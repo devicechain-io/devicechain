@@ -21,11 +21,11 @@ import (
 	"fmt"
 
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/devicechain-io/dc-k8s/api/v1beta1"
@@ -34,9 +34,10 @@ import (
 // TenantReconciler reconciles a Tenant object.
 //
 // Under the shared-microservice model (ADR-001) a Tenant does NOT get its own
-// set of pods. The controller maintains the tenant's ConfigMap and bootstrap
-// status; the shared microservice deployments owned by the Instance discover
-// tenants at runtime and scope work by NATS subject + TimescaleDB partition.
+// set of pods. The controller maintains the tenant's ConfigMap; the shared
+// microservice deployments owned by the Instance discover tenants at runtime
+// and scope work by NATS subject + TimescaleDB partition. The ConfigMap is
+// owned by the Tenant, so Kubernetes garbage-collects it on tenant deletion.
 type TenantReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -50,41 +51,22 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	tenant := &v1beta1.Tenant{}
 	if err := r.Get(ctx, req.NamespacedName, tenant); err != nil {
-		if errors.IsNotFound(err) {
-			log.Info(fmt.Sprintf("Handling deleted tenant: %+v", req.NamespacedName))
-			if err := r.handleTenantDeleted(ctx, req); err != nil {
-				log.Error(err, "Unable to handle tenant delete")
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{}, nil
-		}
+		// The tenant ConfigMap is owned by the Tenant and garbage-collected on
+		// deletion; nothing to do here.
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	cmap := &v1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name:      getTenantConfigMapName(tenant.ObjectMeta.Name),
+		Namespace: tenant.ObjectMeta.Namespace,
+	}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cmap, func() error {
+		return controllerutil.SetControllerReference(tenant, cmap, r.Scheme)
+	}); err != nil {
 		return ctrl.Result{}, err
 	}
-	log.Info(fmt.Sprintf("Handling added/updated tenant: %+v", req.NamespacedName))
 
-	// Create tenant config map if not found.
-	if _, err := getTenantConfigMap(tenant.ObjectMeta.Name, tenant.ObjectMeta.Namespace); err != nil {
-		if !errors.IsNotFound(err) {
-			return ctrl.Result{}, err
-		}
-		cmap, err := createTenantConfigMap(tenant.ObjectMeta.Name, tenant.ObjectMeta.Namespace)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		log.Info(fmt.Sprintf("Created tenant config map '%s'", cmap.ObjectMeta.Name))
-	}
-
-	// Initialize bootstrap state. Actual dataset bootstrapping is performed by
-	// the microservice runtime (follow-up: bootstrap-ordering work); the
-	// operator only seeds the initial state here.
-	if tenant.Status.BootstrapState == "" {
-		tenant.Status.BootstrapState = v1beta1.TenantNotBootstrapped
-		if err := r.Status().Update(ctx, tenant); err != nil {
-			return ctrl.Result{}, err
-		}
-		log.Info(fmt.Sprintf("Initialized bootstrap state for tenant '%s'", tenant.ObjectMeta.Name))
-	}
-
+	log.Info(fmt.Sprintf("Reconciled tenant '%s'", tenant.ObjectMeta.Name))
 	return ctrl.Result{}, nil
 }
 
@@ -92,69 +74,11 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1beta1.Tenant{}).
+		Owns(&v1.ConfigMap{}).
 		Complete(r)
-}
-
-// Handle a deleted tenant by removing its ConfigMap.
-func (r *TenantReconciler) handleTenantDeleted(ctx context.Context, req ctrl.Request) error {
-	log := logf.FromContext(ctx)
-
-	cmap, err := deleteTenantConfigMap(req.Name, req.Namespace)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	log.Info(fmt.Sprintf("Deleted tenant config map '%s'.", cmap.ObjectMeta.Name))
-	return nil
 }
 
 // Get name of tenant config map
 func getTenantConfigMapName(tid string) string {
 	return fmt.Sprintf("%s-%s-%s", "dct", tid, "config")
-}
-
-// Create a new tenant config map
-func createTenantConfigMap(tid string, ns string) (*v1.ConfigMap, error) {
-	cmap := &v1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      getTenantConfigMapName(tid),
-			Namespace: ns,
-		},
-		Data: map[string]string{},
-	}
-
-	err := v1beta1.V1Client.Create(context.Background(), cmap)
-	if err != nil {
-		return nil, err
-	}
-	return cmap, nil
-}
-
-// Get config map associated with tenant
-func getTenantConfigMap(tid string, ns string) (*v1.ConfigMap, error) {
-	cmap := &v1.ConfigMap{}
-	err := v1beta1.V1Client.Get(context.Background(), client.ObjectKey{
-		Name:      getTenantConfigMapName(tid),
-		Namespace: ns,
-	}, cmap)
-	if err != nil {
-		return nil, err
-	}
-	return cmap, nil
-}
-
-// Delete config map associated with tenant
-func deleteTenantConfigMap(tid string, ns string) (*v1.ConfigMap, error) {
-	cmap, err := getTenantConfigMap(tid, ns)
-	if err != nil {
-		return nil, err
-	}
-
-	err = v1beta1.V1Client.Delete(context.Background(), cmap)
-	if err != nil {
-		return nil, err
-	}
-	return cmap, nil
 }

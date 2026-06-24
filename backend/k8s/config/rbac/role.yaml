@@ -33,6 +33,15 @@ rules:
 - apiGroups:
   - core.devicechain.io
   resources:
+  - instanceconfigurations
+  - microserviceconfigurations
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - core.devicechain.io
+  resources:
   - instances
   verbs:
   - create
@@ -56,11 +65,3 @@ rules:
   - get
   - patch
   - update
-- apiGroups:
-  - core.devicechain.io
-  resources:
-  - microserviceconfigurations
-  verbs:
-  - get
-  - list
-  - watch

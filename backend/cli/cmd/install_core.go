@@ -22,11 +22,33 @@ import (
 	gen "github.com/devicechain-io/dc-k8s/generators"
 
 	"github.com/spf13/cobra"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 
 	"github.com/fatih/color"
 )
+
+const (
+	NS_DC_SYSTEM = "dc-system"
+)
+
+// Assure that the DeviceChain system namespace exists.
+func assureSystemNamespace() error {
+	fmt.Print(color.WhiteString("\nVerifying DeviceChain system namespace... "))
+	ns := &corev1.Namespace{}
+	err := v1beta1.V1Client.Get(context.Background(), types.NamespacedName{Name: NS_DC_SYSTEM}, ns)
+	if err != nil {
+		ns = &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NS_DC_SYSTEM}}
+		err = v1beta1.V1Client.Create(context.Background(), ns)
+		fmt.Println(color.GreenString("Created system namespace."))
+	} else {
+		fmt.Println(color.GreenString("System namespace verified."))
+	}
+	return err
+}
 
 // Create instance of install command
 var installCoreCmd = NewInstallCoreCommand()
