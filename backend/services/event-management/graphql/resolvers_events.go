@@ -76,36 +76,15 @@ func (r *EventResolver) AltId() *string {
 	return util.NullStr(r.M.AltId)
 }
 
-func (r *EventResolver) RelDeviceId() *string {
-	return uintPtrStr(r.M.RelDeviceId)
+// AnchorType is the entity class of the denormalized relationship target (e.g.
+// "customer"), or nil when the originating device had no tracked relationship.
+func (r *EventResolver) AnchorType() *string {
+	return r.M.AnchorType
 }
 
-func (r *EventResolver) RelDeviceGroupId() *string {
-	return uintPtrStr(r.M.RelDeviceGroupId)
-}
-
-func (r *EventResolver) RelCustomerId() *string {
-	return uintPtrStr(r.M.RelCustomerId)
-}
-
-func (r *EventResolver) RelCustomerGroupId() *string {
-	return uintPtrStr(r.M.RelCustomerGroupId)
-}
-
-func (r *EventResolver) RelAreaId() *string {
-	return uintPtrStr(r.M.RelAreaId)
-}
-
-func (r *EventResolver) RelAreaGroupId() *string {
-	return uintPtrStr(r.M.RelAreaGroupId)
-}
-
-func (r *EventResolver) RelAssetId() *string {
-	return uintPtrStr(r.M.RelAssetId)
-}
-
-func (r *EventResolver) RelAssetGroupId() *string {
-	return uintPtrStr(r.M.RelAssetGroupId)
+// AnchorId is the row id of the denormalized relationship target, or nil.
+func (r *EventResolver) AnchorId() *string {
+	return uintPtrStr(r.M.AnchorId)
 }
 
 // mapResolvers builds a resolver slice from a model slice, preserving the

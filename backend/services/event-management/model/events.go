@@ -11,23 +11,21 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
-// Event with token references resolved and info from assignment merged.
+// Event with token references resolved and the originating device's tracked
+// relationship denormalized onto it. The relationship target is recorded as a
+// single uniform (AnchorType, AnchorId) pair (ADR-013) rather than one of eight
+// typed Rel* columns; both are nil when the originating device had no tracked
+// relationship. DeviceId always names the originating device.
 type Event struct {
 	rdb.TenantScoped
-	DeviceId           uint
-	EventType          esmodel.EventType
-	OccurredTime       time.Time
-	Source             string
-	AltId              sql.NullString
-	RelDeviceId        *uint
-	RelDeviceGroupId   *uint
-	RelCustomerId      *uint
-	RelCustomerGroupId *uint
-	RelAreaId          *uint
-	RelAreaGroupId     *uint
-	RelAssetId         *uint
-	RelAssetGroupId    *uint
-	ProcessedTime      time.Time
+	DeviceId      uint
+	EventType     esmodel.EventType
+	OccurredTime  time.Time
+	Source        string
+	AltId         sql.NullString
+	AnchorType    *string
+	AnchorId      *uint
+	ProcessedTime time.Time
 }
 
 // Location event fields.

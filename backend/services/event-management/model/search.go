@@ -7,17 +7,15 @@ import (
 	"time"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // Criteria used when searching for events of any type. The same criteria is
 // shared by the base-event and typed-event reads. Time range is applied to the
-// occurred_time column; the optional relationship anchor maps an anchor type
-// (e.g. "customer") to the corresponding Rel* column (e.g. rel_customer_id).
-//
-// Anchor filtering currently targets the discrete Rel* columns; when ADR-013
-// lands and these collapse into a generic (entity_type, entity_id) anchor, the
-// AnchorType/AnchorId pair already models that shape.
+// occurred_time column; the optional relationship anchor filters on the uniform
+// (anchor_type, anchor_id) columns (ADR-013) — the type names an entity class
+// (e.g. "customer") and the id is that entity's row id.
 type EventSearchCriteria struct {
 	rdb.Pagination
 	DeviceId   *uint
@@ -52,24 +50,9 @@ type AlertEventSearchResults struct {
 	Pagination rdb.SearchResultsPagination
 }
 
-// anchorColumns maps an anchor type to the Rel* column it filters on. This is
-// the single source of truth for the anchorType -> column mapping used by the
-// read API.
-var anchorColumns = map[string]string{
-	"device":        "rel_device_id",
-	"devicegroup":   "rel_device_group_id",
-	"customer":      "rel_customer_id",
-	"customergroup": "rel_customer_group_id",
-	"area":          "rel_area_id",
-	"areagroup":     "rel_area_group_id",
-	"asset":         "rel_asset_id",
-	"assetgroup":    "rel_asset_group_id",
-}
-
-// IsAnchorType reports whether t is a recognized relationship anchor type. The
-// read path drops an unrecognized anchor (no column), so callers must reject an
+// IsAnchorType reports whether t is a recognized entity (anchor) type. The read
+// path drops an unrecognized anchor (no filter), so callers must reject an
 // unknown type up front rather than silently returning unfiltered results.
 func IsAnchorType(t string) bool {
-	_, ok := anchorColumns[t]
-	return ok
+	return entity.Type(t).Valid()
 }
