@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -68,9 +67,10 @@ type InstanceReconciler struct {
 // in the configuration catalog. Each microservice runs as a single deployment
 // serving every tenant in the instance.
 //
-// All children are stamped with the Instance as controller-owner, so Kubernetes
-// garbage-collects them when the Instance is deleted (no manual delete handling)
-// and drift on any child re-triggers this reconcile via the Owns watches below.
+// All children are stamped with the Instance as controller-owner. Deleting the
+// Instance garbage-collects the namespace (which cascades to everything in it);
+// the per-child owner refs additionally drive the Owns watches so child drift
+// re-triggers this reconcile. No manual delete handling is needed.
 func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -129,10 +129,7 @@ func (r *InstanceReconciler) mapCatalogToInstances(ctx context.Context, _ client
 // deleting the Instance cascades to the namespace and everything in it.
 func (r *InstanceReconciler) assureNamespace(ctx context.Context, instance *corev1beta1.Instance) error {
 	ns := &v1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: instance.ObjectMeta.Name}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
-		return controllerutil.SetControllerReference(instance, ns, r.Scheme)
-	})
-	return err
+	return applyOwned(ctx, r.Client, r.Scheme, instance, ns)
 }
 
 // Ensure the instance ConfigMap exists with the resolved instance configuration.
@@ -142,15 +139,14 @@ func (r *InstanceReconciler) assureInstanceConfigMap(ctx context.Context, instan
 		return err
 	}
 
-	cmap := &v1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-		Name:      getInstanceConfigMapName(instance.ObjectMeta.Name),
-		Namespace: instance.ObjectMeta.Name,
-	}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cmap, func() error {
-		cmap.Data = map[string]string{INSTANCE_CONFIG_NAME: string(ic.Spec.Configuration.RawMessage)}
-		return controllerutil.SetControllerReference(instance, cmap, r.Scheme)
-	})
-	return err
+	cmap := &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      getInstanceConfigMapName(instance.ObjectMeta.Name),
+			Namespace: instance.ObjectMeta.Name,
+		},
+		Data: map[string]string{INSTANCE_CONFIG_NAME: string(ic.Spec.Configuration.RawMessage)},
+	}
+	return applyOwned(ctx, r.Client, r.Scheme, instance, cmap)
 }
 
 // Reconcile the set of shared microservice deployments for an instance against
@@ -182,60 +178,55 @@ func microserviceLabels(instance *corev1beta1.Instance, msc *corev1beta1.Microse
 // running workload converges to the catalog entry (image, env, ports).
 func (r *InstanceReconciler) assureMicroservice(ctx context.Context, instance *corev1beta1.Instance,
 	msc *corev1beta1.MicroserviceConfiguration) error {
-	log := logf.FromContext(ctx)
 	name := msc.Spec.FunctionalArea
 	labels := microserviceLabels(instance, msc)
+	ns := instance.ObjectMeta.Name
 
-	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: instance.ObjectMeta.Name}}
-	deployResult, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		deploy.Labels = labels
-		// Selector is immutable post-create; the value is deterministic from
-		// labels so re-setting it is a no-op on update.
-		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
-		deploy.Spec.Template.ObjectMeta.Labels = labels
-		deploy.Spec.Template.Spec.Containers = []v1.Container{{
-			Name:            name,
-			Image:           msc.Spec.Image,
-			ImagePullPolicy: v1.PullIfNotPresent,
-			Env: []v1.EnvVar{
-				{Name: ENV_INSTANCE_ID, Value: instance.ObjectMeta.Name},
-				{Name: ENV_MICROSERVICE_ID, Value: msc.ObjectMeta.Name},
-				{Name: ENV_MS_FUNCTIONAL_AREA, Value: msc.Spec.FunctionalArea},
-			},
-			Ports: []v1.ContainerPort{{Name: "graphql", ContainerPort: PORT_GRAPHQL, Protocol: v1.ProtocolTCP}},
-			VolumeMounts: []v1.VolumeMount{
-				{Name: "instance-config", MountPath: "/etc/dci-config"},
-			},
-		}}
-		deploy.Spec.Template.Spec.Volumes = []v1.Volume{{
-			Name: "instance-config",
-			VolumeSource: v1.VolumeSource{
-				ConfigMap: &v1.ConfigMapVolumeSource{
-					LocalObjectReference: v1.LocalObjectReference{Name: getInstanceConfigMapName(instance.ObjectMeta.Name)},
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{{
+						Name:            name,
+						Image:           msc.Spec.Image,
+						ImagePullPolicy: v1.PullIfNotPresent,
+						Env: []v1.EnvVar{
+							{Name: ENV_INSTANCE_ID, Value: instance.ObjectMeta.Name},
+							{Name: ENV_MICROSERVICE_ID, Value: msc.ObjectMeta.Name},
+							{Name: ENV_MS_FUNCTIONAL_AREA, Value: msc.Spec.FunctionalArea},
+						},
+						Ports: []v1.ContainerPort{{Name: "graphql", ContainerPort: PORT_GRAPHQL, Protocol: v1.ProtocolTCP}},
+						VolumeMounts: []v1.VolumeMount{
+							{Name: "instance-config", MountPath: "/etc/dci-config"},
+						},
+					}},
+					Volumes: []v1.Volume{{
+						Name: "instance-config",
+						VolumeSource: v1.VolumeSource{
+							ConfigMap: &v1.ConfigMapVolumeSource{
+								LocalObjectReference: v1.LocalObjectReference{Name: getInstanceConfigMapName(ns)},
+							},
+						},
+					}},
 				},
 			},
-		}}
-		return controllerutil.SetControllerReference(instance, deploy, r.Scheme)
-	})
-	if err != nil {
+		},
+	}
+	if err := applyOwned(ctx, r.Client, r.Scheme, instance, deploy); err != nil {
 		return err
 	}
 
-	svc := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: instance.ObjectMeta.Name}}
-	svcResult, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
-		svc.Labels = labels
-		svc.Spec.Selector = labels
-		svc.Spec.Ports = []v1.ServicePort{{Name: "graphql", Protocol: v1.ProtocolTCP, Port: PORT_GRAPHQL}}
-		return controllerutil.SetControllerReference(instance, svc, r.Scheme)
-	})
-	if err != nil {
-		return err
+	svc := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
+		Spec: v1.ServiceSpec{
+			Selector: labels,
+			Ports:    []v1.ServicePort{{Name: "graphql", Protocol: v1.ProtocolTCP, Port: PORT_GRAPHQL}},
+		},
 	}
-
-	if deployResult != controllerutil.OperationResultNone || svcResult != controllerutil.OperationResultNone {
-		log.Info(fmt.Sprintf("Reconciled shared microservice '%s' (deploy=%s, svc=%s)", name, deployResult, svcResult))
-	}
-	return nil
+	return applyOwned(ctx, r.Client, r.Scheme, instance, svc)
 }
 
 // Get name of instance config map

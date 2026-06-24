@@ -25,7 +25,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/devicechain-io/dc-k8s/api/v1beta1"
@@ -60,9 +59,7 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		Name:      getTenantConfigMapName(tenant.ObjectMeta.Name),
 		Namespace: tenant.ObjectMeta.Namespace,
 	}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cmap, func() error {
-		return controllerutil.SetControllerReference(tenant, cmap, r.Scheme)
-	}); err != nil {
+	if err := applyOwned(ctx, r.Client, r.Scheme, tenant, cmap); err != nil {
 		return ctrl.Result{}, err
 	}
 
