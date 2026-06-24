@@ -1,0 +1,24 @@
+# permissions for end users to edit tenantmicroservices.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tenantmicroservice-editor-role
+rules:
+- apiGroups:
+  - core.devicechain.io
+  resources:
+  - tenantmicroservices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - core.devicechain.io
+  resources:
+  - tenantmicroservices/status
+  verbs:
+  - get

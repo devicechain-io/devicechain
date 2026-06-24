@@ -1,0 +1,12 @@
+apiVersion: core.devicechain.io/v1beta1
+kind: MicroserviceConfiguration
+metadata:
+  creationTimestamp: null
+  name: user-management-default
+spec:
+  configuration:
+    Nested:
+      Test: test
+  functionalArea: user-management
+  image: devicechain-io/user-management:0.0.1
+status: {}

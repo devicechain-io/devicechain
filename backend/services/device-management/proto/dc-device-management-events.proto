@@ -1,0 +1,122 @@
+syntax="proto3";
+
+option go_package = "/proto";
+
+package io.devicechain.devicemanagement;
+
+/**
+ * Enumeration of failure reasons.
+ */
+enum FailureReason {
+    Unknown = 0; // Failed for unknown reason
+    Invalid = 1; // Event was not able to be parsed
+    ApiCallFailed = 2; // API call required for resolution failed
+    DeviceNotFound = 3; // Device token could not be resolved to a device
+}
+
+/**
+ * Event that could not be processed.
+ */
+message PFailedEvent {
+    FailureReason reason = 1;
+    string service = 2;
+    string message = 3;
+    string error = 4;
+    bytes payload = 5;
+}
+
+/**
+ * Event that was successfully resolved.
+ */
+ message PResolvedEvent {
+	string source = 1;
+	optional string alt_id = 2;
+	uint64 source_device_id = 3;
+	uint64 device_relationship_id = 4;
+	optional uint64 target_device_id = 5;
+	optional uint64 target_device_group_id = 6;
+	optional uint64 target_customer_id = 7;
+	optional uint64 target_customer_group_id = 8;
+	optional uint64 target_area_id = 9;
+	optional uint64 target_area_group_id = 10;
+	optional uint64 target_asset_id = 11;
+	optional uint64 target_asset_group_id = 12;
+    string occurred_time = 13;
+    string processed_time = 14;
+    int64 event_type = 15;
+    bytes payload = 16;
+}
+
+/**
+ * Payload for resolved new relationship request.
+ */
+ message PResolvedNewRelationshipPayload {
+	uint64 device_relationship_type_id = 1;
+    optional uint64 target_device_id = 2;
+    optional uint64 target_device_group_id = 3;
+    optional uint64 target_asset_id = 4;
+    optional uint64 target_asset_group_id = 5;
+    optional uint64 target_customer_id = 6;
+    optional uint64 target_customer_group_id = 7;
+    optional uint64 target_area_id = 8;
+    optional uint64 target_area_group_id = 9;
+}
+
+/**
+ * Single location entry for a location payload.
+ */
+ message PResolvedLocationEntry {
+    optional string latitude = 1;
+    optional string longitude = 2;
+    optional string elevation = 3;
+    optional string occurred_time = 4;
+}
+
+/**
+ * Payload for a location event.
+ */
+message PResolvedLocationsPayload {
+    repeated PResolvedLocationEntry entries = 1;
+}
+
+/**
+ * Single measurement entry for a measurement payload.
+ */
+ message PResolvedMeasurementEntry {
+    string name = 1;
+    string value = 2;
+    optional uint64 classifier = 3;
+}
+
+/**
+ * Single measurement entry for a measurement payload.
+ */
+message PResolvedMeasurementsEntry {
+    repeated PResolvedMeasurementEntry measurements = 1;
+    optional string occurred_time = 2;
+}
+
+/**
+ * Payload for a measurement event.
+ */
+message PResolvedMeasurementsPayload {
+    repeated PResolvedMeasurementsEntry entries = 1;
+}
+
+/**
+ * Single alert entry for an alerts payload.
+ */
+message PResolvedAlertEntry {
+    string type = 1;
+    uint32 level = 2;
+    string message = 3;
+    string source = 4;
+    optional string occurred_time = 5;
+}
+
+/**
+ * Payload for an alert event.
+ */
+message PResolvedAlertsPayload {
+    repeated PResolvedAlertEntry entries = 1;
+}

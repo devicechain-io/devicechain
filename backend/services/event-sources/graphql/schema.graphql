@@ -1,0 +1,13 @@
+
+# Contains queries executed against model.
+type Query {
+}
+
+# Contains mutations executed against model.
+type Mutation {
+}
+
+schema {
+    query: Query
+    mutation: Mutation
+}

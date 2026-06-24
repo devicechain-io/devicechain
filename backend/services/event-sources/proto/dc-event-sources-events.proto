@@ -1,0 +1,85 @@
+syntax="proto3";
+
+option go_package = "/proto";
+
+package io.devicechain.eventsources;
+
+/**
+ * Unresolved event that has been decoded by
+ * an event source.
+ */
+message PUnresolvedEvent {
+    string source_id = 1;
+    optional string alt_id = 2;
+    string device = 3;
+    optional string relationship = 4;
+    string occurred_time = 5;
+    string processed_time = 6;
+    int64 event_type = 7;
+    bytes payload = 8;
+}
+
+/**
+ * Payload for creating a new device relationship.
+ */
+message PUnresolvedNewRelationshipPayload {
+    string device_relationship_type = 1;
+    optional string target_device = 2;
+    optional string target_device_group = 3;
+    optional string target_asset = 4;
+    optional string target_asset_group = 5;
+    optional string target_customer = 6;
+    optional string target_customer_group = 7;
+    optional string target_area = 8;
+    optional string target_area_group = 9;
+}
+
+/**
+ * Single location entry for a location payload.
+ */
+message PUnresolvedLocationEntry {
+    optional string latitude = 1;
+    optional string longitude = 2;
+    optional string elevation = 3;
+    optional string occurred_time = 4;
+}
+
+/**
+ * Payload for a location event.
+ */
+message PUnresolvedLocationsPayload {
+    repeated PUnresolvedLocationEntry entries = 1;
+}
+
+/**
+ * Single measurement entry for a measurement payload.
+ */
+message PUnresolvedMeasurementsEntry {
+    map<string, string> measurements = 1;
+    optional string occurred_time = 2;
+}
+
+/**
+ * Payload for a measurement event.
+ */
+message PUnresolvedMeasurementsPayload {
+    repeated PUnresolvedMeasurementsEntry entries = 1;
+}
+
+/**
+ * Single alert entry for an alerts payload.
+ */
+message PUnresolvedAlertEntry {
+    string type = 1;
+    uint32 level = 2;
+    string message = 3;
+    string source = 4;
+    optional string occurred_time = 5;
+}
+
+/**
+ * Payload for an alert event.
+ */
+message PUnresolvedAlertsPayload {
+    repeated PUnresolvedAlertEntry entries = 1;
+}

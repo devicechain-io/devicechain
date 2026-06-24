@@ -1,0 +1,11 @@
+go 1.25
+
+use (
+	./backend/core
+	./backend/k8s
+	./backend/services/device-management
+	./backend/services/event-management
+	./backend/services/event-sources
+	./backend/services/user-management
+	./backend/cli
+)

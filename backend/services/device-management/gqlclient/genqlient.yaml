@@ -1,0 +1,13 @@
+schema: ../graphql/schema.graphql
+operations:
+- ./genqlient-common.graphql
+- ./genqlient-devices.graphql
+- ./genqlient-assets.graphql
+- ./genqlient-areas.graphql
+- ./genqlient-customers.graphql
+generated: generated.go
+package: gqlclient
+optional: pointer
+bindings:
+  DateTime:
+    type: time.Time

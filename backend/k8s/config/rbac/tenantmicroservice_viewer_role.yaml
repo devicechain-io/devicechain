@@ -1,0 +1,20 @@
+# permissions for end users to view tenantmicroservices.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tenantmicroservice-viewer-role
+rules:
+- apiGroups:
+  - core.devicechain.io
+  resources:
+  - tenantmicroservices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - core.devicechain.io
+  resources:
+  - tenantmicroservices/status
+  verbs:
+  - get

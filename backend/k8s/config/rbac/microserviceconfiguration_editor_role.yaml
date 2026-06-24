@@ -1,0 +1,24 @@
+# permissions for end users to edit microserviceconfigurations.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: microserviceconfiguration-editor-role
+rules:
+- apiGroups:
+  - core.devicechain.io
+  resources:
+  - microserviceconfigurations
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - core.devicechain.io
+  resources:
+  - microserviceconfigurations/status
+  verbs:
+  - get

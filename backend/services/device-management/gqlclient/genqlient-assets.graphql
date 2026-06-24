@@ -1,0 +1,362 @@
+# Content associated with asset type response.
+fragment DefaultAssetType on AssetType {
+  id
+  createdAt
+  updatedAt
+  deletedAt
+  token
+  name
+  description
+  imageUrl
+  icon
+  backgroundColor
+  foregroundColor
+  borderColor
+  metadata
+}
+
+# Content associated with asset response.
+fragment DefaultAsset on Asset {
+  id
+  createdAt
+  updatedAt
+  deletedAt
+  token
+  name
+  description
+  assetType {
+    token
+    name
+    description
+  }
+  metadata
+}
+
+# Content associated with asset relationship type response.
+fragment DefaultAssetRelationshipType on AssetRelationshipType {
+  id
+  createdAt
+  updatedAt
+  deletedAt
+  token
+  name
+  description
+  metadata
+}
+
+# Content associated with asset relationship response.
+fragment DefaultAssetRelationship on AssetRelationship {
+  id
+  createdAt
+  updatedAt
+  deletedAt
+  token
+  sourceAsset {
+    token
+    name
+    description
+  }
+  targets {
+    ...DefaultRelationshipTargets
+  }
+  relationshipType {
+    token
+    name
+    description
+  }
+  metadata
+}
+
+# Content associated with asset group.
+fragment DefaultAssetGroup on AssetGroup {
+  id
+  createdAt
+  updatedAt
+  deletedAt
+  token
+  name
+  description
+  imageUrl
+  icon
+  backgroundColor
+  foregroundColor
+  borderColor
+  metadata
+}
+
+# Content associated with asset group relationship type.
+fragment DefaultAssetGroupRelationshipType on AssetGroupRelationshipType {
+  id
+  createdAt
+  updatedAt
+  deletedAt
+  token
+  name
+  description
+  metadata
+}
+
+# Content associated with asset group relationship.
+fragment DefaultAssetGroupRelationship on AssetGroupRelationship {
+  id
+  createdAt
+  updatedAt
+  deletedAt
+  token
+  sourceAssetGroup {
+    token
+    name
+    description
+  }
+  targets {
+    ...DefaultRelationshipTargets
+  }
+  relationshipType {
+    token
+    name
+    description
+  }
+  metadata
+}
+
+# Create asset type and return identifiers.
+mutation createAssetType($token: String!, $name: String, $description: String, 
+  $imageUrl: String, $icon: String, $backgroundColor: String, $foregroundColor: String, $borderColor: String, $metadata: String) {
+  createAssetType(request: { 
+    token: $token,
+    name: $name,
+    description: $description,
+    imageUrl: $imageUrl,
+    icon: $icon,
+    backgroundColor: $backgroundColor,
+    foregroundColor: $foregroundColor,
+    borderColor: $borderColor,
+    metadata: $metadata
+  }) {
+    ...DefaultAssetType
+  }
+}
+
+# Get asset types by unique tokens.
+query getAssetTypesByToken($tokens: [String!]!) {
+  assetTypesByToken(tokens: $tokens) {
+    ...DefaultAssetType
+  }
+}
+
+# List asset types that match criteria.
+query listAssetTypes($pageNumber: Int!, $pageSize: Int!) {
+  assetTypes(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
+    results {
+      ...DefaultAssetType
+    }
+    pagination {
+      ...DefaultPagination
+    }
+  }
+}
+
+# Create asset and return identifiers.
+mutation createAsset($token: String!, $assetTypeToken: String!, $name: String, $description: String, $metadata: String) {
+  createAsset(request: { 
+    token: $token, 
+    assetTypeToken: $assetTypeToken,
+    name: $name,
+    description: $description,
+    metadata: $metadata
+  }) {
+    ...DefaultAsset
+  }
+}
+
+# Get assets by unique tokens.
+query getAssetsByToken($tokens: [String!]!) {
+  assetsByToken(tokens: $tokens) {
+    ...DefaultAsset
+  }
+}
+
+# List assets that match criteria.
+query listAssets($pageNumber: Int!, $pageSize: Int!) {
+  assets(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
+    results {
+      ...DefaultAsset
+    }
+    pagination {
+      ...DefaultPagination
+    }
+  }
+}
+
+# Create asset relationship type and return identifiers.
+mutation createAssetRelationshipType($token: String!, $name: String, $description: String, $metadata: String) {
+  createAssetRelationshipType(request: { 
+    token: $token,
+    name: $name,
+    description: $description,
+    metadata: $metadata
+  }) {
+    ...DefaultAssetRelationshipType
+  }
+}
+
+# Get asset relationship types by unique tokens.
+query getAssetRelationshipTypesByToken($tokens: [String!]!) {
+  assetRelationshipTypesByToken(tokens: $tokens) {
+    ...DefaultAssetRelationshipType
+  }
+}
+
+# List asset relationship types that match criteria.
+query listAssetRelationshipTypes($pageNumber: Int!, $pageSize: Int!) {
+  assetRelationshipTypes(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
+    results {
+      ...DefaultAssetRelationshipType
+    }
+    pagination {
+      ...DefaultPagination
+    }
+  }
+}
+
+# Create asset relationship and return identifiers.
+mutation createAssetRelationship($token: String!, $sourceAsset: String!, $targets: EntityRelationshipTargetsCreateRequest!, $relationshipType: String!) {
+  createAssetRelationship(
+    request: {
+      token: $token,
+      sourceAsset: $sourceAsset
+      targets: $targets
+      relationshipType: $relationshipType
+    }
+  ) {
+    ...DefaultAssetRelationship
+  }
+}
+
+# Get asset relationships by unique tokens.
+query getAssetRelationshipsByToken($tokens: [String!]!) {
+  assetRelationshipsByToken(tokens: $tokens) {
+    ...DefaultAssetRelationship
+  }
+}
+
+# List asset relationships that match criteria.
+query listAssetRelationships($pageNumber: Int!, $pageSize: Int!, $sourceAsset: String, $relationshipType: String) {
+  assetRelationships(criteria: { 
+    pageNumber: $pageNumber, 
+    pageSize: $pageSize, 
+    sourceAsset: $sourceAsset, 
+    relationshipType: $relationshipType }) {
+    results {
+      ...DefaultAssetRelationship
+    }
+    pagination {
+      ...DefaultPagination
+    }
+  }
+}
+
+# Create asset group and return identifiers.
+mutation createAssetGroup($token: String!, $name: String, $description: String, 
+  $imageUrl: String, $icon: String, $backgroundColor: String, $foregroundColor: String, $borderColor: String, $metadata: String) {
+  createAssetGroup(request: { 
+    token: $token,
+    name: $name,
+    description: $description,
+    imageUrl: $imageUrl,
+    icon: $icon,
+    backgroundColor: $backgroundColor,
+    foregroundColor: $foregroundColor,
+    borderColor: $borderColor,
+    metadata: $metadata
+  }) {
+    ...DefaultAssetGroup
+  }
+}
+
+# Get asset groups by unique tokens.
+query getAssetGroupsByToken($tokens: [String!]!) {
+  assetGroupsByToken(tokens: $tokens) {
+    ...DefaultAssetGroup
+  }
+}
+
+# List asset groups that match criteria.
+query listAssetGroups($pageNumber: Int!, $pageSize: Int!) {
+  assetGroups(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
+    results {
+      ...DefaultAssetGroup
+    }
+    pagination {
+      ...DefaultPagination
+    }
+  }
+}
+
+# Create asset group relationship type and return identifiers.
+mutation createAssetGroupRelationshipType($token: String!, $name: String, $description: String, $metadata: String) {
+  createAssetGroupRelationshipType(request: { 
+    token: $token,
+    name: $name,
+    description: $description,
+    metadata: $metadata
+  }) {
+    ...DefaultAssetGroupRelationshipType
+  }
+}
+
+# Get asset group relationship types by unique token.
+query getAssetGroupRelationshipTypesByToken($tokens: [String!]!) {
+  assetGroupRelationshipTypesByToken(tokens: $tokens) {
+    ...DefaultAssetGroupRelationshipType
+  }
+}
+
+# List asset group relationship types that match criteria.
+query listAssetGroupRelationshipTypes($pageNumber: Int!, $pageSize: Int!) {
+  assetGroupRelationshipTypes(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
+    results {
+      ...DefaultAssetGroupRelationshipType
+    }
+    pagination {
+      ...DefaultPagination
+    }
+  }
+}
+
+# Create asset group relationship and return identifiers.
+mutation createAssetGroupRelationship($token: String!, $assetGroup: String!, $targets: EntityRelationshipTargetsCreateRequest!, $relationshipType: String!) {
+  createAssetGroupRelationship(
+    request: {
+      token: $token,
+      sourceAssetGroup: $assetGroup,
+      targets: $targets,
+      relationshipType: $relationshipType
+    }
+  ) {
+    ...DefaultAssetGroupRelationship
+  }
+}
+
+# Get asset group relationships by unique tokens.
+query getAssetGroupRelationshipsByToken($tokens: [String!]!) {
+  assetGroupRelationshipsByToken(tokens: $tokens) {
+    ...DefaultAssetGroupRelationship
+  }
+}
+
+# List asset group relationships that match criteria.
+query listAssetGroupRelationships($pageNumber: Int!, $pageSize: Int!, $sourceAssetGroup: String, $relationshipType: String) {
+  assetGroupRelationships(criteria: { 
+    pageNumber: $pageNumber, 
+    pageSize: $pageSize, 
+    sourceAssetGroup: $sourceAssetGroup, 
+    relationshipType: $relationshipType }) {
+    results {
+      ...DefaultAssetGroupRelationship
+    }
+    pagination {
+      ...DefaultPagination
+    }
+  }
+}

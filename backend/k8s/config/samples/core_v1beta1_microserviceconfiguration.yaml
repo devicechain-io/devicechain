@@ -1,0 +1,6 @@
+apiVersion: core.devicechain.io/v1beta1
+kind: MicroserviceConfiguration
+metadata:
+  name: microserviceconfiguration-sample
+spec:
+  # TODO(user): Add fields here

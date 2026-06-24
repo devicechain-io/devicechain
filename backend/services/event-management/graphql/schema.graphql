@@ -1,0 +1,24 @@
+#
+# Device Management GraphQL Schema
+#
+
+# Represents a type or class of devices
+type Event {
+    id: ID!
+    created_at: String
+    updated_at: String
+    deleted_at: String
+}
+
+# Contains queries executed against model.
+type Query {
+}
+
+# Contains mutations executed against model.
+type Mutation {
+}
+
+schema {
+    query: Query
+    mutation: Mutation
+}
