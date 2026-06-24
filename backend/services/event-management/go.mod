@@ -11,7 +11,6 @@ require (
 	github.com/go-gormigrate/gormigrate/v2 v2.1.6
 	github.com/graph-gophers/graphql-go v1.4.0
 	github.com/rs/zerolog v1.26.1
-	github.com/segmentio/kafka-go v0.4.31
 	github.com/stretchr/testify v1.11.1
 	gorm.io/gorm v1.31.1
 )

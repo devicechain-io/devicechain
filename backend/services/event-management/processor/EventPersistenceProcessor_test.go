@@ -15,9 +15,9 @@ import (
 	emtest "github.com/devicechain-io/dc-event-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	test "github.com/devicechain-io/dc-microservice/test"
 	"github.com/rs/zerolog"
-	"github.com/segmentio/kafka-go"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -26,22 +26,22 @@ import (
 
 // Topic carrying a parseable tenant ({instance}.{tenant}.{suffix}) so the
 // persistence worker can derive a per-message tenant context (fail-closed).
-const testTenantTopic = "instance1.tenant1.resolved-events"
+const testTenantSubject = "instance1.tenant1.resolved-events"
 
 type EventPersistenceProcessorTestSuite struct {
 	suite.Suite
 	EP        *EventPersistenceProcessor
-	Inbound   *test.MockKafkaReader
-	Persisted *test.MockKafkaWriter
-	Failed    *test.MockKafkaWriter
+	Inbound   *test.MockMessageReader
+	Persisted *test.MockMessageWriter
+	Failed    *test.MockMessageWriter
 	API       *emtest.MockApi
 }
 
 // Perform common setup tasks.
 func (suite *EventPersistenceProcessorTestSuite) SetupTest() {
-	suite.Inbound = new(test.MockKafkaReader)
-	suite.Persisted = new(test.MockKafkaWriter)
-	suite.Failed = new(test.MockKafkaWriter)
+	suite.Inbound = new(test.MockMessageReader)
+	suite.Persisted = new(test.MockMessageWriter)
+	suite.Failed = new(test.MockMessageWriter)
 	suite.API = new(emtest.MockApi)
 	suite.EP = NewEventPersistenceProcessor(
 		dmtest.DeviceManagementMicroservice,
@@ -56,7 +56,7 @@ func (suite *EventPersistenceProcessorTestSuite) SetupTest() {
 
 // Test processing loop termination on EOF.
 func (suite *EventPersistenceProcessorTestSuite) TestLifecycle() {
-	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(kafka.Message{}, io.EOF)
+	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, io.EOF)
 	err := suite.EP.Start(context.Background())
 	assert.Nil(suite.T(), err)
 	err = suite.EP.Stop(context.Background())
@@ -67,7 +67,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestLifecycle() {
 
 // Test processing loop termination on EOF.
 func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopEof() {
-	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(kafka.Message{}, io.EOF)
+	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, io.EOF)
 
 	eof := suite.EP.ProcessMessage(context.Background())
 
@@ -76,7 +76,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopEof() {
 
 // Test processing loop without EOF.
 func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopNonEof() {
-	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(kafka.Message{}, nil)
+	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, nil)
 
 	eof := suite.EP.ProcessMessage(context.Background())
 
@@ -159,8 +159,8 @@ func buildAlertsEvent() *dmodel.ResolvedEvent {
 }
 
 // Test failed event flow for a given message.
-func (suite *EventPersistenceProcessorTestSuite) FailedEventFlowFor(msg kafka.Message) {
-	// Emulate kafka read/write.
+func (suite *EventPersistenceProcessorTestSuite) FailedEventFlowFor(msg messaging.Message) {
+	// Emulate read/write.
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
 	suite.Failed.Mock.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
 
@@ -178,7 +178,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestInvalidEvent() {
 	// Assuming invalid binary message format..
 	key := []byte("test")
 	value := []byte("badvalue")
-	badmsg := kafka.Message{Topic: testTenantTopic, Key: key, Value: value}
+	badmsg := messaging.Message{Subject: testTenantSubject, Key: key, Value: value}
 
 	// Test event flow.
 	suite.API.Mock.On("CreateLocationEvent", mock.Anything, mock.Anything).Return(&model.LocationEvent{}, nil)
@@ -186,8 +186,8 @@ func (suite *EventPersistenceProcessorTestSuite) TestInvalidEvent() {
 }
 
 // Test valid event flow for a given message.
-func (suite *EventPersistenceProcessorTestSuite) SuccessEventFlowFor(msg kafka.Message) {
-	// Emulate kafka read/write.
+func (suite *EventPersistenceProcessorTestSuite) SuccessEventFlowFor(msg messaging.Message) {
+	// Emulate read/write.
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
 	suite.Persisted.Mock.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
 
@@ -207,9 +207,9 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleLocationEvent() {
 	bytes, err := dmproto.MarshalResolvedEvent(loc)
 	assert.Nil(suite.T(), err)
 
-	// Build kafka message.
+	// Build message.
 	key := []byte(loc.Source)
-	msg := kafka.Message{Topic: testTenantTopic, Key: key, Value: bytes}
+	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes}
 
 	// Test event flow.
 	suite.API.Mock.On("CreateLocationEvent", mock.Anything, mock.Anything).Return(&model.LocationEvent{}, nil)
@@ -223,9 +223,9 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleMeasurementEvent() {
 	bytes, err := dmproto.MarshalResolvedEvent(loc)
 	assert.Nil(suite.T(), err)
 
-	// Build kafka message.
+	// Build message.
 	key := []byte(loc.Source)
-	msg := kafka.Message{Topic: testTenantTopic, Key: key, Value: bytes}
+	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes}
 
 	// Test event flow.
 	suite.API.Mock.On("CreateMeasurementEvent", mock.Anything, mock.Anything).Return(&model.MeasurementEvent{}, nil)
@@ -239,9 +239,9 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleAlertEvent() {
 	bytes, err := dmproto.MarshalResolvedEvent(alert)
 	assert.Nil(suite.T(), err)
 
-	// Build kafka message.
+	// Build message.
 	key := []byte(alert.Source)
-	msg := kafka.Message{Topic: testTenantTopic, Key: key, Value: bytes}
+	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes}
 
 	// Test event flow.
 	suite.API.Mock.On("CreateAlertEvent", mock.Anything, mock.Anything).Return(&model.AlertEvent{}, nil)

@@ -9,7 +9,6 @@ require (
 	github.com/graph-gophers/graphql-go v1.4.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rs/zerolog v1.26.1
-	github.com/segmentio/kafka-go v0.4.31
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 )
 

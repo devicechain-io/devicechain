@@ -15,10 +15,10 @@ import (
 	"github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	test "github.com/devicechain-io/dc-microservice/test"
 	"github.com/rs/zerolog"
-	"github.com/segmentio/kafka-go"
 	"gorm.io/gorm"
 
 	"github.com/stretchr/testify/assert"
@@ -28,22 +28,22 @@ import (
 
 // Topic carrying a parseable tenant ({instance}.{tenant}.{suffix}) so the
 // per-message tenant-scope context can be derived during resolution.
-const testTenantTopic = "instance1.tenant1.inbound-events"
+const testTenantSubject = "instance1.tenant1.inbound-events"
 
 type InboundEventsProcessorTestSuite struct {
 	suite.Suite
 	IP       *InboundEventsProcessor
-	Inbound  *test.MockKafkaReader
-	Resolved *test.MockKafkaWriter
-	Failed   *test.MockKafkaWriter
+	Inbound  *test.MockMessageReader
+	Resolved *test.MockMessageWriter
+	Failed   *test.MockMessageWriter
 	API      *dmtest.MockApi
 }
 
 // Perform common setup tasks.
 func (suite *InboundEventsProcessorTestSuite) SetupTest() {
-	suite.Inbound = new(test.MockKafkaReader)
-	suite.Resolved = new(test.MockKafkaWriter)
-	suite.Failed = new(test.MockKafkaWriter)
+	suite.Inbound = new(test.MockMessageReader)
+	suite.Resolved = new(test.MockMessageWriter)
+	suite.Failed = new(test.MockMessageWriter)
 	suite.API = new(dmtest.MockApi)
 	suite.IP = NewInboundEventsProcessor(
 		dmtest.DeviceManagementMicroservice,
@@ -58,7 +58,7 @@ func (suite *InboundEventsProcessorTestSuite) SetupTest() {
 
 // Test processing loop termination on EOF.
 func (suite *InboundEventsProcessorTestSuite) TestLifecycle() {
-	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(kafka.Message{}, io.EOF)
+	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, io.EOF)
 	err := suite.IP.Start(context.Background())
 	assert.Nil(suite.T(), err)
 	err = suite.IP.Stop(context.Background())
@@ -69,7 +69,7 @@ func (suite *InboundEventsProcessorTestSuite) TestLifecycle() {
 
 // Test processing loop termination on EOF.
 func (suite *InboundEventsProcessorTestSuite) TestProcessingLoopEof() {
-	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(kafka.Message{}, io.EOF)
+	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, io.EOF)
 
 	eof := suite.IP.ProcessMessage(context.Background())
 
@@ -78,7 +78,7 @@ func (suite *InboundEventsProcessorTestSuite) TestProcessingLoopEof() {
 
 // Test processing loop without EOF.
 func (suite *InboundEventsProcessorTestSuite) TestProcessingLoopNonEof() {
-	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(kafka.Message{}, nil)
+	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, nil)
 
 	eof := suite.IP.ProcessMessage(context.Background())
 
@@ -90,9 +90,9 @@ func (suite *InboundEventsProcessorTestSuite) TestInvalidEvent() {
 	// Assuming invalid binary message format..
 	key := []byte("test")
 	value := []byte("badvalue")
-	badmsg := kafka.Message{Topic: testTenantTopic, Key: key, Value: value}
+	badmsg := messaging.Message{Subject: testTenantSubject, Key: key, Value: value}
 
-	// Emulate kafka read/write.
+	// Emulate read/write.
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(badmsg, nil)
 	suite.Failed.Mock.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
 
@@ -234,9 +234,9 @@ func (suite *InboundEventsProcessorTestSuite) TestUnresolvableLocationsEvent() {
 
 	// Assuming invalid binary message format..
 	key := []byte(loc.Device)
-	msg := kafka.Message{Topic: testTenantTopic, Key: key, Value: bytes}
+	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes}
 
-	// Emulate kafka read/write.
+	// Emulate read/write.
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
 	suite.Failed.Mock.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
 	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{}, errors.New("not found"))
@@ -261,8 +261,8 @@ func buildDeviceRelationship() *dmodel.DeviceRelationship {
 }
 
 // Test valid event flow for a given message.
-func (suite *InboundEventsProcessorTestSuite) SuccessEventFlowFor(msg kafka.Message) {
-	// Emulate kafka read/write.
+func (suite *InboundEventsProcessorTestSuite) SuccessEventFlowFor(msg messaging.Message) {
+	// Emulate read/write.
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
 	suite.Resolved.Mock.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
 	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{buildDevice()}, nil)
@@ -286,9 +286,9 @@ func (suite *InboundEventsProcessorTestSuite) TestValidNewAssignmentEvent() {
 	assert.Nil(suite.T(), err)
 
 	key := []byte(nassn.Device)
-	msg := kafka.Message{Topic: testTenantTopic, Key: key, Value: bytes}
+	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes}
 
-	// Emulate kafka read/write.
+	// Emulate read/write.
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
 	suite.Resolved.Mock.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
 	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{buildDevice()}, nil)
@@ -310,7 +310,7 @@ func (suite *InboundEventsProcessorTestSuite) TestValidLocationsEvent() {
 	assert.Nil(suite.T(), err)
 
 	key := []byte(loc.Device)
-	msg := kafka.Message{Topic: testTenantTopic, Key: key, Value: bytes}
+	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes}
 	suite.SuccessEventFlowFor(msg)
 }
 
@@ -321,7 +321,7 @@ func (suite *InboundEventsProcessorTestSuite) TestValidMeasurementsEvent() {
 	assert.Nil(suite.T(), err)
 
 	key := []byte(mxs.Device)
-	msg := kafka.Message{Topic: testTenantTopic, Key: key, Value: bytes}
+	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes}
 	suite.SuccessEventFlowFor(msg)
 }
 
@@ -332,7 +332,7 @@ func (suite *InboundEventsProcessorTestSuite) TestValidAlertsEvent() {
 	assert.Nil(suite.T(), err)
 
 	key := []byte(alerts.Device)
-	msg := kafka.Message{Topic: testTenantTopic, Key: key, Value: bytes}
+	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes}
 	suite.SuccessEventFlowFor(msg)
 }
 

@@ -37,7 +37,7 @@ func NewDecoderForType(decodetype string, config map[string]string) (Decoder, er
 	case DECODER_TYPE_JSON:
 		return NewJsonDecoder(config), nil
 	default:
-		return nil, fmt.Errorf(fmt.Sprintf("Unknown decoder type: %s", decodetype))
+		return nil, fmt.Errorf("Unknown decoder type: %s", decodetype)
 	}
 }
 

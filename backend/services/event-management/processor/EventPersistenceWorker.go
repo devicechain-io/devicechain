@@ -13,20 +13,19 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	kcore "github.com/devicechain-io/dc-microservice/kafka"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
-	"github.com/segmentio/kafka-go"
 )
 
 // Worker used to persist event entities.
 type EventPersistenceWorker struct {
 	WorkerId    int
 	Api         model.EventManagementApi
-	Unpersisted <-chan kafka.Message
-	Invalid     func(error, kafka.Message)
-	Persisted   func(interface{})
-	Failed      func(uint, dmmodel.ResolvedEvent, error)
+	Unpersisted <-chan messaging.Message
+	Invalid     func(error, messaging.Message)
+	Persisted   func(string, interface{})
+	Failed      func(string, uint, dmmodel.ResolvedEvent, error)
 }
 
 // Results of event persistence process.
@@ -36,10 +35,10 @@ type EventPersistenceResults struct {
 
 // Create a new event resolver.
 func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
-	unpersisted <-chan kafka.Message,
-	invalid func(error, kafka.Message),
-	persisted func(interface{}),
-	failed func(uint, dmmodel.ResolvedEvent, error)) *EventPersistenceWorker {
+	unpersisted <-chan messaging.Message,
+	invalid func(error, messaging.Message),
+	persisted func(string, interface{}),
+	failed func(string, uint, dmmodel.ResolvedEvent, error)) *EventPersistenceWorker {
 	return &EventPersistenceWorker{
 		WorkerId:    workerId,
 		Api:         api,
@@ -201,13 +200,15 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 		if more {
 			log.Debug().Msg(fmt.Sprintf("Event persistence handled by worker id %d", ep.WorkerId))
 
-			// Derive the per-message tenant from the message topic/subject and
-			// build a tenant-scoped context. Without a parseable tenant the
-			// message can not be persisted safely (fail-closed) so it is skipped
-			// rather than written without a tenant.
-			msgctx, ok := kcore.TenantContextFromSubject(ctx, unpersisted.Topic)
+			// Derive the per-message tenant from the message subject and build a
+			// tenant-scoped context. Without a parseable tenant the message can
+			// not be persisted safely (fail-closed) so it is skipped rather than
+			// written without a tenant. The tenant string is carried onto the
+			// persisted/failed channels so the downstream producer scopes its
+			// publish to the same tenant.
+			msgctx, tenant, ok := messaging.TenantContextFromSubject(ctx, unpersisted.Subject)
 			if !ok {
-				log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in topic %q", unpersisted.Topic))
+				log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in subject %q", unpersisted.Subject))
 				continue
 			}
 
@@ -228,10 +229,10 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 			// Persist the event using the per-message tenant context.
 			results, err := ep.PersistEvent(msgctx, *event)
 			if err != nil {
-				ep.Failed(0, *event, err)
+				ep.Failed(tenant, 0, *event, err)
 			} else {
 				for _, result := range results.Events {
-					ep.Persisted(result)
+					ep.Persisted(tenant, result)
 				}
 			}
 		} else {
