@@ -29,8 +29,20 @@ type TenantSpec struct {
 	Description string `json:"description"`
 }
 
+// Bootstrap lifecycle states for a tenant's dataset.
+const (
+	TenantNotBootstrapped = "NotBootstrapped"
+	TenantBootstrapping   = "Bootstrapping"
+	TenantBootstrapped    = "Bootstrapped"
+	TenantBootstrapFailed = "BootstrapFailed"
+)
+
 // TenantStatus defines the observed state of Tenant
 type TenantStatus struct {
+	// BootstrapState tracks progress of seeding the tenant's initial dataset.
+	// Shared microservices and the bootstrap-ordering system read this to gate
+	// startup of dependent functional areas (ADR-001).
+	BootstrapState string `json:"bootstrapState,omitempty"`
 }
 
 //+kubebuilder:object:root=true

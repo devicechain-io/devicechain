@@ -26,25 +26,6 @@ resources:
   version: v1beta1
 - api:
     crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: devicechain.io
-  group: core
-  kind: Microservice
-  path: github.com/devicechain-io/dc-k8s/api/v1beta1
-  version: v1beta1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: devicechain.io
-  group: core
-  kind: TenantMicroservice
-  path: github.com/devicechain-io/dc-k8s/api/v1beta1
-  version: v1beta1
-- api:
-    crdVersion: v1
-    namespaced: true
   domain: devicechain.io
   group: core
   kind: InstanceConfiguration
@@ -52,19 +33,9 @@ resources:
   version: v1beta1
 - api:
     crdVersion: v1
-    namespaced: true
   domain: devicechain.io
   group: core
   kind: MicroserviceConfiguration
-  path: github.com/devicechain-io/dc-k8s/api/v1beta1
-  version: v1beta1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: devicechain.io
-  group: core
-  kind: Cluster
   path: github.com/devicechain-io/dc-k8s/api/v1beta1
   version: v1beta1
 version: "3"

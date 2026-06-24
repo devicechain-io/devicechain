@@ -1,0 +1,4 @@
+github.com/devicechain-io/dc-event-management v0.0.1/go.mod h1:puIOQO+EYI0rBcShQitO23BMPjvjfNrIlEJ0L7zuYTk=
+github.com/devicechain-io/dc-microservice v0.0.0/go.mod h1:ZEJ3jnWuGRM7YA8DCVpqLkP4jGuyFPJ2bR8Q27sd4nI=
+github.com/devicechain-io/dc-user-management v0.0.1/go.mod h1:6AdY+dGqJzXUH+MjHBrPIIDUjwqpVVYu2AajYJVxC/g=
+github.com/mitchellh/mapstructure v1.4.3/go.mod h1:bFUtVrKA4DC2yAKiSyO/QUcy7e+RRV2QTWOzhPopBRo=

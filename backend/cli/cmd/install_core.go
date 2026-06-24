@@ -22,16 +22,10 @@ import (
 	gen "github.com/devicechain-io/dc-k8s/generators"
 
 	"github.com/spf13/cobra"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 
 	"github.com/fatih/color"
-)
-
-const (
-	CLUSTER_NAME = "dc-cluster"
 )
 
 // Create instance of install command
@@ -45,9 +39,6 @@ func NewInstallCoreCommand() *cobra.Command {
 		Long:  `Installs Kubernetes manifests and operator`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Println("Preparing to install DeviceChain core components...")
-			domain, _ := cmd.Flags().GetString("domain")
-			name, _ := cmd.Flags().GetString("name")
-			desc, _ := cmd.Flags().GetString("desc")
 
 			dynamicClient, discoveryClient, err := createClients()
 			if err != nil {
@@ -62,12 +53,6 @@ func NewInstallCoreCommand() *cobra.Command {
 
 			// Install CRDs.
 			err = installCrds(dynamicClient, discoveryClient)
-			if err != nil {
-				return err
-			}
-
-			// Make sure the cluster resource exists.
-			err = assureClusterResource(domain, name, desc)
 			if err != nil {
 				return err
 			}
@@ -112,42 +97,6 @@ func NewInstallCoreCommand() *cobra.Command {
 			return nil
 		},
 	}
-}
-
-// Assure that a cluster resource exists.
-func assureClusterResource(domain string, name string, desc string) error {
-	if domain == "" {
-		domain = "mydc.com"
-	}
-	if name == "" {
-		name = "DeviceChain Cluster"
-	}
-	if desc == "" {
-		desc = fmt.Sprintf("DeviceChain cluster for domain '%s'", domain)
-	}
-
-	// Check for existing namespace.
-	fmt.Print(color.WhiteString("\nVerifying cluster resource... "))
-	cluster := &v1beta1.Cluster{}
-	err := v1beta1.V1Beta1Client.Get(context.Background(), types.NamespacedName{Name: CLUSTER_NAME}, cluster)
-	if err != nil {
-		// Attempt to create the namespace.
-		cluster = &v1beta1.Cluster{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: CLUSTER_NAME,
-			},
-			Spec: v1beta1.ClusterSpec{
-				Name:        name,
-				Description: desc,
-				DomainName:  domain,
-			},
-		}
-		err = v1beta1.V1Beta1Client.Create(context.Background(), cluster)
-		fmt.Println(color.GreenString("Created cluster resource."))
-	} else {
-		fmt.Println(color.GreenString("Cluster resource verified."))
-	}
-	return err
 }
 
 // Install all custom resource definitions from k8s metadata.

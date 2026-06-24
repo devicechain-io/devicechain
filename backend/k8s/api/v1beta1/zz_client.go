@@ -18,8 +18,6 @@ package v1beta1
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log"
 
 	v1 "k8s.io/api/core/v1"
@@ -32,6 +30,7 @@ import (
 )
 
 const (
+	LABEL_INSTANCE     = "devicechain.io.instance"
 	LABEL_TENANT       = "devicechain.io.tenant"
 	LABEL_MICROSERVICE = "devicechain.io.microservice"
 )
@@ -145,7 +144,7 @@ func GetTenant(request TenantGetRequest) (*Tenant, error) {
 	return tenant, nil
 }
 
-// Get an microservice configuration based on request criteria
+// Get a microservice configuration based on request criteria
 func GetMicroserviceConfiguration(request MicroserviceConfigurationGetRequest) (*MicroserviceConfiguration, error) {
 	msconfig := &MicroserviceConfiguration{}
 	err := V1Beta1Client.Get(context.Background(), client.ObjectKey{
@@ -157,180 +156,16 @@ func GetMicroserviceConfiguration(request MicroserviceConfigurationGetRequest) (
 	return msconfig, nil
 }
 
-// Create a new DeviceChain microservice CR.
-func CreateMicroservice(request MicroserviceCreateRequest) (*Microservice, error) {
-	if request.ConfigurationId == "" {
-		return nil, errors.New("configuration id must be provided when creating microservice")
-	}
-	msc, err := GetMicroserviceConfiguration(MicroserviceConfigurationGetRequest{Id: request.ConfigurationId})
+// List the microservice configuration catalog. Each entry defines a shared
+// microservice (functional area + image + config) that the operator deploys
+// once per instance to serve all tenants.
+func ListMicroserviceConfigurations() (*MicroserviceConfigurationList, error) {
+	list := &MicroserviceConfigurationList{}
+	err := V1Beta1Client.List(context.Background(), list)
 	if err != nil {
 		return nil, err
 	}
-
-	// Create ms in instance namespace
-	ms := &Microservice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      request.Id,
-			Namespace: request.InstanceId,
-		},
-		Spec: MicroserviceSpec{
-			Name:            request.Name,
-			Description:     request.Description,
-			FunctionalArea:  msc.Spec.FunctionalArea,
-			Image:           msc.Spec.Image,
-			ImagePullPolicy: v1.PullIfNotPresent,
-			ConfigurationId: request.ConfigurationId,
-		},
-	}
-
-	// Attempt to create the microservice.
-	err = V1Beta1Client.Create(context.Background(), ms)
-	if err != nil {
-		return nil, err
-	}
-
-	// Attempt to get the created microservice.
-	err = V1Beta1Client.Get(context.Background(), client.ObjectKey{
-		Name:      request.Id,
-		Namespace: request.InstanceId,
-	}, ms)
-	if err != nil {
-		return nil, err
-	}
-	return ms, nil
-}
-
-// Get a microservice based on request criteria
-func GetMicroservice(request MicroserviceGetRequest) (*Microservice, error) {
-	ms := &Microservice{}
-	err := V1Beta1Client.Get(context.Background(), client.ObjectKey{
-		Name:      request.MicroserviceId,
-		Namespace: request.InstanceId,
-	}, ms)
-	if err != nil {
-		return nil, err
-	}
-	return ms, nil
-}
-
-// List microservices that match the given criteria
-func ListMicroservices(request MicroserviceListRequest) (*MicroserviceList, error) {
-	mslist := &MicroserviceList{}
-	err := V1Beta1Client.List(context.Background(), mslist, client.InNamespace(request.InstanceId))
-	if err != nil {
-		return nil, err
-	}
-	return mslist, nil
-}
-
-// Create a new tenant microservice CR.
-func CreateTenantMicroservice(request TenantMicroserviceCreateRequest) (*TenantMicroservice, error) {
-	if request.TenantId == "" {
-		return nil, errors.New("tenant id must be provided when creating tenant microservice")
-	}
-	tenant, err := GetTenant(TenantGetRequest{
-		InstanceId: request.InstanceId,
-		TenantId:   request.TenantId})
-	if err != nil {
-		return nil, err
-	}
-
-	if request.MicroserviceId == "" {
-		return nil, errors.New("microservice id must be provided when creating tenant microservice")
-	}
-	ms, err := GetMicroservice(MicroserviceGetRequest{
-		InstanceId:     request.InstanceId,
-		MicroserviceId: request.MicroserviceId})
-	if err != nil {
-		return nil, err
-	}
-
-	msc, err := GetMicroserviceConfiguration(MicroserviceConfigurationGetRequest{
-		Id: ms.Spec.ConfigurationId,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// Create tenant ms in instance namespace
-	tmsid := fmt.Sprintf("%s-%s-%s", "tms", tenant.ObjectMeta.Name, ms.ObjectMeta.Name)
-	tms := &TenantMicroservice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      tmsid,
-			Namespace: tenant.GetObjectMeta().GetNamespace(),
-			Labels: map[string]string{
-				LABEL_TENANT:       tenant.GetObjectMeta().GetName(),
-				LABEL_MICROSERVICE: ms.GetObjectMeta().GetName(),
-			},
-		},
-		Spec: TenantMicroserviceSpec{
-			MicroserviceId: request.MicroserviceId,
-			TenantId:       request.TenantId,
-			Configuration:  EntityConfiguration{RawMessage: msc.Spec.Configuration.RawMessage},
-		},
-	}
-
-	// Attempt to create the tenant microservice.
-	err = V1Beta1Client.Create(context.Background(), tms)
-	if err != nil {
-		return nil, err
-	}
-
-	// Attempt to get the created microservice.
-	err = V1Beta1Client.Get(context.Background(), client.ObjectKey{
-		Name:      tmsid,
-		Namespace: tenant.GetObjectMeta().GetNamespace(),
-	}, tms)
-	if err != nil {
-		return nil, err
-	}
-	return tms, nil
-}
-
-// Get a tenant microservice based on request criteria
-func GetTenantMicroservice(request TenantMicroserviceGetRequest) (*TenantMicroservice, error) {
-	tms := &TenantMicroservice{}
-	err := V1Beta1Client.Get(context.Background(), client.ObjectKey{
-		Name:      request.TenantMicroserviceId,
-		Namespace: request.InstanceId,
-	}, tms)
-	if err != nil {
-		return nil, err
-	}
-	return tms, nil
-}
-
-// Get a tenant microservice based on request criteria
-func GetTenantMicroservicesForTenant(request TenantMicroserviceByTenantRequest) (*TenantMicroserviceList, error) {
-	// List tenant microservices in instance namespace with tenant label
-	tmslist := &TenantMicroserviceList{}
-	err := V1Beta1Client.List(context.Background(), tmslist, client.InNamespace(request.InstanceId),
-		client.MatchingLabels{LABEL_TENANT: request.TenantId})
-	if err != nil {
-		return nil, err
-	}
-	return tmslist, nil
-}
-
-// Delete a tenant microservice based on request criteria
-func DeleteTenantMicroservice(request TenantMicroserviceDeleteRequest) (*TenantMicroservice, error) {
-	// Look up the existing tenant microservice
-	tms := &TenantMicroservice{}
-	err := V1Beta1Client.Get(context.Background(), client.ObjectKey{
-		Name:      request.TenantMicroserviceId,
-		Namespace: request.InstanceId,
-	}, tms)
-	if err != nil {
-		return nil, err
-	}
-
-	// Delete the tenant microservice
-	err = V1Beta1Client.Delete(context.Background(), tms)
-	if err != nil {
-		return nil, err
-	}
-
-	return tms, nil
+	return list, nil
 }
 
 // Initialize client configuration

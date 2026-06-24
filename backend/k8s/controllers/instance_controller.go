@@ -20,10 +20,12 @@ import (
 	"context"
 	"fmt"
 
+	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -33,6 +35,17 @@ import (
 
 const (
 	INSTANCE_CONFIG_NAME = "instance"
+
+	// Environment variables passed to each shared microservice pod. Tenant
+	// identity is intentionally absent: a single microservice pod serves all
+	// tenants, discovering them at runtime via Tenant resources and scoping
+	// work by NATS subject + TimescaleDB partition (ADR-001).
+	ENV_INSTANCE_ID        = "DC_INSTANCE_ID"
+	ENV_MICROSERVICE_ID    = "DC_MICROSERVICE_ID"
+	ENV_MS_FUNCTIONAL_AREA = "DC_MS_FUNCTIONAL_AREA"
+
+	// Default GraphQL port exposed by each microservice.
+	PORT_GRAPHQL = 8080
 )
 
 // InstanceReconciler reconciles a Instance object
@@ -44,16 +57,14 @@ type InstanceReconciler struct {
 //+kubebuilder:rbac:groups=core.devicechain.io,resources=instances,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core.devicechain.io,resources=instances/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=core.devicechain.io,resources=instances/finalizers,verbs=update
+//+kubebuilder:rbac:groups=core.devicechain.io,resources=microserviceconfigurations,verbs=get;list;watch
+//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=services;configmaps;namespaces,verbs=get;list;watch;create;update;patch;delete
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Instance object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.11.0/pkg/reconcile
+// Reconcile drives an Instance toward its desired state: a dedicated namespace,
+// an instance ConfigMap, and one shared Deployment + Service per microservice
+// in the configuration catalog. Each microservice runs as a single deployment
+// serving every tenant in the instance.
 func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -61,10 +72,9 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	err := r.Get(ctx, req.NamespacedName, instance)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			log.Info(fmt.Sprintf("Handling deleted tenant: %+v", req.NamespacedName))
-			err := r.handleInstanceDeleted(ctx, req)
-			if err != nil {
-				log.Error(err, "Unable to handle tenant delete")
+			log.Info(fmt.Sprintf("Handling deleted instance: %+v", req.NamespacedName))
+			if err := r.handleInstanceDeleted(ctx, req); err != nil {
+				log.Error(err, "Unable to handle instance delete")
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{}, nil
@@ -93,6 +103,11 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		log.Info(fmt.Sprintf("Created instance config map '%s'", cmap.ObjectMeta.Name))
 	}
 
+	// Deploy one shared microservice (Deployment + Service) per catalog entry.
+	if err := r.reconcileSharedMicroservices(ctx, instance); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -103,9 +118,137 @@ func (r *InstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// Handle case where instance has been deleted.
+// Handle case where instance has been deleted. The namespace deletion cascades
+// to the Deployments, Services, and ConfigMaps owned by the instance, so only
+// the cluster-scoped instance ConfigMap reference needs explicit cleanup.
 func (r *InstanceReconciler) handleInstanceDeleted(ctx context.Context, req ctrl.Request) error {
 	return deleteInstanceConfigMap(ctx, req)
+}
+
+// Reconcile the set of shared microservice deployments for an instance against
+// the microservice configuration catalog.
+func (r *InstanceReconciler) reconcileSharedMicroservices(ctx context.Context, instance *corev1beta1.Instance) error {
+	log := logf.FromContext(ctx)
+
+	catalog, err := corev1beta1.ListMicroserviceConfigurations()
+	if err != nil {
+		return err
+	}
+	log.Info(fmt.Sprintf("Reconciling %d shared microservices for instance '%s'", len(catalog.Items), instance.ObjectMeta.Name))
+
+	for i := range catalog.Items {
+		msc := &catalog.Items[i]
+		if err := r.assureMicroserviceDeployment(ctx, instance, msc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Name used for a shared microservice deployment/service (its functional area).
+func microserviceName(msc *corev1beta1.MicroserviceConfiguration) string {
+	return msc.Spec.FunctionalArea
+}
+
+// Labels applied to a shared microservice deployment.
+func microserviceLabels(instance *corev1beta1.Instance, msc *corev1beta1.MicroserviceConfiguration) map[string]string {
+	return map[string]string{
+		corev1beta1.LABEL_INSTANCE:     instance.ObjectMeta.Name,
+		corev1beta1.LABEL_MICROSERVICE: msc.Spec.FunctionalArea,
+	}
+}
+
+// Create the Deployment and Service for a shared microservice if not present.
+func (r *InstanceReconciler) assureMicroserviceDeployment(ctx context.Context, instance *corev1beta1.Instance,
+	msc *corev1beta1.MicroserviceConfiguration) error {
+	log := logf.FromContext(ctx)
+
+	name := microserviceName(msc)
+	key := types.NamespacedName{Namespace: instance.ObjectMeta.Name, Name: name}
+
+	deploy := &appsv1.Deployment{}
+	if err := r.Get(ctx, key, deploy); err != nil {
+		if !errors.IsNotFound(err) {
+			return err
+		}
+		if err := r.createDeploymentAndService(ctx, instance, msc); err != nil {
+			return err
+		}
+		log.Info(fmt.Sprintf("Created shared microservice '%s' for instance '%s'", name, instance.ObjectMeta.Name))
+		return nil
+	}
+	return nil
+}
+
+// Create a Deployment and Service for a shared microservice.
+func (r *InstanceReconciler) createDeploymentAndService(ctx context.Context, instance *corev1beta1.Instance,
+	msc *corev1beta1.MicroserviceConfiguration) error {
+	name := microserviceName(msc)
+	labels := microserviceLabels(instance, msc)
+
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: instance.ObjectMeta.Name,
+			Labels:    labels,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name:            name,
+							Image:           msc.Spec.Image,
+							ImagePullPolicy: v1.PullIfNotPresent,
+							Env: []v1.EnvVar{
+								{Name: ENV_INSTANCE_ID, Value: instance.ObjectMeta.Name},
+								{Name: ENV_MICROSERVICE_ID, Value: msc.ObjectMeta.Name},
+								{Name: ENV_MS_FUNCTIONAL_AREA, Value: msc.Spec.FunctionalArea},
+							},
+							Ports: []v1.ContainerPort{
+								{Name: "graphql", ContainerPort: PORT_GRAPHQL, Protocol: v1.ProtocolTCP},
+							},
+							VolumeMounts: []v1.VolumeMount{
+								{Name: "instance-config", MountPath: "/etc/dci-config"},
+							},
+						},
+					},
+					Volumes: []v1.Volume{
+						{
+							Name: "instance-config",
+							VolumeSource: v1.VolumeSource{
+								ConfigMap: &v1.ConfigMapVolumeSource{
+									LocalObjectReference: v1.LocalObjectReference{
+										Name: getInstanceConfigMapName(instance.ObjectMeta.Name),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := r.Create(ctx, deploy); err != nil {
+		return err
+	}
+
+	service := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: instance.ObjectMeta.Name,
+			Labels:    labels,
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{
+				{Name: "graphql", Protocol: v1.ProtocolTCP, Port: PORT_GRAPHQL},
+			},
+			Selector: labels,
+		},
+	}
+	return r.Create(ctx, service)
 }
 
 // Create a new namespace
@@ -154,7 +297,7 @@ func createInstanceConfigMap(dci *corev1beta1.Instance) (*v1.ConfigMap, error) {
 		},
 	}
 
-	// Attempt to create the namespace.
+	// Attempt to create the config map.
 	err = corev1beta1.V1Client.Create(context.Background(), cmap)
 	if err != nil {
 		return nil, err
@@ -185,9 +328,5 @@ func deleteInstanceConfigMap(ctx context.Context, req ctrl.Request) error {
 	if err != nil {
 		return err
 	}
-	err = corev1beta1.V1Client.Delete(ctx, cmap)
-	if err != nil {
-		return err
-	}
-	return nil
+	return corev1beta1.V1Client.Delete(ctx, cmap)
 }

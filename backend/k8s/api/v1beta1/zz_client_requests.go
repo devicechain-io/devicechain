@@ -51,60 +51,11 @@ type TenantGetRequest struct {
 	TenantId   string
 }
 
-// ----------------------
-// Microservice Mangement
-// ----------------------
+// ----------------------------------
+// Microservice Configuration Catalog
+// ----------------------------------
 
 // Information required to get a microservice configuration.
 type MicroserviceConfigurationGetRequest struct {
 	Id string
-}
-
-// Information required to create a DeviceChain microservice.
-type MicroserviceCreateRequest struct {
-	Id              string
-	InstanceId      string
-	Name            string
-	Description     string
-	ConfigurationId string
-}
-
-// Information required to get a microservice.
-type MicroserviceGetRequest struct {
-	InstanceId     string
-	MicroserviceId string
-}
-
-// Information required to list microservices.
-type MicroserviceListRequest struct {
-	InstanceId string
-}
-
-// -----------------------------
-// Tenant Microservice Mangement
-// -----------------------------
-
-// Information required to create a DeviceChain tenant microservice.
-type TenantMicroserviceCreateRequest struct {
-	InstanceId     string
-	TenantId       string
-	MicroserviceId string
-}
-
-// Information required to get a tenant microservice.
-type TenantMicroserviceGetRequest struct {
-	InstanceId           string
-	TenantMicroserviceId string
-}
-
-// Information required to get a tenant microservice.
-type TenantMicroserviceByTenantRequest struct {
-	InstanceId string
-	TenantId   string
-}
-
-// Information required to delete a tenant microservice.
-type TenantMicroserviceDeleteRequest struct {
-	InstanceId           string
-	TenantMicroserviceId string
 }

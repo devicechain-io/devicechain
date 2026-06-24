@@ -20,20 +20,23 @@ import (
 	"context"
 	"fmt"
 
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
-
 	v1 "k8s.io/api/core/v1"
-	netv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
 
-// TenantReconciler reconciles a Tenant object
+// TenantReconciler reconciles a Tenant object.
+//
+// Under the shared-microservice model (ADR-001) a Tenant does NOT get its own
+// set of pods. The controller maintains the tenant's ConfigMap and bootstrap
+// status; the shared microservice deployments owned by the Instance discover
+// tenants at runtime and scope work by NATS subject + TimescaleDB partition.
 type TenantReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -49,8 +52,7 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err := r.Get(ctx, req.NamespacedName, tenant); err != nil {
 		if errors.IsNotFound(err) {
 			log.Info(fmt.Sprintf("Handling deleted tenant: %+v", req.NamespacedName))
-			err := r.handleTenantDeleted(ctx, req)
-			if err != nil {
+			if err := r.handleTenantDeleted(ctx, req); err != nil {
 				log.Error(err, "Unable to handle tenant delete")
 				return ctrl.Result{}, err
 			}
@@ -60,35 +62,27 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	log.Info(fmt.Sprintf("Handling added/updated tenant: %+v", req.NamespacedName))
 
-	// Get list of tenantmicroservices indexed by microservice id
-	tmsbymsid, err := getTenantMicroservicesByMicroserviceId(tenant)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Find microservices where no tenantmicroservice exists for the tenant
-	missing, err := getMicroservicesWithNoTenantMicroservice(ctx, tenant, tmsbymsid)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Add tenant microservice for those that were missing.
-	for _, ms := range missing {
-		tms, err := handleMissingTenantMicroservice(tenant, ms)
-		if err != nil {
+	// Create tenant config map if not found.
+	if _, err := getTenantConfigMap(tenant.ObjectMeta.Name, tenant.ObjectMeta.Namespace); err != nil {
+		if !errors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
-		log.Info(fmt.Sprintf("Added missing tenant microservice (%s/%s)", tms.Spec.TenantId, tms.Spec.MicroserviceId))
-	}
-
-	// Create tenant config map if not found
-	_, err = getTenantConfigMap(tenant.ObjectMeta.Name, tenant.ObjectMeta.Namespace)
-	if err != nil {
 		cmap, err := createTenantConfigMap(tenant.ObjectMeta.Name, tenant.ObjectMeta.Namespace)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 		log.Info(fmt.Sprintf("Created tenant config map '%s'", cmap.ObjectMeta.Name))
+	}
+
+	// Initialize bootstrap state. Actual dataset bootstrapping is performed by
+	// the microservice runtime (follow-up: bootstrap-ordering work); the
+	// operator only seeds the initial state here.
+	if tenant.Status.BootstrapState == "" {
+		tenant.Status.BootstrapState = v1beta1.TenantNotBootstrapped
+		if err := r.Status().Update(ctx, tenant); err != nil {
+			return ctrl.Result{}, err
+		}
+		log.Info(fmt.Sprintf("Initialized bootstrap state for tenant '%s'", tenant.ObjectMeta.Name))
 	}
 
 	return ctrl.Result{}, nil
@@ -101,99 +95,19 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// Handle case where there is no tenantmicroservice for a tenant/microservice combination.
-func handleMissingTenantMicroservice(tenant *v1beta1.Tenant, ms v1beta1.Microservice) (*v1beta1.TenantMicroservice, error) {
-	return v1beta1.CreateTenantMicroservice(v1beta1.TenantMicroserviceCreateRequest{
-		InstanceId:     tenant.GetObjectMeta().GetNamespace(),
-		TenantId:       tenant.ObjectMeta.Name,
-		MicroserviceId: ms.ObjectMeta.Name})
-}
-
-// Get map of tenant microservices indexed by microservice id.
-func getTenantMicroservicesByMicroserviceId(tenant *v1beta1.Tenant) (map[string]v1beta1.TenantMicroservice, error) {
-	// List tenant microservices with the given tenant label
-	tmslist, err := v1beta1.GetTenantMicroservicesForTenant(v1beta1.TenantMicroserviceByTenantRequest{
-		InstanceId: tenant.ObjectMeta.Namespace,
-		TenantId:   tenant.ObjectMeta.Name})
-	if err != nil {
-		return nil, err
-	}
-
-	// Index all tenant microservices by microservice id
-	tmsbymsid := map[string]v1beta1.TenantMicroservice{}
-	for _, tms := range tmslist.Items {
-		tmsbymsid[tms.Spec.MicroserviceId] = tms
-	}
-
-	return tmsbymsid, nil
-}
-
-// Get list of microservices that do not have a tenantmicroservice for tenant.
-func getMicroservicesWithNoTenantMicroservice(ctx context.Context, tenant *v1beta1.Tenant,
-	tmsbymsid map[string]v1beta1.TenantMicroservice) ([]v1beta1.Microservice, error) {
-	log := logf.FromContext(ctx)
-
-	mslist, err := v1beta1.ListMicroservices(v1beta1.MicroserviceListRequest{
-		InstanceId: tenant.ObjectMeta.Namespace})
-	if err != nil {
-		return nil, err
-	}
-
-	// Loop through microservices and look up tenantmicroservices by id to find missing items
-	missing := make([]v1beta1.Microservice, 0)
-	for _, ms := range mslist.Items {
-		if _, present := tmsbymsid[ms.ObjectMeta.Name]; !present {
-			missing = append(missing, ms)
-		}
-	}
-	log.Info(fmt.Sprintf("Found %d microservices without tenant microservices", len(missing)))
-
-	return missing, nil
-}
-
-// Delete tenant ingress resource.
-func (r *TenantReconciler) deleteTenantIngress(ctx context.Context, req ctrl.Request) error {
-	igname := generateIngressName(req.Namespace, req.Name)
-	ingress := &netv1.Ingress{}
-	if err := r.Get(ctx, igname, ingress); err == nil {
-		r.Delete(context.Background(), ingress)
-	}
-	return nil
-}
-
-// Handle a deleted tenant
+// Handle a deleted tenant by removing its ConfigMap.
 func (r *TenantReconciler) handleTenantDeleted(ctx context.Context, req ctrl.Request) error {
 	log := logf.FromContext(ctx)
 
-	// Find all existing tenant microservices for tenant
-	matches, err := v1beta1.GetTenantMicroservicesForTenant(v1beta1.TenantMicroserviceByTenantRequest{
-		InstanceId: req.NamespacedName.Namespace,
-		TenantId:   req.NamespacedName.Name})
-	if err != nil {
-		return err
-	}
-
-	// Loop through tenant microservices and delete them
-	log.Info(fmt.Sprintf("Found %d tenant microservices that will be deleted.", len(matches.Items)))
-	for _, tms := range matches.Items {
-		tms, err := v1beta1.DeleteTenantMicroservice(v1beta1.TenantMicroserviceDeleteRequest{
-			InstanceId:           req.NamespacedName.Namespace,
-			TenantMicroserviceId: tms.ObjectMeta.Name})
-		if err != nil {
-			return err
-		}
-		log.Info(fmt.Sprintf("Deleted tenant microservice '%s' due to tenant delete.", tms.ObjectMeta.Name))
-	}
-
-	// Delete config map associated with tenant
 	cmap, err := deleteTenantConfigMap(req.Name, req.Namespace)
 	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
 		return err
 	}
 	log.Info(fmt.Sprintf("Deleted tenant config map '%s'.", cmap.ObjectMeta.Name))
-
-	// Delete tenant ingress.
-	return r.deleteTenantIngress(ctx, req)
+	return nil
 }
 
 // Get name of tenant config map
@@ -211,7 +125,6 @@ func createTenantConfigMap(tid string, ns string) (*v1.ConfigMap, error) {
 		Data: map[string]string{},
 	}
 
-	// Attempt to create the namespace.
 	err := v1beta1.V1Client.Create(context.Background(), cmap)
 	if err != nil {
 		return nil, err
