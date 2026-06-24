@@ -28,7 +28,7 @@ const config: Config = {
         docs: {
           routeBasePath: '/', // docs are the site root
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://github.com/devicechain-io/devicechain/tree/master/docs/',
+          editUrl: 'https://github.com/devicechain-io/devicechain/tree/main/docs/',
         },
         blog: false,
         theme: {
