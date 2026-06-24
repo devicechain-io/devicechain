@@ -78,3 +78,11 @@ var anchorColumns = map[string]string{
 	"asset":         "rel_asset_id",
 	"assetgroup":    "rel_asset_group_id",
 }
+
+// IsAnchorType reports whether t is a recognized relationship anchor type. The
+// read path drops an unrecognized anchor (no column), so callers must reject an
+// unknown type up front rather than silently returning unfiltered results.
+func IsAnchorType(t string) bool {
+	_, ok := anchorColumns[t]
+	return ok
+}

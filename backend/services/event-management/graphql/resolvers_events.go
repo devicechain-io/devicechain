@@ -121,6 +121,16 @@ func (r *EventResolver) RelAssetGroupId() *string {
 	return uintPtrStr(r.M.RelAssetGroupId)
 }
 
+// mapResolvers builds a resolver slice from a model slice, preserving the
+// schema/context wiring shared by every typed result resolver.
+func mapResolvers[M any, R any](src []M, wrap func(M) R) []R {
+	out := make([]R, 0, len(src))
+	for i := range src {
+		out = append(out, wrap(src[i]))
+	}
+	return out
+}
+
 // -----------------------------
 // Event search results resolver
 // -----------------------------
@@ -132,11 +142,9 @@ type EventSearchResultsResolver struct {
 }
 
 func (r *EventSearchResultsResolver) Results() []*EventResolver {
-	resolvers := make([]*EventResolver, 0)
-	for _, current := range r.M.Results {
-		resolvers = append(resolvers, &EventResolver{M: current, S: r.S, C: r.C})
-	}
-	return resolvers
+	return mapResolvers(r.M.Results, func(m model.Event) *EventResolver {
+		return &EventResolver{M: m, S: r.S, C: r.C}
+	})
 }
 
 func (r *EventSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
@@ -188,11 +196,9 @@ type LocationEventSearchResultsResolver struct {
 }
 
 func (r *LocationEventSearchResultsResolver) Results() []*LocationEventResolver {
-	resolvers := make([]*LocationEventResolver, 0)
-	for _, current := range r.M.Results {
-		resolvers = append(resolvers, &LocationEventResolver{M: current, S: r.S, C: r.C})
-	}
-	return resolvers
+	return mapResolvers(r.M.Results, func(m model.LocationEvent) *LocationEventResolver {
+		return &LocationEventResolver{M: m, S: r.S, C: r.C}
+	})
 }
 
 func (r *LocationEventSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
@@ -244,11 +250,9 @@ type MeasurementEventSearchResultsResolver struct {
 }
 
 func (r *MeasurementEventSearchResultsResolver) Results() []*MeasurementEventResolver {
-	resolvers := make([]*MeasurementEventResolver, 0)
-	for _, current := range r.M.Results {
-		resolvers = append(resolvers, &MeasurementEventResolver{M: current, S: r.S, C: r.C})
-	}
-	return resolvers
+	return mapResolvers(r.M.Results, func(m model.MeasurementEvent) *MeasurementEventResolver {
+		return &MeasurementEventResolver{M: m, S: r.S, C: r.C}
+	})
 }
 
 func (r *MeasurementEventSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
@@ -306,11 +310,9 @@ type AlertEventSearchResultsResolver struct {
 }
 
 func (r *AlertEventSearchResultsResolver) Results() []*AlertEventResolver {
-	resolvers := make([]*AlertEventResolver, 0)
-	for _, current := range r.M.Results {
-		resolvers = append(resolvers, &AlertEventResolver{M: current, S: r.S, C: r.C})
-	}
-	return resolvers
+	return mapResolvers(r.M.Results, func(m model.AlertEvent) *AlertEventResolver {
+		return &AlertEventResolver{M: m, S: r.S, C: r.C}
+	})
 }
 
 func (r *AlertEventSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {

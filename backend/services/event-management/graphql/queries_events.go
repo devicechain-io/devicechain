@@ -19,6 +19,7 @@ package graphql
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -87,6 +88,9 @@ func toEventSearchCriteria(in EventSearchCriteriaInput) (model.EventSearchCriter
 	}
 
 	if in.Anchor != nil {
+		if !model.IsAnchorType(in.Anchor.Type) {
+			return criteria, fmt.Errorf("unknown anchor type %q", in.Anchor.Type)
+		}
 		id, err := strconv.ParseUint(in.Anchor.Id, 0, 64)
 		if err != nil {
 			return criteria, err
