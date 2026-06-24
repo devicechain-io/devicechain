@@ -9,7 +9,9 @@ type SearchResultsPagination {
     totalRecords: Int
 }
 
-# A persisted base event with token references resolved.
+# A persisted base event with token references resolved. The originating
+# device's tracked relationship target is denormalized as a uniform
+# (anchorType, anchorId) pair (ADR-013); both are null when there was none.
 type Event {
     id: ID!
     deviceId: String!
@@ -18,14 +20,8 @@ type Event {
     processedTime: String
     source: String!
     altId: String
-    relDeviceId: String
-    relDeviceGroupId: String
-    relCustomerId: String
-    relCustomerGroupId: String
-    relAreaId: String
-    relAreaGroupId: String
-    relAssetId: String
-    relAssetGroupId: String
+    anchorType: String
+    anchorId: String
 }
 
 # A persisted location event.
@@ -64,7 +60,7 @@ type AlertEvent {
 
 # Relationship anchor used to filter events. The type names an entity class
 # (e.g. "customer", "area") and the id is that entity's row id; together they
-# map to the corresponding Rel* column on the base event table.
+# filter the uniform (anchorType, anchorId) columns on the base event table.
 input EventAnchor {
     type: String!
     id: String!

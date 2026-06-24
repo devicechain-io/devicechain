@@ -55,23 +55,18 @@ func NewInitialSchema() *gormigrate.Migration {
 				Source       string
 			}
 
-			// Base event fields.
+			// Base event fields. The relationship target is denormalized as a
+			// single uniform (anchor_type, anchor_id) pair (ADR-013).
 			type Event struct {
 				rdb.TenantScoped
-				DeviceId        uint              `gorm:"primaryKey"`
-				EventType       esmodel.EventType `gorm:"primaryKey"`
-				OccurredTime    time.Time         `gorm:"primaryKey"`
-				AssignmentId    uint              `gorm:"not null"`
-				Source          string
-				AltId           sql.NullString
-				DeviceGroupId   sql.NullInt64
-				CustomerId      *uint
-				CustomerGroupId *uint
-				AreaId          *uint
-				AreaGroupId     *uint
-				AssetId         *uint
-				AssetGroupId    *uint
-				ProcessedTime   time.Time
+				DeviceId      uint              `gorm:"primaryKey"`
+				EventType     esmodel.EventType `gorm:"primaryKey"`
+				OccurredTime  time.Time         `gorm:"primaryKey"`
+				Source        string
+				AltId         sql.NullString
+				AnchorType    *string
+				AnchorId      *uint
+				ProcessedTime time.Time
 			}
 
 			err := tx.AutoMigrate(&Event{}, &LocationEvent{}, &MeasurementEvent{}, &AlertEvent{})
@@ -93,6 +88,14 @@ func NewInitialSchema() *gormigrate.Migration {
 
 			// Add composite index for tenant-scoped time-series queries.
 			tx.Exec("CREATE INDEX ON \"event-management\".\"events\" (tenant_id, occurred_time DESC);")
+			if tx.Error != nil {
+				return tx.Error
+			}
+
+			// Add the relationship-anchor index for anchor-filtered time-series
+			// queries (the uniform (anchor_type, anchor_id) replaces the eight
+			// previously-unindexed Rel* columns, ADR-013).
+			tx.Exec("CREATE INDEX ON \"event-management\".\"events\" (anchor_type, anchor_id, occurred_time DESC);")
 			if tx.Error != nil {
 				return tx.Error
 			}

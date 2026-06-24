@@ -5,14 +5,13 @@ package model
 
 import (
 	"context"
-	"strings"
 
 	"gorm.io/gorm"
 )
 
 // commonEventFilters applies the device, event-type and occurred-time-range
 // filters that are shared by every event read. The anchor filter is NOT applied
-// here because the typed tables do not carry the Rel* columns; the base-event
+// here because the typed tables do not carry the anchor columns; the base-event
 // read adds the anchor clause directly.
 func commonEventFilters(criteria EventSearchCriteria) func(db *gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
@@ -32,23 +31,21 @@ func commonEventFilters(criteria EventSearchCriteria) func(db *gorm.DB) *gorm.DB
 	}
 }
 
-// anchorColumnFor resolves the Rel* column for the given anchor type, or "" if
-// the anchor type is unknown.
-func anchorColumnFor(anchorType *string) string {
-	if anchorType == nil {
-		return ""
-	}
-	return anchorColumns[strings.ToLower(strings.TrimSpace(*anchorType))]
+// hasAnchor reports whether the criteria carries a usable (anchor_type, anchor_id)
+// pair to filter on.
+func hasAnchor(criteria EventSearchCriteria) bool {
+	return criteria.AnchorType != nil && criteria.AnchorId != nil
 }
 
 // Search for base events that meet criteria. The base Event table carries the
-// Rel* anchor columns, so the anchor filter is applied directly here.
+// uniform (anchor_type, anchor_id) columns, so the anchor filter is applied
+// directly here.
 func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*EventSearchResults, error) {
 	results := make([]Event, 0)
 	db, pag := api.RDB.ListOf(ctx, &Event{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
-		if col := anchorColumnFor(criteria.AnchorType); col != "" && criteria.AnchorId != nil {
-			result = result.Where(col+" = ?", *criteria.AnchorId)
+		if hasAnchor(criteria) {
+			result = result.Where("anchor_type = ? AND anchor_id = ?", *criteria.AnchorType, *criteria.AnchorId)
 		}
 		return result
 	}, criteria.Pagination)
@@ -64,10 +61,10 @@ func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*Even
 // event row matches the anchor. The subquery runs through DB(ctx) so it is
 // tenant-scoped as well.
 func (api *Api) typedAnchorFilter(ctx context.Context, criteria EventSearchCriteria, result *gorm.DB) *gorm.DB {
-	if col := anchorColumnFor(criteria.AnchorType); col != "" && criteria.AnchorId != nil {
+	if hasAnchor(criteria) {
 		sub := api.RDB.DB(ctx).Model(&Event{}).
 			Select("device_id, event_type, occurred_time").
-			Where(col+" = ?", *criteria.AnchorId)
+			Where("anchor_type = ? AND anchor_id = ?", *criteria.AnchorType, *criteria.AnchorId)
 		result = result.Where("(device_id, event_type, occurred_time) IN (?)", sub)
 	}
 	return result
