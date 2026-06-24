@@ -4,6 +4,8 @@
 package model
 
 import (
+	"database/sql"
+
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -108,5 +110,78 @@ type DeviceGroupSearchCriteria struct {
 // Results for device group search.
 type DeviceGroupSearchResults struct {
 	Results    []DeviceGroup
+	Pagination rdb.SearchResultsPagination
+}
+
+// Credential type vocabulary (ADR-014). Pluggable: new types (LWM2M, DID) add
+// no Device-schema churn.
+type CredentialType string
+
+const (
+	CredentialAccessToken     CredentialType = "ACCESS_TOKEN"
+	CredentialX509Certificate CredentialType = "X509_CERTIFICATE"
+	CredentialMqttBasic       CredentialType = "MQTT_BASIC"
+)
+
+// Valid reports whether the credential type names one of the known types.
+func (t CredentialType) Valid() bool {
+	switch t {
+	case CredentialAccessToken, CredentialX509Certificate, CredentialMqttBasic:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the underlying string value.
+func (t CredentialType) String() string {
+	return string(t)
+}
+
+// Data required to create a device credential.
+type DeviceCredentialCreateRequest struct {
+	Token           string
+	DeviceToken     string
+	CredentialType  string
+	CredentialId    string
+	CredentialValue *string
+	Enabled         bool
+	ExpiresAt       *string
+	Metadata        *string
+}
+
+// DeviceCredential holds authentication material for a device (ADR-014).
+// Identity (Device) is stable and never rotates; credentials are rotatable and
+// a device may hold several. CredentialId is the identifier a device presents
+// at connect time (access token string, X.509 cert thumbprint/CN, or MQTT
+// username); it resolves to the owning device. CredentialValue is the secret
+// material (token secret, MQTT password, or certificate PEM).
+type DeviceCredential struct {
+	gorm.Model
+	rdb.TenantScoped
+	rdb.TokenReference
+	rdb.MetadataEntity
+
+	DeviceId        uint
+	Device          *Device
+	CredentialType  string
+	CredentialId    string
+	CredentialValue sql.NullString
+	Enabled         bool
+	ExpiresAt       sql.NullTime
+}
+
+// Search criteria for locating device credentials.
+type DeviceCredentialSearchCriteria struct {
+	rdb.Pagination
+	Device         *string
+	CredentialType *string
+	CredentialId   *string
+	Enabled        *bool
+}
+
+// Results for device credential search.
+type DeviceCredentialSearchResults struct {
+	Results    []DeviceCredential
 	Pagination rdb.SearchResultsPagination
 }

@@ -161,6 +161,50 @@ type DeviceGroupSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# Represents rotatable authentication material for a device (ADR-014).
+type DeviceCredential implements Model & TokenReference & MetadataEntity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    device: Device!
+    credentialType: String!
+    credentialId: String!
+    credentialValue: String
+    enabled: Boolean!
+    expiresAt: String
+    metadata: String
+}
+
+# Data required to create a device credential.
+input DeviceCredentialCreateRequest {
+    token: String!
+    deviceToken: String!
+    credentialType: String!
+    credentialId: String!
+    credentialValue: String
+    enabled: Boolean!
+    expiresAt: String
+    metadata: String
+}
+
+# Criteria used when searching for device credentials.
+input DeviceCredentialSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    device: String
+    credentialType: String
+    credentialId: String
+    enabled: Boolean
+}
+
+# Search results returned from device credential query.
+type DeviceCredentialSearchResults {
+    results: [DeviceCredential!]!
+    pagination: SearchResultsPagination!
+}
+
 # Represents a type or class of assets
 type AssetType implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
     id: ID!
@@ -621,6 +665,12 @@ type Query {
     deviceGroupsByToken(tokens: [String!]!): [DeviceGroup!]!
     # List device groups that meet criteria.
     deviceGroups(criteria: DeviceGroupSearchCriteria!): DeviceGroupSearchResults!
+    # Find device credentials by unique id.
+    deviceCredentialsById(ids: [ID!]!): [DeviceCredential!]!
+    # Find device credentials by unique token.
+    deviceCredentialsByToken(tokens: [String!]!): [DeviceCredential!]!
+    # List device credentials that meet criteria.
+    deviceCredentials(criteria: DeviceCredentialSearchCriteria!): DeviceCredentialSearchResults!
 
     # Find entity relationship types by unique id.
     entityRelationshipTypesById(ids: [String!]!): [EntityRelationshipType!]!
@@ -707,6 +757,10 @@ type Mutation {
     createDeviceGroup(request: DeviceGroupCreateRequest): DeviceGroup!
     # Update an existing device group.
     updateDeviceGroup(token: String!, request: DeviceGroupCreateRequest): DeviceGroup!
+    # Create a new device credential.
+    createDeviceCredential(request: DeviceCredentialCreateRequest): DeviceCredential!
+    # Update an existing device credential.
+    updateDeviceCredential(token: String!, request: DeviceCredentialCreateRequest): DeviceCredential!
 
     # Create a new entity relationship type.
     createEntityRelationshipType(request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
