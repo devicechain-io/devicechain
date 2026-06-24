@@ -122,3 +122,36 @@ func TestTenantIsolation_NonScopedModelUnaffected(t *testing.T) {
 		t.Fatalf("expected 1 gadget, got %d", len(found))
 	}
 }
+
+// (e) A deliberate system context (core.WithSystemContext) reads across tenants:
+// the sanctioned bypass used by the login lookup. It must neither fail closed nor
+// inject a tenant predicate.
+func TestTenantIsolation_SystemContextReadsAcrossTenants(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.WithContext(core.WithTenant(context.Background(), "A")).Create(&widget{Name: "a1"}).Error; err != nil {
+		t.Fatalf("seed A failed: %v", err)
+	}
+	if err := db.WithContext(core.WithTenant(context.Background(), "B")).Create(&widget{Name: "b1"}).Error; err != nil {
+		t.Fatalf("seed B failed: %v", err)
+	}
+
+	sysctx := core.WithSystemContext(context.Background())
+	var found []widget
+	if err := db.WithContext(sysctx).Find(&found).Error; err != nil {
+		t.Fatalf("system-context query failed (should bypass, not fail closed): %v", err)
+	}
+	if len(found) != 2 {
+		t.Fatalf("expected system context to see all 2 rows across tenants, got %d (%+v)", len(found), found)
+	}
+}
+
+// (f) The system bypass is opt-in: WithSystemContext must be explicitly set. A
+// plain context (no tenant, no system marker) still fails closed — proving the
+// bypass cannot be triggered by omission.
+func TestTenantIsolation_SystemContextIsOptIn(t *testing.T) {
+	db := newTestDB(t)
+	var found []widget
+	if err := db.WithContext(context.Background()).Find(&found).Error; !errors.Is(err, core.ErrNoTenant) {
+		t.Fatalf("a plain context must fail closed, not silently bypass; got %v", err)
+	}
+}

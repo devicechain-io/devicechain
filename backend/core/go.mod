@@ -1,6 +1,6 @@
 module github.com/devicechain-io/dc-microservice
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/bsm/redislock v0.7.2
@@ -28,6 +28,7 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/google/pprof v0.0.0-20250403155104-27863c87afa6 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgx/v5 v5.6.0 // indirect

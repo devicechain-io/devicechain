@@ -1,22 +1,22 @@
-# Represents a user assigned to a tenant.
-type TenantUser implements Model {
-    id: ID!
-    created_at: String
-    updated_at: String
-    deleted_at: String
-    firstName: String!
-    lastName: String!
-    email: String
-    username: String!
-    enabled: Boolean
+# Pair of JWTs returned by a successful login or token refresh.
+type AuthToken {
+    accessToken: String!
+    refreshToken: String!
+    expiresAt: String!
 }
 
 # Contains queries executed against model.
 type Query {
+    # Liveness placeholder until tenant-user queries land (Phase 2).
+    ping: String!
 }
 
 # Contains mutations executed against model.
 type Mutation {
+    # Authenticate with a username and password, returning an access/refresh pair.
+    login(username: String!, password: String!): AuthToken!
+    # Exchange a valid refresh token for a new pair (rotates the refresh token).
+    refresh(refreshToken: String!): AuthToken!
 }
 
 schema {

@@ -10,8 +10,8 @@ spec:
         Hostname: dc-nats.dc-system
         Port: 4222
         StreamReplicas: 1
-      Keycloak:
-        Hostname: dc-keycloak.dc-system
+      UserManagement:
+        Hostname: dc-user-management.dc-system
         Port: 8080
       Metrics:
         Enabled: true

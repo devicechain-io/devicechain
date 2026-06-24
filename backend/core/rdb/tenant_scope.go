@@ -82,6 +82,14 @@ func scopedTenant(db *gorm.DB) (string, bool) {
 	if db.Error != nil || !isTenantScoped(db) {
 		return "", false
 	}
+	// A deliberate system context (core.WithSystemContext) runs unscoped: no
+	// predicate is injected and the fail-closed check is skipped. This is the
+	// sanctioned bypass for bootstrap operations that must run before a tenant
+	// is known (e.g. the login lookup). See core.WithSystemContext for the
+	// security contract governing its use.
+	if core.IsSystemContext(db.Statement.Context) {
+		return "", false
+	}
 	tenant, ok := core.TenantFromContext(db.Statement.Context)
 	if !ok {
 		_ = db.AddError(core.ErrNoTenant)
