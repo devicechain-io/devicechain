@@ -110,6 +110,65 @@ func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, eve
 	return results, nil
 }
 
+// Persists measurement events to the datastore.
+func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, event model.Event,
+	payload dmmodel.ResolvedMeasurementsPayload) (*EventPersistenceResults, error) {
+	events := make([]interface{}, 0)
+	for _, mxentry := range payload.Entries {
+		for _, mx := range mxentry.Entries {
+			val := mx.Value
+			fval, err := parseNullableFloat64(&val)
+			if err != nil {
+				return nil, err
+			}
+			var classifier *uint
+			if mx.Classifier != nil {
+				c := uint(*mx.Classifier)
+				classifier = &c
+			}
+			mreq := &model.MeasurementEventCreateRequest{
+				Event:      event,
+				Name:       mx.Name,
+				Value:      fval,
+				Classifier: classifier,
+			}
+			mevt, err := ep.Api.CreateMeasurementEvent(ctx, mreq)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, mevt)
+		}
+	}
+	results := &EventPersistenceResults{
+		Events: events,
+	}
+	return results, nil
+}
+
+// Persists alert events to the datastore.
+func (ep *EventPersistenceWorker) PersistAlertEvents(ctx context.Context, event model.Event,
+	payload dmmodel.ResolvedAlertsPayload) (*EventPersistenceResults, error) {
+	events := make([]interface{}, 0)
+	for _, alert := range payload.Entries {
+		areq := &model.AlertEventCreateRequest{
+			Event:   event,
+			Type:    alert.Type,
+			Level:   alert.Level,
+			Message: alert.Message,
+			Source:  alert.Source,
+		}
+		aevt, err := ep.Api.CreateAlertEvent(ctx, areq)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, aevt)
+	}
+	results := &EventPersistenceResults{
+		Events: events,
+	}
+	return results, nil
+}
+
 // Persists a resolved event to the datastore.
 func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmodel.ResolvedEvent) (*EventPersistenceResults, error) {
 	pevent := model.Event{
@@ -134,6 +193,16 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 			return ep.PersistLocationEvents(ctx, pevent, *payload)
 		}
 		return nil, fmt.Errorf("non-location payload in location event")
+	case esmodel.Measurement:
+		if payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload); ok {
+			return ep.PersistMeasurementEvents(ctx, pevent, *payload)
+		}
+		return nil, fmt.Errorf("non-measurement payload in measurement event")
+	case esmodel.Alert:
+		if payload, ok := event.Payload.(*dmmodel.ResolvedAlertsPayload); ok {
+			return ep.PersistAlertEvents(ctx, pevent, *payload)
+		}
+		return nil, fmt.Errorf("non-alert payload in alert event")
 	}
 	return nil, fmt.Errorf("unhandled event type in persistence: %s", event.EventType.String())
 }

@@ -66,18 +66,41 @@ type LocationEventCreateRequest struct {
 // Measurement event fields.
 type MeasurementEvent struct {
 	rdb.TenantScoped
-	DeviceId     uint            `gorm:"not null"`
-	OccurredTime time.Time       `gorm:"not null"`
-	Event        Event           `gorm:"foreignKey:DeviceId,OccurredTime;References:DeviceId,OccurredTime"`
-	Latitude     sql.NullFloat64 `gorm:"type:decimal(10,8);"`
-	Longitude    sql.NullFloat64 `gorm:"type:decimal(11,8);"`
-	Elevation    sql.NullFloat64 `gorm:"type:decimal(10,8);"`
+	DeviceId     uint              `gorm:"not null"`
+	EventType    esmodel.EventType `gorm:"not null"`
+	OccurredTime time.Time         `gorm:"not null"`
+	Event        Event             `gorm:"foreignKey:DeviceId,EventType,OccurredTime;References:DeviceId,EventType,OccurredTime"`
+	Name         string            `gorm:"not null"`
+	Value        sql.NullFloat64   `gorm:"type:decimal(20,8);"`
+	Classifier   *uint
 }
 
 // Information required to create a measurement event.
 type MeasurementEventCreateRequest struct {
 	Event
-	Latitude  *float64
-	Longitude *float64
-	Elevation *float64
+	Name       string
+	Value      *float64
+	Classifier *uint
+}
+
+// Alert event fields.
+type AlertEvent struct {
+	rdb.TenantScoped
+	DeviceId     uint              `gorm:"not null"`
+	EventType    esmodel.EventType `gorm:"not null"`
+	OccurredTime time.Time         `gorm:"not null"`
+	Event        Event             `gorm:"foreignKey:DeviceId,EventType,OccurredTime;References:DeviceId,EventType,OccurredTime"`
+	Type         string            `gorm:"not null"`
+	Level        uint32            `gorm:"not null"`
+	Message      string
+	Source       string
+}
+
+// Information required to create an alert event.
+type AlertEventCreateRequest struct {
+	Event
+	Type    string
+	Level   uint32
+	Message string
+	Source  string
 }

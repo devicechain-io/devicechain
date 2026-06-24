@@ -155,6 +155,22 @@ func buildMeasurementsEvent() *dmodel.ResolvedEvent {
 	return buildResolvedEvent(esmodel.Measurement, loc)
 }
 
+// Build an alerts event.
+func buildAlertsEvent() *dmodel.ResolvedEvent {
+	entry := dmodel.ResolvedAlertEntry{
+		Type:    "engine.overheat",
+		Level:   3,
+		Message: "Engine temperature exceeds threshold",
+		Source:  "ecu",
+	}
+	entries := make([]dmodel.ResolvedAlertEntry, 0)
+	entries = append(entries, entry)
+	alert := &dmodel.ResolvedAlertsPayload{
+		Entries: entries,
+	}
+	return buildResolvedEvent(esmodel.Alert, alert)
+}
+
 // Test failed event flow for a given message.
 func (suite *EventPersistenceProcessorTestSuite) FailedEventFlowFor(msg kafka.Message) {
 	// Emulate kafka read/write.
@@ -226,6 +242,22 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleMeasurementEvent() {
 
 	// Test event flow.
 	suite.API.Mock.On("CreateMeasurementEvent", mock.Anything, mock.Anything).Return(&model.MeasurementEvent{}, nil)
+	suite.SuccessEventFlowFor(msg)
+}
+
+// Test alerts event with one entry.
+func (suite *EventPersistenceProcessorTestSuite) TestSingleAlertEvent() {
+	// Encode payload as bytes.
+	alert := buildAlertsEvent()
+	bytes, err := dmproto.MarshalResolvedEvent(alert)
+	assert.Nil(suite.T(), err)
+
+	// Build kafka message.
+	key := []byte(alert.Source)
+	msg := kafka.Message{Topic: testTenantTopic, Key: key, Value: bytes}
+
+	// Test event flow.
+	suite.API.Mock.On("CreateAlertEvent", mock.Anything, mock.Anything).Return(&model.AlertEvent{}, nil)
 	suite.SuccessEventFlowFor(msg)
 }
 

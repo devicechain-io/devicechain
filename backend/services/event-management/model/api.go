@@ -36,6 +36,8 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 // Interface for event management API (used for mocking)
 type EventManagementApi interface {
 	CreateLocationEvent(ctx context.Context, request *LocationEventCreateRequest) (*LocationEvent, error)
+	CreateMeasurementEvent(ctx context.Context, request *MeasurementEventCreateRequest) (*MeasurementEvent, error)
+	CreateAlertEvent(ctx context.Context, request *AlertEventCreateRequest) (*AlertEvent, error)
 }
 
 // Create a new location event.
@@ -46,6 +48,43 @@ func (api *Api) CreateLocationEvent(ctx context.Context, request *LocationEventC
 		Latitude:     rdb.NullFloat64Of(request.Latitude),
 		Longitude:    rdb.NullFloat64Of(request.Longitude),
 		Elevation:    rdb.NullFloat64Of(request.Elevation),
+		Event:        request.Event,
+	}
+	result := api.RDB.DB(ctx).Create(created)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return created, nil
+}
+
+// Create a new measurement event.
+func (api *Api) CreateMeasurementEvent(ctx context.Context, request *MeasurementEventCreateRequest) (*MeasurementEvent, error) {
+	created := &MeasurementEvent{
+		DeviceId:     request.DeviceId,
+		EventType:    request.EventType,
+		OccurredTime: request.OccurredTime,
+		Name:         request.Name,
+		Value:        rdb.NullFloat64Of(request.Value),
+		Classifier:   request.Classifier,
+		Event:        request.Event,
+	}
+	result := api.RDB.DB(ctx).Create(created)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return created, nil
+}
+
+// Create a new alert event.
+func (api *Api) CreateAlertEvent(ctx context.Context, request *AlertEventCreateRequest) (*AlertEvent, error) {
+	created := &AlertEvent{
+		DeviceId:     request.DeviceId,
+		EventType:    request.EventType,
+		OccurredTime: request.OccurredTime,
+		Type:         request.Type,
+		Level:        request.Level,
+		Message:      request.Message,
+		Source:       request.Source,
 		Event:        request.Event,
 	}
 	result := api.RDB.DB(ctx).Create(created)

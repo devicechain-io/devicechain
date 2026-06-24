@@ -43,6 +43,31 @@ func NewInitialSchema() *gormigrate.Migration {
 				Elevation    sql.NullFloat64   `gorm:"type:decimal(10,8);"`
 			}
 
+			// Measurement event fields.
+			type MeasurementEvent struct {
+				rdb.TenantScoped
+				DeviceId     uint              `gorm:"not null"`
+				EventType    esmodel.EventType `gorm:"not null"`
+				OccurredTime time.Time         `gorm:"not null"`
+				Event        Event             `gorm:"foreignKey:DeviceId,EventType,OccurredTime;References:DeviceId,EventType,OccurredTime"`
+				Name         string            `gorm:"not null"`
+				Value        sql.NullFloat64   `gorm:"type:decimal(20,8);"`
+				Classifier   *uint
+			}
+
+			// Alert event fields.
+			type AlertEvent struct {
+				rdb.TenantScoped
+				DeviceId     uint              `gorm:"not null"`
+				EventType    esmodel.EventType `gorm:"not null"`
+				OccurredTime time.Time         `gorm:"not null"`
+				Event        Event             `gorm:"foreignKey:DeviceId,EventType,OccurredTime;References:DeviceId,EventType,OccurredTime"`
+				Type         string            `gorm:"not null"`
+				Level        uint32            `gorm:"not null"`
+				Message      string
+				Source       string
+			}
+
 			// Base event fields.
 			type Event struct {
 				rdb.TenantScoped
@@ -62,7 +87,7 @@ func NewInitialSchema() *gormigrate.Migration {
 				ProcessedTime   time.Time
 			}
 
-			err := tx.AutoMigrate(&Event{}, &LocationEvent{})
+			err := tx.AutoMigrate(&Event{}, &LocationEvent{}, &MeasurementEvent{}, &AlertEvent{})
 			if err != nil {
 				return err
 			}
@@ -81,6 +106,20 @@ func NewInitialSchema() *gormigrate.Migration {
 
 			// Add composite index for tenant-scoped time-series queries.
 			tx.Exec("CREATE INDEX ON \"event-management\".\"events\" (tenant_id, occurred_time DESC);")
+			if tx.Error != nil {
+				return tx.Error
+			}
+
+			// Add composite tenant-scoped time-series indexes on the typed event tables.
+			tx.Exec("CREATE INDEX ON \"event-management\".\"location_events\" (tenant_id, occurred_time DESC);")
+			if tx.Error != nil {
+				return tx.Error
+			}
+			tx.Exec("CREATE INDEX ON \"event-management\".\"measurement_events\" (tenant_id, occurred_time DESC);")
+			if tx.Error != nil {
+				return tx.Error
+			}
+			tx.Exec("CREATE INDEX ON \"event-management\".\"alert_events\" (tenant_id, occurred_time DESC);")
 			if tx.Error != nil {
 				return tx.Error
 			}
