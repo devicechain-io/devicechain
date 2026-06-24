@@ -37,6 +37,7 @@ type AreaTypeCreateRequest struct {
 // Represents an area type.
 type AreaType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -68,6 +69,7 @@ type AreaCreateRequest struct {
 // Represents an area.
 type Area struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -99,6 +101,7 @@ type AreaRelationshipTypeCreateRequest struct {
 // Metadata indicating a relationship between areas.
 type AreaRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -162,6 +165,7 @@ type AreaGroupCreateRequest struct {
 // Represents a group of areas.
 type AreaGroup struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -190,6 +194,7 @@ type AreaGroupRelationshipTypeCreateRequest struct {
 // Metadata indicating a relationship between area and group.
 type AreaGroupRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity

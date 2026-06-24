@@ -37,6 +37,10 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
+// Topic carrying a parseable tenant ({instance}.{tenant}.{suffix}) so the
+// persistence worker can derive a per-message tenant context (fail-closed).
+const testTenantTopic = "instance1.tenant1.resolved-events"
+
 type EventPersistenceProcessorTestSuite struct {
 	suite.Suite
 	EP        *EventPersistenceProcessor
@@ -171,7 +175,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestInvalidEvent() {
 	// Assuming invalid binary message format..
 	key := []byte("test")
 	value := []byte("badvalue")
-	badmsg := kafka.Message{Key: key, Value: value}
+	badmsg := kafka.Message{Topic: testTenantTopic, Key: key, Value: value}
 
 	// Test event flow.
 	suite.API.Mock.On("CreateLocationEvent", mock.Anything, mock.Anything).Return(&model.LocationEvent{}, nil)
@@ -202,7 +206,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleLocationEvent() {
 
 	// Build kafka message.
 	key := []byte(loc.Source)
-	msg := kafka.Message{Key: key, Value: bytes}
+	msg := kafka.Message{Topic: testTenantTopic, Key: key, Value: bytes}
 
 	// Test event flow.
 	suite.API.Mock.On("CreateLocationEvent", mock.Anything, mock.Anything).Return(&model.LocationEvent{}, nil)
@@ -218,7 +222,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleMeasurementEvent() {
 
 	// Build kafka message.
 	key := []byte(loc.Source)
-	msg := kafka.Message{Key: key, Value: bytes}
+	msg := kafka.Message{Topic: testTenantTopic, Key: key, Value: bytes}
 
 	// Test event flow.
 	suite.API.Mock.On("CreateMeasurementEvent", mock.Anything, mock.Anything).Return(&model.MeasurementEvent{}, nil)

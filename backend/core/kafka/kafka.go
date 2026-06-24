@@ -21,12 +21,29 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/rs/zerolog/log"
 	kafka "github.com/segmentio/kafka-go"
 )
+
+// ParseTenantFromSubject extracts the tenant id from a messaging subject built
+// as "{instanceId}.{tenantId}.{suffix}". It returns the second dot-segment and
+// true on a match, or ("", false) when the subject does not have at least three
+// non-empty leading segments. Used by ingest consumers to derive a per-message
+// tenant for WithTenant.
+func ParseTenantFromSubject(subject string) (string, bool) {
+	parts := strings.SplitN(subject, ".", 3)
+	if len(parts) < 3 {
+		return "", false
+	}
+	if parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", false
+	}
+	return parts[1], true
+}
 
 // Simplified reader interface for unit testing.
 type KafkaReader interface {

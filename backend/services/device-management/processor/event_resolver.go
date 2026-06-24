@@ -26,6 +26,8 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/core"
+	kcore "github.com/devicechain-io/dc-microservice/kafka"
 	"github.com/devicechain-io/dc-microservice/proto"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
@@ -297,7 +299,7 @@ func (rez *EventResolver) HandleEvent(ctx context.Context,
 
 // Execute logic to resolve event.
 func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
-	matches, err := rez.Api.DevicesByToken(context.Background(), []string{unrez.Device})
+	matches, err := rez.Api.DevicesByToken(ctx, []string{unrez.Device})
 	if err != nil || len(matches) == 0 {
 		return nil, uint(dmproto.FailureReason_DeviceNotFound), err
 	}
@@ -310,6 +312,16 @@ func (rez *EventResolver) Process(ctx context.Context) {
 		unresolved, more := <-rez.Unresolved
 		if more {
 			log.Debug().Msg(fmt.Sprintf("Event resolution handled by resolver id %d", rez.WorkerId))
+
+			// Derive the per-message tenant from the message topic/subject and
+			// build a tenant-scoped context. Without a parseable tenant the
+			// message can not be processed safely (fail-closed) so it is skipped.
+			tenant, ok := kcore.ParseTenantFromSubject(unresolved.Topic)
+			if !ok {
+				log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in topic %q", unresolved.Topic))
+				continue
+			}
+			msgctx := core.WithTenant(ctx, tenant)
 
 			// Attempt to unmarshal event.
 			event, err := esproto.UnmarshalUnresolvedEvent(unresolved.Value)
@@ -325,8 +337,8 @@ func (rez *EventResolver) Process(ctx context.Context) {
 				}
 			}
 
-			// Attempt to resolve event.
-			resolved, reason, err := rez.ResolveEvent(ctx, event)
+			// Attempt to resolve event using the per-message tenant context.
+			resolved, reason, err := rez.ResolveEvent(msgctx, event)
 			if err != nil {
 				rez.Failed(reason, *event, err)
 			} else {

@@ -37,6 +37,7 @@ type DeviceTypeCreateRequest struct {
 // Represents a device type.
 type DeviceType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -68,6 +69,7 @@ type DeviceCreateRequest struct {
 // Represents a device.
 type Device struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -100,6 +102,7 @@ type DeviceRelationshipTypeCreateRequest struct {
 // Metadata indicating a relationship between devices.
 type DeviceRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -165,6 +168,7 @@ type DeviceGroupCreateRequest struct {
 // Represents a group of devices.
 type DeviceGroup struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -193,6 +197,7 @@ type DeviceGroupRelationshipTypeCreateRequest struct {
 // Metadata indicating a relationship between device and group.
 type DeviceGroupRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity

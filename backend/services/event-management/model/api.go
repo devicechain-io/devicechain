@@ -48,7 +48,7 @@ func (api *Api) CreateLocationEvent(ctx context.Context, request *LocationEventC
 		Elevation:    rdb.NullFloat64Of(request.Elevation),
 		Event:        request.Event,
 	}
-	result := api.RDB.Database.Create(created)
+	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
 		return nil, result.Error
 	}

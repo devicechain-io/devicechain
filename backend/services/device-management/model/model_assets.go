@@ -37,6 +37,7 @@ type AssetTypeCreateRequest struct {
 // Represents an asset type.
 type AssetType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -68,6 +69,7 @@ type AssetCreateRequest struct {
 // Represents an asset.
 type Asset struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -99,6 +101,7 @@ type AssetRelationshipTypeCreateRequest struct {
 // Metadata indicating a relationship between assets.
 type AssetRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -162,6 +165,7 @@ type AssetGroupCreateRequest struct {
 // Represents a group of assets.
 type AssetGroup struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -190,6 +194,7 @@ type AssetGroupRelationshipTypeCreateRequest struct {
 // Metadata indicating a relationship between asset and group.
 type AssetGroupRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity

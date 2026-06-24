@@ -44,7 +44,7 @@ func (api *Api) CreateCustomerType(ctx context.Context, request *CustomerTypeCre
 			Metadata: rdb.MetadataStrOf(request.Metadata),
 		},
 	}
-	result := api.RDB.Database.Create(created)
+	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -73,7 +73,7 @@ func (api *Api) UpdateCustomerType(ctx context.Context, token string,
 	found.BorderColor = rdb.NullStrOf(request.BorderColor)
 	found.Metadata = rdb.MetadataStrOf(request.Metadata)
 
-	result := api.RDB.Database.Save(found)
+	result := api.RDB.DB(ctx).Save(found)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -83,7 +83,7 @@ func (api *Api) UpdateCustomerType(ctx context.Context, token string,
 // Get customer types by id.
 func (api *Api) CustomerTypesById(ctx context.Context, ids []uint) ([]*CustomerType, error) {
 	found := make([]*CustomerType, 0)
-	result := api.RDB.Database.Find(&found, ids)
+	result := api.RDB.DB(ctx).Find(&found, ids)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -93,7 +93,7 @@ func (api *Api) CustomerTypesById(ctx context.Context, ids []uint) ([]*CustomerT
 // Get customer types by token.
 func (api *Api) CustomerTypesByToken(ctx context.Context, tokens []string) ([]*CustomerType, error) {
 	found := make([]*CustomerType, 0)
-	result := api.RDB.Database.Find(&found, "token in ?", tokens)
+	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -103,7 +103,7 @@ func (api *Api) CustomerTypesByToken(ctx context.Context, tokens []string) ([]*C
 // Search for customer types that meet criteria.
 func (api *Api) CustomerTypes(ctx context.Context, criteria CustomerTypeSearchCriteria) (*CustomerTypeSearchResults, error) {
 	results := make([]CustomerType, 0)
-	db, pag := api.RDB.ListOf(&CustomerType{}, nil, criteria.Pagination)
+	db, pag := api.RDB.ListOf(ctx, &CustomerType{}, nil, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
 		return nil, db.Error
@@ -139,7 +139,7 @@ func (api *Api) CreateCustomer(ctx context.Context, request *CustomerCreateReque
 		},
 		CustomerType: matches[0],
 	}
-	result := api.RDB.Database.Create(created)
+	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -175,7 +175,7 @@ func (api *Api) UpdateCustomer(ctx context.Context, token string, request *Custo
 		updated.CustomerType = ctmatches[0]
 	}
 
-	result := api.RDB.Database.Save(updated)
+	result := api.RDB.DB(ctx).Save(updated)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -185,7 +185,7 @@ func (api *Api) UpdateCustomer(ctx context.Context, token string, request *Custo
 // Get customers by id.
 func (api *Api) CustomersById(ctx context.Context, ids []uint) ([]*Customer, error) {
 	found := make([]*Customer, 0)
-	result := api.RDB.Database
+	result := api.RDB.DB(ctx)
 	result = result.Preload("CustomerType")
 	result = result.Find(&found, ids)
 	if result.Error != nil {
@@ -197,7 +197,7 @@ func (api *Api) CustomersById(ctx context.Context, ids []uint) ([]*Customer, err
 // Get customers by token.
 func (api *Api) CustomersByToken(ctx context.Context, tokens []string) ([]*Customer, error) {
 	found := make([]*Customer, 0)
-	result := api.RDB.Database
+	result := api.RDB.DB(ctx)
 	result = result.Preload("CustomerType")
 	result = result.Find(&found, "token in ?", tokens)
 	if result.Error != nil {
@@ -209,10 +209,10 @@ func (api *Api) CustomersByToken(ctx context.Context, tokens []string) ([]*Custo
 // Search for customers that meet criteria.
 func (api *Api) Customers(ctx context.Context, criteria CustomerSearchCriteria) (*CustomerSearchResults, error) {
 	results := make([]Customer, 0)
-	db, pag := api.RDB.ListOf(&Customer{}, func(result *gorm.DB) *gorm.DB {
+	db, pag := api.RDB.ListOf(ctx, &Customer{}, func(result *gorm.DB) *gorm.DB {
 		if criteria.CustomerTypeToken != nil {
 			result = result.Where("customer_type_id = (?)",
-				api.RDB.Database.Model(&CustomerType{}).Select("id").Where("token = ?", criteria.CustomerTypeToken))
+				api.RDB.DB(ctx).Model(&CustomerType{}).Select("id").Where("token = ?", criteria.CustomerTypeToken))
 		}
 		return result.Preload("CustomerType")
 	}, criteria.Pagination)
@@ -242,7 +242,7 @@ func (api *Api) CreateCustomerRelationshipType(ctx context.Context, request *Cus
 			Metadata: rdb.MetadataStrOf(request.Metadata),
 		},
 	}
-	result := api.RDB.Database.Create(created)
+	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -266,7 +266,7 @@ func (api *Api) UpdateCustomerRelationshipType(ctx context.Context, token string
 	updated.Description = rdb.NullStrOf(request.Description)
 	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
 
-	result := api.RDB.Database.Save(updated)
+	result := api.RDB.DB(ctx).Save(updated)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -276,7 +276,7 @@ func (api *Api) UpdateCustomerRelationshipType(ctx context.Context, token string
 // Get customer relationship types by id.
 func (api *Api) CustomerRelationshipTypesById(ctx context.Context, ids []uint) ([]*CustomerRelationshipType, error) {
 	found := make([]*CustomerRelationshipType, 0)
-	result := api.RDB.Database.Find(&found, ids)
+	result := api.RDB.DB(ctx).Find(&found, ids)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -286,7 +286,7 @@ func (api *Api) CustomerRelationshipTypesById(ctx context.Context, ids []uint) (
 // Get customer relationship types by token.
 func (api *Api) CustomerRelationshipTypesByToken(ctx context.Context, tokens []string) ([]*CustomerRelationshipType, error) {
 	found := make([]*CustomerRelationshipType, 0)
-	result := api.RDB.Database.Find(&found, "token in ?", tokens)
+	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -297,7 +297,7 @@ func (api *Api) CustomerRelationshipTypesByToken(ctx context.Context, tokens []s
 func (api *Api) CustomerRelationshipTypes(ctx context.Context,
 	criteria CustomerRelationshipTypeSearchCriteria) (*CustomerRelationshipTypeSearchResults, error) {
 	results := make([]CustomerRelationshipType, 0)
-	db, pag := api.RDB.ListOf(&CustomerRelationshipType{}, nil, criteria.Pagination)
+	db, pag := api.RDB.ListOf(ctx, &CustomerRelationshipType{}, nil, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
 		return nil, db.Error
@@ -353,7 +353,7 @@ func (api *Api) CreateCustomerRelationship(ctx context.Context, request *Custome
 		RelationshipType: *crtmatches[0],
 	}
 	api.resolveRelationshipTargets(ctx, request.Targets, &created.EntityRelationship)
-	result := api.RDB.Database.Create(created)
+	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -363,7 +363,7 @@ func (api *Api) CreateCustomerRelationship(ctx context.Context, request *Custome
 // Get customer relationships by id.
 func (api *Api) CustomerRelationshipsById(ctx context.Context, ids []uint) ([]*CustomerRelationship, error) {
 	found := make([]*CustomerRelationship, 0)
-	result := api.RDB.Database
+	result := api.RDB.DB(ctx)
 	result = result.Preload("SourceCustomer").Preload("RelationshipType")
 	result = preloadRelationshipTargets(result)
 	result = result.Find(&found, ids)
@@ -376,7 +376,7 @@ func (api *Api) CustomerRelationshipsById(ctx context.Context, ids []uint) ([]*C
 // Get customer relationships by token.
 func (api *Api) CustomerRelationshipsByToken(ctx context.Context, tokens []string) ([]*CustomerRelationship, error) {
 	found := make([]*CustomerRelationship, 0)
-	result := api.RDB.Database
+	result := api.RDB.DB(ctx)
 	result = result.Preload("SourceCustomer").Preload("RelationshipType")
 	result = preloadRelationshipTargets(result)
 	result = result.Find(&found, "token in ?", tokens)
@@ -390,14 +390,14 @@ func (api *Api) CustomerRelationshipsByToken(ctx context.Context, tokens []strin
 func (api *Api) CustomerRelationships(ctx context.Context,
 	criteria CustomerRelationshipSearchCriteria) (*CustomerRelationshipSearchResults, error) {
 	results := make([]CustomerRelationship, 0)
-	db, pag := api.RDB.ListOf(&CustomerRelationship{}, func(result *gorm.DB) *gorm.DB {
+	db, pag := api.RDB.ListOf(ctx, &CustomerRelationship{}, func(result *gorm.DB) *gorm.DB {
 		if criteria.SourceCustomer != nil {
 			result = result.Where("source_customer_id = (?)",
-				api.RDB.Database.Model(&Customer{}).Select("id").Where("token = ?", criteria.SourceCustomer))
+				api.RDB.DB(ctx).Model(&Customer{}).Select("id").Where("token = ?", criteria.SourceCustomer))
 		}
 		if criteria.RelationshipType != nil {
 			result = result.Where("relationship_type_id = (?)",
-				api.RDB.Database.Model(&CustomerRelationshipType{}).Select("id").Where("token = ?", criteria.RelationshipType))
+				api.RDB.DB(ctx).Model(&CustomerRelationshipType{}).Select("id").Where("token = ?", criteria.RelationshipType))
 		}
 		return result
 	}, criteria.Pagination)
@@ -436,7 +436,7 @@ func (api *Api) CreateCustomerGroup(ctx context.Context, request *CustomerGroupC
 			Metadata: rdb.MetadataStrOf(request.Metadata),
 		},
 	}
-	result := api.RDB.Database.Create(created)
+	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -465,7 +465,7 @@ func (api *Api) UpdateCustomerGroup(ctx context.Context, token string,
 	updated.BorderColor = rdb.NullStrOf(request.BorderColor)
 	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
 
-	result := api.RDB.Database.Save(updated)
+	result := api.RDB.DB(ctx).Save(updated)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -475,7 +475,7 @@ func (api *Api) UpdateCustomerGroup(ctx context.Context, token string,
 // Get customer groups by id.
 func (api *Api) CustomerGroupsById(ctx context.Context, ids []uint) ([]*CustomerGroup, error) {
 	found := make([]*CustomerGroup, 0)
-	result := api.RDB.Database.Find(&found, ids)
+	result := api.RDB.DB(ctx).Find(&found, ids)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -485,7 +485,7 @@ func (api *Api) CustomerGroupsById(ctx context.Context, ids []uint) ([]*Customer
 // Get customer groups by token.
 func (api *Api) CustomerGroupsByToken(ctx context.Context, tokens []string) ([]*CustomerGroup, error) {
 	found := make([]*CustomerGroup, 0)
-	result := api.RDB.Database.Find(&found, "token in ?", tokens)
+	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -495,7 +495,7 @@ func (api *Api) CustomerGroupsByToken(ctx context.Context, tokens []string) ([]*
 // Search for customer groups that meet criteria.
 func (api *Api) CustomerGroups(ctx context.Context, criteria CustomerGroupSearchCriteria) (*CustomerGroupSearchResults, error) {
 	results := make([]CustomerGroup, 0)
-	db, pag := api.RDB.ListOf(&CustomerGroup{}, nil, criteria.Pagination)
+	db, pag := api.RDB.ListOf(ctx, &CustomerGroup{}, nil, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
 		return nil, db.Error
@@ -523,7 +523,7 @@ func (api *Api) CreateCustomerGroupRelationshipType(ctx context.Context,
 			Metadata: rdb.MetadataStrOf(request.Metadata),
 		},
 	}
-	result := api.RDB.Database.Create(created)
+	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -547,7 +547,7 @@ func (api *Api) UpdateCustomerGroupRelationshipType(ctx context.Context, token s
 	updated.Description = rdb.NullStrOf(request.Description)
 	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
 
-	result := api.RDB.Database.Save(updated)
+	result := api.RDB.DB(ctx).Save(updated)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -557,7 +557,7 @@ func (api *Api) UpdateCustomerGroupRelationshipType(ctx context.Context, token s
 // Get customer group relationship types by id.
 func (api *Api) CustomerGroupRelationshipTypesById(ctx context.Context, ids []uint) ([]*CustomerGroupRelationshipType, error) {
 	found := make([]*CustomerGroupRelationshipType, 0)
-	result := api.RDB.Database.Find(&found, ids)
+	result := api.RDB.DB(ctx).Find(&found, ids)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -567,7 +567,7 @@ func (api *Api) CustomerGroupRelationshipTypesById(ctx context.Context, ids []ui
 // Get customer group relationship types by token.
 func (api *Api) CustomerGroupRelationshipTypesByToken(ctx context.Context, tokens []string) ([]*CustomerGroupRelationshipType, error) {
 	found := make([]*CustomerGroupRelationshipType, 0)
-	result := api.RDB.Database.Find(&found, "token in ?", tokens)
+	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -578,7 +578,7 @@ func (api *Api) CustomerGroupRelationshipTypesByToken(ctx context.Context, token
 func (api *Api) CustomerGroupRelationshipTypes(ctx context.Context,
 	criteria CustomerGroupRelationshipTypeSearchCriteria) (*CustomerGroupRelationshipTypeSearchResults, error) {
 	results := make([]CustomerGroupRelationshipType, 0)
-	db, pag := api.RDB.ListOf(&CustomerGroupRelationshipType{}, nil, criteria.Pagination)
+	db, pag := api.RDB.ListOf(ctx, &CustomerGroupRelationshipType{}, nil, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
 		return nil, db.Error
@@ -625,7 +625,7 @@ func (api *Api) CreateCustomerGroupRelationship(ctx context.Context,
 		SourceCustomerGroup: *cgmatches[0],
 		RelationshipType:    *cgrtmatches[0],
 	}
-	result := api.RDB.Database.Create(created)
+	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -635,7 +635,7 @@ func (api *Api) CreateCustomerGroupRelationship(ctx context.Context,
 // Get customer group relationships by id.
 func (api *Api) CustomerGroupRelationshipsById(ctx context.Context, ids []uint) ([]*CustomerGroupRelationship, error) {
 	found := make([]*CustomerGroupRelationship, 0)
-	result := api.RDB.Database
+	result := api.RDB.DB(ctx)
 	result = result.Preload("SourceCustomerGroup").Preload("RelationshipType")
 	result = preloadRelationshipTargets(result)
 	result = result.Find(&found, ids)
@@ -648,7 +648,7 @@ func (api *Api) CustomerGroupRelationshipsById(ctx context.Context, ids []uint) 
 // Get customer group relationships by token.
 func (api *Api) CustomerGroupRelationshipsByToken(ctx context.Context, tokens []string) ([]*CustomerGroupRelationship, error) {
 	found := make([]*CustomerGroupRelationship, 0)
-	result := api.RDB.Database
+	result := api.RDB.DB(ctx)
 	result = result.Preload("SourceCustomerGroup").Preload("RelationshipType")
 	result = preloadRelationshipTargets(result)
 	result = result.Find(&found, "token in ?", tokens)
@@ -662,14 +662,14 @@ func (api *Api) CustomerGroupRelationshipsByToken(ctx context.Context, tokens []
 func (api *Api) CustomerGroupRelationships(ctx context.Context,
 	criteria CustomerGroupRelationshipSearchCriteria) (*CustomerGroupRelationshipSearchResults, error) {
 	results := make([]CustomerGroupRelationship, 0)
-	db, pag := api.RDB.ListOf(&CustomerGroupRelationship{}, func(result *gorm.DB) *gorm.DB {
+	db, pag := api.RDB.ListOf(ctx, &CustomerGroupRelationship{}, func(result *gorm.DB) *gorm.DB {
 		if criteria.SourceCustomerGroup != nil {
 			result = result.Where("source_customer_group_id = (?)",
-				api.RDB.Database.Model(&CustomerGroup{}).Select("id").Where("token = ?", criteria.SourceCustomerGroup))
+				api.RDB.DB(ctx).Model(&CustomerGroup{}).Select("id").Where("token = ?", criteria.SourceCustomerGroup))
 		}
 		if criteria.RelationshipType != nil {
 			result = result.Where("relationship_type_id = (?)",
-				api.RDB.Database.Model(&CustomerGroupRelationshipType{}).Select("id").Where("token = ?", criteria.RelationshipType))
+				api.RDB.DB(ctx).Model(&CustomerGroupRelationshipType{}).Select("id").Where("token = ?", criteria.RelationshipType))
 		}
 		return result
 	}, criteria.Pagination)

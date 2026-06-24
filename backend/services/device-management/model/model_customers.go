@@ -37,6 +37,7 @@ type CustomerTypeCreateRequest struct {
 // Represents a customer type.
 type CustomerType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -68,6 +69,7 @@ type CustomerCreateRequest struct {
 // Represents a customer.
 type Customer struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -99,6 +101,7 @@ type CustomerRelationshipTypeCreateRequest struct {
 // Metadata indicating a relationship between customers.
 type CustomerRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -162,6 +165,7 @@ type CustomerGroupCreateRequest struct {
 // Represents a group of customers.
 type CustomerGroup struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -190,6 +194,7 @@ type CustomerGroupRelationshipTypeCreateRequest struct {
 // Metadata indicating a relationship between customer and group.
 type CustomerGroupRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity

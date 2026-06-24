@@ -25,6 +25,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// TenantScoped marks an entity as tenant-owned. Entities embed this type so
+// the global GORM tenant-scope callbacks (see tenant_scope.go) can detect the
+// TenantId field and enforce row-level isolation. The tenant id is the stable
+// tenant token from the CRD / messaging subject.
+type TenantScoped struct {
+	TenantId string `gorm:"index;not null;size:128"`
+}
+
 // Entity that is referenced by a unique token which may change over time.
 type TokenReference struct {
 	Token string `gorm:"unique;not null;size:128"`

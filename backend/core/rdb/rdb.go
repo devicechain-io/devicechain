@@ -57,8 +57,15 @@ func NewRdbManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
 	return rdb
 }
 
+// DB returns a *gorm.DB bound to the given context so that the tenant-scope
+// callbacks (see tenant_scope.go) can read the per-request/per-message tenant
+// from context. All tenant-scoped data access must go through this.
+func (rdb *RdbManager) DB(ctx context.Context) *gorm.DB {
+	return rdb.Database.WithContext(ctx)
+}
+
 // Query for a list of models based on filter and pagination criteria.
-func (rdb *RdbManager) ListOf(mdl interface{}, filters func(db *gorm.DB) *gorm.DB, pag Pagination) (*gorm.DB, SearchResultsPagination) {
+func (rdb *RdbManager) ListOf(ctx context.Context, mdl interface{}, filters func(db *gorm.DB) *gorm.DB, pag Pagination) (*gorm.DB, SearchResultsPagination) {
 	// Sanity check page number.
 	if pag.PageNumber < 1 {
 		pag.PageNumber = 1
@@ -66,7 +73,7 @@ func (rdb *RdbManager) ListOf(mdl interface{}, filters func(db *gorm.DB) *gorm.D
 
 	// Execute count query.
 	count := int64(0)
-	result := rdb.Database.Model(mdl)
+	result := rdb.Database.WithContext(ctx).Model(mdl)
 	if filters != nil {
 		result = filters(result)
 	}
@@ -74,7 +81,7 @@ func (rdb *RdbManager) ListOf(mdl interface{}, filters func(db *gorm.DB) *gorm.D
 	total := int32(count)
 
 	// Execute data query.
-	result = rdb.Database.Model(mdl)
+	result = rdb.Database.WithContext(ctx).Model(mdl)
 	if filters != nil {
 		result = filters(result)
 	}

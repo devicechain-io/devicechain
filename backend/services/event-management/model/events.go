@@ -21,10 +21,12 @@ import (
 	"time"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // Event with token references resolved and info from assignment merged.
 type Event struct {
+	rdb.TenantScoped
 	DeviceId           uint
 	EventType          esmodel.EventType
 	OccurredTime       time.Time
@@ -43,6 +45,7 @@ type Event struct {
 
 // Location event fields.
 type LocationEvent struct {
+	rdb.TenantScoped
 	DeviceId     uint              `gorm:"not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
@@ -62,6 +65,7 @@ type LocationEventCreateRequest struct {
 
 // Measurement event fields.
 type MeasurementEvent struct {
+	rdb.TenantScoped
 	DeviceId     uint            `gorm:"not null"`
 	OccurredTime time.Time       `gorm:"not null"`
 	Event        Event           `gorm:"foreignKey:DeviceId,OccurredTime;References:DeviceId,OccurredTime"`

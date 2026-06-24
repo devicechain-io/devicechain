@@ -41,7 +41,7 @@ func (rdb *RdbManager) computePostgresRootUrl(pgconfig *PostgresConfig) string {
 // Assure that database is created before connecting to it.
 func (rdb *RdbManager) assurePostgresDatabase(pgconfig *PostgresConfig) error {
 	url := rdb.computePostgresRootUrl(pgconfig)
-	log.Info().Str("database", rdb.Microservice.TenantId).Str("url", url).Msg("Verifying that tenant database exists.")
+	log.Info().Str("database", rdb.Microservice.InstanceId).Str("url", url).Msg("Verifying that instance database exists.")
 	conn, err := pgx.Connect(context.Background(), url)
 	if err != nil {
 		return err
@@ -53,8 +53,8 @@ func (rdb *RdbManager) assurePostgresDatabase(pgconfig *PostgresConfig) error {
 	result := conn.PgConn().ExecParams(context.Background(), "SELECT datname FROM pg_database WHERE datistemplate = false", [][]byte{}, nil, nil, nil)
 	for result.NextRow() {
 		currdb := string(result.Values()[0])
-		if rdb.Microservice.TenantId == currdb {
-			log.Info().Msg("Found existing tenant database.")
+		if rdb.Microservice.InstanceId == currdb {
+			log.Info().Msg("Found existing instance database.")
 			found = true
 		}
 	}
@@ -64,29 +64,29 @@ func (rdb *RdbManager) assurePostgresDatabase(pgconfig *PostgresConfig) error {
 	}
 
 	if !found {
-		// Create tenant database.
+		// Create instance database.
 		log.Info().Msg("Database was not found. Creating...")
-		result := conn.PgConn().ExecParams(context.Background(), fmt.Sprintf("CREATE DATABASE %s", rdb.Microservice.TenantId),
+		result := conn.PgConn().ExecParams(context.Background(), fmt.Sprintf("CREATE DATABASE %s", rdb.Microservice.InstanceId),
 			[][]byte{}, nil, nil, nil)
 		_, err := result.Close()
 		if err != nil {
 			return err
 		}
-		log.Info().Str("database", rdb.Microservice.TenantId).Msg("Successfully created tenant database.")
+		log.Info().Str("database", rdb.Microservice.InstanceId).Msg("Successfully created instance database.")
 	}
 
 	return nil
 }
 
 // Compute non-database connection URL for querying/creating database.
-func (rdb *RdbManager) computePostgresTenantDatabaseUrl(pg *PostgresConfig) string {
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s", pg.Username, pg.Password, pg.Hostname, pg.Port, rdb.Microservice.TenantId)
+func (rdb *RdbManager) computePostgresInstanceDatabaseUrl(pg *PostgresConfig) string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s", pg.Username, pg.Password, pg.Hostname, pg.Port, rdb.Microservice.InstanceId)
 }
 
 // Assure that functional area schema is created before connecting to it.
 func (rdb *RdbManager) assurePostgresSchema(pgconfig *PostgresConfig) error {
 	log.Info().Str("schema", rdb.Microservice.FunctionalArea).Msg("Verifying that schema exists.")
-	url := rdb.computePostgresTenantDatabaseUrl(pgconfig)
+	url := rdb.computePostgresInstanceDatabaseUrl(pgconfig)
 	conn, err := pgx.Connect(context.Background(), url)
 	if err != nil {
 		return err
@@ -126,7 +126,7 @@ func (rdb *RdbManager) assurePostgresSchema(pgconfig *PostgresConfig) error {
 // Compute DSN for connecting to database.
 func (rdb *RdbManager) computePostgresDsn(pg *PostgresConfig) string {
 	dsn := fmt.Sprintf("user=%s password=%s host=%s dbname=%s port=%d sslmode=disable",
-		pg.Username, pg.Password, pg.Hostname, rdb.Microservice.TenantId, pg.Port)
+		pg.Username, pg.Password, pg.Hostname, rdb.Microservice.InstanceId, pg.Port)
 	log.Info().Str("username", pg.Username).Str("password", pg.Password).Str("hostname", pg.Hostname).
 		Int32("port", pg.Port).Msg("Initializing database connectivity")
 	return dsn
@@ -134,7 +134,7 @@ func (rdb *RdbManager) computePostgresDsn(pg *PostgresConfig) string {
 
 // Boostrap a postgres database/schema.
 func (rdb *RdbManager) bootstrapPostgres(pgconf *PostgresConfig) error {
-	// Verify/create tenant database.
+	// Verify/create instance database.
 	err := rdb.assurePostgresDatabase(pgconf)
 	if err != nil {
 		return err
@@ -178,6 +178,12 @@ func (rdb *RdbManager) initializePostgres() error {
 	rdb.Database = db
 	if rdb.MicroserviceConfig.SqlDebug {
 		rdb.Database = rdb.Database.Debug()
+	}
+
+	// Register tenant-scoping callbacks so row-level isolation is enforced for
+	// every tenant-scoped model, un-skippable at the call site.
+	if err := RegisterTenantScoping(rdb.Database); err != nil {
+		return err
 	}
 
 	sqldb, err := rdb.Database.DB()

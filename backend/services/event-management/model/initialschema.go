@@ -21,6 +21,7 @@ import (
 	"time"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
 	"gorm.io/gorm"
 )
@@ -32,6 +33,7 @@ func NewInitialSchema() *gormigrate.Migration {
 		Migrate: func(tx *gorm.DB) error {
 			// Location event fields.
 			type LocationEvent struct {
+				rdb.TenantScoped
 				DeviceId     uint              `gorm:"not null"`
 				EventType    esmodel.EventType `gorm:"not null"`
 				OccurredTime time.Time         `gorm:"not null"`
@@ -43,6 +45,7 @@ func NewInitialSchema() *gormigrate.Migration {
 
 			// Base event fields.
 			type Event struct {
+				rdb.TenantScoped
 				DeviceId        uint              `gorm:"primaryKey"`
 				EventType       esmodel.EventType `gorm:"primaryKey"`
 				OccurredTime    time.Time         `gorm:"primaryKey"`
@@ -72,6 +75,12 @@ func NewInitialSchema() *gormigrate.Migration {
 
 			// Add index on device id.
 			tx.Exec("CREATE INDEX ON \"event-management\".\"events\" (device_id, occurred_time DESC);")
+			if tx.Error != nil {
+				return tx.Error
+			}
+
+			// Add composite index for tenant-scoped time-series queries.
+			tx.Exec("CREATE INDEX ON \"event-management\".\"events\" (tenant_id, occurred_time DESC);")
 			if tx.Error != nil {
 				return tx.Error
 			}

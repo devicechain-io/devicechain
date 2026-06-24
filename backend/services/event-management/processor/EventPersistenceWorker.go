@@ -26,6 +26,8 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/core"
+	kcore "github.com/devicechain-io/dc-microservice/kafka"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/kafka-go"
@@ -144,6 +146,17 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 		if more {
 			log.Debug().Msg(fmt.Sprintf("Event persistence handled by worker id %d", ep.WorkerId))
 
+			// Derive the per-message tenant from the message topic/subject and
+			// build a tenant-scoped context. Without a parseable tenant the
+			// message can not be persisted safely (fail-closed) so it is skipped
+			// rather than written without a tenant.
+			tenant, ok := kcore.ParseTenantFromSubject(unpersisted.Topic)
+			if !ok {
+				log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in topic %q", unpersisted.Topic))
+				continue
+			}
+			msgctx := core.WithTenant(ctx, tenant)
+
 			// Attempt to unmarshal event.
 			event, err := dmproto.UnmarshalResolvedEvent(unpersisted.Value)
 			if err != nil {
@@ -158,8 +171,8 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 				}
 			}
 
-			// Attempt to resolve event.
-			results, err := ep.PersistEvent(ctx, *event)
+			// Persist the event using the per-message tenant context.
+			results, err := ep.PersistEvent(msgctx, *event)
 			if err != nil {
 				ep.Failed(0, *event, err)
 			} else {

@@ -36,6 +36,7 @@ type EntityRelationshipCreateRequest struct {
 // Based data for capturing a relationship between entites.
 type EntityRelationship struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.MetadataEntity
 	TargetDeviceId        *uint

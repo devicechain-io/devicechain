@@ -24,6 +24,7 @@ import (
 // Based data for capturing a relationship between entites.
 type EntityRelationship struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.MetadataEntity
 	TargetDeviceId        *uint
@@ -47,6 +48,7 @@ type EntityRelationship struct {
 // Represents a device type.
 type DeviceType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -58,6 +60,7 @@ type DeviceType struct {
 // Represents a device.
 type Device struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -69,6 +72,7 @@ type Device struct {
 // Metadata indicating a relationship between devices.
 type DeviceRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -87,6 +91,7 @@ type DeviceRelationship struct {
 // Represents a group of devices.
 type DeviceGroup struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -96,6 +101,7 @@ type DeviceGroup struct {
 // Metadata indicating a relationship between device and group.
 type DeviceGroupRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -126,6 +132,7 @@ type AssetTypeCreateRequest struct {
 // Represents an asset type.
 type AssetType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -157,6 +164,7 @@ type AssetCreateRequest struct {
 // Represents an asset.
 type Asset struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -188,6 +196,7 @@ type AssetRelationshipTypeCreateRequest struct {
 // Metadata indicating a relationship between assets.
 type AssetRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -205,6 +214,7 @@ type AssetRelationship struct {
 // Represents a group of assets.
 type AssetGroup struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -214,6 +224,7 @@ type AssetGroup struct {
 // Metadata indicating a relationship between asset and group.
 type AssetGroupRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -232,6 +243,7 @@ type AssetGroupRelationship struct {
 // Represents an area type.
 type AreaType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -243,6 +255,7 @@ type AreaType struct {
 // Represents an area.
 type Area struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -254,6 +267,7 @@ type Area struct {
 // Metadata indicating a relationship between areas.
 type AreaRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -271,6 +285,7 @@ type AreaRelationship struct {
 // Represents a group of areas.
 type AreaGroup struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -280,6 +295,7 @@ type AreaGroup struct {
 // Metadata indicating a relationship between area and group.
 type AreaGroupRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -297,6 +313,7 @@ type AreaGroupRelationship struct {
 // Represents a customer type.
 type CustomerType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -308,6 +325,7 @@ type CustomerType struct {
 // Represents a customer.
 type Customer struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -319,6 +337,7 @@ type Customer struct {
 // Metadata indicating a relationship between customers.
 type CustomerRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
@@ -336,6 +355,7 @@ type CustomerRelationship struct {
 // Represents a group of customers.
 type CustomerGroup struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.BrandedEntity
@@ -345,6 +365,7 @@ type CustomerGroup struct {
 // Metadata indicating a relationship between customer and group.
 type CustomerGroupRelationshipType struct {
 	gorm.Model
+	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
