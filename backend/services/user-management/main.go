@@ -102,8 +102,17 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Serve the platform public key for the other services to validate tokens.
-	registerPublicKeyHandler()
+	// Age-based signing-key rotation (ADR-008 follow-up): rotate at startup if the
+	// active key is older than the configured max age, retaining the prior key for
+	// the configured window so the tokens it signed keep verifying.
+	keyMaxAge := time.Duration(Configuration.Auth.SigningKeyMaxAgeDays) * 24 * time.Hour
+	keyRetention := time.Duration(Configuration.Auth.SigningKeyRetentionDays) * 24 * time.Hour
+	if err := IdentityManager.MaybeRotateOnAge(ctx, keyMaxAge, keyRetention); err != nil {
+		return err
+	}
+
+	// Serve the platform signing keys so other services can validate tokens.
+	registerKeyHandlers()
 
 	// Map of providers injected into the graphql http context.
 	providers := map[gqlcore.ContextKey]interface{}{
@@ -123,12 +132,19 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	return nil
 }
 
-// registerPublicKeyHandler serves the instance JWT public key (PKIX PEM) on the
-// shared http server so the other services can build their validators (ADR-008).
-func registerPublicKeyHandler() {
-	http.HandleFunc("/auth/public-key", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/x-pem-file")
-		_, _ = w.Write(IdentityManager.PublicKeyPEM())
+// registerKeyHandlers serves the instance signing keys on the shared http server
+// so the other services can validate tokens (ADR-008). /auth/jwks is the JWK Set
+// of every retained public key — consumers select the right key by the token's
+// kid, which lets a signing-key rotation propagate without restarts.
+func registerKeyHandlers() {
+	http.HandleFunc("/auth/jwks", func(w http.ResponseWriter, r *http.Request) {
+		jwks, err := IdentityManager.JWKS()
+		if err != nil {
+			http.Error(w, "failed to build JWKS", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(jwks)
 	})
 }
 
