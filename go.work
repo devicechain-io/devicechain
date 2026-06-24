@@ -5,6 +5,7 @@ use (
 	./backend/core
 	./backend/k8s
 	./backend/services/device-management
+	./backend/services/device-state
 	./backend/services/event-management
 	./backend/services/event-sources
 	./backend/services/user-management
