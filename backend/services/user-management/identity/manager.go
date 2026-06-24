@@ -11,8 +11,10 @@ package identity
 
 import (
 	"context"
+	"crypto/rsa"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -53,15 +55,22 @@ type Manager struct {
 	db        *rdb.RdbManager
 	accessTTL time.Duration
 
-	issuer    *auth.Issuer
-	validator *auth.Validator
-	publicPEM []byte
 	refreshKV nats.KeyValue
 	// dummyHash equalizes login timing on the user-not-found path so response
 	// time does not reveal whether a username exists.
 	dummyHash  []byte
 	refreshTTL time.Duration
 	bootstrap  BootstrapConfig
+	issuerName string
+
+	// mu guards the signing-key material, which a rotation replaces while the
+	// service is live. The validator pointer is created once (request handlers
+	// hold it) and its key set is updated in place via SetKeys, so it is not
+	// itself guarded after Initialize.
+	mu         sync.RWMutex
+	issuer     *auth.Issuer
+	validator  *auth.Validator
+	publicKeys []*rsa.PublicKey
 }
 
 // TokenPair is the result of a successful login or refresh.
@@ -82,13 +91,12 @@ func NewManager(ms *core.Microservice, db *rdb.RdbManager, accessTTL, refreshTTL
 // the RdbManager is initialized (tables exist) and the refresh KV bucket is
 // created.
 func (m *Manager) Initialize(ctx context.Context, refreshKV nats.KeyValue) error {
-	priv, pubPEM, err := m.loadOrCreateSigningKey(ctx)
+	m.issuerName = fmt.Sprintf("dc-user-management:%s", m.ms.InstanceId)
+	set, err := m.loadSigningKeys(ctx)
 	if err != nil {
 		return err
 	}
-	m.issuer = auth.NewIssuer(priv, fmt.Sprintf("dc-user-management:%s", m.ms.InstanceId), m.accessTTL, m.refreshTTL)
-	m.validator = auth.NewValidator(&priv.PublicKey)
-	m.publicPEM = pubPEM
+	m.applyKeys(set)
 	m.refreshKV = refreshKV
 
 	dummy, err := bcrypt.GenerateFromPassword([]byte("dc-login-timing-equalizer"), bcrypt.DefaultCost)
@@ -100,12 +108,75 @@ func (m *Manager) Initialize(ctx context.Context, refreshKV nats.KeyValue) error
 	return m.seedBootstrapAdmin(ctx)
 }
 
-// Validator returns the access-token validator built from the local public key
-// (user-management validates its own API requests without a network fetch).
+// applyKeys installs a loaded signing-key set: it rebuilds the issuer on the
+// active key and publishes the full retained public-key set to the validator
+// (in place, so handlers holding the pointer see it) and the JWKS.
+func (m *Manager) applyKeys(set *signingKeySet) {
+	keyMap := make(map[string]*rsa.PublicKey, len(set.publicKeys))
+	for _, p := range set.publicKeys {
+		keyMap[auth.Thumbprint(p)] = p
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.issuer = auth.NewIssuer(set.active, m.issuerName, m.accessTTL, m.refreshTTL)
+	if m.validator == nil {
+		m.validator = auth.NewValidatorFromKeys(keyMap)
+	} else {
+		m.validator.SetKeys(keyMap)
+	}
+	m.publicKeys = set.publicKeys
+}
+
+// RotateSigningKey rotates the instance signing key: the previous active key is
+// retained (and still served in the JWKS) until past retention, after which it
+// is pruned. New tokens are signed by the new key immediately; tokens signed by
+// the retained key keep verifying until they expire.
+func (m *Manager) RotateSigningKey(ctx context.Context, retention time.Duration) error {
+	// A retired key must outlive every token it signed, so never prune sooner
+	// than the refresh-token lifetime regardless of how retention was configured.
+	if retention <= m.refreshTTL {
+		retention = m.refreshTTL + 24*time.Hour
+	}
+	set, err := m.rotateSigningKey(ctx, retention)
+	if err != nil {
+		return err
+	}
+	m.applyKeys(set)
+	return nil
+}
+
+// MaybeRotateOnAge rotates the signing key if the active key is older than
+// maxAge. maxAge <= 0 disables age-based rotation. Called at startup so a
+// long-lived instance does not sign with one key forever (ADR-008 follow-up).
+func (m *Manager) MaybeRotateOnAge(ctx context.Context, maxAge, retention time.Duration) error {
+	if maxAge <= 0 {
+		return nil
+	}
+	age, err := m.activeKeyAge(ctx)
+	if err != nil {
+		return err
+	}
+	if age < maxAge {
+		return nil
+	}
+	log.Info().Dur("age", age).Msg("Active signing key exceeded max age; rotating.")
+	return m.RotateSigningKey(ctx, retention)
+}
+
+// Validator returns the access-token validator built from the local public keys
+// (user-management validates its own API requests without a network fetch). The
+// pointer is stable for the manager's lifetime; a rotation updates its key set
+// in place.
 func (m *Manager) Validator() *auth.Validator { return m.validator }
 
-// PublicKeyPEM returns the PKIX PEM public key served to the other services.
-func (m *Manager) PublicKeyPEM() []byte { return m.publicPEM }
+// JWKS returns the JWK Set of every retained public key, served so other services
+// can select the right key by kid across a rotation.
+func (m *Manager) JWKS() ([]byte, error) {
+	m.mu.RLock()
+	publics := m.publicKeys
+	m.mu.RUnlock()
+	return auth.BuildJWKS(publics)
+}
 
 // Login verifies a username/password and returns a fresh token pair.
 func (m *Manager) Login(ctx context.Context, username, password string) (*TokenPair, error) {
@@ -169,13 +240,19 @@ func (m *Manager) lookupUser(ctx context.Context, username string) (*model.User,
 func (m *Manager) issueTokens(user *model.User) (*TokenPair, error) {
 	roles := []string{} // RBAC roles are a Phase 2 concern (roadmap).
 
-	access, err := m.issuer.IssueAccess(user.TenantId, user.Username, roles, uuid.NewString())
+	// Snapshot the issuer under the lock so a concurrent rotation cannot swap it
+	// mid-issue (the access and refresh tokens are then signed by one key).
+	m.mu.RLock()
+	issuer := m.issuer
+	m.mu.RUnlock()
+
+	access, err := issuer.IssueAccess(user.TenantId, user.Username, roles, uuid.NewString())
 	if err != nil {
 		return nil, err
 	}
 
 	refreshJti := uuid.NewString()
-	refresh, err := m.issuer.IssueRefresh(user.TenantId, user.Username, roles, refreshJti)
+	refresh, err := issuer.IssueRefresh(user.TenantId, user.Username, roles, refreshJti)
 	if err != nil {
 		return nil, err
 	}

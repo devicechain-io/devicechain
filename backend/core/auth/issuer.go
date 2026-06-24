@@ -22,13 +22,16 @@ const (
 // Validator.
 type Issuer struct {
 	privateKey *rsa.PrivateKey
+	kid        string
 	issuer     string
 	accessTTL  time.Duration
 	refreshTTL time.Duration
 }
 
 // NewIssuer builds an Issuer from the instance private key. The issuer string
-// identifies the minting service (the JWT "iss" claim).
+// identifies the minting service (the JWT "iss" claim). The signing key's id
+// (its RFC 7638 thumbprint) is stamped into every token header so a verifier can
+// select the right key across a rotation.
 func NewIssuer(priv *rsa.PrivateKey, issuer string, accessTTL, refreshTTL time.Duration) *Issuer {
 	if accessTTL <= 0 {
 		accessTTL = DefaultAccessTTL
@@ -36,8 +39,17 @@ func NewIssuer(priv *rsa.PrivateKey, issuer string, accessTTL, refreshTTL time.D
 	if refreshTTL <= 0 {
 		refreshTTL = DefaultRefreshTTL
 	}
-	return &Issuer{privateKey: priv, issuer: issuer, accessTTL: accessTTL, refreshTTL: refreshTTL}
+	return &Issuer{
+		privateKey: priv,
+		kid:        Thumbprint(&priv.PublicKey),
+		issuer:     issuer,
+		accessTTL:  accessTTL,
+		refreshTTL: refreshTTL,
+	}
 }
+
+// Kid is the id (RFC 7638 thumbprint) of this issuer's signing key.
+func (i *Issuer) Kid() string { return i.kid }
 
 // IssuedToken is a signed token plus the metadata a caller needs to store or
 // return it (the JTI for server-side refresh-token tracking, and expiry).
@@ -75,7 +87,9 @@ func (i *Issuer) sign(tokenType, tenant, username string, roles []string, jti st
 			ExpiresAt: jwt.NewNumericDate(expires),
 		},
 	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodRS256, claims).SignedString(i.privateKey)
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = i.kid
+	signed, err := token.SignedString(i.privateKey)
 	if err != nil {
 		return IssuedToken{}, err
 	}
