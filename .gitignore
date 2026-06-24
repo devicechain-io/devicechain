@@ -2,6 +2,7 @@
 .agent-os/
 .claude/commands/
 .claude/agents/
+.claude/skills/
 
 # Legacy individual repos (reference only, not part of monorepo)
 _legacy/
