@@ -151,6 +151,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Map of providers that will be injected into graphql http context.
 	providers := map[gqlcore.ContextKey]interface{}{
 		gqlcore.ContextRdbKey: RdbManager,
+		gqlcore.ContextApiKey: Api,
 	}
 
 	// Create and initialize graphql manager.

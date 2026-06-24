@@ -61,3 +61,23 @@ func (api *MockApi) CreateAlertEvent(ctx context.Context, request *emmodel.Alert
 	args := api.Mock.Called()
 	return args.Get(0).(*emmodel.AlertEvent), args.Error(1)
 }
+
+func (api *MockApi) Events(ctx context.Context, criteria emmodel.EventSearchCriteria) (*emmodel.EventSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*emmodel.EventSearchResults), args.Error(1)
+}
+
+func (api *MockApi) LocationEvents(ctx context.Context, criteria emmodel.EventSearchCriteria) (*emmodel.LocationEventSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*emmodel.LocationEventSearchResults), args.Error(1)
+}
+
+func (api *MockApi) MeasurementEvents(ctx context.Context, criteria emmodel.EventSearchCriteria) (*emmodel.MeasurementEventSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*emmodel.MeasurementEventSearchResults), args.Error(1)
+}
+
+func (api *MockApi) AlertEvents(ctx context.Context, criteria emmodel.EventSearchCriteria) (*emmodel.AlertEventSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*emmodel.AlertEventSearchResults), args.Error(1)
+}

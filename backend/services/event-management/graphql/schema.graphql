@@ -1,21 +1,121 @@
 #
-# Device Management GraphQL Schema
+# Event Management GraphQL Schema
 #
 
-# Represents a type or class of devices
+# Pagination info for search results.
+type SearchResultsPagination {
+    pageStart: Int
+    pageEnd: Int
+    totalRecords: Int
+}
+
+# A persisted base event with token references resolved.
 type Event {
     id: ID!
-    created_at: String
-    updated_at: String
-    deleted_at: String
+    deviceId: String!
+    eventType: Int!
+    occurredTime: String
+    processedTime: String
+    source: String!
+    altId: String
+    relDeviceId: String
+    relDeviceGroupId: String
+    relCustomerId: String
+    relCustomerGroupId: String
+    relAreaId: String
+    relAreaGroupId: String
+    relAssetId: String
+    relAssetGroupId: String
+}
+
+# A persisted location event.
+type LocationEvent {
+    id: ID!
+    deviceId: String!
+    eventType: Int!
+    occurredTime: String
+    latitude: Float
+    longitude: Float
+    elevation: Float
+}
+
+# A persisted measurement event (one row per measurement entry).
+type MeasurementEvent {
+    id: ID!
+    deviceId: String!
+    eventType: Int!
+    occurredTime: String
+    name: String!
+    value: Float
+    classifier: String
+}
+
+# A persisted alert event (one row per alert entry).
+type AlertEvent {
+    id: ID!
+    deviceId: String!
+    eventType: Int!
+    occurredTime: String
+    type: String!
+    level: Int!
+    message: String
+    source: String
+}
+
+# Relationship anchor used to filter events. The type names an entity class
+# (e.g. "customer", "area") and the id is that entity's row id; together they
+# map to the corresponding Rel* column on the base event table.
+input EventAnchor {
+    type: String!
+    id: String!
+}
+
+# Criteria used when searching for events. Times are RFC3339 strings.
+input EventSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    deviceId: String
+    eventTypes: [Int!]
+    startTime: String
+    endTime: String
+    anchor: EventAnchor
+}
+
+# Search results returned from a base event query.
+type EventSearchResults {
+    results: [Event!]!
+    pagination: SearchResultsPagination!
+}
+
+# Search results returned from a location event query.
+type LocationEventSearchResults {
+    results: [LocationEvent!]!
+    pagination: SearchResultsPagination!
+}
+
+# Search results returned from a measurement event query.
+type MeasurementEventSearchResults {
+    results: [MeasurementEvent!]!
+    pagination: SearchResultsPagination!
+}
+
+# Search results returned from an alert event query.
+type AlertEventSearchResults {
+    results: [AlertEvent!]!
+    pagination: SearchResultsPagination!
 }
 
 # Contains queries executed against model.
 type Query {
+    events(criteria: EventSearchCriteria!): EventSearchResults!
+    locationEvents(criteria: EventSearchCriteria!): LocationEventSearchResults!
+    measurementEvents(criteria: EventSearchCriteria!): MeasurementEventSearchResults!
+    alertEvents(criteria: EventSearchCriteria!): AlertEventSearchResults!
 }
 
-# Contains mutations executed against model.
+# Events are written by the persistence pipeline, not via the API.
 type Mutation {
+    _empty: Boolean
 }
 
 schema {

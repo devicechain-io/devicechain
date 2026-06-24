@@ -38,6 +38,11 @@ type EventManagementApi interface {
 	CreateLocationEvent(ctx context.Context, request *LocationEventCreateRequest) (*LocationEvent, error)
 	CreateMeasurementEvent(ctx context.Context, request *MeasurementEventCreateRequest) (*MeasurementEvent, error)
 	CreateAlertEvent(ctx context.Context, request *AlertEventCreateRequest) (*AlertEvent, error)
+
+	Events(ctx context.Context, criteria EventSearchCriteria) (*EventSearchResults, error)
+	LocationEvents(ctx context.Context, criteria EventSearchCriteria) (*LocationEventSearchResults, error)
+	MeasurementEvents(ctx context.Context, criteria EventSearchCriteria) (*MeasurementEventSearchResults, error)
+	AlertEvents(ctx context.Context, criteria EventSearchCriteria) (*AlertEventSearchResults, error)
 }
 
 // Create a new location event.
