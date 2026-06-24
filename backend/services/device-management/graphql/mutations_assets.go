@@ -83,61 +83,6 @@ func (r *SchemaResolver) UpdateAsset(ctx context.Context, args struct {
 	return dt, nil
 }
 
-// Create a new asset relationship type.
-func (r *SchemaResolver) CreateAssetRelationshipType(ctx context.Context, args struct {
-	Request *model.AssetRelationshipTypeCreateRequest
-}) (*AssetRelationshipTypeResolver, error) {
-	api := r.GetApi(ctx)
-	created, err := api.CreateAssetRelationshipType(ctx, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &AssetRelationshipTypeResolver{
-		M: *created,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Update an existing asset relationship type.
-func (r *SchemaResolver) UpdateAssetRelationshipType(ctx context.Context, args struct {
-	Token   string
-	Request *model.AssetRelationshipTypeCreateRequest
-}) (*AssetRelationshipTypeResolver, error) {
-	api := r.GetApi(ctx)
-	updated, err := api.UpdateAssetRelationshipType(ctx, args.Token, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &AssetRelationshipTypeResolver{
-		M: *updated,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Create a new asset relationship.
-func (r *SchemaResolver) CreateAssetRelationship(ctx context.Context, args struct {
-	Request *model.AssetRelationshipCreateRequest
-}) (*AssetRelationshipResolver, error) {
-	api := r.GetApi(ctx)
-	created, err := api.CreateAssetRelationship(ctx, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &AssetRelationshipResolver{
-		M: *created,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
 // Create a new asset group.
 func (r *SchemaResolver) CreateAssetGroup(ctx context.Context, args struct {
 	Request *model.AssetGroupCreateRequest
@@ -169,61 +114,6 @@ func (r *SchemaResolver) UpdateAssetGroup(ctx context.Context, args struct {
 
 	dt := &AssetGroupResolver{
 		M: *updated,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Create a new asset group relationship type.
-func (r *SchemaResolver) CreateAssetGroupRelationshipType(ctx context.Context, args struct {
-	Request *model.AssetGroupRelationshipTypeCreateRequest
-}) (*AssetGroupRelationshipTypeResolver, error) {
-	api := r.GetApi(ctx)
-	created, err := api.CreateAssetGroupRelationshipType(ctx, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &AssetGroupRelationshipTypeResolver{
-		M: *created,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Update an existing asset group relationship type.
-func (r *SchemaResolver) UpdateAssetGroupRelationshipType(ctx context.Context, args struct {
-	Token   string
-	Request *model.AssetGroupRelationshipTypeCreateRequest
-}) (*AssetGroupRelationshipTypeResolver, error) {
-	api := r.GetApi(ctx)
-	updated, err := api.UpdateAssetGroupRelationshipType(ctx, args.Token, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &AssetGroupRelationshipTypeResolver{
-		M: *updated,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Create a new asset group relationship.
-func (r *SchemaResolver) CreateAssetGroupRelationship(ctx context.Context, args struct {
-	Request *model.AssetGroupRelationshipCreateRequest
-}) (*AssetGroupRelationshipResolver, error) {
-	api := r.GetApi(ctx)
-	created, err := api.CreateAssetGroupRelationship(ctx, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &AssetGroupRelationshipResolver{
-		M: *created,
 		S: r,
 		C: ctx,
 	}

@@ -83,61 +83,6 @@ func (r *SchemaResolver) UpdateArea(ctx context.Context, args struct {
 	return dt, nil
 }
 
-// Create a new area relationship type.
-func (r *SchemaResolver) CreateAreaRelationshipType(ctx context.Context, args struct {
-	Request *model.AreaRelationshipTypeCreateRequest
-}) (*AreaRelationshipTypeResolver, error) {
-	api := r.GetApi(ctx)
-	created, err := api.CreateAreaRelationshipType(ctx, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &AreaRelationshipTypeResolver{
-		M: *created,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Update an existing area relationship type.
-func (r *SchemaResolver) UpdateAreaRelationshipType(ctx context.Context, args struct {
-	Token   string
-	Request *model.AreaRelationshipTypeCreateRequest
-}) (*AreaRelationshipTypeResolver, error) {
-	api := r.GetApi(ctx)
-	updated, err := api.UpdateAreaRelationshipType(ctx, args.Token, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &AreaRelationshipTypeResolver{
-		M: *updated,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Create a new area relationship.
-func (r *SchemaResolver) CreateAreaRelationship(ctx context.Context, args struct {
-	Request *model.AreaRelationshipCreateRequest
-}) (*AreaRelationshipResolver, error) {
-	api := r.GetApi(ctx)
-	created, err := api.CreateAreaRelationship(ctx, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &AreaRelationshipResolver{
-		M: *created,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
 // Create a new area group.
 func (r *SchemaResolver) CreateAreaGroup(ctx context.Context, args struct {
 	Request *model.AreaGroupCreateRequest
@@ -169,61 +114,6 @@ func (r *SchemaResolver) UpdateAreaGroup(ctx context.Context, args struct {
 
 	dt := &AreaGroupResolver{
 		M: *updated,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Create a new area group relationship type.
-func (r *SchemaResolver) CreateAreaGroupRelationshipType(ctx context.Context, args struct {
-	Request *model.AreaGroupRelationshipTypeCreateRequest
-}) (*AreaGroupRelationshipTypeResolver, error) {
-	api := r.GetApi(ctx)
-	created, err := api.CreateAreaGroupRelationshipType(ctx, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &AreaGroupRelationshipTypeResolver{
-		M: *created,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Update an existing area group relationship type.
-func (r *SchemaResolver) UpdateAreaGroupRelationshipType(ctx context.Context, args struct {
-	Token   string
-	Request *model.AreaGroupRelationshipTypeCreateRequest
-}) (*AreaGroupRelationshipTypeResolver, error) {
-	api := r.GetApi(ctx)
-	updated, err := api.UpdateAreaGroupRelationshipType(ctx, args.Token, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &AreaGroupRelationshipTypeResolver{
-		M: *updated,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Create a new area group relationship.
-func (r *SchemaResolver) CreateAreaGroupRelationship(ctx context.Context, args struct {
-	Request *model.AreaGroupRelationshipCreateRequest
-}) (*AreaGroupRelationshipResolver, error) {
-	api := r.GetApi(ctx)
-	created, err := api.CreateAreaGroupRelationship(ctx, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &AreaGroupRelationshipResolver{
-		M: *created,
 		S: r,
 		C: ctx,
 	}

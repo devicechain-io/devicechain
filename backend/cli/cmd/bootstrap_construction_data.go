@@ -9,7 +9,6 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/devicechain-io/dc-device-management/model"
 	gql "github.com/devicechain-io/dcctl/graphql"
 	"github.com/spf13/cobra"
 )
@@ -58,9 +57,6 @@ func bootstrapAssetData(ctx context.Context, dm gql.DeviceManagementClient) {
 
 	header("Asset Groups", DATASET_CONSTRUCTION)
 	bootstrapAssetGroups(ctx, dm)
-
-	header("Asset Group Relationship Types", DATASET_CONSTRUCTION)
-	bootstrapAssetGroupRelationshipTypes(ctx, dm)
 
 	header("Assets", DATASET_CONSTRUCTION)
 	bootstrapAssets(ctx, dm)
@@ -210,25 +206,13 @@ func bootstrapAssetGroups(ctx context.Context, dm gql.DeviceManagementClient) {
 		s("https://devicechain.s3.amazonaws.com/datasets/construction/catd1.jpg"), nil, nil, nil, nil, nil)
 }
 
-// Bootstrap asset group relationship types.
-func bootstrapAssetGroupRelationshipTypes(ctx context.Context, dm gql.DeviceManagementClient) {
-	// Tracks location of
-	dm.AssureAssetGroupRelationshipType(ctx, "contains", s("Contains"),
-		unspace(`The group contains the target asset`), nil)
-}
-
 // Bootstrap multiple assets of a given type by generating VINs for each.
-func bootstrapAssetsOfType(ctx context.Context, dm gql.DeviceManagementClient, typeToken string, groupToken string, count int) {
+func bootstrapAssetsOfType(ctx context.Context, dm gql.DeviceManagementClient, typeToken string, count int) {
 	atypes, err := dm.GetAssetTypesByToken(ctx, []string{typeToken})
 	if err != nil {
 		panic(err)
 	}
 	atype := atypes[typeToken]
-	agroups, err := dm.GetAssetGroupsByToken(ctx, []string{groupToken})
-	if err != nil {
-		panic(err)
-	}
-	agroup := agroups[groupToken]
 	for idx := 0; idx < count; idx++ {
 		vin := randomVin(15)
 		dm.AssureAsset(ctx, vin, atype.GetToken(), s(fmt.Sprintf("%s VIN:%s", *atype.GetName(), vin)),
@@ -238,26 +222,21 @@ func bootstrapAssetsOfType(ctx context.Context, dm gql.DeviceManagementClient, t
 				"vin": "%s",
 				"purchaseDate": "%s"
 			}`), vin, time.Now().Format("2006-01-02"))))
-		targets := model.EntityRelationshipCreateRequest{
-			TargetAsset: &vin,
-		}
-		dm.AssureAssetGroupRelationship(ctx, fmt.Sprintf("%s-contains-%s", agroup.GetToken(), vin),
-			agroup.GetToken(), targets, "contains", nil)
 	}
 }
 
 // Bootstrap assets.
 func bootstrapAssets(ctx context.Context, dm gql.DeviceManagementClient) {
-	bootstrapAssetsOfType(ctx, dm, "catd6", "bulldoz", 3)
-	bootstrapAssetsOfType(ctx, dm, "cat725", "truck", 3)
-	bootstrapAssetsOfType(ctx, dm, "cat730", "truck", 3)
-	bootstrapAssetsOfType(ctx, dm, "cat313", "excavator", 3)
-	bootstrapAssetsOfType(ctx, dm, "cat317", "excavator", 3)
-	bootstrapAssetsOfType(ctx, dm, "catd1", "bulldoz", 3)
-	bootstrapAssetsOfType(ctx, dm, "cat302cr", "excavator", 3)
-	bootstrapAssetsOfType(ctx, dm, "cat305cr", "excavator", 3)
-	bootstrapAssetsOfType(ctx, dm, "cat415il", "wloaders", 3)
-	bootstrapAssetsOfType(ctx, dm, "cat416", "wloaders", 3)
+	bootstrapAssetsOfType(ctx, dm, "catd6", 3)
+	bootstrapAssetsOfType(ctx, dm, "cat725", 3)
+	bootstrapAssetsOfType(ctx, dm, "cat730", 3)
+	bootstrapAssetsOfType(ctx, dm, "cat313", 3)
+	bootstrapAssetsOfType(ctx, dm, "cat317", 3)
+	bootstrapAssetsOfType(ctx, dm, "catd1", 3)
+	bootstrapAssetsOfType(ctx, dm, "cat302cr", 3)
+	bootstrapAssetsOfType(ctx, dm, "cat305cr", 3)
+	bootstrapAssetsOfType(ctx, dm, "cat415il", 3)
+	bootstrapAssetsOfType(ctx, dm, "cat416", 3)
 }
 
 // Bootstraps device data for construction dataset.
@@ -268,20 +247,8 @@ func bootstrapDeviceData(ctx context.Context, dm gql.DeviceManagementClient) {
 	header("Devices", DATASET_CONSTRUCTION)
 	bootstrapDevices(ctx, dm)
 
-	header("Device Relationship Types", DATASET_CONSTRUCTION)
-	bootstrapDeviceRelationshipTypes(ctx, dm)
-
-	header("Device Relationships", DATASET_CONSTRUCTION)
-	bootstrapDeviceRelationships(ctx, dm)
-
 	header("Device Groups", DATASET_CONSTRUCTION)
 	bootstrapDeviceGroups(ctx, dm)
-
-	header("Device Group Relationship Types", DATASET_CONSTRUCTION)
-	bootstrapDeviceGroupRelationshipTypes(ctx, dm)
-
-	header("Device Group Relationships", DATASET_CONSTRUCTION)
-	bootstrapDeviceGroupRelationships(ctx, dm)
 }
 
 // Bootstrap device types.
@@ -324,39 +291,6 @@ func bootstrapDevices(ctx context.Context, dm gql.DeviceManagementClient) {
 		}`))
 }
 
-// Bootstrap device relationship types.
-func bootstrapDeviceRelationshipTypes(ctx context.Context, dm gql.DeviceManagementClient) {
-	// Tracks location of
-	dm.AssureDeviceRelationshipType(ctx, "tracksLocationOf", s("Tracks location of"),
-		unspace(`The source device tracks the location of the target device`),
-		unspace(`
-		{
-			"accuracy": "1 meter"
-		}`), true)
-	// Tracks temperature of
-	dm.AssureDeviceRelationshipType(ctx, "tracksTempOf", s("Tracks temperature of"),
-		unspace(`The source device tracks the temperature of the target device`),
-		unspace(`
-		{
-			"accuracy": "1 degree C"
-		}`), false)
-}
-
-// Bootstrap device relationships.
-func bootstrapDeviceRelationships(ctx context.Context, dm gql.DeviceManagementClient) {
-	// SDK7GV3WXZ3FBXZ tracksLocationOf WDVM4L7YPRM7HU2
-	vin := "WDVM4L7YPRM7HU2"
-	targets := model.EntityRelationshipCreateRequest{
-		TargetAsset: &vin,
-	}
-	dm.AssureDeviceRelationship(ctx, "SDK7GV3WXZ3FBXZ-tracksLocationOf-WDVM4L7YPRM7HU2",
-		"SDK7GV3WXZ3FBXZ", targets, "tracksLocationOf",
-		unspace(`
-		{
-			"accuracy": "1 meter"
-		}`))
-}
-
 // Bootstrap device groups.
 func bootstrapDeviceGroups(ctx context.Context, dm gql.DeviceManagementClient) {
 	// Small Dozers
@@ -370,32 +304,6 @@ func bootstrapDeviceGroups(ctx context.Context, dm gql.DeviceManagementClient) {
 		{
 			"maxWeight": "20000 lb"
 		}`))
-}
-
-// Bootstrap device group relationship types.
-func bootstrapDeviceGroupRelationshipTypes(ctx context.Context, dm gql.DeviceManagementClient) {
-	// Tracks location of
-	dm.AssureDeviceGroupRelationshipType(ctx, "contains", s("Contains"),
-		unspace(`The group contains the target device`), nil)
-}
-
-// Bootstrap device group relationships.
-func bootstrapDeviceGroupRelationships(ctx context.Context, dm gql.DeviceManagementClient) {
-	// smalldoz contains SDK7GV3WXZ3FBXZ
-	vin1 := "SDK7GV3WXZ3FBXZ"
-	targets := model.EntityRelationshipCreateRequest{
-		TargetAsset: &vin1,
-	}
-	dm.AssureDeviceGroupRelationship(ctx, "smalldoz-contains-SDK7GV3WXZ3FBXZ",
-		"smalldoz", targets, "contains", nil)
-
-	// smalldoz contains WDVM4L7YPRM7HU2
-	vin2 := "SDK7GV3WXZ3FBXZ"
-	targets = model.EntityRelationshipCreateRequest{
-		TargetAsset: &vin2,
-	}
-	dm.AssureDeviceGroupRelationship(ctx, "smalldoz-contains-WDVM4L7YPRM7HU2",
-		"smalldoz", targets, "contains", nil)
 }
 
 // Create a random VIN of the given length.

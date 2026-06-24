@@ -4,15 +4,3 @@ fragment DefaultPagination on SearchResultsPagination {
   pageEnd
   totalRecords
 }
-
-# Content associated with relationship targets.
-fragment DefaultRelationshipTargets on EntityRelationshipTargets {
-  targetDevice { token }
-  targetDeviceGroup { token }
-  targetAsset {token }
-  targetAssetGroup { token }
-  targetArea {token }
-  targetAreaGroup {token }
-  targetCustomer {token }
-  targetCustomerGroup {token }
-}

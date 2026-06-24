@@ -11,7 +11,7 @@ import (
 
 // Drop all tables from the list.
 func dropTables(tx *gorm.DB, tables []string) error {
-	for table := range tables {
+	for _, table := range tables {
 		err := tx.Migrator().DropTable(table)
 		if err != nil {
 			return err
@@ -25,44 +25,22 @@ func NewInitialSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20220101000000",
 		Migrate: func(tx *gorm.DB) error {
-			return tx.AutoMigrate(&v1.Device{}, &v1.DeviceType{}, &v1.DeviceRelationshipType{}, &v1.DeviceRelationship{},
-				&v1.DeviceGroup{}, &v1.DeviceGroupRelationshipType{}, &v1.DeviceGroupRelationship{},
-
-				&v1.AssetType{}, &v1.Asset{}, &v1.AssetRelationshipType{}, &v1.AssetRelationship{}, &v1.AssetGroup{},
-				&v1.AssetGroupRelationshipType{}, &v1.AssetGroupRelationship{},
-
-				&v1.CustomerType{}, &v1.Customer{}, &v1.CustomerRelationshipType{},
-				&v1.CustomerRelationship{}, &v1.CustomerGroup{}, &v1.CustomerGroupRelationshipType{}, &v1.CustomerGroupRelationship{},
-
-				&v1.AreaType{}, &v1.Area{}, &v1.AreaRelationshipType{}, &v1.AreaRelationship{}, &v1.AreaGroup{},
-				&v1.AreaGroupRelationshipType{}, &v1.AreaGroupRelationship{})
+			// One uniform EntityRelationship edge table + EntityRelationshipType
+			// replace the per-family relationship/relationship-type tables (ADR-013).
+			return tx.AutoMigrate(
+				&v1.Device{}, &v1.DeviceType{}, &v1.DeviceGroup{},
+				&v1.AssetType{}, &v1.Asset{}, &v1.AssetGroup{},
+				&v1.CustomerType{}, &v1.Customer{}, &v1.CustomerGroup{},
+				&v1.AreaType{}, &v1.Area{}, &v1.AreaGroup{},
+				&v1.EntityRelationshipType{}, &v1.EntityRelationship{})
 		},
 		Rollback: func(tx *gorm.DB) error {
-			err := dropTables(tx, []string{"devices", "device_types", "device_relationship_types", "device_relationships",
-				"device_groups", "device_group_relationship_types", "device_group_relationships"})
-			if err != nil {
-				return err
-			}
-
-			err = dropTables(tx, []string{"assets", "asset_types", "asset_relationship_types", "asset_relationships",
-				"asset_groups", "asset_group_relationship_types", "asset_group_relationships"})
-			if err != nil {
-				return err
-			}
-
-			err = dropTables(tx, []string{"customers", "customer_types", "customer_relationship_types", "customer_relationships",
-				"customer_groups", "customer_group_relationship_types", "customer_group_relationships"})
-			if err != nil {
-				return err
-			}
-
-			err = dropTables(tx, []string{"areas", "area_types", "area_relationship_types", "area_relationships",
-				"area_groups", "area_group_relationship_types", "area_group_relationships"})
-			if err != nil {
-				return err
-			}
-
-			return nil
+			return dropTables(tx, []string{
+				"entity_relationships", "entity_relationship_types",
+				"devices", "device_types", "device_groups",
+				"assets", "asset_types", "asset_groups",
+				"customers", "customer_types", "customer_groups",
+				"areas", "area_types", "area_groups"})
 		},
 	}
 }

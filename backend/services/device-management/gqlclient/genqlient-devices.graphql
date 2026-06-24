@@ -32,42 +32,6 @@ fragment DefaultDevice on Device {
   metadata
 }
 
-# Content associated with a device relationship type response.
-fragment DefaultDeviceRelationshipType on DeviceRelationshipType {
-  id
-  createdAt
-  updatedAt
-  deletedAt
-  token
-  name
-  description
-  metadata
-  tracked
-}
-
-# Content associated with a device relationship response.
-fragment DefaultDeviceRelationship on DeviceRelationship {
-  id
-  createdAt
-  updatedAt
-  deletedAt
-  token
-  sourceDevice {
-    token
-    name
-    description
-  }
-  targets {
-    ...DefaultRelationshipTargets
-  }
-  relationshipType {
-    token
-    name
-    description
-  }
-  metadata
-}
-
 # Content associated with a device group.
 fragment DefaultDeviceGroup on DeviceGroup {
   id
@@ -82,41 +46,6 @@ fragment DefaultDeviceGroup on DeviceGroup {
   backgroundColor
   foregroundColor
   borderColor
-  metadata
-}
-
-# Content associated with a device group relationship type.
-fragment DefaultDeviceGroupRelationshipType on DeviceGroupRelationshipType {
-  id
-  createdAt
-  updatedAt
-  deletedAt
-  token
-  name
-  description
-  metadata
-}
-
-# Content associated with a device group relationship.
-fragment DefaultDeviceGroupRelationship on DeviceGroupRelationship {
-  id
-  createdAt
-  updatedAt
-  deletedAt
-  token
-  sourceDeviceGroup {
-    token
-    name
-    description
-  }
-  targets {
-    ...DefaultRelationshipTargets
-  }
-  relationshipType {
-    token
-    name
-    description
-  }
   metadata
 }
 
@@ -189,76 +118,6 @@ query listDevices($pageNumber: Int!, $pageSize: Int!) {
   }
 }
 
-# Create device relationship type and return identifiers.
-mutation createDeviceRelationshipType($token: String!, $name: String, $description: String, $metadata: String, $tracked: Boolean!) {
-  createDeviceRelationshipType(request: { 
-    token: $token,
-    name: $name,
-    description: $description,
-    metadata: $metadata,
-    tracked: $tracked
-  }) {
-    ...DefaultDeviceRelationshipType
-  }
-}
-
-# Get device relationship types by unique tokens.
-query getDeviceRelationshipTypesByToken($tokens: [String!]!) {
-  deviceRelationshipTypesByToken(tokens: $tokens) {
-    ...DefaultDeviceRelationshipType
-  }
-}
-
-# List device relationship types that match criteria.
-query listDeviceRelationshipTypes($pageNumber: Int!, $pageSize: Int!) {
-  deviceRelationshipTypes(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
-    results {
-      ...DefaultDeviceRelationshipType
-    }
-    pagination {
-      ...DefaultPagination
-    }
-  }
-}
-
-# Create device relationship and return identifiers.
-mutation createDeviceRelationship($token: String!, $sourceDevice: String!, $targets: EntityRelationshipTargetsCreateRequest!, $relationshipType: String!) {
-  createDeviceRelationship(
-    request: {
-      token: $token,
-      sourceDevice: $sourceDevice
-      targets: $targets
-      relationshipType: $relationshipType
-    }
-  ) {
-    ...DefaultDeviceRelationship
-  }
-}
-
-# Get device relationships by unique tokens.
-query getDeviceRelationshipsByToken($tokens: [String!]!) {
-  deviceRelationshipsByToken(tokens: $tokens) {
-    ...DefaultDeviceRelationship
-  }
-}
-
-# List device relationships that match criteria.
-query listDeviceRelationships($pageNumber: Int!, $pageSize: Int!, $sourceDevice: String, $relationshipType: String, $tracked: Boolean) {
-  deviceRelationships(criteria: { 
-    pageNumber: $pageNumber, 
-    pageSize: $pageSize,
-    sourceDevice: $sourceDevice,
-    relationshipType: $relationshipType,
-    tracked: $tracked }) {
-    results {
-      ...DefaultDeviceRelationship
-    }
-    pagination {
-      ...DefaultPagination
-    }
-  }
-}
-
 # Create device group and return identifiers.
 mutation createDeviceGroup($token: String!, $name: String, $description: String, 
   $imageUrl: String, $icon: String, $backgroundColor: String, $foregroundColor: String, $borderColor: String, $metadata: String) {
@@ -289,74 +148,6 @@ query listDeviceGroups($pageNumber: Int!, $pageSize: Int!) {
   deviceGroups(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
     results {
       ...DefaultDeviceGroup
-    }
-    pagination {
-      ...DefaultPagination
-    }
-  }
-}
-
-# Create device group relationship type and return identifiers.
-mutation createDeviceGroupRelationshipType($token: String!, $name: String, $description: String, $metadata: String) {
-  createDeviceGroupRelationshipType(request: { 
-    token: $token,
-    name: $name,
-    description: $description,
-    metadata: $metadata
-  }) {
-    ...DefaultDeviceGroupRelationshipType
-  }
-}
-
-# Get device group relationship types by unique token.
-query getDeviceGroupRelationshipTypesByToken($tokens: [String!]!) {
-  deviceGroupRelationshipTypesByToken(tokens: $tokens) {
-    ...DefaultDeviceGroupRelationshipType
-  }
-}
-
-# List device group relationship types that match criteria.
-query listDeviceGroupRelationshipTypes($pageNumber: Int!, $pageSize: Int!) {
-  deviceGroupRelationshipTypes(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
-    results {
-      ...DefaultDeviceGroupRelationshipType
-    }
-    pagination {
-      ...DefaultPagination
-    }
-  }
-}
-
-# Create device group relationship and return identifiers.
-mutation createDeviceGroupRelationship($token: String!, $sourceDeviceGroup: String!, $targets: EntityRelationshipTargetsCreateRequest!, $relationshipType: String!) {
-  createDeviceGroupRelationship(
-    request: {
-      token: $token,
-      sourceDeviceGroup: $sourceDeviceGroup,
-      targets: $targets,
-      relationshipType: $relationshipType
-    }
-  ) {
-    ...DefaultDeviceGroupRelationship
-  }
-}
-
-# Get device group relationships by unique tokens.
-query getDeviceGroupRelationshipsByToken($tokens: [String!]!) {
-  deviceGroupRelationshipsByToken(tokens: $tokens) {
-    ...DefaultDeviceGroupRelationship
-  }
-}
-
-# List device group relationships that match criteria.
-query listDeviceGroupRelationships($pageNumber: Int!, $pageSize: Int!, $sourceDeviceGroup: String, $relationshipType: String) {
-  deviceGroupRelationships(criteria: { 
-    pageNumber: $pageNumber, 
-    pageSize: $pageSize,
-    sourceDeviceGroup: $sourceDeviceGroup,
-    relationshipType: $relationshipType }) {
-    results {
-      ...DefaultDeviceGroupRelationship
     }
     pagination {
       ...DefaultPagination

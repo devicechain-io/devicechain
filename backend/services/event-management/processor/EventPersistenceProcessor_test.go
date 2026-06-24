@@ -86,12 +86,14 @@ func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopNonEof() {
 // Build resolved event with the given payload.
 func buildResolvedEvent(etype esmodel.EventType, payload interface{}) *dmodel.ResolvedEvent {
 	altid := "alternateId"
-	tdvid := uint(1)
+	ttype := "asset"
+	tid := uint(1)
 	return &dmodel.ResolvedEvent{
 		Source:         "mysource",
 		AltId:          &altid,
 		SourceDeviceId: 1,
-		TargetDeviceId: &tdvid,
+		TargetType:     &ttype,
+		TargetId:       &tid,
 		EventType:      etype,
 		Payload:        payload,
 	}

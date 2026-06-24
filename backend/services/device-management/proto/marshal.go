@@ -55,15 +55,9 @@ func UnmarshalFailedEvent(encoded []byte) (*model.FailedEvent, error) {
 // Marshal payload for a new relationship event.
 func MarshalPayloadForNewRelationshipEvent(payload *model.ResolvedNewRelationshipPayload) ([]byte, error) {
 	pbpayload := &PResolvedNewRelationshipPayload{
-		DeviceRelationshipTypeId: payload.DeviceRelationshipTypeId,
-		TargetDeviceId:           payload.TargetDeviceId,
-		TargetDeviceGroupId:      payload.TargetDeviceGroupId,
-		TargetAssetId:            payload.TargetAssetId,
-		TargetAssetGroupId:       payload.TargetAssetGroupId,
-		TargetCustomerId:         payload.TargetCustomerId,
-		TargetCustomerGroupId:    payload.TargetCustomerGroupId,
-		TargetAreaId:             payload.TargetAreaId,
-		TargetAreaGroupId:        payload.TargetAreaGroupId,
+		RelationshipTypeId: payload.RelationshipTypeId,
+		TargetType:         payload.TargetType,
+		TargetId:           payload.TargetId,
 	}
 
 	bytes, err := proto.Marshal(pbpayload)
@@ -146,15 +140,9 @@ func UnmarshalPayloadForNewRelationshipEvent(encoded []byte) (*model.ResolvedNew
 		return nil, err
 	}
 	payload := &model.ResolvedNewRelationshipPayload{
-		DeviceRelationshipTypeId: pbpayload.DeviceRelationshipTypeId,
-		TargetDeviceId:           pbpayload.TargetDeviceId,
-		TargetDeviceGroupId:      pbpayload.TargetDeviceGroupId,
-		TargetAssetId:            pbpayload.TargetAssetId,
-		TargetAssetGroupId:       pbpayload.TargetAssetGroupId,
-		TargetCustomerId:         pbpayload.TargetCustomerId,
-		TargetCustomerGroupId:    pbpayload.TargetCustomerGroupId,
-		TargetAreaId:             pbpayload.TargetAreaId,
-		TargetAreaGroupId:        pbpayload.TargetAreaGroupId,
+		RelationshipTypeId: pbpayload.RelationshipTypeId,
+		TargetType:         pbpayload.TargetType,
+		TargetId:           pbpayload.TargetId,
 	}
 
 	return payload, nil
@@ -288,20 +276,14 @@ func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 
 	// Encode protobuf event.
 	pbevent := &PResolvedEvent{
-		Source:                event.Source,
-		AltId:                 event.AltId,
-		DeviceRelationshipId:  uint64(event.DeviceRelationshipId),
-		SourceDeviceId:        uint64(event.SourceDeviceId),
-		TargetDeviceId:        util.NullUint64Of(event.TargetDeviceId),
-		TargetDeviceGroupId:   util.NullUint64Of(event.TargetDeviceGroupId),
-		TargetAssetId:         util.NullUint64Of(event.TargetAssetId),
-		TargetAssetGroupId:    util.NullUint64Of(event.TargetAssetGroupId),
-		TargetCustomerId:      util.NullUint64Of(event.TargetCustomerId),
-		TargetCustomerGroupId: util.NullUint64Of(event.TargetCustomerGroupId),
-		TargetAreaId:          util.NullUint64Of(event.TargetAreaId),
-		TargetAreaGroupId:     util.NullUint64Of(event.TargetAreaGroupId),
-		EventType:             int64(event.EventType),
-		Payload:               pybytes,
+		Source:         event.Source,
+		AltId:          event.AltId,
+		RelationshipId: uint64(event.RelationshipId),
+		SourceDeviceId: uint64(event.SourceDeviceId),
+		TargetType:     event.TargetType,
+		TargetId:       util.NullUint64Of(event.TargetId),
+		EventType:      int64(event.EventType),
+		Payload:        pybytes,
 	}
 
 	// Marshal event to bytes.
@@ -329,20 +311,14 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 	}
 
 	event := &model.ResolvedEvent{
-		Source:                pbevent.Source,
-		AltId:                 pbevent.AltId,
-		DeviceRelationshipId:  uint(pbevent.DeviceRelationshipId),
-		SourceDeviceId:        uint(pbevent.SourceDeviceId),
-		TargetDeviceId:        util.NullUintOf(pbevent.TargetDeviceId),
-		TargetDeviceGroupId:   util.NullUintOf(pbevent.TargetDeviceGroupId),
-		TargetAssetId:         util.NullUintOf(pbevent.TargetAssetId),
-		TargetAssetGroupId:    util.NullUintOf(pbevent.TargetAssetGroupId),
-		TargetCustomerId:      util.NullUintOf(pbevent.TargetCustomerId),
-		TargetCustomerGroupId: util.NullUintOf(pbevent.TargetCustomerGroupId),
-		TargetAreaId:          util.NullUintOf(pbevent.TargetAreaId),
-		TargetAreaGroupId:     util.NullUintOf(pbevent.TargetAreaGroupId),
-		EventType:             esmodel.EventType(pbevent.EventType),
-		Payload:               payload,
+		Source:         pbevent.Source,
+		AltId:          pbevent.AltId,
+		RelationshipId: uint(pbevent.RelationshipId),
+		SourceDeviceId: uint(pbevent.SourceDeviceId),
+		TargetType:     pbevent.TargetType,
+		TargetId:       util.NullUintOf(pbevent.TargetId),
+		EventType:      esmodel.EventType(pbevent.EventType),
+		Payload:        payload,
 	}
 
 	return event, nil

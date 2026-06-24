@@ -32,9 +32,10 @@ type DeviceManagementApi interface {
 	DevicesByToken(ctx context.Context, tokens []string) ([]*Device, error)
 	Devices(ctx context.Context, criteria DeviceSearchCriteria) (*DeviceSearchResults, error)
 
-	// Device relationships.
-	DeviceRelationshipsById(ctx context.Context, ids []uint) ([]*DeviceRelationship, error)
-	DeviceRelationshipsByToken(ctx context.Context, tokens []string) ([]*DeviceRelationship, error)
-	DeviceRelationships(ctx context.Context, criteria DeviceRelationshipSearchCriteria) (*DeviceRelationshipSearchResults, error)
-	CreateDeviceRelationship(ctx context.Context, request *DeviceRelationshipCreateRequest) (*DeviceRelationship, error)
+	// Entity relationships (uniform edge model, ADR-013).
+	EntityRelationshipsById(ctx context.Context, ids []uint) ([]*EntityRelationship, error)
+	EntityRelationshipsByToken(ctx context.Context, tokens []string) ([]*EntityRelationship, error)
+	EntityRelationships(ctx context.Context, criteria EntityRelationshipSearchCriteria) (*EntityRelationshipSearchResults, error)
+	CreateEntityRelationship(ctx context.Context, request *EntityRelationshipCreateRequest) (*EntityRelationship, error)
+	EntityRelationshipTypesByToken(ctx context.Context, tokens []string) ([]*EntityRelationshipType, error)
 }

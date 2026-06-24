@@ -32,41 +32,6 @@ fragment DefaultCustomer on Customer {
   metadata
 }
 
-# Content associated with customer relationship type response.
-fragment DefaultCustomerRelationshipType on CustomerRelationshipType {
-  id
-  createdAt
-  updatedAt
-  deletedAt
-  token
-  name
-  description
-  metadata
-}
-
-# Content associated with customer relationship response.
-fragment DefaultCustomerRelationship on CustomerRelationship {
-  id
-  createdAt
-  updatedAt
-  deletedAt
-  token
-  sourceCustomer {
-    token
-    name
-    description
-  }
-  targets {
-    ...DefaultRelationshipTargets
-  }
-  relationshipType {
-    token
-    name
-    description
-  }
-  metadata
-}
-
 # Content associated with customer group.
 fragment DefaultCustomerGroup on CustomerGroup {
   id
@@ -81,41 +46,6 @@ fragment DefaultCustomerGroup on CustomerGroup {
   backgroundColor
   foregroundColor
   borderColor
-  metadata
-}
-
-# Content associated with customer group relationship type.
-fragment DefaultCustomerGroupRelationshipType on CustomerGroupRelationshipType {
-  id
-  createdAt
-  updatedAt
-  deletedAt
-  token
-  name
-  description
-  metadata
-}
-
-# Content associated with customer group relationship.
-fragment DefaultCustomerGroupRelationship on CustomerGroupRelationship {
-  id
-  createdAt
-  updatedAt
-  deletedAt
-  token
-  sourceCustomerGroup {
-    token
-    name
-    description
-  }
-  targets {
-    ...DefaultRelationshipTargets
-  }
-  relationshipType {
-    token
-    name
-    description
-  }
   metadata
 }
 
@@ -188,74 +118,6 @@ query listCustomers($pageNumber: Int!, $pageSize: Int!) {
   }
 }
 
-# Create customer relationship type and return identifiers.
-mutation createCustomerRelationshipType($token: String!, $name: String, $description: String, $metadata: String) {
-  createCustomerRelationshipType(request: { 
-    token: $token,
-    name: $name,
-    description: $description,
-    metadata: $metadata
-  }) {
-    ...DefaultCustomerRelationshipType
-  }
-}
-
-# Get customer relationship types by unique tokens.
-query getCustomerRelationshipTypesByToken($tokens: [String!]!) {
-  customerRelationshipTypesByToken(tokens: $tokens) {
-    ...DefaultCustomerRelationshipType
-  }
-}
-
-# List customer relationship types that match criteria.
-query listCustomerRelationshipTypes($pageNumber: Int!, $pageSize: Int!) {
-  customerRelationshipTypes(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
-    results {
-      ...DefaultCustomerRelationshipType
-    }
-    pagination {
-      ...DefaultPagination
-    }
-  }
-}
-
-# Create customer relationship and return identifiers.
-mutation createCustomerRelationship($token: String!, $sourceCustomer: String!, $targets: EntityRelationshipTargetsCreateRequest!, $relationshipType: String!) {
-  createCustomerRelationship(
-    request: {
-      token: $token,
-      sourceCustomer: $sourceCustomer
-      targets: $targets
-      relationshipType: $relationshipType
-    }
-  ) {
-    ...DefaultCustomerRelationship
-  }
-}
-
-# Get customer relationships by unique tokens.
-query getCustomerRelationshipsByToken($tokens: [String!]!) {
-  customerRelationshipsByToken(tokens: $tokens) {
-    ...DefaultCustomerRelationship
-  }
-}
-
-# List customer relationships that match criteria.
-query listCustomerRelationships($pageNumber: Int!, $pageSize: Int!, $sourceCustomer: String, $relationshipType: String) {
-  customerRelationships(criteria: { 
-    pageNumber: $pageNumber, 
-    pageSize: $pageSize,
-    sourceCustomer: $sourceCustomer,
-    relationshipType: $relationshipType }) {
-    results {
-      ...DefaultCustomerRelationship
-    }
-    pagination {
-      ...DefaultPagination
-    }
-  }
-}
-
 # Create customer group and return identifiers.
 mutation createCustomerGroup($token: String!, $name: String, $description: String, 
   $imageUrl: String, $icon: String, $backgroundColor: String, $foregroundColor: String, $borderColor: String, $metadata: String) {
@@ -293,70 +155,3 @@ query listCustomerGroups($pageNumber: Int!, $pageSize: Int!) {
   }
 }
 
-# Create customer group relationship type and return identifiers.
-mutation createCustomerGroupRelationshipType($token: String!, $name: String, $description: String, $metadata: String) {
-  createCustomerGroupRelationshipType(request: { 
-    token: $token,
-    name: $name,
-    description: $description,
-    metadata: $metadata
-  }) {
-    ...DefaultCustomerGroupRelationshipType
-  }
-}
-
-# Get customer group relationship types by unique token.
-query getCustomerGroupRelationshipTypesByToken($tokens: [String!]!) {
-  customerGroupRelationshipTypesByToken(tokens: $tokens) {
-    ...DefaultCustomerGroupRelationshipType
-  }
-}
-
-# List customer group relationship types that match criteria.
-query listCustomerGroupRelationshipTypes($pageNumber: Int!, $pageSize: Int!) {
-  customerGroupRelationshipTypes(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
-    results {
-      ...DefaultCustomerGroupRelationshipType
-    }
-    pagination {
-      ...DefaultPagination
-    }
-  }
-}
-
-# Create customer group relationship and return identifiers.
-mutation createCustomerGroupRelationship($token: String!, $customerGroup: String!, $targets: EntityRelationshipTargetsCreateRequest!, $relationshipType: String!) {
-  createCustomerGroupRelationship(
-    request: {
-      token: $token,
-      sourceCustomerGroup: $customerGroup,
-      targets: $targets,
-      relationshipType: $relationshipType
-    }
-  ) {
-    ...DefaultCustomerGroupRelationship
-  }
-}
-
-# Get customer group relationships by unique tokens.
-query getCustomerGroupRelationshipsByToken($tokens: [String!]!) {
-  customerGroupRelationshipsByToken(tokens: $tokens) {
-    ...DefaultCustomerGroupRelationship
-  }
-}
-
-# List customer group relationships that match criteria.
-query listCustomerGroupRelationships($pageNumber: Int!, $pageSize: Int!, $sourceCustomerGroup: String, $relationshipType: String) {
-  customerGroupRelationships(criteria: { 
-    pageNumber: $pageNumber, 
-    pageSize: $pageSize,
-    sourceCustomerGroup: $sourceCustomerGroup,
-    relationshipType: $relationshipType }) {
-    results {
-      ...DefaultCustomerGroupRelationship
-    }
-    pagination {
-      ...DefaultPagination
-    }
-  }
-}
