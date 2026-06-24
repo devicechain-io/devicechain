@@ -5,6 +5,7 @@ package v1
 
 import (
 	"database/sql"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -38,6 +39,23 @@ type EntityRelationship struct {
 	TargetId           uint   `gorm:"not null;index:idx_entity_rel_target,priority:2"`
 	RelationshipTypeId uint   `gorm:"not null"`
 	RelationshipType   EntityRelationshipType
+}
+
+// EntityAttribute is a single current-state key-value for an entity in one of
+// three scopes (ADR-012). It addresses its owner by uniform (entity_type,
+// entity_id) (ADR-013); referential integrity is enforced at the app layer via
+// the entity-type registry. The (entity, scope, key) lookup index is the natural
+// key on which writes upsert. Unlike events, this is a mutable current-state row.
+type EntityAttribute struct {
+	gorm.Model
+	rdb.TenantScoped
+	EntityType  string         `gorm:"not null;size:32;index:idx_entity_attr_key,priority:1"`
+	EntityId    uint           `gorm:"not null;index:idx_entity_attr_key,priority:2"`
+	Scope       string         `gorm:"not null;size:16;index:idx_entity_attr_key,priority:3"`
+	AttrKey     string         `gorm:"not null;size:256;index:idx_entity_attr_key,priority:4"`
+	ValueType   string         `gorm:"not null;size:16"`
+	Value       sql.NullString `gorm:"size:65536"`
+	LastUpdated time.Time      `gorm:"not null"`
 }
 
 // Represents a device type.

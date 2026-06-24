@@ -32,11 +32,13 @@ func NewInitialSchema() *gormigrate.Migration {
 				&v1.AssetType{}, &v1.Asset{}, &v1.AssetGroup{},
 				&v1.CustomerType{}, &v1.Customer{}, &v1.CustomerGroup{},
 				&v1.AreaType{}, &v1.Area{}, &v1.AreaGroup{},
-				&v1.EntityRelationshipType{}, &v1.EntityRelationship{})
+				&v1.EntityRelationshipType{}, &v1.EntityRelationship{},
+				&v1.EntityAttribute{})
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return dropTables(tx, []string{
 				"device_credentials",
+				"entity_attributes",
 				"entity_relationships", "entity_relationship_types",
 				"devices", "device_types", "device_groups",
 				"assets", "asset_types", "asset_groups",

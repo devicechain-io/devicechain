@@ -46,4 +46,10 @@ type DeviceManagementApi interface {
 	EntityRelationships(ctx context.Context, criteria EntityRelationshipSearchCriteria) (*EntityRelationshipSearchResults, error)
 	CreateEntityRelationship(ctx context.Context, request *EntityRelationshipCreateRequest) (*EntityRelationship, error)
 	EntityRelationshipTypesByToken(ctx context.Context, tokens []string) ([]*EntityRelationshipType, error)
+
+	// Entity attributes (ADR-012).
+	SetEntityAttribute(ctx context.Context, request *EntityAttributeSetRequest) (*EntityAttribute, error)
+	EntityAttributes(ctx context.Context, criteria EntityAttributeSearchCriteria) (*EntityAttributeSearchResults, error)
+	DeleteEntityAttribute(ctx context.Context, entityType string, entity string, scope string, attrKey string) (bool, error)
+	EntityAttributesByEntity(ctx context.Context, entityType string, entityId uint, scope *string) ([]*EntityAttribute, error)
 }

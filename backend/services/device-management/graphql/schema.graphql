@@ -645,6 +645,47 @@ type EntityRelationshipSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# Represents a single current-state attribute for an entity (ADR-012).
+type EntityAttribute implements Model {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    entityType: String!
+    entity: Entity!
+    scope: String!
+    attrKey: String!
+    valueType: String!
+    value: String
+    lastUpdated: String
+}
+
+# Data required to set (upsert) an entity attribute.
+input EntityAttributeSetRequest {
+    entityType: String!
+    entity: String!
+    scope: String!
+    attrKey: String!
+    valueType: String!
+    value: String
+}
+
+# Criteria used when searching for entity attributes.
+input EntityAttributeSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    entityType: String
+    entity: String
+    scope: String
+    attrKeys: [String!]
+}
+
+# Search results returned from entity attribute query.
+type EntityAttributeSearchResults {
+    results: [EntityAttribute!]!
+    pagination: SearchResultsPagination!
+}
+
 # Contains queries executed against model.
 type Query {
     # Find device types by unique id.
@@ -684,6 +725,8 @@ type Query {
     entityRelationshipsByToken(tokens: [String!]!): [EntityRelationship!]!
     # List entity relationships that meet criteria.
     entityRelationships(criteria: EntityRelationshipSearchCriteria!): EntityRelationshipSearchResults!
+    # List entity attributes that meet criteria.
+    entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
 
     # Find asset types by unique id.
     assetTypesById(ids: [ID!]!): [AssetType!]!
@@ -768,6 +811,10 @@ type Mutation {
     updateEntityRelationshipType(token: String!, request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
     # Create a new entity relationship.
     createEntityRelationship(request: EntityRelationshipCreateRequest!): EntityRelationship!
+    # Set (upsert) an entity attribute.
+    setEntityAttribute(request: EntityAttributeSetRequest!): EntityAttribute!
+    # Delete an entity attribute by its natural key.
+    deleteEntityAttribute(entityType: String!, entity: String!, scope: String!, attrKey: String!): Boolean!
 
     # Create a new asset type.
     createAssetType(request: AssetTypeCreateRequest): AssetType!
