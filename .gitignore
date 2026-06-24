@@ -1,0 +1,41 @@
+# Agent OS — strategy/instructions not shared publicly
+.agent-os/
+.claude/commands/
+.claude/agents/
+
+# Legacy individual repos (reference only, not part of monorepo)
+_legacy/
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
+dist/
+
+# Frontend
+node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+bin/
+build/
+
+# Secrets / local config
+*.env
+.env
+.env.local
+config.local.yaml
