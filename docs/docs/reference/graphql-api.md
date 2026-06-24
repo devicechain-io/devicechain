@@ -18,8 +18,29 @@ Each service serves its own GraphQL endpoint (exact paths are environment-depend
 | Service | Covers |
 |---|---|
 | device-management | devices, profiles, assets, areas, customers, groups, relationships |
-| event-management | time-series event queries |
+| event-management | time-series event queries — `events`, `locationEvents`, `measurementEvents`, `alertEvents` |
 | user-management | users, roles, authentication |
+
+## Querying events
+
+event-management exposes read queries over the persisted event history. Each takes a search criteria — device, event types, an occurred-time range, a relationship anchor (`{type, id}`), and pagination — and returns paginated results:
+
+```graphql
+query {
+  measurementEvents(criteria: {
+    pageNumber: 1, pageSize: 50,
+    deviceId: "42",
+    startTime: "2026-06-01T00:00:00Z",
+    endTime: "2026-06-24T00:00:00Z",
+    anchor: { type: "customer", id: "7" }
+  }) {
+    results { deviceId occurredTime name value }
+    pagination { totalRecords }
+  }
+}
+```
+
+All event queries are **tenant-scoped automatically** — results are limited to the caller's tenant, and a query without a resolved tenant is rejected.
 
 ## Exploring the schema
 
