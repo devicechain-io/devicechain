@@ -8,28 +8,34 @@ import (
 	"gorm.io/gorm"
 )
 
-// Based data for capturing a relationship between entites.
+// EntityRelationshipType is the metadata describing a class of relationship
+// (ADR-013). A single table serves every entity type; the Tracked flag marks
+// types whose relationships are denormalized onto events for indexing.
+type EntityRelationshipType struct {
+	gorm.Model
+	rdb.TenantScoped
+	rdb.TokenReference
+	rdb.NamedEntity
+	rdb.MetadataEntity
+	Tracked bool `gorm:"not null;default:false;index"`
+}
+
+// EntityRelationship is a single uniform relationship edge (ADR-013): it
+// addresses its source and target by (type, id) rather than by one of eight
+// typed foreign-key columns, so adding a new entity type needs no schema change.
+// Referential integrity for the source/target references is enforced at the
+// application layer (validated on write, resolved by typed loaders on read).
 type EntityRelationship struct {
 	gorm.Model
 	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.MetadataEntity
-	TargetDeviceId        *uint
-	TargetDevice          *Device
-	TargetDeviceGroupId   *uint
-	TargetDeviceGroup     *DeviceGroup
-	TargetAssetId         *uint
-	TargetAsset           *Asset
-	TargetAssetGroupId    *uint
-	TargetAssetGroup      *AssetGroup
-	TargetAreaId          *uint
-	TargetArea            *Area
-	TargetAreaGroupId     *uint
-	TargetAreaGroup       *AreaGroup
-	TargetCustomerId      *uint
-	TargetCustomer        *Customer
-	TargetCustomerGroupId *uint
-	TargetCustomerGroup   *CustomerGroup
+	SourceType         string `gorm:"not null;size:32;index:idx_entity_rel_source,priority:1"`
+	SourceId           uint   `gorm:"not null;index:idx_entity_rel_source,priority:2"`
+	TargetType         string `gorm:"not null;size:32;index:idx_entity_rel_target,priority:1"`
+	TargetId           uint   `gorm:"not null;index:idx_entity_rel_target,priority:2"`
+	RelationshipTypeId uint   `gorm:"not null"`
+	RelationshipType   EntityRelationshipType
 }
 
 // Represents a device type.
@@ -56,25 +62,6 @@ type Device struct {
 	DeviceType   *DeviceType
 }
 
-// Metadata indicating a relationship between devices.
-type DeviceRelationshipType struct {
-	gorm.Model
-	rdb.TenantScoped
-	rdb.TokenReference
-	rdb.NamedEntity
-	rdb.MetadataEntity
-	Tracked bool
-}
-
-// Captures a relationship between devices.
-type DeviceRelationship struct {
-	EntityRelationship
-	SourceDeviceId     uint
-	SourceDevice       Device
-	RelationshipTypeId uint
-	RelationshipType   DeviceRelationshipType
-}
-
 // Represents a group of devices.
 type DeviceGroup struct {
 	gorm.Model
@@ -83,24 +70,6 @@ type DeviceGroup struct {
 	rdb.NamedEntity
 	rdb.BrandedEntity
 	rdb.MetadataEntity
-}
-
-// Metadata indicating a relationship between device and group.
-type DeviceGroupRelationshipType struct {
-	gorm.Model
-	rdb.TenantScoped
-	rdb.TokenReference
-	rdb.NamedEntity
-	rdb.MetadataEntity
-}
-
-// Represents a device-to-group relationship.
-type DeviceGroupRelationship struct {
-	EntityRelationship
-	SourceDeviceGroupId uint
-	SourceDeviceGroup   DeviceGroup
-	RelationshipTypeId  uint
-	RelationshipType    DeviceGroupRelationshipType
 }
 
 // Data required to create an asset type.
@@ -172,32 +141,6 @@ type AssetSearchResults struct {
 	Pagination rdb.SearchResultsPagination
 }
 
-// Data required to create an asset relationship type.
-type AssetRelationshipTypeCreateRequest struct {
-	Token       string
-	Name        *string
-	Description *string
-	Metadata    *string
-}
-
-// Metadata indicating a relationship between assets.
-type AssetRelationshipType struct {
-	gorm.Model
-	rdb.TenantScoped
-	rdb.TokenReference
-	rdb.NamedEntity
-	rdb.MetadataEntity
-}
-
-// Captures a relationship between assets.
-type AssetRelationship struct {
-	EntityRelationship
-	SourceAssetId      uint
-	SourceAsset        Asset
-	RelationshipTypeId uint
-	RelationshipType   AssetRelationshipType
-}
-
 // Represents a group of assets.
 type AssetGroup struct {
 	gorm.Model
@@ -206,25 +149,6 @@ type AssetGroup struct {
 	rdb.NamedEntity
 	rdb.BrandedEntity
 	rdb.MetadataEntity
-}
-
-// Metadata indicating a relationship between asset and group.
-type AssetGroupRelationshipType struct {
-	gorm.Model
-	rdb.TenantScoped
-	rdb.TokenReference
-	rdb.NamedEntity
-	rdb.MetadataEntity
-}
-
-// Represents a asset-to-group relationship.
-type AssetGroupRelationship struct {
-	EntityRelationship
-	SourceAssetGroupId uint
-	SourceAssetGroup   AssetGroup
-	AssetId            uint
-	RelationshipTypeId uint
-	RelationshipType   AssetGroupRelationshipType
 }
 
 // Represents an area type.
@@ -251,24 +175,6 @@ type Area struct {
 	AreaType   *AreaType
 }
 
-// Metadata indicating a relationship between areas.
-type AreaRelationshipType struct {
-	gorm.Model
-	rdb.TenantScoped
-	rdb.TokenReference
-	rdb.NamedEntity
-	rdb.MetadataEntity
-}
-
-// Captures a relationship between areas.
-type AreaRelationship struct {
-	EntityRelationship
-	SourceAreaId       uint
-	SourceArea         Area
-	RelationshipTypeId uint
-	RelationshipType   AreaRelationshipType
-}
-
 // Represents a group of areas.
 type AreaGroup struct {
 	gorm.Model
@@ -277,24 +183,6 @@ type AreaGroup struct {
 	rdb.NamedEntity
 	rdb.BrandedEntity
 	rdb.MetadataEntity
-}
-
-// Metadata indicating a relationship between area and group.
-type AreaGroupRelationshipType struct {
-	gorm.Model
-	rdb.TenantScoped
-	rdb.TokenReference
-	rdb.NamedEntity
-	rdb.MetadataEntity
-}
-
-// Represents a area-to-group relationship.
-type AreaGroupRelationship struct {
-	EntityRelationship
-	SourceAreaGroupId  uint
-	SourceAreaGroup    AreaGroup
-	RelationshipTypeId uint
-	RelationshipType   AreaGroupRelationshipType
 }
 
 // Represents a customer type.
@@ -321,24 +209,6 @@ type Customer struct {
 	CustomerType   *CustomerType
 }
 
-// Metadata indicating a relationship between customers.
-type CustomerRelationshipType struct {
-	gorm.Model
-	rdb.TenantScoped
-	rdb.TokenReference
-	rdb.NamedEntity
-	rdb.MetadataEntity
-}
-
-// Captures a relationship between customers.
-type CustomerRelationship struct {
-	EntityRelationship
-	SourceCustomerId   uint
-	SourceCustomer     Customer
-	RelationshipTypeId uint
-	RelationshipType   CustomerRelationshipType
-}
-
 // Represents a group of customers.
 type CustomerGroup struct {
 	gorm.Model
@@ -347,22 +217,4 @@ type CustomerGroup struct {
 	rdb.NamedEntity
 	rdb.BrandedEntity
 	rdb.MetadataEntity
-}
-
-// Metadata indicating a relationship between customer and group.
-type CustomerGroupRelationshipType struct {
-	gorm.Model
-	rdb.TenantScoped
-	rdb.TokenReference
-	rdb.NamedEntity
-	rdb.MetadataEntity
-}
-
-// Represents a customer-to-group relationship.
-type CustomerGroupRelationship struct {
-	EntityRelationship
-	SourceCustomerGroupId uint
-	SourceCustomerGroup   CustomerGroup
-	RelationshipTypeId    uint
-	RelationshipType      CustomerGroupRelationshipType
 }

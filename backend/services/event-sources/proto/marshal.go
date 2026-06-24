@@ -14,15 +14,9 @@ import (
 // Marshal payload for a new relationship event.
 func MarshalPayloadForNewRelationshipEvent(payload *model.UnresolvedNewRelationshipPayload) ([]byte, error) {
 	pbna := &PUnresolvedNewRelationshipPayload{
-		DeviceRelationshipType: payload.DeviceRelationshipType,
-		TargetDevice:           payload.TargetDevice,
-		TargetDeviceGroup:      payload.TargetDeviceGroup,
-		TargetAsset:            payload.TargetAsset,
-		TargetAssetGroup:       payload.TargetAssetGroup,
-		TargetCustomer:         payload.TargetCustomer,
-		TargetCustomerGroup:    payload.TargetCustomerGroup,
-		TargetArea:             payload.TargetArea,
-		TargetAreaGroup:        payload.TargetAreaGroup,
+		RelationshipType: payload.RelationshipType,
+		TargetType:       payload.TargetType,
+		Target:           payload.Target,
 	}
 	bytes, err := proto.Marshal(pbna)
 	if err != nil {
@@ -95,15 +89,9 @@ func UnmarshalPayloadForNewRelationshipEvent(payload []byte) (*model.UnresolvedN
 		return nil, err
 	}
 	return &model.UnresolvedNewRelationshipPayload{
-		DeviceRelationshipType: pbassn.DeviceRelationshipType,
-		TargetDevice:           pbassn.TargetDevice,
-		TargetDeviceGroup:      pbassn.TargetDeviceGroup,
-		TargetAsset:            pbassn.TargetAsset,
-		TargetAssetGroup:       pbassn.TargetAssetGroup,
-		TargetCustomer:         pbassn.TargetCustomer,
-		TargetCustomerGroup:    pbassn.TargetCustomerGroup,
-		TargetArea:             pbassn.TargetArea,
-		TargetAreaGroup:        pbassn.TargetAreaGroup,
+		RelationshipType: pbassn.RelationshipType,
+		TargetType:       pbassn.TargetType,
+		Target:           pbassn.Target,
 	}, nil
 }
 

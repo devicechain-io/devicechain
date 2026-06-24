@@ -64,23 +64,28 @@ func (api *MockApi) Devices(ctx context.Context, criteria model.DeviceSearchCrit
 	return args.Get(0).(*model.DeviceSearchResults), args.Error(1)
 }
 
-func (api *MockApi) DeviceRelationshipsById(ctx context.Context, ids []uint) ([]*model.DeviceRelationship, error) {
+func (api *MockApi) EntityRelationshipsById(ctx context.Context, ids []uint) ([]*model.EntityRelationship, error) {
 	args := api.Mock.Called()
-	return args.Get(0).([]*model.DeviceRelationship), args.Error(1)
+	return args.Get(0).([]*model.EntityRelationship), args.Error(1)
 }
 
-func (api *MockApi) DeviceRelationshipsByToken(ctx context.Context, tokens []string) ([]*model.DeviceRelationship, error) {
+func (api *MockApi) EntityRelationshipsByToken(ctx context.Context, tokens []string) ([]*model.EntityRelationship, error) {
 	args := api.Mock.Called()
-	return args.Get(0).([]*model.DeviceRelationship), args.Error(1)
+	return args.Get(0).([]*model.EntityRelationship), args.Error(1)
 }
 
-func (api *MockApi) DeviceRelationships(ctx context.Context,
-	criteria model.DeviceRelationshipSearchCriteria) (*model.DeviceRelationshipSearchResults, error) {
+func (api *MockApi) EntityRelationships(ctx context.Context,
+	criteria model.EntityRelationshipSearchCriteria) (*model.EntityRelationshipSearchResults, error) {
 	args := api.Mock.Called()
-	return args.Get(0).(*model.DeviceRelationshipSearchResults), args.Error(1)
+	return args.Get(0).(*model.EntityRelationshipSearchResults), args.Error(1)
 }
 
-func (api *MockApi) CreateDeviceRelationship(ctx context.Context, request *model.DeviceRelationshipCreateRequest) (*model.DeviceRelationship, error) {
+func (api *MockApi) CreateEntityRelationship(ctx context.Context, request *model.EntityRelationshipCreateRequest) (*model.EntityRelationship, error) {
 	args := api.Mock.Called()
-	return args.Get(0).(*model.DeviceRelationship), args.Error(1)
+	return args.Get(0).(*model.EntityRelationship), args.Error(1)
+}
+
+func (api *MockApi) EntityRelationshipTypesByToken(ctx context.Context, tokens []string) ([]*model.EntityRelationshipType, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.EntityRelationshipType), args.Error(1)
 }

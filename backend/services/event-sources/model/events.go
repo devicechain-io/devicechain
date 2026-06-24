@@ -10,6 +10,7 @@ import (
 type EventType int64
 
 // Enumeration of event types.
+//
 //go:generate stringer -type=EventType
 const (
 	NewRelationship EventType = iota
@@ -35,17 +36,12 @@ type UnresolvedEvent struct {
 	Payload       interface{}
 }
 
-// Payload for creating a new device relationship.
+// Payload for creating a new relationship. The target is a uniform (type, token)
+// reference (ADR-013): TargetType names an entity class and Target is its token.
 type UnresolvedNewRelationshipPayload struct {
-	DeviceRelationshipType string
-	TargetDevice           *string
-	TargetDeviceGroup      *string
-	TargetAsset            *string
-	TargetAssetGroup       *string
-	TargetCustomer         *string
-	TargetCustomerGroup    *string
-	TargetArea             *string
-	TargetAreaGroup        *string
+	RelationshipType string
+	TargetType       string
+	Target           string
 }
 
 // Information for a location entry.

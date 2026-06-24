@@ -9,17 +9,12 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
 
-// Payload with resolved device relationship info.
+// Payload with resolved relationship info. The target is a uniform
+// (type, id) reference (ADR-013).
 type ResolvedNewRelationshipPayload struct {
-	DeviceRelationshipTypeId uint64
-	TargetDeviceId           *uint64
-	TargetDeviceGroupId      *uint64
-	TargetAssetId            *uint64
-	TargetAssetGroupId       *uint64
-	TargetCustomerId         *uint64
-	TargetCustomerGroupId    *uint64
-	TargetAreaId             *uint64
-	TargetAreaGroupId        *uint64
+	RelationshipTypeId uint64
+	TargetType         *string
+	TargetId           *uint64
 }
 
 // Entry with resolved location information.
@@ -67,24 +62,20 @@ type ResolvedAlertsPayload struct {
 	Entries []ResolvedAlertEntry
 }
 
-// Event with token references resolved and info from device relationship merged.
+// Event with token references resolved and the originating device's tracked
+// relationship merged onto it. The relationship target is a uniform (type, id)
+// reference (ADR-013); both are nil when the device had no tracked relationship.
 type ResolvedEvent struct {
-	Source                string
-	AltId                 *string
-	SourceDeviceId        uint
-	DeviceRelationshipId  uint
-	TargetDeviceId        *uint
-	TargetDeviceGroupId   *uint
-	TargetCustomerId      *uint
-	TargetCustomerGroupId *uint
-	TargetAreaId          *uint
-	TargetAreaGroupId     *uint
-	TargetAssetId         *uint
-	TargetAssetGroupId    *uint
-	OccurredTime          time.Time
-	ProcessedTime         time.Time
-	EventType             esmodel.EventType
-	Payload               interface{}
+	Source         string
+	AltId          *string
+	SourceDeviceId uint
+	RelationshipId uint
+	TargetType     *string
+	TargetId       *uint
+	OccurredTime   time.Time
+	ProcessedTime  time.Time
+	EventType      esmodel.EventType
+	Payload        interface{}
 }
 
 // Captures failure information for events that could not be processed.

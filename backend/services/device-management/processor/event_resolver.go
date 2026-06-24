@@ -13,6 +13,7 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/proto"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -33,7 +34,7 @@ type EventResolver struct {
 // Results of event resolution process.
 type EventResolutionResults struct {
 	Device       *model.Device
-	Relationship *model.DeviceRelationship
+	Relationship *model.EntityRelationship
 	Resolved     *model.ResolvedEvent
 }
 
@@ -54,26 +55,21 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi,
 }
 
 // Merge device and relationship data with unresolved event in order to create a resolved event.
-func (rez *EventResolver) MergeRelationshipToResolveEvent(device *model.Device, relation *model.DeviceRelationship,
+func (rez *EventResolver) MergeRelationshipToResolveEvent(device *model.Device, relation *model.EntityRelationship,
 	event *esmodel.UnresolvedEvent, rezPayload interface{}) (*EventResolutionResults, error) {
-	// Assemble resolved event from initial event and device assignment.
+	// Assemble resolved event from the initial event and the tracked relationship.
+	// The relationship target is carried as a uniform (type, id) anchor (ADR-013).
 	resolved := &model.ResolvedEvent{
-		Source:                event.Source,
-		AltId:                 event.AltId,
-		SourceDeviceId:        device.ID,
-		DeviceRelationshipId:  relation.ID,
-		TargetDeviceId:        relation.TargetDeviceId,
-		TargetDeviceGroupId:   relation.TargetDeviceGroupId,
-		TargetAssetId:         relation.TargetAssetId,
-		TargetAssetGroupId:    relation.TargetAssetGroupId,
-		TargetCustomerId:      relation.TargetCustomerId,
-		TargetCustomerGroupId: relation.TargetCustomerGroupId,
-		TargetAreaId:          relation.TargetAreaId,
-		TargetAreaGroupId:     relation.TargetAreaGroupId,
-		OccurredTime:          event.OccurredTime,
-		ProcessedTime:         event.ProcessedTime,
-		EventType:             event.EventType,
-		Payload:               rezPayload,
+		Source:         event.Source,
+		AltId:          event.AltId,
+		SourceDeviceId: device.ID,
+		RelationshipId: relation.ID,
+		TargetType:     &relation.TargetType,
+		TargetId:       &relation.TargetId,
+		OccurredTime:   event.OccurredTime,
+		ProcessedTime:  event.ProcessedTime,
+		EventType:      event.EventType,
+		Payload:        rezPayload,
 	}
 
 	results := &EventResolutionResults{
@@ -85,26 +81,20 @@ func (rez *EventResolver) MergeRelationshipToResolveEvent(device *model.Device, 
 	return results, nil
 }
 
-// Create a new device relationship based on inbound event.
-func (rez *EventResolver) CreateNewDeviceRelationship(ctx context.Context, device *model.Device,
-	relcreate esmodel.UnresolvedNewRelationshipPayload) (*model.DeviceRelationship, uint, error) {
-	create := &model.DeviceRelationshipCreateRequest{
+// Create a new relationship based on an inbound event. The source is the
+// originating device; the target is a uniform (type, token) reference (ADR-013).
+func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, device *model.Device,
+	relcreate esmodel.UnresolvedNewRelationshipPayload) (*model.EntityRelationship, uint, error) {
+	create := &model.EntityRelationshipCreateRequest{
 		Token:            uuid.New().String(),
-		SourceDevice:     device.Token,
-		RelationshipType: relcreate.DeviceRelationshipType,
+		SourceType:       string(entity.TypeDevice),
+		Source:           device.Token,
+		TargetType:       relcreate.TargetType,
+		Target:           relcreate.Target,
+		RelationshipType: relcreate.RelationshipType,
 		Metadata:         nil,
-		Targets: model.EntityRelationshipCreateRequest{
-			TargetDevice:        relcreate.TargetDevice,
-			TargetDeviceGroup:   relcreate.TargetDeviceGroup,
-			TargetAsset:         relcreate.TargetAsset,
-			TargetAssetGroup:    relcreate.TargetAssetGroup,
-			TargetArea:          relcreate.TargetArea,
-			TargetAreaGroup:     relcreate.TargetAreaGroup,
-			TargetCustomer:      relcreate.TargetCustomer,
-			TargetCustomerGroup: relcreate.TargetCustomerGroup,
-		},
 	}
-	created, err := rez.Api.CreateDeviceRelationship(ctx, create)
+	created, err := rez.Api.CreateEntityRelationship(ctx, create)
 	if err != nil {
 		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
 	}
@@ -119,23 +109,17 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 		return nil, uint(dmproto.FailureReason_Invalid), errors.New("new relationship payload was not of expected type")
 	}
 
-	// Create new device relationship from the event payload.
-	created, reason, err := rez.CreateNewDeviceRelationship(ctx, device, *relcreate)
+	// Create new relationship from the event payload.
+	created, reason, err := rez.CreateNewEntityRelationship(ctx, device, *relcreate)
 	if err != nil {
-		return nil, reason, errors.New("could not create device assignment")
+		return nil, reason, errors.New("could not create relationship")
 	}
 
-	// Convert to resolved payload.
+	// Convert to resolved payload with the uniform (type, id) target.
 	payload := &model.ResolvedNewRelationshipPayload{
-		DeviceRelationshipTypeId: uint64(created.ID),
-		TargetDeviceId:           proto.NullUint64Of(created.TargetDeviceId),
-		TargetDeviceGroupId:      proto.NullUint64Of(created.TargetDeviceGroupId),
-		TargetAssetId:            proto.NullUint64Of(created.TargetAssetId),
-		TargetAssetGroupId:       proto.NullUint64Of(created.TargetAssetGroupId),
-		TargetCustomerId:         proto.NullUint64Of(created.TargetCustomerId),
-		TargetCustomerGroupId:    proto.NullUint64Of(created.TargetCustomerGroupId),
-		TargetAreaId:             proto.NullUint64Of(created.TargetAreaId),
-		TargetAreaGroupId:        proto.NullUint64Of(created.TargetAreaGroupId),
+		RelationshipTypeId: uint64(created.RelationshipTypeId),
+		TargetType:         &created.TargetType,
+		TargetId:           proto.NullUint64Of(&created.TargetId),
 	}
 
 	// Merge info from device and created assignment into event.
@@ -149,7 +133,7 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 
 // Resolve a locations event payload.
 func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, device *model.Device,
-	relation *model.DeviceRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
+	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	if lpayload, ok := event.Payload.(*esmodel.UnresolvedLocationsPayload); ok {
 		rlpayload := &model.ResolvedLocationsPayload{}
 		rlentries := make([]model.ResolvedLocationEntry, 0)
@@ -170,7 +154,7 @@ func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, devi
 
 // Resolve a measurements event payload.
 func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, device *model.Device,
-	relation *model.DeviceRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
+	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	if mpayload, ok := event.Payload.(*esmodel.UnresolvedMeasurementsPayload); ok {
 		rmpayload := &model.ResolvedMeasurementsPayload{}
 		rmsentries := make([]model.ResolvedMeasurementsEntry, 0)
@@ -198,7 +182,7 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 
 // Resolve a alerts event payload.
 func (rez *EventResolver) ResolveAlertsEventPayload(ctx context.Context, device *model.Device,
-	relation *model.DeviceRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
+	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	if apayload, ok := event.Payload.(*esmodel.UnresolvedAlertsPayload); ok {
 		rapayload := &model.ResolvedAlertsPayload{}
 		raentries := make([]model.ResolvedAlertEntry, 0)
@@ -220,7 +204,7 @@ func (rez *EventResolver) ResolveAlertsEventPayload(ctx context.Context, device 
 
 // Convert an unresolved event payload into a resolved payload.
 func (rez *EventResolver) ResolveEventPayload(ctx context.Context, device *model.Device,
-	relation *model.DeviceRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
+	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	switch event.EventType {
 	case esmodel.Location:
 		return rez.ResolveLocationsEventPayload(ctx, device, relation, event)
@@ -236,17 +220,19 @@ func (rez *EventResolver) ResolveEventPayload(ctx context.Context, device *model
 // Create resolved events by looking up device assignment info and merging it into other event data.
 func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	device *model.Device, event *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
-	// Look up device relationships for tracked types.
+	// Look up the device's tracked relationships (source = this device).
 	tracked := true
-	criteria := model.DeviceRelationshipSearchCriteria{
+	sourceType := string(entity.TypeDevice)
+	criteria := model.EntityRelationshipSearchCriteria{
 		Pagination: rdb.Pagination{
 			PageNumber: 1,
 			PageSize:   0,
 		},
-		SourceDevice: &device.Token,
-		Tracked:      &tracked,
+		SourceType: &sourceType,
+		SourceId:   &device.ID,
+		Tracked:    &tracked,
 	}
-	drels, err := rez.Api.DeviceRelationships(ctx, criteria)
+	drels, err := rez.Api.EntityRelationships(ctx, criteria)
 	if err != nil {
 		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
 	}

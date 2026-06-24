@@ -32,34 +32,23 @@ message PFailedEvent {
 	string source = 1;
 	optional string alt_id = 2;
 	uint64 source_device_id = 3;
-	uint64 device_relationship_id = 4;
-	optional uint64 target_device_id = 5;
-	optional uint64 target_device_group_id = 6;
-	optional uint64 target_customer_id = 7;
-	optional uint64 target_customer_group_id = 8;
-	optional uint64 target_area_id = 9;
-	optional uint64 target_area_group_id = 10;
-	optional uint64 target_asset_id = 11;
-	optional uint64 target_asset_group_id = 12;
-    string occurred_time = 13;
-    string processed_time = 14;
-    int64 event_type = 15;
-    bytes payload = 16;
+	uint64 relationship_id = 4;
+	optional string target_type = 5;
+	optional uint64 target_id = 6;
+    string occurred_time = 7;
+    string processed_time = 8;
+    int64 event_type = 9;
+    bytes payload = 10;
 }
 
 /**
- * Payload for resolved new relationship request.
+ * Payload for resolved new relationship request. The target is a uniform
+ * (type, id) reference (ADR-013).
  */
  message PResolvedNewRelationshipPayload {
-	uint64 device_relationship_type_id = 1;
-    optional uint64 target_device_id = 2;
-    optional uint64 target_device_group_id = 3;
-    optional uint64 target_asset_id = 4;
-    optional uint64 target_asset_group_id = 5;
-    optional uint64 target_customer_id = 6;
-    optional uint64 target_customer_group_id = 7;
-    optional uint64 target_area_id = 8;
-    optional uint64 target_area_group_id = 9;
+	uint64 relationship_type_id = 1;
+    optional string target_type = 2;
+    optional uint64 target_id = 3;
 }
 
 /**

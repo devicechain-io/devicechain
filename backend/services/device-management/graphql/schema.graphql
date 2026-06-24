@@ -42,30 +42,6 @@ type SearchResultsPagination {
 	totalRecords: Int
 }
 
-# Entity relationship targets create request.
-input EntityRelationshipTargetsCreateRequest {
-    targetDevice: String
-    targetDeviceGroup: String
-    targetAsset: String
-    targetAssetGroup: String
-    targetArea: String
-    targetAreaGroup: String
-    targetCustomer: String
-    targetCustomerGroup: String
-}
-
-# Entity relationship targets.
-type EntityRelationshipTargets {
-    targetDevice: Device
-    targetDeviceGroup: DeviceGroup
-    targetAsset: Asset
-    targetAssetGroup: AssetGroup
-    targetArea: Area
-    targetAreaGroup: AreaGroup
-    targetCustomer: Customer
-    targetCustomerGroup: CustomerGroup
-}
-
 # Represents a type or class of devices
 type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
     id: ID!
@@ -109,7 +85,7 @@ type DeviceTypeSearchResults {
 }
 
 # Represents a device instance
-type Device implements Model & TokenReference & NamedEntity & MetadataEntity {
+type Device implements Model & TokenReference & NamedEntity & MetadataEntity & Entity {
     id: ID!
     createdAt: String
     updatedAt: String
@@ -143,79 +119,8 @@ type DeviceSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a type of relation between devices.
-type DeviceRelationshipType implements Model & TokenReference & NamedEntity & MetadataEntity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    name: String
-    description: String
-    metadata: String
-    tracked: Boolean!
-}
-
-# Data required to create a device relationship type.
-input DeviceRelationshipTypeCreateRequest {
-    token: String!
-    name: String
-    description: String
-    metadata: String
-    tracked: Boolean!
-}
-
-# Criteria used when searching for device relationship types.
-input DeviceRelationshipTypeSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-}
-
-# Search results returned from device relationship type query.
-type DeviceRelationshipTypeSearchResults {
-    results: [DeviceRelationshipType!]!
-    pagination: SearchResultsPagination!
-}
-
-# Data required to create a device relationship.
-input DeviceRelationshipCreateRequest {
-    token: String!
-    sourceDevice: String!
-    targets: EntityRelationshipTargetsCreateRequest!
-    relationshipType: String!
-    metadata: String
-}
-
-# Represents a relationship between devices.
-type DeviceRelationship implements Model & MetadataEntity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    sourceDevice: Device!
-    targets: EntityRelationshipTargets!
-    relationshipType: DeviceRelationshipType!
-    metadata: String
-}
-
-# Criteria used when searching for device relationships.
-input DeviceRelationshipSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-    sourceDevice: String
-    relationshipType: String
-    tracked: Boolean
-}
-
-# Search results returned from device relationship query.
-type DeviceRelationshipSearchResults {
-    results: [DeviceRelationship!]!
-    pagination: SearchResultsPagination!
-}
-
 # Represents a group of related devices.
-type DeviceGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
+type DeviceGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity & Entity {
     id: ID!
     createdAt: String
     updatedAt: String
@@ -253,74 +158,6 @@ input DeviceGroupSearchCriteria {
 # Search results returned from device group query.
 type DeviceGroupSearchResults {
     results: [DeviceGroup!]!
-    pagination: SearchResultsPagination!
-}
-
-# Represents a type of relation between a device and a device group.
-type DeviceGroupRelationshipType implements Model & TokenReference & NamedEntity & MetadataEntity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    name: String
-    description: String
-    metadata: String
-}
-
-# Data required to create a device group relationship type.
-input DeviceGroupRelationshipTypeCreateRequest {
-    token: String!
-    name: String
-    description: String
-    metadata: String
-}
-
-# Criteria used when searching for device group relationship types.
-input DeviceGroupRelationshipTypeSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-}
-
-# Search results returned from device group relationship type query.
-type DeviceGroupRelationshipTypeSearchResults {
-    results: [DeviceGroupRelationshipType!]!
-    pagination: SearchResultsPagination!
-}
-
-# Data required to create a device group relationship.
-input DeviceGroupRelationshipCreateRequest {
-    token: String!
-    sourceDeviceGroup: String!
-    targets: EntityRelationshipTargetsCreateRequest!
-    relationshipType: String!
-    metadata: String
-}
-
-# Represents a relationship between a device and a group.
-type DeviceGroupRelationship implements Model {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    sourceDeviceGroup: DeviceGroup!
-    targets: EntityRelationshipTargets!
-    relationshipType: DeviceGroupRelationshipType!
-    metadata: String
-}
-
-# Criteria used when searching for device group relationships.
-input DeviceGroupRelationshipSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-    sourceDeviceGroup: String
-    relationshipType: String
-}
-
-# Search results returned from device group relationship query.
-type DeviceGroupRelationshipSearchResults {
-    results: [DeviceGroupRelationship!]!
     pagination: SearchResultsPagination!
 }
 
@@ -367,7 +204,7 @@ type AssetTypeSearchResults {
 }
 
 # Represents an asset instance
-type Asset implements Model & TokenReference & NamedEntity & MetadataEntity {
+type Asset implements Model & TokenReference & NamedEntity & MetadataEntity & Entity {
     id: ID!
     createdAt: String
     updatedAt: String
@@ -401,76 +238,8 @@ type AssetSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a type of relation between assets.
-type AssetRelationshipType implements Model & TokenReference & NamedEntity & MetadataEntity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    name: String
-    description: String
-    metadata: String
-}
-
-# Data required to create an asset relationship type.
-input AssetRelationshipTypeCreateRequest {
-    token: String!
-    name: String
-    description: String
-    metadata: String
-}
-
-# Criteria used when searching for asset relationship types.
-input AssetRelationshipTypeSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-}
-
-# Search results returned from asset relationship types query.
-type AssetRelationshipTypeSearchResults {
-    results: [AssetRelationshipType!]!
-    pagination: SearchResultsPagination!
-}
-
-# Data required to create an asset relationship.
-input AssetRelationshipCreateRequest {
-    token: String!
-    sourceAsset: String!
-    targets: EntityRelationshipTargetsCreateRequest!
-    relationshipType: String!
-    metadata: String
-}
-
-# Represents a relationship between assets.
-type AssetRelationship implements Model {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    sourceAsset: Asset!
-    targets: EntityRelationshipTargets!
-    relationshipType: AssetRelationshipType!
-    metadata: String
-}
-
-# Criteria used when searching for asset relationships.
-input AssetRelationshipSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-    sourceAsset: String
-    relationshipType: String
-}
-
-# Search results returned from asset relationships query.
-type AssetRelationshipSearchResults {
-    results: [AssetRelationship!]!
-    pagination: SearchResultsPagination!
-}
-
 # Represents a group of related assets.
-type AssetGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
+type AssetGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity & Entity {
     id: ID!
     createdAt: String
     updatedAt: String
@@ -508,74 +277,6 @@ input AssetGroupSearchCriteria {
 # Search results returned from asset groups query.
 type AssetGroupSearchResults {
     results: [AssetGroup!]!
-    pagination: SearchResultsPagination!
-}
-
-# Represents a type of relation between an asset and an asset group.
-type AssetGroupRelationshipType implements Model & TokenReference & NamedEntity & MetadataEntity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    name: String
-    description: String
-    metadata: String
-}
-
-# Data required to create an asset group relationship type.
-input AssetGroupRelationshipTypeCreateRequest {
-    token: String!
-    name: String
-    description: String
-    metadata: String
-}
-
-# Criteria used when searching for asset group relationship types.
-input AssetGroupRelationshipTypeSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-}
-
-# Search results returned from asset group relationship types query.
-type AssetGroupRelationshipTypeSearchResults {
-    results: [AssetGroupRelationshipType!]!
-    pagination: SearchResultsPagination!
-}
-
-# Data required to create an asset group relationship.
-input AssetGroupRelationshipCreateRequest {
-    token: String!
-    sourceAssetGroup: String!
-    targets: EntityRelationshipTargetsCreateRequest!
-    relationshipType: String!
-    metadata: String
-}
-
-# Represents a relationship between an asset and an asset.
-type AssetGroupRelationship implements Model {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    sourceAssetGroup: AssetGroup!
-    targets: EntityRelationshipTargets!
-    relationshipType: AssetGroupRelationshipType!
-    metadata: String
-}
-
-# Criteria used when searching for asset group relationships.
-input AssetGroupRelationshipSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-    sourceAssetGroup: String
-    relationshipType: String
-}
-
-# Search results returned from asset group relationships query.
-type AssetGroupRelationshipSearchResults {
-    results: [AssetGroupRelationship!]!
     pagination: SearchResultsPagination!
 }
 
@@ -622,7 +323,7 @@ type CustomerTypeSearchResults {
 }
 
 # Represents a customer instance
-type Customer implements Model & TokenReference & NamedEntity & MetadataEntity {
+type Customer implements Model & TokenReference & NamedEntity & MetadataEntity & Entity {
     id: ID!
     createdAt: String
     updatedAt: String
@@ -656,76 +357,8 @@ type CustomerSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a type of relation between customers.
-type CustomerRelationshipType implements Model & TokenReference & NamedEntity & MetadataEntity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    name: String
-    description: String
-    metadata: String
-}
-
-# Data required to create a customer relationship type.
-input CustomerRelationshipTypeCreateRequest {
-    token: String!
-    name: String
-    description: String
-    metadata: String
-}
-
-# Criteria used when searching for customer relationship types.
-input CustomerRelationshipTypeSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-}
-
-# Search results returned from customer relationship type query.
-type CustomerRelationshipTypeSearchResults {
-    results: [CustomerRelationshipType!]!
-    pagination: SearchResultsPagination!
-}
-
-# Data required to create a customer relationship.
-input CustomerRelationshipCreateRequest {
-    token: String!
-    sourceCustomer: String!
-    targets: EntityRelationshipTargetsCreateRequest!
-    relationshipType: String!
-    metadata: String
-}
-
-# Represents a relationship between customers.
-type CustomerRelationship implements Model & MetadataEntity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    sourceCustomer: Customer!
-    targets: EntityRelationshipTargets!
-    relationshipType: CustomerRelationshipType!
-    metadata: String
-}
-
-# Criteria used when searching for customer relationships.
-input CustomerRelationshipSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-    sourceCustomer: String
-    relationshipType: String
-}
-
-# Search results returned from customer relationship query.
-type CustomerRelationshipSearchResults {
-    results: [CustomerRelationship!]!
-    pagination: SearchResultsPagination!
-}
-
 # Represents a group of related customers.
-type CustomerGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
+type CustomerGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity & Entity {
     id: ID!
     createdAt: String
     updatedAt: String
@@ -763,74 +396,6 @@ input CustomerGroupSearchCriteria {
 # Search results returned from customer group query.
 type CustomerGroupSearchResults {
     results: [CustomerGroup!]!
-    pagination: SearchResultsPagination!
-}
-
-# Represents a type of relation between a customer and a customer group.
-type CustomerGroupRelationshipType implements Model & TokenReference & NamedEntity & MetadataEntity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    name: String
-    description: String
-    metadata: String
-}
-
-# Data required to create a customer group relationship type.
-input CustomerGroupRelationshipTypeCreateRequest {
-    token: String!
-    name: String
-    description: String
-    metadata: String
-}
-
-# Criteria used when searching for customer group relationship types.
-input CustomerGroupRelationshipTypeSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-}
-
-# Search results returned from customer group relationship type query.
-type CustomerGroupRelationshipTypeSearchResults {
-    results: [CustomerGroupRelationshipType!]!
-    pagination: SearchResultsPagination!
-}
-
-# Data required to create a customer group relationship.
-input CustomerGroupRelationshipCreateRequest {
-    token: String!
-    sourceCustomerGroup: String!
-    targets: EntityRelationshipTargetsCreateRequest!
-    relationshipType: String!
-    metadata: String
-}
-
-# Represents a relationship between a customer and a group.
-type CustomerGroupRelationship implements Model {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    sourceCustomerGroup: CustomerGroup!
-    targets: EntityRelationshipTargets!
-    relationshipType: CustomerGroupRelationshipType!
-    metadata: String
-}
-
-# Criteria used when searching for customer group relationships.
-input CustomerGroupRelationshipSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-    sourceCustomerGroup: String
-    relationshipType: String
-}
-
-# Search results returned from customer group relationship query.
-type CustomerGroupRelationshipSearchResults {
-    results: [CustomerGroupRelationship!]!
     pagination: SearchResultsPagination!
 }
 
@@ -877,7 +442,7 @@ type AreaTypeSearchResults {
 }
 
 # Represents an area instance
-type Area implements Model & TokenReference & NamedEntity & MetadataEntity {
+type Area implements Model & TokenReference & NamedEntity & MetadataEntity & Entity {
     id: ID!
     createdAt: String
     updatedAt: String
@@ -911,76 +476,8 @@ type AreaSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a type of relation between areas.
-type AreaRelationshipType implements Model & TokenReference & NamedEntity & MetadataEntity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    name: String
-    description: String
-    metadata: String
-}
-
-# Data required to create an area relationship type.
-input AreaRelationshipTypeCreateRequest {
-    token: String!
-    name: String
-    description: String
-    metadata: String
-}
-
-# Criteria used when searching for area relationship types.
-input AreaRelationshipTypeSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-}
-
-# Search results returned from area relationship types query.
-type AreaRelationshipTypeSearchResults {
-    results: [AreaRelationshipType!]!
-    pagination: SearchResultsPagination!
-}
-
-# Data required to create an area relationship.
-input AreaRelationshipCreateRequest {
-    token: String!
-    sourceArea: String!
-    targets: EntityRelationshipTargetsCreateRequest!
-    relationshipType: String!
-    metadata: String
-}
-
-# Represents a relationship between areas.
-type AreaRelationship implements Model {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    sourceArea: Area!
-    targets: EntityRelationshipTargets!
-    relationshipType: AreaRelationshipType!
-    metadata: String
-}
-
-# Criteria used when searching for area relationships.
-input AreaRelationshipSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-    sourceArea: String
-    relationshipType: String
-}
-
-# Search results returned from area relationships query.
-type AreaRelationshipSearchResults {
-    results: [AreaRelationship!]!
-    pagination: SearchResultsPagination!
-}
-
 # Represents a group of related areas.
-type AreaGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
+type AreaGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity & Entity {
     id: ID!
     createdAt: String
     updatedAt: String
@@ -1021,8 +518,14 @@ type AreaGroupSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a type of relation between an area and an area group.
-type AreaGroupRelationshipType implements Model & TokenReference & NamedEntity & MetadataEntity {
+# Uniform entity interface implemented by all entity object types.
+interface Entity {
+    id: ID!
+    token: String!
+}
+
+# Represents a type of relation between entities.
+type EntityRelationshipType implements Model & TokenReference & NamedEntity & MetadataEntity {
     id: ID!
     createdAt: String
     updatedAt: String
@@ -1031,61 +534,70 @@ type AreaGroupRelationshipType implements Model & TokenReference & NamedEntity &
     name: String
     description: String
     metadata: String
+    tracked: Boolean!
 }
 
-# Data required to create an area group relationship type.
-input AreaGroupRelationshipTypeCreateRequest {
+# Data required to create an entity relationship type.
+input EntityRelationshipTypeCreateRequest {
     token: String!
     name: String
     description: String
     metadata: String
+    tracked: Boolean!
 }
 
-# Criteria used when searching for area group relationship types.
-input AreaGroupRelationshipTypeSearchCriteria {
+# Criteria used when searching for entity relationship types.
+input EntityRelationshipTypeSearchCriteria {
     pageNumber: Int!
     pageSize: Int!
 }
 
-# Search results returned from area group relationship types query.
-type AreaGroupRelationshipTypeSearchResults {
-    results: [AreaGroupRelationshipType!]!
+# Search results returned from entity relationship type query.
+type EntityRelationshipTypeSearchResults {
+    results: [EntityRelationshipType!]!
     pagination: SearchResultsPagination!
 }
 
-# Data required to create an area group relationship.
-input AreaGroupRelationshipCreateRequest {
+# Represents a relationship between two entities.
+type EntityRelationship implements Model & TokenReference & MetadataEntity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
     token: String!
-    sourceAreaGroup: String!
-    targets: EntityRelationshipTargetsCreateRequest!
+    sourceType: String!
+    source: Entity!
+    targetType: String!
+    target: Entity!
+    relationshipType: EntityRelationshipType!
+    metadata: String
+}
+
+# Data required to create an entity relationship.
+input EntityRelationshipCreateRequest {
+    token: String!
+    sourceType: String!
+    source: String!
+    targetType: String!
+    target: String!
     relationshipType: String!
     metadata: String
 }
 
-# Represents a relationship between an area and an area.
-type AreaGroupRelationship implements Model {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    sourceAreaGroup: AreaGroup!
-    targets: EntityRelationshipTargets!
-    relationshipType: AreaGroupRelationshipType!
-    metadata: String
-}
-
-# Criteria used when searching for area group relationships.
-input AreaGroupRelationshipSearchCriteria {
+# Criteria used when searching for entity relationships.
+input EntityRelationshipSearchCriteria {
     pageNumber: Int!
     pageSize: Int!
-    sourceAreaGroup: String
+    sourceType: String
+    source: String
+    targetType: String
     relationshipType: String
+    tracked: Boolean
 }
 
-# Search results returned from area group relationships query.
-type AreaGroupRelationshipSearchResults {
-    results: [AreaGroupRelationship!]!
+# Search results returned from entity relationship query.
+type EntityRelationshipSearchResults {
+    results: [EntityRelationship!]!
     pagination: SearchResultsPagination!
 }
 
@@ -1103,36 +615,25 @@ type Query {
     devicesByToken(tokens: [String!]!): [Device!]!
     # List devices that meet criteria.
     devices(criteria: DeviceSearchCriteria!): DeviceSearchResults!
-    # Find device relationship types by unique id.
-    deviceRelationshipTypesById(ids: [ID!]!): [DeviceRelationshipType!]!
-    # Find device relationship types by unique token.
-    deviceRelationshipTypesByToken(tokens: [String!]!): [DeviceRelationshipType!]!
-    # List device relationship types that meet criteria.
-    deviceRelationshipTypes(criteria: DeviceRelationshipTypeSearchCriteria!): DeviceRelationshipTypeSearchResults!
-    # Find device relationships by unique id.
-    deviceRelationshipsById(ids: [ID!]!): [DeviceRelationship!]!
-    # Find device relationships by unique token.
-    deviceRelationshipsByToken(tokens: [String!]!): [DeviceRelationship!]!
-    # List device relationships that meet criteria.
-    deviceRelationships(criteria: DeviceRelationshipSearchCriteria!): DeviceRelationshipSearchResults!
     # Find device groups by unique id.
     deviceGroupsById(ids: [ID!]!): [DeviceGroup!]!
     # Find device groups by unique token.
     deviceGroupsByToken(tokens: [String!]!): [DeviceGroup!]!
     # List device groups that meet criteria.
     deviceGroups(criteria: DeviceGroupSearchCriteria!): DeviceGroupSearchResults!
-    # Find device group relationship types by unique id.
-    deviceGroupRelationshipTypesById(ids: [ID!]!): [DeviceGroupRelationshipType!]!
-    # Find device group relationship types by unique token.
-    deviceGroupRelationshipTypesByToken(tokens: [String!]!): [DeviceGroupRelationshipType!]!
-    # List device group relationship types that meet criteria.
-    deviceGroupRelationshipTypes(criteria: DeviceGroupRelationshipTypeSearchCriteria!): DeviceGroupRelationshipTypeSearchResults!
-    # Find device group relationships by unique id.
-    deviceGroupRelationshipsById(ids: [ID!]!): [DeviceGroupRelationship!]!
-    # Find device group relationships by unique token.
-    deviceGroupRelationshipsByToken(tokens: [String!]!): [DeviceGroupRelationship!]!
-    # List device group relationships that meet criteria.
-    deviceGroupRelationships(criteria: DeviceGroupRelationshipSearchCriteria!): DeviceGroupRelationshipSearchResults!
+
+    # Find entity relationship types by unique id.
+    entityRelationshipTypesById(ids: [String!]!): [EntityRelationshipType!]!
+    # Find entity relationship types by unique token.
+    entityRelationshipTypesByToken(tokens: [String!]!): [EntityRelationshipType!]!
+    # List entity relationship types that meet criteria.
+    entityRelationshipTypes(criteria: EntityRelationshipTypeSearchCriteria!): EntityRelationshipTypeSearchResults!
+    # Find entity relationships by unique id.
+    entityRelationshipsById(ids: [String!]!): [EntityRelationship!]!
+    # Find entity relationships by unique token.
+    entityRelationshipsByToken(tokens: [String!]!): [EntityRelationship!]!
+    # List entity relationships that meet criteria.
+    entityRelationships(criteria: EntityRelationshipSearchCriteria!): EntityRelationshipSearchResults!
 
     # Find asset types by unique id.
     assetTypesById(ids: [ID!]!): [AssetType!]!
@@ -1146,36 +647,12 @@ type Query {
     assetsByToken(tokens: [String!]!): [Asset!]!
     # List assets that meet criteria.
     assets(criteria: AssetSearchCriteria!): AssetSearchResults!
-    # Find asset relationship types by unique id.
-    assetRelationshipTypesById(ids: [ID!]!): [AssetRelationshipType!]!
-    # Find asset relationship types by unique token.
-    assetRelationshipTypesByToken(tokens: [String!]!): [AssetRelationshipType!]!
-    # List asset relationship types that meet criteria.
-    assetRelationshipTypes(criteria: AssetRelationshipTypeSearchCriteria!): AssetRelationshipTypeSearchResults!
-    # Find asset relationships by unique id.
-    assetRelationshipsById(ids: [ID!]!): [AssetRelationship!]!
-    # Find an asset relationships by unique token.
-    assetRelationshipsByToken(tokens: [String!]!): [AssetRelationship!]!
-    # List asset relationships that meet criteria.
-    assetRelationships(criteria: AssetRelationshipSearchCriteria!): AssetRelationshipSearchResults!
     # Find asset groups by unique id.
     assetGroupsById(ids: [ID!]!): [AssetGroup!]!
     # Find asset groups by unique token.
     assetGroupsByToken(tokens: [String!]!): [AssetGroup!]!
     # List asset groups that meet criteria.
     assetGroups(criteria: AssetGroupSearchCriteria!): AssetGroupSearchResults!
-    # Find asset group relationship types by unique id.
-    assetGroupRelationshipTypesById(ids: [ID!]!): [AssetGroupRelationshipType!]!
-    # Find asset group relationship types by unique token.
-    assetGroupRelationshipTypesByToken(tokens: [String!]!): [AssetGroupRelationshipType!]!
-    # List asset group relationship types that meet criteria.
-    assetGroupRelationshipTypes(criteria: AssetGroupRelationshipTypeSearchCriteria!): AssetGroupRelationshipTypeSearchResults!
-    # Find asset group relationships by unique id.
-    assetGroupRelationshipsById(ids: [ID!]!): [AssetGroupRelationship!]!
-    # Find asset group relationships type by unique token.
-    assetGroupRelationshipsByToken(tokens: [String!]!): [AssetGroupRelationship!]!
-    # List asset group relationships that meet criteria.
-    assetGroupRelationships(criteria: AssetGroupRelationshipSearchCriteria!): AssetGroupRelationshipSearchResults!
 
     # Find customer types by unique id.
     customerTypesById(ids: [ID!]!): [CustomerType!]!
@@ -1189,36 +666,12 @@ type Query {
     customersByToken(tokens: [String!]!): [Customer!]!
     # List customers that meet criteria.
     customers(criteria: CustomerSearchCriteria!): CustomerSearchResults!
-    # Find customer relationship types by unique id.
-    customerRelationshipTypesById(ids: [ID!]!): [CustomerRelationshipType!]!
-    # Find customer relationship types by unique token.
-    customerRelationshipTypesByToken(tokens: [String!]!): [CustomerRelationshipType!]!
-    # List customer relationship types that meet criteria.
-    customerRelationshipTypes(criteria: CustomerRelationshipTypeSearchCriteria!): CustomerRelationshipTypeSearchResults!
-    # Find customer relationships by unique id.
-    customerRelationshipsById(ids: [ID!]!): [CustomerRelationship!]!
-    # Find customer relationships by unique token.
-    customerRelationshipsByToken(tokens: [String!]!): [CustomerRelationship!]!
-    # List customer relationships that meet criteria.
-    customerRelationships(criteria: CustomerRelationshipSearchCriteria!): CustomerRelationshipSearchResults!
     # Find customer groups by unique id.
     customerGroupsById(ids: [ID!]!): [CustomerGroup!]!
     # Find customer groups by unique token.
     customerGroupsByToken(tokens: [String!]!): [CustomerGroup!]!
     # List customer groups that meet criteria.
     customerGroups(criteria: CustomerGroupSearchCriteria!): CustomerGroupSearchResults!
-    # Find customer group relationship types by unique id.
-    customerGroupRelationshipTypesById(ids: [ID!]!): [CustomerGroupRelationshipType!]!
-    # Find customer group relationship types by unique token.
-    customerGroupRelationshipTypesByToken(tokens: [String!]!): [CustomerGroupRelationshipType!]!
-    # List customer group relationship types that meet criteria.
-    customerGroupRelationshipTypes(criteria: CustomerGroupRelationshipTypeSearchCriteria!): CustomerGroupRelationshipTypeSearchResults!
-    # Find customer group relationship by unique id.
-    customerGroupRelationshipsById(ids: [ID!]!): [CustomerGroupRelationship!]!
-    # Find customer group relationship by unique token.
-    customerGroupRelationshipsByToken(tokens: [String!]!): [CustomerGroupRelationship!]!
-    # List customer group relationships that meet criteria.
-    customerGroupRelationships(criteria: CustomerGroupRelationshipSearchCriteria!): CustomerGroupRelationshipSearchResults!
 
     # Find area types by unique id.
     areaTypesById(ids: [ID!]!): [AreaType!]!
@@ -1232,36 +685,12 @@ type Query {
     areasByToken(tokens: [String!]!): [Area!]!
     # List areas that meet criteria.
     areas(criteria: AreaSearchCriteria!): AreaSearchResults!
-    # Find area relationship types by unique id.
-    areaRelationshipTypesById(ids: [ID!]!): [AreaRelationshipType!]!
-    # Find area relationship types by unique token.
-    areaRelationshipTypesByToken(tokens: [String!]!): [AreaRelationshipType!]!
-    # List area relationship types that meet criteria.
-    areaRelationshipTypes(criteria: AreaRelationshipTypeSearchCriteria!): AreaRelationshipTypeSearchResults!
-    # Find area relationships by unique id.
-    areaRelationshipsById(ids: [ID!]!): [AreaRelationship!]!
-    # Find area relationships by unique token.
-    areaRelationshipsByToken(tokens: [String!]!): [AreaRelationship!]!
-    # List area relationships that meet criteria.
-    areaRelationships(criteria: AreaRelationshipSearchCriteria!): AreaRelationshipSearchResults!
     # Find area groups by unique id.
     areaGroupsById(ids: [ID!]!): [AreaGroup!]!
     # Find area groups by unique token.
     areaGroupsByToken(tokens: [String!]!): [AreaGroup!]!
     # List area groups that meet criteria.
     areaGroups(criteria: AreaGroupSearchCriteria!): AreaGroupSearchResults!
-    # Find area group relationship types by unique id.
-    areaGroupRelationshipTypesById(ids: [ID!]!): [AreaGroupRelationshipType!]!
-    # Find area group relationship types by unique token.
-    areaGroupRelationshipTypesByToken(tokens: [String!]!): [AreaGroupRelationshipType!]!
-    # List area group relationship types that meet criteria.
-    areaGroupRelationshipTypes(criteria: AreaGroupRelationshipTypeSearchCriteria!): AreaGroupRelationshipTypeSearchResults!
-    # Find area group relationships by unique id.
-    areaGroupRelationshipsById(ids: [ID!]!): [AreaGroupRelationship!]!
-    # Find area group relationships by unique token.
-    areaGroupRelationshipsByToken(tokens: [String!]!): [AreaGroupRelationship!]!
-    # List area group relationships that meet criteria.
-    areaGroupRelationships(criteria: AreaGroupRelationshipSearchCriteria!): AreaGroupRelationshipSearchResults!
 }
 
 # Contains mutations executed against model.
@@ -1274,22 +703,17 @@ type Mutation {
     createDevice(request: DeviceCreateRequest): Device!
     # Update an existing device.
     updateDevice(token: String!, request: DeviceCreateRequest): Device!
-    # Create a new device relationship type.
-    createDeviceRelationshipType(request: DeviceRelationshipTypeCreateRequest): DeviceRelationshipType!
-    # Update an existing device relationship type.
-    updateDeviceRelationshipType(token: String!, request: DeviceRelationshipTypeCreateRequest): DeviceRelationshipType!
-    # Create a new device relationship.
-    createDeviceRelationship(request: DeviceRelationshipCreateRequest): DeviceRelationship!
     # Create a new device group.
     createDeviceGroup(request: DeviceGroupCreateRequest): DeviceGroup!
     # Update an existing device group.
     updateDeviceGroup(token: String!, request: DeviceGroupCreateRequest): DeviceGroup!
-    # Create a new device group relationship type.
-    createDeviceGroupRelationshipType(request: DeviceGroupRelationshipTypeCreateRequest): DeviceGroupRelationshipType!
-    # Update an existing device group relationship type.
-    updateDeviceGroupRelationshipType(token: String!, request: DeviceGroupRelationshipTypeCreateRequest): DeviceGroupRelationshipType!
-    # Create a new device group relationship.
-    createDeviceGroupRelationship(request: DeviceGroupRelationshipCreateRequest): DeviceGroupRelationship!
+
+    # Create a new entity relationship type.
+    createEntityRelationshipType(request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
+    # Update an existing entity relationship type.
+    updateEntityRelationshipType(token: String!, request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
+    # Create a new entity relationship.
+    createEntityRelationship(request: EntityRelationshipCreateRequest!): EntityRelationship!
 
     # Create a new asset type.
     createAssetType(request: AssetTypeCreateRequest): AssetType!
@@ -1299,22 +723,10 @@ type Mutation {
     createAsset(request: AssetCreateRequest): Asset!
     # Update an existing asset.
     updateAsset(token: String!, request: AssetCreateRequest): Asset!
-    # Create a new asset relationship type.
-    createAssetRelationshipType(request: AssetRelationshipTypeCreateRequest): AssetRelationshipType!
-    # Update an existing asset relationship type.
-    updateAssetRelationshipType(token: String!, request: AssetRelationshipTypeCreateRequest): AssetRelationshipType!
-    # Create a new asset relationship.
-    createAssetRelationship(request: AssetRelationshipCreateRequest): AssetRelationship!
     # Create a new asset group.
     createAssetGroup(request: AssetGroupCreateRequest): AssetGroup!
     # Update an existing asset group.
     updateAssetGroup(token: String!, request: AssetGroupCreateRequest): AssetGroup!
-    # Create a new asset group relationship type.
-    createAssetGroupRelationshipType(request: AssetGroupRelationshipTypeCreateRequest): AssetGroupRelationshipType!
-    # Update an existing asset group relationship type.
-    updateAssetGroupRelationshipType(token: String!, request: AssetGroupRelationshipTypeCreateRequest): AssetGroupRelationshipType!
-    # Create a new asset group relationship.
-    createAssetGroupRelationship(request: AssetGroupRelationshipCreateRequest): AssetGroupRelationship!
 
     # Create a new customer type.
     createCustomerType(request: CustomerTypeCreateRequest): CustomerType!
@@ -1324,22 +736,10 @@ type Mutation {
     createCustomer(request: CustomerCreateRequest): Customer!
     # Update an existing customer.
     updateCustomer(token: String!, request: CustomerCreateRequest): Customer!
-    # Create a new customer relationship type.
-    createCustomerRelationshipType(request: CustomerRelationshipTypeCreateRequest): CustomerRelationshipType!
-    # Update an existing customer relationship type.
-    updateCustomerRelationshipType(token: String!, request: CustomerRelationshipTypeCreateRequest): CustomerRelationshipType!
-    # Create a new customer relationship.
-    createCustomerRelationship(request: CustomerRelationshipCreateRequest): CustomerRelationship!
     # Create a new customer group.
     createCustomerGroup(request: CustomerGroupCreateRequest): CustomerGroup!
     # Update an existing customer group.
     updateCustomerGroup(token: String!, request: CustomerGroupCreateRequest): CustomerGroup!
-    # Create a new customer group relationship type.
-    createCustomerGroupRelationshipType(request: CustomerGroupRelationshipTypeCreateRequest): CustomerGroupRelationshipType!
-    # Update an existing customer group relationship type.
-    updateCustomerGroupRelationshipType(token: String!, request: CustomerGroupRelationshipTypeCreateRequest): CustomerGroupRelationshipType!
-    # Create a new customer group relationship.
-    createCustomerGroupRelationship(request: CustomerGroupRelationshipCreateRequest): CustomerGroupRelationship!
 
     # Create a new area type.
     createAreaType(request: AreaTypeCreateRequest): AreaType!
@@ -1349,22 +749,10 @@ type Mutation {
     createArea(request: AreaCreateRequest): Area!
     # Update an existing area.
     updateArea(token: String!, request: AreaCreateRequest): Area!
-    # Create a new area relationship type.
-    createAreaRelationshipType(request: AreaRelationshipTypeCreateRequest): AreaRelationshipType!
-    # Update an existing area relationship type.
-    updateAreaRelationshipType(token: String!, request: AreaRelationshipTypeCreateRequest): AreaRelationshipType!
-    # Create a new area relationship.
-    createAreaRelationship(request: AreaRelationshipCreateRequest): AreaRelationship!
     # Create a new area group.
     createAreaGroup(request: AreaGroupCreateRequest): AreaGroup!
     # Update an existing area group.
     updateAreaGroup(token: String!, request: AreaGroupCreateRequest): AreaGroup!
-    # Create a new area group relationship type.
-    createAreaGroupRelationshipType(request: AreaGroupRelationshipTypeCreateRequest): AreaGroupRelationshipType!
-    # Update an existing area group relationship type.
-    updateAreaGroupRelationshipType(token: String!, request: AreaGroupRelationshipTypeCreateRequest): AreaGroupRelationshipType!
-    # Create a new area group relationship.
-    createAreaGroupRelationship(request: AreaGroupRelationshipCreateRequest): AreaGroupRelationship!
 }
 
 schema {

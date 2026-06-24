@@ -13,7 +13,6 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
@@ -156,48 +155,17 @@ func (ep *EventPersistenceWorker) PersistAlertEvents(ctx context.Context, event 
 	return results, nil
 }
 
-// resolvedAnchor collapses a resolved event's single relationship target into
-// the uniform (anchor_type, anchor_id) pair persisted on the event (ADR-013).
-// Exactly one Target* is set per resolved event (the resolver fans out to one
-// event per tracked relationship); the result is nil/nil when none is set.
-func resolvedAnchor(event dmmodel.ResolvedEvent) (*string, *uint) {
-	switch {
-	case event.TargetDeviceId != nil:
-		return anchorTypePtr(entity.TypeDevice), event.TargetDeviceId
-	case event.TargetDeviceGroupId != nil:
-		return anchorTypePtr(entity.TypeDeviceGroup), event.TargetDeviceGroupId
-	case event.TargetAssetId != nil:
-		return anchorTypePtr(entity.TypeAsset), event.TargetAssetId
-	case event.TargetAssetGroupId != nil:
-		return anchorTypePtr(entity.TypeAssetGroup), event.TargetAssetGroupId
-	case event.TargetCustomerId != nil:
-		return anchorTypePtr(entity.TypeCustomer), event.TargetCustomerId
-	case event.TargetCustomerGroupId != nil:
-		return anchorTypePtr(entity.TypeCustomerGroup), event.TargetCustomerGroupId
-	case event.TargetAreaId != nil:
-		return anchorTypePtr(entity.TypeArea), event.TargetAreaId
-	case event.TargetAreaGroupId != nil:
-		return anchorTypePtr(entity.TypeAreaGroup), event.TargetAreaGroupId
-	}
-	return nil, nil
-}
-
-// anchorTypePtr returns a heap pointer to an entity type's string value.
-func anchorTypePtr(t entity.Type) *string {
-	s := t.String()
-	return &s
-}
-
-// Persists a resolved event to the datastore.
+// Persists a resolved event to the datastore. The resolved event already carries
+// its relationship target as a uniform (type, id) reference (ADR-013), which maps
+// directly onto the event's (anchor_type, anchor_id).
 func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmodel.ResolvedEvent) (*EventPersistenceResults, error) {
-	anchorType, anchorId := resolvedAnchor(event)
 	pevent := model.Event{
 		DeviceId:      event.SourceDeviceId,
 		OccurredTime:  event.OccurredTime,
 		Source:        event.Source,
 		AltId:         rdb.NullStrOf(event.AltId),
-		AnchorType:    anchorType,
-		AnchorId:      anchorId,
+		AnchorType:    event.TargetType,
+		AnchorId:      event.TargetId,
 		ProcessedTime: event.ProcessedTime,
 		EventType:     event.EventType,
 	}

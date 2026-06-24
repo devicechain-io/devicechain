@@ -83,61 +83,6 @@ func (r *SchemaResolver) UpdateCustomer(ctx context.Context, args struct {
 	return dt, nil
 }
 
-// Create a new customer relationship type.
-func (r *SchemaResolver) CreateCustomerRelationshipType(ctx context.Context, args struct {
-	Request *model.CustomerRelationshipTypeCreateRequest
-}) (*CustomerRelationshipTypeResolver, error) {
-	api := r.GetApi(ctx)
-	created, err := api.CreateCustomerRelationshipType(ctx, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &CustomerRelationshipTypeResolver{
-		M: *created,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Update an existing customer relationship type.
-func (r *SchemaResolver) UpdateCustomerRelationshipType(ctx context.Context, args struct {
-	Token   string
-	Request *model.CustomerRelationshipTypeCreateRequest
-}) (*CustomerRelationshipTypeResolver, error) {
-	api := r.GetApi(ctx)
-	updated, err := api.UpdateCustomerRelationshipType(ctx, args.Token, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &CustomerRelationshipTypeResolver{
-		M: *updated,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Create a new customer relationship.
-func (r *SchemaResolver) CreateCustomerRelationship(ctx context.Context, args struct {
-	Request *model.CustomerRelationshipCreateRequest
-}) (*CustomerRelationshipResolver, error) {
-	api := r.GetApi(ctx)
-	created, err := api.CreateCustomerRelationship(ctx, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &CustomerRelationshipResolver{
-		M: *created,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
 // Create a new customer group.
 func (r *SchemaResolver) CreateCustomerGroup(ctx context.Context, args struct {
 	Request *model.CustomerGroupCreateRequest
@@ -169,61 +114,6 @@ func (r *SchemaResolver) UpdateCustomerGroup(ctx context.Context, args struct {
 
 	dt := &CustomerGroupResolver{
 		M: *updated,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Create a new customer group relationship type.
-func (r *SchemaResolver) CreateCustomerGroupRelationshipType(ctx context.Context, args struct {
-	Request *model.CustomerGroupRelationshipTypeCreateRequest
-}) (*CustomerGroupRelationshipTypeResolver, error) {
-	api := r.GetApi(ctx)
-	created, err := api.CreateCustomerGroupRelationshipType(ctx, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &CustomerGroupRelationshipTypeResolver{
-		M: *created,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Update an existing customer group relationship type.
-func (r *SchemaResolver) UpdateCustomerGroupRelationshipType(ctx context.Context, args struct {
-	Token   string
-	Request *model.CustomerGroupRelationshipTypeCreateRequest
-}) (*CustomerGroupRelationshipTypeResolver, error) {
-	api := r.GetApi(ctx)
-	updated, err := api.UpdateCustomerGroupRelationshipType(ctx, args.Token, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &CustomerGroupRelationshipTypeResolver{
-		M: *updated,
-		S: r,
-		C: ctx,
-	}
-	return dt, nil
-}
-
-// Create a new customer group relationship.
-func (r *SchemaResolver) CreateCustomerGroupRelationship(ctx context.Context, args struct {
-	Request *model.CustomerGroupRelationshipCreateRequest
-}) (*CustomerGroupRelationshipResolver, error) {
-	api := r.GetApi(ctx)
-	created, err := api.CreateCustomerGroupRelationship(ctx, args.Request)
-	if err != nil {
-		return nil, err
-	}
-
-	dt := &CustomerGroupRelationshipResolver{
-		M: *created,
 		S: r,
 		C: ctx,
 	}

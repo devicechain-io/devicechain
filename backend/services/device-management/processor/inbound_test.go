@@ -105,17 +105,12 @@ func (suite *InboundEventsProcessorTestSuite) TestInvalidEvent() {
 	suite.Failed.AssertCalled(suite.T(), "WriteMessages", mock.Anything, mock.Anything)
 }
 
-// Build a new assignment event.
+// Build a new relationship event.
 func buildNewAssignmentEvent() *model.UnresolvedEvent {
-	dreltype := "controls"
-	dgroup := "primary"
-	asset := "car123"
-	agroup := "cars"
 	assn := &model.UnresolvedNewRelationshipPayload{
-		DeviceRelationshipType: dreltype,
-		TargetDeviceGroup:      &dgroup,
-		TargetAsset:            &asset,
-		TargetAssetGroup:       &agroup,
+		RelationshipType: "controls",
+		TargetType:       "asset",
+		Target:           "car123",
 	}
 	altid := "alternateId"
 	event := &model.UnresolvedEvent{
@@ -250,13 +245,14 @@ func (suite *InboundEventsProcessorTestSuite) TestUnresolvableLocationsEvent() {
 	suite.Failed.AssertCalled(suite.T(), "WriteMessages", mock.Anything, mock.Anything)
 }
 
-// Build a tracked device relationship for a resolved standard event.
-func buildDeviceRelationship() *dmodel.DeviceRelationship {
-	return &dmodel.DeviceRelationship{
-		EntityRelationship: dmodel.EntityRelationship{
-			Model: gorm.Model{ID: 1},
-		},
-		SourceDeviceId: 1,
+// Build a tracked relationship (device -> asset) for a resolved standard event.
+func buildDeviceRelationship() *dmodel.EntityRelationship {
+	return &dmodel.EntityRelationship{
+		Model:      gorm.Model{ID: 1},
+		SourceType: "device",
+		SourceId:   1,
+		TargetType: "asset",
+		TargetId:   2,
 	}
 }
 
@@ -266,8 +262,8 @@ func (suite *InboundEventsProcessorTestSuite) SuccessEventFlowFor(msg messaging.
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
 	suite.Resolved.Mock.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
 	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{buildDevice()}, nil)
-	suite.API.Mock.On("DeviceRelationships", mock.Anything, mock.Anything).Return(&dmodel.DeviceRelationshipSearchResults{
-		Results: []dmodel.DeviceRelationship{*buildDeviceRelationship()},
+	suite.API.Mock.On("EntityRelationships", mock.Anything, mock.Anything).Return(&dmodel.EntityRelationshipSearchResults{
+		Results: []dmodel.EntityRelationship{*buildDeviceRelationship()},
 	}, nil)
 
 	// Send message and wait for event to be processed by resolver.
@@ -292,7 +288,7 @@ func (suite *InboundEventsProcessorTestSuite) TestValidNewAssignmentEvent() {
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
 	suite.Resolved.Mock.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
 	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{buildDevice()}, nil)
-	suite.API.Mock.On("CreateDeviceRelationship", mock.Anything, mock.Anything).Return(buildDeviceRelationship(), nil)
+	suite.API.Mock.On("CreateEntityRelationship", mock.Anything, mock.Anything).Return(buildDeviceRelationship(), nil)
 
 	// Send message and wait for event to be processed by resolver.
 	ctx := context.Background()

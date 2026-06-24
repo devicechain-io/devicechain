@@ -53,44 +53,18 @@ func NewJsonDecoder(config map[string]string) *JsonDecoder {
 	}
 }
 
-// Builds a new relationship payload from the json content.
+// Builds a new relationship payload from the json content. The target is a
+// uniform (type, token) reference (ADR-013).
 func (jd *JsonDecoder) BuildNewRelationshipPayload(source *JsonEvent) (*model.UnresolvedNewRelationshipPayload, error) {
 	payload := &model.UnresolvedNewRelationshipPayload{}
-	if drt, ok := source.Payload["deviceRelationshipType"]; ok {
-		str := fmt.Sprintf("%v", drt)
-		payload.DeviceRelationshipType = str
+	if rt, ok := source.Payload["relationshipType"]; ok {
+		payload.RelationshipType = fmt.Sprintf("%v", rt)
 	}
-	if device, ok := source.Payload["targetDevice"]; ok {
-		str := fmt.Sprintf("%v", device)
-		payload.TargetDevice = &str
+	if ttype, ok := source.Payload["targetType"]; ok {
+		payload.TargetType = fmt.Sprintf("%v", ttype)
 	}
-	if dgroup, ok := source.Payload["targetDeviceGroup"]; ok {
-		str := fmt.Sprintf("%v", dgroup)
-		payload.TargetDeviceGroup = &str
-	}
-	if asset, ok := source.Payload["targetAsset"]; ok {
-		str := fmt.Sprintf("%v", asset)
-		payload.TargetAsset = &str
-	}
-	if agroup, ok := source.Payload["targetAssetGroup"]; ok {
-		str := fmt.Sprintf("%v", agroup)
-		payload.TargetAssetGroup = &str
-	}
-	if cust, ok := source.Payload["targetCustomer"]; ok {
-		str := fmt.Sprintf("%v", cust)
-		payload.TargetCustomer = &str
-	}
-	if cgroup, ok := source.Payload["targetCustomerGroup"]; ok {
-		str := fmt.Sprintf("%v", cgroup)
-		payload.TargetCustomerGroup = &str
-	}
-	if area, ok := source.Payload["targetArea"]; ok {
-		str := fmt.Sprintf("%v", area)
-		payload.TargetArea = &str
-	}
-	if agroup, ok := source.Payload["targetAreaGroup"]; ok {
-		str := fmt.Sprintf("%v", agroup)
-		payload.TargetAreaGroup = &str
+	if target, ok := source.Payload["target"]; ok {
+		payload.Target = fmt.Sprintf("%v", target)
 	}
 
 	return payload, nil
