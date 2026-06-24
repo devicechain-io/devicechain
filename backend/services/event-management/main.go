@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-event-management/graphql"
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-event-management/processor"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -144,7 +145,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	schema := graphql.SchemaContent
 	parsed := gql.MustParseSchema(schema, &graphql.SchemaResolver{})
-	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, gqlcb, *parsed, providers)
+
+	// Build the JWT validator from the platform public key served by
+	// user-management (ADR-008).
+	validator, err := auth.NewValidatorForInstance(ctx, Microservice.InstanceConfiguration.Infrastructure.UserManagement)
+	if err != nil {
+		return err
+	}
+
+	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, gqlcb, *parsed, providers, validator)
 	err = GraphQLManager.Initialize(ctx)
 	if err != nil {
 		return err

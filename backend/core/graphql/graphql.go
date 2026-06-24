@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/friendsofgo/graphiql"
 	graphql "github.com/graph-gophers/graphql-go"
@@ -25,17 +26,22 @@ type GraphQLManager struct {
 	Schema           graphql.Schema
 	Server           *http.Server
 	ContextProviders map[ContextKey]interface{}
+	// Validator verifies access tokens on the /graphql endpoint. Pass nil only
+	// for a deliberately unauthenticated server; production services supply the
+	// validator built from the platform public key (ADR-008).
+	Validator *auth.Validator
 
 	lifecycle core.LifecycleManager
 }
 
-// Create a new rdb manager.
+// Create a new graphql manager.
 func NewGraphQLManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
-	schema graphql.Schema, providers map[ContextKey]interface{}) *GraphQLManager {
+	schema graphql.Schema, providers map[ContextKey]interface{}, validator *auth.Validator) *GraphQLManager {
 	gql := &GraphQLManager{
 		Microservice:     ms,
 		Schema:           schema,
 		ContextProviders: providers,
+		Validator:        validator,
 	}
 	// Create lifecycle manager.
 	gqlname := fmt.Sprintf("%s-%s", ms.FunctionalArea, "graphql")
@@ -68,7 +74,7 @@ func (gql *GraphQLManager) ExecuteStart(context.Context) error {
 	}
 
 	// Add handler for queries
-	http.Handle("/graphql", NewHttpHandler(&gql.Schema, gql.ContextProviders))
+	http.Handle("/graphql", NewHttpHandler(&gql.Schema, gql.ContextProviders, gql.Validator))
 	http.Handle("/graphiql", graphiqlHandler)
 
 	// Add handler for metrics

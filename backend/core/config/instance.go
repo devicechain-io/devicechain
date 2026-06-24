@@ -24,18 +24,20 @@ type MetricsConfiguration struct {
 	HttpPort int32
 }
 
-// Keycloak connectivity configuration
-type KeycloakConfiguration struct {
+// User-management connectivity configuration. The user-management service
+// issues the platform's RS256 JWT signing key (ADR-008); every other service
+// fetches the public key from this host at startup to validate access tokens.
+type UserManagementConfiguration struct {
 	Hostname string
 	Port     uint32
 }
 
 // Infrastructure configuration section
 type InfrastructureConfiguration struct {
-	Redis    RedisConfiguration
-	Nats     NatsConfiguration
-	Metrics  MetricsConfiguration
-	Keycloak KeycloakConfiguration
+	Redis          RedisConfiguration
+	Nats           NatsConfiguration
+	Metrics        MetricsConfiguration
+	UserManagement UserManagementConfiguration
 }
 
 // Generic datastore configuration
@@ -73,8 +75,8 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 				Enabled:  true,
 				HttpPort: 9090,
 			},
-			Keycloak: KeycloakConfiguration{
-				Hostname: "dc-keycloak.dc-system",
+			UserManagement: UserManagementConfiguration{
+				Hostname: "dc-user-management.dc-system",
 				Port:     8080,
 			},
 		},
