@@ -130,8 +130,8 @@ func (r *InstanceReconciler) handleInstanceDeleted(ctx context.Context, req ctrl
 func (r *InstanceReconciler) reconcileSharedMicroservices(ctx context.Context, instance *corev1beta1.Instance) error {
 	log := logf.FromContext(ctx)
 
-	catalog, err := corev1beta1.ListMicroserviceConfigurations()
-	if err != nil {
+	catalog := &corev1beta1.MicroserviceConfigurationList{}
+	if err := r.List(ctx, catalog); err != nil {
 		return err
 	}
 	log.Info(fmt.Sprintf("Reconciling %d shared microservices for instance '%s'", len(catalog.Items), instance.ObjectMeta.Name))
@@ -143,11 +143,6 @@ func (r *InstanceReconciler) reconcileSharedMicroservices(ctx context.Context, i
 		}
 	}
 	return nil
-}
-
-// Name used for a shared microservice deployment/service (its functional area).
-func microserviceName(msc *corev1beta1.MicroserviceConfiguration) string {
-	return msc.Spec.FunctionalArea
 }
 
 // Labels applied to a shared microservice deployment.
@@ -163,27 +158,28 @@ func (r *InstanceReconciler) assureMicroserviceDeployment(ctx context.Context, i
 	msc *corev1beta1.MicroserviceConfiguration) error {
 	log := logf.FromContext(ctx)
 
-	name := microserviceName(msc)
+	name := msc.Spec.FunctionalArea
 	key := types.NamespacedName{Namespace: instance.ObjectMeta.Name, Name: name}
 
-	deploy := &appsv1.Deployment{}
-	if err := r.Get(ctx, key, deploy); err != nil {
-		if !errors.IsNotFound(err) {
-			return err
-		}
-		if err := r.createDeploymentAndService(ctx, instance, msc); err != nil {
-			return err
-		}
-		log.Info(fmt.Sprintf("Created shared microservice '%s' for instance '%s'", name, instance.ObjectMeta.Name))
-		return nil
+	err := r.Get(ctx, key, &appsv1.Deployment{})
+	if err == nil {
+		return nil // already exists
 	}
+	if !errors.IsNotFound(err) {
+		return err
+	}
+
+	if err := r.createDeploymentAndService(ctx, instance, msc); err != nil {
+		return err
+	}
+	log.Info(fmt.Sprintf("Created shared microservice '%s' for instance '%s'", name, instance.ObjectMeta.Name))
 	return nil
 }
 
 // Create a Deployment and Service for a shared microservice.
 func (r *InstanceReconciler) createDeploymentAndService(ctx context.Context, instance *corev1beta1.Instance,
 	msc *corev1beta1.MicroserviceConfiguration) error {
-	name := microserviceName(msc)
+	name := msc.Spec.FunctionalArea
 	labels := microserviceLabels(instance, msc)
 
 	deploy := &appsv1.Deployment{

@@ -31,7 +31,6 @@ import (
 
 const (
 	LABEL_INSTANCE     = "devicechain.io.instance"
-	LABEL_TENANT       = "devicechain.io.tenant"
 	LABEL_MICROSERVICE = "devicechain.io.microservice"
 )
 
@@ -154,18 +153,6 @@ func GetMicroserviceConfiguration(request MicroserviceConfigurationGetRequest) (
 		return nil, err
 	}
 	return msconfig, nil
-}
-
-// List the microservice configuration catalog. Each entry defines a shared
-// microservice (functional area + image + config) that the operator deploys
-// once per instance to serve all tenants.
-func ListMicroserviceConfigurations() (*MicroserviceConfigurationList, error) {
-	list := &MicroserviceConfigurationList{}
-	err := V1Beta1Client.List(context.Background(), list)
-	if err != nil {
-		return nil, err
-	}
-	return list, nil
 }
 
 // Initialize client configuration

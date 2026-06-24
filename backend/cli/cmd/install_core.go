@@ -220,8 +220,4 @@ func applyYaml(dynamicClient dynamic.Interface, discoveryClient *discovery.Disco
 
 func init() {
 	installCmd.AddCommand(installCoreCmd)
-
-	installCoreCmd.Flags().StringP("domain", "s", "mydc.com", "Domain suffix used to filter ingress")
-	installCoreCmd.Flags().StringP("name", "n", "", "Specifies human-readable name for instance")
-	installCoreCmd.Flags().StringP("desc", "d", "", "Specifies human-readable description for instance")
 }
