@@ -17,6 +17,7 @@ It is a ground-up rebuild of the SiteWhere platform that keeps the proven domain
 - **GraphQL-first API** — introspectable and self-documenting; no generated client stubs.
 - **A lean, fully open-source stack** — NATS JetStream is the entire messaging / MQTT / KV backbone, native JWT handles auth, TimescaleDB is the single data store, and OpenTofu provisions infrastructure. Two dependencies to run locally: **NATS + TimescaleDB**.
 - **A uniform relationship model** — device context is a typed relationship graph rather than rigid assignments, so new entity types compose without schema churn.
+- **Self-hosted and unmetered** — Apache-2.0 with no open-core split and no per-device pricing. The device inventory, twin state, command delivery, multi-tenancy, high availability, and SSO are part of the open platform, not a paid tier — run it inside your own environment with full data ownership.
 
 ## How the platform is organized
 
