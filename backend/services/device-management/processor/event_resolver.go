@@ -26,7 +26,6 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
-	"github.com/devicechain-io/dc-microservice/core"
 	kcore "github.com/devicechain-io/dc-microservice/kafka"
 	"github.com/devicechain-io/dc-microservice/proto"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -316,12 +315,11 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			// Derive the per-message tenant from the message topic/subject and
 			// build a tenant-scoped context. Without a parseable tenant the
 			// message can not be processed safely (fail-closed) so it is skipped.
-			tenant, ok := kcore.ParseTenantFromSubject(unresolved.Topic)
+			msgctx, ok := kcore.TenantContextFromSubject(ctx, unresolved.Topic)
 			if !ok {
 				log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in topic %q", unresolved.Topic))
 				continue
 			}
-			msgctx := core.WithTenant(ctx, tenant)
 
 			// Attempt to unmarshal event.
 			event, err := esproto.UnmarshalUnresolvedEvent(unresolved.Value)

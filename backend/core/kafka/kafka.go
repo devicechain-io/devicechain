@@ -45,6 +45,19 @@ func ParseTenantFromSubject(subject string) (string, bool) {
 	return parts[1], true
 }
 
+// TenantContextFromSubject derives the tenant from a scoped subject/topic (see
+// ParseTenantFromSubject) and returns a tenant-scoped context. ok is false when
+// no tenant is parseable, in which case the caller must NOT process the message
+// (fail-closed). Used by ingest consumers so the per-message tenant flows into
+// the tenant-scope DB callbacks.
+func TenantContextFromSubject(ctx context.Context, subject string) (context.Context, bool) {
+	tenant, ok := ParseTenantFromSubject(subject)
+	if !ok {
+		return ctx, false
+	}
+	return core.WithTenant(ctx, tenant), true
+}
+
 // Simplified reader interface for unit testing.
 type KafkaReader interface {
 	ReadMessage(ctx context.Context) (kafka.Message, error)

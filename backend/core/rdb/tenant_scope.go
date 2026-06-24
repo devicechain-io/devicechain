@@ -17,8 +17,6 @@
 package rdb
 
 import (
-	"reflect"
-
 	"github.com/devicechain-io/dc-microservice/core"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -50,43 +48,34 @@ const tenantFieldName = "TenantId"
 // scoping is never silently skipped on a tenant-scoped model. The isolation
 // test (tenant_scope_test.go) is the standing guarantee this still holds.
 func RegisterTenantScoping(db *gorm.DB) error {
-	if err := db.Callback().Query().Before("gorm:query").Register("dc:tenant_query", tenantScopeQuery); err != nil {
-		return err
-	}
-	if err := db.Callback().Row().Before("gorm:row").Register("dc:tenant_row", tenantScopeQuery); err != nil {
-		return err
-	}
-	if err := db.Callback().Update().Before("gorm:update").Register("dc:tenant_update", tenantScopeQuery); err != nil {
-		return err
-	}
-	if err := db.Callback().Delete().Before("gorm:delete").Register("dc:tenant_delete", tenantScopeQuery); err != nil {
-		return err
-	}
-	if err := db.Callback().Create().Before("gorm:create").Register("dc:tenant_create", tenantScopeCreate); err != nil {
-		return err
+	// Query / row / update / delete inject the tenant predicate; create stamps it.
+	for _, register := range []func() error{
+		func() error { return db.Callback().Query().Before("gorm:query").Register("dc:tenant_query", tenantScopeQuery) },
+		func() error { return db.Callback().Row().Before("gorm:row").Register("dc:tenant_row", tenantScopeQuery) },
+		func() error { return db.Callback().Update().Before("gorm:update").Register("dc:tenant_update", tenantScopeQuery) },
+		func() error { return db.Callback().Delete().Before("gorm:delete").Register("dc:tenant_delete", tenantScopeQuery) },
+		func() error { return db.Callback().Create().Before("gorm:create").Register("dc:tenant_create", tenantScopeCreate) },
+	} {
+		if err := register(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // ensureSchema makes sure db.Statement.Schema is populated. Returns true when a
-// usable schema is available after the attempt.
+// usable schema is available after the attempt. Find/First set Dest; Model(...)
+// sets Model. The trailing check is authoritative.
 func ensureSchema(db *gorm.DB) bool {
 	if db.Statement.Schema != nil {
 		return true
 	}
-	// Attempt to parse from whatever the statement has set. Find/First set Dest;
-	// Model(...) sets Model. Parsing populates db.Statement.Schema.
-	if db.Statement.Model != nil {
-		if err := db.Statement.Parse(db.Statement.Model); err == nil && db.Statement.Schema != nil {
-			return true
-		}
+	if src := db.Statement.Model; src != nil {
+		_ = db.Statement.Parse(src)
+	} else if src := db.Statement.Dest; src != nil {
+		_ = db.Statement.Parse(src)
 	}
-	if db.Statement.Dest != nil {
-		if err := db.Statement.Parse(db.Statement.Dest); err == nil && db.Statement.Schema != nil {
-			return true
-		}
-	}
-	return false
+	return db.Statement.Schema != nil
 }
 
 // isTenantScoped reports whether the statement's schema embeds TenantScoped.
@@ -98,18 +87,27 @@ func isTenantScoped(db *gorm.DB) bool {
 	return ok
 }
 
-// tenantScopeQuery injects the tenant predicate for read/update/delete-style
-// statements and fails closed when no tenant is present.
-func tenantScopeQuery(db *gorm.DB) {
-	if db.Error != nil {
-		return
-	}
-	if !isTenantScoped(db) {
-		return
+// scopedTenant returns the context tenant when db is a live, tenant-scoped
+// statement. ok=false means the callback should return without acting; any
+// fail-closed error (no tenant in context for a tenant-scoped model) has already
+// been recorded on db.
+func scopedTenant(db *gorm.DB) (string, bool) {
+	if db.Error != nil || !isTenantScoped(db) {
+		return "", false
 	}
 	tenant, ok := core.TenantFromContext(db.Statement.Context)
 	if !ok {
 		_ = db.AddError(core.ErrNoTenant)
+		return "", false
+	}
+	return tenant, true
+}
+
+// tenantScopeQuery injects the tenant predicate for read/update/delete-style
+// statements and fails closed when no tenant is present.
+func tenantScopeQuery(db *gorm.DB) {
+	tenant, ok := scopedTenant(db)
+	if !ok {
 		return
 	}
 	db.Statement.AddClause(clause.Where{
@@ -122,45 +120,13 @@ func tenantScopeQuery(db *gorm.DB) {
 	})
 }
 
-// tenantScopeCreate stamps the tenant id onto every row being created and fails
+// tenantScopeCreate stamps the tenant id onto every row being created (SetColumn
+// handles struct, slice and array destinations, i.e. batch inserts) and fails
 // closed when no tenant is present.
 func tenantScopeCreate(db *gorm.DB) {
-	if db.Error != nil {
-		return
-	}
-	if !isTenantScoped(db) {
-		return
-	}
-	tenant, ok := core.TenantFromContext(db.Statement.Context)
+	tenant, ok := scopedTenant(db)
 	if !ok {
-		_ = db.AddError(core.ErrNoTenant)
 		return
 	}
-	field := db.Statement.Schema.FieldsByName[tenantFieldName]
-	if field == nil {
-		return
-	}
-
-	rv := db.Statement.ReflectValue
-	switch rv.Kind() {
-	case reflect.Slice, reflect.Array:
-		for i := 0; i < rv.Len(); i++ {
-			elem := rv.Index(i)
-			if elem.Kind() == reflect.Ptr {
-				if elem.IsNil() {
-					continue
-				}
-				elem = elem.Elem()
-			}
-			if err := field.Set(db.Statement.Context, elem, tenant); err != nil {
-				_ = db.AddError(err)
-				return
-			}
-		}
-	case reflect.Struct:
-		if err := field.Set(db.Statement.Context, rv, tenant); err != nil {
-			_ = db.AddError(err)
-			return
-		}
-	}
+	db.Statement.SetColumn(tenantFieldName, tenant, true)
 }

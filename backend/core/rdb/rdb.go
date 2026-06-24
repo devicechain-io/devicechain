@@ -71,9 +71,13 @@ func (rdb *RdbManager) ListOf(ctx context.Context, mdl interface{}, filters func
 		pag.PageNumber = 1
 	}
 
+	// Bind the context once (so the tenant-scope callbacks see it) and reuse it
+	// for both the count and data queries; each Model(...) clones a fresh stmt.
+	base := rdb.Database.WithContext(ctx)
+
 	// Execute count query.
 	count := int64(0)
-	result := rdb.Database.WithContext(ctx).Model(mdl)
+	result := base.Model(mdl)
 	if filters != nil {
 		result = filters(result)
 	}
@@ -81,7 +85,7 @@ func (rdb *RdbManager) ListOf(ctx context.Context, mdl interface{}, filters func
 	total := int32(count)
 
 	// Execute data query.
-	result = rdb.Database.WithContext(ctx).Model(mdl)
+	result = base.Model(mdl)
 	if filters != nil {
 		result = filters(result)
 	}

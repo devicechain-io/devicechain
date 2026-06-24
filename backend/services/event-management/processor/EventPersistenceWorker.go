@@ -26,7 +26,6 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/core"
 	kcore "github.com/devicechain-io/dc-microservice/kafka"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
@@ -150,12 +149,11 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 			// build a tenant-scoped context. Without a parseable tenant the
 			// message can not be persisted safely (fail-closed) so it is skipped
 			// rather than written without a tenant.
-			tenant, ok := kcore.ParseTenantFromSubject(unpersisted.Topic)
+			msgctx, ok := kcore.TenantContextFromSubject(ctx, unpersisted.Topic)
 			if !ok {
 				log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in topic %q", unpersisted.Topic))
 				continue
 			}
-			msgctx := core.WithTenant(ctx, tenant)
 
 			// Attempt to unmarshal event.
 			event, err := dmproto.UnmarshalResolvedEvent(unpersisted.Value)
