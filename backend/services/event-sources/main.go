@@ -7,10 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/rs/zerolog/log"
-	"github.com/segmentio/kafka-go"
 
 	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/graphql"
@@ -19,7 +19,7 @@ import (
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
-	kcore "github.com/devicechain-io/dc-microservice/kafka"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -29,11 +29,11 @@ var (
 	EventSources  []core.LifecycleComponent
 
 	GraphQLManager *gqlcore.GraphQLManager
-	KakfaManager   *kcore.KafkaManager
+	NatsManager    *messaging.NatsManager
 
-	// Kafka.
-	InboundEventsWriter kcore.KafkaWriter
-	FailedDecodeWriter  kcore.KafkaWriter
+	// Messaging.
+	InboundEventsWriter messaging.MessageWriter
+	FailedDecodeWriter  messaging.MessageWriter
 
 	// Metrics
 	MessagesCounter     *prometheus.CounterVec
@@ -134,13 +134,35 @@ func onMessageReceived(source string, raw []byte) {
 	MessagesCounter.WithLabelValues(source).Inc()
 }
 
+// tenantFromMqttTopic derives the tenant from an inbound MQTT topic of the form
+// "dc/{tenant}/..." (ADR-006): the tenant is the second of at least three
+// non-empty slash-separated segments. Parsed directly (no whole-string rewrite)
+// since this runs per inbound message.
+func tenantFromMqttTopic(topic string) (string, bool) {
+	parts := strings.SplitN(topic, "/", 3)
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", false
+	}
+	return parts[1], true
+}
+
 // Called by event sources when an event is successfully decoded.
-func onEventDecoded(source string, event *model.UnresolvedEvent, payload interface{}) {
+func onEventDecoded(source string, mqttTopic string, event *model.UnresolvedEvent, payload interface{}) {
 	// Increment counter for metrics.
 	DecodedCounter.WithLabelValues(source).Inc()
 
 	event.Source = source
 	event.Payload = payload
+
+	// Derive the per-message tenant from the inbound MQTT topic. Without a
+	// parseable tenant the message cannot be published to a tenant-scoped
+	// subject, so it is dropped (fail-closed) rather than published unscoped.
+	tenant, ok := tenantFromMqttTopic(mqttTopic)
+	if !ok {
+		log.Warn().Msg(fmt.Sprintf("Dropping event with no parseable tenant in MQTT topic %q", mqttTopic))
+		return
+	}
+	ctx := core.WithTenant(context.Background(), tenant)
 
 	// Marshal event message to protobuf.
 	bytes, err := esproto.MarshalUnresolvedEvent(event)
@@ -148,38 +170,47 @@ func onEventDecoded(source string, event *model.UnresolvedEvent, payload interfa
 		log.Error().Err(err).Msg("unable to marshal event to protobuf")
 	}
 
-	// Create and deliver message.
-	msg := kafka.Message{
+	// Create and deliver message (writer derives the scoped subject from ctx).
+	msg := messaging.Message{
 		Key:   []byte(event.Device),
 		Value: bytes,
 	}
-	err = InboundEventsWriter.WriteMessages(context.Background(), msg)
+	err = InboundEventsWriter.WriteMessages(ctx, msg)
 	InboundEventsWriter.HandleResponse(err)
 }
 
 // Handle failed decoding.
-func onEventDecodeFailed(source string, raw []byte, err error) {
+func onEventDecodeFailed(source string, mqttTopic string, raw []byte, err error) {
 	// Increment counter for metrics.
 	FailedDecodeCounter.WithLabelValues(source).Inc()
 
+	// A message that could not even be decoded still carries its tenant in the
+	// MQTT topic; without one it cannot be scoped, so it is dropped fail-closed.
+	tenant, ok := tenantFromMqttTopic(mqttTopic)
+	if !ok {
+		log.Warn().Msg(fmt.Sprintf("Dropping failed-decode message with no parseable tenant in MQTT topic %q", mqttTopic))
+		return
+	}
+	ctx := core.WithTenant(context.Background(), tenant)
+
 	// Create and deliver message.
-	msg := kafka.Message{
+	msg := messaging.Message{
 		Key:   []byte(source),
 		Value: raw,
 	}
-	senderr := FailedDecodeWriter.WriteMessages(context.Background(), msg)
+	senderr := FailedDecodeWriter.WriteMessages(ctx, msg)
 	FailedDecodeWriter.HandleResponse(senderr)
 }
 
-// Create kafka components used by this microservice.
-func createKafkaComponents(kmgr *kcore.KafkaManager) error {
-	ievents, err := kmgr.NewWriter(kmgr.NewScopedTopic(config.KAFKA_TOPIC_INBOUND_EVENTS))
+// Create messaging components used by this microservice.
+func createNatsComponents(nmgr *messaging.NatsManager) error {
+	ievents, err := nmgr.NewWriter(config.SUBJECT_INBOUND_EVENTS)
 	if err != nil {
 		return err
 	}
 	InboundEventsWriter = ievents
 
-	failed, err := kmgr.NewWriter(kmgr.NewScopedTopic(config.KAFKA_TOPIC_FAILED_DECODE))
+	failed, err := nmgr.NewWriter(config.SUBJECT_FAILED_DECODE)
 	if err != nil {
 		return err
 	}
@@ -204,9 +235,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Initialize metrics.
 	initializeMetrics()
 
-	// Create and initialize kafka manager.
-	KakfaManager = kcore.NewKafkaManager(Microservice, core.NewNoOpLifecycleCallbacks(), createKafkaComponents)
-	err = KakfaManager.Initialize(ctx)
+	// Create and initialize nats manager.
+	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
+	err = NatsManager.Initialize(ctx)
 	if err != nil {
 		return err
 	}
@@ -236,8 +267,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 // Called after microservice has been started.
 func afterMicroserviceStarted(ctx context.Context) error {
-	// Start kafka manager.
-	err := KakfaManager.Start(ctx)
+	// Start nats manager.
+	err := NatsManager.Start(ctx)
 	if err != nil {
 		return err
 	}
@@ -275,8 +306,8 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
-	// Stop kafka manager.
-	err = KakfaManager.Stop(ctx)
+	// Stop nats manager.
+	err = NatsManager.Stop(ctx)
 	if err != nil {
 		return err
 	}
@@ -300,8 +331,8 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		return err
 	}
 
-	// Terminate kafka manager.
-	err = KakfaManager.Terminate(ctx)
+	// Terminate nats manager.
+	err = NatsManager.Terminate(ctx)
 	if err != nil {
 		return err
 	}

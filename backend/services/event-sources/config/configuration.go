@@ -4,8 +4,8 @@
 package config
 
 const (
-	KAFKA_TOPIC_INBOUND_EVENTS = "inbound-events"
-	KAFKA_TOPIC_FAILED_DECODE  = "failed-decode"
+	SUBJECT_INBOUND_EVENTS = "inbound-events"
+	SUBJECT_FAILED_DECODE  = "failed-decode"
 )
 
 // Decodes event payloads into standardized format.
@@ -41,9 +41,11 @@ func NewEventSourcesConfiguration() *EventSourcesConfiguration {
 				Id:   "mqtt1",
 				Type: "mqtt",
 				Configuration: map[string]string{
-					"host":  "dc-mosquitto.dc-system",
-					"port":  "1883",
-					"topic": "devicechain/events",
+					"host": "dc-nats.dc-system",
+					"port": "1883",
+					// Tenant-bearing topic (ADR-006): "dc/{tenant}/...". The
+					// second level carries the tenant the producer scopes on.
+					"topic": "dc/+/#",
 				},
 				Decoder: EventDecoder{
 					Type:          "json",

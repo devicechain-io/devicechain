@@ -27,5 +27,5 @@ Because tenants are declarative resources, the full tenant roster is version-con
 Running one set of services for all tenants keeps the cluster footprint small and the operational model simple, while the enforced row-level scope (plus subject scoping on the bus) provides the isolation that matters. The shared services derive each request's or message's tenant and scope all data access to it automatically.
 
 :::note Status
-Runtime tenant scoping on the data path is enforced today (fail-closed). Two pieces are still being wired: sourcing the API-path tenant from the verified JWT claim (currently a trusted gateway header), and consuming all tenants' subjects from one shared pod — which lands with the messaging migration.
+Runtime tenant scoping on the data path is enforced today (fail-closed), and the shared pod consumes every tenant's messages over a wildcard subject, deriving each message's tenant from its subject. One piece is still being wired: sourcing the API-path tenant from the verified JWT claim (currently a trusted gateway header).
 :::

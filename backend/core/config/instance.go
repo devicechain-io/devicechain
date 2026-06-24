@@ -9,12 +9,13 @@ type RedisConfiguration struct {
 	Port     int32
 }
 
-// Kafka configuration parameters
-type KafkaConfiguration struct {
-	Hostname                      string
-	Port                          uint32
-	DefaultTopicPartitions        uint32
-	DefaultTopicReplicationFactor uint32
+// NATS configuration parameters
+type NatsConfiguration struct {
+	Hostname string
+	Port     uint32
+	// StreamReplicas is the JetStream replica count for created streams
+	// (1 for single-node dev; raise to 3 for the HA topology in ADR-018).
+	StreamReplicas uint32
 }
 
 // Prometheus metrics configuration
@@ -32,7 +33,7 @@ type KeycloakConfiguration struct {
 // Infrastructure configuration section
 type InfrastructureConfiguration struct {
 	Redis    RedisConfiguration
-	Kafka    KafkaConfiguration
+	Nats     NatsConfiguration
 	Metrics  MetricsConfiguration
 	Keycloak KeycloakConfiguration
 }
@@ -63,11 +64,10 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 				Hostname: "dc-redis-master.dc-system",
 				Port:     6379,
 			},
-			Kafka: KafkaConfiguration{
-				Hostname:                      "dc-kafka-kafka-bootstrap.dc-system",
-				Port:                          9092,
-				DefaultTopicPartitions:        4,
-				DefaultTopicReplicationFactor: 1,
+			Nats: NatsConfiguration{
+				Hostname:       "dc-nats.dc-system",
+				Port:           4222,
+				StreamReplicas: 1,
 			},
 			Metrics: MetricsConfiguration{
 				Enabled:  true,

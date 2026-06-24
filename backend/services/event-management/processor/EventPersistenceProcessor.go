@@ -14,36 +14,49 @@ import (
 	"github.com/devicechain-io/dc-device-management/proto"
 	emmodel "github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
-	kcore "github.com/devicechain-io/dc-microservice/kafka"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
-	"github.com/segmentio/kafka-go"
 )
 
 const (
 	WORKER_COUNT                 = 5   // Number of event persisters running in parallel
-	KAFKA_BACKLOG_SIZE           = 100 // Number of kafka messages that can be read and waiting to be processed
-	FAILED_EVENT_BACKLOG_SIZE    = 100 // Number of failed events that can be waiting to be sent to kafka
-	PERSISTED_EVENT_BACKLOG_SIZE = 100 // Number of persisted events that can be waiting to be sent to kafka
+	MESSAGE_BACKLOG_SIZE         = 100 // Number of messages that can be read and waiting to be processed
+	FAILED_EVENT_BACKLOG_SIZE    = 100 // Number of failed events that can be waiting to publish
+	PERSISTED_EVENT_BACKLOG_SIZE = 100 // Number of persisted events that can be waiting to publish
 )
+
+// persistedItem pairs a persisted event with the tenant it belongs to so the
+// outbound producer can publish to the tenant's subject (the tenant is derived
+// from the inbound subject and must travel with the event across the channel).
+type persistedItem struct {
+	tenant string
+	event  interface{}
+}
+
+// failedItem pairs a failed event with its tenant for the same reason.
+type failedItem struct {
+	tenant string
+	event  dmodel.FailedEvent
+}
 
 type EventPersistenceProcessor struct {
 	Microservice          *core.Microservice
-	ResolvedEventsReader  kcore.KafkaReader
-	PersistedEventsWriter kcore.KafkaWriter
-	FailedEventsWriter    kcore.KafkaWriter
+	ResolvedEventsReader  messaging.MessageReader
+	PersistedEventsWriter messaging.MessageWriter
+	FailedEventsWriter    messaging.MessageWriter
 	Api                   emmodel.EventManagementApi
 
-	messages  chan kafka.Message
-	persisted chan interface{}
-	failed    chan dmodel.FailedEvent
+	messages  chan messaging.Message
+	persisted chan persistedItem
+	failed    chan failedItem
 	workers   []*EventPersistenceWorker
 
 	lifecycle core.LifecycleManager
 }
 
 // Create a new inbound events processor.
-func NewEventPersistenceProcessor(ms *core.Microservice, resolved kcore.KafkaReader, persisted kcore.KafkaWriter,
-	failed kcore.KafkaWriter, callbacks core.LifecycleCallbacks, api emmodel.EventManagementApi) *EventPersistenceProcessor {
+func NewEventPersistenceProcessor(ms *core.Microservice, resolved messaging.MessageReader, persisted messaging.MessageWriter,
+	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api emmodel.EventManagementApi) *EventPersistenceProcessor {
 	eproc := &EventPersistenceProcessor{
 		Microservice:          ms,
 		ResolvedEventsReader:  resolved,
@@ -60,21 +73,22 @@ func NewEventPersistenceProcessor(ms *core.Microservice, resolved kcore.KafkaRea
 
 // Handle case where event failed to process.
 func (eproc *EventPersistenceProcessor) ProcessFailedEvent(ctx context.Context) bool {
-	failed, more := <-eproc.failed
-	log.Debug().Msg(fmt.Sprintf("received failed event: %s (%s)", failed.Message, failed.Error))
+	item, more := <-eproc.failed
 	if more {
+		log.Debug().Str("message", item.event.Message).Str("error", item.event.Error).Msg("received failed event")
+
 		// Marshal event message to protobuf.
-		bytes, err := proto.MarshalFailedEvent(&failed)
+		bytes, err := proto.MarshalFailedEvent(&item.event)
 		if err != nil {
 			log.Error().Err(err).Msg("unable to marshal event to protobuf")
 		}
 
-		// Create and deliver message.
-		msg := kafka.Message{
-			Key:   []byte(strconv.FormatInt(int64(failed.Reason), 10)),
+		// Create and deliver message on the failed event's tenant subject.
+		msg := messaging.Message{
+			Key:   []byte(strconv.FormatInt(int64(item.event.Reason), 10)),
 			Value: bytes,
 		}
-		err = eproc.FailedEventsWriter.WriteMessages(ctx, msg)
+		err = eproc.FailedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)
 		eproc.FailedEventsWriter.HandleResponse(err)
 		return false
 	} else {
@@ -82,15 +96,22 @@ func (eproc *EventPersistenceProcessor) ProcessFailedEvent(ctx context.Context) 
 	}
 }
 
-// Called when a message can not be unmarshaled to an event.
-func (eproc *EventPersistenceProcessor) OnInvalidEvent(err error, msg kafka.Message) {
+// Called when a message can not be unmarshaled to an event. The tenant is
+// re-derived from the message subject (the worker only reaches this callback
+// after confirming the subject carries a parseable tenant).
+func (eproc *EventPersistenceProcessor) OnInvalidEvent(err error, msg messaging.Message) {
+	tenant, ok := messaging.ParseTenantFromSubject(msg.Subject)
+	if !ok {
+		log.Warn().Msg(fmt.Sprintf("Dropping invalid event with no parseable tenant in subject %q", msg.Subject))
+		return
+	}
 	failed := dmodel.NewFailedEvent(uint(proto.FailureReason_Invalid), eproc.Microservice.FunctionalArea,
 		"message could not be parsed", err, msg.Value)
-	eproc.failed <- *failed
+	eproc.failed <- failedItem{tenant: tenant, event: *failed}
 }
 
 // Called when a message can not be persisted.
-func (eproc *EventPersistenceProcessor) OnFailedEvent(reason uint, event dmodel.ResolvedEvent, perr error) {
+func (eproc *EventPersistenceProcessor) OnFailedEvent(tenant string, reason uint, event dmodel.ResolvedEvent, perr error) {
 	// Marshal event message to protobuf.
 	bytes, err := proto.MarshalResolvedEvent(&event)
 	if err != nil {
@@ -98,20 +119,20 @@ func (eproc *EventPersistenceProcessor) OnFailedEvent(reason uint, event dmodel.
 	} else {
 		failed := dmodel.NewFailedEvent(reason, eproc.Microservice.FunctionalArea,
 			"event could not be processed", perr, bytes)
-		eproc.failed <- *failed
+		eproc.failed <- failedItem{tenant: tenant, event: *failed}
 	}
 }
 
 // Handle case where event was successfully persisted.
 func (eproc *EventPersistenceProcessor) ProcessPersistedEvent(ctx context.Context) bool {
-	_, more := <-eproc.persisted
+	item, more := <-eproc.persisted
 	if more {
 		bytes := []byte("test")
-		msg := kafka.Message{
+		msg := messaging.Message{
 			Key:   []byte("xxx"),
 			Value: bytes,
 		}
-		err := eproc.PersistedEventsWriter.WriteMessages(ctx, msg)
+		err := eproc.PersistedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)
 		eproc.PersistedEventsWriter.HandleResponse(err)
 		return false
 	} else {
@@ -119,15 +140,15 @@ func (eproc *EventPersistenceProcessor) ProcessPersistedEvent(ctx context.Contex
 	}
 }
 
-// Called when an event is successfully resolved.
-func (eproc *EventPersistenceProcessor) OnPersistedEvent(event interface{}) {
-	eproc.persisted <- event
+// Called when an event is successfully persisted.
+func (eproc *EventPersistenceProcessor) OnPersistedEvent(tenant string, event interface{}) {
+	eproc.persisted <- persistedItem{tenant: tenant, event: event}
 }
 
 // Initialize pool of workers for persisting events.
 func (eproc *EventPersistenceProcessor) initializeEventPersistenceWorkers(ctx context.Context) {
 	// Make channels and workers for distributed processing.
-	eproc.messages = make(chan kafka.Message, KAFKA_BACKLOG_SIZE)
+	eproc.messages = make(chan messaging.Message, MESSAGE_BACKLOG_SIZE)
 	eproc.workers = make([]*EventPersistenceWorker, 0)
 	for w := 1; w <= WORKER_COUNT; w++ {
 		resolver := NewEventPersistenceWorker(w, eproc.Api, eproc.messages,
@@ -139,8 +160,8 @@ func (eproc *EventPersistenceProcessor) initializeEventPersistenceWorkers(ctx co
 
 // Initialize outbound processing.
 func (eproc *EventPersistenceProcessor) initializeOutboundProcessing(ctx context.Context) {
-	eproc.failed = make(chan dmodel.FailedEvent, FAILED_EVENT_BACKLOG_SIZE)
-	eproc.persisted = make(chan interface{}, PERSISTED_EVENT_BACKLOG_SIZE)
+	eproc.failed = make(chan failedItem, FAILED_EVENT_BACKLOG_SIZE)
+	eproc.persisted = make(chan persistedItem, PERSISTED_EVENT_BACKLOG_SIZE)
 }
 
 // Initialize component.

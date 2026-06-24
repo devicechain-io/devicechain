@@ -13,22 +13,21 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
-	kcore "github.com/devicechain-io/dc-microservice/kafka"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/proto"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"github.com/segmentio/kafka-go"
 )
 
 // Worker used to resolve event entities.
 type EventResolver struct {
 	WorkerId   int
 	Api        model.DeviceManagementApi
-	Unresolved <-chan kafka.Message
-	Invalid    func(error, kafka.Message)
-	Resolved   func([]EventResolutionResults)
-	Failed     func(uint, esmodel.UnresolvedEvent, error)
+	Unresolved <-chan messaging.Message
+	Invalid    func(error, messaging.Message)
+	Resolved   func(string, []EventResolutionResults)
+	Failed     func(string, uint, esmodel.UnresolvedEvent, error)
 }
 
 // Results of event resolution process.
@@ -40,10 +39,10 @@ type EventResolutionResults struct {
 
 // Create a new event resolver.
 func NewEventResolver(workerId int, api model.DeviceManagementApi,
-	unrez <-chan kafka.Message,
-	invalid func(error, kafka.Message),
-	resolved func([]EventResolutionResults),
-	failed func(uint, esmodel.UnresolvedEvent, error)) *EventResolver {
+	unrez <-chan messaging.Message,
+	invalid func(error, messaging.Message),
+	resolved func(string, []EventResolutionResults),
+	failed func(string, uint, esmodel.UnresolvedEvent, error)) *EventResolver {
 	return &EventResolver{
 		WorkerId:   workerId,
 		Api:        api,
@@ -299,12 +298,14 @@ func (rez *EventResolver) Process(ctx context.Context) {
 		if more {
 			log.Debug().Msg(fmt.Sprintf("Event resolution handled by resolver id %d", rez.WorkerId))
 
-			// Derive the per-message tenant from the message topic/subject and
-			// build a tenant-scoped context. Without a parseable tenant the
-			// message can not be processed safely (fail-closed) so it is skipped.
-			msgctx, ok := kcore.TenantContextFromSubject(ctx, unresolved.Topic)
+			// Derive the per-message tenant from the message subject and build a
+			// tenant-scoped context. Without a parseable tenant the message can
+			// not be processed safely (fail-closed) so it is skipped. The tenant
+			// string is carried onto the resolved/failed channels so the
+			// downstream producer can publish to the same tenant's subject.
+			msgctx, tenant, ok := messaging.TenantContextFromSubject(ctx, unresolved.Subject)
 			if !ok {
-				log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in topic %q", unresolved.Topic))
+				log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in subject %q", unresolved.Subject))
 				continue
 			}
 
@@ -325,9 +326,9 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			// Attempt to resolve event using the per-message tenant context.
 			resolved, reason, err := rez.ResolveEvent(msgctx, event)
 			if err != nil {
-				rez.Failed(reason, *event, err)
+				rez.Failed(tenant, reason, *event, err)
 			} else {
-				rez.Resolved(resolved)
+				rez.Resolved(tenant, resolved)
 			}
 		} else {
 			log.Debug().Msg("Event resolver received shutdown signal.")

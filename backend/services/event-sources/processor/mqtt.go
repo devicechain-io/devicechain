@@ -29,19 +29,19 @@ type MqttEventSource struct {
 	Client  mqtt.Client
 	Decoder Decoder
 
-	messages  chan []byte
+	messages  chan rawMessage
 	workers   []*DecodeWorker
 	lifecycle core.LifecycleManager
 	received  func(string, []byte)
-	decoded   func(string, *model.UnresolvedEvent, interface{})
-	failed    func(string, []byte, error)
+	decoded   func(string, string, *model.UnresolvedEvent, interface{})
+	failed    func(string, string, []byte, error)
 }
 
 // Create a new MQTT event source based on the given configuration.
 func NewMqttEventSource(id string, config map[string]string, decoder Decoder,
 	received func(string, []byte),
-	decoded func(string, *model.UnresolvedEvent, interface{}),
-	failed func(string, []byte, error)) (*MqttEventSource, error) {
+	decoded func(string, string, *model.UnresolvedEvent, interface{}),
+	failed func(string, string, []byte, error)) (*MqttEventSource, error) {
 	port, err := strconv.Atoi(config["port"])
 	if err != nil {
 		return nil, err
@@ -68,7 +68,7 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 		log.Debug().Msg(fmt.Sprintf("Received message:\n%s from MQTT topic: %s\n", msg.Payload(), msg.Topic()))
 	}
 	es.received(es.Id, msg.Payload())
-	es.messages <- msg.Payload()
+	es.messages <- rawMessage{topic: msg.Topic(), payload: msg.Payload()}
 }
 
 // Called on successful connection.
@@ -110,7 +110,7 @@ func (es *MqttEventSource) Start(ctx context.Context) error {
 // Initialize pool of workers for decoding raw messages.
 func (es *MqttEventSource) initializeDecodeWorkers() {
 	// Make channels and workers for distributed processing.
-	es.messages = make(chan []byte, 100)
+	es.messages = make(chan rawMessage, 100)
 	es.workers = make([]*DecodeWorker, 0)
 	for w := 1; w <= DECODE_WORKER_COUNT; w++ {
 		worker := NewDecodeWorker(w, es.Id, es.Decoder, es.messages, es.decoded, es.failed)

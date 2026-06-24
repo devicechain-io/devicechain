@@ -15,36 +15,49 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
-	kcore "github.com/devicechain-io/dc-microservice/kafka"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
-	"github.com/segmentio/kafka-go"
 )
 
 const (
 	EVENT_RESOLVER_COUNT        = 5   // Number of event resolvers running in parallel
-	KAFKA_BACKLOG_SIZE          = 100 // Number of Kafka messages that can be read and waiting to be processed
-	FAILED_EVENT_BACKLOG_SIZE   = 100 // Number of failed events that can be waiting to push to kafka
-	RESOLVED_EVENT_BACKLOG_SIZE = 100 // Number of resolved events that can be waiting to push to kafka
+	MESSAGE_BACKLOG_SIZE        = 100 // Number of inbound messages that can be read and waiting to be processed
+	FAILED_EVENT_BACKLOG_SIZE   = 100 // Number of failed events that can be waiting to publish
+	RESOLVED_EVENT_BACKLOG_SIZE = 100 // Number of resolved events that can be waiting to publish
 )
+
+// resolvedItem pairs a resolved event with the tenant it belongs to so the
+// outbound producer can publish to the tenant's subject (the tenant is derived
+// from the inbound subject and must travel with the event across the channel).
+type resolvedItem struct {
+	tenant string
+	event  dmodel.ResolvedEvent
+}
+
+// failedItem pairs a failed event with its tenant for the same reason.
+type failedItem struct {
+	tenant string
+	event  dmodel.FailedEvent
+}
 
 type InboundEventsProcessor struct {
 	Microservice         *core.Microservice
-	InboundEventsReader  kcore.KafkaReader
-	ResolvedEventsWriter kcore.KafkaWriter
-	FailedEventsWriter   kcore.KafkaWriter
+	InboundEventsReader  messaging.MessageReader
+	ResolvedEventsWriter messaging.MessageWriter
+	FailedEventsWriter   messaging.MessageWriter
 	Api                  dmodel.DeviceManagementApi
 
-	messages  chan kafka.Message
-	failed    chan dmodel.FailedEvent
-	resolved  chan dmodel.ResolvedEvent
+	messages  chan messaging.Message
+	failed    chan failedItem
+	resolved  chan resolvedItem
 	resolvers []*EventResolver
 
 	lifecycle core.LifecycleManager
 }
 
 // Create a new inbound events processor.
-func NewInboundEventsProcessor(ms *core.Microservice, inbound kcore.KafkaReader, resolved kcore.KafkaWriter,
-	failed kcore.KafkaWriter, callbacks core.LifecycleCallbacks, api dmodel.DeviceManagementApi) *InboundEventsProcessor {
+func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageReader, resolved messaging.MessageWriter,
+	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api dmodel.DeviceManagementApi) *InboundEventsProcessor {
 	iproc := &InboundEventsProcessor{
 		Microservice:         ms,
 		InboundEventsReader:  inbound,
@@ -61,21 +74,22 @@ func NewInboundEventsProcessor(ms *core.Microservice, inbound kcore.KafkaReader,
 
 // Handle case where event failed to process.
 func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) bool {
-	failed, more := <-iproc.failed
-	log.Debug().Msg(fmt.Sprintf("received failed event: %s", failed.Message))
+	item, more := <-iproc.failed
 	if more {
+		log.Debug().Str("message", item.event.Message).Msg("received failed event")
+
 		// Marshal event message to protobuf.
-		bytes, err := proto.MarshalFailedEvent(&failed)
+		bytes, err := proto.MarshalFailedEvent(&item.event)
 		if err != nil {
 			log.Error().Err(err).Msg("unable to marshal event to protobuf")
 		}
 
-		// Create and deliver message.
-		msg := kafka.Message{
-			Key:   []byte(strconv.FormatInt(int64(failed.Reason), 10)),
+		// Create and deliver message on the failed event's tenant subject.
+		msg := messaging.Message{
+			Key:   []byte(strconv.FormatInt(int64(item.event.Reason), 10)),
 			Value: bytes,
 		}
-		err = iproc.FailedEventsWriter.WriteMessages(ctx, msg)
+		err = iproc.FailedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)
 		iproc.FailedEventsWriter.HandleResponse(err)
 		return false
 	} else {
@@ -83,15 +97,22 @@ func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) boo
 	}
 }
 
-// Called when a message can not be unmarshaled to an event.
-func (iproc *InboundEventsProcessor) OnInvalidEvent(err error, msg kafka.Message) {
+// Called when a message can not be unmarshaled to an event. The tenant is
+// re-derived from the message subject (the resolver only reaches this callback
+// after confirming the subject carries a parseable tenant).
+func (iproc *InboundEventsProcessor) OnInvalidEvent(err error, msg messaging.Message) {
+	tenant, ok := messaging.ParseTenantFromSubject(msg.Subject)
+	if !ok {
+		log.Warn().Msg(fmt.Sprintf("Dropping invalid event with no parseable tenant in subject %q", msg.Subject))
+		return
+	}
 	failed := dmodel.NewFailedEvent(uint(proto.FailureReason_Invalid), iproc.Microservice.FunctionalArea,
 		"message could not be parsed", err, msg.Value)
-	iproc.failed <- *failed
+	iproc.failed <- failedItem{tenant: tenant, event: *failed}
 }
 
 // Called when an event can not be resolved.
-func (iproc *InboundEventsProcessor) OnUnresolvedEvent(reason uint, unrez esmodel.UnresolvedEvent, rezerr error) {
+func (iproc *InboundEventsProcessor) OnUnresolvedEvent(tenant string, reason uint, unrez esmodel.UnresolvedEvent, rezerr error) {
 	// Marshal event message to protobuf.
 	bytes, err := esproto.MarshalUnresolvedEvent(&unrez)
 	if err != nil {
@@ -99,23 +120,23 @@ func (iproc *InboundEventsProcessor) OnUnresolvedEvent(reason uint, unrez esmode
 	} else {
 		failed := dmodel.NewFailedEvent(reason, iproc.Microservice.FunctionalArea,
 			"event could not be resolved", rezerr, bytes)
-		iproc.failed <- *failed
+		iproc.failed <- failedItem{tenant: tenant, event: *failed}
 	}
 }
 
 // Handle case where event was successfully resolved.
 func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) bool {
-	resolved, more := <-iproc.resolved
+	item, more := <-iproc.resolved
 	if more {
-		bytes, err := proto.MarshalResolvedEvent(&resolved)
+		bytes, err := proto.MarshalResolvedEvent(&item.event)
 		if err != nil {
 			log.Error().Err(err).Msg("unable to marshal resolved event to protobuf")
 		} else {
-			msg := kafka.Message{
-				Key:   []byte(strconv.FormatInt(int64(resolved.SourceDeviceId), 10)),
+			msg := messaging.Message{
+				Key:   []byte(strconv.FormatInt(int64(item.event.SourceDeviceId), 10)),
 				Value: bytes,
 			}
-			err = iproc.ResolvedEventsWriter.WriteMessages(ctx, msg)
+			err = iproc.ResolvedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)
 			iproc.ResolvedEventsWriter.HandleResponse(err)
 		}
 		return false
@@ -125,16 +146,16 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 }
 
 // Called when an event is successfully resolved.
-func (iproc *InboundEventsProcessor) OnResolvedEvent(events []EventResolutionResults) {
+func (iproc *InboundEventsProcessor) OnResolvedEvent(tenant string, events []EventResolutionResults) {
 	for _, event := range events {
-		iproc.resolved <- *event.Resolved
+		iproc.resolved <- resolvedItem{tenant: tenant, event: *event.Resolved}
 	}
 }
 
 // Initialize pool of workers for resolving events.
 func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Context) {
 	// Make channels and workers for distributed processing.
-	iproc.messages = make(chan kafka.Message, KAFKA_BACKLOG_SIZE)
+	iproc.messages = make(chan messaging.Message, MESSAGE_BACKLOG_SIZE)
 	iproc.resolvers = make([]*EventResolver, 0)
 	for w := 1; w <= EVENT_RESOLVER_COUNT; w++ {
 		resolver := NewEventResolver(w, iproc.Api, iproc.messages,
@@ -146,8 +167,8 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 
 // Initialize outbound processing.
 func (iproc *InboundEventsProcessor) initializeOutboundProcessing(ctx context.Context) {
-	iproc.failed = make(chan dmodel.FailedEvent, FAILED_EVENT_BACKLOG_SIZE)
-	iproc.resolved = make(chan dmodel.ResolvedEvent, RESOLVED_EVENT_BACKLOG_SIZE)
+	iproc.failed = make(chan failedItem, FAILED_EVENT_BACKLOG_SIZE)
+	iproc.resolved = make(chan resolvedItem, RESOLVED_EVENT_BACKLOG_SIZE)
 }
 
 // Initialize component.

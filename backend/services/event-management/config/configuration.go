@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	KAFKA_TOPIC_PERSISTED_EVENTS = "persisted-events"
+	SUBJECT_PERSISTED_EVENTS = "persisted-events"
 )
 
 type EventManagementConfiguration struct {

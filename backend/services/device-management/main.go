@@ -17,7 +17,7 @@ import (
 	esconfig "github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
-	kcore "github.com/devicechain-io/dc-microservice/kafka"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
@@ -27,15 +27,15 @@ var (
 
 	RdbManager     *rdb.RdbManager
 	GraphQLManager *gqlcore.GraphQLManager
-	KakfaManager   *kcore.KafkaManager
+	NatsManager    *messaging.NatsManager
 
 	Api       *model.Api
 	CachedApi *model.CachedApi
 
-	InboundEventsReader    kcore.KafkaReader
+	InboundEventsReader    messaging.MessageReader
 	InboundEventsProcessor *processor.InboundEventsProcessor
-	ResolvedEventsWriter   kcore.KafkaWriter
-	FailedEventsWriter     kcore.KafkaWriter
+	ResolvedEventsWriter   messaging.MessageWriter
+	FailedEventsWriter     messaging.MessageWriter
 )
 
 func main() {
@@ -72,26 +72,24 @@ func parseConfiguration() error {
 	return nil
 }
 
-// Create kafka components used by this microservice.
-func createKafkaComponents(kmgr *kcore.KafkaManager) error {
-	// Create reader for inbound events.
-	ievents, err := kmgr.NewReader(
-		kmgr.NewScopedConsumerGroup(esconfig.KAFKA_TOPIC_INBOUND_EVENTS),
-		kmgr.NewScopedTopic(esconfig.KAFKA_TOPIC_INBOUND_EVENTS))
+// Create messaging components used by this microservice.
+func createNatsComponents(nmgr *messaging.NatsManager) error {
+	// Create reader for inbound events (wildcard across tenants).
+	ievents, err := nmgr.NewReader(esconfig.SUBJECT_INBOUND_EVENTS)
 	if err != nil {
 		return err
 	}
 	InboundEventsReader = ievents
 
 	// Add and initialize resolved events writer.
-	revents, err := kmgr.NewWriter(kmgr.NewScopedTopic(config.KAFKA_TOPIC_RESOLVED_EVENTS))
+	revents, err := nmgr.NewWriter(config.SUBJECT_RESOLVED_EVENTS)
 	if err != nil {
 		return err
 	}
 	ResolvedEventsWriter = revents
 
 	// Add and initialize failed events writer.
-	fevents, err := kmgr.NewWriter(kmgr.NewScopedTopic(config.KAFKA_TOPIC_FAILED_EVENTS))
+	fevents, err := nmgr.NewWriter(config.SUBJECT_FAILED_EVENTS)
 	if err != nil {
 		return err
 	}
@@ -132,9 +130,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Api = model.NewApi(RdbManager)
 	CachedApi = model.NewCachedApi(Api)
 
-	// Create and initialize kafka manager.
-	KakfaManager = kcore.NewKafkaManager(Microservice, core.NewNoOpLifecycleCallbacks(), createKafkaComponents)
-	err = KakfaManager.Initialize(ctx)
+	// Create and initialize nats manager.
+	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
+	err = NatsManager.Initialize(ctx)
 	if err != nil {
 		return err
 	}
@@ -171,8 +169,8 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
-	// Start kafka manager.
-	err = KakfaManager.Start(ctx)
+	// Start nats manager.
+	err = NatsManager.Start(ctx)
 	if err != nil {
 		return err
 	}
@@ -194,8 +192,8 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
-	// Stop kafka manager.
-	err = KakfaManager.Stop(ctx)
+	// Stop nats manager.
+	err = NatsManager.Stop(ctx)
 	if err != nil {
 		return err
 	}
@@ -223,8 +221,8 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		return err
 	}
 
-	// Terminate kafka manager.
-	err = KakfaManager.Terminate(ctx)
+	// Terminate nats manager.
+	err = NatsManager.Terminate(ctx)
 	if err != nil {
 		return err
 	}

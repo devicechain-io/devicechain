@@ -10,20 +10,29 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// rawMessage pairs an inbound transport message's payload with the MQTT topic
+// it arrived on. The topic carries the tenant ("dc/{tenant}/...", ADR-006) which
+// must travel with the payload so the producer can publish to the tenant-scoped
+// subject.
+type rawMessage struct {
+	topic   string
+	payload []byte
+}
+
 // Worker used to decode event payloads.
 type DecodeWorker struct {
 	WorkerId    int
 	SourceId    string
 	Decoder     Decoder
-	RawMessages <-chan []byte
-	Callback    func(string, *model.UnresolvedEvent, interface{})
-	Failed      func(string, []byte, error)
+	RawMessages <-chan rawMessage
+	Callback    func(string, string, *model.UnresolvedEvent, interface{})
+	Failed      func(string, string, []byte, error)
 }
 
 // Create a new decode worker.
-func NewDecodeWorker(workerId int, sourceId string, decoder Decoder, rawMessages <-chan []byte,
-	callback func(string, *model.UnresolvedEvent, interface{}),
-	failed func(string, []byte, error)) *DecodeWorker {
+func NewDecodeWorker(workerId int, sourceId string, decoder Decoder, rawMessages <-chan rawMessage,
+	callback func(string, string, *model.UnresolvedEvent, interface{}),
+	failed func(string, string, []byte, error)) *DecodeWorker {
 	worker := &DecodeWorker{
 		WorkerId:    workerId,
 		SourceId:    sourceId,
@@ -41,11 +50,11 @@ func (wrk *DecodeWorker) Process() {
 		raw, more := <-wrk.RawMessages
 		if more {
 			log.Debug().Msg(fmt.Sprintf("Decode handled by worker id %d", wrk.WorkerId))
-			event, payload, err := wrk.Decoder.Decode(raw)
+			event, payload, err := wrk.Decoder.Decode(raw.payload)
 			if err != nil {
-				wrk.Failed(wrk.SourceId, raw, err)
+				wrk.Failed(wrk.SourceId, raw.topic, raw.payload, err)
 			} else {
-				wrk.Callback(wrk.SourceId, event, payload)
+				wrk.Callback(wrk.SourceId, raw.topic, event, payload)
 			}
 		} else {
 			log.Debug().Msg("Decode worker received shutdown signal.")
