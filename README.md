@@ -9,7 +9,7 @@ fleets — covering device lifecycle, telemetry ingestion, command & control,
 organizational modeling, and multi-tenancy — and exposes everything through a
 GraphQL API.
 
-It is a ground-up rebuild of the [SiteWhere](https://sitewhere.io) IoT platform
+It is a ground-up rebuild of the [SiteWhere](https://github.com/sitewhere/sitewhere) IoT platform
 that keeps the proven domain model while replacing the heavy Java/Spring stack with
 efficient, operationally simple microservices that run on any Kubernetes cluster.
 The goal is a self-hosted, full-featured platform that is operationally simple,
