@@ -191,11 +191,68 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	sqldb.SetMaxIdleConns(1)
-	sqldb.SetMaxOpenConns(int(pgconf.MaxConnections))
+
+	// Size the connection pool (ADR-022 review E4). The pool must comfortably
+	// exceed the owning service's per-service worker count (currently 5
+	// persistence/projection workers) plus the GraphQL server's request
+	// concurrency, otherwise workers and GraphQL contend for the same handles and
+	// per-pod throughput is capped. We deliberately do NOT validate
+	// worker_count <= max_connections here: the worker counts live in the service
+	// processors, not in this shared package.
+	//
+	// Pool sizing now comes from the per-microservice config (MaxOpen/MaxIdle).
+	// The legacy instance-level PostgresConfig.MaxConnections (default 5) is
+	// subsumed by this and no longer drives the pool; it is left on the struct
+	// for any other reader but does not size the pool.
+	maxOpen, maxIdle := poolSizing(rdb.MicroserviceConfig.MaxOpenConnections,
+		rdb.MicroserviceConfig.MaxIdleConnections)
+	sqldb.SetMaxOpenConns(maxOpen)
+	sqldb.SetMaxIdleConns(maxIdle)
 	sqldb.SetConnMaxLifetime(time.Hour)
 	log.Info().
-		Int32("max_connections", pgconf.MaxConnections).Msg("Created connection pool.")
+		Int("max_open_connections", maxOpen).
+		Int("max_idle_connections", maxIdle).
+		Msg("Created connection pool.")
 
 	return nil
+}
+
+const (
+	// defaultMaxOpenConnections is the per-pod cap on open database connections
+	// when the service does not configure one. It is intentionally larger than
+	// the historical value (5) so the per-service worker pool (5) and the GraphQL
+	// server do not contend for the same handles.
+	defaultMaxOpenConnections = 20
+	// minMaxIdleConnections floors the idle pool so a brief lull does not tear
+	// down every connection only to immediately reopen them (connection thrash).
+	minMaxIdleConnections = 2
+)
+
+// poolSizing resolves the configured open/idle connection counts into the values
+// actually applied to the pool, substituting defaults for unset (zero/negative)
+// values. A zero/unset value falls back to a default rather than being passed
+// through to database/sql, where 0 open means unlimited and 0 idle means "no
+// idle connections" — both of which we want to avoid. MaxIdle is kept close to
+// MaxOpen (not <<) so idle connections are not constantly closed and reopened,
+// and is clamped to never exceed MaxOpen.
+func poolSizing(cfgOpen, cfgIdle int) (open, idle int) {
+	open = cfgOpen
+	if open <= 0 {
+		open = defaultMaxOpenConnections
+	}
+
+	idle = cfgIdle
+	if idle <= 0 {
+		// Default idle to half of open (floored) so it tracks open without
+		// pinning the full pool open, but never below a small floor.
+		idle = open / 2
+		if idle < minMaxIdleConnections {
+			idle = minMaxIdleConnections
+		}
+	}
+	// Idle can never exceed open; database/sql would silently clamp it anyway.
+	if idle > open {
+		idle = open
+	}
+	return open, idle
 }

@@ -17,9 +17,17 @@ instance:
   id: devicechain
   # Whether the chart creates the target namespace (disable if managed elsewhere).
   createNamespace: true
+  # C2 (ADR-022 review): the instance config below carries persistence credentials
+  # (persistence.*.password), so the chart renders it into a *Secret*, not a
+  # ConfigMap, and mounts that Secret at /etc/dci-config. For production, prefer
+  # External Secrets / a pre-created Secret over committing passwords here: set
+  # `existingSecret` to the name of a Secret that already holds the full instance
+  # config JSON under an `instance` key, and the chart will mount it and skip
+  # rendering its own Secret (the `config` block below is then unused).
+  existingSecret: ""
   # Instance-wide configuration mounted at /etc/dci-config/instance and read by
   # every service (infrastructure endpoints + persistence). Rendered verbatim as
-  # JSON; keys are matched case-insensitively to the Go config struct.
+  # JSON into a Secret; keys are matched case-insensitively to the Go config struct.
   config:
     infrastructure:
       redis:
@@ -76,12 +84,69 @@ service:
 metrics:
   enabled: true
 
-# Default pod resource requests/limits (override per area under
-# functionalAreas.<area>.resources).
-resources: {}
+# E7 (ADR-022 review): default pod resource requests/limits (override per area
+# under functionalAreas.<area>.resources). These are lightweight Go services
+# (~50MB baseline per the mission); requests size for scheduling, limits cap the
+# blast radius. requests are mandatory (values.schema.json enforces non-empty
+# resources) so pods land in the Burstable/Guaranteed QoS class, not BestEffort.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
 
 # Replica count per area (override per area under functionalAreas.<area>.replicas).
 replicas: 1
+
+# E7: a dedicated ServiceAccount per release, referenced by every Deployment, in
+# place of the namespace `default` SA. The data-plane services never call the
+# Kubernetes API, so the token is not mounted.
+serviceAccount:
+  create: true
+  # Defaults to "dc-<instance.id>" when empty.
+  name: ""
+  automountToken: false
+
+# E7: PodDisruptionBudget per enabled area so a node drain cannot evict every
+# replica at once. Only emitted for areas with replicas > 1 (a PDB on a single
+# replica would block voluntary drains). Set exactly one of minAvailable /
+# maxUnavailable.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: ""
+  maxUnavailable: 1
+
+# E7: startupProbe (on /readyz) gives a slow JWKS/DB cold start up to
+# periodSeconds * failureThreshold to come up before liveness can fire; the
+# liveness probe keeps a raised failureThreshold so a transient blip won't kill a
+# healthy pod. Readiness still gates Service endpoints on /readyz.
+startupProbe:
+  periodSeconds: 5
+  failureThreshold: 30
+livenessProbe:
+  failureThreshold: 6
+
+# C3 (ADR-022 review): hardened, values-driven securityContext. Defaults run the
+# workload as the distroless nonroot uid (65532) with a read-only rootfs and no
+# Linux capabilities — strictly matching the operator's own manager.yaml. The
+# service images are `FROM scratch` static binaries that read config from mounts
+# and write nothing to the rootfs, so these defaults are safe; relax them here if
+# an operator builds images that need to run as root or write to disk.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
 
 # Per-functional-area settings. `config` defaults to {} → the service applies its
 # own typed defaults at load (ADR-022 decision 1). Override `image`, `replicas`,

@@ -1,10 +1,29 @@
-{{/* Instance-wide config mounted at /etc/dci-config/instance on every pod. */}}
+{{/*
+Instance-wide config mounted at /etc/dci-config/instance on every pod.
+
+C2 (ADR-022 review): the instance config carries persistence credentials
+(persistence.rdb/tsdb.configuration.password) and infrastructure endpoints. It is
+consumed by the core as a single JSON document read from a file
+(backend/core/core/microservice.go reads /etc/dci-config/instance), so it is
+rendered into a Secret rather than a ConfigMap — credentials in a ConfigMap are
+readable by anyone with configmap get/list and leak into `helm get values`/GitOps
+diffs. The Deployment mounts this Secret at the same /etc/dci-config path, so the
+switch is transparent to the app.
+
+For production, prefer External Secrets / a pre-created Secret over committing
+credentials to values: set instance.existingSecret to the name of a Secret that
+already holds the `instance` key (the full instance-config JSON), and this
+template is skipped.
+*/}}
+{{- if not .Values.instance.existingSecret }}
 apiVersion: v1
-kind: ConfigMap
+kind: Secret
 metadata:
-  name: {{ include "devicechain.instanceConfigMap" . }}
+  name: {{ include "devicechain.instanceConfigSecret" . }}
   namespace: {{ .Values.instance.id }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
-data:
+type: Opaque
+stringData:
   instance: {{ .Values.instance.config | toJson | quote }}
+{{- end }}

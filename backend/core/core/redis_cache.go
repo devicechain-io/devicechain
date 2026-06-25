@@ -5,6 +5,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -53,4 +54,14 @@ func (rc *RedisCache) Set(ctx context.Context, key string, value interface{}, tt
 // Get an entry from the cache.
 func (rc *RedisCache) Get(ctx context.Context, key string, callback func(*cache.Cache, string)) {
 	callback(rc.Cache, rc.prefix+key)
+}
+
+// Delete evicts an entry from the cache, tolerating a miss. Used to invalidate a
+// cached entry on mutation so a stale value is not served (bounded further by the
+// cache TTL).
+func (rc *RedisCache) Delete(ctx context.Context, key string) error {
+	if err := rc.Cache.Delete(ctx, rc.prefix+key); err != nil && !errors.Is(err, cache.ErrCacheMiss) {
+		return err
+	}
+	return nil
 }

@@ -32,6 +32,10 @@
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "createNamespace": { "type": "boolean" },
+        "existingSecret": {
+          "type": "string",
+          "description": "C2: name of a pre-created Secret (e.g. External Secrets) holding the instance-config JSON under an `instance` key. When set, the chart mounts it and renders no Secret of its own."
+        },
         "config": { "type": "object" }
       }
     },
@@ -61,6 +65,53 @@
       "description": "Prometheus scrape integration. enabled renders a ServiceMonitor per area (scraping /metrics on the graphql port); requires the Prometheus Operator CRDs."
     },
     "replicas": { "type": "integer", "minimum": 0 },
+    "resources": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "E7: default container resources; non-empty so pods are not BestEffort QoS.",
+      "properties": {
+        "requests": { "type": "object", "minProperties": 1 },
+        "limits": { "type": "object" }
+      },
+      "required": ["requests"]
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "automountToken": { "type": "boolean" }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "type": ["integer", "string"] },
+        "maxUnavailable": { "type": ["integer", "string"] }
+      }
+    },
+    "startupProbe": {
+      "type": "object",
+      "properties": {
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "livenessProbe": {
+      "type": "object",
+      "properties": {
+        "failureThreshold": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "podSecurityContext": {
+      "type": "object",
+      "description": "C3: pod-level securityContext; hardened defaults run the workload as a non-zero uid with RuntimeDefault seccomp."
+    },
+    "securityContext": {
+      "type": "object",
+      "description": "C3: container-level securityContext; hardened defaults drop all capabilities and use a read-only rootfs."
+    },
     "functionalAreas": {
       "type": "object",
       "additionalProperties": {

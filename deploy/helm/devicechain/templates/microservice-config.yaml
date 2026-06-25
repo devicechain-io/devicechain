@@ -4,7 +4,6 @@ each pod reads its own /etc/dct-config/{functional-area}. An area with no config
 override renders "{}" and the service applies its typed defaults at load
 (ADR-022 decision 1).
 */}}
-{{- $root := . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -13,7 +12,4 @@ metadata:
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
 data:
-  {{- range $area := splitList "," (include "devicechain.enabledAreas" .) }}
-  {{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
-  {{ $area }}: {{ get $areaCfg "config" | default dict | toJson | quote }}
-  {{- end }}
+  {{- include "devicechain.microserviceConfig" . | nindent 2 }}

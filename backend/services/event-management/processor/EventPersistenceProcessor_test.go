@@ -181,7 +181,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestInvalidEvent() {
 	badmsg := messaging.Message{Subject: testTenantSubject, Key: key, Value: value}
 
 	// Test event flow.
-	suite.API.Mock.On("CreateLocationEvent", mock.Anything, mock.Anything).Return(&model.LocationEvent{}, nil)
+	suite.API.Mock.On("CreateLocationEvents", mock.Anything, mock.Anything).Return([]*model.LocationEvent{}, nil)
 	suite.FailedEventFlowFor(badmsg)
 }
 
@@ -215,7 +215,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleLocationEvent() {
 	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes}
 
 	// Test event flow.
-	suite.API.Mock.On("CreateLocationEvent", mock.Anything, mock.Anything).Return(&model.LocationEvent{}, nil)
+	suite.API.Mock.On("CreateLocationEvents", mock.Anything, mock.Anything).Return([]*model.LocationEvent{{}}, nil)
 	suite.SuccessEventFlowFor(msg)
 }
 
@@ -231,7 +231,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleMeasurementEvent() {
 	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes}
 
 	// Test event flow.
-	suite.API.Mock.On("CreateMeasurementEvent", mock.Anything, mock.Anything).Return(&model.MeasurementEvent{}, nil)
+	suite.API.Mock.On("CreateMeasurementEvents", mock.Anything, mock.Anything).Return([]*model.MeasurementEvent{{}, {}}, nil)
 	suite.SuccessEventFlowFor(msg)
 }
 
@@ -247,7 +247,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleAlertEvent() {
 	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes}
 
 	// Test event flow.
-	suite.API.Mock.On("CreateAlertEvent", mock.Anything, mock.Anything).Return(&model.AlertEvent{}, nil)
+	suite.API.Mock.On("CreateAlertEvents", mock.Anything, mock.Anything).Return([]*model.AlertEvent{{}}, nil)
 	suite.SuccessEventFlowFor(msg)
 }
 
