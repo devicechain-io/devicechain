@@ -12,5 +12,6 @@ var (
 		NewInitialSchema(),
 		NewMetricDefinitionSchema(),
 		NewEntityAttributeSchema(),
+		NewProvisioningProfileSchema(),
 	}
 )
