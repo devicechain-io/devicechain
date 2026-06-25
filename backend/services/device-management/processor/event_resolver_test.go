@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -142,6 +143,64 @@ func (suite *EventResolverTestSuite) TestUnknownDeviceToken() {
 
 	assert.Error(suite.T(), err)
 	assert.Equal(suite.T(), uint(dmproto.FailureReason_DeviceNotFound), reason)
+}
+
+// A measurement event for the given key/value.
+func measurementEvent(key, value string) *esmodel.UnresolvedEvent {
+	return &esmodel.UnresolvedEvent{
+		Device:    "TEST-123",
+		EventType: esmodel.Measurement,
+		Payload: &esmodel.UnresolvedMeasurementsPayload{
+			Entries: []esmodel.UnresolvedMeasurementsEntry{
+				{Measurements: map[string]string{key: value}},
+			},
+		},
+	}
+}
+
+// A measurement violating a declared metric definition routes to the dead-letter
+// path (FailureReason_Invalid) before any relationship fan-out is attempted.
+func (suite *EventResolverTestSuite) TestMeasurementValidationRejects() {
+	def := &dmodel.MetricDefinition{MetricKey: "temp", DataType: "DOUBLE",
+		MaxValue: sql.NullFloat64{Float64: 100, Valid: true}}
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
+
+	_, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
+		context.Background(), deviceWithToken("TEST-123"), measurementEvent("temp", "150"))
+
+	assert.Error(suite.T(), err)
+	assert.Equal(suite.T(), uint(dmproto.FailureReason_Invalid), reason)
+	suite.API.AssertNotCalled(suite.T(), "EntityRelationships")
+}
+
+// A conforming measurement passes validation and proceeds to fan-out (here, no
+// tracked relationships, so zero resolved events and no failure).
+func (suite *EventResolverTestSuite) TestMeasurementValidationPasses() {
+	def := &dmodel.MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
+	suite.API.Mock.On("EntityRelationships").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
+
+	results, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
+		context.Background(), deviceWithToken("TEST-123"), measurementEvent("temp", "42"))
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint(0), reason)
+	assert.Empty(suite.T(), results)
+}
+
+// A device type that declares no metric definitions skips validation entirely
+// (an undeclared/untyped fleet is unaffected).
+func (suite *EventResolverTestSuite) TestMeasurementNoDefinitionsSkipsValidation() {
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
+	suite.API.Mock.On("EntityRelationships").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
+
+	_, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
+		context.Background(), deviceWithToken("TEST-123"), measurementEvent("anything", "not-a-number"))
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint(0), reason)
 }
 
 func TestEventResolverTestSuite(t *testing.T) {

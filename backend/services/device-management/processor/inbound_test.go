@@ -275,6 +275,9 @@ func (suite *InboundEventsProcessorTestSuite) SuccessEventFlowFor(msg messaging.
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
 	suite.Resolved.Mock.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
 	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{buildDevice()}, nil)
+	// No declared metric definitions, so a measurement event skips validation
+	// (ADR-016) and flows through as before.
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	suite.API.Mock.On("EntityRelationships", mock.Anything, mock.Anything).Return(&dmodel.EntityRelationshipSearchResults{
 		Results: []dmodel.EntityRelationship{*buildDeviceRelationship()},
 	}, nil)
