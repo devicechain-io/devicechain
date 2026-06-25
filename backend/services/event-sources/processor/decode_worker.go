@@ -10,12 +10,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// rawMessage pairs an inbound transport message's payload with the MQTT topic
-// it arrived on. The topic carries the tenant ("dc/{tenant}/...", ADR-006) which
-// must travel with the payload so the producer can publish to the tenant-scoped
-// subject.
+// rawMessage pairs an inbound transport message's payload with the tenant it
+// belongs to. The tenant is derived by the source from its own addressing (an
+// MQTT topic "dc/{tenant}/...", an HTTP path "/dc/{tenant}/...", ADR-006) before
+// the payload is enqueued, so it travels with the payload to the producer, which
+// publishes to the tenant-scoped subject.
 type rawMessage struct {
-	topic   string
+	tenant  string
 	payload []byte
 }
 
@@ -52,9 +53,9 @@ func (wrk *DecodeWorker) Process() {
 			log.Debug().Msg(fmt.Sprintf("Decode handled by worker id %d", wrk.WorkerId))
 			event, payload, err := wrk.Decoder.Decode(raw.payload)
 			if err != nil {
-				wrk.Failed(wrk.SourceId, raw.topic, raw.payload, err)
+				wrk.Failed(wrk.SourceId, raw.tenant, raw.payload, err)
 			} else {
-				wrk.Callback(wrk.SourceId, raw.topic, event, payload)
+				wrk.Callback(wrk.SourceId, raw.tenant, event, payload)
 			}
 		} else {
 			log.Debug().Msg("Decode worker received shutdown signal.")

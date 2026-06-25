@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/rs/zerolog/log"
@@ -119,6 +118,13 @@ func buildEventSources() error {
 				return err
 			}
 			created = append(created, mqtt)
+		case processor.TYPE_HTTP:
+			http, err := processor.NewHttpEventSource(source.Id, source.Configuration,
+				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed)
+			if err != nil {
+				return err
+			}
+			created = append(created, http)
 		default:
 			return fmt.Errorf("unkown event source type: %s", source.Type)
 		}
@@ -133,32 +139,19 @@ func onMessageReceived(source string, raw []byte) {
 	MessagesCounter.WithLabelValues(source).Inc()
 }
 
-// tenantFromMqttTopic derives the tenant from an inbound MQTT topic of the form
-// "dc/{tenant}/..." (ADR-006): the tenant is the second of at least three
-// non-empty slash-separated segments. Parsed directly (no whole-string rewrite)
-// since this runs per inbound message.
-func tenantFromMqttTopic(topic string) (string, bool) {
-	parts := strings.SplitN(topic, "/", 3)
-	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return "", false
-	}
-	return parts[1], true
-}
-
-// Called by event sources when an event is successfully decoded.
-func onEventDecoded(source string, mqttTopic string, event *model.UnresolvedEvent, payload interface{}) {
+// Called by event sources when an event is successfully decoded. The tenant is
+// derived by the source from its own addressing (MQTT topic / HTTP path) before
+// the event reaches here; an empty tenant cannot be published to a tenant-scoped
+// subject, so the event is dropped (fail-closed) rather than published unscoped.
+func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{}) {
 	// Increment counter for metrics.
 	DecodedCounter.WithLabelValues(source).Inc()
 
 	event.Source = source
 	event.Payload = payload
 
-	// Derive the per-message tenant from the inbound MQTT topic. Without a
-	// parseable tenant the message cannot be published to a tenant-scoped
-	// subject, so it is dropped (fail-closed) rather than published unscoped.
-	tenant, ok := tenantFromMqttTopic(mqttTopic)
-	if !ok {
-		log.Warn().Msg(fmt.Sprintf("Dropping event with no parseable tenant in MQTT topic %q", mqttTopic))
+	if tenant == "" {
+		log.Warn().Msg(fmt.Sprintf("Dropping decoded event from source %q with no tenant", source))
 		return
 	}
 	ctx := core.WithTenant(context.Background(), tenant)
@@ -179,15 +172,15 @@ func onEventDecoded(source string, mqttTopic string, event *model.UnresolvedEven
 }
 
 // Handle failed decoding.
-func onEventDecodeFailed(source string, mqttTopic string, raw []byte, err error) {
+func onEventDecodeFailed(source string, tenant string, raw []byte, err error) {
 	// Increment counter for metrics.
 	FailedDecodeCounter.WithLabelValues(source).Inc()
 
-	// A message that could not even be decoded still carries its tenant in the
-	// MQTT topic; without one it cannot be scoped, so it is dropped fail-closed.
-	tenant, ok := tenantFromMqttTopic(mqttTopic)
-	if !ok {
-		log.Warn().Msg(fmt.Sprintf("Dropping failed-decode message with no parseable tenant in MQTT topic %q", mqttTopic))
+	// A message that could not be decoded is still routed to the failed-decode
+	// subject for the originating tenant; without a tenant it cannot be scoped, so
+	// it is dropped fail-closed.
+	if tenant == "" {
+		log.Warn().Msg(fmt.Sprintf("Dropping failed-decode message from source %q with no tenant", source))
 		return
 	}
 	ctx := core.WithTenant(context.Background(), tenant)
