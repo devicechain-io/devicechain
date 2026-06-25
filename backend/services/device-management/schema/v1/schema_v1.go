@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -67,7 +68,30 @@ type DeviceType struct {
 	rdb.BrandedEntity
 	rdb.MetadataEntity
 
-	Devices []Device
+	Devices           []Device
+	MetricDefinitions []MetricDefinition
+}
+
+// MetricDefinition is a typed, unit-bearing metric declared on a device profile
+// (the DeviceType entity, ADR-016). The (device_type_id, metric_key) lookup index
+// is unique so a profile cannot declare the same key twice; tenant_id (from the
+// embedded TenantScoped) is enforced by the app-layer tenant scope.
+type MetricDefinition struct {
+	gorm.Model
+	rdb.TenantScoped
+	rdb.TokenReference
+	rdb.NamedEntity
+	rdb.MetadataEntity
+
+	DeviceTypeId uint `gorm:"not null;index:idx_metric_definition_key,unique,priority:1"`
+	DeviceType   *DeviceType
+	MetricKey    string `gorm:"not null;size:128;index:idx_metric_definition_key,unique,priority:2"`
+	DataType     string `gorm:"not null;size:16"`
+	Unit         sql.NullString
+	MinValue     sql.NullFloat64
+	MaxValue     sql.NullFloat64
+	Enum         *datatypes.JSON
+	Descriptor   sql.NullString
 }
 
 // Represents a device.

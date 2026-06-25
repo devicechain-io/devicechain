@@ -28,7 +28,7 @@ func NewInitialSchema() *gormigrate.Migration {
 			// One uniform EntityRelationship edge table + EntityRelationshipType
 			// replace the per-family relationship/relationship-type tables (ADR-013).
 			return tx.AutoMigrate(
-				&v1.Device{}, &v1.DeviceType{}, &v1.DeviceGroup{}, &v1.DeviceCredential{},
+				&v1.Device{}, &v1.DeviceType{}, &v1.MetricDefinition{}, &v1.DeviceGroup{}, &v1.DeviceCredential{},
 				&v1.AssetType{}, &v1.Asset{}, &v1.AssetGroup{},
 				&v1.CustomerType{}, &v1.Customer{}, &v1.CustomerGroup{},
 				&v1.AreaType{}, &v1.Area{}, &v1.AreaGroup{},
@@ -37,6 +37,7 @@ func NewInitialSchema() *gormigrate.Migration {
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return dropTables(tx, []string{
+				"metric_definitions",
 				"device_credentials",
 				"entity_attributes",
 				"entity_relationships", "entity_relationship_types",

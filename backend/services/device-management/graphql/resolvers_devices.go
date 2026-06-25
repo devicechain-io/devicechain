@@ -75,6 +75,25 @@ func (r *DeviceTypeResolver) Metadata() *string {
 	return util.MetadataStr(r.M.Metadata)
 }
 
+// Metric definitions declared on this device profile (ADR-016).
+func (r *DeviceTypeResolver) MetricDefinitions() ([]*MetricDefinitionResolver, error) {
+	api := r.S.GetApi(r.C)
+	found, err := api.MetricDefinitionsByDeviceType(r.C, r.M.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*MetricDefinitionResolver, 0)
+	for _, md := range found {
+		result = append(result, &MetricDefinitionResolver{
+			M: *md,
+			S: r.S,
+			C: r.C,
+		})
+	}
+	return result, nil
+}
+
 // -----------------------------------
 // Device type search results resolver
 // -----------------------------------

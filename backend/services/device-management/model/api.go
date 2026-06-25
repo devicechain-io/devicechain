@@ -52,4 +52,12 @@ type DeviceManagementApi interface {
 	EntityAttributes(ctx context.Context, criteria EntityAttributeSearchCriteria) (*EntityAttributeSearchResults, error)
 	DeleteEntityAttribute(ctx context.Context, entityType string, entity string, scope string, attrKey string) (bool, error)
 	EntityAttributesByEntity(ctx context.Context, entityType string, entityId uint, scope *string) ([]*EntityAttribute, error)
+
+	// Metric definitions (ADR-016).
+	CreateMetricDefinition(ctx context.Context, request *MetricDefinitionCreateRequest) (*MetricDefinition, error)
+	UpdateMetricDefinition(ctx context.Context, token string, request *MetricDefinitionCreateRequest) (*MetricDefinition, error)
+	MetricDefinitionsById(ctx context.Context, ids []uint) ([]*MetricDefinition, error)
+	MetricDefinitionsByToken(ctx context.Context, tokens []string) ([]*MetricDefinition, error)
+	MetricDefinitions(ctx context.Context, criteria MetricDefinitionSearchCriteria) (*MetricDefinitionSearchResults, error)
+	MetricDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*MetricDefinition, error)
 }
