@@ -6,6 +6,7 @@ package core
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -24,12 +25,16 @@ var authGateRetryInterval = 5 * time.Second
 // processes nothing without a verified-auth capability (preserving the ADR-015
 // fail-closed invariant). Once the validator is fetched the gate opens once and
 // stays open; it never closes again for the life of the process.
+//
+// Reads are lock-free: readiness is the closed state of readyCh and the
+// validator is an atomic pointer, so the request and consume hot paths never
+// contend on a mutex. once makes the open transition happen exactly once.
 type ReadinessGate struct {
-	mu        sync.RWMutex
-	ready     bool
-	validator *auth.Validator
+	once      sync.Once
+	validator atomic.Pointer[auth.Validator]
 	// readyCh is closed exactly once when the gate opens, so WaitReady can block
-	// without polling. It is created at construction and never reassigned.
+	// without polling and Ready can test without a lock. Created at construction
+	// and never reassigned.
 	readyCh chan struct{}
 }
 
@@ -40,17 +45,18 @@ func NewReadinessGate() *ReadinessGate {
 
 // Ready reports whether the gate has opened (auth is live).
 func (g *ReadinessGate) Ready() bool {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.ready
+	select {
+	case <-g.readyCh:
+		return true
+	default:
+		return false
+	}
 }
 
 // Validator returns the live JWT validator, or nil while the gate is still
 // closed. Callers must treat nil as "not yet authenticated" and fail closed.
 func (g *ReadinessGate) Validator() *auth.Validator {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	return g.validator
+	return g.validator.Load()
 }
 
 // MarkReady records the live validator and opens the gate. It is idempotent: the
@@ -59,14 +65,10 @@ func (g *ReadinessGate) Validator() *auth.Validator {
 // and verifies with its own local key) call this directly; others reach it
 // through StartAuthGate once the background fetch succeeds.
 func (g *ReadinessGate) MarkReady(validator *auth.Validator) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.ready {
-		return
-	}
-	g.validator = validator
-	g.ready = true
-	close(g.readyCh)
+	g.once.Do(func() {
+		g.validator.Store(validator)
+		close(g.readyCh)
+	})
 }
 
 // WaitReady blocks until the gate opens or ctx is cancelled. It is the pause
@@ -105,4 +107,15 @@ func (ms *Microservice) StartAuthGate(ctx context.Context, fetch func(context.Co
 			}
 		}
 	}()
+}
+
+// StartInstanceAuthGate is the standard data-plane wiring: it starts the
+// background auth bootstrap against this instance's user-management JWKS
+// endpoint (ADR-022 decision 3). Every fetch-based service uses it; only
+// user-management, whose validator is local, opens the gate synchronously via
+// MarkReady instead.
+func (ms *Microservice) StartInstanceAuthGate(ctx context.Context) {
+	ms.StartAuthGate(ctx, func(ctx context.Context) (*auth.Validator, error) {
+		return auth.FetchValidatorForInstance(ctx, ms.InstanceConfiguration.Infrastructure.UserManagement)
+	})
 }

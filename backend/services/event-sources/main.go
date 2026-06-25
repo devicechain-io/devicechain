@@ -16,7 +16,6 @@ import (
 	"github.com/devicechain-io/dc-event-sources/model"
 	processor "github.com/devicechain-io/dc-event-sources/processor"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
-	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -252,9 +251,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
 	// validator in the background and gate the data plane on readiness rather
 	// than exiting when user-management is briefly unreachable (amends ADR-008).
-	Microservice.StartAuthGate(ctx, func(ctx context.Context) (*auth.Validator, error) {
-		return auth.FetchValidatorForInstance(ctx, Microservice.InstanceConfiguration.Infrastructure.UserManagement)
-	})
+	Microservice.StartInstanceAuthGate(ctx)
 
 	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(), *parsed, providers, Microservice.Readiness)
 	err = GraphQLManager.Initialize(ctx)
