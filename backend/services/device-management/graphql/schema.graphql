@@ -110,6 +110,47 @@ type MetricDefinitionSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# Represents a single current-state attribute for an entity (ADR-012).
+type EntityAttribute implements Model {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    entityType: String!
+    entity: Entity!
+    scope: String!
+    attrKey: String!
+    valueType: String!
+    value: String
+    lastUpdated: String
+}
+
+# Data required to set (upsert) an entity attribute.
+input EntityAttributeSetRequest {
+    entityType: String!
+    entity: String!
+    scope: String!
+    attrKey: String!
+    valueType: String!
+    value: String
+}
+
+# Criteria used when searching for entity attributes.
+input EntityAttributeSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    entityType: String
+    entity: String
+    scope: String
+    attrKeys: [String!]
+}
+
+# Search results returned from entity attribute query.
+type EntityAttributeSearchResults {
+    results: [EntityAttribute!]!
+    pagination: SearchResultsPagination!
+}
+
 # Data required to create a device type.
 input DeviceTypeCreateRequest {
     token: String!
@@ -710,6 +751,8 @@ type Query {
     metricDefinitionsByToken(tokens: [String!]!): [MetricDefinition!]!
     # List metric definitions that meet criteria.
     metricDefinitions(criteria: MetricDefinitionSearchCriteria!): MetricDefinitionSearchResults!
+    # List entity attributes that meet criteria.
+    entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
     # Find devices by unique id.
     devicesById(ids: [ID!]!): [Device!]!
     # Find devices by unique token.
@@ -810,6 +853,10 @@ type Mutation {
     createMetricDefinition(request: MetricDefinitionCreateRequest): MetricDefinition!
     # Update an existing metric definition.
     updateMetricDefinition(token: String!, request: MetricDefinitionCreateRequest): MetricDefinition!
+    # Set (upsert) an entity attribute.
+    setEntityAttribute(request: EntityAttributeSetRequest!): EntityAttribute!
+    # Delete an entity attribute by its natural key.
+    deleteEntityAttribute(entityType: String!, entity: String!, scope: String!, attrKey: String!): Boolean!
     # Create a new device.
     createDevice(request: DeviceCreateRequest): Device!
     # Update an existing device.

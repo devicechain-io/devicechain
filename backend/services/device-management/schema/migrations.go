@@ -11,5 +11,6 @@ var (
 	Migrations = []*gormigrate.Migration{
 		NewInitialSchema(),
 		NewMetricDefinitionSchema(),
+		NewEntityAttributeSchema(),
 	}
 )
