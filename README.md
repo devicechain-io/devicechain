@@ -1,0 +1,213 @@
+# DeviceChain
+
+**A modern, cloud-native IoT Application Enablement Platform built in Go and React.**
+
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+DeviceChain connects, manages, and processes data from large, heterogeneous device
+fleets — covering device lifecycle, telemetry ingestion, command & control,
+organizational modeling, and multi-tenancy — and exposes everything through a
+GraphQL API.
+
+It is a ground-up rebuild of the [SiteWhere](https://sitewhere.io) IoT platform
+that keeps the proven domain model while replacing the heavy Java/Spring stack with
+efficient, operationally simple microservices that run on any Kubernetes cluster.
+The goal is a self-hosted, full-featured platform that is operationally simple,
+architecturally complete, and **unmetered all the way to production scale**.
+
+> **Project status:** DeviceChain is pre-release and under active development. The
+> documentation marks each capability as **available**, **planned**, or **in
+> design**, and this repository is the source of truth for what currently builds
+> and runs.
+
+## Why DeviceChain
+
+- **Go-native microservices** — sub-second startup, a small memory footprint, and
+  single-binary services per functional area.
+- **Operator + CRDs, not shell scripts** — a Kubernetes operator reconciles
+  declarative `DeviceChainInstance` / `DeviceChainTenant` custom resources, so the
+  full tenant roster is version-controllable and GitOps-friendly.
+- **GraphQL-first API** — introspectable and self-documenting; no generated client
+  stubs and no REST surface to maintain.
+- **A lean, fully open-source stack** — NATS JetStream is the entire messaging /
+  MQTT / KV backbone, native JWT handles auth, TimescaleDB is the single data
+  store, and OpenTofu provisions infrastructure. **Two dependencies to run
+  locally: NATS + TimescaleDB.** No Java, Keycloak, Kafka, ZooKeeper, Redis, or
+  Mosquitto.
+- **A uniform relationship model** — device context is a typed relationship graph
+  rather than rigid assignments, so new entity types compose without schema churn.
+- **Self-hosted and unmetered** — Apache-2.0 with no open-core split and no
+  per-device pricing. Device inventory, twin state, command delivery,
+  multi-tenancy, high availability, and SSO are part of the open platform, not a
+  paid tier. Run it inside your own environment with full data ownership.
+
+## Open source, all the way down
+
+DeviceChain ships under **Apache License 2.0 with no open-core split**. There is no
+proprietary "Enterprise" edition that gates production-critical capability —
+clustering / high availability, multi-tenant isolation, persistent command
+delivery, OTA updates, and SSO are all part of the open stack.
+
+Every runtime dependency is **OSI-approved** open source (Apache 2.0, MIT, BSD, MPL
+2.0), and nothing in the stack is encumbered by a source-available or
+business-source license. Because the platform runs entirely inside your own
+environment, the data — and the compliance boundary around it — stays with you:
+no third-party processor to vet and full source auditability.
+
+## Standards and interoperability
+
+DeviceChain favors open, widely-implemented standards over bespoke protocols, so
+existing tools and off-the-shelf device clients work without a special SDK:
+
+- **Device transport** — devices connect over standard **MQTT** (the built-in NATS
+  MQTT server on port 1883); HTTP, CoAP, and WebSocket transports are planned. Any
+  conformant MQTT client works unchanged.
+- **API** — **GraphQL** for all external APIs (one introspectable schema per
+  service). Internal service-to-service communication is asynchronous over NATS.
+- **Authentication** — native **RS256 JSON Web Tokens** (RFC 7519) with a
+  standard **JWKS** endpoint and RFC 7638 key thumbprints for rotation. Device
+  credentials are pluggable, including **X.509** certificates and access tokens.
+- **Enterprise SSO (optional)** — an optional [Dex](https://dexidp.io) sidecar
+  adds **OIDC / SAML / LDAP** without a heavyweight identity provider per tenant.
+- **Observability** — **Prometheus** metrics, and Kubernetes-standard `/healthz`
+  (liveness) and `/readyz` (readiness) probes on every service.
+- **Orchestration & IaC** — runs on any **CNCF-conformant** Kubernetes cluster
+  (EKS, GKE, AKS, K3s, kind), packaged with **Helm**, with infrastructure
+  provisioned by **OpenTofu** (a Terraform-compatible, Linux Foundation project).
+- **Data** — **PostgreSQL** + **TimescaleDB**: a single SQL engine for both
+  relational entity data and time-series events.
+
+## Architecture
+
+DeviceChain is a set of stateless Go microservices over a shared core library,
+coordinated by a Kubernetes operator and connected by NATS JetStream. A **single
+instance serves all tenants** (a shared-microservice model); tenant isolation is
+enforced at the messaging and storage layers rather than by running separate pods
+per tenant.
+
+### Core services
+
+| Service | Responsibility |
+|---|---|
+| **event-sources** | Inbound device transports. Decodes raw messages and publishes them onto the pipeline. |
+| **device-management** | Devices, device profiles, the typed relationship graph, and event resolution. |
+| **event-management** | Persists resolved events to TimescaleDB and serves time-series queries over GraphQL. |
+| **user-management** | Users, roles, and JWT issuance / validation (JWKS). |
+| **device-state** | Live last-known-state projection per device (presence, latest location and measurements). |
+| **command-delivery** | Persistent, two-way command dispatch to devices. |
+| **operator** | A controller-runtime operator reconciling `DeviceChainInstance` / `DeviceChainTenant` resources. |
+
+### The backbone
+
+- **NATS JetStream** is the single backbone for asynchronous messaging, the MQTT
+  ingress, and key-value caching / locking — no separate Kafka, Redis, or MQTT
+  broker.
+- **TimescaleDB** (PostgreSQL + the TimescaleDB extension) is the single data
+  store for both relational entity data and time-series events. Events live in
+  hypertables with compression and continuous aggregates.
+
+### The event pipeline
+
+```
+device → MQTT/NATS → event-sources → (decoded event)
+       → device-management → (resolved event: device + relationship context attached)
+       → event-management → TimescaleDB
+```
+
+During resolution, device-management looks up the device's **tracked**
+relationships and denormalizes them onto each event as index dimensions, so
+downstream queries like "every reading for Building 7" resolve without joins.
+
+### Deployment model
+
+Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned by **OpenTofu** at
+cluster-creation time. The **operator** assumes that infrastructure exists and is
+responsible only for materializing DeviceChain workloads and maintaining their
+configuration — keeping cluster bootstrapping out of application code.
+
+Each service loads its configuration into a typed schema and **fails closed**: an
+unknown key, a wrong type, or an invalid value is rejected at startup rather than
+silently ignored.
+
+## Domain model
+
+DeviceChain models the physical world with a small set of composable concepts. The
+defining choice is that device *context* is expressed as a **typed relationship
+graph** rather than a fixed assignment record:
+
+- **Device** — an instance of a device profile; the thing that connects and reports.
+- **Device Profile** — shared configuration for a class of devices (transport,
+  provisioning, alarm rules, OTA targets, processing routing).
+- **Asset** — the real-world thing a device monitors (Device / Person / Hardware).
+- **Area** — a spatial/organizational location, optionally with polygon boundaries
+  and zones; areas nest into hierarchies.
+- **Customer** — an organizational owner; customers also nest into hierarchies.
+- **Groups** — named collections of any of the above, with role-tagged membership.
+
+Entities are addressed uniformly by **entity type + id**, and connected by
+**typed, directed relationships**. A relationship type carries a `Tracked` flag
+that selects which relationships are denormalized onto events for indexing — so a
+device can relate to many customers, areas, assets, or even other devices at once,
+and context can evolve without schema migrations.
+
+DeviceChain also distinguishes **current state** from **history**: append-only
+**events** in TimescaleDB hypertables, versus key-value **attributes** in three
+scopes — `CLIENT` (device-reported), `SERVER` (platform-only), and `SHARED`
+(platform-set, device-readable; the channel for remote config and OTA).
+
+## Multi-tenancy
+
+A single shared set of microservices serves all tenants. Isolation is enforced
+where it matters:
+
+- **Storage** — every tenant-owned row carries a `tenant_id`, and a central,
+  **fail-closed** database scope applies a `WHERE tenant_id = …` predicate to every
+  read and stamps it on every write. A tenant-scoped query with no tenant in
+  context is rejected.
+- **Messaging** — subjects are scoped per tenant (`{instance}.{tenant}.{suffix}`).
+- **Auth** — the per-request tenant comes from the caller's verified JWT tenant
+  claim; the per-message tenant is derived from the messaging subject.
+
+Adding a tenant is a declarative operation — create a `DeviceChainTenant` resource
+and the operator reconciles it. Tenants do **not** get their own pods.
+
+## Tech stack
+
+| Area | Choice |
+|---|---|
+| **Backend** | Go 1.26+ (Go Workspaces), `net/http` + graph-gophers/graphql-go, GORM |
+| **Frontend** | TypeScript, React (hooks), Vite, TailwindCSS, Shadcn/ui, Apollo Client |
+| **Messaging / KV / MQTT** | NATS JetStream |
+| **Data** | PostgreSQL 17+ with TimescaleDB Community Edition |
+| **Auth** | Native RS256 JWT + JWKS; optional Dex for OIDC/SAML/LDAP |
+| **Orchestration** | Kubernetes (controller-runtime operator), Helm |
+| **Infrastructure as Code** | OpenTofu |
+| **Observability** | Prometheus, zerolog |
+
+Minimum to run locally: a NATS server (a single ~10MB binary) and TimescaleDB
+(via Docker). No Java, Keycloak, Kafka, ZooKeeper, Redis, or Mosquitto.
+
+## Repository layout
+
+```
+backend/    Go monorepo (Go Workspaces)
+  core/       shared library — entity, auth, messaging, config, rdb, graphql
+  services/   microservices — device-management, user-management, event-management,
+              event-sources, device-state, command-delivery
+  k8s/        Kubernetes operator (controller-runtime)
+  cli/        command-line tooling
+frontend/   React + TypeScript management UI
+deploy/     Helm charts
+docs/       Docusaurus documentation site
+```
+
+## Documentation
+
+The [`docs/`](docs/) directory is a Docusaurus site covering concepts
+(architecture, domain model, multi-tenancy), deployment, and guides. See
+[`docs/docs/intro.md`](docs/docs/intro.md) to start.
+
+## License
+
+DeviceChain is licensed under the **Apache License 2.0**. See [LICENSE](LICENSE)
+and [NOTICE](NOTICE). Copyright is held by **The DeviceChain Authors**.

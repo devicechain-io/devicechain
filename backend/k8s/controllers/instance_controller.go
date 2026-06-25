@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	corev1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"github.com/devicechain-io/dc-k8s/functionalarea"
 )
 
 const (
@@ -139,6 +140,22 @@ func (r *InstanceReconciler) assureInstanceConfigMap(ctx context.Context, instan
 // Reconcile the set of shared microservice deployments for an instance against
 // the microservice configuration catalog (cache-backed list).
 func (r *InstanceReconciler) reconcileSharedMicroservices(ctx context.Context, instance *corev1beta1.Instance) error {
+	// Resolve and validate which functional areas this instance deploys (ADR-022
+	// decision 2): a named profile or an explicit set, gated so a service is
+	// never stamped without its hard dependencies enabled.
+	explicit := make([]functionalarea.FunctionalArea, 0, len(instance.Spec.EnabledFunctionalAreas))
+	for _, area := range instance.Spec.EnabledFunctionalAreas {
+		explicit = append(explicit, functionalarea.FunctionalArea(area))
+	}
+	enabled, err := functionalarea.ResolveAndValidate(instance.Spec.Profile, explicit)
+	if err != nil {
+		return fmt.Errorf("invalid functional-area selection for instance %q: %w", instance.ObjectMeta.Name, err)
+	}
+	enabledSet := make(map[string]bool, len(enabled))
+	for _, area := range enabled {
+		enabledSet[string(area)] = true
+	}
+
 	catalog := &corev1beta1.MicroserviceConfigurationList{}
 	if err := r.List(ctx, catalog); err != nil {
 		return err
@@ -146,6 +163,10 @@ func (r *InstanceReconciler) reconcileSharedMicroservices(ctx context.Context, i
 
 	for i := range catalog.Items {
 		msc := &catalog.Items[i]
+		// Deploy only the functional areas this instance has enabled.
+		if !enabledSet[msc.Spec.FunctionalArea] {
+			continue
+		}
 		if err := r.assureMicroservice(ctx, instance, msc); err != nil {
 			return err
 		}
