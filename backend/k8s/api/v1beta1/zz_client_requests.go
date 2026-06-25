@@ -37,12 +37,3 @@ type TenantGetRequest struct {
 	InstanceId string
 	TenantId   string
 }
-
-// ----------------------------------
-// Microservice Configuration Catalog
-// ----------------------------------
-
-// Information required to get a microservice configuration.
-type MicroserviceConfigurationGetRequest struct {
-	Id string
-}

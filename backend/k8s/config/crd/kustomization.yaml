@@ -5,7 +5,6 @@ resources:
 - bases/core.devicechain.io_instances.yaml
 - bases/core.devicechain.io_tenants.yaml
 - bases/core.devicechain.io_instanceconfigurations.yaml
-- bases/core.devicechain.io_microserviceconfigurations.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patchesStrategicMerge:

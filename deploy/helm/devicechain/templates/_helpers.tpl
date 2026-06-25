@@ -86,3 +86,18 @@ encoded — pub/sub (ADR-003) makes an absent peer safe, so only hard edges gate
 {{- define "devicechain.microserviceConfigMap" -}}
 {{- printf "dct-%s-config" .Values.instance.id -}}
 {{- end -}}
+
+{{/* Identifying labels for an instance-scoped resource (namespace, ConfigMaps). */}}
+{{- define "devicechain.instanceLabels" -}}
+devicechain.io/instance: {{ .Values.instance.id }}
+{{- end -}}
+
+{{/*
+Identifying labels for a per-functional-area resource (Deployment/Service).
+Takes a dict {root, area}. These are stable (instance + area only), so the same
+set is safe for both metadata labels and selector matchLabels.
+*/}}
+{{- define "devicechain.areaLabels" -}}
+devicechain.io/instance: {{ .root.Values.instance.id }}
+devicechain.io/functional-area: {{ .area }}
+{{- end -}}

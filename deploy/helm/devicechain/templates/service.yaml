@@ -8,12 +8,10 @@ metadata:
   name: {{ $area }}
   namespace: {{ $root.Values.instance.id }}
   labels:
-    devicechain.io/instance: {{ $root.Values.instance.id }}
-    devicechain.io/functional-area: {{ $area }}
+    {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 4 }}
 spec:
   selector:
-    devicechain.io/instance: {{ $root.Values.instance.id }}
-    devicechain.io/functional-area: {{ $area }}
+    {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 4 }}
   ports:
     - name: graphql
       protocol: TCP
