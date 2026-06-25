@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -20,7 +19,6 @@ type RdbManager struct {
 	Microservice       *core.Microservice
 	Database           *gorm.DB
 	Migrations         []*gormigrate.Migration
-	RedisCaches        map[string]*core.RedisCache
 	InstanceConfig     config.DatastoreConfiguration
 	MicroserviceConfig config.MicroserviceDatastoreConfiguration
 
@@ -34,7 +32,6 @@ func NewRdbManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
 	rdb := &RdbManager{
 		Microservice:       ms,
 		Migrations:         migrations,
-		RedisCaches:        make(map[string]*core.RedisCache),
 		InstanceConfig:     icfg,
 		MicroserviceConfig: cfg,
 	}
@@ -98,18 +95,6 @@ func (rdb *RdbManager) ListOf(ctx context.Context, mdl interface{}, filters func
 		TotalRecords: total,
 	}
 	return result, srpag
-}
-
-// Create a new redis cache with the given settings.
-func (rdb *RdbManager) NewRedisCache(name string, size int, ttl time.Duration) *core.RedisCache {
-	created := core.NewRedisCache(*rdb.Microservice.Redis, name, size, ttl)
-	rdb.RedisCaches[name] = created
-	return created
-}
-
-// Get a redis cache by name.
-func (rdb *RdbManager) GetRedisCache(name string) *core.RedisCache {
-	return rdb.RedisCaches[name]
 }
 
 // Initialize component.

@@ -11,8 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Startup retry policy for infrastructure connects (Redis, Postgres, NATS
-// stream). A cluster restart or rollout often brings a microservice up a few
+// Startup retry policy for infrastructure connects (Postgres, NATS stream/KV). A cluster restart or rollout often brings a microservice up a few
 // seconds before its dependencies are reachable; without a retry the process
 // exits and crash-loops, amplifying the outage. ~1 minute of bounded retry
 // absorbs that lag and aligns with the auth gate's degrade-don't-die posture

@@ -9,7 +9,6 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
-	rediscache "github.com/go-redis/cache/v8"
 )
 
 // CachedApi is a caching decorator over *Api implementing the ADR-022 review B2
@@ -77,7 +76,7 @@ func (capi *CachedApi) DevicesByToken(ctx context.Context, tokens []string) ([]*
 	}
 	// Cache positive hits only; never cache a miss/not-found.
 	if len(matches) == 1 && matches[0] != nil {
-		_ = capi.caches.DeviceByToken.Set(ctx, key, matches[0], 0)
+		_ = capi.caches.DeviceByToken.Set(ctx, key, matches[0])
 	}
 	return matches, nil
 }
@@ -85,14 +84,11 @@ func (capi *CachedApi) DevicesByToken(ctx context.Context, tokens []string) ([]*
 // getDevice returns the cached device for key, or nil on a miss (or any cache
 // error, which degrades to a DB lookup by the caller).
 func (capi *CachedApi) getDevice(ctx context.Context, key string) *Device {
-	var device *Device
-	capi.caches.DeviceByToken.Get(ctx, key, func(c *rediscache.Cache, prefixed string) {
-		var cached Device
-		if err := c.Get(ctx, prefixed, &cached); err == nil {
-			device = &cached
-		}
-	})
-	return device
+	var device Device
+	if found, err := capi.caches.DeviceByToken.Get(ctx, key, &device); err == nil && found {
+		return &device
+	}
+	return nil
 }
 
 // isTrackedSourceDeviceShape reports whether criteria is exactly the shape the
@@ -130,7 +126,7 @@ func (capi *CachedApi) EntityRelationships(ctx context.Context,
 	}
 	// Cache positive results only.
 	if results != nil {
-		_ = capi.caches.RelationshipsBySource.Set(ctx, key, results, 0)
+		_ = capi.caches.RelationshipsBySource.Set(ctx, key, results)
 	}
 	return results, nil
 }
@@ -138,14 +134,11 @@ func (capi *CachedApi) EntityRelationships(ctx context.Context,
 // getRelationships returns the cached relationship results for key, or nil on a
 // miss (or any cache error, which degrades to a DB lookup by the caller).
 func (capi *CachedApi) getRelationships(ctx context.Context, key string) *EntityRelationshipSearchResults {
-	var results *EntityRelationshipSearchResults
-	capi.caches.RelationshipsBySource.Get(ctx, key, func(c *rediscache.Cache, prefixed string) {
-		var cached EntityRelationshipSearchResults
-		if err := c.Get(ctx, prefixed, &cached); err == nil {
-			results = &cached
-		}
-	})
-	return results
+	var results EntityRelationshipSearchResults
+	if found, err := capi.caches.RelationshipsBySource.Get(ctx, key, &results); err == nil && found {
+		return &results
+	}
+	return nil
 }
 
 // UpdateDevice forwards to the DB then evicts the device's by-token entry so a

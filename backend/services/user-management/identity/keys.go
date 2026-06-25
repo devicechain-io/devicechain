@@ -30,7 +30,7 @@ type signingKeySet struct {
 // tenant-scoped, so these reads/writes need no tenant in context.
 func (m *Manager) loadSigningKeys(ctx context.Context) (*signingKeySet, error) {
 	var set *signingKeySet
-	err := m.ms.WithDistributedLock(ctx, 5*time.Second, 5, func(ctx context.Context) error {
+	err := m.locker.WithLock(ctx, m.ms.FunctionalArea, func(ctx context.Context) error {
 		db := m.db.DB(ctx)
 		var current model.SigningKey
 		err := db.Where("active = ?", true).First(&current).Error
@@ -113,7 +113,7 @@ func (m *Manager) createSigningKey(db *gorm.DB) (*model.SigningKey, error) {
 // replicas. retention <= 0 keeps retired keys indefinitely.
 func (m *Manager) rotateSigningKey(ctx context.Context, retention time.Duration) (*signingKeySet, error) {
 	var set *signingKeySet
-	err := m.ms.WithDistributedLock(ctx, 5*time.Second, 5, func(ctx context.Context) error {
+	err := m.locker.WithLock(ctx, m.ms.FunctionalArea, func(ctx context.Context) error {
 		return m.db.DB(ctx).Transaction(func(tx *gorm.DB) error {
 			now := time.Now()
 			if err := tx.Model(&model.SigningKey{}).Where("active = ?", true).
