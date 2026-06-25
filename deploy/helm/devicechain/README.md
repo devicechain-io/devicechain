@@ -56,6 +56,18 @@ functionalAreas:
     replicas: 2
 ```
 
+Areas can also expose extra ports beyond the shared 8080 graphql port via
+`functionalAreas.<area>.extraPorts` (name ≤15 chars). event-sources ships with
+its HTTP device-ingest port by default:
+
+```yaml
+functionalAreas:
+  event-sources:
+    extraPorts:
+      - name: http-ingest
+        port: 8081   # POST /dc/{tenant}/events
+```
+
 `values.schema.json` validates the deployment-selection envelope (profile enum,
 area names, image/instance shape) at `helm install`/`upgrade` time.
 
@@ -65,4 +77,5 @@ area names, image/instance shape) at `helm install`/`upgrade` time.
 - `dci-<id>-config` — instance config mounted at `/etc/dci-config/instance`.
 - `dct-<id>-config` — per-area config mounted at `/etc/dct-config/<area>`.
 - Per enabled area: a `Deployment` (with `/readyz` readiness + `/healthz`
-  liveness probes, ADR-022 decision 3) and a `Service` on the GraphQL port.
+  liveness probes, ADR-022 decision 3) and a `Service` on the GraphQL port (plus
+  any `extraPorts` for the area, e.g. event-sources' HTTP ingest on 8081).

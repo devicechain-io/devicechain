@@ -120,7 +120,19 @@
           "image": { "type": "string" },
           "replicas": { "type": "integer", "minimum": 0 },
           "resources": { "type": "object" },
-          "config": { "type": "object" }
+          "config": { "type": "object" },
+          "extraPorts": {
+            "type": "array",
+            "description": "Extra Service/container ports for this area beyond the 8080 graphql port (e.g. event-sources HTTP device ingest on 8081). Port names must be <=15 chars per Kubernetes.",
+            "items": {
+              "type": "object",
+              "required": ["name", "port"],
+              "properties": {
+                "name": { "type": "string", "minLength": 1, "maxLength": 15 },
+                "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+              }
+            }
+          }
         }
       }
     }

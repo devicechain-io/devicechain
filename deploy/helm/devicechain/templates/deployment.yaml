@@ -65,6 +65,11 @@ spec:
             - name: graphql
               containerPort: {{ $root.Values.service.port }}
               protocol: TCP
+            {{- range $port := get $areaCfg "extraPorts" | default list }}
+            - name: {{ $port.name }}
+              containerPort: {{ $port.port }}
+              protocol: TCP
+            {{- end }}
           {{/*
           E7: a startupProbe with a generous failureThreshold gives a slow JWKS/DB
           cold start time to come up before liveness can act; liveness keeps a
