@@ -1,6 +1,8 @@
-{{/* One Service per enabled functional area, fronting its GraphQL/HTTP port. */}}
+{{/* One Service per enabled functional area, fronting its GraphQL/HTTP port plus
+any area-specific extra ports (e.g. event-sources' HTTP device-ingest 8081). */}}
 {{- $root := . -}}
 {{- range $area := splitList "," (include "devicechain.enabledAreas" .) }}
+{{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
 ---
 apiVersion: v1
 kind: Service
@@ -17,4 +19,10 @@ spec:
       protocol: TCP
       port: {{ $root.Values.service.port }}
       targetPort: graphql
+    {{- range $port := get $areaCfg "extraPorts" | default list }}
+    - name: {{ $port.name }}
+      protocol: TCP
+      port: {{ $port.port }}
+      targetPort: {{ $port.name }}
+    {{- end }}
 {{- end }}
