@@ -8,7 +8,7 @@ title: Connecting a Device
 Devices connect to DeviceChain over **MQTT**, which is served directly by NATS' built-in MQTT server on port 1883 — there is no separate broker. A standard MQTT client (Arduino, ESP32, Eclipse Paho, etc.) works unchanged.
 
 :::note Status
-MQTT ingestion is available. Additional transports (HTTP, CoAP, WebSocket) and the full provisioning/credentials flow are planned — see the [Domain Model](../concepts/domain-model.md#identity-and-credentials).
+MQTT ingestion is available. **Device authentication is available**: a device can present a credential (access token, X.509 thumbprint, or MQTT-basic username/secret) that the platform resolves to the owning device and verifies — honoring expiry and revocation-by-disable — and an instance can be configured to reject events that don't authenticate. Additional transports (HTTP, CoAP, WebSocket) and the full self-service provisioning/claiming flow are still planned — see the [Domain Model](../concepts/domain-model.md#identity-and-credentials).
 :::
 
 ## Topic / subject mapping
