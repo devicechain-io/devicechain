@@ -51,6 +51,12 @@ type Microservice struct {
 	// Readiness gates the data plane on auth being live (ADR-022 decision 3).
 	Readiness *ReadinessGate
 
+	// Observability metrics (E17). nil when the microservice was built without
+	// NewMicroservice (e.g. in unit tests), so every use is nil-guarded.
+	readyGauge   prometheus.Gauge
+	authAttempts prometheus.Counter
+	authFailures prometheus.Counter
+
 	// Internal lifeycle processing
 	lifecycle LifecycleManager
 	shutdown  chan os.Signal
@@ -66,8 +72,6 @@ type Microservice struct {
 
 // Create a new microservice instance
 func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
-
 	ms := &Microservice{}
 	ms.StartTime = time.Now()
 	ms.InstanceId = os.Getenv(ENV_INSTANCE_ID)
@@ -77,9 +81,31 @@ func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
 	ms.MicroserviceName = os.Getenv(ENV_MICROSERVICE_NAME)
 	ms.FunctionalArea = os.Getenv(ENV_MS_FUNCTIONAL_AREA)
 
+	// Structured logging (E16): JSON by default for log aggregation, the colorized
+	// ConsoleWriter only when DC_LOG_CONSOLE is set (local dev). Every line is
+	// stamped with the instance/area (and tenant, when the pod is tenant-scoped) so
+	// logs are filterable without threading those fields through every call site.
+	if os.Getenv(ENV_LOG_CONSOLE) != "" {
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+	} else {
+		log.Logger = zerolog.New(os.Stderr).With().Timestamp().Logger()
+	}
+	baseCtx := log.Logger.With().Str("instance", ms.InstanceId).Str("area", ms.FunctionalArea)
+	if ms.TenantId != "" {
+		baseCtx = baseCtx.Str("tenant", ms.TenantId)
+	}
+	log.Logger = baseCtx.Logger()
+
 	// Create common tooling.
 	ms.Redis = NewRedisManager(ms, NewNoOpLifecycleCallbacks())
 	ms.Readiness = NewReadinessGate()
+
+	// Readiness/auth-degrade observability (E17): a gauge that is 1 once the data
+	// plane is ready and counters for the background auth-gate attempts/failures,
+	// so degraded-for-N is a first-class, alertable app signal.
+	ms.readyGauge = ms.NewGauge("ready", "1 when the data plane is ready (auth live), else 0", nil)
+	ms.authAttempts = ms.NewCounter("auth_gate_attempts_total", "Background auth-gate JWKS fetch attempts", nil)
+	ms.authFailures = ms.NewCounter("auth_gate_failures_total", "Background auth-gate JWKS fetch failures", nil)
 
 	// Create lifecycle manager and channels for tracking shutdown.
 	ms.lifecycle = NewLifecycleManager(ms.FunctionalArea, ms, callbacks)

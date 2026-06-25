@@ -18,10 +18,13 @@ type NatsConfiguration struct {
 	StreamReplicas uint32
 }
 
-// Prometheus metrics configuration
+// Prometheus metrics configuration. Metrics are served on the GraphQL HTTP port
+// (8080) at /metrics via the shared mux; there is no separate metrics listener,
+// so the former HttpPort field was dead config and has been removed (E14).
+// Enabled is informational — scrape discovery is gated by the Helm chart's
+// metrics.enabled value (the ServiceMonitor), not by the running service.
 type MetricsConfiguration struct {
-	Enabled  bool
-	HttpPort int32
+	Enabled bool
 }
 
 // User-management connectivity configuration. The user-management service
@@ -72,8 +75,7 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 				StreamReplicas: 1,
 			},
 			Metrics: MetricsConfiguration{
-				Enabled:  true,
-				HttpPort: 9090,
+				Enabled: true,
 			},
 			UserManagement: UserManagementConfiguration{
 				Hostname: "dc-user-management.dc-system",

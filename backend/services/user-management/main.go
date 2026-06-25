@@ -122,7 +122,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// and depends on no other service, so the readiness gate opens immediately
 	// (ADR-022 decision 3); login/refresh remain reachable without a token (an
 	// absent token is allowed through, see the auth handler).
-	Microservice.Readiness.MarkReady(IdentityManager.Validator())
+	Microservice.MarkReady(IdentityManager.Validator())
 
 	parsed := gql.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{})
 	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(), *parsed,

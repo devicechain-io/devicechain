@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
 )
@@ -176,7 +177,20 @@ func (w *natsWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
 	}
 	subject := ScopedSubject(w.nmgr.Microservice.InstanceId, tenant, w.suffix)
 	for i := range msgs {
-		if _, err := w.nmgr.js.Publish(subject, msgs[i].Value); err != nil {
+		nm := &nats.Msg{Subject: subject, Data: msgs[i].Value, Header: nats.Header{}}
+		// Carry the correlation id, generating one when the producer did not
+		// propagate it, so any message can be followed across the pipeline (E15).
+		cid := msgs[i].CorrelationID()
+		if cid == "" {
+			cid = uuid.NewString()
+		}
+		nm.Header.Set(HeaderCorrelationID, cid)
+		for k, v := range msgs[i].Headers {
+			if k != HeaderCorrelationID {
+				nm.Header.Set(k, v)
+			}
+		}
+		if _, err := w.nmgr.js.PublishMsg(nm); err != nil {
 			return err
 		}
 	}
@@ -282,8 +296,21 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 		}
 		nm := r.pending[0]
 		r.pending = r.pending[1:]
-		return NewConsumedMessage(nm.Subject, nm.Data, deliveryCount(nm), natsAck{nm: nm}), nil
+		return NewConsumedMessage(nm.Subject, nm.Data, deliveryCount(nm), natsHeaders(nm), natsAck{nm: nm}), nil
 	}
+}
+
+// natsHeaders flattens a delivered message's NATS headers into the transport-
+// neutral map carried on the envelope (E15), or nil when there are none.
+func natsHeaders(nm *nats.Msg) map[string]string {
+	if len(nm.Header) == 0 {
+		return nil
+	}
+	headers := make(map[string]string, len(nm.Header))
+	for k := range nm.Header {
+		headers[k] = nm.Header.Get(k)
+	}
+	return headers
 }
 
 // deliveryCount returns the JetStream delivery attempt count for a consumed
