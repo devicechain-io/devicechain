@@ -1,5 +1,5 @@
 # Agent OS — strategy/instructions not shared publicly
-.agent-os/
+.agent-os
 .claude/commands/
 .claude/agents/
 .claude/skills/
