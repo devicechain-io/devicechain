@@ -21,3 +21,10 @@
 
 # Single-node by default; flip on for the ADR-020 HA topology (when implemented).
 # ha = false
+
+# Ingress + TLS. Disable either if the cluster already has it; pin chart versions.
+# enable_ingress_nginx       = true
+# enable_cert_manager        = true
+# ingress_class              = "nginx"
+# ingress_nginx_chart_version = "4.11.3"
+# cert_manager_chart_version  = "v1.16.2"

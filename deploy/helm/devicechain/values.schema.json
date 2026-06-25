@@ -112,6 +112,26 @@
       "type": "object",
       "description": "C3: container-level securityContext; hardened defaults drop all capabilities and use a read-only rootfs."
     },
+    "ingress": {
+      "type": "object",
+      "description": "Optional Ingress + cert-manager TLS exposing the GraphQL/HTTP surface (requires the OpenTofu ingress-nginx + cert-manager).",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string", "minLength": 1 },
+        "host": { "type": "string", "minLength": 1 },
+        "annotations": { "type": "object" },
+        "tls": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "selfSigned": { "type": "boolean" },
+            "issuerName": { "type": "string" },
+            "clusterIssuer": { "type": "string" },
+            "secretName": { "type": "string" }
+          }
+        }
+      }
+    },
     "functionalAreas": {
       "type": "object",
       "additionalProperties": {

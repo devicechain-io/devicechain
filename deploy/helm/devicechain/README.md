@@ -79,3 +79,7 @@ area names, image/instance shape) at `helm install`/`upgrade` time.
 - Per enabled area: a `Deployment` (with `/readyz` readiness + `/healthz`
   liveness probes, ADR-022 decision 3) and a `Service` on the GraphQL port (plus
   any `extraPorts` for the area, e.g. event-sources' HTTP ingest on 8081).
+- Optional (`ingress.enabled=true`): an `Ingress` exposing each enabled area at
+  `https://<host>/<area>/graphql`, plus a cert-manager TLS `Issuer` (self-signed
+  by default). Requires the ingress-nginx controller + cert-manager from
+  [`deploy/opentofu`](../../opentofu).
