@@ -38,6 +38,7 @@ const (
 const (
 	DefaultDeviceCacheTtlSeconds       = 60
 	DefaultRelationshipCacheTtlSeconds = 60
+	DefaultMetricDefCacheTtlSeconds    = 60
 )
 
 type DeviceManagementConfiguration struct {
@@ -49,9 +50,12 @@ type DeviceManagementConfiguration struct {
 	// Hot inbound-event resolution path caches (ADR-022 review B2).
 	// DeviceCacheTtlSeconds bounds the device-by-token cache;
 	// RelationshipCacheTtlSeconds bounds the tracked-relationships-by-source-device
-	// cache. Both are NATS KV bucket TTLs, in seconds (ADR-007).
+	// cache; MetricDefCacheTtlSeconds bounds the per-device-type metric-definition
+	// cache used by ingest-time metric validation (ADR-016). All are NATS KV bucket
+	// TTLs, in seconds (ADR-007).
 	DeviceCacheTtlSeconds       int
 	RelationshipCacheTtlSeconds int
+	MetricDefCacheTtlSeconds    int
 }
 
 // Creates the default device management configuration
@@ -77,6 +81,9 @@ func (c *DeviceManagementConfiguration) ApplyDefaults() {
 	if c.RelationshipCacheTtlSeconds == 0 {
 		c.RelationshipCacheTtlSeconds = DefaultRelationshipCacheTtlSeconds
 	}
+	if c.MetricDefCacheTtlSeconds == 0 {
+		c.MetricDefCacheTtlSeconds = DefaultMetricDefCacheTtlSeconds
+	}
 }
 
 // Validate enforces semantic constraints after decoding and defaulting, failing
@@ -93,6 +100,9 @@ func (c *DeviceManagementConfiguration) Validate() error {
 	}
 	if c.RelationshipCacheTtlSeconds <= 0 {
 		return fmt.Errorf("relationshipCacheTtlSeconds must be positive (got %d)", c.RelationshipCacheTtlSeconds)
+	}
+	if c.MetricDefCacheTtlSeconds <= 0 {
+		return fmt.Errorf("metricDefCacheTtlSeconds must be positive (got %d)", c.MetricDefCacheTtlSeconds)
 	}
 	return nil
 }
