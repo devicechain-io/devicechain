@@ -197,6 +197,25 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 	// tenant-scope create callback still fires on every batched insert.
 	var results *EventPersistenceResults
 	err := ep.Api.PersistInTx(ctx, func(tx *gorm.DB) error {
+		// Idempotent ingestion: a redelivered resolved event carrying an
+		// alternateId that was already persisted is a no-op, so the at-least-once
+		// consume path (ADR-022 Wave-2 redelivery/DLQ) does not double-write. The
+		// (tenant_id, alt_id, occurred_time) partial unique index is the backstop
+		// for a concurrent-redelivery race; this check skips the common sequential
+		// case without erroring. Events without an alternateId are not deduped.
+		if event.AltId != nil {
+			exists, derr := ep.Api.EventExistsByAltId(ctx, tx, *event.AltId, event.OccurredTime)
+			if derr != nil {
+				return derr
+			}
+			if exists {
+				log.Info().Str("altId", *event.AltId).
+					Msg("Skipping already-persisted event (idempotent redelivery)")
+				results = &EventPersistenceResults{}
+				return nil
+			}
+		}
+
 		var perr error
 		switch event.EventType {
 		case esmodel.Location:

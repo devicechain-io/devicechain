@@ -73,6 +73,13 @@ func (api *MockApi) PersistInTx(ctx context.Context, fn func(db *gorm.DB) error)
 	return fn(nil)
 }
 
+// EventExistsByAltId defaults to "not persisted" so the idempotent-ingestion
+// dedup check never short-circuits a persistence test; a test exercising the
+// dedup path can override it with an .On("EventExistsByAltId") expectation.
+func (api *MockApi) EventExistsByAltId(ctx context.Context, db *gorm.DB, altId string, occurred time.Time) (bool, error) {
+	return false, nil
+}
+
 func (api *MockApi) Events(ctx context.Context, criteria emmodel.EventSearchCriteria) (*emmodel.EventSearchResults, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*emmodel.EventSearchResults), args.Error(1)
