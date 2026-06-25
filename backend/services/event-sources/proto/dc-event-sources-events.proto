@@ -17,6 +17,12 @@ message PUnresolvedEvent {
     string processed_time = 6;
     int64 event_type = 7;
     bytes payload = 8;
+    // Credential presented by the connecting device (ADR-014). Used to
+    // authenticate the device at the ingest->resolve boundary; absent when the
+    // transport is trusted or authentication is disabled.
+    optional string credential_type = 9;
+    optional string credential_id = 10;
+    optional string credential_secret = 11;
 }
 
 /**

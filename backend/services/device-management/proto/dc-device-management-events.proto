@@ -12,6 +12,7 @@ enum FailureReason {
     Invalid = 1; // Event was not able to be parsed
     ApiCallFailed = 2; // API call required for resolution failed
     DeviceNotFound = 3; // Device token could not be resolved to a device
+    Unauthenticated = 4; // Presented device credential was missing or invalid (ADR-014)
 }
 
 /**

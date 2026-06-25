@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
@@ -39,6 +40,9 @@ type DeviceManagementApi interface {
 	DeviceCredentialsByToken(ctx context.Context, tokens []string) ([]*DeviceCredential, error)
 	DeviceCredentials(ctx context.Context, criteria DeviceCredentialSearchCriteria) (*DeviceCredentialSearchResults, error)
 	DeviceCredentialByCredentialId(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error)
+
+	// Device authentication (transport security, ADR-014).
+	AuthenticateDevice(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, error)
 
 	// Entity relationships (uniform edge model, ADR-013).
 	EntityRelationshipsById(ctx context.Context, ids []uint) ([]*EntityRelationship, error)

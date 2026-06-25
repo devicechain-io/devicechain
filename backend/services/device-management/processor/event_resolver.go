@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
@@ -25,6 +27,7 @@ import (
 type EventResolver struct {
 	WorkerId   int
 	Api        model.DeviceManagementApi
+	AuthMode   string
 	Unresolved <-chan messaging.Message
 	Invalid    func(error, messaging.Message)
 	Resolved   func(string, []EventResolutionResults)
@@ -39,7 +42,7 @@ type EventResolutionResults struct {
 }
 
 // Create a new event resolver.
-func NewEventResolver(workerId int, api model.DeviceManagementApi,
+func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode string,
 	unrez <-chan messaging.Message,
 	invalid func(error, messaging.Message),
 	resolved func(string, []EventResolutionResults),
@@ -47,6 +50,7 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi,
 	return &EventResolver{
 		WorkerId:   workerId,
 		Api:        api,
+		AuthMode:   authMode,
 		Unresolved: unrez,
 		Invalid:    invalid,
 		Resolved:   resolved,
@@ -268,13 +272,64 @@ func (rez *EventResolver) HandleEvent(ctx context.Context,
 	}
 }
 
-// Execute logic to resolve event.
-func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
+// presentedCredential extracts the credential a device offered on the inbound
+// event (ADR-014), or nil when none was presented. An empty credential id counts
+// as none so an event carrying blank fields falls through to the configured
+// no-credential behaviour rather than failing authentication.
+func presentedCredential(unrez *esmodel.UnresolvedEvent) *model.PresentedCredential {
+	if unrez.CredentialType == nil || unrez.CredentialId == nil || *unrez.CredentialId == "" {
+		return nil
+	}
+	return &model.PresentedCredential{
+		CredentialType: *unrez.CredentialType,
+		CredentialId:   *unrez.CredentialId,
+		Secret:         unrez.CredentialSecret,
+	}
+}
+
+// resolveDevice determines the originating device for an event, enforcing the
+// configured device authentication policy (transport security, ADR-014):
+//   - disabled: the self-asserted device token is trusted (legacy path).
+//   - optional: a presented credential is authenticated and authoritative; with
+//     no credential the device token is trusted.
+//   - required: a valid credential must be presented or the event is rejected.
+//
+// When a credential authenticates, the resolved device is authoritative: a
+// self-asserted token naming a different device is rejected so one authenticated
+// device can not impersonate another.
+func (rez *EventResolver) resolveDevice(ctx context.Context, unrez *esmodel.UnresolvedEvent) (*model.Device, uint, error) {
+	if rez.AuthMode != config.AuthModeDisabled {
+		if presented := presentedCredential(unrez); presented != nil {
+			device, err := rez.Api.AuthenticateDevice(ctx, presented, time.Now())
+			if err != nil {
+				return nil, uint(dmproto.FailureReason_Unauthenticated), err
+			}
+			if unrez.Device != "" && unrez.Device != device.Token {
+				return nil, uint(dmproto.FailureReason_Unauthenticated),
+					fmt.Errorf("event device token %q does not match authenticated device %q", unrez.Device, device.Token)
+			}
+			return device, 0, nil
+		}
+		if rez.AuthMode == config.AuthModeRequired {
+			return nil, uint(dmproto.FailureReason_Unauthenticated),
+				errors.New("device authentication required but no credential was presented")
+		}
+	}
+
 	matches, err := rez.Api.DevicesByToken(ctx, []string{unrez.Device})
 	if err != nil || len(matches) == 0 {
 		return nil, uint(dmproto.FailureReason_DeviceNotFound), err
 	}
-	return rez.HandleEvent(ctx, matches[0], unrez)
+	return matches[0], 0, nil
+}
+
+// Execute logic to resolve event.
+func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
+	device, reason, err := rez.resolveDevice(ctx, unrez)
+	if err != nil {
+		return nil, reason, err
+	}
+	return rez.HandleEvent(ctx, device, unrez)
 }
 
 // Converts unresolved events into resolved events.

@@ -34,6 +34,15 @@ type UnresolvedEvent struct {
 	ProcessedTime time.Time
 	EventType     EventType
 	Payload       interface{}
+
+	// Credential presented by the connecting device (ADR-014). When set, the
+	// downstream resolver authenticates the device against the credential store
+	// rather than trusting the self-asserted Device token. CredentialSecret
+	// carries the bearer secret (e.g. an MQTT password) when the credential type
+	// requires one; it is nil when possession of the id is itself the proof.
+	CredentialType   *string
+	CredentialId     *string
+	CredentialSecret *string
 }
 
 // Payload for creating a new relationship. The target is a uniform (type, token)

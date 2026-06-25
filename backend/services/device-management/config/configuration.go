@@ -12,8 +12,28 @@ const (
 	SUBJECT_RESOLVED_EVENTS = "resolved-events"
 )
 
+// Device authentication policy applied to inbound events (transport security,
+// ADR-014).
+const (
+	// AuthModeDisabled performs no authentication: the self-asserted device token
+	// on the event is trusted. Appropriate only when the transport itself is
+	// trusted (e.g. a broker that already authenticated the device).
+	AuthModeDisabled = "disabled"
+	// AuthModeOptional authenticates when a credential is presented (rejecting
+	// bad credentials) but allows events that present none, falling back to the
+	// device token. This is the migration default; it is not a secure posture for
+	// untrusted transports.
+	AuthModeOptional = "optional"
+	// AuthModeRequired rejects any event that does not present a valid credential.
+	// This is the hardened production posture.
+	AuthModeRequired = "required"
+)
+
 type DeviceManagementConfiguration struct {
 	RdbConfiguration config.MicroserviceDatastoreConfiguration
+	// DeviceAuthMode selects how inbound events are authenticated (one of the
+	// AuthMode* constants). Empty is treated as AuthModeOptional.
+	DeviceAuthMode string
 }
 
 // Creates the default device management configuration
@@ -22,5 +42,6 @@ func NewDeviceManagementConfiguration() *DeviceManagementConfiguration {
 		RdbConfiguration: config.MicroserviceDatastoreConfiguration{
 			SqlDebug: true,
 		},
+		DeviceAuthMode: AuthModeOptional,
 	}
 }

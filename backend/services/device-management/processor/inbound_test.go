@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -51,7 +52,8 @@ func (suite *InboundEventsProcessorTestSuite) SetupTest() {
 		suite.Resolved,
 		suite.Failed,
 		core.NewNoOpLifecycleCallbacks(),
-		suite.API)
+		suite.API,
+		config.AuthModeOptional)
 	ctx := context.Background()
 	suite.IP.Initialize(ctx)
 }

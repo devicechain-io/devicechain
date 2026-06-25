@@ -23,6 +23,12 @@ type JsonEvent struct {
 	OccurredTime *string                `json:"occurredTime,omitempty"`
 	EventType    string                 `json:"eventType"`
 	Payload      map[string]interface{} `json:"payload"`
+
+	// Credential presented by the connecting device (ADR-014), carried so the
+	// resolver can authenticate the device rather than trusting the Device token.
+	CredentialType   *string `json:"credentialType,omitempty"`
+	CredentialId     *string `json:"credentialId,omitempty"`
+	CredentialSecret *string `json:"credentialSecret,omitempty"`
 }
 
 // Interface implemented by all decoders.
@@ -116,9 +122,12 @@ func (jd *JsonDecoder) ParseEvent(payload []byte) (*JsonEvent, error) {
 // Assemble an event based on json event data.
 func (jd *JsonDecoder) AssembleEvent(jevent *JsonEvent) (*model.UnresolvedEvent, error) {
 	event := &model.UnresolvedEvent{
-		AltId:        jevent.AltId,
-		Device:       jevent.Device,
-		Relationship: jevent.Relationship,
+		AltId:            jevent.AltId,
+		Device:           jevent.Device,
+		Relationship:     jevent.Relationship,
+		CredentialType:   jevent.CredentialType,
+		CredentialId:     jevent.CredentialId,
+		CredentialSecret: jevent.CredentialSecret,
 	}
 	if etype, ok := model.EventTypesByName[jevent.EventType]; ok {
 		event.EventType = etype

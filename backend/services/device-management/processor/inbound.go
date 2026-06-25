@@ -46,6 +46,7 @@ type InboundEventsProcessor struct {
 	ResolvedEventsWriter messaging.MessageWriter
 	FailedEventsWriter   messaging.MessageWriter
 	Api                  dmodel.DeviceManagementApi
+	AuthMode             string
 
 	messages  chan messaging.Message
 	failed    chan failedItem
@@ -55,15 +56,17 @@ type InboundEventsProcessor struct {
 	lifecycle core.LifecycleManager
 }
 
-// Create a new inbound events processor.
+// Create a new inbound events processor. authMode is the device authentication
+// policy applied while resolving inbound events (transport security, ADR-014).
 func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageReader, resolved messaging.MessageWriter,
-	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api dmodel.DeviceManagementApi) *InboundEventsProcessor {
+	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api dmodel.DeviceManagementApi, authMode string) *InboundEventsProcessor {
 	iproc := &InboundEventsProcessor{
 		Microservice:         ms,
 		InboundEventsReader:  inbound,
 		ResolvedEventsWriter: resolved,
 		FailedEventsWriter:   failed,
 		Api:                  api,
+		AuthMode:             authMode,
 	}
 
 	// Create lifecycle manager.
@@ -158,7 +161,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 	iproc.messages = make(chan messaging.Message, MESSAGE_BACKLOG_SIZE)
 	iproc.resolvers = make([]*EventResolver, 0)
 	for w := 1; w <= EVENT_RESOLVER_COUNT; w++ {
-		resolver := NewEventResolver(w, iproc.Api, iproc.messages,
+		resolver := NewEventResolver(w, iproc.Api, iproc.AuthMode, iproc.messages,
 			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent)
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		go resolver.Process(ctx)
