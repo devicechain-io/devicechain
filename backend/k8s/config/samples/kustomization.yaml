@@ -3,5 +3,4 @@ resources:
 - core_v1beta1_instance.yaml
 - core_v1beta1_tenant.yaml
 - core_v1beta1_instanceconfiguration.yaml
-- core_v1beta1_microserviceconfiguration.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

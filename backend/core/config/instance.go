@@ -3,6 +3,8 @@
 
 package config
 
+import "fmt"
+
 // Redis configuration parameters
 type RedisConfiguration struct {
 	Hostname string
@@ -59,6 +61,30 @@ type PersistenceConfiguration struct {
 type InstanceConfiguration struct {
 	Infrastructure InfrastructureConfiguration
 	Persistence    PersistenceConfiguration
+}
+
+// ApplyDefaults fills unset infrastructure fields with their defaults so an
+// instance document that omits them is still well-formed (ADR-022 decision 1 /
+// review E3). It is applied after decoding and before Validate.
+func (c *InstanceConfiguration) ApplyDefaults() {
+	if c.Infrastructure.Nats.StreamReplicas == 0 {
+		c.Infrastructure.Nats.StreamReplicas = 1
+	}
+}
+
+// Validate fails closed on an instance configuration missing the infrastructure
+// a service cannot run without (ADR-022 decision 1 / review E3): the NATS
+// backbone and the user-management endpoint every service validates tokens
+// against. A misrendered config Secret then surfaces at startup rather than as a
+// confusing downstream connection failure.
+func (c *InstanceConfiguration) Validate() error {
+	if c.Infrastructure.Nats.Hostname == "" || c.Infrastructure.Nats.Port == 0 {
+		return fmt.Errorf("infrastructure.nats hostname and port are required")
+	}
+	if c.Infrastructure.UserManagement.Hostname == "" || c.Infrastructure.UserManagement.Port == 0 {
+		return fmt.Errorf("infrastructure.userManagement hostname and port are required")
+	}
+	return nil
 }
 
 // Creates the default instance configuration
