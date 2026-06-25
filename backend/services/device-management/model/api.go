@@ -74,4 +74,10 @@ type DeviceManagementApi interface {
 	ProvisioningProfileByProvisionKey(ctx context.Context, provisionKey string) (*ProvisioningProfile, error)
 	ProvisionDevice(ctx context.Context, request *ProvisionDeviceRequest, now time.Time) (*ProvisionDeviceResult, error)
 	ProvisionDeviceBootstrap(ctx context.Context, request *ProvisionDeviceRequest, now time.Time) (*ProvisionDeviceResult, error)
+
+	// Device→customer claiming (ADR-012).
+	InitiateDeviceClaim(ctx context.Context, request *DeviceClaimInitiateRequest) (*DeviceClaim, error)
+	ClaimDevice(ctx context.Context, request *DeviceClaimRequest, now time.Time) (*EntityRelationship, error)
+	CancelDeviceClaim(ctx context.Context, deviceToken string) (bool, error)
+	DeviceClaimByDeviceToken(ctx context.Context, deviceToken string) (*DeviceClaim, error)
 }

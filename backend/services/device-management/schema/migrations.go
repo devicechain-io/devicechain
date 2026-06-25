@@ -13,5 +13,6 @@ var (
 		NewMetricDefinitionSchema(),
 		NewEntityAttributeSchema(),
 		NewProvisioningProfileSchema(),
+		NewDeviceClaimSchema(),
 	}
 )
