@@ -98,7 +98,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 
 	// Add and initialize inbound events processor.
 	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,
-		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), Api)
+		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), Api, Configuration.DeviceAuthMode)
 	err = InboundEventsProcessor.Initialize(context.Background())
 	if err != nil {
 		return err
