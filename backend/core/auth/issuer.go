@@ -60,24 +60,27 @@ type IssuedToken struct {
 }
 
 // IssueAccess mints a short-lived access token for the subject in the tenant.
-func (i *Issuer) IssueAccess(tenant, username string, roles []string, jti string) (IssuedToken, error) {
-	return i.sign(TokenTypeAccess, tenant, username, roles, jti, i.accessTTL)
+// roles are the subject's assigned role names (carried for display/audit);
+// authorities are their expanded effective capabilities (what resolvers gate on).
+func (i *Issuer) IssueAccess(tenant, username string, roles, authorities []string, jti string) (IssuedToken, error) {
+	return i.sign(TokenTypeAccess, tenant, username, roles, authorities, jti, i.accessTTL)
 }
 
 // IssueRefresh mints a long-lived refresh token. The caller persists jti in the
 // refresh-token store (NATS KV) so the token can be validated and revoked.
-func (i *Issuer) IssueRefresh(tenant, username string, roles []string, jti string) (IssuedToken, error) {
-	return i.sign(TokenTypeRefresh, tenant, username, roles, jti, i.refreshTTL)
+func (i *Issuer) IssueRefresh(tenant, username string, roles, authorities []string, jti string) (IssuedToken, error) {
+	return i.sign(TokenTypeRefresh, tenant, username, roles, authorities, jti, i.refreshTTL)
 }
 
-func (i *Issuer) sign(tokenType, tenant, username string, roles []string, jti string, ttl time.Duration) (IssuedToken, error) {
+func (i *Issuer) sign(tokenType, tenant, username string, roles, authorities []string, jti string, ttl time.Duration) (IssuedToken, error) {
 	now := time.Now()
 	expires := now.Add(ttl)
 	claims := &Claims{
-		Tenant:    tenant,
-		Username:  username,
-		Roles:     roles,
-		TokenType: tokenType,
+		Tenant:      tenant,
+		Username:    username,
+		Roles:       roles,
+		Authorities: authorities,
+		TokenType:   tokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    i.issuer,
 			Subject:   username,

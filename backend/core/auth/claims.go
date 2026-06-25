@@ -23,11 +23,26 @@ type Claims struct {
 	Tenant string `json:"tenant"`
 	// Username is the human-readable subject identifier (mirrors sub).
 	Username string `json:"username"`
-	// Roles are granted authority names. Carried for forward authorization
-	// work (Phase 2); the auth middleware does not yet gate on them.
+	// Roles are the subject's assigned role names. Carried for display/audit;
+	// enforcement is on Authorities, not role names (ADR-008 RBAC).
 	Roles []string `json:"roles,omitempty"`
+	// Authorities are the subject's effective capabilities — the union of their
+	// roles' granted authorities, expanded at token-issue time. Resolvers gate on
+	// these (see Authorize); a holder of AuthorityAll ("*") passes every check.
+	Authorities []string `json:"authorities,omitempty"`
 	// TokenType distinguishes access from refresh tokens (see TokenType*).
 	TokenType string `json:"typ"`
 
 	jwt.RegisteredClaims
+}
+
+// HasAuthority reports whether the claims grant the required authority. A subject
+// holding the super-authority AuthorityAll ("*") passes every check.
+func (c *Claims) HasAuthority(required Authority) bool {
+	for _, held := range c.Authorities {
+		if held == string(AuthorityAll) || held == string(required) {
+			return true
+		}
+	}
+	return false
 }
