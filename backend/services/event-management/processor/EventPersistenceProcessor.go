@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"sync"
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/proto"
@@ -41,6 +42,15 @@ type EventPersistenceProcessor struct {
 	messages chan messaging.Message
 	failed   chan failedItem
 	workers  []*EventPersistenceWorker
+
+	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
+	// let ExecuteStop drain senders before closing the channels they feed, so a
+	// worker or the reader can never send on a closed channel at SIGTERM.
+	procCtx    context.Context
+	procCancel context.CancelFunc
+	readerWG   sync.WaitGroup
+	workerWG   sync.WaitGroup
+	outboundWG sync.WaitGroup
 
 	lifecycle core.LifecycleManager
 }
@@ -122,7 +132,14 @@ func (eproc *EventPersistenceProcessor) initializeEventPersistenceWorkers(ctx co
 		resolver := NewEventPersistenceWorker(w, eproc.Api, eproc.messages,
 			eproc.OnInvalidEvent, eproc.OnFailedEvent)
 		eproc.workers = append(eproc.workers, resolver)
-		go resolver.Process(ctx)
+		// Workers run on a background context (not the cancelable read context)
+		// so that on shutdown they drain the remaining buffered messages to
+		// completion and ack them rather than aborting in-flight persistence.
+		eproc.workerWG.Add(1)
+		go func(r *EventPersistenceWorker) {
+			defer eproc.workerWG.Done()
+			r.Process(context.Background())
+		}(resolver)
 	}
 }
 
@@ -138,6 +155,9 @@ func (eproc *EventPersistenceProcessor) Initialize(ctx context.Context) error {
 
 // Lifecycle callback that runs initialization logic.
 func (eproc *EventPersistenceProcessor) ExecuteInitialize(ctx context.Context) error {
+	// Derive the cancelable context the read loop runs under (E10/A5).
+	eproc.procCtx, eproc.procCancel = context.WithCancel(ctx)
+
 	// Initialize pool of event resolvers.
 	eproc.initializeEventPersistenceWorkers(ctx)
 
@@ -162,15 +182,24 @@ func (eproc *EventPersistenceProcessor) ProcessMessage(ctx context.Context) bool
 			eproc.ResolvedEventsReader.HandleResponse(err)
 		}
 	} else {
-		eproc.messages <- msg
+		// Hand off to the workers, but abandon the handoff on shutdown so the
+		// loop can exit instead of blocking on a full channel (A5). The message
+		// is unacked, so it is redelivered after restart.
+		select {
+		case eproc.messages <- msg:
+		case <-ctx.Done():
+			return true
+		}
 	}
 	return false
 }
 
 // Lifecycle callback that runs startup logic.
 func (eproc *EventPersistenceProcessor) ExecuteStart(ctx context.Context) error {
-	// Processing loop for failed events.
+	// Processing loop for failed events (drains until the failed channel closes).
+	eproc.outboundWG.Add(1)
 	go func() {
+		defer eproc.outboundWG.Done()
 		for {
 			eof := eproc.ProcessFailedEvent(ctx)
 			if eof {
@@ -178,10 +207,13 @@ func (eproc *EventPersistenceProcessor) ExecuteStart(ctx context.Context) error 
 			}
 		}
 	}()
-	// Processing loop for inbound messages.
+	// Processing loop for inbound messages (runs under the cancelable context so
+	// ExecuteStop can stop it before the channels are closed).
+	eproc.readerWG.Add(1)
 	go func() {
+		defer eproc.readerWG.Done()
 		for {
-			eof := eproc.ProcessMessage(ctx)
+			eof := eproc.ProcessMessage(eproc.procCtx)
 			if eof {
 				break
 			}
@@ -195,10 +227,19 @@ func (eproc *EventPersistenceProcessor) Stop(ctx context.Context) error {
 	return eproc.lifecycle.Stop(ctx)
 }
 
-// Lifecycle callback that runs shutdown logic.
+// Lifecycle callback that runs shutdown logic. It unwinds the pipeline in
+// dependency order so no goroutine ever sends on a closed channel (A5): stop the
+// reader, then close the channel it feeds, then wait for the workers it feeds
+// before closing the channel they feed, then wait for the outbound loop.
 func (eproc *EventPersistenceProcessor) ExecuteStop(context.Context) error {
-	close(eproc.messages)
-	close(eproc.failed)
+	if eproc.procCancel != nil {
+		eproc.procCancel()
+	}
+	eproc.readerWG.Wait()   // reader stopped: no more sends to messages
+	close(eproc.messages)   //
+	eproc.workerWG.Wait()   // workers drained + exited: no more sends to failed
+	close(eproc.failed)     //
+	eproc.outboundWG.Wait() // outbound loop drained + exited
 	return nil
 }
 

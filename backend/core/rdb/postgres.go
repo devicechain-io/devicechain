@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	pgx "github.com/jackc/pgx/v4"
 	"github.com/rs/zerolog/log"
 	"gorm.io/driver/postgres"
@@ -142,28 +143,36 @@ func (rdb *RdbManager) bootstrapPostgres(pgconf *PostgresConfig) error {
 }
 
 // Initialize a postgres database.
-func (rdb *RdbManager) initializePostgres() error {
+func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 	pgconf, err := convertToPostgresConfig(rdb.InstanceConfig)
 	if err != nil {
 		return err
 	}
 
-	// Bootstrap the postgres database/schema if needed.
-	err = rdb.bootstrapPostgres(pgconf)
-	if err != nil {
+	// Bootstrap the postgres database/schema if needed, retrying so a few seconds
+	// of Postgres lag on a cluster restart degrades into a retry rather than a
+	// crash-loop (A6). bootstrapPostgres only creates what is missing, so a
+	// re-attempt after a partial failure is safe.
+	if err := core.RetryInfraConnect(ctx, "postgres", func(context.Context) error {
+		return rdb.bootstrapPostgres(pgconf)
+	}); err != nil {
 		return err
 	}
 
-	// Connect to database using params from instance configuration.
+	// Connect to database using params from instance configuration (also retried).
 	dsn := rdb.computePostgresDsn(pgconf)
-	db, err := gorm.Open(postgres.New(postgres.Config{
-		DSN: dsn,
-	}), &gorm.Config{
-		NamingStrategy: schema.NamingStrategy{
-			TablePrefix:   fmt.Sprintf("%s.", rdb.Microservice.FunctionalArea),
-			SingularTable: false,
-		}})
-	if err != nil {
+	var db *gorm.DB
+	if err := core.RetryInfraConnect(ctx, "postgres", func(context.Context) error {
+		var oerr error
+		db, oerr = gorm.Open(postgres.New(postgres.Config{
+			DSN: dsn,
+		}), &gorm.Config{
+			NamingStrategy: schema.NamingStrategy{
+				TablePrefix:   fmt.Sprintf("%s.", rdb.Microservice.FunctionalArea),
+				SingularTable: false,
+			}})
+		return oerr
+	}); err != nil {
 		return err
 	}
 

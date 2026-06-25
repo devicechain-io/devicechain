@@ -55,6 +55,13 @@ type Microservice struct {
 	lifecycle LifecycleManager
 	shutdown  chan os.Signal
 	done      chan bool
+
+	// rootCtx is the cancelable context handed to Initialize/Start; cancel is
+	// invoked at the start of shutdown so long-running loops (NATS consumers, the
+	// background auth gate) observe cancellation and unwind instead of running on
+	// a context that is never cancelled (ADR-022 review E10).
+	rootCtx context.Context
+	cancel  context.CancelFunc
 }
 
 // Create a new microservice instance
@@ -76,6 +83,7 @@ func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
 
 	// Create lifecycle manager and channels for tracking shutdown.
 	ms.lifecycle = NewLifecycleManager(ms.FunctionalArea, ms, callbacks)
+	ms.rootCtx, ms.cancel = context.WithCancel(context.Background())
 	ms.done = make(chan bool, 1)
 	ms.shutdown = make(chan os.Signal, 1)
 
@@ -136,12 +144,12 @@ func (ms *Microservice) Run() error {
 // Issue initialize and start commands to microservice
 func (ms *Microservice) InitializeAndStart() error {
 	startedat := time.Now()
-	err := ms.Initialize(context.Background())
+	err := ms.Initialize(ms.rootCtx)
 	if err != nil {
 		log.Error().Err(err).Msg("Unable to initialize microservice")
 		return err
 	}
-	err = ms.Start(context.Background())
+	err = ms.Start(ms.rootCtx)
 	if err != nil {
 		log.Error().Err(err).Msg("Unable to start microservice")
 		return err
@@ -153,6 +161,11 @@ func (ms *Microservice) InitializeAndStart() error {
 
 // Issue stop and terminate commands to microservice
 func (ms *Microservice) ShutDownNow() {
+	// Cancel the root context first so long-running loops (NATS consumers, the
+	// auth gate) observe cancellation and unwind (E10). Stop/Terminate run on
+	// fresh contexts so teardown still completes after the cancellation.
+	ms.cancel()
+
 	err := ms.Stop(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("Unable to stop microservice")
