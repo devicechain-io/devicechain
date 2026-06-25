@@ -4,6 +4,8 @@
 package config
 
 import (
+	"fmt"
+
 	"github.com/devicechain-io/dc-microservice/config"
 )
 
@@ -38,10 +40,31 @@ type DeviceManagementConfiguration struct {
 
 // Creates the default device management configuration
 func NewDeviceManagementConfiguration() *DeviceManagementConfiguration {
-	return &DeviceManagementConfiguration{
+	cfg := &DeviceManagementConfiguration{
 		RdbConfiguration: config.MicroserviceDatastoreConfiguration{
 			SqlDebug: true,
 		},
-		DeviceAuthMode: AuthModeOptional,
 	}
+	cfg.ApplyDefaults()
+	return cfg
+}
+
+// ApplyDefaults fills unset fields with their defaults so configuration loaded
+// from a document that omits them is still well-formed (ADR-022 decision 1).
+func (c *DeviceManagementConfiguration) ApplyDefaults() {
+	if c.DeviceAuthMode == "" {
+		c.DeviceAuthMode = AuthModeOptional
+	}
+}
+
+// Validate enforces semantic constraints after decoding and defaulting, failing
+// the load closed on an invalid configuration (ADR-022 decision 1).
+func (c *DeviceManagementConfiguration) Validate() error {
+	switch c.DeviceAuthMode {
+	case AuthModeDisabled, AuthModeOptional, AuthModeRequired:
+	default:
+		return fmt.Errorf("deviceAuthMode must be one of %q, %q, %q (got %q)",
+			AuthModeDisabled, AuthModeOptional, AuthModeRequired, c.DeviceAuthMode)
+	}
+	return nil
 }
