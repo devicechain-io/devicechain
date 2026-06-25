@@ -26,12 +26,25 @@ const (
 	RESOLVED_EVENT_BACKLOG_SIZE = 100 // Number of resolved events that can be waiting to publish
 )
 
+// ackCoord coordinates acknowledgement of one source message across the 1->N
+// resolved-event fan-out it produced. The source is acked once every resolved
+// event has been durably published, or Nak'd (once) if any publish fails so the
+// whole message is redelivered (ADR-022 review A3). It is only ever touched by
+// the single ProcessResolvedEvent goroutine, so no locking is required.
+type ackCoord struct {
+	src       messaging.Message
+	remaining int
+	failed    bool
+}
+
 // resolvedItem pairs a resolved event with the tenant it belongs to so the
 // outbound producer can publish to the tenant's subject (the tenant is derived
 // from the inbound subject and must travel with the event across the channel).
+// coord ties the item back to its source message for ack coordination.
 type resolvedItem struct {
 	tenant string
 	event  dmodel.ResolvedEvent
+	coord  *ackCoord
 }
 
 // failedItem pairs a failed event with its tenant for the same reason.
@@ -127,31 +140,62 @@ func (iproc *InboundEventsProcessor) OnUnresolvedEvent(tenant string, reason uin
 	}
 }
 
-// Handle case where event was successfully resolved.
+// Handle case where event was successfully resolved. The source message is acked
+// only after the last resolved event it produced has been durably published, and
+// Nak'd (once) if any publish fails so the whole message is redelivered (A3).
 func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) bool {
 	item, more := <-iproc.resolved
 	if more {
 		bytes, err := proto.MarshalResolvedEvent(&item.event)
-		if err != nil {
-			log.Error().Err(err).Msg("unable to marshal resolved event to protobuf")
-		} else {
+		if err == nil {
 			msg := messaging.Message{
 				Key:   []byte(strconv.FormatInt(int64(item.event.SourceDeviceId), 10)),
 				Value: bytes,
 			}
 			err = iproc.ResolvedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)
 			iproc.ResolvedEventsWriter.HandleResponse(err)
+		} else {
+			log.Error().Err(err).Msg("unable to marshal resolved event to protobuf")
 		}
+		iproc.settleResolved(item.coord, err)
 		return false
 	} else {
 		return true
 	}
 }
 
-// Called when an event is successfully resolved.
-func (iproc *InboundEventsProcessor) OnResolvedEvent(tenant string, events []EventResolutionResults) {
+// settleResolved records the outcome of publishing one resolved event against
+// its source's ack coordinator: a publish failure Naks the source once (whole
+// message redelivers); success decrements the outstanding count and acks the
+// source when the last resolved event has been published.
+func (iproc *InboundEventsProcessor) settleResolved(coord *ackCoord, err error) {
+	if coord == nil {
+		return
+	}
+	if err != nil {
+		if !coord.failed {
+			coord.failed = true
+			_ = coord.src.Nak()
+		}
+		return
+	}
+	coord.remaining--
+	if coord.remaining == 0 && !coord.failed {
+		_ = coord.src.Ack()
+	}
+}
+
+// Called when an event is successfully resolved. An event resolving to no tracked
+// relationships produces no output, so the source is acked immediately; otherwise
+// a coordinator acks it once all of its resolved events have been published.
+func (iproc *InboundEventsProcessor) OnResolvedEvent(src messaging.Message, tenant string, events []EventResolutionResults) {
+	if len(events) == 0 {
+		_ = src.Ack()
+		return
+	}
+	coord := &ackCoord{src: src, remaining: len(events)}
 	for _, event := range events {
-		iproc.resolved <- resolvedItem{tenant: tenant, event: *event.Resolved}
+		iproc.resolved <- resolvedItem{tenant: tenant, event: *event.Resolved, coord: coord}
 	}
 }
 

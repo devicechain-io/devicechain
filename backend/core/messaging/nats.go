@@ -24,7 +24,38 @@ const (
 	// fetchTimeout bounds a single pull-consumer Fetch so an idle reader can
 	// periodically check for shutdown instead of blocking forever.
 	fetchTimeout = 1 * time.Second
+
+	// fetchBatch is how many messages a single Fetch pulls. Batching amortizes
+	// the request-reply round trip across many messages so consume throughput is
+	// not capped at ~one RTT per message (ADR-022 review B1). Messages are then
+	// handed to the caller one per ReadMessage from an internal buffer. The whole
+	// batch starts its AckWait timer at fetch, so fetchBatch is kept well below
+	// ackWait * throughput (and within the processors' MESSAGE_BACKLOG channel)
+	// so the tail of a batch is not redelivered while still in the pipeline.
+	fetchBatch = 64
+
+	// ackWait is how long JetStream waits for an ack before redelivering a
+	// message. It must comfortably exceed the time a fetched batch takes to clear
+	// the worker pipeline (worst-case per-message DB persist latency * batch /
+	// workers) so a slow-but-succeeding message is not redelivered underneath the
+	// worker (ADR-022 review A4).
+	ackWait = 60 * time.Second
+
+	// MaxDeliver bounds redelivery of a poison message: after this many delivery
+	// attempts the broker stops redelivering, and consumers route the message to
+	// their dead-letter path (failed-events) on the final attempt rather than
+	// looping forever (ADR-022 review A4). Consumers compare Message.NumDelivered
+	// against this.
+	MaxDeliver = 5
 )
+
+// natsAck adapts a JetStream *nats.Msg to the transport-neutral Acknowledger so
+// the ack handle can ride the Message envelope to the worker that ultimately
+// handles it (ADR-022 review A3: ack only after the message is durably handled).
+type natsAck struct{ nm *nats.Msg }
+
+func (a natsAck) Ack() error { return a.nm.Ack() }
+func (a natsAck) Nak() error { return a.nm.Nak() }
 
 // NatsManager manages the lifecycle of NATS JetStream interactions for a
 // microservice. It mirrors the former KafkaManager's lifecycle shape so the
@@ -166,6 +197,10 @@ type natsReader struct {
 	// decision 3): a degraded service parks in ReadMessage instead of draining
 	// messages without live auth.
 	gate *core.ReadinessGate
+	// pending buffers the remainder of the last batch Fetch so ReadMessage can
+	// hand messages out one at a time while fetching in batches (B1). Messages
+	// are not acked here; the ack handle rides the returned Message (A3).
+	pending []*nats.Msg
 }
 
 // NewReader creates a durable pull consumer for the given subject suffix,
@@ -179,7 +214,16 @@ func (nmgr *NatsManager) NewReader(suffix string) (MessageReader, error) {
 	}
 	subject := WildcardSubject(nmgr.Microservice.InstanceId, suffix)
 	durable := DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
-	sub, err := nmgr.js.PullSubscribe(subject, durable, nats.BindStream(stream))
+	// Explicit consumer config (A4) rather than server defaults: explicit-ack so a
+	// message is only removed once a consumer acks it after durable handling (A3),
+	// a deliberate AckWait sized to persistence latency, and a finite MaxDeliver so
+	// a poison message stops redelivering and is routed to the dead-letter path by
+	// the consumer instead of looping forever.
+	sub, err := nmgr.js.PullSubscribe(subject, durable, nats.BindStream(stream),
+		nats.AckExplicit(),
+		nats.AckWait(ackWait),
+		nats.MaxDeliver(MaxDeliver),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -189,12 +233,14 @@ func (nmgr *NatsManager) NewReader(suffix string) (MessageReader, error) {
 	return r, nil
 }
 
-// ReadMessage blocks until a message is available, the context is cancelled, or
-// the subscription closes. It acks on fetch (parity with the previous Kafka
-// auto-commit-on-read; the in-memory channel pipeline already assumes messages
-// can be lost on crash). True ack-after-persist is a hardening follow-up.
-// On shutdown (ctx cancelled or subscription/connection closed) it returns
-// io.EOF so the existing processor EOF handling applies.
+// ReadMessage returns the next message, blocking until one is available, the
+// context is cancelled, or the subscription closes. Messages are fetched in
+// batches (B1) and buffered, so most calls return from the buffer without a
+// round trip. The message is NOT acked here (A3): its ack handle rides the
+// returned envelope so the consumer can Ack only after durably handling it, or
+// Nak to request redelivery. On shutdown (ctx cancelled or subscription/
+// connection closed) it returns io.EOF so the existing processor EOF handling
+// applies.
 func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -207,27 +253,39 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 				return Message{}, io.EOF
 			}
 		}
-		msgs, err := r.sub.Fetch(1, nats.MaxWait(fetchTimeout))
-		if err != nil {
-			if errors.Is(err, nats.ErrTimeout) {
+		if len(r.pending) == 0 {
+			msgs, err := r.sub.Fetch(fetchBatch, nats.MaxWait(fetchTimeout))
+			if err != nil {
+				if errors.Is(err, nats.ErrTimeout) {
+					continue
+				}
+				if errors.Is(err, nats.ErrConnectionClosed) ||
+					errors.Is(err, nats.ErrSubscriptionClosed) ||
+					errors.Is(err, nats.ErrConnectionDraining) {
+					return Message{}, io.EOF
+				}
+				return Message{}, err
+			}
+			if len(msgs) == 0 {
 				continue
 			}
-			if errors.Is(err, nats.ErrConnectionClosed) ||
-				errors.Is(err, nats.ErrSubscriptionClosed) ||
-				errors.Is(err, nats.ErrConnectionDraining) {
-				return Message{}, io.EOF
-			}
-			return Message{}, err
+			r.pending = msgs
 		}
-		if len(msgs) == 0 {
-			continue
-		}
-		nm := msgs[0]
-		if ackErr := nm.Ack(); ackErr != nil {
-			log.Error().Err(ackErr).Str("subject", nm.Subject).Msg("nats ack failed")
-		}
-		return Message{Subject: nm.Subject, Value: nm.Data}, nil
+		nm := r.pending[0]
+		r.pending = r.pending[1:]
+		return NewConsumedMessage(nm.Subject, nm.Data, deliveryCount(nm), natsAck{nm: nm}), nil
 	}
+}
+
+// deliveryCount returns the JetStream delivery attempt count for a consumed
+// message (1 on first delivery), or 0 when metadata is unavailable (which can
+// happen for a non-JetStream message and should not block handling).
+func deliveryCount(nm *nats.Msg) int {
+	md, err := nm.Metadata()
+	if err != nil {
+		return 0
+	}
+	return int(md.NumDelivered)
 }
 
 // HandleResponse logs the result of a read operation.
