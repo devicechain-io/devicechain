@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
@@ -18,14 +19,37 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	WORKER_COUNT         = 5   // Number of state mergers running in parallel
+	MESSAGE_BACKLOG_SIZE = 100 // Number of messages that can be read and waiting to be processed
+)
+
 // StateProcessor is a second, independent consumer of the resolved-events stream
 // (fan-out alongside event-management's persistence). For every resolved event it
 // updates the originating device's live state projection, and a background
 // monitor flips devices to inactive after an inactivity timeout.
+//
+// Like event-management's persistence processor, the single read loop only reads
+// messages and hands them to a pool of workers (E6); the workers run the actual
+// MergeDeviceState merge in parallel so projection throughput is not serialized.
+// Per-device coalescing across workers is safe because MergeDeviceState is
+// idempotent. Each message carries its own NATS ack handle, so the ack/nak
+// disposition (A3) is performed by the worker that merges it.
 type StateProcessor struct {
 	Microservice         *core.Microservice
 	ResolvedEventsReader messaging.MessageReader
 	Api                  model.DeviceStateApi
+
+	messages chan messaging.Message
+
+	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
+	// let ExecuteStop drain the reader before closing the channel it feeds, so the
+	// reader can never send on a closed channel at SIGTERM, and the workers drain
+	// the remaining backlog to completion before exiting.
+	procCtx    context.Context
+	procCancel context.CancelFunc
+	readerWG   sync.WaitGroup
+	workerWG   sync.WaitGroup
 
 	lifecycle core.LifecycleManager
 	quit      chan struct{}
@@ -54,7 +78,28 @@ func (sp *StateProcessor) Initialize(ctx context.Context) error {
 // Lifecycle callback that runs initialization logic.
 func (sp *StateProcessor) ExecuteInitialize(ctx context.Context) error {
 	sp.quit = make(chan struct{})
+
+	// Derive the cancelable context the read loop runs under (A5).
+	sp.procCtx, sp.procCancel = context.WithCancel(ctx)
+
+	// Initialize the pool of state-merge workers.
+	sp.initializeWorkers()
 	return nil
+}
+
+// Initialize pool of workers that merge device state in parallel.
+func (sp *StateProcessor) initializeWorkers() {
+	sp.messages = make(chan messaging.Message, MESSAGE_BACKLOG_SIZE)
+	for w := 1; w <= WORKER_COUNT; w++ {
+		sp.workerWG.Add(1)
+		// Workers run on a background context (not the cancelable read context)
+		// so that on shutdown they drain the remaining buffered messages to
+		// completion and ack them rather than aborting in-flight merges.
+		go func() {
+			defer sp.workerWG.Done()
+			sp.processMessages(context.Background())
+		}()
+	}
 }
 
 // Start component.
@@ -62,8 +107,9 @@ func (sp *StateProcessor) Start(ctx context.Context) error {
 	return sp.lifecycle.Start(ctx)
 }
 
-// Execute primary processing loop. This is done in a goroutine since it runs
-// indefinitely. For each resolved event it merges the originating device's state.
+// Execute the read side of the processing loop. Reads one resolved event from the
+// stream and hands it to the worker pool. Runs in a goroutine since it loops
+// indefinitely. Returns true once the stream EOFs or the loop is being shut down.
 func (sp *StateProcessor) ProcessMessage(ctx context.Context) bool {
 	msg, err := sp.ResolvedEventsReader.ReadMessage(ctx)
 	if err != nil {
@@ -75,6 +121,31 @@ func (sp *StateProcessor) ProcessMessage(ctx context.Context) bool {
 		return false
 	}
 
+	// Hand off to the workers, but abandon the handoff on shutdown so the loop
+	// can exit instead of blocking on a full channel (A5). The message is unacked,
+	// so it is redelivered after restart.
+	select {
+	case sp.messages <- msg:
+	case <-ctx.Done():
+		return true
+	}
+	return false
+}
+
+// processMessages is the worker loop: it drains the messages channel and merges
+// each event's originating device state. The A3 ack/nak contract rides on each
+// messaging.Message, so the worker that performs the merge is the one that acks
+// (success / poison) or naks (transient) it.
+func (sp *StateProcessor) processMessages(ctx context.Context) {
+	for msg := range sp.messages {
+		sp.mergeOne(ctx, msg)
+	}
+	log.Debug().Msg("Device state merger received shutdown signal.")
+}
+
+// mergeOne updates the originating device's live state projection for a single
+// resolved event and applies the A3 message disposition.
+func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 	// Derive the per-message tenant from the message subject and build a
 	// tenant-scoped context. Without a parseable tenant the state can not be
 	// updated safely (fail-closed) so the message is skipped.
@@ -84,7 +155,7 @@ func (sp *StateProcessor) ProcessMessage(ctx context.Context) bool {
 		// Poison message: redelivery will not make the tenant parseable, so ack
 		// to drop it rather than redeliver up to MaxDeliver times.
 		msg.Ack()
-		return false
+		return
 	}
 
 	// Attempt to unmarshal the resolved event. A projection has no failed-events
@@ -94,7 +165,7 @@ func (sp *StateProcessor) ProcessMessage(ctx context.Context) bool {
 		log.Warn().Err(err).Msg(fmt.Sprintf("Skipping resolved event that could not be parsed from subject %q", msg.Subject))
 		// Poison message: redelivery will not make it parseable, so ack to drop.
 		msg.Ack()
-		return false
+		return
 	}
 
 	// Update the originating device's live state projection.
@@ -109,20 +180,22 @@ func (sp *StateProcessor) ProcessMessage(ctx context.Context) bool {
 		} else {
 			msg.Nak()
 		}
-		return false
+		return
 	}
 
 	// Projection updated successfully: ack so the message is not redelivered.
 	msg.Ack()
-	return false
 }
 
 // Lifecycle callback that runs startup logic.
 func (sp *StateProcessor) ExecuteStart(ctx context.Context) error {
-	// Processing loop for inbound resolved events.
+	// Read loop for inbound resolved events. Runs under the cancelable context so
+	// ExecuteStop can stop it before the channel it feeds is closed.
+	sp.readerWG.Add(1)
 	go func() {
+		defer sp.readerWG.Done()
 		for {
-			eof := sp.ProcessMessage(ctx)
+			eof := sp.ProcessMessage(sp.procCtx)
 			if eof {
 				break
 			}
@@ -157,9 +230,19 @@ func (sp *StateProcessor) Stop(ctx context.Context) error {
 	return sp.lifecycle.Stop(ctx)
 }
 
-// Lifecycle callback that runs shutdown logic.
+// Lifecycle callback that runs shutdown logic. It unwinds the pipeline in
+// dependency order so no goroutine ever sends on a closed channel (A5): stop the
+// reader, then close the channel it feeds, then wait for the workers it feeds to
+// drain the backlog and exit. The inactivity monitor is stopped independently.
 func (sp *StateProcessor) ExecuteStop(context.Context) error {
-	close(sp.quit)
+	if sp.procCancel != nil {
+		sp.procCancel()
+	}
+	sp.readerWG.Wait() // reader stopped: no more sends to messages
+	close(sp.messages) //
+	sp.workerWG.Wait() // workers drained + exited
+
+	close(sp.quit) // stop the inactivity monitor
 	return nil
 }
 
