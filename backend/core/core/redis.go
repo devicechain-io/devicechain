@@ -52,8 +52,12 @@ func (rmgr *RedisManager) ExecuteInitialize(ctx context.Context) error {
 			return nil
 		},
 	})
-	if status := rmgr.Client.Ping(ctx); status.Err() != nil {
-		return status.Err()
+	// Retry the initial ping so a few seconds of Redis lag on a cluster restart
+	// degrades into a retry rather than a crash-loop (A6).
+	if err := RetryInfraConnect(ctx, "redis", func(ctx context.Context) error {
+		return rmgr.Client.Ping(ctx).Err()
+	}); err != nil {
+		return err
 	}
 	log.Info().Msg(fmt.Sprintf("Verified successful Redis ping against %s", url))
 

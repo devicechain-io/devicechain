@@ -118,16 +118,16 @@ func (rdb *RdbManager) Initialize(ctx context.Context) error {
 }
 
 // Lifecycle callback that runs initialization logic.
-func (rdb *RdbManager) ExecuteInitialize(context.Context) error {
+func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 	// Make sure database exists before interacting with it.
 	dbtype := rdb.InstanceConfig.Type
 	if strings.HasPrefix(dbtype, "postgres") {
-		err := rdb.initializePostgres()
+		err := rdb.initializePostgres(ctx)
 		if err != nil {
 			return err
 		}
 	} else if strings.HasPrefix(dbtype, "timescaledb") {
-		err := rdb.initializePostgres()
+		err := rdb.initializePostgres(ctx)
 		if err != nil {
 			return err
 		}

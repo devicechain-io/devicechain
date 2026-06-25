@@ -109,24 +109,33 @@ func (nmgr *NatsManager) streamReplicas() int {
 // wildcard consumer.
 func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
-	if _, err := nmgr.js.StreamInfo(name); err == nil {
-		return name, nil
-	} else if !errors.Is(err, nats.ErrStreamNotFound) {
-		return "", err
-	}
-	_, err := nmgr.js.AddStream(&nats.StreamConfig{
-		Name:      name,
-		Subjects:  []string{WildcardSubject(nmgr.Microservice.InstanceId, suffix)},
-		Storage:   nats.FileStorage,
-		Retention: nats.LimitsPolicy,
-		Discard:   nats.DiscardOld,
-		MaxAge:    streamMaxAge,
-		Replicas:  nmgr.streamReplicas(),
+	// Retry on connection/server errors so a few seconds of NATS lag on a cluster
+	// restart degrades into a retry rather than a crash-loop (A6). A stream that
+	// does not yet exist (ErrStreamNotFound) is the normal first-run case and is
+	// handled by creating it, not retried.
+	err := core.RetryInfraConnect(context.Background(), "nats jetstream", func(context.Context) error {
+		if _, err := nmgr.js.StreamInfo(name); err == nil {
+			return nil
+		} else if !errors.Is(err, nats.ErrStreamNotFound) {
+			return err
+		}
+		if _, err := nmgr.js.AddStream(&nats.StreamConfig{
+			Name:      name,
+			Subjects:  []string{WildcardSubject(nmgr.Microservice.InstanceId, suffix)},
+			Storage:   nats.FileStorage,
+			Retention: nats.LimitsPolicy,
+			Discard:   nats.DiscardOld,
+			MaxAge:    streamMaxAge,
+			Replicas:  nmgr.streamReplicas(),
+		}); err != nil {
+			return err
+		}
+		log.Info().Str("stream", name).Msg("Created JetStream stream")
+		return nil
 	})
 	if err != nil {
 		return "", err
 	}
-	log.Info().Str("stream", name).Msg("Created JetStream stream")
 	return name, nil
 }
 
