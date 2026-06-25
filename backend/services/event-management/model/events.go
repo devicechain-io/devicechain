@@ -89,3 +89,11 @@ type AlertEventCreateRequest struct {
 	Message string
 	Source  string
 }
+
+// AuditExempt opts the event tables out of the audit journal (ADR-019): they are
+// the high-volume, append-only telemetry data plane — immutable facts, not the
+// control-plane entity mutations the journal records.
+func (Event) AuditExempt() bool            { return true }
+func (LocationEvent) AuditExempt() bool    { return true }
+func (MeasurementEvent) AuditExempt() bool { return true }
+func (AlertEvent) AuditExempt() bool       { return true }

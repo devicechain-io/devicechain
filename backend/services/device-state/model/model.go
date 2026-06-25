@@ -25,6 +25,11 @@ type DeviceState struct {
 	InactivityTimeout   int // seconds; per-device override of the default
 }
 
+// AuditExempt opts the device-state projection out of the audit journal
+// (ADR-019): it is high-volume derived connectivity/activity state recomputed
+// from the event stream, not a control-plane entity mutation.
+func (DeviceState) AuditExempt() bool { return true }
+
 // Search criteria for locating device states. Note: DeviceId is filterable via
 // the API but is not exposed in the GraphQL criteria (graph-gophers can not bind
 // an optional Int onto a Go *uint); use deviceStatesByDeviceId for id lookups.
