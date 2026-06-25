@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"sync"
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/proto"
@@ -65,6 +66,15 @@ type InboundEventsProcessor struct {
 	failed    chan failedItem
 	resolved  chan resolvedItem
 	resolvers []*EventResolver
+
+	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
+	// let ExecuteStop drain senders before closing the channels they feed, so a
+	// resolver or the reader can never send on a closed channel at SIGTERM.
+	procCtx    context.Context
+	procCancel context.CancelFunc
+	readerWG   sync.WaitGroup
+	workerWG   sync.WaitGroup
+	outboundWG sync.WaitGroup
 
 	lifecycle core.LifecycleManager
 }
@@ -208,7 +218,14 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		resolver := NewEventResolver(w, iproc.Api, iproc.AuthMode, iproc.messages,
 			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent)
 		iproc.resolvers = append(iproc.resolvers, resolver)
-		go resolver.Process(ctx)
+		// Resolvers run on a background context (not the cancelable read context)
+		// so that on shutdown they drain the remaining buffered messages to
+		// completion and ack them rather than aborting in-flight resolution.
+		iproc.workerWG.Add(1)
+		go func(r *EventResolver) {
+			defer iproc.workerWG.Done()
+			r.Process(context.Background())
+		}(resolver)
 	}
 }
 
@@ -225,6 +242,9 @@ func (iproc *InboundEventsProcessor) Initialize(ctx context.Context) error {
 
 // Lifecycle callback that runs initialization logic.
 func (iproc *InboundEventsProcessor) ExecuteInitialize(ctx context.Context) error {
+	// Derive the cancelable context the read loop runs under (E10/A5).
+	iproc.procCtx, iproc.procCancel = context.WithCancel(ctx)
+
 	// Initialize pool of event resolvers.
 	iproc.initializeEventResolvers(ctx)
 
@@ -249,15 +269,24 @@ func (iproc *InboundEventsProcessor) ProcessMessage(ctx context.Context) bool {
 			iproc.InboundEventsReader.HandleResponse(err)
 		}
 	} else {
-		iproc.messages <- msg
+		// Hand off to the resolvers, but abandon the handoff on shutdown so the
+		// loop can exit instead of blocking on a full channel (A5). The message
+		// is unacked, so it is redelivered after restart.
+		select {
+		case iproc.messages <- msg:
+		case <-ctx.Done():
+			return true
+		}
 	}
 	return false
 }
 
 // Lifecycle callback that runs startup logic.
 func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
-	// Processing loop for failed events.
+	// Processing loop for failed events (drains until the failed channel closes).
+	iproc.outboundWG.Add(1)
 	go func() {
+		defer iproc.outboundWG.Done()
 		for {
 			eof := iproc.ProcessFailedEvent(ctx)
 			if eof {
@@ -265,8 +294,10 @@ func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
 			}
 		}
 	}()
-	// Processing loop for resolved events.
+	// Processing loop for resolved events (drains until the resolved channel closes).
+	iproc.outboundWG.Add(1)
 	go func() {
+		defer iproc.outboundWG.Done()
 		for {
 			eof := iproc.ProcessResolvedEvent(ctx)
 			if eof {
@@ -274,10 +305,13 @@ func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
 			}
 		}
 	}()
-	// Processing loop for inbound messages.
+	// Processing loop for inbound messages (runs under the cancelable context so
+	// ExecuteStop can stop it before the channels are closed).
+	iproc.readerWG.Add(1)
 	go func() {
+		defer iproc.readerWG.Done()
 		for {
-			eof := iproc.ProcessMessage(ctx)
+			eof := iproc.ProcessMessage(iproc.procCtx)
 			if eof {
 				break
 			}
@@ -291,11 +325,20 @@ func (iproc *InboundEventsProcessor) Stop(ctx context.Context) error {
 	return iproc.lifecycle.Stop(ctx)
 }
 
-// Lifecycle callback that runs shutdown logic.
+// Lifecycle callback that runs shutdown logic. It unwinds the pipeline in
+// dependency order so no goroutine ever sends on a closed channel (A5): stop the
+// reader, then close the channel it feeds, then wait for the resolvers it feeds
+// before closing the channels they feed, then wait for the outbound loops.
 func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
-	close(iproc.messages)
-	close(iproc.resolved)
-	close(iproc.failed)
+	if iproc.procCancel != nil {
+		iproc.procCancel()
+	}
+	iproc.readerWG.Wait()   // reader stopped: no more sends to messages
+	close(iproc.messages)   //
+	iproc.workerWG.Wait()   // resolvers drained + exited: no more sends to resolved/failed
+	close(iproc.resolved)   //
+	close(iproc.failed)     //
+	iproc.outboundWG.Wait() // outbound loops drained + exited
 	return nil
 }
 
