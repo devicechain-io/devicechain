@@ -24,7 +24,6 @@ type EventPersistenceWorker struct {
 	Api         model.EventManagementApi
 	Unpersisted <-chan messaging.Message
 	Invalid     func(error, messaging.Message)
-	Persisted   func(string, interface{})
 	Failed      func(string, uint, dmmodel.ResolvedEvent, error)
 }
 
@@ -37,14 +36,12 @@ type EventPersistenceResults struct {
 func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
 	unpersisted <-chan messaging.Message,
 	invalid func(error, messaging.Message),
-	persisted func(string, interface{}),
 	failed func(string, uint, dmmodel.ResolvedEvent, error)) *EventPersistenceWorker {
 	return &EventPersistenceWorker{
 		WorkerId:    workerId,
 		Api:         api,
 		Unpersisted: unpersisted,
 		Invalid:     invalid,
-		Persisted:   persisted,
 		Failed:      failed,
 	}
 }
@@ -223,13 +220,8 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 			}
 
 			// Persist the event using the per-message tenant context.
-			results, err := ep.PersistEvent(msgctx, *event)
-			if err != nil {
+			if _, err := ep.PersistEvent(msgctx, *event); err != nil {
 				ep.Failed(tenant, 0, *event, err)
-			} else {
-				for _, result := range results.Events {
-					ep.Persisted(tenant, result)
-				}
 			}
 		} else {
 			log.Debug().Msg("Event persister received shutdown signal.")

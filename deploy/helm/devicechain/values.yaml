@@ -64,6 +64,18 @@ image:
 service:
   port: 8080
 
+# Prometheus scrape integration. Metrics are NOT served on a dedicated port:
+# /metrics rides on the graphql port 8080 (the shared HTTP mux), so the
+# ServiceMonitor scrapes the Service's named `graphql` port at path /metrics.
+# (The instance.config.infrastructure.metrics.httpPort 9090 is not used here.)
+#
+# enabled renders one monitoring.coreos.com/v1 ServiceMonitor per enabled
+# functional area. This REQUIRES the Prometheus Operator CRDs to be installed on
+# the cluster — set it to false if they are not present (the chart will then omit
+# all ServiceMonitors).
+metrics:
+  enabled: true
+
 # Default pod resource requests/limits (override per area under
 # functionalAreas.<area>.resources).
 resources: {}

@@ -31,7 +31,6 @@ var (
 
 	ResolvedEventsReader      messaging.MessageReader
 	EventPersistenceProcessor *processor.EventPersistenceProcessor
-	PersistedEventsWriter     messaging.MessageWriter
 	FailedEventsWriter        messaging.MessageWriter
 )
 
@@ -78,13 +77,6 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	ResolvedEventsReader = revents
 
-	// Add and initialize persisted events writer.
-	pevents, err := nmgr.NewWriter(config.SUBJECT_PERSISTED_EVENTS)
-	if err != nil {
-		return err
-	}
-	PersistedEventsWriter = pevents
-
 	// Add and initialize failed events writer.
 	fevents, err := nmgr.NewWriter(dmconfig.SUBJECT_FAILED_EVENTS)
 	if err != nil {
@@ -94,7 +86,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 
 	// Add and initialize inbound events processor.
 	EventPersistenceProcessor = processor.NewEventPersistenceProcessor(Microservice, ResolvedEventsReader,
-		PersistedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), Api)
+		FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), Api)
 	err = EventPersistenceProcessor.Initialize(context.Background())
 	if err != nil {
 		return err

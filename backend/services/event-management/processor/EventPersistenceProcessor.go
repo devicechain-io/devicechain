@@ -19,50 +19,40 @@ import (
 )
 
 const (
-	WORKER_COUNT                 = 5   // Number of event persisters running in parallel
-	MESSAGE_BACKLOG_SIZE         = 100 // Number of messages that can be read and waiting to be processed
-	FAILED_EVENT_BACKLOG_SIZE    = 100 // Number of failed events that can be waiting to publish
-	PERSISTED_EVENT_BACKLOG_SIZE = 100 // Number of persisted events that can be waiting to publish
+	WORKER_COUNT              = 5   // Number of event persisters running in parallel
+	MESSAGE_BACKLOG_SIZE      = 100 // Number of messages that can be read and waiting to be processed
+	FAILED_EVENT_BACKLOG_SIZE = 100 // Number of failed events that can be waiting to publish
 )
 
-// persistedItem pairs a persisted event with the tenant it belongs to so the
-// outbound producer can publish to the tenant's subject (the tenant is derived
-// from the inbound subject and must travel with the event across the channel).
-type persistedItem struct {
-	tenant string
-	event  interface{}
-}
-
-// failedItem pairs a failed event with its tenant for the same reason.
+// failedItem pairs a failed event with its tenant so the outbound producer can
+// publish to the tenant's subject (the tenant is derived from the inbound
+// subject and must travel with the event across the channel).
 type failedItem struct {
 	tenant string
 	event  dmodel.FailedEvent
 }
 
 type EventPersistenceProcessor struct {
-	Microservice          *core.Microservice
-	ResolvedEventsReader  messaging.MessageReader
-	PersistedEventsWriter messaging.MessageWriter
-	FailedEventsWriter    messaging.MessageWriter
-	Api                   emmodel.EventManagementApi
+	Microservice         *core.Microservice
+	ResolvedEventsReader messaging.MessageReader
+	FailedEventsWriter   messaging.MessageWriter
+	Api                  emmodel.EventManagementApi
 
-	messages  chan messaging.Message
-	persisted chan persistedItem
-	failed    chan failedItem
-	workers   []*EventPersistenceWorker
+	messages chan messaging.Message
+	failed   chan failedItem
+	workers  []*EventPersistenceWorker
 
 	lifecycle core.LifecycleManager
 }
 
 // Create a new inbound events processor.
-func NewEventPersistenceProcessor(ms *core.Microservice, resolved messaging.MessageReader, persisted messaging.MessageWriter,
+func NewEventPersistenceProcessor(ms *core.Microservice, resolved messaging.MessageReader,
 	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api emmodel.EventManagementApi) *EventPersistenceProcessor {
 	eproc := &EventPersistenceProcessor{
-		Microservice:          ms,
-		ResolvedEventsReader:  resolved,
-		PersistedEventsWriter: persisted,
-		FailedEventsWriter:    failed,
-		Api:                   api,
+		Microservice:         ms,
+		ResolvedEventsReader: resolved,
+		FailedEventsWriter:   failed,
+		Api:                  api,
 	}
 
 	// Create lifecycle manager.
@@ -123,28 +113,6 @@ func (eproc *EventPersistenceProcessor) OnFailedEvent(tenant string, reason uint
 	}
 }
 
-// Handle case where event was successfully persisted.
-func (eproc *EventPersistenceProcessor) ProcessPersistedEvent(ctx context.Context) bool {
-	item, more := <-eproc.persisted
-	if more {
-		bytes := []byte("test")
-		msg := messaging.Message{
-			Key:   []byte("xxx"),
-			Value: bytes,
-		}
-		err := eproc.PersistedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)
-		eproc.PersistedEventsWriter.HandleResponse(err)
-		return false
-	} else {
-		return true
-	}
-}
-
-// Called when an event is successfully persisted.
-func (eproc *EventPersistenceProcessor) OnPersistedEvent(tenant string, event interface{}) {
-	eproc.persisted <- persistedItem{tenant: tenant, event: event}
-}
-
 // Initialize pool of workers for persisting events.
 func (eproc *EventPersistenceProcessor) initializeEventPersistenceWorkers(ctx context.Context) {
 	// Make channels and workers for distributed processing.
@@ -152,7 +120,7 @@ func (eproc *EventPersistenceProcessor) initializeEventPersistenceWorkers(ctx co
 	eproc.workers = make([]*EventPersistenceWorker, 0)
 	for w := 1; w <= WORKER_COUNT; w++ {
 		resolver := NewEventPersistenceWorker(w, eproc.Api, eproc.messages,
-			eproc.OnInvalidEvent, eproc.OnPersistedEvent, eproc.OnFailedEvent)
+			eproc.OnInvalidEvent, eproc.OnFailedEvent)
 		eproc.workers = append(eproc.workers, resolver)
 		go resolver.Process(ctx)
 	}
@@ -161,7 +129,6 @@ func (eproc *EventPersistenceProcessor) initializeEventPersistenceWorkers(ctx co
 // Initialize outbound processing.
 func (eproc *EventPersistenceProcessor) initializeOutboundProcessing(ctx context.Context) {
 	eproc.failed = make(chan failedItem, FAILED_EVENT_BACKLOG_SIZE)
-	eproc.persisted = make(chan persistedItem, PERSISTED_EVENT_BACKLOG_SIZE)
 }
 
 // Initialize component.
@@ -211,15 +178,6 @@ func (eproc *EventPersistenceProcessor) ExecuteStart(ctx context.Context) error 
 			}
 		}
 	}()
-	// Processing loop for resolved events.
-	go func() {
-		for {
-			eof := eproc.ProcessPersistedEvent(ctx)
-			if eof {
-				break
-			}
-		}
-	}()
 	// Processing loop for inbound messages.
 	go func() {
 		for {
@@ -240,7 +198,6 @@ func (eproc *EventPersistenceProcessor) Stop(ctx context.Context) error {
 // Lifecycle callback that runs shutdown logic.
 func (eproc *EventPersistenceProcessor) ExecuteStop(context.Context) error {
 	close(eproc.messages)
-	close(eproc.persisted)
 	close(eproc.failed)
 	return nil
 }
