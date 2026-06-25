@@ -48,7 +48,7 @@ func TestValidate_RoundTrip(t *testing.T) {
 	iss := NewIssuer(key, "test", time.Minute, time.Hour)
 	v := NewValidator(&key.PublicKey)
 
-	tok, err := iss.IssueAccess("tenant-a", "alice", []string{"admin"}, "jti-1")
+	tok, err := iss.IssueAccess("tenant-a", "alice", []string{"admin"}, []string{string(AuthorityAll)}, "jti-1")
 	if err != nil {
 		t.Fatalf("IssueAccess: %v", err)
 	}
@@ -61,6 +61,9 @@ func TestValidate_RoundTrip(t *testing.T) {
 	}
 	if len(claims.Roles) != 1 || claims.Roles[0] != "admin" {
 		t.Fatalf("unexpected roles: %+v", claims.Roles)
+	}
+	if !claims.HasAuthority(DeviceWrite) {
+		t.Fatalf("expected super-authority to grant device:write: %+v", claims.Authorities)
 	}
 }
 
@@ -116,8 +119,8 @@ func TestValidate_TokenTypeSeparation(t *testing.T) {
 	iss := NewIssuer(key, "test", time.Minute, time.Hour)
 	v := NewValidator(&key.PublicKey)
 
-	access, _ := iss.IssueAccess("tenant-a", "alice", nil, "a")
-	refresh, _ := iss.IssueRefresh("tenant-a", "alice", nil, "r")
+	access, _ := iss.IssueAccess("tenant-a", "alice", nil, nil, "a")
+	refresh, _ := iss.IssueRefresh("tenant-a", "alice", nil, nil, "r")
 
 	if _, err := v.Validate(refresh.Token); err == nil {
 		t.Fatal("Validate accepted a refresh token")

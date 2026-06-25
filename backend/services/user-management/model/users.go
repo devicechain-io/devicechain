@@ -24,6 +24,11 @@ type User struct {
 	LastName     string `gorm:"size:128"`
 	Enabled      bool   `gorm:"not null;default:true"`
 	PasswordHash string `gorm:"not null;size:256" json:"-"`
+
+	// Roles the user is assigned (ADR-008 RBAC), via the user_roles join table.
+	// Their granted authorities are unioned and expanded into the user's tokens at
+	// login/refresh.
+	Roles []Role `gorm:"many2many:user_roles;"`
 }
 
 // SigningKey is an instance-global RSA keypair used to sign and verify the

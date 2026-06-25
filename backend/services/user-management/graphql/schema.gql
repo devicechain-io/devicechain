@@ -5,10 +5,59 @@ type AuthToken {
     expiresAt: String!
 }
 
+# A named bundle of granted authorities (ADR-008 RBAC).
+type Role {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    token: String!
+    name: String
+    description: String
+    authorities: [String!]!
+}
+
+# Data required to create or update a role. Each authority must name a known
+# capability (e.g. "device:write", or "*" for the super-authority).
+input RoleCreateRequest {
+    token: String!
+    name: String
+    description: String
+    authorities: [String!]!
+}
+
+# A platform user. The password hash is never exposed.
+type User {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    username: String!
+    email: String
+    firstName: String
+    lastName: String
+    enabled: Boolean!
+    roles: [Role!]!
+}
+
+# Data required to create a user.
+input UserCreateRequest {
+    username: String!
+    password: String!
+    email: String
+    firstName: String
+    lastName: String
+    enabled: Boolean!
+}
+
 # Contains queries executed against model.
 type Query {
-    # Liveness placeholder until tenant-user queries land (Phase 2).
+    # Liveness placeholder.
     ping: String!
+    # List users in the tenant (requires user:read).
+    users: [User!]!
+    # List roles in the tenant (requires role:read).
+    roles: [Role!]!
+    # Look up roles by token (requires role:read).
+    rolesByToken(tokens: [String!]!): [Role!]!
 }
 
 # Contains mutations executed against model.
@@ -17,6 +66,16 @@ type Mutation {
     login(username: String!, password: String!): AuthToken!
     # Exchange a valid refresh token for a new pair (rotates the refresh token).
     refresh(refreshToken: String!): AuthToken!
+    # Create a role granting a set of authorities (requires role:write).
+    createRole(request: RoleCreateRequest!): Role!
+    # Update a role by token (requires role:write).
+    updateRole(token: String!, request: RoleCreateRequest!): Role!
+    # Delete a role by token; returns whether one was removed (requires role:write).
+    deleteRole(token: String!): Boolean!
+    # Create a user (requires user:write).
+    createUser(request: UserCreateRequest!): User!
+    # Replace a user's role assignments (requires user:write).
+    setUserRoles(username: String!, roleTokens: [String!]!): User!
 }
 
 schema {

@@ -84,12 +84,12 @@ func TestValidate_SelectsKeyByKid(t *testing.T) {
 		Thumbprint(&k2.PublicKey): &k2.PublicKey,
 	})
 
-	tok2, _ := NewIssuer(k2, "test", time.Minute, time.Hour).IssueAccess("tenant-a", "alice", nil, "j2")
+	tok2, _ := NewIssuer(k2, "test", time.Minute, time.Hour).IssueAccess("tenant-a", "alice", nil, nil, "j2")
 	if _, err := v.Validate(tok2.Token); err != nil {
 		t.Fatalf("validator rejected a token signed by a held key: %v", err)
 	}
 
-	tok3, _ := NewIssuer(k3, "test", time.Minute, time.Hour).IssueAccess("tenant-a", "alice", nil, "j3")
+	tok3, _ := NewIssuer(k3, "test", time.Minute, time.Hour).IssueAccess("tenant-a", "alice", nil, nil, "j3")
 	if _, err := v.Validate(tok3.Token); err == nil {
 		t.Fatal("validator accepted a token whose kid it does not hold")
 	}
@@ -107,7 +107,7 @@ func TestValidate_LazyRefreshOnUnknownKid(t *testing.T) {
 		time.Minute,
 	)
 
-	tok, _ := NewIssuer(newKey, "test", time.Minute, time.Hour).IssueAccess("tenant-a", "alice", nil, "jn")
+	tok, _ := NewIssuer(newKey, "test", time.Minute, time.Hour).IssueAccess("tenant-a", "alice", nil, nil, "jn")
 	if _, err := v.Validate(tok.Token); err != nil {
 		t.Fatalf("validator did not pick up the rotated-in key: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestValidate_RefreshThrottled(t *testing.T) {
 	)
 
 	for i := 0; i < 5; i++ {
-		tok, _ := NewIssuer(k2, "test", time.Minute, time.Hour).IssueAccess("tenant-a", "alice", nil, "j")
+		tok, _ := NewIssuer(k2, "test", time.Minute, time.Hour).IssueAccess("tenant-a", "alice", nil, nil, "j")
 		_, _ = v.Validate(tok.Token) // expected to fail; we only assert refetch count
 	}
 	mu.Lock()

@@ -202,7 +202,7 @@ func (m *Manager) Login(ctx context.Context, username, password string) (*TokenP
 		return nil, ErrInvalidCredentials
 	}
 	m.recordAuth(ctx, rdb.AuditOpLogin, user.Username, user.TenantId)
-	return m.issueTokens(user)
+	return m.issueTokens(ctx, user)
 }
 
 // recordAuth writes an authentication audit event (ADR-019) best-effort: a
@@ -236,7 +236,7 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, ErrInvalidToken
 	}
 	m.recordAuth(ctx, rdb.AuditOpRefresh, user.Username, user.TenantId)
-	return m.issueTokens(user)
+	return m.issueTokens(ctx, user)
 }
 
 // lookupUser resolves a user by globally-unique username. This is the sole
@@ -255,9 +255,14 @@ func (m *Manager) lookupUser(ctx context.Context, username string) (*model.User,
 }
 
 // issueTokens mints an access + refresh token pair for the user and records the
-// refresh token's jti in the server-side store.
-func (m *Manager) issueTokens(user *model.User) (*TokenPair, error) {
-	roles := []string{} // RBAC roles are a Phase 2 concern (roadmap).
+// refresh token's jti in the server-side store. The user's assigned roles are
+// expanded into their effective authorities and carried in the token claims
+// (ADR-008 RBAC), so a role change takes effect on the next login or refresh.
+func (m *Manager) issueTokens(ctx context.Context, user *model.User) (*TokenPair, error) {
+	roles, authorities, err := m.effectiveAuthorities(ctx, user)
+	if err != nil {
+		return nil, err
+	}
 
 	// Snapshot the issuer under the lock so a concurrent rotation cannot swap it
 	// mid-issue (the access and refresh tokens are then signed by one key).
@@ -265,13 +270,13 @@ func (m *Manager) issueTokens(user *model.User) (*TokenPair, error) {
 	issuer := m.issuer
 	m.mu.RUnlock()
 
-	access, err := issuer.IssueAccess(user.TenantId, user.Username, roles, uuid.NewString())
+	access, err := issuer.IssueAccess(user.TenantId, user.Username, roles, authorities, uuid.NewString())
 	if err != nil {
 		return nil, err
 	}
 
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueRefresh(user.TenantId, user.Username, roles, refreshJti)
+	refresh, err := issuer.IssueRefresh(user.TenantId, user.Username, roles, authorities, refreshJti)
 	if err != nil {
 		return nil, err
 	}
@@ -297,13 +302,31 @@ func (m *Manager) seedBootstrapAdmin(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		tctx := core.WithTenant(ctx, m.bootstrap.Tenant)
 		admin := model.User{Username: m.bootstrap.Username, Enabled: true, PasswordHash: string(hash)}
 		admin.TenantId = m.bootstrap.Tenant
-		if err := m.db.DB(core.WithTenant(ctx, m.bootstrap.Tenant)).Create(&admin).Error; err != nil {
+		if err := m.db.DB(tctx).Create(&admin).Error; err != nil {
+			return err
+		}
+
+		// Seed an "admin" role granting the super-authority and assign it to the
+		// bootstrap admin, so the very first login carries full authority and can
+		// administer users and roles (ADR-008 RBAC).
+		adminName := "Administrator"
+		adminRole := model.Role{
+			TokenReference: rdb.TokenReference{Token: "admin"},
+			NamedEntity:    rdb.NamedEntity{Name: rdb.NullStrOf(&adminName)},
+			Authorities:    []string{string(auth.AuthorityAll)},
+		}
+		adminRole.TenantId = m.bootstrap.Tenant
+		if err := m.db.DB(tctx).Create(&adminRole).Error; err != nil {
+			return err
+		}
+		if err := m.db.DB(tctx).Model(&admin).Association("Roles").Append(&adminRole); err != nil {
 			return err
 		}
 		log.Warn().Str("username", m.bootstrap.Username).Str("tenant", m.bootstrap.Tenant).
-			Msg("Seeded bootstrap admin with the default password — CHANGE IT IMMEDIATELY.")
+			Msg("Seeded bootstrap admin (role=admin, authority=*) with the default password — CHANGE IT IMMEDIATELY.")
 		return nil
 	})
 }
