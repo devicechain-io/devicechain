@@ -30,8 +30,11 @@ type EventResolver struct {
 	AuthMode   string
 	Unresolved <-chan messaging.Message
 	Invalid    func(error, messaging.Message)
-	Resolved   func(string, []EventResolutionResults)
-	Failed     func(string, uint, esmodel.UnresolvedEvent, error)
+	// Resolved is handed the source message so its ack can be coordinated across
+	// the 1->N resolved-event fan-out (the source is acked only once every
+	// resolved event it produced has been durably published; ADR-022 review A3).
+	Resolved func(messaging.Message, string, []EventResolutionResults)
+	Failed   func(string, uint, esmodel.UnresolvedEvent, error)
 }
 
 // Results of event resolution process.
@@ -45,7 +48,7 @@ type EventResolutionResults struct {
 func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode string,
 	unrez <-chan messaging.Message,
 	invalid func(error, messaging.Message),
-	resolved func(string, []EventResolutionResults),
+	resolved func(messaging.Message, string, []EventResolutionResults),
 	failed func(string, uint, esmodel.UnresolvedEvent, error)) *EventResolver {
 	return &EventResolver{
 		WorkerId:   workerId,
@@ -347,13 +350,19 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			msgctx, tenant, ok := messaging.TenantContextFromSubject(ctx, unresolved.Subject)
 			if !ok {
 				log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in subject %q", unresolved.Subject))
+				// No tenant means the message can never be processed; ack it so it
+				// is not redelivered (A3 — drop poison).
+				_ = unresolved.Ack()
 				continue
 			}
 
 			// Attempt to unmarshal event.
 			event, err := esproto.UnmarshalUnresolvedEvent(unresolved.Value)
 			if err != nil {
+				// Unparseable payload routes to the failed-events dead-letter path
+				// and is acked (terminal; redelivery cannot help).
 				rez.Invalid(err, unresolved)
+				_ = unresolved.Ack()
 				continue
 			}
 
@@ -367,9 +376,21 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			// Attempt to resolve event using the per-message tenant context.
 			resolved, reason, err := rez.ResolveEvent(msgctx, event)
 			if err != nil {
-				rez.Failed(tenant, reason, *event, err)
+				// Resolution failed. Retry via redelivery (a transient lookup error
+				// may clear, and a not-yet-registered device may appear) until the
+				// delivery cap, then route to the failed-events dead-letter path and
+				// ack so a permanently-unresolvable event stops looping (A4).
+				if unresolved.NumDelivered >= messaging.MaxDeliver {
+					rez.Failed(tenant, reason, *event, err)
+					_ = unresolved.Ack()
+				} else {
+					_ = unresolved.Nak()
+				}
 			} else {
-				rez.Resolved(tenant, resolved)
+				// On success the source is acked only after every resolved event it
+				// produced has been durably published (handled via the fan-out ack
+				// coordinator in OnResolvedEvent / ProcessResolvedEvent).
+				rez.Resolved(unresolved, tenant, resolved)
 			}
 		} else {
 			log.Debug().Msg("Event resolver received shutdown signal.")

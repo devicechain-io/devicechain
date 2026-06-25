@@ -202,6 +202,9 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 			msgctx, tenant, ok := messaging.TenantContextFromSubject(ctx, unpersisted.Subject)
 			if !ok {
 				log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in subject %q", unpersisted.Subject))
+				// Poison message: a message with no parseable tenant can not be
+				// persisted and redelivery can not help, so ack it to drop it.
+				unpersisted.Ack()
 				continue
 			}
 
@@ -209,6 +212,8 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 			event, err := dmproto.UnmarshalResolvedEvent(unpersisted.Value)
 			if err != nil {
 				ep.Invalid(err, unpersisted)
+				// Terminal: routed to the failed-events DLQ, so ack to drop it.
+				unpersisted.Ack()
 				continue
 			}
 
@@ -221,7 +226,18 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 
 			// Persist the event using the per-message tenant context.
 			if _, err := ep.PersistEvent(msgctx, *event); err != nil {
-				ep.Failed(tenant, 0, *event, err)
+				// Persist errors are treated as transient and retryable. Retry
+				// via redelivery up to the redelivery cap; on the final attempt
+				// route to the dead-letter path and ack to stop retrying.
+				if unpersisted.NumDelivered >= messaging.MaxDeliver {
+					ep.Failed(tenant, 0, *event, err)
+					unpersisted.Ack()
+				} else {
+					unpersisted.Nak()
+				}
+			} else {
+				// Durably persisted: ack so the message is not redelivered.
+				unpersisted.Ack()
 			}
 		} else {
 			log.Debug().Msg("Event persister received shutdown signal.")

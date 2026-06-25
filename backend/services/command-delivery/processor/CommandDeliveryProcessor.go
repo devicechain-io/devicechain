@@ -135,23 +135,41 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 		return false
 	}
 
-	// Derive the per-message tenant from the subject (fail-closed).
+	// Derive the per-message tenant from the subject (fail-closed). A response
+	// we cannot route to a tenant is poison: ack it so it does not redeliver.
 	tenantCtx, _, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
 	if !ok {
 		log.Warn().Msg(fmt.Sprintf("Skipping command response with no parseable tenant in subject %q", msg.Subject))
+		_ = msg.Ack()
 		return false
 	}
 
+	// An undecodable payload is poison: ack it so it does not redeliver.
 	var response responseEnvelope
 	if err := json.Unmarshal(msg.Value, &response); err != nil {
 		log.Warn().Err(err).Msg("Skipping undecodable command response")
+		_ = msg.Ack()
 		return false
 	}
 
 	if _, err := cproc.Api.MarkResponse(tenantCtx, response.CommandToken,
 		response.Success, response.Payload, response.Error); err != nil {
-		log.Error().Err(err).Str("command", response.CommandToken).Msg("unable to record command response")
+		// Treat a failed persist as transient. Nak to retry until the
+		// redelivery cap, then ack to give up (the device can resend and the
+		// command sweep handles redelivery of the command itself).
+		if msg.NumDelivered >= messaging.MaxDeliver {
+			log.Error().Err(err).Str("command", response.CommandToken).Int("attempts", msg.NumDelivered).
+				Msg("dropping command response after maximum delivery attempts")
+			_ = msg.Ack()
+		} else {
+			log.Error().Err(err).Str("command", response.CommandToken).Msg("unable to record command response")
+			_ = msg.Nak()
+		}
+		return false
 	}
+
+	// Response persisted successfully; ack so it is not redelivered.
+	_ = msg.Ack()
 	return false
 }
 

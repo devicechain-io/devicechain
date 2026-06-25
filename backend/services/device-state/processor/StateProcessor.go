@@ -81,6 +81,9 @@ func (sp *StateProcessor) ProcessMessage(ctx context.Context) bool {
 	msgctx, _, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
 	if !ok {
 		log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in subject %q", msg.Subject))
+		// Poison message: redelivery will not make the tenant parseable, so ack
+		// to drop it rather than redeliver up to MaxDeliver times.
+		msg.Ack()
 		return false
 	}
 
@@ -89,13 +92,28 @@ func (sp *StateProcessor) ProcessMessage(ctx context.Context) bool {
 	event, err := dmproto.UnmarshalResolvedEvent(msg.Value)
 	if err != nil {
 		log.Warn().Err(err).Msg(fmt.Sprintf("Skipping resolved event that could not be parsed from subject %q", msg.Subject))
+		// Poison message: redelivery will not make it parseable, so ack to drop.
+		msg.Ack()
 		return false
 	}
 
 	// Update the originating device's live state projection.
 	if _, err := sp.Api.MergeDeviceState(msgctx, event.SourceDeviceId, event.OccurredTime); err != nil {
 		log.Error().Err(err).Msg(fmt.Sprintf("Unable to merge device state for device %d", event.SourceDeviceId))
+		// Treat as transient (e.g. a DB blip). Retry via redelivery until the
+		// finite MaxDeliver cap, then give up: the projection is reconstructable,
+		// so dropping is preferable to looping forever.
+		if msg.NumDelivered >= messaging.MaxDeliver {
+			log.Error().Msg(fmt.Sprintf("Giving up on device state projection update for device %d after %d attempts", event.SourceDeviceId, msg.NumDelivered))
+			msg.Ack()
+		} else {
+			msg.Nak()
+		}
+		return false
 	}
+
+	// Projection updated successfully: ack so the message is not redelivered.
+	msg.Ack()
 	return false
 }
 

@@ -229,9 +229,11 @@ func (suite *InboundEventsProcessorTestSuite) TestUnresolvableLocationsEvent() {
 	bytes, err := esproto.MarshalUnresolvedEvent(loc)
 	assert.Nil(suite.T(), err)
 
-	// Assuming invalid binary message format..
+	// A device that can not be resolved routes to the failed-events stream only
+	// after the delivery cap is reached (earlier attempts are Nak'd for redelivery,
+	// A4), so simulate the final delivery attempt.
 	key := []byte(loc.Device)
-	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes}
+	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes, NumDelivered: messaging.MaxDeliver}
 
 	// Emulate read/write.
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
