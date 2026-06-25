@@ -17,6 +17,7 @@ func TestDefaultConfigurationValid(t *testing.T) {
 	assert.Equal(t, AuthModeOptional, cfg.DeviceAuthMode)
 	assert.Equal(t, DefaultDeviceCacheTtlSeconds, cfg.DeviceCacheTtlSeconds)
 	assert.Equal(t, DefaultRelationshipCacheTtlSeconds, cfg.RelationshipCacheTtlSeconds)
+	assert.Equal(t, DefaultMetricDefCacheTtlSeconds, cfg.MetricDefCacheTtlSeconds)
 	assert.NoError(t, cfg.Validate())
 }
 

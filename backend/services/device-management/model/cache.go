@@ -13,6 +13,7 @@ import (
 const (
 	CACHE_NAME_DEVICE_BY_TOKEN         = "device-by-token"
 	CACHE_NAME_RELATIONSHIPS_BY_SOURCE = "relationships-by-source"
+	CACHE_NAME_METRIC_DEFS_BY_TYPE     = "metric-defs-by-type"
 )
 
 // Caches bundles the caches the cached API decorator reads from and evicts. The
@@ -25,6 +26,11 @@ type Caches struct {
 	// RelationshipsBySource caches a device's tracked relationships (keyed by
 	// tenant+source device id).
 	RelationshipsBySource *messaging.Cache
+	// MetricDefsByType caches a device type's declared metric definitions (keyed by
+	// tenant+device type id), read on the hot path by ingest-time metric validation
+	// (ADR-016). Empty results are cached too — an untyped device type is the common
+	// case and should not query on every event.
+	MetricDefsByType *messaging.Cache
 }
 
 // InitializeCaches builds the caches used by the cached API, TTL'd from the
@@ -42,8 +48,14 @@ func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementC
 	if err != nil {
 		return nil, err
 	}
+	metricDefsByType, err := nmgr.NewCache(CACHE_NAME_METRIC_DEFS_BY_TYPE,
+		time.Duration(cfg.MetricDefCacheTtlSeconds)*time.Second)
+	if err != nil {
+		return nil, err
+	}
 	return &Caches{
 		DeviceByToken:         deviceByToken,
 		RelationshipsBySource: relationshipsBySource,
+		MetricDefsByType:      metricDefsByType,
 	}, nil
 }

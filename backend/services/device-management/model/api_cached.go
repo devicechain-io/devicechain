@@ -174,3 +174,66 @@ func (capi *CachedApi) CreateEntityRelationship(ctx context.Context,
 	}
 	return created, nil
 }
+
+// metricDefsByTypeKey builds the tenant-scoped cache key for a device type's
+// declared metric definitions, keyed by the device type row id.
+func metricDefsByTypeKey(tenant string, deviceTypeId uint) string {
+	return fmt.Sprintf("%s|%d", tenant, deviceTypeId)
+}
+
+// MetricDefinitionsByDeviceType serves the ingest validation path's per-device-type
+// metric-definition lookup from cache, including empty results (an untyped device
+// type is the common case and must not query on every measurement event). A lookup
+// without a tenant in context bypasses the cache and goes straight to the DB.
+func (capi *CachedApi) MetricDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*MetricDefinition, error) {
+	tenant, hasTenant := core.TenantFromContext(ctx)
+	if !hasTenant {
+		return capi.Api.MetricDefinitionsByDeviceType(ctx, deviceTypeId)
+	}
+
+	key := metricDefsByTypeKey(tenant, deviceTypeId)
+	var cached []*MetricDefinition
+	if found, err := capi.caches.MetricDefsByType.Get(ctx, key, &cached); err == nil && found {
+		return cached, nil
+	}
+
+	defs, err := capi.Api.MetricDefinitionsByDeviceType(ctx, deviceTypeId)
+	if err != nil {
+		return nil, err
+	}
+	_ = capi.caches.MetricDefsByType.Set(ctx, key, defs)
+	return defs, nil
+}
+
+// CreateMetricDefinition forwards to the DB then evicts the affected device type's
+// cached definitions so a newly declared metric is enforced on the next event.
+func (capi *CachedApi) CreateMetricDefinition(ctx context.Context, request *MetricDefinitionCreateRequest) (*MetricDefinition, error) {
+	created, err := capi.Api.CreateMetricDefinition(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	capi.evictMetricDefs(ctx, created)
+	return created, nil
+}
+
+// UpdateMetricDefinition forwards to the DB then evicts the affected device type's
+// cached definitions so a changed bound/type/enum takes effect on the next event
+// (bounded further by the cache TTL if a def is retargeted to another type).
+func (capi *CachedApi) UpdateMetricDefinition(ctx context.Context, token string, request *MetricDefinitionCreateRequest) (*MetricDefinition, error) {
+	updated, err := capi.Api.UpdateMetricDefinition(ctx, token, request)
+	if err != nil {
+		return nil, err
+	}
+	capi.evictMetricDefs(ctx, updated)
+	return updated, nil
+}
+
+// evictMetricDefs drops the cached definitions for a definition's device type.
+func (capi *CachedApi) evictMetricDefs(ctx context.Context, def *MetricDefinition) {
+	if def == nil {
+		return
+	}
+	if tenant, ok := core.TenantFromContext(ctx); ok {
+		_ = capi.caches.MetricDefsByType.Delete(ctx, metricDefsByTypeKey(tenant, def.DeviceTypeId))
+	}
+}
