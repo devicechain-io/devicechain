@@ -15,6 +15,7 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/proto"
@@ -34,7 +35,14 @@ type EventResolver struct {
 	// the 1->N resolved-event fan-out (the source is acked only once every
 	// resolved event it produced has been durably published; ADR-022 review A3).
 	Resolved func(messaging.Message, string, []EventResolutionResults)
-	Failed   func(string, uint, esmodel.UnresolvedEvent, error)
+	// Failed is handed the inbound message's correlation id (final argument) so
+	// the outbound failed event it produces is stamped with it and stays
+	// traceable end to end (ADR-022 review E15).
+	Failed func(string, uint, esmodel.UnresolvedEvent, error, string)
+	// metrics records RED instrumentation for the resolve loop (ADR-022 review
+	// E13). It is shared across all workers and may be nil in tests; Start() is
+	// nil-safe so a nil value no-ops.
+	metrics *core.ProcessorMetrics
 }
 
 // Results of event resolution process.
@@ -49,7 +57,8 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 	unrez <-chan messaging.Message,
 	invalid func(error, messaging.Message),
 	resolved func(messaging.Message, string, []EventResolutionResults),
-	failed func(string, uint, esmodel.UnresolvedEvent, error)) *EventResolver {
+	failed func(string, uint, esmodel.UnresolvedEvent, error, string),
+	metrics *core.ProcessorMetrics) *EventResolver {
 	return &EventResolver{
 		WorkerId:   workerId,
 		Api:        api,
@@ -58,6 +67,7 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 		Invalid:    invalid,
 		Resolved:   resolved,
 		Failed:     failed,
+		metrics:    metrics,
 	}
 }
 
@@ -340,7 +350,13 @@ func (rez *EventResolver) Process(ctx context.Context) {
 	for {
 		unresolved, more := <-rez.Unresolved
 		if more {
-			log.Debug().Msg(fmt.Sprintf("Event resolution handled by resolver id %d", rez.WorkerId))
+			// RED instrumentation for the resolve loop (E13): Start marks the
+			// message in-flight and starts its timer; done(result) is called
+			// exactly once on every disposition path below. correlation ties the
+			// inbound message into the per-message log context (E15).
+			done := rez.metrics.Start()
+			correlation := unresolved.CorrelationID()
+			log.Debug().Str("correlation", correlation).Msg(fmt.Sprintf("Event resolution handled by resolver id %d", rez.WorkerId))
 
 			// Derive the per-message tenant from the message subject and build a
 			// tenant-scoped context. Without a parseable tenant the message can
@@ -349,10 +365,11 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			// downstream producer can publish to the same tenant's subject.
 			msgctx, tenant, ok := messaging.TenantContextFromSubject(ctx, unresolved.Subject)
 			if !ok {
-				log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in subject %q", unresolved.Subject))
+				log.Warn().Str("correlation", correlation).Msg(fmt.Sprintf("Skipping message with no parseable tenant in subject %q", unresolved.Subject))
 				// No tenant means the message can never be processed; ack it so it
 				// is not redelivered (A3 — drop poison).
 				_ = unresolved.Ack()
+				done(core.ResultInvalid)
 				continue
 			}
 
@@ -363,13 +380,14 @@ func (rez *EventResolver) Process(ctx context.Context) {
 				// and is acked (terminal; redelivery cannot help).
 				rez.Invalid(err, unresolved)
 				_ = unresolved.Ack()
+				done(core.ResultInvalid)
 				continue
 			}
 
 			if log.Debug().Enabled() {
 				jevent, err := json.MarshalIndent(event, "", "  ")
 				if err == nil {
-					log.Debug().Msg(fmt.Sprintf("Received %s event:\n%s", event.EventType.String(), jevent))
+					log.Debug().Str("correlation", correlation).Msg(fmt.Sprintf("Received %s event:\n%s", event.EventType.String(), jevent))
 				}
 			}
 
@@ -381,16 +399,19 @@ func (rez *EventResolver) Process(ctx context.Context) {
 				// delivery cap, then route to the failed-events dead-letter path and
 				// ack so a permanently-unresolvable event stops looping (A4).
 				if unresolved.NumDelivered >= messaging.MaxDeliver {
-					rez.Failed(tenant, reason, *event, err)
+					rez.Failed(tenant, reason, *event, err, correlation)
 					_ = unresolved.Ack()
+					done(core.ResultFailed)
 				} else {
 					_ = unresolved.Nak()
+					done(core.ResultRetry)
 				}
 			} else {
 				// On success the source is acked only after every resolved event it
 				// produced has been durably published (handled via the fan-out ack
 				// coordinator in OnResolvedEvent / ProcessResolvedEvent).
 				rez.Resolved(unresolved, tenant, resolved)
+				done(core.ResultOK)
 			}
 		} else {
 			log.Debug().Msg("Event resolver received shutdown signal.")

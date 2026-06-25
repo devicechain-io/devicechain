@@ -83,6 +83,16 @@ func (g *ReadinessGate) WaitReady(ctx context.Context) error {
 	}
 }
 
+// MarkReady opens the readiness gate and records the readiness metric (E17).
+// Services call this rather than ms.Readiness.MarkReady directly so the ready
+// signal is exported. It is idempotent (the gate's MarkReady is).
+func (ms *Microservice) MarkReady(validator *auth.Validator) {
+	ms.Readiness.MarkReady(validator)
+	if ms.readyGauge != nil {
+		ms.readyGauge.Set(1)
+	}
+}
+
 // StartAuthGate launches the background auth bootstrap and returns immediately
 // (ADR-022 decision 3). The service starts not-ready; fetch is attempted
 // repeatedly until it succeeds, at which point the gate opens and the data plane
@@ -93,11 +103,17 @@ func (g *ReadinessGate) WaitReady(ctx context.Context) error {
 func (ms *Microservice) StartAuthGate(ctx context.Context, fetch func(context.Context) (*auth.Validator, error)) {
 	go func() {
 		for {
+			if ms.authAttempts != nil {
+				ms.authAttempts.Inc()
+			}
 			validator, err := fetch(ctx)
 			if err == nil {
-				ms.Readiness.MarkReady(validator)
+				ms.MarkReady(validator)
 				log.Info().Msg("Auth is live; service is ready and the data plane is released.")
 				return
+			}
+			if ms.authFailures != nil {
+				ms.authFailures.Inc()
 			}
 			log.Warn().Err(err).Msg("Auth not yet live; service remains not-ready (degraded). Retrying.")
 			select {

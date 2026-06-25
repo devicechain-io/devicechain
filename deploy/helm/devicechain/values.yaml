@@ -5,8 +5,11 @@
 # chart fails the render if the resulting set omits a required core area
 # (user-management, device-management) or an enabled area's hard dependency.
 
-# A named profile: one of "full", "telemetry", "ingest-only".
-profile: full
+# A named profile: one of "full", "telemetry", "ingest-only". Left empty by
+# default so an override file that sets `enabledFunctionalAreas` is not rejected
+# for "setting both" against a baked-in profile (E19); an empty selection still
+# resolves to the full profile.
+profile: ""
 
 # An explicit set of functional areas, as an alternative to `profile`.
 # e.g. [user-management, device-management, event-sources]

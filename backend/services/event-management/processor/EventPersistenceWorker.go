@@ -13,6 +13,7 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
@@ -25,7 +26,11 @@ type EventPersistenceWorker struct {
 	Api         model.EventManagementApi
 	Unpersisted <-chan messaging.Message
 	Invalid     func(error, messaging.Message)
-	Failed      func(string, uint, dmmodel.ResolvedEvent, error)
+	Failed      func(string, uint, dmmodel.ResolvedEvent, error, string)
+	// metrics records RED-style instrumentation for each message handled by this
+	// worker (ADR-022 E13). Shared by reference with sibling workers; may be nil
+	// in tests, so it is only ever touched via the nil-safe Start().
+	metrics *core.ProcessorMetrics
 }
 
 // Results of event persistence process.
@@ -37,13 +42,15 @@ type EventPersistenceResults struct {
 func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
 	unpersisted <-chan messaging.Message,
 	invalid func(error, messaging.Message),
-	failed func(string, uint, dmmodel.ResolvedEvent, error)) *EventPersistenceWorker {
+	failed func(string, uint, dmmodel.ResolvedEvent, error, string),
+	metrics *core.ProcessorMetrics) *EventPersistenceWorker {
 	return &EventPersistenceWorker{
 		WorkerId:    workerId,
 		Api:         api,
 		Unpersisted: unpersisted,
 		Invalid:     invalid,
 		Failed:      failed,
+		metrics:     metrics,
 	}
 }
 
@@ -224,7 +231,12 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 	for {
 		unpersisted, more := <-ep.Unpersisted
 		if more {
-			log.Debug().Msg(fmt.Sprintf("Event persistence handled by worker id %d", ep.WorkerId))
+			// Mark the message in-flight and record its result+duration on every
+			// disposition path below (ADR-022 E13). Start() is nil-safe.
+			done := ep.metrics.Start()
+
+			log.Debug().Int("worker", ep.WorkerId).Str("correlation", unpersisted.CorrelationID()).
+				Msg("Event persistence handled by worker")
 
 			// Derive the per-message tenant from the message subject and build a
 			// tenant-scoped context. Without a parseable tenant the message can
@@ -238,6 +250,7 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 				// Poison message: a message with no parseable tenant can not be
 				// persisted and redelivery can not help, so ack it to drop it.
 				unpersisted.Ack()
+				done(core.ResultInvalid)
 				continue
 			}
 
@@ -247,6 +260,7 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 				ep.Invalid(err, unpersisted)
 				// Terminal: routed to the failed-events DLQ, so ack to drop it.
 				unpersisted.Ack()
+				done(core.ResultInvalid)
 				continue
 			}
 
@@ -263,14 +277,17 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 				// via redelivery up to the redelivery cap; on the final attempt
 				// route to the dead-letter path and ack to stop retrying.
 				if unpersisted.NumDelivered >= messaging.MaxDeliver {
-					ep.Failed(tenant, 0, *event, err)
+					ep.Failed(tenant, 0, *event, err, unpersisted.CorrelationID())
 					unpersisted.Ack()
+					done(core.ResultFailed)
 				} else {
 					unpersisted.Nak()
+					done(core.ResultRetry)
 				}
 			} else {
 				// Durably persisted: ack so the message is not redelivered.
 				unpersisted.Ack()
+				done(core.ResultOK)
 			}
 		} else {
 			log.Debug().Msg("Event persister received shutdown signal.")

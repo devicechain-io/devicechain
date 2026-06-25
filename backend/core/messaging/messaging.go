@@ -38,8 +38,38 @@ type Message struct {
 	Key          []byte
 	Value        []byte
 	NumDelivered int
+	// Headers carries transport metadata across the pipeline (E15). Today it holds
+	// the correlation id used to follow a message through event-sources ->
+	// device-management -> event-management/device-state. It is transmitted via
+	// NATS message headers by the writer and populated from them by the reader.
+	Headers map[string]string
 
 	ack Acknowledger
+}
+
+// HeaderCorrelationID is the message-header key for the correlation id that ties
+// together every message derived from one originating event (E15).
+const HeaderCorrelationID = "Dc-Correlation-Id"
+
+// CorrelationID returns the message's correlation id, or "" when none is set.
+func (m Message) CorrelationID() string {
+	if m.Headers == nil {
+		return ""
+	}
+	return m.Headers[HeaderCorrelationID]
+}
+
+// WithCorrelationID returns a copy of the message carrying id as its correlation
+// id, so a producer can propagate the id from the message that triggered it onto
+// the messages it emits. The headers map is copied so the original is untouched.
+func (m Message) WithCorrelationID(id string) Message {
+	headers := make(map[string]string, len(m.Headers)+1)
+	for k, v := range m.Headers {
+		headers[k] = v
+	}
+	headers[HeaderCorrelationID] = id
+	m.Headers = headers
+	return m
 }
 
 // Acknowledger is the transport-neutral ack handle threaded onto a consumed
@@ -51,11 +81,11 @@ type Acknowledger interface {
 	Nak() error
 }
 
-// NewConsumedMessage builds a consumed message carrying its delivery count and
-// ack handle. Only message readers construct these; producers and tests use the
-// plain struct literal (no acknowledger, so Ack/Nak are no-ops).
-func NewConsumedMessage(subject string, value []byte, numDelivered int, ack Acknowledger) Message {
-	return Message{Subject: subject, Value: value, NumDelivered: numDelivered, ack: ack}
+// NewConsumedMessage builds a consumed message carrying its delivery count,
+// headers, and ack handle. Only message readers construct these; producers and
+// tests use the plain struct literal (no acknowledger, so Ack/Nak are no-ops).
+func NewConsumedMessage(subject string, value []byte, numDelivered int, headers map[string]string, ack Acknowledger) Message {
+	return Message{Subject: subject, Value: value, NumDelivered: numDelivered, Headers: headers, ack: ack}
 }
 
 // Ack acknowledges that the message has been durably handled so it is not

@@ -1,12 +1,20 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package functionalarea is the deployment catalog for DeviceChain's functional
-// areas (ADR-022 decision 2): which services exist, the messaging contract each
-// declares, their inter-area dependencies, and the named profiles that expand to
-// a valid enabled set. It is the single source the deployment-time validation
-// gate consults — today the operator, and the Helm-template guard / admission
-// webhook once decision 4 lands.
+// Package functionalarea is the canonical deployment catalog for DeviceChain's
+// functional areas (ADR-022 decision 2): which services exist, the messaging
+// contract each declares, their inter-area dependencies, and the named profiles
+// that expand to a valid enabled set.
+//
+// Since decision 4 narrowed the operator and moved workload rendering to the
+// Helm chart, the deployment-time dependency gate that actually runs is the
+// chart's `devicechain.enabledAreas` template guard, which mirrors this catalog.
+// No production Go code consults this package today (only its tests do); it is
+// deliberately retained as the single Go source of truth for that guard and for
+// the deferred dependency-admission webhook (ADR-022 review E18), which would
+// re-establish a Go enforcement path so the Helm template stops being a parallel
+// reimplementation. Until then the webhook is consciously descoped in favor of
+// the template guard (tracked on the roadmap).
 package functionalarea
 
 import (

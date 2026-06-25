@@ -27,10 +27,13 @@ const (
 
 // failedItem pairs a failed event with its tenant so the outbound producer can
 // publish to the tenant's subject (the tenant is derived from the inbound
-// subject and must travel with the event across the channel).
+// subject and must travel with the event across the channel). The inbound
+// message's correlation id (E15) also travels with it so the outbound failed
+// event can be stamped with the same id for end-to-end tracing.
 type failedItem struct {
-	tenant string
-	event  dmodel.FailedEvent
+	tenant        string
+	event         dmodel.FailedEvent
+	correlationId string
 }
 
 type EventPersistenceProcessor struct {
@@ -42,6 +45,10 @@ type EventPersistenceProcessor struct {
 	messages chan messaging.Message
 	failed   chan failedItem
 	workers  []*EventPersistenceWorker
+
+	// metrics records RED-style instrumentation (rate/errors/duration) for the
+	// persist loop (ADR-022 E13); shared by reference across all workers.
+	metrics *core.ProcessorMetrics
 
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
 	// let ExecuteStop drain senders before closing the channels they feed, so a
@@ -63,6 +70,7 @@ func NewEventPersistenceProcessor(ms *core.Microservice, resolved messaging.Mess
 		ResolvedEventsReader: resolved,
 		FailedEventsWriter:   failed,
 		Api:                  api,
+		metrics:              ms.NewProcessorMetrics("persist"),
 	}
 
 	// Create lifecycle manager.
@@ -83,11 +91,13 @@ func (eproc *EventPersistenceProcessor) ProcessFailedEvent(ctx context.Context) 
 			log.Error().Err(err).Msg("unable to marshal event to protobuf")
 		}
 
-		// Create and deliver message on the failed event's tenant subject.
+		// Create and deliver message on the failed event's tenant subject. Stamp
+		// it with the inbound message's correlation id (E15) so the emitted
+		// failed event can be traced back to the resolved event that triggered it.
 		msg := messaging.Message{
 			Key:   []byte(strconv.FormatInt(int64(item.event.Reason), 10)),
 			Value: bytes,
-		}
+		}.WithCorrelationID(item.correlationId)
 		err = eproc.FailedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)
 		eproc.FailedEventsWriter.HandleResponse(err)
 		return false
@@ -107,11 +117,12 @@ func (eproc *EventPersistenceProcessor) OnInvalidEvent(err error, msg messaging.
 	}
 	failed := dmodel.NewFailedEvent(uint(proto.FailureReason_Invalid), eproc.Microservice.FunctionalArea,
 		"message could not be parsed", err, msg.Value)
-	eproc.failed <- failedItem{tenant: tenant, event: *failed}
+	eproc.failed <- failedItem{tenant: tenant, event: *failed, correlationId: msg.CorrelationID()}
 }
 
-// Called when a message can not be persisted.
-func (eproc *EventPersistenceProcessor) OnFailedEvent(tenant string, reason uint, event dmodel.ResolvedEvent, perr error) {
+// Called when a message can not be persisted. The inbound correlation id (E15)
+// is threaded through from the worker so the emitted failed event carries it.
+func (eproc *EventPersistenceProcessor) OnFailedEvent(tenant string, reason uint, event dmodel.ResolvedEvent, perr error, correlationId string) {
 	// Marshal event message to protobuf.
 	bytes, err := proto.MarshalResolvedEvent(&event)
 	if err != nil {
@@ -119,7 +130,7 @@ func (eproc *EventPersistenceProcessor) OnFailedEvent(tenant string, reason uint
 	} else {
 		failed := dmodel.NewFailedEvent(reason, eproc.Microservice.FunctionalArea,
 			"event could not be processed", perr, bytes)
-		eproc.failed <- failedItem{tenant: tenant, event: *failed}
+		eproc.failed <- failedItem{tenant: tenant, event: *failed, correlationId: correlationId}
 	}
 }
 
@@ -130,7 +141,7 @@ func (eproc *EventPersistenceProcessor) initializeEventPersistenceWorkers(ctx co
 	eproc.workers = make([]*EventPersistenceWorker, 0)
 	for w := 1; w <= WORKER_COUNT; w++ {
 		resolver := NewEventPersistenceWorker(w, eproc.Api, eproc.messages,
-			eproc.OnInvalidEvent, eproc.OnFailedEvent)
+			eproc.OnInvalidEvent, eproc.OnFailedEvent, eproc.metrics)
 		eproc.workers = append(eproc.workers, resolver)
 		// Workers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to

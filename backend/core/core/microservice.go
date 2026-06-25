@@ -6,6 +6,8 @@ package core
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -51,6 +53,12 @@ type Microservice struct {
 	// Readiness gates the data plane on auth being live (ADR-022 decision 3).
 	Readiness *ReadinessGate
 
+	// Observability metrics (E17). nil when the microservice was built without
+	// NewMicroservice (e.g. in unit tests), so every use is nil-guarded.
+	readyGauge   prometheus.Gauge
+	authAttempts prometheus.Counter
+	authFailures prometheus.Counter
+
 	// Internal lifeycle processing
 	lifecycle LifecycleManager
 	shutdown  chan os.Signal
@@ -66,8 +74,6 @@ type Microservice struct {
 
 // Create a new microservice instance
 func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
-
 	ms := &Microservice{}
 	ms.StartTime = time.Now()
 	ms.InstanceId = os.Getenv(ENV_INSTANCE_ID)
@@ -77,9 +83,31 @@ func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
 	ms.MicroserviceName = os.Getenv(ENV_MICROSERVICE_NAME)
 	ms.FunctionalArea = os.Getenv(ENV_MS_FUNCTIONAL_AREA)
 
+	// Structured logging (E16): JSON by default for log aggregation, the colorized
+	// ConsoleWriter only when DC_LOG_CONSOLE is set (local dev). Every line is
+	// stamped with the instance/area (and tenant, when the pod is tenant-scoped) so
+	// logs are filterable without threading those fields through every call site.
+	if os.Getenv(ENV_LOG_CONSOLE) != "" {
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+	} else {
+		log.Logger = zerolog.New(os.Stderr).With().Timestamp().Logger()
+	}
+	baseCtx := log.Logger.With().Str("instance", ms.InstanceId).Str("area", ms.FunctionalArea)
+	if ms.TenantId != "" {
+		baseCtx = baseCtx.Str("tenant", ms.TenantId)
+	}
+	log.Logger = baseCtx.Logger()
+
 	// Create common tooling.
 	ms.Redis = NewRedisManager(ms, NewNoOpLifecycleCallbacks())
 	ms.Readiness = NewReadinessGate()
+
+	// Readiness/auth-degrade observability (E17): a gauge that is 1 once the data
+	// plane is ready and counters for the background auth-gate attempts/failures,
+	// so degraded-for-N is a first-class, alertable app signal.
+	ms.readyGauge = ms.NewGauge("ready", "1 when the data plane is ready (auth live), else 0", nil)
+	ms.authAttempts = ms.NewCounter("auth_gate_attempts_total", "Background auth-gate JWKS fetch attempts", nil)
+	ms.authFailures = ms.NewCounter("auth_gate_failures_total", "Background auth-gate JWKS fetch failures", nil)
 
 	// Create lifecycle manager and channels for tracking shutdown.
 	ms.lifecycle = NewLifecycleManager(ms.FunctionalArea, ms, callbacks)
@@ -208,23 +236,31 @@ func (ms *Microservice) waitForShutdown() {
 	<-ms.done
 }
 
-// Reloads instance configuration from configmap volume mapping
-func (ms *Microservice) ReloadInstanceConfiguration() error {
-	bytes, err := os.ReadFile("/etc/dci-config/instance")
+// LoadInstanceConfiguration reads the instance configuration from the mounted
+// config volume. It runs once at startup — a config change is rolled out by the
+// chart's checksum annotation restarting the pod, not by an in-place reload (E9),
+// hence "Load" rather than "Reload". After decoding it applies defaults and
+// validates, failing closed on an invalid instance configuration (E3).
+func (ms *Microservice) LoadInstanceConfiguration() error {
+	raw, err := os.ReadFile("/etc/dci-config/instance")
 	if err != nil {
 		return err
 	}
-	config := &config.InstanceConfiguration{}
-	err = json.Unmarshal(bytes, config)
-	if err != nil {
+	cfg := &config.InstanceConfiguration{}
+	if err := json.Unmarshal(raw, cfg); err != nil {
 		return err
 	}
-	ms.InstanceConfiguration = *config
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("instance configuration invalid: %w", err)
+	}
+	ms.InstanceConfiguration = *cfg
 	return nil
 }
 
-// Reloads microservice configuration from configmap volume mapping
-func (ms *Microservice) ReloadMicroserviceConfiguration() error {
+// LoadMicroserviceConfiguration reads this service's configuration from the
+// mounted config volume. Startup-only, like LoadInstanceConfiguration (E9).
+func (ms *Microservice) LoadMicroserviceConfiguration() error {
 	fa, found := os.LookupEnv(ENV_MS_FUNCTIONAL_AREA)
 	if !found {
 		return fmt.Errorf("environment variable for functional area (%s) not set", ENV_MS_FUNCTIONAL_AREA)
@@ -237,10 +273,17 @@ func (ms *Microservice) ReloadMicroserviceConfiguration() error {
 	}
 	ms.MicroserviceConfigurationRaw = cfgbytes
 
-	// Print configuration to log as json.
-	var fmted bytes.Buffer
-	json.Indent(&fmted, ms.MicroserviceConfigurationRaw, "", "  ")
-	log.Info().Msg(fmt.Sprintf("Using configuration:\n\n%s\n", fmted.String()))
+	// Log a short hash of the configuration, not its contents (E20): the raw
+	// config is a latent home for sensitive values, and a hash is enough to
+	// correlate a running pod with its config version. The full document is
+	// available only at debug level.
+	sum := sha256.Sum256(cfgbytes)
+	log.Info().Str("config_sha256", hex.EncodeToString(sum[:])[:16]).Msg("Loaded microservice configuration")
+	if log.Debug().Enabled() {
+		var fmted bytes.Buffer
+		json.Indent(&fmted, cfgbytes, "", "  ")
+		log.Debug().Msg(fmt.Sprintf("Microservice configuration:\n\n%s\n", fmted.String()))
+	}
 	return nil
 }
 
@@ -292,14 +335,14 @@ func (ms *Microservice) Initialize(ctx context.Context) error {
 // Initialize microservice (as called by lifecycle manager)
 func (ms *Microservice) ExecuteInitialize(ctx context.Context) error {
 	// Load instance configuration.
-	err := ms.ReloadInstanceConfiguration()
+	err := ms.LoadInstanceConfiguration()
 	if err != nil {
 		return err
 	}
 	log.Info().Msg("Successfully loaded instance configuration.")
 
 	// Load microservice configuration.
-	err = ms.ReloadMicroserviceConfiguration()
+	err = ms.LoadMicroserviceConfiguration()
 	if err != nil {
 		return err
 	}
