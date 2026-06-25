@@ -372,6 +372,38 @@ type ProvisionDeviceResult {
     created: Boolean!
 }
 
+# A device's possession claim (ADR-012): a one-time, optionally expiring secret an
+# eventual owner presents to assign the device to a customer. The claim secret is
+# write-only and is never exposed on this type.
+type DeviceClaim implements Model {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    device: Device!
+    status: String!
+    expiresAt: String
+    claimedTime: String
+    claimedByCustomer: Customer
+}
+
+# Data required to open (or reopen) a device claim.
+input DeviceClaimInitiateRequest {
+    deviceToken: String!
+    claimSecret: String!
+    expiresAt: String
+}
+
+# Data required to redeem a device claim: the device, the claim secret (proof of
+# possession), the customer to assign the device to, and the relationship type for
+# the resulting device→customer ownership edge.
+input DeviceClaimRequest {
+    deviceToken: String!
+    claimSecret: String!
+    customerToken: String!
+    relationshipType: String!
+}
+
 # Represents a type or class of assets
 type AssetType implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
     id: ID!
@@ -852,6 +884,8 @@ type Query {
     provisioningProfilesByToken(tokens: [String!]!): [ProvisioningProfile!]!
     # List provisioning profiles that meet criteria.
     provisioningProfiles(criteria: ProvisioningProfileSearchCriteria!): ProvisioningProfileSearchResults!
+    # Get a device's current possession claim, or null if it has none.
+    deviceClaim(deviceToken: String!): DeviceClaim
 
     # Find entity relationship types by unique id.
     entityRelationshipTypesById(ids: [String!]!): [EntityRelationshipType!]!
@@ -958,6 +992,15 @@ type Mutation {
     # tenant is resolved from the provision key and the key+secret is the gate.
     # Returns the credential the device must authenticate with going forward.
     provisionDevice(request: ProvisionDeviceRequest!): ProvisionDeviceResult!
+    # Open (or reopen) a possession claim on a device with a secret an eventual
+    # owner will present.
+    initiateDeviceClaim(request: DeviceClaimInitiateRequest!): DeviceClaim!
+    # Redeem a device's claim by presenting its secret, assigning the device to a
+    # customer via a relationship of the given type. Returns the created edge.
+    claimDevice(request: DeviceClaimRequest!): EntityRelationship!
+    # Cancel a device's open claim without assigning it. Returns whether an open
+    # claim was closed.
+    cancelDeviceClaim(deviceToken: String!): Boolean!
 
     # Create a new entity relationship type.
     createEntityRelationshipType(request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
