@@ -162,6 +162,10 @@ func (w *natsWriter) HandleResponse(err error) {
 type natsReader struct {
 	suffix string
 	sub    *nats.Subscription
+	// gate pauses consumption until the service's data plane is ready (ADR-022
+	// decision 3): a degraded service parks in ReadMessage instead of draining
+	// messages without live auth.
+	gate *core.ReadinessGate
 }
 
 // NewReader creates a durable pull consumer for the given subject suffix,
@@ -179,7 +183,7 @@ func (nmgr *NatsManager) NewReader(suffix string) (MessageReader, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &natsReader{suffix: suffix, sub: sub}
+	r := &natsReader{suffix: suffix, sub: sub, gate: nmgr.Microservice.Readiness}
 	nmgr.readers = append(nmgr.readers, r)
 	log.Info().Str("durable", durable).Str("subject", subject).Msg("Added new NATS reader")
 	return r, nil
@@ -195,6 +199,13 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return Message{}, io.EOF
+		}
+		// Stay parked until the data plane is released (ADR-022 decision 3). A
+		// cancelled context here means shutdown, which surfaces as EOF below.
+		if r.gate != nil {
+			if err := r.gate.WaitReady(ctx); err != nil {
+				return Message{}, io.EOF
+			}
 		}
 		msgs, err := r.sub.Fetch(1, nats.MaxWait(fetchTimeout))
 		if err != nil {

@@ -48,6 +48,9 @@ type Microservice struct {
 	// Common microservice tooling
 	Redis *RedisManager
 
+	// Readiness gates the data plane on auth being live (ADR-022 decision 3).
+	Readiness *ReadinessGate
+
 	// Internal lifeycle processing
 	lifecycle LifecycleManager
 	shutdown  chan os.Signal
@@ -69,6 +72,7 @@ func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
 
 	// Create common tooling.
 	ms.Redis = NewRedisManager(ms, NewNoOpLifecycleCallbacks())
+	ms.Readiness = NewReadinessGate()
 
 	// Create lifecycle manager and channels for tracking shutdown.
 	ms.lifecycle = NewLifecycleManager(ms.FunctionalArea, ms, callbacks)

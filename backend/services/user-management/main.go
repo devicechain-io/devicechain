@@ -118,12 +118,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		graphql.ContextIdentityKey: IdentityManager,
 	}
 
-	// Create and initialize graphql manager. user-management validates its own
-	// API requests with the local public key; login/refresh remain reachable
-	// without a token (an absent token is allowed through, see the auth handler).
+	// user-management validates its own API requests with the local public key
+	// and depends on no other service, so the readiness gate opens immediately
+	// (ADR-022 decision 3); login/refresh remain reachable without a token (an
+	// absent token is allowed through, see the auth handler).
+	Microservice.Readiness.MarkReady(IdentityManager.Validator())
+
 	parsed := gql.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{})
 	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(), *parsed,
-		providers, IdentityManager.Validator())
+		providers, Microservice.Readiness)
 	if err := GraphQLManager.Initialize(ctx); err != nil {
 		return err
 	}

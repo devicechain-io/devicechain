@@ -30,22 +30,34 @@ type HttpHandler struct {
 	Schema           *graphql.Schema
 	Relay            *relay.Handler
 	ContextProviders map[ContextKey]interface{}
-	// Validator verifies the request's access token. When nil the handler runs
-	// without JWT authentication (no tenant is derived from a token); requests
-	// then have no tenant and fail closed at the DB scope. Production services
-	// always supply one.
-	Validator *auth.Validator
+	// Gate supplies the live JWT validator, which is bound late: a service starts
+	// not-ready and the validator becomes available only once the auth bootstrap
+	// succeeds (ADR-022 decision 3). While the gate is closed the validator is
+	// nil, so a presented token is rejected (never silently trusted) and the
+	// service's readiness probe keeps external traffic away in the first place.
+	Gate *core.ReadinessGate
 }
 
-// Create new http handler.
-func NewHttpHandler(schema *graphql.Schema, providers map[ContextKey]interface{}, validator *auth.Validator) *HttpHandler {
+// Create new http handler. gate may be nil only for a deliberately
+// unauthenticated server (tests); production services pass the microservice
+// readiness gate.
+func NewHttpHandler(schema *graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *HttpHandler {
 	handler := &HttpHandler{
 		Schema:           schema,
 		Relay:            &relay.Handler{Schema: schema},
 		ContextProviders: providers,
-		Validator:        validator,
+		Gate:             gate,
 	}
 	return handler
+}
+
+// validator returns the live validator, or nil when the gate is absent or still
+// closed.
+func (h *HttpHandler) validator() *auth.Validator {
+	if h.Gate == nil {
+		return nil
+	}
+	return h.Gate.Validator()
 }
 
 // Handles http request processing.
@@ -62,11 +74,12 @@ func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// run; every tenant-scoped operation still fails closed at the DB layer when
 	// no tenant resolves.
 	if token, ok := bearerToken(r); ok {
-		if h.Validator == nil {
-			http.Error(w, "authentication is not configured", http.StatusUnauthorized)
+		validator := h.validator()
+		if validator == nil {
+			http.Error(w, "authentication is not available", http.StatusUnauthorized)
 			return
 		}
-		claims, err := h.Validator.Validate(token)
+		claims, err := validator.Validate(token)
 		if err != nil {
 			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 			return

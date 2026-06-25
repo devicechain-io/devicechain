@@ -38,8 +38,22 @@ const (
 // JWT validation with a single call. The returned validator refetches the JWKS
 // on an unknown kid, so a signing-key rotation propagates without a restart.
 func NewValidatorForInstance(ctx context.Context, cfg config.UserManagementConfiguration) (*Validator, error) {
-	url := fmt.Sprintf("http://%s:%d/auth/jwks", cfg.Hostname, cfg.Port)
-	return NewValidatorFromJWKSURL(ctx, url, jwksFetchAttempts, jwksFetchDelay)
+	return NewValidatorFromJWKSURL(ctx, jwksURLForInstance(cfg), jwksFetchAttempts, jwksFetchDelay)
+}
+
+// FetchValidatorForInstance performs a single JWKS fetch and validator build
+// with no internal retry. It is the per-attempt fetch for the readiness-gated
+// auth bootstrap (ADR-022 decision 3): the gate's background loop owns the retry
+// cadence, so this returns the first error immediately for the gate to log and
+// re-attempt instead of blocking for the whole startup-retry budget.
+func FetchValidatorForInstance(ctx context.Context, cfg config.UserManagementConfiguration) (*Validator, error) {
+	return NewValidatorFromJWKSURL(ctx, jwksURLForInstance(cfg), 1, 0)
+}
+
+// jwksURLForInstance is the single source of the user-management JWKS endpoint
+// convention.
+func jwksURLForInstance(cfg config.UserManagementConfiguration) string {
+	return fmt.Sprintf("http://%s:%d/auth/jwks", cfg.Hostname, cfg.Port)
 }
 
 // NewValidatorFromJWKSURL fetches the platform JWKS from user-management and

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/friendsofgo/graphiql"
 	graphql "github.com/graph-gophers/graphql-go"
@@ -26,22 +25,22 @@ type GraphQLManager struct {
 	Schema           graphql.Schema
 	Server           *http.Server
 	ContextProviders map[ContextKey]interface{}
-	// Validator verifies access tokens on the /graphql endpoint. Pass nil only
-	// for a deliberately unauthenticated server; production services supply the
-	// validator built from the platform public key (ADR-008).
-	Validator *auth.Validator
+	// Gate supplies the late-bound JWT validator and the readiness state the
+	// /readyz probe reports (ADR-022 decision 3). Pass nil only for a deliberately
+	// unauthenticated server (tests); production services pass ms.Readiness.
+	Gate *core.ReadinessGate
 
 	lifecycle core.LifecycleManager
 }
 
 // Create a new graphql manager.
 func NewGraphQLManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
-	schema graphql.Schema, providers map[ContextKey]interface{}, validator *auth.Validator) *GraphQLManager {
+	schema graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *GraphQLManager {
 	gql := &GraphQLManager{
 		Microservice:     ms,
 		Schema:           schema,
 		ContextProviders: providers,
-		Validator:        validator,
+		Gate:             gate,
 	}
 	// Create lifecycle manager.
 	gqlname := fmt.Sprintf("%s-%s", ms.FunctionalArea, "graphql")
@@ -74,11 +73,25 @@ func (gql *GraphQLManager) ExecuteStart(context.Context) error {
 	}
 
 	// Add handler for queries
-	http.Handle("/graphql", NewHttpHandler(&gql.Schema, gql.ContextProviders, gql.Validator))
+	http.Handle("/graphql", NewHttpHandler(&gql.Schema, gql.ContextProviders, gql.Gate))
 	http.Handle("/graphiql", graphiqlHandler)
 
 	// Add handler for metrics
 	http.Handle("/metrics", promhttp.Handler())
+
+	// Kubernetes probes (ADR-022 decision 3): liveness is always healthy while
+	// the process runs, but readiness reports 503 until the auth gate opens, so a
+	// degraded pod is pulled from Service endpoints instead of serving traffic.
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	http.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if gql.Gate != nil && gql.Gate.Ready() {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.Error(w, "not ready: auth not yet live", http.StatusServiceUnavailable)
+	})
 
 	// Start server in a background thread in order to continue server startup.
 	go func() {
