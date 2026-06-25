@@ -5,6 +5,7 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/model"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 // This file holds the user + role directory (ADR-008 RBAC): the tenant-scoped
@@ -32,13 +34,35 @@ func validateAuthorities(authorities []string) error {
 	return nil
 }
 
+// requireCallerGrants enforces the no-privilege-escalation invariant (review
+// finding #3): the authenticated caller may only define or assign authorities
+// they themselves already hold. Without this, a holder of role:write could mint a
+// role granting "*" (or any authority beyond their own) and a holder of
+// user:write could assign it — escalating to admin. The "*" super-authority in
+// the caller's own claims satisfies every check, so an admin is unconstrained.
+func requireCallerGrants(ctx context.Context, authorities []string) error {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok {
+		return auth.ErrUnauthenticated
+	}
+	for _, a := range authorities {
+		if !claims.HasAuthority(auth.Authority(a)) {
+			return fmt.Errorf("%w: caller cannot grant authority %q it does not itself hold", auth.ErrForbidden, a)
+		}
+	}
+	return nil
+}
+
 // CreateRole creates a tenant-scoped role granting the requested authorities.
 func (m *Manager) CreateRole(ctx context.Context, request *model.RoleCreateRequest) (*model.Role, error) {
 	if err := validateAuthorities(request.Authorities); err != nil {
 		return nil, err
 	}
+	if err := requireCallerGrants(ctx, request.Authorities); err != nil {
+		return nil, err
+	}
 	role := &model.Role{
-		TokenReference: rdb.TokenReference{Token: request.Token},
+		Token: request.Token,
 		NamedEntity: rdb.NamedEntity{
 			Name:        rdb.NullStrOf(request.Name),
 			Description: rdb.NullStrOf(request.Description),
@@ -56,6 +80,9 @@ func (m *Manager) UpdateRole(ctx context.Context, token string, request *model.R
 	if err := validateAuthorities(request.Authorities); err != nil {
 		return nil, err
 	}
+	if err := requireCallerGrants(ctx, request.Authorities); err != nil {
+		return nil, err
+	}
 	var role model.Role
 	if err := m.db.DB(ctx).Where("token = ?", token).First(&role).Error; err != nil {
 		return nil, err
@@ -70,14 +97,27 @@ func (m *Manager) UpdateRole(ctx context.Context, token string, request *model.R
 	return &role, nil
 }
 
-// DeleteRole removes a role by token. Returns false (no error) when no such role
-// exists, so the call is idempotent.
+// DeleteRole removes a role by token. It hard-deletes (review finding #6): the
+// global soft-delete from gorm.Model would otherwise keep the row and block reuse
+// of its token, and leave orphaned user_roles join rows. Returns false (no error)
+// when no such role exists, so the call is idempotent.
 func (m *Manager) DeleteRole(ctx context.Context, token string) (bool, error) {
-	result := m.db.DB(ctx).Where("token = ?", token).Delete(&model.Role{})
-	if result.Error != nil {
-		return false, result.Error
+	var role model.Role
+	if err := m.db.DB(ctx).Where("token = ?", token).First(&role).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
 	}
-	return result.RowsAffected > 0, nil
+	// Clear the role's user assignments first so no join row dangles, then hard
+	// delete so the token is immediately reusable.
+	if err := m.db.DB(ctx).Exec("DELETE FROM user_roles WHERE role_id = ?", role.ID).Error; err != nil {
+		return false, err
+	}
+	if err := m.db.DB(ctx).Unscoped().Delete(&role).Error; err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // RolesByToken loads roles by token.
@@ -152,6 +192,22 @@ func (m *Manager) SetUserRoles(ctx context.Context, username string, roleTokens 
 		if len(roles) != len(roleTokens) {
 			return nil, fmt.Errorf("one or more roles not found: %v", roleTokens)
 		}
+	}
+	// No-escalation invariant (review finding #3): the caller may only assign roles
+	// whose every authority they already hold, so a user:write holder cannot grant
+	// a higher-privileged (e.g. admin "*") role.
+	granted := map[string]struct{}{}
+	for _, r := range roles {
+		for _, a := range r.Authorities {
+			granted[a] = struct{}{}
+		}
+	}
+	union := make([]string, 0, len(granted))
+	for a := range granted {
+		union = append(union, a)
+	}
+	if err := requireCallerGrants(ctx, union); err != nil {
+		return nil, err
 	}
 	if err := m.db.DB(ctx).Model(user).Association("Roles").Replace(roles); err != nil {
 		return nil, err
