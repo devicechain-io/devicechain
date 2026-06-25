@@ -187,6 +187,17 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 		return err
 	}
 
+	// Register the audit-journal callbacks and ensure the journal table exists, so
+	// every entity mutation in this service is recorded by construction (ADR-019).
+	// The table is core-owned and auto-migrated here rather than via each service's
+	// migration list, so no per-service wiring is required.
+	if err := rdb.Database.AutoMigrate(&AuditEvent{}); err != nil {
+		return err
+	}
+	if err := RegisterAuditJournal(rdb.Database); err != nil {
+		return err
+	}
+
 	sqldb, err := rdb.Database.DB()
 	if err != nil {
 		return err
