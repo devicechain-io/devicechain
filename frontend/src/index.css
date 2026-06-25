@@ -11,7 +11,8 @@
  *
  * Light: white bg, near-black text, zinc-100/200 surfaces
  * Dark:  zinc-950 bg, zinc-100 text, zinc-800/900 surfaces
- * Primary (blue-600) and destructive (red-600) are shared across modes.
+ * Primary is the DeviceChain brand blue (#208cb7), lifted slightly in dark mode
+ * for contrast; destructive (red-600) is shared across modes.
  */
 @layer base {
   :root {
@@ -26,7 +27,8 @@
     --popover: 0 0% 100%;
     --popover-foreground: 240 10% 3.9%;
 
-    --primary: 221.2 83.2% 53.3%;
+    /* Brand blue (logo "CHAIN" / cube), sampled from the brandmark #208cb7. */
+    --primary: 197 71% 42%;
     --primary-foreground: 0 0% 100%;
 
     --secondary: 240 4.8% 95.9%;
@@ -52,7 +54,7 @@
 
     --border: 240 5.9% 90%;
     --input: 240 5.9% 90%;
-    --ring: 221.2 83.2% 53.3%;
+    --ring: 197 71% 42%;
 
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
@@ -62,12 +64,12 @@
 
     --sidebar-background: 0 0% 98%;
     --sidebar-foreground: 240 5.3% 26.1%;
-    --sidebar-primary: 221.2 83.2% 53.3%;
+    --sidebar-primary: 197 71% 42%;
     --sidebar-primary-foreground: 0 0% 100%;
     --sidebar-accent: 240 4.8% 95.9%;
     --sidebar-accent-foreground: 240 5.9% 10%;
     --sidebar-border: 240 5.9% 90%;
-    --sidebar-ring: 221.2 83.2% 53.3%;
+    --sidebar-ring: 197 71% 42%;
   }
 
   .dark {
@@ -80,7 +82,8 @@
     --popover: 240 3.7% 10%;
     --popover-foreground: 240 4.8% 95.9%;
 
-    --primary: 221.2 83.2% 53.3%;
+    /* Brand blue, lifted for dark-mode contrast. */
+    --primary: 197 71% 49%;
     --primary-foreground: 0 0% 100%;
 
     --secondary: 240 3.7% 15.9%;
@@ -105,7 +108,7 @@
 
     --border: 240 3.7% 15.9%;
     --input: 240 3.7% 25.9%;
-    --ring: 217.2 91.2% 59.8%;
+    --ring: 197 71% 49%;
 
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
@@ -115,12 +118,12 @@
 
     --sidebar-background: 240 5.9% 6%;
     --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 221.2 83.2% 53.3%;
+    --sidebar-primary: 197 71% 42%;
     --sidebar-primary-foreground: 0 0% 100%;
     --sidebar-accent: 240 3.7% 15.9%;
     --sidebar-accent-foreground: 240 4.8% 95.9%;
     --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-ring: 197 71% 49%;
   }
 }
 

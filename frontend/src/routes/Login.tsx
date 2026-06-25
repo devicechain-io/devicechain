@@ -3,7 +3,6 @@
 
 import { useState, type FormEvent } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
-import { Cpu } from 'lucide-react';
 import { useAuth } from '@/auth/AuthProvider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -46,11 +45,16 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center text-center">
-          <div className="mb-3 flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <Cpu className="size-6" />
+          {/* Full-color lockup on a light panel so the navy wordmark reads in
+              either theme. Swap the src for the Illustrator export when ready. */}
+          <div className="mb-4 rounded-xl bg-white px-6 py-4 shadow-sm ring-1 ring-black/5">
+            <img
+              src="/branding/devicechain-lockup.svg"
+              alt="DeviceChain"
+              className="h-16 w-auto"
+            />
           </div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">DeviceChain</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Sign in to the management console</p>
+          <p className="text-sm text-muted-foreground">Sign in to the management console</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border border-border bg-card p-6">
