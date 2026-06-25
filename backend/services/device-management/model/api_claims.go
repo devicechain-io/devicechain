@@ -9,9 +9,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -28,6 +30,9 @@ var (
 	ErrClaimExpired = errors.New("device claim has expired")
 	// ErrClaimSecretMismatch means the presented claim secret did not match.
 	ErrClaimSecretMismatch = errors.New("device claim secret did not match")
+	// ErrClaimSecretEmpty means an empty claim secret was supplied on initiate. An
+	// empty secret is no proof of possession, so it is rejected at write time.
+	ErrClaimSecretEmpty = errors.New("device claim secret must not be empty")
 )
 
 // InitiateDeviceClaim opens (or reopens) a possession claim on a device: the
@@ -35,6 +40,12 @@ var (
 // claim row, so re-initiating a previously claimed/canceled device reopens it
 // (e.g. after resale), clearing the prior redemption record.
 func (api *Api) InitiateDeviceClaim(ctx context.Context, request *DeviceClaimInitiateRequest) (*DeviceClaim, error) {
+	// An empty secret is no proof of possession (review #5): reject it rather than
+	// persist a claim anyone can redeem.
+	if strings.TrimSpace(request.ClaimSecret) == "" {
+		return nil, ErrClaimSecretEmpty
+	}
+
 	devices, err := api.DevicesByToken(ctx, []string{request.DeviceToken})
 	if err != nil {
 		return nil, err
@@ -53,12 +64,27 @@ func (api *Api) InitiateDeviceClaim(ctx context.Context, request *DeviceClaimIni
 		return nil, err
 	}
 	if existing != nil {
-		existing.ClaimSecret = request.ClaimSecret
-		existing.Status = string(ClaimStatusOpen)
-		existing.ExpiresAt = expiresAt
-		existing.ClaimedTime = sql.NullTime{}
-		existing.ClaimedByCustomerId = sql.NullInt64{}
-		if err := api.RDB.DB(ctx).Save(existing).Error; err != nil {
+		// Reopening a CLAIMED claim is a resale. Revoke the prior owner's edge and
+		// reopen in one transaction (review #2): without the revoke the previous
+		// customer keeps ownership of a device they sold.
+		err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+			if ClaimStatus(existing.Status) == ClaimStatusClaimed && existing.ClaimedByCustomerId.Valid {
+				if err := tx.Where(
+					"source_type = ? AND source_id = ? AND target_type = ? AND target_id = ?",
+					string(entity.TypeDevice), existing.DeviceId,
+					string(entity.TypeCustomer), uint(existing.ClaimedByCustomerId.Int64),
+				).Delete(&EntityRelationship{}).Error; err != nil {
+					return err
+				}
+			}
+			existing.ClaimSecret = request.ClaimSecret
+			existing.Status = string(ClaimStatusOpen)
+			existing.ExpiresAt = expiresAt
+			existing.ClaimedTime = sql.NullTime{}
+			existing.ClaimedByCustomerId = sql.NullInt64{}
+			return tx.Save(existing).Error
+		})
+		if err != nil {
 			return nil, err
 		}
 		return existing, nil
@@ -86,6 +112,13 @@ func evaluateDeviceClaim(claim *DeviceClaim, presentedSecret string, now time.Ti
 	if claim.ExpiresAt.Valid && !now.Before(claim.ExpiresAt.Time) {
 		return ErrClaimExpired
 	}
+	// An empty stored secret is never a valid proof (review #5, defense in depth):
+	// a constant-time compare of "" == "" would otherwise match an empty presented
+	// secret. InitiateDeviceClaim rejects empty secrets, so this only guards rows
+	// that predate that check.
+	if claim.ClaimSecret == "" {
+		return ErrClaimSecretMismatch
+	}
 	// Constant-time compare to avoid leaking the secret via timing.
 	if subtle.ConstantTimeCompare([]byte(presentedSecret), []byte(claim.ClaimSecret)) != 1 {
 		return ErrClaimSecretMismatch
@@ -98,12 +131,13 @@ func evaluateDeviceClaim(claim *DeviceClaim, presentedSecret string, now time.Ti
 // relationship of the requested type, and consumes the claim (the secret is
 // one-time). now is supplied by the caller so expiry is deterministic in tests.
 //
-// The ownership edge is created before the claim is consumed deliberately: if the
-// edge write fails the claim stays OPEN and the caller can retry, whereas
-// consuming first could spend the claim without an edge — leaving the device both
-// unowned and unclaimable. (The two writes are not in one transaction because
-// CreateEntityRelationship opens its own; a failure between them leaves the device
-// correctly owned with a stale OPEN claim the operator can cancel.)
+// The consume and the edge create commit in ONE transaction, and the consume is a
+// guarded compare-and-swap (UPDATE … WHERE status = OPEN) that is the
+// authoritative one-time check (review #1): a concurrent redemption, or a replay
+// after a partial failure, affects zero rows and is rejected — so a single secret
+// can never spend into two ownership edges, and the device is never left owned but
+// still redeemable. evaluateDeviceClaim is kept as a fast pre-check for clear
+// errors; the CAS is what enforces the invariant.
 func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, now time.Time) (*EntityRelationship, error) {
 	claim, err := api.DeviceClaimByDeviceToken(ctx, request.DeviceToken)
 	if err != nil {
@@ -116,28 +150,47 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 		return nil, err
 	}
 
-	// Resolve (and validate) the target customer; its id records who claimed.
+	// Resolve (and validate) the target customer + relationship type before the
+	// transaction; the customer id also records who claimed.
 	customerId, err := api.ResolveEntityToken(ctx, string(entity.TypeCustomer), request.CustomerToken)
 	if err != nil {
 		return nil, fmt.Errorf("customer: %w", err)
 	}
-
-	rel, err := api.CreateEntityRelationship(ctx, &EntityRelationshipCreateRequest{
-		Token:            uuid.New().String(),
-		SourceType:       string(entity.TypeDevice),
-		Source:           request.DeviceToken,
-		TargetType:       string(entity.TypeCustomer),
-		Target:           request.CustomerToken,
-		RelationshipType: request.RelationshipType,
-	})
+	rtMatches, err := api.EntityRelationshipTypesByToken(ctx, []string{request.RelationshipType})
 	if err != nil {
 		return nil, err
 	}
+	if len(rtMatches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
 
-	claim.Status = string(ClaimStatusClaimed)
-	claim.ClaimedTime = sql.NullTime{Time: now, Valid: true}
-	claim.ClaimedByCustomerId = sql.NullInt64{Int64: int64(customerId), Valid: true}
-	if err := api.RDB.DB(ctx).Save(claim).Error; err != nil {
+	rel := &EntityRelationship{
+		TokenReference:     rdb.TokenReference{Token: uuid.New().String()},
+		SourceType:         string(entity.TypeDevice),
+		SourceId:           claim.DeviceId,
+		TargetType:         string(entity.TypeCustomer),
+		TargetId:           customerId,
+		RelationshipTypeId: rtMatches[0].ID,
+	}
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&DeviceClaim{}).
+			Where("id = ? AND status = ?", claim.ID, string(ClaimStatusOpen)).
+			Updates(map[string]interface{}{
+				"status":                 string(ClaimStatusClaimed),
+				"claimed_time":           now,
+				"claimed_by_customer_id": int64(customerId),
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		// Lost the race (or replay): the claim was already redeemed/canceled, so no
+		// edge is created and the transaction rolls back.
+		if res.RowsAffected == 0 {
+			return ErrClaimNotOpen
+		}
+		return tx.Create(rel).Error
+	})
+	if err != nil {
 		return nil, err
 	}
 	return rel, nil

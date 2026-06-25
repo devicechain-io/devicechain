@@ -93,3 +93,11 @@ func TestEvaluateDeviceClaim_NotOpenBeatsSecret(t *testing.T) {
 	err := evaluateDeviceClaim(claim(ClaimStatusClaimed, "s3cret", nil), "wrong", now)
 	assert.ErrorIs(t, err, ErrClaimNotOpen)
 }
+
+// An empty stored secret never matches, even when an empty secret is presented —
+// a constant-time "" == "" would otherwise pass (review #5 defense in depth).
+func TestEvaluateDeviceClaim_EmptyStoredSecret(t *testing.T) {
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	err := evaluateDeviceClaim(claim(ClaimStatusOpen, "", nil), "", now)
+	assert.ErrorIs(t, err, ErrClaimSecretMismatch)
+}
