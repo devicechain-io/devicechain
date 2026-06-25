@@ -10,11 +10,38 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// The default configuration is valid and defaults the auth mode to optional.
+// The default configuration is valid and defaults the auth mode to optional and
+// the hot-path cache sizes/TTLs to their defaults (ADR-022 review B2).
 func TestDefaultConfigurationValid(t *testing.T) {
 	cfg := NewDeviceManagementConfiguration()
 	assert.Equal(t, AuthModeOptional, cfg.DeviceAuthMode)
+	assert.Equal(t, DefaultDeviceCacheTtlSeconds, cfg.DeviceCacheTtlSeconds)
+	assert.Equal(t, DefaultDeviceCacheSize, cfg.DeviceCacheSize)
+	assert.Equal(t, DefaultRelationshipCacheTtlSeconds, cfg.RelationshipCacheTtlSeconds)
+	assert.Equal(t, DefaultRelationshipCacheSize, cfg.RelationshipCacheSize)
 	assert.NoError(t, cfg.Validate())
+}
+
+// Loading a document that omits the cache settings defaults them, and the result
+// validates (the cache bounds are positive).
+func TestLoadDefaultsCacheSettings(t *testing.T) {
+	cfg := &DeviceManagementConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"RdbConfiguration":{"SqlDebug":true}}`), cfg)
+
+	assert.NoError(t, err)
+	assert.Equal(t, DefaultDeviceCacheTtlSeconds, cfg.DeviceCacheTtlSeconds)
+	assert.Equal(t, DefaultDeviceCacheSize, cfg.DeviceCacheSize)
+	assert.Equal(t, DefaultRelationshipCacheTtlSeconds, cfg.RelationshipCacheTtlSeconds)
+	assert.Equal(t, DefaultRelationshipCacheSize, cfg.RelationshipCacheSize)
+	assert.NoError(t, cfg.Validate())
+}
+
+// A non-positive cache bound fails the load closed.
+func TestLoadRejectsNonPositiveCacheBound(t *testing.T) {
+	cfg := &DeviceManagementConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"DeviceCacheSize":-1}`), cfg)
+
+	assert.Error(t, err)
 }
 
 // Loading a document that omits the auth mode defaults it rather than leaving it

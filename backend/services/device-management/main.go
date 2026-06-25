@@ -96,7 +96,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 
 	// Add and initialize inbound events processor.
 	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,
-		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), Api, Configuration.DeviceAuthMode)
+		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode)
 	err = InboundEventsProcessor.Initialize(context.Background())
 	if err != nil {
 		return err
@@ -122,12 +122,13 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Create RDB caches.
-	model.InitializeCaches(RdbManager)
+	// Create RDB caches sized/TTL'd from configuration (ADR-022 review B2).
+	caches := model.InitializeCaches(RdbManager, Configuration)
 
-	// Wrap api around rdb manager.
+	// Wrap api around rdb manager, then wrap a caching decorator over it for the
+	// hot inbound-event resolution path.
 	Api = model.NewApi(RdbManager)
-	CachedApi = model.NewCachedApi(Api)
+	CachedApi = model.NewCachedApi(Api, caches)
 
 	// Create and initialize nats manager.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
