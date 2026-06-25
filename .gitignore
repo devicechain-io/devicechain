@@ -40,3 +40,16 @@ build/
 .env
 .env.local
 config.local.yaml
+
+# OpenTofu / Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+# keep example tfvars; ignore real ones (may hold credentials)
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
