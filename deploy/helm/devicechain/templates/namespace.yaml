@@ -4,5 +4,5 @@ kind: Namespace
 metadata:
   name: {{ .Values.instance.id }}
   labels:
-    devicechain.io/instance: {{ .Values.instance.id }}
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
 {{- end }}

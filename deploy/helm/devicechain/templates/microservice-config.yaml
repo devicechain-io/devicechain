@@ -11,7 +11,7 @@ metadata:
   name: {{ include "devicechain.microserviceConfigMap" . }}
   namespace: {{ .Values.instance.id }}
   labels:
-    devicechain.io/instance: {{ .Values.instance.id }}
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
 data:
   {{- range $area := splitList "," (include "devicechain.enabledAreas" .) }}
   {{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
