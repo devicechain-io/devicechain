@@ -1,0 +1,94 @@
+#
+# Command Delivery GraphQL Schema
+#
+
+# Base elements in gorm RDB model.
+interface Model {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+}
+
+# Entity referenced by unique token.
+interface TokenReference {
+    token: String!
+}
+
+# Entity that provides metadata.
+interface MetadataEntity {
+    metadata: String
+}
+
+# Pagination info for search results.
+type SearchResultsPagination {
+    pageStart: Int
+    pageEnd: Int
+    totalRecords: Int
+}
+
+# A persisted, lifecycle-tracked command to a device (ADR-012 / ThingsBoard 2.6).
+type Command implements Model & TokenReference & MetadataEntity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    metadata: String
+    deviceToken: String!
+    name: String!
+    payload: String
+    status: String!
+    queuedTime: String
+    sentTime: String
+    deliveredTime: String
+    respondedTime: String
+    expiresAt: String
+    responsePayload: String
+    error: String
+}
+
+# Data required to issue a command.
+input CommandCreateRequest {
+    token: String!
+    deviceToken: String!
+    name: String!
+    payload: String
+    expiresAt: String
+    metadata: String
+}
+
+# Criteria used when searching for commands.
+input CommandSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    deviceToken: String
+    status: String
+}
+
+# Search results returned from command query.
+type CommandSearchResults {
+    results: [Command!]!
+    pagination: SearchResultsPagination!
+}
+
+type Query {
+    # Find commands by unique id.
+    commandsById(ids: [String!]!): [Command!]!
+    # Find commands by unique token.
+    commandsByToken(tokens: [String!]!): [Command!]!
+    # List all commands that match the given criteria.
+    commands(criteria: CommandSearchCriteria!): CommandSearchResults!
+}
+
+type Mutation {
+    # Issue (persist) a new command to a device.
+    createCommand(request: CommandCreateRequest!): Command!
+    # Cancel a non-terminal command by token.
+    cancelCommand(token: String!): Command!
+}
+
+schema {
+    query: Query
+    mutation: Mutation
+}

@@ -4,6 +4,7 @@ use (
 	./backend/cli
 	./backend/core
 	./backend/k8s
+	./backend/services/command-delivery
 	./backend/services/device-management
 	./backend/services/event-management
 	./backend/services/event-sources
