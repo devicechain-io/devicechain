@@ -124,3 +124,33 @@ func (api *MockApi) EntityRelationshipTypesByToken(ctx context.Context, tokens [
 	args := api.Mock.Called()
 	return args.Get(0).([]*model.EntityRelationshipType), args.Error(1)
 }
+
+func (api *MockApi) CreateMetricDefinition(ctx context.Context, request *model.MetricDefinitionCreateRequest) (*model.MetricDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.MetricDefinition), args.Error(1)
+}
+
+func (api *MockApi) UpdateMetricDefinition(ctx context.Context, token string, request *model.MetricDefinitionCreateRequest) (*model.MetricDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.MetricDefinition), args.Error(1)
+}
+
+func (api *MockApi) MetricDefinitionsById(ctx context.Context, ids []uint) ([]*model.MetricDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.MetricDefinition), args.Error(1)
+}
+
+func (api *MockApi) MetricDefinitionsByToken(ctx context.Context, tokens []string) ([]*model.MetricDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.MetricDefinition), args.Error(1)
+}
+
+func (api *MockApi) MetricDefinitions(ctx context.Context, criteria model.MetricDefinitionSearchCriteria) (*model.MetricDefinitionSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.MetricDefinitionSearchResults), args.Error(1)
+}
+
+func (api *MockApi) MetricDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*model.MetricDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.MetricDefinition), args.Error(1)
+}

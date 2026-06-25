@@ -57,6 +57,57 @@ type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity 
     foregroundColor: String
     borderColor: String
     metadata: String
+    metricDefinitions: [MetricDefinition!]!
+}
+
+# Represents a typed, unit-bearing metric declared on a device profile (ADR-016).
+type MetricDefinition implements Model & TokenReference & NamedEntity & MetadataEntity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    name: String
+    description: String
+    deviceType: DeviceType!
+    metricKey: String!
+    dataType: String!
+    unit: String
+    minValue: Float
+    maxValue: Float
+    enum: String
+    descriptor: String
+    metadata: String
+}
+
+# Data required to create a metric definition.
+input MetricDefinitionCreateRequest {
+    token: String!
+    deviceTypeToken: String!
+    metricKey: String!
+    name: String
+    description: String
+    dataType: String!
+    unit: String
+    minValue: Float
+    maxValue: Float
+    enum: String
+    descriptor: String
+    metadata: String
+}
+
+# Criteria used when searching for metric definitions.
+input MetricDefinitionSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    deviceType: String
+    metricKey: String
+}
+
+# Search results returned from metric definition query.
+type MetricDefinitionSearchResults {
+    results: [MetricDefinition!]!
+    pagination: SearchResultsPagination!
 }
 
 # Data required to create a device type.
@@ -653,6 +704,12 @@ type Query {
     deviceTypesByToken(tokens: [String!]!): [DeviceType!]!
     # List device types that meet criteria.
     deviceTypes(criteria: DeviceTypeSearchCriteria!): DeviceTypeSearchResults!
+    # Find metric definitions by unique id.
+    metricDefinitionsById(ids: [ID!]!): [MetricDefinition!]!
+    # Find metric definitions by unique token.
+    metricDefinitionsByToken(tokens: [String!]!): [MetricDefinition!]!
+    # List metric definitions that meet criteria.
+    metricDefinitions(criteria: MetricDefinitionSearchCriteria!): MetricDefinitionSearchResults!
     # Find devices by unique id.
     devicesById(ids: [ID!]!): [Device!]!
     # Find devices by unique token.
@@ -749,6 +806,10 @@ type Mutation {
     createDeviceType(request: DeviceTypeCreateRequest): DeviceType!
     # Update an existing device type.
     updateDeviceType(token: String!, request: DeviceTypeCreateRequest): DeviceType!
+    # Create a new metric definition.
+    createMetricDefinition(request: MetricDefinitionCreateRequest): MetricDefinition!
+    # Update an existing metric definition.
+    updateMetricDefinition(token: String!, request: MetricDefinitionCreateRequest): MetricDefinition!
     # Create a new device.
     createDevice(request: DeviceCreateRequest): Device!
     # Update an existing device.
