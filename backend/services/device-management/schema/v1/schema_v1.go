@@ -4,6 +4,8 @@
 package v1
 
 import (
+	"database/sql"
+
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -70,6 +72,26 @@ type DeviceGroup struct {
 	rdb.NamedEntity
 	rdb.BrandedEntity
 	rdb.MetadataEntity
+}
+
+// DeviceCredential holds rotatable authentication material resolved at connect
+// time to the owning device (ADR-014). The (credential_type, credential_id)
+// lookup index is unique; tenant_id (from the embedded TenantScoped) is enforced
+// by the app-layer tenant scope. A future tightening could make the unique
+// constraint tenant-composite via raw DDL.
+type DeviceCredential struct {
+	gorm.Model
+	rdb.TenantScoped
+	rdb.TokenReference
+	rdb.MetadataEntity
+
+	DeviceId        uint `gorm:"not null;index"`
+	Device          *Device
+	CredentialType  string         `gorm:"not null;size:32;index;index:idx_device_credential_lookup,unique,priority:1"`
+	CredentialId    string         `gorm:"not null;size:256;index:idx_device_credential_lookup,unique,priority:2"`
+	CredentialValue sql.NullString `gorm:"size:4096"`
+	Enabled         bool           `gorm:"not null;default:true"`
+	ExpiresAt       sql.NullTime
 }
 
 // Data required to create an asset type.

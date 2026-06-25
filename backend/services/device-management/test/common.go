@@ -64,6 +64,36 @@ func (api *MockApi) Devices(ctx context.Context, criteria model.DeviceSearchCrit
 	return args.Get(0).(*model.DeviceSearchResults), args.Error(1)
 }
 
+func (api *MockApi) CreateDeviceCredential(ctx context.Context, request *model.DeviceCredentialCreateRequest) (*model.DeviceCredential, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.DeviceCredential), args.Error(1)
+}
+
+func (api *MockApi) UpdateDeviceCredential(ctx context.Context, token string, request *model.DeviceCredentialCreateRequest) (*model.DeviceCredential, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.DeviceCredential), args.Error(1)
+}
+
+func (api *MockApi) DeviceCredentialsById(ctx context.Context, ids []uint) ([]*model.DeviceCredential, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.DeviceCredential), args.Error(1)
+}
+
+func (api *MockApi) DeviceCredentialsByToken(ctx context.Context, tokens []string) ([]*model.DeviceCredential, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.DeviceCredential), args.Error(1)
+}
+
+func (api *MockApi) DeviceCredentials(ctx context.Context, criteria model.DeviceCredentialSearchCriteria) (*model.DeviceCredentialSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.DeviceCredentialSearchResults), args.Error(1)
+}
+
+func (api *MockApi) DeviceCredentialByCredentialId(ctx context.Context, credentialType string, credentialId string) (*model.DeviceCredential, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.DeviceCredential), args.Error(1)
+}
+
 func (api *MockApi) EntityRelationshipsById(ctx context.Context, ids []uint) ([]*model.EntityRelationship, error) {
 	args := api.Mock.Called()
 	return args.Get(0).([]*model.EntityRelationship), args.Error(1)

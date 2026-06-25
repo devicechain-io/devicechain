@@ -32,6 +32,14 @@ type DeviceManagementApi interface {
 	DevicesByToken(ctx context.Context, tokens []string) ([]*Device, error)
 	Devices(ctx context.Context, criteria DeviceSearchCriteria) (*DeviceSearchResults, error)
 
+	// Device credentials (ADR-014).
+	CreateDeviceCredential(ctx context.Context, request *DeviceCredentialCreateRequest) (*DeviceCredential, error)
+	UpdateDeviceCredential(ctx context.Context, token string, request *DeviceCredentialCreateRequest) (*DeviceCredential, error)
+	DeviceCredentialsById(ctx context.Context, ids []uint) ([]*DeviceCredential, error)
+	DeviceCredentialsByToken(ctx context.Context, tokens []string) ([]*DeviceCredential, error)
+	DeviceCredentials(ctx context.Context, criteria DeviceCredentialSearchCriteria) (*DeviceCredentialSearchResults, error)
+	DeviceCredentialByCredentialId(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error)
+
 	// Entity relationships (uniform edge model, ADR-013).
 	EntityRelationshipsById(ctx context.Context, ids []uint) ([]*EntityRelationship, error)
 	EntityRelationshipsByToken(ctx context.Context, tokens []string) ([]*EntityRelationship, error)
