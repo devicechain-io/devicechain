@@ -306,7 +306,7 @@ func (api *Api) ProvisionDevice(ctx context.Context, request *ProvisionDeviceReq
 		created = true
 	}
 
-	credentialId, err := api.mintOrReuseCredential(ctx, device.Token, profile.CredentialType)
+	credentialId, err := api.mintOrReuseCredential(ctx, device.Token, profile.CredentialType, now)
 	if err != nil {
 		return nil, err
 	}
@@ -344,12 +344,14 @@ func (api *Api) ProvisionDeviceBootstrap(ctx context.Context, request *Provision
 }
 
 // mintOrReuseCredential returns the credential id a provisioned device should
-// authenticate with for the given type. It reuses the device's existing enabled
-// credential of that type when present (so re-provisioning is idempotent), and
-// otherwise mints a fresh one. Only ACCESS_TOKEN is minted today (see
-// provisionableCredentialType), so the generated id is the bearer token and no
-// secret value is stored.
-func (api *Api) mintOrReuseCredential(ctx context.Context, deviceToken string, credentialType string) (string, error) {
+// authenticate with for the given type. It reuses the device's existing enabled,
+// UNEXPIRED credential of that type when present (so re-provisioning is
+// idempotent), and otherwise mints a fresh one. Only ACCESS_TOKEN is minted today
+// (see provisionableCredentialType), so the generated id is the bearer token and
+// no secret value is stored. now is supplied so an expired credential is never
+// handed back (review #4): reusing one would return a dead token the device
+// cannot authenticate with.
+func (api *Api) mintOrReuseCredential(ctx context.Context, deviceToken string, credentialType string, now time.Time) (string, error) {
 	enabled := true
 	existing, err := api.DeviceCredentials(ctx, DeviceCredentialSearchCriteria{
 		Device:         &deviceToken,
@@ -359,8 +361,12 @@ func (api *Api) mintOrReuseCredential(ctx context.Context, deviceToken string, c
 	if err != nil {
 		return "", err
 	}
-	if len(existing.Results) > 0 {
-		return existing.Results[0].CredentialId, nil
+	for _, cred := range existing.Results {
+		// Skip an enabled-but-expired credential: it would authenticate to nothing.
+		if cred.ExpiresAt.Valid && !now.Before(cred.ExpiresAt.Time) {
+			continue
+		}
+		return cred.CredentialId, nil
 	}
 
 	credentialId := uuid.New().String()
