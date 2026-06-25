@@ -42,6 +42,16 @@ func NewValidatorForInstance(ctx context.Context, cfg config.UserManagementConfi
 	return NewValidatorFromJWKSURL(ctx, url, jwksFetchAttempts, jwksFetchDelay)
 }
 
+// FetchValidatorForInstance performs a single JWKS fetch and validator build
+// with no internal retry. It is the per-attempt fetch for the readiness-gated
+// auth bootstrap (ADR-022 decision 3): the gate's background loop owns the retry
+// cadence, so this returns the first error immediately for the gate to log and
+// re-attempt instead of blocking for the whole startup-retry budget.
+func FetchValidatorForInstance(ctx context.Context, cfg config.UserManagementConfiguration) (*Validator, error) {
+	url := fmt.Sprintf("http://%s:%d/auth/jwks", cfg.Hostname, cfg.Port)
+	return NewValidatorFromJWKSURL(ctx, url, 1, 0)
+}
+
 // NewValidatorFromJWKSURL fetches the platform JWKS from user-management and
 // returns a Validator that verifies tokens locally thereafter. It retries to
 // absorb the startup race where user-management is not yet serving, and on an

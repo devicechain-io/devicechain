@@ -145,14 +145,14 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	schema := graphql.SchemaContent
 	parsed := gql.MustParseSchema(schema, &graphql.SchemaResolver{})
 
-	// Build the JWT validator from the platform public key served by
-	// user-management (ADR-008).
-	validator, err := auth.NewValidatorForInstance(ctx, Microservice.InstanceConfiguration.Infrastructure.UserManagement)
-	if err != nil {
-		return err
-	}
+	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
+	// validator in the background and gate the data plane on readiness rather
+	// than exiting when user-management is briefly unreachable (amends ADR-008).
+	Microservice.StartAuthGate(ctx, func(ctx context.Context) (*auth.Validator, error) {
+		return auth.FetchValidatorForInstance(ctx, Microservice.InstanceConfiguration.Infrastructure.UserManagement)
+	})
 
-	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, gqlcb, *parsed, providers, validator)
+	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, gqlcb, *parsed, providers, Microservice.Readiness)
 	err = GraphQLManager.Initialize(ctx)
 	if err != nil {
 		return err

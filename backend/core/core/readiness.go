@@ -1,0 +1,108 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package core
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/rs/zerolog/log"
+)
+
+// authGateRetryInterval is how often the background auth bootstrap re-attempts
+// the JWKS fetch while the service is degraded. The fetch itself is a single
+// attempt (FetchValidatorForInstance); this loop owns the cadence. It is a var
+// so tests can shorten it.
+var authGateRetryInterval = 5 * time.Second
+
+// ReadinessGate is the data-plane readiness latch for a service (ADR-022
+// decision 3). A service starts not-ready: until the JWT validator is live, the
+// readiness probe reports 503 and NATS consumers stay paused, so the service
+// processes nothing without a verified-auth capability (preserving the ADR-015
+// fail-closed invariant). Once the validator is fetched the gate opens once and
+// stays open; it never closes again for the life of the process.
+type ReadinessGate struct {
+	mu        sync.RWMutex
+	ready     bool
+	validator *auth.Validator
+	// readyCh is closed exactly once when the gate opens, so WaitReady can block
+	// without polling. It is created at construction and never reassigned.
+	readyCh chan struct{}
+}
+
+// NewReadinessGate creates a closed (not-ready) gate.
+func NewReadinessGate() *ReadinessGate {
+	return &ReadinessGate{readyCh: make(chan struct{})}
+}
+
+// Ready reports whether the gate has opened (auth is live).
+func (g *ReadinessGate) Ready() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.ready
+}
+
+// Validator returns the live JWT validator, or nil while the gate is still
+// closed. Callers must treat nil as "not yet authenticated" and fail closed.
+func (g *ReadinessGate) Validator() *auth.Validator {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.validator
+}
+
+// MarkReady records the live validator and opens the gate. It is idempotent: the
+// first call wins and later calls are no-ops, so the gate never flaps. Services
+// whose validator is available synchronously (e.g. user-management, which signs
+// and verifies with its own local key) call this directly; others reach it
+// through StartAuthGate once the background fetch succeeds.
+func (g *ReadinessGate) MarkReady(validator *auth.Validator) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.ready {
+		return
+	}
+	g.validator = validator
+	g.ready = true
+	close(g.readyCh)
+}
+
+// WaitReady blocks until the gate opens or ctx is cancelled. It is the pause
+// point for NATS consumers: a degraded service parks here instead of draining
+// messages. It returns ctx.Err() if the context is cancelled first (shutdown).
+func (g *ReadinessGate) WaitReady(ctx context.Context) error {
+	select {
+	case <-g.readyCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// StartAuthGate launches the background auth bootstrap and returns immediately
+// (ADR-022 decision 3). The service starts not-ready; fetch is attempted
+// repeatedly until it succeeds, at which point the gate opens and the data plane
+// is released. A slow or absent user-management therefore degrades this service
+// rather than failing its startup (amends ADR-008's fatal startup fetch), without
+// ever processing traffic before auth is live. The loop exits on ctx
+// cancellation (shutdown).
+func (ms *Microservice) StartAuthGate(ctx context.Context, fetch func(context.Context) (*auth.Validator, error)) {
+	go func() {
+		for {
+			validator, err := fetch(ctx)
+			if err == nil {
+				ms.Readiness.MarkReady(validator)
+				log.Info().Msg("Auth is live; service is ready and the data plane is released.")
+				return
+			}
+			log.Warn().Err(err).Msg("Auth not yet live; service remains not-ready (degraded). Retrying.")
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(authGateRetryInterval):
+			}
+		}
+	}()
+}
