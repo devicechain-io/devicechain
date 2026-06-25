@@ -1,0 +1,59 @@
+#
+# Device State GraphQL Schema
+#
+
+# Base elements in gorm RDB model.
+interface Model {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+}
+
+# Pagination info for search results.
+type SearchResultsPagination {
+	pageStart: Int
+	pageEnd: Int
+	totalRecords: Int
+}
+
+# Live current-state projection for a single device (connectivity + activity).
+type DeviceState implements Model {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    deviceId: Int!
+    active: Boolean!
+    lastConnectTime: String
+    lastDisconnectTime: String
+    lastActivityTime: String
+    inactivityAlarmTime: String
+    inactivityTimeout: Int!
+}
+
+# Criteria used when searching for device states. Device-id lookups are served by
+# the deviceStatesByDeviceId query instead of a criteria field.
+input DeviceStateSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    active: Boolean
+}
+
+# Search results returned from device state query.
+type DeviceStateSearchResults {
+    results: [DeviceState!]!
+    pagination: SearchResultsPagination!
+}
+
+# Queries for accessing device state.
+type Query {
+    # Get device states for one or more devices by device id.
+    deviceStatesByDeviceId(deviceIds: [Int!]!): [DeviceState!]!
+    # Search for device states that match the given criteria.
+    deviceStates(criteria: DeviceStateSearchCriteria!): DeviceStateSearchResults!
+}
+
+schema {
+    query: Query
+}
