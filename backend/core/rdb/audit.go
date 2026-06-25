@@ -4,6 +4,7 @@
 package rdb
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"time"
@@ -11,6 +12,22 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"gorm.io/gorm"
+)
+
+// Audit categories distinguish a row captured from an entity mutation (the GORM
+// callbacks) from one recorded for an authentication event (the login/refresh
+// path), which is not a mutation. Auth-event rows leave TableName/EntityPK empty.
+const (
+	AuditCategoryMutation = "mutation"
+	AuditCategoryAuth     = "auth"
+)
+
+// Audit operations for authentication events (ADR-019). Mutation operations are
+// the literal "create"/"update"/"delete" recorded by the callbacks.
+const (
+	AuditOpLogin       = "login"
+	AuditOpLoginFailed = "login_failed"
+	AuditOpRefresh     = "refresh"
 )
 
 // AuditEvent is one row of the tenant-scoped audit journal (ADR-019): a record,
@@ -26,13 +43,18 @@ type AuditEvent struct {
 	ID           uint      `gorm:"primaryKey"`
 	OccurredTime time.Time `gorm:"not null;index:idx_audit_tenant_time,priority:2,sort:desc"`
 	TenantId     string    `gorm:"index:idx_audit_tenant_time,priority:1"`
+	// Category is "mutation" (an entity create/update/delete) or "auth" (a login,
+	// failed login, or refresh). It discriminates the two row shapes.
+	Category string `gorm:"not null"`
 	// Actor is the JWT subject that performed the mutation, "system" for a
 	// deliberate system-context operation (bootstrap, the ingest pipeline), or ""
-	// when neither is present.
+	// when neither is present. For an auth event it is the subject username.
 	Actor string
-	// TableName is the mutated table (schema-qualified as the dialect renders it).
-	TableName string `gorm:"not null"`
-	// Operation is one of "create", "update", "delete".
+	// TableName is the mutated table (schema-qualified as the dialect renders it);
+	// empty for an auth event.
+	TableName string
+	// Operation is one of "create"/"update"/"delete" for a mutation, or
+	// "login"/"login_failed"/"refresh" for an auth event.
 	Operation string `gorm:"not null"`
 	// EntityPK is the primary key of the affected row when the statement targets a
 	// single keyed row; empty for a bulk/condition update or delete (RowsAffected
@@ -120,6 +142,7 @@ func auditCallback(operation string) func(*gorm.DB) {
 		row := &AuditEvent{
 			OccurredTime: time.Now().UTC(),
 			TenantId:     auditTenant(db),
+			Category:     AuditCategoryMutation,
 			Actor:        auditActor(db),
 			TableName:    db.Statement.Table,
 			Operation:    operation,
@@ -184,4 +207,25 @@ func auditPrimaryKey(db *gorm.DB) string {
 		return ""
 	}
 	return fmt.Sprint(value)
+}
+
+// RecordAuthEvent appends an audit row for an authentication event — a login,
+// failed login, or refresh (ADR-019). These are not GORM entity mutations, so
+// they are not captured by the mutation callbacks and are written here directly.
+//
+// It runs under a system context so the tenant-scope callback does not require a
+// tenant (a failed login for an unknown user has none); the tenant is set
+// explicitly and may be "". Unlike the fail-closed mutation path, recording is
+// best-effort: the caller logs but does not fail interactive authentication on an
+// audit-write error, since failing every login when the audit table blips would
+// be a worse outcome (and a denial-of-service lever) than a missed row.
+func (rdb *RdbManager) RecordAuthEvent(ctx context.Context, operation, actor, tenant string) error {
+	row := &AuditEvent{
+		OccurredTime: time.Now().UTC(),
+		TenantId:     tenant,
+		Category:     AuditCategoryAuth,
+		Actor:        actor,
+		Operation:    operation,
+	}
+	return rdb.DB(core.WithSystemContext(ctx)).Create(row).Error
 }
