@@ -4,11 +4,21 @@
 package messaging
 
 import (
+	"encoding/base64"
 	"errors"
 	"time"
 
 	nats "github.com/nats-io/nats.go"
 )
+
+// kvKey encodes an arbitrary caller key into the NATS KV key charset. Caller
+// keys (e.g. "tenant|token" cache keys or a lock name) are not guaranteed to
+// fall within the restricted KV key charset, so they are base64url-encoded,
+// which yields only [-_A-Za-z0-9] — all valid KV key characters. Shared by both
+// the Cache and the DistributedLock built on this KV layer.
+func kvKey(key string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(key))
+}
 
 // KeyValueStore returns a JetStream KeyValue bucket, creating it with the given
 // per-entry TTL and the manager's configured replica count if it does not yet

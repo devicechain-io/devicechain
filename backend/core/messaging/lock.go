@@ -30,8 +30,7 @@ const (
 // already exists; the bucket's TTL auto-expires a lock whose holder crashed
 // without releasing it, so a dead holder cannot wedge the lock forever.
 type DistributedLock struct {
-	kv  nats.KeyValue
-	ttl time.Duration
+	kv nats.KeyValue
 }
 
 // NewDistributedLock returns a DistributedLock over the instance lock bucket,
@@ -44,7 +43,7 @@ func (nmgr *NatsManager) NewDistributedLock(ttl time.Duration) (*DistributedLock
 	if err != nil {
 		return nil, err
 	}
-	return &DistributedLock{kv: kv, ttl: ttl}, nil
+	return &DistributedLock{kv: kv}, nil
 }
 
 // WithLock acquires the named lock, runs logic while holding it, and releases
@@ -53,7 +52,7 @@ func (nmgr *NatsManager) NewDistributedLock(ttl time.Duration) (*DistributedLock
 // error is returned and logic never runs (fail-closed). The lock is released
 // even if logic returns an error.
 func (l *DistributedLock) WithLock(ctx context.Context, name string, logic func(ctx context.Context) error) error {
-	key := cacheKey(name)
+	key := kvKey(name)
 	holder := uuid.NewString()
 
 	log.Info().Str("lock", name).Msg("Acquiring distributed lock...")

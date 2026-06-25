@@ -5,7 +5,6 @@ package messaging
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,12 +39,6 @@ func (nmgr *NatsManager) NewCache(name string, ttl time.Duration) (*Cache, error
 	return &Cache{kv: kv}, nil
 }
 
-// cacheKey encodes an arbitrary caller key into the NATS KV key charset
-// (base64url yields only [-_A-Za-z0-9], all valid KV key characters).
-func cacheKey(key string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(key))
-}
-
 // Set stores value under key, JSON-encoding it. The entry expires after the
 // bucket TTL configured at construction.
 func (c *Cache) Set(ctx context.Context, key string, value interface{}) error {
@@ -53,7 +46,7 @@ func (c *Cache) Set(ctx context.Context, key string, value interface{}) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.kv.Put(cacheKey(key), data)
+	_, err = c.kv.Put(kvKey(key), data)
 	return err
 }
 
@@ -61,7 +54,7 @@ func (c *Cache) Set(ctx context.Context, key string, value interface{}) error {
 // present. A miss returns (false, nil); only a transport/decode error returns a
 // non-nil error, so callers can degrade a miss-or-error to a DB lookup.
 func (c *Cache) Get(ctx context.Context, key string, dest interface{}) (bool, error) {
-	entry, err := c.kv.Get(cacheKey(key))
+	entry, err := c.kv.Get(kvKey(key))
 	if err != nil {
 		if errors.Is(err, nats.ErrKeyNotFound) {
 			return false, nil
@@ -77,7 +70,7 @@ func (c *Cache) Get(ctx context.Context, key string, dest interface{}) (bool, er
 // Delete evicts an entry, tolerating a miss. Used to invalidate a cached entry
 // on mutation so a stale value is not served (bounded further by the TTL).
 func (c *Cache) Delete(ctx context.Context, key string) error {
-	if err := c.kv.Delete(cacheKey(key)); err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+	if err := c.kv.Delete(kvKey(key)); err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
 		return err
 	}
 	return nil
