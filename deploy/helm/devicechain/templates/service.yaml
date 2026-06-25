@@ -1,0 +1,22 @@
+{{/* One Service per enabled functional area, fronting its GraphQL/HTTP port. */}}
+{{- $root := . -}}
+{{- range $area := splitList "," (include "devicechain.enabledAreas" .) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $area }}
+  namespace: {{ $root.Values.instance.id }}
+  labels:
+    devicechain.io/instance: {{ $root.Values.instance.id }}
+    devicechain.io/functional-area: {{ $area }}
+spec:
+  selector:
+    devicechain.io/instance: {{ $root.Values.instance.id }}
+    devicechain.io/functional-area: {{ $area }}
+  ports:
+    - name: graphql
+      protocol: TCP
+      port: {{ $root.Values.service.port }}
+      targetPort: graphql
+{{- end }}

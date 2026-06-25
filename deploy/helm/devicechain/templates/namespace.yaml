@@ -1,0 +1,8 @@
+{{- if .Values.instance.createNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.instance.id }}
+  labels:
+    devicechain.io/instance: {{ .Values.instance.id }}
+{{- end }}

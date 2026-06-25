@@ -1,0 +1,73 @@
+{{/*
+One Deployment per enabled functional area (ADR-022 decision 2). Each pod gets
+the instance identity via env and mounts the instance + per-service config
+ConfigMaps at the paths the shared core reads. Readiness/liveness target the
+/readyz and /healthz endpoints introduced in ADR-022 decision 3, so a degraded
+pod (auth not yet live) is held out of Service endpoints.
+*/}}
+{{- $root := . -}}
+{{- range $area := splitList "," (include "devicechain.enabledAreas" .) }}
+{{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $area }}
+  namespace: {{ $root.Values.instance.id }}
+  labels:
+    devicechain.io/instance: {{ $root.Values.instance.id }}
+    devicechain.io/functional-area: {{ $area }}
+spec:
+  replicas: {{ get $areaCfg "replicas" | default $root.Values.replicas }}
+  selector:
+    matchLabels:
+      devicechain.io/instance: {{ $root.Values.instance.id }}
+      devicechain.io/functional-area: {{ $area }}
+  template:
+    metadata:
+      labels:
+        devicechain.io/instance: {{ $root.Values.instance.id }}
+        devicechain.io/functional-area: {{ $area }}
+    spec:
+      containers:
+        - name: {{ $area }}
+          image: {{ include "devicechain.image" (dict "area" $area "root" $root) }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          env:
+            - name: DC_INSTANCE_ID
+              value: {{ $root.Values.instance.id | quote }}
+            - name: DC_MICROSERVICE_ID
+              value: {{ $area | quote }}
+            - name: DC_MS_FUNCTIONAL_AREA
+              value: {{ $area | quote }}
+          ports:
+            - name: graphql
+              containerPort: {{ $root.Values.service.port }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: graphql
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: graphql
+            initialDelaySeconds: 3
+            periodSeconds: 20
+          resources:
+            {{- get $areaCfg "resources" | default $root.Values.resources | toYaml | nindent 12 }}
+          volumeMounts:
+            - name: instance-config
+              mountPath: /etc/dci-config
+            - name: microservice-config
+              mountPath: /etc/dct-config
+      volumes:
+        - name: instance-config
+          configMap:
+            name: {{ include "devicechain.instanceConfigMap" $root }}
+        - name: microservice-config
+          configMap:
+            name: {{ include "devicechain.microserviceConfigMap" $root }}
+{{- end }}
