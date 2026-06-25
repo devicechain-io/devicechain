@@ -1,9 +1,17 @@
 {{/*
 One Deployment per enabled functional area (ADR-022 decision 2). Each pod gets
-the instance identity via env and mounts the instance + per-service config
-ConfigMaps at the paths the shared core reads. Readiness/liveness target the
-/readyz and /healthz endpoints introduced in ADR-022 decision 3, so a degraded
-pod (auth not yet live) is held out of Service endpoints.
+the instance identity via env and mounts the instance + per-service config at the
+paths the shared core reads. Readiness/liveness target the /readyz and /healthz
+endpoints introduced in ADR-022 decision 3, so a degraded pod (auth not yet live)
+is held out of Service endpoints.
+
+ADR-022 review hardening:
+  C2 — the instance config is backed by a Secret (it carries DB credentials).
+  C3 — pod/container securityContext run the workload non-root with a read-only
+       rootfs and no capabilities (the scratch static binaries write nothing).
+  E7 — resource requests/limits, probes (incl. startupProbe for slow cold starts)
+       and a dedicated ServiceAccount with the API token unmounted.
+  E8 — checksum annotations roll the pods when config (Secret/ConfigMap) changes.
 */}}
 {{- $root := . -}}
 {{- range $area := splitList "," (include "devicechain.enabledAreas" .) }}
@@ -23,13 +31,29 @@ spec:
       {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 6 }}
   template:
     metadata:
+      annotations:
+        {{/* E8: roll pods deterministically when config changes. */}}
+        checksum/instance-secret: {{ $root.Values.instance.config | toJson | sha256sum }}
+        checksum/microservice-config: {{ include "devicechain.microserviceConfig" $root | sha256sum }}
       labels:
         {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 8 }}
     spec:
+      {{- if $root.Values.serviceAccount.create }}
+      serviceAccountName: {{ include "devicechain.serviceAccountName" $root }}
+      {{- end }}
+      automountServiceAccountToken: {{ $root.Values.serviceAccount.automountToken }}
+      {{- with $root.Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ $area }}
           image: {{ include "devicechain.image" (dict "area" $area "root" $root) }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          {{- with $root.Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             - name: DC_INSTANCE_ID
               value: {{ $root.Values.instance.id | quote }}
@@ -41,29 +65,41 @@ spec:
             - name: graphql
               containerPort: {{ $root.Values.service.port }}
               protocol: TCP
+          {{/*
+          E7: a startupProbe with a generous failureThreshold gives a slow JWKS/DB
+          cold start time to come up before liveness can act; liveness keeps a
+          raised failureThreshold so a transient blip doesn't kill a healthy pod.
+          */}}
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: graphql
+            periodSeconds: {{ $root.Values.startupProbe.periodSeconds }}
+            failureThreshold: {{ $root.Values.startupProbe.failureThreshold }}
           readinessProbe:
             httpGet:
               path: /readyz
               port: graphql
-            initialDelaySeconds: 3
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /healthz
               port: graphql
-            initialDelaySeconds: 3
             periodSeconds: 20
+            failureThreshold: {{ $root.Values.livenessProbe.failureThreshold }}
           resources:
             {{- get $areaCfg "resources" | default $root.Values.resources | toYaml | nindent 12 }}
           volumeMounts:
             - name: instance-config
               mountPath: /etc/dci-config
+              readOnly: true
             - name: microservice-config
               mountPath: /etc/dct-config
+              readOnly: true
       volumes:
         - name: instance-config
-          configMap:
-            name: {{ include "devicechain.instanceConfigMap" $root }}
+          secret:
+            secretName: {{ include "devicechain.instanceConfigSecret" $root }}
         - name: microservice-config
           configMap:
             name: {{ include "devicechain.microserviceConfigMap" $root }}

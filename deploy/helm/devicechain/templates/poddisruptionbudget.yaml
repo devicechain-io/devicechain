@@ -1,0 +1,33 @@
+{{/*
+E7 (ADR-022 review): a PodDisruptionBudget per enabled functional area so a
+voluntary disruption (node drain/upgrade) cannot evict every replica of an area at
+once. Gated on podDisruptionBudget.enabled and skipped for single-replica areas,
+where a PDB with minAvailable would block the drain entirely. Set exactly one of
+podDisruptionBudget.minAvailable / .maxUnavailable.
+*/}}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- $root := . -}}
+{{- range $area := splitList "," (include "devicechain.enabledAreas" .) }}
+{{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
+{{- $replicas := get $areaCfg "replicas" | default $root.Values.replicas }}
+{{- if gt (int $replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $area }}
+  namespace: {{ $root.Values.instance.id }}
+  labels:
+    {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 4 }}
+spec:
+  {{- if $root.Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ $root.Values.podDisruptionBudget.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ $root.Values.podDisruptionBudget.maxUnavailable | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}
