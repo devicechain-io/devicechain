@@ -9,6 +9,8 @@ import AppLayout from '@/routes/AppLayout';
 import Dashboard from '@/routes/Dashboard';
 import UsersPage from '@/routes/users/UsersPage';
 import RolesPage from '@/routes/roles/RolesPage';
+import DevicesPage from '@/routes/devices/DevicesPage';
+import DeviceTypesPage from '@/routes/device-types/DeviceTypesPage';
 
 function ProtectedRoute() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -34,6 +36,8 @@ export default function App() {
       <Route element={<ProtectedRoute />}>
         <Route path="/" element={<AppLayout />}>
           <Route index element={<Dashboard />} />
+          <Route path="devices" element={<DevicesPage />} />
+          <Route path="device-types" element={<DeviceTypesPage />} />
           <Route path="users" element={<UsersPage />} />
           <Route path="roles" element={<RolesPage />} />
         </Route>
