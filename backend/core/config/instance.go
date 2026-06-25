@@ -5,12 +5,6 @@ package config
 
 import "fmt"
 
-// Redis configuration parameters
-type RedisConfiguration struct {
-	Hostname string
-	Port     int32
-}
-
 // NATS configuration parameters
 type NatsConfiguration struct {
 	Hostname string
@@ -39,7 +33,6 @@ type UserManagementConfiguration struct {
 
 // Infrastructure configuration section
 type InfrastructureConfiguration struct {
-	Redis          RedisConfiguration
 	Nats           NatsConfiguration
 	Metrics        MetricsConfiguration
 	UserManagement UserManagementConfiguration
@@ -91,10 +84,6 @@ func (c *InstanceConfiguration) Validate() error {
 func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 	return &InstanceConfiguration{
 		Infrastructure: InfrastructureConfiguration{
-			Redis: RedisConfiguration{
-				Hostname: "dc-redis-master.dc-system",
-				Port:     6379,
-			},
 			Nats: NatsConfiguration{
 				Hostname:       "dc-nats.dc-system",
 				Port:           4222,

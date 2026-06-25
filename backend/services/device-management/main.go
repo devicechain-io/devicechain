@@ -122,20 +122,24 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Create RDB caches sized/TTL'd from configuration (ADR-022 review B2).
-	caches := model.InitializeCaches(RdbManager, Configuration)
-
-	// Wrap api around rdb manager, then wrap a caching decorator over it for the
-	// hot inbound-event resolution path.
-	Api = model.NewApi(RdbManager)
-	CachedApi = model.NewCachedApi(Api, caches)
-
-	// Create and initialize nats manager.
+	// Create and initialize nats manager before the caches, which are backed by
+	// NATS JetStream KV buckets built from it (ADR-007: NATS KV cache backend).
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
 	err = NatsManager.Initialize(ctx)
 	if err != nil {
 		return err
 	}
+
+	// Create NATS KV caches TTL'd from configuration (ADR-022 review B2).
+	caches, err := model.InitializeCaches(NatsManager, Configuration)
+	if err != nil {
+		return err
+	}
+
+	// Wrap api around rdb manager, then wrap a caching decorator over it for the
+	// hot inbound-event resolution path.
+	Api = model.NewApi(RdbManager)
+	CachedApi = model.NewCachedApi(Api, caches)
 
 	// Map of providers that will be injected into graphql http context.
 	providers := map[gqlcore.ContextKey]interface{}{

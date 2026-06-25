@@ -19,6 +19,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/model"
 	"github.com/google/uuid"
@@ -53,6 +54,7 @@ type BootstrapConfig struct {
 type Manager struct {
 	ms        *core.Microservice
 	db        *rdb.RdbManager
+	locker    *messaging.DistributedLock
 	accessTTL time.Duration
 
 	refreshKV nats.KeyValue
@@ -81,9 +83,10 @@ type TokenPair struct {
 }
 
 // NewManager constructs a Manager. accessTTL/refreshTTL of 0 fall back to the
-// auth package defaults.
-func NewManager(ms *core.Microservice, db *rdb.RdbManager, accessTTL, refreshTTL time.Duration, bootstrap BootstrapConfig) *Manager {
-	return &Manager{ms: ms, db: db, accessTTL: accessTTL, refreshTTL: refreshTTL, bootstrap: bootstrap}
+// auth package defaults. locker serializes signing-key generation/rotation and
+// bootstrap seeding across replicas (ADR-007).
+func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.DistributedLock, accessTTL, refreshTTL time.Duration, bootstrap BootstrapConfig) *Manager {
+	return &Manager{ms: ms, db: db, locker: locker, accessTTL: accessTTL, refreshTTL: refreshTTL, bootstrap: bootstrap}
 }
 
 // Initialize loads (or creates) the signing key, builds the issuer/validator,
@@ -266,7 +269,7 @@ func (m *Manager) issueTokens(user *model.User) (*TokenPair, error) {
 // seedBootstrapAdmin creates the configured admin user on first startup (when no
 // users exist), under a distributed lock so replicas seed exactly once.
 func (m *Manager) seedBootstrapAdmin(ctx context.Context) error {
-	return m.ms.WithDistributedLock(ctx, 5*time.Second, 5, func(ctx context.Context) error {
+	return m.locker.WithLock(ctx, m.ms.FunctionalArea, func(ctx context.Context) error {
 		var count int64
 		if err := m.db.DB(core.WithSystemContext(ctx)).Model(&model.User{}).Count(&count).Error; err != nil {
 			return err

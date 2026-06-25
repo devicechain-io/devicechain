@@ -1,11 +1,12 @@
 apiVersion: core.devicechain.io/v1beta1
 kind: InstanceConfiguration
 metadata:
-  creationTimestamp: null
   name: dcic-default
 spec:
   configuration:
     Infrastructure:
+      Metrics:
+        Enabled: true
       Nats:
         Hostname: dc-nats.dc-system
         Port: 4222
@@ -13,12 +14,6 @@ spec:
       UserManagement:
         Hostname: dc-user-management.dc-system
         Port: 8080
-      Metrics:
-        Enabled: true
-        HttpPort: 9090
-      Redis:
-        Hostname: dc-redis-master.dc-system
-        Port: 6379
     Persistence:
       Rdb:
         Configuration:

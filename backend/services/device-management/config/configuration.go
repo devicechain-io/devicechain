@@ -32,12 +32,12 @@ const (
 )
 
 // Defaults for the hot-path resolution caches (ADR-022 review B2). A short TTL
-// bounds staleness for entries that change rarely; the size bounds memory.
+// bounds staleness for entries that change rarely; the caches are NATS JetStream
+// KV buckets (ADR-007), which are server-side and unbounded, so there is no
+// client-side size to configure.
 const (
 	DefaultDeviceCacheTtlSeconds       = 60
-	DefaultDeviceCacheSize             = 1000
 	DefaultRelationshipCacheTtlSeconds = 60
-	DefaultRelationshipCacheSize       = 1000
 )
 
 type DeviceManagementConfiguration struct {
@@ -46,13 +46,12 @@ type DeviceManagementConfiguration struct {
 	// AuthMode* constants). Empty is treated as AuthModeOptional.
 	DeviceAuthMode string
 
-	// Hot inbound-event resolution path caches (ADR-022 review B2). DeviceCache*
-	// bounds the device-by-token cache; RelationshipCache* bounds the
-	// tracked-relationships-by-source-device cache. TTLs are in seconds.
+	// Hot inbound-event resolution path caches (ADR-022 review B2).
+	// DeviceCacheTtlSeconds bounds the device-by-token cache;
+	// RelationshipCacheTtlSeconds bounds the tracked-relationships-by-source-device
+	// cache. Both are NATS KV bucket TTLs, in seconds (ADR-007).
 	DeviceCacheTtlSeconds       int
-	DeviceCacheSize             int
 	RelationshipCacheTtlSeconds int
-	RelationshipCacheSize       int
 }
 
 // Creates the default device management configuration
@@ -75,14 +74,8 @@ func (c *DeviceManagementConfiguration) ApplyDefaults() {
 	if c.DeviceCacheTtlSeconds == 0 {
 		c.DeviceCacheTtlSeconds = DefaultDeviceCacheTtlSeconds
 	}
-	if c.DeviceCacheSize == 0 {
-		c.DeviceCacheSize = DefaultDeviceCacheSize
-	}
 	if c.RelationshipCacheTtlSeconds == 0 {
 		c.RelationshipCacheTtlSeconds = DefaultRelationshipCacheTtlSeconds
-	}
-	if c.RelationshipCacheSize == 0 {
-		c.RelationshipCacheSize = DefaultRelationshipCacheSize
 	}
 }
 
@@ -98,14 +91,8 @@ func (c *DeviceManagementConfiguration) Validate() error {
 	if c.DeviceCacheTtlSeconds <= 0 {
 		return fmt.Errorf("deviceCacheTtlSeconds must be positive (got %d)", c.DeviceCacheTtlSeconds)
 	}
-	if c.DeviceCacheSize <= 0 {
-		return fmt.Errorf("deviceCacheSize must be positive (got %d)", c.DeviceCacheSize)
-	}
 	if c.RelationshipCacheTtlSeconds <= 0 {
 		return fmt.Errorf("relationshipCacheTtlSeconds must be positive (got %d)", c.RelationshipCacheTtlSeconds)
-	}
-	if c.RelationshipCacheSize <= 0 {
-		return fmt.Errorf("relationshipCacheSize must be positive (got %d)", c.RelationshipCacheSize)
 	}
 	return nil
 }

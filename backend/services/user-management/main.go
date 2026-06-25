@@ -92,7 +92,13 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	IdentityManager = identity.NewManager(Microservice, RdbManager, accessTTL, refreshTTL, identity.BootstrapConfig{
+	// Distributed lock (ADR-007, NATS KV) serializing signing-key work and
+	// bootstrap seeding across replicas.
+	lock, err := NatsManager.NewDistributedLock(5 * time.Second)
+	if err != nil {
+		return err
+	}
+	IdentityManager = identity.NewManager(Microservice, RdbManager, lock, accessTTL, refreshTTL, identity.BootstrapConfig{
 		Tenant:   Configuration.Auth.BootstrapTenant,
 		Username: Configuration.Auth.BootstrapUsername,
 		Password: Configuration.Auth.BootstrapPassword,

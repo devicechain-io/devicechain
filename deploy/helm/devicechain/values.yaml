@@ -33,9 +33,6 @@ instance:
   # JSON into a Secret; keys are matched case-insensitively to the Go config struct.
   config:
     infrastructure:
-      redis:
-        hostname: dc-redis-master.dc-system
-        port: 6379
       nats:
         hostname: dc-nats.dc-system
         port: 4222

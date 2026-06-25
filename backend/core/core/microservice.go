@@ -21,7 +21,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	"github.com/bsm/redislock"
 	"github.com/fatih/color"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -46,9 +45,6 @@ type Microservice struct {
 	// Configuration content
 	InstanceConfiguration        config.InstanceConfiguration
 	MicroserviceConfigurationRaw []byte
-
-	// Common microservice tooling
-	Redis *RedisManager
 
 	// Readiness gates the data plane on auth being live (ADR-022 decision 3).
 	Readiness *ReadinessGate
@@ -99,7 +95,6 @@ func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
 	log.Logger = baseCtx.Logger()
 
 	// Create common tooling.
-	ms.Redis = NewRedisManager(ms, NewNoOpLifecycleCallbacks())
 	ms.Readiness = NewReadinessGate()
 
 	// Readiness/auth-degrade observability (E17): a gauge that is 1 once the data
@@ -208,27 +203,6 @@ func (ms *Microservice) ShutDownNow() {
 	}
 
 	ms.done <- true
-}
-
-// Use Redis to get a lock across all microservice replicas.
-func (ms *Microservice) WithDistributedLock(ctx context.Context, duration time.Duration, retries int,
-	logic func(ctx context.Context) error) error {
-	log.Info().Msg(fmt.Sprintf("Getting distributed lock for %s with duration %+v and %d retries...",
-		ms.FunctionalArea, duration, retries))
-	lock, err := ms.Redis.RedisLock.Obtain(ctx, ms.FunctionalArea, duration, &redislock.Options{
-		RetryStrategy: redislock.LimitRetry(redislock.LinearBackoff(duration), retries),
-	})
-	if err != nil {
-		// Any Obtain failure (ErrNotObtained, a Redis drop, deadline, or retry
-		// exhaustion) leaves lock nil. Return before touching lock so a transient
-		// infra blip degrades rather than panicking, and the guarded logic never
-		// runs without the lock actually held (fail-closed; ADR-022 decision 3).
-		return err
-	}
-	defer lock.Release(ctx)
-
-	log.Info().Msg("Lock obtained. Running guarded logic.")
-	return logic(ctx)
 }
 
 // Wait for microservice to shut down
@@ -347,10 +321,7 @@ func (ms *Microservice) ExecuteInitialize(ctx context.Context) error {
 		return err
 	}
 	log.Info().Msg("Successfully loaded microservice configuration.")
-
-	// Initialize Redis connectivity.
-	err = ms.Redis.Initialize(ctx)
-	return err
+	return nil
 }
 
 // Start microservice
@@ -360,9 +331,7 @@ func (ms *Microservice) Start(ctx context.Context) error {
 
 // Start microservice (as called by lifecycle manager)
 func (ms *Microservice) ExecuteStart(ctx context.Context) error {
-	// Execute Redis startup.
-	err := ms.Redis.Start(ctx)
-	return err
+	return nil
 }
 
 // Stop microservice
@@ -372,9 +341,7 @@ func (ms *Microservice) Stop(ctx context.Context) error {
 
 // Stop microservice (as called by lifecycle manager)
 func (ms *Microservice) ExecuteStop(ctx context.Context) error {
-	// Execute Redis shutdown.
-	err := ms.Redis.Stop(ctx)
-	return err
+	return nil
 }
 
 // Terminate microservice
@@ -384,7 +351,5 @@ func (ms *Microservice) Terminate(ctx context.Context) error {
 
 // Terminate microservice (as called by lifecycle manager)
 func (ms *Microservice) ExecuteTerminate(ctx context.Context) error {
-	// Execute Redis termination.
-	err := ms.Redis.Terminate(ctx)
-	return err
+	return nil
 }
