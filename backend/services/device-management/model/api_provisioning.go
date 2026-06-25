@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -318,6 +319,28 @@ func (api *Api) ProvisionDevice(ctx context.Context, request *ProvisionDeviceReq
 		CredentialValue: nil,
 		Created:         created,
 	}, nil
+}
+
+// ProvisionDeviceBootstrap is the entry point an unauthenticated provisioning
+// transport calls: a device presents only its provision key+secret and never
+// names a tenant. It resolves the owning tenant from the globally-unique
+// provision key before any tenant is known — the device-side analog of the
+// login-by-username lookup and a sanctioned WithSystemContext bootstrap
+// (ADR-015) — then re-enters scoped to that tenant and runs ProvisionDevice, so
+// the secret/strategy gates and the device + credential writes are all tenant
+// isolated exactly as an authenticated path would be. The secret is NOT trusted
+// during tenant resolution; ProvisionDevice verifies it within the tenant scope.
+func (api *Api) ProvisionDeviceBootstrap(ctx context.Context, request *ProvisionDeviceRequest, now time.Time) (*ProvisionDeviceResult, error) {
+	sysctx := core.WithSystemContext(ctx)
+	profile, err := api.ProvisioningProfileByProvisionKey(sysctx, request.ProvisionKey)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrProvisioningKeyNotResolved
+		}
+		return nil, err
+	}
+	tctx := core.WithTenant(ctx, profile.TenantId)
+	return api.ProvisionDevice(tctx, request, now)
 }
 
 // mintOrReuseCredential returns the credential id a provisioned device should

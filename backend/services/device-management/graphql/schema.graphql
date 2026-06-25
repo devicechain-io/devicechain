@@ -297,6 +297,81 @@ type DeviceCredentialSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# A device provisioning profile (ADR-012): the shared key+secret a fleet presents
+# to self-register, the strategy governing whether unknown devices may be created,
+# and the device type stamped onto auto-created devices. The provision secret is
+# write-only and is never exposed on this type.
+type ProvisioningProfile implements Model & TokenReference & NamedEntity & MetadataEntity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    name: String
+    description: String
+    provisionKey: String!
+    strategy: String!
+    deviceType: DeviceType!
+    credentialType: String!
+    enabled: Boolean!
+    expiresAt: String
+    metadata: String
+}
+
+# Data required to create or update a provisioning profile.
+input ProvisioningProfileCreateRequest {
+    token: String!
+    name: String
+    description: String
+    provisionKey: String!
+    provisionSecret: String!
+    strategy: String!
+    deviceTypeToken: String!
+    credentialType: String
+    enabled: Boolean!
+    expiresAt: String
+    metadata: String
+}
+
+# Criteria used when searching for provisioning profiles.
+input ProvisioningProfileSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    deviceType: String
+    strategy: String
+    enabled: Boolean
+}
+
+# Search results returned from provisioning profile query.
+type ProvisioningProfileSearchResults {
+    results: [ProvisioningProfile!]!
+    pagination: SearchResultsPagination!
+}
+
+# Self-registration request a connecting device presents (ADR-012). The device
+# supplies only its provision key+secret and the identity it claims; the tenant is
+# resolved from the globally-unique provision key.
+input ProvisionDeviceRequest {
+    provisionKey: String!
+    provisionSecret: String!
+    deviceToken: String!
+    name: String
+    metadata: String
+}
+
+# Result returned to a successfully provisioned device: the resolved identity and
+# the credential it must authenticate with going forward. credentialValue is set
+# only for credential types that carry a separate secret; for an ACCESS_TOKEN the
+# bearer secret is the credentialId itself. created reports whether this call
+# brought the device into existence.
+type ProvisionDeviceResult {
+    deviceToken: String!
+    credentialType: String!
+    credentialId: String!
+    credentialValue: String
+    created: Boolean!
+}
+
 # Represents a type or class of assets
 type AssetType implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
     id: ID!
@@ -771,6 +846,12 @@ type Query {
     deviceCredentialsByToken(tokens: [String!]!): [DeviceCredential!]!
     # List device credentials that meet criteria.
     deviceCredentials(criteria: DeviceCredentialSearchCriteria!): DeviceCredentialSearchResults!
+    # Find provisioning profiles by unique id.
+    provisioningProfilesById(ids: [ID!]!): [ProvisioningProfile!]!
+    # Find provisioning profiles by unique token.
+    provisioningProfilesByToken(tokens: [String!]!): [ProvisioningProfile!]!
+    # List provisioning profiles that meet criteria.
+    provisioningProfiles(criteria: ProvisioningProfileSearchCriteria!): ProvisioningProfileSearchResults!
 
     # Find entity relationship types by unique id.
     entityRelationshipTypesById(ids: [String!]!): [EntityRelationshipType!]!
@@ -869,6 +950,14 @@ type Mutation {
     createDeviceCredential(request: DeviceCredentialCreateRequest): DeviceCredential!
     # Update an existing device credential.
     updateDeviceCredential(token: String!, request: DeviceCredentialCreateRequest): DeviceCredential!
+    # Create a new provisioning profile.
+    createProvisioningProfile(request: ProvisioningProfileCreateRequest): ProvisioningProfile!
+    # Update an existing provisioning profile.
+    updateProvisioningProfile(token: String!, request: ProvisioningProfileCreateRequest): ProvisioningProfile!
+    # Self-register a device against a provisioning profile. Unauthenticated: the
+    # tenant is resolved from the provision key and the key+secret is the gate.
+    # Returns the credential the device must authenticate with going forward.
+    provisionDevice(request: ProvisionDeviceRequest!): ProvisionDeviceResult!
 
     # Create a new entity relationship type.
     createEntityRelationshipType(request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
