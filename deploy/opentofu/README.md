@@ -20,6 +20,14 @@ these modules, passing its cluster credentials to the providers.
 | NATS (JetStream + MQTT) | `nats` Helm chart | `dc-nats.dc-system:4222` / `:1883` |
 | Relational Postgres | StatefulSet + headless Service + Secret | `dc-postgresql.dc-system:5432` |
 | TimescaleDB | same generic module, Timescale image | `dc-timescaledb-single.dc-system:5432` |
+| NGINX ingress controller | `ingress-nginx` Helm chart | IngressClass `nginx` |
+| cert-manager (+ CRDs) | `cert-manager` Helm chart | namespace `cert-manager` |
+
+The ingress controller and cert-manager are the TLS/ingress *capability*; the
+per-instance **Ingress resource + cert Issuer** that route to the app Services are
+rendered by the Helm chart (it knows the enabled functional areas) — set
+`ingress.enabled=true` there. Both are toggleable (`enable_ingress_nginx`,
+`enable_cert_manager`) if the cluster already has them.
 
 These endpoints line up with the Helm chart's `values.yaml` defaults, so the chart
 deploys against this infra with no extra wiring.
@@ -47,6 +55,5 @@ tofu apply
   `terraform.tfvars` (gitignored) or a pre-created Secret for any real deploy.
 - **Pin versions.** Set `nats_chart_version` and `timescale_image` to tested
   versions for reproducible deploys (the defaults float to latest).
-- **Not yet here (next slice):** NGINX ingress + TLS (cert-manager) to expose the
-  GraphQL/HTTP surface externally; the ADR-020 HA topology + the broker-enforced
+- **Not yet here (next slice):** the ADR-020 HA topology + the broker-enforced
   transport security (TLS + NATS auth-callout) it unblocks.

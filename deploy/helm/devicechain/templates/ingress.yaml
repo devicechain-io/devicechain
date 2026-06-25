@@ -1,0 +1,69 @@
+{{/*
+Optional Ingress exposing the GraphQL/HTTP surface, with cert-manager TLS. The
+ingress-nginx controller and cert-manager themselves come from the OpenTofu infra
+(deploy/opentofu); this renders the per-instance routing + Issuer once those
+exist. Disabled by default.
+
+Each enabled functional area is exposed at /<area> on one host, rewritten to the
+service root so /<area>/graphql reaches the service's /graphql. When TLS is on and
+selfSigned, a cert-manager self-signed Issuer is rendered in this namespace
+(dev-grade: valid TLS, browser-untrusted); for real certs set selfSigned=false and
+point clusterIssuer at a configured ClusterIssuer.
+*/}}
+{{- if .Values.ingress.enabled }}
+{{- $root := . -}}
+{{- $tls := .Values.ingress.tls -}}
+{{- if and $tls.enabled $tls.selfSigned }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $tls.issuerName }}
+  namespace: {{ .Values.instance.id }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: devicechain
+  namespace: {{ .Values.instance.id }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+  annotations:
+    # Strip the /<area> prefix so the request reaches the service at its own root.
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    {{- if $tls.enabled }}
+    {{- if $tls.selfSigned }}
+    cert-manager.io/issuer: {{ $tls.issuerName }}
+    {{- else if $tls.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ $tls.clusterIssuer }}
+    {{- end }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if $tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ $tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          {{- range $area := splitList "," (include "devicechain.enabledAreas" $root) }}
+          - path: /{{ $area }}(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $area }}
+                port:
+                  name: graphql
+          {{- end }}
+{{- end }}

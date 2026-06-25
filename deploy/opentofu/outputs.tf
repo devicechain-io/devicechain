@@ -30,3 +30,13 @@ output "timescaledb_host" {
   description = "Host:port of TimescaleDB."
   value       = module.timescaledb.host
 }
+
+output "ingress_class" {
+  description = "IngressClass name to set on the Helm chart's ingress.className (null if the controller was not installed here)."
+  value       = var.enable_ingress_nginx ? module.ingress_nginx[0].ingress_class : null
+}
+
+output "cert_manager_namespace" {
+  description = "Namespace cert-manager was installed into (null if not installed here)."
+  value       = var.enable_cert_manager ? module.cert_manager[0].namespace : null
+}

@@ -148,6 +148,29 @@ securityContext:
     drop:
       - ALL
 
+# Ingress exposing the GraphQL/HTTP surface, with cert-manager TLS. Requires the
+# ingress-nginx controller + cert-manager from deploy/opentofu. Disabled by
+# default; enable to route an external host to the per-area Services. Each enabled
+# area is reachable at https://<host>/<area>/graphql (the /<area> prefix is
+# stripped before the request reaches the service).
+ingress:
+  enabled: false
+  # Must match the IngressClass the controller registered (OpenTofu `ingress_class`).
+  className: nginx
+  host: devicechain.local
+  # Extra annotations merged onto the Ingress (e.g. body size, timeouts).
+  annotations: {}
+  tls:
+    enabled: true
+    # selfSigned renders a cert-manager self-signed Issuer in the instance
+    # namespace (dev: valid TLS, browser-untrusted). For real certs set
+    # selfSigned=false and point clusterIssuer at a configured ClusterIssuer
+    # (e.g. a Let's Encrypt ACME issuer).
+    selfSigned: true
+    issuerName: devicechain-selfsigned
+    clusterIssuer: ""
+    secretName: devicechain-tls
+
 # Per-functional-area settings. `config` defaults to {} → the service applies its
 # own typed defaults at load (ADR-022 decision 1). Override `image`, `replicas`,
 # `resources`, or `config` per area as needed.

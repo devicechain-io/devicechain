@@ -82,6 +82,50 @@ variable "postgres_storage" {
   default     = "8Gi"
 }
 
+# --- Ingress + TLS (ADR-002) ----------------------------------------------------
+
+variable "enable_ingress_nginx" {
+  description = "Install the NGINX ingress controller. Set false if the cluster already has one."
+  type        = bool
+  default     = true
+}
+
+variable "ingress_nginx_namespace" {
+  description = "Namespace for the ingress-nginx controller."
+  type        = string
+  default     = "ingress-nginx"
+}
+
+variable "ingress_nginx_chart_version" {
+  description = "ingress-nginx chart version; empty installs latest. Pin for reproducibility."
+  type        = string
+  default     = ""
+}
+
+variable "ingress_class" {
+  description = "IngressClass name the controller registers; set the same on the Helm chart's ingress.className."
+  type        = string
+  default     = "nginx"
+}
+
+variable "enable_cert_manager" {
+  description = "Install cert-manager (+ CRDs). Set false if the cluster already has it."
+  type        = bool
+  default     = true
+}
+
+variable "cert_manager_namespace" {
+  description = "Namespace for cert-manager."
+  type        = string
+  default     = "cert-manager"
+}
+
+variable "cert_manager_chart_version" {
+  description = "cert-manager chart version; empty installs latest. Pin for reproducibility."
+  type        = string
+  default     = ""
+}
+
 # --- TimescaleDB (event hypertables, ADR-004) -----------------------------------
 
 variable "timescale_image" {

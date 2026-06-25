@@ -50,3 +50,24 @@ module "timescaledb" {
 
   depends_on = [module.namespace]
 }
+
+# NGINX ingress controller — the L7 entry point fronting the GraphQL/HTTP surface
+# (ADR-002). The Ingress resource itself is rendered by the Helm chart.
+module "ingress_nginx" {
+  source = "./modules/ingress-nginx"
+  count  = var.enable_ingress_nginx ? 1 : 0
+
+  namespace     = var.ingress_nginx_namespace
+  chart_version = var.ingress_nginx_chart_version
+  ingress_class = var.ingress_class
+}
+
+# cert-manager — issues/renews the ingress TLS certificates (ADR-002). The Issuer
+# is rendered by the Helm chart once these CRDs exist.
+module "cert_manager" {
+  source = "./modules/cert-manager"
+  count  = var.enable_cert_manager ? 1 : 0
+
+  namespace     = var.cert_manager_namespace
+  chart_version = var.cert_manager_chart_version
+}
