@@ -303,26 +303,29 @@ func (m *Manager) seedBootstrapAdmin(ctx context.Context) error {
 			return err
 		}
 		tctx := core.WithTenant(ctx, m.bootstrap.Tenant)
-		admin := model.User{Username: m.bootstrap.Username, Enabled: true, PasswordHash: string(hash)}
-		admin.TenantId = m.bootstrap.Tenant
-		if err := m.db.DB(tctx).Create(&admin).Error; err != nil {
-			return err
-		}
-
-		// Seed an "admin" role granting the super-authority and assign it to the
-		// bootstrap admin, so the very first login carries full authority and can
-		// administer users and roles (ADR-008 RBAC).
 		adminName := "Administrator"
-		adminRole := model.Role{
-			TokenReference: rdb.TokenReference{Token: "admin"},
-			NamedEntity:    rdb.NamedEntity{Name: rdb.NullStrOf(&adminName)},
-			Authorities:    []string{string(auth.AuthorityAll)},
-		}
-		adminRole.TenantId = m.bootstrap.Tenant
-		if err := m.db.DB(tctx).Create(&adminRole).Error; err != nil {
-			return err
-		}
-		if err := m.db.DB(tctx).Model(&admin).Association("Roles").Append(&adminRole); err != nil {
+
+		// Seed the admin user, an "admin" role granting the super-authority, and
+		// the assignment in ONE transaction (review finding #8): otherwise a crash
+		// between the user insert and the role assignment leaves the count>0 guard
+		// satisfied while the admin holds no authorities — locked out permanently.
+		if err := m.db.DB(tctx).Transaction(func(tx *gorm.DB) error {
+			admin := model.User{Username: m.bootstrap.Username, Enabled: true, PasswordHash: string(hash)}
+			admin.TenantId = m.bootstrap.Tenant
+			if err := tx.Create(&admin).Error; err != nil {
+				return err
+			}
+			adminRole := model.Role{
+				Token:       "admin",
+				NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&adminName)},
+				Authorities: []string{string(auth.AuthorityAll)},
+			}
+			adminRole.TenantId = m.bootstrap.Tenant
+			if err := tx.Create(&adminRole).Error; err != nil {
+				return err
+			}
+			return tx.Model(&admin).Association("Roles").Append(&adminRole)
+		}); err != nil {
 			return err
 		}
 		log.Warn().Str("username", m.bootstrap.Username).Str("tenant", m.bootstrap.Tenant).

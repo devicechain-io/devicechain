@@ -18,12 +18,17 @@ import (
 // plus the capabilities it grants, and the authority vocabulary lives in code
 // (core/auth), so no separate authority table is needed. Each authority is
 // validated against that vocabulary on write.
+//
+// Token is unique *per tenant*, not globally (unlike rdb.TokenReference): a role
+// token like "admin" is a per-tenant identifier — every tenant has its own admin
+// role — so the uniqueness is the composite (tenant_id, token) built in the
+// migration, and Role does not embed rdb.TokenReference.
 type Role struct {
 	gorm.Model
 	rdb.TenantScoped
-	rdb.TokenReference
 	rdb.NamedEntity
 
+	Token       string   `gorm:"not null;size:128"`
 	Authorities []string `gorm:"serializer:json"`
 }
 
