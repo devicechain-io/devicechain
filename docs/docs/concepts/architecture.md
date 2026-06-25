@@ -15,7 +15,7 @@ DeviceChain is a set of stateless Go microservices over a shared core library, c
 | **device-management** | Devices, device profiles, the typed relationship graph, and event resolution (attaching device + organizational context to each event). |
 | **event-management** | Persists resolved events to TimescaleDB and serves time-series queries over GraphQL. |
 | **user-management** | Users, roles, and JWT issuance/validation. |
-| **operator** | A controller-runtime operator that reconciles `DeviceChainInstance` and `DeviceChainTenant` custom resources into Deployments and Services. |
+| **operator** | A controller-runtime operator that manages `DeviceChainInstance` and `DeviceChainTenant` lifecycle (tenant bootstrap, status, config hot-reload). Workloads themselves are rendered by the Helm chart. |
 
 Additional services — command delivery, device state, device registration, outbound connectors, batch operations, and scheduling — are planned. See the repository for current status.
 
@@ -38,7 +38,7 @@ During resolution, device-management looks up the device's **tracked** relations
 
 ## Deployment model
 
-Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned by **OpenTofu** at cluster-creation time. The **operator** assumes that infrastructure exists and is responsible only for materializing DeviceChain workloads and maintaining their configuration. This separation keeps cluster bootstrapping out of application code. See [Deployment](../deployment/kubernetes-operator.md).
+Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned by **OpenTofu** at cluster-creation time. A **Helm chart** renders the platform workloads — one Deployment + Service per enabled functional area, selected by a deployment **profile** (`full` / `telemetry` / `ingest-only`) or an explicit set, with a dependency gate that rejects an invalid selection at install time. The **operator** assumes infrastructure exists and handles instance/tenant lifecycle rather than stamping workloads. This separation keeps cluster bootstrapping out of application code. See [Deployment](../deployment/kubernetes-operator.md).
 
 ## Configuration, health, and startup
 
