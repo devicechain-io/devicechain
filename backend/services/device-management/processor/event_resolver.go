@@ -237,6 +237,15 @@ func (rez *EventResolver) ResolveEventPayload(ctx context.Context, device *model
 // Create resolved events by looking up device assignment info and merging it into other event data.
 func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	device *model.Device, event *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
+	// Validate measurements against the device type's declared metric definitions
+	// before doing any fan-out work (ADR-016): a non-conforming value routes the
+	// whole event to the dead-letter path rather than persisting bad data.
+	if event.EventType == esmodel.Measurement {
+		if reason, err := rez.validateMeasurements(ctx, device, event); err != nil {
+			return nil, reason, err
+		}
+	}
+
 	// Look up the device's tracked relationships (source = this device).
 	tracked := true
 	sourceType := string(entity.TypeDevice)
@@ -270,6 +279,41 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	}
 
 	return results, 0, nil
+}
+
+// validateMeasurements enforces the device type's declared metric definitions
+// against an inbound measurement event (ADR-016). It returns (0, nil) when the
+// event conforms or the device type declares no metrics. A transient
+// definition-lookup failure returns FailureReason_ApiCallFailed (retryable); a
+// non-conforming value returns FailureReason_Invalid, routing the event to the
+// dead-letter path. Validation is lenient: an undeclared metric key passes
+// through (model.ValidateMeasurement), so the metric model is an additive typing
+// layer, not a strict allow-list.
+func (rez *EventResolver) validateMeasurements(ctx context.Context, device *model.Device,
+	event *esmodel.UnresolvedEvent) (uint, error) {
+	payload, ok := event.Payload.(*esmodel.UnresolvedMeasurementsPayload)
+	if !ok {
+		return 0, nil
+	}
+	defs, err := rez.Api.MetricDefinitionsByDeviceType(ctx, device.DeviceTypeId)
+	if err != nil {
+		return uint(dmproto.FailureReason_ApiCallFailed), err
+	}
+	if len(defs) == 0 {
+		return 0, nil
+	}
+	byKey := make(map[string]*model.MetricDefinition, len(defs))
+	for _, d := range defs {
+		byKey[d.MetricKey] = d
+	}
+	for _, entry := range payload.Entries {
+		for name, value := range entry.Measurements {
+			if verr := model.ValidateMeasurement(byKey, name, value); verr != nil {
+				return uint(dmproto.FailureReason_Invalid), verr
+			}
+		}
+	}
+	return 0, nil
 }
 
 // Route event to handlers based on event type.
