@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -57,7 +56,7 @@ func main() {
 // Parses the configuration from raw bytes.
 func parseConfiguration() error {
 	cfg := &config.UserManagementConfiguration{}
-	if err := json.Unmarshal(Microservice.MicroserviceConfigurationRaw, cfg); err != nil {
+	if err := core.LoadConfiguration(Microservice.MicroserviceConfigurationRaw, cfg); err != nil {
 		return err
 	}
 	Configuration = cfg

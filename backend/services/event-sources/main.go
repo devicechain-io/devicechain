@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -68,7 +67,7 @@ func main() {
 // Parses the configuration from raw bytes.
 func parseConfiguration() error {
 	config := &config.EventSourcesConfiguration{}
-	err := json.Unmarshal(Microservice.MicroserviceConfigurationRaw, config)
+	err := core.LoadConfiguration(Microservice.MicroserviceConfigurationRaw, config)
 	if err != nil {
 		return err
 	}
