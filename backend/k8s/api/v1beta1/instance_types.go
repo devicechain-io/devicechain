@@ -20,6 +20,20 @@ type InstanceSpec struct {
 
 	// Instance configuration information.
 	Configuration EntityConfiguration `json:"configuration"`
+
+	// Profile names a curated set of functional areas to deploy (e.g.
+	// "full", "telemetry", "ingest-only") — ADR-022 decision 2. Mutually
+	// exclusive with EnabledFunctionalAreas; an empty profile with no explicit
+	// set defaults to the full profile.
+	// +optional
+	Profile string `json:"profile,omitempty"`
+
+	// EnabledFunctionalAreas is an explicit set of functional areas to deploy,
+	// as an alternative to a named Profile (ADR-022 decision 2). The set is
+	// rejected if it omits a required core area or an enabled area's hard
+	// dependency.
+	// +optional
+	EnabledFunctionalAreas []string `json:"enabledFunctionalAreas,omitempty"`
 }
 
 // InstanceStatus defines the observed state of Instance
