@@ -85,9 +85,47 @@ func TestAuditCaptureCreateUpdateDelete(t *testing.T) {
 		if row.TableName != "widgets" {
 			t.Errorf("row %d: table = %q, want widgets", i, row.TableName)
 		}
+		if row.Category != AuditCategoryMutation {
+			t.Errorf("row %d: category = %q, want %q", i, row.Category, AuditCategoryMutation)
+		}
 		if row.RowsAffected != 1 {
 			t.Errorf("row %d: rows_affected = %d, want 1", i, row.RowsAffected)
 		}
+	}
+}
+
+// RecordAuthEvent writes an auth-category row directly (no mutation), tolerating
+// the no-tenant case of a failed login for an unknown user, and is itself not
+// re-audited.
+func TestRecordAuthEvent(t *testing.T) {
+	db := newAuditTestDB(t)
+	mgr := &RdbManager{Database: db}
+
+	if err := mgr.RecordAuthEvent(context.Background(), AuditOpLogin, "derek", "A"); err != nil {
+		t.Fatalf("record login: %v", err)
+	}
+	// A failed login for an unknown user has no tenant — must still record.
+	if err := mgr.RecordAuthEvent(context.Background(), AuditOpLoginFailed, "ghost", ""); err != nil {
+		t.Fatalf("record failed login: %v", err)
+	}
+
+	rows := readAudit(t, db)
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 auth rows (no recursion), got %d", len(rows))
+	}
+	for _, row := range rows {
+		if row.Category != AuditCategoryAuth {
+			t.Errorf("category = %q, want %q", row.Category, AuditCategoryAuth)
+		}
+		if row.TableName != "" {
+			t.Errorf("auth row should have no table, got %q", row.TableName)
+		}
+	}
+	if rows[0].Operation != AuditOpLogin || rows[0].Actor != "derek" || rows[0].TenantId != "A" {
+		t.Errorf("unexpected login row: %+v", rows[0])
+	}
+	if rows[1].Operation != AuditOpLoginFailed || rows[1].Actor != "ghost" || rows[1].TenantId != "" {
+		t.Errorf("unexpected failed-login row: %+v", rows[1])
 	}
 }
 

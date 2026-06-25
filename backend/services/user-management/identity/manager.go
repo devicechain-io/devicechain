@@ -190,12 +190,27 @@ func (m *Manager) Login(ctx context.Context, username, password string) (*TokenP
 	if user == nil || !user.Enabled {
 		// Spend comparable time hashing so timing does not betray existence.
 		_ = bcrypt.CompareHashAndPassword(m.dummyHash, []byte(password))
+		tenant := ""
+		if user != nil {
+			tenant = user.TenantId
+		}
+		m.recordAuth(ctx, rdb.AuditOpLoginFailed, username, tenant)
 		return nil, ErrInvalidCredentials
 	}
 	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
+		m.recordAuth(ctx, rdb.AuditOpLoginFailed, username, user.TenantId)
 		return nil, ErrInvalidCredentials
 	}
+	m.recordAuth(ctx, rdb.AuditOpLogin, user.Username, user.TenantId)
 	return m.issueTokens(user)
+}
+
+// recordAuth writes an authentication audit event (ADR-019) best-effort: a
+// failure to record is logged but never fails the authentication itself.
+func (m *Manager) recordAuth(ctx context.Context, operation, actor, tenant string) {
+	if err := m.db.RecordAuthEvent(ctx, operation, actor, tenant); err != nil {
+		log.Error().Err(err).Str("operation", operation).Msg("Failed to record auth audit event")
+	}
 }
 
 // Refresh exchanges a valid, unrevoked refresh token for a new token pair,
@@ -220,6 +235,7 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	if user == nil || !user.Enabled {
 		return nil, ErrInvalidToken
 	}
+	m.recordAuth(ctx, rdb.AuditOpRefresh, user.Username, user.TenantId)
 	return m.issueTokens(user)
 }
 
