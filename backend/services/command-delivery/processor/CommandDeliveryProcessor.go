@@ -47,6 +47,9 @@ type CommandDeliveryProcessor struct {
 	DeviceCommandsWriter   messaging.MessageWriter
 	Api                    model.CommandDeliveryApi
 
+	// RED metrics for the response-consumer path (E13).
+	metrics *core.ProcessorMetrics
+
 	lifecycle core.LifecycleManager
 	quit      chan struct{}
 }
@@ -60,6 +63,7 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 		CommandResponsesReader: responses,
 		DeviceCommandsWriter:   commands,
 		Api:                    api,
+		metrics:                ms.NewProcessorMetrics("response"),
 	}
 
 	// Create lifecycle manager.
@@ -135,20 +139,27 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 		return false
 	}
 
+	// RED metrics for this response (E13): start timing now that we hold a
+	// message, and record its disposition exactly once on whichever return
+	// path it leaves by.
+	done := cproc.metrics.Start()
+
 	// Derive the per-message tenant from the subject (fail-closed). A response
 	// we cannot route to a tenant is poison: ack it so it does not redeliver.
 	tenantCtx, _, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
 	if !ok {
-		log.Warn().Msg(fmt.Sprintf("Skipping command response with no parseable tenant in subject %q", msg.Subject))
+		log.Warn().Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Skipping command response with no parseable tenant in subject %q", msg.Subject))
 		_ = msg.Ack()
+		done(core.ResultInvalid)
 		return false
 	}
 
 	// An undecodable payload is poison: ack it so it does not redeliver.
 	var response responseEnvelope
 	if err := json.Unmarshal(msg.Value, &response); err != nil {
-		log.Warn().Err(err).Msg("Skipping undecodable command response")
+		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).Msg("Skipping undecodable command response")
 		_ = msg.Ack()
+		done(core.ResultInvalid)
 		return false
 	}
 
@@ -158,18 +169,21 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 		// redelivery cap, then ack to give up (the device can resend and the
 		// command sweep handles redelivery of the command itself).
 		if msg.NumDelivered >= messaging.MaxDeliver {
-			log.Error().Err(err).Str("command", response.CommandToken).Int("attempts", msg.NumDelivered).
+			log.Error().Err(err).Str("command", response.CommandToken).Str("correlation", msg.CorrelationID()).Int("attempts", msg.NumDelivered).
 				Msg("dropping command response after maximum delivery attempts")
 			_ = msg.Ack()
+			done(core.ResultFailed)
 		} else {
-			log.Error().Err(err).Str("command", response.CommandToken).Msg("unable to record command response")
+			log.Error().Err(err).Str("command", response.CommandToken).Str("correlation", msg.CorrelationID()).Msg("unable to record command response")
 			_ = msg.Nak()
+			done(core.ResultRetry)
 		}
 		return false
 	}
 
 	// Response persisted successfully; ack so it is not redelivered.
 	_ = msg.Ack()
+	done(core.ResultOK)
 	return false
 }
 

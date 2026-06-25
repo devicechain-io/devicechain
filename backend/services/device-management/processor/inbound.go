@@ -42,16 +42,22 @@ type ackCoord struct {
 // outbound producer can publish to the tenant's subject (the tenant is derived
 // from the inbound subject and must travel with the event across the channel).
 // coord ties the item back to its source message for ack coordination.
+// correlation carries the inbound message's correlation id so the outbound
+// resolved event is stamped with it and stays traceable end to end (E15).
 type resolvedItem struct {
-	tenant string
-	event  dmodel.ResolvedEvent
-	coord  *ackCoord
+	tenant      string
+	event       dmodel.ResolvedEvent
+	coord       *ackCoord
+	correlation string
 }
 
 // failedItem pairs a failed event with its tenant for the same reason.
+// correlation carries the inbound message's correlation id onto the outbound
+// failed event for the same end-to-end traceability (E15).
 type failedItem struct {
-	tenant string
-	event  dmodel.FailedEvent
+	tenant      string
+	event       dmodel.FailedEvent
+	correlation string
 }
 
 type InboundEventsProcessor struct {
@@ -66,6 +72,10 @@ type InboundEventsProcessor struct {
 	failed    chan failedItem
 	resolved  chan resolvedItem
 	resolvers []*EventResolver
+
+	// metrics records RED instrumentation for the resolve loop (E13); it is
+	// shared across every resolver worker.
+	metrics *core.ProcessorMetrics
 
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
 	// let ExecuteStop drain senders before closing the channels they feed, so a
@@ -114,7 +124,7 @@ func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) boo
 		msg := messaging.Message{
 			Key:   []byte(strconv.FormatInt(int64(item.event.Reason), 10)),
 			Value: bytes,
-		}
+		}.WithCorrelationID(item.correlation)
 		err = iproc.FailedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)
 		iproc.FailedEventsWriter.HandleResponse(err)
 		return false
@@ -134,11 +144,12 @@ func (iproc *InboundEventsProcessor) OnInvalidEvent(err error, msg messaging.Mes
 	}
 	failed := dmodel.NewFailedEvent(uint(proto.FailureReason_Invalid), iproc.Microservice.FunctionalArea,
 		"message could not be parsed", err, msg.Value)
-	iproc.failed <- failedItem{tenant: tenant, event: *failed}
+	iproc.failed <- failedItem{tenant: tenant, event: *failed, correlation: msg.CorrelationID()}
 }
 
-// Called when an event can not be resolved.
-func (iproc *InboundEventsProcessor) OnUnresolvedEvent(tenant string, reason uint, unrez esmodel.UnresolvedEvent, rezerr error) {
+// Called when an event can not be resolved. correlation is the inbound message's
+// correlation id, carried onto the outbound failed event for traceability (E15).
+func (iproc *InboundEventsProcessor) OnUnresolvedEvent(tenant string, reason uint, unrez esmodel.UnresolvedEvent, rezerr error, correlation string) {
 	// Marshal event message to protobuf.
 	bytes, err := esproto.MarshalUnresolvedEvent(&unrez)
 	if err != nil {
@@ -146,7 +157,7 @@ func (iproc *InboundEventsProcessor) OnUnresolvedEvent(tenant string, reason uin
 	} else {
 		failed := dmodel.NewFailedEvent(reason, iproc.Microservice.FunctionalArea,
 			"event could not be resolved", rezerr, bytes)
-		iproc.failed <- failedItem{tenant: tenant, event: *failed}
+		iproc.failed <- failedItem{tenant: tenant, event: *failed, correlation: correlation}
 	}
 }
 
@@ -161,7 +172,7 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 			msg := messaging.Message{
 				Key:   []byte(strconv.FormatInt(int64(item.event.SourceDeviceId), 10)),
 				Value: bytes,
-			}
+			}.WithCorrelationID(item.correlation)
 			err = iproc.ResolvedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)
 			iproc.ResolvedEventsWriter.HandleResponse(err)
 		} else {
@@ -204,8 +215,9 @@ func (iproc *InboundEventsProcessor) OnResolvedEvent(src messaging.Message, tena
 		return
 	}
 	coord := &ackCoord{src: src, remaining: len(events)}
+	correlation := src.CorrelationID()
 	for _, event := range events {
-		iproc.resolved <- resolvedItem{tenant: tenant, event: *event.Resolved, coord: coord}
+		iproc.resolved <- resolvedItem{tenant: tenant, event: *event.Resolved, coord: coord, correlation: correlation}
 	}
 }
 
@@ -216,7 +228,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 	iproc.resolvers = make([]*EventResolver, 0)
 	for w := 1; w <= EVENT_RESOLVER_COUNT; w++ {
 		resolver := NewEventResolver(w, iproc.Api, iproc.AuthMode, iproc.messages,
-			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent)
+			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent, iproc.metrics)
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		// Resolvers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to
@@ -244,6 +256,10 @@ func (iproc *InboundEventsProcessor) Initialize(ctx context.Context) error {
 func (iproc *InboundEventsProcessor) ExecuteInitialize(ctx context.Context) error {
 	// Derive the cancelable context the read loop runs under (E10/A5).
 	iproc.procCtx, iproc.procCancel = context.WithCancel(ctx)
+
+	// Build RED instrumentation for the resolve loop before the resolvers are
+	// created so it can be shared across every worker (E13).
+	iproc.metrics = iproc.Microservice.NewProcessorMetrics("resolve")
 
 	// Initialize pool of event resolvers.
 	iproc.initializeEventResolvers(ctx)

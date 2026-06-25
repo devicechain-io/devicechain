@@ -30,7 +30,7 @@ func (suite *EventResolverTestSuite) SetupTest() {
 
 // Build a resolver bound to the suite mock under the given auth mode.
 func (suite *EventResolverTestSuite) resolver(authMode string) *EventResolver {
-	return NewEventResolver(1, suite.API, authMode, nil, nil, nil, nil)
+	return NewEventResolver(1, suite.API, authMode, nil, nil, nil, nil, nil)
 }
 
 // A device whose stable token is the given value.

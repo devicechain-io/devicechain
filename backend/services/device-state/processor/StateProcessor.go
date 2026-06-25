@@ -40,6 +40,9 @@ type StateProcessor struct {
 	ResolvedEventsReader messaging.MessageReader
 	Api                  model.DeviceStateApi
 
+	// RED metrics for the per-message merge path (E13).
+	metrics *core.ProcessorMetrics
+
 	messages chan messaging.Message
 
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
@@ -62,6 +65,7 @@ func NewStateProcessor(ms *core.Microservice, reader messaging.MessageReader,
 		Microservice:         ms,
 		ResolvedEventsReader: reader,
 		Api:                  api,
+		metrics:              ms.NewProcessorMetrics("state"),
 	}
 
 	// Create lifecycle manager.
@@ -146,15 +150,20 @@ func (sp *StateProcessor) processMessages(ctx context.Context) {
 // mergeOne updates the originating device's live state projection for a single
 // resolved event and applies the A3 message disposition.
 func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
+	// RED metrics for this merge (E13): time the message and record its
+	// disposition exactly once on whichever path it leaves by.
+	done := sp.metrics.Start()
+
 	// Derive the per-message tenant from the message subject and build a
 	// tenant-scoped context. Without a parseable tenant the state can not be
 	// updated safely (fail-closed) so the message is skipped.
 	msgctx, _, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
 	if !ok {
-		log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in subject %q", msg.Subject))
+		log.Warn().Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Skipping message with no parseable tenant in subject %q", msg.Subject))
 		// Poison message: redelivery will not make the tenant parseable, so ack
 		// to drop it rather than redeliver up to MaxDeliver times.
 		msg.Ack()
+		done(core.ResultInvalid)
 		return
 	}
 
@@ -162,29 +171,33 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 	// channel, so an unparseable message is logged and dropped.
 	event, err := dmproto.UnmarshalResolvedEvent(msg.Value)
 	if err != nil {
-		log.Warn().Err(err).Msg(fmt.Sprintf("Skipping resolved event that could not be parsed from subject %q", msg.Subject))
+		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Skipping resolved event that could not be parsed from subject %q", msg.Subject))
 		// Poison message: redelivery will not make it parseable, so ack to drop.
 		msg.Ack()
+		done(core.ResultInvalid)
 		return
 	}
 
 	// Update the originating device's live state projection.
 	if _, err := sp.Api.MergeDeviceState(msgctx, event.SourceDeviceId, event.OccurredTime); err != nil {
-		log.Error().Err(err).Msg(fmt.Sprintf("Unable to merge device state for device %d", event.SourceDeviceId))
+		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Unable to merge device state for device %d", event.SourceDeviceId))
 		// Treat as transient (e.g. a DB blip). Retry via redelivery until the
 		// finite MaxDeliver cap, then give up: the projection is reconstructable,
 		// so dropping is preferable to looping forever.
 		if msg.NumDelivered >= messaging.MaxDeliver {
-			log.Error().Msg(fmt.Sprintf("Giving up on device state projection update for device %d after %d attempts", event.SourceDeviceId, msg.NumDelivered))
+			log.Error().Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Giving up on device state projection update for device %d after %d attempts", event.SourceDeviceId, msg.NumDelivered))
 			msg.Ack()
+			done(core.ResultFailed)
 		} else {
 			msg.Nak()
+			done(core.ResultRetry)
 		}
 		return
 	}
 
 	// Projection updated successfully: ack so the message is not redelivered.
 	msg.Ack()
+	done(core.ResultOK)
 }
 
 // Lifecycle callback that runs startup logic.
