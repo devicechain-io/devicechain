@@ -1,0 +1,23 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Copy to terraform.tfvars (gitignored) and adjust. The defaults target a local
+# single-node cluster; override credentials and pin chart/image versions for any
+# real deploy.
+
+# kubeconfig_path    = "~/.kube/config"
+# kubeconfig_context = "kind-devicechain"
+
+# namespace        = "dc-system"
+# create_namespace = true
+
+# Pin to a tested chart/image version for reproducible deploys.
+# nats_chart_version = "1.2.2"
+# timescale_image    = "timescale/timescaledb:2.17.2-pg16"
+
+# Change these for anything beyond local dev (or use a pre-created Secret).
+# postgres_password  = "CHANGE-ME"
+# timescale_password = "CHANGE-ME"
+
+# Single-node by default; flip on for the ADR-020 HA topology (when implemented).
+# ha = false
