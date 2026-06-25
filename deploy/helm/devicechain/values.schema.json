@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "DeviceChain Helm values",
+  "description": "Apply-time guard for DeviceChain deployment values (ADR-022). Validates the deployment-selection envelope; per-service config is validated fail-closed by each service at load (decision 1).",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "profile": {
+      "type": "string",
+      "enum": ["", "full", "telemetry", "ingest-only"],
+      "description": "A named profile, or empty to use enabledFunctionalAreas (or default to full)."
+    },
+    "enabledFunctionalAreas": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "user-management",
+          "device-management",
+          "event-sources",
+          "event-management",
+          "device-state",
+          "command-delivery"
+        ]
+      },
+      "uniqueItems": true,
+      "description": "Explicit set of functional areas; mutually exclusive with profile."
+    },
+    "instance": {
+      "type": "object",
+      "required": ["id", "config"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "createNamespace": { "type": "boolean" },
+        "config": { "type": "object" }
+      }
+    },
+    "image": {
+      "type": "object",
+      "required": ["registry", "tag"],
+      "properties": {
+        "registry": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "replicas": { "type": "integer", "minimum": 0 },
+    "functionalAreas": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "image": { "type": "string" },
+          "replicas": { "type": "integer", "minimum": 0 },
+          "resources": { "type": "object" },
+          "config": { "type": "object" }
+        }
+      }
+    }
+  }
+}

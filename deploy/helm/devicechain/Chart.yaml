@@ -1,0 +1,16 @@
+apiVersion: v2
+name: devicechain
+description: |-
+  DeviceChain — the shared-microservice IoT platform. Renders one Deployment +
+  Service per enabled functional area, plus the instance and per-service config
+  ConfigMaps, under the shared-microservice model (ADR-001/ADR-022). Deployment
+  selection is profile- or set-driven and dependency-gated (ADR-022 decision 2).
+type: application
+version: 0.1.0
+appVersion: "0.0.1"
+keywords:
+  - iot
+  - devicechain
+home: https://github.com/devicechain-io/devicechain
+sources:
+  - https://github.com/devicechain-io/devicechain

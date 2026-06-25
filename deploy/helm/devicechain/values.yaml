@@ -1,0 +1,90 @@
+# DeviceChain Helm values.
+#
+# Deployment selection (ADR-022 decision 2): set exactly one of `profile` or
+# `enabledFunctionalAreas`. An empty selection defaults to the full profile. The
+# chart fails the render if the resulting set omits a required core area
+# (user-management, device-management) or an enabled area's hard dependency.
+
+# A named profile: one of "full", "telemetry", "ingest-only".
+profile: full
+
+# An explicit set of functional areas, as an alternative to `profile`.
+# e.g. [user-management, device-management, event-sources]
+enabledFunctionalAreas: []
+
+instance:
+  # Instance identity: becomes DC_INSTANCE_ID and the target namespace.
+  id: devicechain
+  # Whether the chart creates the target namespace (disable if managed elsewhere).
+  createNamespace: true
+  # Instance-wide configuration mounted at /etc/dci-config/instance and read by
+  # every service (infrastructure endpoints + persistence). Rendered verbatim as
+  # JSON; keys are matched case-insensitively to the Go config struct.
+  config:
+    infrastructure:
+      redis:
+        hostname: dc-redis-master.dc-system
+        port: 6379
+      nats:
+        hostname: dc-nats.dc-system
+        port: 4222
+        streamReplicas: 1
+      metrics:
+        enabled: true
+        httpPort: 9090
+      userManagement:
+        hostname: dc-user-management.dc-system
+        port: 8080
+    persistence:
+      rdb:
+        type: postgres95
+        configuration:
+          hostname: dc-postgresql.dc-system
+          port: 5432
+          maxConnections: 5
+          username: devicechain
+          password: devicechain
+      tsdb:
+        type: timescaledb
+        configuration:
+          hostname: dc-timescaledb-single.dc-system
+          port: 5432
+          maxConnections: 5
+          username: postgres
+          password: devicechain
+
+# Container image defaults. The image for an area is
+# "{registry}/{area}:{tag}" unless overridden under functionalAreas.<area>.image.
+image:
+  registry: ghcr.io/devicechain-io
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+
+# GraphQL/HTTP port exposed by every service (also serves /healthz and /readyz).
+service:
+  port: 8080
+
+# Default pod resource requests/limits (override per area under
+# functionalAreas.<area>.resources).
+resources: {}
+
+# Replica count per area (override per area under functionalAreas.<area>.replicas).
+replicas: 1
+
+# Per-functional-area settings. `config` defaults to {} → the service applies its
+# own typed defaults at load (ADR-022 decision 1). Override `image`, `replicas`,
+# `resources`, or `config` per area as needed.
+functionalAreas:
+  user-management:
+    config: {}
+  device-management:
+    config:
+      deviceAuthMode: optional
+  event-sources:
+    config: {}
+  event-management:
+    config: {}
+  device-state:
+    config: {}
+  command-delivery:
+    config: {}

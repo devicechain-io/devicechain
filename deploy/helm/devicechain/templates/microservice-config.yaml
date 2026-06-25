@@ -1,0 +1,19 @@
+{{/*
+Per-service typed config, one key per enabled area, mounted at /etc/dct-config so
+each pod reads its own /etc/dct-config/{functional-area}. An area with no config
+override renders "{}" and the service applies its typed defaults at load
+(ADR-022 decision 1).
+*/}}
+{{- $root := . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "devicechain.microserviceConfigMap" . }}
+  namespace: {{ .Values.instance.id }}
+  labels:
+    devicechain.io/instance: {{ .Values.instance.id }}
+data:
+  {{- range $area := splitList "," (include "devicechain.enabledAreas" .) }}
+  {{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
+  {{ $area }}: {{ get $areaCfg "config" | default dict | toJson | quote }}
+  {{- end }}

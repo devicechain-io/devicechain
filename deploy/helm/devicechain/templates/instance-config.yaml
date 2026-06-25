@@ -1,0 +1,10 @@
+{{/* Instance-wide config mounted at /etc/dci-config/instance on every pod. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "devicechain.instanceConfigMap" . }}
+  namespace: {{ .Values.instance.id }}
+  labels:
+    devicechain.io/instance: {{ .Values.instance.id }}
+data:
+  instance: {{ .Values.instance.config | toJson | quote }}
