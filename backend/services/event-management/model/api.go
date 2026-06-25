@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -41,6 +42,11 @@ type EventManagementApi interface {
 	// committed all-or-nothing (ADR-022 E5).
 	PersistInTx(ctx context.Context, fn func(db *gorm.DB) error) error
 
+	// EventExistsByAltId reports whether a resolved event with the given
+	// alternateId was already persisted for the tenant in context, backing
+	// idempotent ingestion of a redelivered message.
+	EventExistsByAltId(ctx context.Context, db *gorm.DB, altId string, occurred time.Time) (bool, error)
+
 	Events(ctx context.Context, criteria EventSearchCriteria) (*EventSearchResults, error)
 	LocationEvents(ctx context.Context, criteria EventSearchCriteria) (*LocationEventSearchResults, error)
 	MeasurementEvents(ctx context.Context, criteria EventSearchCriteria) (*MeasurementEventSearchResults, error)
@@ -53,14 +59,32 @@ type EventManagementApi interface {
 // inserts performed by fn either all commit or all roll back, making a single
 // message's events atomic (ADR-022 E5).
 //
-// NOTE: this makes a message's writes all-or-nothing, but it does NOT make the
-// at-least-once consume path idempotent — a redelivered message will re-insert
-// its rows. True idempotency needs a per-event dedup key; that is a follow-up
-// (tracked separately) and out of scope for E5.
+// This makes a message's writes all-or-nothing. Idempotency on the at-least-once
+// consume path is layered on top via EventExistsByAltId: a redelivered resolved
+// event carrying an alternateId is detected and skipped inside the transaction
+// (PersistEvent), with the (tenant_id, alt_id, occurred_time) partial unique index
+// as the race backstop. Events without an alternateId are still re-inserted on
+// redelivery — supplying a stable alternateId is what opts an event into dedup.
 func (api *Api) PersistInTx(ctx context.Context, fn func(db *gorm.DB) error) error {
 	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(tx)
 	})
+}
+
+// EventExistsByAltId reports whether an event with the given alternateId already
+// exists for the tenant in context at occurred (the dedup key components beyond
+// tenant_id, which the global query callback applies). It backs idempotent
+// ingestion: a redelivered resolved event is detected and skipped rather than
+// double-persisted. db may be a transaction handle so the check and the inserts
+// that follow share one transaction.
+func (api *Api) EventExistsByAltId(ctx context.Context, db *gorm.DB, altId string, occurred time.Time) (bool, error) {
+	var count int64
+	if err := db.WithContext(ctx).Model(&Event{}).
+		Where("alt_id = ? AND occurred_time = ?", altId, occurred).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // Create a new location event.
