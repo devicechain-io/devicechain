@@ -154,3 +154,24 @@ func (api *MockApi) MetricDefinitionsByDeviceType(ctx context.Context, deviceTyp
 	args := api.Mock.Called()
 	return args.Get(0).([]*model.MetricDefinition), args.Error(1)
 }
+
+func (api *MockApi) SetEntityAttribute(ctx context.Context, request *model.EntityAttributeSetRequest) (*model.EntityAttribute, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.EntityAttribute), args.Error(1)
+}
+
+func (api *MockApi) EntityAttributes(ctx context.Context,
+	criteria model.EntityAttributeSearchCriteria) (*model.EntityAttributeSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.EntityAttributeSearchResults), args.Error(1)
+}
+
+func (api *MockApi) DeleteEntityAttribute(ctx context.Context, entityType string, entity string, scope string, attrKey string) (bool, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(bool), args.Error(1)
+}
+
+func (api *MockApi) EntityAttributesByEntity(ctx context.Context, entityType string, entityId uint, scope *string) ([]*model.EntityAttribute, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.EntityAttribute), args.Error(1)
+}
