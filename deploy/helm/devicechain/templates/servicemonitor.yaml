@@ -1,0 +1,30 @@
+{{/*
+One ServiceMonitor per enabled functional area (gated on metrics.enabled).
+Metrics ride on the graphql port 8080 (the shared HTTP mux), so each monitor
+selects the area's Service and scrapes its named `graphql` port at /metrics.
+ServiceMonitor is a Prometheus-Operator CRD; this whole file is skipped when
+metrics.enabled is false (set it false on clusters without those CRDs).
+*/}}
+{{- if .Values.metrics.enabled }}
+{{- $root := . -}}
+{{- range $area := splitList "," (include "devicechain.enabledAreas" .) }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $area }}
+  namespace: {{ $root.Values.instance.id }}
+  labels:
+    {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ $root.Values.instance.id }}
+  selector:
+    matchLabels:
+      {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 6 }}
+  endpoints:
+    - port: graphql
+      path: /metrics
+{{- end }}
+{{- end }}

@@ -28,9 +28,20 @@ type CommandDeliveryConfiguration struct {
 
 // NewCommandDeliveryConfiguration creates the default command delivery configuration.
 func NewCommandDeliveryConfiguration() *CommandDeliveryConfiguration {
-	return &CommandDeliveryConfiguration{
-		RdbConfiguration: config.MicroserviceDatastoreConfiguration{
-			SqlDebug: true,
-		},
-	}
+	cfg := &CommandDeliveryConfiguration{}
+	cfg.ApplyDefaults()
+	return cfg
+}
+
+// ApplyDefaults is the ADR-022 decision-1 defaulting hook for this service. It
+// has no defaults to apply today (SqlDebug is intentionally left at its zero
+// value, SQL query logging off); it exists as the extension point future fields
+// will use.
+func (c *CommandDeliveryConfiguration) ApplyDefaults() {}
+
+// Validate is the ADR-022 decision-1 validation hook for this service. It has no
+// constraints to enforce today; it exists as the extension point future fields
+// will use.
+func (c *CommandDeliveryConfiguration) Validate() error {
+	return nil
 }

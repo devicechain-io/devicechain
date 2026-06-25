@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
@@ -30,23 +31,20 @@ const testTenantSubject = "instance1.tenant1.resolved-events"
 
 type EventPersistenceProcessorTestSuite struct {
 	suite.Suite
-	EP        *EventPersistenceProcessor
-	Inbound   *test.MockMessageReader
-	Persisted *test.MockMessageWriter
-	Failed    *test.MockMessageWriter
-	API       *emtest.MockApi
+	EP      *EventPersistenceProcessor
+	Inbound *test.MockMessageReader
+	Failed  *test.MockMessageWriter
+	API     *emtest.MockApi
 }
 
 // Perform common setup tasks.
 func (suite *EventPersistenceProcessorTestSuite) SetupTest() {
 	suite.Inbound = new(test.MockMessageReader)
-	suite.Persisted = new(test.MockMessageWriter)
 	suite.Failed = new(test.MockMessageWriter)
 	suite.API = new(emtest.MockApi)
 	suite.EP = NewEventPersistenceProcessor(
 		dmtest.DeviceManagementMicroservice,
 		suite.Inbound,
-		suite.Persisted,
 		suite.Failed,
 		core.NewNoOpLifecycleCallbacks(),
 		suite.API)
@@ -189,17 +187,20 @@ func (suite *EventPersistenceProcessorTestSuite) TestInvalidEvent() {
 
 // Test valid event flow for a given message.
 func (suite *EventPersistenceProcessorTestSuite) SuccessEventFlowFor(msg messaging.Message) {
-	// Emulate read/write.
+	// Emulate read.
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
-	suite.Persisted.Mock.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
 
-	// Send message and wait for event to be processed by resolver.
+	// Send message. The worker pool started in Initialize persists the event
+	// asynchronously, so poll until the API records the corresponding create
+	// call (the persistence side effect) rather than synchronizing on a now
+	// removed persisted channel.
 	ctx := context.Background()
 	suite.EP.ProcessMessage(ctx)
-	suite.EP.ProcessPersistedEvent(ctx)
 
-	// Verify a message was written to persisted messages writer.
-	suite.Persisted.AssertCalled(suite.T(), "WriteMessages", mock.Anything, mock.Anything)
+	// Verify the event was persisted via the API.
+	assert.Eventually(suite.T(), func() bool {
+		return len(suite.API.Mock.Calls) > 0
+	}, 2*time.Second, 10*time.Millisecond, "expected event to be persisted via the API")
 }
 
 // Test locations event with one entry.

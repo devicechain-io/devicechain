@@ -22,9 +22,20 @@ type DeviceStateConfiguration struct {
 
 // Creates the default device state configuration
 func NewDeviceStateConfiguration() *DeviceStateConfiguration {
-	return &DeviceStateConfiguration{
-		RdbConfiguration: config.MicroserviceDatastoreConfiguration{
-			SqlDebug: true,
-		},
-	}
+	cfg := &DeviceStateConfiguration{}
+	cfg.ApplyDefaults()
+	return cfg
+}
+
+// ApplyDefaults is the ADR-022 decision-1 defaulting hook for this service. It
+// has no defaults to apply today (SqlDebug is intentionally left at its zero
+// value, SQL query logging off); it exists as the extension point future fields
+// will use.
+func (c *DeviceStateConfiguration) ApplyDefaults() {}
+
+// Validate is the ADR-022 decision-1 validation hook for this service. It has no
+// constraints to enforce today; it exists as the extension point future fields
+// will use.
+func (c *DeviceStateConfiguration) Validate() error {
+	return nil
 }

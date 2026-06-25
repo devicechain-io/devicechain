@@ -28,7 +28,10 @@ func (rdb *RdbManager) computePostgresRootUrl(pgconfig *PostgresConfig) string {
 // Assure that database is created before connecting to it.
 func (rdb *RdbManager) assurePostgresDatabase(pgconfig *PostgresConfig) error {
 	url := rdb.computePostgresRootUrl(pgconfig)
-	log.Info().Str("database", rdb.Microservice.InstanceId).Str("url", url).Msg("Verifying that instance database exists.")
+	// Log the connection coordinates but never the URL — it embeds the password (C1).
+	log.Info().Str("database", rdb.Microservice.InstanceId).
+		Str("host", pgconfig.Hostname).Int32("port", pgconfig.Port).
+		Msg("Verifying that instance database exists.")
 	conn, err := pgx.Connect(context.Background(), url)
 	if err != nil {
 		return err
@@ -114,7 +117,9 @@ func (rdb *RdbManager) assurePostgresSchema(pgconfig *PostgresConfig) error {
 func (rdb *RdbManager) computePostgresDsn(pg *PostgresConfig) string {
 	dsn := fmt.Sprintf("user=%s password=%s host=%s dbname=%s port=%d sslmode=disable",
 		pg.Username, pg.Password, pg.Hostname, rdb.Microservice.InstanceId, pg.Port)
-	log.Info().Str("username", pg.Username).Str("password", pg.Password).Str("hostname", pg.Hostname).
+	// Never log the password (C1): emit only the non-sensitive connection
+	// coordinates. PostgresConfig.Password is treated as redacted everywhere.
+	log.Info().Str("username", pg.Username).Str("hostname", pg.Hostname).
 		Int32("port", pg.Port).Msg("Initializing database connectivity")
 	return dsn
 }

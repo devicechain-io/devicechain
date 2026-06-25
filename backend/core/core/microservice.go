@@ -177,7 +177,11 @@ func (ms *Microservice) WithDistributedLock(ctx context.Context, duration time.D
 	lock, err := ms.Redis.RedisLock.Obtain(ctx, ms.FunctionalArea, duration, &redislock.Options{
 		RetryStrategy: redislock.LimitRetry(redislock.LinearBackoff(duration), retries),
 	})
-	if err == redislock.ErrNotObtained {
+	if err != nil {
+		// Any Obtain failure (ErrNotObtained, a Redis drop, deadline, or retry
+		// exhaustion) leaves lock nil. Return before touching lock so a transient
+		// infra blip degrades rather than panicking, and the guarded logic never
+		// runs without the lock actually held (fail-closed; ADR-022 decision 3).
 		return err
 	}
 	defer lock.Release(ctx)
