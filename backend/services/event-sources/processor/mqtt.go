@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -62,13 +63,34 @@ func NewMqttEventSource(id string, config map[string]string, decoder Decoder,
 	return es, nil
 }
 
+// tenantFromTopic derives the tenant from an inbound MQTT topic of the form
+// "dc/{tenant}/..." (ADR-006): the tenant is the second of at least three
+// non-empty slash-separated segments. Parsed directly (no whole-string rewrite)
+// since this runs per inbound message.
+func tenantFromTopic(topic string) (string, bool) {
+	parts := strings.SplitN(topic, "/", 3)
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", false
+	}
+	return parts[1], true
+}
+
 // Called when message is received from topic.
 func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	if log.Debug().Enabled() {
 		log.Debug().Msg(fmt.Sprintf("Received message:\n%s from MQTT topic: %s\n", msg.Payload(), msg.Topic()))
 	}
 	es.received(es.Id, msg.Payload())
-	es.messages <- rawMessage{topic: msg.Topic(), payload: msg.Payload()}
+
+	// Derive the per-message tenant from the topic up front; a message whose topic
+	// carries no tenant cannot be published to a tenant-scoped subject, so it is
+	// dropped (fail-closed) rather than decoded and published unscoped.
+	tenant, ok := tenantFromTopic(msg.Topic())
+	if !ok {
+		log.Warn().Msg(fmt.Sprintf("Dropping message with no parseable tenant in MQTT topic %q", msg.Topic()))
+		return
+	}
+	es.messages <- rawMessage{tenant: tenant, payload: msg.Payload()}
 }
 
 // Called on successful connection.

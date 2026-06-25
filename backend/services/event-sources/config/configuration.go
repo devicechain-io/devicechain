@@ -68,6 +68,22 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 				},
 				Debug: false,
 			},
+			{
+				// HTTP ingest is on by default alongside MQTT (TB §2.9, the most
+				// common integration after MQTT). Devices POST events to
+				// "/dc/{tenant}/events"; the tenant is taken from the path, mirroring
+				// the MQTT topic convention (ADR-006).
+				Id:   "http1",
+				Type: "http",
+				Configuration: map[string]string{
+					"port": "8081",
+				},
+				Decoder: EventDecoder{
+					Type:          "json",
+					Configuration: map[string]string{},
+				},
+				Debug: false,
+			},
 		}
 	}
 	if c.InboundEventBatching.MaxBatchSize == 0 {
