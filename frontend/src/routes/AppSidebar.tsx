@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Link, useLocation } from 'react-router-dom';
-import { Cpu, LayoutGrid, ShieldCheck, Users } from 'lucide-react';
+import { LayoutGrid, ShieldCheck, Users } from 'lucide-react';
+import { BrandMark } from '@/components/BrandMark';
 import {
   Sidebar,
   SidebarContent,
@@ -41,11 +42,13 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild tooltip="DeviceChain">
               <Link to="/">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                  <Cpu className="size-4" />
+                <div className="flex aspect-square size-8 items-center justify-center">
+                  <BrandMark className="size-7" />
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">DeviceChain</span>
+                  <span className="truncate font-semibold">
+                    Device<span className="text-primary">Chain</span>
+                  </span>
                   <span className="truncate text-xs text-muted-foreground">Management Console</span>
                 </div>
               </Link>
