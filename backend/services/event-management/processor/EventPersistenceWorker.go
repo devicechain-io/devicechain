@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
 
 // Worker used to persist event entities.
@@ -58,10 +59,12 @@ func parseNullableFloat64(val *string) (*float64, error) {
 	return &parsed, nil
 }
 
-// Persists a location event to the datastore.
-func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, event model.Event,
+// Persists a location event to the datastore. All of the message's location
+// rows are inserted as a single batch on the supplied (transaction-bound) db
+// handle so they commit all-or-nothing (ADR-022 E5).
+func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, db *gorm.DB, event model.Event,
 	payload dmmodel.ResolvedLocationsPayload) (*EventPersistenceResults, error) {
-	events := make([]interface{}, 0)
+	requests := make([]*model.LocationEventCreateRequest, 0, len(payload.Entries))
 	for _, location := range payload.Entries {
 		lat, err := parseNullableFloat64(location.Latitude)
 		if err != nil {
@@ -75,16 +78,19 @@ func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, eve
 		if err != nil {
 			return nil, err
 		}
-		lreq := &model.LocationEventCreateRequest{
+		requests = append(requests, &model.LocationEventCreateRequest{
 			Event:     event,
 			Latitude:  lat,
 			Longitude: lon,
 			Elevation: ele,
-		}
-		locevt, err := ep.Api.CreateLocationEvent(ctx, lreq)
-		if err != nil {
-			return nil, err
-		}
+		})
+	}
+	created, err := ep.Api.CreateLocationEvents(ctx, db, requests)
+	if err != nil {
+		return nil, err
+	}
+	events := make([]interface{}, 0, len(created))
+	for _, locevt := range created {
 		events = append(events, locevt)
 	}
 	results := &EventPersistenceResults{
@@ -93,10 +99,12 @@ func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, eve
 	return results, nil
 }
 
-// Persists measurement events to the datastore.
-func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, event model.Event,
+// Persists measurement events to the datastore. All of the message's
+// measurement rows are inserted as a single batch on the supplied
+// (transaction-bound) db handle so they commit all-or-nothing (ADR-022 E5).
+func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, db *gorm.DB, event model.Event,
 	payload dmmodel.ResolvedMeasurementsPayload) (*EventPersistenceResults, error) {
-	events := make([]interface{}, 0)
+	requests := make([]*model.MeasurementEventCreateRequest, 0)
 	for _, mxentry := range payload.Entries {
 		for _, mx := range mxentry.Entries {
 			val := mx.Value
@@ -109,18 +117,21 @@ func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, 
 				c := uint(*mx.Classifier)
 				classifier = &c
 			}
-			mreq := &model.MeasurementEventCreateRequest{
+			requests = append(requests, &model.MeasurementEventCreateRequest{
 				Event:      event,
 				Name:       mx.Name,
 				Value:      fval,
 				Classifier: classifier,
-			}
-			mevt, err := ep.Api.CreateMeasurementEvent(ctx, mreq)
-			if err != nil {
-				return nil, err
-			}
-			events = append(events, mevt)
+			})
 		}
+	}
+	created, err := ep.Api.CreateMeasurementEvents(ctx, db, requests)
+	if err != nil {
+		return nil, err
+	}
+	events := make([]interface{}, 0, len(created))
+	for _, mevt := range created {
+		events = append(events, mevt)
 	}
 	results := &EventPersistenceResults{
 		Events: events,
@@ -128,22 +139,27 @@ func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, 
 	return results, nil
 }
 
-// Persists alert events to the datastore.
-func (ep *EventPersistenceWorker) PersistAlertEvents(ctx context.Context, event model.Event,
+// Persists alert events to the datastore. All of the message's alert rows are
+// inserted as a single batch on the supplied (transaction-bound) db handle so
+// they commit all-or-nothing (ADR-022 E5).
+func (ep *EventPersistenceWorker) PersistAlertEvents(ctx context.Context, db *gorm.DB, event model.Event,
 	payload dmmodel.ResolvedAlertsPayload) (*EventPersistenceResults, error) {
-	events := make([]interface{}, 0)
+	requests := make([]*model.AlertEventCreateRequest, 0, len(payload.Entries))
 	for _, alert := range payload.Entries {
-		areq := &model.AlertEventCreateRequest{
+		requests = append(requests, &model.AlertEventCreateRequest{
 			Event:   event,
 			Type:    alert.Type,
 			Level:   alert.Level,
 			Message: alert.Message,
 			Source:  alert.Source,
-		}
-		aevt, err := ep.Api.CreateAlertEvent(ctx, areq)
-		if err != nil {
-			return nil, err
-		}
+		})
+	}
+	created, err := ep.Api.CreateAlertEvents(ctx, db, requests)
+	if err != nil {
+		return nil, err
+	}
+	events := make([]interface{}, 0, len(created))
+	for _, aevt := range created {
 		events = append(events, aevt)
 	}
 	results := &EventPersistenceResults{
@@ -166,24 +182,41 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 		ProcessedTime: event.ProcessedTime,
 		EventType:     event.EventType,
 	}
-	switch event.EventType {
-	case esmodel.Location:
-		if payload, ok := event.Payload.(*dmmodel.ResolvedLocationsPayload); ok {
-			return ep.PersistLocationEvents(ctx, pevent, *payload)
+	// All of a single message's inserts run inside one transaction so the
+	// message's events are persisted all-or-nothing (ADR-022 E5): a mid-message
+	// failure rolls the whole message back rather than leaving some rows
+	// committed while the message routes to the failed/dead-letter path. The
+	// transaction handle (tx) carries the tenant-scoped ctx, so the global
+	// tenant-scope create callback still fires on every batched insert.
+	var results *EventPersistenceResults
+	err := ep.Api.PersistInTx(ctx, func(tx *gorm.DB) error {
+		var perr error
+		switch event.EventType {
+		case esmodel.Location:
+			if payload, ok := event.Payload.(*dmmodel.ResolvedLocationsPayload); ok {
+				results, perr = ep.PersistLocationEvents(ctx, tx, pevent, *payload)
+				return perr
+			}
+			return fmt.Errorf("non-location payload in location event")
+		case esmodel.Measurement:
+			if payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload); ok {
+				results, perr = ep.PersistMeasurementEvents(ctx, tx, pevent, *payload)
+				return perr
+			}
+			return fmt.Errorf("non-measurement payload in measurement event")
+		case esmodel.Alert:
+			if payload, ok := event.Payload.(*dmmodel.ResolvedAlertsPayload); ok {
+				results, perr = ep.PersistAlertEvents(ctx, tx, pevent, *payload)
+				return perr
+			}
+			return fmt.Errorf("non-alert payload in alert event")
 		}
-		return nil, fmt.Errorf("non-location payload in location event")
-	case esmodel.Measurement:
-		if payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload); ok {
-			return ep.PersistMeasurementEvents(ctx, pevent, *payload)
-		}
-		return nil, fmt.Errorf("non-measurement payload in measurement event")
-	case esmodel.Alert:
-		if payload, ok := event.Payload.(*dmmodel.ResolvedAlertsPayload); ok {
-			return ep.PersistAlertEvents(ctx, pevent, *payload)
-		}
-		return nil, fmt.Errorf("non-alert payload in alert event")
+		return fmt.Errorf("unhandled event type in persistence: %s", event.EventType.String())
+	})
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("unhandled event type in persistence: %s", event.EventType.String())
+	return results, nil
 }
 
 // Converts unresolved events into resolved events.
