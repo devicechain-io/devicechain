@@ -8,8 +8,6 @@ rules:
   - ""
   resources:
   - configmaps
-  - namespaces
-  - services
   verbs:
   - create
   - delete
@@ -17,27 +15,6 @@ rules:
   - list
   - patch
   - update
-  - watch
-- apiGroups:
-  - apps
-  resources:
-  - deployments
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - core.devicechain.io
-  resources:
-  - instanceconfigurations
-  - microserviceconfigurations
-  verbs:
-  - get
-  - list
   - watch
 - apiGroups:
   - core.devicechain.io
@@ -61,6 +38,32 @@ rules:
   - core.devicechain.io
   resources:
   - instances/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - core.devicechain.io
+  resources:
+  - tenants
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - core.devicechain.io
+  resources:
+  - tenants/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - core.devicechain.io
+  resources:
+  - tenants/status
   verbs:
   - get
   - patch

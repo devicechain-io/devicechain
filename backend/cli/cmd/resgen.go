@@ -8,12 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	dmgen "github.com/devicechain-io/dc-device-management/generator"
-	emgen "github.com/devicechain-io/dc-event-management/generator"
-	esgen "github.com/devicechain-io/dc-event-sources/generator"
 	gen "github.com/devicechain-io/dc-k8s/generators"
 	ms "github.com/devicechain-io/dc-microservice/config"
-	umgen "github.com/devicechain-io/dc-user-management/generator"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -29,21 +25,11 @@ var resgenCmd = &cobra.Command{
 		fmt.Println("Generating resources from source code...")
 		os.MkdirAll(GenResFolder, 0777)
 
-		// Generate instance resources
+		// Generate instance resources. Per-functional-area workload + config
+		// rendering now lives in the Helm chart (deploy/helm/devicechain,
+		// ADR-022 decision 4), so resgen no longer emits a microservice catalog.
 		fmt.Println(GreenUnderline("\nInstance Resources"))
-		err := generateInstanceResources()
-		if err != nil {
-			return err
-		}
-
-		// Generate resources for each microservice
-		fmt.Println(GreenUnderline("\nMicroservice Resources"))
-		err = generateMicroserviceResources(
-			dmgen.ResourceProvider{},
-			emgen.ResourceProvider{},
-			esgen.ResourceProvider{},
-			umgen.ResourceProvider{})
-		if err != nil {
+		if err := generateInstanceResources(); err != nil {
 			return err
 		}
 		return nil
@@ -82,26 +68,6 @@ func generateInstanceResources() error {
 			return err
 		}
 		fmt.Printf(color.GreenString("Generated instance resource: %s\n"), color.HiWhiteString(path))
-	}
-	fmt.Println()
-	return nil
-}
-
-// Generate microservice resources by introspecting microservice configs
-func generateMicroserviceResources(providers ...gen.ConfigurationResourceProvider) error {
-	for _, prov := range providers {
-		dcires, err := prov.GetConfigurationResources()
-		if err != nil {
-			return err
-		}
-		for _, dci := range dcires {
-			path := filepath.Join(GenResFolder, fmt.Sprintf("%s.yaml", dci.Name))
-			err = os.WriteFile(path, dci.Content, 0644)
-			if err != nil {
-				return err
-			}
-			fmt.Printf(color.GreenString("Generated microservice resource: %s\n"), color.HiWhiteString(path))
-		}
 	}
 	fmt.Println()
 	return nil

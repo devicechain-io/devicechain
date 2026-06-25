@@ -130,18 +130,6 @@ func GetTenant(request TenantGetRequest) (*Tenant, error) {
 	return tenant, nil
 }
 
-// Get a microservice configuration based on request criteria
-func GetMicroserviceConfiguration(request MicroserviceConfigurationGetRequest) (*MicroserviceConfiguration, error) {
-	msconfig := &MicroserviceConfiguration{}
-	err := V1Beta1Client.Get(context.Background(), client.ObjectKey{
-		Name: request.Id,
-	}, msconfig)
-	if err != nil {
-		return nil, err
-	}
-	return msconfig, nil
-}
-
 // Initialize client configuration
 func initClientConfig() {
 	ClientConfig = config.GetConfigOrDie()
