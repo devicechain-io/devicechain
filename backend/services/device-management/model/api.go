@@ -64,4 +64,13 @@ type DeviceManagementApi interface {
 	EntityAttributes(ctx context.Context, criteria EntityAttributeSearchCriteria) (*EntityAttributeSearchResults, error)
 	DeleteEntityAttribute(ctx context.Context, entityType string, entity string, scope string, attrKey string) (bool, error)
 	EntityAttributesByEntity(ctx context.Context, entityType string, entityId uint, scope *string) ([]*EntityAttribute, error)
+
+	// Device provisioning + self-registration (ADR-012).
+	CreateProvisioningProfile(ctx context.Context, request *ProvisioningProfileCreateRequest) (*ProvisioningProfile, error)
+	UpdateProvisioningProfile(ctx context.Context, token string, request *ProvisioningProfileCreateRequest) (*ProvisioningProfile, error)
+	ProvisioningProfilesById(ctx context.Context, ids []uint) ([]*ProvisioningProfile, error)
+	ProvisioningProfilesByToken(ctx context.Context, tokens []string) ([]*ProvisioningProfile, error)
+	ProvisioningProfiles(ctx context.Context, criteria ProvisioningProfileSearchCriteria) (*ProvisioningProfileSearchResults, error)
+	ProvisioningProfileByProvisionKey(ctx context.Context, provisionKey string) (*ProvisioningProfile, error)
+	ProvisionDevice(ctx context.Context, request *ProvisionDeviceRequest, now time.Time) (*ProvisionDeviceResult, error)
 }

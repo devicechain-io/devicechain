@@ -175,3 +175,38 @@ func (api *MockApi) EntityAttributesByEntity(ctx context.Context, entityType str
 	args := api.Mock.Called()
 	return args.Get(0).([]*model.EntityAttribute), args.Error(1)
 }
+
+func (api *MockApi) CreateProvisioningProfile(ctx context.Context, request *model.ProvisioningProfileCreateRequest) (*model.ProvisioningProfile, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.ProvisioningProfile), args.Error(1)
+}
+
+func (api *MockApi) UpdateProvisioningProfile(ctx context.Context, token string, request *model.ProvisioningProfileCreateRequest) (*model.ProvisioningProfile, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.ProvisioningProfile), args.Error(1)
+}
+
+func (api *MockApi) ProvisioningProfilesById(ctx context.Context, ids []uint) ([]*model.ProvisioningProfile, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.ProvisioningProfile), args.Error(1)
+}
+
+func (api *MockApi) ProvisioningProfilesByToken(ctx context.Context, tokens []string) ([]*model.ProvisioningProfile, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.ProvisioningProfile), args.Error(1)
+}
+
+func (api *MockApi) ProvisioningProfiles(ctx context.Context, criteria model.ProvisioningProfileSearchCriteria) (*model.ProvisioningProfileSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.ProvisioningProfileSearchResults), args.Error(1)
+}
+
+func (api *MockApi) ProvisioningProfileByProvisionKey(ctx context.Context, provisionKey string) (*model.ProvisioningProfile, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.ProvisioningProfile), args.Error(1)
+}
+
+func (api *MockApi) ProvisionDevice(ctx context.Context, request *model.ProvisionDeviceRequest, now time.Time) (*model.ProvisionDeviceResult, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.ProvisionDeviceResult), args.Error(1)
+}
