@@ -59,6 +59,9 @@ func NewInstallCoreCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Println("Preparing to install DeviceChain core components...")
 
+			if err := v1beta1.InitClient(); err != nil {
+				return fmt.Errorf("connecting to the cluster: %w", err)
+			}
 			dynamicClient, discoveryClient, err := createClients()
 			if err != nil {
 				return err

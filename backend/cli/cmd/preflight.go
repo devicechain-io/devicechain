@@ -66,13 +66,13 @@ func (d *doctor) checkTools(provider string) {
 		{names: []string{"tofu", "terraform"}, required: true, guidance: "install OpenTofu (https://opentofu.org) or Terraform"},
 	}
 	// The local provider targets a kind cluster specifically, so require kind
-	// (not just any cluster tool) and cloud-provider-kind (LoadBalancer support).
-	// Other/unset providers accept any local cluster tool and treat the LB
-	// helper as optional.
+	// (not just any cluster tool). cloud-provider-kind is optional: bootstrap
+	// reaches ingress and MQTT through host-port/NodePort mappings, so a
+	// LoadBalancer (and thus the LB helper) is not needed for the default path.
 	if provider == "local" {
 		checks = append(checks,
 			toolCheck{names: []string{"kind"}, required: true, guidance: "go install sigs.k8s.io/kind@latest — the local provider deploys to a kind cluster"},
-			toolCheck{names: []string{"cloud-provider-kind"}, required: true, guidance: "go install sigs.k8s.io/cloud-provider-kind@latest — required for type=LoadBalancer (ingress-nginx, NATS MQTT)"},
+			toolCheck{names: []string{"cloud-provider-kind"}, required: false, guidance: "go install sigs.k8s.io/cloud-provider-kind@latest — only needed for type=LoadBalancer services; the default bootstrap uses host-port/NodePort"},
 		)
 	} else {
 		checks = append(checks,

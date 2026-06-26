@@ -32,6 +32,9 @@ func NewCreateInstanceCommand() *cobra.Command {
 
 // Create a new DeviceChain instance
 func createInstance(args []string, name string, desc string) error {
+	if err := v1beta1.InitClient(); err != nil {
+		return fmt.Errorf("connecting to the cluster: %w", err)
+	}
 	if len(args) < 1 {
 		return errors.New("no instance id passed for new DeviceChain instance")
 	}
