@@ -15,7 +15,7 @@ var versionCmd = &cobra.Command{
 	Short: "Get version info",
 	Long:  `Gets version information for the CLI`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println(gitCommit)
+		fmt.Printf("dcctl %s (commit %s)\n", Version, gitCommit)
 	},
 }
 

@@ -13,6 +13,10 @@ import (
 // Git commit info passed via makefile
 var gitCommit string
 
+// Version is the release version, injected via ldflags at build time
+// (goreleaser / the release workflow). Defaults to "dev" for local builds.
+var Version = "dev"
+
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "dcctl",

@@ -1,0 +1,70 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# goreleaser config for the DeviceChain CLI (dcctl).
+#
+# Builds cross-platform `dcctl` binaries from the backend/cli module and
+# attaches them (with archives + checksums) to the GitHub Release created for
+# a vX.Y.Z tag. The release workflow runs this from the backend/cli directory,
+# so this module IS the project root and `main: .` resolves to backend/cli/main.go.
+#
+# Version is stamped via ldflags into github.com/devicechain-io/dcctl/cmd.Version
+# (and the existing gitCommit var), so `dcctl version` reports the release.
+
+version: 2
+
+project_name: dcctl
+
+# No `go mod tidy` before-hook: the cli module depends on sibling modules via
+# go.work + replace directives, and tidying outside the workspace rewrites
+# go.mod/go.sum incorrectly. The committed go.mod is already tidy.
+
+builds:
+  - id: dcctl
+    binary: dcctl
+    main: .
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/devicechain-io/dcctl/cmd.Version={{ .Version }}
+      - -X github.com/devicechain-io/dcctl/cmd.gitCommit={{ .FullCommit }}
+
+archives:
+  - id: dcctl
+    ids:
+      - dcctl
+    name_template: >-
+      dcctl_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats:
+      - tar.gz
+    # Windows users expect a .zip rather than a tarball.
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+
+release:
+  github:
+    owner: devicechain-io
+    name: devicechain
+  # Mark the GitHub Release as a prerelease automatically when the tag carries
+  # a prerelease segment (e.g. v1.2.3-rc.1). Stable tags publish a full release.
+  prerelease: auto
