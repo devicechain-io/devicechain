@@ -1,8 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    control-plane: controller-manager
+  name: system
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: controller-manager
-  namespace: dc-system
+  namespace: system
   labels:
     control-plane: controller-manager
 spec:
@@ -20,9 +27,19 @@ spec:
       securityContext:
         runAsNonRoot: true
       containers:
-      - command:
-        - /manager
-        image: devicechain-io/operator:0.0.1
+        # No `command:` override — the images are built with ko (ADR-031), which
+        # sets the entrypoint to the manager binary under /ko-app (there is no
+        # /manager as a Dockerfile build would produce). args are still appended.
+      - args:
+        - "--health-probe-bind-address=:8081"
+        # Metrics disabled for now (the deprecated kube-rbac-proxy sidecar was
+        # removed; re-enable via controller-runtime's built-in metrics authn/z).
+        - "--metrics-bind-address=0"
+        # NOTE: main.go does not yet wire leader election; add --leader-elect once
+        # it does (needed before the operator runs with replicas > 1).
+        # Placeholder image name `controller`; `make deploy IMG=…` (kustomize
+        # edit set image controller=…) rewrites it to the real published tag.
+        image: controller:latest
         name: manager
         securityContext:
           allowPrivilegeEscalation: false

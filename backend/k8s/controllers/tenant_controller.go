@@ -29,10 +29,14 @@ type TenantReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=core.devicechain.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core.devicechain.io,resources=tenants/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=core.devicechain.io,resources=tenants/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core.devicechain.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core.devicechain.io,resources=tenants/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=core.devicechain.io,resources=tenants/finalizers,verbs=update
+//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+
+// Reconcile maintains the tenant's owned ConfigMap (the shared-microservice model,
+// ADR-001). The RBAC markers above are a standalone comment group (separated from
+// this doc comment by a blank line) so controller-gen collects them.
 func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
