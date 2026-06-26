@@ -149,12 +149,13 @@ helm --kube-context "$CONTEXT" upgrade --install dc "$CHART_DIR" \
 
 # ---- 7. seed ---------------------------------------------------------------
 log "🌱 Seed"
-if command -v dcctl >/dev/null 2>&1; then
-  step "seeding admin credential / example data"
-  dcctl seed --kube-context "$CONTEXT" || step "WARN: dcctl seed failed — seed manually if needed"
-else
-  step "dcctl not on PATH — build it: make -C backend/cli build  (binary: backend/cli/build/dcctl)"
-fi
+# The bootstrap admin credential is seeded automatically by user-management on
+# first start (look for "Seeded bootstrap admin" in its logs; default password —
+# change it). Example datasets are seeded over GraphQL against the running
+# instance (needs the API reachable + auth), so they are an on-demand step, not
+# part of bring-up.
+step "bootstrap admin auto-seeded by user-management on first start (default password — change it)"
+step "load example data on demand:  dcctl seed construction --server localhost --instance $INSTANCE"
 
 # ---- 8. report -------------------------------------------------------------
 log "🚀 Ready"

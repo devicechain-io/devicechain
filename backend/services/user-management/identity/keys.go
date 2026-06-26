@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-user-management/model"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -26,12 +27,14 @@ type signingKeySet struct {
 
 // loadSigningKeys returns the instance signing-key set, generating and persisting
 // the first key the very first time. The work runs under a distributed lock so
-// concurrent replicas converge on a single keypair (ADR-008). SigningKey is not
-// tenant-scoped, so these reads/writes need no tenant in context.
+// concurrent replicas converge on a single keypair (ADR-008). SigningKey is an
+// instance-global model (not tenant-scoped), so its writes run under the
+// sanctioned system context — the fail-closed tenant guard (ADR-015) rejects any
+// write with neither a tenant nor the system context, even on exempt models.
 func (m *Manager) loadSigningKeys(ctx context.Context) (*signingKeySet, error) {
 	var set *signingKeySet
 	err := m.locker.WithLock(ctx, m.ms.FunctionalArea, func(ctx context.Context) error {
-		db := m.db.DB(ctx)
+		db := m.db.DB(core.WithSystemContext(ctx))
 		var current model.SigningKey
 		err := db.Where("active = ?", true).First(&current).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -114,7 +117,7 @@ func (m *Manager) createSigningKey(db *gorm.DB) (*model.SigningKey, error) {
 func (m *Manager) rotateSigningKey(ctx context.Context, retention time.Duration) (*signingKeySet, error) {
 	var set *signingKeySet
 	err := m.locker.WithLock(ctx, m.ms.FunctionalArea, func(ctx context.Context) error {
-		return m.db.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		return m.db.DB(core.WithSystemContext(ctx)).Transaction(func(tx *gorm.DB) error {
 			now := time.Now()
 			if err := tx.Model(&model.SigningKey{}).Where("active = ?", true).
 				Updates(map[string]any{"active": false, "retired_at": now}).Error; err != nil {
@@ -151,7 +154,7 @@ func (m *Manager) rotateSigningKey(ctx context.Context, retention time.Duration)
 // by the age-based auto-rotation check.
 func (m *Manager) activeKeyAge(ctx context.Context) (time.Duration, error) {
 	var current model.SigningKey
-	if err := m.db.DB(ctx).Where("active = ?", true).First(&current).Error; err != nil {
+	if err := m.db.DB(core.WithSystemContext(ctx)).Where("active = ?", true).First(&current).Error; err != nil {
 		return 0, err
 	}
 	return time.Since(current.CreatedAt), nil
