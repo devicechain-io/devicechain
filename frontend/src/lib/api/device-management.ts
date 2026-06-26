@@ -3,52 +3,23 @@
 
 // Typed GraphQL operations against the device-management service.
 import { gql } from '@/lib/graphql/client';
+import { graphql } from '@/gql/device-management';
+import type {
+  DevicesQuery,
+  DeviceTypesQuery,
+} from '@/gql/device-management/graphql';
 
-export interface DeviceType {
-  id: string;
-  token: string;
-  name: string | null;
-  description: string | null;
-  imageUrl: string | null;
-  icon: string | null;
-  backgroundColor: string | null;
-  foregroundColor: string | null;
-  borderColor: string | null;
-  metadata: string | null;
-  createdAt: string | null;
-  updatedAt: string | null;
-}
-
-export interface Device {
-  id: string;
-  token: string;
-  name: string | null;
-  description: string | null;
-  deviceType: DeviceType;
-  metadata: string | null;
-  createdAt: string | null;
-  updatedAt: string | null;
-}
-
-export interface Pagination {
-  pageStart: number | null;
-  pageEnd: number | null;
-  totalRecords: number | null;
-}
-
-export interface DeviceSearchResults {
-  results: Device[];
-  pagination: Pagination;
-}
-
-export interface DeviceTypeSearchResults {
-  results: DeviceType[];
-  pagination: Pagination;
-}
+// Public types are derived from the generated operation results so they always
+// reflect the actual selection sets and can never drift from the schema.
+export type Device = DevicesQuery['devices']['results'][number];
+export type DeviceType = DeviceTypesQuery['deviceTypes']['results'][number];
+export type Pagination = DevicesQuery['devices']['pagination'];
+export type DeviceSearchResults = DevicesQuery['devices'];
+export type DeviceTypeSearchResults = DeviceTypesQuery['deviceTypes'];
 
 // ── Devices ─────────────────────────────────────────────────────────────
 
-const DEVICES = `
+const DEVICES = graphql(`
   query Devices($criteria: DeviceSearchCriteria!) {
     devices(criteria: $criteria) {
       results {
@@ -72,14 +43,14 @@ const DEVICES = `
       }
     }
   }
-`;
+`);
 
 export async function listDevices(opts: {
   pageNumber: number;
   pageSize: number;
   deviceType?: string;
 }): Promise<DeviceSearchResults> {
-  const data = await gql<{ devices: DeviceSearchResults }>('device-management', DEVICES, {
+  const data = await gql('device-management', DEVICES, {
     criteria: {
       pageNumber: opts.pageNumber,
       pageSize: opts.pageSize,
@@ -91,7 +62,7 @@ export async function listDevices(opts: {
 
 // ── Device types ────────────────────────────────────────────────────────
 
-const DEVICE_TYPES = `
+const DEVICE_TYPES = graphql(`
   query DeviceTypes($criteria: DeviceTypeSearchCriteria!) {
     deviceTypes(criteria: $criteria) {
       results {
@@ -112,21 +83,17 @@ const DEVICE_TYPES = `
       }
     }
   }
-`;
+`);
 
 export async function listDeviceTypes(opts: {
   pageNumber: number;
   pageSize: number;
 }): Promise<DeviceTypeSearchResults> {
-  const data = await gql<{ deviceTypes: DeviceTypeSearchResults }>(
-    'device-management',
-    DEVICE_TYPES,
-    {
-      criteria: {
-        pageNumber: opts.pageNumber,
-        pageSize: opts.pageSize,
-      },
+  const data = await gql('device-management', DEVICE_TYPES, {
+    criteria: {
+      pageNumber: opts.pageNumber,
+      pageSize: opts.pageSize,
     },
-  );
+  });
   return data.deviceTypes;
 }

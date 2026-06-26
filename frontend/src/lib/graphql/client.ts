@@ -7,6 +7,8 @@
 // when one is available (see setAuthTokenGetter); login/refresh run with no
 // token (the GraphQL handler lets an absent token through with no tenant).
 
+import type { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+
 // DeviceChain functional areas that expose a GraphQL endpoint.
 export type Area =
   | 'user-management'
@@ -57,12 +59,20 @@ interface RequestOptions {
   anonymous?: boolean;
 }
 
-export async function gql<T>(
+// `document` is a code-generated typed document (a `TypedDocumentString` from
+// the GraphQL Code Generator client preset). It implements
+// `DocumentTypeDecoration<TResult, TVariables>`, which carries the result and
+// variable types as phantom generics, and stringifies (via `toString()`) to the
+// raw query text the server expects. The structural `& { toString(): string }`
+// keeps this accepting a document from ANY service while still inferring both
+// the result (`TResult`) and the variables (`TVariables`).
+export async function gql<TResult, TVariables>(
   area: Area,
-  query: string,
-  variables?: Record<string, unknown>,
-  options?: RequestOptions,
-): Promise<T> {
+  document: DocumentTypeDecoration<TResult, TVariables> & { toString(): string },
+  ...[variables, options]: TVariables extends Record<string, never>
+    ? [variables?: undefined, options?: RequestOptions]
+    : [variables: TVariables, options?: RequestOptions]
+): Promise<TResult> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
   if (!options?.anonymous && tokenGetter) {
@@ -75,7 +85,7 @@ export async function gql<T>(
     res = await fetch(endpoint(area), {
       method: 'POST',
       headers,
-      body: JSON.stringify({ query, variables }),
+      body: JSON.stringify({ query: document.toString(), variables }),
     });
   } catch (err) {
     throw new GraphQLRequestError(
@@ -88,7 +98,7 @@ export async function gql<T>(
     throw new GraphQLRequestError(`Request failed (${res.status})`, res.status);
   }
 
-  const body = (await res.json()) as GraphQLResponse<T>;
+  const body = (await res.json()) as GraphQLResponse<TResult>;
   if (body.errors && body.errors.length > 0) {
     throw new GraphQLRequestError(body.errors[0].message, res.status, body.errors);
   }
