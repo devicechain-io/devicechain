@@ -254,4 +254,19 @@ jobs:
           KO_DOCKER_REPO: ghcr.io/devicechain-io
         # --local loads to the runner's Docker daemon and never pushes to a
         # registry. --base-import-paths keeps the local tag deterministic.
-        run: ko build --local --base-import-paths ./
+        #
+        # Retry with backoff: the distroless base (cgr.dev/chainguard/static)
+        # lives on a public registry that intermittently returns
+        # MANIFEST_UNKNOWN for the :latest tag, flaking otherwise-green builds.
+        # The retry absorbs those transient blips without masking a real
+        # build failure (which fails all three attempts deterministically).
+        run: |
+          for attempt in 1 2 3; do
+            if ko build --local --base-import-paths ./; then
+              exit 0
+            fi
+            echo "::warning::ko build attempt ${attempt}/3 failed (likely a transient base-image registry blip); retrying..." >&2
+            sleep $((attempt * 15))
+          done
+          echo "::error::ko build failed after 3 attempts" >&2
+          exit 1
