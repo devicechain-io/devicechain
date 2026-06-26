@@ -10,6 +10,16 @@ import (
 	"github.com/fatih/color"
 )
 
+// DefaultImageRegistry is where published images live.
+const DefaultImageRegistry = "ghcr.io/devicechain-io"
+
+// DefaultImageVersion is the published image tag deployed by default. It is the
+// single source of truth from the repo-root VERSION file, injected via ldflags
+// at build time (the Makefile stamps the same value into cmd.Version, so
+// `dcctl version` and the default image version always match). "dev" is the
+// unstamped fallback for plain `go build`.
+var DefaultImageVersion = "dev"
+
 // State threads data between pipeline steps. Values is populated as the
 // pipeline runs (generated passwords, endpoints, admin cred, etc.).
 type State struct {
@@ -18,7 +28,13 @@ type State struct {
 	Profile     string
 	DryRun      bool
 	AssumeYes   bool
-	Values      map[string]string
+	// Image source. By default the pipeline pulls published images
+	// (ImageRegistry/<area>:ImageVersion); BuildImages flips to the developer
+	// path of building from source into a local registry.
+	ImageRegistry string
+	ImageVersion  string
+	BuildImages   bool
+	Values        map[string]string
 }
 
 // Step is a single named unit of bootstrap work.

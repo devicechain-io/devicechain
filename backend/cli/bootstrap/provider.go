@@ -17,6 +17,12 @@ type Options struct {
 	Profile     string
 	DryRun      bool
 	AssumeYes   bool
+	// ImageRegistry/ImageVersion select the published image source (defaults
+	// DefaultImageRegistry/DefaultImageVersion). BuildImages opts into building
+	// from source into a local registry instead (developer path).
+	ImageRegistry string
+	ImageVersion  string
+	BuildImages   bool
 }
 
 // Provider abstracts the target environment (local cluster today; cloud later)

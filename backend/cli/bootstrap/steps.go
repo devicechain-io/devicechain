@@ -56,22 +56,44 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		return fmt.Errorf("generating db password: %w", err)
 	}
 
+	// Resolve the image source. Default to published images at a pinned version;
+	// the developer path builds from source into a local registry instead.
+	if st.ImageRegistry == "" {
+		st.ImageRegistry = DefaultImageRegistry
+	}
+	if st.ImageVersion == "" {
+		st.ImageVersion = DefaultImageVersion
+	}
+	imageSource := fmt.Sprintf("%s/<area>:%s (published)", st.ImageRegistry, st.ImageVersion)
+	if st.BuildImages {
+		imageSource = "built from source → local registry"
+	}
+
 	st.Values["instance"] = st.Instance
 	st.Values["namespace"] = namespace
 	st.Values["profile"] = st.Profile
 	st.Values["dbPassword"] = password
+	st.Values["imageRegistry"] = st.ImageRegistry
+	st.Values["imageVersion"] = st.ImageVersion
+	st.Values["imageSource"] = imageSource
 	done()
 	return nil
 }
 
-// stepLocalRegistry ensures images are pullable by reference rather than
-// side-loaded into the node.
+// stepLocalRegistry ensures a local registry exists for the developer
+// build-from-source path. End users pull published images, so this is a no-op
+// unless BuildImages is set.
 func stepLocalRegistry(ctx context.Context, st *State) error {
-	// TODO(ADR-032 §image-model): ensure a local registry (kind/minikube/k3d native) so images are pulled by reference (localhost:5000), not side-loaded.
-	doing("ensuring local image registry")
+	if !st.BuildImages {
+		doing("local image registry")
+		fmt.Println(color.GreenString("not needed (using published images)."))
+		return nil
+	}
+	// TODO(ADR-032 §image-model): ensure a local registry (kind/minikube/k3d native) and build+push from source, so images are pulled by reference (localhost:5000), not side-loaded.
+	doing("ensuring local image registry (build-from-source path)")
 	if st.DryRun {
 		fmt.Println()
-		wouldDo("provision a local registry reachable at localhost:5000")
+		wouldDo("provision a local registry at localhost:5000 and build+push images from source")
 		return nil
 	}
 	fmt.Println(color.YellowString("skipped (not yet wired)."))
@@ -106,7 +128,7 @@ func stepInstallCore(ctx context.Context, st *State) error {
 
 // stepHelmInstall installs the per-instance chart.
 func stepHelmInstall(ctx context.Context, st *State) error {
-	// TODO(ADR-032 phase: instance): helm install deploy/helm/devicechain via the Helm Go SDK (instance.id, image.registry/tag).
+	// TODO(ADR-032 phase: instance): helm install deploy/helm/devicechain via the Helm Go SDK (instance.id, image.registry=st.ImageRegistry, image.tag=st.ImageVersion).
 	doing("installing instance chart (Helm)")
 	if st.DryRun {
 		fmt.Println()
@@ -149,6 +171,7 @@ func stepReport(ctx context.Context, st *State) error {
 	fmt.Printf("  %s %s\n", color.WhiteString("Instance:"), color.GreenString(st.Values["instance"]))
 	fmt.Printf("  %s %s\n", color.WhiteString("Namespace:"), color.GreenString(st.Values["namespace"]))
 	fmt.Printf("  %s %s\n", color.WhiteString("Profile:"), color.GreenString(st.Values["profile"]))
+	fmt.Printf("  %s %s\n", color.WhiteString("Images:"), color.GreenString(st.Values["imageSource"]))
 	fmt.Printf("  %s %s\n", color.WhiteString("Kube context:"), color.GreenString(st.KubeContext))
 	fmt.Println(color.YellowString(
 		"\nNote: infra/core/instance/seed steps are not yet wired (ADR-032 skeleton); no workloads were deployed."))
