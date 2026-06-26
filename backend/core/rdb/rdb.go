@@ -6,11 +6,13 @@ package rdb
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -130,11 +132,60 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 		ValidateUnknownMigrations: false,
 	}
 	m := gormigrate.New(rdb.Database, options, rdb.Migrations)
-	if err := m.Migrate(); err != nil {
+
+	// Serialize migrations across concurrently-rolling pods with a Postgres
+	// session-level advisory lock (methodology §10.3). During a rolling update old
+	// and new pods run side by side and each calls Migrate() at startup; without a
+	// lock they would race on DDL. The lock is keyed by this service's migration
+	// table, so different services never block each other — only replicas of the
+	// same service serialize. Whichever pod loses the race waits, then finds the
+	// migrations already recorded by gormigrate and no-ops. (This pairs with the
+	// expand/contract discipline that keeps old and new schema mutually readable
+	// for the rollout window.)
+	if err := rdb.withMigrationLock(ctx, advisoryLockKey(mtable), m.Migrate); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// advisoryLockKey derives a stable bigint key for pg_advisory_lock from the
+// migration table name, so the lock namespace is per-service and deterministic
+// across pods and restarts.
+func advisoryLockKey(name string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(name))
+	return int64(h.Sum64())
+}
+
+// withMigrationLock holds a Postgres session-level advisory lock for the duration
+// of fn, so only one pod migrates at a time. It pins a single pooled connection
+// for the lock's lifetime (a session lock is bound to the connection that took
+// it) and always releases it, even though fn's own statements run on other pooled
+// connections — advisory locks are instance-global, so they still serialize.
+func (rdb *RdbManager) withMigrationLock(ctx context.Context, key int64, fn func() error) error {
+	sqldb, err := rdb.Database.DB()
+	if err != nil {
+		return err
+	}
+	conn, err := sqldb.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", key); err != nil {
+		return fmt.Errorf("acquire migration advisory lock: %w", err)
+	}
+	// Release on the same session before the connection returns to the pool, so a
+	// reused connection does not carry a stale lock.
+	defer func() {
+		if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", key); err != nil {
+			log.Warn().Err(err).Msg("Failed to release migration advisory lock; it clears when the session ends.")
+		}
+	}()
+
+	return fn()
 }
 
 // Start component.

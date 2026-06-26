@@ -65,6 +65,24 @@
       "description": "Prometheus scrape integration. enabled renders a ServiceMonitor per area (scraping /metrics on the graphql port); requires the Prometheus Operator CRDs."
     },
     "replicas": { "type": "integer", "minimum": 0 },
+    "rollingUpdate": {
+      "type": "object",
+      "description": "§10.1: zero-downtime rolling-update strategy. maxUnavailable:0 + maxSurge:1 surges a Ready replacement in before removing an old pod.",
+      "properties": {
+        "maxUnavailable": { "type": ["integer", "string"] },
+        "maxSurge": { "type": ["integer", "string"] }
+      }
+    },
+    "terminationGracePeriodSeconds": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "§10.2: graceful-shutdown window; must exceed shutdownDrainSeconds plus in-flight request time."
+    },
+    "shutdownDrainSeconds": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "§10.2: app-side readiness-drain window before the server stops (DC_SHUTDOWN_DRAIN_SECONDS)."
+    },
     "resources": {
       "type": "object",
       "minProperties": 1,

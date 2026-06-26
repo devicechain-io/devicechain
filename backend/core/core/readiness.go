@@ -36,6 +36,12 @@ type ReadinessGate struct {
 	// without polling and Ready can test without a lock. Created at construction
 	// and never reassigned.
 	readyCh chan struct{}
+	// draining is set once at shutdown so the /readyz probe starts reporting 503
+	// while the server can still serve in-flight requests. It is a separate,
+	// one-way latch from the open gate: opening means "auth is live", draining
+	// means "stop sending me new traffic" — a pod can be open *and* draining
+	// during graceful shutdown (zero-downtime rollouts, methodology §10.2).
+	draining atomic.Bool
 }
 
 // NewReadinessGate creates a closed (not-ready) gate.
@@ -69,6 +75,21 @@ func (g *ReadinessGate) MarkReady(validator *auth.Validator) {
 		g.validator.Store(validator)
 		close(g.readyCh)
 	})
+}
+
+// BeginDrain marks the gate as draining so the /readyz probe begins reporting
+// 503, causing the endpoint controllers to pull this pod from Service endpoints.
+// It deliberately does NOT touch the live validator or close readyCh: in-flight
+// requests still authenticate and any WaitReady'd NATS consumers unwind on
+// context cancellation instead. One-way and idempotent.
+func (g *ReadinessGate) BeginDrain() {
+	g.draining.Store(true)
+}
+
+// Draining reports whether graceful shutdown has begun. The /readyz probe treats
+// a draining pod as not-ready even though the auth gate is still open.
+func (g *ReadinessGate) Draining() bool {
+	return g.draining.Load()
 }
 
 // WaitReady blocks until the gate opens or ctx is cancelled. It is the pause

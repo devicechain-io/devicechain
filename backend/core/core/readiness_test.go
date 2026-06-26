@@ -67,6 +67,35 @@ func TestReadinessGate_WaitReadyReleasedOnOpen(t *testing.T) {
 	}
 }
 
+// A fresh gate is not draining.
+func TestReadinessGate_StartsNotDraining(t *testing.T) {
+	g := NewReadinessGate()
+	assert.False(t, g.Draining())
+}
+
+// BeginDrain flips Draining without disturbing the open gate or the validator,
+// so /readyz reports 503 while in-flight requests still authenticate.
+func TestReadinessGate_BeginDrain(t *testing.T) {
+	g := NewReadinessGate()
+	v := &auth.Validator{}
+	g.MarkReady(v)
+
+	g.BeginDrain()
+
+	assert.True(t, g.Draining())
+	// The gate stays open and the validator stays live for in-flight requests.
+	assert.True(t, g.Ready())
+	assert.Same(t, v, g.Validator())
+}
+
+// BeginDrain is idempotent.
+func TestReadinessGate_BeginDrainIdempotent(t *testing.T) {
+	g := NewReadinessGate()
+	g.BeginDrain()
+	g.BeginDrain()
+	assert.True(t, g.Draining())
+}
+
 // StartAuthGate opens the gate once the background fetch succeeds, after retrying
 // past transient failures.
 func TestStartAuthGate_OpensAfterRetries(t *testing.T) {

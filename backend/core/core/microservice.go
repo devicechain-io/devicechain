@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -182,8 +183,43 @@ func (ms *Microservice) InitializeAndStart() error {
 	return nil
 }
 
+// defaultShutdownDrain is the drain window used when DC_SHUTDOWN_DRAIN_SECONDS is
+// unset or invalid. ~5s comfortably covers Service-endpoint removal propagation
+// while staying well under the chart's default terminationGracePeriodSeconds.
+const defaultShutdownDrain = 5 * time.Second
+
+// shutdownDrainDelay resolves the readiness-drain window from the environment,
+// falling back to defaultShutdownDrain. A value of 0 disables the drain (useful
+// for local single-instance runs where there is no Service to drain from).
+func shutdownDrainDelay() time.Duration {
+	v := os.Getenv(ENV_SHUTDOWN_DRAIN_SECONDS)
+	if v == "" {
+		return defaultShutdownDrain
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		log.Warn().Str("value", v).Msgf("Invalid %s; using default drain.", ENV_SHUTDOWN_DRAIN_SECONDS)
+		return defaultShutdownDrain
+	}
+	return time.Duration(n) * time.Second
+}
+
 // Issue stop and terminate commands to microservice
 func (ms *Microservice) ShutDownNow() {
+	// Zero-downtime drain (methodology §10.2): flip readiness to 503 FIRST so the
+	// endpoint controllers pull this pod from Service endpoints, then keep serving
+	// for a short window while that removal propagates (kube-proxy is eventually
+	// consistent). The scratch service images have no shell for a preStop hook, so
+	// this drain is app-side. Only after the window do we cancel and tear down, so
+	// in-flight requests are not severed.
+	if ms.Readiness != nil {
+		ms.Readiness.BeginDrain()
+		if d := shutdownDrainDelay(); d > 0 {
+			log.Info().Dur("drain", d).Msg("Draining: readiness now reports 503; waiting for endpoint removal to propagate.")
+			time.Sleep(d)
+		}
+	}
+
 	// Cancel the root context first so long-running loops (NATS consumers, the
 	// auth gate) observe cancellation and unwind (E10). Stop/Terminate run on
 	// fresh contexts so teardown still completes after the cancellation.

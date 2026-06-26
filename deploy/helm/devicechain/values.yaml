@@ -98,7 +98,25 @@ resources:
     memory: 256Mi
 
 # Replica count per area (override per area under functionalAreas.<area>.replicas).
+# Recommend >= 2 in production for true zero-downtime rollouts (a single replica
+# still has a brief gap while its one pod is replaced) and node-failure survival.
 replicas: 1
+
+# Zero-downtime rolling-update strategy (methodology §10.1). maxUnavailable:0 keeps
+# full capacity through an upgrade — a new pod must pass /readyz before an old one
+# is removed; maxSurge:1 brings the replacement up first.
+rollingUpdate:
+  maxUnavailable: 0
+  maxSurge: 1
+
+# Graceful shutdown (§10.2). On SIGTERM a service flips readiness to 503, waits
+# shutdownDrainSeconds for the endpoint controllers to pull it from Service
+# endpoints, then drains in-flight requests. The scratch images have no shell, so
+# this drain is app-side (DC_SHUTDOWN_DRAIN_SECONDS), not a preStop hook.
+# terminationGracePeriodSeconds must exceed shutdownDrainSeconds plus in-flight
+# request time, or the kubelet SIGKILLs the pod mid-drain.
+terminationGracePeriodSeconds: 30
+shutdownDrainSeconds: 5
 
 # E7: a dedicated ServiceAccount per release, referenced by every Deployment, in
 # place of the namespace `default` SA. The data-plane services never call the

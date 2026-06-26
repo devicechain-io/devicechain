@@ -15,4 +15,14 @@ const (
 	// colorized console logger for local development. Unset (the default, and how
 	// the Helm chart runs) emits structured JSON for log aggregation (E16).
 	ENV_LOG_CONSOLE = "DC_LOG_CONSOLE"
+
+	// ENV_SHUTDOWN_DRAIN_SECONDS is the grace window (in seconds) between flipping
+	// readiness to 503 on SIGTERM and tearing the server down, giving the endpoint
+	// controllers time to pull the pod from Service endpoints before in-flight
+	// traffic stops being accepted (the app-side equivalent of a preStop sleep —
+	// the scratch service images have no shell for a preStop hook). The Helm chart
+	// sets it; it defaults to defaultShutdownDrain when unset or invalid. Must stay
+	// comfortably below terminationGracePeriodSeconds so the graceful HTTP shutdown
+	// still has time after the drain (methodology §10.2).
+	ENV_SHUTDOWN_DRAIN_SECONDS = "DC_SHUTDOWN_DRAIN_SECONDS"
 )

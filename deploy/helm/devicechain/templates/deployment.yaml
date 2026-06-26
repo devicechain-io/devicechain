@@ -26,6 +26,18 @@ metadata:
     {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 4 }}
 spec:
   replicas: {{ get $areaCfg "replicas" | default $root.Values.replicas }}
+  {{/*
+  Zero-downtime rollouts (methodology §10.1): maxUnavailable:0 keeps full capacity
+  during an upgrade — a new pod must go Ready (/readyz) before an old one is
+  removed — and maxSurge:1 brings the replacement up first. Pair with replicas >= 2
+  for true zero-downtime (a single replica still has a brief gap while its one pod
+  is replaced).
+  */}}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ $root.Values.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ $root.Values.rollingUpdate.maxSurge }}
   selector:
     matchLabels:
       {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 6 }}
@@ -38,6 +50,11 @@ spec:
       labels:
         {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 8 }}
     spec:
+      {{/*
+      Graceful shutdown window (§10.2): must exceed shutdownDrainSeconds plus the
+      time to drain in-flight requests, or the kubelet SIGKILLs mid-drain.
+      */}}
+      terminationGracePeriodSeconds: {{ $root.Values.terminationGracePeriodSeconds }}
       {{- if $root.Values.serviceAccount.create }}
       serviceAccountName: {{ include "devicechain.serviceAccountName" $root }}
       {{- end }}
@@ -61,6 +78,11 @@ spec:
               value: {{ $area | quote }}
             - name: DC_MS_FUNCTIONAL_AREA
               value: {{ $area | quote }}
+            {{/* §10.2: app-side drain window (the scratch images have no shell
+            for a preStop hook) — readiness flips to 503 this many seconds before
+            the server stops, so endpoints drain first. */}}
+            - name: DC_SHUTDOWN_DRAIN_SECONDS
+              value: {{ $root.Values.shutdownDrainSeconds | quote }}
           ports:
             - name: graphql
               containerPort: {{ $root.Values.service.port }}
