@@ -37,11 +37,21 @@ const tenantFieldName = "TenantId"
 func RegisterTenantScoping(db *gorm.DB) error {
 	// Query / row / update / delete inject the tenant predicate; create stamps it.
 	for _, register := range []func() error{
-		func() error { return db.Callback().Query().Before("gorm:query").Register("dc:tenant_query", tenantScopeQuery) },
-		func() error { return db.Callback().Row().Before("gorm:row").Register("dc:tenant_row", tenantScopeQuery) },
-		func() error { return db.Callback().Update().Before("gorm:update").Register("dc:tenant_update", tenantScopeQuery) },
-		func() error { return db.Callback().Delete().Before("gorm:delete").Register("dc:tenant_delete", tenantScopeQuery) },
-		func() error { return db.Callback().Create().Before("gorm:create").Register("dc:tenant_create", tenantScopeCreate) },
+		func() error {
+			return db.Callback().Query().Before("gorm:query").Register("dc:tenant_query", tenantScopeQuery)
+		},
+		func() error {
+			return db.Callback().Row().Before("gorm:row").Register("dc:tenant_row", tenantScopeQuery)
+		},
+		func() error {
+			return db.Callback().Update().Before("gorm:update").Register("dc:tenant_update", tenantScopeQuery)
+		},
+		func() error {
+			return db.Callback().Delete().Before("gorm:delete").Register("dc:tenant_delete", tenantScopeQuery)
+		},
+		func() error {
+			return db.Callback().Create().Before("gorm:create").Register("dc:tenant_create", tenantScopeCreate)
+		},
 	} {
 		if err := register(); err != nil {
 			return err

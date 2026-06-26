@@ -1,0 +1,257 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Validation CI for the DeviceChain monorepo.
+#
+# This workflow validates only -- it never publishes images or artifacts.
+# Image publishing lives in a separate, tag-triggered workflow.
+#
+# Services are enumerated dynamically from backend/services/* (via
+# hack/list-services.sh), so adding a new service needs no edits here.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: validation jobs only need to read the repo.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Enumerate services (image-smoke matrix) and Go modules (go matrix).
+  # ---------------------------------------------------------------------------
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.svc.outputs.services }}
+      modules: ${{ steps.mod.outputs.modules }}
+      smoke: ${{ steps.smoke.outputs.smoke }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Discover services
+        id: svc
+        run: |
+          services="$(hack/list-services.sh)"
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+          echo "Services: $services"
+
+      - name: Discover Go modules
+        id: mod
+        run: |
+          # Full set of Go module dirs = non-service modules + discovered services.
+          # Derived by finding every dir that holds a go.mod under the known roots.
+          modules="$(
+            for d in backend/cli backend/core backend/k8s backend/services/*/; do
+              [ -f "${d%/}/go.mod" ] && echo "${d%/}"
+            done | jq -R . | jq -s -c .
+          )"
+          echo "modules=$modules" >> "$GITHUB_OUTPUT"
+          echo "Modules: $modules"
+
+      - name: Build image-smoke module list
+        id: smoke
+        run: |
+          # ko-buildable image modules = each discovered service (mapped to its
+          # backend/services/<name> dir) PLUS the operator at backend/k8s.
+          smoke="$(
+            { hack/list-services.sh | jq -r '.[] | "backend/services/" + .'
+              echo "backend/k8s"
+            } | jq -R . | jq -s -c .
+          )"
+          echo "smoke=$smoke" >> "$GITHUB_OUTPUT"
+          echo "Smoke modules: $smoke"
+
+  # ---------------------------------------------------------------------------
+  # Per-module Go validation: fmt, build, vet, test.
+  # go.work makes the module the working directory for each matrix entry.
+  # ---------------------------------------------------------------------------
+  go:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJson(needs.discover.outputs.modules) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: gofmt
+        working-directory: ${{ matrix.module }}
+        run: |
+          # gofmt -l prints files that need formatting; any output is a failure.
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go build
+        working-directory: ${{ matrix.module }}
+        run: go build ./...
+
+      - name: go vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+
+      - name: go test
+        working-directory: ${{ matrix.module }}
+        # The operator's controllers suite is a kubebuilder envtest scaffold with
+        # no specs yet — it boots a control plane but asserts nothing, and is
+        # environment-sensitive. Exclude it from unit CI; add a dedicated envtest
+        # job when real controller specs land. All other packages run normally.
+        run: |
+          if [ "${{ matrix.module }}" = "backend/k8s" ]; then
+            go test $(go list ./... | grep -v '/controllers$')
+          else
+            go test ./...
+          fi
+
+  # NOTE: a golangci-lint job is intentionally omitted for now — no golangci-lint
+  # release yet supports Go 1.26 (it refuses: "the Go language version used to
+  # build golangci-lint is lower than the targeted Go version"). gofmt + go vet
+  # in the `go` job are the Go gates; re-add golangci-lint once a 1.26-compatible
+  # release ships.
+
+  # ---------------------------------------------------------------------------
+  # License header check (backend only, per CLAUDE.md).
+  # ---------------------------------------------------------------------------
+  license:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: Check SPDX headers
+        # Go + hand-authored GraphQL/proto sources. YAML and the operator
+        # Dockerfile are excluded: those manifests are controller-gen-generated,
+        # so a header would drift away on every `make manifests` regeneration.
+        run: >
+          go run github.com/google/addlicense@latest -check
+          -ignore '**/*.yaml' -ignore '**/Dockerfile'
+          -f hack/license-header.txt backend
+
+  # ---------------------------------------------------------------------------
+  # Frontend: codegen drift check, typecheck, build.
+  # ---------------------------------------------------------------------------
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Codegen drift check
+        run: |
+          # Regenerate and fail if the committed output in src/gql is stale.
+          npm run codegen
+          git diff --exit-code -- src/gql
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # Helm chart: lint and template render.
+  # ---------------------------------------------------------------------------
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: azure/setup-helm@v5
+
+      - name: helm lint
+        run: helm lint deploy/helm/devicechain
+
+      - name: helm template
+        # Catch template render errors without keeping the output.
+        run: helm template deploy/helm/devicechain >/dev/null
+
+  # ---------------------------------------------------------------------------
+  # OpenTofu: format, init (no backend), validate.
+  # ---------------------------------------------------------------------------
+  opentofu:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/opentofu
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: opentofu/setup-opentofu@v1
+
+      - name: tofu fmt
+        run: tofu fmt -check -recursive
+
+      - name: tofu init
+        run: tofu init -backend=false
+
+      - name: tofu validate
+        run: tofu validate
+
+  # ---------------------------------------------------------------------------
+  # Image smoke build: ko builds each service image locally (no push). This
+  # catches image-build breakage. The matrix covers the discovered services
+  # plus the operator (backend/k8s).
+  # ---------------------------------------------------------------------------
+  image-smoke:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Discovered services (mapped to backend/services/<name>) plus the
+        # operator at backend/k8s -- assembled by the discover job.
+        module: ${{ fromJson(needs.discover.outputs.smoke) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - uses: ko-build/setup-ko@v0.7
+
+      - name: ko build (local, no push)
+        working-directory: ${{ matrix.module }}
+        env:
+          KO_DOCKER_REPO: ghcr.io/devicechain-io
+        # --local loads to the runner's Docker daemon and never pushes to a
+        # registry. --base-import-paths keeps the local tag deterministic.
+        run: ko build --local --base-import-paths ./

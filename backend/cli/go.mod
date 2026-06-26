@@ -102,3 +102,15 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/devicechain-io/dc-device-management => ../services/device-management
+
+replace github.com/devicechain-io/dc-event-management => ../services/event-management
+
+replace github.com/devicechain-io/dc-event-sources => ../services/event-sources
+
+replace github.com/devicechain-io/dc-k8s => ../k8s
+
+replace github.com/devicechain-io/dc-microservice => ../core
+
+replace github.com/devicechain-io/dc-user-management => ../services/user-management

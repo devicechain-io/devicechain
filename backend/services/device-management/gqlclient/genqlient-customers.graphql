@@ -1,3 +1,6 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Content associated with customer type response.
 fragment DefaultCustomerType on CustomerType {
   id

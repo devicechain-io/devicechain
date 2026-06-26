@@ -1,0 +1,10 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# ko build configuration for DeviceChain images.
+#
+# Pins the nonroot distroless static base so built images match the Helm
+# chart's pod securityContext (runAsUser 65532, read-only root filesystem).
+# Images are published as ghcr.io/devicechain-io/<service> by the (separate)
+# release workflow; this repo's CI only smoke-builds them locally.
+defaultBaseImage: cgr.dev/chainguard/static:latest

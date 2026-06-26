@@ -13,6 +13,7 @@ import (
 type LifecycleState int64
 
 // Enumeration of lifecycle states
+//
 //go:generate stringer -type=LifecycleState
 const (
 	Uninitialized LifecycleState = iota
