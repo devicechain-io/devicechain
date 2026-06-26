@@ -10,4 +10,5 @@ use (
 	./backend/services/event-management
 	./backend/services/event-sources
 	./backend/services/user-management
+	./deploy
 )

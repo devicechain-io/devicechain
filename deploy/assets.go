@@ -1,0 +1,51 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Package assets embeds the DeviceChain deploy artifacts — the OpenTofu
+// infrastructure config and the per-instance Helm chart — directly into any
+// binary that imports it. This is what lets `dcctl bootstrap` provision a
+// cluster with no source checkout, no git, and no kubectl/kustomize/helm
+// binaries on the user's machine: the manifests travel inside dcctl.
+//
+// The embed globs are deliberately precise: they pull in the .tf source and the
+// modules tree but never the local terraform state/tfvars (which hold secrets
+// and per-machine values), nor the gitignored .terraform provider cache.
+package assets
+
+import (
+	"embed"
+	"io/fs"
+)
+
+// opentofu holds the infrastructure root: top-level *.tf plus the modules tree.
+// terraform.tfstate / terraform.tfvars are intentionally excluded.
+//
+//go:embed opentofu/*.tf all:opentofu/modules
+var opentofu embed.FS
+
+// helmChart holds the per-instance chart (Chart.yaml, values, templates). The
+// all: prefix is essential: go:embed otherwise skips _-prefixed files, dropping
+// templates/_helpers.tpl (the chart's named-template library).
+//
+//go:embed all:helm/devicechain
+var helmChart embed.FS
+
+// OpenTofu returns the embedded OpenTofu root, rooted so main.tf is at the top
+// level (callers extract this to a working directory for terraform-exec).
+func OpenTofu() fs.FS {
+	sub, err := fs.Sub(opentofu, "opentofu")
+	if err != nil {
+		panic(err) // embed paths are compile-time constant; this cannot fail
+	}
+	return sub
+}
+
+// HelmChart returns the embedded chart root, rooted so Chart.yaml is at the top
+// level (suitable for the Helm loader).
+func HelmChart() fs.FS {
+	sub, err := fs.Sub(helmChart, "helm/devicechain")
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}
