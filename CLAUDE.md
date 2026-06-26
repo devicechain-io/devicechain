@@ -28,4 +28,7 @@ go run github.com/google/addlicense@latest -f hack/license-header.txt backend
 go run github.com/google/addlicense@latest -check -f hack/license-header.txt backend
 ```
 
-(A GitHub Actions check enforcing this is planned but not yet wired up.)
+(The CI `license` job enforces this on every PR and push to `main` — see
+[.github/workflows/ci.yml](.github/workflows/ci.yml). It checks Go + hand-authored
+GraphQL/proto sources; controller-gen-generated YAML and the operator Dockerfile are
+excluded because a header would drift away on every regeneration.)

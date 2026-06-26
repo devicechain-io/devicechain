@@ -29,6 +29,18 @@ helm install dc deploy/helm/devicechain --set instance.id=devicechain
 helm install dc deploy/helm/devicechain --set profile=telemetry
 ```
 
+To install a published release, pin the image tag to a version — released images are public
+on `ghcr.io/devicechain-io`, so nothing has to be built locally:
+
+```bash
+helm install dc deploy/helm/devicechain \
+  --set instance.id=devicechain \
+  --set image.tag=v1.2.0
+```
+
+See [Releases & Upgrades](./releases-and-upgrades.md) for the versioning model and how
+`helm upgrade` rolls forward with zero downtime.
+
 `user-management` and `device-management` are the required core; `event-management`, `device-state`, and `command-delivery` are independently optional. The chart **fails the render** if a selection omits a required core service or an enabled service's hard dependency — so a broken topology is caught at install time, not after pods crash-loop. Values are validated against the chart's `values.schema.json` at apply time.
 
 ## Custom resources
@@ -52,4 +64,4 @@ DeviceChain deliberately splits each layer:
 | Lifecycle | **Operator** | tenant bootstrap; instance/tenant status and config hot-reload |
 | Business configuration | kubectl / UI | tenants and their settings |
 
-OpenTofu runs once at cluster creation; the chart renders the workloads; the operator runs continuously, reconciling lifecycle. Cluster bootstrapping never lives in application or operator code — it is the infrastructure layer's job. OpenTofu modules are planned deliverables; see the repository for current status.
+OpenTofu runs once at cluster creation; the chart renders the workloads; the operator runs continuously, reconciling lifecycle. Cluster bootstrapping never lives in application or operator code — it is the infrastructure layer's job. The OpenTofu modules live in [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); they provision the database tier with retention guards so it survives application teardown (see [Releases & Upgrades](./releases-and-upgrades.md#data-durability)).
