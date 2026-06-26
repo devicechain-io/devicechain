@@ -83,8 +83,8 @@ func init() {
 	bootstrapCmd.Flags().BoolVar(&bootstrapDryRun, "dry-run", false, "print what would happen without applying changes")
 	bootstrapCmd.Flags().BoolVarP(&bootstrapAssumeYes, "yes", "y", false, "assume yes for prompts")
 	bootstrapCmd.Flags().BoolVar(&bootstrapSkipPreflight, "skip-preflight", false, "skip the local-system preflight checks")
-	bootstrapCmd.Flags().StringVar(&bootstrapRegistry, "registry", bootstrap.DefaultImageRegistry, "image registry to deploy from")
-	bootstrapCmd.Flags().StringVar(&bootstrapVersion, "version", bootstrap.DefaultImageVersion, "published image version (tag) to deploy")
+	bootstrapCmd.Flags().StringVar(&bootstrapRegistry, "registry", "", "image registry to deploy from (default: published ghcr.io/devicechain-io, or localhost:5000 with --build)")
+	bootstrapCmd.Flags().StringVar(&bootstrapVersion, "version", "", "image version/tag to deploy (default: the published release version, or 'dev' with --build)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapBuild, "build", false, "build images from source into a local registry (developer path; requires source + ko)")
 
 	rootCmd.AddCommand(bootstrapCmd)

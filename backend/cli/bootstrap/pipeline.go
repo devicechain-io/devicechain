@@ -13,6 +13,11 @@ import (
 // DefaultImageRegistry is where published images live.
 const DefaultImageRegistry = "ghcr.io/devicechain-io"
 
+// LocalRegistry is the default registry for the developer build-from-source path
+// (a registry:2 container reachable from host and the kind network as
+// localhost:5000). Mirrors deploy/local.
+const LocalRegistry = "localhost:5000"
+
 // DefaultImageVersion is the published image tag deployed by default. It is the
 // single source of truth from the repo-root VERSION file, injected via ldflags
 // at build time (the Makefile stamps the same value into cmd.Version, so
