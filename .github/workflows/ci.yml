@@ -116,42 +116,20 @@ jobs:
         run: |
           go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
           SETUP_ENVTEST="$(go env GOPATH)/bin/setup-envtest"
-          echo "KUBEBUILDER_ASSETS=$("$SETUP_ENVTEST" use -p path)" >> "$GITHUB_ENV"
+          # Pin the envtest k8s version to one compatible with controller-runtime
+          # v0.24.x; the @latest default (1.36+) fails the control-plane start.
+          echo "KUBEBUILDER_ASSETS=$("$SETUP_ENVTEST" use 1.33.0 -p path)" >> "$GITHUB_ENV"
 
       - name: go test
         working-directory: ${{ matrix.module }}
         # Modules with no tests still pass (go test reports "no test files").
         run: go test ./...
 
-  # ---------------------------------------------------------------------------
-  # golangci-lint per module. go.work multi-module support can be finicky, so
-  # this runs per-module via working-directory and is non-blocking: gofmt and
-  # go vet in the `go` job are the authoritative gates. Lint surfaces extra
-  # findings without letting lint-config friction break the pipeline.
-  # ---------------------------------------------------------------------------
-  lint:
-    needs: discover
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        module: ${{ fromJson(needs.discover.outputs.modules) }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.work
-          cache: true
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          working-directory: ${{ matrix.module }}
-          # Permissive defaults; no custom .golangci.yml.
-          args: --timeout=5m
+  # NOTE: a golangci-lint job is intentionally omitted for now — no golangci-lint
+  # release yet supports Go 1.26 (it refuses: "the Go language version used to
+  # build golangci-lint is lower than the targeted Go version"). gofmt + go vet
+  # in the `go` job are the Go gates; re-add golangci-lint once a 1.26-compatible
+  # release ships.
 
   # ---------------------------------------------------------------------------
   # License header check (backend only, per CLAUDE.md).
