@@ -132,7 +132,14 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 		UseTransaction:            false,
 		ValidateUnknownMigrations: false,
 	}
-	m := gormigrate.New(rdb.Database, options, rdb.Migrations)
+	// Migrations are system-level bootstrap operations that run before any tenant
+	// exists. Bind a system context so the tenant-scoping Create callback (ADR-015
+	// fail-closed) does not reject gormigrate's own bookkeeping INSERTs into the
+	// migrations table — without this, the first row written after a tenant-scoped
+	// model is migrated fails with ErrNoTenant. DDL inside the migrations is
+	// unaffected (the callbacks act on row operations, not schema changes).
+	migrateDB := rdb.Database.WithContext(core.WithSystemContext(ctx))
+	m := gormigrate.New(migrateDB, options, rdb.Migrations)
 
 	// Serialize migrations across concurrently-rolling pods with a Postgres
 	// session-level advisory lock (methodology §10.3). During a rolling update old
