@@ -81,16 +81,19 @@ func (gql *GraphQLManager) ExecuteStart(context.Context) error {
 
 	// Kubernetes probes (ADR-022 decision 3): liveness is always healthy while
 	// the process runs, but readiness reports 503 until the auth gate opens, so a
-	// degraded pod is pulled from Service endpoints instead of serving traffic.
+	// degraded pod is pulled from Service endpoints instead of serving traffic. On
+	// SIGTERM the gate flips to draining, so readiness also reports 503 for the
+	// drain window before the server stops — pulling the pod from endpoints while
+	// it can still finish in-flight requests (zero-downtime rollouts, §10.2).
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	http.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if gql.Gate != nil && gql.Gate.Ready() {
+		if gql.Gate != nil && gql.Gate.Ready() && !gql.Gate.Draining() {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		http.Error(w, "not ready: auth not yet live", http.StatusServiceUnavailable)
+		http.Error(w, "not ready", http.StatusServiceUnavailable)
 	})
 
 	// Start server in a background thread in order to continue server startup.
