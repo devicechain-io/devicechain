@@ -3,38 +3,22 @@
 
 // Typed GraphQL operations against the user-management service (ADR-008 RBAC).
 import { gql } from '@/lib/graphql/client';
+import { graphql } from '@/gql/user-management';
+import type {
+  LoginMutation,
+  UsersQuery,
+  RolesQuery,
+} from '@/gql/user-management/graphql';
 
-export interface AuthToken {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: string;
-}
-
-export interface Role {
-  id: string;
-  token: string;
-  name: string | null;
-  description: string | null;
-  authorities: string[];
-  createdAt: string | null;
-  updatedAt: string | null;
-}
-
-export interface User {
-  id: string;
-  username: string;
-  email: string | null;
-  firstName: string | null;
-  lastName: string | null;
-  enabled: boolean;
-  roles: Role[];
-  createdAt: string | null;
-  updatedAt: string | null;
-}
+// Public types are derived from the generated operation results so they always
+// reflect the actual selection sets and can never drift from the schema.
+export type AuthToken = LoginMutation['login'];
+export type User = UsersQuery['users'][number];
+export type Role = RolesQuery['roles'][number];
 
 // ── Auth (unauthenticated) ──────────────────────────────────────────────
 
-const LOGIN = `
+const LOGIN = graphql(`
   mutation Login($username: String!, $password: String!) {
     login(username: $username, password: $password) {
       accessToken
@@ -42,10 +26,10 @@ const LOGIN = `
       expiresAt
     }
   }
-`;
+`);
 
 export async function login(username: string, password: string): Promise<AuthToken> {
-  const data = await gql<{ login: AuthToken }>(
+  const data = await gql(
     'user-management',
     LOGIN,
     { username, password },
@@ -54,7 +38,7 @@ export async function login(username: string, password: string): Promise<AuthTok
   return data.login;
 }
 
-const REFRESH = `
+const REFRESH = graphql(`
   mutation Refresh($refreshToken: String!) {
     refresh(refreshToken: $refreshToken) {
       accessToken
@@ -62,10 +46,10 @@ const REFRESH = `
       expiresAt
     }
   }
-`;
+`);
 
 export async function refresh(refreshToken: string): Promise<AuthToken> {
-  const data = await gql<{ refresh: AuthToken }>(
+  const data = await gql(
     'user-management',
     REFRESH,
     { refreshToken },
@@ -76,17 +60,7 @@ export async function refresh(refreshToken: string): Promise<AuthToken> {
 
 // ── Directory (authenticated) ───────────────────────────────────────────
 
-const ROLE_FIELDS = `
-  id
-  token
-  name
-  description
-  authorities
-  createdAt
-  updatedAt
-`;
-
-const USERS = `
+const USERS = graphql(`
   query Users {
     users {
       id
@@ -97,23 +71,39 @@ const USERS = `
       enabled
       createdAt
       updatedAt
-      roles { ${ROLE_FIELDS} }
+      roles {
+        id
+        token
+        name
+        description
+        authorities
+        createdAt
+        updatedAt
+      }
     }
   }
-`;
+`);
 
 export async function listUsers(): Promise<User[]> {
-  const data = await gql<{ users: User[] }>('user-management', USERS);
+  const data = await gql('user-management', USERS);
   return data.users;
 }
 
-const ROLES = `
+const ROLES = graphql(`
   query Roles {
-    roles { ${ROLE_FIELDS} }
+    roles {
+      id
+      token
+      name
+      description
+      authorities
+      createdAt
+      updatedAt
+    }
   }
-`;
+`);
 
 export async function listRoles(): Promise<Role[]> {
-  const data = await gql<{ roles: Role[] }>('user-management', ROLES);
+  const data = await gql('user-management', ROLES);
   return data.roles;
 }
