@@ -20,6 +20,10 @@ import (
 // helmReleaseName is the per-instance chart release name.
 const helmReleaseName = "dc"
 
+// helmTimeout bounds how long an install/upgrade waits for the rendered
+// workloads to become ready.
+const helmTimeout = 10 * time.Minute
+
 // helmInstall installs (or upgrades) the embedded per-instance chart via the
 // Helm Go SDK, blocking until the rendered workloads are ready. The chart ships
 // inside the binary, so no chart repo, no `helm` CLI and no source are needed.
@@ -60,7 +64,7 @@ func helmInstall(ctx context.Context, st *State) error {
 		inst.ReleaseName = helmReleaseName
 		inst.Namespace = releaseNamespace
 		inst.Wait = true
-		inst.Timeout = 10 * time.Minute
+		inst.Timeout = helmTimeout
 		_, err := inst.RunWithContext(ctx, ch, vals)
 		return err
 	} else if err != nil {
@@ -70,7 +74,7 @@ func helmInstall(ctx context.Context, st *State) error {
 	upg := action.NewUpgrade(actionConfig)
 	upg.Namespace = releaseNamespace
 	upg.Wait = true
-	upg.Timeout = 10 * time.Minute
+	upg.Timeout = helmTimeout
 	_, err = upg.RunWithContext(ctx, helmReleaseName, ch, vals)
 	return err
 }

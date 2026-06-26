@@ -229,20 +229,14 @@ func buildImages(ctx context.Context, root string, st *State) error {
 // stepInfraApply deploys the shared data/infra stack via OpenTofu, driving the
 // tofu/terraform binary through terraform-exec.
 func stepInfraApply(ctx context.Context, st *State) error {
-	doing("applying infrastructure stack (OpenTofu)")
 	if st.DryRun {
+		doing("applying infrastructure stack (OpenTofu)")
 		fmt.Println()
 		wouldDo("tofu init+apply deploy/opentofu (NATS, Postgres, Timescale, ingress, cert-manager)")
 		return nil
 	}
-	fmt.Println()
-	if err := applyInfra(ctx, st); err != nil {
-		return fmt.Errorf("infrastructure apply: %w", err)
-	}
-	fmt.Print("  ")
-	doing("infrastructure")
-	done()
-	return nil
+	return runStreamed("applying infrastructure stack (OpenTofu)", "infrastructure stack",
+		func() error { return applyInfra(ctx, st) })
 }
 
 // stepInstallCore renders the operator overlay (CRDs + RBAC + controller) the
@@ -276,18 +270,26 @@ func stepInstallCore(ctx context.Context, st *State) error {
 // stepHelmInstall installs (or upgrades) the per-instance chart via the Helm Go
 // SDK, blocking until the rendered workloads are ready.
 func stepHelmInstall(ctx context.Context, st *State) error {
-	doing("installing instance chart (Helm)")
 	if st.DryRun {
+		doing("installing instance chart (Helm)")
 		fmt.Println()
 		wouldDo("helm upgrade --install the devicechain chart into namespace " + st.Values["namespace"])
 		return nil
 	}
-	fmt.Println()
-	if err := helmInstall(ctx, st); err != nil {
-		return fmt.Errorf("helm install: %w", err)
+	return runStreamed("installing instance chart (Helm)", "instance chart",
+		func() error { return helmInstall(ctx, st) })
+}
+
+// runStreamed frames a step whose underlying tool (tofu, helm) streams its own
+// progress to stdout: it prints a heading, runs the work, then prints a final
+// indented status line so the noisy sub-tool output is bracketed cleanly.
+func runStreamed(heading, label string, work func() error) error {
+	fmt.Println(color.WhiteString("%s:", heading))
+	if err := work(); err != nil {
+		return fail(label, err)
 	}
 	fmt.Print("  ")
-	doing("instance chart")
+	doing(label)
 	done()
 	return nil
 }
