@@ -1,0 +1,226 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Release CI for the DeviceChain monorepo.
+#
+# Triggered EXCLUSIVELY by a version tag (vX.Y.Z, optionally a -rc.N prerelease).
+# A release is therefore a deliberate, auditable act -- `main` never publishes.
+#
+# On a tag this workflow:
+#   - guard:  validates the tag is strict semver, computes version + prerelease,
+#             and enumerates the image build matrix (hack/list-services.sh).
+#   - images: ko-builds + pushes every service image and the operator image to
+#             ghcr.io/devicechain-io, multi-arch (amd64 + arm64).
+#   - chart:  packages the Helm chart at the tag version and pushes it as an OCI
+#             artifact to ghcr.io/devicechain-io/charts.
+#   - cli:    goreleaser cross-compiles dcctl and creates the GitHub Release.
+#
+# Auth is the built-in GITHUB_TOKEN -- no PAT. ghcr packages are created private
+# on first push; flip each to Public once (org Packages settings).
+
+name: release
+
+# Trigger on semver-shaped tags. The `*` suffix admits prerelease/build segments
+# (e.g. v1.2.3-rc.1); the guard job enforces the strict format and fails fast.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+# contents: write -> create the GitHub Release. packages: write -> push to ghcr.
+permissions:
+  contents: write
+  packages: write
+
+# Never run two releases for the same tag concurrently.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io/devicechain-io
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Validate the tag, derive the version + prerelease flag, and enumerate the
+  # image build matrix (same source of truth as ci.yml's discover job).
+  # ---------------------------------------------------------------------------
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.semver.outputs.version }}
+      is_prerelease: ${{ steps.semver.outputs.is_prerelease }}
+      smoke: ${{ steps.smoke.outputs.smoke }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate tag is strict semver
+        id: semver
+        run: |
+          version="${GITHUB_REF_NAME}"
+          # Strict semver with an optional prerelease segment: vMAJOR.MINOR.PATCH[-pre]
+          if ! echo "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Tag '$version' is not a valid semver release tag (expected vX.Y.Z or vX.Y.Z-rc.N)."
+            exit 1
+          fi
+          # A '-' in the tag marks a prerelease (e.g. v1.2.3-rc.1).
+          if [[ "$version" == *-* ]]; then
+            is_prerelease=true
+          else
+            is_prerelease=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version (prerelease=$is_prerelease)"
+
+      - name: Build image module list
+        id: smoke
+        run: |
+          # ko-buildable image modules = each discovered service (mapped to its
+          # backend/services/<name> dir) PLUS the operator at backend/k8s.
+          # Identical logic to ci.yml's discover job -- single source of truth.
+          smoke="$(
+            { hack/list-services.sh | jq -r '.[] | "backend/services/" + .'
+              echo "backend/k8s"
+            } | jq -R . | jq -s -c .
+          )"
+          echo "smoke=$smoke" >> "$GITHUB_OUTPUT"
+          echo "Image modules: $smoke"
+
+  # ---------------------------------------------------------------------------
+  # Build + push every service image and the operator image, multi-arch.
+  # ---------------------------------------------------------------------------
+  images:
+    needs: guard
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Discovered services (backend/services/<name>) plus the operator
+        # (backend/k8s) -- assembled by the guard job.
+        module: ${{ fromJson(needs.guard.outputs.smoke) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - uses: ko-build/setup-ko@v0.7
+
+      - name: Log in to ghcr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | ko login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Compute ko repo + tags
+        id: ko
+        env:
+          MODULE: ${{ matrix.module }}
+          VERSION: ${{ needs.guard.outputs.version }}
+          IS_PRERELEASE: ${{ needs.guard.outputs.is_prerelease }}
+        run: |
+          # The operator (backend/k8s) must publish as ".../operator", NOT "k8s".
+          # Special-case it by pushing into a fixed repo and using --bare so ko
+          # uses KO_DOCKER_REPO verbatim as the image name. Services publish under
+          # the org repo with --base-import-paths, which yields the directory name
+          # (== the service name, e.g. device-management).
+          if [ "$MODULE" = "backend/k8s" ]; then
+            echo "repo=${REGISTRY}/operator" >> "$GITHUB_OUTPUT"
+            echo "bare=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "repo=${REGISTRY}" >> "$GITHUB_OUTPUT"
+            echo "bare=false" >> "$GITHUB_OUTPUT"
+          fi
+          # :latest moves ONLY on stable releases -- never on prereleases.
+          if [ "$IS_PRERELEASE" = "false" ]; then
+            echo "tags=${VERSION},latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: ko build + push
+        working-directory: ${{ matrix.module }}
+        env:
+          KO_DOCKER_REPO: ${{ steps.ko.outputs.repo }}
+        run: |
+          # Multi-arch image at the exact required name:
+          #   service  -> ghcr.io/devicechain-io/<service>   (--base-import-paths)
+          #   operator -> ghcr.io/devicechain-io/operator     (--bare, fixed repo)
+          if [ "${{ steps.ko.outputs.bare }}" = "true" ]; then
+            ko build --bare \
+              --platform=linux/amd64,linux/arm64 \
+              --tags="${{ steps.ko.outputs.tags }}" \
+              ./
+          else
+            ko build --base-import-paths \
+              --platform=linux/amd64,linux/arm64 \
+              --tags="${{ steps.ko.outputs.tags }}" \
+              ./
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Package the Helm chart at the release version and push it as an OCI artifact.
+  # ---------------------------------------------------------------------------
+  chart:
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: azure/setup-helm@v5
+
+      - name: Log in to ghcr (helm registry)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Package + push chart
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          # The chart version/appVersion are SemVer WITHOUT the leading 'v'.
+          # OCI tags follow chart version, so strip the prefix for the chart only.
+          chart_version="${VERSION#v}"
+
+          # Pin every rendered image to this release tag (image.tag in values).
+          # The chart builds refs as "{registry}/{area}:{image.tag}", so setting
+          # image.tag to the release version keeps the whole deploy coherent.
+          helm package deploy/helm/devicechain \
+            --version "$chart_version" \
+            --app-version "$VERSION" \
+            --set-string image.tag="$VERSION"
+
+          # helm package writes devicechain-<chart_version>.tgz to the cwd.
+          helm push "devicechain-${chart_version}.tgz" oci://${REGISTRY}/charts
+
+  # ---------------------------------------------------------------------------
+  # Cross-compile dcctl and create the GitHub Release (goreleaser).
+  # ---------------------------------------------------------------------------
+  cli:
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # goreleaser needs full history (tags + commits) for changelog/version.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: goreleaser release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+          # The dcctl module is the goreleaser project root; its config and
+          # main.go live under backend/cli.
+          workdir: backend/cli
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
