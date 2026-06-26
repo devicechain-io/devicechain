@@ -90,18 +90,6 @@ jobs:
           go-version-file: go.work
           cache: true
 
-      - name: debug workspace
-        working-directory: ${{ matrix.module }}
-        run: |
-          echo "pwd=$(pwd)"
-          echo "GOWORK=$(go env GOWORK)"
-          echo "GOFLAGS=$(go env GOFLAGS) GOPROXY=$(go env GOPROXY)"
-          go version
-          echo "--- root go.work present? ---"; ls -la "$GITHUB_WORKSPACE/go.work" || true
-          echo "--- use dirs present? ---"; ls -d "$GITHUB_WORKSPACE"/backend/services/*/ || true
-          echo "--- resolves as workspace module (no version) or external? ---"
-          go list -m github.com/devicechain-io/dc-user-management || true
-
       - name: gofmt
         working-directory: ${{ matrix.module }}
         run: |
