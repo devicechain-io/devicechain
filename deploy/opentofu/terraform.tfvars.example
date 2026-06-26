@@ -19,6 +19,15 @@
 # postgres_password  = "CHANGE-ME"
 # timescale_password = "CHANGE-ME"
 
+# Data durability (methodology §11). Empty uses the cluster default StorageClass,
+# whose reclaimPolicy is usually Delete — so PVC/PV deletion destroys the data.
+# FOR PRODUCTION point these at a StorageClass whose reclaimPolicy is Retain, so
+# the underlying volume (and its data) survives PVC/PV deletion and a redeploy
+# re-attaches it. (The StatefulSets also Retain PVCs on delete/scale and carry a
+# prevent_destroy guard — see README "Data durability".)
+# postgres_storage_class  = "retain-ssd"
+# timescale_storage_class = "retain-ssd"
+
 # Single-node by default; flip on for the ADR-020 HA topology (when implemented).
 # ha = false
 

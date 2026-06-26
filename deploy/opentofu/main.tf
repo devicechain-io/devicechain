@@ -24,13 +24,14 @@ module "nats" {
 module "postgres" {
   source = "./modules/postgres"
 
-  namespace = var.namespace
-  name      = "dc-postgresql"
-  image     = var.postgres_image
-  database  = var.postgres_database
-  username  = var.postgres_username
-  password  = var.postgres_password
-  storage   = var.postgres_storage
+  namespace     = var.namespace
+  name          = "dc-postgresql"
+  image         = var.postgres_image
+  database      = var.postgres_database
+  username      = var.postgres_username
+  password      = var.postgres_password
+  storage       = var.postgres_storage
+  storage_class = var.postgres_storage_class
 
   depends_on = [module.namespace]
 }
@@ -40,13 +41,14 @@ module "postgres" {
 module "timescaledb" {
   source = "./modules/postgres"
 
-  namespace = var.namespace
-  name      = "dc-timescaledb-single"
-  image     = var.timescale_image
-  database  = var.timescale_database
-  username  = var.timescale_username
-  password  = var.timescale_password
-  storage   = var.timescale_storage
+  namespace     = var.namespace
+  name          = "dc-timescaledb-single"
+  image         = var.timescale_image
+  database      = var.timescale_database
+  username      = var.timescale_username
+  password      = var.timescale_password
+  storage       = var.timescale_storage
+  storage_class = var.timescale_storage_class
 
   depends_on = [module.namespace]
 }

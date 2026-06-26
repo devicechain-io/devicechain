@@ -39,6 +39,12 @@ variable "storage" {
   default = "8Gi"
 }
 
+variable "storage_class" {
+  description = "StorageClass for the data volume. Empty uses the cluster default. For production durability point this at a StorageClass whose reclaimPolicy is Retain, so the underlying volume (and its data) survives PVC/PV deletion."
+  type        = string
+  default     = ""
+}
+
 variable "port" {
   type    = number
   default = 5432
@@ -76,9 +82,22 @@ resource "kubernetes_stateful_set_v1" "db" {
     labels    = local.labels
   }
 
+  # Databases outlive the deployment: refuse a naive `tofu destroy`. Intentional
+  # teardown requires removing this guard (or a targeted/state-surgery removal).
+  lifecycle {
+    prevent_destroy = true
+  }
+
   spec {
     service_name = var.name
     replicas     = 1
+
+    # Never reap the data PVCs when the StatefulSet is deleted or scaled down —
+    # the volumes (and their data) persist across app upgrades/uninstalls.
+    persistent_volume_claim_retention_policy {
+      when_deleted = "Retain"
+      when_scaled  = "Retain"
+    }
 
     selector {
       match_labels = local.labels
@@ -149,6 +168,9 @@ resource "kubernetes_stateful_set_v1" "db" {
       }
       spec {
         access_modes = ["ReadWriteOnce"]
+        # Empty leaves storage_class_name unset → the cluster default applies.
+        # Point at a Retain StorageClass in production for volume durability.
+        storage_class_name = var.storage_class != "" ? var.storage_class : null
         resources {
           requests = {
             storage = var.storage
