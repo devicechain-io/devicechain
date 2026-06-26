@@ -20,31 +20,6 @@ rules:
   - core.devicechain.io
   resources:
   - instances
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - core.devicechain.io
-  resources:
-  - instances/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - core.devicechain.io
-  resources:
-  - instances/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - core.devicechain.io
-  resources:
   - tenants
   verbs:
   - create
@@ -57,12 +32,14 @@ rules:
 - apiGroups:
   - core.devicechain.io
   resources:
+  - instances/finalizers
   - tenants/finalizers
   verbs:
   - update
 - apiGroups:
   - core.devicechain.io
   resources:
+  - instances/status
   - tenants/status
   verbs:
   - get

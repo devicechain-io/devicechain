@@ -129,16 +129,9 @@ fi
 ( cd "$TF_DIR" && "$TF" init -input=false >/dev/null && "$TF" apply -input=false -auto-approve )
 
 # ---- 5. core (CRDs + operator) ---------------------------------------------
-# NOTE: `make install/deploy` regenerates manifests via controller-gen, whose
-# pinned v0.8.0 panics under Go 1.26. The operator is day-1 reconcile (tenant
-# bootstrap / status aggregation) and the Helm-rendered data plane does not depend
-# on it, so a failure here warns and continues rather than aborting the bring-up.
-# TODO: fix the operator deploy toolchain (bump controller-gen; restore
-# config/manager/controller_manager_config.yaml) and make this fatal again.
 log "🧩 Core — CRDs + operator ($OPERATOR_IMG)"
-if ! ( make -C "$OPERATOR_DIR" install && make -C "$OPERATOR_DIR" deploy IMG="$OPERATOR_IMG" ); then
-  step "WARN: operator install/deploy failed (known controller-gen/Go 1.26 issue) — continuing; the data plane does not require it."
-fi
+make -C "$OPERATOR_DIR" install
+make -C "$OPERATOR_DIR" deploy IMG="$OPERATOR_IMG"
 
 # ---- 6. instance chart (Helm) ----------------------------------------------
 log "⎈ Instance chart — Helm (instance.id=$INSTANCE, profile=$PROFILE)"
