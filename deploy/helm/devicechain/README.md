@@ -15,6 +15,25 @@ Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned separately by
 OpenTofu (ADR-002); this chart assumes it exists and points at it via
 `instance.config.infrastructure` / `.persistence`.
 
+### Installing a released version
+
+Every release is one semver tag (`vX.Y.Z`) covering all images, the operator, the
+chart, and the `dcctl` CLI together. Images are public on `ghcr.io/devicechain-io`
+(multi-arch, distroless nonroot), so nothing is built locally — pin `image.tag`:
+
+```bash
+helm install dc deploy/helm/devicechain \
+  --set instance.id=devicechain \
+  --set image.tag=v1.2.0
+```
+
+The chart is also published as an OCI artifact, installable without a checkout:
+
+```bash
+helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
+  --version 1.2.0 --set instance.id=devicechain --set image.tag=v1.2.0
+```
+
 ## Choosing what to deploy (ADR-022 decision 2)
 
 Set **either** a named `profile` **or** an explicit `enabledFunctionalAreas`
@@ -70,6 +89,22 @@ functionalAreas:
 
 `values.schema.json` validates the deployment-selection envelope (profile enum,
 area names, image/instance shape) at `helm install`/`upgrade` time.
+
+## Zero-downtime upgrades
+
+`helm upgrade` rolls forward without dropping traffic. Each Deployment uses a
+`RollingUpdate` strategy with `maxUnavailable: 0` / `maxSurge: 1`, so a new pod must
+pass `/readyz` before an old one is removed. On termination a pod flips `/readyz` to
+503 first, waits `shutdownDrainSeconds` (default 5, under the 30s
+`terminationGracePeriodSeconds`) for endpoint removal to propagate, then drains
+in-flight requests — an app-side drain, since the `FROM scratch` images have no shell
+for a `preStop` hook. Database migrations run under a Postgres advisory lock so
+concurrently-rolling replicas don't race on DDL.
+
+For true zero-downtime run `replicas: 2`+ per area (`--set replicas=2` or
+`functionalAreas.<area>.replicas`); a `PodDisruptionBudget` is rendered for any area
+with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable` /
+`rollingUpdate.maxSurge`.
 
 ## What it renders
 
