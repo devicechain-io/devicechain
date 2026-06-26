@@ -29,6 +29,42 @@ variable "ingress_class" {
   default     = "nginx"
 }
 
+variable "use_host_port" {
+  description = <<-EOT
+    Bind the controller to the node's host 80/443 (hostPort) and expose it via a
+    NodePort Service instead of a LoadBalancer. This is the local-kind recipe: a
+    LoadBalancer Service stays <pending> on kind unless cloud-provider-kind owns
+    the host ports — which collides with kind's own 80/443 extraPortMappings — so
+    the helm release never goes ready and the apply times out. With host ports the
+    controller binds the ingress-ready node directly and is reachable at
+    localhost:80/443 with no LoadBalancer. Leave false for real clouds (GKE/EKS/AKS),
+    where a LoadBalancer Service is correct.
+  EOT
+  type        = bool
+  default     = false
+}
+
+locals {
+  ingress_controller_base = {
+    ingressClassResource = {
+      name    = var.ingress_class
+      enabled = true
+    }
+    ingressClass = var.ingress_class
+  }
+  # kind recipe: bind node 80/443 directly, no LoadBalancer to wait on.
+  ingress_controller_host_port = {
+    hostPort     = { enabled = true }
+    service      = { type = "NodePort" }
+    nodeSelector = { "ingress-ready" = "true" }
+    tolerations = [{
+      key      = "node-role.kubernetes.io/control-plane"
+      operator = "Equal"
+      effect   = "NoSchedule"
+    }]
+  }
+}
+
 resource "helm_release" "ingress_nginx" {
   name             = var.release_name
   namespace        = var.namespace
@@ -37,15 +73,14 @@ resource "helm_release" "ingress_nginx" {
   chart            = "ingress-nginx"
   version          = var.chart_version != "" ? var.chart_version : null
 
-  values = [yamlencode({
-    controller = {
-      ingressClassResource = {
-        name    = var.ingress_class
-        enabled = true
-      }
-      ingressClass = var.ingress_class
-    }
-  })]
+  # yamlencode is inside the conditional so both branches are strings (an HCL
+  # ternary requires both arms to share a type; the merged host-port object and
+  # the base object do not).
+  values = [
+    var.use_host_port
+    ? yamlencode({ controller = merge(local.ingress_controller_base, local.ingress_controller_host_port) })
+    : yamlencode({ controller = local.ingress_controller_base })
+  ]
 }
 
 output "ingress_class" {

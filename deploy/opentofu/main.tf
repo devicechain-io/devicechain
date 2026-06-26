@@ -62,6 +62,7 @@ module "ingress_nginx" {
   namespace     = var.ingress_nginx_namespace
   chart_version = var.ingress_nginx_chart_version
   ingress_class = var.ingress_class
+  use_host_port = var.ingress_use_host_port
 }
 
 # cert-manager — issues/renews the ingress TLS certificates (ADR-002). The Issuer

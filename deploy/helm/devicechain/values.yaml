@@ -41,7 +41,12 @@ instance:
         enabled: true
         httpPort: 9090
       userManagement:
-        hostname: dc-user-management.dc-system
+        # user-management is a functional area deployed by THIS chart into the
+        # instance namespace (not infra in dc-system), so peers reach it by its
+        # in-namespace Service name. The short name resolves within the instance
+        # namespace regardless of instance.id. (Was dc-user-management.dc-system,
+        # a stale pre-Helm coordinate that does not exist under ADR-022 rendering.)
+        hostname: user-management
         port: 8080
     persistence:
       rdb:

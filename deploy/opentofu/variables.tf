@@ -108,6 +108,16 @@ variable "ingress_nginx_chart_version" {
   default     = ""
 }
 
+variable "ingress_use_host_port" {
+  description = <<-EOT
+    Local-kind only: bind the ingress controller to the node's host 80/443 and use
+    a NodePort Service instead of a LoadBalancer (which stays <pending> on kind and
+    times out the apply). Leave false on real clouds. deploy/local/up.sh sets true.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "ingress_class" {
   description = "IngressClass name the controller registers; set the same on the Helm chart's ingress.className."
   type        = string
