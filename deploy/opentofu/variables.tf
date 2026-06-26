@@ -82,6 +82,12 @@ variable "postgres_storage" {
   default     = "8Gi"
 }
 
+variable "postgres_storage_class" {
+  description = "StorageClass for the relational Postgres data volume. Empty uses the cluster default (often reclaimPolicy Delete). FOR PRODUCTION DURABILITY set this to a StorageClass whose reclaimPolicy is Retain, so the underlying volume survives PVC/PV deletion and a redeploy can re-attach the data."
+  type        = string
+  default     = ""
+}
+
 # --- Ingress + TLS (ADR-002) ----------------------------------------------------
 
 variable "enable_ingress_nginx" {
@@ -157,4 +163,10 @@ variable "timescale_storage" {
   description = "PersistentVolume size for TimescaleDB."
   type        = string
   default     = "8Gi"
+}
+
+variable "timescale_storage_class" {
+  description = "StorageClass for the TimescaleDB data volume. Empty uses the cluster default (often reclaimPolicy Delete). FOR PRODUCTION DURABILITY set this to a StorageClass whose reclaimPolicy is Retain, so the underlying volume survives PVC/PV deletion and a redeploy can re-attach the data."
+  type        = string
+  default     = ""
 }

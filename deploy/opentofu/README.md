@@ -44,6 +44,36 @@ tofu apply
 
 (`terraform` works identically — the HCL is provider-compatible.)
 
+## Data durability
+
+The databases (relational Postgres + TimescaleDB) are treated as **lifecycle-
+independent and durable** — they must survive app upgrades/uninstalls *and*
+accidental destroys (methodology §11). Three guards back this up:
+
+- **Retain StorageClass (recommended for production).** The data volume's
+  `storage_class_name` is set from `postgres_storage_class` / `timescale_storage_class`.
+  Empty (the default) uses the cluster default StorageClass, whose `reclaimPolicy`
+  is typically `Delete` — fine for local dev, but PVC/PV deletion then destroys the
+  data. **For production, point these at a StorageClass whose `reclaimPolicy` is
+  `Retain`**, so the underlying volume (and its data) survives PVC/PV deletion and a
+  redeploy can re-attach the existing volume.
+- **PVC retention policy.** Each DB StatefulSet sets
+  `persistent_volume_claim_retention_policy { when_deleted = "Retain"  when_scaled = "Retain" }`,
+  so deleting or scaling the StatefulSet never reaps the data PVCs.
+- **`prevent_destroy` backstop.** Each DB StatefulSet carries
+  `lifecycle { prevent_destroy = true }`. This is **intentional**: a naive
+  `tofu destroy` will *refuse* to remove the databases (and therefore refuses to
+  destroy this whole root). Intentional teardown requires removing the guard, or
+  removing the DBs from state / targeting around them — the "databases outlive the
+  deployment" guarantee.
+
+**Planned next step:** split this OpenTofu root into a durable **data stack**
+(PG/Timescale/NATS JetStream — Retain, prevent_destroy, rarely touched) with its
+own state, separate from the disposable **platform stack** (ingress, cert-manager),
+so the data tier can be applied/destroyed fully independently (methodology §11).
+Scheduled backups (`pg_dump` / volume snapshots) are a belt-and-suspenders
+fast-follow.
+
 ## Notes & scope boundaries
 
 - **Single-node by default.** The `ha` variable is threaded through for the
