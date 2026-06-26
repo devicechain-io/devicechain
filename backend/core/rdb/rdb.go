@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -151,7 +152,9 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 
 // advisoryLockKey derives a stable bigint key for pg_advisory_lock from the
 // migration table name, so the lock namespace is per-service and deterministic
-// across pods and restarts.
+// across pods and restarts. The uint64→int64 conversion may yield a negative
+// key; pg_advisory_lock takes the full signed bigint range, so that is fine and
+// every distinct hash still maps to a distinct lock.
 func advisoryLockKey(name string) int64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(name))
@@ -174,13 +177,24 @@ func (rdb *RdbManager) withMigrationLock(ctx context.Context, key int64, fn func
 	}
 	defer conn.Close()
 
+	// The acquire blocks until the lock is free, but on ctx (the startup context),
+	// so a SIGTERM mid-wait cancels it and unwinds startup rather than hanging — a
+	// peer that crashes while holding the lock drops its session, which Postgres
+	// releases automatically. The wait is intentionally not time-bounded: a hard
+	// timeout would spuriously fail this pod while a peer runs a legitimately slow
+	// migration.
 	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", key); err != nil {
 		return fmt.Errorf("acquire migration advisory lock: %w", err)
 	}
 	// Release on the same session before the connection returns to the pool, so a
-	// reused connection does not carry a stale lock.
+	// reused connection does not carry a stale lock. Use a fresh, short context —
+	// not ctx — so the unlock still runs when ctx was cancelled during fn (e.g. a
+	// SIGTERM mid-migration); otherwise the lock would linger on the pooled
+	// connection until the session ends.
 	defer func() {
-		if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", key); err != nil {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", key); err != nil {
 			log.Warn().Err(err).Msg("Failed to release migration advisory lock; it clears when the session ends.")
 		}
 	}()
