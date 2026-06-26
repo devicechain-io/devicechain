@@ -116,8 +116,17 @@ func (rdb *RdbManager) assurePostgresSchema(pgconfig *PostgresConfig) error {
 
 // Compute DSN for connecting to database.
 func (rdb *RdbManager) computePostgresDsn(pg *PostgresConfig) string {
-	dsn := fmt.Sprintf("user=%s password=%s host=%s dbname=%s port=%d sslmode=disable",
-		pg.Username, pg.Password, pg.Hostname, rdb.Microservice.InstanceId, pg.Port)
+	// Pin search_path to this service's functional-area schema (then public) so
+	// that EVERY statement on the connection — not just GORM model operations,
+	// which are schema-qualified by the NamingStrategy TablePrefix — resolves into
+	// the right schema. Without this, gormigrate's bookkeeping table and any
+	// raw-SQL migration (e.g. an `ALTER TABLE roles`) fall back to the default
+	// search_path and land in / look up `public`, where the service's tables do
+	// not exist — so a migration against a fresh database fails with
+	// "relation does not exist". `public` stays on the path so extension functions
+	// installed there (TimescaleDB's create_hypertable, etc.) remain resolvable.
+	dsn := fmt.Sprintf("user=%s password=%s host=%s dbname=%s port=%d sslmode=disable search_path=%s,public",
+		pg.Username, pg.Password, pg.Hostname, rdb.Microservice.InstanceId, pg.Port, rdb.Microservice.FunctionalArea)
 	// Never log the password (C1): emit only the non-sensitive connection
 	// coordinates. PostgresConfig.Password is treated as redacted everywhere.
 	log.Info().Str("username", pg.Username).Str("hostname", pg.Hostname).
