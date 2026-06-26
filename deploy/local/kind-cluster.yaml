@@ -1,0 +1,50 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Local kind cluster for full-stack DeviceChain testing.
+# Cluster name 'devicechain' => kube-context 'kind-devicechain', which is the
+# value deploy/opentofu/terraform.tfvars.example already defaults to.
+#
+#   kind create cluster --name devicechain --config kind-cluster.yaml
+#
+# (up.sh does this for you, and also wires the localhost:5000 registry.)
+apiVersion: kind.x-k8s.io/v1alpha4
+kind: Cluster
+name: devicechain
+
+# Pull-through / local registry so ~a dozen service images are pulled by
+# reference (localhost:5000/...) instead of side-loaded into every node — far
+# more disk-efficient. up.sh starts the registry container and connects it.
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:5000"]
+      endpoint = ["http://kind-registry:5000"]
+
+nodes:
+  - role: control-plane
+    # ingress-ready label lets ingress-nginx schedule onto this node and bind
+    # the host ports below. With cloud-provider-kind running you can instead use
+    # the LoadBalancer IP; these mappings give a reliable localhost path too
+    # (and, under WSL2 mirrored networking, reach the Windows browser).
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80      # ingress HTTP
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443     # ingress HTTPS
+        hostPort: 443
+        protocol: TCP
+      - containerPort: 31883   # NATS MQTT device ingress (NodePort)
+        hostPort: 1883
+        protocol: TCP
+
+  # Uncomment to exercise PodDisruptionBudgets / anti-affinity / multi-node
+  # scheduling. Each node is a full kubelet+containerd container, so only add
+  # these when you actually need topology — single-node is lighter.
+  # - role: worker
+  # - role: worker

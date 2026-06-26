@@ -32,7 +32,7 @@ var constructionDataCmd = &cobra.Command{
 }
 
 func init() {
-	bootstrapCmd.AddCommand(constructionDataCmd)
+	seedCmd.AddCommand(constructionDataCmd)
 }
 
 // Bootstraps system microservices with construction sample dataset.

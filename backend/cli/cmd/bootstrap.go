@@ -5,54 +5,87 @@ package cmd
 
 import (
 	"fmt"
-	"regexp"
-	"strings"
 
-	"github.com/fatih/color"
+	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/spf13/cobra"
 )
 
+// Bootstrap command flags.
 var (
-	DUP_SPACE = regexp.MustCompile(`\s+`)
+	bootstrapKubeContext   string
+	bootstrapProfile       string
+	bootstrapDryRun        bool
+	bootstrapAssumeYes     bool
+	bootstrapSkipPreflight bool
+	bootstrapRegistry      string
+	bootstrapVersion       string
+	bootstrapBuild         bool
 )
 
-// Create common command for creating DeviceChain resources
+// bootstrapCmd provisions a usable DeviceChain instance on a target provider.
+// It is a thin wrapper over the bootstrap engine package (ADR-032).
 var bootstrapCmd = &cobra.Command{
-	Use:   "bootstrap",
-	Short: "Bootstrap system data",
-	Long:  `Bootstraps system microservices with example datasets`,
-}
+	Use:   "bootstrap <provider> <instance>",
+	Short: "Bootstrap a DeviceChain instance",
+	Long:  `Provisions a usable DeviceChain instance on the given provider (e.g. "local")`,
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		provider, err := bootstrap.Get(args[0])
+		if err != nil {
+			return err
+		}
 
-// Remove leading space and any cases of multiple spaces internally.
-func unspace(val string) *string {
-	cleaned := DUP_SPACE.ReplaceAllString(strings.TrimSpace(val), " ")
-	return &cleaned
-}
+		// Diagnose the local system up front so a run fails fast on a missing
+		// tool / low limit / unreachable docker rather than midway through.
+		if !bootstrapSkipPreflight {
+			if d := runDoctor(args[0]); d.fails > 0 {
+				return fmt.Errorf("%d preflight check(s) failed — fix the items above, or re-run with --skip-preflight", d.fails)
+			}
+		}
 
-// Create a string pointer from a string.
-func s(val string) *string {
-	return &val
-}
+		opts := bootstrap.Options{
+			Instance:      args[1],
+			KubeContext:   bootstrapKubeContext,
+			Profile:       bootstrapProfile,
+			DryRun:        bootstrapDryRun,
+			AssumeYes:     bootstrapAssumeYes,
+			ImageRegistry: bootstrapRegistry,
+			ImageVersion:  bootstrapVersion,
+			BuildImages:   bootstrapBuild,
+		}
 
-// Section header for bootstrap operation.
-func title(dataset string) {
-	fmt.Println(GreenUnderline(fmt.Sprintf("\nBootstrap Data for %s Dataset", dataset)))
-}
+		ctx := cmd.Context()
+		// EnsureCluster resolves the kube-context we should target.
+		kubeContext, err := provider.EnsureCluster(ctx, opts)
+		if err != nil {
+			return err
+		}
 
-// Section header for bootstrap operation.
-func header(model string, dataset string) {
-	fmt.Println(WhiteUnderline(fmt.Sprintf("\nCreate %s for %s Dataset", model, dataset)))
-}
-
-// Footer for bootstrap operation.
-func footer(dataset string) {
-	fmt.Println(color.HiGreenString(fmt.Sprintf("\nBootstrap Completed for %s Dataset.", dataset)))
+		st := &bootstrap.State{
+			Instance:      opts.Instance,
+			KubeContext:   kubeContext,
+			Profile:       opts.Profile,
+			DryRun:        opts.DryRun,
+			AssumeYes:     opts.AssumeYes,
+			ImageRegistry: opts.ImageRegistry,
+			ImageVersion:  opts.ImageVersion,
+			BuildImages:   opts.BuildImages,
+			Values:        map[string]string{},
+		}
+		return bootstrap.NewDefaultPipeline().Run(ctx, st)
+	},
+	SilenceUsage: true,
 }
 
 func init() {
-	bootstrapCmd.PersistentFlags().StringP("server", "s", "localhost", "server hostname targeted for remote calls")
-	bootstrapCmd.PersistentFlags().StringP("instance", "i", "dc1", "instance id targeted for remote calls")
-	bootstrapCmd.PersistentFlags().StringP("tenant", "t", "tenant1", "tenant id targeted for remote calls")
+	bootstrapCmd.Flags().StringVar(&bootstrapKubeContext, "kube-context", "", "kube-context to target (default: auto-detect)")
+	bootstrapCmd.Flags().StringVar(&bootstrapProfile, "profile", "", "configuration profile to apply")
+	bootstrapCmd.Flags().BoolVar(&bootstrapDryRun, "dry-run", false, "print what would happen without applying changes")
+	bootstrapCmd.Flags().BoolVarP(&bootstrapAssumeYes, "yes", "y", false, "assume yes for prompts")
+	bootstrapCmd.Flags().BoolVar(&bootstrapSkipPreflight, "skip-preflight", false, "skip the local-system preflight checks")
+	bootstrapCmd.Flags().StringVar(&bootstrapRegistry, "registry", bootstrap.DefaultImageRegistry, "image registry to deploy from")
+	bootstrapCmd.Flags().StringVar(&bootstrapVersion, "version", bootstrap.DefaultImageVersion, "published image version (tag) to deploy")
+	bootstrapCmd.Flags().BoolVar(&bootstrapBuild, "build", false, "build images from source into a local registry (developer path; requires source + ko)")
 
 	rootCmd.AddCommand(bootstrapCmd)
 }
