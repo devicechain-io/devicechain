@@ -97,7 +97,15 @@ func (v *Validator) SetKeys(keys map[string]*rsa.PublicKey) {
 // token (refresh tokens are never accepted on the request path). The validated
 // claims are returned on success.
 func (v *Validator) Validate(tokenString string) (*Claims, error) {
-	return v.validateTyped(tokenString, TokenTypeAccess)
+	return v.validateTyped(tokenString, TokenTypeAccess, true)
+}
+
+// ValidateIdentity parses and verifies an *identity*-tier token (ADR-033): the
+// instance-scoped tier the admin API and the tenant-selection exchange accept. It
+// asserts the identity token type but, unlike the data-plane path, does NOT
+// require a tenant claim (an identity token has none).
+func (v *Validator) ValidateIdentity(tokenString string) (*Claims, error) {
+	return v.validateTyped(tokenString, TokenTypeIdentity, false)
 }
 
 // ValidateRefresh parses and verifies a *refresh* token. Used by the issuing
@@ -105,12 +113,13 @@ func (v *Validator) Validate(tokenString string) (*Claims, error) {
 // consulting its server-side store. Refresh tokens are never accepted on the
 // API request path (that is Validate's job).
 func (v *Validator) ValidateRefresh(tokenString string) (*Claims, error) {
-	return v.validateTyped(tokenString, TokenTypeRefresh)
+	return v.validateTyped(tokenString, TokenTypeRefresh, true)
 }
 
-// validateTyped verifies the signature/expiry and asserts the token type and a
-// non-empty tenant claim.
-func (v *Validator) validateTyped(tokenString, expectedType string) (*Claims, error) {
+// validateTyped verifies the signature/expiry and asserts the token type. When
+// requireTenant is set it also asserts a non-empty tenant claim (the data-plane
+// invariant); the instance-scoped identity tier passes requireTenant=false.
+func (v *Validator) validateTyped(tokenString, expectedType string, requireTenant bool) (*Claims, error) {
 	claims := &Claims{}
 	_, err := v.parser.ParseWithClaims(tokenString, claims, v.keyfunc)
 	if err != nil {
@@ -119,7 +128,7 @@ func (v *Validator) validateTyped(tokenString, expectedType string) (*Claims, er
 	if claims.TokenType != expectedType {
 		return nil, fmt.Errorf("auth: token type %q does not match expected %q", claims.TokenType, expectedType)
 	}
-	if claims.Tenant == "" {
+	if requireTenant && claims.Tenant == "" {
 		return nil, fmt.Errorf("auth: token has no tenant claim")
 	}
 	return claims, nil
