@@ -14,5 +14,6 @@ var (
 		NewRoleSchema(),
 		NewRoleTokenPerTenant(),
 		NewIdentitySchema(),
+		NewTenantSchema(),
 	}
 )

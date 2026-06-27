@@ -19,21 +19,3 @@ type InstanceCreateRequest struct {
 type InstanceGetRequest struct {
 	Id string
 }
-
-// ------------------
-// Tenant Mangement
-// ------------------
-
-// Information required to create a DeviceChain tenant.
-type TenantCreateRequest struct {
-	InstanceId  string
-	TenantId    string
-	Name        string
-	Description string
-}
-
-// Information required to get a tenant.
-type TenantGetRequest struct {
-	InstanceId string
-	TenantId   string
-}

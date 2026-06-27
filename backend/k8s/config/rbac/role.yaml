@@ -5,22 +5,9 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - ""
-  resources:
-  - configmaps
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - core.devicechain.io
   resources:
   - instances
-  - tenants
   verbs:
   - create
   - delete
@@ -33,14 +20,12 @@ rules:
   - core.devicechain.io
   resources:
   - instances/finalizers
-  - tenants/finalizers
   verbs:
   - update
 - apiGroups:
   - core.devicechain.io
   resources:
   - instances/status
-  - tenants/status
   verbs:
   - get
   - patch
