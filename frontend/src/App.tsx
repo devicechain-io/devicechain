@@ -11,6 +11,11 @@ import UsersPage from '@/routes/users/UsersPage';
 import RolesPage from '@/routes/roles/RolesPage';
 import DevicesPage from '@/routes/devices/DevicesPage';
 import DeviceTypesPage from '@/routes/device-types/DeviceTypesPage';
+import AdminProtectedRoute from '@/routes/admin/AdminProtectedRoute';
+import AdminLayout from '@/routes/admin/AdminLayout';
+import AdminTenantsPage from '@/routes/admin/TenantsPage';
+import AdminIdentitiesPage from '@/routes/admin/IdentitiesPage';
+import AdminRolesPage from '@/routes/admin/RolesPage';
 
 function ProtectedRoute() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -40,6 +45,17 @@ export default function App() {
           <Route path="device-types" element={<DeviceTypesPage />} />
           <Route path="users" element={<UsersPage />} />
           <Route path="roles" element={<RolesPage />} />
+        </Route>
+      </Route>
+
+      {/* The instance-scoped admin console (ADR-033), gated on a superuser
+          identity session — separate from the tenant ProtectedRoute. */}
+      <Route element={<AdminProtectedRoute />}>
+        <Route path="/admin" element={<AdminLayout />}>
+          <Route index element={<Navigate to="/admin/tenants" replace />} />
+          <Route path="tenants" element={<AdminTenantsPage />} />
+          <Route path="identities" element={<AdminIdentitiesPage />} />
+          <Route path="roles" element={<AdminRolesPage />} />
         </Route>
       </Route>
 
