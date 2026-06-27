@@ -13,5 +13,6 @@ var (
 		NewSigningKeyRetention(),
 		NewRoleSchema(),
 		NewRoleTokenPerTenant(),
+		NewIdentitySchema(),
 	}
 )
