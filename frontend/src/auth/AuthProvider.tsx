@@ -11,7 +11,12 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { login as apiLogin, refresh as apiRefresh } from '@/lib/api/user-management';
+import {
+  login as apiLogin,
+  selectTenant as apiSelectTenant,
+  refresh as apiRefresh,
+  type IdentityAuth,
+} from '@/lib/api/user-management';
 import { setAuthTokenGetter } from '@/lib/graphql/client';
 import { decodeToken, isExpired, type DecodedClaims } from '@/lib/auth/jwt';
 
@@ -33,7 +38,14 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   /** True until the persisted session has been read on first mount. */
   isLoading: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  /**
+   * Authenticate an email/password (ADR-033). Returns the identity token + the
+   * tenants the identity may act in; does NOT start a session — call selectTenant
+   * with the returned identityToken to do that.
+   */
+  login: (email: string, password: string) => Promise<IdentityAuth>;
+  /** Exchange an identity token for a tenant-scoped session. */
+  selectTenant: (identityToken: string, tenant: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -112,9 +124,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => setAuthTokenGetter(null);
   }, [getToken]);
 
+  // Step 1: authenticate the identity. Returns the identity token + memberships;
+  // the session is not started until a tenant is selected.
   const login = useCallback(
-    async (username: string, password: string) => {
-      const pair = await apiLogin(username, password);
+    (email: string, password: string) => apiLogin(email, password),
+    [],
+  );
+
+  // Step 2: exchange the identity token for a tenant-scoped session pair.
+  const selectTenant = useCallback(
+    async (identityToken: string, tenant: string) => {
+      const pair = await apiSelectTenant(identityToken, tenant);
       applyTokens({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
     },
     [applyTokens],
@@ -131,9 +151,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: claims !== null,
       isLoading,
       login,
+      selectTenant,
       logout,
     }),
-    [claims, isLoading, login, logout],
+    [claims, isLoading, login, selectTenant, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

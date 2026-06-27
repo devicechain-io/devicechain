@@ -88,3 +88,37 @@ func (s *Store) AddMembership(ctx context.Context, identityID uint, tenantID str
 func (s *Store) AssignSystemRoles(ctx context.Context, id *Identity, roles []Role) error {
 	return s.sys(ctx).Model(id).Association("SystemRoles").Append(roles)
 }
+
+// SeedSuperuser creates, in one transaction, the superuser identity with the
+// `superuser` system role and a scaffold membership in `tenant` carrying the
+// `tenant-admin` role. The two authority sets are passed in so this package stays
+// decoupled from the authority vocabulary (the caller passes the super-authority
+// for both). Doing it transactionally avoids a half-seeded, locked-out superuser.
+func (s *Store) SeedSuperuser(ctx context.Context, email, passwordHash, tenant string, systemAuthorities, tenantAdminAuthorities []string) error {
+	suName, adminName := "Superuser", "Tenant Administrator"
+	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		suRole := Role{Scope: ScopeSystem, Token: SuperuserRoleToken,
+			NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&suName)}, Authorities: systemAuthorities}
+		if err := tx.Where(Role{Scope: ScopeSystem, Token: SuperuserRoleToken}).FirstOrCreate(&suRole).Error; err != nil {
+			return err
+		}
+		adminRole := Role{Scope: ScopeTenant, Token: TenantAdminRoleToken,
+			NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&adminName)}, Authorities: tenantAdminAuthorities}
+		if err := tx.Where(Role{Scope: ScopeTenant, Token: TenantAdminRoleToken}).FirstOrCreate(&adminRole).Error; err != nil {
+			return err
+		}
+
+		id := Identity{Email: email, Enabled: true, PasswordHash: passwordHash}
+		if err := tx.Create(&id).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&id).Association("SystemRoles").Append(&suRole); err != nil {
+			return err
+		}
+		mem := Membership{IdentityID: id.ID, TenantId: tenant, Enabled: true}
+		if err := tx.Create(&mem).Error; err != nil {
+			return err
+		}
+		return tx.Model(&mem).Association("TenantRoles").Append(&adminRole)
+	})
+}

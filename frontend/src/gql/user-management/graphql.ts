@@ -5,12 +5,20 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 export type LoginMutationVariables = Exact<{
-  username: string;
+  email: string;
   password: string;
 }>;
 
 
-export type LoginMutation = { login: { accessToken: string, refreshToken: string, expiresAt: string } };
+export type LoginMutation = { login: { identityToken: string, expiresAt: string, superuser: boolean, memberships: Array<{ tenant: string, roles: Array<string> }> } };
+
+export type SelectTenantMutationVariables = Exact<{
+  identityToken: string;
+  tenant: string;
+}>;
+
+
+export type SelectTenantMutation = { selectTenant: { accessToken: string, refreshToken: string, expiresAt: string } };
 
 export type RefreshMutationVariables = Exact<{
   refreshToken: string;
@@ -49,14 +57,27 @@ export class TypedDocumentString<TResult, TVariables>
 }
 
 export const LoginDocument = new TypedDocumentString(`
-    mutation Login($username: String!, $password: String!) {
-  login(username: $username, password: $password) {
+    mutation Login($email: String!, $password: String!) {
+  login(email: $email, password: $password) {
+    identityToken
+    expiresAt
+    superuser
+    memberships {
+      tenant
+      roles
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<LoginMutation, LoginMutationVariables>;
+export const SelectTenantDocument = new TypedDocumentString(`
+    mutation SelectTenant($identityToken: String!, $tenant: String!) {
+  selectTenant(identityToken: $identityToken, tenant: $tenant) {
     accessToken
     refreshToken
     expiresAt
   }
 }
-    `) as unknown as TypedDocumentString<LoginMutation, LoginMutationVariables>;
+    `) as unknown as TypedDocumentString<SelectTenantMutation, SelectTenantMutationVariables>;
 export const RefreshDocument = new TypedDocumentString(`
     mutation Refresh($refreshToken: String!) {
   refresh(refreshToken: $refreshToken) {

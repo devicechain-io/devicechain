@@ -10,16 +10,16 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// Loading an empty document defaults the bootstrap admin so the documented
-// admin/devicechain login works (ADR-022 decision 1 defaulting via
-// core.LoadConfiguration). This is platform-breaking if it regresses.
-func TestLoadDefaultsBootstrapAdmin(t *testing.T) {
+// Loading an empty document defaults the superuser (ADR-033) so the documented
+// first login works (ADR-022 decision 1 defaulting via core.LoadConfiguration).
+// This is platform-breaking if it regresses.
+func TestLoadDefaultsSuperuser(t *testing.T) {
 	cfg := &UserManagementConfiguration{}
 	err := core.LoadConfiguration([]byte(``), cfg)
 
 	assert.NoError(t, err)
-	assert.Equal(t, "admin", cfg.Auth.BootstrapUsername)
-	assert.Equal(t, "devicechain", cfg.Auth.BootstrapPassword)
+	assert.Equal(t, "superuser@devicechain.local", cfg.Auth.SuperuserEmail)
+	assert.Equal(t, "devicechain", cfg.Auth.SuperuserPassword)
 	assert.Equal(t, "default", cfg.Auth.BootstrapTenant)
 	assert.Equal(t, 900, cfg.Auth.AccessTokenTtlSeconds)
 	assert.Equal(t, 604800, cfg.Auth.RefreshTokenTtlSeconds)
@@ -31,7 +31,7 @@ func TestLoadDefaultsBootstrapAdmin(t *testing.T) {
 // The constructor and the load path share one source of defaults.
 func TestDefaultConfigurationValid(t *testing.T) {
 	cfg := NewUserManagementConfiguration()
-	assert.Equal(t, "admin", cfg.Auth.BootstrapUsername)
+	assert.Equal(t, "superuser@devicechain.local", cfg.Auth.SuperuserEmail)
 	assert.NoError(t, cfg.Validate())
 }
 
@@ -43,8 +43,8 @@ func TestValidateRejectsNonPositiveRefreshTtl(t *testing.T) {
 			AccessTokenTtlSeconds:  900,
 			RefreshTokenTtlSeconds: -1,
 			BootstrapTenant:        "default",
-			BootstrapUsername:      "admin",
-			BootstrapPassword:      "devicechain",
+			SuperuserEmail:         "superuser@devicechain.local",
+			SuperuserPassword:      "devicechain",
 		},
 	}
 	assert.Error(t, cfg.Validate())
