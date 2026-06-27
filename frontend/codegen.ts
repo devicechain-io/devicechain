@@ -19,6 +19,16 @@ const config: CodegenConfig = {
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },
     },
+    // The instance-scoped admin API (ADR-033), served by user-management at
+    // /admin/graphql. Its own schema + client so the admin console's typed
+    // operations never mix with the tenant-scoped user-management ones.
+    './src/gql/user-management-admin/': {
+      schema: '../backend/services/user-management/graphql/admin_schema.gql',
+      documents: ['src/lib/api/admin.ts'],
+      preset: 'client',
+      presetConfig: { fragmentMasking: false },
+      config: { documentMode: 'string' },
+    },
   },
 };
 export default config;
