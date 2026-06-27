@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"strings"
 	"time"
 
 	assets "github.com/devicechain-io/dc-deploy"
@@ -78,6 +79,30 @@ func helmInstall(ctx context.Context, st *State) error {
 	upg.Wait = true
 	upg.Timeout = helmTimeout
 	_, err = upg.RunWithContext(ctx, helmReleaseName, ch, vals)
+	return err
+}
+
+// helmUninstall removes the per-instance chart release, deleting every resource
+// the chart created (workloads, services, ingress, and the instance namespace).
+// A missing release is treated as success so destroy is idempotent.
+func helmUninstall(ctx context.Context, kubeContext string) error {
+	const releaseNamespace = "default"
+
+	settings := cli.New()
+	settings.KubeContext = kubeContext
+	actionConfig := new(action.Configuration)
+	if err := actionConfig.Init(settings.RESTClientGetter(), releaseNamespace, "secret",
+		func(string, ...interface{}) {}); err != nil {
+		return err
+	}
+
+	un := action.NewUninstall(actionConfig)
+	un.Wait = true
+	un.Timeout = helmTimeout
+	_, err := un.Run(helmReleaseName)
+	if err != nil && strings.Contains(err.Error(), "not found") {
+		return nil
+	}
 	return err
 }
 

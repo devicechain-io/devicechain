@@ -4,55 +4,57 @@
 package cmd
 
 import (
-	"fmt"
-
-	"github.com/fatih/color"
+	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/spf13/cobra"
 )
 
 // Destroy command flags.
 var (
-	destroyPurgeData bool
-	destroyAssumeYes bool
+	destroyKubeContext   string
+	destroyKeepCluster   bool
+	destroyPurgeRegistry bool
+	destroyDryRun        bool
+	destroyAssumeYes     bool
 )
 
-// destroyCmd tears down a DeviceChain instance. SKELETON: it only prints the
-// teardown plan; no destructive action is taken yet (ADR-032).
+// destroyCmd tears down a DeviceChain instance — the inverse of bootstrap.
 var destroyCmd = &cobra.Command{
 	Use:   "destroy <provider> <instance>",
 	Short: "Destroy a DeviceChain instance",
-	Long:  `Tears down a DeviceChain instance. The data stack is preserved unless --purge-data is set.`,
-	Args:  cobra.ExactArgs(2),
+	Long: `Tears down a DeviceChain instance — the inverse of bootstrap.
+
+By default this is a full teardown: it deletes the whole cluster the instance
+lives in (for the local provider, the kind cluster), which removes the operator,
+infrastructure and all data in one shot, then clears the instance's local state.
+
+Use --keep-cluster to uninstall only the instance (its Helm release + namespace),
+leaving the cluster, infrastructure and operator in place for a quick re-bootstrap.`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		provider, instance := args[0], args[1]
-
-		fmt.Println(GreenUnderline(
-			fmt.Sprintf("\nTeardown plan for instance %q on provider %q", instance, provider)))
-
-		// TODO(ADR-032 phase: destroy): helm uninstall the application release.
-		fmt.Println(color.WhiteString("  1. helm uninstall the application release"))
-		// TODO(ADR-032 phase: destroy): tofu destroy the *platform* stack (ingress/cert-manager/operator infra).
-		fmt.Println(color.WhiteString("  2. tofu destroy the platform stack (ingress, cert-manager, operator infra)"))
-		// TODO(ADR-032 phase: destroy): namespace cleanup.
-		fmt.Println(color.WhiteString("  3. namespace cleanup"))
-
-		if destroyPurgeData {
-			// TODO(ADR-032 phase: destroy): tofu destroy the data stack (Postgres/Timescale/NATS) and PVCs.
-			fmt.Println(color.RedString("  4. --purge-data: tofu destroy the data stack (Postgres, Timescale, NATS) and PVCs"))
-		} else {
-			fmt.Println(color.GreenString("  Data stack preserved (pass --purge-data to drop it)."))
+		provider, err := bootstrap.Get(args[0])
+		if err != nil {
+			return err
 		}
-
-		fmt.Println(color.YellowString(
-			"\nNote: destroy is a skeleton (ADR-032); nothing was actually destroyed."))
-		_ = destroyAssumeYes
-		return nil
+		opts := bootstrap.DestroyOptions{
+			Options: bootstrap.Options{
+				Instance:    args[1],
+				KubeContext: destroyKubeContext,
+				DryRun:      destroyDryRun,
+				AssumeYes:   destroyAssumeYes,
+			},
+			KeepCluster:   destroyKeepCluster,
+			PurgeRegistry: destroyPurgeRegistry,
+		}
+		return bootstrap.Destroy(cmd.Context(), provider, opts)
 	},
 	SilenceUsage: true,
 }
 
 func init() {
-	destroyCmd.Flags().BoolVar(&destroyPurgeData, "purge-data", false, "also destroy the data stack (Postgres/Timescale/NATS); destructive")
+	destroyCmd.Flags().StringVar(&destroyKubeContext, "kube-context", "", "kube-context to target (default: auto-detect kind-<instance>)")
+	destroyCmd.Flags().BoolVar(&destroyKeepCluster, "keep-cluster", false, "uninstall only the instance, leaving the cluster + infra + operator in place")
+	destroyCmd.Flags().BoolVar(&destroyPurgeRegistry, "purge-registry", false, "also remove the shared local image registry container (full teardown only)")
+	destroyCmd.Flags().BoolVar(&destroyDryRun, "dry-run", false, "print what would happen without destroying anything")
 	destroyCmd.Flags().BoolVarP(&destroyAssumeYes, "yes", "y", false, "assume yes for prompts")
 
 	rootCmd.AddCommand(destroyCmd)
