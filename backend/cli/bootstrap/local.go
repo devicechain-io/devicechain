@@ -4,10 +4,14 @@
 package bootstrap
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
+	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/fatih/color"
 )
 
@@ -21,51 +25,110 @@ type localProvider struct{}
 
 func (localProvider) Name() string { return "local" }
 
-// EnsureCluster resolves the kube-context to target for a local install. It
-// never creates a cluster in this skeleton; it only selects an existing one.
+// EnsureCluster resolves (and, if needed, creates) the kube-context to target
+// for a local install. The local provider deploys to kind, so by default it
+// targets a kind cluster named after the instance (context kind-<instance>):
+// it is used if it already exists, and created otherwise. An explicit
+// --kube-context overrides this and is never auto-created.
 func (localProvider) EnsureCluster(ctx context.Context, opts Options) (string, error) {
-	fmt.Print(color.WhiteString("Detecting local Kubernetes context... "))
-
-	names, current, err := KubeContexts()
+	names, _, err := KubeContexts()
 	if err != nil {
-		fmt.Println(color.RedString("failed."))
 		return "", fmt.Errorf("loading kube contexts: %w", err)
 	}
 
-	// Explicit context: verify it exists, then use it.
+	// Explicit context: verify it exists, then use it (never auto-create — a
+	// missing explicit context is almost always a typo).
 	if opts.KubeContext != "" {
 		if !containsString(names, opts.KubeContext) {
-			fmt.Println(color.RedString("not found."))
 			return "", fmt.Errorf("kube-context %q not found; available contexts: %s",
 				opts.KubeContext, strings.Join(names, ", "))
 		}
-		fmt.Println(color.GreenString("using %s.", opts.KubeContext))
+		fmt.Println(color.WhiteString("Using kube-context %s.", color.GreenString(opts.KubeContext)))
 		return opts.KubeContext, nil
 	}
 
-	// Auto-detect: collect contexts whose names look local.
-	local := make([]string, 0, len(names))
-	for _, name := range names {
-		if looksLocal(name) {
-			local = append(local, name)
-		}
+	// Default: a kind cluster named after the instance.
+	clusterName := opts.Instance
+	kubeContext := "kind-" + clusterName
+	if containsString(names, kubeContext) {
+		fmt.Println(color.WhiteString("Using existing kind cluster %s.", color.GreenString(kubeContext)))
+		return kubeContext, nil
 	}
 
-	switch len(local) {
-	case 1:
-		fmt.Println(color.GreenString("using %s.", local[0]))
-		return local[0], nil
-	case 0:
-		fmt.Println(color.RedString("none found."))
-		// TODO(ADR-032): offer to create a cluster (needs --yes)
+	// Not present — create it.
+	if opts.DryRun {
+		fmt.Println(color.YellowString("[dry-run] would create kind cluster %q (context %s)", clusterName, kubeContext))
+		return kubeContext, nil
+	}
+	if !opts.AssumeYes &&
+		!confirm(fmt.Sprintf("No local cluster found. Create a kind cluster %q now?", clusterName)) {
 		return "", fmt.Errorf(
-			"no local Kubernetes context detected (current-context: %q); "+
-				"create one with 'minikube start' or 'kind create cluster', then re-run", current)
+			"no local cluster and creation declined; create one (e.g. `kind create cluster`) " +
+				"or pass --kube-context, then re-run")
+	}
+	if err := createKindCluster(ctx, clusterName); err != nil {
+		return "", err
+	}
+	return kubeContext, nil
+}
+
+// createKindCluster creates a kind cluster from the embedded topology (the same
+// config deploy/local/up.sh uses). kind streams its own progress.
+func createKindCluster(ctx context.Context, name string) error {
+	if _, err := exec.LookPath("kind"); err != nil {
+		return fmt.Errorf("kind not found on PATH; install it (https://kind.sigs.k8s.io) and re-run")
+	}
+
+	cfg, err := os.CreateTemp("", "dcctl-kind-*.yaml")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(cfg.Name())
+	// Strip the config's hard-coded cluster name so --name governs.
+	if _, err := cfg.Write(stripClusterName(assets.KindClusterConfig())); err != nil {
+		return err
+	}
+	if err := cfg.Close(); err != nil {
+		return err
+	}
+
+	fmt.Println(color.WhiteString("Creating kind cluster %q:", name))
+	cmd := exec.CommandContext(ctx, "kind", "create", "cluster",
+		"--name", name, "--config", cfg.Name(), "--wait", "90s")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("creating kind cluster %q: %w", name, err)
+	}
+	return nil
+}
+
+// stripClusterName drops the top-level `name:` field from the kind config so the
+// --name flag is the single source of the cluster name.
+func stripClusterName(cfg []byte) []byte {
+	lines := strings.Split(string(cfg), "\n")
+	kept := lines[:0]
+	for _, ln := range lines {
+		if strings.HasPrefix(ln, "name:") {
+			continue
+		}
+		kept = append(kept, ln)
+	}
+	return []byte(strings.Join(kept, "\n"))
+}
+
+// confirm asks the user a yes/no question on stdin, defaulting to no.
+func confirm(prompt string) bool {
+	fmt.Print(color.WhiteString("%s [y/N]: ", prompt))
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return false
+	}
+	switch strings.TrimSpace(strings.ToLower(line)) {
+	case "y", "yes":
+		return true
 	default:
-		fmt.Println(color.RedString("ambiguous."))
-		return "", fmt.Errorf(
-			"multiple local contexts found (%s); select one with --kube-context",
-			strings.Join(local, ", "))
+		return false
 	}
 }
 

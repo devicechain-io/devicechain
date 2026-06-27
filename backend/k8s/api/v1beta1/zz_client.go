@@ -5,7 +5,7 @@ package v1beta1
 
 import (
 	"context"
-	"log"
+	"sync"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -130,10 +130,32 @@ func GetTenant(request TenantGetRequest) (*Tenant, error) {
 	return tenant, nil
 }
 
-// Initialize client configuration
-func initClientConfig() {
-	ClientConfig = config.GetConfigOrDie()
-	ClientConfig.RateLimiter = flowcontrol.NewFakeAlwaysRateLimiter()
+var clientInitOnce sync.Once
+var clientInitErr error
+
+// InitClient lazily builds the package-global Kubernetes clients from the ambient
+// kubeconfig, exactly once, returning any error instead of dying. Commands that
+// use ClientConfig / V1Client / V1Beta1Client must call it first.
+//
+// It is deliberately NOT invoked from init(): dcctl must run (version, help, and
+// `bootstrap` — which creates the cluster) with no reachable cluster or even no
+// current-context set. An eager GetConfigOrDie() here would abort the process
+// before main, breaking exactly the bootstrap-from-nothing path.
+func InitClient() error {
+	clientInitOnce.Do(func() {
+		cfg, err := config.GetConfig()
+		if err != nil {
+			clientInitErr = err
+			return
+		}
+		cfg.RateLimiter = flowcontrol.NewFakeAlwaysRateLimiter()
+		ClientConfig = cfg
+		if clientInitErr = initV1Beta1Client(); clientInitErr != nil {
+			return
+		}
+		clientInitErr = initV1Client()
+	})
+	return clientInitErr
 }
 
 // Initialize client for DeviceChain operations
@@ -162,16 +184,4 @@ func initV1Client() error {
 		return err
 	}
 	return nil
-}
-
-func init() {
-	initClientConfig()
-	err := initV1Beta1Client()
-	if err != nil {
-		log.Fatal("unable to initialize v1beta1 client", err)
-	}
-	err = initV1Client()
-	if err != nil {
-		log.Println("unable to initialize v1 client", err)
-	}
 }
