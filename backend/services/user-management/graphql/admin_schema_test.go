@@ -91,3 +91,29 @@ func TestAdminMutationsForbidWithoutAuthority(t *testing.T) {
 	_, err := r.CreateIdentity(ctx, struct{ Request adminIdentityCreateInput }{})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 }
+
+// TestAdminCatalogFailClosed confirms the role-catalog and tenant resolvers gate
+// on their own authorities: an unauthenticated request is rejected, and an
+// identity holding only user:write (not role:write / tenant:write) is forbidden
+// from the catalog and tenant mutations (ADR-033 least privilege).
+func TestAdminCatalogFailClosed(t *testing.T) {
+	r := &AdminResolver{}
+
+	// Unauthenticated.
+	bare := context.Background()
+	_, err := r.Roles(bare, struct{ Scope *string }{})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	_, err = r.CreateRole(bare, struct{ Request adminRoleCreateInput }{})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	_, err = r.CreateTenant(bare, struct{ Request adminTenantCreateInput }{})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	// Authenticated but holding only user:write — wrong authority for the catalog.
+	limited := auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{string(auth.UserWrite)}})
+	_, err = r.Roles(limited, struct{ Scope *string }{})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+	_, err = r.CreateRole(limited, struct{ Request adminRoleCreateInput }{})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+	_, err = r.CreateTenant(limited, struct{ Request adminTenantCreateInput }{})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+}
