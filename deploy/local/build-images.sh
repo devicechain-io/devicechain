@@ -54,4 +54,10 @@ done
 # Operator (backend/k8s) — deployed by 'make deploy IMG=...'.
 build_one "$ROOT/backend/k8s" "$REGISTRY/operator"
 
+# Web console (frontend) — a static nginx SPA, so docker (not ko) builds it. The
+# chart deploys it by default at {REGISTRY}/frontend:{TAG}.
+step "🏗️  $REGISTRY/frontend:$TAG"
+docker build -t "$REGISTRY/frontend:$TAG" "$ROOT/frontend" >/dev/null
+docker push "$REGISTRY/frontend:$TAG" >/dev/null
+
 log "✅ Done — images pushed to $REGISTRY"

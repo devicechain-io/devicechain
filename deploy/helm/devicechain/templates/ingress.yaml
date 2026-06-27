@@ -1,14 +1,27 @@
 {{/*
-Optional Ingress exposing the GraphQL/HTTP surface, with cert-manager TLS. The
-ingress-nginx controller and cert-manager themselves come from the OpenTofu infra
-(deploy/opentofu); this renders the per-instance routing + Issuer once those
-exist. Disabled by default.
+Optional Ingress exposing the console + GraphQL/HTTP surface, with cert-manager
+TLS. The ingress-nginx controller and cert-manager themselves come from the
+OpenTofu infra (deploy/opentofu); this renders the per-instance routing + Issuer
+once those exist. Disabled by default.
 
-Each enabled functional area is exposed at /<area> on one host, rewritten to the
-service root so /<area>/graphql reaches the service's /graphql. When TLS is on and
-selfSigned, a cert-manager self-signed Issuer is rendered in this namespace
-(dev-grade: valid TLS, browser-untrusted); for real certs set selfSigned=false and
-point clusterIssuer at a configured ClusterIssuer.
+Two routing concerns share one host:
+
+  - /api/<area>  → the functional-area Service (the /api/<area> prefix is stripped
+    so /api/<area>/graphql reaches the service's /graphql). This matches the
+    browser contract in frontend/src/lib/graphql/client.ts, so the same relative
+    URLs work in `vite dev` (proxy) and against a real instance.
+  - /            → the web console Service, which serves the SPA and falls back to
+    index.html for client-side routes.
+
+These live on SEPARATE Ingress objects because they need different rewrite
+behavior: the API ingress strips the prefix (rewrite-target), while the console
+ingress must pass the path through untouched so nginx can serve assets and do its
+own SPA fallback. ingress-nginx merges both for the host; the more-specific
+/api/<area> regex locations are matched before the "/" prefix.
+
+When TLS is on and selfSigned, a cert-manager self-signed Issuer is rendered in
+this namespace (dev-grade: valid TLS, browser-untrusted); for real certs set
+selfSigned=false and point clusterIssuer at a configured ClusterIssuer.
 */}}
 {{- if .Values.ingress.enabled }}
 {{- $root := . -}}
@@ -28,12 +41,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: devicechain
+  name: devicechain-api
   namespace: {{ .Values.instance.id }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
   annotations:
-    # Strip the /<area> prefix so the request reaches the service at its own root.
+    # Strip the /api/<area> prefix so the request reaches the service at its own root.
     nginx.ingress.kubernetes.io/rewrite-target: /$2
     {{- if $tls.enabled }}
     {{- if $tls.selfSigned }}
@@ -58,7 +71,7 @@ spec:
       http:
         paths:
           {{- range $area := splitList "," (include "devicechain.enabledAreas" $root) }}
-          - path: /{{ $area }}(/|$)(.*)
+          - path: /api/{{ $area }}(/|$)(.*)
             pathType: ImplementationSpecific
             backend:
               service:
@@ -66,4 +79,43 @@ spec:
                 port:
                   name: graphql
           {{- end }}
+{{- if .Values.frontend.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: devicechain-web
+  namespace: {{ .Values.instance.id }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+  annotations:
+    # No rewrite: the console nginx serves /assets/* verbatim and falls back to
+    # index.html itself, so the path must reach it unchanged.
+    #
+    # No cert-manager annotation here: the API ingress above owns the Certificate
+    # for this host's secret; this ingress only reuses that secret for TLS, so a
+    # second issuer annotation would race a competing Certificate onto it.
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if $tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ $tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  name: http
+{{- end }}
 {{- end }}

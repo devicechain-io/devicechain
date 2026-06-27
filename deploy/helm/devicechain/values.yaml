@@ -77,6 +77,27 @@ image:
 service:
   port: 8080
 
+# The web console (single-page app). Unlike the functional areas this is a static
+# nginx image (frontend/Dockerfile), not a Go service, so it is a standalone
+# workload rather than part of the area machinery. The cluster ingress serves it
+# at "/" and routes /api/<area> to the services (see templates/ingress.yaml).
+frontend:
+  enabled: true
+  # Image defaults to "{image.registry}/frontend:{image.tag}"; override repository
+  # and/or tag to pin a different console build.
+  image:
+    repository: ""
+    tag: ""
+  replicas: 1
+  # nginx is lighter than the Go services; size accordingly.
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
 # Prometheus scrape integration. Metrics are NOT served on a dedicated port:
 # /metrics rides on the graphql port 8080 (the shared HTTP mux), so the
 # ServiceMonitor scrapes the Service's named `graphql` port at path /metrics.

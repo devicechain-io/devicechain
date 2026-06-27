@@ -18,8 +18,10 @@ export type Area =
   | 'command-delivery';
 
 function endpoint(area: Area): string {
-  // Mirrors the ingress contract: https://<host>/<area>/graphql. The dev proxy
-  // (vite.config.ts) forwards /api/<area>/... to a backend.
+  // Relative URL matching the cluster ingress contract: the ingress routes
+  // https://<host>/api/<area>/graphql to each functional-area service (see
+  // deploy/helm/devicechain/templates/ingress.yaml), and serves the SPA at "/".
+  // In `vite dev` the same path is handled by the proxy in vite.config.ts.
   return `/api/${area}/graphql`;
 }
 

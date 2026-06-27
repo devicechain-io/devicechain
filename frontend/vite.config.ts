@@ -4,16 +4,18 @@ import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
 
 // The frontend talks to the DeviceChain services over GraphQL. Each functional
-// area serves its own /graphql endpoint; the ingress (deploy/opentofu +
-// deploy/helm ingress) exposes them at https://<host>/<area>/graphql and strips
-// the /<area> prefix before the request reaches the service.
+// area serves its own /graphql endpoint; the cluster ingress (deploy/helm
+// ingress) exposes them at https://<host>/api/<area>/graphql and strips the
+// /api/<area> prefix before the request reaches the service, while serving the
+// built SPA at "/".
 //
 // In dev we mirror that contract: the GraphQL client builds URLs as
 // `/api/<area>/graphql`, and this proxy forwards `/api/<area>/...` to a backend,
 // stripping the `/api/<area>` prefix so a single locally-run service (which
-// serves plain `/graphql`) answers. Point VITE_GATEWAY_TARGET at the ingress
-// instead and switch the rewrite to strip only `/api` to exercise the full
-// multi-service routing.
+// serves plain `/graphql`) answers. To exercise full multi-service routing,
+// point VITE_GATEWAY_TARGET at a real instance's ingress and drop the rewrite
+// below (the ingress speaks the same `/api/<area>` contract, so the path passes
+// through unchanged).
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {

@@ -78,6 +78,19 @@ encoded — pub/sub (ADR-003) makes an absent peer safe, so only hard edges gate
 {{- end -}}
 
 {{/*
+The web console image reference: explicit frontend.image.repository:tag overrides,
+otherwise "{image.registry}/frontend:{image.tag}" — same registry/tag the services
+resolve through, so a release pins the whole deploy coherently.
+*/}}
+{{- define "devicechain.frontendImage" -}}
+  {{- $fe := .Values.frontend | default dict -}}
+  {{- $img := $fe.image | default dict -}}
+  {{- $repo := $img.repository | default (printf "%s/frontend" .Values.image.registry) -}}
+  {{- $tag := $img.tag | default .Values.image.tag -}}
+  {{- printf "%s:%s" $repo $tag -}}
+{{- end -}}
+
+{{/*
 The instance config Secret name. C2 (ADR-022 review): the instance config holds
 persistence credentials, so it is rendered into a Secret (not a ConfigMap). When
 instance.existingSecret is set, that name is used instead so an operator can point
