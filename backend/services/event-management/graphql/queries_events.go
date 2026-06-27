@@ -7,6 +7,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"strconv"
 	"time"
 
@@ -95,6 +96,10 @@ func toEventSearchCriteria(in EventSearchCriteriaInput) (model.EventSearchCriter
 func (r *SchemaResolver) Events(ctx context.Context, args struct {
 	Criteria EventSearchCriteriaInput
 }) (*EventSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	criteria, err := toEventSearchCriteria(args.Criteria)
 	if err != nil {
@@ -111,6 +116,10 @@ func (r *SchemaResolver) Events(ctx context.Context, args struct {
 func (r *SchemaResolver) LocationEvents(ctx context.Context, args struct {
 	Criteria EventSearchCriteriaInput
 }) (*LocationEventSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	criteria, err := toEventSearchCriteria(args.Criteria)
 	if err != nil {
@@ -127,6 +136,10 @@ func (r *SchemaResolver) LocationEvents(ctx context.Context, args struct {
 func (r *SchemaResolver) MeasurementEvents(ctx context.Context, args struct {
 	Criteria EventSearchCriteriaInput
 }) (*MeasurementEventSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	criteria, err := toEventSearchCriteria(args.Criteria)
 	if err != nil {
@@ -143,6 +156,10 @@ func (r *SchemaResolver) MeasurementEvents(ctx context.Context, args struct {
 func (r *SchemaResolver) AlertEvents(ctx context.Context, args struct {
 	Criteria EventSearchCriteriaInput
 }) (*AlertEventSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	criteria, err := toEventSearchCriteria(args.Criteria)
 	if err != nil {

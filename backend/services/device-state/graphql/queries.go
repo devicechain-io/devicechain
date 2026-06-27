@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	_ "embed"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-state/model"
 )
@@ -14,6 +15,10 @@ import (
 func (r *SchemaResolver) DeviceStatesByDeviceId(ctx context.Context, args struct {
 	DeviceIds []int32
 }) ([]*DeviceStateResolver, error) {
+	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids := make([]uint, 0, len(args.DeviceIds))
 	for _, id := range args.DeviceIds {
@@ -40,6 +45,10 @@ func (r *SchemaResolver) DeviceStatesByDeviceId(ctx context.Context, args struct
 func (r *SchemaResolver) DeviceStates(ctx context.Context, args struct {
 	Criteria model.DeviceStateSearchCriteria
 }) (*DeviceStateSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.DeviceStates(ctx, args.Criteria)
 	if err != nil {

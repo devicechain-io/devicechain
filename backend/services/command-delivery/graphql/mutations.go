@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
 )
@@ -13,6 +14,10 @@ import (
 func (r *SchemaResolver) CreateCommand(ctx context.Context, args struct {
 	Request *model.CommandCreateRequest
 }) (*CommandResolver, error) {
+	if err := auth.Authorize(ctx, auth.CommandWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateCommand(ctx, args.Request)
 	if err != nil {
@@ -30,6 +35,10 @@ func (r *SchemaResolver) CreateCommand(ctx context.Context, args struct {
 func (r *SchemaResolver) CancelCommand(ctx context.Context, args struct {
 	Token string
 }) (*CommandResolver, error) {
+	if err := auth.Authorize(ctx, auth.CommandWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	cancelled, err := api.CancelCommand(ctx, args.Token)
 	if err != nil {
