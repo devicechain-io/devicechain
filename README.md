@@ -92,7 +92,7 @@ per tenant.
 | **event-sources** | Inbound device transports. Decodes raw messages and publishes them onto the pipeline. |
 | **device-management** | Devices, device profiles, the typed relationship graph, and event resolution. |
 | **event-management** | Persists resolved events to TimescaleDB and serves time-series queries over GraphQL. |
-| **user-management** | Users, roles, and JWT issuance / validation (JWKS). |
+| **user-management** | Identities, per-tenant memberships, roles, and two-tier JWT issuance / validation (JWKS). |
 | **device-state** | Live last-known-state projection per device (presence, latest location and measurements). |
 | **command-delivery** | Persistent, two-way command dispatch to devices. |
 | **operator** | A controller-runtime operator reconciling `DeviceChainInstance` / `DeviceChainTenant` resources. |
@@ -128,6 +128,34 @@ configuration — keeping cluster bootstrapping out of application code.
 Each service loads its configuration into a typed schema and **fails closed**: an
 unknown key, a wrong type, or an invalid value is rejected at startup rather than
 silently ignored.
+
+## Running locally
+
+`dcctl` — the platform CLI — bootstraps a complete instance with one command. It
+is self-contained: the operator manifests, Helm chart, and OpenTofu config are
+embedded in the binary, so no source checkout, `kubectl`, `helm`, or `kustomize`
+is required. The single host prerequisites are **Docker**, **kind**, and
+**OpenTofu** (the CLI's preflight checks guide you through any that are missing).
+
+```bash
+# Stand up a full instance on a local kind cluster at http://localhost/
+dcctl bootstrap local --host localhost --no-tls
+
+# …then open the printed console URL and log in with the seeded credentials.
+
+# Tear it all back down (use --keep-cluster to uninstall only the instance)
+dcctl destroy
+```
+
+The bootstrap pipeline renders config → `tofu apply` (NATS + TimescaleDB + ingress)
+→ installs the CRDs/operator → `helm install`s the instance → seeds the initial
+superuser → waits for readiness → reports the access URL — and is idempotent on
+re-run. It defaults to published images; pass `--build` for the from-source
+(ko → local registry) developer path. Building `dcctl` itself: `cd backend/cli &&
+make build`.
+
+> Because DeviceChain is pre-release, no image tags have been published yet — use
+> the `--build` path until the first release is cut.
 
 ## Domain model
 
@@ -165,7 +193,10 @@ where it matters:
   read and stamps it on every write. A tenant-scoped query with no tenant in
   context is rejected.
 - **Messaging** — subjects are scoped per tenant (`{instance}.{tenant}.{suffix}`).
-- **Auth** — the per-request tenant comes from the caller's verified JWT tenant
+- **Auth** — a person is a global, email-keyed **identity** that holds one
+  **membership** per tenant. Logging in yields an **identity token** (admin API);
+  selecting a tenant exchanges it for a single-tenant **tenant token** that drives
+  the data plane. The per-request tenant comes from that verified tenant token's
   claim; the per-message tenant is derived from the messaging subject.
 
 Adding a tenant is a declarative operation — create a `DeviceChainTenant` resource
@@ -176,7 +207,7 @@ and the operator reconciles it. Tenants do **not** get their own pods.
 | Area | Choice |
 |---|---|
 | **Backend** | Go 1.26+ (Go Workspaces), `net/http` + graph-gophers/graphql-go, GORM |
-| **Frontend** | TypeScript, React (hooks), Vite, TailwindCSS, Shadcn/ui, Apollo Client |
+| **Frontend** | TypeScript, React 19 (hooks), Vite, TailwindCSS, shadcn/ui, GraphQL Code Generator (client-preset) |
 | **Messaging / KV / MQTT** | NATS JetStream |
 | **Data** | PostgreSQL 17+ with TimescaleDB Community Edition |
 | **Auth** | Native RS256 JWT + JWKS; optional Dex for OIDC/SAML/LDAP |
@@ -195,9 +226,9 @@ backend/    Go monorepo (Go Workspaces)
   services/   microservices — device-management, user-management, event-management,
               event-sources, device-state, command-delivery
   k8s/        Kubernetes operator (controller-runtime)
-  cli/        command-line tooling
-frontend/   React + TypeScript management UI
-deploy/     Helm charts
+  cli/        dcctl — instance bootstrap / destroy and admin tooling
+frontend/   React + TypeScript management console
+deploy/     Helm chart + OpenTofu modules
 docs/       Docusaurus documentation site
 ```
 

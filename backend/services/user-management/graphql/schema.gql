@@ -1,8 +1,24 @@
-# Pair of JWTs returned by a successful login or token refresh.
+# Tenant-scoped pair of JWTs returned by selectTenant or token refresh.
 type AuthToken {
     accessToken: String!
     refreshToken: String!
     expiresAt: String!
+}
+
+# Result of an email/password login (ADR-033): an instance-scoped identity token
+# plus the tenants the identity may act in. The caller picks one via selectTenant.
+type IdentityAuth {
+    identityToken: String!
+    expiresAt: String!
+    # Whether this identity holds the superuser system role (may enter any tenant).
+    superuser: Boolean!
+    memberships: [Membership!]!
+}
+
+# A tenant the authenticated identity belongs to, with the role tokens it holds.
+type Membership {
+    tenant: String!
+    roles: [String!]!
 }
 
 # A named bundle of granted authorities (ADR-008 RBAC).
@@ -62,8 +78,11 @@ type Query {
 
 # Contains mutations executed against model.
 type Mutation {
-    # Authenticate with a username and password, returning an access/refresh pair.
-    login(username: String!, password: String!): AuthToken!
+    # Authenticate with an email and password, returning an identity token + the
+    # tenants the identity may select (ADR-033). No tenant is chosen yet.
+    login(email: String!, password: String!): IdentityAuth!
+    # Exchange an identity token for a tenant-scoped access/refresh pair.
+    selectTenant(identityToken: String!, tenant: String!): AuthToken!
     # Exchange a valid refresh token for a new pair (rotates the refresh token).
     refresh(refreshToken: String!): AuthToken!
     # Create a role granting a set of authorities (requires role:write).

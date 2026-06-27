@@ -1,5 +1,77 @@
 # DeviceChain — Repository Guide
 
+## Repository layout
+
+A Go monorepo using **Go Workspaces** (`go.work`, Go 1.26). The workspace modules are:
+
+```
+backend/
+  core/                       shared library — entity, auth, messaging, config, rdb, graphql
+  services/                   one module per microservice:
+    device-management/        devices, profiles, the typed relationship graph, event resolution
+    user-management/          identities, per-tenant memberships, roles, two-tier JWT/JWKS
+    event-management/         persists + queries time-series events (TimescaleDB hypertables)
+    event-sources/            inbound device transports (MQTT/NATS), decode → pipeline
+    device-state/             live last-known-state projection per device
+    command-delivery/         persistent two-way command dispatch
+  k8s/                        controller-runtime operator (DeviceChainInstance / DeviceChainTenant CRDs)
+  cli/                        dcctl — bootstrap/destroy + admin tooling
+deploy/                       Helm chart (deploy/helm) + OpenTofu modules (deploy/opentofu)
+frontend/                     React 19 + Vite + Tailwind + shadcn/ui console; GraphQL Code Generator (client-preset)
+docs/                         Docusaurus site
+hack/                         license header + dev scripts
+_legacy/                      archived pre-migration SiteWhere code — NOT in the workspace, not built; do not edit
+```
+
+## Planning & decisions — read before proposing architecture
+
+Source-of-truth planning docs live in [.agent-os/product/](.agent-os/product/). Consult them before
+designing anything non-trivial; the codebase follows the ADRs.
+
+- **decisions.md** — ADRs (the "why"). Referenced throughout as `ADR-0xx`.
+- **roadmap.md** — only **open** (`[ ]`) and **in-progress** (`[~]`) work, organized by phase + the
+  current "Launch Slice".
+- **shipped.md** — delivered features (the `[x]` log).
+- **mission.md** / **mission-lite.md** / **tech-stack.md** — product framing and stack rationale.
+
+The product/strategy narrative docs can be reconciled with the `/sync-product-docs` skill.
+
+## Build, test, and lint (these are the CI gates — run before committing)
+
+Go (from the repo root; the workspace resolves all modules — no vendor step):
+
+```bash
+gofmt -l .          # must print nothing
+go build ./...
+go vet ./...
+go test ./...
+```
+
+Other areas:
+
+```bash
+# dcctl
+cd backend/cli && make build
+
+# frontend
+cd frontend && npm ci && npm run codegen && npm run typecheck && npm run build
+
+# helm
+helm lint deploy/helm/devicechain && helm template deploy/helm/devicechain >/dev/null
+
+# opentofu
+cd deploy/opentofu && tofu fmt -check -recursive && tofu init -backend=false && tofu validate
+```
+
+## Conventions
+
+- **Pre-GA (v1.0.0):** all models and APIs are changeable. Prefer decisive cutovers over compat shims,
+  backfills, or migration scaffolding for old shapes.
+- **Fail closed:** typed config rejects unknown/invalid keys at startup; the DB tenant-scope callback
+  rejects any tenant-scoped query with no tenant in context.
+- **Multi-tenancy:** a single shared set of services serves all tenants; isolation is enforced at the
+  storage (`tenant_id` predicate) and messaging (per-tenant subjects) layers, not by per-tenant pods.
+
 ## License headers
 
 DeviceChain is licensed under **Apache License 2.0** (see [LICENSE](LICENSE) and [NOTICE](NOTICE)).

@@ -41,6 +41,10 @@ func (s RoleScope) Valid() bool { return s == ScopeSystem || s == ScopeTenant }
 // (Phase 2) so this package need not import the authority vocabulary.
 const SuperuserRoleToken = "superuser"
 
+// TenantAdminRoleToken is the well-known tenant role granting full authority
+// within a tenant — seeded for the superuser's scaffold membership.
+const TenantAdminRoleToken = "tenant-admin"
+
 // Role is a globally-defined, named bundle of authorities. Uniqueness is the
 // composite (scope, token) — a token like "admin" can exist once per scope — so
 // the catalog can hold both a system "superuser" and tenant roles without

@@ -14,6 +14,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-user-management/model"
+	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
@@ -42,11 +43,15 @@ var ErrInvalidCredentials = errors.New("invalid credentials")
 // or is absent from the server-side store (rotated, revoked, or expired).
 var ErrInvalidToken = errors.New("invalid or expired token")
 
-// BootstrapConfig describes the admin user seeded on first startup.
+// BootstrapConfig describes the superuser (and scaffold tenant) seeded on first
+// startup (ADR-033).
 type BootstrapConfig struct {
-	Tenant   string
-	Username string
-	Password string
+	// SuperuserEmail/SuperuserPassword identify the global superuser identity.
+	SuperuserEmail    string
+	SuperuserPassword string
+	// Tenant is the scaffold tenant the superuser gets a membership in so the
+	// tenant console is usable before the admin console can create tenants.
+	Tenant string
 }
 
 // Manager owns native auth for the instance. Build it with NewManager, then
@@ -54,6 +59,7 @@ type BootstrapConfig struct {
 type Manager struct {
 	ms        *core.Microservice
 	db        *rdb.RdbManager
+	iam       *iam.Store
 	locker    *messaging.DistributedLock
 	accessTTL time.Duration
 
@@ -86,7 +92,7 @@ type TokenPair struct {
 // auth package defaults. locker serializes signing-key generation/rotation and
 // bootstrap seeding across replicas (ADR-007).
 func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.DistributedLock, accessTTL, refreshTTL time.Duration, bootstrap BootstrapConfig) *Manager {
-	return &Manager{ms: ms, db: db, locker: locker, accessTTL: accessTTL, refreshTTL: refreshTTL, bootstrap: bootstrap}
+	return &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, accessTTL: accessTTL, refreshTTL: refreshTTL, bootstrap: bootstrap}
 }
 
 // Initialize loads (or creates) the signing key, builds the issuer/validator,
@@ -108,7 +114,7 @@ func (m *Manager) Initialize(ctx context.Context, refreshKV nats.KeyValue) error
 	}
 	m.dummyHash = dummy
 
-	return m.seedBootstrapAdmin(ctx)
+	return m.seedSuperuser(ctx)
 }
 
 // applyKeys installs a loaded signing-key set: it rebuilds the issuer on the
@@ -181,28 +187,102 @@ func (m *Manager) JWKS() ([]byte, error) {
 	return auth.BuildJWKS(publics)
 }
 
-// Login verifies a username/password and returns a fresh token pair.
-func (m *Manager) Login(ctx context.Context, username, password string) (*TokenPair, error) {
-	user, err := m.lookupUser(ctx, username)
+// IdentityAuth is the result of a successful email/password login (ADR-033): an
+// instance-scoped identity token plus the tenants the identity may act in. No
+// tenant is chosen yet — the client picks one and exchanges it via SelectTenant
+// for a tenant-scoped token pair.
+type IdentityAuth struct {
+	IdentityToken string
+	ExpiresAt     time.Time
+	Superuser     bool
+	Memberships   []MembershipInfo
+}
+
+// MembershipInfo names a tenant the identity belongs to and the role tokens it
+// holds there (carried for the tenant picker / display).
+type MembershipInfo struct {
+	Tenant string
+	Roles  []string
+}
+
+// Login verifies an email/password and returns an identity token plus the
+// identity's memberships (ADR-033). Failures are uniform (unknown email, bad
+// password, or disabled) and timing-equalized so the API does not reveal whether
+// an email exists.
+func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityAuth, error) {
+	email = normalizeEmail(email)
+	id, err := m.iam.IdentityByEmail(ctx, email)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	if id == nil || !id.Enabled {
+		_ = bcrypt.CompareHashAndPassword(m.dummyHash, []byte(password))
+		m.recordAuth(ctx, rdb.AuditOpLoginFailed, email, "")
+		return nil, ErrInvalidCredentials
+	}
+	if bcrypt.CompareHashAndPassword([]byte(id.PasswordHash), []byte(password)) != nil {
+		m.recordAuth(ctx, rdb.AuditOpLoginFailed, email, "")
+		return nil, ErrInvalidCredentials
+	}
+	m.recordAuth(ctx, rdb.AuditOpLogin, id.Email, "")
+
+	m.mu.RLock()
+	issuer := m.issuer
+	m.mu.RUnlock()
+	tok, err := issuer.IssueIdentity(id.Email, roleTokens(id.SystemRoles), id.SystemAuthorities(), uuid.NewString())
 	if err != nil {
 		return nil, err
 	}
-	if user == nil || !user.Enabled {
-		// Spend comparable time hashing so timing does not betray existence.
-		_ = bcrypt.CompareHashAndPassword(m.dummyHash, []byte(password))
-		tenant := ""
-		if user != nil {
-			tenant = user.TenantId
+	return &IdentityAuth{
+		IdentityToken: tok.Token,
+		ExpiresAt:     tok.ExpiresAt,
+		Superuser:     isSuperuser(id),
+		Memberships:   membershipInfos(id.Memberships),
+	}, nil
+}
+
+// SelectTenant exchanges a valid identity token for a tenant-scoped token pair
+// (ADR-033). The identity must hold an (enabled) membership in the tenant, unless
+// it is a superuser — which may enter any tenant with full authority, marked
+// actingAsSuperuser on the token for audit.
+func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string) (*TokenPair, error) {
+	claims, err := m.validator.ValidateIdentity(identityToken)
+	if err != nil {
+		return nil, ErrInvalidToken
+	}
+	id, err := m.iam.IdentityByEmail(ctx, claims.Email)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrInvalidToken
 		}
-		m.recordAuth(ctx, rdb.AuditOpLoginFailed, username, tenant)
+		return nil, err
+	}
+	if !id.Enabled {
+		return nil, ErrInvalidToken
+	}
+
+	su := isSuperuser(id)
+	mem := findMembership(id.Memberships, tenant)
+	if mem == nil && !su {
+		m.recordAuth(ctx, rdb.AuditOpLoginFailed, id.Email, tenant)
 		return nil, ErrInvalidCredentials
 	}
-	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
-		m.recordAuth(ctx, rdb.AuditOpLoginFailed, username, user.TenantId)
-		return nil, ErrInvalidCredentials
+
+	var roles, authorities []string
+	if mem != nil {
+		if !mem.Enabled {
+			return nil, ErrInvalidCredentials
+		}
+		roles = roleTokens(mem.TenantRoles)
+		authorities = mem.TenantAuthorities()
 	}
-	m.recordAuth(ctx, rdb.AuditOpLogin, user.Username, user.TenantId)
-	return m.issueTokens(ctx, user)
+	if su {
+		// Break-glass: a superuser acts in any tenant with full authority. The
+		// token carries actingAsSuperuser so the audit log shows a superuser acted.
+		authorities = []string{string(auth.AuthorityAll)}
+	}
+	m.recordAuth(ctx, rdb.AuditOpLogin, id.Email, tenant)
+	return m.issueTenantTokens(tenant, id.Email, roles, authorities, su)
 }
 
 // recordAuth writes an authentication audit event (ADR-019) best-effort: a
@@ -213,123 +293,134 @@ func (m *Manager) recordAuth(ctx context.Context, operation, actor, tenant strin
 	}
 }
 
-// Refresh exchanges a valid, unrevoked refresh token for a new token pair,
-// rotating the refresh token (the presented one is invalidated).
+// Refresh exchanges a valid, unrevoked tenant refresh token for a new pair,
+// rotating it. Authorities are re-resolved from the identity's current
+// membership, so a role change takes effect on the next refresh.
 func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
 	claims, err := m.validator.ValidateRefresh(refreshToken)
 	if err != nil {
 		return nil, ErrInvalidToken
 	}
-	// The token must still be present in the server-side store.
 	if _, err := m.refreshKV.Get(claims.ID); err != nil {
 		return nil, ErrInvalidToken
 	}
 	// Rotate: invalidate the presented token before minting a replacement.
 	_ = m.refreshKV.Delete(claims.ID)
 
-	// Confirm the account is still enabled (a disabled user cannot refresh).
-	user, err := m.lookupUser(ctx, claims.Username)
-	if err != nil {
-		return nil, err
-	}
-	if user == nil || !user.Enabled {
+	// The refresh token's subject is the identity email; the tenant is its claim.
+	id, err := m.iam.IdentityByEmail(ctx, claims.Username)
+	if err != nil || !id.Enabled {
 		return nil, ErrInvalidToken
 	}
-	m.recordAuth(ctx, rdb.AuditOpRefresh, user.Username, user.TenantId)
-	return m.issueTokens(ctx, user)
+	su := isSuperuser(id)
+	mem := findMembership(id.Memberships, claims.Tenant)
+	if mem == nil && !su {
+		return nil, ErrInvalidToken
+	}
+	var roles, authorities []string
+	if mem != nil {
+		if !mem.Enabled {
+			return nil, ErrInvalidToken
+		}
+		roles = roleTokens(mem.TenantRoles)
+		authorities = mem.TenantAuthorities()
+	}
+	if su {
+		authorities = []string{string(auth.AuthorityAll)}
+	}
+	m.recordAuth(ctx, rdb.AuditOpRefresh, id.Email, claims.Tenant)
+	return m.issueTenantTokens(claims.Tenant, id.Email, roles, authorities, su)
 }
 
-// lookupUser resolves a user by globally-unique username. This is the sole
-// sanctioned use of the tenant-unscoped system context (core.WithSystemContext):
-// login must find the user, and thereby the tenant, before any tenant is known.
-func (m *Manager) lookupUser(ctx context.Context, username string) (*model.User, error) {
-	var user model.User
-	err := m.db.DB(core.WithSystemContext(ctx)).Where("username = ?", username).First(&user).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &user, nil
-}
-
-// issueTokens mints an access + refresh token pair for the user and records the
-// refresh token's jti in the server-side store. The user's assigned roles are
-// expanded into their effective authorities and carried in the token claims
-// (ADR-008 RBAC), so a role change takes effect on the next login or refresh.
-func (m *Manager) issueTokens(ctx context.Context, user *model.User) (*TokenPair, error) {
-	roles, authorities, err := m.effectiveAuthorities(ctx, user)
-	if err != nil {
-		return nil, err
-	}
-
-	// Snapshot the issuer under the lock so a concurrent rotation cannot swap it
-	// mid-issue (the access and refresh tokens are then signed by one key).
+// issueTenantTokens mints a tenant access + refresh pair for a global identity
+// and records the refresh jti in the server-side store.
+func (m *Manager) issueTenantTokens(tenant, email string, roles, authorities []string, sudo bool) (*TokenPair, error) {
 	m.mu.RLock()
 	issuer := m.issuer
 	m.mu.RUnlock()
 
-	access, err := issuer.IssueAccess(user.TenantId, user.Username, roles, authorities, uuid.NewString())
+	access, err := issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString())
 	if err != nil {
 		return nil, err
 	}
-
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueRefresh(user.TenantId, user.Username, roles, authorities, refreshJti)
+	refresh, err := issuer.IssueRefresh(tenant, email, roles, authorities, refreshJti)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := m.refreshKV.Put(refreshJti, []byte(user.Username)); err != nil {
+	if _, err := m.refreshKV.Put(refreshJti, []byte(email)); err != nil {
 		return nil, err
 	}
-
 	return &TokenPair{AccessToken: access.Token, RefreshToken: refresh.Token, ExpiresAt: access.ExpiresAt}, nil
 }
 
-// seedBootstrapAdmin creates the configured admin user on first startup (when no
-// users exist), under a distributed lock so replicas seed exactly once.
-func (m *Manager) seedBootstrapAdmin(ctx context.Context) error {
+// seedSuperuser creates the superuser identity (system role `superuser`, authority
+// `*`) and a scaffold tenant membership (tenant-admin) on first startup, when no
+// identity exists, under a distributed lock so replicas seed exactly once. The
+// scaffold tenant keeps the tenant console usable until the admin console can
+// create the first tenant (ADR-033 phase 4, tenant-less bootstrap).
+func (m *Manager) seedSuperuser(ctx context.Context) error {
 	return m.locker.WithLock(ctx, m.ms.FunctionalArea, func(ctx context.Context) error {
-		var count int64
-		if err := m.db.DB(core.WithSystemContext(ctx)).Model(&model.User{}).Count(&count).Error; err != nil {
-			return err
-		}
-		if count > 0 {
-			return nil
-		}
-		hash, err := bcrypt.GenerateFromPassword([]byte(m.bootstrap.Password), bcrypt.DefaultCost)
+		n, err := m.iam.CountIdentities(ctx)
 		if err != nil {
 			return err
 		}
-		tctx := core.WithTenant(ctx, m.bootstrap.Tenant)
-		adminName := "Administrator"
-
-		// Seed the admin user, an "admin" role granting the super-authority, and
-		// the assignment in ONE transaction (review finding #8): otherwise a crash
-		// between the user insert and the role assignment leaves the count>0 guard
-		// satisfied while the admin holds no authorities — locked out permanently.
-		if err := m.db.DB(tctx).Transaction(func(tx *gorm.DB) error {
-			admin := model.User{Username: m.bootstrap.Username, Enabled: true, PasswordHash: string(hash)}
-			admin.TenantId = m.bootstrap.Tenant
-			if err := tx.Create(&admin).Error; err != nil {
-				return err
-			}
-			adminRole := model.Role{
-				Token:       "admin",
-				NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&adminName)},
-				Authorities: []string{string(auth.AuthorityAll)},
-			}
-			adminRole.TenantId = m.bootstrap.Tenant
-			if err := tx.Create(&adminRole).Error; err != nil {
-				return err
-			}
-			return tx.Model(&admin).Association("Roles").Append(&adminRole)
-		}); err != nil {
+		if n > 0 {
+			return nil
+		}
+		hash, err := bcrypt.GenerateFromPassword([]byte(m.bootstrap.SuperuserPassword), bcrypt.DefaultCost)
+		if err != nil {
 			return err
 		}
-		log.Warn().Str("username", m.bootstrap.Username).Str("tenant", m.bootstrap.Tenant).
-			Msg("Seeded bootstrap admin (role=admin, authority=*) with the default password — CHANGE IT IMMEDIATELY.")
+		email := normalizeEmail(m.bootstrap.SuperuserEmail)
+		all := []string{string(auth.AuthorityAll)}
+		if err := m.iam.SeedSuperuser(ctx, email, string(hash), m.bootstrap.Tenant, all, all); err != nil {
+			return err
+		}
+		log.Warn().Str("email", email).Str("tenant", m.bootstrap.Tenant).
+			Msg("Seeded superuser (system role=superuser, authority=*) + scaffold tenant-admin membership with the default password — CHANGE IT IMMEDIATELY.")
 		return nil
 	})
+}
+
+// normalizeEmail lower-cases and trims an email so lookups and uniqueness are
+// case-insensitive.
+func normalizeEmail(e string) string { return strings.ToLower(strings.TrimSpace(e)) }
+
+// roleTokens projects roles to their token strings.
+func roleTokens(roles []iam.Role) []string {
+	out := make([]string, 0, len(roles))
+	for _, r := range roles {
+		out = append(out, r.Token)
+	}
+	return out
+}
+
+// isSuperuser reports whether the identity holds the superuser system role.
+func isSuperuser(id *iam.Identity) bool {
+	for _, r := range id.SystemRoles {
+		if r.Token == iam.SuperuserRoleToken {
+			return true
+		}
+	}
+	return false
+}
+
+// findMembership returns the identity's membership in the tenant, or nil.
+func findMembership(ms []iam.Membership, tenant string) *iam.Membership {
+	for i := range ms {
+		if ms[i].TenantId == tenant {
+			return &ms[i]
+		}
+	}
+	return nil
+}
+
+// membershipInfos projects memberships to the login response shape.
+func membershipInfos(ms []iam.Membership) []MembershipInfo {
+	out := make([]MembershipInfo, 0, len(ms))
+	for _, mm := range ms {
+		out = append(out, MembershipInfo{Tenant: mm.TenantId, Roles: roleTokens(mm.TenantRoles)})
+	}
+	return out
 }
