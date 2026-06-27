@@ -168,11 +168,29 @@ local registry, and runs [`build-images.sh`](build-images.sh). That script uses
 **`ko`** (the repo's image tool — services use local `replace` directives that
 Dockerfiles can't resolve, so CI builds with ko too) with `--bare`, so each image
 is named exactly what the Helm chart pulls: `{REGISTRY}/{area}:{TAG}` for services
-and `{REGISTRY}/devicechain-operator:{TAG}` for the operator.
+and `{REGISTRY}/operator:{TAG}` for the operator. The web console is a static
+nginx SPA (not a Go service), so `build-images.sh` builds it with `docker` as
+`{REGISTRY}/frontend:{TAG}`.
 
 The `dcctl` CLI follows the same model: `dcctl bootstrap local <inst>` deploys
 published images at the default version; `--version x.y.z` overrides it, and
 `--build` is the developer build-from-source path.
+
+### Fast inner loop — bounce one image
+
+To iterate on a single service or the console without a full rebuild/redeploy,
+[`bounce.sh`](bounce.sh) rebuilds just that image and rolls it onto the running
+instance (it pushes a unique tag and `kubectl set image`s the deployment, so the
+new build is always pulled past the chart's `IfNotPresent` policy):
+
+```bash
+deploy/local/bounce.sh frontend            # ~6s: rebuild + roll the web console
+deploy/local/bounce.sh device-management   # one service
+```
+
+For active **UI** work the faster loop is `npm run dev` (Vite HMR) pointed at the
+instance ingress — see [`frontend/.env.example`](../../frontend/.env.example).
+Use `bounce.sh` when you need to validate the actual served artifact.
 
 ---
 

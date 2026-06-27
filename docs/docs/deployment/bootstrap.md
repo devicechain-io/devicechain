@@ -88,8 +88,15 @@ pipeline, chart, and operator are identical.
 | `--profile <profile>` | Functional-area profile: `full` (default), `telemetry`, or `ingest-only`. |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |
 | `--registry` / `--version` | Override the image registry / tag (defaults: published `ghcr.io/devicechain-io`, or `localhost:5000` + `dev` with `--build`). |
+| `--host <name>` | Ingress host to expose the instance on (default `devicechain.local`). Use `localhost` on a local cluster to reach the console with **no `/etc/hosts` edit**. |
+| `--no-tls` | Serve plain HTTP instead of a self-signed cert. With `--host localhost`, a zero-config `http://localhost/` (no cert warning). |
 | `--dry-run` | Print what each step would do without changing anything. |
 | `--skip-preflight` | Skip the environment checks. |
+
+:::tip Zero-config local URL
+`dcctl bootstrap local my-instance --build --host localhost --no-tls` exposes the
+console at `http://localhost/` — no hosts-file entry and no certificate warning.
+:::
 
 ## After bootstrap
 

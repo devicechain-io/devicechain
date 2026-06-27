@@ -20,6 +20,8 @@ var (
 	bootstrapRegistry      string
 	bootstrapVersion       string
 	bootstrapBuild         bool
+	bootstrapHost          string
+	bootstrapNoTLS         bool
 )
 
 // bootstrapCmd provisions a usable DeviceChain instance on a target provider.
@@ -52,6 +54,8 @@ var bootstrapCmd = &cobra.Command{
 			ImageRegistry: bootstrapRegistry,
 			ImageVersion:  bootstrapVersion,
 			BuildImages:   bootstrapBuild,
+			IngressHost:   bootstrapHost,
+			NoTLS:         bootstrapNoTLS,
 		}
 
 		ctx := cmd.Context()
@@ -70,6 +74,8 @@ var bootstrapCmd = &cobra.Command{
 			ImageRegistry: opts.ImageRegistry,
 			ImageVersion:  opts.ImageVersion,
 			BuildImages:   opts.BuildImages,
+			IngressHost:   opts.IngressHost,
+			NoTLS:         opts.NoTLS,
 			Values:        map[string]string{},
 		}
 		return bootstrap.NewDefaultPipeline().Run(ctx, st)
@@ -86,6 +92,8 @@ func init() {
 	bootstrapCmd.Flags().StringVar(&bootstrapRegistry, "registry", "", "image registry to deploy from (default: published ghcr.io/devicechain-io, or localhost:5000 with --build)")
 	bootstrapCmd.Flags().StringVar(&bootstrapVersion, "version", "", "image version/tag to deploy (default: the published release version, or 'dev' with --build)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapBuild, "build", false, "build images from source into a local registry (developer path; requires source + ko)")
+	bootstrapCmd.Flags().StringVar(&bootstrapHost, "host", "", "ingress host to expose the instance on (default devicechain.local; use 'localhost' for a local cluster to skip the /etc/hosts edit)")
+	bootstrapCmd.Flags().BoolVar(&bootstrapNoTLS, "no-tls", false, "serve plain HTTP instead of a self-signed cert (with --host localhost, a zero-config http://localhost/)")
 
 	rootCmd.AddCommand(bootstrapCmd)
 }

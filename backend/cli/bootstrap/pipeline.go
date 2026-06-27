@@ -45,7 +45,11 @@ type State struct {
 	ImageRegistry string
 	ImageVersion  string
 	BuildImages   bool
-	Values        map[string]string
+	// IngressHost is the host the instance ingress is exposed on; NoTLS serves
+	// plain HTTP instead of a self-signed cert. See Options for the UX rationale.
+	IngressHost string
+	NoTLS       bool
+	Values      map[string]string
 }
 
 // Step is a single named unit of bootstrap work.
