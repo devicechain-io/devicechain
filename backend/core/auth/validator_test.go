@@ -154,3 +154,56 @@ func TestKeyPEM_RoundTrip(t *testing.T) {
 		t.Fatalf("NewValidatorFromPEM: %v", err)
 	}
 }
+
+func TestIssueIdentity_RoundTripAndTierIsolation(t *testing.T) {
+	key := mustKey(t)
+	iss := NewIssuer(key, "test", time.Minute, time.Hour)
+	v := NewValidator(&key.PublicKey)
+
+	// An identity token carries no tenant but a system authority, and round-trips
+	// through ValidateIdentity.
+	idt, err := iss.IssueIdentity("alice@example.com", []string{"superuser"}, []string{string(AuthorityAll)}, "jti-id")
+	if err != nil {
+		t.Fatalf("IssueIdentity: %v", err)
+	}
+	claims, err := v.ValidateIdentity(idt.Token)
+	if err != nil {
+		t.Fatalf("ValidateIdentity: %v", err)
+	}
+	if claims.Tenant != "" || claims.Email != "alice@example.com" || claims.TokenType != TokenTypeIdentity {
+		t.Fatalf("unexpected identity claims: %+v", claims)
+	}
+
+	// Tier isolation: the data-plane Validate must reject an identity token (wrong
+	// type, and it has no tenant claim either).
+	if _, err := v.Validate(idt.Token); err == nil {
+		t.Fatal("data-plane Validate accepted an identity token")
+	}
+
+	// And ValidateIdentity must reject a tenant access token (wrong type).
+	at, err := iss.IssueAccess("tenant-a", "alice", nil, nil, "jti-a")
+	if err != nil {
+		t.Fatalf("IssueAccess: %v", err)
+	}
+	if _, err := v.ValidateIdentity(at.Token); err == nil {
+		t.Fatal("ValidateIdentity accepted a tenant access token")
+	}
+}
+
+func TestIssueTenantAccess_CarriesEmailAndSudo(t *testing.T) {
+	key := mustKey(t)
+	iss := NewIssuer(key, "test", time.Minute, time.Hour)
+	v := NewValidator(&key.PublicKey)
+
+	tok, err := iss.IssueTenantAccess("tenant-a", "su@example.com", []string{"superuser"}, []string{string(AuthorityAll)}, true, "jti-su")
+	if err != nil {
+		t.Fatalf("IssueTenantAccess: %v", err)
+	}
+	claims, err := v.Validate(tok.Token)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if claims.Tenant != "tenant-a" || claims.Email != "su@example.com" || !claims.ActingAsSuperuser {
+		t.Fatalf("unexpected tenant claims: %+v", claims)
+	}
+}

@@ -5,12 +5,17 @@ package auth
 
 import "github.com/golang-jwt/jwt/v5"
 
-// Token type values carried in the "typ" claim. Access tokens authorize API
-// calls; refresh tokens are exchanged at the user-management /refresh mutation
-// for a new access token and are never accepted by the request middleware.
+// Token type values carried in the "typ" claim. Access tokens authorize
+// tenant-scoped data-plane calls; refresh tokens are exchanged at the
+// user-management /refresh mutation and never accepted by the request
+// middleware. Identity tokens are the instance-scoped tier (ADR-033): they carry
+// no tenant, carry the subject's *system* authorities, and authorize the admin
+// API + the tenant-selection exchange — the data-plane validator rejects them
+// precisely because they have no tenant claim.
 const (
-	TokenTypeAccess  = "access"
-	TokenTypeRefresh = "refresh"
+	TokenTypeAccess   = "access"
+	TokenTypeRefresh  = "refresh"
+	TokenTypeIdentity = "identity"
 )
 
 // Claims is the DeviceChain JWT payload (ADR-008). The Tenant claim is the
@@ -23,6 +28,13 @@ type Claims struct {
 	Tenant string `json:"tenant"`
 	// Username is the human-readable subject identifier (mirrors sub).
 	Username string `json:"username"`
+	// Email is the global identity's email (ADR-033). Carried on identity tokens
+	// (and tenant tokens minted from one) as the stable cross-tenant principal id.
+	Email string `json:"email,omitempty"`
+	// ActingAsSuperuser marks a tenant token minted for a superuser who selected a
+	// tenant they hold no membership in (break-glass). Carried for audit so the
+	// log shows a superuser acted, not a phantom tenant-admin.
+	ActingAsSuperuser bool `json:"sudo,omitempty"`
 	// Roles are the subject's assigned role names. Carried for display/audit;
 	// enforcement is on Authorities, not role names (ADR-008 RBAC).
 	Roles []string `json:"roles,omitempty"`

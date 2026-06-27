@@ -59,32 +59,76 @@ type IssuedToken struct {
 	ExpiresAt time.Time
 }
 
-// IssueAccess mints a short-lived access token for the subject in the tenant.
-// roles are the subject's assigned role names (carried for display/audit);
-// authorities are their expanded effective capabilities (what resolvers gate on).
+// tokenSpec is the full set of inputs a signed token carries. Bundled into a
+// struct so the issue helpers stay readable as the claim set grows (ADR-033 added
+// the identity tier + the superuser marker).
+type tokenSpec struct {
+	tokenType         string
+	tenant            string
+	username          string
+	email             string
+	roles             []string
+	authorities       []string
+	actingAsSuperuser bool
+	jti               string
+	ttl               time.Duration
+}
+
+// IssueAccess mints a short-lived tenant-scoped access token (the data-plane
+// tier). roles are the subject's assigned role names (display/audit); authorities
+// are their expanded effective capabilities (what resolvers gate on).
 func (i *Issuer) IssueAccess(tenant, username string, roles, authorities []string, jti string) (IssuedToken, error) {
-	return i.sign(TokenTypeAccess, tenant, username, roles, authorities, jti, i.accessTTL)
+	return i.sign(tokenSpec{
+		tokenType: TokenTypeAccess, tenant: tenant, username: username,
+		roles: roles, authorities: authorities, jti: jti, ttl: i.accessTTL,
+	})
 }
 
-// IssueRefresh mints a long-lived refresh token. The caller persists jti in the
-// refresh-token store (NATS KV) so the token can be validated and revoked.
+// IssueTenantAccess mints a tenant-scoped access token for a global identity
+// (ADR-033), carrying its email and, when a superuser selected a tenant it holds
+// no membership in, the break-glass actingAsSuperuser marker.
+func (i *Issuer) IssueTenantAccess(tenant, email string, roles, authorities []string, actingAsSuperuser bool, jti string) (IssuedToken, error) {
+	return i.sign(tokenSpec{
+		tokenType: TokenTypeAccess, tenant: tenant, username: email, email: email,
+		roles: roles, authorities: authorities, actingAsSuperuser: actingAsSuperuser,
+		jti: jti, ttl: i.accessTTL,
+	})
+}
+
+// IssueRefresh mints a long-lived tenant-scoped refresh token. The caller
+// persists jti in the refresh-token store (NATS KV) so it can be revoked.
 func (i *Issuer) IssueRefresh(tenant, username string, roles, authorities []string, jti string) (IssuedToken, error) {
-	return i.sign(TokenTypeRefresh, tenant, username, roles, authorities, jti, i.refreshTTL)
+	return i.sign(tokenSpec{
+		tokenType: TokenTypeRefresh, tenant: tenant, username: username,
+		roles: roles, authorities: authorities, jti: jti, ttl: i.refreshTTL,
+	})
 }
 
-func (i *Issuer) sign(tokenType, tenant, username string, roles, authorities []string, jti string, ttl time.Duration) (IssuedToken, error) {
+// IssueIdentity mints an instance-scoped identity token (ADR-033): no tenant, the
+// subject's *system* authorities, used for the admin API and the tenant-selection
+// exchange. The data-plane validator rejects it because it carries no tenant.
+func (i *Issuer) IssueIdentity(email string, roles, authorities []string, jti string) (IssuedToken, error) {
+	return i.sign(tokenSpec{
+		tokenType: TokenTypeIdentity, username: email, email: email,
+		roles: roles, authorities: authorities, jti: jti, ttl: i.accessTTL,
+	})
+}
+
+func (i *Issuer) sign(spec tokenSpec) (IssuedToken, error) {
 	now := time.Now()
-	expires := now.Add(ttl)
+	expires := now.Add(spec.ttl)
 	claims := &Claims{
-		Tenant:      tenant,
-		Username:    username,
-		Roles:       roles,
-		Authorities: authorities,
-		TokenType:   tokenType,
+		Tenant:            spec.tenant,
+		Username:          spec.username,
+		Email:             spec.email,
+		Roles:             spec.roles,
+		Authorities:       spec.authorities,
+		ActingAsSuperuser: spec.actingAsSuperuser,
+		TokenType:         spec.tokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    i.issuer,
-			Subject:   username,
-			ID:        jti,
+			Subject:   spec.username,
+			ID:        spec.jti,
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expires),
@@ -96,5 +140,5 @@ func (i *Issuer) sign(tokenType, tenant, username string, roles, authorities []s
 	if err != nil {
 		return IssuedToken{}, err
 	}
-	return IssuedToken{Token: signed, ID: jti, ExpiresAt: expires}, nil
+	return IssuedToken{Token: signed, ID: spec.jti, ExpiresAt: expires}, nil
 }
