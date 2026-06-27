@@ -12,7 +12,7 @@ import (
 // resources and that the image override was applied (the placeholder
 // "controller" image is rewritten to the requested reference).
 func TestRenderOperatorContents(t *testing.T) {
-	out, err := RenderOperator("localhost:5000/devicechain-operator:dev")
+	out, err := RenderOperator("localhost:5000/operator:dev")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestRenderOperatorContents(t *testing.T) {
 		"kind: Deployment",
 		"namespace: dc-k8s-system",
 		"name: dc-k8s-controller-manager",
-		"image: localhost:5000/devicechain-operator:dev",
+		"image: localhost:5000/operator:dev",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered operator manifests missing %q", want)
@@ -38,7 +38,7 @@ func TestRenderOperatorContents(t *testing.T) {
 // must be emitted before the namespaced resources that depend on them, so the
 // stream applies cleanly without kubectl's kind-sorting.
 func TestRenderOperatorOrdering(t *testing.T) {
-	out, err := RenderOperator("localhost:5000/devicechain-operator:dev")
+	out, err := RenderOperator("localhost:5000/operator:dev")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,8 +60,8 @@ func TestRenderOperatorOrdering(t *testing.T) {
 // TestSplitImageRef covers the registry-port edge case.
 func TestSplitImageRef(t *testing.T) {
 	cases := []struct{ in, name, tag string }{
-		{"localhost:5000/devicechain-operator:dev", "localhost:5000/devicechain-operator", "dev"},
-		{"ghcr.io/devicechain-io/devicechain-operator:1.2.3", "ghcr.io/devicechain-io/devicechain-operator", "1.2.3"},
+		{"localhost:5000/operator:dev", "localhost:5000/operator", "dev"},
+		{"ghcr.io/devicechain-io/operator:1.2.3", "ghcr.io/devicechain-io/operator", "1.2.3"},
 		{"controller", "controller", ""},
 		{"localhost:5000/op", "localhost:5000/op", ""},
 	}
