@@ -1,0 +1,55 @@
+# Admin (instance-scoped) GraphQL API — ADR-033.
+#
+# Served at /admin/graphql and authenticated with an *identity*-tier token (the
+# tenant-less system token minted by login), not a tenant access token. Every
+# operation additionally requires a specific system authority; a superuser holds
+# the super-authority "*" and so passes them all. This API is cross-tenant: it
+# administers the global identity directory, the tenant registry, the role
+# catalog, and the per-tenant memberships.
+
+# A global, email-keyed principal (ADR-033).
+type AdminIdentity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    email: String!
+    firstName: String
+    lastName: String
+    enabled: Boolean!
+    # System role tokens held by this identity (e.g. "superuser").
+    systemRoles: [String!]!
+    # The tenants this identity can act in, with its per-tenant roles.
+    memberships: [AdminMembership!]!
+}
+
+# An identity's binding to a single tenant, with its tenant-scoped role tokens.
+type AdminMembership {
+    tenant: String!
+    enabled: Boolean!
+    roles: [String!]!
+}
+
+# A control-plane tenant record (ADR-033): a registry entry, not a provisioned
+# resource. Config is freeform JSON exposed as a string for now.
+type AdminTenant {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    token: String!
+    name: String
+    enabled: Boolean!
+}
+
+# Admin queries. Each requires a system authority (superusers hold "*").
+type Query {
+    # Liveness placeholder.
+    ping: String!
+    # List the full identity directory (requires user:read).
+    identities: [AdminIdentity!]!
+    # List every tenant (requires tenant:read).
+    tenants: [AdminTenant!]!
+}
+
+schema {
+    query: Query
+}

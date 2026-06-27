@@ -25,6 +25,30 @@ const (
 	ContextApiKey ContextKey = "api"
 )
 
+// authPolicy decides how a handler authenticates a request before dispatching to
+// its schema. The two policies map to the two token tiers (ADR-033):
+//
+//   - tenantPolicy (data plane): a bearer token is optional; when present it is
+//     validated as a tenant access token and its tenant stamped into context. An
+//     absent token runs unauthenticated so open entry points (the login mutation)
+//     stay reachable; every tenant-scoped operation still fails closed at the DB.
+//   - identityPolicy (admin plane): a bearer token is required and validated as an
+//     instance-scoped identity token; its claims are attached without a tenant, so
+//     admin operations run in the system context, across tenants.
+type authPolicy struct {
+	// required rejects a request that carries no bearer token (401).
+	required bool
+	// validate verifies a token of this policy's tier and returns its claims.
+	validate func(*auth.Validator, string) (*auth.Claims, error)
+	// setTenant stamps the claims' tenant into the request context (data plane).
+	setTenant bool
+}
+
+var (
+	tenantPolicy   = authPolicy{required: false, validate: (*auth.Validator).Validate, setTenant: true}
+	identityPolicy = authPolicy{required: true, validate: (*auth.Validator).ValidateIdentity, setTenant: false}
+)
+
 // Adds extra context to http request.
 type HttpHandler struct {
 	Schema           *graphql.Schema
@@ -36,19 +60,32 @@ type HttpHandler struct {
 	// nil, so a presented token is rejected (never silently trusted) and the
 	// service's readiness probe keeps external traffic away in the first place.
 	Gate *core.ReadinessGate
+
+	policy authPolicy
 }
 
-// Create new http handler. gate may be nil only for a deliberately
-// unauthenticated server (tests); production services pass the microservice
-// readiness gate.
+// Create new http handler for the data plane. gate may be nil only for a
+// deliberately unauthenticated server (tests); production services pass the
+// microservice readiness gate.
 func NewHttpHandler(schema *graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *HttpHandler {
-	handler := &HttpHandler{
+	return newHandler(schema, providers, gate, tenantPolicy)
+}
+
+// NewAdminHttpHandler creates the instance-scoped admin handler (ADR-033): it
+// requires an identity-tier token and runs in the system context (no tenant).
+// Resolvers still gate each operation on a specific system authority.
+func NewAdminHttpHandler(schema *graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *HttpHandler {
+	return newHandler(schema, providers, gate, identityPolicy)
+}
+
+func newHandler(schema *graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate, policy authPolicy) *HttpHandler {
+	return &HttpHandler{
 		Schema:           schema,
 		Relay:            &relay.Handler{Schema: schema},
 		ContextProviders: providers,
 		Gate:             gate,
+		policy:           policy,
 	}
-	return handler
 }
 
 // validator returns the live validator, or nil when the gate is absent or still
@@ -66,30 +103,40 @@ func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(context.WithValue(r.Context(), key, value))
 	}
 
-	// Authenticate via the verified JWT tenant claim (ADR-008), which replaces
-	// the former trusted X-DC-Tenant gateway header. A *present* token is always
-	// verified: an invalid one is rejected with 401 rather than silently
-	// ignored. An *absent* token is allowed through with no tenant so that
-	// unauthenticated entry points (e.g. the user-management login mutation) can
-	// run; every tenant-scoped operation still fails closed at the DB layer when
-	// no tenant resolves.
-	if token, ok := bearerToken(r); ok {
-		validator := h.validator()
-		if validator == nil {
-			http.Error(w, "authentication is not available", http.StatusUnauthorized)
+	// Authenticate via the verified JWT (ADR-008), which replaces the former
+	// trusted X-DC-Tenant gateway header: a verified token's claims cannot be
+	// forged because the signature covers them. The policy decides whether a
+	// token is required, which tier it is validated as, and whether its tenant is
+	// stamped into context (see authPolicy). A *present* token is always verified
+	// — an invalid one is rejected with 401, never silently ignored.
+	token, ok := bearerToken(r)
+	if !ok {
+		if h.policy.required {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}
-		claims, err := validator.Validate(token)
-		if err != nil {
-			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
-			return
-		}
-		ctx := core.WithTenant(r.Context(), claims.Tenant)
-		ctx = auth.WithClaims(ctx, claims)
-		r = r.WithContext(ctx)
+		// Data plane: run unauthenticated so open entry points (the login
+		// mutation) stay reachable; tenant-scoped operations fail closed at the DB.
+		h.Relay.ServeHTTP(w, r)
+		return
 	}
 
-	h.Relay.ServeHTTP(w, r)
+	validator := h.validator()
+	if validator == nil {
+		http.Error(w, "authentication is not available", http.StatusUnauthorized)
+		return
+	}
+	claims, err := h.policy.validate(validator, token)
+	if err != nil {
+		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+		return
+	}
+	ctx := r.Context()
+	if h.policy.setTenant {
+		ctx = core.WithTenant(ctx, claims.Tenant)
+	}
+	ctx = auth.WithClaims(ctx, claims)
+	h.Relay.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // bearerToken extracts the access token from the Authorization header. It

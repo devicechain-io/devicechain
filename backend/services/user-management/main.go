@@ -14,8 +14,10 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-user-management/admin"
 	"github.com/devicechain-io/dc-user-management/config"
 	"github.com/devicechain-io/dc-user-management/graphql"
+	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/identity"
 	"github.com/devicechain-io/dc-user-management/schema"
 )
@@ -137,7 +139,26 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
+	// Instance-scoped admin API (ADR-033), served on the shared http server at
+	// /admin/graphql. It validates identity-tier tokens (not tenant access tokens)
+	// and runs in the system context; its resolvers gate each operation on a
+	// system authority. Registered here, before the GraphQL server starts in
+	// afterMicroserviceStarted.
+	registerAdminHandler()
+
 	return nil
+}
+
+// registerAdminHandler parses the admin schema and registers its identity-token
+// handler on the default mux (ADR-033). The admin Service shares the instance
+// RdbManager via its own iam store wrapper.
+func registerAdminHandler() {
+	adminSvc := admin.NewService(iam.NewStore(RdbManager))
+	adminProviders := map[gqlcore.ContextKey]interface{}{
+		graphql.ContextAdminKey: adminSvc,
+	}
+	adminSchema := gql.MustParseSchema(graphql.AdminSchemaContent, &graphql.AdminResolver{})
+	http.Handle("/admin/graphql", gqlcore.NewAdminHttpHandler(adminSchema, adminProviders, Microservice.Readiness))
 }
 
 // registerKeyHandlers serves the instance signing keys on the shared http server
