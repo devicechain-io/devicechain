@@ -30,7 +30,7 @@ type AdminMembership {
 }
 
 # A control-plane tenant record (ADR-033): a registry entry, not a provisioned
-# resource. Config is freeform JSON exposed as a string for now.
+# resource. Config is freeform JSON exposed as a JSON-encoded string.
 type AdminTenant {
     id: ID!
     createdAt: String
@@ -38,6 +38,52 @@ type AdminTenant {
     token: String!
     name: String
     enabled: Boolean!
+    # Freeform per-tenant config as a JSON object string (null when unset).
+    config: String
+}
+
+# A globally-defined, named bundle of authorities (ADR-008 RBAC / ADR-033). Scope
+# is "system" (assigned to identities, gates the admin API) or "tenant" (assigned
+# to memberships, gates the data plane).
+type AdminRole {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    scope: String!
+    token: String!
+    name: String
+    description: String
+    authorities: [String!]!
+}
+
+# Data to create a role. scope is "system" or "tenant"; each authority must name a
+# known capability (e.g. "device:write", "tenant:read", or "*").
+input AdminRoleCreateRequest {
+    scope: String!
+    token: String!
+    name: String
+    description: String
+    authorities: [String!]!
+}
+
+# Data to update a role (its scope + token identity is fixed).
+input AdminRoleUpdateRequest {
+    name: String
+    description: String
+    authorities: [String!]!
+}
+
+# Data to create a tenant. config is an optional JSON object string.
+input AdminTenantCreateRequest {
+    token: String!
+    name: String
+    config: String
+}
+
+# Data to update a tenant (its token is fixed).
+input AdminTenantUpdateRequest {
+    name: String
+    config: String
 }
 
 # Data required to create a global identity. Each system role must name an
@@ -59,6 +105,8 @@ type Query {
     identities: [AdminIdentity!]!
     # List every tenant (requires tenant:read).
     tenants: [AdminTenant!]!
+    # List the role catalog, optionally filtered to a scope (requires role:read).
+    roles(scope: String): [AdminRole!]!
 }
 
 # Admin mutations. Identity + membership administration requires user:write
@@ -83,6 +131,24 @@ type Mutation {
     setMembershipEnabled(email: String!, tenant: String!, enabled: Boolean!): AdminIdentity!
     # Remove an identity's membership in a tenant.
     removeMembership(email: String!, tenant: String!): AdminIdentity!
+
+    # Create a role granting a set of authorities (requires role:write).
+    createRole(request: AdminRoleCreateRequest!): AdminRole!
+    # Update a role by scope + token (requires role:write).
+    updateRole(scope: String!, token: String!, request: AdminRoleUpdateRequest!): AdminRole!
+    # Delete a role by scope + token; returns whether one was removed. The
+    # superuser system role is protected (requires role:write).
+    deleteRole(scope: String!, token: String!): Boolean!
+
+    # Create a tenant, enabled by default (requires tenant:write).
+    createTenant(request: AdminTenantCreateRequest!): AdminTenant!
+    # Update a tenant's name + config by token (requires tenant:write).
+    updateTenant(token: String!, request: AdminTenantUpdateRequest!): AdminTenant!
+    # Enable or disable a tenant (requires tenant:write).
+    setTenantEnabled(token: String!, enabled: Boolean!): AdminTenant!
+    # Delete a tenant by token; returns whether one was removed. Rejected if the
+    # tenant still has memberships (requires tenant:write).
+    deleteTenant(token: String!): Boolean!
 }
 
 schema {

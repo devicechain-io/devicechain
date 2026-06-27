@@ -216,6 +216,80 @@ func (s *Store) RoleByScopeToken(ctx context.Context, scope RoleScope, token str
 	return &r, nil
 }
 
+// ListRoles returns the role catalog, optionally filtered to a single scope,
+// ordered by scope then token for a stable listing.
+func (s *Store) ListRoles(ctx context.Context, scope *RoleScope) ([]Role, error) {
+	q := s.sys(ctx).Order("scope").Order("token")
+	if scope != nil {
+		q = q.Where("scope = ?", *scope)
+	}
+	var roles []Role
+	err := q.Find(&roles).Error
+	return roles, err
+}
+
+// CreateRole inserts a new role; a duplicate (scope, token) violates the unique
+// index and surfaces as an error.
+func (s *Store) CreateRole(ctx context.Context, r *Role) error {
+	return s.sys(ctx).Create(r).Error
+}
+
+// UpdateRole persists the mutable fields of an already-loaded role (name,
+// description, authorities). Save writes by primary key.
+func (s *Store) UpdateRole(ctx context.Context, r *Role) error {
+	return s.sys(ctx).Save(r).Error
+}
+
+// DeleteRole clears the role's assignment join rows (from both the identity
+// system-role and membership tenant-role join tables) and hard-deletes it, so a
+// deleted role leaves no dangling assignment. The join-table names match the
+// many2many tags on Identity.SystemRoles / Membership.TenantRoles; like every
+// other unqualified table reference here they resolve via the connection's
+// schema search path.
+func (s *Store) DeleteRole(ctx context.Context, r *Role) error {
+	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM iam_identity_system_roles WHERE role_id = ?", r.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("DELETE FROM iam_membership_tenant_roles WHERE role_id = ?", r.ID).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Delete(r).Error
+	})
+}
+
+// CreateTenant inserts a new control-plane tenant; a duplicate token violates the
+// unique index.
+func (s *Store) CreateTenant(ctx context.Context, t *Tenant) error {
+	return s.sys(ctx).Create(t).Error
+}
+
+// UpdateTenant persists the mutable fields of an already-loaded tenant (name,
+// config). Save writes by primary key.
+func (s *Store) UpdateTenant(ctx context.Context, t *Tenant) error {
+	return s.sys(ctx).Save(t).Error
+}
+
+// SetTenantEnabled flips a tenant's enabled flag in place.
+func (s *Store) SetTenantEnabled(ctx context.Context, t *Tenant, enabled bool) error {
+	return s.sys(ctx).Model(t).Update("enabled", enabled).Error
+}
+
+// DeleteTenant hard-deletes a tenant row. The caller is responsible for ensuring
+// no memberships still reference it (see CountMembershipsInTenant).
+func (s *Store) DeleteTenant(ctx context.Context, t *Tenant) error {
+	return s.sys(ctx).Unscoped().Delete(t).Error
+}
+
+// CountMembershipsInTenant returns how many memberships reference a tenant — the
+// guard the admin uses before deleting a tenant so it cannot orphan a person's
+// access.
+func (s *Store) CountMembershipsInTenant(ctx context.Context, tenant string) (int64, error) {
+	var n int64
+	err := s.sys(ctx).Model(&Membership{}).Where("tenant_id = ?", tenant).Count(&n).Error
+	return n, err
+}
+
 // AddMembership binds an identity to a tenant with the given (already-resolved)
 // tenant roles.
 func (s *Store) AddMembership(ctx context.Context, identityID uint, tenantID string, roles []Role) (*Membership, error) {
