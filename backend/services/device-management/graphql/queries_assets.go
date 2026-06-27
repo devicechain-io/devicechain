@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	_ "embed"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -14,6 +15,10 @@ import (
 func (r *SchemaResolver) AssetTypesById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*AssetTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids, err := r.asUintIds(args.Ids)
 	if err != nil {
@@ -41,6 +46,10 @@ func (r *SchemaResolver) AssetTypesById(ctx context.Context, args struct {
 func (r *SchemaResolver) AssetTypesByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*AssetTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.AssetTypesByToken(ctx, args.Tokens)
 	if err != nil {
@@ -63,6 +72,10 @@ func (r *SchemaResolver) AssetTypesByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) AssetTypes(ctx context.Context, args struct {
 	Criteria model.AssetTypeSearchCriteria
 }) (*AssetTypeSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.AssetTypes(ctx, args.Criteria)
 	if err != nil {
@@ -81,6 +94,10 @@ func (r *SchemaResolver) AssetTypes(ctx context.Context, args struct {
 func (r *SchemaResolver) AssetsById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*AssetResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids, err := r.asUintIds(args.Ids)
 	if err != nil {
@@ -107,6 +124,10 @@ func (r *SchemaResolver) AssetsById(ctx context.Context, args struct {
 func (r *SchemaResolver) AssetsByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*AssetResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.AssetsByToken(ctx, args.Tokens)
 	if err != nil {
@@ -129,6 +150,10 @@ func (r *SchemaResolver) AssetsByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) Assets(ctx context.Context, args struct {
 	Criteria model.AssetSearchCriteria
 }) (*AssetSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.Assets(ctx, args.Criteria)
 	if err != nil {
@@ -147,6 +172,10 @@ func (r *SchemaResolver) Assets(ctx context.Context, args struct {
 func (r *SchemaResolver) AssetGroupsById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*AssetGroupResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids, err := r.asUintIds(args.Ids)
 	if err != nil {
@@ -173,6 +202,10 @@ func (r *SchemaResolver) AssetGroupsById(ctx context.Context, args struct {
 func (r *SchemaResolver) AssetGroupsByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*AssetGroupResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.AssetGroupsByToken(ctx, args.Tokens)
 	if err != nil {
@@ -195,6 +228,10 @@ func (r *SchemaResolver) AssetGroupsByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) AssetGroups(ctx context.Context, args struct {
 	Criteria model.AssetGroupSearchCriteria
 }) (*AssetGroupSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.AssetGroups(ctx, args.Criteria)
 	if err != nil {

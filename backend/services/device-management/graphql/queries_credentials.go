@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	_ "embed"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -14,6 +15,10 @@ import (
 func (r *SchemaResolver) DeviceCredentialsById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*DeviceCredentialResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids, err := r.asUintIds(args.Ids)
 	if err != nil {
@@ -40,6 +45,10 @@ func (r *SchemaResolver) DeviceCredentialsById(ctx context.Context, args struct 
 func (r *SchemaResolver) DeviceCredentialsByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*DeviceCredentialResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.DeviceCredentialsByToken(ctx, args.Tokens)
 	if err != nil {
@@ -62,6 +71,10 @@ func (r *SchemaResolver) DeviceCredentialsByToken(ctx context.Context, args stru
 func (r *SchemaResolver) DeviceCredentials(ctx context.Context, args struct {
 	Criteria model.DeviceCredentialSearchCriteria
 }) (*DeviceCredentialSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.DeviceCredentials(ctx, args.Criteria)
 	if err != nil {

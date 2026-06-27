@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"errors"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -16,6 +17,10 @@ import (
 func (r *SchemaResolver) CreateProvisioningProfile(ctx context.Context, args struct {
 	Request *model.ProvisioningProfileCreateRequest
 }) (*ProvisioningProfileResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateProvisioningProfile(ctx, args.Request)
 	if err != nil {
@@ -29,6 +34,10 @@ func (r *SchemaResolver) UpdateProvisioningProfile(ctx context.Context, args str
 	Token   string
 	Request *model.ProvisioningProfileCreateRequest
 }) (*ProvisioningProfileResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateProvisioningProfile(ctx, args.Token, args.Request)
 	if err != nil {
@@ -72,6 +81,10 @@ func sanitizeProvisioningError(err error) error {
 func (r *SchemaResolver) ProvisionDevice(ctx context.Context, args struct {
 	Request *model.ProvisionDeviceRequest
 }) (*ProvisionDeviceResultResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	result, err := api.ProvisionDeviceBootstrap(ctx, args.Request, time.Now())
 	if err != nil {

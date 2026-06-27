@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -13,6 +14,10 @@ import (
 func (r *SchemaResolver) EntityRelationshipTypesById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*EntityRelationshipTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids, err := r.asUintIds(args.Ids)
 	if err != nil {
@@ -33,6 +38,10 @@ func (r *SchemaResolver) EntityRelationshipTypesById(ctx context.Context, args s
 func (r *SchemaResolver) EntityRelationshipTypesByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*EntityRelationshipTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.EntityRelationshipTypesByToken(ctx, args.Tokens)
 	if err != nil {
@@ -49,6 +58,10 @@ func (r *SchemaResolver) EntityRelationshipTypesByToken(ctx context.Context, arg
 func (r *SchemaResolver) EntityRelationshipTypes(ctx context.Context, args struct {
 	Criteria model.EntityRelationshipTypeSearchCriteria
 }) (*EntityRelationshipTypeSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.EntityRelationshipTypes(ctx, args.Criteria)
 	if err != nil {
@@ -61,6 +74,10 @@ func (r *SchemaResolver) EntityRelationshipTypes(ctx context.Context, args struc
 func (r *SchemaResolver) EntityRelationshipsById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*EntityRelationshipResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids, err := r.asUintIds(args.Ids)
 	if err != nil {
@@ -81,6 +98,10 @@ func (r *SchemaResolver) EntityRelationshipsById(ctx context.Context, args struc
 func (r *SchemaResolver) EntityRelationshipsByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*EntityRelationshipResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.EntityRelationshipsByToken(ctx, args.Tokens)
 	if err != nil {
@@ -98,6 +119,10 @@ func (r *SchemaResolver) EntityRelationshipsByToken(ctx context.Context, args st
 func (r *SchemaResolver) EntityRelationships(ctx context.Context, args struct {
 	Criteria model.EntityRelationshipSearchCriteria
 }) (*EntityRelationshipSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	criteria := args.Criteria
 	if criteria.Source != nil && criteria.SourceType != nil {

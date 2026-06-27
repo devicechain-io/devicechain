@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -13,6 +14,10 @@ import (
 func (r *SchemaResolver) ProvisioningProfilesById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*ProvisioningProfileResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids, err := r.asUintIds(args.Ids)
 	if err != nil {
@@ -39,6 +44,10 @@ func (r *SchemaResolver) ProvisioningProfilesById(ctx context.Context, args stru
 func (r *SchemaResolver) ProvisioningProfilesByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*ProvisioningProfileResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.ProvisioningProfilesByToken(ctx, args.Tokens)
 	if err != nil {
@@ -60,6 +69,10 @@ func (r *SchemaResolver) ProvisioningProfilesByToken(ctx context.Context, args s
 func (r *SchemaResolver) ProvisioningProfiles(ctx context.Context, args struct {
 	Criteria model.ProvisioningProfileSearchCriteria
 }) (*ProvisioningProfileSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	results, err := api.ProvisioningProfiles(ctx, args.Criteria)
 	if err != nil {

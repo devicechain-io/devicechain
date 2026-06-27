@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	_ "embed"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -14,6 +15,10 @@ import (
 func (r *SchemaResolver) MetricDefinitionsById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*MetricDefinitionResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids, err := r.asUintIds(args.Ids)
 	if err != nil {
@@ -40,6 +45,10 @@ func (r *SchemaResolver) MetricDefinitionsById(ctx context.Context, args struct 
 func (r *SchemaResolver) MetricDefinitionsByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*MetricDefinitionResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.MetricDefinitionsByToken(ctx, args.Tokens)
 	if err != nil {
@@ -62,6 +71,10 @@ func (r *SchemaResolver) MetricDefinitionsByToken(ctx context.Context, args stru
 func (r *SchemaResolver) MetricDefinitions(ctx context.Context, args struct {
 	Criteria model.MetricDefinitionSearchCriteria
 }) (*MetricDefinitionSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.MetricDefinitions(ctx, args.Criteria)
 	if err != nil {
