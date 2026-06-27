@@ -27,16 +27,6 @@ export type RefreshMutationVariables = Exact<{
 
 export type RefreshMutation = { refresh: { accessToken: string, refreshToken: string, expiresAt: string } };
 
-export type UsersQueryVariables = Exact<{ [key: string]: never; }>;
-
-
-export type UsersQuery = { users: Array<{ id: string, username: string, email: string | null, firstName: string | null, lastName: string | null, enabled: boolean, createdAt: string | null, updatedAt: string | null, roles: Array<{ id: string, token: string, name: string | null, description: string | null, authorities: Array<string>, createdAt: string | null, updatedAt: string | null }> }> };
-
-export type RolesQueryVariables = Exact<{ [key: string]: never; }>;
-
-
-export type RolesQuery = { roles: Array<{ id: string, token: string, name: string | null, description: string | null, authorities: Array<string>, createdAt: string | null, updatedAt: string | null }> };
-
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -87,39 +77,3 @@ export const RefreshDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<RefreshMutation, RefreshMutationVariables>;
-export const UsersDocument = new TypedDocumentString(`
-    query Users {
-  users {
-    id
-    username
-    email
-    firstName
-    lastName
-    enabled
-    createdAt
-    updatedAt
-    roles {
-      id
-      token
-      name
-      description
-      authorities
-      createdAt
-      updatedAt
-    }
-  }
-}
-    `) as unknown as TypedDocumentString<UsersQuery, UsersQueryVariables>;
-export const RolesDocument = new TypedDocumentString(`
-    query Roles {
-  roles {
-    id
-    token
-    name
-    description
-    authorities
-    createdAt
-    updatedAt
-  }
-}
-    `) as unknown as TypedDocumentString<RolesQuery, RolesQueryVariables>;

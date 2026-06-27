@@ -9,8 +9,6 @@ const PAGE_TITLES: { pattern: string; title: string }[] = [
   { pattern: '/', title: 'Dashboard' },
   { pattern: '/devices', title: 'Devices' },
   { pattern: '/device-types', title: 'Device Types' },
-  { pattern: '/users', title: 'Users' },
-  { pattern: '/roles', title: 'Roles' },
 ];
 
 export default function AppLayout() {

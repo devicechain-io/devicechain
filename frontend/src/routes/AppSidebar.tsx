@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Link, useLocation } from 'react-router-dom';
-import { Boxes, Cpu, LayoutGrid, ShieldCheck, Users } from 'lucide-react';
+import { Boxes, Cpu, LayoutGrid } from 'lucide-react';
 import { BrandMark } from '@/components/BrandMark';
 import {
   Sidebar,
@@ -25,11 +25,6 @@ const NAV = {
   devices: [
     { label: 'Devices', href: '/devices', icon: Cpu },
     { label: 'Device Types', href: '/device-types', icon: Boxes },
-  ],
-  // Access control maps onto the user-management / RBAC service (ADR-008).
-  accessControl: [
-    { label: 'Users', href: '/users', icon: Users },
-    { label: 'Roles', href: '/roles', icon: ShieldCheck },
   ],
 };
 
@@ -85,24 +80,6 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {NAV.devices.map((item) => (
-                <SidebarMenuItem key={item.href}>
-                  <SidebarMenuButton asChild isActive={isActive(pathname, item.href)} tooltip={item.label}>
-                    <Link to={item.href}>
-                      <item.icon />
-                      <span>{item.label}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarGroup>
-          <SidebarGroupLabel>Access Control</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {NAV.accessControl.map((item) => (
                 <SidebarMenuItem key={item.href}>
                   <SidebarMenuButton asChild isActive={isActive(pathname, item.href)} tooltip={item.label}>
                     <Link to={item.href}>

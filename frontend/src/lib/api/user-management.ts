@@ -7,8 +7,6 @@ import { graphql } from '@/gql/user-management';
 import type {
   LoginMutation,
   SelectTenantMutation,
-  UsersQuery,
-  RolesQuery,
 } from '@/gql/user-management/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -16,8 +14,6 @@ import type {
 export type IdentityAuth = LoginMutation['login'];
 export type Membership = IdentityAuth['memberships'][number];
 export type AuthToken = SelectTenantMutation['selectTenant'];
-export type User = UsersQuery['users'][number];
-export type Role = RolesQuery['roles'][number];
 
 // ── Auth (unauthenticated) ──────────────────────────────────────────────
 //
@@ -82,54 +78,4 @@ export async function refresh(refreshToken: string): Promise<AuthToken> {
     { anonymous: true },
   );
   return data.refresh;
-}
-
-// ── Directory (authenticated) ───────────────────────────────────────────
-
-const USERS = graphql(`
-  query Users {
-    users {
-      id
-      username
-      email
-      firstName
-      lastName
-      enabled
-      createdAt
-      updatedAt
-      roles {
-        id
-        token
-        name
-        description
-        authorities
-        createdAt
-        updatedAt
-      }
-    }
-  }
-`);
-
-export async function listUsers(): Promise<User[]> {
-  const data = await gql('user-management', USERS);
-  return data.users;
-}
-
-const ROLES = graphql(`
-  query Roles {
-    roles {
-      id
-      token
-      name
-      description
-      authorities
-      createdAt
-      updatedAt
-    }
-  }
-`);
-
-export async function listRoles(): Promise<Role[]> {
-  const data = await gql('user-management', ROLES);
-  return data.roles;
 }

@@ -7,8 +7,6 @@ import { LoadingState } from '@/components/ui/loading-state';
 import LoginPage from '@/routes/Login';
 import AppLayout from '@/routes/AppLayout';
 import Dashboard from '@/routes/Dashboard';
-import UsersPage from '@/routes/users/UsersPage';
-import RolesPage from '@/routes/roles/RolesPage';
 import DevicesPage from '@/routes/devices/DevicesPage';
 import DeviceTypesPage from '@/routes/device-types/DeviceTypesPage';
 import AdminProtectedRoute from '@/routes/admin/AdminProtectedRoute';
@@ -43,8 +41,6 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="devices" element={<DevicesPage />} />
           <Route path="device-types" element={<DeviceTypesPage />} />
-          <Route path="users" element={<UsersPage />} />
-          <Route path="roles" element={<RolesPage />} />
         </Route>
       </Route>
 
