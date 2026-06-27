@@ -50,9 +50,14 @@ func helmInstall(ctx context.Context, st *State) error {
 		"instance": map[string]interface{}{"id": st.Instance},
 		"profile":  st.Profile,
 		// Set the host explicitly (matching the chart default) so the deployed
-		// ingress and the access report agree on one value.
-		"ingress": map[string]interface{}{"enabled": true, "host": st.Values["ingressHost"]},
-		"image":   map[string]interface{}{"registry": st.ImageRegistry, "tag": st.ImageVersion},
+		// ingress and the access report agree on one value. --no-tls turns off the
+		// self-signed cert for a plain-HTTP (zero-warning) local URL.
+		"ingress": map[string]interface{}{
+			"enabled": true,
+			"host":    st.Values["ingressHost"],
+			"tls":     map[string]interface{}{"enabled": !st.NoTLS},
+		},
+		"image": map[string]interface{}{"registry": st.ImageRegistry, "tag": st.ImageVersion},
 		// A bare cluster has no Prometheus Operator, so the ServiceMonitors the
 		// metrics path renders would fail to apply.
 		"metrics": map[string]interface{}{"enabled": false},

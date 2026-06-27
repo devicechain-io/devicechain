@@ -23,6 +23,12 @@ type Options struct {
 	ImageRegistry string
 	ImageVersion  string
 	BuildImages   bool
+	// IngressHost is the host the instance is exposed on (default
+	// DefaultIngressHost). Set it to "localhost" for a local cluster to reach the
+	// console with no /etc/hosts edit. NoTLS serves plain HTTP instead of a
+	// self-signed cert — combined with localhost, a zero-config http://localhost/.
+	IngressHost string
+	NoTLS       bool
 }
 
 // Provider abstracts the target environment (local cluster today; cloud later)

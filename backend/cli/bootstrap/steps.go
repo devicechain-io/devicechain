@@ -121,7 +121,21 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	st.Values["instance"] = st.Instance
 	st.Values["namespace"] = namespace
 	st.Values["profile"] = st.Profile
-	st.Values["ingressHost"] = DefaultIngressHost
+
+	// Ingress host + scheme. Default to DefaultIngressHost; a loopback host
+	// (localhost/127.0.0.1) needs no /etc/hosts edit. TLS is on unless --no-tls,
+	// which serves plain HTTP — a self-signed cert adds friction with no benefit
+	// on localhost.
+	host := st.IngressHost
+	if host == "" {
+		host = DefaultIngressHost
+	}
+	st.Values["ingressHost"] = host
+	scheme := "https"
+	if st.NoTLS {
+		scheme = "http"
+	}
+	st.Values["scheme"] = scheme
 	st.Values["dbPassword"] = password
 	st.Values["imageRegistry"] = st.ImageRegistry
 	st.Values["imageVersion"] = st.ImageVersion
@@ -400,8 +414,9 @@ func stepReport(ctx context.Context, st *State) error {
 	fmt.Printf("  %s %s\n", color.WhiteString("Images:"), color.GreenString(st.Values["imageSource"]))
 	fmt.Printf("  %s %s\n", color.WhiteString("Kube context:"), color.GreenString(st.KubeContext))
 	if host := st.Values["ingressHost"]; host != "" {
-		fmt.Printf("  %s %s\n", color.WhiteString("Console:"), color.GreenString("https://%s/", host))
-		fmt.Printf("  %s %s\n", color.WhiteString("GraphQL:"), color.GreenString("https://%s/api/<area>/graphql", host))
+		scheme := st.Values["scheme"]
+		fmt.Printf("  %s %s\n", color.WhiteString("Console:"), color.GreenString("%s://%s/", scheme, host))
+		fmt.Printf("  %s %s\n", color.WhiteString("GraphQL:"), color.GreenString("%s://%s/api/<area>/graphql", scheme, host))
 	}
 	if st.Values["adminUsername"] != "" {
 		fmt.Printf("  %s %s / %s  %s\n",
@@ -412,15 +427,25 @@ func stepReport(ctx context.Context, st *State) error {
 	}
 	if !st.DryRun {
 		host := st.Values["ingressHost"]
-		fmt.Println(color.HiGreenString("\nDeviceChain is up. Open the web console at https://%s/ and sign in.", host))
-		// A *.local host on a local cluster won't resolve and uses a self-signed
-		// cert, so a non-dev needs the one-time hosts mapping spelled out.
-		if looksLocal(st.KubeContext) {
-			fmt.Println(color.YellowString("  Local cluster: map the host first — add \"127.0.0.1 %s\" to /etc/hosts.", host))
-			fmt.Println(color.YellowString("  The TLS cert is self-signed (dev-grade), so your browser will warn once."))
+		scheme := st.Values["scheme"]
+		fmt.Println(color.HiGreenString("\nDeviceChain is up. Open the web console at %s://%s/ and sign in.", scheme, host))
+		// A non-loopback host on a local cluster won't resolve, so a non-dev needs
+		// the one-time hosts mapping spelled out. localhost/127.0.0.1 need nothing.
+		if looksLocal(st.KubeContext) && !isLoopbackHost(host) {
+			fmt.Println(color.YellowString("  Local cluster: map the host first — add \"127.0.0.1 %s\" to /etc/hosts (or bootstrap with --host localhost).", host))
+		}
+		// A self-signed cert (TLS on) makes the browser warn once.
+		if scheme == "https" {
+			fmt.Println(color.YellowString("  The TLS cert is self-signed (dev-grade), so your browser will warn once (or use --no-tls)."))
 		}
 	}
 	return nil
+}
+
+// isLoopbackHost reports whether a host resolves to the local machine with no
+// /etc/hosts entry.
+func isLoopbackHost(host string) bool {
+	return host == "localhost" || host == "127.0.0.1"
 }
 
 // randomSecret returns a hex-encoded random string with the given byte length
