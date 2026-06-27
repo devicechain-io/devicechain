@@ -45,9 +45,16 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       const auth = await login(email.trim(), password);
+      if (auth.superuser) {
+        // A superuser's home is the admin console (ADR-033); from there they can
+        // create tenants and switch into one. This is also the only landing for a
+        // superuser on a tenant-less instance.
+        navigate('/admin', { replace: true });
+        return;
+      }
       if (auth.memberships.length === 0) {
-        // No tenant to enter yet (e.g. a superuser before any tenant exists). The
-        // admin console is where tenants get created (ADR-033 phase 4).
+        // No tenant to enter yet. The admin console is where tenants get created
+        // and memberships assigned (ADR-033 phase 4).
         setError('This account has no tenant access yet. Ask an administrator to add you to a tenant.');
         setSubmitting(false);
         return;

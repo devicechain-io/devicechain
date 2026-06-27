@@ -1,7 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { ChevronsUpDown, LogOut } from 'lucide-react';
+import { ChevronsUpDown, LogOut, ShieldCheck } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import {
@@ -28,8 +29,9 @@ function UserAvatar({ name }: { name: string }) {
 }
 
 export function NavUser() {
-  const { claims, logout } = useAuth();
+  const { claims, logout, superuser, isIdentityAuthenticated } = useAuth();
   const { isMobile } = useSidebar();
+  const navigate = useNavigate();
 
   if (!claims) return null;
 
@@ -69,6 +71,20 @@ export function NavUser() {
 
             <DropdownMenuSeparator />
 
+            {superuser && isIdentityAuthenticated && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => navigate('/admin')}
+                  className="cursor-pointer"
+                >
+                  <ShieldCheck size={16} />
+                  Admin console
+                </DropdownMenuItem>
+              </>
+            )}
+
+            <DropdownMenuSeparator />
             <DropdownMenuItem onClick={logout} className="cursor-pointer">
               <LogOut size={16} />
               Sign out
