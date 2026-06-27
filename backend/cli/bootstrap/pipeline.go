@@ -18,6 +18,12 @@ const DefaultImageRegistry = "ghcr.io/devicechain-io"
 // localhost:5000). Mirrors deploy/local.
 const LocalRegistry = "localhost:5000"
 
+// DefaultIngressHost is the host the instance ingress is exposed on. It matches
+// the chart's ingress.host default; the pipeline sets it explicitly so the
+// access report can print a real URL instead of a placeholder. (A future --host
+// flag / gcp provider can override this through State.)
+const DefaultIngressHost = "devicechain.local"
+
 // DefaultImageVersion is the published image tag deployed by default. It is the
 // single source of truth from the repo-root VERSION file, injected via ldflags
 // at build time (the Makefile stamps the same value into cmd.Version, so

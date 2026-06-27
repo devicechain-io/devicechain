@@ -121,6 +121,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	st.Values["instance"] = st.Instance
 	st.Values["namespace"] = namespace
 	st.Values["profile"] = st.Profile
+	st.Values["ingressHost"] = DefaultIngressHost
 	st.Values["dbPassword"] = password
 	st.Values["imageRegistry"] = st.ImageRegistry
 	st.Values["imageVersion"] = st.ImageVersion
@@ -392,6 +393,10 @@ func stepReport(ctx context.Context, st *State) error {
 	fmt.Printf("  %s %s\n", color.WhiteString("Profile:"), color.GreenString(st.Values["profile"]))
 	fmt.Printf("  %s %s\n", color.WhiteString("Images:"), color.GreenString(st.Values["imageSource"]))
 	fmt.Printf("  %s %s\n", color.WhiteString("Kube context:"), color.GreenString(st.KubeContext))
+	if host := st.Values["ingressHost"]; host != "" {
+		fmt.Printf("  %s %s\n", color.WhiteString("Console:"), color.GreenString("https://%s/", host))
+		fmt.Printf("  %s %s\n", color.WhiteString("GraphQL:"), color.GreenString("https://%s/api/<area>/graphql", host))
+	}
 	if st.Values["adminUsername"] != "" {
 		fmt.Printf("  %s %s / %s  %s\n",
 			color.WhiteString("Admin:"),
@@ -400,7 +405,14 @@ func stepReport(ctx context.Context, st *State) error {
 			color.YellowString("(tenant %q — change this password immediately)", st.Values["adminTenant"]))
 	}
 	if !st.DryRun {
-		fmt.Println(color.HiGreenString("\nDeviceChain is up. Open the web console at the cluster ingress root (https://<host>/); the GraphQL APIs are served under /api/<area>."))
+		host := st.Values["ingressHost"]
+		fmt.Println(color.HiGreenString("\nDeviceChain is up. Open the web console at https://%s/ and sign in.", host))
+		// A *.local host on a local cluster won't resolve and uses a self-signed
+		// cert, so a non-dev needs the one-time hosts mapping spelled out.
+		if looksLocal(st.KubeContext) {
+			fmt.Println(color.YellowString("  Local cluster: map the host first — add \"127.0.0.1 %s\" to /etc/hosts.", host))
+			fmt.Println(color.YellowString("  The TLS cert is self-signed (dev-grade), so your browser will warn once."))
+		}
 	}
 	return nil
 }
