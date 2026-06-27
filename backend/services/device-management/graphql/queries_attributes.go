@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -15,6 +16,10 @@ import (
 func (r *SchemaResolver) EntityAttributes(ctx context.Context, args struct {
 	Criteria model.EntityAttributeSearchCriteria
 }) (*EntityAttributeSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.EntityAttributes(ctx, args.Criteria)
 	if err != nil {

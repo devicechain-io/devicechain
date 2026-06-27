@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"errors"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"gorm.io/gorm"
 )
@@ -14,6 +15,10 @@ import (
 func (r *SchemaResolver) DeviceClaim(ctx context.Context, args struct {
 	DeviceToken string
 }) (*DeviceClaimResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	claim, err := api.DeviceClaimByDeviceToken(ctx, args.DeviceToken)
 	if err != nil {

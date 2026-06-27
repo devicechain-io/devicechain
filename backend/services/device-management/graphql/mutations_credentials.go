@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -13,6 +14,10 @@ import (
 func (r *SchemaResolver) CreateDeviceCredential(ctx context.Context, args struct {
 	Request *model.DeviceCredentialCreateRequest
 }) (*DeviceCredentialResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateDeviceCredential(ctx, args.Request)
 	if err != nil {
@@ -32,6 +37,10 @@ func (r *SchemaResolver) UpdateDeviceCredential(ctx context.Context, args struct
 	Token   string
 	Request *model.DeviceCredentialCreateRequest
 }) (*DeviceCredentialResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateDeviceCredential(ctx, args.Token, args.Request)
 	if err != nil {

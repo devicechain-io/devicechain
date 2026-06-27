@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -13,6 +14,10 @@ import (
 func (r *SchemaResolver) CreateCustomerType(ctx context.Context, args struct {
 	Request *model.CustomerTypeCreateRequest
 }) (*CustomerTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateCustomerType(ctx, args.Request)
 	if err != nil {
@@ -32,6 +37,10 @@ func (r *SchemaResolver) UpdateCustomerType(ctx context.Context, args struct {
 	Token   string
 	Request *model.CustomerTypeCreateRequest
 }) (*CustomerTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateCustomerType(ctx, args.Token, args.Request)
 	if err != nil {
@@ -50,6 +59,10 @@ func (r *SchemaResolver) UpdateCustomerType(ctx context.Context, args struct {
 func (r *SchemaResolver) CreateCustomer(ctx context.Context, args struct {
 	Request *model.CustomerCreateRequest
 }) (*CustomerResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateCustomer(ctx, args.Request)
 	if err != nil {
@@ -69,6 +82,10 @@ func (r *SchemaResolver) UpdateCustomer(ctx context.Context, args struct {
 	Token   string
 	Request *model.CustomerCreateRequest
 }) (*CustomerResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateCustomer(ctx, args.Token, args.Request)
 	if err != nil {
@@ -87,6 +104,10 @@ func (r *SchemaResolver) UpdateCustomer(ctx context.Context, args struct {
 func (r *SchemaResolver) CreateCustomerGroup(ctx context.Context, args struct {
 	Request *model.CustomerGroupCreateRequest
 }) (*CustomerGroupResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateCustomerGroup(ctx, args.Request)
 	if err != nil {
@@ -106,6 +127,10 @@ func (r *SchemaResolver) UpdateCustomerGroup(ctx context.Context, args struct {
 	Token   string
 	Request *model.CustomerGroupCreateRequest
 }) (*CustomerGroupResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateCustomerGroup(ctx, args.Token, args.Request)
 	if err != nil {

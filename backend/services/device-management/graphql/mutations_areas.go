@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -13,6 +14,10 @@ import (
 func (r *SchemaResolver) CreateAreaType(ctx context.Context, args struct {
 	Request *model.AreaTypeCreateRequest
 }) (*AreaTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateAreaType(ctx, args.Request)
 	if err != nil {
@@ -32,6 +37,10 @@ func (r *SchemaResolver) UpdateAreaType(ctx context.Context, args struct {
 	Token   string
 	Request *model.AreaTypeCreateRequest
 }) (*AreaTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateAreaType(ctx, args.Token, args.Request)
 	if err != nil {
@@ -50,6 +59,10 @@ func (r *SchemaResolver) UpdateAreaType(ctx context.Context, args struct {
 func (r *SchemaResolver) CreateArea(ctx context.Context, args struct {
 	Request *model.AreaCreateRequest
 }) (*AreaResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateArea(ctx, args.Request)
 	if err != nil {
@@ -69,6 +82,10 @@ func (r *SchemaResolver) UpdateArea(ctx context.Context, args struct {
 	Token   string
 	Request *model.AreaCreateRequest
 }) (*AreaResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateArea(ctx, args.Token, args.Request)
 	if err != nil {
@@ -87,6 +104,10 @@ func (r *SchemaResolver) UpdateArea(ctx context.Context, args struct {
 func (r *SchemaResolver) CreateAreaGroup(ctx context.Context, args struct {
 	Request *model.AreaGroupCreateRequest
 }) (*AreaGroupResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateAreaGroup(ctx, args.Request)
 	if err != nil {
@@ -106,6 +127,10 @@ func (r *SchemaResolver) UpdateAreaGroup(ctx context.Context, args struct {
 	Token   string
 	Request *model.AreaGroupCreateRequest
 }) (*AreaGroupResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateAreaGroup(ctx, args.Token, args.Request)
 	if err != nil {

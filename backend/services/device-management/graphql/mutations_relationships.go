@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -13,6 +14,10 @@ import (
 func (r *SchemaResolver) CreateEntityRelationshipType(ctx context.Context, args struct {
 	Request *model.EntityRelationshipTypeCreateRequest
 }) (*EntityRelationshipTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateEntityRelationshipType(ctx, args.Request)
 	if err != nil {
@@ -26,6 +31,10 @@ func (r *SchemaResolver) UpdateEntityRelationshipType(ctx context.Context, args 
 	Token   string
 	Request *model.EntityRelationshipTypeCreateRequest
 }) (*EntityRelationshipTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateEntityRelationshipType(ctx, args.Token, args.Request)
 	if err != nil {
@@ -38,6 +47,10 @@ func (r *SchemaResolver) UpdateEntityRelationshipType(ctx context.Context, args 
 func (r *SchemaResolver) CreateEntityRelationship(ctx context.Context, args struct {
 	Request *model.EntityRelationshipCreateRequest
 }) (*EntityRelationshipResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateEntityRelationship(ctx, args.Request)
 	if err != nil {

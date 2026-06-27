@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	_ "embed"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -14,6 +15,10 @@ import (
 func (r *SchemaResolver) CustomerTypesById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*CustomerTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids, err := r.asUintIds(args.Ids)
 	if err != nil {
@@ -41,6 +46,10 @@ func (r *SchemaResolver) CustomerTypesById(ctx context.Context, args struct {
 func (r *SchemaResolver) CustomerTypesByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*CustomerTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.CustomerTypesByToken(ctx, args.Tokens)
 	if err != nil {
@@ -63,6 +72,10 @@ func (r *SchemaResolver) CustomerTypesByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) CustomerTypes(ctx context.Context, args struct {
 	Criteria model.CustomerTypeSearchCriteria
 }) (*CustomerTypeSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.CustomerTypes(ctx, args.Criteria)
 	if err != nil {
@@ -81,6 +94,10 @@ func (r *SchemaResolver) CustomerTypes(ctx context.Context, args struct {
 func (r *SchemaResolver) CustomersById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*CustomerResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids, err := r.asUintIds(args.Ids)
 	if err != nil {
@@ -107,6 +124,10 @@ func (r *SchemaResolver) CustomersById(ctx context.Context, args struct {
 func (r *SchemaResolver) CustomersByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*CustomerResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.CustomersByToken(ctx, args.Tokens)
 	if err != nil {
@@ -129,6 +150,10 @@ func (r *SchemaResolver) CustomersByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) Customers(ctx context.Context, args struct {
 	Criteria model.CustomerSearchCriteria
 }) (*CustomerSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.Customers(ctx, args.Criteria)
 	if err != nil {
@@ -147,6 +172,10 @@ func (r *SchemaResolver) Customers(ctx context.Context, args struct {
 func (r *SchemaResolver) CustomerGroupsById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*CustomerGroupResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids, err := r.asUintIds(args.Ids)
 	if err != nil {
@@ -173,6 +202,10 @@ func (r *SchemaResolver) CustomerGroupsById(ctx context.Context, args struct {
 func (r *SchemaResolver) CustomerGroupsByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*CustomerGroupResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.CustomerGroupsByToken(ctx, args.Tokens)
 	if err != nil {
@@ -195,6 +228,10 @@ func (r *SchemaResolver) CustomerGroupsByToken(ctx context.Context, args struct 
 func (r *SchemaResolver) CustomerGroups(ctx context.Context, args struct {
 	Criteria model.CustomerGroupSearchCriteria
 }) (*CustomerGroupSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.CustomerGroups(ctx, args.Criteria)
 	if err != nil {

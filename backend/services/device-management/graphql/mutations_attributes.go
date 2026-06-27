@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -13,6 +14,10 @@ import (
 func (r *SchemaResolver) SetEntityAttribute(ctx context.Context, args struct {
 	Request *model.EntityAttributeSetRequest
 }) (*EntityAttributeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	set, err := api.SetEntityAttribute(ctx, args.Request)
 	if err != nil {
@@ -28,6 +33,10 @@ func (r *SchemaResolver) DeleteEntityAttribute(ctx context.Context, args struct 
 	Scope      string
 	AttrKey    string
 }) (bool, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return false, err
+	}
+
 	api := r.GetApi(ctx)
 	return api.DeleteEntityAttribute(ctx, args.EntityType, args.Entity, args.Scope, args.AttrKey)
 }

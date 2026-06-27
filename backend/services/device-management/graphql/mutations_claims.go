@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -14,6 +15,10 @@ import (
 func (r *SchemaResolver) InitiateDeviceClaim(ctx context.Context, args struct {
 	Request *model.DeviceClaimInitiateRequest
 }) (*DeviceClaimResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	claim, err := api.InitiateDeviceClaim(ctx, args.Request)
 	if err != nil {
@@ -26,6 +31,10 @@ func (r *SchemaResolver) InitiateDeviceClaim(ctx context.Context, args struct {
 func (r *SchemaResolver) ClaimDevice(ctx context.Context, args struct {
 	Request *model.DeviceClaimRequest
 }) (*EntityRelationshipResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	rel, err := api.ClaimDevice(ctx, args.Request, time.Now())
 	if err != nil {
@@ -38,6 +47,10 @@ func (r *SchemaResolver) ClaimDevice(ctx context.Context, args struct {
 func (r *SchemaResolver) CancelDeviceClaim(ctx context.Context, args struct {
 	DeviceToken string
 }) (bool, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return false, err
+	}
+
 	api := r.GetApi(ctx)
 	return api.CancelDeviceClaim(ctx, args.DeviceToken)
 }

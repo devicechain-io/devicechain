@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -13,6 +14,10 @@ import (
 func (r *SchemaResolver) CreateAssetType(ctx context.Context, args struct {
 	Request *model.AssetTypeCreateRequest
 }) (*AssetTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateAssetType(ctx, args.Request)
 	if err != nil {
@@ -32,6 +37,10 @@ func (r *SchemaResolver) UpdateAssetType(ctx context.Context, args struct {
 	Token   string
 	Request *model.AssetTypeCreateRequest
 }) (*AssetTypeResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateAssetType(ctx, args.Token, args.Request)
 	if err != nil {
@@ -50,6 +59,10 @@ func (r *SchemaResolver) UpdateAssetType(ctx context.Context, args struct {
 func (r *SchemaResolver) CreateAsset(ctx context.Context, args struct {
 	Request *model.AssetCreateRequest
 }) (*AssetResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateAsset(ctx, args.Request)
 	if err != nil {
@@ -69,6 +82,10 @@ func (r *SchemaResolver) UpdateAsset(ctx context.Context, args struct {
 	Token   string
 	Request *model.AssetCreateRequest
 }) (*AssetResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateAsset(ctx, args.Token, args.Request)
 	if err != nil {
@@ -87,6 +104,10 @@ func (r *SchemaResolver) UpdateAsset(ctx context.Context, args struct {
 func (r *SchemaResolver) CreateAssetGroup(ctx context.Context, args struct {
 	Request *model.AssetGroupCreateRequest
 }) (*AssetGroupResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	created, err := api.CreateAssetGroup(ctx, args.Request)
 	if err != nil {
@@ -106,6 +127,10 @@ func (r *SchemaResolver) UpdateAssetGroup(ctx context.Context, args struct {
 	Token   string
 	Request *model.AssetGroupCreateRequest
 }) (*AssetGroupResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateAssetGroup(ctx, args.Token, args.Request)
 	if err != nil {
