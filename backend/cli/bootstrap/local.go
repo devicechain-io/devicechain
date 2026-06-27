@@ -63,7 +63,7 @@ func (localProvider) EnsureCluster(ctx context.Context, opts Options) (string, e
 	if !opts.AssumeYes &&
 		!confirm(fmt.Sprintf("No local cluster found. Create a kind cluster %q now?", clusterName)) {
 		return "", fmt.Errorf(
-			"no local cluster and creation declined; create one (e.g. `kind create cluster`) "+
+			"no local cluster and creation declined; create one (e.g. `kind create cluster`) " +
 				"or pass --kube-context, then re-run")
 	}
 	if err := createKindCluster(ctx, clusterName); err != nil {
