@@ -72,6 +72,23 @@ func (localProvider) EnsureCluster(ctx context.Context, opts Options) (string, e
 	return kubeContext, nil
 }
 
+// DestroyCluster deletes the kind cluster the instance lives in. It only deletes
+// clusters it manages (kind-<instance>): an explicit --kube-context is refused,
+// since it may point at a real cluster the user did not mean to delete. kind's
+// delete is idempotent — a missing cluster is not an error.
+func (localProvider) DestroyCluster(ctx context.Context, opts Options) error {
+	if opts.KubeContext != "" {
+		return fmt.Errorf(
+			"refusing to delete the explicitly targeted context %q; the local provider only deletes kind clusters it manages — "+
+				"omit --kube-context to delete kind-%s, or use --keep-cluster to uninstall just the instance",
+			opts.KubeContext, opts.Instance)
+	}
+	if _, err := exec.LookPath("kind"); err != nil {
+		return fmt.Errorf("kind not found on PATH; install it (https://kind.sigs.k8s.io) and re-run")
+	}
+	return run(ctx, "kind", "delete", "cluster", "--name", opts.Instance)
+}
+
 // createKindCluster creates a kind cluster from the embedded topology (the same
 // config deploy/local/up.sh uses). kind streams its own progress.
 func createKindCluster(ctx context.Context, name string) error {

@@ -31,6 +31,10 @@ type Provider interface {
 	Name() string
 	// EnsureCluster guarantees a usable cluster and returns the kube-context to target.
 	EnsureCluster(ctx context.Context, opts Options) (kubeContext string, err error)
+	// DestroyCluster deletes the cluster the instance lives in (the inverse of
+	// EnsureCluster). For the local provider this deletes the kind cluster; a
+	// cloud provider would tofu-destroy it.
+	DestroyCluster(ctx context.Context, opts Options) error
 }
 
 // registry holds the known providers, populated by each provider's init().

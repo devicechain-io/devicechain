@@ -69,6 +69,17 @@ func findTofu() (string, error) {
 	return "", fmt.Errorf("neither 'tofu' nor 'terraform' found on PATH; install OpenTofu (https://opentofu.org) and re-run")
 }
 
+// instanceRoot returns the per-instance state root (~/.devicechain/<instance>)
+// without creating it — used by destroy to remove all persisted state for an
+// instance (tofu tfstate and friends).
+func instanceRoot(instance string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".devicechain", instance), nil
+}
+
 // instanceStateDir returns a stable, per-instance directory under the user's
 // home for persistent bootstrap state (e.g. ~/.devicechain/<instance>/<sub>),
 // creating it if necessary.
