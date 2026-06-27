@@ -306,21 +306,16 @@ func (s *Store) AssignSystemRoles(ctx context.Context, id *Identity, roles []Rol
 }
 
 // SeedSuperuser creates, in one transaction, the superuser identity with the
-// `superuser` system role and a scaffold membership in `tenant` carrying the
-// `tenant-admin` role. The two authority sets are passed in so this package stays
-// decoupled from the authority vocabulary (the caller passes the super-authority
-// for both). Doing it transactionally avoids a half-seeded, locked-out superuser.
-func (s *Store) SeedSuperuser(ctx context.Context, email, passwordHash, tenant string, systemAuthorities, tenantAdminAuthorities []string) error {
+// `superuser` system role (ADR-033). The bootstrap is tenant-less: no scaffold
+// tenant or membership is created. A convenience `tenant-admin` tenant role is
+// still seeded into the catalog so the admin has a full-authority role to assign
+// when it creates the first tenant. The two authority sets are passed in so this
+// package stays decoupled from the authority vocabulary (the caller passes the
+// super-authority for both). Doing it transactionally avoids a half-seeded,
+// locked-out superuser.
+func (s *Store) SeedSuperuser(ctx context.Context, email, passwordHash string, systemAuthorities, tenantAdminAuthorities []string) error {
 	suName, adminName := "Superuser", "Tenant Administrator"
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
-		// The scaffold tenant as a control-plane row (ADR-033).
-		tName := "Default"
-		ten := Tenant{Token: tenant, Enabled: true,
-			NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&tName)}}
-		if err := tx.Where(Tenant{Token: tenant}).FirstOrCreate(&ten).Error; err != nil {
-			return err
-		}
-
 		suRole := Role{Scope: ScopeSystem, Token: SuperuserRoleToken,
 			NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&suName)}, Authorities: systemAuthorities}
 		if err := tx.Where(Role{Scope: ScopeSystem, Token: SuperuserRoleToken}).FirstOrCreate(&suRole).Error; err != nil {
@@ -336,13 +331,6 @@ func (s *Store) SeedSuperuser(ctx context.Context, email, passwordHash, tenant s
 		if err := tx.Create(&id).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&id).Association("SystemRoles").Append(&suRole); err != nil {
-			return err
-		}
-		mem := Membership{IdentityID: id.ID, TenantId: tenant, Enabled: true}
-		if err := tx.Create(&mem).Error; err != nil {
-			return err
-		}
-		return tx.Model(&mem).Association("TenantRoles").Append(&adminRole)
+		return tx.Model(&id).Association("SystemRoles").Append(&suRole)
 	})
 }

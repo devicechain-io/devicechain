@@ -30,12 +30,6 @@ type AuthConfiguration struct {
 	// dcctl bootstrap supplies a generated password.
 	SuperuserEmail    string
 	SuperuserPassword string
-
-	// BootstrapTenant is the scaffold tenant seeded alongside the superuser so the
-	// tenant console is immediately usable (the superuser gets a membership in it).
-	// Removed once the admin console can create the first tenant (ADR-033 phase 4,
-	// tenant-less bootstrap).
-	BootstrapTenant string
 }
 
 type UserManagementConfiguration struct {
@@ -71,9 +65,6 @@ func (c *UserManagementConfiguration) ApplyDefaults() {
 	if c.Auth.SuperuserPassword == "" {
 		c.Auth.SuperuserPassword = "devicechain"
 	}
-	if c.Auth.BootstrapTenant == "" {
-		c.Auth.BootstrapTenant = "default"
-	}
 }
 
 // Validate enforces semantic constraints after decoding and defaulting, failing
@@ -86,9 +77,6 @@ func (c *UserManagementConfiguration) Validate() error {
 	}
 	if c.Auth.SuperuserPassword == "" {
 		return fmt.Errorf("auth.superuserPassword must not be empty")
-	}
-	if c.Auth.BootstrapTenant == "" {
-		return fmt.Errorf("auth.bootstrapTenant must not be empty")
 	}
 	if c.Auth.AccessTokenTtlSeconds <= 0 {
 		return fmt.Errorf("auth.accessTokenTtlSeconds must be positive (got %d)", c.Auth.AccessTokenTtlSeconds)

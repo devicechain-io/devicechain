@@ -354,11 +354,11 @@ func stepSeedAdmin(ctx context.Context, st *State) error {
 	doing("recording bootstrap superuser credential")
 	// These mirror user-management's config defaults (config.ApplyDefaults): a
 	// global superuser identity with a well-known initial password that MUST be
-	// changed, plus the scaffold "default" tenant it can act in. A future
-	// enhancement can read a generated password from the chart values / a secret.
+	// changed. The bootstrap is tenant-less (ADR-033) — the superuser signs in to
+	// the admin console and creates the first tenant there. A future enhancement
+	// can read a generated password from the chart values / a secret.
 	st.Values["superuserEmail"] = "superuser@devicechain.local"
 	st.Values["superuserPassword"] = "devicechain"
-	st.Values["adminTenant"] = "default"
 	done()
 	return nil
 }
@@ -423,7 +423,7 @@ func stepReport(ctx context.Context, st *State) error {
 			color.WhiteString("Superuser:"),
 			color.GreenString(st.Values["superuserEmail"]),
 			color.GreenString(st.Values["superuserPassword"]),
-			color.YellowString("(sign in, then select tenant %q — change this password immediately)", st.Values["adminTenant"]))
+			color.YellowString("(sign in to the admin console to create your first tenant — change this password immediately)"))
 	}
 	if !st.DryRun {
 		host := st.Values["ingressHost"]
