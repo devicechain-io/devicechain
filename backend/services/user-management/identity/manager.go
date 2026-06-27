@@ -42,15 +42,14 @@ var ErrInvalidCredentials = errors.New("invalid credentials")
 // or is absent from the server-side store (rotated, revoked, or expired).
 var ErrInvalidToken = errors.New("invalid or expired token")
 
-// BootstrapConfig describes the superuser (and scaffold tenant) seeded on first
-// startup (ADR-033).
+// BootstrapConfig describes the superuser seeded on first startup (ADR-033). The
+// bootstrap is tenant-less: only the superuser identity is created, with no
+// scaffold tenant or membership — the superuser lands in the admin console and
+// creates the first tenant there.
 type BootstrapConfig struct {
 	// SuperuserEmail/SuperuserPassword identify the global superuser identity.
 	SuperuserEmail    string
 	SuperuserPassword string
-	// Tenant is the scaffold tenant the superuser gets a membership in so the
-	// tenant console is usable before the admin console can create tenants.
-	Tenant string
 }
 
 // Manager owns native auth for the instance. Build it with NewManager, then
@@ -354,10 +353,11 @@ func (m *Manager) issueTenantTokens(tenant, email string, roles, authorities []s
 }
 
 // seedSuperuser creates the superuser identity (system role `superuser`, authority
-// `*`) and a scaffold tenant membership (tenant-admin) on first startup, when no
-// identity exists, under a distributed lock so replicas seed exactly once. The
-// scaffold tenant keeps the tenant console usable until the admin console can
-// create the first tenant (ADR-033 phase 4, tenant-less bootstrap).
+// `*`) on first startup, when no identity exists, under a distributed lock so
+// replicas seed exactly once. The bootstrap is tenant-less (ADR-033 phase 4): no
+// scaffold tenant or membership is created — the superuser lands in the admin
+// console and creates the first tenant there. A convenience `tenant-admin` tenant
+// role is seeded in the catalog so the admin has a full-authority role to assign.
 func (m *Manager) seedSuperuser(ctx context.Context) error {
 	return m.locker.WithLock(ctx, m.ms.FunctionalArea, func(ctx context.Context) error {
 		n, err := m.iam.CountIdentities(ctx)
@@ -373,11 +373,11 @@ func (m *Manager) seedSuperuser(ctx context.Context) error {
 		}
 		email := normalizeEmail(m.bootstrap.SuperuserEmail)
 		all := []string{string(auth.AuthorityAll)}
-		if err := m.iam.SeedSuperuser(ctx, email, string(hash), m.bootstrap.Tenant, all, all); err != nil {
+		if err := m.iam.SeedSuperuser(ctx, email, string(hash), all, all); err != nil {
 			return err
 		}
-		log.Warn().Str("email", email).Str("tenant", m.bootstrap.Tenant).
-			Msg("Seeded superuser (system role=superuser, authority=*) + scaffold tenant-admin membership with the default password — CHANGE IT IMMEDIATELY.")
+		log.Warn().Str("email", email).
+			Msg("Seeded superuser (system role=superuser, authority=*) with the default password — CHANGE IT IMMEDIATELY.")
 		return nil
 	})
 }

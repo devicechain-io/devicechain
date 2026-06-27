@@ -101,7 +101,6 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 	IdentityManager = identity.NewManager(Microservice, RdbManager, lock, accessTTL, refreshTTL, identity.BootstrapConfig{
-		Tenant:            Configuration.Auth.BootstrapTenant,
 		SuperuserEmail:    Configuration.Auth.SuperuserEmail,
 		SuperuserPassword: Configuration.Auth.SuperuserPassword,
 	})

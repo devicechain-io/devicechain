@@ -20,7 +20,6 @@ func TestLoadDefaultsSuperuser(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "superuser@devicechain.local", cfg.Auth.SuperuserEmail)
 	assert.Equal(t, "devicechain", cfg.Auth.SuperuserPassword)
-	assert.Equal(t, "default", cfg.Auth.BootstrapTenant)
 	assert.Equal(t, 900, cfg.Auth.AccessTokenTtlSeconds)
 	assert.Equal(t, 604800, cfg.Auth.RefreshTokenTtlSeconds)
 	assert.Equal(t, 8, cfg.Auth.SigningKeyRetentionDays)
@@ -42,7 +41,6 @@ func TestValidateRejectsNonPositiveRefreshTtl(t *testing.T) {
 		Auth: AuthConfiguration{
 			AccessTokenTtlSeconds:  900,
 			RefreshTokenTtlSeconds: -1,
-			BootstrapTenant:        "default",
 			SuperuserEmail:         "superuser@devicechain.local",
 			SuperuserPassword:      "devicechain",
 		},
