@@ -40,7 +40,7 @@ else
   REGISTRY=${REGISTRY:-ghcr.io/devicechain-io}                       # published
   VERSION=${VERSION:-$(cat "$ROOT/VERSION" 2>/dev/null || echo dev)} # override: VERSION=x.y.z
 fi
-OPERATOR_IMG="$REGISTRY/devicechain-operator:$VERSION"
+OPERATOR_IMG="$REGISTRY/operator:$VERSION"
 
 # color-aware output (honours NO_COLOR and non-TTY / dumb terminals)
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then

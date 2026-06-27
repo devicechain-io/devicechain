@@ -12,7 +12,7 @@
 # Uses ko (the repo's image tool — services use local 'replace' directives that
 # Dockerfiles can't resolve) with --bare so each image is named EXACTLY what the
 # Helm chart pulls: {REGISTRY}/{area}:{TAG}  (chart's devicechain.image helper).
-# The operator image is {REGISTRY}/devicechain-operator:{TAG}.
+# The operator image is {REGISTRY}/operator:{TAG}.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,6 +52,6 @@ for d in "$ROOT"/backend/services/*/; do
 done
 
 # Operator (backend/k8s) — deployed by 'make deploy IMG=...'.
-build_one "$ROOT/backend/k8s" "$REGISTRY/devicechain-operator"
+build_one "$ROOT/backend/k8s" "$REGISTRY/operator"
 
 log "✅ Done — images pushed to $REGISTRY"

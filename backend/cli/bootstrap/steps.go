@@ -33,7 +33,11 @@ const defaultProfile = "full"
 const (
 	registryContainerName = "kind-registry"
 	kindNetwork           = "kind"
-	operatorImageName     = "devicechain-operator"
+	// operatorImageName must match the name the release pipeline publishes the
+	// operator under — ghcr.io/devicechain-io/operator (see .github/workflows/
+	// release.yml, which special-cases backend/k8s to ".../operator"). A
+	// mismatch makes the published-image bootstrap pull a nonexistent image.
+	operatorImageName = "operator"
 )
 
 // doing prints a white "doing…" progress line (house style).
@@ -100,6 +104,15 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			st.ImageVersion = DefaultImageVersion
 		}
 	}
+	// A binary built without version stamping (plain `go build`) falls back to
+	// "dev", which only ever exists in a local registry — the published registry
+	// has no :dev tag. Fail clearly here instead of an ImagePullBackOff on every
+	// workload several minutes into the run.
+	if !st.BuildImages && st.ImageVersion == "dev" {
+		return fail("resolving image source", fmt.Errorf(
+			"this dcctl build has no pinned image version; deploy a tagged release with --version <tag>, or build from source with --build"))
+	}
+
 	imageSource := fmt.Sprintf("%s/<area>:%s (published)", st.ImageRegistry, st.ImageVersion)
 	if st.BuildImages {
 		imageSource = fmt.Sprintf("built from source → %s/<area>:%s", st.ImageRegistry, st.ImageVersion)

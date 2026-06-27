@@ -36,6 +36,11 @@ builds:
       - -s -w
       - -X github.com/devicechain-io/dcctl/cmd.Version={{ .Version }}
       - -X github.com/devicechain-io/dcctl/cmd.gitCommit={{ .FullCommit }}
+      # Pin the default image version a released dcctl deploys to this release's
+      # tag, so `dcctl bootstrap` (published path) pulls real images instead of
+      # the unpublished ":dev". The Makefile dev build stamps this too; only the
+      # goreleaser path was missing it.
+      - -X github.com/devicechain-io/dcctl/bootstrap.DefaultImageVersion={{ .Version }}
 
 archives:
   - id: dcctl
