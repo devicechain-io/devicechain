@@ -48,8 +48,10 @@ func helmInstall(ctx context.Context, st *State) error {
 	vals := map[string]interface{}{
 		"instance": map[string]interface{}{"id": st.Instance},
 		"profile":  st.Profile,
-		"ingress":  map[string]interface{}{"enabled": true},
-		"image":    map[string]interface{}{"registry": st.ImageRegistry, "tag": st.ImageVersion},
+		// Set the host explicitly (matching the chart default) so the deployed
+		// ingress and the access report agree on one value.
+		"ingress": map[string]interface{}{"enabled": true, "host": st.Values["ingressHost"]},
+		"image":   map[string]interface{}{"registry": st.ImageRegistry, "tag": st.ImageVersion},
 		// A bare cluster has no Prometheus Operator, so the ServiceMonitors the
 		// metrics path renders would fail to apply.
 		"metrics": map[string]interface{}{"enabled": false},
