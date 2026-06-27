@@ -16,9 +16,16 @@
 package iam
 
 import (
+	"strings"
+
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
+
+// NormalizeEmail lower-cases and trims an email so identity lookups and the
+// uniqueness constraint are case-insensitive. The single normalizer shared by the
+// auth path (login) and the admin path (identity CRUD) so the two cannot diverge.
+func NormalizeEmail(e string) string { return strings.ToLower(strings.TrimSpace(e)) }
 
 // RoleScope decides where a role may be assigned and which token tier carries
 // its authorities (ADR-033): system roles attach to an Identity and ride the

@@ -40,6 +40,17 @@ type AdminTenant {
     enabled: Boolean!
 }
 
+# Data required to create a global identity. Each system role must name an
+# existing role with system scope; the password is hashed server-side.
+input AdminIdentityCreateRequest {
+    email: String!
+    password: String!
+    firstName: String
+    lastName: String
+    enabled: Boolean!
+    systemRoles: [String!]!
+}
+
 # Admin queries. Each requires a system authority (superusers hold "*").
 type Query {
     # Liveness placeholder.
@@ -50,6 +61,31 @@ type Query {
     tenants: [AdminTenant!]!
 }
 
+# Admin mutations. Identity + membership administration requires user:write
+# (superusers hold "*"). All return the affected identity (re-loaded) unless noted.
+type Mutation {
+    # Create a global identity with the given system roles.
+    createIdentity(request: AdminIdentityCreateRequest!): AdminIdentity!
+    # Enable or disable an identity (disabled identities cannot authenticate).
+    setIdentityEnabled(email: String!, enabled: Boolean!): AdminIdentity!
+    # Replace an identity's system-role assignments (role tokens, system scope).
+    setSystemRoles(email: String!, roleTokens: [String!]!): AdminIdentity!
+    # Replace an identity's password (hashed server-side).
+    setPassword(email: String!, password: String!): AdminIdentity!
+    # Delete an identity and its memberships; returns whether one was removed.
+    deleteIdentity(email: String!): Boolean!
+
+    # Bind an identity to an existing tenant with the given tenant roles.
+    addMembership(email: String!, tenant: String!, roleTokens: [String!]!): AdminIdentity!
+    # Replace a membership's tenant-role assignments (role tokens, tenant scope).
+    setMembershipRoles(email: String!, tenant: String!, roleTokens: [String!]!): AdminIdentity!
+    # Enable or disable a membership (a disabled membership cannot be selected).
+    setMembershipEnabled(email: String!, tenant: String!, enabled: Boolean!): AdminIdentity!
+    # Remove an identity's membership in a tenant.
+    removeMembership(email: String!, tenant: String!): AdminIdentity!
+}
+
 schema {
     query: Query
+    mutation: Mutation
 }

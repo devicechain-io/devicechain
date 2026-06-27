@@ -52,3 +52,42 @@ func TestAdminQueriesForbidWithoutAuthority(t *testing.T) {
 	_, err = r.Tenants(ctx)
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 }
+
+// TestAdminMutationsFailClosed confirms the admin mutations reject an
+// unauthenticated request (no claims) before touching the service — the
+// user:write gate runs first, so a missing admin service in context is never
+// reached (ADR-033).
+func TestAdminMutationsFailClosed(t *testing.T) {
+	r := &AdminResolver{}
+	ctx := context.Background()
+
+	_, err := r.CreateIdentity(ctx, struct{ Request adminIdentityCreateInput }{})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	_, err = r.SetIdentityEnabled(ctx, struct {
+		Email   string
+		Enabled bool
+	}{Email: "a@b.c"})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	_, err = r.AddMembership(ctx, struct {
+		Email      string
+		Tenant     string
+		RoleTokens []string
+	}{Email: "a@b.c", Tenant: "t"})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	ok, err := r.DeleteIdentity(ctx, struct{ Email string }{Email: "a@b.c"})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	assert.False(t, ok)
+}
+
+// TestAdminMutationsForbidWithoutAuthority confirms an authenticated identity
+// lacking user:write is refused on a representative mutation.
+func TestAdminMutationsForbidWithoutAuthority(t *testing.T) {
+	r := &AdminResolver{}
+	ctx := auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{string(auth.UserRead)}})
+
+	_, err := r.CreateIdentity(ctx, struct{ Request adminIdentityCreateInput }{})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+}

@@ -14,7 +14,6 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -384,8 +383,9 @@ func (m *Manager) seedSuperuser(ctx context.Context) error {
 }
 
 // normalizeEmail lower-cases and trims an email so lookups and uniqueness are
-// case-insensitive.
-func normalizeEmail(e string) string { return strings.ToLower(strings.TrimSpace(e)) }
+// case-insensitive. Delegates to the shared iam normalizer so the auth and admin
+// paths agree.
+func normalizeEmail(e string) string { return iam.NormalizeEmail(e) }
 
 // roleTokens projects roles to their token strings.
 func roleTokens(roles []iam.Role) []string {
