@@ -52,6 +52,26 @@ func (s *Store) IdentityByEmail(ctx context.Context, email string) (*Identity, e
 	return &id, nil
 }
 
+// ListIdentities returns every identity, preloading system roles and memberships
+// (each with its tenant roles) so the admin console can render the full directory
+// in one call. Ordered by email for a stable listing.
+func (s *Store) ListIdentities(ctx context.Context) ([]Identity, error) {
+	var ids []Identity
+	err := s.sys(ctx).
+		Preload("SystemRoles").
+		Preload("Memberships.TenantRoles").
+		Order("email").
+		Find(&ids).Error
+	return ids, err
+}
+
+// ListTenants returns every control-plane tenant row (ADR-033), ordered by token.
+func (s *Store) ListTenants(ctx context.Context) ([]Tenant, error) {
+	var tenants []Tenant
+	err := s.sys(ctx).Order("token").Find(&tenants).Error
+	return tenants, err
+}
+
 // CreateIdentity inserts an identity (with any associated roles/memberships set
 // on the struct).
 func (s *Store) CreateIdentity(ctx context.Context, id *Identity) error {

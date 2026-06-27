@@ -16,11 +16,17 @@ const (
 	// authorization check. The bootstrap admin role grants it.
 	AuthorityAll Authority = "*"
 
-	// User + role directory (user-management).
+	// Identity + role directory (user-management). UserRead/UserWrite gate the
+	// admin identity and membership operations; RoleRead/RoleWrite gate the role
+	// catalog (ADR-033).
 	UserRead  Authority = "user:read"
 	UserWrite Authority = "user:write"
 	RoleRead  Authority = "role:read"
 	RoleWrite Authority = "role:write"
+
+	// Tenant control plane (user-management admin API, ADR-033).
+	TenantRead  Authority = "tenant:read"
+	TenantWrite Authority = "tenant:write"
 
 	// Device management (device-management). Enforcement is rolled out per service
 	// in later PRs; the vocabulary is defined here up front so resolvers across
@@ -47,6 +53,8 @@ var vocabulary = map[Authority]struct{}{
 	UserWrite:    {},
 	RoleRead:     {},
 	RoleWrite:    {},
+	TenantRead:   {},
+	TenantWrite:  {},
 	DeviceRead:   {},
 	DeviceWrite:  {},
 	EventRead:    {},
