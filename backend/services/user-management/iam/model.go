@@ -6,9 +6,10 @@
 // catalog whose entries are scoped system (assigned to identities, gate the
 // instance/admin API) or tenant (assigned to memberships, gate the data plane).
 //
-// It supersedes the legacy tenant-bound model.User / model.Role. During the
-// phased cutover the two coexist, so these tables are deliberately prefixed
-// `iam_` to avoid colliding with the legacy `users` / `roles` / `user_roles`.
+// It replaced the legacy tenant-bound user/role model (now removed, ADR-033). The
+// tables are prefixed `iam_` — originally to coexist with the legacy
+// `users`/`roles`/`user_roles` tables during the cutover, retained as a clear
+// namespace now that those are gone.
 //
 // Like the SigningKey, these entities are instance-global — they are NOT
 // rdb.TenantScoped, so the fail-closed tenant callback does not filter them; the

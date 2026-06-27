@@ -19,15 +19,17 @@ func dropTables(tx *gorm.DB, tables []string) error {
 	return nil
 }
 
-// Creates the initial schema migration for this functional area.
+// Creates the initial schema migration for this functional area. It materializes
+// the instance signing-key table (ADR-008). The legacy tenant-bound user/role
+// tables it once created are gone (ADR-033 cutover; see NewDropLegacyUserRole).
 func NewInitialSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20220101000000",
 		Migrate: func(tx *gorm.DB) error {
-			return tx.AutoMigrate(&model.User{}, &model.SigningKey{})
+			return tx.AutoMigrate(&model.SigningKey{})
 		},
 		Rollback: func(tx *gorm.DB) error {
-			return dropTables(tx, []string{"users", "signing_keys"})
+			return dropTables(tx, []string{"signing_keys"})
 		},
 	}
 }
