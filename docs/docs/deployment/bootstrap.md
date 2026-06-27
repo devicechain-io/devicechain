@@ -38,7 +38,7 @@ to the same state and tells you which step failed if one does:
    with the Kubernetes API directly.
 4. **Install the instance** — deploy the Helm chart via the Helm Go SDK, blocking
    until the workloads are ready.
-5. **Seed & report** — the admin credential is seeded automatically by the
+5. **Seed & report** — the superuser credential is seeded automatically by the
    user-management service on first start; the command prints it (and the
    namespace and access pointers) at the end.
 
@@ -100,15 +100,18 @@ console at `http://localhost/` — no hosts-file entry and no certificate warnin
 
 ## After bootstrap
 
-The command prints the namespace, the bootstrapped admin credential, and how to
-reach the instance through the cluster ingress. The admin is seeded with a default
+The command prints the namespace, the **superuser** credential, and how to reach
+the instance through the cluster ingress. The superuser is seeded with a default
 password — **change it immediately**.
 
 The instance includes the **web console**: the ingress serves it at the host root
 (`https://<host>/`) and routes `https://<host>/api/<area>/graphql` to each
-functional-area service. Open the console in a browser and sign in with the admin
-credential. (For a headless/ingest-only instance, deploy with the console
-disabled — see the chart's `frontend.enabled` value.)
+functional-area service. Open the console in a browser and sign in with the
+superuser's email and password. A fresh instance is **tenant-less**, so you land
+in the admin console (`/admin`) to create your first tenant and assign
+memberships; switch into a tenant to reach the device console. (For a
+headless/ingest-only instance, deploy with the console disabled — see the chart's
+`frontend.enabled` value.)
 
 To inspect the running instance:
 

@@ -7,14 +7,13 @@ title: Multi-Tenancy
 
 DeviceChain runs a **single shared set of microservices per instance** that serves all tenants, rather than spinning up a separate stack of pods for each tenant. Isolation is enforced at the messaging and storage layers.
 
-## Custom resources
+## The instance and its tenants
 
-Two Kubernetes custom resources model the platform:
+One Kubernetes custom resource models the platform itself:
 
-- **`DeviceChainInstance`** (cluster-scoped) — one per installation. Represents the platform itself.
-- **`DeviceChainTenant`** (namespaced) — one per tenant. Adding a tenant is a declarative operation: create a `DeviceChainTenant` resource and the operator reconciles the tenant's configuration. Tenants do **not** get their own pods.
+- **`DeviceChainInstance`** (cluster-scoped) — one per installation. Represents the platform.
 
-Because tenants are declarative resources, the full tenant roster is version-controllable and GitOps-friendly, and `kubectl get devicechaintenant` shows the live roster.
+Tenants are **not** Kubernetes resources. A tenant is a control-plane **database record** — a registry entry plus per-tenant configuration — created on demand through the instance admin API and the `/admin` console. Tenants share the instance's services and do **not** get their own pods. A fresh instance is **tenant-less**: it seeds only a superuser, who creates the first tenant from the admin console.
 
 ## Isolation
 
