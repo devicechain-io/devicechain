@@ -1,0 +1,7 @@
+# Keep the build context small and reproducible: install deps from the lockfile
+# inside the image, never copy host artifacts in.
+node_modules
+dist
+.env
+.env.*
+npm-debug.log*

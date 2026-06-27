@@ -197,6 +197,53 @@ jobs:
           helm push "devicechain-${chart_version}.tgz" oci://${REGISTRY}/charts
 
   # ---------------------------------------------------------------------------
+  # Build + push the web console image (static nginx SPA), multi-arch.
+  #
+  # The console is not a Go service, so it is built with docker buildx from
+  # frontend/Dockerfile rather than ko. It publishes as ".../frontend", the name
+  # the chart resolves by default ({image.registry}/frontend:{image.tag}).
+  # ---------------------------------------------------------------------------
+  frontend:
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+          IS_PRERELEASE: ${{ needs.guard.outputs.is_prerelease }}
+        run: |
+          # :latest moves ONLY on stable releases -- never on prereleases
+          # (mirrors the ko images job).
+          tags="${REGISTRY}/frontend:${VERSION}"
+          if [ "$IS_PRERELEASE" = "false" ]; then
+            tags="${tags},${REGISTRY}/frontend:latest"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "Frontend tags: $tags"
+
+      - name: Build + push console image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+
+  # ---------------------------------------------------------------------------
   # Cross-compile dcctl and create the GitHub Release (goreleaser).
   # ---------------------------------------------------------------------------
   cli:

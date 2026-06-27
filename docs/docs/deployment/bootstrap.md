@@ -69,7 +69,8 @@ dcctl bootstrap local my-instance
 
 Developers working from a source checkout can build the images from source and
 deploy those instead with `--build`, which builds each service and the operator
-with [`ko`](https://ko.build) into a local registry and deploys by reference:
+with [`ko`](https://ko.build) — plus the web console with `docker build` — into a
+local registry and deploys by reference:
 
 ```bash
 # from a source checkout; requires Docker + ko
@@ -95,6 +96,12 @@ pipeline, chart, and operator are identical.
 The command prints the namespace, the bootstrapped admin credential, and how to
 reach the instance through the cluster ingress. The admin is seeded with a default
 password — **change it immediately**.
+
+The instance includes the **web console**: the ingress serves it at the host root
+(`https://<host>/`) and routes `https://<host>/api/<area>/graphql` to each
+functional-area service. Open the console in a browser and sign in with the admin
+credential. (For a headless/ingest-only instance, deploy with the console
+disabled — see the chart's `frontend.enabled` value.)
 
 To inspect the running instance:
 

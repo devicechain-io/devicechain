@@ -114,7 +114,12 @@ with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable`
 - Per enabled area: a `Deployment` (with `/readyz` readiness + `/healthz`
   liveness probes, ADR-022 decision 3) and a `Service` on the GraphQL port (plus
   any `extraPorts` for the area, e.g. event-sources' HTTP ingest on 8081).
-- Optional (`ingress.enabled=true`): an `Ingress` exposing each enabled area at
-  `https://<host>/<area>/graphql`, plus a cert-manager TLS `Issuer` (self-signed
-  by default). Requires the ingress-nginx controller + cert-manager from
+- The web console (`frontend.enabled=true`, on by default): a static nginx
+  `Deployment` + `Service` serving the Vite/React SPA. Disable for
+  headless/ingest-only instances.
+- Optional (`ingress.enabled=true`): two `Ingress` objects on one host — the API
+  ingress routes `https://<host>/api/<area>/graphql` to each enabled area
+  (stripping the `/api/<area>` prefix), and the web ingress serves the console at
+  `https://<host>/`. Plus a cert-manager TLS `Issuer` (self-signed by default).
+  Requires the ingress-nginx controller + cert-manager from
   [`deploy/opentofu`](../../opentofu).

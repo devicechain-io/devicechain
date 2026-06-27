@@ -235,8 +235,27 @@ func buildImages(ctx context.Context, root string, st *State) error {
 			return err
 		}
 	}
-	return build(filepath.Join(root, "backend", "k8s"),
-		fmt.Sprintf("%s/%s", st.ImageRegistry, operatorImageName))
+	if err := build(filepath.Join(root, "backend", "k8s"),
+		fmt.Sprintf("%s/%s", st.ImageRegistry, operatorImageName)); err != nil {
+		return err
+	}
+
+	// The web console is a static nginx SPA, not a Go service, so ko can't build
+	// it — docker build from frontend/Dockerfile and push to the same registry
+	// the chart resolves ({registry}/frontend:{tag}).
+	return buildFrontend(ctx, root, st)
+}
+
+// buildFrontend builds the web console image from frontend/Dockerfile and pushes
+// it to the local registry at the same registry/tag the services use, so the
+// chart's default frontend image (registry/frontend:tag) resolves.
+func buildFrontend(ctx context.Context, root string, st *State) error {
+	image := fmt.Sprintf("%s/frontend:%s", st.ImageRegistry, st.ImageVersion)
+	frontendDir := filepath.Join(root, "frontend")
+	if err := run(ctx, "docker", "build", "-t", image, frontendDir); err != nil {
+		return err
+	}
+	return run(ctx, "docker", "push", image)
 }
 
 // stepInfraApply deploys the shared data/infra stack via OpenTofu, driving the
@@ -381,7 +400,7 @@ func stepReport(ctx context.Context, st *State) error {
 			color.YellowString("(tenant %q — change this password immediately)", st.Values["adminTenant"]))
 	}
 	if !st.DryRun {
-		fmt.Println(color.HiGreenString("\nDeviceChain is up. Reach the API through the cluster ingress."))
+		fmt.Println(color.HiGreenString("\nDeviceChain is up. Open the web console at the cluster ingress root (https://<host>/); the GraphQL APIs are served under /api/<area>."))
 	}
 	return nil
 }
