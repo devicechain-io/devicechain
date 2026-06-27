@@ -347,18 +347,18 @@ func runStreamed(heading, label string, work func() error) error {
 	return nil
 }
 
-// stepSeedAdmin surfaces the bootstrap admin credential. user-management seeds
-// the admin automatically on first start (ADR-008); this step records the
-// coordinates so the final report can show them.
+// stepSeedAdmin surfaces the bootstrap superuser credential. user-management
+// seeds a global superuser identity automatically on first start (ADR-033); this
+// step records the coordinates so the final report can show them.
 func stepSeedAdmin(ctx context.Context, st *State) error {
-	doing("recording bootstrap admin credential")
-	// These mirror user-management's config defaults (config.Defaults): the admin
-	// is seeded into tenant "default" as user "admin" with a well-known initial
-	// password that MUST be changed. A future enhancement can read overrides from
-	// the chart values / a generated secret.
+	doing("recording bootstrap superuser credential")
+	// These mirror user-management's config defaults (config.ApplyDefaults): a
+	// global superuser identity with a well-known initial password that MUST be
+	// changed, plus the scaffold "default" tenant it can act in. A future
+	// enhancement can read a generated password from the chart values / a secret.
+	st.Values["superuserEmail"] = "superuser@devicechain.local"
+	st.Values["superuserPassword"] = "devicechain"
 	st.Values["adminTenant"] = "default"
-	st.Values["adminUsername"] = "admin"
-	st.Values["adminPassword"] = "devicechain"
 	done()
 	return nil
 }
@@ -418,12 +418,12 @@ func stepReport(ctx context.Context, st *State) error {
 		fmt.Printf("  %s %s\n", color.WhiteString("Console:"), color.GreenString("%s://%s/", scheme, host))
 		fmt.Printf("  %s %s\n", color.WhiteString("GraphQL:"), color.GreenString("%s://%s/api/<area>/graphql", scheme, host))
 	}
-	if st.Values["adminUsername"] != "" {
+	if st.Values["superuserEmail"] != "" {
 		fmt.Printf("  %s %s / %s  %s\n",
-			color.WhiteString("Admin:"),
-			color.GreenString(st.Values["adminUsername"]),
-			color.GreenString(st.Values["adminPassword"]),
-			color.YellowString("(tenant %q — change this password immediately)", st.Values["adminTenant"]))
+			color.WhiteString("Superuser:"),
+			color.GreenString(st.Values["superuserEmail"]),
+			color.GreenString(st.Values["superuserPassword"]),
+			color.YellowString("(sign in, then select tenant %q — change this password immediately)", st.Values["adminTenant"]))
 	}
 	if !st.DryRun {
 		host := st.Values["ingressHost"]

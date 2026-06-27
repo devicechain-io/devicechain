@@ -86,50 +86,6 @@ func GetInstance(request InstanceGetRequest) (*Instance, error) {
 	return instance, nil
 }
 
-// Create a new DeviceChain tenant CR.
-func CreateTenant(request TenantCreateRequest) (*Tenant, error) {
-	// Create tenant in instance namespace
-	tenant := &Tenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      request.TenantId,
-			Namespace: request.InstanceId,
-		},
-		Spec: TenantSpec{
-			Name:        request.Name,
-			Description: request.Description,
-		},
-	}
-
-	// Attempt to create the tenant.
-	err := V1Beta1Client.Create(context.Background(), tenant)
-	if err != nil {
-		return nil, err
-	}
-
-	// Attempt to get the created tenant.
-	err = V1Beta1Client.Get(context.Background(), client.ObjectKey{
-		Name:      request.TenantId,
-		Namespace: request.InstanceId,
-	}, tenant)
-	if err != nil {
-		return nil, err
-	}
-	return tenant, nil
-}
-
-// Get a tenant based on request criteria
-func GetTenant(request TenantGetRequest) (*Tenant, error) {
-	tenant := &Tenant{}
-	err := V1Beta1Client.Get(context.Background(), client.ObjectKey{
-		Name:      request.TenantId,
-		Namespace: request.InstanceId,
-	}, tenant)
-	if err != nil {
-		return nil, err
-	}
-	return tenant, nil
-}
-
 var clientInitOnce sync.Once
 var clientInitErr error
 

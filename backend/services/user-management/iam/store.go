@@ -97,6 +97,14 @@ func (s *Store) AssignSystemRoles(ctx context.Context, id *Identity, roles []Rol
 func (s *Store) SeedSuperuser(ctx context.Context, email, passwordHash, tenant string, systemAuthorities, tenantAdminAuthorities []string) error {
 	suName, adminName := "Superuser", "Tenant Administrator"
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		// The scaffold tenant as a control-plane row (ADR-033).
+		tName := "Default"
+		ten := Tenant{Token: tenant, Enabled: true,
+			NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&tName)}}
+		if err := tx.Where(Tenant{Token: tenant}).FirstOrCreate(&ten).Error; err != nil {
+			return err
+		}
+
 		suRole := Role{Scope: ScopeSystem, Token: SuperuserRoleToken,
 			NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&suName)}, Authorities: systemAuthorities}
 		if err := tx.Where(Role{Scope: ScopeSystem, Token: SuperuserRoleToken}).FirstOrCreate(&suRole).Error; err != nil {

@@ -101,6 +101,24 @@ type Membership struct {
 
 func (Membership) TableName() string { return "iam_memberships" }
 
+// Tenant is the control-plane record of a tenant (ADR-033). The data plane scopes
+// purely by the tenant id string (the JWT claim, the rows' TenantId, the NATS
+// subject), so a tenant is a registry entry + per-tenant config, NOT a
+// provisioned resource — this replaces the former DeviceChainTenant CRD, whose
+// reconciler only maintained an (empty) ConfigMap that nothing read. Token is the
+// tenant id used everywhere. Config is freeform JSON for now; structured concerns
+// (quotas, retention) graduate to their own FK tables later.
+type Tenant struct {
+	gorm.Model
+	rdb.NamedEntity
+
+	Token   string         `gorm:"uniqueIndex;not null;size:128"`
+	Enabled bool           `gorm:"not null;default:true"`
+	Config  map[string]any `gorm:"serializer:json"`
+}
+
+func (Tenant) TableName() string { return "iam_tenants" }
+
 // SystemAuthorities is the deduped union of the identity's system roles'
 // authorities — the authorities carried on its identity token. Pure: it reads
 // the already-loaded SystemRoles.
