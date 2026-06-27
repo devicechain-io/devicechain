@@ -9,9 +9,13 @@
 
 import type { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 
-// DeviceChain functional areas that expose a GraphQL endpoint.
+// DeviceChain functional areas that expose a GraphQL endpoint. The
+// `user-management/admin` "area" is the instance-scoped admin API (ADR-033),
+// served by user-management at a second path and authenticated with the identity
+// token rather than a tenant access token (see the `identity` request option).
 export type Area =
   | 'user-management'
+  | 'user-management/admin'
   | 'device-management'
   | 'event-management'
   | 'device-state'
@@ -22,6 +26,7 @@ function endpoint(area: Area): string {
   // https://<host>/api/<area>/graphql to each functional-area service (see
   // deploy/helm/devicechain/templates/ingress.yaml), and serves the SPA at "/".
   // In `vite dev` the same path is handled by the proxy in vite.config.ts.
+  // 'user-management/admin' resolves to /api/user-management/admin/graphql.
   return `/api/${area}/graphql`;
 }
 
@@ -34,6 +39,16 @@ let tokenGetter: (() => Promise<string | null>) | null = null;
 
 export function setAuthTokenGetter(getter: (() => Promise<string | null>) | null) {
   tokenGetter = getter;
+}
+
+// The identity-token getter feeds the admin API (ADR-033): admin requests carry
+// the instance-scoped identity token, not the tenant access token. Registered by
+// the AuthProvider alongside setAuthTokenGetter; selected per request via the
+// `identity` option.
+let identityTokenGetter: (() => Promise<string | null>) | null = null;
+
+export function setIdentityTokenGetter(getter: (() => Promise<string | null>) | null) {
+  identityTokenGetter = getter;
 }
 
 // ── Errors ──────────────────────────────────────────────────────────────
@@ -59,6 +74,11 @@ interface GraphQLResponse<T> {
 interface RequestOptions {
   /** Skip attaching the Bearer token (login / refresh run unauthenticated). */
   anonymous?: boolean;
+  /**
+   * Authenticate with the identity token instead of the tenant access token —
+   * for the instance-scoped admin API (ADR-033). Ignored when `anonymous`.
+   */
+  identity?: boolean;
 }
 
 // `document` is a code-generated typed document (a `TypedDocumentString` from
@@ -77,9 +97,12 @@ export async function gql<TResult, TVariables>(
 ): Promise<TResult> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
-  if (!options?.anonymous && tokenGetter) {
-    const token = await tokenGetter();
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (!options?.anonymous) {
+    const getter = options?.identity ? identityTokenGetter : tokenGetter;
+    if (getter) {
+      const token = await getter();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+    }
   }
 
   let res: Response;
