@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	_ "embed"
+	"github.com/devicechain-io/dc-microservice/auth"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
 )
@@ -14,6 +15,10 @@ import (
 func (r *SchemaResolver) CommandsById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*CommandResolver, error) {
+	if err := auth.Authorize(ctx, auth.CommandRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	ids, err := r.asUintIds(args.Ids)
 	if err != nil {
@@ -39,6 +44,10 @@ func (r *SchemaResolver) CommandsById(ctx context.Context, args struct {
 func (r *SchemaResolver) CommandsByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*CommandResolver, error) {
+	if err := auth.Authorize(ctx, auth.CommandRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.CommandsByToken(ctx, args.Tokens)
 	if err != nil {
@@ -60,6 +69,10 @@ func (r *SchemaResolver) CommandsByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) Commands(ctx context.Context, args struct {
 	Criteria model.CommandSearchCriteria
 }) (*CommandSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.CommandRead); err != nil {
+		return nil, err
+	}
+
 	api := r.GetApi(ctx)
 	found, err := api.Commands(ctx, args.Criteria)
 	if err != nil {
