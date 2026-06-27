@@ -89,6 +89,14 @@ func (r *AdminResolver) Tenants(ctx context.Context) ([]*AdminTenantResolver, er
 	return out, nil
 }
 
+// optStr maps an empty string column to a null GraphQL field.
+func optStr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 // roleTokenList projects iam roles to their token strings for display.
 func roleTokenList(roles []iam.Role) []string {
 	out := make([]string, 0, len(roles))

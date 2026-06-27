@@ -6,30 +6,8 @@ package model
 import (
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
-
-// User is a tenant-scoped identity that can authenticate to the platform. The
-// username is globally unique so that login(username, password) can resolve the
-// acting tenant from the user record (ADR-008) without the caller naming a
-// tenant. The bcrypt password hash is stored inline; it is never exposed
-// through the GraphQL API.
-type User struct {
-	gorm.Model
-	rdb.TenantScoped
-	Username     string `gorm:"uniqueIndex;not null;size:128"`
-	Email        string `gorm:"size:256"`
-	FirstName    string `gorm:"size:128"`
-	LastName     string `gorm:"size:128"`
-	Enabled      bool   `gorm:"not null;default:true"`
-	PasswordHash string `gorm:"not null;size:256" json:"-"`
-
-	// Roles the user is assigned (ADR-008 RBAC), via the user_roles join table.
-	// Their granted authorities are unioned and expanded into the user's tokens at
-	// login/refresh.
-	Roles []Role `gorm:"many2many:user_roles;"`
-}
 
 // SigningKey is an instance-global RSA keypair used to sign and verify the
 // platform's RS256 JWTs (ADR-008). It is deliberately NOT tenant-scoped: a
