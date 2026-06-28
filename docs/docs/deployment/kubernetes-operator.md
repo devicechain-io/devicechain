@@ -46,11 +46,11 @@ See [Releases & Upgrades](./releases-and-upgrades.md) for the versioning model a
 ## Custom resources
 
 - **`DeviceChainInstance`** (cluster-scoped) — one per installation, declaring the instance identity and configuration.
-- **`DeviceChainTenant`** (namespaced) — one per tenant. The operator maintains the tenant's configuration; tenants share the instance's services (see [Multi-Tenancy](../concepts/multi-tenancy.md)).
+
+Tenants are **not** custom resources — they are control-plane database records created through the instance admin API and the `/admin` console, sharing the instance's services (see [Multi-Tenancy](../concepts/multi-tenancy.md)).
 
 ```bash
 kubectl get devicechaininstance      # platform
-kubectl get devicechaintenant        # tenant roster
 ```
 
 ## Separation of concerns

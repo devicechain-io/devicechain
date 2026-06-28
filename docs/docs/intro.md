@@ -13,7 +13,7 @@ It is a ground-up rebuild of the SiteWhere platform that keeps the proven domain
 ## Why DeviceChain
 
 - **Go-native microservices** — sub-second startup, small memory footprint, single-binary services.
-- **Operator + CRDs** — a Kubernetes operator with declarative `DeviceChainInstance` / `DeviceChainTenant` resources, not shell scripts.
+- **Operator + CRDs** — a Kubernetes operator with a declarative `DeviceChainInstance` resource, not shell scripts; tenants are control-plane database records managed through the admin console.
 - **GraphQL-first API** — introspectable and self-documenting; no generated client stubs.
 - **A lean, fully open-source stack** — NATS JetStream is the entire messaging / MQTT / KV backbone, native JWT handles auth, TimescaleDB is the single data store, and OpenTofu provisions infrastructure. Two dependencies to run locally: **NATS + TimescaleDB**.
 - **A uniform relationship model** — device context is a typed relationship graph rather than rigid assignments, so new entity types compose without schema churn.

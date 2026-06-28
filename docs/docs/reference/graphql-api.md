@@ -19,7 +19,9 @@ Each service serves its own GraphQL endpoint (exact paths are environment-depend
 |---|---|
 | device-management | devices, profiles, assets, areas, customers, groups, relationships |
 | event-management | time-series event queries — `events`, `locationEvents`, `measurementEvents`, `alertEvents` |
-| user-management | users, roles, authentication |
+| user-management | authentication — `login`, `selectTenant`, `refresh` |
+
+`user-management` also serves a separate **instance admin API** (a distinct endpoint, authenticated with an identity token and authorized for the superuser) that manages the global identity directory, per-tenant memberships, the role catalog, and the tenant registry. Authorization across the data-plane services is **capability-based**: each resolver checks for a specific authority (e.g. `device:write`) carried on the caller's tenant token.
 
 ## Querying events
 

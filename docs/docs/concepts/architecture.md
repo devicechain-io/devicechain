@@ -15,7 +15,7 @@ DeviceChain is a set of stateless Go microservices over a shared core library, c
 | **device-management** | Devices, device profiles, the typed relationship graph, and event resolution (attaching device + organizational context to each event). |
 | **event-management** | Persists resolved events to TimescaleDB and serves time-series queries over GraphQL. |
 | **user-management** | Users, roles, and JWT issuance/validation. |
-| **operator** | A controller-runtime operator that manages `DeviceChainInstance` and `DeviceChainTenant` lifecycle (tenant bootstrap, status, config hot-reload). Workloads themselves are rendered by the Helm chart. |
+| **operator** | A controller-runtime operator that manages the `DeviceChainInstance` lifecycle (status aggregation, config hot-reload). Workloads themselves are rendered by the Helm chart; tenants are control-plane database records, not reconciled resources. |
 
 Additional services — command delivery, device state, device registration, outbound connectors, batch operations, and scheduling — are planned. See the repository for current status.
 
