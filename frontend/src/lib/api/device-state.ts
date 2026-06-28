@@ -28,3 +28,11 @@ export async function getDeviceState(deviceId: number): Promise<DeviceState | nu
   const data = await gql('device-state', DEVICE_STATES_BY_DEVICE_ID, { deviceIds: [deviceId] });
   return data.deviceStatesByDeviceId[0] ?? null;
 }
+
+// getDeviceStates batch-fetches state for several devices at once — used to
+// annotate a device list with online/offline status in one round-trip.
+export async function getDeviceStates(deviceIds: number[]): Promise<DeviceState[]> {
+  if (deviceIds.length === 0) return [];
+  const data = await gql('device-state', DEVICE_STATES_BY_DEVICE_ID, { deviceIds });
+  return data.deviceStatesByDeviceId;
+}
