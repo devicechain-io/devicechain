@@ -102,6 +102,19 @@ export async function listRoles(scope?: 'system' | 'tenant'): Promise<AdminRole[
   return data.roles;
 }
 
+const AUTHORITIES = graphql(`
+  query Authorities {
+    authorities
+  }
+`);
+
+// listAuthorities returns the known authority vocabulary so role forms can offer
+// a checklist instead of free-text authority strings.
+export async function listAuthorities(): Promise<string[]> {
+  const data = await gql('user-management/admin', AUTHORITIES, undefined, { identity: true });
+  return data.authorities;
+}
+
 // ── Identity mutations ──────────────────────────────────────────────────
 //
 // Every identity-returning mutation selects the same identity shape as the

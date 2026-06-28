@@ -55,6 +55,11 @@ export type RolesQueryVariables = Exact<{
 
 export type RolesQuery = { roles: Array<{ id: string, scope: string, token: string, name: string | null, description: string | null, authorities: Array<string>, createdAt: string | null, updatedAt: string | null }> };
 
+export type AuthoritiesQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type AuthoritiesQuery = { authorities: Array<string> };
+
 export type CreateIdentityMutationVariables = Exact<{
   request: AdminIdentityCreateRequest;
 }>;
@@ -247,6 +252,11 @@ export const RolesDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<RolesQuery, RolesQueryVariables>;
+export const AuthoritiesDocument = new TypedDocumentString(`
+    query Authorities {
+  authorities
+}
+    `) as unknown as TypedDocumentString<AuthoritiesQuery, AuthoritiesQueryVariables>;
 export const CreateIdentityDocument = new TypedDocumentString(`
     mutation CreateIdentity($request: AdminIdentityCreateRequest!) {
   createIdentity(request: $request) {

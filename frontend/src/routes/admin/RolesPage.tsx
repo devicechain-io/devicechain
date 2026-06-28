@@ -1,13 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { FormField } from '@/components/ui/form-field';
+import { MultiSelect } from '@/components/ui/multi-select';
+import type { ComboboxOption } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -24,19 +26,31 @@ import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   listRoles,
+  listAuthorities,
   createRole,
   updateRole,
   deleteRole,
   type AdminRole,
 } from '@/lib/api/admin';
-import { AdminCard, Textarea, errMessage, parseTokens, useReload } from '@/routes/admin/common';
+import { AdminCard, errMessage, useReload } from '@/routes/admin/common';
 
 type Scope = 'system' | 'tenant';
 
 export default function RolesPage() {
   const [version, reload] = useReload();
   const { data: roles, loading, error } = useQuery(listRoles, [version]);
+  const { data: authorityVocab } = useQuery(listAuthorities, []);
   const { toast } = useToast();
+
+  // Offer the known authority vocabulary as a checklist; "*" is the full-access
+  // super-authority, called out so it isn't granted by accident.
+  const authorityOptions = useMemo<ComboboxOption[]>(
+    () =>
+      (authorityVocab ?? []).map((a) =>
+        a === '*' ? { value: '*', label: '*', description: 'Full access (super-authority)' } : { value: a },
+      ),
+    [authorityVocab],
+  );
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<AdminRole | null>(null);
@@ -44,7 +58,7 @@ export default function RolesPage() {
   const [token, setToken] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [authorities, setAuthorities] = useState('');
+  const [authorities, setAuthorities] = useState<string[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -54,7 +68,7 @@ export default function RolesPage() {
     setToken('');
     setName('');
     setDescription('');
-    setAuthorities('');
+    setAuthorities([]);
     setFormError(null);
     setOpen(true);
   };
@@ -65,7 +79,7 @@ export default function RolesPage() {
     setToken(r.token);
     setName(r.name ?? '');
     setDescription(r.description ?? '');
-    setAuthorities(r.authorities.join(' '));
+    setAuthorities([...r.authorities]);
     setFormError(null);
     setOpen(true);
   };
@@ -74,12 +88,11 @@ export default function RolesPage() {
     setFormError(null);
     setBusy(true);
     try {
-      const auths = parseTokens(authorities);
       if (editing) {
         await updateRole(editing.scope, editing.token, {
           name: name.trim() || undefined,
           description: description.trim() || undefined,
-          authorities: auths,
+          authorities,
         });
         toast(`Role “${editing.token}” updated`);
       } else {
@@ -88,7 +101,7 @@ export default function RolesPage() {
           token: token.trim(),
           name: name.trim() || undefined,
           description: description.trim() || undefined,
-          authorities: auths,
+          authorities,
         });
         toast(`Role “${token.trim()}” created`);
       }
@@ -165,13 +178,15 @@ export default function RolesPage() {
               <FormField
                 label="Authorities"
                 htmlFor="r-auths"
-                description='Space-separated, e.g. "device:read command:write". Use "*" for full access.'
+                description='The capabilities this role grants. Use "*" for full access.'
               >
-                <Textarea
+                <MultiSelect
                   id="r-auths"
+                  options={authorityOptions}
                   value={authorities}
-                  placeholder="device:read device:write"
-                  onChange={(e) => setAuthorities(e.target.value)}
+                  onChange={setAuthorities}
+                  placeholder="Select authorities…"
+                  searchPlaceholder="Filter authorities…"
                 />
               </FormField>
               <div className="flex gap-2">

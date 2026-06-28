@@ -3,6 +3,8 @@
 
 package auth
 
+import "sort"
+
 // Authority is an atomic, capability-style permission of the form
 // "resource:action" (e.g. "device:write"). Authorization is capability-based
 // (ADR-008 RBAC): a Role bundles a set of authorities, a user's effective
@@ -68,4 +70,17 @@ var vocabulary = map[Authority]struct{}{
 func ValidAuthority(s string) bool {
 	_, ok := vocabulary[Authority(s)]
 	return ok
+}
+
+// Authorities returns the full known authority vocabulary, sorted, including the
+// super-authority "*". The admin API exposes it so the console can offer a
+// checklist when defining a role rather than asking for free-text authority
+// strings (which a typo would silently break).
+func Authorities() []string {
+	out := make([]string, 0, len(vocabulary))
+	for a := range vocabulary {
+		out = append(out, string(a))
+	}
+	sort.Strings(out)
+	return out
 }
