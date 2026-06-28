@@ -7,6 +7,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
+import { Logo } from '@/components/brand/Logo';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { GraphQLRequestError } from '@/lib/graphql/client';
 import type { IdentityAuth } from '@/lib/api/user-management';
@@ -89,15 +90,9 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center text-center">
-          {/* Full-color lockup on a light panel so the navy wordmark reads in
-              either theme. Swap the src for the Illustrator export when ready. */}
-          <div className="mb-4 rounded-xl bg-white px-6 py-4 shadow-sm ring-1 ring-black/5">
-            <img
-              src="/branding/devicechain-lockup.svg"
-              alt="DeviceChain"
-              className="h-16 w-auto"
-            />
-          </div>
+          {/* deviceColor follows the theme's text color so the wordmark reads on
+              both light and dark backgrounds; "Chain" and the cube stay brand. */}
+          <Logo deviceColor="currentColor" className="mb-4 h-16 w-auto" />
           <p className="text-sm text-muted-foreground">
             {identity ? 'Choose a tenant to continue' : 'Sign in to the management console'}
           </p>
