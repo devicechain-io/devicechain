@@ -35,9 +35,14 @@ type LocationEvent struct {
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
 	Event        Event             `gorm:"foreignKey:DeviceId,EventType,OccurredTime;References:DeviceId,EventType,OccurredTime"`
-	Latitude     sql.NullFloat64   `gorm:"type:decimal(10,8);"`
-	Longitude    sql.NullFloat64   `gorm:"type:decimal(11,8);"`
-	Elevation    sql.NullFloat64   `gorm:"type:decimal(10,8);"`
+	// Latitude/Longitude are degrees, so 8 fractional digits (~1.1mm) with just
+	// enough integer room for ±90 / ±180. Elevation is metres, not degrees: it
+	// needs integer range (mountains, aircraft, orbit), not sub-degree precision —
+	// decimal(12,4) holds ±99,999,999.9999 m at 0.1mm resolution. A decimal(10,8)
+	// here would overflow above 99.99 m.
+	Latitude  sql.NullFloat64 `gorm:"type:decimal(10,8);"`
+	Longitude sql.NullFloat64 `gorm:"type:decimal(11,8);"`
+	Elevation sql.NullFloat64 `gorm:"type:decimal(12,4);"`
 }
 
 // Information required to create a location event.

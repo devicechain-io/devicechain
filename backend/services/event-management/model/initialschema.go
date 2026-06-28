@@ -25,9 +25,10 @@ func NewInitialSchema() *gormigrate.Migration {
 				EventType    esmodel.EventType `gorm:"not null"`
 				OccurredTime time.Time         `gorm:"not null"`
 				Event        Event             `gorm:"foreignKey:DeviceId,EventType,OccurredTime;References:DeviceId,EventType,OccurredTime"`
-				Latitude     sql.NullFloat64   `gorm:"type:decimal(10,8);"`
-				Longitude    sql.NullFloat64   `gorm:"type:decimal(11,8);"`
-				Elevation    sql.NullFloat64   `gorm:"type:decimal(10,8);"`
+				// Elevation is metres (decimal(12,4)), not degrees — see events.go.
+				Latitude  sql.NullFloat64 `gorm:"type:decimal(10,8);"`
+				Longitude sql.NullFloat64 `gorm:"type:decimal(11,8);"`
+				Elevation sql.NullFloat64 `gorm:"type:decimal(12,4);"`
 			}
 
 			// Measurement event fields.
