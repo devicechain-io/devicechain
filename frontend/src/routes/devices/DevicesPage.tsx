@@ -2,14 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Plus } from 'lucide-react';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listDevices } from '@/lib/api/device-management';
 import { PageShell } from '@/components/ui/page-shell';
+import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
+import { rowLinkProps } from '@/routes/common';
 import {
   DataTable,
   DataTableBody,
@@ -22,6 +26,7 @@ import {
 const pageSize = 20;
 
 export default function DevicesPage() {
+  const navigate = useNavigate();
   const [pageNumber, setPageNumber] = useState(1);
   const { data, loading, error } = useQuery(
     () => listDevices({ pageNumber, pageSize }),
@@ -34,7 +39,15 @@ export default function DevicesPage() {
   const results = data?.results ?? [];
 
   return (
-    <PageShell title="Devices" description="Devices registered in this tenant (requires device:read)">
+    <PageShell
+      title="Devices"
+      description="Devices registered in this tenant (requires device:read)"
+      action={
+        <Button onClick={() => navigate('/devices/new')}>
+          <Plus size={16} /> New device
+        </Button>
+      }
+    >
       {results.length === 0 ? (
         <EmptyState description="No devices registered yet." />
       ) : (
@@ -49,7 +62,10 @@ export default function DevicesPage() {
             </DataTableHead>
             <DataTableBody>
               {results.map((device) => (
-                <DataTableRow key={device.id}>
+                <DataTableRow
+                  key={device.id}
+                  {...rowLinkProps(() => navigate(`/devices/${encodeURIComponent(device.token)}`))}
+                >
                   <DataTableCell>
                     <span className="font-mono text-xs text-foreground">{device.token}</span>
                   </DataTableCell>

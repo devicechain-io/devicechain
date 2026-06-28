@@ -10,28 +10,25 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
-import { listRoles, deleteRole } from '@/lib/api/admin';
+import { getDeviceType, deleteDeviceType } from '@/lib/api/device-management';
 import { BackLink, errMessage, useReload } from '@/routes/common';
-import { RoleForm } from '@/routes/admin/roles/RoleForm';
+import { DeviceTypeForm } from '@/routes/device-types/DeviceTypeForm';
 
-export default function RoleDetailPage() {
-  const { scope: rawScope, token: rawToken } = useParams<{ scope: string; token: string }>();
-  const scope = (rawScope ?? '') as 'system' | 'tenant';
+export default function DeviceTypeDetailPage() {
+  const { token: rawToken } = useParams<{ token: string }>();
   const token = decodeURIComponent(rawToken ?? '');
   const navigate = useNavigate();
   const { toast } = useToast();
 
   const [version, reload] = useReload();
-  const { data: roles, loading, error } = useQuery(() => listRoles(scope), [version]);
+  const { data: deviceType, loading, error } = useQuery(() => getDeviceType(token), [version]);
 
-  const role = roles?.find((r) => r.scope === scope && r.token === token) ?? null;
-
-  const back = <BackLink to="/admin/roles">Roles</BackLink>;
+  const back = <BackLink to="/device-types">Device types</BackLink>;
 
   if (loading) {
     return (
       <PageShell title={token} action={back}>
-        <LoadingState description="Loading role…" />
+        <LoadingState description="Loading device type…" />
       </PageShell>
     );
   }
@@ -42,20 +39,20 @@ export default function RoleDetailPage() {
       </PageShell>
     );
   }
-  if (!role) {
+  if (!deviceType) {
     return (
       <PageShell title={token} action={back}>
-        <ErrorState description={`Role “${token}” not found.`} />
+        <ErrorState description={`Device type “${token}” not found.`} />
       </PageShell>
     );
   }
 
   const remove = async () => {
-    if (!window.confirm(`Delete the ${role.scope} role “${role.token}”? It will be removed from all assignees.`)) return;
+    if (!window.confirm(`Delete device type “${deviceType.token}”? This cannot be undone.`)) return;
     try {
-      const ok = await deleteRole(role.scope, role.token);
-      toast(ok ? `Role “${role.token}” deleted` : `Role “${role.token}” not found`);
-      navigate('/admin/roles');
+      await deleteDeviceType(deviceType.token);
+      toast(`Device type “${deviceType.token}” deleted`);
+      navigate('/device-types');
     } catch (err) {
       toast(errMessage(err), 'error');
     }
@@ -64,7 +61,7 @@ export default function RoleDetailPage() {
   return (
     <PageShell
       title={token}
-      description={`${scope} role`}
+      description={deviceType.name ?? '—'}
       action={
         <div className="flex items-center gap-2">
           {back}
@@ -75,8 +72,8 @@ export default function RoleDetailPage() {
       }
     >
       <SectionPanel>
-        <RoleForm
-          role={role}
+        <DeviceTypeForm
+          deviceType={deviceType}
           onDone={(m) => {
             toast(m);
             reload();

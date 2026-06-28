@@ -30,7 +30,7 @@ import {
   removeMembership,
   type AdminIdentity,
 } from '@/lib/api/admin';
-import { BackLink, StatusBadge, errMessage, useReload } from '@/routes/admin/common';
+import { BackLink, StatusBadge, errMessage, useReload } from '@/routes/common';
 
 // toOptions turns a token+name record (tenant or role) into combobox options:
 // the token is the value, a friendlier name is the label, and the raw token is

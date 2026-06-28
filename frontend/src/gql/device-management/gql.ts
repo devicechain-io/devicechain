@@ -16,11 +16,27 @@ import * as types from './graphql';
  */
 type Documents = {
     "\n  query Devices($criteria: DeviceSearchCriteria!) {\n    devices(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        deviceType {\n          id\n          token\n          name\n          backgroundColor\n          foregroundColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DevicesDocument,
+    "\n  query DeviceByToken($tokens: [String!]!) {\n    devicesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": typeof types.DeviceByTokenDocument,
+    "\n  mutation CreateDevice($request: DeviceCreateRequest) {\n    createDevice(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": typeof types.CreateDeviceDocument,
+    "\n  mutation UpdateDevice($token: String!, $request: DeviceCreateRequest) {\n    updateDevice(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": typeof types.UpdateDeviceDocument,
+    "\n  mutation DeleteDevice($token: String!) {\n    deleteDevice(token: $token)\n  }\n": typeof types.DeleteDeviceDocument,
     "\n  query DeviceTypes($criteria: DeviceTypeSearchCriteria!) {\n    deviceTypes(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        icon\n        backgroundColor\n        foregroundColor\n        borderColor\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DeviceTypesDocument,
+    "\n  query DeviceTypeByToken($tokens: [String!]!) {\n    deviceTypesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": typeof types.DeviceTypeByTokenDocument,
+    "\n  mutation CreateDeviceType($request: DeviceTypeCreateRequest) {\n    createDeviceType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": typeof types.CreateDeviceTypeDocument,
+    "\n  mutation UpdateDeviceType($token: String!, $request: DeviceTypeCreateRequest) {\n    updateDeviceType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": typeof types.UpdateDeviceTypeDocument,
+    "\n  mutation DeleteDeviceType($token: String!) {\n    deleteDeviceType(token: $token)\n  }\n": typeof types.DeleteDeviceTypeDocument,
 };
 const documents: Documents = {
     "\n  query Devices($criteria: DeviceSearchCriteria!) {\n    devices(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        deviceType {\n          id\n          token\n          name\n          backgroundColor\n          foregroundColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DevicesDocument,
+    "\n  query DeviceByToken($tokens: [String!]!) {\n    devicesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": types.DeviceByTokenDocument,
+    "\n  mutation CreateDevice($request: DeviceCreateRequest) {\n    createDevice(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": types.CreateDeviceDocument,
+    "\n  mutation UpdateDevice($token: String!, $request: DeviceCreateRequest) {\n    updateDevice(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": types.UpdateDeviceDocument,
+    "\n  mutation DeleteDevice($token: String!) {\n    deleteDevice(token: $token)\n  }\n": types.DeleteDeviceDocument,
     "\n  query DeviceTypes($criteria: DeviceTypeSearchCriteria!) {\n    deviceTypes(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        icon\n        backgroundColor\n        foregroundColor\n        borderColor\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DeviceTypesDocument,
+    "\n  query DeviceTypeByToken($tokens: [String!]!) {\n    deviceTypesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": types.DeviceTypeByTokenDocument,
+    "\n  mutation CreateDeviceType($request: DeviceTypeCreateRequest) {\n    createDeviceType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": types.CreateDeviceTypeDocument,
+    "\n  mutation UpdateDeviceType($token: String!, $request: DeviceTypeCreateRequest) {\n    updateDeviceType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": types.UpdateDeviceTypeDocument,
+    "\n  mutation DeleteDeviceType($token: String!) {\n    deleteDeviceType(token: $token)\n  }\n": types.DeleteDeviceTypeDocument,
 };
 
 /**
@@ -30,7 +46,39 @@ export function graphql(source: "\n  query Devices($criteria: DeviceSearchCriter
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
+export function graphql(source: "\n  query DeviceByToken($tokens: [String!]!) {\n    devicesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n"): typeof import('./graphql').DeviceByTokenDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation CreateDevice($request: DeviceCreateRequest) {\n    createDevice(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n"): typeof import('./graphql').CreateDeviceDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation UpdateDevice($token: String!, $request: DeviceCreateRequest) {\n    updateDevice(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n"): typeof import('./graphql').UpdateDeviceDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation DeleteDevice($token: String!) {\n    deleteDevice(token: $token)\n  }\n"): typeof import('./graphql').DeleteDeviceDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
 export function graphql(source: "\n  query DeviceTypes($criteria: DeviceTypeSearchCriteria!) {\n    deviceTypes(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        icon\n        backgroundColor\n        foregroundColor\n        borderColor\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').DeviceTypesDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query DeviceTypeByToken($tokens: [String!]!) {\n    deviceTypesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n"): typeof import('./graphql').DeviceTypeByTokenDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation CreateDeviceType($request: DeviceTypeCreateRequest) {\n    createDeviceType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n"): typeof import('./graphql').CreateDeviceTypeDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation UpdateDeviceType($token: String!, $request: DeviceTypeCreateRequest) {\n    updateDeviceType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n"): typeof import('./graphql').UpdateDeviceTypeDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation DeleteDeviceType($token: String!) {\n    deleteDeviceType(token: $token)\n  }\n"): typeof import('./graphql').DeleteDeviceTypeDocument;
 
 
 export function graphql(source: string) {

@@ -2,13 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Plus } from 'lucide-react';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listDeviceTypes } from '@/lib/api/device-management';
 import { PageShell } from '@/components/ui/page-shell';
+import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
+import { rowLinkProps } from '@/routes/common';
 import {
   DataTable,
   DataTableBody,
@@ -21,6 +25,7 @@ import {
 const pageSize = 20;
 
 export default function DeviceTypesPage() {
+  const navigate = useNavigate();
   const [pageNumber, setPageNumber] = useState(1);
   const { data, loading, error } = useQuery(
     () => listDeviceTypes({ pageNumber, pageSize }),
@@ -36,6 +41,11 @@ export default function DeviceTypesPage() {
     <PageShell
       title="Device Types"
       description="Templates that classify devices (requires devicetype:read)"
+      action={
+        <Button onClick={() => navigate('/device-types/new')}>
+          <Plus size={16} /> New device type
+        </Button>
+      }
     >
       {results.length === 0 ? (
         <EmptyState description="No device types defined yet." />
@@ -50,7 +60,12 @@ export default function DeviceTypesPage() {
             </DataTableHead>
             <DataTableBody>
               {results.map((deviceType) => (
-                <DataTableRow key={deviceType.id}>
+                <DataTableRow
+                  key={deviceType.id}
+                  {...rowLinkProps(() =>
+                    navigate(`/device-types/${encodeURIComponent(deviceType.token)}`),
+                  )}
+                >
                   <DataTableCell>
                     <div className="flex items-center gap-2">
                       <span

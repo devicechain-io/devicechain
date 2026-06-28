@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/data-table';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listRoles } from '@/lib/api/admin';
-import { rowLinkProps } from '@/routes/admin/common';
+import { rowLinkProps } from '@/routes/common';
 
 export default function RolesPage() {
   const navigate = useNavigate();

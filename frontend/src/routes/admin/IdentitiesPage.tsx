@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/data-table';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listIdentities } from '@/lib/api/admin';
-import { StatusBadge, rowLinkProps } from '@/routes/admin/common';
+import { StatusBadge, rowLinkProps } from '@/routes/common';
 
 export default function IdentitiesPage() {
   const navigate = useNavigate();
