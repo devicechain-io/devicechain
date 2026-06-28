@@ -1,16 +1,11 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { FormField } from '@/components/ui/form-field';
-import { MultiSelect } from '@/components/ui/multi-select';
-import type { ComboboxOption } from '@/components/ui/combobox';
-import { ErrorBanner } from '@/components/ui/error-banner';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -24,95 +19,14 @@ import {
 } from '@/components/ui/data-table';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
-import {
-  listRoles,
-  listAuthorities,
-  createRole,
-  updateRole,
-  deleteRole,
-  type AdminRole,
-} from '@/lib/api/admin';
-import { AdminCard, errMessage, useReload } from '@/routes/admin/common';
-
-type Scope = 'system' | 'tenant';
+import { listRoles, deleteRole, type AdminRole } from '@/lib/api/admin';
+import { errMessage, useReload } from '@/routes/admin/common';
 
 export default function RolesPage() {
+  const navigate = useNavigate();
   const [version, reload] = useReload();
   const { data: roles, loading, error } = useQuery(listRoles, [version]);
-  const { data: authorityVocab } = useQuery(listAuthorities, []);
   const { toast } = useToast();
-
-  // Offer the known authority vocabulary as a checklist; "*" is the full-access
-  // super-authority, called out so it isn't granted by accident.
-  const authorityOptions = useMemo<ComboboxOption[]>(
-    () =>
-      (authorityVocab ?? []).map((a) =>
-        a === '*' ? { value: '*', label: '*', description: 'Full access (super-authority)' } : { value: a },
-      ),
-    [authorityVocab],
-  );
-
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<AdminRole | null>(null);
-  const [scope, setScope] = useState<Scope>('tenant');
-  const [token, setToken] = useState('');
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [authorities, setAuthorities] = useState<string[]>([]);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const startCreate = () => {
-    setEditing(null);
-    setScope('tenant');
-    setToken('');
-    setName('');
-    setDescription('');
-    setAuthorities([]);
-    setFormError(null);
-    setOpen(true);
-  };
-
-  const startEdit = (r: AdminRole) => {
-    setEditing(r);
-    setScope(r.scope as Scope);
-    setToken(r.token);
-    setName(r.name ?? '');
-    setDescription(r.description ?? '');
-    setAuthorities([...r.authorities]);
-    setFormError(null);
-    setOpen(true);
-  };
-
-  const submit = async () => {
-    setFormError(null);
-    setBusy(true);
-    try {
-      if (editing) {
-        await updateRole(editing.scope, editing.token, {
-          name: name.trim() || undefined,
-          description: description.trim() || undefined,
-          authorities,
-        });
-        toast(`Role “${editing.token}” updated`);
-      } else {
-        await createRole({
-          scope,
-          token: token.trim(),
-          name: name.trim() || undefined,
-          description: description.trim() || undefined,
-          authorities,
-        });
-        toast(`Role “${token.trim()}” created`);
-      }
-      setOpen(false);
-      reload();
-    } catch (err) {
-      setFormError(errMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const remove = async (r: AdminRole) => {
     if (!window.confirm(`Delete the ${r.scope} role “${r.token}”? It will be removed from all assignees.`)) return;
@@ -130,77 +44,12 @@ export default function RolesPage() {
       title="Roles"
       description="The global role catalog. System roles gate the admin API; tenant roles gate the data plane."
       action={
-        <Button onClick={startCreate}>
+        <Button onClick={() => navigate('/admin/roles/new')}>
           <Plus size={16} /> New role
         </Button>
       }
     >
       <div className="space-y-6">
-        {open && (
-          <AdminCard title={editing ? `Edit ${editing.scope} role “${editing.token}”` : 'New role'}>
-            <div className="space-y-4">
-              {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-              <FormField label="Scope">
-                <div className="flex gap-2">
-                  {(['tenant', 'system'] as Scope[]).map((s) => (
-                    <Button
-                      key={s}
-                      type="button"
-                      variant={scope === s ? 'default' : 'outline'}
-                      size="sm"
-                      disabled={editing !== null}
-                      onClick={() => setScope(s)}
-                    >
-                      {s}
-                    </Button>
-                  ))}
-                </div>
-              </FormField>
-              <FormField label="Token" htmlFor="r-token">
-                <Input
-                  id="r-token"
-                  value={token}
-                  disabled={editing !== null}
-                  placeholder="operator"
-                  onChange={(e) => setToken(e.target.value)}
-                />
-              </FormField>
-              <FormField label="Name" htmlFor="r-name">
-                <Input id="r-name" value={name} placeholder="Operator" onChange={(e) => setName(e.target.value)} />
-              </FormField>
-              <FormField label="Description" htmlFor="r-desc">
-                <Input
-                  id="r-desc"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
-              </FormField>
-              <FormField
-                label="Authorities"
-                htmlFor="r-auths"
-                description='The capabilities this role grants. Use "*" for full access.'
-              >
-                <MultiSelect
-                  id="r-auths"
-                  options={authorityOptions}
-                  value={authorities}
-                  onChange={setAuthorities}
-                  placeholder="Select authorities…"
-                  searchPlaceholder="Filter authorities…"
-                />
-              </FormField>
-              <div className="flex gap-2">
-                <Button onClick={submit} loading={busy} disabled={busy || (!editing && !token.trim())}>
-                  {editing ? 'Save changes' : 'Create role'}
-                </Button>
-                <Button variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          </AdminCard>
-        )}
-
         {loading ? (
           <LoadingState description="Loading roles…" />
         ) : error ? (
@@ -235,7 +84,11 @@ export default function RolesPage() {
                   </DataTableCell>
                   <DataTableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => startEdit(r)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => navigate(`/admin/roles/${r.scope}/${encodeURIComponent(r.token)}`)}
+                      >
                         Edit
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => remove(r)}>
