@@ -967,10 +967,15 @@ type Mutation {
     createDeviceType(request: DeviceTypeCreateRequest): DeviceType!
     # Update an existing device type.
     updateDeviceType(token: String!, request: DeviceTypeCreateRequest): DeviceType!
+    # Delete a device type. Refused while any device references it; its owned
+    # metric definitions are cascade-removed. Returns whether a row was deleted.
+    deleteDeviceType(token: String!): Boolean!
     # Create a new metric definition.
     createMetricDefinition(request: MetricDefinitionCreateRequest): MetricDefinition!
     # Update an existing metric definition.
     updateMetricDefinition(token: String!, request: MetricDefinitionCreateRequest): MetricDefinition!
+    # Delete a single metric definition.
+    deleteMetricDefinition(token: String!): Boolean!
     # Set (upsert) an entity attribute.
     setEntityAttribute(request: EntityAttributeSetRequest!): EntityAttribute!
     # Delete an entity attribute by its natural key.
@@ -979,18 +984,26 @@ type Mutation {
     createDevice(request: DeviceCreateRequest): Device!
     # Update an existing device.
     updateDevice(token: String!, request: DeviceCreateRequest): Device!
+    # Delete a device, cascade-removing its credentials and relationship edges.
+    deleteDevice(token: String!): Boolean!
     # Create a new device group.
     createDeviceGroup(request: DeviceGroupCreateRequest): DeviceGroup!
     # Update an existing device group.
     updateDeviceGroup(token: String!, request: DeviceGroupCreateRequest): DeviceGroup!
+    # Delete a device group and its relationship edges.
+    deleteDeviceGroup(token: String!): Boolean!
     # Create a new device credential.
     createDeviceCredential(request: DeviceCredentialCreateRequest): DeviceCredential!
     # Update an existing device credential.
     updateDeviceCredential(token: String!, request: DeviceCredentialCreateRequest): DeviceCredential!
+    # Delete a single device credential.
+    deleteDeviceCredential(token: String!): Boolean!
     # Create a new provisioning profile.
     createProvisioningProfile(request: ProvisioningProfileCreateRequest): ProvisioningProfile!
     # Update an existing provisioning profile.
     updateProvisioningProfile(token: String!, request: ProvisioningProfileCreateRequest): ProvisioningProfile!
+    # Delete a single provisioning profile.
+    deleteProvisioningProfile(token: String!): Boolean!
     # Self-register a device against a provisioning profile. Unauthenticated: the
     # tenant is resolved from the provision key and the key+secret is the gate.
     # Returns the credential the device must authenticate with going forward.
@@ -1009,47 +1022,69 @@ type Mutation {
     createEntityRelationshipType(request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
     # Update an existing entity relationship type.
     updateEntityRelationshipType(token: String!, request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
+    # Delete a relationship type. Refused while any edge still uses it.
+    deleteEntityRelationshipType(token: String!): Boolean!
     # Create a new entity relationship.
     createEntityRelationship(request: EntityRelationshipCreateRequest!): EntityRelationship!
+    # Remove a single relationship edge — the explicit "unassign" operation.
+    removeEntityRelationship(token: String!): Boolean!
 
     # Create a new asset type.
     createAssetType(request: AssetTypeCreateRequest): AssetType!
     # Update an existing asset type.
     updateAssetType(token: String!, request: AssetTypeCreateRequest): AssetType!
+    # Delete an asset type. Refused while any asset references it.
+    deleteAssetType(token: String!): Boolean!
     # Create a new asset.
     createAsset(request: AssetCreateRequest): Asset!
     # Update an existing asset.
     updateAsset(token: String!, request: AssetCreateRequest): Asset!
+    # Delete an asset and its relationship edges.
+    deleteAsset(token: String!): Boolean!
     # Create a new asset group.
     createAssetGroup(request: AssetGroupCreateRequest): AssetGroup!
     # Update an existing asset group.
     updateAssetGroup(token: String!, request: AssetGroupCreateRequest): AssetGroup!
+    # Delete an asset group and its relationship edges.
+    deleteAssetGroup(token: String!): Boolean!
 
     # Create a new customer type.
     createCustomerType(request: CustomerTypeCreateRequest): CustomerType!
     # Update an existing customer type.
     updateCustomerType(token: String!, request: CustomerTypeCreateRequest): CustomerType!
+    # Delete a customer type. Refused while any customer references it.
+    deleteCustomerType(token: String!): Boolean!
     # Create a new customer.
     createCustomer(request: CustomerCreateRequest): Customer!
     # Update an existing customer.
     updateCustomer(token: String!, request: CustomerCreateRequest): Customer!
+    # Delete a customer and its relationship edges.
+    deleteCustomer(token: String!): Boolean!
     # Create a new customer group.
     createCustomerGroup(request: CustomerGroupCreateRequest): CustomerGroup!
     # Update an existing customer group.
     updateCustomerGroup(token: String!, request: CustomerGroupCreateRequest): CustomerGroup!
+    # Delete a customer group and its relationship edges.
+    deleteCustomerGroup(token: String!): Boolean!
 
     # Create a new area type.
     createAreaType(request: AreaTypeCreateRequest): AreaType!
     # Update an existing area type.
     updateAreaType(token: String!, request: AreaTypeCreateRequest): AreaType!
+    # Delete an area type. Refused while any area references it.
+    deleteAreaType(token: String!): Boolean!
     # Create a new area.
     createArea(request: AreaCreateRequest): Area!
     # Update an existing area.
     updateArea(token: String!, request: AreaCreateRequest): Area!
+    # Delete an area and its relationship edges.
+    deleteArea(token: String!): Boolean!
     # Create a new area group.
     createAreaGroup(request: AreaGroupCreateRequest): AreaGroup!
     # Update an existing area group.
     updateAreaGroup(token: String!, request: AreaGroupCreateRequest): AreaGroup!
+    # Delete an area group and its relationship edges.
+    deleteAreaGroup(token: String!): Boolean!
 }
 
 schema {
