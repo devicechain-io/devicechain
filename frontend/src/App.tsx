@@ -12,8 +12,14 @@ import DeviceTypesPage from '@/routes/device-types/DeviceTypesPage';
 import AdminProtectedRoute from '@/routes/admin/AdminProtectedRoute';
 import AdminLayout from '@/routes/admin/AdminLayout';
 import AdminTenantsPage from '@/routes/admin/TenantsPage';
+import AdminNewTenantPage from '@/routes/admin/tenants/NewTenantPage';
+import AdminTenantDetailPage from '@/routes/admin/tenants/TenantDetailPage';
 import AdminIdentitiesPage from '@/routes/admin/IdentitiesPage';
+import AdminNewIdentityPage from '@/routes/admin/identities/NewIdentityPage';
+import AdminIdentityDetailPage from '@/routes/admin/identities/IdentityDetailPage';
 import AdminRolesPage from '@/routes/admin/RolesPage';
+import AdminNewRolePage from '@/routes/admin/roles/NewRolePage';
+import AdminRoleDetailPage from '@/routes/admin/roles/RoleDetailPage';
 
 function ProtectedRoute() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -50,8 +56,14 @@ export default function App() {
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Navigate to="/admin/tenants" replace />} />
           <Route path="tenants" element={<AdminTenantsPage />} />
+          <Route path="tenants/new" element={<AdminNewTenantPage />} />
+          <Route path="tenants/:token" element={<AdminTenantDetailPage />} />
           <Route path="identities" element={<AdminIdentitiesPage />} />
+          <Route path="identities/new" element={<AdminNewIdentityPage />} />
+          <Route path="identities/:email" element={<AdminIdentityDetailPage />} />
           <Route path="roles" element={<AdminRolesPage />} />
+          <Route path="roles/new" element={<AdminNewRolePage />} />
+          <Route path="roles/:scope/:token" element={<AdminRoleDetailPage />} />
         </Route>
       </Route>
 

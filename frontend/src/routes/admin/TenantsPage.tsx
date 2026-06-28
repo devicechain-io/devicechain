@@ -1,13 +1,10 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { FormField } from '@/components/ui/form-field';
-import { ErrorBanner } from '@/components/ui/error-banner';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -21,68 +18,14 @@ import {
 } from '@/components/ui/data-table';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
-import {
-  listTenants,
-  createTenant,
-  updateTenant,
-  setTenantEnabled,
-  deleteTenant,
-  type AdminTenant,
-} from '@/lib/api/admin';
-import { AdminCard, StatusBadge, Textarea, errMessage, useReload } from '@/routes/admin/common';
+import { listTenants, setTenantEnabled, deleteTenant, type AdminTenant } from '@/lib/api/admin';
+import { StatusBadge, errMessage, useReload } from '@/routes/admin/common';
 
 export default function TenantsPage() {
+  const navigate = useNavigate();
   const [version, reload] = useReload();
   const { data: tenants, loading, error } = useQuery(listTenants, [version]);
   const { toast } = useToast();
-
-  // The create/edit form. editing holds the token being edited (null = create).
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<string | null>(null);
-  const [token, setToken] = useState('');
-  const [name, setName] = useState('');
-  const [config, setConfig] = useState('');
-  const [formError, setFormError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const startCreate = () => {
-    setEditing(null);
-    setToken('');
-    setName('');
-    setConfig('');
-    setFormError(null);
-    setOpen(true);
-  };
-
-  const startEdit = (t: AdminTenant) => {
-    setEditing(t.token);
-    setToken(t.token);
-    setName(t.name ?? '');
-    setConfig(t.config ?? '');
-    setFormError(null);
-    setOpen(true);
-  };
-
-  const submit = async () => {
-    setFormError(null);
-    setBusy(true);
-    try {
-      const cfg = config.trim() === '' ? undefined : config;
-      if (editing) {
-        await updateTenant(editing, { name: name.trim() || undefined, config: cfg });
-        toast(`Tenant “${editing}” updated`);
-      } else {
-        await createTenant({ token: token.trim(), name: name.trim() || undefined, config: cfg });
-        toast(`Tenant “${token.trim()}” created`);
-      }
-      setOpen(false);
-      reload();
-    } catch (err) {
-      setFormError(errMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const toggleEnabled = async (t: AdminTenant) => {
     try {
@@ -110,51 +53,12 @@ export default function TenantsPage() {
       title="Tenants"
       description="The instance's tenant registry. A tenant is a control-plane record, not a provisioned resource."
       action={
-        <Button onClick={startCreate}>
+        <Button onClick={() => navigate('/admin/tenants/new')}>
           <Plus size={16} /> New tenant
         </Button>
       }
     >
       <div className="space-y-6">
-        {open && (
-          <AdminCard
-            title={editing ? `Edit tenant “${editing}”` : 'New tenant'}
-            description={editing ? undefined : 'The token is the tenant id used across the platform; it cannot change later.'}
-          >
-            <div className="space-y-4">
-              {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-              <FormField label="Token" htmlFor="t-token">
-                <Input
-                  id="t-token"
-                  value={token}
-                  disabled={editing !== null}
-                  placeholder="acme"
-                  onChange={(e) => setToken(e.target.value)}
-                />
-              </FormField>
-              <FormField label="Name" htmlFor="t-name">
-                <Input id="t-name" value={name} placeholder="Acme Corp" onChange={(e) => setName(e.target.value)} />
-              </FormField>
-              <FormField label="Config (JSON)" htmlFor="t-config" description="Optional freeform JSON object.">
-                <Textarea
-                  id="t-config"
-                  value={config}
-                  placeholder='{ "tier": "gold" }'
-                  onChange={(e) => setConfig(e.target.value)}
-                />
-              </FormField>
-              <div className="flex gap-2">
-                <Button onClick={submit} loading={busy} disabled={busy || (!editing && !token.trim())}>
-                  {editing ? 'Save changes' : 'Create tenant'}
-                </Button>
-                <Button variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          </AdminCard>
-        )}
-
         {loading ? (
           <LoadingState description="Loading tenants…" />
         ) : error ? (
@@ -183,7 +87,11 @@ export default function TenantsPage() {
                   </DataTableCell>
                   <DataTableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => startEdit(t)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => navigate(`/admin/tenants/${encodeURIComponent(t.token)}`)}
+                      >
                         Edit
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => toggleEnabled(t)}>

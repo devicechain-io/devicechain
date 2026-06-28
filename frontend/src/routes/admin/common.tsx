@@ -5,6 +5,8 @@
 // light — the admin console is a slim CRUD surface over the admin API.
 
 import { useCallback, useState, type ReactNode, type TextareaHTMLAttributes } from 'react';
+import { Link } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
 import { GraphQLRequestError } from '@/lib/graphql/client';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -57,6 +59,16 @@ export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTex
 export function StatusBadge({ enabled }: { enabled: boolean }) {
   return (
     <Badge variant={enabled ? 'outline' : 'destructive'}>{enabled ? 'Enabled' : 'Disabled'}</Badge>
+  );
+}
+
+// BackLink is the small "← Section" link shown atop detail/new pages, returning
+// the user to the resource's list.
+export function BackLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+      <ArrowLeft size={14} /> {children}
+    </Link>
   );
 }
 
