@@ -73,6 +73,15 @@ func (r *AdminResolver) Roles(ctx context.Context, args struct{ Scope *string })
 	return out, nil
 }
 
+// Authorities lists the known authority vocabulary so the console can offer a
+// checklist when defining a role (requires role:read).
+func (r *AdminResolver) Authorities(ctx context.Context) ([]string, error) {
+	if err := auth.Authorize(ctx, auth.RoleRead); err != nil {
+		return nil, err
+	}
+	return auth.Authorities(), nil
+}
+
 // adminRoleCreateInput mirrors AdminRoleCreateRequest.
 type adminRoleCreateInput struct {
 	Scope       string

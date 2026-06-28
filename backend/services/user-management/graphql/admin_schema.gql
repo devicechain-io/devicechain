@@ -107,6 +107,9 @@ type Query {
     tenants: [AdminTenant!]!
     # List the role catalog, optionally filtered to a scope (requires role:read).
     roles(scope: String): [AdminRole!]!
+    # The known authority vocabulary (sorted, includes "*"), for offering a
+    # checklist when defining a role rather than free-text entry (requires role:read).
+    authorities: [String!]!
 }
 
 # Admin mutations. Identity + membership administration requires user:write
