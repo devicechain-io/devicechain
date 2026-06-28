@@ -3,7 +3,7 @@
 
 import { Link, useLocation } from 'react-router-dom';
 import { Boxes, Cpu, LayoutGrid } from 'lucide-react';
-import { BrandMark } from '@/components/BrandMark';
+import { Logomark } from '@/components/brand/Logo';
 import {
   Sidebar,
   SidebarContent,
@@ -43,7 +43,7 @@ export function AppSidebar() {
             <SidebarMenuButton size="lg" asChild tooltip="DeviceChain">
               <Link to="/">
                 <div className="flex aspect-square size-8 items-center justify-center">
-                  <BrandMark className="size-7" />
+                  <Logomark className="size-7" />
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-semibold">
