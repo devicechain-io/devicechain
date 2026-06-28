@@ -2,14 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useNavigate, useParams } from 'react-router-dom';
+import { Trash2 } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
+import { SectionPanel } from '@/components/ui/section-panel';
 import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listRoles, deleteRole } from '@/lib/api/admin';
-import { AdminCard, BackLink, errMessage, useReload } from '@/routes/admin/common';
+import { BackLink, errMessage, useReload } from '@/routes/admin/common';
 import { RoleForm } from '@/routes/admin/roles/RoleForm';
 
 export default function RoleDetailPage() {
@@ -24,23 +26,25 @@ export default function RoleDetailPage() {
 
   const role = roles?.find((r) => r.scope === scope && r.token === token) ?? null;
 
+  const back = <BackLink to="/admin/roles">Roles</BackLink>;
+
   if (loading) {
     return (
-      <PageShell title={token} action={<BackLink to="/admin/roles">Roles</BackLink>}>
+      <PageShell title={token} action={back}>
         <LoadingState description="Loading role…" />
       </PageShell>
     );
   }
   if (error) {
     return (
-      <PageShell title={token} action={<BackLink to="/admin/roles">Roles</BackLink>}>
+      <PageShell title={token} action={back}>
         <ErrorState description={error} />
       </PageShell>
     );
   }
   if (!role) {
     return (
-      <PageShell title={token} action={<BackLink to="/admin/roles">Roles</BackLink>}>
+      <PageShell title={token} action={back}>
         <ErrorState description={`Role “${token}” not found.`} />
       </PageShell>
     );
@@ -61,24 +65,24 @@ export default function RoleDetailPage() {
     <PageShell
       title={token}
       description={`${scope} role`}
-      action={<BackLink to="/admin/roles">Roles</BackLink>}
-    >
-      <AdminCard title={`Edit ${scope} role “${token}”`}>
-        <div className="space-y-6">
-          <RoleForm
-            role={role}
-            onDone={(m) => {
-              toast(m);
-              reload();
-            }}
-          />
-          <div className="flex gap-2 border-t border-border pt-4">
-            <Button variant="destructive" onClick={remove}>
-              Delete role
-            </Button>
-          </div>
+      action={
+        <div className="flex items-center gap-2">
+          {back}
+          <Button variant="destructive" size="sm" onClick={remove}>
+            <Trash2 size={14} /> Delete
+          </Button>
         </div>
-      </AdminCard>
+      }
+    >
+      <SectionPanel>
+        <RoleForm
+          role={role}
+          onDone={(m) => {
+            toast(m);
+            reload();
+          }}
+        />
+      </SectionPanel>
     </PageShell>
   );
 }

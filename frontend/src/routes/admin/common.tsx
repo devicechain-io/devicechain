@@ -4,9 +4,15 @@
 // Small shared helpers for the admin console pages (ADR-033). Kept deliberately
 // light — the admin console is a slim CRUD surface over the admin API.
 
-import { useCallback, useState, type ReactNode, type TextareaHTMLAttributes } from 'react';
+import {
+  useCallback,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type TextareaHTMLAttributes,
+} from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, CircleSlash } from 'lucide-react';
 import { GraphQLRequestError } from '@/lib/graphql/client';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -26,19 +32,22 @@ export function errMessage(err: unknown): string {
   return 'Could not reach the server.';
 }
 
-// parseTokens splits a free-text token field (space- or comma-separated) into a
-// clean, de-duplicated list — used for role-token and authority inputs.
-export function parseTokens(input: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of input.split(/[\s,]+/)) {
-    const t = raw.trim();
-    if (t && !seen.has(t)) {
-      seen.add(t);
-      out.push(t);
-    }
-  }
-  return out;
+// rowLinkProps makes a whole table row behave like a link to a detail page:
+// clickable, keyboard-focusable, and activatable with Enter/Space. Spread it onto
+// a DataTableRow whose cells are plain content (no nested interactive controls).
+export function rowLinkProps(onActivate: () => void) {
+  return {
+    role: 'button' as const,
+    tabIndex: 0,
+    className: 'cursor-pointer',
+    onClick: onActivate,
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onActivate();
+      }
+    },
+  };
 }
 
 // Textarea mirrors the Input primitive's styling for multi-line fields (tenant
@@ -55,10 +64,17 @@ export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTex
   );
 }
 
-// StatusBadge renders an enabled/disabled pill.
+// StatusBadge renders an enabled/disabled pill — green with a check when enabled,
+// muted with a slash when not, so status reads at a glance from colour + icon.
 export function StatusBadge({ enabled }: { enabled: boolean }) {
-  return (
-    <Badge variant={enabled ? 'outline' : 'destructive'}>{enabled ? 'Enabled' : 'Disabled'}</Badge>
+  return enabled ? (
+    <Badge variant="success" className="gap-1">
+      <CheckCircle2 size={12} /> Enabled
+    </Badge>
+  ) : (
+    <Badge variant="outline" className="gap-1 text-muted-foreground">
+      <CircleSlash size={12} /> Disabled
+    </Badge>
   );
 }
 
@@ -72,23 +88,3 @@ export function BackLink({ to, children }: { to: string; children: ReactNode }) 
   );
 }
 
-// AdminCard is a titled section used to frame create/edit forms and detail panels.
-export function AdminCard({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="rounded-lg border border-border bg-card p-5">
-      <div className="mb-4">
-        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-        {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
-      </div>
-      {children}
-    </div>
-  );
-}
