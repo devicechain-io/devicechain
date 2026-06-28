@@ -3,8 +3,9 @@
 
 import { useNavigate } from 'react-router-dom';
 import { PageShell } from '@/components/ui/page-shell';
+import { SectionPanel } from '@/components/ui/section-panel';
 import { useToast } from '@/components/ui/toast';
-import { AdminCard, BackLink } from '@/routes/admin/common';
+import { BackLink } from '@/routes/admin/common';
 import { RoleForm } from '@/routes/admin/roles/RoleForm';
 
 export default function NewRolePage() {
@@ -17,14 +18,14 @@ export default function NewRolePage() {
       description="System roles gate the admin API; tenant roles gate the data plane."
       action={<BackLink to="/admin/roles">Roles</BackLink>}
     >
-      <AdminCard title="New role">
+      <SectionPanel>
         <RoleForm
           onDone={(m) => {
             toast(m);
             navigate('/admin/roles');
           }}
         />
-      </AdminCard>
+      </SectionPanel>
     </PageShell>
   );
 }

@@ -2,14 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useNavigate, useParams } from 'react-router-dom';
+import { Ban, Power, Trash2 } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
+import { SectionPanel } from '@/components/ui/section-panel';
 import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listTenants, setTenantEnabled, deleteTenant } from '@/lib/api/admin';
-import { AdminCard, BackLink, errMessage, useReload } from '@/routes/admin/common';
+import { BackLink, StatusBadge, errMessage, useReload } from '@/routes/admin/common';
 import { TenantForm } from '@/routes/admin/tenants/TenantForm';
 
 export default function TenantDetailPage() {
@@ -23,23 +25,25 @@ export default function TenantDetailPage() {
 
   const tenant = tenants?.find((t) => t.token === token) ?? null;
 
+  const back = <BackLink to="/admin/tenants">Tenants</BackLink>;
+
   if (loading) {
     return (
-      <PageShell title={token} action={<BackLink to="/admin/tenants">Tenants</BackLink>}>
+      <PageShell title={token} action={back}>
         <LoadingState description="Loading tenant…" />
       </PageShell>
     );
   }
   if (error) {
     return (
-      <PageShell title={token} action={<BackLink to="/admin/tenants">Tenants</BackLink>}>
+      <PageShell title={token} action={back}>
         <ErrorState description={error} />
       </PageShell>
     );
   }
   if (!tenant) {
     return (
-      <PageShell title={token} action={<BackLink to="/admin/tenants">Tenants</BackLink>}>
+      <PageShell title={token} action={back}>
         <ErrorState description={`Tenant “${token}” not found.`} />
       </PageShell>
     );
@@ -69,28 +73,34 @@ export default function TenantDetailPage() {
   return (
     <PageShell
       title={token}
-      description={tenant.name ?? '—'}
-      action={<BackLink to="/admin/tenants">Tenants</BackLink>}
-    >
-      <AdminCard title={`Edit tenant “${token}”`}>
-        <div className="space-y-6">
-          <TenantForm
-            tenant={tenant}
-            onDone={(m) => {
-              toast(m);
-              reload();
-            }}
-          />
-          <div className="flex gap-2 border-t border-border pt-4">
-            <Button variant="outline" onClick={toggleEnabled}>
-              {tenant.enabled ? 'Disable' : 'Enable'}
-            </Button>
-            <Button variant="destructive" onClick={remove}>
-              Delete tenant
-            </Button>
-          </div>
+      description={
+        <div className="mt-1 flex items-center gap-2">
+          <StatusBadge enabled={tenant.enabled} />
+          {tenant.name && <span className="text-sm text-muted-foreground">{tenant.name}</span>}
         </div>
-      </AdminCard>
+      }
+      action={
+        <div className="flex items-center gap-2">
+          {back}
+          <Button variant="outline" size="sm" onClick={toggleEnabled}>
+            {tenant.enabled ? <Ban size={14} /> : <Power size={14} />}
+            {tenant.enabled ? 'Disable' : 'Enable'}
+          </Button>
+          <Button variant="destructive" size="sm" onClick={remove}>
+            <Trash2 size={14} /> Delete
+          </Button>
+        </div>
+      }
+    >
+      <SectionPanel>
+        <TenantForm
+          tenant={tenant}
+          onDone={(m) => {
+            toast(m);
+            reload();
+          }}
+        />
+      </SectionPanel>
     </PageShell>
   );
 }

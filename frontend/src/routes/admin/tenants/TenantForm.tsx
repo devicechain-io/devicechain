@@ -41,7 +41,11 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <FormField label="Token" htmlFor="t-token">
+      <FormField
+        label="Token"
+        htmlFor="t-token"
+        description={editing ? undefined : 'The tenant id used across the platform; it cannot change later.'}
+      >
         <Input
           id="t-token"
           value={token}

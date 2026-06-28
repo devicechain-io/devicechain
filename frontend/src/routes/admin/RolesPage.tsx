@@ -17,27 +17,13 @@ import {
   DataTableRow,
   DataTableCell,
 } from '@/components/ui/data-table';
-import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
-import { listRoles, deleteRole, type AdminRole } from '@/lib/api/admin';
-import { errMessage, useReload } from '@/routes/admin/common';
+import { listRoles } from '@/lib/api/admin';
+import { rowLinkProps } from '@/routes/admin/common';
 
 export default function RolesPage() {
   const navigate = useNavigate();
-  const [version, reload] = useReload();
-  const { data: roles, loading, error } = useQuery(listRoles, [version]);
-  const { toast } = useToast();
-
-  const remove = async (r: AdminRole) => {
-    if (!window.confirm(`Delete the ${r.scope} role “${r.token}”? It will be removed from all assignees.`)) return;
-    try {
-      const ok = await deleteRole(r.scope, r.token);
-      toast(ok ? `Role “${r.token}” deleted` : `Role “${r.token}” not found`);
-      reload();
-    } catch (err) {
-      toast(errMessage(err), 'error');
-    }
-  };
+  const { data: roles, loading, error } = useQuery(listRoles, []);
 
   return (
     <PageShell
@@ -63,11 +49,13 @@ export default function RolesPage() {
               <DataTableHeaderCell>Token</DataTableHeaderCell>
               <DataTableHeaderCell>Name</DataTableHeaderCell>
               <DataTableHeaderCell>Authorities</DataTableHeaderCell>
-              <DataTableHeaderCell className="text-right">Actions</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
               {roles.map((r) => (
-                <DataTableRow key={r.id}>
+                <DataTableRow
+                  key={r.id}
+                  {...rowLinkProps(() => navigate(`/admin/roles/${r.scope}/${encodeURIComponent(r.token)}`))}
+                >
                   <DataTableCell>
                     <Badge variant="secondary">{r.scope}</Badge>
                   </DataTableCell>
@@ -80,20 +68,6 @@ export default function RolesPage() {
                           {a}
                         </Badge>
                       ))}
-                    </div>
-                  </DataTableCell>
-                  <DataTableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => navigate(`/admin/roles/${r.scope}/${encodeURIComponent(r.token)}`)}
-                      >
-                        Edit
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => remove(r)}>
-                        Delete
-                      </Button>
                     </div>
                   </DataTableCell>
                 </DataTableRow>

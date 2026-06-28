@@ -3,8 +3,9 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { X } from 'lucide-react';
+import { Ban, Power, Trash2, X } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
+import { SectionPanel } from '@/components/ui/section-panel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -29,7 +30,7 @@ import {
   removeMembership,
   type AdminIdentity,
 } from '@/lib/api/admin';
-import { AdminCard, BackLink, StatusBadge, errMessage, useReload } from '@/routes/admin/common';
+import { BackLink, StatusBadge, errMessage, useReload } from '@/routes/admin/common';
 
 // toOptions turns a token+name record (tenant or role) into combobox options:
 // the token is the value, a friendlier name is the label, and the raw token is
@@ -46,6 +47,7 @@ export default function IdentityDetailPage() {
   const { email: rawEmail } = useParams<{ email: string }>();
   const email = decodeURIComponent(rawEmail ?? '');
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   const [version, reload] = useReload();
   const { data: identities, loading, error } = useQuery(listIdentities, [version]);
@@ -59,35 +61,74 @@ export default function IdentityDetailPage() {
 
   const identity = identities?.find((i) => i.email === email) ?? null;
 
+  const back = <BackLink to="/admin/identities">Identities</BackLink>;
+
   if (loading) {
     return (
-      <PageShell title={email} action={<BackLink to="/admin/identities">Identities</BackLink>}>
+      <PageShell title={email} action={back}>
         <LoadingState description="Loading identity…" />
       </PageShell>
     );
   }
   if (error) {
     return (
-      <PageShell title={email} action={<BackLink to="/admin/identities">Identities</BackLink>}>
+      <PageShell title={email} action={back}>
         <ErrorState description={error} />
       </PageShell>
     );
   }
   if (!identity) {
     return (
-      <PageShell title={email} action={<BackLink to="/admin/identities">Identities</BackLink>}>
+      <PageShell title={email} action={back}>
         <ErrorState description={`Identity “${email}” not found.`} />
       </PageShell>
     );
   }
+
+  const toggleEnabled = async () => {
+    try {
+      await setIdentityEnabled(identity.email, !identity.enabled);
+      toast(`Identity “${identity.email}” ${identity.enabled ? 'disabled' : 'enabled'}`);
+      reload();
+    } catch (err) {
+      toast(errMessage(err), 'error');
+    }
+  };
+
+  const remove = async () => {
+    if (!window.confirm(`Delete identity “${identity.email}” and all its memberships?`)) return;
+    try {
+      await deleteIdentity(identity.email);
+      toast(`Identity “${identity.email}” deleted`);
+      navigate('/admin/identities');
+    } catch (err) {
+      toast(errMessage(err), 'error');
+    }
+  };
 
   const fullName = [identity.firstName, identity.lastName].filter(Boolean).join(' ');
 
   return (
     <PageShell
       title={identity.email}
-      description={fullName || 'No name set'}
-      action={<BackLink to="/admin/identities">Identities</BackLink>}
+      description={
+        <div className="mt-1 flex items-center gap-2">
+          <StatusBadge enabled={identity.enabled} />
+          {fullName && <span className="text-sm text-muted-foreground">{fullName}</span>}
+        </div>
+      }
+      action={
+        <div className="flex items-center gap-2">
+          {back}
+          <Button variant="outline" size="sm" onClick={toggleEnabled}>
+            {identity.enabled ? <Ban size={14} /> : <Power size={14} />}
+            {identity.enabled ? 'Disable' : 'Enable'}
+          </Button>
+          <Button variant="destructive" size="sm" onClick={remove}>
+            <Trash2 size={14} /> Delete
+          </Button>
+        </div>
+      }
     >
       <IdentityDetail
         key={identity.email}
@@ -96,7 +137,6 @@ export default function IdentityDetailPage() {
         systemRoleOptions={systemRoleOptions}
         tenantRoleOptions={tenantRoleOptions}
         onChanged={reload}
-        onDeleted={() => navigate('/admin/identities')}
       />
     </PageShell>
   );
@@ -110,14 +150,12 @@ function IdentityDetail({
   systemRoleOptions,
   tenantRoleOptions,
   onChanged,
-  onDeleted,
 }: {
   identity: AdminIdentity;
   tenantOptions: ComboboxOption[];
   systemRoleOptions: ComboboxOption[];
   tenantRoleOptions: ComboboxOption[];
   onChanged: () => void;
-  onDeleted: () => void;
 }) {
   const { toast } = useToast();
   const [sysRoles, setSysRoles] = useState<string[]>(identity.systemRoles);
@@ -135,32 +173,11 @@ function IdentityDetail({
     }
   };
 
-  const toggleEnabled = async () => {
-    try {
-      await setIdentityEnabled(identity.email, !identity.enabled);
-      toast(`Identity “${identity.email}” ${identity.enabled ? 'disabled' : 'enabled'}`);
-      onChanged();
-    } catch (err) {
-      toast(errMessage(err), 'error');
-    }
-  };
-
-  const remove = async () => {
-    if (!window.confirm(`Delete identity “${identity.email}” and all its memberships?`)) return;
-    try {
-      await deleteIdentity(identity.email);
-      toast(`Identity “${identity.email}” deleted`);
-      onDeleted();
-    } catch (err) {
-      toast(errMessage(err), 'error');
-    }
-  };
-
   return (
-    <AdminCard title={`Manage “${identity.email}”`}>
-      <div className="space-y-6">
-        {memberError && <ErrorBanner message={memberError} onDismiss={() => setMemberError(null)} />}
+    <div className="space-y-6">
+      {memberError && <ErrorBanner message={memberError} onDismiss={() => setMemberError(null)} />}
 
+      <SectionPanel title="Access">
         <div className="grid gap-4 sm:grid-cols-2">
           <FormField label="System roles" description="Roles that gate the admin API.">
             <div className="flex gap-2">
@@ -204,43 +221,33 @@ function IdentityDetail({
             </div>
           </FormField>
         </div>
+      </SectionPanel>
 
-        <div>
-          <h4 className="mb-2 text-sm font-semibold text-foreground">Memberships</h4>
-          {identity.memberships.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No tenant memberships.</p>
-          ) : (
-            <div className="space-y-2">
-              {identity.memberships.map((m) => (
-                <MembershipRow
-                  key={m.tenant}
-                  email={identity.email}
-                  membership={m}
-                  roleOptions={tenantRoleOptions}
-                  onChanged={onChanged}
-                />
-              ))}
-            </div>
-          )}
-          <AddMembershipRow
-            email={identity.email}
-            tenantOptions={tenantOptions}
-            roleOptions={tenantRoleOptions}
-            existingTenants={identity.memberships.map((m) => m.tenant)}
-            onChanged={onChanged}
-          />
-        </div>
-
-        <div className="flex gap-2 border-t border-border pt-4">
-          <Button variant="outline" onClick={toggleEnabled}>
-            {identity.enabled ? 'Disable' : 'Enable'}
-          </Button>
-          <Button variant="destructive" onClick={remove}>
-            Delete identity
-          </Button>
-        </div>
-      </div>
-    </AdminCard>
+      <SectionPanel title="Memberships">
+        {identity.memberships.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No tenant memberships.</p>
+        ) : (
+          <div className="space-y-2">
+            {identity.memberships.map((m) => (
+              <MembershipRow
+                key={m.tenant}
+                email={identity.email}
+                membership={m}
+                roleOptions={tenantRoleOptions}
+                onChanged={onChanged}
+              />
+            ))}
+          </div>
+        )}
+        <AddMembershipRow
+          email={identity.email}
+          tenantOptions={tenantOptions}
+          roleOptions={tenantRoleOptions}
+          existingTenants={identity.memberships.map((m) => m.tenant)}
+          onChanged={onChanged}
+        />
+      </SectionPanel>
+    </div>
   );
 }
 

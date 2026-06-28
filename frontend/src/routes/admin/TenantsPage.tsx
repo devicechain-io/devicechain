@@ -16,37 +16,13 @@ import {
   DataTableRow,
   DataTableCell,
 } from '@/components/ui/data-table';
-import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
-import { listTenants, setTenantEnabled, deleteTenant, type AdminTenant } from '@/lib/api/admin';
-import { StatusBadge, errMessage, useReload } from '@/routes/admin/common';
+import { listTenants } from '@/lib/api/admin';
+import { StatusBadge, rowLinkProps } from '@/routes/admin/common';
 
 export default function TenantsPage() {
   const navigate = useNavigate();
-  const [version, reload] = useReload();
-  const { data: tenants, loading, error } = useQuery(listTenants, [version]);
-  const { toast } = useToast();
-
-  const toggleEnabled = async (t: AdminTenant) => {
-    try {
-      await setTenantEnabled(t.token, !t.enabled);
-      toast(`Tenant “${t.token}” ${t.enabled ? 'disabled' : 'enabled'}`);
-      reload();
-    } catch (err) {
-      toast(errMessage(err), 'error');
-    }
-  };
-
-  const remove = async (t: AdminTenant) => {
-    if (!window.confirm(`Delete tenant “${t.token}”? This cannot be undone.`)) return;
-    try {
-      const ok = await deleteTenant(t.token);
-      toast(ok ? `Tenant “${t.token}” deleted` : `Tenant “${t.token}” not found`);
-      reload();
-    } catch (err) {
-      toast(errMessage(err), 'error');
-    }
-  };
+  const { data: tenants, loading, error } = useQuery(listTenants, []);
 
   return (
     <PageShell
@@ -72,11 +48,13 @@ export default function TenantsPage() {
               <DataTableHeaderCell>Name</DataTableHeaderCell>
               <DataTableHeaderCell>Status</DataTableHeaderCell>
               <DataTableHeaderCell>Config</DataTableHeaderCell>
-              <DataTableHeaderCell className="text-right">Actions</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
               {tenants.map((t) => (
-                <DataTableRow key={t.id}>
+                <DataTableRow
+                  key={t.id}
+                  {...rowLinkProps(() => navigate(`/admin/tenants/${encodeURIComponent(t.token)}`))}
+                >
                   <DataTableCell className="font-medium">{t.token}</DataTableCell>
                   <DataTableCell>{t.name ?? '—'}</DataTableCell>
                   <DataTableCell>
@@ -84,23 +62,6 @@ export default function TenantsPage() {
                   </DataTableCell>
                   <DataTableCell className="max-w-xs truncate font-mono text-xs text-muted-foreground">
                     {t.config ?? '—'}
-                  </DataTableCell>
-                  <DataTableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => navigate(`/admin/tenants/${encodeURIComponent(t.token)}`)}
-                      >
-                        Edit
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => toggleEnabled(t)}>
-                        {t.enabled ? 'Disable' : 'Enable'}
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => remove(t)}>
-                        Delete
-                      </Button>
-                    </div>
                   </DataTableCell>
                 </DataTableRow>
               ))}

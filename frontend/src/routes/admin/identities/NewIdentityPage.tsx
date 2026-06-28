@@ -4,6 +4,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageShell } from '@/components/ui/page-shell';
+import { SectionPanel } from '@/components/ui/section-panel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -13,7 +14,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listRoles, createIdentity } from '@/lib/api/admin';
-import { AdminCard, BackLink, errMessage } from '@/routes/admin/common';
+import { BackLink, errMessage } from '@/routes/admin/common';
 
 // toOptions turns a token+name record into combobox options.
 function toOptions(items: { token: string; name?: string | null }[] | null | undefined): ComboboxOption[] {
@@ -66,10 +67,7 @@ export default function NewIdentityPage() {
       description="An email-keyed global principal. Add tenant memberships after creating it."
       action={<BackLink to="/admin/identities">Identities</BackLink>}
     >
-      <AdminCard
-        title="New identity"
-        description="An email-keyed global principal. Add tenant memberships after creating it."
-      >
+      <SectionPanel>
         <div className="space-y-4">
           {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
           <div className="grid gap-4 sm:grid-cols-2">
@@ -110,7 +108,7 @@ export default function NewIdentityPage() {
             </Button>
           </div>
         </div>
-      </AdminCard>
+      </SectionPanel>
     </PageShell>
   );
 }

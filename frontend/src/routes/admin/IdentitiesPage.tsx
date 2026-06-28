@@ -17,42 +17,13 @@ import {
   DataTableRow,
   DataTableCell,
 } from '@/components/ui/data-table';
-import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
-import {
-  listIdentities,
-  setIdentityEnabled,
-  deleteIdentity,
-  type AdminIdentity,
-} from '@/lib/api/admin';
-import { StatusBadge, errMessage, useReload } from '@/routes/admin/common';
+import { listIdentities } from '@/lib/api/admin';
+import { StatusBadge, rowLinkProps } from '@/routes/admin/common';
 
 export default function IdentitiesPage() {
   const navigate = useNavigate();
-  const [version, reload] = useReload();
-  const { data: identities, loading, error } = useQuery(listIdentities, [version]);
-  const { toast } = useToast();
-
-  const remove = async (i: AdminIdentity) => {
-    if (!window.confirm(`Delete identity “${i.email}” and all its memberships?`)) return;
-    try {
-      await deleteIdentity(i.email);
-      toast(`Identity “${i.email}” deleted`);
-      reload();
-    } catch (err) {
-      toast(errMessage(err), 'error');
-    }
-  };
-
-  const toggleEnabled = async (i: AdminIdentity) => {
-    try {
-      await setIdentityEnabled(i.email, !i.enabled);
-      toast(`Identity “${i.email}” ${i.enabled ? 'disabled' : 'enabled'}`);
-      reload();
-    } catch (err) {
-      toast(errMessage(err), 'error');
-    }
-  };
+  const { data: identities, loading, error } = useQuery(listIdentities, []);
 
   return (
     <PageShell
@@ -79,11 +50,13 @@ export default function IdentitiesPage() {
               <DataTableHeaderCell>Status</DataTableHeaderCell>
               <DataTableHeaderCell>System roles</DataTableHeaderCell>
               <DataTableHeaderCell>Tenants</DataTableHeaderCell>
-              <DataTableHeaderCell className="text-right">Actions</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
               {identities.map((i) => (
-                <DataTableRow key={i.id}>
+                <DataTableRow
+                  key={i.id}
+                  {...rowLinkProps(() => navigate('/admin/identities/' + encodeURIComponent(i.email)))}
+                >
                   <DataTableCell className="font-medium">{i.email}</DataTableCell>
                   <DataTableCell>{[i.firstName, i.lastName].filter(Boolean).join(' ') || '—'}</DataTableCell>
                   <DataTableCell>
@@ -101,23 +74,6 @@ export default function IdentitiesPage() {
                     </div>
                   </DataTableCell>
                   <DataTableCell className="text-muted-foreground">{i.memberships.length}</DataTableCell>
-                  <DataTableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => navigate('/admin/identities/' + encodeURIComponent(i.email))}
-                      >
-                        Manage
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => toggleEnabled(i)}>
-                        {i.enabled ? 'Disable' : 'Enable'}
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => remove(i)}>
-                        Delete
-                      </Button>
-                    </div>
-                  </DataTableCell>
                 </DataTableRow>
               ))}
             </DataTableBody>
