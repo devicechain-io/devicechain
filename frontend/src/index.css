@@ -79,7 +79,11 @@
     --card: 240 3.7% 10%;
     --card-foreground: 240 4.8% 95.9%;
 
-    --popover: 240 3.7% 10%;
+    /* Popovers (combobox/multi-select/menus) open *over* cards, which are also
+     * 10% — so lift the surface to read as elevated rather than blending into
+     * the card behind it. Kept just below --border (16%) so the rim + internal
+     * dividers stay visible. */
+    --popover: 240 3.7% 14%;
     --popover-foreground: 240 4.8% 95.9%;
 
     /* Brand blue, lifted for dark-mode contrast. */
