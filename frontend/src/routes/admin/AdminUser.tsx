@@ -8,7 +8,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { decodeToken } from '@/lib/auth/jwt';
 import { useToast } from '@/components/ui/toast';
-import { errMessage } from '@/routes/admin/common';
+import { errMessage } from '@/routes/common';
 import {
   DropdownMenu,
   DropdownMenuContent,

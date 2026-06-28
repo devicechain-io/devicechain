@@ -8,7 +8,11 @@ import LoginPage from '@/routes/Login';
 import AppLayout from '@/routes/AppLayout';
 import Dashboard from '@/routes/Dashboard';
 import DevicesPage from '@/routes/devices/DevicesPage';
+import NewDevicePage from '@/routes/devices/NewDevicePage';
+import DeviceDetailPage from '@/routes/devices/DeviceDetailPage';
 import DeviceTypesPage from '@/routes/device-types/DeviceTypesPage';
+import NewDeviceTypePage from '@/routes/device-types/NewDeviceTypePage';
+import DeviceTypeDetailPage from '@/routes/device-types/DeviceTypeDetailPage';
 import AdminProtectedRoute from '@/routes/admin/AdminProtectedRoute';
 import AdminLayout from '@/routes/admin/AdminLayout';
 import AdminTenantsPage from '@/routes/admin/TenantsPage';
@@ -46,7 +50,11 @@ export default function App() {
         <Route path="/" element={<AppLayout />}>
           <Route index element={<Dashboard />} />
           <Route path="devices" element={<DevicesPage />} />
+          <Route path="devices/new" element={<NewDevicePage />} />
+          <Route path="devices/:token" element={<DeviceDetailPage />} />
           <Route path="device-types" element={<DeviceTypesPage />} />
+          <Route path="device-types/new" element={<NewDeviceTypePage />} />
+          <Route path="device-types/:token" element={<DeviceTypeDetailPage />} />
         </Route>
       </Route>
 

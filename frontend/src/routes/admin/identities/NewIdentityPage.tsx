@@ -14,7 +14,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listRoles, createIdentity } from '@/lib/api/admin';
-import { BackLink, errMessage } from '@/routes/admin/common';
+import { BackLink, errMessage } from '@/routes/common';
 
 // toOptions turns a token+name record into combobox options.
 function toOptions(items: { token: string; name?: string | null }[] | null | undefined): ComboboxOption[] {

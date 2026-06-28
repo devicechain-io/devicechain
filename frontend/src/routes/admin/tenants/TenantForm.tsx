@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { createTenant, updateTenant, type AdminTenant } from '@/lib/api/admin';
-import { Textarea, errMessage } from '@/routes/admin/common';
+import { Textarea, errMessage } from '@/routes/common';
 
 // TenantForm creates a tenant (tenant absent) or edits one (tenant present, with
 // its token fixed). Shared by the new + detail pages.

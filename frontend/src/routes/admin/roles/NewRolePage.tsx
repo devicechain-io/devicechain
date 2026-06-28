@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { useToast } from '@/components/ui/toast';
-import { BackLink } from '@/routes/admin/common';
+import { BackLink } from '@/routes/common';
 import { RoleForm } from '@/routes/admin/roles/RoleForm';
 
 export default function NewRolePage() {

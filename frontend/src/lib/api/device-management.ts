@@ -7,6 +7,8 @@ import { graphql } from '@/gql/device-management';
 import type {
   DevicesQuery,
   DeviceTypesQuery,
+  DeviceTypeCreateRequest,
+  DeviceCreateRequest,
 } from '@/gql/device-management/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -16,6 +18,10 @@ export type DeviceType = DeviceTypesQuery['deviceTypes']['results'][number];
 export type Pagination = DevicesQuery['devices']['pagination'];
 export type DeviceSearchResults = DevicesQuery['devices'];
 export type DeviceTypeSearchResults = DeviceTypesQuery['deviceTypes'];
+
+// Re-export the generated request inputs so forms can type their request objects
+// without reaching into the generated module directly.
+export type { DeviceTypeCreateRequest, DeviceCreateRequest };
 
 // ── Devices ─────────────────────────────────────────────────────────────
 
@@ -60,6 +66,89 @@ export async function listDevices(opts: {
   return data.devices;
 }
 
+const DEVICE_BY_TOKEN = graphql(`
+  query DeviceByToken($tokens: [String!]!) {
+    devicesByToken(tokens: $tokens) {
+      id
+      token
+      name
+      description
+      createdAt
+      deviceType {
+        id
+        token
+        name
+        backgroundColor
+        foregroundColor
+      }
+    }
+  }
+`);
+
+export async function getDevice(token: string): Promise<Device | null> {
+  const data = await gql('device-management', DEVICE_BY_TOKEN, { tokens: [token] });
+  return data.devicesByToken[0] ?? null;
+}
+
+const CREATE_DEVICE = graphql(`
+  mutation CreateDevice($request: DeviceCreateRequest) {
+    createDevice(request: $request) {
+      id
+      token
+      name
+      description
+      createdAt
+      deviceType {
+        id
+        token
+        name
+        backgroundColor
+        foregroundColor
+      }
+    }
+  }
+`);
+
+export async function createDevice(request: DeviceCreateRequest): Promise<Device> {
+  const data = await gql('device-management', CREATE_DEVICE, { request });
+  return data.createDevice;
+}
+
+const UPDATE_DEVICE = graphql(`
+  mutation UpdateDevice($token: String!, $request: DeviceCreateRequest) {
+    updateDevice(token: $token, request: $request) {
+      id
+      token
+      name
+      description
+      createdAt
+      deviceType {
+        id
+        token
+        name
+        backgroundColor
+        foregroundColor
+      }
+    }
+  }
+`);
+
+export async function updateDevice(token: string, request: DeviceCreateRequest): Promise<Device> {
+  const data = await gql('device-management', UPDATE_DEVICE, { token, request });
+  return data.updateDevice;
+}
+
+const DELETE_DEVICE = graphql(`
+  mutation DeleteDevice($token: String!) {
+    deleteDevice(token: $token)
+  }
+`);
+
+export async function deleteDevice(token: string): Promise<boolean> {
+  const data = await gql('device-management', DELETE_DEVICE, { token });
+  return data.deleteDevice;
+}
+
 // ── Device types ────────────────────────────────────────────────────────
 
 const DEVICE_TYPES = graphql(`
@@ -96,4 +185,83 @@ export async function listDeviceTypes(opts: {
     },
   });
   return data.deviceTypes;
+}
+
+// The device-type getter and mutations select the same shape as the DeviceTypes
+// query so their results stay assignable to the shared DeviceType type.
+const DEVICE_TYPE_BY_TOKEN = graphql(`
+  query DeviceTypeByToken($tokens: [String!]!) {
+    deviceTypesByToken(tokens: $tokens) {
+      id
+      token
+      name
+      description
+      icon
+      backgroundColor
+      foregroundColor
+      borderColor
+      createdAt
+    }
+  }
+`);
+
+export async function getDeviceType(token: string): Promise<DeviceType | null> {
+  const data = await gql('device-management', DEVICE_TYPE_BY_TOKEN, { tokens: [token] });
+  return data.deviceTypesByToken[0] ?? null;
+}
+
+const CREATE_DEVICE_TYPE = graphql(`
+  mutation CreateDeviceType($request: DeviceTypeCreateRequest) {
+    createDeviceType(request: $request) {
+      id
+      token
+      name
+      description
+      icon
+      backgroundColor
+      foregroundColor
+      borderColor
+      createdAt
+    }
+  }
+`);
+
+export async function createDeviceType(request: DeviceTypeCreateRequest): Promise<DeviceType> {
+  const data = await gql('device-management', CREATE_DEVICE_TYPE, { request });
+  return data.createDeviceType;
+}
+
+const UPDATE_DEVICE_TYPE = graphql(`
+  mutation UpdateDeviceType($token: String!, $request: DeviceTypeCreateRequest) {
+    updateDeviceType(token: $token, request: $request) {
+      id
+      token
+      name
+      description
+      icon
+      backgroundColor
+      foregroundColor
+      borderColor
+      createdAt
+    }
+  }
+`);
+
+export async function updateDeviceType(
+  token: string,
+  request: DeviceTypeCreateRequest,
+): Promise<DeviceType> {
+  const data = await gql('device-management', UPDATE_DEVICE_TYPE, { token, request });
+  return data.updateDeviceType;
+}
+
+const DELETE_DEVICE_TYPE = graphql(`
+  mutation DeleteDeviceType($token: String!) {
+    deleteDeviceType(token: $token)
+  }
+`);
+
+export async function deleteDeviceType(token: string): Promise<boolean> {
+  const data = await gql('device-management', DELETE_DEVICE_TYPE, { token });
+  return data.deleteDeviceType;
 }

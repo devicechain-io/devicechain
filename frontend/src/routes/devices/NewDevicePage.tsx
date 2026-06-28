@@ -6,23 +6,23 @@ import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { useToast } from '@/components/ui/toast';
 import { BackLink } from '@/routes/common';
-import { TenantForm } from '@/routes/admin/tenants/TenantForm';
+import { DeviceForm } from '@/routes/devices/DeviceForm';
 
-export default function NewTenantPage() {
+export default function NewDevicePage() {
   const navigate = useNavigate();
   const { toast } = useToast();
 
   return (
     <PageShell
-      title="New tenant"
-      description="The instance's tenant registry. A tenant is a control-plane record, not a provisioned resource."
-      action={<BackLink to="/admin/tenants">Tenants</BackLink>}
+      title="New device"
+      description="Devices registered in this tenant."
+      action={<BackLink to="/devices">Devices</BackLink>}
     >
       <SectionPanel>
-        <TenantForm
+        <DeviceForm
           onDone={(m) => {
             toast(m);
-            navigate('/admin/tenants');
+            navigate('/devices');
           }}
         />
       </SectionPanel>

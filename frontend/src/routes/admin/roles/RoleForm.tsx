@@ -10,7 +10,7 @@ import type { ComboboxOption } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listAuthorities, createRole, updateRole, type AdminRole } from '@/lib/api/admin';
-import { errMessage } from '@/routes/admin/common';
+import { errMessage } from '@/routes/common';
 
 type Scope = 'system' | 'tenant';
 
