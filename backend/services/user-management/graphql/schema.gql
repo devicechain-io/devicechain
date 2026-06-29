@@ -30,6 +30,14 @@ type Tenant {
     description: String
 }
 
+# The identity the caller is signed in as (control plane), for display in the
+# console — its name, falling back to email.
+type CurrentIdentity {
+    email: String!
+    firstName: String
+    lastName: String
+}
+
 # The tenant-scoped user-management API is the authentication surface only
 # (ADR-033). Identities, memberships, the role catalog, and tenants are
 # administered through the instance-scoped admin API (admin_schema.gql) — the one
@@ -39,6 +47,8 @@ type Query {
     ping: String!
     # The tenant the caller is currently acting within (self-scoped).
     tenant: Tenant!
+    # The identity the caller is signed in as (self-scoped).
+    me: CurrentIdentity!
 }
 
 type Mutation {

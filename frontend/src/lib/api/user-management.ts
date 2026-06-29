@@ -8,6 +8,7 @@ import type {
   LoginMutation,
   SelectTenantMutation,
   CurrentTenantQuery,
+  MeQuery,
 } from '@/gql/user-management/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -16,6 +17,7 @@ export type IdentityAuth = LoginMutation['login'];
 export type Membership = IdentityAuth['memberships'][number];
 export type AuthToken = SelectTenantMutation['selectTenant'];
 export type CurrentTenant = CurrentTenantQuery['tenant'];
+export type CurrentUser = MeQuery['me'];
 
 // ── Auth (unauthenticated) ──────────────────────────────────────────────
 //
@@ -101,4 +103,22 @@ const CURRENT_TENANT = graphql(`
 export async function getCurrentTenant(): Promise<CurrentTenant> {
   const data = await gql('user-management', CURRENT_TENANT);
   return data.tenant;
+}
+
+// Describes the identity the caller is signed in as — resolved server-side from
+// the access token. Backs the console's user menu (name, falling back to email).
+
+const ME = graphql(`
+  query Me {
+    me {
+      email
+      firstName
+      lastName
+    }
+  }
+`);
+
+export async function getCurrentUser(): Promise<CurrentUser> {
+  const data = await gql('user-management', ME);
+  return data.me;
 }

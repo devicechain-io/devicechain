@@ -32,6 +32,11 @@ export type CurrentTenantQueryVariables = Exact<{ [key: string]: never; }>;
 
 export type CurrentTenantQuery = { tenant: { token: string, name: string | null, description: string | null } };
 
+export type MeQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type MeQuery = { me: { email: string, firstName: string | null, lastName: string | null } };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -91,3 +96,12 @@ export const CurrentTenantDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CurrentTenantQuery, CurrentTenantQueryVariables>;
+export const MeDocument = new TypedDocumentString(`
+    query Me {
+  me {
+    email
+    firstName
+    lastName
+  }
+}
+    `) as unknown as TypedDocumentString<MeQuery, MeQueryVariables>;

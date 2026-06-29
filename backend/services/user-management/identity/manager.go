@@ -291,6 +291,14 @@ func (m *Manager) CurrentTenant(ctx context.Context, token string) (*iam.Tenant,
 	return m.iam.TenantByToken(ctx, token)
 }
 
+// CurrentUser resolves the global identity making the request, keyed by the
+// email carried as the access token's subject. It reads the tenant-unscoped
+// control-plane table (iam.Store uses the system context), so it works from a
+// tenant-scoped data-plane request. Used to show the signed-in user's name.
+func (m *Manager) CurrentUser(ctx context.Context, email string) (*iam.Identity, error) {
+	return m.iam.IdentityByEmail(ctx, email)
+}
+
 // recordAuth writes an authentication audit event (ADR-019) best-effort: a
 // failure to record is logged but never fails the authentication itself.
 func (m *Manager) recordAuth(ctx context.Context, operation, actor, tenant string) {
