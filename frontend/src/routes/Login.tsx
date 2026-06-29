@@ -3,7 +3,7 @@
 
 import { useState, type FormEvent } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
-import { useAuth } from '@/auth/AuthProvider';
+import { useAuth, consumeSessionExpired } from '@/auth/AuthProvider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -23,6 +23,9 @@ export default function LoginPage() {
   const [identity, setIdentity] = useState<IdentityAuth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Read once: true when we landed here because a session expired (not a fresh
+  // visit or an explicit sign-out).
+  const [expired] = useState(() => consumeSessionExpired());
 
   if (isAuthenticated) {
     return <Navigate to="/" replace />;
@@ -97,6 +100,12 @@ export default function LoginPage() {
             {identity ? 'Choose a tenant to continue' : 'Sign in to the management console'}
           </p>
         </div>
+
+        {expired && !identity && (
+          <p className="mb-4 rounded-md border border-border bg-muted/50 px-3 py-2 text-center text-sm text-muted-foreground">
+            Your session expired. Please sign in again.
+          </p>
+        )}
 
         {identity ? (
           <div className="space-y-3 rounded-lg border border-border bg-card p-6">
