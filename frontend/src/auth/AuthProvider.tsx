@@ -114,6 +114,31 @@ function writeStoredIdentity(identity: StoredIdentity | null) {
   }
 }
 
+// A one-shot flag set when a session is dropped because it expired (as opposed to
+// an explicit sign-out), read once by the login screen so the redirect isn't
+// mysterious.
+const SESSION_EXPIRED_KEY = 'dc-session-expired';
+
+function flagSessionExpired() {
+  try {
+    window.sessionStorage.setItem(SESSION_EXPIRED_KEY, '1');
+  } catch {
+    // sessionStorage unavailable — the login notice is best-effort
+  }
+}
+
+export function consumeSessionExpired(): boolean {
+  try {
+    if (window.sessionStorage.getItem(SESSION_EXPIRED_KEY) === '1') {
+      window.sessionStorage.removeItem(SESSION_EXPIRED_KEY);
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [tokens, setTokens] = useState<StoredTokens | null>(() => readStored());
   const [identity, setIdentity] = useState<StoredIdentity | null>(() => readStoredIdentity());
@@ -149,12 +174,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     applyIdentity(null);
   }, [applyTokens, applyIdentity]);
 
+  // expireTenant / expireIdentity drop a session that can no longer be sustained
+  // (the refresh call failed, or a no-refresh identity token lapsed) and flag the
+  // cause for the login screen. Clearing the session state flips the route guards,
+  // which redirect to /login — instead of leaving a dead session in place to fire
+  // failing requests and render a raw error.
+  const expireTenant = useCallback(() => {
+    flagSessionExpired();
+    refreshInFlight.current = null;
+    applyTokens(null);
+  }, [applyTokens]);
+
+  const expireIdentity = useCallback(() => {
+    flagSessionExpired();
+    applyIdentity(null);
+  }, [applyIdentity]);
+
   // Hands the GraphQL client a usable access token, refreshing first if the
-  // current one is missing or near expiry. Returns null when the session can no
-  // longer be sustained (caller proceeds unauthenticated → server fails closed).
+  // current one is near expiry. If the refresh token itself has lapsed (long
+  // inactivity) or the refresh call fails, the tenant session is expired cleanly
+  // and the caller gets null (the route guard then redirects to login).
   const getToken = useCallback(async (): Promise<string | null> => {
     const current = tokensRef.current;
     if (!current) return null;
+    if (isExpired(current.refreshToken, 0)) {
+      expireTenant();
+      return null;
+    }
     if (!isExpired(current.accessToken)) return current.accessToken;
 
     if (!refreshInFlight.current) {
@@ -164,7 +210,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           applyTokens({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
           return pair.accessToken;
         } catch {
-          logout();
+          expireTenant();
           return null;
         } finally {
           refreshInFlight.current = null;
@@ -172,16 +218,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })();
     }
     return refreshInFlight.current;
-  }, [applyTokens, logout]);
+  }, [applyTokens, expireTenant]);
 
   // Hands the admin client the identity token while it is still valid. Identity
-  // tokens have no refresh path, so an expired one returns null (admin calls then
-  // fail closed and the console routes back to login).
+  // tokens have no refresh path, so an expired one expires the identity session —
+  // which routes the admin console back to login — and returns null.
   const getIdentityToken = useCallback(async (): Promise<string | null> => {
     const current = identityRef.current;
-    if (!current || isExpired(current.identityToken)) return null;
+    if (!current) return null;
+    if (isExpired(current.identityToken, 0)) {
+      expireIdentity();
+      return null;
+    }
     return current.identityToken;
-  }, []);
+  }, [expireIdentity]);
 
   // Register the getters with the client, and mark loading complete.
   useEffect(() => {
@@ -223,20 +273,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [tokens],
   );
 
+  // A session counts as authenticated only while it can still be sustained: the
+  // tenant session until its refresh token lapses (the short-lived access token is
+  // refreshed transparently), the identity session until its non-refreshable token
+  // expires. The route guards read these, so an expired session redirects to login
+  // rather than rendering pages whose requests will fail.
+  const sessionAlive = tokens !== null && !isExpired(tokens.refreshToken, 0);
+  const identityAlive = identity !== null && !isExpired(identity.identityToken, 0);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       claims,
-      isAuthenticated: claims !== null,
+      isAuthenticated: sessionAlive,
       isLoading,
       login,
       selectTenant,
       logout,
-      isIdentityAuthenticated: identity !== null,
-      superuser: identity?.superuser ?? false,
+      isIdentityAuthenticated: identityAlive,
+      superuser: identityAlive && (identity?.superuser ?? false),
       memberships: identity?.memberships ?? [],
-      identityToken: identity?.identityToken ?? null,
+      identityToken: identityAlive ? (identity?.identityToken ?? null) : null,
     }),
-    [claims, isLoading, login, selectTenant, logout, identity],
+    [claims, sessionAlive, identityAlive, isLoading, login, selectTenant, logout, identity],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
