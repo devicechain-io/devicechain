@@ -11,7 +11,9 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
-import { rowLinkProps } from '@/routes/common';
+import { useToast } from '@/components/ui/toast';
+import { rowLinkProps, useReload } from '@/routes/common';
+import { FormDrawer } from '@/components/registry/FormDrawer';
 import {
   DataTable,
   DataTableBody,
@@ -24,14 +26,18 @@ import type { RegistryResource } from '@/components/registry/types';
 
 const pageSize = 20;
 
-// Generic paginated list for a registry resource: a "New" action, clickable rows
-// that route to the detail page, and the resource's own columns.
+// Generic paginated list for a registry resource: a "New" action that opens the
+// create drawer, clickable rows that route to the detail page, and the resource's
+// own columns.
 export function ResourceListPage<T>({ resource }: { resource: RegistryResource<T> }) {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [pageNumber, setPageNumber] = useState(1);
+  const [creating, setCreating] = useState(false);
+  const [version, reload] = useReload();
   const { data, loading, error } = useQuery(
     () => resource.list({ pageNumber, pageSize }),
-    [pageNumber],
+    [pageNumber, version],
   );
 
   const results = data?.results ?? [];
@@ -41,11 +47,22 @@ export function ResourceListPage<T>({ resource }: { resource: RegistryResource<T
       title={resource.titlePlural}
       description={resource.listDescription}
       action={
-        <Button onClick={() => navigate(`${resource.basePath}/new`)}>
+        <Button onClick={() => setCreating(true)}>
           <Plus size={16} /> New {resource.singular}
         </Button>
       }
     >
+      <FormDrawer
+        open={creating}
+        onOpenChange={setCreating}
+        title={`New ${resource.singular}`}
+      >
+        {resource.renderForm(undefined, (m) => {
+          toast(m);
+          setCreating(false);
+          reload();
+        })}
+      </FormDrawer>
       {loading ? (
         <LoadingState description={`Loading ${resource.titlePlural.toLowerCase()}…`} />
       ) : error ? (

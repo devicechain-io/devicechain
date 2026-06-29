@@ -1,14 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import type { RegistryResource } from '@/components/registry';
+import { RegistryTypeForm, type RegistryResource } from '@/components/registry';
 import {
   listDeviceTypes,
   getDeviceType,
+  createDeviceType,
+  updateDeviceType,
   deleteDeviceType,
   type DeviceType,
 } from '@/lib/api/device-management';
-import { DeviceTypeForm } from '@/routes/device-types/DeviceTypeForm';
 
 // The device-type registry, described once for the generic list/detail/new pages.
 export const deviceTypeResource: RegistryResource<DeviceType> = {
@@ -47,6 +48,15 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
       className: 'text-muted-foreground',
     },
   ],
-  renderForm: (dt, onDone) => <DeviceTypeForm deviceType={dt} onDone={onDone} />,
+  renderForm: (dt, onDone) => (
+    <RegistryTypeForm
+      entity={dt}
+      singular="device type"
+      tokenPlaceholder="thermostat"
+      create={(req) => createDeviceType(req)}
+      update={(token, req) => updateDeviceType(token, req)}
+      onDone={onDone}
+    />
+  ),
   removeConfirm: (dt) => `Delete device type “${dt.token}”? This cannot be undone.`,
 };
