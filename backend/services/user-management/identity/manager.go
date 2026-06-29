@@ -112,7 +112,10 @@ func (m *Manager) Initialize(ctx context.Context, refreshKV nats.KeyValue) error
 	}
 	m.dummyHash = dummy
 
-	return m.seedSuperuser(ctx)
+	if err := m.seedSuperuser(ctx); err != nil {
+		return err
+	}
+	return m.ensureViewerRole(ctx)
 }
 
 // applyKeys installs a loaded signing-key set: it rebuilds the issuer on the
@@ -346,9 +349,52 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	return m.issueTenantTokens(claims.Tenant, id.Email, roles, authorities, su)
 }
 
+// viewerAuthorities is the read-only baseline every enabled tenant member
+// receives in addition to their assigned roles: read access to all domain
+// objects (ADR-008). Writes stay role-gated. Kept in sync with the seeded
+// `viewer` role (ensureViewerRole) so the access is visible in the catalog.
+var viewerAuthorities = []string{
+	string(auth.DeviceRead),
+	string(auth.EventRead),
+	string(auth.StateRead),
+	string(auth.CommandRead),
+}
+
+// ensureViewerRole keeps the well-known `viewer` tenant role in the catalog,
+// idempotently and under the seed lock, so the read baseline is visible and
+// assignable in the admin console. Its authorities mirror viewerAuthorities.
+func (m *Manager) ensureViewerRole(ctx context.Context) error {
+	return m.locker.WithLock(ctx, m.ms.FunctionalArea, func(ctx context.Context) error {
+		return m.iam.EnsureRole(ctx, iam.ScopeTenant, iam.ViewerRoleToken, "Viewer", viewerAuthorities)
+	})
+}
+
+// unionStrings returns the de-duplicated union of two string slices, preserving
+// first-seen order.
+func unionStrings(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, group := range [][]string{a, b} {
+		for _, s := range group {
+			if _, ok := seen[s]; ok {
+				continue
+			}
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // issueTenantTokens mints a tenant access + refresh pair for a global identity
 // and records the refresh jti in the server-side store.
 func (m *Manager) issueTenantTokens(tenant, email string, roles, authorities []string, sudo bool) (*TokenPair, error) {
+	// Every enabled tenant member can view all domain objects by default (the
+	// `viewer` baseline); writes stay role-gated. Superusers already hold `*`.
+	if !sudo {
+		authorities = unionStrings(authorities, viewerAuthorities)
+	}
+
 	m.mu.RLock()
 	issuer := m.issuer
 	m.mu.RUnlock()

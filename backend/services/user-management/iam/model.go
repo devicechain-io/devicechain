@@ -53,6 +53,12 @@ const SuperuserRoleToken = "superuser"
 // within a tenant — seeded for the superuser's scaffold membership.
 const TenantAdminRoleToken = "tenant-admin"
 
+// ViewerRoleToken is the well-known tenant role granting read access to all
+// domain objects. Its authorities mirror the read-only baseline every enabled
+// tenant member receives by default (see identity.viewerAuthorities); it is kept
+// in the catalog so the access is visible/assignable in the admin console.
+const ViewerRoleToken = "viewer"
+
 // Role is a globally-defined, named bundle of authorities. Uniqueness is the
 // composite (scope, token) — a token like "admin" can exist once per scope — so
 // the catalog can hold both a system "superuser" and tenant roles without

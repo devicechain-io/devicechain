@@ -305,6 +305,17 @@ func (s *Store) AssignSystemRoles(ctx context.Context, id *Identity, roles []Rol
 	return s.sys(ctx).Model(id).Association("SystemRoles").Append(roles)
 }
 
+// EnsureRole idempotently upserts a well-known role by (scope, token), keeping
+// its name and authorities current. Safe to call on every startup — used to keep
+// the built-in `viewer` role in the catalog and in sync with the code.
+func (s *Store) EnsureRole(ctx context.Context, scope RoleScope, token, name string, authorities []string) error {
+	role := Role{Scope: scope, Token: token}
+	return s.sys(ctx).
+		Where(Role{Scope: scope, Token: token}).
+		Assign(Role{NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&name)}, Authorities: authorities}).
+		FirstOrCreate(&role).Error
+}
+
 // SeedSuperuser creates, in one transaction, the superuser identity with the
 // `superuser` system role (ADR-033). The bootstrap is tenant-less: no scaffold
 // tenant or membership is created. A convenience `tenant-admin` tenant role is
