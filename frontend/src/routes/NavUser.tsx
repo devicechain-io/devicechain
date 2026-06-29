@@ -1,11 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { ChevronsUpDown, LogOut, ShieldCheck } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronsUpDown, LogOut, ShieldCheck, UserPen } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthProvider';
 import { useCurrentUser } from '@/auth/CurrentUserProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { FormDrawer } from '@/components/registry';
+import { ProfileForm } from '@/routes/ProfileForm';
+import { useToast } from '@/components/ui/toast';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,7 +37,9 @@ export function NavUser() {
   const { claims, logout, superuser, isIdentityAuthenticated } = useAuth();
   const user = useCurrentUser();
   const { isMobile } = useSidebar();
+  const { toast } = useToast();
   const navigate = useNavigate();
+  const [editing, setEditing] = useState(false);
 
   if (!claims) return null;
 
@@ -76,6 +82,11 @@ export function NavUser() {
 
             <DropdownMenuSeparator />
 
+            <DropdownMenuItem onClick={() => setEditing(true)} className="cursor-pointer">
+              <UserPen size={16} />
+              Edit profile
+            </DropdownMenuItem>
+
             {superuser && isIdentityAuthenticated && (
               <>
                 <DropdownMenuSeparator />
@@ -96,6 +107,20 @@ export function NavUser() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        <FormDrawer
+          open={editing}
+          onOpenChange={setEditing}
+          title="Edit profile"
+          description="Update your display name."
+        >
+          <ProfileForm
+            onDone={(message) => {
+              toast(message);
+              setEditing(false);
+            }}
+          />
+        </FormDrawer>
       </SidebarMenuItem>
     </SidebarMenu>
   );

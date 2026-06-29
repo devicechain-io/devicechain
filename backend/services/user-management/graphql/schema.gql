@@ -59,6 +59,9 @@ type Mutation {
     selectTenant(identityToken: String!, tenant: String!): AuthToken!
     # Exchange a valid refresh token for a new pair (rotates the refresh token).
     refresh(refreshToken: String!): AuthToken!
+    # Update the signed-in user's own display name (first/last). Email is fixed;
+    # self-scoped to the caller's identity.
+    updateProfile(firstName: String, lastName: String): CurrentIdentity!
 }
 
 schema {

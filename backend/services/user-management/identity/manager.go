@@ -302,6 +302,22 @@ func (m *Manager) CurrentUser(ctx context.Context, email string) (*iam.Identity,
 	return m.iam.IdentityByEmail(ctx, email)
 }
 
+// UpdateProfile updates the signed-in identity's display name (first/last),
+// keyed by the email carried as the token subject. Email and credentials are not
+// affected — this is the self-service profile edit for a tenant user.
+func (m *Manager) UpdateProfile(ctx context.Context, email, firstName, lastName string) (*iam.Identity, error) {
+	id, err := m.iam.IdentityByEmail(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	id.FirstName = firstName
+	id.LastName = lastName
+	if err := m.iam.UpdateIdentity(ctx, id); err != nil {
+		return nil, err
+	}
+	return id, nil
+}
+
 // recordAuth writes an authentication audit event (ADR-019) best-effort: a
 // failure to record is logged but never fails the authentication itself.
 func (m *Manager) recordAuth(ctx context.Context, operation, actor, tenant string) {

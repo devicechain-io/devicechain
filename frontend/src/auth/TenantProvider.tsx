@@ -22,7 +22,7 @@ const TenantContext = createContext<TenantInfo | null>(null);
 export function TenantProvider({ children }: { children: ReactNode }) {
   const { claims } = useAuth();
   const token = claims?.tenant ?? null;
-  const cached = useCachedResource<TenantInfo>(token ? `dc-tenant:${token}` : null, () =>
+  const [cached] = useCachedResource<TenantInfo>(token ? `dc-tenant:${token}` : null, () =>
     getCurrentTenant().then((t) => ({
       token: t.token,
       name: t.name ?? null,

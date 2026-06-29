@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-user-management/identity"
 )
 
@@ -81,4 +82,24 @@ func (r *SchemaResolver) Refresh(ctx context.Context, args struct {
 		return nil, err
 	}
 	return &AuthTokenResolver{pair: pair}, nil
+}
+
+// UpdateProfile lets the signed-in user edit their own display name (first/last).
+// Self-scoped: it targets the identity carried in the caller's token, so being
+// authenticated is sufficient; email and credentials are immutable here.
+func (r *SchemaResolver) UpdateProfile(ctx context.Context, args struct {
+	FirstName *string
+	LastName  *string
+}) (*CurrentIdentityResolver, error) {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok {
+		return nil, auth.ErrUnauthenticated
+	}
+	id, err := r.getIdentityManager(ctx).UpdateProfile(
+		ctx, claims.Username, strOrEmpty(args.FirstName), strOrEmpty(args.LastName),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &CurrentIdentityResolver{id: id}, nil
 }

@@ -122,3 +122,26 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   const data = await gql('user-management', ME);
   return data.me;
 }
+
+// Self-service edit of the signed-in user's display name (email is fixed).
+
+const UPDATE_PROFILE = graphql(`
+  mutation UpdateProfile($firstName: String, $lastName: String) {
+    updateProfile(firstName: $firstName, lastName: $lastName) {
+      email
+      firstName
+      lastName
+    }
+  }
+`);
+
+export async function updateProfile(input: {
+  firstName?: string | null;
+  lastName?: string | null;
+}): Promise<CurrentUser> {
+  const data = await gql('user-management', UPDATE_PROFILE, {
+    firstName: input.firstName ?? null,
+    lastName: input.lastName ?? null,
+  });
+  return data.updateProfile;
+}

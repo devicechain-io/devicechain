@@ -24,6 +24,8 @@ export interface UserInfo extends CachedUser {
 }
 
 const CurrentUserContext = createContext<UserInfo | null>(null);
+// Write-through setter so a profile edit updates the name everywhere immediately.
+const ApplyUserContext = createContext<(user: CachedUser) => void>(() => {});
 
 function fullName(first: string | null, last: string | null): string {
   return [first, last].filter(Boolean).join(' ');
@@ -32,7 +34,7 @@ function fullName(first: string | null, last: string | null): string {
 export function CurrentUserProvider({ children }: { children: ReactNode }) {
   const { claims } = useAuth();
   const email = claims?.username ?? null; // the token subject is the email
-  const cached = useCachedResource<CachedUser>(email ? `dc-user:${email}` : null, () =>
+  const [cached, setCached] = useCachedResource<CachedUser>(email ? `dc-user:${email}` : null, () =>
     getCurrentUser().then((u) => ({
       email: u.email,
       firstName: u.firstName ?? null,
@@ -45,9 +47,19 @@ export function CurrentUserProvider({ children }: { children: ReactNode }) {
     ? { ...base, displayName: fullName(base.firstName, base.lastName) || base.email }
     : null;
 
-  return <CurrentUserContext.Provider value={user}>{children}</CurrentUserContext.Provider>;
+  return (
+    <CurrentUserContext.Provider value={user}>
+      <ApplyUserContext.Provider value={setCached}>{children}</ApplyUserContext.Provider>
+    </CurrentUserContext.Provider>
+  );
 }
 
 export function useCurrentUser(): UserInfo | null {
   return useContext(CurrentUserContext);
+}
+
+// Apply an updated profile (from updateProfile) to the cached current user, so
+// the name refreshes across the app without a refetch.
+export function useApplyCurrentUser(): (user: CachedUser) => void {
+  return useContext(ApplyUserContext);
 }

@@ -305,6 +305,17 @@ func (s *Store) AssignSystemRoles(ctx context.Context, id *Identity, roles []Rol
 	return s.sys(ctx).Model(id).Association("SystemRoles").Append(roles)
 }
 
+// UpdateIdentity persists the mutable profile fields of an already-loaded
+// identity (first/last name) by primary key. Uses a column map so clearing a
+// name to "" is written (a zero-value struct update would skip it), and so the
+// email, password, and role associations are never touched.
+func (s *Store) UpdateIdentity(ctx context.Context, id *Identity) error {
+	return s.sys(ctx).Model(id).Updates(map[string]any{
+		"first_name": id.FirstName,
+		"last_name":  id.LastName,
+	}).Error
+}
+
 // EnsureRole idempotently upserts a well-known role by (scope, token), keeping
 // its name and authorities current. Safe to call on every startup — used to keep
 // the built-in `viewer` role in the catalog and in sync with the code.
