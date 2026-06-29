@@ -36,3 +36,29 @@ func (r *SchemaResolver) Tenant(ctx context.Context) (*TenantResolver, error) {
 	}
 	return &TenantResolver{t: t}, nil
 }
+
+// CurrentIdentityResolver resolves the CurrentIdentity GraphQL type: the global
+// identity the caller is signed in as, for display in the console (name, falling
+// back to email).
+type CurrentIdentityResolver struct {
+	id *iam.Identity
+}
+
+func (r *CurrentIdentityResolver) Email() string      { return r.id.Email }
+func (r *CurrentIdentityResolver) FirstName() *string { return optStr(r.id.FirstName) }
+func (r *CurrentIdentityResolver) LastName() *string  { return optStr(r.id.LastName) }
+
+// Me describes the identity the caller is signed in as (ADR-033). Self-scoped:
+// resolved from the email carried as the access token's subject, so being
+// authenticated is enough.
+func (r *SchemaResolver) Me(ctx context.Context) (*CurrentIdentityResolver, error) {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok {
+		return nil, auth.ErrUnauthenticated
+	}
+	id, err := r.getIdentityManager(ctx).CurrentUser(ctx, claims.Username)
+	if err != nil {
+		return nil, err
+	}
+	return &CurrentIdentityResolver{id: id}, nil
+}

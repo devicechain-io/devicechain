@@ -4,6 +4,7 @@
 import { ChevronsUpDown, LogOut, ShieldCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthProvider';
+import { useCurrentUser } from '@/auth/CurrentUserProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import {
   DropdownMenu,
@@ -30,10 +31,16 @@ function UserAvatar({ name }: { name: string }) {
 
 export function NavUser() {
   const { claims, logout, superuser, isIdentityAuthenticated } = useAuth();
+  const user = useCurrentUser();
   const { isMobile } = useSidebar();
   const navigate = useNavigate();
 
   if (!claims) return null;
+
+  // Prefer the human name; fall back to the email (the token subject) until the
+  // identity record loads.
+  const name = user?.displayName ?? claims.username;
+  const email = user?.email ?? claims.username;
 
   return (
     <SidebarMenu>
@@ -44,10 +51,10 @@ export function NavUser() {
               size="lg"
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
-              <UserAvatar name={claims.username} />
+              <UserAvatar name={name} />
               <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-semibold">{claims.username}</span>
-                <span className="truncate text-xs text-muted-foreground">{claims.tenant}</span>
+                <span className="truncate font-semibold">{name}</span>
+                <span className="truncate text-xs text-muted-foreground">{email}</span>
               </div>
               <ChevronsUpDown className="ml-auto size-4" />
             </SidebarMenuButton>
@@ -59,10 +66,9 @@ export function NavUser() {
             sideOffset={4}
           >
             <div className="px-2 py-2">
-              <p className="text-sm font-medium text-foreground">{claims.username}</p>
-              <p className="text-xs text-muted-foreground">
-                Tenant: {claims.tenant || '—'}
-              </p>
+              <p className="text-sm font-medium text-foreground">{name}</p>
+              <p className="text-xs text-muted-foreground">{email}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Tenant: {claims.tenant || '—'}</p>
             </div>
 
             <div className="px-2 py-1.5">
