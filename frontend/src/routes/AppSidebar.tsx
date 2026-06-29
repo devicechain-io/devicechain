@@ -1,8 +1,10 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Boxes, Cpu, LayoutGrid } from 'lucide-react';
+import { Boxes, ChevronRight, Cpu, LayoutGrid, type LucideIcon } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { Logomark } from '@/components/brand/Logo';
 import {
   Sidebar,
@@ -10,30 +12,77 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarRail,
 } from '@/components/ui/sidebar';
 import { NavUser } from '@/routes/NavUser';
 
-const NAV = {
-  overview: [{ label: 'Dashboard', href: '/', icon: LayoutGrid }],
-  // Devices maps onto the device-management service.
-  devices: [
-    { label: 'Devices', href: '/devices', icon: Cpu },
-    { label: 'Device Types', href: '/device-types', icon: Boxes },
-  ],
-};
+interface NavLeaf {
+  label: string;
+  href: string;
+  icon: LucideIcon;
+}
+
+// A top-level nav node is either a direct link (Dashboard) or a collapsible
+// group of leaves. Each model construct (Devices, and later Assets/Customers/
+// Areas) is one group whose children are its Instances / Types / Groups — so
+// adding a construct is a single config entry, not new layout code.
+type NavNode = NavLeaf | { label: string; icon: LucideIcon; children: NavLeaf[] };
+
+const NAV: NavNode[] = [
+  { label: 'Dashboard', href: '/', icon: LayoutGrid },
+  {
+    label: 'Devices',
+    icon: Cpu,
+    children: [
+      { label: 'Devices', href: '/devices', icon: Cpu },
+      { label: 'Device Types', href: '/device-types', icon: Boxes },
+      // Device Groups land with the registry families / membership work.
+    ],
+  },
+];
+
+function isLeaf(node: NavNode): node is NavLeaf {
+  return 'href' in node;
+}
 
 function isActive(pathname: string, href: string) {
   return href === '/' ? pathname === '/' : pathname.startsWith(href);
 }
 
+// Label of the group that owns the current route, if any — used to keep the
+// active group expanded (including on deep links / refreshes).
+function activeGroupLabel(pathname: string): string | undefined {
+  return NAV.find(
+    (node) => !isLeaf(node) && node.children.some((c) => isActive(pathname, c.href)),
+  )?.label;
+}
+
 export function AppSidebar() {
   const { pathname } = useLocation();
+  const activeGroup = activeGroupLabel(pathname);
+  const [open, setOpen] = useState<Set<string>>(() => new Set(activeGroup ? [activeGroup] : []));
+
+  // Navigating into a collapsed group (e.g. via a link elsewhere) expands it,
+  // without collapsing groups the user opened manually.
+  useEffect(() => {
+    if (activeGroup) {
+      setOpen((prev) => (prev.has(activeGroup) ? prev : new Set(prev).add(activeGroup)));
+    }
+  }, [activeGroup]);
+
+  const toggle = (label: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      next.has(label) ? next.delete(label) : next.add(label);
+      return next;
+    });
 
   return (
     <Sidebar collapsible="icon">
@@ -61,34 +110,30 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {NAV.overview.map((item) => (
-                <SidebarMenuItem key={item.href}>
-                  <SidebarMenuButton asChild isActive={isActive(pathname, item.href)} tooltip={item.label}>
-                    <Link to={item.href}>
-                      <item.icon />
-                      <span>{item.label}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarGroup>
-          <SidebarGroupLabel>Devices</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {NAV.devices.map((item) => (
-                <SidebarMenuItem key={item.href}>
-                  <SidebarMenuButton asChild isActive={isActive(pathname, item.href)} tooltip={item.label}>
-                    <Link to={item.href}>
-                      <item.icon />
-                      <span>{item.label}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+              {NAV.map((node) =>
+                isLeaf(node) ? (
+                  <SidebarMenuItem key={node.label}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={isActive(pathname, node.href)}
+                      tooltip={node.label}
+                    >
+                      <Link to={node.href}>
+                        <node.icon />
+                        <span>{node.label}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : (
+                  <NavGroup
+                    key={node.label}
+                    node={node}
+                    pathname={pathname}
+                    open={open.has(node.label)}
+                    onToggle={() => toggle(node.label)}
+                  />
+                ),
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -100,5 +145,52 @@ export function AppSidebar() {
 
       <SidebarRail />
     </Sidebar>
+  );
+}
+
+function NavGroup({
+  node,
+  pathname,
+  open,
+  onToggle,
+}: {
+  node: { label: string; icon: LucideIcon; children: NavLeaf[] };
+  pathname: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const hasActiveChild = node.children.some((c) => isActive(pathname, c.href));
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        onClick={onToggle}
+        // Highlight the collapsed parent so the user still sees where they are.
+        isActive={hasActiveChild && !open}
+        tooltip={node.label}
+      >
+        <node.icon />
+        <span>{node.label}</span>
+        <ChevronRight
+          className={cn(
+            'ml-auto transition-transform group-data-[collapsible=icon]:hidden',
+            open && 'rotate-90',
+          )}
+        />
+      </SidebarMenuButton>
+      {open && (
+        <SidebarMenuSub>
+          {node.children.map((child) => (
+            <SidebarMenuSubItem key={child.href}>
+              <SidebarMenuSubButton asChild isActive={isActive(pathname, child.href)}>
+                <Link to={child.href}>
+                  <child.icon />
+                  <span>{child.label}</span>
+                </Link>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          ))}
+        </SidebarMenuSub>
+      )}
+    </SidebarMenuItem>
   );
 }
