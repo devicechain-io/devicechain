@@ -4,4 +4,10 @@
 export type { RegistryResource, RegistryColumn, RegistryListResult, PaginationInfo } from './types';
 export { ResourceListPage } from './ResourceListPage';
 export { ResourceDetailPage } from './ResourceDetailPage';
-export { ResourceNewPage } from './ResourceNewPage';
+export { FormDrawer } from './FormDrawer';
+export {
+  RegistryTypeForm,
+  RegistryInstanceForm,
+  type TypeRequest,
+  type InstanceRequest,
+} from './forms';

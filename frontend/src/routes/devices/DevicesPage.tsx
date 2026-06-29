@@ -15,7 +15,10 @@ import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
-import { rowLinkProps } from '@/routes/common';
+import { useToast } from '@/components/ui/toast';
+import { rowLinkProps, useReload } from '@/routes/common';
+import { FormDrawer } from '@/components/registry';
+import { DeviceForm } from '@/routes/devices/DeviceForm';
 import {
   DataTable,
   DataTableBody,
@@ -44,10 +47,13 @@ function StatusDot({ active }: { active: boolean | undefined }) {
 
 export default function DevicesPage() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [pageNumber, setPageNumber] = useState(1);
+  const [creating, setCreating] = useState(false);
+  const [version, reload] = useReload();
   const { data, loading, error } = useQuery(
     () => listDevices({ pageNumber, pageSize }),
-    [pageNumber],
+    [pageNumber, version],
   );
 
   const results = data?.results ?? [];
@@ -62,11 +68,20 @@ export default function DevicesPage() {
       title="Devices"
       description="Devices registered in this tenant (requires device:read)"
       action={
-        <Button onClick={() => navigate('/devices/new')}>
+        <Button onClick={() => setCreating(true)}>
           <Plus size={16} /> New device
         </Button>
       }
     >
+      <FormDrawer open={creating} onOpenChange={setCreating} title="New device">
+        <DeviceForm
+          onDone={(m) => {
+            toast(m);
+            setCreating(false);
+            reload();
+          }}
+        />
+      </FormDrawer>
       {loading ? (
         <LoadingState description="Loading devices…" />
       ) : error ? (
