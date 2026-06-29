@@ -68,7 +68,6 @@ export function NavUser() {
             <div className="px-2 py-2">
               <p className="text-sm font-medium text-foreground">{name}</p>
               <p className="text-xs text-muted-foreground">{email}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Tenant: {claims.tenant || '—'}</p>
             </div>
 
             <div className="px-2 py-1.5">

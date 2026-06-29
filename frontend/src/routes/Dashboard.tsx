@@ -3,9 +3,8 @@
 
 import { Link } from 'react-router-dom';
 import { Boxes, Cpu, type LucideIcon } from 'lucide-react';
-import { useAuth } from '@/auth/AuthProvider';
+import { useCurrentUser } from '@/auth/CurrentUserProvider';
 import { PageShell } from '@/components/ui/page-shell';
-import { Badge } from '@/components/ui/badge';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listDevices, listDeviceTypes } from '@/lib/api/device-management';
 
@@ -39,7 +38,7 @@ function StatCard({
 }
 
 export default function Dashboard() {
-  const { claims } = useAuth();
+  const user = useCurrentUser();
 
   // A page size of 1 keeps the count query cheap — we only read pagination.totalRecords.
   const { data: devices } = useQuery(() => listDevices({ pageNumber: 1, pageSize: 1 }), []);
@@ -50,25 +49,10 @@ export default function Dashboard() {
 
   return (
     <PageShell
-      title={`Welcome, ${claims?.username ?? ''}`}
+      title={user ? `Welcome, ${user.displayName}` : 'Welcome'}
       description="Your DeviceChain tenant at a glance. Event and state surfaces land here as the console grows."
       bodyClassName="space-y-6 max-w-5xl"
     >
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-muted-foreground">Tenant</span>
-        <Badge variant="secondary">{claims?.tenant || '—'}</Badge>
-        <span className="ml-2 text-muted-foreground">Roles</span>
-        {(claims?.roles ?? []).length > 0 ? (
-          claims!.roles.map((r) => (
-            <Badge key={r} variant="outline">
-              {r}
-            </Badge>
-          ))
-        ) : (
-          <Badge variant="outline">none</Badge>
-        )}
-      </div>
-
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatCard label="Devices" icon={Cpu} count={deviceCount} to="/devices" />
         <StatCard label="Device Types" icon={Boxes} count={deviceTypeCount} to="/device-types" />
