@@ -10,25 +10,30 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
-import { getDeviceType, deleteDeviceType } from '@/lib/api/device-management';
 import { BackLink, errMessage, useReload } from '@/routes/common';
-import { DeviceTypeForm } from '@/routes/device-types/DeviceTypeForm';
+import type { RegistryResource } from '@/components/registry/types';
 
-export default function DeviceTypeDetailPage() {
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+// Generic detail page: loads the entity by token, frames it with a header toolbar
+// (Back + Delete), renders the resource's form, and appends any extra panels
+// (e.g. device state + events). Delete surfaces the backend message (including a
+// referential-integrity refusal) and only navigates away on success.
+export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource<T> }) {
   const { token: rawToken } = useParams<{ token: string }>();
   const token = decodeURIComponent(rawToken ?? '');
   const navigate = useNavigate();
   const { toast } = useToast();
 
   const [version, reload] = useReload();
-  const { data: deviceType, loading, error } = useQuery(() => getDeviceType(token), [version]);
+  const { data: item, loading, error } = useQuery(() => resource.load(token), [version]);
 
-  const back = <BackLink to="/device-types">Device types</BackLink>;
+  const back = <BackLink to={resource.basePath}>{resource.backLabel}</BackLink>;
 
   if (loading) {
     return (
       <PageShell title={token} action={back}>
-        <LoadingState description="Loading device type…" />
+        <LoadingState description={`Loading ${resource.singular}…`} />
       </PageShell>
     );
   }
@@ -39,20 +44,23 @@ export default function DeviceTypeDetailPage() {
       </PageShell>
     );
   }
-  if (!deviceType) {
+  if (!item) {
     return (
       <PageShell title={token} action={back}>
-        <ErrorState description={`Device type “${token}” not found.`} />
+        <ErrorState description={`${cap(resource.singular)} “${token}” not found.`} />
       </PageShell>
     );
   }
 
   const remove = async () => {
-    if (!window.confirm(`Delete device type “${deviceType.token}”? This cannot be undone.`)) return;
+    const prompt =
+      resource.removeConfirm?.(item) ??
+      `Delete ${resource.singular} “${token}”? This cannot be undone.`;
+    if (!window.confirm(prompt)) return;
     try {
-      await deleteDeviceType(deviceType.token);
-      toast(`Device type “${deviceType.token}” deleted`);
-      navigate('/device-types');
+      await resource.remove(token);
+      toast(`${cap(resource.singular)} “${token}” deleted`);
+      navigate(resource.basePath);
     } catch (err) {
       toast(errMessage(err), 'error');
     }
@@ -61,7 +69,7 @@ export default function DeviceTypeDetailPage() {
   return (
     <PageShell
       title={token}
-      description={deviceType.name ?? '—'}
+      description={resource.descriptionOf?.(item)}
       action={
         <div className="flex items-center gap-2">
           {back}
@@ -71,15 +79,15 @@ export default function DeviceTypeDetailPage() {
         </div>
       }
     >
-      <SectionPanel>
-        <DeviceTypeForm
-          deviceType={deviceType}
-          onDone={(m) => {
+      <div className="space-y-6">
+        <SectionPanel>
+          {resource.renderForm(item, (m) => {
             toast(m);
             reload();
-          }}
-        />
-      </SectionPanel>
+          })}
+        </SectionPanel>
+        {resource.renderDetailExtra?.(item)}
+      </div>
     </PageShell>
   );
 }
