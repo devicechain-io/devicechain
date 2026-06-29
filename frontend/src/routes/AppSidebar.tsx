@@ -21,19 +21,25 @@ import {
   SidebarMenuSubItem,
   SidebarRail,
 } from '@/components/ui/sidebar';
+import { useAuth } from '@/auth/AuthProvider';
+import { hasAuthority, type DecodedClaims } from '@/lib/auth/jwt';
 import { NavUser } from '@/routes/NavUser';
 
 interface NavLeaf {
   label: string;
   href: string;
   icon: LucideIcon;
+  // Authority required to see this item; omit for always-visible (e.g. Dashboard).
+  requires?: string;
 }
+
+type NavGroupNode = { label: string; icon: LucideIcon; children: NavLeaf[] };
 
 // A top-level nav node is either a direct link (Dashboard) or a collapsible
 // group of leaves. Each model construct (Devices, and later Assets/Customers/
 // Areas) is one group whose children are its Instances / Types / Groups — so
 // adding a construct is a single config entry, not new layout code.
-type NavNode = NavLeaf | { label: string; icon: LucideIcon; children: NavLeaf[] };
+type NavNode = NavLeaf | NavGroupNode;
 
 const NAV: NavNode[] = [
   { label: 'Dashboard', href: '/', icon: LayoutGrid },
@@ -41,8 +47,10 @@ const NAV: NavNode[] = [
     label: 'Devices',
     icon: Cpu,
     children: [
-      { label: 'Devices', href: '/devices', icon: Cpu },
-      { label: 'Device Types', href: '/device-types', icon: Boxes },
+      // All of device-management is gated by device:read (there is no separate
+      // devicetype:read), so both share the same requirement.
+      { label: 'Devices', href: '/devices', icon: Cpu, requires: 'device:read' },
+      { label: 'Device Types', href: '/device-types', icon: Boxes, requires: 'device:read' },
       // Device Groups land with the registry families / membership work.
     ],
   },
@@ -50,6 +58,21 @@ const NAV: NavNode[] = [
 
 function isLeaf(node: NavNode): node is NavLeaf {
   return 'href' in node;
+}
+
+function canSee(leaf: NavLeaf, claims: DecodedClaims | null): boolean {
+  return !leaf.requires || hasAuthority(claims, leaf.requires);
+}
+
+// Drop nav the user can't use: leaves they lack the authority for, and any group
+// left with no visible children. Pages stay fail-closed server-side regardless;
+// this just avoids advertising what would only return "forbidden".
+function visibleNav(claims: DecodedClaims | null): NavNode[] {
+  return NAV.flatMap<NavNode>((node) => {
+    if (isLeaf(node)) return canSee(node, claims) ? [node] : [];
+    const children = node.children.filter((c) => canSee(c, claims));
+    return children.length > 0 ? [{ ...node, children }] : [];
+  });
 }
 
 function isActive(pathname: string, href: string) {
@@ -66,6 +89,8 @@ function activeGroupLabel(pathname: string): string | undefined {
 
 export function AppSidebar() {
   const { pathname } = useLocation();
+  const { claims } = useAuth();
+  const nav = visibleNav(claims);
   const activeGroup = activeGroupLabel(pathname);
   const [open, setOpen] = useState<Set<string>>(() => new Set(activeGroup ? [activeGroup] : []));
 
@@ -110,7 +135,7 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {NAV.map((node) =>
+              {nav.map((node) =>
                 isLeaf(node) ? (
                   <SidebarMenuItem key={node.label}>
                     <SidebarMenuButton

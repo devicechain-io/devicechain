@@ -66,7 +66,7 @@ export default function DevicesPage() {
   return (
     <PageShell
       title="Devices"
-      description="Devices registered in this tenant (requires device:read)"
+      description="Devices registered in this tenant"
       action={
         <Button onClick={() => setCreating(true)}>
           <Plus size={16} /> New device
