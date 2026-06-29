@@ -7,6 +7,7 @@ import { graphql } from '@/gql/user-management';
 import type {
   LoginMutation,
   SelectTenantMutation,
+  CurrentTenantQuery,
 } from '@/gql/user-management/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -14,6 +15,7 @@ import type {
 export type IdentityAuth = LoginMutation['login'];
 export type Membership = IdentityAuth['memberships'][number];
 export type AuthToken = SelectTenantMutation['selectTenant'];
+export type CurrentTenant = CurrentTenantQuery['tenant'];
 
 // ── Auth (unauthenticated) ──────────────────────────────────────────────
 //
@@ -78,4 +80,25 @@ export async function refresh(refreshToken: string): Promise<AuthToken> {
     { anonymous: true },
   );
   return data.refresh;
+}
+
+// ── Current tenant (authenticated) ──────────────────────────────────────
+//
+// Describes the tenant the caller is acting within — resolved server-side from
+// the access token, so it takes no arguments. Backs the console's tenant header
+// (name + token); the shape will grow to carry branding.
+
+const CURRENT_TENANT = graphql(`
+  query CurrentTenant {
+    tenant {
+      token
+      name
+      description
+    }
+  }
+`);
+
+export async function getCurrentTenant(): Promise<CurrentTenant> {
+  const data = await gql('user-management', CURRENT_TENANT);
+  return data.tenant;
 }

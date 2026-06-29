@@ -21,12 +21,24 @@ type Membership {
     roles: [String!]!
 }
 
+# The tenant the authenticated caller is acting within (control plane). Drives
+# the console's tenant header; branding (logo/colors) will extend this type as it
+# lands.
+type Tenant {
+    token: String!
+    name: String
+    description: String
+}
+
 # The tenant-scoped user-management API is the authentication surface only
 # (ADR-033). Identities, memberships, the role catalog, and tenants are
-# administered through the instance-scoped admin API (admin_schema.gql).
+# administered through the instance-scoped admin API (admin_schema.gql) — the one
+# exception is `tenant`, which lets a caller read their own tenant for display.
 type Query {
     # Liveness placeholder.
     ping: String!
+    # The tenant the caller is currently acting within (self-scoped).
+    tenant: Tenant!
 }
 
 type Mutation {

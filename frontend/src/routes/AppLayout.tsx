@@ -4,6 +4,8 @@
 import { Outlet, useLocation, matchPath } from 'react-router-dom';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from '@/routes/AppSidebar';
+import { TenantChip } from '@/routes/TenantChip';
+import { TenantProvider } from '@/auth/TenantProvider';
 
 const PAGE_TITLES: { pattern: string; title: string }[] = [
   { pattern: '/', title: 'Dashboard' },
@@ -18,17 +20,22 @@ export default function AppLayout() {
     'DeviceChain';
 
   return (
-    <SidebarProvider>
-      <AppSidebar />
-      <SidebarInset className="min-w-0">
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
-          <SidebarTrigger className="-ml-1 h-9 w-9" />
-          <span className="text-base font-semibold text-foreground">{title}</span>
-        </header>
-        <div className="flex min-h-0 flex-1 flex-col">
-          <Outlet />
-        </div>
-      </SidebarInset>
-    </SidebarProvider>
+    <TenantProvider>
+      <SidebarProvider>
+        <AppSidebar />
+        <SidebarInset className="min-w-0">
+          <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
+            <SidebarTrigger className="-ml-1 h-9 w-9" />
+            <span className="text-base font-semibold text-foreground">{title}</span>
+            <div className="ml-auto">
+              <TenantChip />
+            </div>
+          </header>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <Outlet />
+          </div>
+        </SidebarInset>
+      </SidebarProvider>
+    </TenantProvider>
   );
 }
