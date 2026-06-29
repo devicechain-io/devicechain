@@ -27,6 +27,11 @@ export type RefreshMutationVariables = Exact<{
 
 export type RefreshMutation = { refresh: { accessToken: string, refreshToken: string, expiresAt: string } };
 
+export type CurrentTenantQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type CurrentTenantQuery = { tenant: { token: string, name: string | null, description: string | null } };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -77,3 +82,12 @@ export const RefreshDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<RefreshMutation, RefreshMutationVariables>;
+export const CurrentTenantDocument = new TypedDocumentString(`
+    query CurrentTenant {
+  tenant {
+    token
+    name
+    description
+  }
+}
+    `) as unknown as TypedDocumentString<CurrentTenantQuery, CurrentTenantQueryVariables>;

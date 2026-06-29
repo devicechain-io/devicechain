@@ -283,6 +283,14 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 	return m.issueTenantTokens(tenant, id.Email, roles, authorities, su)
 }
 
+// CurrentTenant resolves the control-plane tenant record the caller is acting
+// within, keyed by the tenant token carried in their access token. It reads the
+// tenant-unscoped control-plane table (iam.Store uses the system context), so it
+// works from a tenant-scoped data-plane request.
+func (m *Manager) CurrentTenant(ctx context.Context, token string) (*iam.Tenant, error) {
+	return m.iam.TenantByToken(ctx, token)
+}
+
 // recordAuth writes an authentication audit event (ADR-019) best-effort: a
 // failure to record is logged but never fails the authentication itself.
 func (m *Manager) recordAuth(ctx context.Context, operation, actor, tenant string) {
