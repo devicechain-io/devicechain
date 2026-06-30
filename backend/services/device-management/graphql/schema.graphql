@@ -1028,6 +1028,11 @@ type Mutation {
     createEntityRelationship(request: EntityRelationshipCreateRequest!): EntityRelationship!
     # Remove a single relationship edge — the explicit "unassign" operation.
     removeEntityRelationship(token: String!): Boolean!
+    # Create multiple entity relationships in one transaction (bulk "add members" /
+    # "assign"). Auto-provisions the reserved "member" relationship type on first use.
+    createEntityRelationships(requests: [EntityRelationshipCreateRequest!]!): [EntityRelationship!]!
+    # Remove multiple relationship edges by token (bulk "remove members" / "unassign").
+    removeEntityRelationships(tokens: [String!]!): Boolean!
 
     # Create a new asset type.
     createAssetType(request: AssetTypeCreateRequest): AssetType!
