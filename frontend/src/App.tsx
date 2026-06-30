@@ -12,12 +12,16 @@ import DeviceDetailPage from '@/routes/devices/DeviceDetailPage';
 import { ResourceListPage, ResourceDetailPage, type RegistryResource } from '@/components/registry';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { deviceTypeResource } from '@/routes/device-types/resource';
+import { deviceGroupResource } from '@/routes/device-groups/resource';
 import { assetResource } from '@/routes/assets/resource';
 import { assetTypeResource } from '@/routes/asset-types/resource';
+import { assetGroupResource } from '@/routes/asset-groups/resource';
 import { customerResource } from '@/routes/customers/resource';
 import { customerTypeResource } from '@/routes/customer-types/resource';
+import { customerGroupResource } from '@/routes/customer-groups/resource';
 import { areaResource } from '@/routes/areas/resource';
 import { areaTypeResource } from '@/routes/area-types/resource';
+import { areaGroupResource } from '@/routes/area-groups/resource';
 import AdminProtectedRoute from '@/routes/admin/AdminProtectedRoute';
 import AdminLayout from '@/routes/admin/AdminLayout';
 import AdminTenantsPage from '@/routes/admin/TenantsPage';
@@ -35,12 +39,16 @@ import AdminRoleDetailPage from '@/routes/admin/roles/RoleDetailPage';
 // element T is invariant; each is consumed by a generic page that re-narrows it.
 const REGISTRY_RESOURCES: RegistryResource<any>[] = [
   deviceTypeResource,
+  deviceGroupResource,
   assetResource,
   assetTypeResource,
+  assetGroupResource,
   customerResource,
   customerTypeResource,
+  customerGroupResource,
   areaResource,
   areaTypeResource,
+  areaGroupResource,
 ];
 
 function ProtectedRoute() {

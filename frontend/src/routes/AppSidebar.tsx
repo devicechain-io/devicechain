@@ -8,6 +8,7 @@ import {
   Building2,
   ChevronRight,
   Cpu,
+  Layers,
   LayoutGrid,
   MapPin,
   Package,
@@ -60,7 +61,7 @@ const NAV: NavNode[] = [
       // devicetype:read), so both share the same requirement.
       { label: 'Devices', href: '/devices', icon: Cpu, requires: 'device:read' },
       { label: 'Device Types', href: '/device-types', icon: Boxes, requires: 'device:read' },
-      // Device Groups land with the registry families / membership work.
+      { label: 'Device Groups', href: '/device-groups', icon: Layers, requires: 'device:read' },
     ],
   },
   {
@@ -71,6 +72,7 @@ const NAV: NavNode[] = [
     children: [
       { label: 'Assets', href: '/assets', icon: Package, requires: 'device:read' },
       { label: 'Asset Types', href: '/asset-types', icon: Boxes, requires: 'device:read' },
+      { label: 'Asset Groups', href: '/asset-groups', icon: Layers, requires: 'device:read' },
     ],
   },
   {
@@ -79,6 +81,7 @@ const NAV: NavNode[] = [
     children: [
       { label: 'Customers', href: '/customers', icon: Building2, requires: 'device:read' },
       { label: 'Customer Types', href: '/customer-types', icon: Boxes, requires: 'device:read' },
+      { label: 'Customer Groups', href: '/customer-groups', icon: Layers, requires: 'device:read' },
     ],
   },
   {
@@ -87,6 +90,7 @@ const NAV: NavNode[] = [
     children: [
       { label: 'Areas', href: '/areas', icon: MapPin, requires: 'device:read' },
       { label: 'Area Types', href: '/area-types', icon: Boxes, requires: 'device:read' },
+      { label: 'Area Groups', href: '/area-groups', icon: Layers, requires: 'device:read' },
     ],
   },
 ];

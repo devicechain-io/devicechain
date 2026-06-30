@@ -12,6 +12,23 @@ export type AreaCreateRequest = {
   token: string;
 };
 
+export type AreaGroupCreateRequest = {
+  backgroundColor?: string | null | undefined;
+  borderColor?: string | null | undefined;
+  description?: string | null | undefined;
+  foregroundColor?: string | null | undefined;
+  icon?: string | null | undefined;
+  imageUrl?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  token: string;
+};
+
+export type AreaGroupSearchCriteria = {
+  pageNumber: number;
+  pageSize: number;
+};
+
 export type AreaSearchCriteria = {
   areaTypeToken?: string | null | undefined;
   pageNumber: number;
@@ -41,6 +58,23 @@ export type AssetCreateRequest = {
   metadata?: string | null | undefined;
   name?: string | null | undefined;
   token: string;
+};
+
+export type AssetGroupCreateRequest = {
+  backgroundColor?: string | null | undefined;
+  borderColor?: string | null | undefined;
+  description?: string | null | undefined;
+  foregroundColor?: string | null | undefined;
+  icon?: string | null | undefined;
+  imageUrl?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  token: string;
+};
+
+export type AssetGroupSearchCriteria = {
+  pageNumber: number;
+  pageSize: number;
 };
 
 export type AssetSearchCriteria = {
@@ -74,6 +108,23 @@ export type CustomerCreateRequest = {
   token: string;
 };
 
+export type CustomerGroupCreateRequest = {
+  backgroundColor?: string | null | undefined;
+  borderColor?: string | null | undefined;
+  description?: string | null | undefined;
+  foregroundColor?: string | null | undefined;
+  icon?: string | null | undefined;
+  imageUrl?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  token: string;
+};
+
+export type CustomerGroupSearchCriteria = {
+  pageNumber: number;
+  pageSize: number;
+};
+
 export type CustomerSearchCriteria = {
   customerTypeToken?: string | null | undefined;
   pageNumber: number;
@@ -103,6 +154,23 @@ export type DeviceCreateRequest = {
   metadata?: string | null | undefined;
   name?: string | null | undefined;
   token: string;
+};
+
+export type DeviceGroupCreateRequest = {
+  backgroundColor?: string | null | undefined;
+  borderColor?: string | null | undefined;
+  description?: string | null | undefined;
+  foregroundColor?: string | null | undefined;
+  icon?: string | null | undefined;
+  imageUrl?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  token: string;
+};
+
+export type DeviceGroupSearchCriteria = {
+  pageNumber: number;
+  pageSize: number;
 };
 
 export type DeviceSearchCriteria = {
@@ -200,6 +268,42 @@ export type DeleteAreaTypeMutationVariables = Exact<{
 
 export type DeleteAreaTypeMutation = { deleteAreaType: boolean };
 
+export type AreaGroupsQueryVariables = Exact<{
+  criteria: AreaGroupSearchCriteria;
+}>;
+
+
+export type AreaGroupsQuery = { areaGroups: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type AreaGroupByTokenQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type AreaGroupByTokenQuery = { areaGroupsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null }> };
+
+export type CreateAreaGroupMutationVariables = Exact<{
+  request?: AreaGroupCreateRequest | null | undefined;
+}>;
+
+
+export type CreateAreaGroupMutation = { createAreaGroup: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null } };
+
+export type UpdateAreaGroupMutationVariables = Exact<{
+  token: string;
+  request?: AreaGroupCreateRequest | null | undefined;
+}>;
+
+
+export type UpdateAreaGroupMutation = { updateAreaGroup: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null } };
+
+export type DeleteAreaGroupMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteAreaGroupMutation = { deleteAreaGroup: boolean };
+
 export type AssetsQueryVariables = Exact<{
   criteria: AssetSearchCriteria;
 }>;
@@ -271,6 +375,42 @@ export type DeleteAssetTypeMutationVariables = Exact<{
 
 
 export type DeleteAssetTypeMutation = { deleteAssetType: boolean };
+
+export type AssetGroupsQueryVariables = Exact<{
+  criteria: AssetGroupSearchCriteria;
+}>;
+
+
+export type AssetGroupsQuery = { assetGroups: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type AssetGroupByTokenQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type AssetGroupByTokenQuery = { assetGroupsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null }> };
+
+export type CreateAssetGroupMutationVariables = Exact<{
+  request?: AssetGroupCreateRequest | null | undefined;
+}>;
+
+
+export type CreateAssetGroupMutation = { createAssetGroup: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null } };
+
+export type UpdateAssetGroupMutationVariables = Exact<{
+  token: string;
+  request?: AssetGroupCreateRequest | null | undefined;
+}>;
+
+
+export type UpdateAssetGroupMutation = { updateAssetGroup: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null } };
+
+export type DeleteAssetGroupMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteAssetGroupMutation = { deleteAssetGroup: boolean };
 
 export type CustomersQueryVariables = Exact<{
   criteria: CustomerSearchCriteria;
@@ -344,6 +484,42 @@ export type DeleteCustomerTypeMutationVariables = Exact<{
 
 export type DeleteCustomerTypeMutation = { deleteCustomerType: boolean };
 
+export type CustomerGroupsQueryVariables = Exact<{
+  criteria: CustomerGroupSearchCriteria;
+}>;
+
+
+export type CustomerGroupsQuery = { customerGroups: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type CustomerGroupByTokenQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type CustomerGroupByTokenQuery = { customerGroupsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null }> };
+
+export type CreateCustomerGroupMutationVariables = Exact<{
+  request?: CustomerGroupCreateRequest | null | undefined;
+}>;
+
+
+export type CreateCustomerGroupMutation = { createCustomerGroup: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null } };
+
+export type UpdateCustomerGroupMutationVariables = Exact<{
+  token: string;
+  request?: CustomerGroupCreateRequest | null | undefined;
+}>;
+
+
+export type UpdateCustomerGroupMutation = { updateCustomerGroup: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null } };
+
+export type DeleteCustomerGroupMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteCustomerGroupMutation = { deleteCustomerGroup: boolean };
+
 export type DevicesQueryVariables = Exact<{
   criteria: DeviceSearchCriteria;
 }>;
@@ -415,6 +591,42 @@ export type DeleteDeviceTypeMutationVariables = Exact<{
 
 
 export type DeleteDeviceTypeMutation = { deleteDeviceType: boolean };
+
+export type DeviceGroupsQueryVariables = Exact<{
+  criteria: DeviceGroupSearchCriteria;
+}>;
+
+
+export type DeviceGroupsQuery = { deviceGroups: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type DeviceGroupByTokenQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type DeviceGroupByTokenQuery = { deviceGroupsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null }> };
+
+export type CreateDeviceGroupMutationVariables = Exact<{
+  request?: DeviceGroupCreateRequest | null | undefined;
+}>;
+
+
+export type CreateDeviceGroupMutation = { createDeviceGroup: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null } };
+
+export type UpdateDeviceGroupMutationVariables = Exact<{
+  token: string;
+  request?: DeviceGroupCreateRequest | null | undefined;
+}>;
+
+
+export type UpdateDeviceGroupMutation = { updateDeviceGroup: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null } };
+
+export type DeleteDeviceGroupMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteDeviceGroupMutation = { deleteDeviceGroup: boolean };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -591,6 +803,62 @@ export const DeleteAreaTypeDocument = new TypedDocumentString(`
   deleteAreaType(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteAreaTypeMutation, DeleteAreaTypeMutationVariables>;
+export const AreaGroupsDocument = new TypedDocumentString(`
+    query AreaGroups($criteria: AreaGroupSearchCriteria!) {
+  areaGroups(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      createdAt
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AreaGroupsQuery, AreaGroupsQueryVariables>;
+export const AreaGroupByTokenDocument = new TypedDocumentString(`
+    query AreaGroupByToken($tokens: [String!]!) {
+  areaGroupsByToken(tokens: $tokens) {
+    id
+    token
+    name
+    description
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<AreaGroupByTokenQuery, AreaGroupByTokenQueryVariables>;
+export const CreateAreaGroupDocument = new TypedDocumentString(`
+    mutation CreateAreaGroup($request: AreaGroupCreateRequest) {
+  createAreaGroup(request: $request) {
+    id
+    token
+    name
+    description
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<CreateAreaGroupMutation, CreateAreaGroupMutationVariables>;
+export const UpdateAreaGroupDocument = new TypedDocumentString(`
+    mutation UpdateAreaGroup($token: String!, $request: AreaGroupCreateRequest) {
+  updateAreaGroup(token: $token, request: $request) {
+    id
+    token
+    name
+    description
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateAreaGroupMutation, UpdateAreaGroupMutationVariables>;
+export const DeleteAreaGroupDocument = new TypedDocumentString(`
+    mutation DeleteAreaGroup($token: String!) {
+  deleteAreaGroup(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteAreaGroupMutation, DeleteAreaGroupMutationVariables>;
 export const AssetsDocument = new TypedDocumentString(`
     query Assets($criteria: AssetSearchCriteria!) {
   assets(criteria: $criteria) {
@@ -747,6 +1015,62 @@ export const DeleteAssetTypeDocument = new TypedDocumentString(`
   deleteAssetType(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteAssetTypeMutation, DeleteAssetTypeMutationVariables>;
+export const AssetGroupsDocument = new TypedDocumentString(`
+    query AssetGroups($criteria: AssetGroupSearchCriteria!) {
+  assetGroups(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      createdAt
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AssetGroupsQuery, AssetGroupsQueryVariables>;
+export const AssetGroupByTokenDocument = new TypedDocumentString(`
+    query AssetGroupByToken($tokens: [String!]!) {
+  assetGroupsByToken(tokens: $tokens) {
+    id
+    token
+    name
+    description
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<AssetGroupByTokenQuery, AssetGroupByTokenQueryVariables>;
+export const CreateAssetGroupDocument = new TypedDocumentString(`
+    mutation CreateAssetGroup($request: AssetGroupCreateRequest) {
+  createAssetGroup(request: $request) {
+    id
+    token
+    name
+    description
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<CreateAssetGroupMutation, CreateAssetGroupMutationVariables>;
+export const UpdateAssetGroupDocument = new TypedDocumentString(`
+    mutation UpdateAssetGroup($token: String!, $request: AssetGroupCreateRequest) {
+  updateAssetGroup(token: $token, request: $request) {
+    id
+    token
+    name
+    description
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateAssetGroupMutation, UpdateAssetGroupMutationVariables>;
+export const DeleteAssetGroupDocument = new TypedDocumentString(`
+    mutation DeleteAssetGroup($token: String!) {
+  deleteAssetGroup(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteAssetGroupMutation, DeleteAssetGroupMutationVariables>;
 export const CustomersDocument = new TypedDocumentString(`
     query Customers($criteria: CustomerSearchCriteria!) {
   customers(criteria: $criteria) {
@@ -903,6 +1227,62 @@ export const DeleteCustomerTypeDocument = new TypedDocumentString(`
   deleteCustomerType(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteCustomerTypeMutation, DeleteCustomerTypeMutationVariables>;
+export const CustomerGroupsDocument = new TypedDocumentString(`
+    query CustomerGroups($criteria: CustomerGroupSearchCriteria!) {
+  customerGroups(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      createdAt
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CustomerGroupsQuery, CustomerGroupsQueryVariables>;
+export const CustomerGroupByTokenDocument = new TypedDocumentString(`
+    query CustomerGroupByToken($tokens: [String!]!) {
+  customerGroupsByToken(tokens: $tokens) {
+    id
+    token
+    name
+    description
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<CustomerGroupByTokenQuery, CustomerGroupByTokenQueryVariables>;
+export const CreateCustomerGroupDocument = new TypedDocumentString(`
+    mutation CreateCustomerGroup($request: CustomerGroupCreateRequest) {
+  createCustomerGroup(request: $request) {
+    id
+    token
+    name
+    description
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<CreateCustomerGroupMutation, CreateCustomerGroupMutationVariables>;
+export const UpdateCustomerGroupDocument = new TypedDocumentString(`
+    mutation UpdateCustomerGroup($token: String!, $request: CustomerGroupCreateRequest) {
+  updateCustomerGroup(token: $token, request: $request) {
+    id
+    token
+    name
+    description
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateCustomerGroupMutation, UpdateCustomerGroupMutationVariables>;
+export const DeleteCustomerGroupDocument = new TypedDocumentString(`
+    mutation DeleteCustomerGroup($token: String!) {
+  deleteCustomerGroup(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteCustomerGroupMutation, DeleteCustomerGroupMutationVariables>;
 export const DevicesDocument = new TypedDocumentString(`
     query Devices($criteria: DeviceSearchCriteria!) {
   devices(criteria: $criteria) {
@@ -1059,3 +1439,59 @@ export const DeleteDeviceTypeDocument = new TypedDocumentString(`
   deleteDeviceType(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteDeviceTypeMutation, DeleteDeviceTypeMutationVariables>;
+export const DeviceGroupsDocument = new TypedDocumentString(`
+    query DeviceGroups($criteria: DeviceGroupSearchCriteria!) {
+  deviceGroups(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      createdAt
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceGroupsQuery, DeviceGroupsQueryVariables>;
+export const DeviceGroupByTokenDocument = new TypedDocumentString(`
+    query DeviceGroupByToken($tokens: [String!]!) {
+  deviceGroupsByToken(tokens: $tokens) {
+    id
+    token
+    name
+    description
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceGroupByTokenQuery, DeviceGroupByTokenQueryVariables>;
+export const CreateDeviceGroupDocument = new TypedDocumentString(`
+    mutation CreateDeviceGroup($request: DeviceGroupCreateRequest) {
+  createDeviceGroup(request: $request) {
+    id
+    token
+    name
+    description
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<CreateDeviceGroupMutation, CreateDeviceGroupMutationVariables>;
+export const UpdateDeviceGroupDocument = new TypedDocumentString(`
+    mutation UpdateDeviceGroup($token: String!, $request: DeviceGroupCreateRequest) {
+  updateDeviceGroup(token: $token, request: $request) {
+    id
+    token
+    name
+    description
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateDeviceGroupMutation, UpdateDeviceGroupMutationVariables>;
+export const DeleteDeviceGroupDocument = new TypedDocumentString(`
+    mutation DeleteDeviceGroup($token: String!) {
+  deleteDeviceGroup(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteDeviceGroupMutation, DeleteDeviceGroupMutationVariables>;

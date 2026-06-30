@@ -25,6 +25,11 @@ type Documents = {
     "\n  mutation CreateAreaType($request: AreaTypeCreateRequest) {\n    createAreaType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": typeof types.CreateAreaTypeDocument,
     "\n  mutation UpdateAreaType($token: String!, $request: AreaTypeCreateRequest) {\n    updateAreaType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": typeof types.UpdateAreaTypeDocument,
     "\n  mutation DeleteAreaType($token: String!) {\n    deleteAreaType(token: $token)\n  }\n": typeof types.DeleteAreaTypeDocument,
+    "\n  query AreaGroups($criteria: AreaGroupSearchCriteria!) {\n    areaGroups(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.AreaGroupsDocument,
+    "\n  query AreaGroupByToken($tokens: [String!]!) {\n    areaGroupsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.AreaGroupByTokenDocument,
+    "\n  mutation CreateAreaGroup($request: AreaGroupCreateRequest) {\n    createAreaGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.CreateAreaGroupDocument,
+    "\n  mutation UpdateAreaGroup($token: String!, $request: AreaGroupCreateRequest) {\n    updateAreaGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.UpdateAreaGroupDocument,
+    "\n  mutation DeleteAreaGroup($token: String!) {\n    deleteAreaGroup(token: $token)\n  }\n": typeof types.DeleteAreaGroupDocument,
     "\n  query Assets($criteria: AssetSearchCriteria!) {\n    assets(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        assetType {\n          id\n          token\n          name\n          backgroundColor\n          foregroundColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.AssetsDocument,
     "\n  query AssetByToken($tokens: [String!]!) {\n    assetsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n      assetType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": typeof types.AssetByTokenDocument,
     "\n  mutation CreateAsset($request: AssetCreateRequest) {\n    createAsset(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      assetType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": typeof types.CreateAssetDocument,
@@ -35,6 +40,11 @@ type Documents = {
     "\n  mutation CreateAssetType($request: AssetTypeCreateRequest) {\n    createAssetType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": typeof types.CreateAssetTypeDocument,
     "\n  mutation UpdateAssetType($token: String!, $request: AssetTypeCreateRequest) {\n    updateAssetType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": typeof types.UpdateAssetTypeDocument,
     "\n  mutation DeleteAssetType($token: String!) {\n    deleteAssetType(token: $token)\n  }\n": typeof types.DeleteAssetTypeDocument,
+    "\n  query AssetGroups($criteria: AssetGroupSearchCriteria!) {\n    assetGroups(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.AssetGroupsDocument,
+    "\n  query AssetGroupByToken($tokens: [String!]!) {\n    assetGroupsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.AssetGroupByTokenDocument,
+    "\n  mutation CreateAssetGroup($request: AssetGroupCreateRequest) {\n    createAssetGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.CreateAssetGroupDocument,
+    "\n  mutation UpdateAssetGroup($token: String!, $request: AssetGroupCreateRequest) {\n    updateAssetGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.UpdateAssetGroupDocument,
+    "\n  mutation DeleteAssetGroup($token: String!) {\n    deleteAssetGroup(token: $token)\n  }\n": typeof types.DeleteAssetGroupDocument,
     "\n  query Customers($criteria: CustomerSearchCriteria!) {\n    customers(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        customerType {\n          id\n          token\n          name\n          backgroundColor\n          foregroundColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.CustomersDocument,
     "\n  query CustomerByToken($tokens: [String!]!) {\n    customersByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n      customerType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": typeof types.CustomerByTokenDocument,
     "\n  mutation CreateCustomer($request: CustomerCreateRequest) {\n    createCustomer(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      customerType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": typeof types.CreateCustomerDocument,
@@ -45,6 +55,11 @@ type Documents = {
     "\n  mutation CreateCustomerType($request: CustomerTypeCreateRequest) {\n    createCustomerType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": typeof types.CreateCustomerTypeDocument,
     "\n  mutation UpdateCustomerType($token: String!, $request: CustomerTypeCreateRequest) {\n    updateCustomerType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": typeof types.UpdateCustomerTypeDocument,
     "\n  mutation DeleteCustomerType($token: String!) {\n    deleteCustomerType(token: $token)\n  }\n": typeof types.DeleteCustomerTypeDocument,
+    "\n  query CustomerGroups($criteria: CustomerGroupSearchCriteria!) {\n    customerGroups(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.CustomerGroupsDocument,
+    "\n  query CustomerGroupByToken($tokens: [String!]!) {\n    customerGroupsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.CustomerGroupByTokenDocument,
+    "\n  mutation CreateCustomerGroup($request: CustomerGroupCreateRequest) {\n    createCustomerGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.CreateCustomerGroupDocument,
+    "\n  mutation UpdateCustomerGroup($token: String!, $request: CustomerGroupCreateRequest) {\n    updateCustomerGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.UpdateCustomerGroupDocument,
+    "\n  mutation DeleteCustomerGroup($token: String!) {\n    deleteCustomerGroup(token: $token)\n  }\n": typeof types.DeleteCustomerGroupDocument,
     "\n  query Devices($criteria: DeviceSearchCriteria!) {\n    devices(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        deviceType {\n          id\n          token\n          name\n          backgroundColor\n          foregroundColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DevicesDocument,
     "\n  query DeviceByToken($tokens: [String!]!) {\n    devicesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": typeof types.DeviceByTokenDocument,
     "\n  mutation CreateDevice($request: DeviceCreateRequest) {\n    createDevice(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": typeof types.CreateDeviceDocument,
@@ -55,6 +70,11 @@ type Documents = {
     "\n  mutation CreateDeviceType($request: DeviceTypeCreateRequest) {\n    createDeviceType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": typeof types.CreateDeviceTypeDocument,
     "\n  mutation UpdateDeviceType($token: String!, $request: DeviceTypeCreateRequest) {\n    updateDeviceType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": typeof types.UpdateDeviceTypeDocument,
     "\n  mutation DeleteDeviceType($token: String!) {\n    deleteDeviceType(token: $token)\n  }\n": typeof types.DeleteDeviceTypeDocument,
+    "\n  query DeviceGroups($criteria: DeviceGroupSearchCriteria!) {\n    deviceGroups(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DeviceGroupsDocument,
+    "\n  query DeviceGroupByToken($tokens: [String!]!) {\n    deviceGroupsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.DeviceGroupByTokenDocument,
+    "\n  mutation CreateDeviceGroup($request: DeviceGroupCreateRequest) {\n    createDeviceGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.CreateDeviceGroupDocument,
+    "\n  mutation UpdateDeviceGroup($token: String!, $request: DeviceGroupCreateRequest) {\n    updateDeviceGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.UpdateDeviceGroupDocument,
+    "\n  mutation DeleteDeviceGroup($token: String!) {\n    deleteDeviceGroup(token: $token)\n  }\n": typeof types.DeleteDeviceGroupDocument,
 };
 const documents: Documents = {
     "\n  query Areas($criteria: AreaSearchCriteria!) {\n    areas(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        areaType {\n          id\n          token\n          name\n          backgroundColor\n          foregroundColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AreasDocument,
@@ -67,6 +87,11 @@ const documents: Documents = {
     "\n  mutation CreateAreaType($request: AreaTypeCreateRequest) {\n    createAreaType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": types.CreateAreaTypeDocument,
     "\n  mutation UpdateAreaType($token: String!, $request: AreaTypeCreateRequest) {\n    updateAreaType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": types.UpdateAreaTypeDocument,
     "\n  mutation DeleteAreaType($token: String!) {\n    deleteAreaType(token: $token)\n  }\n": types.DeleteAreaTypeDocument,
+    "\n  query AreaGroups($criteria: AreaGroupSearchCriteria!) {\n    areaGroups(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AreaGroupsDocument,
+    "\n  query AreaGroupByToken($tokens: [String!]!) {\n    areaGroupsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.AreaGroupByTokenDocument,
+    "\n  mutation CreateAreaGroup($request: AreaGroupCreateRequest) {\n    createAreaGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.CreateAreaGroupDocument,
+    "\n  mutation UpdateAreaGroup($token: String!, $request: AreaGroupCreateRequest) {\n    updateAreaGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.UpdateAreaGroupDocument,
+    "\n  mutation DeleteAreaGroup($token: String!) {\n    deleteAreaGroup(token: $token)\n  }\n": types.DeleteAreaGroupDocument,
     "\n  query Assets($criteria: AssetSearchCriteria!) {\n    assets(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        assetType {\n          id\n          token\n          name\n          backgroundColor\n          foregroundColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AssetsDocument,
     "\n  query AssetByToken($tokens: [String!]!) {\n    assetsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n      assetType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": types.AssetByTokenDocument,
     "\n  mutation CreateAsset($request: AssetCreateRequest) {\n    createAsset(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      assetType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": types.CreateAssetDocument,
@@ -77,6 +102,11 @@ const documents: Documents = {
     "\n  mutation CreateAssetType($request: AssetTypeCreateRequest) {\n    createAssetType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": types.CreateAssetTypeDocument,
     "\n  mutation UpdateAssetType($token: String!, $request: AssetTypeCreateRequest) {\n    updateAssetType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": types.UpdateAssetTypeDocument,
     "\n  mutation DeleteAssetType($token: String!) {\n    deleteAssetType(token: $token)\n  }\n": types.DeleteAssetTypeDocument,
+    "\n  query AssetGroups($criteria: AssetGroupSearchCriteria!) {\n    assetGroups(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AssetGroupsDocument,
+    "\n  query AssetGroupByToken($tokens: [String!]!) {\n    assetGroupsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.AssetGroupByTokenDocument,
+    "\n  mutation CreateAssetGroup($request: AssetGroupCreateRequest) {\n    createAssetGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.CreateAssetGroupDocument,
+    "\n  mutation UpdateAssetGroup($token: String!, $request: AssetGroupCreateRequest) {\n    updateAssetGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.UpdateAssetGroupDocument,
+    "\n  mutation DeleteAssetGroup($token: String!) {\n    deleteAssetGroup(token: $token)\n  }\n": types.DeleteAssetGroupDocument,
     "\n  query Customers($criteria: CustomerSearchCriteria!) {\n    customers(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        customerType {\n          id\n          token\n          name\n          backgroundColor\n          foregroundColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.CustomersDocument,
     "\n  query CustomerByToken($tokens: [String!]!) {\n    customersByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n      customerType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": types.CustomerByTokenDocument,
     "\n  mutation CreateCustomer($request: CustomerCreateRequest) {\n    createCustomer(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      customerType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": types.CreateCustomerDocument,
@@ -87,6 +117,11 @@ const documents: Documents = {
     "\n  mutation CreateCustomerType($request: CustomerTypeCreateRequest) {\n    createCustomerType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": types.CreateCustomerTypeDocument,
     "\n  mutation UpdateCustomerType($token: String!, $request: CustomerTypeCreateRequest) {\n    updateCustomerType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": types.UpdateCustomerTypeDocument,
     "\n  mutation DeleteCustomerType($token: String!) {\n    deleteCustomerType(token: $token)\n  }\n": types.DeleteCustomerTypeDocument,
+    "\n  query CustomerGroups($criteria: CustomerGroupSearchCriteria!) {\n    customerGroups(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.CustomerGroupsDocument,
+    "\n  query CustomerGroupByToken($tokens: [String!]!) {\n    customerGroupsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.CustomerGroupByTokenDocument,
+    "\n  mutation CreateCustomerGroup($request: CustomerGroupCreateRequest) {\n    createCustomerGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.CreateCustomerGroupDocument,
+    "\n  mutation UpdateCustomerGroup($token: String!, $request: CustomerGroupCreateRequest) {\n    updateCustomerGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.UpdateCustomerGroupDocument,
+    "\n  mutation DeleteCustomerGroup($token: String!) {\n    deleteCustomerGroup(token: $token)\n  }\n": types.DeleteCustomerGroupDocument,
     "\n  query Devices($criteria: DeviceSearchCriteria!) {\n    devices(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        deviceType {\n          id\n          token\n          name\n          backgroundColor\n          foregroundColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DevicesDocument,
     "\n  query DeviceByToken($tokens: [String!]!) {\n    devicesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": types.DeviceByTokenDocument,
     "\n  mutation CreateDevice($request: DeviceCreateRequest) {\n    createDevice(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      deviceType {\n        id\n        token\n        name\n        backgroundColor\n        foregroundColor\n      }\n    }\n  }\n": types.CreateDeviceDocument,
@@ -97,6 +132,11 @@ const documents: Documents = {
     "\n  mutation CreateDeviceType($request: DeviceTypeCreateRequest) {\n    createDeviceType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": types.CreateDeviceTypeDocument,
     "\n  mutation UpdateDeviceType($token: String!, $request: DeviceTypeCreateRequest) {\n    updateDeviceType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      createdAt\n    }\n  }\n": types.UpdateDeviceTypeDocument,
     "\n  mutation DeleteDeviceType($token: String!) {\n    deleteDeviceType(token: $token)\n  }\n": types.DeleteDeviceTypeDocument,
+    "\n  query DeviceGroups($criteria: DeviceGroupSearchCriteria!) {\n    deviceGroups(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DeviceGroupsDocument,
+    "\n  query DeviceGroupByToken($tokens: [String!]!) {\n    deviceGroupsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.DeviceGroupByTokenDocument,
+    "\n  mutation CreateDeviceGroup($request: DeviceGroupCreateRequest) {\n    createDeviceGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.CreateDeviceGroupDocument,
+    "\n  mutation UpdateDeviceGroup($token: String!, $request: DeviceGroupCreateRequest) {\n    updateDeviceGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.UpdateDeviceGroupDocument,
+    "\n  mutation DeleteDeviceGroup($token: String!) {\n    deleteDeviceGroup(token: $token)\n  }\n": types.DeleteDeviceGroupDocument,
 };
 
 /**
@@ -142,6 +182,26 @@ export function graphql(source: "\n  mutation DeleteAreaType($token: String!) {\
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
+export function graphql(source: "\n  query AreaGroups($criteria: AreaGroupSearchCriteria!) {\n    areaGroups(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').AreaGroupsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query AreaGroupByToken($tokens: [String!]!) {\n    areaGroupsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n"): typeof import('./graphql').AreaGroupByTokenDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation CreateAreaGroup($request: AreaGroupCreateRequest) {\n    createAreaGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n"): typeof import('./graphql').CreateAreaGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation UpdateAreaGroup($token: String!, $request: AreaGroupCreateRequest) {\n    updateAreaGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n"): typeof import('./graphql').UpdateAreaGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation DeleteAreaGroup($token: String!) {\n    deleteAreaGroup(token: $token)\n  }\n"): typeof import('./graphql').DeleteAreaGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
 export function graphql(source: "\n  query Assets($criteria: AssetSearchCriteria!) {\n    assets(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        assetType {\n          id\n          token\n          name\n          backgroundColor\n          foregroundColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').AssetsDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
@@ -179,6 +239,26 @@ export function graphql(source: "\n  mutation UpdateAssetType($token: String!, $
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteAssetType($token: String!) {\n    deleteAssetType(token: $token)\n  }\n"): typeof import('./graphql').DeleteAssetTypeDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query AssetGroups($criteria: AssetGroupSearchCriteria!) {\n    assetGroups(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').AssetGroupsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query AssetGroupByToken($tokens: [String!]!) {\n    assetGroupsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n"): typeof import('./graphql').AssetGroupByTokenDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation CreateAssetGroup($request: AssetGroupCreateRequest) {\n    createAssetGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n"): typeof import('./graphql').CreateAssetGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation UpdateAssetGroup($token: String!, $request: AssetGroupCreateRequest) {\n    updateAssetGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n"): typeof import('./graphql').UpdateAssetGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation DeleteAssetGroup($token: String!) {\n    deleteAssetGroup(token: $token)\n  }\n"): typeof import('./graphql').DeleteAssetGroupDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -222,6 +302,26 @@ export function graphql(source: "\n  mutation DeleteCustomerType($token: String!
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
+export function graphql(source: "\n  query CustomerGroups($criteria: CustomerGroupSearchCriteria!) {\n    customerGroups(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').CustomerGroupsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query CustomerGroupByToken($tokens: [String!]!) {\n    customerGroupsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n"): typeof import('./graphql').CustomerGroupByTokenDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation CreateCustomerGroup($request: CustomerGroupCreateRequest) {\n    createCustomerGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n"): typeof import('./graphql').CreateCustomerGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation UpdateCustomerGroup($token: String!, $request: CustomerGroupCreateRequest) {\n    updateCustomerGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n"): typeof import('./graphql').UpdateCustomerGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation DeleteCustomerGroup($token: String!) {\n    deleteCustomerGroup(token: $token)\n  }\n"): typeof import('./graphql').DeleteCustomerGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
 export function graphql(source: "\n  query Devices($criteria: DeviceSearchCriteria!) {\n    devices(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        deviceType {\n          id\n          token\n          name\n          backgroundColor\n          foregroundColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').DevicesDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
@@ -259,6 +359,26 @@ export function graphql(source: "\n  mutation UpdateDeviceType($token: String!, 
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteDeviceType($token: String!) {\n    deleteDeviceType(token: $token)\n  }\n"): typeof import('./graphql').DeleteDeviceTypeDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query DeviceGroups($criteria: DeviceGroupSearchCriteria!) {\n    deviceGroups(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').DeviceGroupsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query DeviceGroupByToken($tokens: [String!]!) {\n    deviceGroupsByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n"): typeof import('./graphql').DeviceGroupByTokenDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation CreateDeviceGroup($request: DeviceGroupCreateRequest) {\n    createDeviceGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n"): typeof import('./graphql').CreateDeviceGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation UpdateDeviceGroup($token: String!, $request: DeviceGroupCreateRequest) {\n    updateDeviceGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n"): typeof import('./graphql').UpdateDeviceGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation DeleteDeviceGroup($token: String!) {\n    deleteDeviceGroup(token: $token)\n  }\n"): typeof import('./graphql').DeleteDeviceGroupDocument;
 
 
 export function graphql(source: string) {
