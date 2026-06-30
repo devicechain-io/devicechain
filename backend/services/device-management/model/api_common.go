@@ -118,6 +118,10 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
 		return nil, err
 	}
+	// Populate the association from the type we already resolved, so a resolver
+	// selecting relationshipType on the mutation result gets real values. Read
+	// paths Preload it; the create path must set it explicitly or it stays zero.
+	created.RelationshipType = *rtmatches[0]
 	return created, nil
 }
 
