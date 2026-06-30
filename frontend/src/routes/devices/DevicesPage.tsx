@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
-import { TypeCapsule } from '@/components/TypeCapsule';
+import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { Pagination } from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/toast';
 import { rowLinkProps, useReload } from '@/routes/common';
@@ -116,16 +116,7 @@ export default function DevicesPage() {
                     {device.name || '—'}
                   </DataTableCell>
                   <DataTableCell>
-                    <TypeCapsule
-                      appearance={{
-                        token: device.deviceType.token,
-                        name: device.deviceType.name,
-                        icon: device.deviceType.icon,
-                        backgroundColor: device.deviceType.backgroundColor,
-                        foregroundColor: device.deviceType.foregroundColor,
-                        borderColor: device.deviceType.borderColor,
-                      }}
-                    />
+                    <TypeCapsule appearance={appearanceOf(device.deviceType)} />
                   </DataTableCell>
                   <DataTableCell className="max-w-xs truncate text-muted-foreground">
                     {device.description || '—'}

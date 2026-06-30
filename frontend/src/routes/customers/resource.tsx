@@ -1,8 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { RegistryInstanceForm, type RegistryResource } from '@/components/registry';
-import { TypeCapsule } from '@/components/TypeCapsule';
+import { RegistryInstanceForm, tokenColumn, nameColumn, createdColumn, type RegistryResource } from '@/components/registry';
+import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import {
   listCustomers,
   getCustomer,
@@ -17,7 +17,6 @@ export const customerResource: RegistryResource<Customer> = {
   basePath: '/customers',
   titlePlural: 'Customers',
   singular: 'customer',
-  backLabel: 'Customers',
   listDescription: 'Organizations or accounts you serve',
   banner: 'customers',
   list: listCustomers,
@@ -25,48 +24,21 @@ export const customerResource: RegistryResource<Customer> = {
   remove: deleteCustomer,
   idOf: (c) => c.id,
   tokenOf: (c) => c.token,
-  descriptionOf: (c) => c.name ?? '—',
   nameOf: (c) => c.name,
-  typeOf: (c) =>
-    c.customerType
-      ? {
-          token: c.customerType.token,
-          name: c.customerType.name,
-          icon: c.customerType.icon,
-          backgroundColor: c.customerType.backgroundColor,
-          foregroundColor: c.customerType.foregroundColor,
-          borderColor: c.customerType.borderColor,
-        }
-      : null,
+  typeOf: (c) => (c.customerType ? appearanceOf(c.customerType) : null),
   columns: [
-    {
-      header: 'Token',
-      cell: (c) => <span className="font-mono text-xs text-foreground">{c.token}</span>,
-    },
-    { header: 'Name', cell: (c) => c.name || '—', className: 'font-medium text-foreground' },
+    tokenColumn<Customer>(),
+    nameColumn<Customer>(),
     {
       header: 'Type',
       cell: (c) =>
         c.customerType ? (
-          <TypeCapsule
-            appearance={{
-              token: c.customerType.token,
-              name: c.customerType.name,
-              icon: c.customerType.icon,
-              backgroundColor: c.customerType.backgroundColor,
-              foregroundColor: c.customerType.foregroundColor,
-              borderColor: c.customerType.borderColor,
-            }}
-          />
+          <TypeCapsule appearance={appearanceOf(c.customerType)} />
         ) : (
           <span className="text-muted-foreground">—</span>
         ),
     },
-    {
-      header: 'Created',
-      cell: (c) => (c.createdAt ? new Date(c.createdAt).toLocaleDateString() : '—'),
-      className: 'text-muted-foreground',
-    },
+    createdColumn<Customer>(),
   ],
   renderForm: (c, onDone) => (
     <RegistryInstanceForm

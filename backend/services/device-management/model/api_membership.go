@@ -69,18 +69,44 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 	if len(requests) == 0 {
 		return []*EntityRelationship{}, nil
 	}
+
+	// Resolve each distinct relationship type once up front — a bulk add of N
+	// members of the same type does one lookup, not N. The reserved membership type
+	// is auto-provisioned on first use and seeded into the map.
+	typesByToken := make(map[string]*EntityRelationshipType)
+	plainTokens := make([]string, 0)
 	for _, request := range requests {
+		if _, ok := typesByToken[request.RelationshipType]; ok {
+			continue
+		}
 		if request.RelationshipType == MembershipRelationshipType {
-			if _, err := api.EnsureMembershipType(ctx); err != nil {
+			member, err := api.EnsureMembershipType(ctx)
+			if err != nil {
 				return nil, err
 			}
-			break
+			typesByToken[MembershipRelationshipType] = member
+			continue
+		}
+		typesByToken[request.RelationshipType] = nil // mark as needing a lookup
+		plainTokens = append(plainTokens, request.RelationshipType)
+	}
+	if len(plainTokens) > 0 {
+		matches, err := api.EntityRelationshipTypesByToken(ctx, plainTokens)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range matches {
+			typesByToken[m.Token] = m
 		}
 	}
 
 	created := make([]*EntityRelationship, 0, len(requests))
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, request := range requests {
+			rt := typesByToken[request.RelationshipType]
+			if rt == nil {
+				return gorm.ErrRecordNotFound
+			}
 			sourceId, err := api.ResolveEntityToken(ctx, request.SourceType, request.Source)
 			if err != nil {
 				return fmt.Errorf("source: %w", err)
@@ -89,13 +115,6 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 			if err != nil {
 				return fmt.Errorf("target: %w", err)
 			}
-			rtmatches, err := api.EntityRelationshipTypesByToken(ctx, []string{request.RelationshipType})
-			if err != nil {
-				return err
-			}
-			if len(rtmatches) == 0 {
-				return gorm.ErrRecordNotFound
-			}
 			edge := &EntityRelationship{
 				TokenReference:     rdb.TokenReference{Token: request.Token},
 				MetadataEntity:     rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
@@ -103,12 +122,12 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 				SourceId:           sourceId,
 				TargetType:         request.TargetType,
 				TargetId:           targetId,
-				RelationshipTypeId: rtmatches[0].ID,
+				RelationshipTypeId: rt.ID,
 			}
 			if err := tx.Create(edge).Error; err != nil {
 				return err
 			}
-			edge.RelationshipType = *rtmatches[0]
+			edge.RelationshipType = *rt
 			created = append(created, edge)
 		}
 		return nil

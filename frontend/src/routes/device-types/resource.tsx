@@ -1,8 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { RegistryTypeForm, type RegistryResource } from '@/components/registry';
-import { TypeCapsule } from '@/components/TypeCapsule';
+import { RegistryTypeForm, tokenColumn, descriptionColumn, createdColumn, type RegistryResource } from '@/components/registry';
+import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { TypeAppearanceForm } from '@/components/TypeAppearanceForm';
 import {
   listDeviceTypes,
@@ -18,7 +18,6 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
   basePath: '/device-types',
   titlePlural: 'Device Types',
   singular: 'device type',
-  backLabel: 'Device types',
   banner: 'devices',
   listDescription: 'Templates that classify devices',
   list: listDeviceTypes,
@@ -26,34 +25,15 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
   remove: deleteDeviceType,
   idOf: (dt) => dt.id,
   tokenOf: (dt) => dt.token,
-  descriptionOf: (dt) => dt.name ?? '—',
   nameOf: (dt) => dt.name,
   columns: [
     {
       header: 'Appearance',
-      cell: (dt) => (
-        <TypeCapsule
-          appearance={{
-            token: dt.token,
-            name: dt.name,
-            icon: dt.icon,
-            backgroundColor: dt.backgroundColor,
-            foregroundColor: dt.foregroundColor,
-            borderColor: dt.borderColor,
-          }}
-        />
-      ),
+      cell: (dt) => <TypeCapsule appearance={appearanceOf(dt)} />,
     },
-    {
-      header: 'Token',
-      cell: (dt) => <span className="font-mono text-xs text-foreground">{dt.token}</span>,
-    },
-    { header: 'Description', cell: (dt) => dt.description || '—', className: 'text-muted-foreground' },
-    {
-      header: 'Created',
-      cell: (dt) => (dt.createdAt ? new Date(dt.createdAt).toLocaleDateString() : '—'),
-      className: 'text-muted-foreground',
-    },
+    tokenColumn<DeviceType>(),
+    descriptionColumn<DeviceType>(),
+    createdColumn<DeviceType>(),
   ],
   renderForm: (dt, onDone) => (
     <RegistryTypeForm

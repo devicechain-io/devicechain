@@ -1,8 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { RegistryTypeForm, type RegistryResource } from '@/components/registry';
-import { TypeCapsule } from '@/components/TypeCapsule';
+import { RegistryTypeForm, tokenColumn, descriptionColumn, createdColumn, type RegistryResource } from '@/components/registry';
+import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { TypeAppearanceForm } from '@/components/TypeAppearanceForm';
 import {
   listAssetTypes,
@@ -18,7 +18,6 @@ export const assetTypeResource: RegistryResource<AssetType> = {
   basePath: '/asset-types',
   titlePlural: 'Asset Types',
   singular: 'asset type',
-  backLabel: 'Asset types',
   banner: 'assets',
   listDescription: 'Templates that classify assets',
   list: listAssetTypes,
@@ -26,34 +25,15 @@ export const assetTypeResource: RegistryResource<AssetType> = {
   remove: deleteAssetType,
   idOf: (at) => at.id,
   tokenOf: (at) => at.token,
-  descriptionOf: (at) => at.name ?? '—',
   nameOf: (at) => at.name,
   columns: [
     {
       header: 'Appearance',
-      cell: (at) => (
-        <TypeCapsule
-          appearance={{
-            token: at.token,
-            name: at.name,
-            icon: at.icon,
-            backgroundColor: at.backgroundColor,
-            foregroundColor: at.foregroundColor,
-            borderColor: at.borderColor,
-          }}
-        />
-      ),
+      cell: (at) => <TypeCapsule appearance={appearanceOf(at)} />,
     },
-    {
-      header: 'Token',
-      cell: (at) => <span className="font-mono text-xs text-foreground">{at.token}</span>,
-    },
-    { header: 'Description', cell: (at) => at.description || '—', className: 'text-muted-foreground' },
-    {
-      header: 'Created',
-      cell: (at) => (at.createdAt ? new Date(at.createdAt).toLocaleDateString() : '—'),
-      className: 'text-muted-foreground',
-    },
+    tokenColumn<AssetType>(),
+    descriptionColumn<AssetType>(),
+    createdColumn<AssetType>(),
   ],
   renderForm: (at, onDone) => (
     <RegistryTypeForm

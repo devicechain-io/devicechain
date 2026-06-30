@@ -1,8 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { RegistryInstanceForm, type RegistryResource } from '@/components/registry';
-import { TypeCapsule } from '@/components/TypeCapsule';
+import { RegistryInstanceForm, tokenColumn, nameColumn, createdColumn, type RegistryResource } from '@/components/registry';
+import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import {
   listAreas,
   getArea,
@@ -17,7 +17,6 @@ export const areaResource: RegistryResource<Area> = {
   basePath: '/areas',
   titlePlural: 'Areas',
   singular: 'area',
-  backLabel: 'Areas',
   listDescription: 'Locations or zones you organize by',
   banner: 'areas',
   list: listAreas,
@@ -25,48 +24,21 @@ export const areaResource: RegistryResource<Area> = {
   remove: deleteArea,
   idOf: (a) => a.id,
   tokenOf: (a) => a.token,
-  descriptionOf: (a) => a.name ?? '—',
   nameOf: (a) => a.name,
-  typeOf: (a) =>
-    a.areaType
-      ? {
-          token: a.areaType.token,
-          name: a.areaType.name,
-          icon: a.areaType.icon,
-          backgroundColor: a.areaType.backgroundColor,
-          foregroundColor: a.areaType.foregroundColor,
-          borderColor: a.areaType.borderColor,
-        }
-      : null,
+  typeOf: (a) => (a.areaType ? appearanceOf(a.areaType) : null),
   columns: [
-    {
-      header: 'Token',
-      cell: (a) => <span className="font-mono text-xs text-foreground">{a.token}</span>,
-    },
-    { header: 'Name', cell: (a) => a.name || '—', className: 'font-medium text-foreground' },
+    tokenColumn<Area>(),
+    nameColumn<Area>(),
     {
       header: 'Type',
       cell: (a) =>
         a.areaType ? (
-          <TypeCapsule
-            appearance={{
-              token: a.areaType.token,
-              name: a.areaType.name,
-              icon: a.areaType.icon,
-              backgroundColor: a.areaType.backgroundColor,
-              foregroundColor: a.areaType.foregroundColor,
-              borderColor: a.areaType.borderColor,
-            }}
-          />
+          <TypeCapsule appearance={appearanceOf(a.areaType)} />
         ) : (
           <span className="text-muted-foreground">—</span>
         ),
     },
-    {
-      header: 'Created',
-      cell: (a) => (a.createdAt ? new Date(a.createdAt).toLocaleDateString() : '—'),
-      className: 'text-muted-foreground',
-    },
+    createdColumn<Area>(),
   ],
   renderForm: (a, onDone) => (
     <RegistryInstanceForm

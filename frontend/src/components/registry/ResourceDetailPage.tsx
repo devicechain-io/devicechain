@@ -12,10 +12,9 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
+import { cap } from '@/components/registry/forms';
 import { errMessage, useReload } from '@/routes/common';
 import type { RegistryResource } from '@/components/registry/types';
-
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // Generic detail page: loads the entity by token, frames it with a header toolbar
 // (Back + Delete), renders the resource's form, and appends any extra panels
@@ -78,7 +77,6 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
     </SectionPanel>
   );
   const extra = resource.renderDetailExtra?.(item, reload);
-  const labeledExtra = extra != null && resource.detailExtraLabel != null;
   const heading = resource.nameOf?.(item) || token;
   const type = resource.typeOf?.(item);
 
@@ -104,16 +102,10 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
       <Tabs defaultValue="basic">
         <TabsList>
           <TabsTrigger value="basic">Basic</TabsTrigger>
-          {labeledExtra && <TabsTrigger value="extra">{resource.detailExtraLabel}</TabsTrigger>}
+          {extra && <TabsTrigger value="extra">{resource.detailExtraLabel ?? 'More'}</TabsTrigger>}
         </TabsList>
-        <TabsContent value="basic">
-          <div className="space-y-6">
-            {form}
-            {/* An unlabelled extra (no tab) still renders under Basic. */}
-            {extra && !resource.detailExtraLabel ? extra : null}
-          </div>
-        </TabsContent>
-        {labeledExtra && <TabsContent value="extra">{extra}</TabsContent>}
+        <TabsContent value="basic">{form}</TabsContent>
+        {extra && <TabsContent value="extra">{extra}</TabsContent>}
       </Tabs>
     </PageShell>
   );

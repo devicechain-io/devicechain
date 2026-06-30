@@ -8,7 +8,7 @@ import { SectionPanel } from '@/components/ui/section-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { TypeCapsule, TokenCapsule } from '@/components/TypeCapsule';
+import { TypeCapsule, TokenCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -82,16 +82,7 @@ export default function DeviceDetailPage() {
       banner="devices"
       description={
         <div className="mt-1 flex flex-wrap items-center gap-2">
-          <TypeCapsule
-            appearance={{
-              token: device.deviceType.token,
-              name: device.deviceType.name,
-              icon: device.deviceType.icon,
-              backgroundColor: device.deviceType.backgroundColor,
-              foregroundColor: device.deviceType.foregroundColor,
-              borderColor: device.deviceType.borderColor,
-            }}
-          />
+          <TypeCapsule appearance={appearanceOf(device.deviceType)} />
           <TokenCapsule token={device.token} />
         </div>
       }

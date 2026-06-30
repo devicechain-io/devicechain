@@ -1,8 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { RegistryTypeForm, type RegistryResource } from '@/components/registry';
-import { TypeCapsule } from '@/components/TypeCapsule';
+import { RegistryTypeForm, tokenColumn, descriptionColumn, createdColumn, type RegistryResource } from '@/components/registry';
+import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { TypeAppearanceForm } from '@/components/TypeAppearanceForm';
 import {
   listCustomerTypes,
@@ -18,7 +18,6 @@ export const customerTypeResource: RegistryResource<CustomerType> = {
   basePath: '/customer-types',
   titlePlural: 'Customer Types',
   singular: 'customer type',
-  backLabel: 'Customer types',
   banner: 'customers',
   listDescription: 'Templates that classify customers',
   list: listCustomerTypes,
@@ -26,34 +25,15 @@ export const customerTypeResource: RegistryResource<CustomerType> = {
   remove: deleteCustomerType,
   idOf: (ct) => ct.id,
   tokenOf: (ct) => ct.token,
-  descriptionOf: (ct) => ct.name ?? '—',
   nameOf: (ct) => ct.name,
   columns: [
     {
       header: 'Appearance',
-      cell: (ct) => (
-        <TypeCapsule
-          appearance={{
-            token: ct.token,
-            name: ct.name,
-            icon: ct.icon,
-            backgroundColor: ct.backgroundColor,
-            foregroundColor: ct.foregroundColor,
-            borderColor: ct.borderColor,
-          }}
-        />
-      ),
+      cell: (ct) => <TypeCapsule appearance={appearanceOf(ct)} />,
     },
-    {
-      header: 'Token',
-      cell: (ct) => <span className="font-mono text-xs text-foreground">{ct.token}</span>,
-    },
-    { header: 'Description', cell: (ct) => ct.description || '—', className: 'text-muted-foreground' },
-    {
-      header: 'Created',
-      cell: (ct) => (ct.createdAt ? new Date(ct.createdAt).toLocaleDateString() : '—'),
-      className: 'text-muted-foreground',
-    },
+    tokenColumn<CustomerType>(),
+    descriptionColumn<CustomerType>(),
+    createdColumn<CustomerType>(),
   ],
   renderForm: (ct, onDone) => (
     <RegistryTypeForm

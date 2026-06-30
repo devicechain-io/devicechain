@@ -17,6 +17,20 @@ export interface TypeAppearance {
   borderColor?: string | null;
 }
 
+// Project a branded type entity (device/asset/customer/area type) onto the fields
+// a capsule needs — the single source for the appearance mapping that the resource
+// columns, instance `typeOf`, and detail headers all use.
+export function appearanceOf(t: TypeAppearance): TypeAppearance {
+  return {
+    token: t.token,
+    name: t.name,
+    icon: t.icon,
+    backgroundColor: t.backgroundColor,
+    foregroundColor: t.foregroundColor,
+    borderColor: t.borderColor,
+  };
+}
+
 export function TypeCapsule({
   appearance,
   className,
