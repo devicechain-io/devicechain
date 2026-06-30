@@ -57,8 +57,10 @@ func (l *DistributedLock) WithLock(ctx context.Context, name string, logic func(
 
 	log.Info().Str("lock", name).Msg("Acquiring distributed lock...")
 	acquired := false
+	var rev uint64
 	for attempt := 0; attempt <= lockRetries; attempt++ {
-		if _, err := l.kv.Create(key, []byte(holder)); err == nil {
+		if r, err := l.kv.Create(key, []byte(holder)); err == nil {
+			rev = r
 			acquired = true
 			break
 		} else if !errors.Is(err, nats.ErrKeyExists) {
@@ -78,13 +80,12 @@ func (l *DistributedLock) WithLock(ctx context.Context, name string, logic func(
 	}
 
 	defer func() {
-		// Release only our own hold: if the TTL already expired our entry and
-		// another replica took the lock, deleting would drop theirs. Purge our
-		// key only when it still carries our holder id.
-		if entry, err := l.kv.Get(key); err == nil && string(entry.Value()) == holder {
-			if derr := l.kv.Delete(key); derr != nil {
-				log.Error().Err(derr).Str("lock", name).Msg("Error releasing distributed lock.")
-			}
+		// Release only the exact entry we created: a revision-checked delete is a
+		// no-op if our entry already expired (TTL) and another replica re-created
+		// the lock, so a Get-then-Delete race can never drop someone else's hold.
+		if derr := l.kv.Delete(key, nats.LastRevision(rev)); derr != nil {
+			log.Debug().Err(derr).Str("lock", name).
+				Msg("Distributed lock already released or taken over; nothing to delete.")
 		}
 	}()
 
