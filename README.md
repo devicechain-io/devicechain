@@ -1,4 +1,9 @@
-# DeviceChain
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="branding/logos/logo.svg">
+    <img alt="DeviceChain" src="branding/logos/logo-light.svg" width="300">
+  </picture>
+</p>
 
 **A modern, cloud-native IoT Application Enablement Platform built in Go and React.**
 
