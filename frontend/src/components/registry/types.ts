@@ -8,6 +8,7 @@
 // not copying three near-identical page files.
 
 import type { ReactNode } from 'react';
+import type { TypeAppearance } from '@/components/TypeCapsule';
 
 // Matches the Pagination component's prop shape and every *SearchResults
 // pagination block, so a resource's `list` can return the API result directly.
@@ -57,12 +58,18 @@ export interface RegistryResource<T> {
 
   // ── Presentation ──
   columns: RegistryColumn<T>[];
-  /** Detail-page subtitle (e.g. the entity's name). */
+  /** Detail-page primary title (the entity's name). Falls back to the token. */
+  nameOf?: (item: T) => string | null;
+  /** The linked type's appearance, shown as a capsule in an instance's detail
+   *  header (e.g. a device's device-type). Omit for types/groups. */
+  typeOf?: (item: T) => TypeAppearance | null;
+  /** Detail-page subtitle (legacy; prefer nameOf + typeOf). */
   descriptionOf?: (item: T) => ReactNode;
   /** The create/edit form, shared by the new + detail pages. */
   renderForm: (entity: T | undefined, onDone: (message: string) => void) => ReactNode;
-  /** Extra detail-page content (e.g. a group's members). */
-  renderDetailExtra?: (item: T) => ReactNode;
+  /** Extra detail-page content (e.g. a group's members, a type's appearance).
+   *  Receives a reload callback to refresh the page after a save. */
+  renderDetailExtra?: (item: T, reload: () => void) => ReactNode;
   /** When set alongside renderDetailExtra, the detail page splits into a "Basic"
    *  tab (the form) and a second tab with this label holding the extra content. */
   detailExtraLabel?: string;

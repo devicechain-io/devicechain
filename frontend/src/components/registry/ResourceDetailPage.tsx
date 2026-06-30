@@ -6,6 +6,7 @@ import { Trash2 } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { TypeCapsule, TokenCapsule } from '@/components/TypeCapsule';
 import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -76,14 +77,21 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
       })}
     </SectionPanel>
   );
-  const extra = resource.renderDetailExtra?.(item);
+  const extra = resource.renderDetailExtra?.(item, reload);
   const labeledExtra = extra != null && resource.detailExtraLabel != null;
+  const heading = resource.nameOf?.(item) || token;
+  const type = resource.typeOf?.(item);
 
   return (
     <PageShell
-      title={token}
+      title={heading}
       banner={resource.banner}
-      description={resource.descriptionOf?.(item)}
+      description={
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          {type && <TypeCapsule appearance={type} />}
+          <TokenCapsule token={token} />
+        </div>
+      }
       action={
         <Button variant="destructive" size="sm" onClick={remove}>
           <Trash2 size={14} /> Delete

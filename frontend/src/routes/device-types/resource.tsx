@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RegistryTypeForm, type RegistryResource } from '@/components/registry';
+import { TypeCapsule } from '@/components/TypeCapsule';
+import { TypeAppearanceForm } from '@/components/TypeAppearanceForm';
 import {
   listDeviceTypes,
   getDeviceType,
@@ -25,23 +27,27 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
   idOf: (dt) => dt.id,
   tokenOf: (dt) => dt.token,
   descriptionOf: (dt) => dt.name ?? '—',
+  nameOf: (dt) => dt.name,
   columns: [
     {
-      header: 'Token',
+      header: 'Appearance',
       cell: (dt) => (
-        <div className="flex items-center gap-2">
-          <span
-            className={
-              dt.backgroundColor ? 'size-4 shrink-0 rounded' : 'size-4 shrink-0 rounded bg-muted'
-            }
-            style={dt.backgroundColor ? { backgroundColor: dt.backgroundColor } : undefined}
-            aria-hidden
-          />
-          <span className="font-mono text-xs text-foreground">{dt.token}</span>
-        </div>
+        <TypeCapsule
+          appearance={{
+            token: dt.token,
+            name: dt.name,
+            icon: dt.icon,
+            backgroundColor: dt.backgroundColor,
+            foregroundColor: dt.foregroundColor,
+            borderColor: dt.borderColor,
+          }}
+        />
       ),
     },
-    { header: 'Name', cell: (dt) => dt.name || '—', className: 'font-medium text-foreground' },
+    {
+      header: 'Token',
+      cell: (dt) => <span className="font-mono text-xs text-foreground">{dt.token}</span>,
+    },
     { header: 'Description', cell: (dt) => dt.description || '—', className: 'text-muted-foreground' },
     {
       header: 'Created',
@@ -55,9 +61,27 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
       singular="device type"
       tokenPlaceholder="thermostat"
       create={(req) => createDeviceType(req)}
-      update={(token, req) => updateDeviceType(token, req)}
+      update={(token, req) =>
+        updateDeviceType(token, {
+          token: req.token,
+          name: req.name,
+          description: req.description,
+          icon: dt?.icon,
+          backgroundColor: dt?.backgroundColor,
+          foregroundColor: dt?.foregroundColor,
+          borderColor: dt?.borderColor,
+        })
+      }
       onDone={onDone}
     />
   ),
   removeConfirm: (dt) => `Delete device type “${dt.token}”? This cannot be undone.`,
+  detailExtraLabel: 'Appearance',
+  renderDetailExtra: (dt, reload) => (
+    <TypeAppearanceForm
+      entity={dt}
+      update={(req) => updateDeviceType(dt.token, req)}
+      onSaved={reload}
+    />
+  ),
 };

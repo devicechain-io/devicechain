@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RegistryInstanceForm, type RegistryResource } from '@/components/registry';
-import { Badge } from '@/components/ui/badge';
+import { TypeCapsule } from '@/components/TypeCapsule';
 import {
   listAreas,
   getArea,
@@ -26,6 +26,18 @@ export const areaResource: RegistryResource<Area> = {
   idOf: (a) => a.id,
   tokenOf: (a) => a.token,
   descriptionOf: (a) => a.name ?? '—',
+  nameOf: (a) => a.name,
+  typeOf: (a) =>
+    a.areaType
+      ? {
+          token: a.areaType.token,
+          name: a.areaType.name,
+          icon: a.areaType.icon,
+          backgroundColor: a.areaType.backgroundColor,
+          foregroundColor: a.areaType.foregroundColor,
+          borderColor: a.areaType.borderColor,
+        }
+      : null,
   columns: [
     {
       header: 'Token',
@@ -36,7 +48,16 @@ export const areaResource: RegistryResource<Area> = {
       header: 'Type',
       cell: (a) =>
         a.areaType ? (
-          <Badge variant="secondary">{a.areaType.name || a.areaType.token}</Badge>
+          <TypeCapsule
+            appearance={{
+              token: a.areaType.token,
+              name: a.areaType.name,
+              icon: a.areaType.icon,
+              backgroundColor: a.areaType.backgroundColor,
+              foregroundColor: a.areaType.foregroundColor,
+              borderColor: a.areaType.borderColor,
+            }}
+          />
         ) : (
           <span className="text-muted-foreground">—</span>
         ),

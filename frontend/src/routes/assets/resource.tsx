@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RegistryInstanceForm, type RegistryResource } from '@/components/registry';
-import { Badge } from '@/components/ui/badge';
+import { TypeCapsule } from '@/components/TypeCapsule';
 import {
   listAssets,
   getAsset,
@@ -27,6 +27,18 @@ export const assetResource: RegistryResource<Asset> = {
   idOf: (a) => a.id,
   tokenOf: (a) => a.token,
   descriptionOf: (a) => a.name ?? '—',
+  nameOf: (a) => a.name,
+  typeOf: (a) =>
+    a.assetType
+      ? {
+          token: a.assetType.token,
+          name: a.assetType.name,
+          icon: a.assetType.icon,
+          backgroundColor: a.assetType.backgroundColor,
+          foregroundColor: a.assetType.foregroundColor,
+          borderColor: a.assetType.borderColor,
+        }
+      : null,
   columns: [
     {
       header: 'Token',
@@ -37,7 +49,16 @@ export const assetResource: RegistryResource<Asset> = {
       header: 'Type',
       cell: (a) =>
         a.assetType ? (
-          <Badge variant="secondary">{a.assetType.name || a.assetType.token}</Badge>
+          <TypeCapsule
+            appearance={{
+              token: a.assetType.token,
+              name: a.assetType.name,
+              icon: a.assetType.icon,
+              backgroundColor: a.assetType.backgroundColor,
+              foregroundColor: a.assetType.foregroundColor,
+              borderColor: a.assetType.borderColor,
+            }}
+          />
         ) : (
           <span className="text-muted-foreground">—</span>
         ),

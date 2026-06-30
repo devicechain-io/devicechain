@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RegistryTypeForm, type RegistryResource } from '@/components/registry';
+import { TypeCapsule } from '@/components/TypeCapsule';
+import { TypeAppearanceForm } from '@/components/TypeAppearanceForm';
 import {
   listAreaTypes,
   getAreaType,
@@ -25,23 +27,27 @@ export const areaTypeResource: RegistryResource<AreaType> = {
   idOf: (at) => at.id,
   tokenOf: (at) => at.token,
   descriptionOf: (at) => at.name ?? '—',
+  nameOf: (at) => at.name,
   columns: [
     {
-      header: 'Token',
+      header: 'Appearance',
       cell: (at) => (
-        <div className="flex items-center gap-2">
-          <span
-            className={
-              at.backgroundColor ? 'size-4 shrink-0 rounded' : 'size-4 shrink-0 rounded bg-muted'
-            }
-            style={at.backgroundColor ? { backgroundColor: at.backgroundColor } : undefined}
-            aria-hidden
-          />
-          <span className="font-mono text-xs text-foreground">{at.token}</span>
-        </div>
+        <TypeCapsule
+          appearance={{
+            token: at.token,
+            name: at.name,
+            icon: at.icon,
+            backgroundColor: at.backgroundColor,
+            foregroundColor: at.foregroundColor,
+            borderColor: at.borderColor,
+          }}
+        />
       ),
     },
-    { header: 'Name', cell: (at) => at.name || '—', className: 'font-medium text-foreground' },
+    {
+      header: 'Token',
+      cell: (at) => <span className="font-mono text-xs text-foreground">{at.token}</span>,
+    },
     { header: 'Description', cell: (at) => at.description || '—', className: 'text-muted-foreground' },
     {
       header: 'Created',
@@ -55,9 +61,27 @@ export const areaTypeResource: RegistryResource<AreaType> = {
       singular="area type"
       tokenPlaceholder="building"
       create={(req) => createAreaType(req)}
-      update={(token, req) => updateAreaType(token, req)}
+      update={(token, req) =>
+        updateAreaType(token, {
+          token: req.token,
+          name: req.name,
+          description: req.description,
+          icon: at?.icon,
+          backgroundColor: at?.backgroundColor,
+          foregroundColor: at?.foregroundColor,
+          borderColor: at?.borderColor,
+        })
+      }
       onDone={onDone}
     />
   ),
   removeConfirm: (at) => `Delete area type “${at.token}”? This cannot be undone.`,
+  detailExtraLabel: 'Appearance',
+  renderDetailExtra: (at, reload) => (
+    <TypeAppearanceForm
+      entity={at}
+      update={(req) => updateAreaType(at.token, req)}
+      onSaved={reload}
+    />
+  ),
 };

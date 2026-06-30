@@ -42,8 +42,10 @@ const ASSETS = graphql(`
           id
           token
           name
+          icon
           backgroundColor
           foregroundColor
+          borderColor
         }
       }
       pagination {
@@ -80,8 +82,10 @@ const ASSET_BY_TOKEN = graphql(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
   }
@@ -104,8 +108,10 @@ const CREATE_ASSET = graphql(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
   }
@@ -128,8 +134,10 @@ const UPDATE_ASSET = graphql(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
   }
