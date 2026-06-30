@@ -20,6 +20,7 @@ export const assetResource: RegistryResource<Asset> = {
   singular: 'asset',
   backLabel: 'Assets',
   listDescription: 'Physical or logical things you track',
+  banner: 'assets',
   list: listAssets,
   load: getAsset,
   remove: deleteAsset,

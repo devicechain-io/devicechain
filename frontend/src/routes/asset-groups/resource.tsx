@@ -17,6 +17,7 @@ export const assetGroupResource: RegistryResource<AssetGroup> = {
   titlePlural: 'Asset Groups',
   singular: 'asset group',
   backLabel: 'Asset groups',
+  banner: 'assets',
   listDescription: 'Collections of assets',
   list: listAssetGroups,
   load: getAssetGroup,

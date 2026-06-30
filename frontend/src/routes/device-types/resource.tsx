@@ -17,6 +17,7 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
   titlePlural: 'Device Types',
   singular: 'device type',
   backLabel: 'Device types',
+  banner: 'devices',
   listDescription: 'Templates that classify devices',
   list: listDeviceTypes,
   load: getDeviceType,

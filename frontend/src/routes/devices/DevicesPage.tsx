@@ -67,6 +67,7 @@ export default function DevicesPage() {
     <PageShell
       title="Devices"
       description="Devices registered in this tenant"
+      banner="devices"
       action={
         <Button onClick={() => setCreating(true)}>
           <Plus size={16} /> New device

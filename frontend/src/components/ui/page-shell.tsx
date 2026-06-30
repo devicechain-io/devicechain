@@ -11,6 +11,12 @@ interface PageShellProps {
   description?: string | ReactNode;
   /** Action buttons on the right side of the header */
   action?: ReactNode;
+  /**
+   * Category key for the muted background texture in the header, e.g. "devices".
+   * Resolves to `/banners/banner-<key>-mask.png`, tinted by the foreground color
+   * and laid at low opacity. Only set for top-level categories, not sub-items.
+   */
+  banner?: string;
   /** Fully custom header content (overrides title/description/action) */
   header?: ReactNode;
   /** Sticky strip shown below the main header — e.g. tabs + context-specific controls */
@@ -27,6 +33,7 @@ export function PageShell({
   description,
   action,
   header,
+  banner,
   subHeader,
   fullBleed = false,
   bodyClassName,
@@ -37,20 +44,56 @@ export function PageShell({
   return (
     <div className="flex flex-col h-full">
       {hasHeader && (
-        <div className="shrink-0 border-b border-border bg-background px-6 py-4">
-          {header ?? (
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-2xl font-bold tracking-tight text-foreground">{title}</h1>
-                {description && (
-                  typeof description === 'string'
-                    ? <p className="text-sm text-muted-foreground mt-1">{description}</p>
-                    : <div className="mt-1">{description}</div>
-                )}
-              </div>
-              {action}
-            </div>
+        <div
+          className={cn(
+            'relative shrink-0 overflow-hidden border-b border-border bg-background px-6',
+            // Fixed, content-independent height for the standard header so every
+            // category page lines up; custom headers keep their own sizing.
+            header ? 'py-4' : 'flex h-28 items-center',
           )}
+        >
+          {banner && (
+            <>
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0 bg-foreground opacity-[0.08] dark:opacity-[0.11]"
+                style={{
+                  WebkitMaskImage: `url(/banners/banner-${banner}-mask.png)`,
+                  maskImage: `url(/banners/banner-${banner}-mask.png)`,
+                  WebkitMaskSize: 'cover',
+                  maskSize: 'cover',
+                  WebkitMaskPosition: 'center',
+                  maskPosition: 'center',
+                }}
+              />
+              {/* Wash the texture out under the title/description on the left,
+                  fading to the full pattern by the header's midpoint. Uses the
+                  background color so it stays correct in both themes. */}
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0"
+                style={{
+                  background:
+                    'linear-gradient(to right, hsl(var(--background)) 0%, hsl(var(--background) / 0) 50%)',
+                }}
+              />
+            </>
+          )}
+          <div className="relative w-full">
+            {header ?? (
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-2xl font-bold tracking-tight text-foreground">{title}</h1>
+                  {description && (
+                    typeof description === 'string'
+                      ? <p className="text-sm text-muted-foreground mt-1">{description}</p>
+                      : <div className="mt-1">{description}</div>
+                  )}
+                </div>
+                {action}
+              </div>
+            )}
+          </div>
         </div>
       )}
       {subHeader && (

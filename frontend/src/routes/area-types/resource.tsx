@@ -17,6 +17,7 @@ export const areaTypeResource: RegistryResource<AreaType> = {
   titlePlural: 'Area Types',
   singular: 'area type',
   backLabel: 'Area types',
+  banner: 'areas',
   listDescription: 'Templates that classify areas',
   list: listAreaTypes,
   load: getAreaType,

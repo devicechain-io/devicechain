@@ -19,6 +19,7 @@ export const customerResource: RegistryResource<Customer> = {
   singular: 'customer',
   backLabel: 'Customers',
   listDescription: 'Organizations or accounts you serve',
+  banner: 'customers',
   list: listCustomers,
   load: getCustomer,
   remove: deleteCustomer,

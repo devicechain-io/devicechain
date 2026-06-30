@@ -16,6 +16,7 @@ export const deviceGroupResource: RegistryResource<DeviceGroup> = {
   titlePlural: 'Device Groups',
   singular: 'device group',
   backLabel: 'Device groups',
+  banner: 'devices',
   listDescription: 'Collections of devices',
   list: listDeviceGroups,
   load: getDeviceGroup,

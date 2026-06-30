@@ -16,6 +16,7 @@ export const customerGroupResource: RegistryResource<CustomerGroup> = {
   titlePlural: 'Customer Groups',
   singular: 'customer group',
   backLabel: 'Customer groups',
+  banner: 'customers',
   listDescription: 'Collections of customers',
   list: listCustomerGroups,
   load: getCustomerGroup,
