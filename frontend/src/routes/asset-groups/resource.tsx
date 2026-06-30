@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RegistryTypeForm, type RegistryResource } from '@/components/registry';
+import { MembershipPanel } from '@/components/MembershipPanel';
 import {
   listAssetGroups,
   getAssetGroup,
   createAssetGroup,
   updateAssetGroup,
   deleteAssetGroup,
+  listAssets,
   type AssetGroup,
 } from '@/lib/api/assets';
 
@@ -49,4 +51,13 @@ export const assetGroupResource: RegistryResource<AssetGroup> = {
     />
   ),
   removeConfirm: (g) => `Delete asset group “${g.token}”? This cannot be undone.`,
+  renderDetailExtra: (g) => (
+    <MembershipPanel
+      groupType="assetgroup"
+      groupToken={g.token}
+      memberType="asset"
+      memberSingular="asset"
+      loadCandidates={() => listAssets({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
+    />
+  ),
 };

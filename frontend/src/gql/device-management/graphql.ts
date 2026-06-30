@@ -196,6 +196,26 @@ export type DeviceTypeSearchCriteria = {
   pageSize: number;
 };
 
+export type EntityRelationshipCreateRequest = {
+  metadata?: string | null | undefined;
+  relationshipType: string;
+  source: string;
+  sourceType: string;
+  target: string;
+  targetType: string;
+  token: string;
+};
+
+export type EntityRelationshipSearchCriteria = {
+  pageNumber: number;
+  pageSize: number;
+  relationshipType?: string | null | undefined;
+  source?: string | null | undefined;
+  sourceType?: string | null | undefined;
+  targetType?: string | null | undefined;
+  tracked?: boolean | null | undefined;
+};
+
 export type AreasQueryVariables = Exact<{
   criteria: AreaSearchCriteria;
 }>;
@@ -627,6 +647,36 @@ export type DeleteDeviceGroupMutationVariables = Exact<{
 
 
 export type DeleteDeviceGroupMutation = { deleteDeviceGroup: boolean };
+
+export type EntityRelationshipsQueryVariables = Exact<{
+  criteria: EntityRelationshipSearchCriteria;
+}>;
+
+
+export type EntityRelationshipsQuery = { entityRelationships: { results: Array<{ id: string, token: string, targetType: string, target:
+        | { id: string, token: string }
+        | { id: string, token: string }
+        | { id: string, token: string }
+        | { id: string, token: string }
+        | { id: string, token: string }
+        | { id: string, token: string }
+        | { id: string, token: string }
+        | { id: string, token: string }
+       }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type CreateEntityRelationshipsMutationVariables = Exact<{
+  requests: Array<EntityRelationshipCreateRequest> | EntityRelationshipCreateRequest;
+}>;
+
+
+export type CreateEntityRelationshipsMutation = { createEntityRelationships: Array<{ id: string, token: string }> };
+
+export type RemoveEntityRelationshipsMutationVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type RemoveEntityRelationshipsMutation = { removeEntityRelationships: boolean };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -1495,3 +1545,36 @@ export const DeleteDeviceGroupDocument = new TypedDocumentString(`
   deleteDeviceGroup(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteDeviceGroupMutation, DeleteDeviceGroupMutationVariables>;
+export const EntityRelationshipsDocument = new TypedDocumentString(`
+    query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {
+  entityRelationships(criteria: $criteria) {
+    results {
+      id
+      token
+      targetType
+      target {
+        id
+        token
+      }
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<EntityRelationshipsQuery, EntityRelationshipsQueryVariables>;
+export const CreateEntityRelationshipsDocument = new TypedDocumentString(`
+    mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {
+  createEntityRelationships(requests: $requests) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<CreateEntityRelationshipsMutation, CreateEntityRelationshipsMutationVariables>;
+export const RemoveEntityRelationshipsDocument = new TypedDocumentString(`
+    mutation RemoveEntityRelationships($tokens: [String!]!) {
+  removeEntityRelationships(tokens: $tokens)
+}
+    `) as unknown as TypedDocumentString<RemoveEntityRelationshipsMutation, RemoveEntityRelationshipsMutationVariables>;

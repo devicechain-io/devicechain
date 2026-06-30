@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RegistryTypeForm, type RegistryResource } from '@/components/registry';
+import { MembershipPanel } from '@/components/MembershipPanel';
 import {
   listAreaGroups,
   getAreaGroup,
   createAreaGroup,
   updateAreaGroup,
   deleteAreaGroup,
+  listAreas,
   type AreaGroup,
 } from '@/lib/api/areas';
 
@@ -48,4 +50,13 @@ export const areaGroupResource: RegistryResource<AreaGroup> = {
     />
   ),
   removeConfirm: (g) => `Delete area group “${g.token}”? This cannot be undone.`,
+  renderDetailExtra: (g) => (
+    <MembershipPanel
+      groupType="areagroup"
+      groupToken={g.token}
+      memberType="area"
+      memberSingular="area"
+      loadCandidates={() => listAreas({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
+    />
+  ),
 };
