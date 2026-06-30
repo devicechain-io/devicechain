@@ -101,7 +101,7 @@ func (r *MetricDefinitionResolver) DeviceType() *DeviceTypeResolver {
 	} else {
 		ids := []string{fmt.Sprintf("%d", r.M.DeviceTypeId)}
 		rez, err := r.S.DeviceTypesById(r.C, struct{ Ids []string }{Ids: ids})
-		if err != nil {
+		if err != nil || len(rez) == 0 {
 			return nil
 		}
 		return rez[0]

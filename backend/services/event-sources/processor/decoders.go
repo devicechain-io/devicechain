@@ -83,7 +83,9 @@ func (jd *JsonDecoder) BuildLocationsPayload(source *JsonEvent) (*model.Unresolv
 		return nil, err
 	}
 	payload := &model.UnresolvedLocationsPayload{}
-	json.Unmarshal(locbytes, payload)
+	if err := json.Unmarshal(locbytes, payload); err != nil {
+		return nil, err
+	}
 	return payload, nil
 }
 
@@ -94,7 +96,9 @@ func (jd *JsonDecoder) BuildMeasurementsPayload(source *JsonEvent) (*model.Unres
 		return nil, err
 	}
 	payload := &model.UnresolvedMeasurementsPayload{}
-	json.Unmarshal(locbytes, payload)
+	if err := json.Unmarshal(locbytes, payload); err != nil {
+		return nil, err
+	}
 	return payload, nil
 }
 
@@ -105,7 +109,9 @@ func (jd *JsonDecoder) BuildAlertsPayload(source *JsonEvent) (*model.UnresolvedA
 		return nil, err
 	}
 	payload := &model.UnresolvedAlertsPayload{}
-	json.Unmarshal(locbytes, payload)
+	if err := json.Unmarshal(locbytes, payload); err != nil {
+		return nil, err
+	}
 	return payload, nil
 }
 

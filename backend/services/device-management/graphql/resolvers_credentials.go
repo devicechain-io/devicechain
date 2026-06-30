@@ -80,7 +80,7 @@ func (r *DeviceCredentialResolver) Device() *DeviceResolver {
 	} else {
 		ids := []string{fmt.Sprintf("%d", r.M.DeviceId)}
 		rez, err := r.S.DevicesById(r.C, struct{ Ids []string }{Ids: ids})
-		if err != nil {
+		if err != nil || len(rez) == 0 {
 			return nil
 		}
 		return rez[0]

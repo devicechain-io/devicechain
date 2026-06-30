@@ -305,15 +305,16 @@ func (s *Store) AssignSystemRoles(ctx context.Context, id *Identity, roles []Rol
 	return s.sys(ctx).Model(id).Association("SystemRoles").Append(roles)
 }
 
-// UpdateIdentity persists the mutable profile fields of an already-loaded
-// identity (first/last name) by primary key. Uses a column map so clearing a
-// name to "" is written (a zero-value struct update would skip it), and so the
-// email, password, and role associations are never touched.
-func (s *Store) UpdateIdentity(ctx context.Context, id *Identity) error {
-	return s.sys(ctx).Model(id).Updates(map[string]any{
-		"first_name": id.FirstName,
-		"last_name":  id.LastName,
-	}).Error
+// UpdateIdentityFields persists the given profile columns of an already-loaded
+// identity by primary key. A column map is used (not a struct) so an explicit
+// empty string is written, and only the supplied columns are touched — the
+// email, password, and role associations are never affected. A no-op for an
+// empty map.
+func (s *Store) UpdateIdentityFields(ctx context.Context, id *Identity, fields map[string]any) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	return s.sys(ctx).Model(id).Updates(fields).Error
 }
 
 // EnsureRole idempotently upserts a well-known role by (scope, token), keeping

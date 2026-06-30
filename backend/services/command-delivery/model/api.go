@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -67,6 +68,16 @@ func canTransition(from, to CommandStatus) bool {
 
 // CreateCommand persists a new command in the QUEUED state.
 func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest) (*Command, error) {
+	// Reject a malformed JSON payload rather than silently persisting NULL (the
+	// metadata helper swallows the parse error), which would deliver a command
+	// stripped of its arguments. Same for the metadata blob.
+	if request.Payload != nil && !json.Valid([]byte(*request.Payload)) {
+		return nil, fmt.Errorf("command payload is not valid JSON")
+	}
+	if request.Metadata != nil && !json.Valid([]byte(*request.Metadata)) {
+		return nil, fmt.Errorf("command metadata is not valid JSON")
+	}
+
 	created := &Command{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
