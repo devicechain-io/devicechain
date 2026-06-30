@@ -58,3 +58,24 @@ func (r *SchemaResolver) CreateEntityRelationship(ctx context.Context, args stru
 	}
 	return &EntityRelationshipResolver{M: *created, S: r, C: ctx}, nil
 }
+
+// Create multiple entity relationships in one transaction (bulk "add members" /
+// "assign"). Auto-provisions the reserved "member" relationship type on first use.
+func (r *SchemaResolver) CreateEntityRelationships(ctx context.Context, args struct {
+	Requests []*model.EntityRelationshipCreateRequest
+}) ([]*EntityRelationshipResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
+	api := r.GetApi(ctx)
+	created, err := api.CreateEntityRelationships(ctx, args.Requests)
+	if err != nil {
+		return nil, err
+	}
+	resolvers := make([]*EntityRelationshipResolver, 0, len(created))
+	for _, c := range created {
+		resolvers = append(resolvers, &EntityRelationshipResolver{M: *c, S: r, C: ctx})
+	}
+	return resolvers, nil
+}

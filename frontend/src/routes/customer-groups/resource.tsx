@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RegistryTypeForm, type RegistryResource } from '@/components/registry';
+import { MembershipPanel } from '@/components/MembershipPanel';
 import {
   listCustomerGroups,
   getCustomerGroup,
   createCustomerGroup,
   updateCustomerGroup,
   deleteCustomerGroup,
+  listCustomers,
   type CustomerGroup,
 } from '@/lib/api/customers';
 
@@ -48,4 +50,13 @@ export const customerGroupResource: RegistryResource<CustomerGroup> = {
     />
   ),
   removeConfirm: (g) => `Delete customer group “${g.token}”? This cannot be undone.`,
+  renderDetailExtra: (g) => (
+    <MembershipPanel
+      groupType="customergroup"
+      groupToken={g.token}
+      memberType="customer"
+      memberSingular="customer"
+      loadCandidates={() => listCustomers({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
+    />
+  ),
 };

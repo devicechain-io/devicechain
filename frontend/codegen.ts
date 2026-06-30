@@ -21,6 +21,7 @@ const config: CodegenConfig = {
         'src/lib/api/assets.ts',
         'src/lib/api/customers.ts',
         'src/lib/api/areas.ts',
+        'src/lib/api/relationships.ts',
       ],
       preset: 'client',
       presetConfig: { fragmentMasking: false },

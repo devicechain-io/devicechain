@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RegistryTypeForm, type RegistryResource } from '@/components/registry';
+import { MembershipPanel } from '@/components/MembershipPanel';
 import {
   listDeviceGroups,
   getDeviceGroup,
   createDeviceGroup,
   updateDeviceGroup,
   deleteDeviceGroup,
+  listDevices,
   type DeviceGroup,
 } from '@/lib/api/device-management';
 
@@ -48,4 +50,13 @@ export const deviceGroupResource: RegistryResource<DeviceGroup> = {
     />
   ),
   removeConfirm: (g) => `Delete device group “${g.token}”? This cannot be undone.`,
+  renderDetailExtra: (g) => (
+    <MembershipPanel
+      groupType="devicegroup"
+      groupToken={g.token}
+      memberType="device"
+      memberSingular="device"
+      loadCandidates={() => listDevices({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
+    />
+  ),
 };

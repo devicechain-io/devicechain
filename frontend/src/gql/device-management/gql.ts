@@ -75,6 +75,9 @@ type Documents = {
     "\n  mutation CreateDeviceGroup($request: DeviceGroupCreateRequest) {\n    createDeviceGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.CreateDeviceGroupDocument,
     "\n  mutation UpdateDeviceGroup($token: String!, $request: DeviceGroupCreateRequest) {\n    updateDeviceGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": typeof types.UpdateDeviceGroupDocument,
     "\n  mutation DeleteDeviceGroup($token: String!) {\n    deleteDeviceGroup(token: $token)\n  }\n": typeof types.DeleteDeviceGroupDocument,
+    "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.EntityRelationshipsDocument,
+    "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n": typeof types.CreateEntityRelationshipsDocument,
+    "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": typeof types.RemoveEntityRelationshipsDocument,
 };
 const documents: Documents = {
     "\n  query Areas($criteria: AreaSearchCriteria!) {\n    areas(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        areaType {\n          id\n          token\n          name\n          backgroundColor\n          foregroundColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AreasDocument,
@@ -137,6 +140,9 @@ const documents: Documents = {
     "\n  mutation CreateDeviceGroup($request: DeviceGroupCreateRequest) {\n    createDeviceGroup(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.CreateDeviceGroupDocument,
     "\n  mutation UpdateDeviceGroup($token: String!, $request: DeviceGroupCreateRequest) {\n    updateDeviceGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n    }\n  }\n": types.UpdateDeviceGroupDocument,
     "\n  mutation DeleteDeviceGroup($token: String!) {\n    deleteDeviceGroup(token: $token)\n  }\n": types.DeleteDeviceGroupDocument,
+    "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.EntityRelationshipsDocument,
+    "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n": types.CreateEntityRelationshipsDocument,
+    "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": types.RemoveEntityRelationshipsDocument,
 };
 
 /**
@@ -379,6 +385,18 @@ export function graphql(source: "\n  mutation UpdateDeviceGroup($token: String!,
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteDeviceGroup($token: String!) {\n    deleteDeviceGroup(token: $token)\n  }\n"): typeof import('./graphql').DeleteDeviceGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').EntityRelationshipsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n"): typeof import('./graphql').CreateEntityRelationshipsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n"): typeof import('./graphql').RemoveEntityRelationshipsDocument;
 
 
 export function graphql(source: string) {

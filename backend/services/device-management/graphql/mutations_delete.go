@@ -136,6 +136,14 @@ func (r *SchemaResolver) RemoveEntityRelationship(ctx context.Context, args stru
 	return r.GetApi(ctx).RemoveEntityRelationship(ctx, args.Token)
 }
 
+// Remove multiple relationship edges by token (bulk "remove members" / "unassign").
+func (r *SchemaResolver) RemoveEntityRelationships(ctx context.Context, args struct{ Tokens []string }) (bool, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return false, err
+	}
+	return r.GetApi(ctx).RemoveEntityRelationships(ctx, args.Tokens)
+}
+
 // Delete a single metric definition.
 func (r *SchemaResolver) DeleteMetricDefinition(ctx context.Context, args struct{ Token string }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
