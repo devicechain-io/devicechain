@@ -1,13 +1,14 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   Boxes,
   Building2,
   ChevronRight,
   Cpu,
+  Layers,
   LayoutGrid,
   MapPin,
   Package,
@@ -60,7 +61,7 @@ const NAV: NavNode[] = [
       // devicetype:read), so both share the same requirement.
       { label: 'Devices', href: '/devices', icon: Cpu, requires: 'device:read' },
       { label: 'Device Types', href: '/device-types', icon: Boxes, requires: 'device:read' },
-      // Device Groups land with the registry families / membership work.
+      { label: 'Device Groups', href: '/device-groups', icon: Layers, requires: 'device:read' },
     ],
   },
   {
@@ -71,6 +72,7 @@ const NAV: NavNode[] = [
     children: [
       { label: 'Assets', href: '/assets', icon: Package, requires: 'device:read' },
       { label: 'Asset Types', href: '/asset-types', icon: Boxes, requires: 'device:read' },
+      { label: 'Asset Groups', href: '/asset-groups', icon: Layers, requires: 'device:read' },
     ],
   },
   {
@@ -79,6 +81,7 @@ const NAV: NavNode[] = [
     children: [
       { label: 'Customers', href: '/customers', icon: Building2, requires: 'device:read' },
       { label: 'Customer Types', href: '/customer-types', icon: Boxes, requires: 'device:read' },
+      { label: 'Customer Groups', href: '/customer-groups', icon: Layers, requires: 'device:read' },
     ],
   },
   {
@@ -87,6 +90,7 @@ const NAV: NavNode[] = [
     children: [
       { label: 'Areas', href: '/areas', icon: MapPin, requires: 'device:read' },
       { label: 'Area Types', href: '/area-types', icon: Boxes, requires: 'device:read' },
+      { label: 'Area Groups', href: '/area-groups', icon: Layers, requires: 'device:read' },
     ],
   },
 ];
@@ -127,17 +131,15 @@ export function AppSidebar() {
   const { claims } = useAuth();
   const nav = visibleNav(claims);
   const activeGroup = activeGroupLabel(pathname);
-  // `open` holds the groups the user toggled open; a group is also shown expanded
-  // whenever it owns the active route (so deep links / refreshes land expanded,
-  // with no effect-driven state to keep in sync).
-  const [open, setOpen] = useState<Set<string>>(() => new Set());
+  // Accordion: at most one group expanded at a time, to keep the rail uncluttered.
+  // Default to the group that owns the current route, and follow the route when it
+  // moves into a different group (deep links / refreshes land expanded too).
+  const [openGroup, setOpenGroup] = useState<string | null>(activeGroup ?? null);
+  useEffect(() => {
+    if (activeGroup) setOpenGroup(activeGroup);
+  }, [activeGroup]);
 
-  const toggle = (label: string) =>
-    setOpen((prev) => {
-      const next = new Set(prev);
-      next.has(label) ? next.delete(label) : next.add(label);
-      return next;
-    });
+  const toggle = (label: string) => setOpenGroup((cur) => (cur === label ? null : label));
 
   return (
     <Sidebar collapsible="icon">
@@ -172,6 +174,7 @@ export function AppSidebar() {
                       asChild
                       isActive={isActive(pathname, node.href)}
                       tooltip={node.label}
+                      className={cn(isActive(pathname, node.href) && '!font-semibold !text-primary')}
                     >
                       <Link to={node.href}>
                         <node.icon />
@@ -184,7 +187,7 @@ export function AppSidebar() {
                     key={node.label}
                     node={node}
                     pathname={pathname}
-                    open={open.has(node.label) || node.label === activeGroup}
+                    open={openGroup === node.label}
                     onToggle={() => toggle(node.label)}
                   />
                 ),
@@ -222,6 +225,7 @@ function NavGroup({
         // Highlight the collapsed parent so the user still sees where they are.
         isActive={hasActiveChild && !open}
         tooltip={node.label}
+        className={cn(hasActiveChild && !open && '!font-semibold !text-primary')}
       >
         <node.icon />
         <span>{node.label}</span>
@@ -236,7 +240,11 @@ function NavGroup({
         <SidebarMenuSub>
           {node.children.map((child) => (
             <SidebarMenuSubItem key={child.href}>
-              <SidebarMenuSubButton asChild isActive={isActive(pathname, child.href)}>
+              <SidebarMenuSubButton
+                asChild
+                isActive={isActive(pathname, child.href)}
+                className={cn(isActive(pathname, child.href) && '!font-semibold !text-primary')}
+              >
                 <Link to={child.href}>
                   <child.icon />
                   <span>{child.label}</span>

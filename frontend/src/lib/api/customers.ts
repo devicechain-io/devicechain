@@ -9,6 +9,8 @@ import type {
   CustomerTypesQuery,
   CustomerTypeCreateRequest,
   CustomerCreateRequest,
+  CustomerGroupsQuery,
+  CustomerGroupCreateRequest,
 } from '@/gql/device-management/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -18,10 +20,12 @@ export type CustomerType = CustomerTypesQuery['customerTypes']['results'][number
 export type Pagination = CustomersQuery['customers']['pagination'];
 export type CustomerSearchResults = CustomersQuery['customers'];
 export type CustomerTypeSearchResults = CustomerTypesQuery['customerTypes'];
+export type CustomerGroup = CustomerGroupsQuery['customerGroups']['results'][number];
+export type CustomerGroupSearchResults = CustomerGroupsQuery['customerGroups'];
 
 // Re-export the generated request inputs so forms can type their request objects
 // without reaching into the generated module directly.
-export type { CustomerTypeCreateRequest, CustomerCreateRequest };
+export type { CustomerTypeCreateRequest, CustomerCreateRequest, CustomerGroupCreateRequest };
 
 // ── Customers ───────────────────────────────────────────────────────────
 
@@ -265,4 +269,107 @@ const DELETE_CUSTOMER_TYPE = graphql(`
 export async function deleteCustomerType(token: string): Promise<boolean> {
   const data = await gql('device-management', DELETE_CUSTOMER_TYPE, { token });
   return data.deleteCustomerType;
+}
+
+// ── Customer groups ───────────────────────────────────────────────────────
+
+const CUSTOMER_GROUPS = graphql(`
+  query CustomerGroups($criteria: CustomerGroupSearchCriteria!) {
+    customerGroups(criteria: $criteria) {
+      results {
+        id
+        token
+        name
+        description
+        createdAt
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
+export async function listCustomerGroups(opts: {
+  pageNumber: number;
+  pageSize: number;
+}): Promise<CustomerGroupSearchResults> {
+  const data = await gql('device-management', CUSTOMER_GROUPS, {
+    criteria: {
+      pageNumber: opts.pageNumber,
+      pageSize: opts.pageSize,
+    },
+  });
+  return data.customerGroups;
+}
+
+// The customer-group getter and mutations select the same shape as the CustomerGroups
+// query so their results stay assignable to the shared CustomerGroup type.
+const CUSTOMER_GROUP_BY_TOKEN = graphql(`
+  query CustomerGroupByToken($tokens: [String!]!) {
+    customerGroupsByToken(tokens: $tokens) {
+      id
+      token
+      name
+      description
+      createdAt
+    }
+  }
+`);
+
+export async function getCustomerGroup(token: string): Promise<CustomerGroup | null> {
+  const data = await gql('device-management', CUSTOMER_GROUP_BY_TOKEN, { tokens: [token] });
+  return data.customerGroupsByToken[0] ?? null;
+}
+
+const CREATE_CUSTOMER_GROUP = graphql(`
+  mutation CreateCustomerGroup($request: CustomerGroupCreateRequest) {
+    createCustomerGroup(request: $request) {
+      id
+      token
+      name
+      description
+      createdAt
+    }
+  }
+`);
+
+export async function createCustomerGroup(
+  request: CustomerGroupCreateRequest,
+): Promise<CustomerGroup> {
+  const data = await gql('device-management', CREATE_CUSTOMER_GROUP, { request });
+  return data.createCustomerGroup;
+}
+
+const UPDATE_CUSTOMER_GROUP = graphql(`
+  mutation UpdateCustomerGroup($token: String!, $request: CustomerGroupCreateRequest) {
+    updateCustomerGroup(token: $token, request: $request) {
+      id
+      token
+      name
+      description
+      createdAt
+    }
+  }
+`);
+
+export async function updateCustomerGroup(
+  token: string,
+  request: CustomerGroupCreateRequest,
+): Promise<CustomerGroup> {
+  const data = await gql('device-management', UPDATE_CUSTOMER_GROUP, { token, request });
+  return data.updateCustomerGroup;
+}
+
+const DELETE_CUSTOMER_GROUP = graphql(`
+  mutation DeleteCustomerGroup($token: String!) {
+    deleteCustomerGroup(token: $token)
+  }
+`);
+
+export async function deleteCustomerGroup(token: string): Promise<boolean> {
+  const data = await gql('device-management', DELETE_CUSTOMER_GROUP, { token });
+  return data.deleteCustomerGroup;
 }
