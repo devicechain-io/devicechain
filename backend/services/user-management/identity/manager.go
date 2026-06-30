@@ -266,18 +266,13 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 		return nil, ErrInvalidCredentials
 	}
 
-	var roles, authorities []string
-	if mem != nil {
-		if !mem.Enabled {
+	roles, authorities, err := m.resolveTenantGrant(ctx, tenant, mem, su)
+	if err != nil {
+		if errors.Is(err, errTenantAccessDenied) {
+			m.recordAuth(ctx, rdb.AuditOpLoginFailed, id.Email, tenant)
 			return nil, ErrInvalidCredentials
 		}
-		roles = roleTokens(mem.TenantRoles)
-		authorities = mem.TenantAuthorities()
-	}
-	if su {
-		// Break-glass: a superuser acts in any tenant with full authority. The
-		// token carries actingAsSuperuser so the audit log shows a superuser acted.
-		authorities = []string{string(auth.AuthorityAll)}
+		return nil, err
 	}
 	m.recordAuth(ctx, rdb.AuditOpLogin, id.Email, tenant)
 	return m.issueTenantTokens(tenant, id.Email, roles, authorities, su)
@@ -331,11 +326,16 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	if err != nil {
 		return nil, ErrInvalidToken
 	}
-	if _, err := m.refreshKV.Get(claims.ID); err != nil {
+	entry, err := m.refreshKV.Get(claims.ID)
+	if err != nil {
 		return nil, ErrInvalidToken
 	}
-	// Rotate: invalidate the presented token before minting a replacement.
-	_ = m.refreshKV.Delete(claims.ID)
+	// Rotate atomically: a revision-checked delete claims the token, so only one
+	// of N concurrent refreshes wins. A replayed or stolen refresh token can't
+	// mint two sessions — the losing delete fails and that refresh is rejected.
+	if err := m.refreshKV.Delete(claims.ID, nats.LastRevision(entry.Revision())); err != nil {
+		return nil, ErrInvalidToken
+	}
 
 	// The refresh token's subject is the identity email; the tenant is its claim.
 	id, err := m.iam.IdentityByEmail(ctx, claims.Username)
@@ -347,19 +347,47 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	if mem == nil && !su {
 		return nil, ErrInvalidToken
 	}
-	var roles, authorities []string
-	if mem != nil {
-		if !mem.Enabled {
+	roles, authorities, err := m.resolveTenantGrant(ctx, claims.Tenant, mem, su)
+	if err != nil {
+		if errors.Is(err, errTenantAccessDenied) {
 			return nil, ErrInvalidToken
 		}
-		roles = roleTokens(mem.TenantRoles)
-		authorities = mem.TenantAuthorities()
-	}
-	if su {
-		authorities = []string{string(auth.AuthorityAll)}
+		return nil, err
 	}
 	m.recordAuth(ctx, rdb.AuditOpRefresh, id.Email, claims.Tenant)
 	return m.issueTenantTokens(claims.Tenant, id.Email, roles, authorities, su)
+}
+
+// errTenantAccessDenied marks a regular member's denial from a tenant (tenant
+// disabled, membership disabled, or tenant missing). Callers translate it to the
+// invalid-credentials error of their surface.
+var errTenantAccessDenied = errors.New("tenant access denied")
+
+// resolveTenantGrant computes the roles + authorities an identity receives when
+// acting in tenant, enforcing the disabled-tenant and disabled-membership gates.
+// A superuser breaks glass into any tenant — even a disabled one, or where its
+// own membership is disabled — with full authority, since it may need to enter to
+// remediate (actingAsSuperuser is recorded for audit). A regular member is denied
+// if the tenant or its membership is disabled. mem is non-nil for a non-superuser
+// (callers reject non-members first).
+func (m *Manager) resolveTenantGrant(ctx context.Context, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, err error) {
+	if su {
+		if mem != nil {
+			roles = roleTokens(mem.TenantRoles)
+		}
+		return roles, []string{string(auth.AuthorityAll)}, nil
+	}
+	t, err := m.iam.TenantByToken(ctx, tenant)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, errTenantAccessDenied
+		}
+		return nil, nil, err
+	}
+	if !t.Enabled || !mem.Enabled {
+		return nil, nil, errTenantAccessDenied
+	}
+	return roleTokens(mem.TenantRoles), mem.TenantAuthorities(), nil
 }
 
 // viewerAuthorities is the read-only baseline every enabled tenant member
