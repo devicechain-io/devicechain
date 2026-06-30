@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RegistryTypeForm, type RegistryResource } from '@/components/registry';
+import { TypeCapsule } from '@/components/TypeCapsule';
+import { TypeAppearanceForm } from '@/components/TypeAppearanceForm';
 import {
   listCustomerTypes,
   getCustomerType,
@@ -25,23 +27,27 @@ export const customerTypeResource: RegistryResource<CustomerType> = {
   idOf: (ct) => ct.id,
   tokenOf: (ct) => ct.token,
   descriptionOf: (ct) => ct.name ?? '—',
+  nameOf: (ct) => ct.name,
   columns: [
     {
-      header: 'Token',
+      header: 'Appearance',
       cell: (ct) => (
-        <div className="flex items-center gap-2">
-          <span
-            className={
-              ct.backgroundColor ? 'size-4 shrink-0 rounded' : 'size-4 shrink-0 rounded bg-muted'
-            }
-            style={ct.backgroundColor ? { backgroundColor: ct.backgroundColor } : undefined}
-            aria-hidden
-          />
-          <span className="font-mono text-xs text-foreground">{ct.token}</span>
-        </div>
+        <TypeCapsule
+          appearance={{
+            token: ct.token,
+            name: ct.name,
+            icon: ct.icon,
+            backgroundColor: ct.backgroundColor,
+            foregroundColor: ct.foregroundColor,
+            borderColor: ct.borderColor,
+          }}
+        />
       ),
     },
-    { header: 'Name', cell: (ct) => ct.name || '—', className: 'font-medium text-foreground' },
+    {
+      header: 'Token',
+      cell: (ct) => <span className="font-mono text-xs text-foreground">{ct.token}</span>,
+    },
     { header: 'Description', cell: (ct) => ct.description || '—', className: 'text-muted-foreground' },
     {
       header: 'Created',
@@ -55,9 +61,27 @@ export const customerTypeResource: RegistryResource<CustomerType> = {
       singular="customer type"
       tokenPlaceholder="standard"
       create={(req) => createCustomerType(req)}
-      update={(token, req) => updateCustomerType(token, req)}
+      update={(token, req) =>
+        updateCustomerType(token, {
+          token: req.token,
+          name: req.name,
+          description: req.description,
+          icon: ct?.icon,
+          backgroundColor: ct?.backgroundColor,
+          foregroundColor: ct?.foregroundColor,
+          borderColor: ct?.borderColor,
+        })
+      }
       onDone={onDone}
     />
   ),
   removeConfirm: (ct) => `Delete customer type “${ct.token}”? This cannot be undone.`,
+  detailExtraLabel: 'Appearance',
+  renderDetailExtra: (ct, reload) => (
+    <TypeAppearanceForm
+      entity={ct}
+      update={(req) => updateCustomerType(ct.token, req)}
+      onSaved={reload}
+    />
+  ),
 };

@@ -42,8 +42,10 @@ const DEVICES = graphql(`
           id
           token
           name
+          icon
           backgroundColor
           foregroundColor
+          borderColor
         }
       }
       pagination {
@@ -82,8 +84,10 @@ const DEVICE_BY_TOKEN = graphql(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
   }
@@ -106,8 +110,10 @@ const CREATE_DEVICE = graphql(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
   }
@@ -130,8 +136,10 @@ const UPDATE_DEVICE = graphql(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
   }

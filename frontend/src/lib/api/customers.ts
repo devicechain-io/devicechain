@@ -42,8 +42,10 @@ const CUSTOMERS = graphql(`
           id
           token
           name
+          icon
           backgroundColor
           foregroundColor
+          borderColor
         }
       }
       pagination {
@@ -80,8 +82,10 @@ const CUSTOMER_BY_TOKEN = graphql(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
   }
@@ -104,8 +108,10 @@ const CREATE_CUSTOMER = graphql(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
   }
@@ -128,8 +134,10 @@ const UPDATE_CUSTOMER = graphql(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
   }

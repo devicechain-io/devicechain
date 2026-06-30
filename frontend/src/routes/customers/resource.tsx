@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RegistryInstanceForm, type RegistryResource } from '@/components/registry';
-import { Badge } from '@/components/ui/badge';
+import { TypeCapsule } from '@/components/TypeCapsule';
 import {
   listCustomers,
   getCustomer,
@@ -26,6 +26,18 @@ export const customerResource: RegistryResource<Customer> = {
   idOf: (c) => c.id,
   tokenOf: (c) => c.token,
   descriptionOf: (c) => c.name ?? '—',
+  nameOf: (c) => c.name,
+  typeOf: (c) =>
+    c.customerType
+      ? {
+          token: c.customerType.token,
+          name: c.customerType.name,
+          icon: c.customerType.icon,
+          backgroundColor: c.customerType.backgroundColor,
+          foregroundColor: c.customerType.foregroundColor,
+          borderColor: c.customerType.borderColor,
+        }
+      : null,
   columns: [
     {
       header: 'Token',
@@ -36,7 +48,16 @@ export const customerResource: RegistryResource<Customer> = {
       header: 'Type',
       cell: (c) =>
         c.customerType ? (
-          <Badge variant="secondary">{c.customerType.name || c.customerType.token}</Badge>
+          <TypeCapsule
+            appearance={{
+              token: c.customerType.token,
+              name: c.customerType.name,
+              icon: c.customerType.icon,
+              backgroundColor: c.customerType.backgroundColor,
+              foregroundColor: c.customerType.foregroundColor,
+              borderColor: c.customerType.borderColor,
+            }}
+          />
         ) : (
           <span className="text-muted-foreground">—</span>
         ),

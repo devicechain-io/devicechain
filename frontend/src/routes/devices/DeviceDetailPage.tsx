@@ -8,6 +8,7 @@ import { SectionPanel } from '@/components/ui/section-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { TypeCapsule, TokenCapsule } from '@/components/TypeCapsule';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -77,12 +78,21 @@ export default function DeviceDetailPage() {
 
   return (
     <PageShell
-      title={token}
+      title={device.name || token}
       banner="devices"
       description={
-        <div className="mt-1 flex items-center gap-2">
-          <Badge variant="secondary">{device.deviceType.name ?? device.deviceType.token}</Badge>
-          {device.name && <span className="text-sm text-muted-foreground">{device.name}</span>}
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <TypeCapsule
+            appearance={{
+              token: device.deviceType.token,
+              name: device.deviceType.name,
+              icon: device.deviceType.icon,
+              backgroundColor: device.deviceType.backgroundColor,
+              foregroundColor: device.deviceType.foregroundColor,
+              borderColor: device.deviceType.borderColor,
+            }}
+          />
+          <TokenCapsule token={device.token} />
         </div>
       }
       action={

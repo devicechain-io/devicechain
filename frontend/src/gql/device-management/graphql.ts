@@ -221,21 +221,21 @@ export type AreasQueryVariables = Exact<{
 }>;
 
 
-export type AreasQuery = { areas: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AreasQuery = { areas: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AreaByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AreaByTokenQuery = { areasByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } }> };
+export type AreaByTokenQuery = { areasByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateAreaMutationVariables = Exact<{
   request?: AreaCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAreaMutation = { createArea: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } } };
+export type CreateAreaMutation = { createArea: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateAreaMutationVariables = Exact<{
   token: string;
@@ -243,7 +243,7 @@ export type UpdateAreaMutationVariables = Exact<{
 }>;
 
 
-export type UpdateAreaMutation = { updateArea: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } } };
+export type UpdateAreaMutation = { updateArea: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteAreaMutationVariables = Exact<{
   token: string;
@@ -329,21 +329,21 @@ export type AssetsQueryVariables = Exact<{
 }>;
 
 
-export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AssetByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } }> };
+export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateAssetMutationVariables = Exact<{
   request?: AssetCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } } };
+export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateAssetMutationVariables = Exact<{
   token: string;
@@ -351,7 +351,7 @@ export type UpdateAssetMutationVariables = Exact<{
 }>;
 
 
-export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } } };
+export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteAssetMutationVariables = Exact<{
   token: string;
@@ -437,21 +437,21 @@ export type CustomersQueryVariables = Exact<{
 }>;
 
 
-export type CustomersQuery = { customers: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type CustomersQuery = { customers: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CustomerByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type CustomerByTokenQuery = { customersByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } }> };
+export type CustomerByTokenQuery = { customersByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateCustomerMutationVariables = Exact<{
   request?: CustomerCreateRequest | null | undefined;
 }>;
 
 
-export type CreateCustomerMutation = { createCustomer: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } } };
+export type CreateCustomerMutation = { createCustomer: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateCustomerMutationVariables = Exact<{
   token: string;
@@ -459,7 +459,7 @@ export type UpdateCustomerMutationVariables = Exact<{
 }>;
 
 
-export type UpdateCustomerMutation = { updateCustomer: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } } };
+export type UpdateCustomerMutation = { updateCustomer: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteCustomerMutationVariables = Exact<{
   token: string;
@@ -545,21 +545,21 @@ export type DevicesQueryVariables = Exact<{
 }>;
 
 
-export type DevicesQuery = { devices: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type DevicesQuery = { devices: { results: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type DeviceByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type DeviceByTokenQuery = { devicesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } }> };
+export type DeviceByTokenQuery = { devicesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateDeviceMutationVariables = Exact<{
   request?: DeviceCreateRequest | null | undefined;
 }>;
 
 
-export type CreateDeviceMutation = { createDevice: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } } };
+export type CreateDeviceMutation = { createDevice: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateDeviceMutationVariables = Exact<{
   token: string;
@@ -567,7 +567,7 @@ export type UpdateDeviceMutationVariables = Exact<{
 }>;
 
 
-export type UpdateDeviceMutation = { updateDevice: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, backgroundColor: string | null, foregroundColor: string | null } } };
+export type UpdateDeviceMutation = { updateDevice: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteDeviceMutationVariables = Exact<{
   token: string;
@@ -710,8 +710,10 @@ export const AreasDocument = new TypedDocumentString(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
     pagination {
@@ -734,8 +736,10 @@ export const AreaByTokenDocument = new TypedDocumentString(`
       id
       token
       name
+      icon
       backgroundColor
       foregroundColor
+      borderColor
     }
   }
 }
@@ -752,8 +756,10 @@ export const CreateAreaDocument = new TypedDocumentString(`
       id
       token
       name
+      icon
       backgroundColor
       foregroundColor
+      borderColor
     }
   }
 }
@@ -770,8 +776,10 @@ export const UpdateAreaDocument = new TypedDocumentString(`
       id
       token
       name
+      icon
       backgroundColor
       foregroundColor
+      borderColor
     }
   }
 }
@@ -922,8 +930,10 @@ export const AssetsDocument = new TypedDocumentString(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
     pagination {
@@ -946,8 +956,10 @@ export const AssetByTokenDocument = new TypedDocumentString(`
       id
       token
       name
+      icon
       backgroundColor
       foregroundColor
+      borderColor
     }
   }
 }
@@ -964,8 +976,10 @@ export const CreateAssetDocument = new TypedDocumentString(`
       id
       token
       name
+      icon
       backgroundColor
       foregroundColor
+      borderColor
     }
   }
 }
@@ -982,8 +996,10 @@ export const UpdateAssetDocument = new TypedDocumentString(`
       id
       token
       name
+      icon
       backgroundColor
       foregroundColor
+      borderColor
     }
   }
 }
@@ -1134,8 +1150,10 @@ export const CustomersDocument = new TypedDocumentString(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
     pagination {
@@ -1158,8 +1176,10 @@ export const CustomerByTokenDocument = new TypedDocumentString(`
       id
       token
       name
+      icon
       backgroundColor
       foregroundColor
+      borderColor
     }
   }
 }
@@ -1176,8 +1196,10 @@ export const CreateCustomerDocument = new TypedDocumentString(`
       id
       token
       name
+      icon
       backgroundColor
       foregroundColor
+      borderColor
     }
   }
 }
@@ -1194,8 +1216,10 @@ export const UpdateCustomerDocument = new TypedDocumentString(`
       id
       token
       name
+      icon
       backgroundColor
       foregroundColor
+      borderColor
     }
   }
 }
@@ -1346,8 +1370,10 @@ export const DevicesDocument = new TypedDocumentString(`
         id
         token
         name
+        icon
         backgroundColor
         foregroundColor
+        borderColor
       }
     }
     pagination {
@@ -1370,8 +1396,10 @@ export const DeviceByTokenDocument = new TypedDocumentString(`
       id
       token
       name
+      icon
       backgroundColor
       foregroundColor
+      borderColor
     }
   }
 }
@@ -1388,8 +1416,10 @@ export const CreateDeviceDocument = new TypedDocumentString(`
       id
       token
       name
+      icon
       backgroundColor
       foregroundColor
+      borderColor
     }
   }
 }
@@ -1406,8 +1436,10 @@ export const UpdateDeviceDocument = new TypedDocumentString(`
       id
       token
       name
+      icon
       backgroundColor
       foregroundColor
+      borderColor
     }
   }
 }
