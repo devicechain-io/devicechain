@@ -33,7 +33,12 @@ export const customerResource: RegistryResource<Customer> = {
     { header: 'Name', cell: (c) => c.name || '—', className: 'font-medium text-foreground' },
     {
       header: 'Type',
-      cell: (c) => <Badge variant="secondary">{c.customerType.name || c.customerType.token}</Badge>,
+      cell: (c) =>
+        c.customerType ? (
+          <Badge variant="secondary">{c.customerType.name || c.customerType.token}</Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
     },
     {
       header: 'Created',
@@ -48,7 +53,7 @@ export const customerResource: RegistryResource<Customer> = {
       typeLabel="Customer type"
       typeSingular="customer type"
       tokenPlaceholder="acme"
-      defaultTypeToken={c?.customerType.token}
+      defaultTypeToken={c?.customerType?.token}
       loadTypes={() => listCustomerTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
       create={(req) =>
         createCustomer({

@@ -7,6 +7,7 @@ import { AppSidebar } from '@/routes/AppSidebar';
 import { TenantChip } from '@/routes/TenantChip';
 import { TenantProvider } from '@/auth/TenantProvider';
 import { CurrentUserProvider } from '@/auth/CurrentUserProvider';
+import { ErrorBoundary } from '@/components/ui/error-boundary';
 
 const PAGE_TITLES: { pattern: string; title: string }[] = [
   { pattern: '/', title: 'Dashboard' },
@@ -34,7 +35,10 @@ export default function AppLayout() {
               </div>
             </header>
             <div className="flex min-h-0 flex-1 flex-col">
-              <Outlet />
+              {/* Key the boundary by route so a page crash auto-clears on navigation. */}
+              <ErrorBoundary key={pathname}>
+                <Outlet />
+              </ErrorBoundary>
             </div>
           </SidebarInset>
         </SidebarProvider>

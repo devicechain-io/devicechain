@@ -26,7 +26,10 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
   const { toast } = useToast();
 
   const [version, reload] = useReload();
-  const { data: item, loading, error } = useQuery(() => resource.load(token), [version]);
+  const { data: item, loading, error } = useQuery(
+    () => resource.load(token),
+    [version, resource.basePath, token],
+  );
 
   const back = <BackLink to={resource.basePath}>{resource.backLabel}</BackLink>;
 

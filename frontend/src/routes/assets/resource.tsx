@@ -34,7 +34,12 @@ export const assetResource: RegistryResource<Asset> = {
     { header: 'Name', cell: (a) => a.name || '—', className: 'font-medium text-foreground' },
     {
       header: 'Type',
-      cell: (a) => <Badge variant="secondary">{a.assetType.name || a.assetType.token}</Badge>,
+      cell: (a) =>
+        a.assetType ? (
+          <Badge variant="secondary">{a.assetType.name || a.assetType.token}</Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
     },
     {
       header: 'Created',
@@ -49,7 +54,7 @@ export const assetResource: RegistryResource<Asset> = {
       typeLabel="Asset type"
       typeSingular="asset type"
       tokenPlaceholder="pump-001"
-      defaultTypeToken={a?.assetType.token}
+      defaultTypeToken={a?.assetType?.token}
       loadTypes={() => listAssetTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
       create={(req) =>
         createAsset({

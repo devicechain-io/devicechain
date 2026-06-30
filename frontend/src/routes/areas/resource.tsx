@@ -33,7 +33,12 @@ export const areaResource: RegistryResource<Area> = {
     { header: 'Name', cell: (a) => a.name || '—', className: 'font-medium text-foreground' },
     {
       header: 'Type',
-      cell: (a) => <Badge variant="secondary">{a.areaType.name || a.areaType.token}</Badge>,
+      cell: (a) =>
+        a.areaType ? (
+          <Badge variant="secondary">{a.areaType.name || a.areaType.token}</Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
     },
     {
       header: 'Created',
@@ -48,7 +53,7 @@ export const areaResource: RegistryResource<Area> = {
       typeLabel="Area type"
       typeSingular="area type"
       tokenPlaceholder="warehouse-1"
-      defaultTypeToken={a?.areaType.token}
+      defaultTypeToken={a?.areaType?.token}
       loadTypes={() => listAreaTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
       create={(req) =>
         createArea({
