@@ -5,10 +5,10 @@ title: Deployment & Operator
 
 # Deployment & Operator
 
-DeviceChain deploys in two declarative layers: a **Helm chart** renders the platform's workloads, and a Kubernetes **operator** (built with controller-runtime) handles instance and tenant lifecycle. Both are declarative and GitOps-friendly.
+DeviceChain deploys in two declarative layers: a **Helm chart** renders the platform's workloads, and a Kubernetes **operator** (built with controller-runtime) handles the `DeviceChainInstance` lifecycle. Both are declarative and GitOps-friendly. (Tenants are not part of the operator's work — they are control-plane database records, see below.)
 
 :::note Status
-The Helm chart renders the per-service workloads and config today. The operator manages tenant lifecycle; instance/tenant **status aggregation** and **config hot-reload** are in progress. Per-environment Kustomize overlays are planned.
+The Helm chart renders the per-service workloads and config today. The operator's instance **status aggregation** and **config hot-reload** are in progress. Per-environment Kustomize overlays are planned.
 :::
 
 ## Deploying with Helm
@@ -61,7 +61,7 @@ DeviceChain deliberately splits each layer:
 |---|---|---|
 | Infrastructure | **OpenTofu** | NATS, TimescaleDB, namespaces, ingress, TLS |
 | Workloads | **Helm chart** | Deployments, Services, and config ConfigMaps per functional area |
-| Lifecycle | **Operator** | tenant bootstrap; instance/tenant status and config hot-reload |
+| Lifecycle | **Operator** | `DeviceChainInstance` status aggregation and config hot-reload |
 | Business configuration | kubectl / UI | tenants and their settings |
 
 OpenTofu runs once at cluster creation; the chart renders the workloads; the operator runs continuously, reconciling lifecycle. Cluster bootstrapping never lives in application or operator code — it is the infrastructure layer's job. The OpenTofu modules live in [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); they provision the database tier with retention guards so it survives application teardown (see [Releases & Upgrades](./releases-and-upgrades.md#data-durability)).
