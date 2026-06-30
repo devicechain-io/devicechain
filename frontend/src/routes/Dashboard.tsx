@@ -51,6 +51,7 @@ export default function Dashboard() {
     <PageShell
       title={user ? `Welcome, ${user.displayName}` : 'Welcome'}
       description="Your DeviceChain tenant at a glance. Event and state surfaces land here as the console grows."
+      banner="dashboard"
       bodyClassName="space-y-6 max-w-5xl"
     >
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

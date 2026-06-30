@@ -86,6 +86,36 @@ export function Logo({ deviceColor = DEVICE, chainColor = CHAIN, ...props }: Wor
   );
 }
 
+// Horizontal lockup: cube at left, wordmark at right. The cube is sized to 1.2×
+// the wordmark's height (28.34 vs 23.62) for a touch more presence, scaled by
+// 28.34/103.93 ≈ 0.27272 and anchored at x:0; the wordmark is shifted to sit a
+// small gap to its right and vertically centered against the taller cube.
+// Geometry is reused verbatim from Cube/Device/Chain.
+export function LogoHorizontal({
+  deviceColor = DEVICE,
+  chainColor = CHAIN,
+  mono,
+  ...props
+}: WordmarkProps & { mono?: string }) {
+  return (
+    <svg
+      viewBox="0 0 292.34 28.34"
+      xmlns="http://www.w3.org/2000/svg"
+      role="img"
+      aria-label="DeviceChain"
+      {...props}
+    >
+      <g transform="translate(-33.555 -18.087) scale(0.272723)">
+        <Cube mono={mono} />
+      </g>
+      <g transform="translate(-7.656 -187.368)">
+        <Device color={deviceColor} />
+        <Chain color={chainColor} />
+      </g>
+    </svg>
+  );
+}
+
 // Wordmark only.
 export function Logotype({ deviceColor = DEVICE, chainColor = CHAIN, ...props }: WordmarkProps) {
   return (

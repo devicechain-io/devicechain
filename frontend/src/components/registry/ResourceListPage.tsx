@@ -46,6 +46,7 @@ export function ResourceListPage<T>({ resource }: { resource: RegistryResource<T
     <PageShell
       title={resource.titlePlural}
       description={resource.listDescription}
+      banner={resource.banner}
       action={
         <Button onClick={() => setCreating(true)}>
           <Plus size={16} /> New {resource.singular}

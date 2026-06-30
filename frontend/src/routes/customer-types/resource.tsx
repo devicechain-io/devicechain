@@ -17,6 +17,7 @@ export const customerTypeResource: RegistryResource<CustomerType> = {
   titlePlural: 'Customer Types',
   singular: 'customer type',
   backLabel: 'Customer types',
+  banner: 'customers',
   listDescription: 'Templates that classify customers',
   list: listCustomerTypes,
   load: getCustomerType,

@@ -40,6 +40,12 @@ export interface RegistryResource<T> {
   backLabel: string;
   /** Optional list-page description line. */
   listDescription?: string;
+  /**
+   * Category key for the muted header background texture, e.g. "assets".
+   * Set only on top-level categories — leave unset for sub-item resources
+   * (types, groups) so they render a plain header.
+   */
+  banner?: string;
 
   // ── Data plane ──
   list: (page: { pageNumber: number; pageSize: number }) => Promise<RegistryListResult<T>>;

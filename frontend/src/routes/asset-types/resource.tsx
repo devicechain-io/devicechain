@@ -17,6 +17,7 @@ export const assetTypeResource: RegistryResource<AssetType> = {
   titlePlural: 'Asset Types',
   singular: 'asset type',
   backLabel: 'Asset types',
+  banner: 'assets',
   listDescription: 'Templates that classify assets',
   list: listAssetTypes,
   load: getAssetType,

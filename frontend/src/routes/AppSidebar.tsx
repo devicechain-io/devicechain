@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Boxes,
   Building2,
@@ -15,7 +15,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Logomark } from '@/components/brand/Logo';
+import { Logomark, LogoHorizontal } from '@/components/brand/Logo';
 import {
   Sidebar,
   SidebarContent,
@@ -143,18 +143,16 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader>
+      <SidebarHeader className="pt-4">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild tooltip="DeviceChain">
+            <SidebarMenuButton size="lg" asChild tooltip="DeviceChain" className="justify-center">
               <Link to="/">
-                <div className="flex aspect-square size-8 items-center justify-center">
-                  <Logomark className="size-7" />
-                </div>
-                <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">
-                    Device<span className="text-primary">Chain</span>
-                  </span>
+                {/* Collapsed icon rail: cube mark only */}
+                <Logomark className="hidden size-7 shrink-0 group-data-[collapsible=icon]:block" />
+                {/* Expanded: horizontal lockup with the console subtitle beneath */}
+                <div className="flex flex-col items-center gap-1 group-data-[collapsible=icon]:hidden">
+                  <LogoHorizontal deviceColor="currentColor" className="h-[17px] w-auto" />
                   <span className="truncate text-xs text-muted-foreground">Management Console</span>
                 </div>
               </Link>
@@ -163,7 +161,7 @@ export function AppSidebar() {
         </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarContent>
+      <SidebarContent className="overflow-x-hidden">
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
@@ -174,7 +172,10 @@ export function AppSidebar() {
                       asChild
                       isActive={isActive(pathname, node.href)}
                       tooltip={node.label}
-                      className={cn(isActive(pathname, node.href) && '!font-semibold !text-primary')}
+                      className={cn(
+                        'text-[0.9375rem] font-medium',
+                        isActive(pathname, node.href) && '!font-semibold !text-primary',
+                      )}
                     >
                       <Link to={node.href}>
                         <node.icon />
@@ -217,15 +218,26 @@ function NavGroup({
   open: boolean;
   onToggle: () => void;
 }) {
+  const navigate = useNavigate();
   const hasActiveChild = node.children.some((c) => isActive(pathname, c.href));
+  // Expanding a category lands you on its first item in one click (the active-group
+  // effect keeps it open); clicking an already-open group just collapses it.
+  const handleClick = () => {
+    const willOpen = !open;
+    onToggle();
+    if (willOpen) navigate(node.children[0].href);
+  };
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        onClick={onToggle}
+        onClick={handleClick}
         // Highlight the collapsed parent so the user still sees where they are.
         isActive={hasActiveChild && !open}
         tooltip={node.label}
-        className={cn(hasActiveChild && !open && '!font-semibold !text-primary')}
+        className={cn(
+          'text-[0.9375rem] font-medium',
+          hasActiveChild && !open && '!font-semibold !text-primary',
+        )}
       >
         <node.icon />
         <span>{node.label}</span>
@@ -237,13 +249,18 @@ function NavGroup({
         />
       </SidebarMenuButton>
       {open && (
-        <SidebarMenuSub>
+        <SidebarMenuSub className="-mx-2 rounded-none border-l-0 bg-sidebar-accent/70 py-2.5 pl-6 pr-2">
           {node.children.map((child) => (
             <SidebarMenuSubItem key={child.href}>
               <SidebarMenuSubButton
                 asChild
                 isActive={isActive(pathname, child.href)}
-                className={cn(isActive(pathname, child.href) && '!font-semibold !text-primary')}
+                className={cn(
+                  // Squared, edge-to-edge rows; the active item is shown by font/color
+                  // alone (no fill) so it reads clean against the lighter panel.
+                  'rounded-none text-[0.8125rem] data-[active=true]:bg-transparent',
+                  isActive(pathname, child.href) && '!font-semibold !text-primary',
+                )}
               >
                 <Link to={child.href}>
                   <child.icon />

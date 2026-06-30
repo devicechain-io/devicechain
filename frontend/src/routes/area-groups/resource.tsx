@@ -16,6 +16,7 @@ export const areaGroupResource: RegistryResource<AreaGroup> = {
   titlePlural: 'Area Groups',
   singular: 'area group',
   backLabel: 'Area groups',
+  banner: 'areas',
   listDescription: 'Collections of areas',
   list: listAreaGroups,
   load: getAreaGroup,

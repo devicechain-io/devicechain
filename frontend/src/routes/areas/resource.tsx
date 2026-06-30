@@ -19,6 +19,7 @@ export const areaResource: RegistryResource<Area> = {
   singular: 'area',
   backLabel: 'Areas',
   listDescription: 'Locations or zones you organize by',
+  banner: 'areas',
   list: listAreas,
   load: getArea,
   remove: deleteArea,
