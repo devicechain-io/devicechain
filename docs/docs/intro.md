@@ -26,7 +26,7 @@ DeviceChain is a set of cooperating microservices over a shared core library:
 - **event-sources** — pluggable inbound transports (MQTT today; HTTP, CoAP, WebSocket planned) that decode raw device messages onto the pipeline.
 - **device-management** — devices, profiles, the relationship graph, and event resolution.
 - **event-management** — persists resolved events to TimescaleDB and serves time-series queries.
-- **user-management** — users, roles, and JWT issuance/validation.
+- **user-management** — global identities, per-tenant memberships, the role catalog, and JWT issuance/validation.
 - **operator (k8s)** — reconciles CRDs into the running platform.
 
 See [Architecture](./concepts/architecture.md) for how these fit together, and the [Domain Model](./concepts/domain-model.md) for the core concepts.

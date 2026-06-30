@@ -14,7 +14,7 @@ DeviceChain is a set of stateless Go microservices over a shared core library, c
 | **event-sources** | Inbound device transports. Decodes raw messages (JSON today; Protobuf and custom decoders planned) and publishes them onto the pipeline. |
 | **device-management** | Devices, device profiles, the typed relationship graph, and event resolution (attaching device + organizational context to each event). |
 | **event-management** | Persists resolved events to TimescaleDB and serves time-series queries over GraphQL. |
-| **user-management** | Users, roles, and JWT issuance/validation. |
+| **user-management** | Global identities, per-tenant memberships, the role catalog, and JWT issuance/validation. |
 | **operator** | A controller-runtime operator that manages the `DeviceChainInstance` lifecycle (status aggregation, config hot-reload). Workloads themselves are rendered by the Helm chart; tenants are control-plane database records, not reconciled resources. |
 
 Additional services — command delivery, device state, device registration, outbound connectors, batch operations, and scheduling — are planned. See the repository for current status.
@@ -38,7 +38,7 @@ During resolution, device-management looks up the device's **tracked** relations
 
 ## Deployment model
 
-Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned by **OpenTofu** at cluster-creation time. A **Helm chart** renders the platform workloads — one Deployment + Service per enabled functional area, selected by a deployment **profile** (`full` / `telemetry` / `ingest-only`) or an explicit set, with a dependency gate that rejects an invalid selection at install time. The **operator** assumes infrastructure exists and handles instance/tenant lifecycle rather than stamping workloads. This separation keeps cluster bootstrapping out of application code. See [Deployment](../deployment/kubernetes-operator.md).
+Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned by **OpenTofu** at cluster-creation time. A **Helm chart** renders the platform workloads — one Deployment + Service per enabled functional area, selected by a deployment **profile** (`full` / `telemetry` / `ingest-only`) or an explicit set, with a dependency gate that rejects an invalid selection at install time. The **operator** assumes infrastructure exists and handles the `DeviceChainInstance` lifecycle rather than stamping workloads (tenants are control-plane database records, not reconciled resources). This separation keeps cluster bootstrapping out of application code. See [Deployment](../deployment/kubernetes-operator.md).
 
 ## Configuration, health, and startup
 
