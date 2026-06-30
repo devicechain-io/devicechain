@@ -3,7 +3,16 @@
 
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Boxes, ChevronRight, Cpu, LayoutGrid, type LucideIcon } from 'lucide-react';
+import {
+  Boxes,
+  Building2,
+  ChevronRight,
+  Cpu,
+  LayoutGrid,
+  MapPin,
+  Package,
+  type LucideIcon,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Logomark } from '@/components/brand/Logo';
 import {
@@ -52,6 +61,32 @@ const NAV: NavNode[] = [
       { label: 'Devices', href: '/devices', icon: Cpu, requires: 'device:read' },
       { label: 'Device Types', href: '/device-types', icon: Boxes, requires: 'device:read' },
       // Device Groups land with the registry families / membership work.
+    ],
+  },
+  {
+    // Asset / Customer / Area share device-management's authority model: the whole
+    // service is gated by device:read, so every leaf below uses it too.
+    label: 'Assets',
+    icon: Package,
+    children: [
+      { label: 'Assets', href: '/assets', icon: Package, requires: 'device:read' },
+      { label: 'Asset Types', href: '/asset-types', icon: Boxes, requires: 'device:read' },
+    ],
+  },
+  {
+    label: 'Customers',
+    icon: Building2,
+    children: [
+      { label: 'Customers', href: '/customers', icon: Building2, requires: 'device:read' },
+      { label: 'Customer Types', href: '/customer-types', icon: Boxes, requires: 'device:read' },
+    ],
+  },
+  {
+    label: 'Areas',
+    icon: MapPin,
+    children: [
+      { label: 'Areas', href: '/areas', icon: MapPin, requires: 'device:read' },
+      { label: 'Area Types', href: '/area-types', icon: Boxes, requires: 'device:read' },
     ],
   },
 ];

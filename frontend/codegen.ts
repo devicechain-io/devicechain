@@ -14,7 +14,14 @@ const config: CodegenConfig = {
     },
     './src/gql/device-management/': {
       schema: '../backend/services/device-management/graphql/schema.graphql',
-      documents: ['src/lib/api/device-management.ts'],
+      // The device, asset, customer, and area registry families are all served by
+      // the one device-management schema, so they share a single generated client.
+      documents: [
+        'src/lib/api/device-management.ts',
+        'src/lib/api/assets.ts',
+        'src/lib/api/customers.ts',
+        'src/lib/api/areas.ts',
+      ],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },
