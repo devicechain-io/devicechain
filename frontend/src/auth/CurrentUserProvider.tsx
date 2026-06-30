@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { useAuth } from '@/auth/AuthProvider';
 import { getCurrentUser } from '@/lib/api/user-management';
 import { useCachedResource } from '@/lib/hooks/use-cached-resource';
@@ -23,13 +23,14 @@ export interface UserInfo extends CachedUser {
   displayName: string;
 }
 
-const CurrentUserContext = createContext<UserInfo | null>(null);
-// Write-through setter so a profile edit updates the name everywhere immediately.
-const ApplyUserContext = createContext<(user: CachedUser) => void>(() => {});
-
-function fullName(first: string | null, last: string | null): string {
-  return [first, last].filter(Boolean).join(' ');
+// The current user plus a write-through setter so a profile edit (updateProfile)
+// can refresh the name everywhere without a refetch.
+interface CurrentUserValue {
+  user: UserInfo | null;
+  applyUser: (user: CachedUser) => void;
 }
+
+const CurrentUserContext = createContext<CurrentUserValue>({ user: null, applyUser: () => {} });
 
 export function CurrentUserProvider({ children }: { children: ReactNode }) {
   const { claims } = useAuth();
@@ -41,25 +42,26 @@ export function CurrentUserProvider({ children }: { children: ReactNode }) {
       lastName: u.lastName ?? null,
     })),
   );
-  // Fall back to the bare email so the menu paints before the first fetch lands.
-  const base = cached ?? (email ? { email, firstName: null, lastName: null } : null);
-  const user: UserInfo | null = base
-    ? { ...base, displayName: fullName(base.firstName, base.lastName) || base.email }
-    : null;
+  const value = useMemo<CurrentUserValue>(() => {
+    // Fall back to the bare email so the menu paints before the first fetch lands.
+    const base = cached ?? (email ? { email, firstName: null, lastName: null } : null);
+    return {
+      user: base
+        ? { ...base, displayName: [base.firstName, base.lastName].filter(Boolean).join(' ') || base.email }
+        : null,
+      applyUser: setCached,
+    };
+  }, [cached, email, setCached]);
 
-  return (
-    <CurrentUserContext.Provider value={user}>
-      <ApplyUserContext.Provider value={setCached}>{children}</ApplyUserContext.Provider>
-    </CurrentUserContext.Provider>
-  );
+  return <CurrentUserContext.Provider value={value}>{children}</CurrentUserContext.Provider>;
 }
 
 export function useCurrentUser(): UserInfo | null {
-  return useContext(CurrentUserContext);
+  return useContext(CurrentUserContext).user;
 }
 
 // Apply an updated profile (from updateProfile) to the cached current user, so
 // the name refreshes across the app without a refetch.
 export function useApplyCurrentUser(): (user: CachedUser) => void {
-  return useContext(ApplyUserContext);
+  return useContext(CurrentUserContext).applyUser;
 }

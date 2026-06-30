@@ -112,10 +112,7 @@ func (m *Manager) Initialize(ctx context.Context, refreshKV nats.KeyValue) error
 	}
 	m.dummyHash = dummy
 
-	if err := m.seedSuperuser(ctx); err != nil {
-		return err
-	}
-	return m.ensureViewerRole(ctx)
+	return m.seed(ctx)
 }
 
 // applyKeys installs a loaded signing-key set: it rebuilds the issuer on the
@@ -367,22 +364,15 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 
 // viewerAuthorities is the read-only baseline every enabled tenant member
 // receives in addition to their assigned roles: read access to all domain
-// objects (ADR-008). Writes stay role-gated. Kept in sync with the seeded
-// `viewer` role (ensureViewerRole) so the access is visible in the catalog.
+// objects (ADR-008). Writes stay role-gated. This one list is the single source
+// of truth — it both backs the token-issuance grant (issueTenantTokens) and
+// seeds the built-in `viewer` role (re-synced from it on every startup, see
+// seed), so the access is visible in the admin catalog and can't drift.
 var viewerAuthorities = []string{
 	string(auth.DeviceRead),
 	string(auth.EventRead),
 	string(auth.StateRead),
 	string(auth.CommandRead),
-}
-
-// ensureViewerRole keeps the well-known `viewer` tenant role in the catalog,
-// idempotently and under the seed lock, so the read baseline is visible and
-// assignable in the admin console. Its authorities mirror viewerAuthorities.
-func (m *Manager) ensureViewerRole(ctx context.Context) error {
-	return m.locker.WithLock(ctx, m.ms.FunctionalArea, func(ctx context.Context) error {
-		return m.iam.EnsureRole(ctx, iam.ScopeTenant, iam.ViewerRoleToken, "Viewer", viewerAuthorities)
-	})
 }
 
 // unionStrings returns the de-duplicated union of two string slices, preserving
@@ -430,14 +420,22 @@ func (m *Manager) issueTenantTokens(tenant, email string, roles, authorities []s
 	return &TokenPair{AccessToken: access.Token, RefreshToken: refresh.Token, ExpiresAt: access.ExpiresAt}, nil
 }
 
-// seedSuperuser creates the superuser identity (system role `superuser`, authority
-// `*`) on first startup, when no identity exists, under a distributed lock so
-// replicas seed exactly once. The bootstrap is tenant-less (ADR-033 phase 4): no
-// scaffold tenant or membership is created — the superuser lands in the admin
-// console and creates the first tenant there. A convenience `tenant-admin` tenant
-// role is seeded in the catalog so the admin has a full-authority role to assign.
-func (m *Manager) seedSuperuser(ctx context.Context) error {
+// seed runs startup seeding under a single distributed lock so replicas seed
+// exactly once. It always keeps the built-in `viewer` tenant role in sync with
+// the code (idempotent upsert), and — only on first startup, when no identity
+// exists — creates the bootstrap superuser. The bootstrap is tenant-less (ADR-033
+// phase 4): no scaffold tenant or membership is created; the superuser lands in
+// the admin console and creates the first tenant there. A convenience
+// `tenant-admin` tenant role is also seeded so the admin has a full-authority
+// role to assign.
+func (m *Manager) seed(ctx context.Context) error {
 	return m.locker.WithLock(ctx, m.ms.FunctionalArea, func(ctx context.Context) error {
+		// Re-sync the read-only `viewer` baseline role from viewerAuthorities so
+		// the catalog always reflects the current code.
+		if err := m.iam.EnsureRole(ctx, iam.ScopeTenant, iam.ViewerRoleToken, "Viewer", viewerAuthorities); err != nil {
+			return err
+		}
+
 		n, err := m.iam.CountIdentities(ctx)
 		if err != nil {
 			return err
