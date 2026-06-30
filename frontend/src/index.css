@@ -18,6 +18,11 @@
   :root {
     --radius: 0.5rem;
 
+    /* Strength of the two brand-teal body glows (the .app-gradient treatment).
+     * Faint in light mode; full devicechain.io strength in dark. */
+    --app-glow-1: 0.05;
+    --app-glow-2: 0.03;
+
     --background: 0 0% 100%;
     --foreground: 240 10% 3.9%;
 
@@ -73,31 +78,36 @@
   }
 
   .dark {
-    --background: 240 5.9% 3.9%;
-    --foreground: 240 4.8% 95.9%;
+    /* Full-strength brand-teal body glows (matches devicechain.io). */
+    --app-glow-1: 0.2;
+    --app-glow-2: 0.1;
 
-    --card: 240 3.7% 10%;
-    --card-foreground: 240 4.8% 95.9%;
+    /* Dark surfaces are a navy family (hue ~210) so the flat sidebar/header and
+     * the teal-glow body read as one cohesive devicechain.io-style theme rather
+     * than neutral greys. */
+    --background: 210 40% 6%;
+    --foreground: 210 16% 96%;
 
-    /* Popovers (combobox/multi-select/menus) open *over* cards, which are also
-     * 10% — so lift the surface to read as elevated rather than blending into
-     * the card behind it. Kept just below --border (16%) so the rim + internal
-     * dividers stay visible. */
-    --popover: 240 3.7% 14%;
-    --popover-foreground: 240 4.8% 95.9%;
+    --card: 210 24% 11%;
+    --card-foreground: 210 16% 96%;
+
+    /* Popovers (combobox/multi-select/menus) open *over* cards — lift the surface
+     * so it reads as elevated rather than blending into the card behind it. */
+    --popover: 210 24% 15%;
+    --popover-foreground: 210 16% 96%;
 
     /* Brand blue, lifted for dark-mode contrast. */
     --primary: 197 71% 49%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 240 4.8% 95.9%;
+    --secondary: 210 20% 16%;
+    --secondary-foreground: 210 16% 96%;
 
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
+    --muted: 210 20% 16%;
+    --muted-foreground: 210 12% 66%;
 
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 240 4.8% 95.9%;
+    --accent: 210 20% 16%;
+    --accent-foreground: 210 16% 96%;
 
     --destructive: 0 72.2% 50.6%;
     --destructive-foreground: 0 0% 100%;
@@ -110,8 +120,8 @@
     --warning: 38 92% 55%;
     --warning-foreground: 0 0% 100%;
 
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 25.9%;
+    --border: 210 20% 17%;
+    --input: 210 22% 26%;
     --ring: 197 71% 49%;
 
     --chart-1: 220 70% 50%;
@@ -120,13 +130,15 @@
     --chart-4: 280 65% 60%;
     --chart-5: 340 75% 55%;
 
-    --sidebar-background: 240 5.9% 6%;
-    --sidebar-foreground: 240 4.8% 95.9%;
+    /* Flat sidebar — a touch lighter than the body base so it reads as its own
+     * panel without a gradient. */
+    --sidebar-background: 210 34% 8%;
+    --sidebar-foreground: 210 16% 96%;
     --sidebar-primary: 197 71% 42%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-accent: 210 20% 16%;
+    --sidebar-accent-foreground: 210 16% 96%;
+    --sidebar-border: 210 20% 17%;
     --sidebar-ring: 197 71% 49%;
   }
 }
@@ -140,6 +152,24 @@
     margin: 0;
     padding: 0;
     font-family: 'Inter Variable', Inter, system-ui, -apple-system, sans-serif;
+  }
+
+  /* The devicechain.io treatment: two soft brand-teal radial glows over the base.
+   * Applied only to the body content region (below a flat header, right of a flat
+   * sidebar), so the chrome stays calm and the depth lives where the eye rests.
+   * Glow strength is per-mode via --app-glow-*. */
+  .app-gradient {
+    background-image:
+      radial-gradient(
+        900px 600px at 50% -10%,
+        hsl(var(--primary) / var(--app-glow-1)),
+        transparent 60%
+      ),
+      radial-gradient(
+        700px 500px at 85% 110%,
+        hsl(var(--primary) / var(--app-glow-2)),
+        transparent 55%
+      );
   }
 }
 

@@ -62,7 +62,7 @@ export default function AppLayout() {
                 <TenantChip />
               </div>
             </header>
-            <div className="flex min-h-0 flex-1 flex-col">
+            <div className="app-gradient flex min-h-0 flex-1 flex-col">
               {/* Key the boundary by route so a page crash auto-clears on navigation. */}
               <ErrorBoundary key={pathname}>
                 <Outlet />
