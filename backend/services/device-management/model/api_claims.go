@@ -193,6 +193,10 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 	if err != nil {
 		return nil, err
 	}
+	// Populate the association from the type we already resolved so a resolver
+	// selecting relationshipType on the claim result gets real values (the create
+	// path doesn't Preload it).
+	rel.RelationshipType = *rtMatches[0]
 	return rel, nil
 }
 

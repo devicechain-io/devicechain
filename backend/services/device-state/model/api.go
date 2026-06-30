@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-device-state/config"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Api struct {
@@ -36,39 +37,46 @@ type DeviceStateApi interface {
 // MergeDeviceState updates (or creates) the live state projection for a device
 // in response to a resolved event. It is the write path of the projection.
 func (api *Api) MergeDeviceState(ctx context.Context, deviceId uint, occurredAt time.Time) (*DeviceState, error) {
+	// The 5 decode workers can process two events for the same device
+	// concurrently. Read-modify-write the row inside a transaction that takes a
+	// row lock (SELECT … FOR UPDATE), so same-device merges serialize and a later
+	// write can't regress LastActivityTime or clobber a reconnect.
 	found := &DeviceState{}
-	result := api.RDB.DB(ctx).Where("device_id = ?", deviceId).First(found)
-	if result.Error != nil {
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			// First event seen for this device: create a new active row.
-			created := &DeviceState{
-				DeviceId:          deviceId,
-				Active:            true,
-				LastActivityTime:  sql.NullTime{Time: occurredAt, Valid: true},
-				LastConnectTime:   sql.NullTime{Time: occurredAt, Valid: true},
-				InactivityTimeout: config.DefaultInactivityTimeout,
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("device_id = ?", deviceId).First(found)
+		if result.Error != nil {
+			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+				// First event seen for this device: create a new active row. A
+				// concurrent first event loses the device_id unique index race and
+				// errors out (redelivered), rather than producing a duplicate.
+				found = &DeviceState{
+					DeviceId:          deviceId,
+					Active:            true,
+					LastActivityTime:  sql.NullTime{Time: occurredAt, Valid: true},
+					LastConnectTime:   sql.NullTime{Time: occurredAt, Valid: true},
+					InactivityTimeout: config.DefaultInactivityTimeout,
+				}
+				return tx.Create(found).Error
 			}
-			if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
-				return nil, err
-			}
-			return created, nil
+			return result.Error
 		}
-		return nil, result.Error
-	}
 
-	// Existing row: a previously-inactive device reconnecting.
-	if !found.Active {
-		found.Active = true
-		found.LastConnectTime = sql.NullTime{Time: occurredAt, Valid: true}
-		found.InactivityAlarmTime = sql.NullTime{}
-	}
+		// Existing row: a previously-inactive device reconnecting.
+		if !found.Active {
+			found.Active = true
+			found.LastConnectTime = sql.NullTime{Time: occurredAt, Valid: true}
+			found.InactivityAlarmTime = sql.NullTime{}
+		}
 
-	// Advance last-activity time only when this event is newer than what we have.
-	if !found.LastActivityTime.Valid || occurredAt.After(found.LastActivityTime.Time) {
-		found.LastActivityTime = sql.NullTime{Time: occurredAt, Valid: true}
-	}
+		// Advance last-activity time only when this event is newer than what we have.
+		if !found.LastActivityTime.Valid || occurredAt.After(found.LastActivityTime.Time) {
+			found.LastActivityTime = sql.NullTime{Time: occurredAt, Valid: true}
+		}
 
-	if err := api.RDB.DB(ctx).Save(found).Error; err != nil {
+		return tx.Save(found).Error
+	})
+	if err != nil {
 		return nil, err
 	}
 	return found, nil
@@ -119,15 +127,24 @@ func (api *Api) SweepInactive(ctx context.Context, now time.Time) (int64, error)
 	var flipped int64
 	for i := range active {
 		row := active[i]
-		if isInactive(row.LastActivityTime, row.InactivityTimeout, now) {
-			row.Active = false
-			row.LastDisconnectTime = sql.NullTime{Time: now, Valid: true}
-			row.InactivityAlarmTime = sql.NullTime{Time: now, Valid: true}
-			if err := api.RDB.DB(ctx).Save(&row).Error; err != nil {
-				return flipped, err
-			}
-			flipped++
+		if !isInactive(row.LastActivityTime, row.InactivityTimeout, now) {
+			continue
 		}
+		// Flip with a conditional update keyed to the snapshot's activity time, not
+		// a full-row Save of the stale snapshot: if a MergeDeviceState landed new
+		// activity since the scan, last_activity_time no longer matches and the row
+		// is left active (no flip), so the sweep can't clobber a just-active device.
+		res := api.RDB.DB(ctx).Model(&DeviceState{}).
+			Where("id = ? AND active = ? AND last_activity_time = ?", row.ID, true, row.LastActivityTime).
+			Updates(map[string]any{
+				"active":                false,
+				"last_disconnect_time":  sql.NullTime{Time: now, Valid: true},
+				"inactivity_alarm_time": sql.NullTime{Time: now, Valid: true},
+			})
+		if res.Error != nil {
+			return flipped, res.Error
+		}
+		flipped += res.RowsAffected
 	}
 	return flipped, nil
 }

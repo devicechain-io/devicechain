@@ -217,15 +217,22 @@ func (api *Api) ExpireStale(ctx context.Context, now time.Time) (int64, error) {
 
 	var count int64
 	for _, cmd := range stale {
+		next := CommandTimeout.String()
 		if cmd.Status == CommandQueued.String() {
-			cmd.Status = CommandExpired.String()
-		} else {
-			cmd.Status = CommandTimeout.String()
+			next = CommandExpired.String()
 		}
-		if err := api.RDB.DB(ctx).Save(cmd).Error; err != nil {
-			return count, err
+		// Conditional update: only expire a command that is STILL non-terminal, and
+		// touch only the status column — never a full-row Save of the pre-response
+		// snapshot. A device response (MarkResponse) that landed since the scan made
+		// the command terminal, so this WHERE misses and the response is preserved
+		// instead of being overwritten back to TIMEOUT/EXPIRED.
+		res := api.RDB.DB(ctx).Model(&Command{}).
+			Where("id = ? AND status NOT IN ?", cmd.ID, terminal).
+			Update("status", next)
+		if res.Error != nil {
+			return count, res.Error
 		}
-		count++
+		count += res.RowsAffected
 	}
 	return count, nil
 }
