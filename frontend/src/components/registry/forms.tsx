@@ -16,7 +16,7 @@ import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useQuery } from '@/lib/hooks/use-query';
 import { Textarea, errMessage } from '@/routes/common';
 
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+export const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // A minimal registry entity: every family exposes at least these.
 interface NamedEntity {

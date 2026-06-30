@@ -13,28 +13,14 @@ import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { useToast } from '@/components/ui/toast';
 import { errMessage } from '@/routes/common';
-import { TypeCapsule } from '@/components/TypeCapsule';
+import { TypeCapsule, type TypeAppearance } from '@/components/TypeCapsule';
 import { TYPE_ICONS, TYPE_ICON_KEYS } from '@/lib/type-icons';
 
-// The shape a type appearance update sends — structurally a <X>TypeCreateRequest.
-export interface AppearanceUpdate {
-  token: string;
-  name?: string;
-  description?: string;
-  icon?: string;
-  backgroundColor?: string;
-  foregroundColor?: string;
-  borderColor?: string;
-}
-
-interface AppearanceEntity {
-  token: string;
-  name?: string | null;
+// A type's appearance plus the description the form preserves on save (the type
+// update is a full replace, so both the read entity and the sent update carry it).
+// Structurally a <X>TypeCreateRequest.
+export interface AppearanceUpdate extends TypeAppearance {
   description?: string | null;
-  icon?: string | null;
-  backgroundColor?: string | null;
-  foregroundColor?: string | null;
-  borderColor?: string | null;
 }
 
 function ColorField({
@@ -78,7 +64,7 @@ export function TypeAppearanceForm({
   update,
   onSaved,
 }: {
-  entity: AppearanceEntity;
+  entity: AppearanceUpdate;
   update: (req: AppearanceUpdate) => Promise<unknown>;
   onSaved: () => void;
 }) {

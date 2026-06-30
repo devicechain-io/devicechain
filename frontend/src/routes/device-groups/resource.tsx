@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { RegistryTypeForm, type RegistryResource } from '@/components/registry';
+import { RegistryTypeForm, groupColumns, type RegistryResource } from '@/components/registry';
 import { MembershipPanel } from '@/components/MembershipPanel';
 import {
   listDeviceGroups,
@@ -17,7 +17,6 @@ export const deviceGroupResource: RegistryResource<DeviceGroup> = {
   basePath: '/device-groups',
   titlePlural: 'Device Groups',
   singular: 'device group',
-  backLabel: 'Device groups',
   banner: 'devices',
   listDescription: 'Collections of devices',
   list: listDeviceGroups,
@@ -25,20 +24,8 @@ export const deviceGroupResource: RegistryResource<DeviceGroup> = {
   remove: deleteDeviceGroup,
   idOf: (g) => g.id,
   tokenOf: (g) => g.token,
-  descriptionOf: (g) => g.name ?? '—',
-  columns: [
-    {
-      header: 'Token',
-      cell: (g) => <span className="font-mono text-xs text-foreground">{g.token}</span>,
-    },
-    { header: 'Name', cell: (g) => g.name || '—', className: 'font-medium text-foreground' },
-    { header: 'Description', cell: (g) => g.description || '—', className: 'text-muted-foreground' },
-    {
-      header: 'Created',
-      cell: (g) => (g.createdAt ? new Date(g.createdAt).toLocaleDateString() : '—'),
-      className: 'text-muted-foreground',
-    },
-  ],
+  nameOf: (g) => g.name,
+  columns: groupColumns<DeviceGroup>(),
   renderForm: (g, onDone) => (
     <RegistryTypeForm
       entity={g}

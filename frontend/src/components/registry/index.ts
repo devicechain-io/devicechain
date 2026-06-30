@@ -4,6 +4,13 @@
 export type { RegistryResource, RegistryColumn, RegistryListResult, PaginationInfo } from './types';
 export { ResourceListPage } from './ResourceListPage';
 export { ResourceDetailPage } from './ResourceDetailPage';
+export {
+  tokenColumn,
+  nameColumn,
+  descriptionColumn,
+  createdColumn,
+  groupColumns,
+} from './columns';
 export { FormDrawer } from './FormDrawer';
 export {
   RegistryTypeForm,

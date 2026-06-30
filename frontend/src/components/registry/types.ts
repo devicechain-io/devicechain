@@ -37,8 +37,6 @@ export interface RegistryResource<T> {
   titlePlural: string;
   /** Lowercase singular used in prose + buttons, e.g. "device type". */
   singular: string;
-  /** Back-link label on detail/new pages, e.g. "Device types". */
-  backLabel: string;
   /** Optional list-page description line. */
   listDescription?: string;
   /**
@@ -63,8 +61,6 @@ export interface RegistryResource<T> {
   /** The linked type's appearance, shown as a capsule in an instance's detail
    *  header (e.g. a device's device-type). Omit for types/groups. */
   typeOf?: (item: T) => TypeAppearance | null;
-  /** Detail-page subtitle (legacy; prefer nameOf + typeOf). */
-  descriptionOf?: (item: T) => ReactNode;
   /** The create/edit form, shared by the new + detail pages. */
   renderForm: (entity: T | undefined, onDone: (message: string) => void) => ReactNode;
   /** Extra detail-page content (e.g. a group's members, a type's appearance).
