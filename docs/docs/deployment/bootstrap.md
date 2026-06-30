@@ -109,7 +109,7 @@ The instance includes the **web console**: the ingress serves it at the host roo
 functional-area service. Open the console in a browser and sign in with the
 superuser's email and password. A fresh instance is **tenant-less**, so you land
 in the admin console (`/admin`) to create your first tenant and assign
-memberships; switch into a tenant to reach the device console. (For a
+memberships; switch into a tenant to reach the tenant console. (For a
 headless/ingest-only instance, deploy with the console disabled — see the chart's
 `frontend.enabled` value.)
 
