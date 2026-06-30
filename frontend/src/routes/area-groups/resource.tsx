@@ -50,6 +50,7 @@ export const areaGroupResource: RegistryResource<AreaGroup> = {
     />
   ),
   removeConfirm: (g) => `Delete area group “${g.token}”? This cannot be undone.`,
+  detailExtraLabel: 'Members',
   renderDetailExtra: (g) => (
     <MembershipPanel
       groupType="areagroup"

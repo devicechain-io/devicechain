@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Trash2, Wifi, WifiOff } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -45,21 +46,21 @@ export default function DeviceDetailPage() {
 
   if (loading) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token} banner="devices" action={back}>
         <LoadingState description="Loading device…" />
       </PageShell>
     );
   }
   if (error) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token} banner="devices" action={back}>
         <ErrorState description={error} />
       </PageShell>
     );
   }
   if (!device) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token} banner="devices" action={back}>
         <ErrorState description={`Device “${token}” not found.`} />
       </PageShell>
     );
@@ -79,6 +80,7 @@ export default function DeviceDetailPage() {
   return (
     <PageShell
       title={token}
+      banner="devices"
       description={
         <div className="mt-1 flex items-center gap-2">
           <Badge variant="secondary">{device.deviceType.name ?? device.deviceType.token}</Badge>
@@ -94,25 +96,36 @@ export default function DeviceDetailPage() {
         </div>
       }
     >
-      <div className="space-y-6">
-        <SectionPanel>
-          <DeviceForm
-            device={device}
-            onDone={(m) => {
-              toast(m);
-              reload();
-            }}
-          />
-        </SectionPanel>
-
-        <SectionPanel title="Connectivity">
-          <DeviceStatePanel deviceId={device.id} />
-        </SectionPanel>
-
-        <SectionPanel title="Recent events">
-          <DeviceEventsPanel deviceId={device.id} />
-        </SectionPanel>
-      </div>
+      {/* Connectivity + events sit in their own tabs, so they load only when
+          opened and the page stays digestible. */}
+      <Tabs defaultValue="basic">
+        <TabsList>
+          <TabsTrigger value="basic">Basic</TabsTrigger>
+          <TabsTrigger value="connectivity">Connectivity</TabsTrigger>
+          <TabsTrigger value="events">Events</TabsTrigger>
+        </TabsList>
+        <TabsContent value="basic">
+          <SectionPanel>
+            <DeviceForm
+              device={device}
+              onDone={(m) => {
+                toast(m);
+                reload();
+              }}
+            />
+          </SectionPanel>
+        </TabsContent>
+        <TabsContent value="connectivity">
+          <SectionPanel>
+            <DeviceStatePanel deviceId={device.id} />
+          </SectionPanel>
+        </TabsContent>
+        <TabsContent value="events">
+          <SectionPanel>
+            <DeviceEventsPanel deviceId={device.id} />
+          </SectionPanel>
+        </TabsContent>
+      </Tabs>
     </PageShell>
   );
 }

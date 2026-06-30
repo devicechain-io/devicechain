@@ -50,6 +50,7 @@ export const customerGroupResource: RegistryResource<CustomerGroup> = {
     />
   ),
   removeConfirm: (g) => `Delete customer group “${g.token}”? This cannot be undone.`,
+  detailExtraLabel: 'Members',
   renderDetailExtra: (g) => (
     <MembershipPanel
       groupType="customergroup"

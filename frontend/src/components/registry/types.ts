@@ -61,8 +61,11 @@ export interface RegistryResource<T> {
   descriptionOf?: (item: T) => ReactNode;
   /** The create/edit form, shared by the new + detail pages. */
   renderForm: (entity: T | undefined, onDone: (message: string) => void) => ReactNode;
-  /** Extra detail-page panels below the form (e.g. a device's state + events). */
+  /** Extra detail-page content (e.g. a group's members). */
   renderDetailExtra?: (item: T) => ReactNode;
+  /** When set alongside renderDetailExtra, the detail page splits into a "Basic"
+   *  tab (the form) and a second tab with this label holding the extra content. */
+  detailExtraLabel?: string;
   /** Override the delete confirmation prompt. */
   removeConfirm?: (item: T) => string;
 }

@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Trash2 } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -35,21 +36,21 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
 
   if (loading) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token} banner={resource.banner} action={back}>
         <LoadingState description={`Loading ${resource.singular}…`} />
       </PageShell>
     );
   }
   if (error) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token} banner={resource.banner} action={back}>
         <ErrorState description={error} />
       </PageShell>
     );
   }
   if (!item) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token} banner={resource.banner} action={back}>
         <ErrorState description={`${cap(resource.singular)} “${token}” not found.`} />
       </PageShell>
     );
@@ -69,9 +70,21 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
     }
   };
 
+  const form = (
+    <SectionPanel>
+      {resource.renderForm(item, (m) => {
+        toast(m);
+        reload();
+      })}
+    </SectionPanel>
+  );
+  const extra = resource.renderDetailExtra?.(item);
+  const labeledExtra = extra != null && resource.detailExtraLabel != null;
+
   return (
     <PageShell
       title={token}
+      banner={resource.banner}
       description={resource.descriptionOf?.(item)}
       action={
         <div className="flex items-center gap-2">
@@ -82,15 +95,23 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
         </div>
       }
     >
-      <div className="space-y-6">
-        <SectionPanel>
-          {resource.renderForm(item, (m) => {
-            toast(m);
-            reload();
-          })}
-        </SectionPanel>
-        {resource.renderDetailExtra?.(item)}
-      </div>
+      {/* The form always lives under a "Basic" tab — a single-tab bar is a
+          deliberate, forward-looking frame for tabs added later. A labelled extra
+          (e.g. a group's Members) becomes a second tab beside it. */}
+      <Tabs defaultValue="basic">
+        <TabsList>
+          <TabsTrigger value="basic">Basic</TabsTrigger>
+          {labeledExtra && <TabsTrigger value="extra">{resource.detailExtraLabel}</TabsTrigger>}
+        </TabsList>
+        <TabsContent value="basic">
+          <div className="space-y-6">
+            {form}
+            {/* An unlabelled extra (no tab) still renders under Basic. */}
+            {extra && !resource.detailExtraLabel ? extra : null}
+          </div>
+        </TabsContent>
+        {labeledExtra && <TabsContent value="extra">{extra}</TabsContent>}
+      </Tabs>
     </PageShell>
   );
 }
