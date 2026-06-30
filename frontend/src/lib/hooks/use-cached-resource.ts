@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 // Stale-while-revalidate cache for a rarely-changing per-session resource (the
 // current tenant, the signed-in user): render from localStorage immediately,
@@ -9,7 +9,13 @@ import { useEffect, useRef, useState } from 'react';
 // key — callers namespace it by identity (e.g. `dc-tenant:<token>`); a null key
 // means "no resource" and clears the value. A failed refresh keeps whatever was
 // cached, so a transient error never blanks the UI.
-export function useCachedResource<T>(cacheKey: string | null, fetcher: () => Promise<T>): T | null {
+//
+// Returns the value plus a write-through setter, so a mutation (e.g. editing your
+// own name) can update the value and cache immediately without a refetch.
+export function useCachedResource<T>(
+  cacheKey: string | null,
+  fetcher: () => Promise<T>,
+): [T | null, (value: T) => void] {
   // Keep the latest fetcher without making it an effect dependency: the effect
   // re-runs only when the cache key changes, not on every render.
   const fetcherRef = useRef(fetcher);
@@ -40,7 +46,15 @@ export function useCachedResource<T>(cacheKey: string | null, fetcher: () => Pro
     };
   }, [cacheKey]);
 
-  return value;
+  const set = useCallback(
+    (next: T) => {
+      setValue(next);
+      if (cacheKey) write(cacheKey, next);
+    },
+    [cacheKey],
+  );
+
+  return [value, set];
 }
 
 function read<T>(key: string): T | null {

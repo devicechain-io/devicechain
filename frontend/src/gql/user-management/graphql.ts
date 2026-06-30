@@ -37,6 +37,14 @@ export type MeQueryVariables = Exact<{ [key: string]: never; }>;
 
 export type MeQuery = { me: { email: string, firstName: string | null, lastName: string | null } };
 
+export type UpdateProfileMutationVariables = Exact<{
+  firstName?: string | null | undefined;
+  lastName?: string | null | undefined;
+}>;
+
+
+export type UpdateProfileMutation = { updateProfile: { email: string, firstName: string | null, lastName: string | null } };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -105,3 +113,12 @@ export const MeDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<MeQuery, MeQueryVariables>;
+export const UpdateProfileDocument = new TypedDocumentString(`
+    mutation UpdateProfile($firstName: String, $lastName: String) {
+  updateProfile(firstName: $firstName, lastName: $lastName) {
+    email
+    firstName
+    lastName
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateProfileMutation, UpdateProfileMutationVariables>;
