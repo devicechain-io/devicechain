@@ -11,6 +11,12 @@ import DevicesPage from '@/routes/devices/DevicesPage';
 import DeviceDetailPage from '@/routes/devices/DeviceDetailPage';
 import { ResourceListPage, ResourceDetailPage } from '@/components/registry';
 import { deviceTypeResource } from '@/routes/device-types/resource';
+import { assetResource } from '@/routes/assets/resource';
+import { assetTypeResource } from '@/routes/asset-types/resource';
+import { customerResource } from '@/routes/customers/resource';
+import { customerTypeResource } from '@/routes/customer-types/resource';
+import { areaResource } from '@/routes/areas/resource';
+import { areaTypeResource } from '@/routes/area-types/resource';
 import AdminProtectedRoute from '@/routes/admin/AdminProtectedRoute';
 import AdminLayout from '@/routes/admin/AdminLayout';
 import AdminTenantsPage from '@/routes/admin/TenantsPage';
@@ -51,6 +57,18 @@ export default function App() {
           <Route path="devices/:token" element={<DeviceDetailPage />} />
           <Route path="device-types" element={<ResourceListPage resource={deviceTypeResource} />} />
           <Route path="device-types/:token" element={<ResourceDetailPage resource={deviceTypeResource} />} />
+          <Route path="assets" element={<ResourceListPage resource={assetResource} />} />
+          <Route path="assets/:token" element={<ResourceDetailPage resource={assetResource} />} />
+          <Route path="asset-types" element={<ResourceListPage resource={assetTypeResource} />} />
+          <Route path="asset-types/:token" element={<ResourceDetailPage resource={assetTypeResource} />} />
+          <Route path="customers" element={<ResourceListPage resource={customerResource} />} />
+          <Route path="customers/:token" element={<ResourceDetailPage resource={customerResource} />} />
+          <Route path="customer-types" element={<ResourceListPage resource={customerTypeResource} />} />
+          <Route path="customer-types/:token" element={<ResourceDetailPage resource={customerTypeResource} />} />
+          <Route path="areas" element={<ResourceListPage resource={areaResource} />} />
+          <Route path="areas/:token" element={<ResourceDetailPage resource={areaResource} />} />
+          <Route path="area-types" element={<ResourceListPage resource={areaTypeResource} />} />
+          <Route path="area-types/:token" element={<ResourceDetailPage resource={areaTypeResource} />} />
         </Route>
       </Route>
 
