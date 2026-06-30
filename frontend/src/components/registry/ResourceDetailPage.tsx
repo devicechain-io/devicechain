@@ -11,7 +11,7 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
-import { BackLink, errMessage, useReload } from '@/routes/common';
+import { errMessage, useReload } from '@/routes/common';
 import type { RegistryResource } from '@/components/registry/types';
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -32,25 +32,23 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
     [version, resource.basePath, token],
   );
 
-  const back = <BackLink to={resource.basePath}>{resource.backLabel}</BackLink>;
-
   if (loading) {
     return (
-      <PageShell title={token} banner={resource.banner} action={back}>
+      <PageShell title={token} banner={resource.banner}>
         <LoadingState description={`Loading ${resource.singular}…`} />
       </PageShell>
     );
   }
   if (error) {
     return (
-      <PageShell title={token} banner={resource.banner} action={back}>
+      <PageShell title={token} banner={resource.banner}>
         <ErrorState description={error} />
       </PageShell>
     );
   }
   if (!item) {
     return (
-      <PageShell title={token} banner={resource.banner} action={back}>
+      <PageShell title={token} banner={resource.banner}>
         <ErrorState description={`${cap(resource.singular)} “${token}” not found.`} />
       </PageShell>
     );
@@ -87,12 +85,9 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
       banner={resource.banner}
       description={resource.descriptionOf?.(item)}
       action={
-        <div className="flex items-center gap-2">
-          {back}
-          <Button variant="destructive" size="sm" onClick={remove}>
-            <Trash2 size={14} /> Delete
-          </Button>
-        </div>
+        <Button variant="destructive" size="sm" onClick={remove}>
+          <Trash2 size={14} /> Delete
+        </Button>
       }
     >
       {/* The form always lives under a "Basic" tab — a single-tab bar is a

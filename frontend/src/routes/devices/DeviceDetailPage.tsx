@@ -24,7 +24,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { getDevice, deleteDevice } from '@/lib/api/device-management';
 import { getDeviceState } from '@/lib/api/device-state';
 import { listEvents } from '@/lib/api/event-management';
-import { BackLink, errMessage, useReload } from '@/routes/common';
+import { errMessage, useReload } from '@/routes/common';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
 
 // Mirrors the timestamp formatting used by the device list; renders a dash when
@@ -42,25 +42,23 @@ export default function DeviceDetailPage() {
   const [version, reload] = useReload();
   const { data: device, loading, error } = useQuery(() => getDevice(token), [version]);
 
-  const back = <BackLink to="/devices">Devices</BackLink>;
-
   if (loading) {
     return (
-      <PageShell title={token} banner="devices" action={back}>
+      <PageShell title={token} banner="devices">
         <LoadingState description="Loading device…" />
       </PageShell>
     );
   }
   if (error) {
     return (
-      <PageShell title={token} banner="devices" action={back}>
+      <PageShell title={token} banner="devices">
         <ErrorState description={error} />
       </PageShell>
     );
   }
   if (!device) {
     return (
-      <PageShell title={token} banner="devices" action={back}>
+      <PageShell title={token} banner="devices">
         <ErrorState description={`Device “${token}” not found.`} />
       </PageShell>
     );
@@ -88,12 +86,9 @@ export default function DeviceDetailPage() {
         </div>
       }
       action={
-        <div className="flex items-center gap-2">
-          {back}
-          <Button variant="destructive" size="sm" onClick={remove}>
-            <Trash2 size={14} /> Delete
-          </Button>
-        </div>
+        <Button variant="destructive" size="sm" onClick={remove}>
+          <Trash2 size={14} /> Delete
+        </Button>
       }
     >
       {/* Connectivity + events sit in their own tabs, so they load only when
