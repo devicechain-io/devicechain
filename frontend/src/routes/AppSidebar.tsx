@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Boxes, ChevronRight, Cpu, LayoutGrid, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -92,15 +92,10 @@ export function AppSidebar() {
   const { claims } = useAuth();
   const nav = visibleNav(claims);
   const activeGroup = activeGroupLabel(pathname);
-  const [open, setOpen] = useState<Set<string>>(() => new Set(activeGroup ? [activeGroup] : []));
-
-  // Navigating into a collapsed group (e.g. via a link elsewhere) expands it,
-  // without collapsing groups the user opened manually.
-  useEffect(() => {
-    if (activeGroup) {
-      setOpen((prev) => (prev.has(activeGroup) ? prev : new Set(prev).add(activeGroup)));
-    }
-  }, [activeGroup]);
+  // `open` holds the groups the user toggled open; a group is also shown expanded
+  // whenever it owns the active route (so deep links / refreshes land expanded,
+  // with no effect-driven state to keep in sync).
+  const [open, setOpen] = useState<Set<string>>(() => new Set());
 
   const toggle = (label: string) =>
     setOpen((prev) => {
@@ -154,7 +149,7 @@ export function AppSidebar() {
                     key={node.label}
                     node={node}
                     pathname={pathname}
-                    open={open.has(node.label)}
+                    open={open.has(node.label) || node.label === activeGroup}
                     onToggle={() => toggle(node.label)}
                   />
                 ),
@@ -179,7 +174,7 @@ function NavGroup({
   open,
   onToggle,
 }: {
-  node: { label: string; icon: LucideIcon; children: NavLeaf[] };
+  node: NavGroupNode;
   pathname: string;
   open: boolean;
   onToggle: () => void;
