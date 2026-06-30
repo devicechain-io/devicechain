@@ -95,9 +95,7 @@ func (r *SchemaResolver) UpdateProfile(ctx context.Context, args struct {
 	if !ok {
 		return nil, auth.ErrUnauthenticated
 	}
-	id, err := r.getIdentityManager(ctx).UpdateProfile(
-		ctx, claims.Username, strOrEmpty(args.FirstName), strOrEmpty(args.LastName),
-	)
+	id, err := r.getIdentityManager(ctx).UpdateProfile(ctx, claims.Username, args.FirstName, args.LastName)
 	if err != nil {
 		return nil, err
 	}

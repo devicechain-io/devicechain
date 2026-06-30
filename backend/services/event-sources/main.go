@@ -160,6 +160,7 @@ func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, 
 	bytes, err := esproto.MarshalUnresolvedEvent(event)
 	if err != nil {
 		log.Error().Err(err).Msg("unable to marshal event to protobuf")
+		return
 	}
 
 	// Create and deliver message (writer derives the scoped subject from ctx).

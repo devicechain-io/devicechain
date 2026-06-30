@@ -297,14 +297,24 @@ func (m *Manager) CurrentUser(ctx context.Context, email string) (*iam.Identity,
 // UpdateProfile updates the signed-in identity's display name (first/last),
 // keyed by the email carried as the token subject. Email and credentials are not
 // affected — this is the self-service profile edit for a tenant user.
-func (m *Manager) UpdateProfile(ctx context.Context, email, firstName, lastName string) (*iam.Identity, error) {
+func (m *Manager) UpdateProfile(ctx context.Context, email string, firstName, lastName *string) (*iam.Identity, error) {
 	id, err := m.iam.IdentityByEmail(ctx, email)
 	if err != nil {
 		return nil, err
 	}
-	id.FirstName = firstName
-	id.LastName = lastName
-	if err := m.iam.UpdateIdentity(ctx, id); err != nil {
+	// Only update the fields actually supplied: a nil pointer means "leave
+	// unchanged", so omitting lastName doesn't clear it (a "" pointer still
+	// clears it explicitly).
+	fields := map[string]any{}
+	if firstName != nil {
+		id.FirstName = *firstName
+		fields["first_name"] = *firstName
+	}
+	if lastName != nil {
+		id.LastName = *lastName
+		fields["last_name"] = *lastName
+	}
+	if err := m.iam.UpdateIdentityFields(ctx, id, fields); err != nil {
 		return nil, err
 	}
 	return id, nil

@@ -25,9 +25,11 @@ export function ProfileForm({ onDone }: { onDone: (message: string) => void }) {
     setFormError(null);
     setBusy(true);
     try {
+      // Send both fields as strings (the form always shows both): "" explicitly
+      // clears, which the backend distinguishes from an omitted/null field.
       const updated = await updateProfile({
-        firstName: firstName.trim() || null,
-        lastName: lastName.trim() || null,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
       });
       applyUser({
         email: updated.email,
