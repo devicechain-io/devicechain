@@ -37,7 +37,7 @@ export function ResourceListPage<T>({ resource }: { resource: RegistryResource<T
   const [version, reload] = useReload();
   const { data, loading, error } = useQuery(
     () => resource.list({ pageNumber, pageSize }),
-    [pageNumber, version],
+    [pageNumber, version, resource.basePath],
   );
 
   const results = data?.results ?? [];

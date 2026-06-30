@@ -4,6 +4,7 @@
 import { Outlet, useLocation, matchPath } from 'react-router-dom';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AdminSidebar } from '@/routes/admin/AdminSidebar';
+import { ErrorBoundary } from '@/components/ui/error-boundary';
 
 const PAGE_TITLES: { pattern: string; title: string }[] = [
   { pattern: '/admin/tenants', title: 'Tenants' },
@@ -29,7 +30,9 @@ export default function AdminLayout() {
           </span>
         </header>
         <div className="flex min-h-0 flex-1 flex-col">
-          <Outlet />
+          <ErrorBoundary key={pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </div>
       </SidebarInset>
     </SidebarProvider>
