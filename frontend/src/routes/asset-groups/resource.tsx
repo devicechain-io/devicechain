@@ -51,6 +51,7 @@ export const assetGroupResource: RegistryResource<AssetGroup> = {
     />
   ),
   removeConfirm: (g) => `Delete asset group “${g.token}”? This cannot be undone.`,
+  detailExtraLabel: 'Members',
   renderDetailExtra: (g) => (
     <MembershipPanel
       groupType="assetgroup"

@@ -24,8 +24,6 @@ interface Candidate {
   name?: string | null;
 }
 
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
 export function MembershipPanel({
   groupType,
   groupToken,
@@ -102,7 +100,8 @@ export function MembershipPanel({
   };
 
   return (
-    <SectionPanel title="Members" description={`${cap(memberSingular)}s in this group.`}>
+    // Untitled: this renders inside the detail page's "Members" tab, which labels it.
+    <SectionPanel>
       <div className="space-y-4">
         <div className="flex items-end gap-2">
           <div className="min-w-0 flex-1">

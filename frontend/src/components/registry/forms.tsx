@@ -178,38 +178,43 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <FormField
-        label="Token"
-        htmlFor="r-token"
-        description={editing ? undefined : `Unique id for this ${singular}; it cannot change later.`}
-      >
-        <Input
-          id="r-token"
-          value={token}
-          disabled={editing}
-          placeholder={tokenPlaceholder}
-          onChange={(e) => setToken(e.target.value)}
-        />
-      </FormField>
+      {/* Type then token on one line: pick the classifying type first, then name
+          the instance. (Live token-availability checking can hang off the token
+          field later.) */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <FormField
+          label={typeLabel}
+          htmlFor="r-type"
+          description={noTypes ? `Create a ${typeSingular} first.` : undefined}
+        >
+          <Combobox
+            id="r-type"
+            value={typeToken}
+            onChange={setTypeToken}
+            options={options}
+            placeholder={`Select a ${typeSingular}…`}
+            disabled={noTypes}
+          />
+        </FormField>
+        <FormField
+          label="Token"
+          htmlFor="r-token"
+          description={editing ? undefined : `Unique id for this ${singular}; it cannot change later.`}
+        >
+          <Input
+            id="r-token"
+            value={token}
+            disabled={editing}
+            placeholder={tokenPlaceholder}
+            onChange={(e) => setToken(e.target.value)}
+          />
+        </FormField>
+      </div>
       <FormField label="Name" htmlFor="r-name">
         <Input id="r-name" value={name} onChange={(e) => setName(e.target.value)} />
       </FormField>
       <FormField label="Description" htmlFor="r-description">
         <Textarea id="r-description" value={description} onChange={(e) => setDescription(e.target.value)} />
-      </FormField>
-      <FormField
-        label={typeLabel}
-        htmlFor="r-type"
-        description={noTypes ? `Create a ${typeSingular} first.` : undefined}
-      >
-        <Combobox
-          id="r-type"
-          value={typeToken}
-          onChange={setTypeToken}
-          options={options}
-          placeholder={`Select a ${typeSingular}…`}
-          disabled={noTypes}
-        />
       </FormField>
       <div className="flex gap-2">
         <Button

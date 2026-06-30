@@ -50,6 +50,7 @@ export const deviceGroupResource: RegistryResource<DeviceGroup> = {
     />
   ),
   removeConfirm: (g) => `Delete device group “${g.token}”? This cannot be undone.`,
+  detailExtraLabel: 'Members',
   renderDetailExtra: (g) => (
     <MembershipPanel
       groupType="devicegroup"
