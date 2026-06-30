@@ -207,10 +207,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshInFlight.current = (async () => {
         try {
           const pair = await apiRefresh(current.refreshToken);
+          // The session can be cleared or replaced while this refresh is in
+          // flight (logout, expiry). A promise can't be cancelled, so guard here:
+          // if the live session is no longer the one we started refreshing, drop
+          // the result instead of resurrecting a dead session into storage.
+          if (tokensRef.current !== current) return null;
           applyTokens({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
           return pair.accessToken;
         } catch {
-          expireTenant();
+          // Only expire the session this refresh belonged to — not one that has
+          // since been logged out or replaced.
+          if (tokensRef.current === current) expireTenant();
           return null;
         } finally {
           refreshInFlight.current = null;

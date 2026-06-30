@@ -160,6 +160,16 @@ func (es *MqttEventSource) Stop(ctx context.Context) error {
 
 // Stop event source (as called by lifecycle manager)
 func (es *MqttEventSource) ExecuteStop(ctx context.Context) error {
+	// Quiesce inbound traffic before tearing down the channel: unsubscribe and
+	// disconnect the broker client so paho can no longer invoke onMessage, then
+	// close the channel the decode workers drain. Closing first would race a
+	// late-arriving message into a send-on-closed-channel panic.
+	if es.Client != nil {
+		if token := es.Client.Unsubscribe(es.Topic); token.Wait() && token.Error() != nil {
+			log.Warn().Err(token.Error()).Msg("MQTT event source failed to unsubscribe on stop.")
+		}
+		es.Client.Disconnect(250)
+	}
 	close(es.messages)
 	return nil
 }
