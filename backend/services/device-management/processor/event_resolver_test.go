@@ -173,8 +173,9 @@ func (suite *EventResolverTestSuite) TestMeasurementValidationRejects() {
 	suite.API.AssertNotCalled(suite.T(), "EntityRelationships")
 }
 
-// A conforming measurement passes validation and proceeds to fan-out (here, no
-// tracked relationships, so zero resolved events and no failure).
+// A conforming measurement passes validation and resolves. With no tracked
+// relationship it resolves to exactly one *anchorless* event (not dropped) —
+// ADR-013 addendum 2026-07-01.
 func (suite *EventResolverTestSuite) TestMeasurementValidationPasses() {
 	def := &dmodel.MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
@@ -186,7 +187,76 @@ func (suite *EventResolverTestSuite) TestMeasurementValidationPasses() {
 
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), uint(0), reason)
-	assert.Empty(suite.T(), results)
+	assert.Len(suite.T(), results, 1)
+	assert.Nil(suite.T(), results[0].Resolved.TargetType)
+	assert.Equal(suite.T(), uint(0), results[0].Resolved.RelationshipId)
+}
+
+// A tracked relationship builds a device with ID 1 as source and the given target.
+func trackedRel(id uint, targetType string, targetId uint) dmodel.EntityRelationship {
+	return dmodel.EntityRelationship{
+		Model:      gorm.Model{ID: id},
+		SourceType: "device",
+		SourceId:   1,
+		TargetType: targetType,
+		TargetId:   targetId,
+	}
+}
+
+// An unassigned device resolves to exactly one anchorless event — the event
+// belongs to the device and still persists/projects (ADR-013 addendum 2026-07-01).
+func (suite *EventResolverTestSuite) TestUnassignedResolvesAnchorless() {
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
+	suite.API.Mock.On("EntityRelationships").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
+
+	results, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
+		context.Background(), deviceWithToken("TEST-123"), measurementEvent("temp", "42"))
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint(0), reason)
+	assert.Len(suite.T(), results, 1)
+	assert.Nil(suite.T(), results[0].Resolved.TargetType)
+	assert.Nil(suite.T(), results[0].Resolved.TargetId)
+}
+
+// A single assignment anchors the one resolved event on that relationship's target.
+func (suite *EventResolverTestSuite) TestSingleAssignmentAnchored() {
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
+	suite.API.Mock.On("EntityRelationships").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
+			trackedRel(7, "customer", 3),
+		}}, nil)
+
+	results, _, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
+		context.Background(), deviceWithToken("TEST-123"), measurementEvent("temp", "42"))
+
+	assert.NoError(suite.T(), err)
+	assert.Len(suite.T(), results, 1)
+	assert.Equal(suite.T(), uint(7), results[0].Resolved.RelationshipId)
+	assert.Equal(suite.T(), "customer", *results[0].Resolved.TargetType)
+	assert.Equal(suite.T(), uint(3), *results[0].Resolved.TargetId)
+}
+
+// Several assignments still yield one event, anchored to the primary — the
+// lowest-id relationship — with the rest left in the graph (ADR-013 addendum).
+func (suite *EventResolverTestSuite) TestMultipleAssignmentsUsePrimary() {
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
+	suite.API.Mock.On("EntityRelationships").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
+			trackedRel(5, "area", 9),
+			trackedRel(2, "customer", 3),
+			trackedRel(8, "asset", 1),
+		}}, nil)
+
+	results, _, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
+		context.Background(), deviceWithToken("TEST-123"), measurementEvent("temp", "42"))
+
+	assert.NoError(suite.T(), err)
+	assert.Len(suite.T(), results, 1)
+	assert.Equal(suite.T(), uint(2), results[0].Resolved.RelationshipId)
+	assert.Equal(suite.T(), "customer", *results[0].Resolved.TargetType)
+	assert.Equal(suite.T(), uint(3), *results[0].Resolved.TargetId)
 }
 
 // A device type that declares no metric definitions skips validation entirely

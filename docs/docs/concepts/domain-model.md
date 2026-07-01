@@ -25,7 +25,9 @@ Instead of binding a device to a single fixed `(customer, area, asset)` assignme
 - A relationship has a **source**, a **target**, and a **relationship type**.
 - A relationship type carries a **`Tracked`** flag.
 
-The `Tracked` flag is central: when a device reports an event, the platform looks up that device's tracked relationships and **denormalizes them onto the event** as index dimensions. This is how a query like "every temperature reading for Building 7" resolves without joins, while still allowing arbitrary, evolving context (a device can relate to many customers, areas, assets, or even other devices simultaneously).
+The `Tracked` flag is central. When a device reports an event, the platform looks up the device's tracked relationships and denormalizes the **primary** one — the device's first assignment — onto the event as its **anchor** `(anchor_type, anchor_id)`. This is how a query like "every temperature reading for Building 7" resolves without joins. A device may hold **several** tracked relationships (assign it to a customer *and* an area *and* an asset); they all live in the graph, and the primary is the one denormalized onto events.
+
+**Assignment organizes; it does not gate.** A device that is credentialed but not yet assigned still reports telemetry — its events resolve with a **null anchor** rather than being dropped. Assigning the device later gives its subsequent events a customer/area/asset anchor. (See [Managing device assignments](../guides/managing-assignments.md) and ADR-013.)
 
 ## Attributes vs. events
 
@@ -39,8 +41,8 @@ DeviceChain distinguishes **current state** from **history**:
 
 ## Identity and credentials
 
-A device has a **stable identity** that everything else references, kept separate from its **credentials** (the material it uses to authenticate). Credentials are pluggable — access token, X.509 certificate, MQTT-basic — so a device can rotate or hold multiple credentials without changing its identity. *(In design; credentials beyond the connection token are planned.)*
+A device has a **stable identity** that everything else references, kept separate from its **credentials** (the material it uses to authenticate). Credentials are pluggable — **access token**, **MQTT-basic** (username + password), and **X.509 certificate** — so a device can rotate or hold multiple credentials without changing its identity. A credential's secret is **write-only**: it is submitted when the credential is registered and never returned on read. See [Device credentials](../guides/device-credentials.md).
 
 ## Events
 
-Each event records the reporting device, the event type, the device-reported and platform-received timestamps, an optional external correlation id (`alternateId`) for idempotent ingestion, and the resolved relationship anchors described above. Event categories include measurements, locations, alerts, command invocations and responses, and state changes.
+Each event records the reporting device, the event type, the device-reported and platform-received timestamps, an optional external correlation id (`alternateId`) for idempotent ingestion, and the resolved relationship anchor described above (null when the device is unassigned). Event categories include measurements, locations, alerts, command invocations and responses, and state changes.

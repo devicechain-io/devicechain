@@ -30,6 +30,7 @@ import { errMessage, useReload } from '@/routes/common';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
 import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
 import { DeviceCredentialsPanel } from '@/routes/devices/DeviceCredentialsPanel';
+import { DeviceAssignmentPanel } from '@/routes/devices/DeviceAssignmentPanel';
 
 export default function DeviceDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
@@ -94,6 +95,7 @@ export default function DeviceDetailPage() {
       <Tabs defaultValue="basic">
         <TabsList>
           <TabsTrigger value="basic">Basic</TabsTrigger>
+          <TabsTrigger value="assignment">Assignment</TabsTrigger>
           <TabsTrigger value="connectivity">Connectivity</TabsTrigger>
           <TabsTrigger value="events">Events</TabsTrigger>
           <TabsTrigger value="commands">Commands</TabsTrigger>
@@ -108,6 +110,11 @@ export default function DeviceDetailPage() {
                 reload();
               }}
             />
+          </SectionPanel>
+        </TabsContent>
+        <TabsContent value="assignment">
+          <SectionPanel>
+            <DeviceAssignmentPanel deviceToken={device.token} />
           </SectionPanel>
         </TabsContent>
         <TabsContent value="connectivity">
