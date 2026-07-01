@@ -4,11 +4,15 @@
 // Typed GraphQL operations against the device-state service.
 import { gql } from '@/lib/graphql/client';
 import { graphql } from '@/gql/device-state';
-import type { DeviceStatesByDeviceIdQuery } from '@/gql/device-state/graphql';
+import type {
+  DeviceStatesByDeviceIdQuery,
+  LatestMeasurementsQuery,
+} from '@/gql/device-state/graphql';
 
-// Public type derived from the generated operation result so it always reflects
-// the actual selection set and can never drift from the schema.
+// Public types derived from the generated operation results so they always
+// reflect the actual selection set and can never drift from the schema.
 export type DeviceState = DeviceStatesByDeviceIdQuery['deviceStatesByDeviceId'][number];
+export type LatestMeasurement = LatestMeasurementsQuery['latestMeasurements'][number];
 
 const DEVICE_STATES_BY_DEVICE_ID = graphql(`
   query DeviceStatesByDeviceId($deviceIds: [Int!]!) {
@@ -35,4 +39,22 @@ export async function getDeviceStates(deviceIds: number[]): Promise<DeviceState[
   if (deviceIds.length === 0) return [];
   const data = await gql('device-state', DEVICE_STATES_BY_DEVICE_ID, { deviceIds });
   return data.deviceStatesByDeviceId;
+}
+
+const LATEST_MEASUREMENTS = graphql(`
+  query LatestMeasurements($deviceId: Int!) {
+    latestMeasurements(deviceId: $deviceId) {
+      id
+      name
+      value
+      occurredTime
+    }
+  }
+`);
+
+// getLatestMeasurements returns the current value of every measurement name for a
+// device — the live "current readings" projection. Requires state:read.
+export async function getLatestMeasurements(deviceId: number): Promise<LatestMeasurement[]> {
+  const data = await gql('device-state', LATEST_MEASUREMENTS, { deviceId });
+  return data.latestMeasurements;
 }

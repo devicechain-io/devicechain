@@ -35,6 +35,22 @@ type DeviceState implements Model {
     inactivityTimeout: Int!
 }
 
+# Current (most-recent) value of a single named measurement for a device — the
+# live "what is it now?" projection beside the append-only history. occurredTime
+# is the RFC3339 time of the reading; value is null only for a non-numeric reading
+# (not stored in v1).
+type LatestMeasurement implements Model {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    deviceId: Int!
+    name: String!
+    value: Float
+    classifier: Int
+    occurredTime: String!
+}
+
 # Criteria used when searching for device states. Device-id lookups are served by
 # the deviceStatesByDeviceId query instead of a criteria field.
 input DeviceStateSearchCriteria {
@@ -55,6 +71,8 @@ type Query {
     deviceStatesByDeviceId(deviceIds: [Int!]!): [DeviceState!]!
     # Search for device states that match the given criteria.
     deviceStates(criteria: DeviceStateSearchCriteria!): DeviceStateSearchResults!
+    # Current value of every measurement name for a device (live readings).
+    latestMeasurements(deviceId: Int!): [LatestMeasurement!]!
 }
 
 schema {

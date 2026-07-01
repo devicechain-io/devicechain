@@ -16,15 +16,21 @@ import * as types from './graphql';
  */
 type Documents = {
     "\n  query DeviceStatesByDeviceId($deviceIds: [Int!]!) {\n    deviceStatesByDeviceId(deviceIds: $deviceIds) {\n      id\n      deviceId\n      active\n      lastConnectTime\n      lastDisconnectTime\n      lastActivityTime\n      inactivityTimeout\n    }\n  }\n": typeof types.DeviceStatesByDeviceIdDocument,
+    "\n  query LatestMeasurements($deviceId: Int!) {\n    latestMeasurements(deviceId: $deviceId) {\n      id\n      name\n      value\n      occurredTime\n    }\n  }\n": typeof types.LatestMeasurementsDocument,
 };
 const documents: Documents = {
     "\n  query DeviceStatesByDeviceId($deviceIds: [Int!]!) {\n    deviceStatesByDeviceId(deviceIds: $deviceIds) {\n      id\n      deviceId\n      active\n      lastConnectTime\n      lastDisconnectTime\n      lastActivityTime\n      inactivityTimeout\n    }\n  }\n": types.DeviceStatesByDeviceIdDocument,
+    "\n  query LatestMeasurements($deviceId: Int!) {\n    latestMeasurements(deviceId: $deviceId) {\n      id\n      name\n      value\n      occurredTime\n    }\n  }\n": types.LatestMeasurementsDocument,
 };
 
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query DeviceStatesByDeviceId($deviceIds: [Int!]!) {\n    deviceStatesByDeviceId(deviceIds: $deviceIds) {\n      id\n      deviceId\n      active\n      lastConnectTime\n      lastDisconnectTime\n      lastActivityTime\n      inactivityTimeout\n    }\n  }\n"): typeof import('./graphql').DeviceStatesByDeviceIdDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query LatestMeasurements($deviceId: Int!) {\n    latestMeasurements(deviceId: $deviceId) {\n      id\n      name\n      value\n      occurredTime\n    }\n  }\n"): typeof import('./graphql').LatestMeasurementsDocument;
 
 
 export function graphql(source: string) {

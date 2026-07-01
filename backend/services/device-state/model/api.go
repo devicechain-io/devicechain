@@ -32,6 +32,8 @@ type DeviceStateApi interface {
 	DeviceStatesByDeviceId(ctx context.Context, deviceIds []uint) ([]*DeviceState, error)
 	DeviceStates(ctx context.Context, criteria DeviceStateSearchCriteria) (*DeviceStateSearchResults, error)
 	SweepInactive(ctx context.Context, now time.Time) (int64, error)
+	MergeLatestMeasurements(ctx context.Context, deviceId uint, inputs []LatestMeasurementInput) error
+	LatestMeasurementsByDeviceId(ctx context.Context, deviceId uint) ([]*LatestMeasurement, error)
 }
 
 // MergeDeviceState updates (or creates) the live state projection for a device
@@ -78,6 +80,66 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceId uint, occurredAt 
 	})
 	if err != nil {
 		return nil, err
+	}
+	return found, nil
+}
+
+// MergeLatestMeasurements upserts the current value of each named measurement for
+// a device from a resolved measurement event. Like MergeDeviceState it is a
+// read-modify-write under a row lock so the concurrent decode workers serialize
+// per key, and it only advances a key when the incoming reading is newer
+// (out-of-order safe): a delayed old value never clobbers a newer stored one.
+// All entries in the event commit together in one transaction.
+func (api *Api) MergeLatestMeasurements(ctx context.Context, deviceId uint, inputs []LatestMeasurementInput) error {
+	if len(inputs) == 0 {
+		return nil
+	}
+	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, in := range inputs {
+			found := &LatestMeasurement{}
+			result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("device_id = ? AND name = ?", deviceId, in.Name).First(found)
+			if result.Error != nil {
+				if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+					// First value for this (device, name): create it. A concurrent
+					// first create loses the unique-index race and errors out
+					// (redelivered), rather than producing a duplicate row.
+					created := &LatestMeasurement{
+						DeviceId:     deviceId,
+						Name:         in.Name,
+						Value:        in.Value,
+						Classifier:   in.Classifier,
+						OccurredTime: in.OccurredTime,
+					}
+					if err := tx.Create(created).Error; err != nil {
+						return err
+					}
+					continue
+				}
+				return result.Error
+			}
+			// Existing row: overwrite only when this reading is strictly newer, so a
+			// late-arriving old value (or a redelivered duplicate) is ignored.
+			if in.OccurredTime.After(found.OccurredTime) {
+				found.Value = in.Value
+				found.Classifier = in.Classifier
+				found.OccurredTime = in.OccurredTime
+				if err := tx.Save(found).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+// LatestMeasurementsByDeviceId returns the current value of every measurement
+// name for a device (name-ordered) — the live "current readings" surface.
+func (api *Api) LatestMeasurementsByDeviceId(ctx context.Context, deviceId uint) ([]*LatestMeasurement, error) {
+	found := make([]*LatestMeasurement, 0)
+	result := api.RDB.DB(ctx).Where("device_id = ?", deviceId).Order("name asc").Find(&found)
+	if result.Error != nil {
+		return nil, result.Error
 	}
 	return found, nil
 }

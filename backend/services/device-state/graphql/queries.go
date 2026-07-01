@@ -62,3 +62,25 @@ func (r *SchemaResolver) DeviceStates(ctx context.Context, args struct {
 		C: ctx,
 	}, nil
 }
+
+// LatestMeasurements returns the current value of every measurement name for a
+// device (the live-readings projection).
+func (r *SchemaResolver) LatestMeasurements(ctx context.Context, args struct {
+	DeviceId int32
+}) ([]*LatestMeasurementResolver, error) {
+	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
+		return nil, err
+	}
+
+	api := r.GetApi(ctx)
+	found, err := api.LatestMeasurementsByDeviceId(ctx, uint(args.DeviceId))
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*LatestMeasurementResolver, 0)
+	for _, m := range found {
+		result = append(result, &LatestMeasurementResolver{M: *m, S: r, C: ctx})
+	}
+	return result, nil
+}

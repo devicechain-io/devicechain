@@ -11,6 +11,13 @@ export type DeviceStatesByDeviceIdQueryVariables = Exact<{
 
 export type DeviceStatesByDeviceIdQuery = { deviceStatesByDeviceId: Array<{ id: string, deviceId: number, active: boolean, lastConnectTime: string | null, lastDisconnectTime: string | null, lastActivityTime: string | null, inactivityTimeout: number }> };
 
+export type LatestMeasurementsQueryVariables = Exact<{
+  deviceId: number;
+}>;
+
+
+export type LatestMeasurementsQuery = { latestMeasurements: Array<{ id: string, name: string, value: number | null, occurredTime: string }> };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -43,3 +50,13 @@ export const DeviceStatesByDeviceIdDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<DeviceStatesByDeviceIdQuery, DeviceStatesByDeviceIdQueryVariables>;
+export const LatestMeasurementsDocument = new TypedDocumentString(`
+    query LatestMeasurements($deviceId: Int!) {
+  latestMeasurements(deviceId: $deviceId) {
+    id
+    name
+    value
+    occurredTime
+  }
+}
+    `) as unknown as TypedDocumentString<LatestMeasurementsQuery, LatestMeasurementsQueryVariables>;
