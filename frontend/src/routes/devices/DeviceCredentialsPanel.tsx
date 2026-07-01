@@ -113,6 +113,19 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
     }
   };
 
+  const remove = async (c: DeviceCredential) => {
+    if (!window.confirm(`Delete this ${c.credentialType} credential? The device can no longer authenticate with it.`)) {
+      return;
+    }
+    try {
+      await deleteDeviceCredential(c.token);
+      toast('Credential deleted');
+      reload();
+    } catch (err) {
+      toast(errMessage(err), 'error');
+    }
+  };
+
   const credentials = data ?? [];
 
   return (
@@ -244,17 +257,4 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
       )}
     </div>
   );
-
-  async function remove(c: DeviceCredential) {
-    if (!window.confirm(`Delete this ${c.credentialType} credential? The device can no longer authenticate with it.`)) {
-      return;
-    }
-    try {
-      await deleteDeviceCredential(c.token);
-      toast('Credential deleted');
-      reload();
-    } catch (err) {
-      toast(errMessage(err), 'error');
-    }
-  }
 }
