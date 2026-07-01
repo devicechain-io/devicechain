@@ -188,8 +188,7 @@ func (suite *EventResolverTestSuite) TestMeasurementValidationPasses() {
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), uint(0), reason)
 	assert.Len(suite.T(), results, 1)
-	assert.Nil(suite.T(), results[0].Resolved.TargetType)
-	assert.Equal(suite.T(), uint(0), results[0].Resolved.RelationshipId)
+	assert.Empty(suite.T(), results[0].Resolved.Anchors)
 }
 
 // A tracked relationship builds a device with ID 1 as source and the given target.
@@ -216,8 +215,7 @@ func (suite *EventResolverTestSuite) TestUnassignedResolvesAnchorless() {
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), uint(0), reason)
 	assert.Len(suite.T(), results, 1)
-	assert.Nil(suite.T(), results[0].Resolved.TargetType)
-	assert.Nil(suite.T(), results[0].Resolved.TargetId)
+	assert.Empty(suite.T(), results[0].Resolved.Anchors)
 }
 
 // A single assignment anchors the one resolved event on that relationship's target.
@@ -233,14 +231,14 @@ func (suite *EventResolverTestSuite) TestSingleAssignmentAnchored() {
 
 	assert.NoError(suite.T(), err)
 	assert.Len(suite.T(), results, 1)
-	assert.Equal(suite.T(), uint(7), results[0].Resolved.RelationshipId)
-	assert.Equal(suite.T(), "customer", *results[0].Resolved.TargetType)
-	assert.Equal(suite.T(), uint(3), *results[0].Resolved.TargetId)
+	assert.Equal(suite.T(), []dmodel.ResolvedAnchor{
+		{AnchorType: "customer", AnchorId: 3, RelationshipId: 7},
+	}, results[0].Resolved.Anchors)
 }
 
-// Several assignments still yield one event, anchored to the primary — the
-// lowest-id relationship — with the rest left in the graph (ADR-013 addendum).
-func (suite *EventResolverTestSuite) TestMultipleAssignmentsUsePrimary() {
+// Several assignments yield one event carrying ALL of them as anchors, so the
+// event is queryable by every dimension (customer, area, asset) — ADR-013 addendum.
+func (suite *EventResolverTestSuite) TestMultipleAssignmentsAllAnchored() {
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	suite.API.Mock.On("EntityRelationships").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
@@ -254,9 +252,11 @@ func (suite *EventResolverTestSuite) TestMultipleAssignmentsUsePrimary() {
 
 	assert.NoError(suite.T(), err)
 	assert.Len(suite.T(), results, 1)
-	assert.Equal(suite.T(), uint(2), results[0].Resolved.RelationshipId)
-	assert.Equal(suite.T(), "customer", *results[0].Resolved.TargetType)
-	assert.Equal(suite.T(), uint(3), *results[0].Resolved.TargetId)
+	assert.ElementsMatch(suite.T(), []dmodel.ResolvedAnchor{
+		{AnchorType: "area", AnchorId: 9, RelationshipId: 5},
+		{AnchorType: "customer", AnchorId: 3, RelationshipId: 2},
+		{AnchorType: "asset", AnchorId: 1, RelationshipId: 8},
+	}, results[0].Resolved.Anchors)
 }
 
 // A device type that declares no metric definitions skips validation entirely

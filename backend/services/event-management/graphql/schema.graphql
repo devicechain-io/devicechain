@@ -12,9 +12,10 @@ type SearchResultsPagination {
     totalRecords: Int
 }
 
-# A persisted base event with token references resolved. The originating
-# device's tracked relationship target is denormalized as a uniform
-# (anchorType, anchorId) pair (ADR-013); both are null when there was none.
+# A persisted base event with token references resolved. The originating device's
+# tracked-relationship targets are recorded as a set of anchors in event_anchors
+# (ADR-013 addendum 2026-07-01), queryable via the (anchorType, anchorId) search
+# filter below; an event with no assignment simply has no anchor rows.
 type Event {
     id: ID!
     deviceId: String!
@@ -23,8 +24,6 @@ type Event {
     processedTime: String
     source: String!
     altId: String
-    anchorType: String
-    anchorId: String
 }
 
 # A persisted location event.

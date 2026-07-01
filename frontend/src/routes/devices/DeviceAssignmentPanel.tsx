@@ -47,11 +47,11 @@ async function loadTargets(type: AssignmentTargetType): Promise<{ value: string;
 }
 
 // DeviceAssignmentPanel manages a device's assignments — tracked relationships to
-// a customer/area/asset (ADR-013). A device may hold several; the first (its
-// lowest-id edge) is the *primary* whose target is denormalized onto the device's
-// events as their anchor (ADR-013 addendum). An unassigned device still emits
-// telemetry — resolution is anchorless, not dropped. Loads independently: without
-// device:read the query errors and this panel degrades to an ErrorState.
+// a customer/area/asset (ADR-013). A device may hold several; each becomes an
+// anchor on the device's events, so its telemetry is queryable by every dimension
+// (ADR-013 addendum). An unassigned device still emits telemetry — resolution is
+// anchorless, not dropped. Loads independently: without device:read the query
+// errors and this panel degrades to an ErrorState.
 export function DeviceAssignmentPanel({ deviceToken }: { deviceToken: string }) {
   const { toast } = useToast();
   const [targetType, setTargetType] = useState<AssignmentTargetType>('customer');
@@ -104,8 +104,7 @@ export function DeviceAssignmentPanel({ deviceToken }: { deviceToken: string }) 
     }
   };
 
-  // Sort by edge id so the primary (lowest id — the denormalized anchor) is first.
-  const assignments = [...(data ?? [])].sort((a, b) => Number(a.id) - Number(b.id));
+  const assignments = data ?? [];
 
   return (
     <div className="space-y-6">
@@ -149,24 +148,16 @@ export function DeviceAssignmentPanel({ deviceToken }: { deviceToken: string }) 
           <DataTableHead>
             <DataTableHeaderCell>Type</DataTableHeaderCell>
             <DataTableHeaderCell>Target</DataTableHeaderCell>
-            <DataTableHeaderCell>Anchor</DataTableHeaderCell>
             <DataTableHeaderCell>&nbsp;</DataTableHeaderCell>
           </DataTableHead>
           <DataTableBody>
-            {assignments.map((edge, i) => (
+            {assignments.map((edge) => (
               <DataTableRow key={edge.id}>
                 <DataTableCell>
                   <Badge variant="secondary">{edge.targetType}</Badge>
                 </DataTableCell>
                 <DataTableCell className="font-mono text-xs text-foreground">
                   {edge.target?.token ?? '—'}
-                </DataTableCell>
-                <DataTableCell>
-                  {i === 0 ? (
-                    <Badge variant="success">primary</Badge>
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
                 </DataTableCell>
                 <DataTableCell className="text-right">
                   <Button variant="outline" size="sm" onClick={() => remove(edge)}>

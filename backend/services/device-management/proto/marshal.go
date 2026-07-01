@@ -9,7 +9,6 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	util "github.com/devicechain-io/dc-microservice/proto"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -276,13 +275,19 @@ func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 	}
 
 	// Encode protobuf event.
+	anchors := make([]*PResolvedAnchor, 0, len(event.Anchors))
+	for _, a := range event.Anchors {
+		anchors = append(anchors, &PResolvedAnchor{
+			AnchorType:     a.AnchorType,
+			AnchorId:       uint64(a.AnchorId),
+			RelationshipId: uint64(a.RelationshipId),
+		})
+	}
 	pbevent := &PResolvedEvent{
 		Source:         event.Source,
 		AltId:          event.AltId,
-		RelationshipId: uint64(event.RelationshipId),
 		SourceDeviceId: uint64(event.SourceDeviceId),
-		TargetType:     event.TargetType,
-		TargetId:       util.NullUint64Of(event.TargetId),
+		Anchors:        anchors,
 		OccurredTime:   event.OccurredTime.Format(time.RFC3339),
 		ProcessedTime:  event.ProcessedTime.Format(time.RFC3339),
 		EventType:      int64(event.EventType),
@@ -322,13 +327,20 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 		return nil, err
 	}
 
+	anchors := make([]model.ResolvedAnchor, 0, len(pbevent.Anchors))
+	for _, a := range pbevent.Anchors {
+		anchors = append(anchors, model.ResolvedAnchor{
+			AnchorType:     a.AnchorType,
+			AnchorId:       uint(a.AnchorId),
+			RelationshipId: uint(a.RelationshipId),
+		})
+	}
+
 	event := &model.ResolvedEvent{
 		Source:         pbevent.Source,
 		AltId:          pbevent.AltId,
-		RelationshipId: uint(pbevent.RelationshipId),
 		SourceDeviceId: uint(pbevent.SourceDeviceId),
-		TargetType:     pbevent.TargetType,
-		TargetId:       util.NullUintOf(pbevent.TargetId),
+		Anchors:        anchors,
 		OccurredTime:   occurred,
 		ProcessedTime:  processed,
 		EventType:      esmodel.EventType(pbevent.EventType),

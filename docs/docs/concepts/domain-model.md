@@ -25,7 +25,7 @@ Instead of binding a device to a single fixed `(customer, area, asset)` assignme
 - A relationship has a **source**, a **target**, and a **relationship type**.
 - A relationship type carries a **`Tracked`** flag.
 
-The `Tracked` flag is central. When a device reports an event, the platform looks up the device's tracked relationships and denormalizes the **primary** one — the device's first assignment — onto the event as its **anchor** `(anchor_type, anchor_id)`. This is how a query like "every temperature reading for Building 7" resolves without joins. A device may hold **several** tracked relationships (assign it to a customer *and* an area *and* an asset); they all live in the graph, and the primary is the one denormalized onto events.
+The `Tracked` flag is central. When a device reports an event, the platform records **each** of the device's tracked relationships as an **anchor** on that event (an `(anchor_type, anchor_id)` entry in the event's anchor set). A device may hold **several** tracked relationships — a customer *and* an area *and* an asset — and the reading is then queryable by **every** one of them: "every temperature reading for Building 7" and "…for customer Acme" both find it. Anchors are captured at write time, so history stays put when a device is later reassigned.
 
 **Assignment organizes; it does not gate.** A device that is credentialed but not yet assigned still reports telemetry — its events resolve with a **null anchor** rather than being dropped. Assigning the device later gives its subsequent events a customer/area/asset anchor. (See [Managing device assignments](../guides/managing-assignments.md) and ADR-013.)
 

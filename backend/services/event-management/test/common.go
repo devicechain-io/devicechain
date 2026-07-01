@@ -65,6 +65,11 @@ func (api *MockApi) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests
 	return args.Get(0).([]*emmodel.AlertEvent), args.Error(1)
 }
 
+func (api *MockApi) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*emmodel.EventAnchor) error {
+	args := api.Mock.Called()
+	return args.Error(0)
+}
+
 // PersistInTx runs fn directly (no real database in tests) passing a nil *gorm.DB
 // handle. The batch create mocks above ignore the handle, so this preserves the
 // all-or-nothing semantics that the production transaction provides while

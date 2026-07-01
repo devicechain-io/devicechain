@@ -12,5 +12,6 @@ var (
 		NewInitialSchema(),
 		NewAltIdIdempotencyIndex(),
 		NewMeasurementAggregationIndex(),
+		NewEventAnchorsTable(),
 	}
 )

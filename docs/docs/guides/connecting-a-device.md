@@ -54,7 +54,7 @@ curl -X POST http://localhost:8081/dc/acme/events \
 ## What happens next
 
 1. **event-sources** decodes the raw message.
-2. **device-management** authenticates the device by its credential and resolves the event: the device's **primary tracked relationship** (its assignment to a customer/area/asset, if any) is denormalized onto the event as its anchor. An **unassigned** device still reports — its events resolve with a null anchor rather than being dropped (see [Managing device assignments](./managing-assignments.md)).
+2. **device-management** authenticates the device by its credential and resolves the event: **each** of the device's tracked relationships (its assignments to a customer/area/asset) is recorded as an anchor, so the reading is queryable by every dimension. An **unassigned** device still reports — its event simply carries no anchors rather than being dropped (see [Managing device assignments](./managing-assignments.md)).
 3. **event-management** persists the resolved event to a TimescaleDB hypertable, and **device-state** updates the device's latest reading + connectivity.
 
 See [Architecture → The event pipeline](../concepts/architecture.md#the-event-pipeline).

@@ -63,19 +63,25 @@ type ResolvedAlertsPayload struct {
 }
 
 // Event with token references resolved and the originating device's tracked
-// relationship merged onto it. The relationship target is a uniform (type, id)
-// reference (ADR-013); both are nil when the device had no tracked relationship.
+// relationships merged onto it as a set of anchors (ADR-013). The set is empty
+// when the device has no tracked relationship (it still resolves and persists).
 type ResolvedEvent struct {
 	Source         string
 	AltId          *string
 	SourceDeviceId uint
-	RelationshipId uint
-	TargetType     *string
-	TargetId       *uint
+	Anchors        []ResolvedAnchor
 	OccurredTime   time.Time
 	ProcessedTime  time.Time
 	EventType      esmodel.EventType
 	Payload        interface{}
+}
+
+// ResolvedAnchor is one of a resolved event's anchors — a tracked relationship's
+// target as a uniform (type, id) reference (ADR-013).
+type ResolvedAnchor struct {
+	AnchorType     string
+	AnchorId       uint
+	RelationshipId uint
 }
 
 // Captures failure information for events that could not be processed.

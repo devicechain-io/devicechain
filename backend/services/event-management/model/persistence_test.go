@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"gorm.io/gorm"
 )
 
@@ -38,13 +39,47 @@ func newPersistenceTestApi(t *testing.T) *Api {
 		`ON events (device_id, event_type, occurred_time);`).Error; err != nil {
 		t.Fatalf("failed to create natural-key index: %v", err)
 	}
-	if err := db.AutoMigrate(&MeasurementEvent{}); err != nil {
-		t.Fatalf("failed to migrate measurement_events: %v", err)
+	if err := db.AutoMigrate(&MeasurementEvent{}, &EventAnchor{}); err != nil {
+		t.Fatalf("failed to migrate child tables: %v", err)
 	}
 	if err := db.Exec(`PRAGMA foreign_keys = ON;`).Error; err != nil {
 		t.Fatalf("failed to enable foreign keys: %v", err)
 	}
 	return NewApi(&rdb.RdbManager{Database: db})
+}
+
+// A device assigned to several targets records one anchor row per target for each
+// reading, so the same measurement is found by every dimension — the capability
+// the single-anchor schema could not express (ADR-013 addendum 2026-07-01).
+func TestMeasurementsQueryableByEachAnchor(t *testing.T) {
+	api := newPersistenceTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	occurred := time.Date(2026, 7, 1, 20, 0, 0, 0, time.UTC)
+
+	parent := Event{DeviceId: 4, EventType: esmodel.Measurement, OccurredTime: occurred, Source: "http1"}
+	if _, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
+		[]*MeasurementEventCreateRequest{{Event: parent, Name: "temperature", Value: f64(21.5)}}); err != nil {
+		t.Fatalf("CreateMeasurementEvents: %v", err)
+	}
+	// The device is assigned to a customer AND an area: one anchor row per target.
+	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
+		{DeviceId: 4, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorId: 3},
+		{DeviceId: 4, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorId: 9},
+	}); err != nil {
+		t.Fatalf("CreateEventAnchors: %v", err)
+	}
+
+	byAnchor := func(atype string, aid uint) int {
+		res, err := api.MeasurementEvents(ctx, EventSearchCriteria{AnchorType: &atype, AnchorId: &aid})
+		if err != nil {
+			t.Fatalf("MeasurementEvents(%s,%d): %v", atype, aid, err)
+		}
+		return len(res.Results)
+	}
+
+	assert.Equal(t, 1, byAnchor("customer", 3), "found by its customer anchor")
+	assert.Equal(t, 1, byAnchor("area", 9), "found by its area anchor")
+	assert.Equal(t, 0, byAnchor("asset", 1), "not found by an unassigned dimension")
 }
 
 // A measurement message carrying several metrics at one instant is one parent

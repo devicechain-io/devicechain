@@ -20,19 +20,19 @@ A device authenticates with a **credential**; assignment only **organizes** its 
 
 Unassigned devices are therefore never silently dropped — a change from earlier behavior (see ADR-013, addendum 2026-07-01).
 
-## The primary anchor
+## Every assignment is an anchor
 
-A device may hold **several** assignments at once — a customer *and* an area *and* an asset. All of them live in the relationship graph. When the device reports an event, exactly **one** of them — the **primary**, defined as the device's **first** (lowest-id) assignment — is denormalized onto the event as its `(anchor_type, anchor_id)` anchor. This keeps anchor-filtered event queries join-free for the common case. Secondary assignments are recorded in the graph but are not denormalized onto events.
+A device may hold **several** assignments at once — a customer *and* an area *and* an asset. When the device reports an event, **each** assignment is recorded as an **anchor** on that event. So the same reading is queryable by **every** dimension: it shows up under the customer *and* under the area. There is no "primary" — the assignments are equal.
 
-The console marks the primary assignment with a **`primary`** badge.
+Concretely, each event's anchors live in a sibling `event_anchors` set (one row per assignment), and an anchor-filtered query ("events for area Y") matches events whose set contains that anchor. Anchors are captured **at write time**, so history is stable: a device that later moves areas keeps the area each old event was in when it happened.
 
 ## Assign a device (console)
 
 1. Open the device's detail page and select the **Assignment** tab.
 2. Choose a **target type** (Customer / Area / Asset) and pick the **target** entity.
-3. Click **Assign**. Repeat to add more assignments.
+3. Click **Assign**. Repeat to add more assignments — the device can be assigned to several targets at once.
 
-To unassign, click **Unassign** on a row. Removing the primary promotes the next-lowest assignment to primary for the device's *future* events.
+To unassign, click **Unassign** on a row. It stops anchoring the device's *future* events to that target; events already recorded keep their anchors.
 
 ## Assign a device (GraphQL)
 

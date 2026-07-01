@@ -93,16 +93,15 @@ func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopNonEof() {
 // Build resolved event with the given payload.
 func buildResolvedEvent(etype esmodel.EventType, payload interface{}) *dmodel.ResolvedEvent {
 	altid := "alternateId"
-	ttype := "asset"
-	tid := uint(1)
 	return &dmodel.ResolvedEvent{
 		Source:         "mysource",
 		AltId:          &altid,
 		SourceDeviceId: 1,
-		TargetType:     &ttype,
-		TargetId:       &tid,
-		EventType:      etype,
-		Payload:        payload,
+		Anchors: []dmodel.ResolvedAnchor{
+			{AnchorType: "asset", AnchorId: 1, RelationshipId: 1},
+		},
+		EventType: etype,
+		Payload:   payload,
 	}
 }
 
@@ -191,6 +190,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestInvalidEvent() {
 
 	// Test event flow.
 	suite.API.Mock.On("CreateLocationEvents", mock.Anything, mock.Anything).Return([]*model.LocationEvent{}, nil)
+	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
 	suite.FailedEventFlowFor(badmsg)
 }
 
@@ -225,6 +225,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleLocationEvent() {
 
 	// Test event flow.
 	suite.API.Mock.On("CreateLocationEvents", mock.Anything, mock.Anything).Return([]*model.LocationEvent{{}}, nil)
+	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
 	suite.SuccessEventFlowFor(msg)
 }
 
@@ -241,6 +242,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleMeasurementEvent() {
 
 	// Test event flow.
 	suite.API.Mock.On("CreateMeasurementEvents", mock.Anything, mock.Anything).Return([]*model.MeasurementEvent{{}, {}}, nil)
+	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
 	suite.SuccessEventFlowFor(msg)
 }
 
@@ -257,6 +259,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleAlertEvent() {
 
 	// Test event flow.
 	suite.API.Mock.On("CreateAlertEvents", mock.Anything, mock.Anything).Return([]*model.AlertEvent{{}}, nil)
+	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
 	suite.SuccessEventFlowFor(msg)
 }
 
