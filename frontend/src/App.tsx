@@ -32,6 +32,7 @@ import AdminIdentitiesPage from '@/routes/admin/IdentitiesPage';
 import AdminNewIdentityPage from '@/routes/admin/identities/NewIdentityPage';
 import AdminIdentityDetailPage from '@/routes/admin/identities/IdentityDetailPage';
 import AdminRolesPage from '@/routes/admin/RolesPage';
+import AdminAuditPage from '@/routes/admin/AuditPage';
 import AdminNewRolePage from '@/routes/admin/roles/NewRolePage';
 import AdminRoleDetailPage from '@/routes/admin/roles/RoleDetailPage';
 
@@ -113,6 +114,7 @@ export default function App() {
           <Route path="roles" element={<AdminRolesPage />} />
           <Route path="roles/new" element={<AdminNewRolePage />} />
           <Route path="roles/:scope/:token" element={<AdminRoleDetailPage />} />
+          <Route path="audit" element={<AdminAuditPage />} />
         </Route>
       </Route>
 

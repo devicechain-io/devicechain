@@ -97,6 +97,61 @@ input AdminIdentityCreateRequest {
     systemRoles: [String!]!
 }
 
+# Pagination info for admin search results.
+type SearchResultsPagination {
+    pageStart: Int
+    pageEnd: Int
+    totalRecords: Int
+}
+
+# A row of the instance's user-management audit journal (ADR-019): an
+# authentication event (login/refresh) or an administrative mutation (identity /
+# role / tenant / membership). Instance-wide and cross-tenant, so it is exposed
+# only on the admin API. Times are RFC3339 strings.
+type AdminAuditEvent {
+    id: ID!
+    # RFC3339 time the audited statement committed / the event occurred.
+    occurredTime: String!
+    # "auth" (a login/login_failed/refresh) or "mutation" (an admin entity change).
+    category: String!
+    # The tenant the row was stamped with, or null for a tenant-less system/auth event.
+    tenant: String
+    # JWT subject that performed it, "system" for a system-context op, or "".
+    actor: String!
+    # "login"/"login_failed"/"refresh" for auth; "create"/"update"/"delete" for a mutation.
+    operation: String!
+    # Schema-qualified mutated table (null for an auth event).
+    tableName: String
+    # Primary key of the affected row for a single-row mutation; null otherwise.
+    entityPk: String
+    # Human-facing, non-sensitive label of the affected row (e.g. a role/tenant
+    # token or an identity email), captured when the model provides one; null otherwise.
+    entityLabel: String
+    # Number of rows the audited statement affected.
+    rowsAffected: Int!
+}
+
+# Criteria for an admin audit query. All filters are optional except pagination;
+# actor is a case-insensitive substring match, category/operation/tenant are exact.
+input AdminAuditEventSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    startTime: String
+    endTime: String
+    category: String
+    operation: String
+    actor: String
+    # Restrict to a single tenant's rows (by tenant token). Tenant-less auth
+    # events are excluded when set.
+    tenant: String
+}
+
+# A page of admin audit rows, newest first.
+type AdminAuditEventSearchResults {
+    results: [AdminAuditEvent!]!
+    pagination: SearchResultsPagination!
+}
+
 # Admin queries. Each requires a system authority (superusers hold "*").
 type Query {
     # Liveness placeholder.
@@ -110,6 +165,9 @@ type Query {
     # The known authority vocabulary (sorted, includes "*"), for offering a
     # checklist when defining a role rather than free-text entry (requires role:read).
     authorities: [String!]!
+    # Query the instance audit journal for user-management — auth events plus
+    # identity/role/tenant administration, newest first (requires audit:read).
+    auditEvents(criteria: AdminAuditEventSearchCriteria!): AdminAuditEventSearchResults!
 }
 
 # Admin mutations. Identity + membership administration requires user:write

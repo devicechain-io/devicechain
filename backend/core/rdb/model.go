@@ -25,6 +25,12 @@ type TokenReference struct {
 	Token string `gorm:"unique;not null;size:128"`
 }
 
+// AuditLabel implements AuditLabeler: the token is the human-facing, non-sensitive
+// identifier for any token-referenced entity, so the audit journal records it
+// alongside the (table, pk) reference. Every entity that embeds TokenReference
+// (the registry families) inherits this via promotion.
+func (t TokenReference) AuditLabel() string { return t.Token }
+
 // Entity that has a name and description.
 type NamedEntity struct {
 	Name        sql.NullString `gorm:"size:128"`

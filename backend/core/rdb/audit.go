@@ -59,7 +59,14 @@ type AuditEvent struct {
 	// EntityPK is the primary key of the affected row when the statement targets a
 	// single keyed row; empty for a bulk/condition update or delete (RowsAffected
 	// then conveys the scope).
-	EntityPK     string
+	EntityPK string
+	// EntityLabel is a human-facing, non-sensitive identifier of the affected row
+	// (e.g. a token, name, or email), recorded when the mutated model implements
+	// AuditLabeler and its label is set. Empty otherwise (a model that opts out, a
+	// bulk statement, or a delete-by-key that carried no populated struct). It is
+	// display sugar over (TableName, EntityPK) — deliberately not a value dump, so
+	// the metadata-only contract of the journal (ADR-019) holds.
+	EntityLabel  string
 	RowsAffected int64
 }
 
@@ -77,6 +84,38 @@ const auditSchemaName = "AuditEvent"
 // "capture by construction" exists to prevent.
 type AuditExempt interface {
 	AuditExempt() bool
+}
+
+// AuditLabeler is implemented by a model to contribute a human-facing,
+// non-sensitive label for the affected row to its audit entry (e.g. a token,
+// name, or email) — turning an opaque "iam_roles #3" into "iam_roles operator"
+// in an audit view. The label must never be a secret or free-form value dump;
+// the journal stays metadata-only by design (ADR-019), and the model chooses
+// exactly which safe identifier to expose. Opting in is optional: a model that
+// does not implement it simply records no label and the reader falls back to the
+// (table, pk) reference.
+type AuditLabeler interface {
+	AuditLabel() string
+}
+
+// auditLabel returns the mutated row's label when the destination is a single
+// struct that implements AuditLabeler and the label is set. It reads the actual
+// mutated instance (db.Statement.ReflectValue) — not a fresh zero value like the
+// AuditExempt check — because the label is per-row data, not a constant.
+func auditLabel(db *gorm.DB) string {
+	rv := db.Statement.ReflectValue
+	if rv.Kind() != reflect.Struct {
+		return ""
+	}
+	if labeler, ok := rv.Interface().(AuditLabeler); ok {
+		return labeler.AuditLabel()
+	}
+	if rv.CanAddr() {
+		if labeler, ok := rv.Addr().Interface().(AuditLabeler); ok {
+			return labeler.AuditLabel()
+		}
+	}
+	return ""
 }
 
 // isAuditExempt reports whether the mutated model opts out of the journal.
@@ -147,6 +186,7 @@ func auditCallback(operation string) func(*gorm.DB) {
 			TableName:    db.Statement.Table,
 			Operation:    operation,
 			EntityPK:     auditPrimaryKey(db),
+			EntityLabel:  auditLabel(db),
 			RowsAffected: db.Statement.RowsAffected,
 		}
 

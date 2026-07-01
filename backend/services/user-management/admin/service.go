@@ -17,6 +17,7 @@ package admin
 import (
 	"context"
 
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 )
 
@@ -39,4 +40,11 @@ func (s *Service) ListIdentities(ctx context.Context) ([]iam.Identity, error) {
 // ListTenants returns every control-plane tenant row (ADR-033).
 func (s *Service) ListTenants(ctx context.Context) ([]iam.Tenant, error) {
 	return s.iam.ListTenants(ctx)
+}
+
+// AuditEvents lists this instance's user-management audit journal for the admin
+// console — auth events plus identity/role/tenant/membership administration,
+// newest first. Instance-wide (cross-tenant) via the store's system-context read.
+func (s *Service) AuditEvents(ctx context.Context, criteria rdb.AuditEventSearchCriteria) (*rdb.AuditEventSearchResults, error) {
+	return s.iam.AuditEvents(ctx, criteria)
 }

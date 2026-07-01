@@ -35,6 +35,10 @@ type AuditEventSearchCriteria struct {
 	Actor     *string
 	TableName *string
 	EntityPK  *string
+	// Tenant filters to a single tenant's rows. Meaningful only for an
+	// instance-wide (system-context) read such as the admin console — a
+	// tenant-scoped read is already restricted to one tenant by the callback.
+	Tenant *string
 }
 
 // AuditEventSearchResults is a page of audit-journal rows, newest first.
@@ -77,6 +81,9 @@ func (rdb *RdbManager) AuditEvents(ctx context.Context, criteria AuditEventSearc
 		}
 		if criteria.EntityPK != nil {
 			result = result.Where("entity_pk = ?", *criteria.EntityPK)
+		}
+		if criteria.Tenant != nil {
+			result = result.Where("tenant_id = ?", *criteria.Tenant)
 		}
 		return result.Order("occurred_time DESC")
 	}, criteria.Pagination)
