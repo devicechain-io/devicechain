@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/data-table';
 import { useToast } from '@/components/ui/toast';
 import { formatTime } from '@/lib/utils';
+import { useNoAutofill } from '@/lib/hooks/use-no-autofill';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
 import {
@@ -48,21 +49,9 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
   const [secret, setSecret] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [version, reload] = useReload();
-  // These are device credentials, not the operator's own login, so no password
-  // manager should autofill or save them. The data-* flags opt out of the major
-  // managers (1Password/LastPass/Bitwarden), but LastPass ignores them for
-  // login-shaped fields — so the fields also start read-only and unlock on focus,
-  // which reliably suppresses page-load autofill across every manager.
-  const [interacted, setInteracted] = useState(false);
-  const noAutofill = {
-    autoComplete: 'off',
-    readOnly: !interacted,
-    onFocus: () => setInteracted(true),
-    'data-1p-ignore': 'true',
-    'data-lpignore': 'true',
-    'data-bwignore': 'true',
-    'data-form-type': 'other',
-  } as const;
+  // These are device credentials, not the operator's own login, so suppress
+  // password-manager autofill/save on the fields (see the hook for the mechanism).
+  const { noAutofill, rearm } = useNoAutofill();
 
   const { data, loading, error } = useQuery(
     () => listDeviceCredentials(deviceToken),
@@ -77,7 +66,7 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
     setType(t);
     setCredentialId('');
     setSecret('');
-    setInteracted(false);
+    rearm();
   };
 
   const copy = (text: string) => {
@@ -104,7 +93,7 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
       toast('Credential added');
       setCredentialId('');
       setSecret('');
-      setInteracted(false); // re-arm the autofill guard for the now-empty fields
+      rearm(); // re-arm the autofill guard for the now-empty fields
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');

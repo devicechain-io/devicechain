@@ -9,6 +9,7 @@ import { listAdminAuditEvents, listTenants, type AdminAuditEvent } from '@/lib/a
 import { PageShell } from '@/components/ui/page-shell';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Combobox } from '@/components/ui/combobox';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -87,29 +88,23 @@ export default function AdminAuditPage() {
       description="Authentication events and identity, role & tenant administration across the instance (ADR-019)."
       action={
         <div className="flex items-center gap-2">
-          <select
-            aria-label="Filter by tenant"
-            className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          <Combobox
+            className="h-9 w-44"
+            placeholder="All tenants"
             value={tenant}
-            onChange={(e) => setTenant(e.target.value)}
-          >
-            <option value="">All tenants</option>
-            {(tenants ?? []).map((t) => (
-              <option key={t.id} value={t.token}>
-                {t.token}
-              </option>
-            ))}
-          </select>
-          <select
-            aria-label="Filter by category"
-            className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            onChange={setTenant}
+            options={(tenants ?? []).map((t) => ({ value: t.token }))}
+          />
+          <Combobox
+            className="h-9 w-44"
+            placeholder="All categories"
             value={category}
-            onChange={(e) => setCategory(e.target.value)}
-          >
-            <option value="">All categories</option>
-            <option value="auth">Auth</option>
-            <option value="mutation">Mutation</option>
-          </select>
+            onChange={setCategory}
+            options={[
+              { value: 'auth', label: 'Auth' },
+              { value: 'mutation', label: 'Mutation' },
+            ]}
+          />
           <Input
             className="h-9 w-48"
             placeholder="Filter by actor…"

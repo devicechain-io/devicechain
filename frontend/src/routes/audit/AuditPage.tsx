@@ -9,6 +9,7 @@ import { listAuditEvents, type AuditEvent } from '@/lib/api/audit';
 import { PageShell } from '@/components/ui/page-shell';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Combobox } from '@/components/ui/combobox';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -77,17 +78,17 @@ export default function AuditPage() {
       description="Every change to this tenant's registry, recorded by construction (ADR-019)."
       action={
         <div className="flex items-center gap-2">
-          <select
-            aria-label="Filter by operation"
-            className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          <Combobox
+            className="h-9 w-44"
+            placeholder="All operations"
             value={operation}
-            onChange={(e) => setOperation(e.target.value)}
-          >
-            <option value="">All operations</option>
-            <option value="create">Create</option>
-            <option value="update">Update</option>
-            <option value="delete">Delete</option>
-          </select>
+            onChange={setOperation}
+            options={[
+              { value: 'create', label: 'Create' },
+              { value: 'update', label: 'Update' },
+              { value: 'delete', label: 'Delete' },
+            ]}
+          />
           <Input
             className="h-9 w-48"
             placeholder="Filter by actor…"
