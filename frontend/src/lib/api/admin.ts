@@ -14,6 +14,8 @@ import type {
   IdentitiesQuery,
   TenantsQuery,
   RolesQuery,
+  AdminAuditEventsQuery,
+  AdminAuditEventSearchCriteria,
   AdminIdentityCreateRequest,
   AdminRoleCreateRequest,
   AdminRoleUpdateRequest,
@@ -27,8 +29,11 @@ export type AdminIdentity = IdentitiesQuery['identities'][number];
 export type AdminMembership = AdminIdentity['memberships'][number];
 export type AdminTenant = TenantsQuery['tenants'][number];
 export type AdminRole = RolesQuery['roles'][number];
+export type AdminAuditEvent = AdminAuditEventsQuery['auditEvents']['results'][number];
+export type AdminAuditEventSearchResults = AdminAuditEventsQuery['auditEvents'];
 
 export type {
+  AdminAuditEventSearchCriteria,
   AdminIdentityCreateRequest,
   AdminRoleCreateRequest,
   AdminRoleUpdateRequest,
@@ -100,6 +105,40 @@ const ROLES = graphql(`
 export async function listRoles(scope?: 'system' | 'tenant'): Promise<AdminRole[]> {
   const data = await gql('user-management/admin', ROLES, { scope }, { identity: true });
   return data.roles;
+}
+
+const AUDIT_EVENTS = graphql(`
+  query AdminAuditEvents($criteria: AdminAuditEventSearchCriteria!) {
+    auditEvents(criteria: $criteria) {
+      results {
+        id
+        occurredTime
+        category
+        tenant
+        actor
+        operation
+        tableName
+        entityPk
+        entityLabel
+        rowsAffected
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
+// List the instance's user-management audit journal (auth events + identity /
+// role / tenant administration), newest first. Instance-wide (cross-tenant);
+// requires audit:read (superusers hold "*").
+export async function listAdminAuditEvents(
+  criteria: AdminAuditEventSearchCriteria,
+): Promise<AdminAuditEventSearchResults> {
+  const data = await gql('user-management/admin', AUDIT_EVENTS, { criteria }, { identity: true });
+  return data.auditEvents;
 }
 
 const AUTHORITIES = graphql(`

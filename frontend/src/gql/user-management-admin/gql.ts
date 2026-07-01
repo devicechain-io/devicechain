@@ -18,6 +18,7 @@ type Documents = {
     "\n  query Identities {\n    identities {\n      id\n      email\n      firstName\n      lastName\n      enabled\n      systemRoles\n      memberships {\n        tenant\n        enabled\n        roles\n      }\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.IdentitiesDocument,
     "\n  query Tenants {\n    tenants {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.TenantsDocument,
     "\n  query Roles($scope: String) {\n    roles(scope: $scope) {\n      id\n      scope\n      token\n      name\n      description\n      authorities\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.RolesDocument,
+    "\n  query AdminAuditEvents($criteria: AdminAuditEventSearchCriteria!) {\n    auditEvents(criteria: $criteria) {\n      results {\n        id\n        occurredTime\n        category\n        tenant\n        actor\n        operation\n        tableName\n        entityPk\n        entityLabel\n        rowsAffected\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.AdminAuditEventsDocument,
     "\n  query Authorities {\n    authorities\n  }\n": typeof types.AuthoritiesDocument,
     "\n  mutation CreateIdentity($request: AdminIdentityCreateRequest!) {\n    createIdentity(request: $request) {\n      id\n      email\n      firstName\n      lastName\n      enabled\n      systemRoles\n      memberships {\n        tenant\n        enabled\n        roles\n      }\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.CreateIdentityDocument,
     "\n  mutation SetIdentityEnabled($email: String!, $enabled: Boolean!) {\n    setIdentityEnabled(email: $email, enabled: $enabled) {\n      id\n      email\n      firstName\n      lastName\n      enabled\n      systemRoles\n      memberships {\n        tenant\n        enabled\n        roles\n      }\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.SetIdentityEnabledDocument,
@@ -40,6 +41,7 @@ const documents: Documents = {
     "\n  query Identities {\n    identities {\n      id\n      email\n      firstName\n      lastName\n      enabled\n      systemRoles\n      memberships {\n        tenant\n        enabled\n        roles\n      }\n      createdAt\n      updatedAt\n    }\n  }\n": types.IdentitiesDocument,
     "\n  query Tenants {\n    tenants {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n": types.TenantsDocument,
     "\n  query Roles($scope: String) {\n    roles(scope: $scope) {\n      id\n      scope\n      token\n      name\n      description\n      authorities\n      createdAt\n      updatedAt\n    }\n  }\n": types.RolesDocument,
+    "\n  query AdminAuditEvents($criteria: AdminAuditEventSearchCriteria!) {\n    auditEvents(criteria: $criteria) {\n      results {\n        id\n        occurredTime\n        category\n        tenant\n        actor\n        operation\n        tableName\n        entityPk\n        entityLabel\n        rowsAffected\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AdminAuditEventsDocument,
     "\n  query Authorities {\n    authorities\n  }\n": types.AuthoritiesDocument,
     "\n  mutation CreateIdentity($request: AdminIdentityCreateRequest!) {\n    createIdentity(request: $request) {\n      id\n      email\n      firstName\n      lastName\n      enabled\n      systemRoles\n      memberships {\n        tenant\n        enabled\n        roles\n      }\n      createdAt\n      updatedAt\n    }\n  }\n": types.CreateIdentityDocument,
     "\n  mutation SetIdentityEnabled($email: String!, $enabled: Boolean!) {\n    setIdentityEnabled(email: $email, enabled: $enabled) {\n      id\n      email\n      firstName\n      lastName\n      enabled\n      systemRoles\n      memberships {\n        tenant\n        enabled\n        roles\n      }\n      createdAt\n      updatedAt\n    }\n  }\n": types.SetIdentityEnabledDocument,
@@ -71,6 +73,10 @@ export function graphql(source: "\n  query Tenants {\n    tenants {\n      id\n 
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query Roles($scope: String) {\n    roles(scope: $scope) {\n      id\n      scope\n      token\n      name\n      description\n      authorities\n      createdAt\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').RolesDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query AdminAuditEvents($criteria: AdminAuditEventSearchCriteria!) {\n    auditEvents(criteria: $criteria) {\n      results {\n        id\n        occurredTime\n        category\n        tenant\n        actor\n        operation\n        tableName\n        entityPk\n        entityLabel\n        rowsAffected\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').AdminAuditEventsDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

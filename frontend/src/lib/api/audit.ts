@@ -27,6 +27,7 @@ const AUDIT_EVENTS = graphql(`
         operation
         tableName
         entityPk
+        entityLabel
         rowsAffected
       }
       pagination {

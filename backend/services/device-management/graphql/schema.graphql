@@ -167,6 +167,9 @@ type AuditEvent {
     # Primary key of the affected row when the statement targets a single row;
     # empty for a bulk/condition mutation (rowsAffected then conveys the scope).
     entityPk: String
+    # Human-facing, non-sensitive label of the affected row (e.g. its token),
+    # captured when the model provides one; null otherwise.
+    entityLabel: String
     # Number of rows the audited statement affected.
     rowsAffected: Int!
 }

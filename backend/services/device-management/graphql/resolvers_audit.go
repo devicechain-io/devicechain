@@ -63,6 +63,15 @@ func (r *AuditEventResolver) EntityPk() *string {
 	return &r.M.EntityPK
 }
 
+// EntityLabel is a human-facing identifier of the affected row (e.g. its token),
+// null when the model contributed none.
+func (r *AuditEventResolver) EntityLabel() *string {
+	if r.M.EntityLabel == "" {
+		return nil
+	}
+	return &r.M.EntityLabel
+}
+
 func (r *AuditEventResolver) RowsAffected() int32 {
 	return int32(r.M.RowsAffected)
 }

@@ -449,7 +449,7 @@ export type AuditEventsQueryVariables = Exact<{
 }>;
 
 
-export type AuditEventsQuery = { auditEvents: { results: Array<{ id: string, occurredTime: string, category: string, actor: string, operation: string, tableName: string | null, entityPk: string | null, rowsAffected: number }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AuditEventsQuery = { auditEvents: { results: Array<{ id: string, occurredTime: string, category: string, actor: string, operation: string, tableName: string | null, entityPk: string | null, entityLabel: string | null, rowsAffected: number }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CustomersQueryVariables = Exact<{
   criteria: CustomerSearchCriteria;
@@ -1167,6 +1167,7 @@ export const AuditEventsDocument = new TypedDocumentString(`
       operation
       tableName
       entityPk
+      entityLabel
       rowsAffected
     }
     pagination {

@@ -28,6 +28,16 @@ func (s *Store) sys(ctx context.Context) *gorm.DB {
 	return s.db.DB(core.WithSystemContext(ctx))
 }
 
+// AuditEvents reads this instance's user-management audit journal — the auth
+// events (login/login_failed/refresh) plus the identity/role/tenant/membership
+// administration mutations. It runs in the system context so the read is
+// instance-wide (not tenant-scoped): the admin console is cross-tenant and must
+// surface tenant-less auth events and every tenant's administrative changes. The
+// query itself is the core-owned RdbManager.AuditEvents helper.
+func (s *Store) AuditEvents(ctx context.Context, criteria rdb.AuditEventSearchCriteria) (*rdb.AuditEventSearchResults, error) {
+	return s.db.AuditEvents(core.WithSystemContext(ctx), criteria)
+}
+
 // CountIdentities returns the number of identities — the guard a first-run seed
 // uses to decide whether to create the superuser.
 func (s *Store) CountIdentities(ctx context.Context) (int64, error) {

@@ -111,7 +111,7 @@ export default function AuditPage() {
               <DataTableHeaderCell>Actor</DataTableHeaderCell>
               <DataTableHeaderCell>Operation</DataTableHeaderCell>
               <DataTableHeaderCell>Table</DataTableHeaderCell>
-              <DataTableHeaderCell>Entity</DataTableHeaderCell>
+              <DataTableHeaderCell>Target</DataTableHeaderCell>
               <DataTableHeaderCell>Rows</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
@@ -128,7 +128,7 @@ export default function AuditPage() {
                   </DataTableCell>
                   <DataTableCell className="text-foreground">{shortTable(row.tableName)}</DataTableCell>
                   <DataTableCell className="font-mono text-xs text-muted-foreground">
-                    {row.entityPk || '—'}
+                    {row.entityLabel || (row.entityPk ? `#${row.entityPk}` : '—')}
                   </DataTableCell>
                   <DataTableCell className="text-muted-foreground">{row.rowsAffected}</DataTableCell>
                 </DataTableRow>

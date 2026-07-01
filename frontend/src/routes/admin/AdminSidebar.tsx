@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Link, useLocation } from 'react-router-dom';
-import { Building2, ShieldCheck, Users } from 'lucide-react';
+import { Building2, ScrollText, ShieldCheck, Users } from 'lucide-react';
 import { Logomark } from '@/components/brand/Logo';
 import {
   Sidebar,
@@ -25,6 +25,7 @@ const NAV = [
   { label: 'Tenants', href: '/admin/tenants', icon: Building2 },
   { label: 'Identities', href: '/admin/identities', icon: Users },
   { label: 'Roles', href: '/admin/roles', icon: ShieldCheck },
+  { label: 'Audit', href: '/admin/audit', icon: ScrollText },
 ];
 
 export function AdminSidebar() {

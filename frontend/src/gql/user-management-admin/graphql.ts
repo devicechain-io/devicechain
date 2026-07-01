@@ -4,6 +4,17 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+export type AdminAuditEventSearchCriteria = {
+  actor?: string | null | undefined;
+  category?: string | null | undefined;
+  endTime?: string | null | undefined;
+  operation?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+  startTime?: string | null | undefined;
+  tenant?: string | null | undefined;
+};
+
 export type AdminIdentityCreateRequest = {
   email: string;
   enabled: boolean;
@@ -54,6 +65,13 @@ export type RolesQueryVariables = Exact<{
 
 
 export type RolesQuery = { roles: Array<{ id: string, scope: string, token: string, name: string | null, description: string | null, authorities: Array<string>, createdAt: string | null, updatedAt: string | null }> };
+
+export type AdminAuditEventsQueryVariables = Exact<{
+  criteria: AdminAuditEventSearchCriteria;
+}>;
+
+
+export type AdminAuditEventsQuery = { auditEvents: { results: Array<{ id: string, occurredTime: string, category: string, tenant: string | null, actor: string, operation: string, tableName: string | null, entityPk: string | null, entityLabel: string | null, rowsAffected: number }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AuthoritiesQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -252,6 +270,29 @@ export const RolesDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<RolesQuery, RolesQueryVariables>;
+export const AdminAuditEventsDocument = new TypedDocumentString(`
+    query AdminAuditEvents($criteria: AdminAuditEventSearchCriteria!) {
+  auditEvents(criteria: $criteria) {
+    results {
+      id
+      occurredTime
+      category
+      tenant
+      actor
+      operation
+      tableName
+      entityPk
+      entityLabel
+      rowsAffected
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AdminAuditEventsQuery, AdminAuditEventsQueryVariables>;
 export const AuthoritiesDocument = new TypedDocumentString(`
     query Authorities {
   authorities

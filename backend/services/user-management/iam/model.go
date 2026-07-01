@@ -133,6 +133,14 @@ type Tenant struct {
 
 func (Tenant) TableName() string { return "iam_tenants" }
 
+// AuditLabel implements rdb.AuditLabeler: label an audited iam row with its
+// human-facing, non-sensitive identifier — a role/tenant token or an identity's
+// email — so an audit view can show "iam_roles operator" rather than "#3".
+// (Membership has no single natural label and is left to fall back to its pk.)
+func (r Role) AuditLabel() string     { return r.Token }
+func (t Tenant) AuditLabel() string   { return t.Token }
+func (i Identity) AuditLabel() string { return i.Email }
+
 // SystemAuthorities is the deduped union of the identity's system roles'
 // authorities — the authorities carried on its identity token. Pure: it reads
 // the already-loaded SystemRoles.
