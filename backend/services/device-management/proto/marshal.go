@@ -5,6 +5,7 @@ package proto
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
@@ -282,6 +283,8 @@ func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 		SourceDeviceId: uint64(event.SourceDeviceId),
 		TargetType:     event.TargetType,
 		TargetId:       util.NullUint64Of(event.TargetId),
+		OccurredTime:   event.OccurredTime.Format(time.RFC3339),
+		ProcessedTime:  event.ProcessedTime.Format(time.RFC3339),
 		EventType:      int64(event.EventType),
 		Payload:        pybytes,
 	}
@@ -310,6 +313,15 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 		return nil, err
 	}
 
+	occurred, err := time.Parse(time.RFC3339, pbevent.OccurredTime)
+	if err != nil {
+		return nil, err
+	}
+	processed, err := time.Parse(time.RFC3339, pbevent.ProcessedTime)
+	if err != nil {
+		return nil, err
+	}
+
 	event := &model.ResolvedEvent{
 		Source:         pbevent.Source,
 		AltId:          pbevent.AltId,
@@ -317,6 +329,8 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 		SourceDeviceId: uint(pbevent.SourceDeviceId),
 		TargetType:     pbevent.TargetType,
 		TargetId:       util.NullUintOf(pbevent.TargetId),
+		OccurredTime:   occurred,
+		ProcessedTime:  processed,
 		EventType:      esmodel.EventType(pbevent.EventType),
 		Payload:        payload,
 	}
