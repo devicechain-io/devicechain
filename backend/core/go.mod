@@ -9,6 +9,7 @@ require (
 	github.com/go-gormigrate/gormigrate/v2 v2.1.6
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/graph-gophers/graphql-go v1.4.0
 	github.com/jackc/pgx/v4 v4.16.1
 	github.com/nats-io/nats-server/v2 v2.10.22
@@ -43,6 +44,7 @@ require (
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
+	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/time v0.7.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

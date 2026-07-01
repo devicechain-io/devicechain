@@ -72,8 +72,14 @@ func (gql *GraphQLManager) ExecuteStart(context.Context) error {
 		panic(err)
 	}
 
-	// Add handler for queries
-	http.Handle("/graphql", NewHttpHandler(&gql.Schema, gql.ContextProviders, gql.Gate))
+	// Add handler for queries. A WebSocket upgrade on the same /graphql path is
+	// routed to the graphql-transport-ws subscription handler (ADR-037); a plain
+	// POST goes to the HTTP relay handler. Sharing one path lets a client derive
+	// the ws:// URL from the http:// one, matching GraphQL client conventions.
+	http.Handle("/graphql", graphqlDispatcher(
+		NewHttpHandler(&gql.Schema, gql.ContextProviders, gql.Gate),
+		NewSubscriptionHandler(&gql.Schema, gql.ContextProviders, gql.Gate),
+	))
 	http.Handle("/graphiql", graphiqlHandler)
 
 	// Add handler for metrics
