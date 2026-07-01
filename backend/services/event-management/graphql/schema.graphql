@@ -104,12 +104,41 @@ type AlertEventSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# Criteria for a server-side, time-bucketed measurement aggregation. Reuses the
+# event search filters (device, event types, time range, anchor) plus an optional
+# measurement-name filter. intervalSeconds is the time_bucket width and must be
+# >= 1. Always bound this with a time range — it returns every matching bucket.
+input MeasurementAggregationCriteria {
+    deviceId: String
+    name: String
+    eventTypes: [Int!]
+    startTime: String
+    endTime: String
+    anchor: EventAnchor
+    intervalSeconds: Int!
+}
+
+# One time bucket of aggregated measurement values for a single measurement name.
+# bucketStart is the RFC3339 bucket start. Every standard aggregate is returned
+# so one query can drive a chart under any aggregation; avg/min/max/sum are null
+# for an all-null bucket and count is the number of non-null values.
+type MeasurementBucket {
+    bucketStart: String!
+    name: String!
+    avg: Float
+    min: Float
+    max: Float
+    sum: Float
+    count: Int!
+}
+
 # Contains queries executed against model.
 type Query {
     events(criteria: EventSearchCriteria!): EventSearchResults!
     locationEvents(criteria: EventSearchCriteria!): LocationEventSearchResults!
     measurementEvents(criteria: EventSearchCriteria!): MeasurementEventSearchResults!
     alertEvents(criteria: EventSearchCriteria!): AlertEventSearchResults!
+    bucketedMeasurements(criteria: MeasurementAggregationCriteria!): [MeasurementBucket!]!
 }
 
 # Events are written by the persistence pipeline, not via the API.

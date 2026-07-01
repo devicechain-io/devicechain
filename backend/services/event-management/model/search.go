@@ -4,6 +4,7 @@
 package model
 
 import (
+	"database/sql"
 	"time"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
@@ -55,4 +56,36 @@ type AlertEventSearchResults struct {
 // unknown type up front rather than silently returning unfiltered results.
 func IsAnchorType(t string) bool {
 	return entity.Type(t).Valid()
+}
+
+// MeasurementAggregationCriteria selects measurement rows for a time-bucketed
+// aggregation. It reuses the same device / event-type / time-range / anchor
+// filters as EventSearchCriteria, adds an optional measurement-name filter, and
+// requires a bucket width in seconds (IntervalSeconds, the TimescaleDB
+// time_bucket interval). Unlike a paginated read it returns every matching
+// bucket, so callers should always bound it with a time range.
+type MeasurementAggregationCriteria struct {
+	DeviceId        *uint
+	Name            *string
+	EventTypes      []esmodel.EventType
+	StartTime       *time.Time
+	EndTime         *time.Time
+	AnchorType      *string
+	AnchorId        *uint
+	IntervalSeconds int64
+}
+
+// MeasurementBucket is one time bucket of aggregated measurement values for a
+// single measurement name (the (time_bucket, name) grouping key). Every standard
+// aggregate is computed per bucket so one query can drive a chart under any
+// aggregation without a refetch. Avg/Min/Max/Sum are null only for an all-null
+// bucket; Count is the number of non-null values.
+type MeasurementBucket struct {
+	BucketStart time.Time
+	Name        string
+	Avg         sql.NullFloat64
+	Min         sql.NullFloat64
+	Max         sql.NullFloat64
+	Sum         sql.NullFloat64
+	Count       int64
 }

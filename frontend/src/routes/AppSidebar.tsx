@@ -12,6 +12,7 @@ import {
   LayoutGrid,
   MapPin,
   Package,
+  ScrollText,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -93,6 +94,7 @@ const NAV: NavNode[] = [
       { label: 'Area Groups', href: '/area-groups', icon: Layers, requires: 'device:read' },
     ],
   },
+  { label: 'Audit', href: '/audit', icon: ScrollText, requires: 'audit:read' },
 ];
 
 function isLeaf(node: NavNode): node is NavLeaf {

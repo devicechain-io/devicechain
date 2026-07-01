@@ -100,6 +100,18 @@ export type AssetTypeSearchCriteria = {
   pageSize: number;
 };
 
+export type AuditEventSearchCriteria = {
+  actor?: string | null | undefined;
+  category?: string | null | undefined;
+  endTime?: string | null | undefined;
+  entityPk?: string | null | undefined;
+  operation?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+  startTime?: string | null | undefined;
+  tableName?: string | null | undefined;
+};
+
 export type CustomerCreateRequest = {
   customerTypeToken: string;
   description?: string | null | undefined;
@@ -431,6 +443,13 @@ export type DeleteAssetGroupMutationVariables = Exact<{
 
 
 export type DeleteAssetGroupMutation = { deleteAssetGroup: boolean };
+
+export type AuditEventsQueryVariables = Exact<{
+  criteria: AuditEventSearchCriteria;
+}>;
+
+
+export type AuditEventsQuery = { auditEvents: { results: Array<{ id: string, occurredTime: string, category: string, actor: string, operation: string, tableName: string | null, entityPk: string | null, rowsAffected: number }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CustomersQueryVariables = Exact<{
   criteria: CustomerSearchCriteria;
@@ -1137,6 +1156,27 @@ export const DeleteAssetGroupDocument = new TypedDocumentString(`
   deleteAssetGroup(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteAssetGroupMutation, DeleteAssetGroupMutationVariables>;
+export const AuditEventsDocument = new TypedDocumentString(`
+    query AuditEvents($criteria: AuditEventSearchCriteria!) {
+  auditEvents(criteria: $criteria) {
+    results {
+      id
+      occurredTime
+      category
+      actor
+      operation
+      tableName
+      entityPk
+      rowsAffected
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AuditEventsQuery, AuditEventsQueryVariables>;
 export const CustomersDocument = new TypedDocumentString(`
     query Customers($criteria: CustomerSearchCriteria!) {
   customers(criteria: $criteria) {

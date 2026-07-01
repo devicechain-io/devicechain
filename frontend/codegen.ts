@@ -22,6 +22,7 @@ const config: CodegenConfig = {
         'src/lib/api/customers.ts',
         'src/lib/api/areas.ts',
         'src/lib/api/relationships.ts',
+        'src/lib/api/audit.ts',
       ],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
@@ -37,6 +38,13 @@ const config: CodegenConfig = {
     './src/gql/event-management/': {
       schema: '../backend/services/event-management/graphql/schema.graphql',
       documents: ['src/lib/api/event-management.ts'],
+      preset: 'client',
+      presetConfig: { fragmentMasking: false },
+      config: { documentMode: 'string' },
+    },
+    './src/gql/command-delivery/': {
+      schema: '../backend/services/command-delivery/graphql/schema.graphql',
+      documents: ['src/lib/api/command-delivery.ts'],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },
