@@ -98,6 +98,51 @@ func (api *Api) MeasurementEvents(ctx context.Context, criteria EventSearchCrite
 	return &MeasurementEventSearchResults{Results: results, Pagination: pag}, nil
 }
 
+// BucketedMeasurements returns measurement values aggregated into fixed-width
+// time_bucket intervals (TimescaleDB), grouped by measurement name. Every
+// standard aggregate (avg/min/max/sum/count) is computed per bucket so a single
+// query can drive a chart under any aggregation without a refetch.
+//
+// The query runs through DB(ctx) with the MeasurementEvent model, so the
+// fail-closed tenant-scope callback injects the tenant predicate (ADR-015) just
+// as it does for the paginated reads. The optional anchor filter reuses the same
+// tenant-scoped (device_id, event_type, occurred_time) subquery as the typed
+// reads.
+func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
+	results := make([]MeasurementBucket, 0)
+	db := api.RDB.DB(ctx).Model(&MeasurementEvent{}).
+		Select("time_bucket(make_interval(secs => ?), occurred_time) AS bucket_start, "+
+			"name, "+
+			"avg(value) AS avg, min(value) AS min, max(value) AS max, "+
+			"sum(value) AS sum, count(value) AS count", criteria.IntervalSeconds)
+	if criteria.DeviceId != nil {
+		db = db.Where("device_id = ?", *criteria.DeviceId)
+	}
+	if len(criteria.EventTypes) > 0 {
+		db = db.Where("event_type IN ?", criteria.EventTypes)
+	}
+	if criteria.Name != nil {
+		db = db.Where("name = ?", *criteria.Name)
+	}
+	if criteria.StartTime != nil {
+		db = db.Where("occurred_time >= ?", *criteria.StartTime)
+	}
+	if criteria.EndTime != nil {
+		db = db.Where("occurred_time <= ?", *criteria.EndTime)
+	}
+	if criteria.AnchorType != nil && criteria.AnchorId != nil {
+		sub := api.RDB.DB(ctx).Model(&Event{}).
+			Select("device_id, event_type, occurred_time").
+			Where("anchor_type = ? AND anchor_id = ?", *criteria.AnchorType, *criteria.AnchorId)
+		db = db.Where("(device_id, event_type, occurred_time) IN (?)", sub)
+	}
+	db = db.Group("bucket_start, name").Order("bucket_start ASC, name ASC")
+	if err := db.Scan(&results).Error; err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 // Search for alert events that meet criteria.
 func (api *Api) AlertEvents(ctx context.Context, criteria EventSearchCriteria) (*AlertEventSearchResults, error) {
 	results := make([]AlertEvent, 0)

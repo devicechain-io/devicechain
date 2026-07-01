@@ -25,3 +25,8 @@ export function cn(...inputs: ClassValue[]) {
 export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
+
+/** Render an ISO timestamp in the local locale, or an em dash when absent. */
+export function formatTime(value?: string | null): string {
+  return value ? new Date(value).toLocaleString() : '—';
+}

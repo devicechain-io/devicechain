@@ -148,6 +148,49 @@ input EntityAttributeSearchCriteria {
     attrKeys: [String!]
 }
 
+# A row of the append-only audit journal (ADR-019). Captured by construction on
+# every entity mutation in this service; the journal is never mutated via the
+# API. Times are RFC3339 strings.
+type AuditEvent {
+    id: ID!
+    # RFC3339 time the audited statement committed.
+    occurredTime: String!
+    # "mutation" (an entity create/update/delete) or "auth" (login/refresh).
+    category: String!
+    # JWT subject that performed it, "system" for a system-context operation, or
+    # "" when neither is present.
+    actor: String!
+    # "create" | "update" | "delete" for a mutation.
+    operation: String!
+    # Schema-qualified mutated table (empty for an auth event).
+    tableName: String
+    # Primary key of the affected row when the statement targets a single row;
+    # empty for a bulk/condition mutation (rowsAffected then conveys the scope).
+    entityPk: String
+    # Number of rows the audited statement affected.
+    rowsAffected: Int!
+}
+
+# Criteria for an audit-journal query. All filters are optional except
+# pagination; a bounded (startTime, endTime) range is recommended.
+input AuditEventSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    startTime: String
+    endTime: String
+    category: String
+    operation: String
+    actor: String
+    tableName: String
+    entityPk: String
+}
+
+# A page of audit-journal rows, newest first.
+type AuditEventSearchResults {
+    results: [AuditEvent!]!
+    pagination: SearchResultsPagination!
+}
+
 # Search results returned from entity attribute query.
 type EntityAttributeSearchResults {
     results: [EntityAttribute!]!
@@ -863,6 +906,8 @@ type Query {
     metricDefinitions(criteria: MetricDefinitionSearchCriteria!): MetricDefinitionSearchResults!
     # List entity attributes that meet criteria.
     entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
+    # Query the append-only audit journal (ADR-019); tenant-scoped, newest first.
+    auditEvents(criteria: AuditEventSearchCriteria!): AuditEventSearchResults!
     # Find devices by unique id.
     devicesById(ids: [ID!]!): [Device!]!
     # Find devices by unique token.

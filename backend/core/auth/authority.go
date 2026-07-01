@@ -43,6 +43,11 @@ const (
 	// Command delivery (command-delivery).
 	CommandRead  Authority = "command:read"
 	CommandWrite Authority = "command:write"
+
+	// Audit journal read (ADR-019). Gates the read-side query over the append-only
+	// audit_events table; the journal is written by construction and is never
+	// mutated through the API, so there is no audit:write.
+	AuditRead Authority = "audit:read"
 )
 
 // vocabulary is the set of every known authority. A Role may only grant
@@ -63,6 +68,7 @@ var vocabulary = map[Authority]struct{}{
 	StateRead:    {},
 	CommandRead:  {},
 	CommandWrite: {},
+	AuditRead:    {},
 }
 
 // ValidAuthority reports whether s names a known authority (including the

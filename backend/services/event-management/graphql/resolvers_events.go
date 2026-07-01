@@ -225,6 +225,49 @@ func (r *MeasurementEventSearchResultsResolver) Pagination() *SearchResultsPagin
 	return &SearchResultsPaginationResolver{M: r.M.Pagination, S: r.S, C: r.C}
 }
 
+// ---------------------------------
+// Measurement bucket (aggregate) resolver
+// ---------------------------------
+
+type MeasurementBucketResolver struct {
+	M model.MeasurementBucket
+	S *SchemaResolver
+	C context.Context
+}
+
+// BucketStart is the RFC3339 start of the time bucket; it is a grouping key and
+// therefore always present.
+func (r *MeasurementBucketResolver) BucketStart() string {
+	if s := util.FormatTime(r.M.BucketStart); s != nil {
+		return *s
+	}
+	return ""
+}
+
+func (r *MeasurementBucketResolver) Name() string {
+	return r.M.Name
+}
+
+func (r *MeasurementBucketResolver) Avg() *float64 {
+	return nullFloat(r.M.Avg)
+}
+
+func (r *MeasurementBucketResolver) Min() *float64 {
+	return nullFloat(r.M.Min)
+}
+
+func (r *MeasurementBucketResolver) Max() *float64 {
+	return nullFloat(r.M.Max)
+}
+
+func (r *MeasurementBucketResolver) Sum() *float64 {
+	return nullFloat(r.M.Sum)
+}
+
+func (r *MeasurementBucketResolver) Count() int32 {
+	return int32(r.M.Count)
+}
+
 // --------------------
 // Alert event resolver
 // --------------------

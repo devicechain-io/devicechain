@@ -25,14 +25,10 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { getDevice, deleteDevice } from '@/lib/api/device-management';
 import { getDeviceState } from '@/lib/api/device-state';
 import { listEvents } from '@/lib/api/event-management';
+import { formatTime } from '@/lib/utils';
 import { errMessage, useReload } from '@/routes/common';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
-
-// Mirrors the timestamp formatting used by the device list; renders a dash when
-// the value is absent.
-function formatTime(value?: string | null): string {
-  return value ? new Date(value).toLocaleString() : '—';
-}
+import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
 
 export default function DeviceDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
@@ -99,6 +95,7 @@ export default function DeviceDetailPage() {
           <TabsTrigger value="basic">Basic</TabsTrigger>
           <TabsTrigger value="connectivity">Connectivity</TabsTrigger>
           <TabsTrigger value="events">Events</TabsTrigger>
+          <TabsTrigger value="commands">Commands</TabsTrigger>
         </TabsList>
         <TabsContent value="basic">
           <SectionPanel>
@@ -119,6 +116,11 @@ export default function DeviceDetailPage() {
         <TabsContent value="events">
           <SectionPanel>
             <DeviceEventsPanel deviceId={device.id} />
+          </SectionPanel>
+        </TabsContent>
+        <TabsContent value="commands">
+          <SectionPanel>
+            <DeviceCommandsPanel deviceToken={device.token} />
           </SectionPanel>
         </TabsContent>
       </Tabs>
