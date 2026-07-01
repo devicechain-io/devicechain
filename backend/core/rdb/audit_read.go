@@ -5,10 +5,21 @@ package rdb
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
 )
+
+// likeEscaper neutralizes the LIKE/ILIKE wildcards in user-supplied filter text
+// so it is matched literally (the default Postgres escape char is backslash).
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// containsPattern wraps escaped text in %…% for a case-insensitive substring
+// match.
+func containsPattern(s string) string {
+	return "%" + likeEscaper.Replace(s) + "%"
+}
 
 // AuditEventSearchCriteria selects rows from the append-only audit journal
 // (ADR-019). The journal is tenant-scoped by construction, so a read is
@@ -57,7 +68,9 @@ func (rdb *RdbManager) AuditEvents(ctx context.Context, criteria AuditEventSearc
 			result = result.Where("operation = ?", *criteria.Operation)
 		}
 		if criteria.Actor != nil {
-			result = result.Where("actor = ?", *criteria.Actor)
+			// Partial, case-insensitive match: an actor filter is a free-text
+			// search box, so "super" should surface "superuser@…".
+			result = result.Where("actor ILIKE ?", containsPattern(*criteria.Actor))
 		}
 		if criteria.TableName != nil {
 			result = result.Where("table_name = ?", *criteria.TableName)
