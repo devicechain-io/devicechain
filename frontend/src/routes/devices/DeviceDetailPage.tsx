@@ -23,7 +23,7 @@ import {
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import { getDevice, deleteDevice } from '@/lib/api/device-management';
-import { getDeviceState } from '@/lib/api/device-state';
+import { getDeviceState, getLatestMeasurements } from '@/lib/api/device-state';
 import { listEvents } from '@/lib/api/event-management';
 import { formatTime } from '@/lib/utils';
 import { errMessage, useReload } from '@/routes/common';
@@ -109,9 +109,14 @@ export default function DeviceDetailPage() {
           </SectionPanel>
         </TabsContent>
         <TabsContent value="connectivity">
-          <SectionPanel>
-            <DeviceStatePanel deviceId={device.id} />
-          </SectionPanel>
+          <div className="space-y-4">
+            <SectionPanel title="Connectivity">
+              <DeviceStatePanel deviceId={device.id} />
+            </SectionPanel>
+            <SectionPanel title="Latest readings">
+              <DeviceReadingsPanel deviceId={device.id} />
+            </SectionPanel>
+          </div>
         </TabsContent>
         <TabsContent value="events">
           <SectionPanel>
@@ -163,6 +168,44 @@ function DeviceStatePanel({ deviceId }: { deviceId: string }) {
         <dd className="text-foreground">{formatTime(state.lastDisconnectTime)}</dd>
       </dl>
     </div>
+  );
+}
+
+// DeviceReadingsPanel shows the current value of each measurement the device has
+// reported — the O(1) latest-value projection from device-state. Loads
+// independently: if the role lacks state:read the query errors and this panel
+// degrades to an ErrorState rather than breaking the page.
+function DeviceReadingsPanel({ deviceId }: { deviceId: string }) {
+  const { data, loading, error } = useQuery(
+    () => getLatestMeasurements(Number(deviceId)),
+    [deviceId],
+  );
+
+  if (loading) return <LoadingState description="Loading readings…" />;
+  if (error) return <ErrorState description={error} />;
+
+  const readings = data ?? [];
+  if (readings.length === 0) {
+    return <EmptyState description="No measurements received from this device yet." />;
+  }
+
+  return (
+    <DataTable>
+      <DataTableHead>
+        <DataTableHeaderCell>Measurement</DataTableHeaderCell>
+        <DataTableHeaderCell>Value</DataTableHeaderCell>
+        <DataTableHeaderCell>Updated</DataTableHeaderCell>
+      </DataTableHead>
+      <DataTableBody>
+        {readings.map((m) => (
+          <DataTableRow key={m.id}>
+            <DataTableCell className="font-medium text-foreground">{m.name}</DataTableCell>
+            <DataTableCell className="font-mono text-foreground">{m.value ?? '—'}</DataTableCell>
+            <DataTableCell className="text-muted-foreground">{formatTime(m.occurredTime)}</DataTableCell>
+          </DataTableRow>
+        ))}
+      </DataTableBody>
+    </DataTable>
   );
 }
 

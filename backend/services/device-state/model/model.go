@@ -5,6 +5,7 @@ package model
 
 import (
 	"database/sql"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -29,6 +30,36 @@ type DeviceState struct {
 // (ADR-019): it is high-volume derived connectivity/activity state recomputed
 // from the event stream, not a control-plane entity mutation.
 func (DeviceState) AuditExempt() bool { return true }
+
+// LatestMeasurement is the current (most-recent) value of one named measurement
+// for one device — the O(1) "what is it right now?" projection beside the
+// append-only measurement history in event-management (ThingsBoard's ts_kv_latest
+// analog). One row per (tenant, device, name). Numeric measurements only for v1;
+// a non-numeric reading is skipped upstream. Location gets its own sibling
+// projection later. Bounded by (devices × metrics-per-device), so it never grows
+// with history.
+type LatestMeasurement struct {
+	gorm.Model
+	rdb.TenantScoped
+	DeviceId     uint
+	Name         string
+	Value        sql.NullFloat64
+	Classifier   *uint
+	OccurredTime time.Time
+}
+
+// AuditExempt: a high-volume derived telemetry projection, not a control-plane
+// mutation (ADR-019) — same rationale as DeviceState.
+func (LatestMeasurement) AuditExempt() bool { return true }
+
+// LatestMeasurementInput is one (name, value, occurredAt) reading to upsert into
+// the latest-value projection.
+type LatestMeasurementInput struct {
+	Name         string
+	Value        sql.NullFloat64
+	Classifier   *uint
+	OccurredTime time.Time
+}
 
 // Search criteria for locating device states. Note: DeviceId is filterable via
 // the API but is not exposed in the GraphQL criteria (graph-gophers can not bind

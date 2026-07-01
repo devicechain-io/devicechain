@@ -78,6 +78,63 @@ func (r *DeviceStateResolver) InactivityTimeout() int32 {
 	return int32(r.M.InactivityTimeout)
 }
 
+// --------------------------
+// Latest measurement resolver
+// --------------------------
+
+type LatestMeasurementResolver struct {
+	M model.LatestMeasurement
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *LatestMeasurementResolver) Id() gql.ID {
+	return gql.ID(fmt.Sprint(r.M.ID))
+}
+
+func (r *LatestMeasurementResolver) CreatedAt() *string {
+	return util.FormatTime(r.M.CreatedAt)
+}
+
+func (r *LatestMeasurementResolver) UpdatedAt() *string {
+	return util.FormatTime(r.M.UpdatedAt)
+}
+
+func (r *LatestMeasurementResolver) DeletedAt() *string {
+	return util.FormatTime(r.M.DeletedAt.Time)
+}
+
+func (r *LatestMeasurementResolver) DeviceId() int32 {
+	return int32(r.M.DeviceId)
+}
+
+func (r *LatestMeasurementResolver) Name() string {
+	return r.M.Name
+}
+
+func (r *LatestMeasurementResolver) Value() *float64 {
+	if r.M.Value.Valid {
+		return &r.M.Value.Float64
+	}
+	return nil
+}
+
+func (r *LatestMeasurementResolver) Classifier() *int32 {
+	if r.M.Classifier != nil {
+		v := int32(*r.M.Classifier)
+		return &v
+	}
+	return nil
+}
+
+// OccurredTime is the reading's timestamp; it is a required field and always set.
+func (r *LatestMeasurementResolver) OccurredTime() string {
+	if s := util.FormatTime(r.M.OccurredTime); s != nil {
+		return *s
+	}
+	return ""
+}
+
 // ------------------------------------
 // Device state search results resolver
 // ------------------------------------

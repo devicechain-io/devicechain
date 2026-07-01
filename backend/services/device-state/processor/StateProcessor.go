@@ -5,15 +5,19 @@ package processor
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"sync"
 	"time"
 
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-device-state/config"
 	"github.com/devicechain-io/dc-device-state/model"
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
@@ -178,26 +182,80 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 		return
 	}
 
-	// Update the originating device's live state projection.
-	if _, err := sp.Api.MergeDeviceState(msgctx, event.SourceDeviceId, event.OccurredTime); err != nil {
-		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Unable to merge device state for device %d", event.SourceDeviceId))
-		// Treat as transient (e.g. a DB blip). Retry via redelivery until the
-		// finite MaxDeliver cap, then give up: the projection is reconstructable,
-		// so dropping is preferable to looping forever.
+	// disposeTransient applies the A3 retry-or-drop disposition for a transient
+	// (retryable) projection-write error: redeliver until the finite MaxDeliver
+	// cap, then give up (the projection is reconstructable, so dropping beats
+	// looping forever). Shared by every write below.
+	disposeTransient := func(err error, detail string) {
+		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Msg(detail)
 		if msg.NumDelivered >= messaging.MaxDeliver {
-			log.Error().Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Giving up on device state projection update for device %d after %d attempts", event.SourceDeviceId, msg.NumDelivered))
+			log.Error().Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Giving up on %s after %d attempts", detail, msg.NumDelivered))
 			msg.Ack()
 			done(core.ResultFailed)
 		} else {
 			msg.Nak()
 			done(core.ResultRetry)
 		}
+	}
+
+	// Update the originating device's live connectivity projection for every event.
+	if _, err := sp.Api.MergeDeviceState(msgctx, event.SourceDeviceId, event.OccurredTime); err != nil {
+		disposeTransient(err, fmt.Sprintf("device state projection update for device %d", event.SourceDeviceId))
 		return
+	}
+
+	// For a measurement event, also advance the per-key latest-value projection.
+	if event.EventType == esmodel.Measurement {
+		if err := sp.mergeLatestMeasurements(msgctx, event); err != nil {
+			disposeTransient(err, fmt.Sprintf("latest-measurement projection update for device %d", event.SourceDeviceId))
+			return
+		}
 	}
 
 	// Projection updated successfully: ack so the message is not redelivered.
 	msg.Ack()
 	done(core.ResultOK)
+}
+
+// mergeLatestMeasurements extracts the numeric measurements from a resolved
+// measurement event and upserts each into the per-key latest-value projection.
+// Non-numeric values are skipped (v1 is numeric-only); a per-entry occurred time
+// overrides the event's when present. A measurement event whose payload is not
+// the expected shape is skipped (connectivity was already updated) rather than
+// treated as a retryable error.
+func (sp *StateProcessor) mergeLatestMeasurements(ctx context.Context, event *dmmodel.ResolvedEvent) error {
+	payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload)
+	if !ok {
+		return nil
+	}
+	inputs := make([]model.LatestMeasurementInput, 0)
+	for _, entry := range payload.Entries {
+		occurredAt := event.OccurredTime
+		if entry.OccurredTime != nil {
+			if t, err := time.Parse(time.RFC3339, *entry.OccurredTime); err == nil {
+				occurredAt = t
+			}
+		}
+		for _, mx := range entry.Entries {
+			f, err := strconv.ParseFloat(mx.Value, 64)
+			if err != nil {
+				// Not a numeric reading: outside the v1 latest-value projection.
+				continue
+			}
+			var classifier *uint
+			if mx.Classifier != nil {
+				c := uint(*mx.Classifier)
+				classifier = &c
+			}
+			inputs = append(inputs, model.LatestMeasurementInput{
+				Name:         mx.Name,
+				Value:        sql.NullFloat64{Float64: f, Valid: true},
+				Classifier:   classifier,
+				OccurredTime: occurredAt,
+			})
+		}
+	}
+	return sp.Api.MergeLatestMeasurements(ctx, event.SourceDeviceId, inputs)
 }
 
 // Lifecycle callback that runs startup logic.
