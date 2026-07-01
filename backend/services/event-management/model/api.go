@@ -5,10 +5,12 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Api struct {
@@ -87,58 +89,64 @@ func (api *Api) EventExistsByAltId(ctx context.Context, db *gorm.DB, altId strin
 	return count > 0, nil
 }
 
+// upsertParentEvents inserts the parent `events` rows for a batch of child event
+// requests (location/measurement/alert) before the children, so the child
+// insert's (device_id, event_type, occurred_time) foreign key is satisfied. The
+// rows are deduped on that natural key and inserted ON CONFLICT DO NOTHING:
+// multiple measurements in one message share a single parent event, and a
+// redelivered message re-presents the same key.
+//
+// This replaces GORM's implicit belongs-to upsert of the Event association. On a
+// composite-primary-key hypertable that upsert emits an `ON CONFLICT DO UPDATE`
+// with no inference target — invalid SQL (SQLSTATE 42601) — so it failed every
+// insert. Creating the parent explicitly (and omitting the association on the
+// child insert) keeps the parent/child write in one statement each without that
+// path.
+func upsertParentEvents(ctx context.Context, db *gorm.DB, events []*Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(events))
+	distinct := make([]*Event, 0, len(events))
+	for _, e := range events {
+		key := fmt.Sprintf("%d|%d|%d", e.DeviceId, int64(e.EventType), e.OccurredTime.UnixNano())
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		distinct = append(distinct, e)
+	}
+	return db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "device_id"}, {Name: "event_type"}, {Name: "occurred_time"}},
+		DoNothing: true,
+	}).Create(distinct).Error
+}
+
 // Create a new location event.
 func (api *Api) CreateLocationEvent(ctx context.Context, request *LocationEventCreateRequest) (*LocationEvent, error) {
-	created := &LocationEvent{
-		DeviceId:     request.DeviceId,
-		OccurredTime: request.OccurredTime,
-		Latitude:     rdb.NullFloat64Of(request.Latitude),
-		Longitude:    rdb.NullFloat64Of(request.Longitude),
-		Elevation:    rdb.NullFloat64Of(request.Elevation),
-		Event:        request.Event,
+	created, err := api.CreateLocationEvents(ctx, api.RDB.DB(ctx), []*LocationEventCreateRequest{request})
+	if err != nil {
+		return nil, err
 	}
-	result := api.RDB.DB(ctx).Create(created)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return created, nil
+	return created[0], nil
 }
 
 // Create a new measurement event.
 func (api *Api) CreateMeasurementEvent(ctx context.Context, request *MeasurementEventCreateRequest) (*MeasurementEvent, error) {
-	created := &MeasurementEvent{
-		DeviceId:     request.DeviceId,
-		EventType:    request.EventType,
-		OccurredTime: request.OccurredTime,
-		Name:         request.Name,
-		Value:        rdb.NullFloat64Of(request.Value),
-		Classifier:   request.Classifier,
-		Event:        request.Event,
+	created, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx), []*MeasurementEventCreateRequest{request})
+	if err != nil {
+		return nil, err
 	}
-	result := api.RDB.DB(ctx).Create(created)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return created, nil
+	return created[0], nil
 }
 
 // Create a new alert event.
 func (api *Api) CreateAlertEvent(ctx context.Context, request *AlertEventCreateRequest) (*AlertEvent, error) {
-	created := &AlertEvent{
-		DeviceId:     request.DeviceId,
-		EventType:    request.EventType,
-		OccurredTime: request.OccurredTime,
-		Type:         request.Type,
-		Level:        request.Level,
-		Message:      request.Message,
-		Source:       request.Source,
-		Event:        request.Event,
+	created, err := api.CreateAlertEvents(ctx, api.RDB.DB(ctx), []*AlertEventCreateRequest{request})
+	if err != nil {
+		return nil, err
 	}
-	result := api.RDB.DB(ctx).Create(created)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return created, nil
+	return created[0], nil
 }
 
 // Create a batch of location events in a single multi-row INSERT on the given
@@ -149,18 +157,26 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 	if len(requests) == 0 {
 		return []*LocationEvent{}, nil
 	}
+	parents := make([]*Event, 0, len(requests))
 	created := make([]*LocationEvent, 0, len(requests))
 	for _, request := range requests {
+		parents = append(parents, &request.Event)
 		created = append(created, &LocationEvent{
 			DeviceId:     request.DeviceId,
+			EventType:    request.EventType,
 			OccurredTime: request.OccurredTime,
 			Latitude:     rdb.NullFloat64Of(request.Latitude),
 			Longitude:    rdb.NullFloat64Of(request.Longitude),
 			Elevation:    rdb.NullFloat64Of(request.Elevation),
-			Event:        request.Event,
 		})
 	}
-	result := db.WithContext(ctx).Create(&created)
+	if err := upsertParentEvents(ctx, db, parents); err != nil {
+		return nil, err
+	}
+	// The parent events are upserted above; omit the association so GORM inserts
+	// the child rows directly against the (device_id, event_type, occurred_time)
+	// foreign key rather than re-upserting the parent.
+	result := db.WithContext(ctx).Omit("Event").Create(&created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -175,8 +191,10 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 	if len(requests) == 0 {
 		return []*MeasurementEvent{}, nil
 	}
+	parents := make([]*Event, 0, len(requests))
 	created := make([]*MeasurementEvent, 0, len(requests))
 	for _, request := range requests {
+		parents = append(parents, &request.Event)
 		created = append(created, &MeasurementEvent{
 			DeviceId:     request.DeviceId,
 			EventType:    request.EventType,
@@ -184,10 +202,15 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 			Name:         request.Name,
 			Value:        rdb.NullFloat64Of(request.Value),
 			Classifier:   request.Classifier,
-			Event:        request.Event,
 		})
 	}
-	result := db.WithContext(ctx).Create(&created)
+	if err := upsertParentEvents(ctx, db, parents); err != nil {
+		return nil, err
+	}
+	// The parent events are upserted above; omit the association so GORM inserts
+	// the child rows directly against the (device_id, event_type, occurred_time)
+	// foreign key rather than re-upserting the parent.
+	result := db.WithContext(ctx).Omit("Event").Create(&created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -202,8 +225,10 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 	if len(requests) == 0 {
 		return []*AlertEvent{}, nil
 	}
+	parents := make([]*Event, 0, len(requests))
 	created := make([]*AlertEvent, 0, len(requests))
 	for _, request := range requests {
+		parents = append(parents, &request.Event)
 		created = append(created, &AlertEvent{
 			DeviceId:     request.DeviceId,
 			EventType:    request.EventType,
@@ -212,10 +237,15 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 			Level:        request.Level,
 			Message:      request.Message,
 			Source:       request.Source,
-			Event:        request.Event,
 		})
 	}
-	result := db.WithContext(ctx).Create(&created)
+	if err := upsertParentEvents(ctx, db, parents); err != nil {
+		return nil, err
+	}
+	// The parent events are upserted above; omit the association so GORM inserts
+	// the child rows directly against the (device_id, event_type, occurred_time)
+	// foreign key rather than re-upserting the parent.
+	result := db.WithContext(ctx).Omit("Event").Create(&created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
