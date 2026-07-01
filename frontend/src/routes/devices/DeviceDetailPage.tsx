@@ -29,6 +29,7 @@ import { formatTime } from '@/lib/utils';
 import { errMessage, useReload } from '@/routes/common';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
 import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
+import { DeviceCredentialsPanel } from '@/routes/devices/DeviceCredentialsPanel';
 
 export default function DeviceDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
@@ -96,6 +97,7 @@ export default function DeviceDetailPage() {
           <TabsTrigger value="connectivity">Connectivity</TabsTrigger>
           <TabsTrigger value="events">Events</TabsTrigger>
           <TabsTrigger value="commands">Commands</TabsTrigger>
+          <TabsTrigger value="credentials">Credentials</TabsTrigger>
         </TabsList>
         <TabsContent value="basic">
           <SectionPanel>
@@ -126,6 +128,11 @@ export default function DeviceDetailPage() {
         <TabsContent value="commands">
           <SectionPanel>
             <DeviceCommandsPanel deviceToken={device.token} />
+          </SectionPanel>
+        </TabsContent>
+        <TabsContent value="credentials">
+          <SectionPanel>
+            <DeviceCredentialsPanel deviceToken={device.token} />
           </SectionPanel>
         </TabsContent>
       </Tabs>

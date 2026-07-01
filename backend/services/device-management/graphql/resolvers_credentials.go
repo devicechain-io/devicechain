@@ -55,8 +55,12 @@ func (r *DeviceCredentialResolver) CredentialId() string {
 	return r.M.CredentialId
 }
 
+// CredentialValue is write-only: the stored secret (e.g. an MQTT_BASIC password)
+// is never returned on read, so a device:read holder cannot exfiltrate secrets
+// through the API. It is accepted on create/update and shown once, client-side,
+// by whoever submitted it.
 func (r *DeviceCredentialResolver) CredentialValue() *string {
-	return util.NullStr(r.M.CredentialValue)
+	return nil
 }
 
 func (r *DeviceCredentialResolver) Enabled() bool {
