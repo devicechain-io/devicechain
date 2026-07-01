@@ -9,6 +9,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-management/model"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
@@ -25,6 +26,12 @@ func (s *SchemaResolver) GetRdbManager(ctx context.Context) *rdb.RdbManager {
 // Get api from context.
 func (s *SchemaResolver) GetApi(ctx context.Context) *model.Api {
 	return ctx.Value(gqlcore.ContextApiKey).(*model.Api)
+}
+
+// Get nats manager from context (used by subscription resolvers to open a live
+// tenant-scoped feed).
+func (s *SchemaResolver) GetNats(ctx context.Context) *messaging.NatsManager {
+	return ctx.Value(gqlcore.ContextNatsKey).(*messaging.NatsManager)
 }
 
 // Placeholder resolver for the empty Mutation type (events are written by the
