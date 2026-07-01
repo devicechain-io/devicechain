@@ -39,6 +39,11 @@ type EventManagementApi interface {
 	CreateMeasurementEvents(ctx context.Context, db *gorm.DB, requests []*MeasurementEventCreateRequest) ([]*MeasurementEvent, error)
 	CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*AlertEventCreateRequest) ([]*AlertEvent, error)
 
+	// CreateEventAnchors persists an event's anchor set (ADR-013) on the given db
+	// handle (a transaction), so the event is queryable by each of the device's
+	// tracked-relationship dimensions.
+	CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*EventAnchor) error
+
 	// PersistInTx runs fn inside a single database transaction whose handle
 	// carries the supplied (tenant-scoped) context, so a message's events are
 	// committed all-or-nothing (ADR-022 E5).
@@ -250,4 +255,16 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 		return nil, result.Error
 	}
 	return created, nil
+}
+
+// CreateEventAnchors persists an event's anchor rows on the given db handle (a
+// transaction). Anchors follow the same dedup policy as the events they index:
+// an alternateId-bearing event is skipped before it reaches here on redelivery,
+// and an event without one is re-persisted along with its anchors — so a plain
+// insert keeps anchors in lockstep with the base event.
+func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*EventAnchor) error {
+	if len(anchors) == 0 {
+		return nil
+	}
+	return db.WithContext(ctx).Create(anchors).Error
 }

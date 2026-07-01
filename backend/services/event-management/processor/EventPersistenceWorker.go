@@ -175,17 +175,15 @@ func (ep *EventPersistenceWorker) PersistAlertEvents(ctx context.Context, db *go
 	return results, nil
 }
 
-// Persists a resolved event to the datastore. The resolved event already carries
-// its relationship target as a uniform (type, id) reference (ADR-013), which maps
-// directly onto the event's (anchor_type, anchor_id).
+// Persists a resolved event to the datastore. The event's relationship anchors
+// (ADR-013) are stored as a set of event_anchors rows alongside the base event,
+// so the same reading is queryable by each of the device's assignment dimensions.
 func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmodel.ResolvedEvent) (*EventPersistenceResults, error) {
 	pevent := model.Event{
 		DeviceId:      event.SourceDeviceId,
 		OccurredTime:  event.OccurredTime,
 		Source:        event.Source,
 		AltId:         rdb.NullStrOf(event.AltId),
-		AnchorType:    event.TargetType,
-		AnchorId:      event.TargetId,
 		ProcessedTime: event.ProcessedTime,
 		EventType:     event.EventType,
 	}
@@ -219,30 +217,57 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 		var perr error
 		switch event.EventType {
 		case esmodel.Location:
-			if payload, ok := event.Payload.(*dmmodel.ResolvedLocationsPayload); ok {
-				results, perr = ep.PersistLocationEvents(ctx, tx, pevent, *payload)
-				return perr
+			payload, ok := event.Payload.(*dmmodel.ResolvedLocationsPayload)
+			if !ok {
+				return fmt.Errorf("non-location payload in location event")
 			}
-			return fmt.Errorf("non-location payload in location event")
+			results, perr = ep.PersistLocationEvents(ctx, tx, pevent, *payload)
 		case esmodel.Measurement:
-			if payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload); ok {
-				results, perr = ep.PersistMeasurementEvents(ctx, tx, pevent, *payload)
-				return perr
+			payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload)
+			if !ok {
+				return fmt.Errorf("non-measurement payload in measurement event")
 			}
-			return fmt.Errorf("non-measurement payload in measurement event")
+			results, perr = ep.PersistMeasurementEvents(ctx, tx, pevent, *payload)
 		case esmodel.Alert:
-			if payload, ok := event.Payload.(*dmmodel.ResolvedAlertsPayload); ok {
-				results, perr = ep.PersistAlertEvents(ctx, tx, pevent, *payload)
-				return perr
+			payload, ok := event.Payload.(*dmmodel.ResolvedAlertsPayload)
+			if !ok {
+				return fmt.Errorf("non-alert payload in alert event")
 			}
-			return fmt.Errorf("non-alert payload in alert event")
+			results, perr = ep.PersistAlertEvents(ctx, tx, pevent, *payload)
+		default:
+			return fmt.Errorf("unhandled event type in persistence: %s", event.EventType.String())
 		}
-		return fmt.Errorf("unhandled event type in persistence: %s", event.EventType.String())
+		if perr != nil {
+			return perr
+		}
+		// Persist the event's anchor set in the same transaction, so the event and
+		// its queryable dimensions commit atomically (ADR-013 addendum 2026-07-01).
+		return ep.persistEventAnchors(ctx, tx, event)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return results, nil
+}
+
+// persistEventAnchors writes one event_anchors row per resolved anchor, so the
+// event is queryable by each of the device's tracked-relationship dimensions. An
+// unassigned event carries no anchors and writes nothing.
+func (ep *EventPersistenceWorker) persistEventAnchors(ctx context.Context, db *gorm.DB, event dmmodel.ResolvedEvent) error {
+	if len(event.Anchors) == 0 {
+		return nil
+	}
+	anchors := make([]*model.EventAnchor, 0, len(event.Anchors))
+	for _, a := range event.Anchors {
+		anchors = append(anchors, &model.EventAnchor{
+			DeviceId:     event.SourceDeviceId,
+			EventType:    event.EventType,
+			OccurredTime: event.OccurredTime,
+			AnchorType:   a.AnchorType,
+			AnchorId:     a.AnchorId,
+		})
+	}
+	return ep.Api.CreateEventAnchors(ctx, db, anchors)
 }
 
 // Converts unresolved events into resolved events.

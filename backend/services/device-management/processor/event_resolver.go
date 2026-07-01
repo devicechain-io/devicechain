@@ -47,9 +47,8 @@ type EventResolver struct {
 
 // Results of event resolution process.
 type EventResolutionResults struct {
-	Device       *model.Device
-	Relationship *model.EntityRelationship
-	Resolved     *model.ResolvedEvent
+	Device   *model.Device
+	Resolved *model.ResolvedEvent
 }
 
 // Create a new event resolver.
@@ -71,31 +70,24 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 	}
 }
 
-// Merge device and relationship data with unresolved event in order to create a resolved event.
-func (rez *EventResolver) MergeRelationshipToResolveEvent(device *model.Device, relation *model.EntityRelationship,
+// MergeToResolveEvent assembles a resolved event from the inbound event and the
+// device's tracked-relationship targets, denormalized as a set of uniform
+// (type, id) anchors (ADR-013). An empty anchor set yields an anchorless event —
+// the device is unassigned — which still persists and projects, keyed on the
+// device, rather than being dropped (ADR-013 addendum 2026-07-01).
+func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []model.ResolvedAnchor,
 	event *esmodel.UnresolvedEvent, rezPayload interface{}) (*EventResolutionResults, error) {
-	// Assemble resolved event from the initial event and the tracked relationship.
-	// The relationship target is carried as a uniform (type, id) anchor (ADR-013).
 	resolved := &model.ResolvedEvent{
 		Source:         event.Source,
 		AltId:          event.AltId,
 		SourceDeviceId: device.ID,
-		RelationshipId: relation.ID,
-		TargetType:     &relation.TargetType,
-		TargetId:       &relation.TargetId,
+		Anchors:        anchors,
 		OccurredTime:   event.OccurredTime,
 		ProcessedTime:  event.ProcessedTime,
 		EventType:      event.EventType,
 		Payload:        rezPayload,
 	}
-
-	results := &EventResolutionResults{
-		Device:       device,
-		Relationship: relation,
-		Resolved:     resolved,
-	}
-
-	return results, nil
+	return &EventResolutionResults{Device: device, Resolved: resolved}, nil
 }
 
 // Create a new relationship based on an inbound event. The source is the
@@ -139,8 +131,12 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 		TargetId:           proto.NullUint64Of(&created.TargetId),
 	}
 
-	// Merge info from device and created assignment into event.
-	resolved, err := rez.MergeRelationshipToResolveEvent(device, created, event, payload)
+	// Merge info from device and created assignment into event — the new
+	// relationship is itself the event's single anchor.
+	anchors := []model.ResolvedAnchor{
+		{AnchorType: created.TargetType, AnchorId: created.TargetId, RelationshipId: created.ID},
+	}
+	resolved, err := rez.MergeToResolveEvent(device, anchors, event, payload)
 	if err != nil {
 		return nil, uint(dmproto.FailureReason_Unknown), errors.New("unable to merge info to resolve event")
 	}
@@ -234,26 +230,54 @@ func (rez *EventResolver) ResolveEventPayload(ctx context.Context, device *model
 	}
 }
 
-// Create resolved events by looking up device assignment info and merging it into other event data.
+// HandleStandardEvent resolves a location/measurement/alert event into exactly one
+// resolved event. The event belongs to the device; each of the device's tracked
+// relationships is denormalized as an anchor so the event is queryable by every
+// assignment dimension, and an unassigned device resolves anchorless rather than
+// being dropped (ADR-013 addendum 2026-07-01).
 func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	device *model.Device, event *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
 	// Validate measurements against the device type's declared metric definitions
-	// before doing any fan-out work (ADR-016): a non-conforming value routes the
-	// whole event to the dead-letter path rather than persisting bad data.
+	// (ADR-016): a non-conforming value routes the whole event to the dead-letter
+	// path rather than persisting bad data.
 	if event.EventType == esmodel.Measurement {
 		if reason, err := rez.validateMeasurements(ctx, device, event); err != nil {
 			return nil, reason, err
 		}
 	}
 
-	// Look up the device's tracked relationships (source = this device).
+	// Resolve the payload once — it does not depend on the anchors.
+	resolved, err := rez.ResolveEventPayload(ctx, device, nil, event)
+	if err != nil {
+		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
+	}
+
+	// Denormalize the full set of the device's tracked relationships as anchors.
+	anchors, reason, err := rez.deviceAnchors(ctx, device)
+	if err != nil {
+		return nil, reason, err
+	}
+	if len(anchors) == 0 {
+		log.Debug().Str("device", device.Token).
+			Msg("Resolving event with no anchors (device has no tracked relationship)")
+	}
+
+	result, err := rez.MergeToResolveEvent(device, anchors, event, resolved)
+	if err != nil {
+		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
+	}
+	return []EventResolutionResults{*result}, 0, nil
+}
+
+// deviceAnchors returns the device's tracked-relationship targets as anchors —
+// one per tracked relationship — or an empty set when the device has no tracked
+// relationship. Every anchor is denormalized onto the event (ADR-013 addendum
+// 2026-07-01), so a device assigned to several targets is queryable by each.
+func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Device) ([]model.ResolvedAnchor, uint, error) {
 	tracked := true
 	sourceType := string(entity.TypeDevice)
 	criteria := model.EntityRelationshipSearchCriteria{
-		Pagination: rdb.Pagination{
-			PageNumber: 1,
-			PageSize:   0,
-		},
+		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 0},
 		SourceType: &sourceType,
 		SourceId:   &device.ID,
 		Tracked:    &tracked,
@@ -262,23 +286,16 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	if err != nil {
 		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
 	}
-
-	// Create separate merged event for each tracked device relationship.
-	results := make([]EventResolutionResults, 0)
-	for _, drel := range drels.Results {
-		resolved, err := rez.ResolveEventPayload(ctx, device, &drel, event)
-		if err != nil {
-			return nil, uint(dmproto.FailureReason_ApiCallFailed), err
-		}
-
-		result, err := rez.MergeRelationshipToResolveEvent(device, &drel, event, resolved)
-		if err != nil {
-			return nil, uint(dmproto.FailureReason_ApiCallFailed), err
-		}
-		results = append(results, *result)
+	anchors := make([]model.ResolvedAnchor, 0, len(drels.Results))
+	for i := range drels.Results {
+		r := &drels.Results[i]
+		anchors = append(anchors, model.ResolvedAnchor{
+			AnchorType:     r.TargetType,
+			AnchorId:       r.TargetId,
+			RelationshipId: r.ID,
+		})
 	}
-
-	return results, 0, nil
+	return anchors, 0, nil
 }
 
 // validateMeasurements enforces the device type's declared metric definitions

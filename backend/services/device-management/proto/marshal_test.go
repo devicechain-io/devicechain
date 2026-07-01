@@ -24,10 +24,13 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 	event := &model.ResolvedEvent{
 		Source:         "http1",
 		SourceDeviceId: 4,
-		RelationshipId: 5,
-		OccurredTime:   occurred,
-		ProcessedTime:  processed,
-		EventType:      esmodel.Measurement,
+		Anchors: []model.ResolvedAnchor{
+			{AnchorType: "customer", AnchorId: 3, RelationshipId: 5},
+			{AnchorType: "area", AnchorId: 9, RelationshipId: 8},
+		},
+		OccurredTime:  occurred,
+		ProcessedTime: processed,
+		EventType:     esmodel.Measurement,
 		Payload: &model.ResolvedMeasurementsPayload{
 			Entries: []model.ResolvedMeasurementsEntry{
 				{Entries: []model.ResolvedMeasurementEntry{{Name: "temperature", Value: "21.5"}}},
@@ -42,4 +45,6 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, got.OccurredTime.Equal(occurred), "occurred time round-trip: got %s want %s", got.OccurredTime, occurred)
 	assert.True(t, got.ProcessedTime.Equal(processed), "processed time round-trip: got %s want %s", got.ProcessedTime, processed)
+	// The full anchor set survives the round-trip.
+	assert.Equal(t, event.Anchors, got.Anchors)
 }

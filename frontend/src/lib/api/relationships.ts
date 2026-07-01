@@ -16,6 +16,15 @@ export type EntityRelationshipSearchResults = EntityRelationshipsQuery['entityRe
 // MembershipRelationshipType).
 const MEMBER = 'member';
 
+// The reserved relationship-type token for device assignment — tracked, so a
+// device's primary assignment is denormalized onto its events as their anchor
+// (ADR-013 addendum). The backend auto-provisions it per tenant on first use.
+const ASSIGNED = 'assigned';
+
+// The entity types a device can be assigned to (uniform entity references, ADR-013).
+export const ASSIGNMENT_TARGET_TYPES = ['customer', 'area', 'asset'] as const;
+export type AssignmentTargetType = (typeof ASSIGNMENT_TARGET_TYPES)[number];
+
 const ENTITY_RELATIONSHIPS = graphql(`
   query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {
     entityRelationships(criteria: $criteria) {
@@ -96,5 +105,51 @@ const REMOVE_ENTITY_RELATIONSHIPS = graphql(`
 export async function removeGroupMembers(edgeTokens: string[]): Promise<boolean> {
   if (edgeTokens.length === 0) return false;
   const data = await gql('device-management', REMOVE_ENTITY_RELATIONSHIPS, { tokens: edgeTokens });
+  return data.removeEntityRelationships;
+}
+
+// List a device's assignments: tracked edges from the device (source) of the
+// reserved "assigned" type, each targeting a customer/area/asset. The lowest-id
+// edge is the primary anchor denormalized onto the device's events. Requires
+// device:read.
+export async function listDeviceAssignments(deviceToken: string): Promise<EntityRelationship[]> {
+  const data = await gql('device-management', ENTITY_RELATIONSHIPS, {
+    criteria: {
+      sourceType: 'device',
+      source: deviceToken,
+      relationshipType: ASSIGNED,
+      pageNumber: 1,
+      pageSize: 100,
+    },
+  });
+  return data.entityRelationships.results;
+}
+
+// Assign a device to a target entity (customer/area/asset). Reuses the bulk create
+// so the reserved "assigned" type is auto-provisioned per tenant on first use.
+// Requires device:write.
+export async function assignDevice(
+  deviceToken: string,
+  targetType: AssignmentTargetType,
+  targetToken: string,
+): Promise<number> {
+  const data = await gql('device-management', CREATE_ENTITY_RELATIONSHIPS, {
+    requests: [
+      {
+        token: crypto.randomUUID(),
+        sourceType: 'device',
+        source: deviceToken,
+        targetType,
+        target: targetToken,
+        relationshipType: ASSIGNED,
+      },
+    ],
+  });
+  return data.createEntityRelationships.length;
+}
+
+// Remove a device assignment by its edge token. Requires device:write.
+export async function unassignDevice(edgeToken: string): Promise<boolean> {
+  const data = await gql('device-management', REMOVE_ENTITY_RELATIONSHIPS, { tokens: [edgeToken] });
   return data.removeEntityRelationships;
 }

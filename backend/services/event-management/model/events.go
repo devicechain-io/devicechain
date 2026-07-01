@@ -11,11 +11,11 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
-// Event with token references resolved and the originating device's tracked
-// relationship denormalized onto it. The relationship target is recorded as a
-// single uniform (AnchorType, AnchorId) pair (ADR-013) rather than one of eight
-// typed Rel* columns; both are nil when the originating device had no tracked
-// relationship. DeviceId always names the originating device.
+// Event with token references resolved. DeviceId names the originating device.
+// The device's tracked-relationship targets are recorded as a *set* of anchors
+// in the sibling EventAnchor table (ADR-013 addendum 2026-07-01) rather than a
+// single denormalized pair, so an event assigned to several targets is queryable
+// by each; an unassigned device's event simply has no anchor rows.
 type Event struct {
 	rdb.TenantScoped
 	DeviceId      uint
@@ -23,9 +23,21 @@ type Event struct {
 	OccurredTime  time.Time
 	Source        string
 	AltId         sql.NullString
-	AnchorType    *string
-	AnchorId      *uint
 	ProcessedTime time.Time
+}
+
+// EventAnchor is one anchor of an event: a device's tracked-relationship target
+// (ADR-013) denormalized so the event is queryable by that (anchor_type,
+// anchor_id) dimension. It points back to the base event by its natural key
+// (device_id, event_type, occurred_time); occurred_time is also the hypertable
+// partition column. One event has zero or more anchor rows.
+type EventAnchor struct {
+	rdb.TenantScoped
+	DeviceId     uint              `gorm:"not null"`
+	EventType    esmodel.EventType `gorm:"not null"`
+	OccurredTime time.Time         `gorm:"not null"`
+	AnchorType   string            `gorm:"not null"`
+	AnchorId     uint              `gorm:"not null"`
 }
 
 // Location event fields.
@@ -99,6 +111,7 @@ type AlertEventCreateRequest struct {
 // the high-volume, append-only telemetry data plane — immutable facts, not the
 // control-plane entity mutations the journal records.
 func (Event) AuditExempt() bool            { return true }
+func (EventAnchor) AuditExempt() bool      { return true }
 func (LocationEvent) AuditExempt() bool    { return true }
 func (MeasurementEvent) AuditExempt() bool { return true }
 func (AlertEvent) AuditExempt() bool       { return true }

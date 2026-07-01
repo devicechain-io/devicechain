@@ -30,15 +30,25 @@ message PFailedEvent {
 }
 
 /**
- * Event that was successfully resolved.
+ * A single resolved anchor: one of the device's tracked relationships at event
+ * time, denormalized so the event is queryable by that (type, id) dimension
+ * (ADR-013). A device with several tracked relationships yields several anchors.
+ */
+message PResolvedAnchor {
+	string anchor_type = 1;
+	uint64 anchor_id = 2;
+	uint64 relationship_id = 3;
+}
+
+/**
+ * Event that was successfully resolved. It carries the full set of the device's
+ * tracked-relationship anchors (empty when the device is unassigned).
  */
  message PResolvedEvent {
 	string source = 1;
 	optional string alt_id = 2;
 	uint64 source_device_id = 3;
-	uint64 relationship_id = 4;
-	optional string target_type = 5;
-	optional uint64 target_id = 6;
+	repeated PResolvedAnchor anchors = 4;
     string occurred_time = 7;
     string processed_time = 8;
     int64 event_type = 9;

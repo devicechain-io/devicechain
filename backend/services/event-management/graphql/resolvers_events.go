@@ -76,17 +76,6 @@ func (r *EventResolver) AltId() *string {
 	return util.NullStr(r.M.AltId)
 }
 
-// AnchorType is the entity class of the denormalized relationship target (e.g.
-// "customer"), or nil when the originating device had no tracked relationship.
-func (r *EventResolver) AnchorType() *string {
-	return r.M.AnchorType
-}
-
-// AnchorId is the row id of the denormalized relationship target, or nil.
-func (r *EventResolver) AnchorId() *string {
-	return uintPtrStr(r.M.AnchorId)
-}
-
 // mapResolvers builds a resolver slice from a model slice, preserving the
 // schema/context wiring shared by every typed result resolver.
 func mapResolvers[M any, R any](src []M, wrap func(M) R) []R {
