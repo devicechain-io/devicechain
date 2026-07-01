@@ -168,6 +168,26 @@ export type DeviceCreateRequest = {
   token: string;
 };
 
+export type DeviceCredentialCreateRequest = {
+  credentialId: string;
+  credentialType: string;
+  credentialValue?: string | null | undefined;
+  deviceToken: string;
+  enabled: boolean;
+  expiresAt?: string | null | undefined;
+  metadata?: string | null | undefined;
+  token: string;
+};
+
+export type DeviceCredentialSearchCriteria = {
+  credentialId?: string | null | undefined;
+  credentialType?: string | null | undefined;
+  device?: string | null | undefined;
+  enabled?: boolean | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+};
+
 export type DeviceGroupCreateRequest = {
   backgroundColor?: string | null | undefined;
   borderColor?: string | null | undefined;
@@ -450,6 +470,27 @@ export type AuditEventsQueryVariables = Exact<{
 
 
 export type AuditEventsQuery = { auditEvents: { results: Array<{ id: string, occurredTime: string, category: string, actor: string, operation: string, tableName: string | null, entityPk: string | null, entityLabel: string | null, rowsAffected: number }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type DeviceCredentialsQueryVariables = Exact<{
+  criteria: DeviceCredentialSearchCriteria;
+}>;
+
+
+export type DeviceCredentialsQuery = { deviceCredentials: { results: Array<{ id: string, token: string, credentialType: string, credentialId: string, enabled: boolean, expiresAt: string | null, createdAt: string | null }>, pagination: { totalRecords: number | null } } };
+
+export type CreateDeviceCredentialMutationVariables = Exact<{
+  request?: DeviceCredentialCreateRequest | null | undefined;
+}>;
+
+
+export type CreateDeviceCredentialMutation = { createDeviceCredential: { id: string, token: string, credentialType: string, credentialId: string, enabled: boolean } };
+
+export type DeleteDeviceCredentialMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteDeviceCredentialMutation = { deleteDeviceCredential: boolean };
 
 export type CustomersQueryVariables = Exact<{
   criteria: CustomerSearchCriteria;
@@ -1178,6 +1219,40 @@ export const AuditEventsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AuditEventsQuery, AuditEventsQueryVariables>;
+export const DeviceCredentialsDocument = new TypedDocumentString(`
+    query DeviceCredentials($criteria: DeviceCredentialSearchCriteria!) {
+  deviceCredentials(criteria: $criteria) {
+    results {
+      id
+      token
+      credentialType
+      credentialId
+      enabled
+      expiresAt
+      createdAt
+    }
+    pagination {
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceCredentialsQuery, DeviceCredentialsQueryVariables>;
+export const CreateDeviceCredentialDocument = new TypedDocumentString(`
+    mutation CreateDeviceCredential($request: DeviceCredentialCreateRequest) {
+  createDeviceCredential(request: $request) {
+    id
+    token
+    credentialType
+    credentialId
+    enabled
+  }
+}
+    `) as unknown as TypedDocumentString<CreateDeviceCredentialMutation, CreateDeviceCredentialMutationVariables>;
+export const DeleteDeviceCredentialDocument = new TypedDocumentString(`
+    mutation DeleteDeviceCredential($token: String!) {
+  deleteDeviceCredential(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteDeviceCredentialMutation, DeleteDeviceCredentialMutationVariables>;
 export const CustomersDocument = new TypedDocumentString(`
     query Customers($criteria: CustomerSearchCriteria!) {
   customers(criteria: $criteria) {

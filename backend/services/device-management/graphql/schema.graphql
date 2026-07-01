@@ -312,6 +312,9 @@ type DeviceCredential implements Model & TokenReference & MetadataEntity {
     device: Device!
     credentialType: String!
     credentialId: String!
+    # Write-only: accepted on create/update but never returned on read (always
+    # null), so a stored secret (e.g. an MQTT_BASIC password) cannot be read back
+    # out through the API.
     credentialValue: String
     enabled: Boolean!
     expiresAt: String
