@@ -9,7 +9,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-DeviceChain connects, manages, and processes data from large, heterogeneous device
+DeviceChain™ connects, manages, and processes data from large, heterogeneous device
 fleets — covering device lifecycle, telemetry ingestion, command & control,
 organizational modeling, and multi-tenancy — and exposes everything through a
 GraphQL API.
@@ -247,3 +247,8 @@ The [`docs/`](docs/) directory is a Docusaurus site covering concepts
 
 DeviceChain is licensed under the **Apache License 2.0**. See [LICENSE](LICENSE)
 and [NOTICE](NOTICE). Copyright is held by **The DeviceChain Authors**.
+
+"DeviceChain" and the DeviceChain logo are trademarks of **IoT Innovations, LLC**
+(U.S. application pending, USPTO Serial No. 99910096). The Apache 2.0 license
+covers the code, not the Marks — see [TRADEMARK.md](TRADEMARK.md) for the
+trademark policy.
