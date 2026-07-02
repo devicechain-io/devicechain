@@ -13,6 +13,7 @@
 
 import {
   WIDGET_TYPES,
+  type AnchorTarget,
   type Breakpoints,
   type Canvas,
   type DashboardDefinition,
@@ -108,14 +109,57 @@ function parseWidget(raw: unknown, index: number): WidgetInstance {
     type: type as WidgetType,
     layout: parseLayout(raw.layout, index),
   };
-  // datasource/options are owned by the hub/widget respectively — kept opaque here
-  // (the hub validates the selector kind at resolve time), only carried through
-  // when present and shaped like a selector (a `kind` discriminant).
-  if (isRecord(raw.datasource) && typeof raw.datasource.kind === 'string') {
-    widget.datasource = raw.datasource as unknown as WidgetInstance['datasource'];
-  }
+  // datasource is owned by the hub, but the two supported kinds are NORMALIZED here
+  // so downstream (hub/widgets) never sees a partial shape (a device selector with
+  // no measurements array, an anchor with a non-object target, …). Reserved/other
+  // kinds are carried through opaquely — the hub rejects them.
+  const ds = parseDatasource(raw.datasource);
+  if (ds) widget.datasource = ds;
   if (isRecord(raw.options)) widget.options = raw.options as Record<string, unknown>;
   return widget;
+}
+
+function stringAt(rec: Record<string, unknown>, key: string): string {
+  const v = rec[key];
+  return typeof v === 'string' ? v : '';
+}
+
+function stringArrayAt(rec: Record<string, unknown>, key: string): string[] {
+  const v = rec[key];
+  return Array.isArray(v) ? v.filter((m): m is string => typeof m === 'string') : [];
+}
+
+// parseDatasource coerces a raw datasource into a normalized selector, or drops it
+// (returns undefined) when it is absent or its `kind` is not a non-empty string.
+function parseDatasource(raw: unknown): WidgetInstance['datasource'] | undefined {
+  if (!isRecord(raw)) return undefined;
+  const kind = raw.kind;
+  if (typeof kind !== 'string' || kind.length === 0) return undefined;
+
+  if (kind === 'device') {
+    return { kind: 'device', deviceToken: stringAt(raw, 'deviceToken'), measurements: stringArrayAt(raw, 'measurements') };
+  }
+  if (kind === 'anchor') {
+    const anchorRec = isRecord(raw.anchor) ? raw.anchor : {};
+    const selector: WidgetInstance['datasource'] = {
+      kind: 'anchor',
+      anchor: {
+        relationship: stringAt(anchorRec, 'relationship'),
+        // targetType defaults to '' (the config panel constrains it to the union;
+        // a hand-edited/empty value round-trips rather than being silently coerced).
+        targetType: stringAt(anchorRec, 'targetType') as AnchorTarget['targetType'],
+        targetToken: stringAt(anchorRec, 'targetToken'),
+      },
+      measurements: stringArrayAt(raw, 'measurements'),
+    };
+    if (isRecord(raw.aggregation)) {
+      (selector as { aggregation?: unknown }).aggregation = raw.aggregation;
+    }
+    return selector;
+  }
+
+  // Reserved/other kinds: carry through opaquely (the hub rejects them).
+  return raw as unknown as WidgetInstance['datasource'];
 }
 
 function parseLayout(raw: unknown, index: number): WidgetLayout {

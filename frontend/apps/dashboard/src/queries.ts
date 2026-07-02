@@ -10,10 +10,30 @@
 
 import type { TypedDocument } from '@devicechain/client';
 
+// ── user-management: exchange a refresh token for a fresh session ─────────────
+// Anonymous (no bearer): used by auth.ts to renew an expired access token from the
+// console's stored refresh token so the dashboard doesn't silently go stale.
+
+export interface RefreshResult {
+  refresh: { accessToken: string; refreshToken: string };
+}
+export interface RefreshVariables {
+  refreshToken: string;
+}
+
+export const REFRESH = `
+  mutation Refresh($refreshToken: String!) {
+    refresh(refreshToken: $refreshToken) {
+      accessToken
+      refreshToken
+    }
+  }
+` as unknown as TypedDocument<RefreshResult, RefreshVariables>;
+
 // ── dashboard-management: load a dashboard's definition ──────────────────────
 
 export interface DashboardResult {
-  dashboard: { token: string; name: string | null; definition: string } | null;
+  dashboard: { token: string; name: string | null; description: string | null; definition: string } | null;
 }
 export interface DashboardVariables {
   token: string;
@@ -24,6 +44,7 @@ export const DASHBOARD_BY_TOKEN = `
     dashboard(token: $token) {
       token
       name
+      description
       definition
     }
   }
@@ -36,7 +57,7 @@ export interface UpdateDashboardResult {
 }
 export interface UpdateDashboardVariables {
   token: string;
-  request: { token: string; name?: string | null; definition: string };
+  request: { token: string; name?: string | null; description?: string | null; definition: string };
 }
 
 export const UPDATE_DASHBOARD = `

@@ -126,4 +126,19 @@ describe('ConnectedWidget', () => {
     act(() => sink?.next(sample('temperature', 42, 't1')));
     expect(screen.getByText('42')).toBeTruthy();
   });
+
+  it('renders a "Data unavailable" state when the stream errors', () => {
+    let sink: WidgetStreamSink | null = null;
+    const hub = {
+      subscribeWidget: (_ds: DatasourceSelector, s: WidgetStreamSink) => {
+        sink = s;
+        return () => {};
+      },
+    } as unknown as DashboardHub;
+
+    render(<ConnectedWidget widget={widget('latest-card', { title: 'Temp', precision: 0 })} hub={hub} />);
+    act(() => sink?.error?.(new Error('device not found')));
+    expect(screen.getByText('Data unavailable')).toBeTruthy();
+    expect(screen.getByText(/device not found/)).toBeTruthy();
+  });
 });

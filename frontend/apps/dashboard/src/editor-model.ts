@@ -42,10 +42,12 @@ export function deleteWidget(def: DashboardDefinition, id: string): DashboardDef
 export function bringToFront(def: DashboardDefinition, id: string): DashboardDefinition {
   const widget = def.widgets.find((w) => w.id === id);
   if (!widget) return def;
-  const maxZ = def.widgets.reduce((m, w) => Math.max(m, baseBox(w).z), 0);
   const box = baseBox(widget);
-  if (box.z === maxZ && maxZ > 0) return def; // already on top
-  return setWidgetBox(def, id, { ...box, z: maxZ + 1 });
+  // The highest z among the OTHER widgets. Strictly above them all → already on
+  // top (no bump — this also covers a lone widget at z=0). On a tie, bump past it.
+  const maxOther = Math.max(-Infinity, ...def.widgets.filter((w) => w.id !== id).map((w) => baseBox(w).z));
+  if (box.z > maxOther) return def;
+  return setWidgetBox(def, id, { ...box, z: maxOther + 1 });
 }
 
 // setTitle updates the dashboard title.

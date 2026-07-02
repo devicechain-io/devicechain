@@ -79,9 +79,11 @@ export function DashboardEditor({ definition, onChange, hub, selectedId, onSelec
                 <div
                   className="rnd-no-drag"
                   style={{
+                    // Overlay the widget's top-right corner (inside its bounds) so
+                    // it isn't clipped by the scroll area for widgets at y:0.
                     position: 'absolute',
-                    top: -30,
-                    right: 0,
+                    top: 2,
+                    right: 2,
                     display: 'flex',
                     gap: 4,
                     pointerEvents: 'auto',

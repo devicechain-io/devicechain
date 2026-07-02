@@ -151,7 +151,10 @@ export class DashboardHub {
 
     return () => {
       if (!stream.subscribers.delete(subscriber)) return;
-      if (stream.subscribers.size === 0) {
+      // Only tear down and forget the stream if it is STILL the registered stream
+      // for this device — an upstream error may have evicted and replaced it, and a
+      // lingering old subscriber's detach must not delete the replacement.
+      if (stream.subscribers.size === 0 && this.streams.get(deviceId) === stream) {
         stream.unsubscribe();
         this.streams.delete(deviceId);
       }
