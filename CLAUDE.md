@@ -14,10 +14,12 @@ backend/
     event-sources/            inbound device transports (MQTT/NATS), decode → pipeline
     device-state/             live last-known-state projection per device
     command-delivery/         persistent two-way command dispatch
-  k8s/                        controller-runtime operator (DeviceChainInstance / DeviceChainTenant CRDs)
+    dashboard-management/     dashboard-definition CRUD (ADR-039)
+  k8s/                        controller-runtime operator (Instance CRD; tenants are control-plane DB rows, ADR-033)
   cli/                        dcctl — bootstrap/destroy + admin tooling
 deploy/                       Helm chart (deploy/helm) + OpenTofu modules (deploy/opentofu)
-frontend/                     React 19 + Vite + Tailwind + shadcn/ui console; GraphQL Code Generator (client-preset)
+frontend/                     npm workspace — apps/console (React 19 + Vite + Tailwind + shadcn/ui, client-preset
+                              codegen) + packages/{client,dashboards,widgets} (SDK, dashboard runtime, widgets; ADR-039)
 docs/                         Docusaurus site
 hack/                         license header + dev scripts
 _legacy/                      archived pre-migration SiteWhere code — NOT in the workspace, not built; do not edit
@@ -25,12 +27,15 @@ _legacy/                      archived pre-migration SiteWhere code — NOT in t
 
 ## Planning & decisions — read before proposing architecture
 
-Source-of-truth planning docs live in [.agent-os/product/](.agent-os/product/). Consult them before
+> **`.agent-os/` is a gitignored symlink to a private planning workspace** — it exists only in
+> maintainer checkouts, not in a public clone, so the paths below resolve only when that workspace is
+> linked. The durable architectural rationale is cited inline across the codebase as `ADR-0xx`.
+
+Source-of-truth planning docs (maintainer-only) live under `.agent-os/product/`. Consult them before
 designing anything non-trivial; the codebase follows the ADRs.
 
 - **decisions.md** — ADRs (the "why"). Referenced throughout as `ADR-0xx`.
-- **roadmap.md** — only **open** (`[ ]`) and **in-progress** (`[~]`) work, organized by phase + the
-  current "Launch Slice".
+- **roadmap.md** — only **open** (`[ ]`) and **in-progress** (`[~]`) work, organized by phase.
 - **shipped.md** — delivered features (the `[x]` log).
 - **mission.md** / **mission-lite.md** / **tech-stack.md** — product framing and stack rationale.
 

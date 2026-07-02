@@ -29,9 +29,9 @@ architecturally complete, and **unmetered all the way to production scale**.
 
 - **Go-native microservices** — sub-second startup, a small memory footprint, and
   single-binary services per functional area.
-- **Operator + CRDs, not shell scripts** — a Kubernetes operator reconciles
-  declarative `DeviceChainInstance` / `DeviceChainTenant` custom resources, so the
-  full tenant roster is version-controllable and GitOps-friendly.
+- **Operator + CRDs, not shell scripts** — a Kubernetes operator reconciles a
+  declarative `Instance` custom resource, so an instance's deployment shape is
+  version-controllable and GitOps-friendly.
 - **GraphQL-first API** — introspectable and self-documenting; no generated client
   stubs and no REST surface to maintain.
 - **A lean, fully open-source stack** — NATS JetStream is the entire messaging /
@@ -100,7 +100,8 @@ per tenant.
 | **user-management** | Identities, per-tenant memberships, roles, and two-tier JWT issuance / validation (JWKS). |
 | **device-state** | Live last-known-state projection per device (presence, latest location and measurements). |
 | **command-delivery** | Persistent, two-way command dispatch to devices. |
-| **operator** | A controller-runtime operator reconciling `DeviceChainInstance` / `DeviceChainTenant` resources. |
+| **dashboard-management** | Stores tenant dashboard definitions; the embeddable widget packages render live telemetry over them. |
+| **operator** | A controller-runtime operator reconciling the `Instance` custom resource (an instance's deployment shape). |
 
 ### The backbone
 
@@ -204,8 +205,9 @@ where it matters:
   the data plane. The per-request tenant comes from that verified tenant token's
   claim; the per-message tenant is derived from the messaging subject.
 
-Adding a tenant is a declarative operation — create a `DeviceChainTenant` resource
-and the operator reconciles it. Tenants do **not** get their own pods.
+Adding a tenant is a control-plane operation — the superuser creates it through the
+admin API / console (an `iam_tenants` record), not a Kubernetes resource. Tenants
+do **not** get their own pods.
 
 ## Tech stack
 
@@ -229,10 +231,11 @@ Minimum to run locally: a NATS server (a single ~10MB binary) and TimescaleDB
 backend/    Go monorepo (Go Workspaces)
   core/       shared library — entity, auth, messaging, config, rdb, graphql
   services/   microservices — device-management, user-management, event-management,
-              event-sources, device-state, command-delivery
+              event-sources, device-state, command-delivery, dashboard-management
   k8s/        Kubernetes operator (controller-runtime)
   cli/        dcctl — instance bootstrap / destroy and admin tooling
-frontend/   React + TypeScript management console
+frontend/   npm workspace — apps/console (React + TypeScript management console)
+            + packages (client SDK, dashboard runtime, embeddable widgets)
 deploy/     Helm chart + OpenTofu modules
 docs/       Docusaurus documentation site
 ```
