@@ -37,6 +37,7 @@ import AdminRolesPage from '@/routes/admin/RolesPage';
 import AdminAuditPage from '@/routes/admin/AuditPage';
 import AdminNewRolePage from '@/routes/admin/roles/NewRolePage';
 import AdminRoleDetailPage from '@/routes/admin/roles/RoleDetailPage';
+import AdminSettingsPage from '@/routes/admin/SettingsPage';
 
 // Registry families served by the generic list/detail pages. `any` because the
 // array mixes RegistryResource<DeviceType | Asset | Customer | …> and the
@@ -119,6 +120,7 @@ export default function App() {
           <Route path="roles/new" element={<AdminNewRolePage />} />
           <Route path="roles/:scope/:token" element={<AdminRoleDetailPage />} />
           <Route path="audit" element={<AdminAuditPage />} />
+          <Route path="settings" element={<AdminSettingsPage />} />
         </Route>
       </Route>
 
