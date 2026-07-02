@@ -9,7 +9,14 @@
 // responsive editing is deferred. Boxes are stored in grid cells — the canvas
 // multiplies by canvas.grid.size for pixels, so snapping is exact.
 
-import { BASE_BREAKPOINT, type DashboardDefinition, type WidgetBox, type WidgetInstance } from '@devicechain/dashboards';
+import {
+  BASE_BREAKPOINT,
+  generateWidgetId,
+  type DashboardDefinition,
+  type WidgetBox,
+  type WidgetInstance,
+  type WidgetType,
+} from '@devicechain/dashboards';
 
 // The base box a widget is placed by in the editor.
 export function baseBox(widget: WidgetInstance): WidgetBox {
@@ -44,6 +51,44 @@ export function bringToFront(def: DashboardDefinition, id: string): DashboardDef
 // setTitle updates the dashboard title.
 export function setTitle(def: DashboardDefinition, title: string): DashboardDefinition {
   return { ...def, title };
+}
+
+// updateWidget replaces the widget with the matching id, returning a new definition.
+export function updateWidget(def: DashboardDefinition, id: string, next: WidgetInstance): DashboardDefinition {
+  return { ...def, widgets: def.widgets.map((w) => (w.id === id ? next : w)) };
+}
+
+// humanizeType turns a widget type slug into a readable default title
+// ('timeseries-chart' → 'Timeseries chart').
+function humanizeType(type: WidgetType): string {
+  const words = type.replace(/-/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+// defaultOptions is the starter options bag for a freshly added widget: labels
+// carry placeholder text, everything else a title.
+function defaultOptions(type: WidgetType): Record<string, unknown> {
+  return type === 'label' ? { text: 'New label' } : { title: humanizeType(type) };
+}
+
+// addWidget appends a new default widget of the given type, placed on top
+// (z = max existing z + 1) at a sensible default base box, datasource left
+// undefined. Returns the new definition and the new widget's id so the caller
+// can select it.
+export function addWidget(
+  def: DashboardDefinition,
+  type: WidgetType,
+): { definition: DashboardDefinition; id: string } {
+  const maxZ = def.widgets.reduce((m, w) => Math.max(m, baseBox(w).z), 0);
+  const id = generateWidgetId();
+  const box: WidgetBox = { x: 0, y: 0, w: 12, h: 8, z: maxZ + 1 };
+  const widget: WidgetInstance = {
+    id,
+    type,
+    layout: { [BASE_BREAKPOINT]: box },
+    options: defaultOptions(type),
+  };
+  return { definition: { ...def, widgets: [...def.widgets, widget] }, id };
 }
 
 // (serializeDefinition + isDirty live in @devicechain/dashboards alongside

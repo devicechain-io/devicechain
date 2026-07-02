@@ -11,17 +11,20 @@ import {
   isDirty,
   parseDashboardDefinition,
   serializeDefinition,
+  WIDGET_TYPES,
   type DashboardDefinition,
   type DeviceResolver,
+  type WidgetType,
 } from '@devicechain/dashboards';
 import { useEffect, useMemo, useState } from 'react';
 
 import { hasValidSession } from './auth';
 import { DashboardEditor } from './DashboardEditor';
 import { DashboardRenderer } from './DashboardRenderer';
-import { setTitle } from './editor-model';
+import { addWidget, setTitle, updateWidget } from './editor-model';
 import { DASHBOARD_BY_TOKEN, UPDATE_DASHBOARD } from './queries';
 import { createDeviceResolver } from './resolver';
+import { WidgetConfigPanel } from './WidgetConfigPanel';
 
 // The dashboard token is the path segment after the /dash/ base.
 function dashboardTokenFromPath(): string {
@@ -110,9 +113,24 @@ function DashboardWorkspace({
   const [saved, setSaved] = useState<DashboardDefinition>(loaded);
   // One save state, not scattered saving/error booleans — can't be both at once.
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'clean' });
+  // Selection is owned here (not in the editor) so the config panel and the
+  // editor stay in sync; leaving edit mode clears it.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const dirty = isDirty(working, saved);
   const title = working.title || token;
+  const selected = working.widgets.find((w) => w.id === selectedId) ?? null;
+
+  const addWidgetOfType = (type: WidgetType) => {
+    const { definition, id } = addWidget(working, type);
+    setWorking(definition);
+    setSelectedId(id); // open the new widget's config panel
+  };
+
+  const toggleMode = () => {
+    setSelectedId(null);
+    setMode(mode === 'edit' ? 'view' : 'edit');
+  };
 
   const save = () => {
     const snapshot = working; // persist exactly what we serialize; later edits stay dirty
@@ -167,24 +185,74 @@ function DashboardWorkspace({
           <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 13 }}>Unsaved changes</span>
         )}
 
+        {mode === 'edit' && <AddWidgetMenu onAdd={addWidgetOfType} />}
         {mode === 'edit' && (
           <HeaderButton onClick={save} disabled={!dirty || saveState.kind === 'saving'} primary>
             {saveState.kind === 'saving' ? 'Saving…' : 'Save'}
           </HeaderButton>
         )}
-        <HeaderButton onClick={() => setMode(mode === 'edit' ? 'view' : 'edit')}>
-          {mode === 'edit' ? 'Done' : 'Edit'}
-        </HeaderButton>
+        <HeaderButton onClick={toggleMode}>{mode === 'edit' ? 'Done' : 'Edit'}</HeaderButton>
       </header>
 
       <main style={{ flex: '1 1 auto', minHeight: 0 }}>
         {mode === 'edit' ? (
-          <DashboardEditor definition={working} onChange={setWorking} hub={hub} />
+          <div style={{ display: 'flex', height: '100%' }}>
+            <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+              <DashboardEditor
+                definition={working}
+                onChange={setWorking}
+                hub={hub}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+              />
+            </div>
+            {selected && (
+              <WidgetConfigPanel
+                widget={selected}
+                onChange={(next) => setWorking(updateWidget(working, next.id, next))}
+                onClose={() => setSelectedId(null)}
+              />
+            )}
+          </div>
         ) : (
           <DashboardRenderer definition={working} hub={hub} resolver={resolver} />
         )}
       </main>
     </div>
+  );
+}
+
+// AddWidgetMenu is a native select that adds a widget of the chosen type, then
+// snaps back to its placeholder so it reads as an action, not a stored value.
+function AddWidgetMenu({ onAdd }: { onAdd: (type: WidgetType) => void }) {
+  return (
+    <select
+      value=""
+      onChange={(e) => {
+        const type = e.target.value as WidgetType;
+        if (type) onAdd(type);
+        e.target.value = '';
+      }}
+      style={{
+        fontSize: 14,
+        padding: '6px 10px',
+        borderRadius: 6,
+        border: '1px solid hsl(var(--border))',
+        cursor: 'pointer',
+        color: 'hsl(var(--foreground))',
+        background: 'hsl(var(--card))',
+        flex: '0 0 auto',
+      }}
+    >
+      <option value="" disabled>
+        + Add widget
+      </option>
+      {WIDGET_TYPES.map((type) => (
+        <option key={type} value={type}>
+          {type}
+        </option>
+      ))}
+    </select>
   );
 }
 
