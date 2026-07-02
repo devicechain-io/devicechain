@@ -8,11 +8,12 @@ import { useMemo } from 'react';
 import { buildGaugeOption } from '../chart-options';
 import { EChart } from '../echart';
 import { WidgetFrame } from '../frame';
-import { useChartTheme } from '../hooks';
+import { useChartTheme, useElementSize } from '../hooks';
 import { optNumber, optString, pickSample, primaryMeasurementName, type WidgetProps } from '../widget';
 
 export function Gauge({ widget, data }: WidgetProps) {
   const theme = useChartTheme();
+  const [sizeRef, size] = useElementSize<HTMLDivElement>();
   const name = primaryMeasurementName(widget);
   const sample = pickSample(data.latest, name);
 
@@ -21,13 +22,15 @@ export function Gauge({ widget, data }: WidgetProps) {
   const unit = optString(widget.options, 'unit');
 
   const option = useMemo(
-    () => buildGaugeOption(sample?.value ?? null, theme, { min, max, unit }),
-    [sample?.value, theme, min, max, unit],
+    () => buildGaugeOption(sample?.value ?? null, theme, { min, max, unit }, size),
+    [sample?.value, theme, min, max, unit, size.width, size.height],
   );
 
   return (
     <WidgetFrame title={optString(widget.options, 'title') ?? name}>
-      <EChart option={option} />
+      <div ref={sizeRef} style={{ width: '100%', height: '100%' }}>
+        <EChart option={option} />
+      </div>
     </WidgetFrame>
   );
 }

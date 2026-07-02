@@ -5,10 +5,14 @@
 
 import { formatTimestamp, formatValue } from '../format';
 import { WidgetFrame } from '../frame';
+import { useElementSize } from '../hooks';
 import { css } from '../theme';
 import { optNumber, optString, pickSample, primaryMeasurementName, type WidgetProps } from '../widget';
 
+const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+
 export function LatestCard({ widget, data }: WidgetProps) {
+  const [sizeRef, size] = useElementSize<HTMLDivElement>();
   const name = primaryMeasurementName(widget);
   const sample = pickSample(data.latest, name);
 
@@ -17,9 +21,14 @@ export function LatestCard({ widget, data }: WidgetProps) {
   const precision = optNumber(widget.options, 'precision');
   const display = formatValue(sample?.value, precision);
 
+  // Scale the value to the card so it doesn't overflow a small slot (falls back to
+  // a comfortable size before first measure / in a non-DOM test).
+  const valueFont = size.height > 0 ? clamp(Math.round(size.height / 3.5), 16, 44) : 32;
+
   return (
     <WidgetFrame title={title}>
       <div
+        ref={sizeRef}
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -28,10 +37,12 @@ export function LatestCard({ widget, data }: WidgetProps) {
           padding: '12px 16px',
         }}
       >
-        <div style={{ fontSize: 32, fontWeight: 600, lineHeight: 1.1, color: css('foreground') }}>
+        <div style={{ fontSize: valueFont, fontWeight: 600, lineHeight: 1.1, color: css('foreground') }}>
           {display}
           {sample?.value != null && unit ? (
-            <span style={{ fontSize: 16, color: css('muted-foreground'), marginLeft: 6 }}>{unit}</span>
+            <span style={{ fontSize: Math.round(valueFont / 2), color: css('muted-foreground'), marginLeft: 6 }}>
+              {unit}
+            </span>
           ) : null}
         </div>
         {sample?.occurredTime ? (

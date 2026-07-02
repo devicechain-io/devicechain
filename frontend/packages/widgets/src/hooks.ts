@@ -4,7 +4,7 @@
 // React bindings between the imperative DashboardHub / DOM theme and widget state.
 
 import type { DashboardHub, DatasourceSelector, MeasurementSample } from '@devicechain/dashboards';
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 
 import { resolveChartTheme, type ChartTheme } from './theme';
 
@@ -84,6 +84,40 @@ export function useMeasurementStream(
       error: live.error,
     };
   }, [initialSamples, live, windowSize]);
+}
+
+export interface ElementSize {
+  width: number;
+  height: number;
+}
+
+// useElementSize tracks an element's content-box size via ResizeObserver, so a
+// widget can scale its contents (chart fonts, gauge ticks, a big number) to the
+// slot it was resized to — ECharts' resize() re-lays-out the canvas but never
+// scales absolute font sizes, so a small widget crams without this. Returns
+// {0,0} until measured (and where ResizeObserver is unavailable, e.g. jsdom); the
+// consumers treat a zero size as "use default sizing".
+export function useElementSize<T extends HTMLElement>(): [RefObject<T | null>, ElementSize] {
+  const ref = useRef<T>(null);
+  const [size, setSize] = useState<ElementSize>({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (!rect) return;
+      setSize((prev) =>
+        prev.width === rect.width && prev.height === rect.height
+          ? prev
+          : { width: rect.width, height: rect.height },
+      );
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return [ref, size];
 }
 
 // --- shared chart-theme store ------------------------------------------------

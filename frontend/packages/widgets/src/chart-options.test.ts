@@ -72,4 +72,12 @@ describe('buildGaugeOption', () => {
     const gauge = seriesOf(buildGaugeOption(null, theme, { min: 10, max: 50 }))[0];
     expect(gauge.data[0].value).toBe(10);
   });
+
+  it('scales ticks and fonts down for a small widget', () => {
+    const small = seriesOf(buildGaugeOption(20, theme, { min: 0, max: 50 }, { width: 120, height: 100 }))[0];
+    const large = seriesOf(buildGaugeOption(20, theme, { min: 0, max: 50 }, { width: 600, height: 400 }))[0];
+    expect(small.splitNumber).toBeLessThan(large.splitNumber);
+    expect(small.detail.fontSize).toBeLessThan(large.detail.fontSize);
+    expect(small.axisLabel.fontSize).toBeLessThanOrEqual(large.axisLabel.fontSize);
+  });
 });
