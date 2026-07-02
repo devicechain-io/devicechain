@@ -39,7 +39,12 @@ func NewProvisioningProfileSchema() *gormigrate.Migration {
 				Enabled         bool   `gorm:"not null"`
 				ExpiresAt       sql.NullTime
 			}
-			return tx.AutoMigrate(&ProvisioningProfile{})
+			if err := tx.AutoMigrate(&ProvisioningProfile{}); err != nil {
+				return err
+			}
+			// ADR-042 P1: per-tenant partial unique index on token (ProvisionKey
+			// keeps its own global unique — provisioning keys are cross-tenant).
+			return rdb.CreateTenantTokenIndex(tx, &ProvisioningProfile{})
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return tx.Migrator().DropTable("provisioning_profiles")

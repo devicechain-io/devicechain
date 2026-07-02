@@ -42,7 +42,11 @@ func NewMetricDefinitionSchema() *gormigrate.Migration {
 				Enum         *datatypes.JSON
 				Descriptor   sql.NullString
 			}
-			return tx.AutoMigrate(&MetricDefinition{})
+			if err := tx.AutoMigrate(&MetricDefinition{}); err != nil {
+				return err
+			}
+			// ADR-042 P1: per-tenant partial unique index on token.
+			return rdb.CreateTenantTokenIndex(tx, &MetricDefinition{})
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return tx.Migrator().DropTable("metric_definitions")

@@ -20,9 +20,13 @@ type TenantScoped struct {
 	TenantId string `gorm:"index;not null;size:128"`
 }
 
-// Entity that is referenced by a unique token which may change over time.
+// Entity that is referenced by a token which may change over time. Uniqueness is
+// NOT declared here: a per-tenant partial unique index (ADR-042 P1) is created by
+// each service's migration via rdb.CreateTenantTokenIndex — token is unique within
+// a tenant among live (non-soft-deleted) rows, so tenants never collide and a
+// deleted token frees for reuse. A bare global UNIQUE(token) would do neither.
 type TokenReference struct {
-	Token string `gorm:"unique;not null;size:128"`
+	Token string `gorm:"index;not null;size:128"`
 }
 
 // AuditLabel implements AuditLabeler: the token is the human-facing, non-sensitive

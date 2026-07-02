@@ -26,7 +26,12 @@ func NewInitialSchema() *gormigrate.Migration {
 				Definition datatypes.JSON `gorm:"not null"`
 			}
 
-			return tx.AutoMigrate(&Dashboard{})
+			if err := tx.AutoMigrate(&Dashboard{}); err != nil {
+				return err
+			}
+			// ADR-042 P1: per-tenant partial unique index on token (replaces the
+			// global UNIQUE that rdb.TokenReference no longer declares).
+			return rdb.CreateTenantTokenIndex(tx, &Dashboard{})
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return tx.Migrator().DropTable("dashboards")
