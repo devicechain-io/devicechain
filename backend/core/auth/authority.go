@@ -44,6 +44,12 @@ const (
 	CommandRead  Authority = "command:read"
 	CommandWrite Authority = "command:write"
 
+	// Dashboards (dashboard-management, ADR-039). Gate the dashboard-definition
+	// CRUD API; the live telemetry a dashboard renders is still gated by EventRead
+	// on event-management's subscription.
+	DashboardRead  Authority = "dashboard:read"
+	DashboardWrite Authority = "dashboard:write"
+
 	// Audit journal read (ADR-019). Gates the read-side query over the append-only
 	// audit_events table; the journal is written by construction and is never
 	// mutated through the API, so there is no audit:write.
@@ -55,20 +61,22 @@ const (
 // rejected at write time rather than silently granting nothing. It is extended as
 // each service's resolvers are brought under enforcement.
 var vocabulary = map[Authority]struct{}{
-	AuthorityAll: {},
-	UserRead:     {},
-	UserWrite:    {},
-	RoleRead:     {},
-	RoleWrite:    {},
-	TenantRead:   {},
-	TenantWrite:  {},
-	DeviceRead:   {},
-	DeviceWrite:  {},
-	EventRead:    {},
-	StateRead:    {},
-	CommandRead:  {},
-	CommandWrite: {},
-	AuditRead:    {},
+	AuthorityAll:   {},
+	UserRead:       {},
+	UserWrite:      {},
+	RoleRead:       {},
+	RoleWrite:      {},
+	TenantRead:     {},
+	TenantWrite:    {},
+	DeviceRead:     {},
+	DeviceWrite:    {},
+	EventRead:      {},
+	StateRead:      {},
+	CommandRead:    {},
+	CommandWrite:   {},
+	DashboardRead:  {},
+	DashboardWrite: {},
+	AuditRead:      {},
 }
 
 // ValidAuthority reports whether s names a known authority (including the

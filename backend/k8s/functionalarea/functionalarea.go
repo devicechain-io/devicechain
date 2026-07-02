@@ -32,6 +32,7 @@ const (
 	EventSources     FunctionalArea = "event-sources"
 	EventManagement  FunctionalArea = "event-management"
 	DeviceState      FunctionalArea = "device-state"
+	DashboardMgmt    FunctionalArea = "dashboard-management"
 	CommandDelivery  FunctionalArea = "command-delivery"
 )
 
@@ -86,6 +87,15 @@ var catalog = map[FunctionalArea]Manifest{
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
+	DashboardMgmt: {
+		// Dashboard-definition CRUD (ADR-039). It reads no messaging subjects — the
+		// live telemetry a dashboard renders is subscribed straight from
+		// event-management by the client Hub — but a dashboard's selectors reference
+		// devices/anchors, so it is functionally dead without device-management.
+		Area:     DashboardMgmt,
+		HardDeps: []FunctionalArea{DeviceManagement},
+		SoftDeps: []FunctionalArea{UserManagement},
+	},
 	CommandDelivery: {
 		Area:     CommandDelivery,
 		Produces: []string{"device-commands"},
@@ -113,10 +123,10 @@ const (
 var profiles = map[Profile][]FunctionalArea{
 	ProfileFull: {
 		UserManagement, DeviceManagement, EventSources,
-		EventManagement, DeviceState, CommandDelivery,
+		EventManagement, DeviceState, DashboardMgmt, CommandDelivery,
 	},
 	ProfileTelemetry: {
-		UserManagement, DeviceManagement, EventSources, EventManagement, DeviceState,
+		UserManagement, DeviceManagement, EventSources, EventManagement, DeviceState, DashboardMgmt,
 	},
 	ProfileIngestOnly: {
 		UserManagement, DeviceManagement, EventSources,

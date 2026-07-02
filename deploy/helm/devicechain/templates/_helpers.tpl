@@ -15,18 +15,19 @@ encoded — pub/sub (ADR-003) makes an absent peer safe, so only hard edges gate
 */}}
 {{- define "devicechain.enabledAreas" -}}
   {{- $profiles := dict
-      "full"        (list "user-management" "device-management" "event-sources" "event-management" "device-state" "command-delivery")
-      "telemetry"   (list "user-management" "device-management" "event-sources" "event-management" "device-state")
+      "full"        (list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery")
+      "telemetry"   (list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management")
       "ingest-only" (list "user-management" "device-management" "event-sources")
   -}}
   {{- $core := list "user-management" "device-management" -}}
   {{- $hard := dict
-      "event-sources"    (list "device-management")
-      "event-management" (list "device-management")
-      "device-state"     (list "device-management")
-      "command-delivery" (list "device-management")
+      "event-sources"        (list "device-management")
+      "event-management"     (list "device-management")
+      "device-state"         (list "device-management")
+      "dashboard-management" (list "device-management")
+      "command-delivery"     (list "device-management")
   -}}
-  {{- $known := list "user-management" "device-management" "event-sources" "event-management" "device-state" "command-delivery" -}}
+  {{- $known := list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" -}}
 
   {{- $profile := .Values.profile | default "" -}}
   {{- $explicit := .Values.enabledFunctionalAreas | default (list) -}}
