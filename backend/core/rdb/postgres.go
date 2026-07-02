@@ -196,6 +196,13 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 		return err
 	}
 
+	// Register the token-grammar callbacks so every entity token is validated
+	// fail-closed at create/update (ADR-042 P2): a token carrying a NATS/MQTT
+	// metacharacter can never reach storage, and thus never a subject/topic.
+	if err := RegisterTokenGrammar(rdb.Database); err != nil {
+		return err
+	}
+
 	// Register the audit-journal callbacks and ensure the journal table exists, so
 	// every entity mutation in this service is recorded by construction (ADR-019).
 	// The table is core-owned and auto-migrated here rather than via each service's
