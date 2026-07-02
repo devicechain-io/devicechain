@@ -116,7 +116,15 @@ export class DashboardHub {
     switch (datasource.kind) {
       case 'device': {
         const id = await this.resolver.deviceIdForToken(datasource.deviceToken);
-        if (id == null) return [];
+        // An unknown token is a misconfigured widget, not an empty result — throw
+        // so the sink hears an error and the widget can show "device not found"
+        // instead of a blank pane that never fills. (An anchor resolving to zero
+        // devices, below, IS a valid empty state and stays silent.)
+        if (id == null) {
+          throw new Error(
+            `dashboard device token '${datasource.deviceToken}' did not resolve to a device`,
+          );
+        }
         return [{ deviceId: id, names: new Set(datasource.measurements) }];
       }
       case 'anchor': {
@@ -166,6 +174,12 @@ export class DashboardHub {
     const adapter: SubscriptionSink<MeasurementStreamResult> = {
       next: (data) => this.fanout(deviceId, data.measurementStream),
       error: (err) => {
+        // The upstream is dead. Evict it (and drop the socket-level subscription)
+        // so the NEXT subscriber for this device opens a fresh stream instead of
+        // attaching to this corpse and freezing silently — the reconnect path.
+        // Guard the delete so a stream that has already been replaced is left be.
+        if (this.streams.get(deviceId) === stream) this.streams.delete(deviceId);
+        stream.unsubscribe();
         for (const subscriber of stream.subscribers) subscriber.sink.error?.(err);
       },
     };

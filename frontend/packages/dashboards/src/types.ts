@@ -38,6 +38,10 @@ export interface AnchorSelector {
   kind: 'anchor';
   anchor: AnchorTarget;
   measurements: string[];
+  // RESERVED (Phase 2): server-side aggregation of the member devices into one
+  // series. Phase 1 resolves an anchor to its member devices and streams each
+  // one's raw samples; the Hub does NOT read this field yet. Present so a
+  // definition authored against the final shape still round-trips.
   aggregation?: AnchorAggregation;
 }
 
