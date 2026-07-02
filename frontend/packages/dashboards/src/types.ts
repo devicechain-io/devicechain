@@ -1,0 +1,148 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// The dashboard-definition contract (ADR-039). These types are the canonical
+// shape of the JSON document that dashboard-management stores opaquely — the
+// backend only validates it is well-formed JSON, so this package owns the shape.
+// Kept deliberately fluid pre-GA. See research/dashboard-phase1-design-2026-07.md.
+
+// ---- Datasource selectors ---------------------------------------------------
+//
+// A selector is a tagged union (discriminated on `kind`). Phase 1 resolves two
+// kinds (device, anchor); the rest are reserved — present so definitions stay
+// forward-compatible, but the Hub rejects them today (mirroring the backend).
+
+// device — one device's measurements (latest-card, gauge, single-series chart).
+export interface DeviceSelector {
+  kind: 'device';
+  deviceToken: string;
+  measurements: string[];
+}
+
+// The dimension a dashboard aggregates over — a tracked relationship to a
+// customer / area / asset. anchors beat ThingsBoard's opaque aliases: they are
+// the graph edges the platform already resolves events against.
+export interface AnchorTarget {
+  relationship: string;
+  targetType: 'customer' | 'area' | 'asset';
+  targetToken: string;
+}
+
+export interface AnchorAggregation {
+  window: string; // e.g. '1m'
+  fn: 'avg' | 'min' | 'max' | 'sum' | 'count';
+}
+
+// anchor — an anchor dimension aggregated over its member devices.
+export interface AnchorSelector {
+  kind: 'anchor';
+  anchor: AnchorTarget;
+  measurements: string[];
+  aggregation?: AnchorAggregation;
+}
+
+// ---- Reserved selectors (Phase 2) -------------------------------------------
+// Schema-valid and part of the union so a stored definition never fails to parse,
+// but the Hub throws "not supported yet" until Phase 2 wires them.
+
+export interface DevicesSelector {
+  kind: 'devices';
+  deviceTokens: string[];
+  measurements: string[];
+}
+
+export interface RelatedTraversalSelector {
+  kind: 'relatedTraversal';
+  from: string;
+  relationship: string;
+  measurements: string[];
+}
+
+export interface EntityFromStateSelector {
+  kind: 'entityFromState';
+  stateKey: string;
+  measurements: string[];
+}
+
+export type DatasourceSelector =
+  | DeviceSelector
+  | AnchorSelector
+  | DevicesSelector
+  | RelatedTraversalSelector
+  | EntityFromStateSelector;
+
+// ---- Canvas + widgets -------------------------------------------------------
+
+export type WidgetType =
+  | 'timeseries-chart'
+  | 'latest-card'
+  | 'gauge'
+  | 'table'
+  | 'label'
+  | 'image';
+
+// Absolute placement + z-order — canvas-first layout (layering native, the
+// ThingsBoard default-layout gap we set out to beat).
+export interface WidgetBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  z: number;
+}
+
+// Per-breakpoint placement, keyed by breakpoint name. 'base' is required; a
+// widget omitting a breakpoint inherits its 'base' box.
+export type WidgetLayout = Record<string, WidgetBox>;
+
+export interface WidgetInstance {
+  id: string;
+  type: WidgetType;
+  layout: WidgetLayout;
+  // label/image widgets carry no datasource.
+  datasource?: DatasourceSelector;
+  // Widget-specific options (series colors, unit, thresholds, …). Owned by the
+  // widget package; opaque here.
+  options?: Record<string, unknown>;
+}
+
+export interface CanvasBackground {
+  color?: string | null;
+  imageUrl?: string | null;
+}
+
+export interface CanvasGrid {
+  snap: boolean;
+  size: number;
+}
+
+// Breakpoint name → min viewport width in px. 'base' is required.
+export type Breakpoints = Record<string, number>;
+
+export interface Canvas {
+  background?: CanvasBackground;
+  grid: CanvasGrid;
+  breakpoints: Breakpoints;
+}
+
+export interface DashboardDefinition {
+  schemaVersion: number;
+  title: string;
+  canvas: Canvas;
+  widgets: WidgetInstance[];
+}
+
+// ---- Live telemetry ---------------------------------------------------------
+
+// A live measurement sample delivered to a widget. Mirrors event-management's
+// MeasurementEvent; `deviceId` is the numeric device id the event carries (the
+// value measurementStream filters on), not the device token.
+export interface MeasurementSample {
+  id: string;
+  deviceId: string;
+  eventType: number;
+  occurredTime: string | null;
+  name: string;
+  value: number | null;
+  classifier: string | null;
+}
