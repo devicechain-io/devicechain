@@ -4,7 +4,7 @@
 // Typed GraphQL operations for device credentials (ADR-014), served by the
 // device-management schema. The secret (credentialValue) is write-only on the
 // API: it is submitted on create and never returned on read.
-import { gql } from '@/lib/graphql/client';
+import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-management';
 import type {
   DeviceCredentialsQuery,

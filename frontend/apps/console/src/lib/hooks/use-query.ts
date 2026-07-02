@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useState } from 'react';
-import { GraphQLRequestError } from '@/lib/graphql/client';
+import { GraphQLRequestError } from '@devicechain/client';
 
 interface QueryState<T> {
   data: T | null;

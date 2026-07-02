@@ -17,8 +17,13 @@ import {
   refresh as apiRefresh,
   type IdentityAuth,
 } from '@/lib/api/user-management';
-import { setAuthTokenGetter, setIdentityTokenGetter } from '@/lib/graphql/client';
-import { decodeToken, isExpired, type DecodedClaims } from '@/lib/auth/jwt';
+import {
+  setAuthTokenGetter,
+  setIdentityTokenGetter,
+  decodeToken,
+  isExpired,
+  type DecodedClaims,
+} from '@devicechain/client';
 
 // The access/refresh pair is persisted to localStorage so a reload keeps the
 // session. The GraphQL client never reads storage directly: this provider

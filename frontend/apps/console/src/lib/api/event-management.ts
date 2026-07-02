@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Typed GraphQL operations against the event-management service.
-import { gql } from '@/lib/graphql/client';
+import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/event-management';
 import type { EventsQuery } from '@/gql/event-management/graphql';
 

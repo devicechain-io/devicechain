@@ -3,7 +3,7 @@
 
 // Typed GraphQL operations against the append-only audit journal (ADR-019),
 // served by the device-management schema.
-import { gql } from '@/lib/graphql/client';
+import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-management';
 import type {
   AuditEventsQuery,

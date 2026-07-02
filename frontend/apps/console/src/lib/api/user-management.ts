@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Typed GraphQL operations against the user-management service (ADR-008 RBAC).
-import { gql } from '@/lib/graphql/client';
+import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/user-management';
 import type {
   LoginMutation,

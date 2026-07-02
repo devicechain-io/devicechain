@@ -8,7 +8,7 @@
 //
 // Selection sets are inlined per operation (matching user-management.ts:
 // fragmentMasking is off in codegen, so fragments would only add unused locals).
-import { gql } from '@/lib/graphql/client';
+import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/user-management-admin';
 import type {
   IdentitiesQuery,
