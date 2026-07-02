@@ -167,9 +167,8 @@ type wsConnection struct {
 
 	writeMu sync.Mutex // gorilla permits only one concurrent writer
 
-	mu    sync.Mutex // guards ops + acked
-	acked bool
-	ops   map[string]context.CancelFunc // active operation id -> cancel
+	mu  sync.Mutex                    // guards ops
+	ops map[string]context.CancelFunc // active operation id -> cancel
 }
 
 func newConnection(conn *websocket.Conn, h *SubscriptionHandler) *wsConnection {
@@ -256,9 +255,6 @@ func (c *wsConnection) awaitInit(connCtx context.Context) (context.Context, bool
 		return nil, false
 	}
 
-	c.mu.Lock()
-	c.acked = true
-	c.mu.Unlock()
 	c.write(wsMessage{Type: msgConnectionAck})
 	return ctx, true
 }

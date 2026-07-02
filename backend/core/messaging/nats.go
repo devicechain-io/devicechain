@@ -337,8 +337,10 @@ func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffi
 				}
 				// A live message is never acked (no acknowledger): it is a
 				// fire-and-forget fan-out to the connected client, not a
-				// durable-processing handoff.
-				msg := NewConsumedMessage(nm.Subject, nm.Data, 0, natsHeaders(nm), nil)
+				// durable-processing handoff. Headers are dropped (nil): the live
+				// feed's consumer reads only the payload, so building a per-message
+				// header map would be wasted work on the hot path.
+				msg := NewConsumedMessage(nm.Subject, nm.Data, 0, nil, nil)
 				select {
 				case out <- msg:
 				case <-ctx.Done():
