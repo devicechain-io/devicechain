@@ -9,9 +9,10 @@
 
 import type { DashboardHub, MeasurementSample, WidgetInstance } from '@devicechain/dashboards';
 
+import { WidgetFrame } from './frame';
 import { useMeasurementStream } from './hooks';
 import { WIDGET_REGISTRY } from './registry';
-import { optNumber } from './widget';
+import { optNumber, optString } from './widget';
 
 export interface ConnectedWidgetProps {
   widget: WidgetInstance;
@@ -26,6 +27,34 @@ export function ConnectedWidget({ widget, hub, initialSamples }: ConnectedWidget
     window: optNumber(widget.options, 'window'),
     initialSamples,
   });
+
+  // A resolution/socket error surfaces as a muted error state rather than a blank
+  // pane. label/image carry no datasource so they never error here.
+  if (data.error) {
+    return (
+      <WidgetFrame title={optString(widget.options, 'title')}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 4,
+            width: '100%',
+            height: '100%',
+            padding: 12,
+            boxSizing: 'border-box',
+            textAlign: 'center',
+            color: 'hsl(var(--muted-foreground))',
+          }}
+        >
+          <div style={{ fontSize: 20, lineHeight: 1 }}>⚠</div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Data unavailable</div>
+          <div style={{ fontSize: 11, opacity: 0.8, wordBreak: 'break-word' }}>{String(data.error)}</div>
+        </div>
+      </WidgetFrame>
+    );
+  }
 
   const Component = WIDGET_REGISTRY[widget.type];
   if (!Component) return null; // unknown type in a hand-edited definition

@@ -178,6 +178,33 @@ describe('DashboardHub', () => {
     expect(sinkB.next).toHaveBeenCalledWith(expect.objectContaining({ value: 22 }));
   });
 
+  it('a stale detacher does not delete the fresh stream after an eviction+replace', async () => {
+    const hub = new DashboardHub({ resolver: newResolver() });
+    const sinkA = { next: vi.fn(), error: vi.fn() };
+
+    const disposeA = hub.subscribeWidget(
+      { kind: 'device', deviceToken: 'therm-001', measurements: ['temperature'] },
+      sinkA,
+    );
+    await flush();
+
+    // The upstream errors → the stream is evicted and A is notified.
+    h.streams[0].sink.error!(new Error('socket dropped'));
+    expect(hub.openStreamCount).toBe(0);
+
+    // A fresh subscriber opens a NEW stream for the same device.
+    const sinkB = { next: vi.fn() };
+    hub.subscribeWidget({ kind: 'device', deviceToken: 'therm-001', measurements: ['temperature'] }, sinkB);
+    await flush();
+    expect(hub.openStreamCount).toBe(1);
+
+    // Now the OLD subscriber detaches: the guard must leave the fresh stream intact.
+    disposeA();
+    expect(hub.openStreamCount).toBe(1);
+    h.streams[1].sink.next({ measurementStream: sampleFor('4', 'temperature', 99) });
+    expect(sinkB.next).toHaveBeenCalledWith(expect.objectContaining({ value: 99 }));
+  });
+
   it('does not attach if the widget is disposed before resolution completes', async () => {
     const hub = new DashboardHub({ resolver: newResolver() });
 

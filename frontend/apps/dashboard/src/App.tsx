@@ -29,12 +29,18 @@ import { WidgetConfigPanel } from './WidgetConfigPanel';
 // The dashboard token is the path segment after the /dash/ base.
 function dashboardTokenFromPath(): string {
   const path = window.location.pathname.replace(/^\/dash\/?/, '');
-  return decodeURIComponent(path.split('/')[0] ?? '');
+  const segment = path.split('/')[0] ?? '';
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    // A malformed %-escape (URIError) → treat as no token rather than throwing.
+    return '';
+  }
 }
 
 type LoadState =
   | { status: 'loading' }
-  | { status: 'ready'; definition: DashboardDefinition }
+  | { status: 'ready'; definition: DashboardDefinition; description: string | null }
   | { status: 'error'; message: string };
 
 type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; message: string };
@@ -74,8 +80,14 @@ function DashboardView({
           setState({ status: 'error', message: `Dashboard "${token}" not found.` });
           return;
         }
-        const definition = parseDashboardDefinition(JSON.parse(r.dashboard.definition));
-        setState({ status: 'ready', definition });
+        let definition = parseDashboardDefinition(JSON.parse(r.dashboard.definition));
+        // If the stored definition has no title, seed it from the dashboard's name
+        // so BOTH the working and saved baselines start seeded — otherwise the seed
+        // would only land on the working copy and read as a spurious dirty edit.
+        if (definition.title === '' && r.dashboard.name) {
+          definition = setTitle(definition, r.dashboard.name);
+        }
+        setState({ status: 'ready', definition, description: r.dashboard.description ?? null });
       })
       .catch((err: unknown) => {
         if (!cancelled) setState({ status: 'error', message: errorMessage(err) });
@@ -89,7 +101,14 @@ function DashboardView({
   if (state.status === 'error') return <Message title="Couldn’t load dashboard" detail={state.message} />;
 
   return (
-    <DashboardWorkspace key={token} token={token} loaded={state.definition} hub={hub} resolver={resolver} />
+    <DashboardWorkspace
+      key={token}
+      token={token}
+      loaded={state.definition}
+      description={state.description}
+      hub={hub}
+      resolver={resolver}
+    />
   );
 }
 
@@ -100,11 +119,13 @@ function DashboardView({
 function DashboardWorkspace({
   token,
   loaded,
+  description,
   hub,
   resolver,
 }: {
   token: string;
   loaded: DashboardDefinition;
+  description: string | null;
   hub: DashboardHub;
   resolver: DeviceResolver;
 }) {
@@ -120,6 +141,18 @@ function DashboardWorkspace({
   const dirty = isDirty(working, saved);
   const title = working.title || token;
   const selected = working.widgets.find((w) => w.id === selectedId) ?? null;
+
+  // Warn before a tab close/reload discards unsaved edits (the browser shows its
+  // own generic prompt when a beforeunload handler cancels). Only armed while dirty.
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
 
   const addWidgetOfType = (type: WidgetType) => {
     const { definition, id } = addWidget(working, type);
@@ -137,7 +170,14 @@ function DashboardWorkspace({
     setSaveState({ kind: 'saving' });
     gql('dashboard-management', UPDATE_DASHBOARD, {
       token,
-      request: { token, name: snapshot.title || null, definition: serializeDefinition(snapshot) },
+      // description is preserved verbatim (the editor doesn't edit it); name tracks
+      // the (now-seeded) title so a save never wipes either field.
+      request: {
+        token,
+        name: snapshot.title || null,
+        description,
+        definition: serializeDefinition(snapshot),
+      },
     })
       .then(() => {
         setSaved(snapshot);

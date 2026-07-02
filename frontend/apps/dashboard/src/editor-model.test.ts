@@ -53,6 +53,24 @@ describe('bringToFront', () => {
     const d = def();
     expect(bringToFront(d, 'b')).toBe(d); // b already has max z
   });
+  it('breaks a z-tie by bumping above the other widget', () => {
+    const tied: DashboardDefinition = {
+      ...def(),
+      widgets: [
+        { id: 'a', type: 'gauge', layout: { base: box({ z: 2 }) } },
+        { id: 'b', type: 'label', layout: { base: box({ x: 10, z: 2 }) } },
+      ],
+    };
+    const next = bringToFront(tied, 'a'); // tie at z=2 → a bumps to 3
+    expect(baseBox(next.widgets[0]).z).toBe(3);
+  });
+  it('is a no-op for a lone widget at z=0', () => {
+    const lone: DashboardDefinition = {
+      ...def(),
+      widgets: [{ id: 'a', type: 'gauge', layout: { base: box({ z: 0 }) } }],
+    };
+    expect(bringToFront(lone, 'a')).toBe(lone);
+  });
 });
 
 describe('updateWidget', () => {

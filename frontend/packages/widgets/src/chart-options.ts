@@ -130,7 +130,7 @@ export function buildGaugeOption(
           valueAnimation: false,
           color: theme.foreground,
           fontSize: valueFont,
-          offsetCenter: [0, '42%'],
+          offsetCenter: [0, '30%'],
           formatter: (v: number) => (value == null ? '—' : `${v}${unitSuffix}`),
         },
         data: [{ value: value ?? min }],

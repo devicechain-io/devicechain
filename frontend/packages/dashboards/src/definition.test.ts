@@ -48,6 +48,23 @@ describe('parseDashboardDefinition', () => {
     });
   });
 
+  it('normalizes a device datasource missing measurements to an empty array', () => {
+    const def = parseDashboardDefinition({
+      widgets: [
+        {
+          type: 'gauge',
+          layout: { base: box() },
+          datasource: { kind: 'device', deviceToken: 'therm-001' },
+        },
+      ],
+    });
+    expect(def.widgets[0].datasource).toEqual({
+      kind: 'device',
+      deviceToken: 'therm-001',
+      measurements: [],
+    });
+  });
+
   it('generates an id when a widget omits one', () => {
     const def = parseDashboardDefinition({
       widgets: [{ type: 'label', layout: { base: box() } }],

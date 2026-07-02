@@ -16,7 +16,7 @@ import type {
   WidgetInstance,
   WidgetType,
 } from '@devicechain/dashboards';
-import type { CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 
 // Widgets that carry a datasource (label/image do not).
 const DATA_WIDGETS = new Set<WidgetType>(['latest-card', 'gauge', 'timeseries-chart', 'table']);
@@ -212,9 +212,9 @@ function DeviceFields({
         />
       </Field>
       <Field label="Measurements (comma-separated)">
-        <TextInput
-          value={joinMeasurements(selector.measurements)}
-          onChange={(v) => onChange({ ...selector, measurements: splitMeasurements(v) })}
+        <MeasurementsInput
+          measurements={selector.measurements}
+          onChange={(m) => onChange({ ...selector, measurements: m })}
         />
       </Field>
     </>
@@ -251,9 +251,9 @@ function AnchorFields({
         <TextInput value={selector.anchor.targetToken} onChange={(v) => setAnchor({ targetToken: v })} />
       </Field>
       <Field label="Measurements (comma-separated)">
-        <TextInput
-          value={joinMeasurements(selector.measurements)}
-          onChange={(v) => onChange({ ...selector, measurements: splitMeasurements(v) })}
+        <MeasurementsInput
+          measurements={selector.measurements}
+          onChange={(m) => onChange({ ...selector, measurements: m })}
         />
       </Field>
     </>
@@ -262,8 +262,16 @@ function AnchorFields({
 
 // ---- measurement <-> comma-string helpers -----------------------------------
 
-function joinMeasurements(measurements: string[]): string {
-  return measurements.join(', ');
+// MeasurementsInput keeps its own text buffer so the controlled join→split→join
+// round-trip doesn't eat a trailing comma the user is mid-typing. It reconciles
+// down to the parent only when the parsed measurements actually differ.
+function MeasurementsInput({ measurements, onChange }: { measurements: string[]; onChange: (m: string[]) => void }) {
+  const [text, setText] = useState(() => measurements.join(', '));
+  useEffect(() => {
+    if (splitMeasurements(text).join(',') !== measurements.join(',')) setText(measurements.join(', '));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [measurements]);
+  return <TextInput value={text} onChange={(v) => { setText(v); onChange(splitMeasurements(v)); }} />;
 }
 
 function splitMeasurements(value: string): string[] {
