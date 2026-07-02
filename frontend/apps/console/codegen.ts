@@ -29,6 +29,13 @@ const config: CodegenConfig = {
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },
     },
+    './src/gql/dashboard-management/': {
+      schema: '../../../backend/services/dashboard-management/graphql/schema.graphql',
+      documents: ['src/lib/api/dashboards.ts'],
+      preset: 'client',
+      presetConfig: { fragmentMasking: false },
+      config: { documentMode: 'string' },
+    },
     './src/gql/device-state/': {
       schema: '../../../backend/services/device-state/graphql/schema.graphql',
       documents: ['src/lib/api/device-state.ts'],

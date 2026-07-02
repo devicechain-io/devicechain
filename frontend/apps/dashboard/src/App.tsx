@@ -7,6 +7,7 @@
 
 import { gql } from '@devicechain/client';
 import {
+  createDeviceResolver,
   DashboardHub,
   isDirty,
   parseDashboardDefinition,
@@ -16,14 +17,13 @@ import {
   type DeviceResolver,
   type WidgetType,
 } from '@devicechain/dashboards';
+import { DashboardRenderer } from '@devicechain/widgets';
 import { useEffect, useMemo, useState } from 'react';
 
 import { hasValidSession } from './auth';
 import { DashboardEditor } from './DashboardEditor';
-import { DashboardRenderer } from './DashboardRenderer';
 import { addWidget, setTitle, updateWidget } from './editor-model';
 import { DASHBOARD_BY_TOKEN, UPDATE_DASHBOARD } from './queries';
-import { createDeviceResolver } from './resolver';
 import { WidgetConfigPanel } from './WidgetConfigPanel';
 
 // The dashboard token is the path segment after the /dash/ base.

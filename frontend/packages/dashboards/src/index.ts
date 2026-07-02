@@ -48,3 +48,9 @@ export {
   DashboardDefinitionError,
   BASE_BREAKPOINT,
 } from './definition';
+
+// The device-management-backed resolver the Hub injects, and the event-management
+// history seeder the renderer backfills charts with — the runtime's coupling to the
+// platform's GraphQL, kept out of the presentational widget layer.
+export { createDeviceResolver } from './resolver';
+export { defaultHistoryWindow, fetchWidgetHistory, type HistoryWindow } from './history';

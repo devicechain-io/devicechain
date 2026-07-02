@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Cpu,
   Layers,
+  LayoutDashboard,
   LayoutGrid,
   MapPin,
   Package,
@@ -54,6 +55,7 @@ type NavNode = NavLeaf | NavGroupNode;
 
 const NAV: NavNode[] = [
   { label: 'Dashboard', href: '/', icon: LayoutGrid },
+  { label: 'Dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read' },
   {
     label: 'Devices',
     icon: Cpu,

@@ -34,7 +34,9 @@ export function errMessage(err: unknown): string {
 
 // rowLinkProps makes a whole table row behave like a link to a detail page:
 // clickable, keyboard-focusable, and activatable with Enter/Space. Spread it onto
-// a DataTableRow whose cells are plain content (no nested interactive controls).
+// a DataTableRow whose cells are plain content; a nested interactive control (e.g.
+// a per-row delete button) is fine as long as it stops propagation of both click
+// and keydown so it doesn't also trigger the row's navigation.
 export function rowLinkProps(onActivate: () => void) {
   return {
     role: 'button' as const,

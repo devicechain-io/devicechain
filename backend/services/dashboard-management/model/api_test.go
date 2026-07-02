@@ -80,6 +80,28 @@ func TestDashboardCrud(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// TestTokenReusableAfterDelete guards the hard-delete (Unscoped) fix: deleting a
+// dashboard must free its token so the same token can be created again. Under a
+// soft-delete — the original bug — the deleted row would remain and keep the token
+// occupying the unique index, so this re-create would fail with a duplicate-key
+// error. A revert to soft-delete therefore turns this test red.
+func TestTokenReusableAfterDelete(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	def := `{"schemaVersion":1,"widgets":[]}`
+
+	_, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "reuse", Definition: def})
+	require.NoError(t, err)
+
+	ok, err := api.DeleteDashboard(ctx, "reuse")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// The token must be free again — no lingering soft-deleted row on the unique index.
+	_, err = api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "reuse", Definition: def})
+	require.NoError(t, err, "token should be reusable after delete (hard delete frees the unique index)")
+}
+
 // TestInvalidDefinitionRejected confirms a non-JSON definition is refused on both
 // create and update rather than stored silently.
 func TestInvalidDefinitionRejected(t *testing.T) {

@@ -138,11 +138,19 @@ func (api *Api) Dashboards(ctx context.Context, criteria DashboardSearchCriteria
 	}, nil
 }
 
-// DeleteDashboard soft-deletes the dashboard with the given token. It reports
+// DeleteDashboard hard-deletes the dashboard with the given token. It reports
 // whether a row was deleted (false when no dashboard has that token). The
 // tenant-scope callback confines the delete to the caller's tenant.
+//
+// The delete is Unscoped (a real DELETE, not a soft-delete). A dashboard has no
+// trash/restore semantics, and — critically — the token unique index does not
+// exclude soft-deleted rows, so a soft-delete would lock the token forever and a
+// later create of the same token would fail with a duplicate-key error. Hard
+// delete frees the token immediately. (The platform-wide fix — a per-tenant
+// partial unique index that ignores soft-deleted rows — is tracked separately in
+// the "entity addressing & token policy" ADR.)
 func (api *Api) DeleteDashboard(ctx context.Context, token string) (bool, error) {
-	result := api.RDB.DB(ctx).Where("token = ?", token).Delete(&Dashboard{})
+	result := api.RDB.DB(ctx).Unscoped().Where("token = ?", token).Delete(&Dashboard{})
 	if result.Error != nil {
 		return false, result.Error
 	}
