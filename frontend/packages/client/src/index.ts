@@ -16,6 +16,7 @@ export {
   GraphQLRequestError,
   type Area,
   type RequestOptions,
+  type TypedDocument,
 } from './transport';
 
 export { subscribe, disposeSubscriptions, type SubscriptionSink } from './subscribe';

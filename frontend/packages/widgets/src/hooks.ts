@@ -4,7 +4,7 @@
 // React bindings between the imperative DashboardHub / DOM theme and widget state.
 
 import type { DashboardHub, DatasourceSelector, MeasurementSample } from '@devicechain/dashboards';
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { resolveChartTheme, type ChartTheme } from './theme';
 
@@ -16,42 +16,74 @@ export interface MeasurementStreamState {
   error: unknown | null;
 }
 
+export interface MeasurementStreamOptions {
+  // Max samples retained in the rolling window (oldest dropped past this).
+  window?: number;
+  // Historical samples to seed the window with before live data arrives (from a
+  // bucketedMeasurements backfill). Assumed chronological and older than the live
+  // tail; live samples for the same measurement name override the seed's latest.
+  initialSamples?: MeasurementSample[];
+}
+
 const EMPTY: MeasurementStreamState = { latest: {}, samples: [], error: null };
+
+// Build a name→last-sample map from a chronological list (last occurrence wins).
+function latestOf(samples: MeasurementSample[]): Record<string, MeasurementSample> {
+  const latest: Record<string, MeasurementSample> = {};
+  for (const s of samples) latest[s.name] = s;
+  return latest;
+}
 
 // useMeasurementStream subscribes a widget's datasource through the hub and keeps
 // the latest value per measurement plus a bounded rolling window. It re-subscribes
 // when the datasource changes (compared by value, so a re-rendered-but-equal
-// selector doesn't churn the subscription) and tears down on unmount.
+// selector doesn't churn the subscription) and tears down on unmount. When
+// initialSamples is given, it is merged ahead of the live tail so a chart shows
+// history immediately (and can arrive after the live stream opens).
 export function useMeasurementStream(
   hub: DashboardHub,
   datasource: DatasourceSelector | undefined,
-  options: { window?: number } = {},
+  options: MeasurementStreamOptions = {},
 ): MeasurementStreamState {
   const windowSize = options.window ?? 300;
-  const [state, setState] = useState<MeasurementStreamState>(EMPTY);
+  const initialSamples = options.initialSamples;
+  const [live, setLive] = useState<MeasurementStreamState>(EMPTY);
 
   // Value-compare the selector so an unchanged-but-new object reference doesn't
   // resubscribe every render.
   const key = datasource ? JSON.stringify(datasource) : null;
 
   useEffect(() => {
-    setState(EMPTY); // reset whenever the datasource changes (or clears)
+    setLive(EMPTY); // reset the live buffer whenever the datasource changes (or clears)
     if (!datasource) return;
 
     return hub.subscribeWidget(datasource, {
       next: (sample) =>
-        setState((prev) => {
+        setLive((prev) => {
           const samples = prev.samples.concat(sample);
           if (samples.length > windowSize) samples.splice(0, samples.length - windowSize);
           return { latest: { ...prev.latest, [sample.name]: sample }, samples, error: null };
         }),
-      error: (err) => setState((prev) => ({ ...prev, error: err })),
+      error: (err) => setLive((prev) => ({ ...prev, error: err })),
     });
     // `datasource` is intentionally read via `key` (value identity), not reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hub, key, windowSize]);
 
-  return state;
+  // Layer the history seed under the live tail. Kept separate from the live buffer
+  // so late-arriving history (async backfill) recomputes without touching the
+  // subscription, and switching datasource clears live while the new seed applies.
+  return useMemo(() => {
+    if (!initialSamples || initialSamples.length === 0) return live;
+    const merged = initialSamples.concat(live.samples);
+    const samples =
+      merged.length > windowSize ? merged.slice(merged.length - windowSize) : merged;
+    return {
+      latest: { ...latestOf(initialSamples), ...live.latest },
+      samples,
+      error: live.error,
+    };
+  }, [initialSamples, live, windowSize]);
 }
 
 // --- shared chart-theme store ------------------------------------------------

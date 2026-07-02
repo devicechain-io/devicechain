@@ -29,9 +29,20 @@ export type {
   MeasurementSample,
 } from './types';
 
+export { WIDGET_TYPES } from './types';
+
 export {
   DashboardHub,
   type DashboardHubConfig,
   type DeviceResolver,
   type WidgetStreamSink,
 } from './hub';
+
+export {
+  parseDashboardDefinition,
+  resolveWidgetBox,
+  activeBreakpoint,
+  generateWidgetId,
+  DashboardDefinitionError,
+  BASE_BREAKPOINT,
+} from './definition';

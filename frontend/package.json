@@ -9,7 +9,8 @@
   ],
   "scripts": {
     "dev": "npm run dev -w @devicechain/console",
-    "build": "npm run build -w @devicechain/console",
+    "dev:dash": "npm run dev -w @devicechain/dashboard",
+    "build": "npm run build --workspaces --if-present",
     "codegen": "npm run codegen -w @devicechain/console",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present"

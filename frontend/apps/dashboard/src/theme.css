@@ -1,0 +1,63 @@
+/* Copyright The DeviceChain Authors */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * The design-token contract the @devicechain/widgets package reads (as HSL
+ * channels, e.g. `--card: 0 0% 100%`). Mirrors the console's token set so a
+ * dashboard renders identically in either host. `:root` is light; `.dark` (set on
+ * <html>) is dark — the widgets' chart-theme observer watches <html> for the swap.
+ */
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --primary: 197 71% 42%;
+  --primary-foreground: 0 0% 100%;
+  --muted: 240 4.8% 95.9%;
+  --muted-foreground: 240 3.8% 46.1%;
+  --destructive: 0 72.2% 50.6%;
+  --border: 240 5.9% 90%;
+  --chart-1: 220 70% 50%;
+  --chart-2: 160 60% 45%;
+  --chart-3: 30 80% 55%;
+  --chart-4: 280 65% 60%;
+  --chart-5: 340 75% 55%;
+}
+
+.dark {
+  --background: 210 40% 6%;
+  --foreground: 210 16% 96%;
+  --card: 210 24% 11%;
+  --card-foreground: 210 16% 96%;
+  --primary: 197 71% 49%;
+  --primary-foreground: 0 0% 100%;
+  --muted: 210 20% 16%;
+  --muted-foreground: 210 12% 66%;
+  --destructive: 0 72.2% 50.6%;
+  --border: 210 20% 17%;
+  --chart-1: 220 70% 50%;
+  --chart-2: 160 60% 45%;
+  --chart-3: 30 80% 55%;
+  --chart-4: 280 65% 60%;
+  --chart-5: 340 75% 55%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}

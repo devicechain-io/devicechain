@@ -114,8 +114,9 @@ func (r *SchemaResolver) EntityRelationshipsByToken(ctx context.Context, args st
 	return result, nil
 }
 
-// List all entity relationships that match the given criteria. A source filter is
-// supplied as (sourceType, source-token); it is resolved to the internal id here.
+// List all entity relationships that match the given criteria. Source and target
+// filters are supplied as (type, token) pairs; each is resolved to its internal id
+// here. Filtering by target is how "the devices anchored to area X" is expressed.
 func (r *SchemaResolver) EntityRelationships(ctx context.Context, args struct {
 	Criteria model.EntityRelationshipSearchCriteria
 }) (*EntityRelationshipSearchResultsResolver, error) {
@@ -131,6 +132,13 @@ func (r *SchemaResolver) EntityRelationships(ctx context.Context, args struct {
 			return nil, err
 		}
 		criteria.SourceId = &id
+	}
+	if criteria.Target != nil && criteria.TargetType != nil {
+		id, err := api.ResolveEntityToken(ctx, *criteria.TargetType, *criteria.Target)
+		if err != nil {
+			return nil, err
+		}
+		criteria.TargetId = &id
 	}
 	found, err := api.EntityRelationships(ctx, criteria)
 	if err != nil {

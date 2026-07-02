@@ -80,6 +80,8 @@ type EntityRelationshipSearchCriteria struct {
 	Source           *string // source entity token (GraphQL-facing; resolved to SourceId)
 	SourceId         *uint
 	TargetType       *string
+	Target           *string // target entity token (GraphQL-facing; resolved to TargetId)
+	TargetId         *uint
 	RelationshipType *string
 	Tracked          *bool
 }

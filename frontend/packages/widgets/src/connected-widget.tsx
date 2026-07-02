@@ -7,7 +7,7 @@
 // renderer maps over its widgets rendering one ConnectedWidget each; the widgets
 // themselves stay pure functions of (widget, data).
 
-import type { DashboardHub, WidgetInstance } from '@devicechain/dashboards';
+import type { DashboardHub, MeasurementSample, WidgetInstance } from '@devicechain/dashboards';
 
 import { useMeasurementStream } from './hooks';
 import { WIDGET_REGISTRY } from './registry';
@@ -16,11 +16,15 @@ import { optNumber } from './widget';
 export interface ConnectedWidgetProps {
   widget: WidgetInstance;
   hub: DashboardHub;
+  // Optional history backfill for this widget (from bucketedMeasurements), seeded
+  // under the live tail so a chart isn't blank until the first live sample.
+  initialSamples?: MeasurementSample[];
 }
 
-export function ConnectedWidget({ widget, hub }: ConnectedWidgetProps) {
+export function ConnectedWidget({ widget, hub, initialSamples }: ConnectedWidgetProps) {
   const data = useMeasurementStream(hub, widget.datasource, {
     window: optNumber(widget.options, 'window'),
+    initialSamples,
   });
 
   const Component = WIDGET_REGISTRY[widget.type];
