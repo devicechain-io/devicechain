@@ -244,6 +244,7 @@ export type EntityRelationshipSearchCriteria = {
   relationshipType?: string | null | undefined;
   source?: string | null | undefined;
   sourceType?: string | null | undefined;
+  target?: string | null | undefined;
   targetType?: string | null | undefined;
   tracked?: boolean | null | undefined;
 };
