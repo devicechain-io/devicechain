@@ -153,7 +153,7 @@ jobs:
           -f hack/license-header.txt backend
 
   # ---------------------------------------------------------------------------
-  # Frontend: codegen drift check, typecheck, build.
+  # Frontend: codegen drift check, typecheck, unit tests, build.
   # ---------------------------------------------------------------------------
   frontend:
     runs-on: ubuntu-latest
@@ -181,6 +181,9 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Test
+        run: npm test
 
       - name: Build
         run: npm run build
