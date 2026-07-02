@@ -1,0 +1,67 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Dashboard Management GraphQL Schema (ADR-039).
+
+schema {
+    query: Query
+    mutation: Mutation
+}
+
+# Pagination info for search results.
+type SearchResultsPagination {
+    pageStart: Int
+    pageEnd: Int
+    totalRecords: Int
+}
+
+# A persisted dashboard definition. The layout, widgets, and datasource selectors
+# live inside the JSON `definition` document (owned by the @devicechain/dashboards
+# TypeScript types); the backend stores it opaquely, validated only as well-formed
+# JSON.
+type Dashboard {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    token: String!
+    name: String
+    description: String
+    definition: String!
+}
+
+# Data required to create or update a dashboard.
+input DashboardCreateRequest {
+    token: String!
+    name: String
+    description: String
+    definition: String!
+}
+
+# Criteria used when searching for dashboards.
+input DashboardSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    name: String
+}
+
+# Search results returned from a dashboard query.
+type DashboardSearchResults {
+    results: [Dashboard!]!
+    pagination: SearchResultsPagination!
+}
+
+type Query {
+    # Look up a single dashboard by its token.
+    dashboard(token: String!): Dashboard
+    # Search dashboards by criteria.
+    dashboards(criteria: DashboardSearchCriteria!): DashboardSearchResults!
+}
+
+type Mutation {
+    # Create a new dashboard.
+    createDashboard(request: DashboardCreateRequest!): Dashboard!
+    # Update the dashboard with the given (current) token.
+    updateDashboard(token: String!, request: DashboardCreateRequest!): Dashboard!
+    # Delete the dashboard with the given token. Returns whether a row was deleted.
+    deleteDashboard(token: String!): Boolean!
+}

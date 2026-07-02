@@ -237,5 +237,7 @@ functionalAreas:
     config: {}
   device-state:
     config: {}
+  dashboard-management:
+    config: {}
   command-delivery:
     config: {}
