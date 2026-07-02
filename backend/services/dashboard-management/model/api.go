@@ -4,6 +4,7 @@
 package model
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,9 +14,18 @@ import (
 	"gorm.io/gorm"
 )
 
+// maxDefinitionBytes caps a stored dashboard definition. A definition is a layout
+// document (schemaVersion + canvas + widget list), not a blob — image/background
+// widgets carry URLs, not embedded data — so 1 MiB is already generous. The cap
+// keeps a single tenant from exhausting shared storage with an oversized document.
+const maxDefinitionBytes = 1 << 20
+
 // ErrInvalidDefinition is returned when a create/update carries a Definition that
-// is not well-formed JSON. The document is otherwise stored opaquely.
-var ErrInvalidDefinition = errors.New("dashboard definition is not valid JSON")
+// is not a well-formed JSON object. The document is otherwise stored opaquely.
+var ErrInvalidDefinition = errors.New("dashboard definition must be a JSON object")
+
+// ErrDefinitionTooLarge is returned when a Definition exceeds maxDefinitionBytes.
+var ErrDefinitionTooLarge = errors.New("dashboard definition exceeds the maximum size")
 
 type Api struct {
 	RDB *rdb.RdbManager
@@ -26,13 +36,23 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 	return &Api{RDB: rdb}
 }
 
-// definitionJSON validates that raw is well-formed JSON and returns it as a
-// datatypes.JSON column value. Unlike the registry Metadata helper (which drops
-// invalid input silently) a bad definition is rejected — a dashboard with a
-// corrupt document is a client bug, not a value to swallow.
+// definitionJSON validates that raw is a well-formed, size-bounded JSON object
+// and returns it as a datatypes.JSON column value. Unlike the registry Metadata
+// helper (which drops invalid input silently) a bad definition is rejected — a
+// dashboard with a corrupt document is a client bug, not a value to swallow. The
+// object requirement rejects well-formed-but-nonsense scalars ("42", true, an
+// array) that would only fail later at render time. The backend still treats the
+// document's *contents* opaquely; the @devicechain/dashboards types own the shape.
 func definitionJSON(raw string) (datatypes.JSON, error) {
 	b := []byte(raw)
+	// Length-check before parsing so an oversized payload can't cost a full scan.
+	if len(b) > maxDefinitionBytes {
+		return nil, ErrDefinitionTooLarge
+	}
 	if !json.Valid(b) {
+		return nil, ErrInvalidDefinition
+	}
+	if trimmed := bytes.TrimSpace(b); len(trimmed) == 0 || trimmed[0] != '{' {
 		return nil, ErrInvalidDefinition
 	}
 	return datatypes.JSON(b), nil

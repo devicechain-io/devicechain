@@ -140,13 +140,42 @@ describe('DashboardHub', () => {
     expect(hub.openStreamCount).toBe(0);
   });
 
-  it('opens no stream for an unknown device token', async () => {
+  it('signals sink.error for an unknown device token, opening no stream', async () => {
     const hub = new DashboardHub({ resolver: newResolver() });
+    const sink = { next: vi.fn(), error: vi.fn() };
 
-    hub.subscribeWidget({ kind: 'device', deviceToken: 'ghost', measurements: ['t'] }, { next: vi.fn() });
+    hub.subscribeWidget({ kind: 'device', deviceToken: 'ghost', measurements: ['t'] }, sink);
     await flush();
 
+    // A typo'd/deleted token surfaces as an error, not a silently blank widget.
+    expect(sink.error).toHaveBeenCalledTimes(1);
+    expect((sink.error.mock.calls[0][0] as Error).message).toContain('ghost');
     expect(hub.openStreamCount).toBe(0);
+  });
+
+  it('evicts a stream whose upstream errors so the next subscriber reopens it', async () => {
+    const hub = new DashboardHub({ resolver: newResolver() });
+    const sinkA = { next: vi.fn(), error: vi.fn() };
+
+    hub.subscribeWidget({ kind: 'device', deviceToken: 'therm-001', measurements: ['temperature'] }, sinkA);
+    await flush();
+    expect(hub.openStreamCount).toBe(1);
+
+    // The upstream socket errors: the subscriber is notified AND the dead stream
+    // is evicted (not left cached with a no-op unsubscribe).
+    h.streams[0].sink.error!(new Error('socket dropped'));
+    expect(sinkA.error).toHaveBeenCalledTimes(1);
+    expect(hub.openStreamCount).toBe(0);
+
+    // A fresh subscriber for the same device opens a NEW upstream rather than
+    // attaching to the corpse and freezing.
+    const sinkB = { next: vi.fn() };
+    hub.subscribeWidget({ kind: 'device', deviceToken: 'therm-001', measurements: ['temperature'] }, sinkB);
+    await flush();
+    expect(hub.openStreamCount).toBe(1);
+    expect(h.streams.length).toBe(2); // one dead + one fresh
+    h.streams[1].sink.next({ measurementStream: sampleFor('4', 'temperature', 22) });
+    expect(sinkB.next).toHaveBeenCalledWith(expect.objectContaining({ value: 22 }));
   });
 
   it('does not attach if the widget is disposed before resolution completes', async () => {

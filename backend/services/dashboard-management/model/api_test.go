@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -103,6 +104,30 @@ func TestInvalidDefinitionRejected(t *testing.T) {
 		Definition: "}{",
 	})
 	assert.ErrorIs(t, err, ErrInvalidDefinition)
+}
+
+// TestNonObjectDefinitionRejected confirms a well-formed-but-non-object document
+// (a scalar or array) is refused — it would only fail later at render time.
+func TestNonObjectDefinitionRejected(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	for _, def := range []string{`42`, `true`, `"hello"`, `null`, `[]`, `[{"id":"w1"}]`} {
+		_, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "scalar", Definition: def})
+		assert.ErrorIsf(t, err, ErrInvalidDefinition, "definition %q must be rejected", def)
+	}
+}
+
+// TestOversizedDefinitionRejected confirms a definition beyond the size cap is
+// refused before it can exhaust shared storage.
+func TestOversizedDefinitionRejected(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	// A well-formed object whose padding pushes it past the cap.
+	big := `{"schemaVersion":1,"pad":"` + strings.Repeat("x", maxDefinitionBytes) + `"}`
+	_, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "big", Definition: big})
+	assert.ErrorIs(t, err, ErrDefinitionTooLarge)
 }
 
 // TestTenantIsolation confirms a dashboard created under one tenant is invisible
