@@ -1,0 +1,34 @@
+{
+  "name": "@devicechain/widgets",
+  "version": "0.0.1",
+  "description": "DeviceChain presentational dashboard widgets — time-series chart + gauge (Apache ECharts), latest card, table, label, image. Themed via CSS custom properties, no Tailwind leakage (ADR-039).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@devicechain/dashboards": "*",
+    "echarts": "^5.5.0"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.2.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "jsdom": "^25.0.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "~5.6.0",
+    "vitest": "^2.1.9"
+  }
+}
