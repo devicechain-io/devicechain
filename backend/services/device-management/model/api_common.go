@@ -158,6 +158,9 @@ func (api *Api) EntityRelationships(ctx context.Context,
 		if criteria.TargetType != nil {
 			result = result.Where("target_type = ?", *criteria.TargetType)
 		}
+		if criteria.TargetId != nil {
+			result = result.Where("target_id = ?", *criteria.TargetId)
+		}
 		if criteria.RelationshipType != nil {
 			result = result.Where("relationship_type_id = (?)",
 				api.RDB.DB(ctx).Model(&EntityRelationshipType{}).Select("id").Where("token = ?", *criteria.RelationshipType))

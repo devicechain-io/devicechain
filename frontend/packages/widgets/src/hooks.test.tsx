@@ -73,4 +73,35 @@ describe('useMeasurementStream', () => {
     unmount();
     expect(f.unsub).toHaveBeenCalledTimes(1);
   });
+
+  it('seeds the window with initialSamples ahead of the live tail', () => {
+    const f = fakeHub();
+    const history = [sample('temperature', 18, 'h1'), sample('temperature', 19, 'h2')];
+    const { result } = renderHook(() =>
+      useMeasurementStream(f.hub, ds, { initialSamples: history }),
+    );
+
+    // History is visible before any live sample arrives.
+    expect(result.current.samples.map((s) => s.value)).toEqual([18, 19]);
+    expect(result.current.latest.temperature.value).toBe(19);
+
+    // A live sample appends after the seed, and live wins for `latest`.
+    f.push(sample('temperature', 22, 't1'));
+    expect(result.current.samples.map((s) => s.value)).toEqual([18, 19, 22]);
+    expect(result.current.latest.temperature.value).toBe(22);
+  });
+
+  it('caps the merged history+live window to the configured size', () => {
+    const f = fakeHub();
+    const history = [sample('t', 1, 'h1'), sample('t', 2, 'h2')];
+    const { result } = renderHook(() =>
+      useMeasurementStream(f.hub, ds, { window: 3, initialSamples: history }),
+    );
+
+    f.push(sample('t', 3, 'a'));
+    f.push(sample('t', 4, 'b'));
+
+    // 2 history + 2 live = 4, capped to the newest 3.
+    expect(result.current.samples.map((s) => s.value)).toEqual([2, 3, 4]);
+  });
 });

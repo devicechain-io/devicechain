@@ -19,7 +19,8 @@ export type Area =
   | 'device-management'
   | 'event-management'
   | 'device-state'
-  | 'command-delivery';
+  | 'command-delivery'
+  | 'dashboard-management';
 
 // Relative URL matching the cluster ingress contract: the ingress routes
 // https://<host>/api/<area>/graphql to each functional-area service and serves
@@ -87,6 +88,17 @@ export interface RequestOptions {
   identity?: boolean;
 }
 
+// A GraphQL document tagged with its result/variable types — what gql()/subscribe()
+// accept. A code-generated `TypedDocumentString` (client preset) satisfies it, and
+// so does a hand-authored query string cast to it: the SDK runs in documentMode
+// 'string', calling only `toString()` to get the query text, so the phantom result
+// (`TResult`) and variable (`TVariables`) generics are all that distinguish them.
+// Exported so packages/apps without codegen (dashboards, widgets, the dash app)
+// hand-author typed documents against one shared alias instead of re-inlining it.
+export type TypedDocument<TResult, TVariables> = DocumentTypeDecoration<TResult, TVariables> & {
+  toString(): string;
+};
+
 // `document` is a code-generated typed document (a `TypedDocumentString` from the
 // GraphQL Code Generator client preset). It implements
 // `DocumentTypeDecoration<TResult, TVariables>`, which carries the result and
@@ -96,7 +108,7 @@ export interface RequestOptions {
 // result (`TResult`) and the variables (`TVariables`).
 export async function gql<TResult, TVariables>(
   area: Area,
-  document: DocumentTypeDecoration<TResult, TVariables> & { toString(): string },
+  document: TypedDocument<TResult, TVariables>,
   ...[variables, options]: TVariables extends Record<string, never>
     ? [variables?: undefined, options?: RequestOptions]
     : [variables: TVariables, options?: RequestOptions]

@@ -77,13 +77,18 @@ export type DatasourceSelector =
 
 // ---- Canvas + widgets -------------------------------------------------------
 
-export type WidgetType =
-  | 'timeseries-chart'
-  | 'latest-card'
-  | 'gauge'
-  | 'table'
-  | 'label'
-  | 'image';
+// The built-in widget types. Kept as a runtime array so parse/validation and the
+// widget registry share one source of truth (WidgetType is derived from it).
+export const WIDGET_TYPES = [
+  'timeseries-chart',
+  'latest-card',
+  'gauge',
+  'table',
+  'label',
+  'image',
+] as const;
+
+export type WidgetType = (typeof WIDGET_TYPES)[number];
 
 // Absolute placement + z-order — canvas-first layout (layering native, the
 // ThingsBoard default-layout gap we set out to beat).

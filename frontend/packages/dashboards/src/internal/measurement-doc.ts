@@ -9,17 +9,9 @@
 // GraphQL string carrying phantom result/variable types IS exactly what a
 // generated TypedDocumentString would be at runtime, minus the class wrapper.
 
-import type { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+import type { TypedDocument } from '@devicechain/client';
 
 import type { MeasurementSample } from '../types';
-
-// A GraphQL document string tagged with its result/variable types — the shape
-// the SDK's gql()/subscribe() accept (they only need .toString()). Local to this
-// file; the SDK inlines the same shape but does not export it (a worthwhile
-// future SDK re-export would let both sides share one alias).
-type TypedDocument<TResult, TVariables> = DocumentTypeDecoration<TResult, TVariables> & {
-  toString(): string;
-};
 
 export interface MeasurementStreamResult {
   measurementStream: MeasurementSample;

@@ -886,6 +886,7 @@ input EntityRelationshipSearchCriteria {
     sourceType: String
     source: String
     targetType: String
+    target: String
     relationshipType: String
     tracked: Boolean
 }
