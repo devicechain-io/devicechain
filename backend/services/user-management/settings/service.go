@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+// MaxValueBytes bounds a stored setting value. Settings are small admin-edited
+// config; the cap stops a single write from persisting a payload every settings
+// read then hauls back.
+const MaxValueBytes = 64 * 1024
+
 // Resolver-facing errors.
 var (
 	// ErrUnknownSetting is returned when a write or read targets a key with no code
@@ -18,6 +23,8 @@ var (
 	ErrUnknownSetting = errors.New("unknown setting key")
 	// ErrInvalidValue is returned when a written value is not valid JSON.
 	ErrInvalidValue = errors.New("setting value must be valid JSON")
+	// ErrValueTooLarge is returned when a written value exceeds MaxValueBytes.
+	ErrValueTooLarge = fmt.Errorf("setting value exceeds the maximum size of %d bytes", MaxValueBytes)
 )
 
 // Effective is a setting resolved for presentation: its definition, the effective
@@ -85,6 +92,9 @@ func (s *Service) Get(ctx context.Context, key string) (*Effective, error) {
 func (s *Service) Set(ctx context.Context, key string, value []byte, updatedBy string) (*Effective, error) {
 	if _, ok := definition(key); !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownSetting, key)
+	}
+	if len(value) > MaxValueBytes {
+		return nil, ErrValueTooLarge
 	}
 	if !json.Valid(value) {
 		return nil, ErrInvalidValue

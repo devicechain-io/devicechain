@@ -92,6 +92,11 @@ func newTestApi(t *testing.T) *Api {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("failed to register tenant scoping: %v", err)
 	}
+	// Register the token-grammar callbacks too, so the CRUD path is exercised
+	// exactly as production does (ADR-042 P2).
+	if err := rdb.RegisterTokenGrammar(db); err != nil {
+		t.Fatalf("failed to register token grammar: %v", err)
+	}
 	if err := db.AutoMigrate(&Command{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}

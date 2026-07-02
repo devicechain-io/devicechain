@@ -101,6 +101,18 @@ func TestSetInvalidJSONRejected(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidValue)
 }
 
+func TestSetOversizedValueRejected(t *testing.T) {
+	svc := newTestService(t)
+	// A valid-JSON string literal just over the cap.
+	big := make([]byte, MaxValueBytes+2)
+	big[0], big[len(big)-1] = '"', '"'
+	for i := 1; i < len(big)-1; i++ {
+		big[i] = 'a'
+	}
+	_, err := svc.Set(context.Background(), KeyTokenMasks, big, "x")
+	assert.ErrorIs(t, err, ErrValueTooLarge)
+}
+
 func findEffective(t *testing.T, list []Effective, key string) Effective {
 	t.Helper()
 	for _, e := range list {

@@ -49,6 +49,8 @@ func newGrammarDB(t *testing.T) *gorm.DB {
 func TestValidateToken(t *testing.T) {
 	valid := []string{
 		"device-1", "a", "ops-overview", "abc123", "0", "9-lives",
+		"Ops", "SDK7GV3WXZ3FBXZ", // uppercase machine identifiers (VINs, serials)
+		"device_1", "a_b", // underscore is subject-safe
 		"550e8400-e29b-41d4-a716-446655440000", // a uuid (auto-minted claim token)
 	}
 	for _, tok := range valid {
@@ -59,16 +61,16 @@ func TestValidateToken(t *testing.T) {
 
 	invalid := []string{
 		"",             // empty
-		"Ops",          // uppercase
 		"ops overview", // space
-		"ops_overview", // underscore
 		"-lead",        // leading hyphen
+		"_lead",        // leading underscore
 		"a.b",          // dot — shifts NATS subject segments
 		"a*b",          // NATS wildcard
 		"a>b",          // NATS wildcard
 		"a/b",          // MQTT separator
 		"a+b",          // MQTT wildcard
 		"a#b",          // MQTT wildcard
+		"a:b",          // subject-hazardous punctuation
 		"café",         // non-ascii
 	}
 	for _, tok := range invalid {
@@ -92,6 +94,10 @@ func TestTokenGrammarCallback_Create(t *testing.T) {
 
 	if err := db.Create(&grammarThing{TokenReference: TokenReference{Token: "good-1"}}).Error; err != nil {
 		t.Fatalf("valid token create: %v", err)
+	}
+	// An uppercase machine identifier is accepted (device serials, VINs).
+	if err := db.Create(&grammarThing{TokenReference: TokenReference{Token: "SDK7GV3WXZ3FBXZ"}}).Error; err != nil {
+		t.Fatalf("uppercase identifier must be accepted: %v", err)
 	}
 	// A dangerous token never reaches storage.
 	if err := db.Create(&grammarThing{TokenReference: TokenReference{Token: "bad.token"}}).Error; err == nil {
@@ -147,10 +153,25 @@ func TestTokenGrammarCallback_Update(t *testing.T) {
 		Updates(map[string]interface{}{"name": "again"}).Error; err != nil {
 		t.Fatalf("map update without a token key must pass: %v", err)
 	}
-	// A map update that sets a bad token is rejected.
+	// A map update that sets a bad token is rejected — by the column name...
 	if err := db.Model(&grammarThing{}).Where("id = ?", row.ID).
 		Updates(map[string]interface{}{"token": "bad.token"}).Error; err == nil {
-		t.Fatalf("map update setting a metacharacter token must be rejected")
+		t.Fatalf("map update setting a metacharacter token (column key) must be rejected")
+	}
+	// ...and by the Go field name, which GORM also accepts.
+	if err := db.Model(&grammarThing{}).Where("id = ?", row.ID).
+		Updates(map[string]interface{}{"Token": "bad.token"}).Error; err == nil {
+		t.Fatalf("map update setting a metacharacter token (Go field key) must be rejected")
+	}
+	// A non-string token value in a map fails closed (cannot be validated).
+	if err := db.Model(&grammarThing{}).Where("id = ?", row.ID).
+		Updates(map[string]interface{}{"token": 42}).Error; err == nil {
+		t.Fatalf("map update setting a non-string token must be rejected")
+	}
+	// An explicitly-empty token in a map is rejected.
+	if err := db.Model(&grammarThing{}).Where("id = ?", row.ID).
+		Updates(map[string]interface{}{"token": ""}).Error; err == nil {
+		t.Fatalf("map update setting an empty token must be rejected")
 	}
 }
 
@@ -168,5 +189,18 @@ func TestTokenGrammarCallback_BatchAborts(t *testing.T) {
 	db.Model(&grammarThing{}).Count(&count)
 	if count != 0 {
 		t.Fatalf("no rows should persist when the batch is rejected, got %d", count)
+	}
+}
+
+// A slice-of-maps create must validate each map (and must not panic reaching a
+// struct-field accessor on a map element).
+func TestTokenGrammarCallback_MapSliceCreate(t *testing.T) {
+	db := newGrammarDB(t)
+	err := db.Model(&grammarThing{}).Create(&[]map[string]interface{}{
+		{"token": "ok-a"},
+		{"token": "bad.b"},
+	}).Error
+	if err == nil {
+		t.Fatalf("slice-of-maps create with an invalid token must be rejected (and must not panic)")
 	}
 }
