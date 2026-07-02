@@ -5,6 +5,7 @@ package schema
 
 import (
 	v1 "github.com/devicechain-io/dc-device-management/schema/v1"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
 	"gorm.io/gorm"
 )
@@ -27,12 +28,25 @@ func NewInitialSchema() *gormigrate.Migration {
 		Migrate: func(tx *gorm.DB) error {
 			// One uniform EntityRelationship edge table + EntityRelationshipType
 			// replace the per-family relationship/relationship-type tables (ADR-013).
-			return tx.AutoMigrate(
+			models := []any{
 				&v1.Device{}, &v1.DeviceType{}, &v1.DeviceGroup{}, &v1.DeviceCredential{},
 				&v1.AssetType{}, &v1.Asset{}, &v1.AssetGroup{},
 				&v1.CustomerType{}, &v1.Customer{}, &v1.CustomerGroup{},
 				&v1.AreaType{}, &v1.Area{}, &v1.AreaGroup{},
-				&v1.EntityRelationshipType{}, &v1.EntityRelationship{})
+				&v1.EntityRelationshipType{}, &v1.EntityRelationship{},
+			}
+			if err := tx.AutoMigrate(models...); err != nil {
+				return err
+			}
+			// ADR-042 P1: every one of these is a tenant-scoped token entity — give
+			// each a per-tenant partial unique index on token (replaces the global
+			// UNIQUE that rdb.TokenReference no longer declares).
+			for _, m := range models {
+				if err := rdb.CreateTenantTokenIndex(tx, m); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return dropTables(tx, []string{

@@ -40,7 +40,12 @@ func NewInitialSchema() *gormigrate.Migration {
 				Error           sql.NullString
 			}
 
-			return tx.AutoMigrate(&Command{})
+			if err := tx.AutoMigrate(&Command{}); err != nil {
+				return err
+			}
+			// ADR-042 P1: per-tenant partial unique index on token (replaces the
+			// global UNIQUE that rdb.TokenReference no longer declares).
+			return rdb.CreateTenantTokenIndex(tx, &Command{})
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return tx.Migrator().DropTable("commands")
