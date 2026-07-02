@@ -5,7 +5,7 @@
 // group-membership helpers built on top: membership is just a group -> member
 // edge of the reserved "member" relationship type, which the device-management
 // backend auto-provisions per tenant on first use.
-import { gql } from '@/lib/graphql/client';
+import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-management';
 import type { EntityRelationshipsQuery } from '@/gql/device-management/graphql';
 

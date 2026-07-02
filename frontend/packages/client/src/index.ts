@@ -1,12 +1,28 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// @devicechain/client — the DeviceChain client SDK.
+// @devicechain/client — the DeviceChain client SDK (ADR-034/037).
 //
-// Scaffolded here as a workspace package (ADR-039 package layer cake). PR 3 fills
-// it with the two-tier auth/token state machine, typed GraphQL operations, and
-// the graphql-ws subscribe() over the client wire (ADR-034/037), extracted from
-// the console's current src/lib/graphql + src/auth. Until then this placeholder
-// keeps the package a valid, type-checkable workspace member.
+// The framework-agnostic core of the client plane: the two-tier auth token seam,
+// the typed GraphQL-over-fetch transport, JWT decode, and graphql-ws
+// subscriptions. Hosts (the console, the dashboard app, sims) bring their own
+// state/UI and register a token getter; the SDK owns the wire.
 
-export const SDK_NAME = '@devicechain/client';
+export {
+  gql,
+  areaPath,
+  setAuthTokenGetter,
+  setIdentityTokenGetter,
+  GraphQLRequestError,
+  type Area,
+  type RequestOptions,
+} from './transport';
+
+export { subscribe, disposeSubscriptions, type SubscriptionSink } from './subscribe';
+
+export {
+  decodeToken,
+  isExpired,
+  hasAuthority,
+  type DecodedClaims,
+} from './jwt';

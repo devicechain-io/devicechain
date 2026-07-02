@@ -33,7 +33,7 @@ import {
   SidebarRail,
 } from '@/components/ui/sidebar';
 import { useAuth } from '@/auth/AuthProvider';
-import { hasAuthority, type DecodedClaims } from '@/lib/auth/jwt';
+import { hasAuthority, type DecodedClaims } from '@devicechain/client';
 import { NavUser } from '@/routes/NavUser';
 
 interface NavLeaf {

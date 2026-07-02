@@ -3,7 +3,7 @@
 
 // Typed GraphQL operations against the command-delivery service (ADR-012):
 // persistent, two-way command dispatch with a guarded lifecycle.
-import { gql } from '@/lib/graphql/client';
+import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/command-delivery';
 import type {
   CommandsQuery,

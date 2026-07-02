@@ -13,7 +13,7 @@ import {
 } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2, CircleSlash } from 'lucide-react';
-import { GraphQLRequestError } from '@/lib/graphql/client';
+import { GraphQLRequestError } from '@devicechain/client';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 

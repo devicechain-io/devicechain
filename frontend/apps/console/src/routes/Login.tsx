@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { Logo } from '@/components/brand/Logo';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { GraphQLRequestError } from '@/lib/graphql/client';
+import { GraphQLRequestError } from '@devicechain/client';
 import type { IdentityAuth } from '@/lib/api/user-management';
 
 // Login is two-step (ADR-033): authenticate the email/password to get an identity

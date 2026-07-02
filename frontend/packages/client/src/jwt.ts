@@ -4,8 +4,8 @@
 // Client-side decode of the DeviceChain access token (ADR-008 JWT). This reads
 // the payload for display + routing only; it does NOT verify the signature —
 // every protected operation is still enforced server-side by the token's
-// authorities. Never trust these claims for authorization decisions beyond
-// what the UI shows.
+// authorities. Never trust these claims for authorization decisions beyond what
+// the UI shows.
 
 export interface DecodedClaims {
   /** Tenant the subject acts within (authoritative server-side). */

@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { ChevronsUpDown, LogOut, Building2 } from 'lucide-react';
 import { useAuth } from '@/auth/AuthProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { decodeToken } from '@/lib/auth/jwt';
+import { decodeToken } from '@devicechain/client';
 import { useToast } from '@/components/ui/toast';
 import { errMessage } from '@/routes/common';
 import {
