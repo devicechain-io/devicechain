@@ -174,9 +174,10 @@ jobs:
 
       - name: Codegen drift check
         run: |
-          # Regenerate and fail if the committed output in src/gql is stale.
+          # Regenerate and fail if the committed output in the console's src/gql
+          # is stale (workspace layout: apps/console).
           npm run codegen
-          git diff --exit-code -- src/gql
+          git diff --exit-code -- apps/console/src/gql
 
       - name: Typecheck
         run: npm run typecheck

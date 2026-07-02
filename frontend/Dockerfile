@@ -14,13 +14,19 @@ FROM node:22-alpine AS build
 WORKDIR /app
 
 # Install deps against the lockfile first so the layer caches across source-only
-# changes. npm ci needs devDependencies (tsc, vite) — do not pass --omit=dev.
+# changes. This is an npm workspace (apps/*, packages/*), so every member's
+# manifest must be present for `npm ci` to resolve the workspace tree; copy them
+# alongside the root before the source. npm ci needs devDependencies (tsc, vite)
+# — do not pass --omit=dev.
 COPY package.json package-lock.json ./
+COPY apps/console/package.json apps/console/
+COPY packages/client/package.json packages/client/
 RUN npm ci
 
 COPY . .
-# `npm run build` runs `tsc --noEmit && vite build`; the generated GraphQL client
-# under src/gql is committed, so no codegen step is needed here.
+# Root `build` delegates to the console workspace (`tsc --noEmit && vite build`);
+# the generated GraphQL client under apps/console/src/gql is committed, so no
+# codegen step is needed here. Output lands at apps/console/dist.
 RUN npm run build
 
 # --- serve stage: static nginx ---------------------------------------------
@@ -29,5 +35,5 @@ RUN npm run build
 # (the chart mounts an emptyDir at /tmp). See deploy/helm templates/frontend.yaml.
 FROM nginxinc/nginx-unprivileged:1.27-alpine
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+COPY --from=build /app/apps/console/dist /usr/share/nginx/html
 EXPOSE 8080
