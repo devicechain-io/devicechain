@@ -48,6 +48,12 @@ const (
 	// looping forever (ADR-022 review A4). Consumers compare Message.NumDelivered
 	// against this.
 	MaxDeliver = 5
+
+	// liveBuffer bounds a live subscription's in-flight buffer. A fan-out live
+	// feed (SubscribeLive) prefers dropping under a slow client to stalling the
+	// shared pipeline, so a full buffer drops (NATS slow-consumer) rather than
+	// applying backpressure — history is served by the queries, not this feed.
+	liveBuffer = 256
 )
 
 // natsAck adapts a JetStream *nats.Msg to the transport-neutral Acknowledger so
@@ -298,6 +304,51 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 		r.pending = r.pending[1:]
 		return NewConsumedMessage(nm.Subject, nm.Data, deliveryCount(nm), natsHeaders(nm), natsAck{nm: nm}), nil
 	}
+}
+
+// SubscribeLive opens an ephemeral, tenant-scoped fan-out subscription over a
+// suffix's live subject, for streaming events to a connected client (the
+// GraphQL subscription bridge, ADR-037/ADR-039). Unlike NewReader's durable,
+// load-balanced pull consumer, each SubscribeLive is its own core NATS
+// subscription bound to a single tenant's subject ("{instance}.{tenant}.{suffix}"):
+// every subscriber receives every message for its tenant (fan-out, not
+// load-balanced), there are no acks, and there is no backlog replay — a client
+// sees events from subscribe time onward. The subscription is torn down when ctx
+// is cancelled (the client unsubscribed or the socket closed). A slow reader
+// drops messages (bounded buffer) rather than stalling the pipeline.
+func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffix string) (<-chan Message, error) {
+	subject := ScopedSubject(nmgr.Microservice.InstanceId, tenant, suffix)
+	raw := make(chan *nats.Msg, liveBuffer)
+	sub, err := nmgr.nc.ChanSubscribe(subject, raw)
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan Message)
+	go func() {
+		defer close(out)
+		defer func() { _ = sub.Unsubscribe() }()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case nm, ok := <-raw:
+				if !ok {
+					return
+				}
+				// A live message is never acked (no acknowledger): it is a
+				// fire-and-forget fan-out to the connected client, not a
+				// durable-processing handoff.
+				msg := NewConsumedMessage(nm.Subject, nm.Data, 0, natsHeaders(nm), nil)
+				select {
+				case out <- msg:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	log.Info().Str("subject", subject).Msg("Opened live NATS subscription")
+	return out, nil
 }
 
 // natsHeaders flattens a delivered message's NATS headers into the transport-

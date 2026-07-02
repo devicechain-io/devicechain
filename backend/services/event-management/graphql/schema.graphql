@@ -145,7 +145,20 @@ type Mutation {
     _empty: Boolean
 }
 
+# Live event streams (ADR-037). Each field pushes events to the subscriber as
+# they flow through the resolve pipeline — the same resolved events that are
+# persisted — scoped to the subscriber's tenant. A subscription streams from
+# subscribe time onward with no historical backfill; use the queries for history.
+type Subscription {
+    # Streams measurement events as they resolve, optionally filtered to one
+    # device and/or one measurement name. Drives live charts, gauges, and cards.
+    # Named measurementStream (not measurementEvents, the historical query) since
+    # both fields resolve off the one root resolver.
+    measurementStream(deviceId: String, name: String): MeasurementEvent!
+}
+
 schema {
     query: Query
     mutation: Mutation
+    subscription: Subscription
 }

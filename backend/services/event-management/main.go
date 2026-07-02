@@ -124,10 +124,14 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Map of providers that will be injected into graphql http context.
+	// Map of providers that will be injected into graphql http context. The NATS
+	// manager backs the live subscription resolvers (SubscribeLive); it is already
+	// connected here (Initialize above), before the subscription server accepts a
+	// client.
 	providers := map[gqlcore.ContextKey]interface{}{
-		gqlcore.ContextRdbKey: RdbManager,
-		gqlcore.ContextApiKey: Api,
+		gqlcore.ContextRdbKey:  RdbManager,
+		gqlcore.ContextApiKey:  Api,
+		gqlcore.ContextNatsKey: NatsManager,
 	}
 
 	// Create and initialize graphql manager.

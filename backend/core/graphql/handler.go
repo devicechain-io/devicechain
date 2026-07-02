@@ -23,6 +23,10 @@ type ContextKey string
 const (
 	ContextRdbKey ContextKey = "rdb"
 	ContextApiKey ContextKey = "api"
+	// ContextNatsKey carries the service's *messaging.NatsManager so subscription
+	// resolvers can open a live tenant-scoped feed (SubscribeLive). Stored as an
+	// opaque value here to avoid a core/graphql → messaging import.
+	ContextNatsKey ContextKey = "nats"
 )
 
 // authPolicy decides how a handler authenticates a request before dispatching to
