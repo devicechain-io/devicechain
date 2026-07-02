@@ -62,7 +62,7 @@ export function subscribe<TResult, TVariables>(
   return clientFor(area).subscribe<TResult>(
     {
       query: document.toString(),
-      variables: (variables ?? undefined) as Record<string, unknown> | undefined,
+      variables: variables as Record<string, unknown> | undefined,
     },
     {
       next: (result) => {
