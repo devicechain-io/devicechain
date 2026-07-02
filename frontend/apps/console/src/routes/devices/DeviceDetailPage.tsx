@@ -21,6 +21,7 @@ import {
   DataTableRow,
 } from '@/components/ui/data-table';
 import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { getDevice, deleteDevice } from '@/lib/api/device-management';
 import { getDeviceState, getLatestMeasurements } from '@/lib/api/device-state';
@@ -37,6 +38,7 @@ export default function DeviceDetailPage() {
   const token = decodeURIComponent(rawToken ?? '');
   const navigate = useNavigate();
   const { toast } = useToast();
+  const confirm = useConfirm();
 
   const [version, reload] = useReload();
   const { data: device, loading, error } = useQuery(() => getDevice(token), [version]);
@@ -64,7 +66,14 @@ export default function DeviceDetailPage() {
   }
 
   const remove = async () => {
-    if (!window.confirm(`Delete device “${device.token}”? This cannot be undone.`)) return;
+    if (
+      !(await confirm({
+        title: 'Delete device',
+        description: `Delete “${device.token}”? This cannot be undone.`,
+        confirmLabel: 'Delete',
+      }))
+    )
+      return;
     try {
       await deleteDevice(device.token);
       toast(`Device “${device.token}” deleted`);

@@ -19,6 +19,7 @@ import {
   DataTableRow,
 } from '@/components/ui/data-table';
 import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
 import { listCustomers } from '@/lib/api/customers';
@@ -54,6 +55,7 @@ async function loadTargets(type: AssignmentTargetType): Promise<{ value: string;
 // errors and this panel degrades to an ErrorState.
 export function DeviceAssignmentPanel({ deviceToken }: { deviceToken: string }) {
   const { toast } = useToast();
+  const confirm = useConfirm();
   const [targetType, setTargetType] = useState<AssignmentTargetType>('customer');
   const [target, setTarget] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -92,7 +94,13 @@ export function DeviceAssignmentPanel({ deviceToken }: { deviceToken: string }) 
   };
 
   const remove = async (edge: EntityRelationship) => {
-    if (!window.confirm(`Unassign this device from ${edge.targetType} “${edge.target?.token}”?`)) {
+    if (
+      !(await confirm({
+        title: 'Unassign device',
+        description: `Unassign this device from ${edge.targetType} “${edge.target?.token ?? 'unknown'}”?`,
+        confirmLabel: 'Unassign',
+      }))
+    ) {
       return;
     }
     try {

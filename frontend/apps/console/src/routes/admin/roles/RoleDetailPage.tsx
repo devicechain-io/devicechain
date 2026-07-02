@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listRoles, deleteRole } from '@/lib/api/admin';
 import { BackLink, errMessage, useReload } from '@/routes/common';
@@ -20,6 +21,7 @@ export default function RoleDetailPage() {
   const token = decodeURIComponent(rawToken ?? '');
   const navigate = useNavigate();
   const { toast } = useToast();
+  const confirm = useConfirm();
 
   const [version, reload] = useReload();
   const { data: roles, loading, error } = useQuery(() => listRoles(scope), [version]);
@@ -51,7 +53,14 @@ export default function RoleDetailPage() {
   }
 
   const remove = async () => {
-    if (!window.confirm(`Delete the ${role.scope} role “${role.token}”? It will be removed from all assignees.`)) return;
+    if (
+      !(await confirm({
+        title: 'Delete role',
+        description: `Delete the ${role.scope} role “${role.token}”? It will be removed from all assignees.`,
+        confirmLabel: 'Delete',
+      }))
+    )
+      return;
     try {
       const ok = await deleteRole(role.scope, role.token);
       toast(ok ? `Role “${role.token}” deleted` : `Role “${role.token}” not found`);

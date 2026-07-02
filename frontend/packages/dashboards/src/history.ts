@@ -6,13 +6,14 @@
 // filling in only from live data. Each bucket becomes one synthetic sample at the
 // bucket start carrying its average; the live tail then extends it.
 //
-// D1 seeds `device` selectors only (single numeric id). Anchor (multi-device)
-// history seeding is deferred — the live stream still populates anchor charts.
+// Seeds `device` selectors only (single numeric id). Anchor (multi-device) history
+// seeding is deferred — the live stream still populates anchor charts.
 
 import { gql } from '@devicechain/client';
-import type { DeviceResolver, MeasurementSample, WidgetInstance } from '@devicechain/dashboards';
 
 import { BUCKETED_MEASUREMENTS } from './queries';
+import type { DeviceResolver } from './hub';
+import type { MeasurementSample, WidgetInstance } from './types';
 
 export interface HistoryWindow {
   startTime: string;
@@ -32,9 +33,9 @@ export function defaultHistoryWindow(): HistoryWindow {
 }
 
 // fetchWidgetHistory returns seed samples for one widget, or [] when it has no
-// device datasource (label/image, or an anchor selector in D1). Never rejects into
-// the render path — a failed backfill just yields an empty seed and the live
-// stream still fills the widget.
+// device datasource (label/image, or an anchor selector). Never rejects into the
+// render path — a failed backfill just yields an empty seed and the live stream
+// still fills the widget.
 export async function fetchWidgetHistory(
   widget: WidgetInstance,
   resolver: DeviceResolver,

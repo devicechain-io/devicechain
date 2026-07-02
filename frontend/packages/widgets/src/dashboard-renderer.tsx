@@ -4,10 +4,13 @@
 // DashboardRenderer maps a parsed DashboardDefinition onto the canvas: each widget
 // is absolutely positioned per the active breakpoint's box (in grid cells × grid
 // size), layered by z, and rendered as a <ConnectedWidget> bound to the hub. It is
-// view-only (PR D1); the canvas editor is PR D2.
+// view-only — the canvas editor lives in the console/app shell. This is the shared
+// viewer the console and the reference external app both mount.
 
 import {
   activeBreakpoint,
+  defaultHistoryWindow,
+  fetchWidgetHistory,
   resolveWidgetBox,
   type Breakpoints,
   type DashboardDefinition,
@@ -16,10 +19,9 @@ import {
   type MeasurementSample,
   type WidgetInstance,
 } from '@devicechain/dashboards';
-import { ConnectedWidget } from '@devicechain/widgets';
 import { useEffect, useState } from 'react';
 
-import { defaultHistoryWindow, fetchWidgetHistory } from './history';
+import { ConnectedWidget } from './connected-widget';
 
 export interface DashboardRendererProps {
   definition: DashboardDefinition;
@@ -95,9 +97,9 @@ function useWidgetHistories(
 
   useEffect(() => {
     let cancelled = false;
-    const window = defaultHistoryWindow();
+    const historyWindow = defaultHistoryWindow();
     Promise.all(
-      widgets.map(async (w) => [w.id, await fetchWidgetHistory(w, resolver, window)] as const),
+      widgets.map(async (w) => [w.id, await fetchWidgetHistory(w, resolver, historyWindow)] as const),
     ).then((entries) => {
       if (!cancelled) setHistories(Object.fromEntries(entries));
     });

@@ -26,6 +26,17 @@ type gadget struct {
 	Name string
 }
 
+// Tenant-scoped model WITH soft-delete, to prove that an Unscoped (hard) delete —
+// which disables the soft-delete clause — still has the tenant predicate injected
+// and so can never cross a tenant boundary. This is the load-bearing guarantee
+// behind hard deletes (e.g. dashboard-management, device-management, iam).
+type sprocket struct {
+	ID uint `gorm:"primaryKey"`
+	TenantScoped
+	Name      string
+	DeletedAt gorm.DeletedAt
+}
+
 // newTestDB spins up an in-memory pure-Go sqlite database with the tenant-scope
 // callbacks registered.
 func newTestDB(t *testing.T) *gorm.DB {
@@ -37,7 +48,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 	if err := RegisterTenantScoping(db); err != nil {
 		t.Fatalf("failed to register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&widget{}, &gadget{}); err != nil {
+	if err := db.AutoMigrate(&widget{}, &gadget{}, &sprocket{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
 	return db
@@ -153,5 +164,51 @@ func TestTenantIsolation_SystemContextIsOptIn(t *testing.T) {
 	var found []widget
 	if err := db.WithContext(context.Background()).Find(&found).Error; !errors.Is(err, core.ErrNoTenant) {
 		t.Fatalf("a plain context must fail closed, not silently bypass; got %v", err)
+	}
+}
+
+// An Unscoped (hard) delete still gets the tenant predicate: tenant A deleting by a
+// non-token column that also matches tenant B's row must remove ONLY A's row. This
+// guards the security property that hard deletes (Unscoped, used to free tokens on
+// delete) can never cross a tenant boundary — Unscoped disables the soft-delete
+// clause, NOT the tenant-scope callback.
+func TestTenantIsolation_UnscopedDeleteStaysInTenant(t *testing.T) {
+	db := newTestDB(t)
+	ctxA := core.WithTenant(context.Background(), "A")
+	ctxB := core.WithTenant(context.Background(), "B")
+
+	// Both tenants hold a row with the same name (legal — they're isolated).
+	if err := db.WithContext(ctxA).Create(&sprocket{Name: "shared"}).Error; err != nil {
+		t.Fatalf("create under A failed: %v", err)
+	}
+	if err := db.WithContext(ctxB).Create(&sprocket{Name: "shared"}).Error; err != nil {
+		t.Fatalf("create under B failed: %v", err)
+	}
+
+	// Tenant A hard-deletes by name; the injected tenant predicate must confine it.
+	res := db.WithContext(ctxA).Unscoped().Where("name = ?", "shared").Delete(&sprocket{})
+	if res.Error != nil {
+		t.Fatalf("unscoped delete under A failed: %v", res.Error)
+	}
+	if res.RowsAffected != 1 {
+		t.Fatalf("expected exactly A's 1 row deleted, got %d (delete crossed tenant boundary?)", res.RowsAffected)
+	}
+
+	// Tenant B's row must be untouched.
+	var bCount int64
+	if err := db.WithContext(ctxB).Model(&sprocket{}).Where("name = ?", "shared").Count(&bCount).Error; err != nil {
+		t.Fatalf("count under B failed: %v", err)
+	}
+	if bCount != 1 {
+		t.Fatalf("tenant B's row must survive A's delete; got count=%d", bCount)
+	}
+
+	// A's row is truly gone (hard delete): invisible even to an Unscoped read under A.
+	var aCount int64
+	if err := db.WithContext(ctxA).Unscoped().Model(&sprocket{}).Count(&aCount).Error; err != nil {
+		t.Fatalf("unscoped count under A failed: %v", err)
+	}
+	if aCount != 0 {
+		t.Fatalf("A's row should be hard-deleted (no soft-deleted remnant); got count=%d", aCount)
 	}
 }

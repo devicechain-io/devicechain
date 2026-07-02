@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { cap } from '@/components/registry/forms';
 import { errMessage, useReload } from '@/routes/common';
@@ -25,6 +26,7 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
   const token = decodeURIComponent(rawToken ?? '');
   const navigate = useNavigate();
   const { toast } = useToast();
+  const confirm = useConfirm();
 
   const [version, reload] = useReload();
   const { data: item, loading, error } = useQuery(
@@ -58,7 +60,14 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
     const prompt =
       resource.removeConfirm?.(item) ??
       `Delete ${resource.singular} “${token}”? This cannot be undone.`;
-    if (!window.confirm(prompt)) return;
+    if (
+      !(await confirm({
+        title: `Delete ${resource.singular}`,
+        description: prompt,
+        confirmLabel: 'Delete',
+      }))
+    )
+      return;
     try {
       await resource.remove(token);
       toast(`${cap(resource.singular)} “${token}” deleted`);

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The concrete DeviceResolver — the device-management-backed implementation of the
-// interface DashboardHub injects. It is the ONLY place the dashboard app couples to
-// device-management's schema; the packages stay backend-agnostic.
+// interface DashboardHub injects. It is the one place the dashboard runtime couples
+// to device-management's schema (the Hub itself couples to event-management's
+// measurementStream), so the widget/renderer layers above stay purely presentational.
 //
 //   deviceIdForToken — devicesByToken → numeric Device.id (measurementStream filters
 //                      on the numeric id, not the token).
@@ -15,14 +16,15 @@
 // and the membership is stable for a viewing session.
 
 import { gql } from '@devicechain/client';
-import type { AnchorTarget, DeviceResolver } from '@devicechain/dashboards';
 
+import type { DeviceResolver } from './hub';
 import {
   DEVICES_BY_TOKEN,
   DEVICES_FOR_ANCHOR,
   type DevicesByTokenResult,
   type EntityRelationshipsResult,
 } from './queries';
+import type { AnchorTarget } from './types';
 
 // A generous page size for anchor membership — Phase 1 dashboards anchor to areas
 // with tens of devices, not thousands; server-side aggregation is Phase 2.
