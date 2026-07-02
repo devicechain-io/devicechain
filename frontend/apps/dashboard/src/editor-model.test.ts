@@ -5,12 +5,14 @@ import { isDirty, type DashboardDefinition } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
 import {
+  addWidget,
   baseBox,
   bringToFront,
   deleteWidget,
   pxToCellBox,
   setTitle,
   setWidgetBox,
+  updateWidget,
 } from './editor-model';
 
 const box = (over = {}) => ({ x: 0, y: 0, w: 4, h: 3, z: 0, ...over });
@@ -50,6 +52,51 @@ describe('bringToFront', () => {
   it('is a no-op when already on top', () => {
     const d = def();
     expect(bringToFront(d, 'b')).toBe(d); // b already has max z
+  });
+});
+
+describe('updateWidget', () => {
+  it('replaces the matching widget and leaves others untouched', () => {
+    const d = def();
+    const next = updateWidget(d, 'a', {
+      id: 'a',
+      type: 'latest-card',
+      layout: { base: box({ z: 1 }) },
+      options: { title: 'Renamed' },
+    });
+    expect(next.widgets[0]).toEqual({
+      id: 'a',
+      type: 'latest-card',
+      layout: { base: box({ z: 1 }) },
+      options: { title: 'Renamed' },
+    });
+    expect(next.widgets[1]).toBe(d.widgets[1]); // untouched
+  });
+});
+
+describe('addWidget', () => {
+  it('appends a widget with a unique id, on top, and default options', () => {
+    const d = def();
+    const { definition, id } = addWidget(d, 'gauge');
+    expect(definition.widgets).toHaveLength(3);
+    const added = definition.widgets[2];
+    expect(added.id).toBe(id);
+    expect(added.id).not.toBe('a');
+    expect(added.id).not.toBe('b');
+    expect(added.type).toBe('gauge');
+    expect(baseBox(added).z).toBe(3); // max existing z (2) + 1
+    expect(added.datasource).toBeUndefined();
+    expect(added.options).toEqual({ title: 'Gauge' });
+  });
+
+  it('humanizes a hyphenated type into the default title', () => {
+    const { definition } = addWidget(def(), 'timeseries-chart');
+    expect(definition.widgets[2].options).toEqual({ title: 'Timeseries chart' });
+  });
+
+  it('uses placeholder text for a label', () => {
+    const { definition } = addWidget(def(), 'label');
+    expect(definition.widgets[2].options).toEqual({ text: 'New label' });
   });
 });
 

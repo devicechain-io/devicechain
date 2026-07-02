@@ -13,7 +13,6 @@
 
 import type { DashboardDefinition, DashboardHub } from '@devicechain/dashboards';
 import { ConnectedWidget } from '@devicechain/widgets';
-import { useState } from 'react';
 import { Rnd } from 'react-rnd';
 
 import { baseBox, bringToFront, deleteWidget, pxToCellBox, setWidgetBox } from './editor-model';
@@ -22,12 +21,15 @@ export interface DashboardEditorProps {
   definition: DashboardDefinition;
   onChange: (next: DashboardDefinition) => void;
   hub: DashboardHub;
+  // Selection is lifted to the workspace (which owns the config panel); the
+  // editor is fully controlled — it reports clicks and reflects the current id.
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
 }
 
 // While editing, widgets render their live tail only (no bucketedMeasurements
 // history seed) — hence no DeviceResolver here; the view renderer owns seeding.
-export function DashboardEditor({ definition, onChange, hub }: DashboardEditorProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+export function DashboardEditor({ definition, onChange, hub, selectedId, onSelect }: DashboardEditorProps) {
   const cell = definition.canvas.grid.size || 1;
 
   // Give the scroll area room below the lowest widget so there's somewhere to drag.
@@ -39,7 +41,7 @@ export function DashboardEditor({ definition, onChange, hub }: DashboardEditorPr
 
   return (
     <div
-      onMouseDown={() => setSelectedId(null)}
+      onMouseDown={() => onSelect(null)}
       style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto' }}
     >
       <div style={{ position: 'relative', width: '100%', minHeight: contentHeight }}>
@@ -61,7 +63,7 @@ export function DashboardEditor({ definition, onChange, hub }: DashboardEditorPr
               style={{ zIndex: box.z, outline: selected ? '2px solid hsl(var(--primary))' : '1px dashed hsl(var(--border))' }}
               onMouseDown={(e: MouseEvent) => {
                 e.stopPropagation(); // don't let the canvas deselect
-                setSelectedId(widget.id);
+                onSelect(widget.id);
               }}
               onDragStop={(_e, d) => commitBox({ x: d.x, y: d.y, w: box.w * cell, h: box.h * cell })}
               onResizeStop={(_e, _dir, ref, _delta, pos) =>
@@ -92,7 +94,7 @@ export function DashboardEditor({ definition, onChange, hub }: DashboardEditorPr
                     danger
                     onClick={() => {
                       onChange(deleteWidget(definition, widget.id));
-                      setSelectedId(null);
+                      onSelect(null);
                     }}
                   >
                     Delete
