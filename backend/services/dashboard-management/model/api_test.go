@@ -26,6 +26,10 @@ func newTestApi(t *testing.T) *Api {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
+	// Register the token-grammar callbacks too, so the CRUD path is exercised
+	// exactly as production does (ADR-042 P2): a non-conforming token fixture would
+	// fail here as it would live.
+	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	require.NoError(t, db.AutoMigrate(&Dashboard{}))
 	// Mirror the migration's per-tenant partial unique index (ADR-042 P1) so the
 	// token-uniqueness tests run against the real constraint, not a bare table.
