@@ -141,6 +141,20 @@ function parseBox(rec: Record<string, unknown>): WidgetBox {
   };
 }
 
+// serializeDefinition is the canonical on-the-wire JSON — the inverse of
+// parseDashboardDefinition — that dashboard-management stores. Named (not an inline
+// JSON.stringify) so every consumer that persists a definition shares one format.
+export function serializeDefinition(def: DashboardDefinition): string {
+  return JSON.stringify(def);
+}
+
+// isDirty reports whether two definitions differ. A structural JSON compare is
+// enough: both sides come from parse/edit transforms that preserve key order, so
+// it only flips on a real change. Drives an editor's save/dirty state.
+export function isDirty(a: DashboardDefinition, b: DashboardDefinition): boolean {
+  return serializeDefinition(a) !== serializeDefinition(b);
+}
+
 // resolveWidgetBox returns the box for the active breakpoint, falling back to the
 // widget's 'base' box when it defines no override for that breakpoint. Parse
 // guarantees a base box exists, so this always resolves.

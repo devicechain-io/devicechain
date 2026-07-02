@@ -29,6 +29,24 @@ export const DASHBOARD_BY_TOKEN = `
   }
 ` as unknown as TypedDocument<DashboardResult, DashboardVariables>;
 
+// ── dashboard-management: save an edited definition ──────────────────────────
+
+export interface UpdateDashboardResult {
+  updateDashboard: { token: string };
+}
+export interface UpdateDashboardVariables {
+  token: string;
+  request: { token: string; name?: string | null; definition: string };
+}
+
+export const UPDATE_DASHBOARD = `
+  mutation UpdateDashboard($token: String!, $request: DashboardCreateRequest!) {
+    updateDashboard(token: $token, request: $request) {
+      token
+    }
+  }
+` as unknown as TypedDocument<UpdateDashboardResult, UpdateDashboardVariables>;
+
 // ── device-management: resolve a device token to its numeric id ──────────────
 
 export interface DevicesByTokenResult {
