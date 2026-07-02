@@ -15,6 +15,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   listIdentities,
@@ -48,6 +49,7 @@ export default function IdentityDetailPage() {
   const email = decodeURIComponent(rawEmail ?? '');
   const navigate = useNavigate();
   const { toast } = useToast();
+  const confirm = useConfirm();
 
   const [version, reload] = useReload();
   const { data: identities, loading, error } = useQuery(listIdentities, [version]);
@@ -96,7 +98,14 @@ export default function IdentityDetailPage() {
   };
 
   const remove = async () => {
-    if (!window.confirm(`Delete identity “${identity.email}” and all its memberships?`)) return;
+    if (
+      !(await confirm({
+        title: 'Delete identity',
+        description: `Delete “${identity.email}” and all its memberships? This cannot be undone.`,
+        confirmLabel: 'Delete',
+      }))
+    )
+      return;
     try {
       await deleteIdentity(identity.email);
       toast(`Identity “${identity.email}” deleted`);

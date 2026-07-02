@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listTenants, setTenantEnabled, deleteTenant } from '@/lib/api/admin';
 import { BackLink, StatusBadge, errMessage, useReload } from '@/routes/common';
@@ -19,6 +20,7 @@ export default function TenantDetailPage() {
   const token = decodeURIComponent(rawToken ?? '');
   const navigate = useNavigate();
   const { toast } = useToast();
+  const confirm = useConfirm();
 
   const [version, reload] = useReload();
   const { data: tenants, loading, error } = useQuery(listTenants, [version]);
@@ -60,7 +62,14 @@ export default function TenantDetailPage() {
   };
 
   const remove = async () => {
-    if (!window.confirm(`Delete tenant “${tenant.token}”? This cannot be undone.`)) return;
+    if (
+      !(await confirm({
+        title: 'Delete tenant',
+        description: `Delete “${tenant.token}”? This cannot be undone.`,
+        confirmLabel: 'Delete',
+      }))
+    )
+      return;
     try {
       const ok = await deleteTenant(tenant.token);
       toast(ok ? `Tenant “${tenant.token}” deleted` : `Tenant “${tenant.token}” not found`);

@@ -20,6 +20,7 @@ import {
   DataTableRow,
 } from '@/components/ui/data-table';
 import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatTime } from '@/lib/utils';
 import { useNoAutofill } from '@/lib/hooks/use-no-autofill';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -44,6 +45,7 @@ const needsSecret = (t: CredentialType) => t === 'MQTT_BASIC';
 // and this panel degrades to an ErrorState rather than breaking the page.
 export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string }) {
   const { toast } = useToast();
+  const confirm = useConfirm();
   const [type, setType] = useState<CredentialType>('ACCESS_TOKEN');
   const [credentialId, setCredentialId] = useState('');
   const [secret, setSecret] = useState('');
@@ -103,7 +105,13 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
   };
 
   const remove = async (c: DeviceCredential) => {
-    if (!window.confirm(`Delete this ${c.credentialType} credential? The device can no longer authenticate with it.`)) {
+    if (
+      !(await confirm({
+        title: 'Delete credential',
+        description: `Delete this ${c.credentialType} credential? The device can no longer authenticate with it.`,
+        confirmLabel: 'Delete',
+      }))
+    ) {
       return;
     }
     try {
