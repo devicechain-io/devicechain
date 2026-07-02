@@ -77,7 +77,7 @@ Area-specific checks when you touch them:
 cd backend/cli && make build
 
 # frontend
-cd frontend && npm ci && npm run codegen && npm run typecheck && npm run build
+cd frontend && npm ci && npm run codegen && npm run typecheck && npm test && npm run build
 
 # helm
 helm lint deploy/helm/devicechain && helm template deploy/helm/devicechain >/dev/null
@@ -86,8 +86,8 @@ helm lint deploy/helm/devicechain && helm template deploy/helm/devicechain >/dev
 cd deploy/opentofu && tofu fmt -check -recursive && tofu init -backend=false && tofu validate
 ```
 
-See [CLAUDE.md](CLAUDE.md) for the fuller repository guide (layout, conventions, and
-the planning docs under `.agent-os/product/`).
+See [CLAUDE.md](CLAUDE.md) for the fuller repository guide (repository layout and
+conventions).
 
 ## Commit & PR conventions
 
