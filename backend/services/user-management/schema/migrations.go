@@ -21,5 +21,6 @@ var (
 		NewIdentitySchema(),
 		NewTenantSchema(),
 		NewDropLegacyUserRole(),
+		NewSettingsSchema(),
 	}
 )

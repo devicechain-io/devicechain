@@ -54,6 +54,13 @@ const (
 	// audit_events table; the journal is written by construction and is never
 	// mutated through the API, so there is no audit:write.
 	AuditRead Authority = "audit:read"
+
+	// System settings (user-management settings API, ADR-042 P2). Instance-global,
+	// admin-edited configuration (e.g. token masks); gates the read/write of the
+	// system_settings override store. Only a system-authority holder (superuser)
+	// carries these — they are not tenant-scoped.
+	SettingsRead  Authority = "settings:read"
+	SettingsWrite Authority = "settings:write"
 )
 
 // vocabulary is the set of every known authority. A Role may only grant
@@ -77,6 +84,8 @@ var vocabulary = map[Authority]struct{}{
 	DashboardRead:  {},
 	DashboardWrite: {},
 	AuditRead:      {},
+	SettingsRead:   {},
+	SettingsWrite:  {},
 }
 
 // ValidAuthority reports whether s names a known authority (including the

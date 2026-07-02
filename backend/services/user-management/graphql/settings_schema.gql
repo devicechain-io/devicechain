@@ -1,0 +1,43 @@
+# System settings (instance-scoped) GraphQL API — ADR-042 P2.
+#
+# Served at /settings/graphql and authenticated with an *identity*-tier token (the
+# same lane as the admin API), not a tenant access token. Every operation requires
+# a settings authority; a superuser holds the super-authority "*" and so passes.
+# Settings are instance-global, admin-edited configuration (e.g. token masks).
+#
+# Values are opaque JSON exposed as JSON-encoded strings: the backend stores and
+# serves them but does not interpret them (the console reads the token-mask
+# setting to drive token generation — ADR-042 P3). Defaults live in code; the
+# store holds only overrides, so a setting is always resolvable even before it is
+# ever set.
+
+# One system setting resolved for presentation: the effective value plus whether
+# it comes from a stored override or the code default.
+type Setting {
+    key: String!
+    description: String!
+    # The effective value as a JSON-encoded string — the override when one is set,
+    # otherwise the code default.
+    value: String!
+    # True when a stored override is in effect; false when using the code default.
+    overridden: Boolean!
+    # The override's audit metadata, null when using the code default.
+    updatedAt: String
+    updatedBy: String
+}
+
+type Query {
+    # Every known setting with its effective value (requires settings:read).
+    settings: [Setting!]!
+    # One known setting by key (requires settings:read).
+    setting(key: String!): Setting
+}
+
+type Mutation {
+    # Override a setting with a JSON value; the value must be valid JSON and the key
+    # must be known (requires settings:write).
+    setSetting(key: String!, value: String!): Setting!
+    # Remove a setting's override, reverting it to the code default (requires
+    # settings:write).
+    clearSetting(key: String!): Setting!
+}

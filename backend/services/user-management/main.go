@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/identity"
 	"github.com/devicechain-io/dc-user-management/schema"
+	"github.com/devicechain-io/dc-user-management/settings"
 )
 
 var (
@@ -145,6 +146,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// afterMicroserviceStarted.
 	registerAdminHandler()
 
+	// Instance-scoped settings API (ADR-042 P2), served at /settings/graphql on the
+	// same identity-token / system-context lane as the admin API. Its store is a
+	// sealed package so the seam is pre-cut for a future extraction.
+	registerSettingsHandler()
+
 	return nil
 }
 
@@ -158,6 +164,18 @@ func registerAdminHandler() {
 	}
 	adminSchema := gql.MustParseSchema(graphql.AdminSchemaContent, &graphql.AdminResolver{})
 	http.Handle("/admin/graphql", gqlcore.NewAdminHttpHandler(adminSchema, adminProviders, Microservice.Readiness))
+}
+
+// registerSettingsHandler parses the settings schema and registers its
+// identity-token handler on the default mux (ADR-042 P2). The settings Service
+// wraps the instance RdbManager via its own sealed store (no iam dependency).
+func registerSettingsHandler() {
+	settingsSvc := settings.NewService(settings.NewStore(RdbManager))
+	settingsProviders := map[gqlcore.ContextKey]interface{}{
+		graphql.ContextSettingsKey: settingsSvc,
+	}
+	settingsSchema := gql.MustParseSchema(graphql.SettingsSchemaContent, &graphql.SettingsResolver{})
+	http.Handle("/settings/graphql", gqlcore.NewAdminHttpHandler(settingsSchema, settingsProviders, Microservice.Readiness))
 }
 
 // registerKeyHandlers serves the instance signing keys on the shared http server
