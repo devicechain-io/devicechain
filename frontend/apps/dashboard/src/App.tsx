@@ -8,15 +8,19 @@
 import { gql } from '@devicechain/client';
 import {
   DashboardHub,
+  isDirty,
   parseDashboardDefinition,
+  serializeDefinition,
   type DashboardDefinition,
   type DeviceResolver,
 } from '@devicechain/dashboards';
 import { useEffect, useMemo, useState } from 'react';
 
 import { hasValidSession } from './auth';
+import { DashboardEditor } from './DashboardEditor';
 import { DashboardRenderer } from './DashboardRenderer';
-import { DASHBOARD_BY_TOKEN } from './queries';
+import { setTitle } from './editor-model';
+import { DASHBOARD_BY_TOKEN, UPDATE_DASHBOARD } from './queries';
 import { createDeviceResolver } from './resolver';
 
 // The dashboard token is the path segment after the /dash/ base.
@@ -27,8 +31,10 @@ function dashboardTokenFromPath(): string {
 
 type LoadState =
   | { status: 'loading' }
-  | { status: 'ready'; definition: DashboardDefinition; title: string }
+  | { status: 'ready'; definition: DashboardDefinition }
   | { status: 'error'; message: string };
+
+type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; message: string };
 
 export default function App() {
   const token = useMemo(dashboardTokenFromPath, []);
@@ -66,7 +72,7 @@ function DashboardView({
           return;
         }
         const definition = parseDashboardDefinition(JSON.parse(r.dashboard.definition));
-        setState({ status: 'ready', definition, title: r.dashboard.name ?? token });
+        setState({ status: 'ready', definition });
       })
       .catch((err: unknown) => {
         if (!cancelled) setState({ status: 'error', message: errorMessage(err) });
@@ -80,21 +86,137 @@ function DashboardView({
   if (state.status === 'error') return <Message title="Couldn’t load dashboard" detail={state.message} />;
 
   return (
+    <DashboardWorkspace key={token} token={token} loaded={state.definition} hub={hub} resolver={resolver} />
+  );
+}
+
+// DashboardWorkspace holds the view/edit mode and the working copy of the
+// definition. View renders the read-only DashboardRenderer; edit renders the
+// react-rnd canvas. Save persists the working copy via updateDashboard and
+// re-baselines the dirty check.
+function DashboardWorkspace({
+  token,
+  loaded,
+  hub,
+  resolver,
+}: {
+  token: string;
+  loaded: DashboardDefinition;
+  hub: DashboardHub;
+  resolver: DeviceResolver;
+}) {
+  const [mode, setMode] = useState<'view' | 'edit'>('view');
+  const [working, setWorking] = useState<DashboardDefinition>(loaded);
+  const [saved, setSaved] = useState<DashboardDefinition>(loaded);
+  // One save state, not scattered saving/error booleans — can't be both at once.
+  const [saveState, setSaveState] = useState<SaveState>({ kind: 'clean' });
+
+  const dirty = isDirty(working, saved);
+  const title = working.title || token;
+
+  const save = () => {
+    const snapshot = working; // persist exactly what we serialize; later edits stay dirty
+    setSaveState({ kind: 'saving' });
+    gql('dashboard-management', UPDATE_DASHBOARD, {
+      token,
+      request: { token, name: snapshot.title || null, definition: serializeDefinition(snapshot) },
+    })
+      .then(() => {
+        setSaved(snapshot);
+        setSaveState({ kind: 'clean' });
+      })
+      .catch((err: unknown) => setSaveState({ kind: 'error', message: errorMessage(err) }));
+  };
+
+  return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <header
         style={{
-          padding: '10px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '8px 16px',
           borderBottom: '1px solid hsl(var(--border))',
-          fontWeight: 600,
           flex: '0 0 auto',
         }}
       >
-        {state.title}
+        {mode === 'edit' ? (
+          <input
+            value={working.title}
+            onChange={(e) => setWorking(setTitle(working, e.target.value))}
+            placeholder="Dashboard title"
+            style={{
+              flex: '1 1 auto',
+              fontSize: 16,
+              fontWeight: 600,
+              padding: '4px 8px',
+              borderRadius: 6,
+              border: '1px solid hsl(var(--border))',
+              background: 'hsl(var(--card))',
+              color: 'hsl(var(--foreground))',
+            }}
+          />
+        ) : (
+          <div style={{ flex: '1 1 auto', fontWeight: 600 }}>{title}</div>
+        )}
+
+        {saveState.kind === 'error' && (
+          <span style={{ color: 'hsl(var(--destructive))', fontSize: 13 }}>{saveState.message}</span>
+        )}
+        {mode === 'edit' && dirty && saveState.kind !== 'error' && (
+          <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 13 }}>Unsaved changes</span>
+        )}
+
+        {mode === 'edit' && (
+          <HeaderButton onClick={save} disabled={!dirty || saveState.kind === 'saving'} primary>
+            {saveState.kind === 'saving' ? 'Saving…' : 'Save'}
+          </HeaderButton>
+        )}
+        <HeaderButton onClick={() => setMode(mode === 'edit' ? 'view' : 'edit')}>
+          {mode === 'edit' ? 'Done' : 'Edit'}
+        </HeaderButton>
       </header>
+
       <main style={{ flex: '1 1 auto', minHeight: 0 }}>
-        <DashboardRenderer definition={state.definition} hub={hub} resolver={resolver} />
+        {mode === 'edit' ? (
+          <DashboardEditor definition={working} onChange={setWorking} hub={hub} />
+        ) : (
+          <DashboardRenderer definition={working} hub={hub} resolver={resolver} />
+        )}
       </main>
     </div>
+  );
+}
+
+function HeaderButton({
+  children,
+  onClick,
+  disabled,
+  primary,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  primary?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        fontSize: 14,
+        padding: '6px 14px',
+        borderRadius: 6,
+        border: '1px solid hsl(var(--border))',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        color: primary ? 'hsl(var(--primary-foreground))' : 'hsl(var(--foreground))',
+        background: primary ? 'hsl(var(--primary))' : 'hsl(var(--card))',
+        flex: '0 0 auto',
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

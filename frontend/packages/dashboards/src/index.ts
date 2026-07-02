@@ -40,6 +40,8 @@ export {
 
 export {
   parseDashboardDefinition,
+  serializeDefinition,
+  isDirty,
   resolveWidgetBox,
   activeBreakpoint,
   generateWidgetId,

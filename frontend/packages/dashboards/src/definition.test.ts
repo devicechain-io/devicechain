@@ -8,8 +8,10 @@ import {
   BASE_BREAKPOINT,
   DashboardDefinitionError,
   generateWidgetId,
+  isDirty,
   parseDashboardDefinition,
   resolveWidgetBox,
+  serializeDefinition,
 } from './definition';
 
 const box = (over = {}) => ({ x: 0, y: 0, w: 4, h: 3, z: 0, ...over });
@@ -93,5 +95,24 @@ describe('activeBreakpoint', () => {
 describe('generateWidgetId', () => {
   it('produces unique ids', () => {
     expect(generateWidgetId()).not.toBe(generateWidgetId());
+  });
+});
+
+describe('serializeDefinition / isDirty', () => {
+  const def = () =>
+    parseDashboardDefinition({
+      schemaVersion: 1,
+      title: 'T',
+      widgets: [{ id: 'w1', type: 'label', layout: { base: box() } }],
+    });
+
+  it('round-trips through parse', () => {
+    const d = def();
+    expect(parseDashboardDefinition(JSON.parse(serializeDefinition(d)))).toEqual(d);
+  });
+
+  it('isDirty is false for equal definitions and true after a change', () => {
+    expect(isDirty(def(), def())).toBe(false);
+    expect(isDirty({ ...def(), title: 'changed' }, def())).toBe(true);
   });
 });
