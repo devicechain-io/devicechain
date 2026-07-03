@@ -67,6 +67,16 @@ const config: CodegenConfig = {
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },
     },
+    // The instance-scoped settings API (ADR-042 P2), served by user-management at
+    // /settings/graphql on the same identity-token lane as the admin API. Its own
+    // schema + client so its typed operations stay separate.
+    './src/gql/user-management-settings/': {
+      schema: '../../../backend/services/user-management/graphql/settings_schema.gql',
+      documents: ['src/lib/api/settings.ts'],
+      preset: 'client',
+      presetConfig: { fragmentMasking: false },
+      config: { documentMode: 'string' },
+    },
   },
 };
 export default config;

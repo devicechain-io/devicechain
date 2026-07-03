@@ -16,6 +16,7 @@ import type { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 export type Area =
   | 'user-management'
   | 'user-management/admin'
+  | 'user-management/settings'
   | 'device-management'
   | 'event-management'
   | 'device-state'

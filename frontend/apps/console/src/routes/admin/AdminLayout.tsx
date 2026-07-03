@@ -11,6 +11,7 @@ const PAGE_TITLES: { pattern: string; title: string }[] = [
   { pattern: '/admin/identities', title: 'Identities' },
   { pattern: '/admin/roles', title: 'Roles' },
   { pattern: '/admin/audit', title: 'Audit' },
+  { pattern: '/admin/settings', title: 'Settings' },
 ];
 
 export default function AdminLayout() {
