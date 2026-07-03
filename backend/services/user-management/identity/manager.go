@@ -278,6 +278,30 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 	return m.issueTenantTokens(tenant, id.Email, roles, authorities, su)
 }
 
+// Memberships re-reads the live memberships for the identity a valid identity
+// token names (ADR-033). It lets the console refresh its cached membership list
+// mid-session — after a membership is added or removed — without a re-login,
+// since the identity token carries no memberships and login only returns a
+// snapshot. The token is validated internally (as SelectTenant does), so this can
+// run on the unauthenticated main endpoint before any tenant is selected.
+func (m *Manager) Memberships(ctx context.Context, identityToken string) ([]MembershipInfo, error) {
+	claims, err := m.validator.ValidateIdentity(identityToken)
+	if err != nil {
+		return nil, ErrInvalidToken
+	}
+	id, err := m.iam.IdentityByEmail(ctx, claims.Email)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrInvalidToken
+		}
+		return nil, err
+	}
+	if !id.Enabled {
+		return nil, ErrInvalidToken
+	}
+	return membershipInfos(id.Memberships), nil
+}
+
 // CurrentTenant resolves the control-plane tenant record the caller is acting
 // within, keyed by the tenant token carried in their access token. It reads the
 // tenant-unscoped control-plane table (iam.Store uses the system context), so it

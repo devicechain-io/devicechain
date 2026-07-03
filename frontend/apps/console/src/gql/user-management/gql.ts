@@ -17,6 +17,7 @@ import * as types from './graphql';
 type Documents = {
     "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n      }\n    }\n  }\n": typeof types.LoginDocument,
     "\n  mutation SelectTenant($identityToken: String!, $tenant: String!) {\n    selectTenant(identityToken: $identityToken, tenant: $tenant) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": typeof types.SelectTenantDocument,
+    "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n    }\n  }\n": typeof types.IdentityMembershipsDocument,
     "\n  mutation Refresh($refreshToken: String!) {\n    refresh(refreshToken: $refreshToken) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": typeof types.RefreshDocument,
     "\n  query CurrentTenant {\n    tenant {\n      token\n      name\n      description\n    }\n  }\n": typeof types.CurrentTenantDocument,
     "\n  query Me {\n    me {\n      email\n      firstName\n      lastName\n    }\n  }\n": typeof types.MeDocument,
@@ -25,6 +26,7 @@ type Documents = {
 const documents: Documents = {
     "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n      }\n    }\n  }\n": types.LoginDocument,
     "\n  mutation SelectTenant($identityToken: String!, $tenant: String!) {\n    selectTenant(identityToken: $identityToken, tenant: $tenant) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": types.SelectTenantDocument,
+    "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n    }\n  }\n": types.IdentityMembershipsDocument,
     "\n  mutation Refresh($refreshToken: String!) {\n    refresh(refreshToken: $refreshToken) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": types.RefreshDocument,
     "\n  query CurrentTenant {\n    tenant {\n      token\n      name\n      description\n    }\n  }\n": types.CurrentTenantDocument,
     "\n  query Me {\n    me {\n      email\n      firstName\n      lastName\n    }\n  }\n": types.MeDocument,
@@ -39,6 +41,10 @@ export function graphql(source: "\n  mutation Login($email: String!, $password: 
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation SelectTenant($identityToken: String!, $tenant: String!) {\n    selectTenant(identityToken: $identityToken, tenant: $tenant) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n"): typeof import('./graphql').SelectTenantDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n    }\n  }\n"): typeof import('./graphql').IdentityMembershipsDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

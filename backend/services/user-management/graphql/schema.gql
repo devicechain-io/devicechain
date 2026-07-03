@@ -49,6 +49,11 @@ type Query {
     tenant: Tenant!
     # The identity the caller is signed in as (self-scoped).
     me: CurrentIdentity!
+    # Re-read the caller's live memberships from a valid identity token, so the
+    # console can refresh its tenant picker after a membership change without a
+    # re-login. The token is validated internally (like selectTenant), so this
+    # runs before a tenant is selected.
+    identityMemberships(identityToken: String!): [Membership!]!
 }
 
 type Mutation {
