@@ -9,6 +9,11 @@ export type SettingsQueryVariables = Exact<{ [key: string]: never; }>;
 
 export type SettingsQuery = { settings: Array<{ key: string, description: string, value: string, overridden: boolean, updatedAt: string | null, updatedBy: string | null }> };
 
+export type TokenMasksQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type TokenMasksQuery = { tokenMasks: string };
+
 export type SetSettingMutationVariables = Exact<{
   key: string;
   value: string;
@@ -55,6 +60,11 @@ export const SettingsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<SettingsQuery, SettingsQueryVariables>;
+export const TokenMasksDocument = new TypedDocumentString(`
+    query TokenMasks {
+  tokenMasks
+}
+    `) as unknown as TypedDocumentString<TokenMasksQuery, TokenMasksQueryVariables>;
 export const SetSettingDocument = new TypedDocumentString(`
     mutation SetSetting($key: String!, $value: String!) {
   setSetting(key: $key, value: $value) {

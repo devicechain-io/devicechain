@@ -9,12 +9,14 @@ import {
   listDashboards,
   createDashboard,
   deleteDashboard,
+  getDashboard,
 } from '@/lib/api/dashboards';
 import { formatTime } from '@/lib/utils';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
+import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -186,16 +188,15 @@ function DashboardCreateForm({ onDone }: { onDone: (token: string) => void }) {
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <FormField
-        label="Token"
-        htmlFor="d-token"
-        description="Unique id for this dashboard; it cannot change later."
-      >
-        <Input
+      <FormField label="Token" htmlFor="d-token">
+        <TokenField
           id="d-token"
+          entityType="dashboard"
           value={token}
+          onChange={setToken}
+          seed={name}
           placeholder="ops-overview"
-          onChange={(e) => setToken(e.target.value)}
+          checkAvailability={(t) => getDashboard(t).then((d) => d === null)}
         />
       </FormField>
       <FormField label="Name" htmlFor="d-name">

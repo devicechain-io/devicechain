@@ -8,9 +8,11 @@
 // values to its own typed create/update request in its config (see resource.tsx).
 
 import { useState } from 'react';
+import { normalizeToken } from '@devicechain/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
+import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -40,14 +42,19 @@ export interface InstanceRequest extends TypeRequest {
 export function RegistryTypeForm<T extends NamedEntity>({
   entity,
   singular,
+  entityType,
   tokenPlaceholder,
+  checkAvailability,
   create,
   update,
   onDone,
 }: {
   entity?: T;
   singular: string; // "device type"
+  /** Mask key for token generation (ADR-042 P3); defaults to the kebab singular. */
+  entityType?: string;
   tokenPlaceholder?: string;
+  checkAvailability?: (token: string) => Promise<boolean>;
   create: (req: TypeRequest) => Promise<unknown>;
   update: (token: string, req: TypeRequest) => Promise<unknown>;
   onDone: (message: string) => void;
@@ -85,15 +92,21 @@ export function RegistryTypeForm<T extends NamedEntity>({
       <FormField
         label="Token"
         htmlFor="r-token"
-        description={editing ? undefined : `Unique id for this ${singular}; it cannot change later.`}
+        description={editing ? `The ${singular} id; it cannot change.` : undefined}
       >
-        <Input
-          id="r-token"
-          value={token}
-          disabled={editing}
-          placeholder={tokenPlaceholder}
-          onChange={(e) => setToken(e.target.value)}
-        />
+        {editing ? (
+          <Input id="r-token" value={token} disabled />
+        ) : (
+          <TokenField
+            id="r-token"
+            entityType={entityType ?? normalizeToken(singular)}
+            value={token}
+            onChange={setToken}
+            seed={name}
+            placeholder={tokenPlaceholder}
+            checkAvailability={checkAvailability}
+          />
+        )}
       </FormField>
       <FormField label="Name" htmlFor="r-name">
         <Input id="r-name" value={name} onChange={(e) => setName(e.target.value)} />
@@ -115,10 +128,12 @@ export function RegistryTypeForm<T extends NamedEntity>({
 export function RegistryInstanceForm<T extends NamedEntity>({
   entity,
   singular,
+  entityType,
   typeLabel,
   typeSingular,
   defaultTypeToken,
   tokenPlaceholder,
+  checkAvailability,
   loadTypes,
   create,
   update,
@@ -126,10 +141,13 @@ export function RegistryInstanceForm<T extends NamedEntity>({
 }: {
   entity?: T;
   singular: string; // "asset"
+  /** Mask key for token generation (ADR-042 P3); defaults to the kebab singular. */
+  entityType?: string;
   typeLabel: string; // "Asset type"
   typeSingular: string; // "asset type" — used in the "create one first" hint
   defaultTypeToken?: string;
   tokenPlaceholder?: string;
+  checkAvailability?: (token: string) => Promise<boolean>;
   loadTypes: () => Promise<NamedEntity[]>;
   create: (req: InstanceRequest) => Promise<unknown>;
   update: (token: string, req: InstanceRequest) => Promise<unknown>;
@@ -199,15 +217,21 @@ export function RegistryInstanceForm<T extends NamedEntity>({
         <FormField
           label="Token"
           htmlFor="r-token"
-          description={editing ? undefined : `Unique id for this ${singular}; it cannot change later.`}
+          description={editing ? `The ${singular} id; it cannot change.` : undefined}
         >
-          <Input
-            id="r-token"
-            value={token}
-            disabled={editing}
-            placeholder={tokenPlaceholder}
-            onChange={(e) => setToken(e.target.value)}
-          />
+          {editing ? (
+            <Input id="r-token" value={token} disabled />
+          ) : (
+            <TokenField
+              id="r-token"
+              entityType={entityType ?? normalizeToken(singular)}
+              value={token}
+              onChange={setToken}
+              seed={name}
+              placeholder={tokenPlaceholder}
+              checkAvailability={checkAvailability}
+            />
+          )}
         </FormField>
       </div>
       <FormField label="Name" htmlFor="r-name">

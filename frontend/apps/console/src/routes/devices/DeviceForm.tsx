@@ -6,6 +6,7 @@ import {
   listDeviceTypes,
   createDevice,
   updateDevice,
+  getDevice,
   type Device,
 } from '@/lib/api/device-management';
 
@@ -26,6 +27,7 @@ export function DeviceForm({
       typeLabel="Device type"
       typeSingular="device type"
       tokenPlaceholder="sensor-001"
+      checkAvailability={(token) => getDevice(token).then((d) => d === null)}
       defaultTypeToken={device?.deviceType.token}
       loadTypes={() => listDeviceTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
       create={(req) =>
