@@ -8,9 +8,9 @@
 // react-rnd canvas + the widget config panel. Editing is gated on dashboard:write
 // (the server enforces it too — this just hides a button the caller can't use).
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, History, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, FlaskConical, History, Plus, Trash2 } from 'lucide-react';
 import { hasAuthority } from '@devicechain/client';
 import {
   addWidget,
@@ -19,16 +19,20 @@ import {
   serializeDefinition,
   setTitle,
   updateWidget,
+  SyntheticDataSource,
+  SYNTHETIC_GENERATORS,
   WIDGET_TYPES,
   type DashboardDefinition,
   type DashboardHub,
   type DeviceResolver,
+  type SyntheticGenerator,
   type WidgetType,
 } from '@devicechain/dashboards';
 import { DashboardRenderer } from '@devicechain/widgets';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Combobox } from '@/components/ui/combobox';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -80,6 +84,14 @@ export function DashboardWorkspace({
   // Advanced after every save/rollback so a subsequent save doesn't self-conflict.
   const [expectedUpdatedAt, setExpectedUpdatedAt] = useState<string | null>(updatedAt);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Preview mode swaps the live hub for a client-side synthetic source so the author
+  // can validate layout/scales/thresholds before any device reports. It's a view
+  // concern only — it never touches the definition, so it can't affect dirty/save.
+  const [preview, setPreview] = useState(false);
+  const [generator, setGenerator] = useState<SyntheticGenerator>('sine');
+  const synthetic = useMemo(() => new SyntheticDataSource({ generator }), [generator]);
+  useEffect(() => () => synthetic.disposeAll(), [synthetic]);
+  const dataHub = preview ? synthetic : hub;
 
   const dirty = isDirty(working, saved);
   const selected = working.widgets.find((w) => w.id === selectedId) ?? null;
@@ -222,12 +234,38 @@ export function DashboardWorkspace({
     </Button>
   );
 
+  // Preview toggle + (when on) a generator picker. Shown in both modes so an author
+  // can lay out against synthetic data or review it.
+  const previewControl = (
+    <div className="flex items-center gap-2">
+      {preview && (
+        <Combobox
+          options={SYNTHETIC_GENERATORS.map((g) => ({ value: g.value, label: g.label }))}
+          value={generator}
+          onChange={(v) => setGenerator(v as SyntheticGenerator)}
+          allowClear={false}
+          className="h-9 w-40"
+        />
+      )}
+      <Button
+        variant={preview ? 'default' : 'outline'}
+        size="sm"
+        aria-pressed={preview}
+        onClick={() => setPreview((p) => !p)}
+        title="Preview with synthetic data (no device required)"
+      >
+        <FlaskConical size={14} /> Preview
+      </Button>
+    </div>
+  );
+
   const viewActions = (
     <div className="flex items-center gap-2">
       {statusEl}
       {/* Reachable so edits carried into view mode can be persisted without
           re-entering the editor. */}
       {dirty && saveButton}
+      {previewControl}
       {historyButton}
       <Button variant="outline" size="sm" onClick={toggleMode} disabled={!canEdit}>
         Edit
@@ -255,6 +293,7 @@ export function DashboardWorkspace({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
+      {previewControl}
       {historyButton}
       {saveButton}
       <Button variant="outline" size="sm" onClick={toggleMode}>
@@ -303,7 +342,7 @@ export function DashboardWorkspace({
             <DashboardCanvas
               definition={working}
               onChange={setWorking}
-              hub={hub}
+              hub={dataHub}
               selectedId={selectedId}
               onSelect={setSelectedId}
             />
@@ -324,7 +363,12 @@ export function DashboardWorkspace({
         // DashboardRenderer's root fills 100% width/height, so it needs a bounded
         // container to give it real height inside the page flow.
         <div style={{ position: 'relative', height: 'calc(100vh - 180px)', minHeight: 400 }}>
-          <DashboardRenderer definition={working} hub={hub} resolver={resolver} />
+          <DashboardRenderer
+            definition={working}
+            hub={dataHub}
+            resolver={resolver}
+            seedHistory={!preview}
+          />
         </div>
       )}
     </PageShell>

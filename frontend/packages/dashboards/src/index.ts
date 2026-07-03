@@ -38,7 +38,15 @@ export {
   type DashboardHubConfig,
   type DeviceResolver,
   type WidgetStreamSink,
+  type WidgetDataSource,
 } from './hub';
+
+export {
+  SyntheticDataSource,
+  SYNTHETIC_GENERATORS,
+  type SyntheticGenerator,
+  type SyntheticDataSourceConfig,
+} from './synthetic';
 
 export {
   parseDashboardDefinition,

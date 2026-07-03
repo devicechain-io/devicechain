@@ -14,7 +14,7 @@ import {
   resolveWidgetBox,
   type Breakpoints,
   type DashboardDefinition,
-  type DashboardHub,
+  type WidgetDataSource,
   type DeviceResolver,
   type MeasurementSample,
   type WidgetInstance,
@@ -25,13 +25,22 @@ import { ConnectedWidget } from './connected-widget';
 
 export interface DashboardRendererProps {
   definition: DashboardDefinition;
-  hub: DashboardHub;
+  hub: WidgetDataSource;
   resolver: DeviceResolver;
+  // Whether to backfill each widget from bucketedMeasurements (a real backend call).
+  // Default true; set false for offline preview, where the data source (e.g.
+  // SyntheticDataSource) supplies its own history and the backend must not be hit.
+  seedHistory?: boolean;
 }
 
-export function DashboardRenderer({ definition, hub, resolver }: DashboardRendererProps) {
+export function DashboardRenderer({
+  definition,
+  hub,
+  resolver,
+  seedHistory = true,
+}: DashboardRendererProps) {
   const breakpoint = useActiveBreakpoint(definition.canvas.breakpoints);
-  const histories = useWidgetHistories(definition.widgets, resolver);
+  const histories = useWidgetHistories(definition.widgets, resolver, seedHistory);
 
   // Boxes are expressed in grid cells; the grid size turns them into pixels so a
   // definition is resolution-independent (and snap-to-grid stays exact).
@@ -92,10 +101,17 @@ function useActiveBreakpoint(breakpoints: Breakpoints): string {
 function useWidgetHistories(
   widgets: WidgetInstance[],
   resolver: DeviceResolver,
+  enabled: boolean,
 ): Record<string, MeasurementSample[]> {
   const [histories, setHistories] = useState<Record<string, MeasurementSample[]>>({});
 
   useEffect(() => {
+    // Preview (enabled=false) must not touch the backend; clear any prior seed so a
+    // toggle from live→preview doesn't leave stale real history under synthetic data.
+    if (!enabled) {
+      setHistories({});
+      return;
+    }
     let cancelled = false;
     const historyWindow = defaultHistoryWindow();
     Promise.all(
@@ -106,7 +122,7 @@ function useWidgetHistories(
     return () => {
       cancelled = true;
     };
-  }, [widgets, resolver]);
+  }, [widgets, resolver, enabled]);
 
   return histories;
 }
