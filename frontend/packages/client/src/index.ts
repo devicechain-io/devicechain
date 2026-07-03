@@ -27,3 +27,16 @@ export {
   hasAuthority,
   type DecodedClaims,
 } from './jwt';
+
+export {
+  generateToken,
+  normalizeToken,
+  conformsToMask,
+  maskToRegExp,
+  parseMask,
+  resolveMask,
+  isValidToken,
+  MAX_TOKEN_LEN,
+  type GenerateOptions,
+  type MaskSegment,
+} from './tokens';
