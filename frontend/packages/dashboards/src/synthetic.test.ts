@@ -1,0 +1,112 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { SyntheticDataSource } from './synthetic';
+import type { MeasurementSample } from './types';
+import type { DatasourceSelector } from './types';
+
+function deviceSel(measurements: string[]): DatasourceSelector {
+  return { kind: 'device', deviceToken: 'x', measurements };
+}
+
+function collect() {
+  const samples: MeasurementSample[] = [];
+  return { sink: { next: (s: MeasurementSample) => samples.push(s) }, samples };
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-07-03T00:00:00Z'));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('SyntheticDataSource', () => {
+  it('backfills a full window per measurement on subscribe', () => {
+    const src = new SyntheticDataSource({ backfill: 10 });
+    const { sink, samples } = collect();
+    src.subscribeWidget(deviceSel(['temperature', 'humidity']), sink);
+    // 10 backfill points × 2 names, delivered synchronously.
+    expect(samples).toHaveLength(20);
+    expect(new Set(samples.map((s) => s.name))).toEqual(new Set(['temperature', 'humidity']));
+    // Backfill is chronological (non-decreasing timestamps).
+    const temps = samples.filter((s) => s.name === 'temperature').map((s) => Date.parse(s.occurredTime!));
+    expect(temps).toEqual([...temps].sort((a, b) => a - b));
+  });
+
+  it('emits one more sample per name each interval tick', () => {
+    const src = new SyntheticDataSource({ backfill: 0, intervalMs: 1000 });
+    const { sink, samples } = collect();
+    src.subscribeWidget(deviceSel(['t']), sink);
+    expect(samples).toHaveLength(0); // no backfill
+    vi.advanceTimersByTime(3000);
+    expect(samples).toHaveLength(3);
+  });
+
+  it('keeps every value within [min, max] for all generators', () => {
+    for (const generator of ['sine', 'ramp', 'random-walk'] as const) {
+      const src = new SyntheticDataSource({ generator, backfill: 50, min: 10, max: 20 });
+      const { sink, samples } = collect();
+      src.subscribeWidget(deviceSel(['t']), sink);
+      vi.advanceTimersByTime(50_000);
+      for (const s of samples) {
+        expect(s.value).not.toBeNull();
+        expect(s.value! >= 10 && s.value! <= 20).toBe(true);
+      }
+    }
+  });
+
+  it('falls back to a "value" series when the selector lists no measurements', () => {
+    const src = new SyntheticDataSource({ backfill: 3 });
+    const { sink, samples } = collect();
+    src.subscribeWidget(deviceSel([]), sink);
+    expect(samples).toHaveLength(3);
+    expect(samples.every((s) => s.name === 'value')).toBe(true);
+  });
+
+  it('stops emitting after the subscription is disposed', () => {
+    const src = new SyntheticDataSource({ backfill: 0 });
+    const { sink, samples } = collect();
+    const dispose = src.subscribeWidget(deviceSel(['t']), sink);
+    vi.advanceTimersByTime(2000);
+    const afterTwo = samples.length;
+    dispose();
+    vi.advanceTimersByTime(5000);
+    expect(samples).toHaveLength(afterTwo);
+  });
+
+  it('disposeAll stops every stream', () => {
+    const src = new SyntheticDataSource({ backfill: 0 });
+    const a = collect();
+    const b = collect();
+    src.subscribeWidget(deviceSel(['t']), a.sink);
+    src.subscribeWidget(deviceSel(['t']), b.sink);
+    vi.advanceTimersByTime(1000);
+    src.disposeAll();
+    const aCount = a.samples.length;
+    const bCount = b.samples.length;
+    vi.advanceTimersByTime(5000);
+    expect(a.samples).toHaveLength(aCount);
+    expect(b.samples).toHaveLength(bCount);
+  });
+
+  it('produces finite values even with a degenerate config (periodMs 0)', () => {
+    const src = new SyntheticDataSource({ generator: 'sine', backfill: 5, periodMs: 0, intervalMs: 0 });
+    const { sink, samples } = collect();
+    src.subscribeWidget(deviceSel(['t']), sink);
+    expect(samples).toHaveLength(5);
+    for (const s of samples) expect(Number.isFinite(s.value!)).toBe(true);
+  });
+
+  it('gives distinct series different phase (sine)', () => {
+    const src = new SyntheticDataSource({ generator: 'sine', backfill: 1 });
+    const { sink, samples } = collect();
+    src.subscribeWidget(deviceSel(['alpha', 'beta']), sink);
+    const alpha = samples.find((s) => s.name === 'alpha')!.value;
+    const beta = samples.find((s) => s.name === 'beta')!.value;
+    expect(alpha).not.toBe(beta); // different phase → different value at the same instant
+  });
+});

@@ -3,7 +3,7 @@
 
 // React bindings between the imperative DashboardHub / DOM theme and widget state.
 
-import type { DashboardHub, DatasourceSelector, MeasurementSample } from '@devicechain/dashboards';
+import type { WidgetDataSource, DatasourceSelector, MeasurementSample } from '@devicechain/dashboards';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 
 import { resolveChartTheme, type ChartTheme } from './theme';
@@ -41,7 +41,7 @@ function latestOf(samples: MeasurementSample[]): Record<string, MeasurementSampl
 // initialSamples is given, it is merged ahead of the live tail so a chart shows
 // history immediately (and can arrive after the live stream opens).
 export function useMeasurementStream(
-  hub: DashboardHub,
+  hub: WidgetDataSource,
   datasource: DatasourceSelector | undefined,
   options: MeasurementStreamOptions = {},
 ): MeasurementStreamState {

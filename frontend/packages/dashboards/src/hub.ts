@@ -47,6 +47,15 @@ export interface DashboardHubConfig {
   resolver: DeviceResolver;
 }
 
+// WidgetDataSource is the minimal contract a widget renderer needs from a data
+// source: bind a datasource selector to a sink, get a disposer back. DashboardHub
+// is the live implementation (multiplexed backend telemetry); SyntheticDataSource
+// is the offline preview implementation. The widget layer depends on THIS interface,
+// not the concrete class, so a host can feed either without widgets knowing which.
+export interface WidgetDataSource {
+  subscribeWidget(datasource: DatasourceSelector, sink: WidgetStreamSink): () => void;
+}
+
 // One widget's interest in a device stream: the measurement names it wants (an
 // empty set means every measurement) and where to deliver them.
 interface Subscriber {
@@ -60,7 +69,7 @@ interface DeviceStream {
   unsubscribe: () => void;
 }
 
-export class DashboardHub {
+export class DashboardHub implements WidgetDataSource {
   private readonly resolver: DeviceResolver;
   // One entry per distinct numeric device id that has at least one subscriber.
   private readonly streams = new Map<string, DeviceStream>();

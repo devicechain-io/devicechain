@@ -18,7 +18,7 @@ import {
   pxToCellBox,
   setWidgetBox,
   type DashboardDefinition,
-  type DashboardHub,
+  type WidgetDataSource,
 } from '@devicechain/dashboards';
 import { ConnectedWidget } from '@devicechain/widgets';
 import { Rnd } from 'react-rnd';
@@ -26,7 +26,7 @@ import { Rnd } from 'react-rnd';
 export interface DashboardCanvasProps {
   definition: DashboardDefinition;
   onChange: (next: DashboardDefinition) => void;
-  hub: DashboardHub;
+  hub: WidgetDataSource;
   // Selection is lifted to the workspace (which owns the config panel); the
   // canvas is fully controlled — it reports clicks and reflects the current id.
   selectedId: string | null;
