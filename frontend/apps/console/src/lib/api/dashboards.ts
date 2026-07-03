@@ -5,7 +5,11 @@
 import { gql } from '@devicechain/client';
 import { parseDashboardDefinition, serializeDefinition } from '@devicechain/dashboards';
 import { graphql } from '@/gql/dashboard-management';
-import type { DashboardsQuery, DashboardQuery } from '@/gql/dashboard-management/graphql';
+import type {
+  DashboardsQuery,
+  DashboardQuery,
+  DashboardVersionsQuery,
+} from '@/gql/dashboard-management/graphql';
 
 // Public types are derived from the generated operation results so they always
 // reflect the actual selection sets and can never drift from the schema.
@@ -13,6 +17,7 @@ export type DashboardListItem = DashboardsQuery['dashboards']['results'][number]
 export type Dashboard = NonNullable<DashboardQuery['dashboard']>;
 export type Pagination = DashboardsQuery['dashboards']['pagination'];
 export type DashboardSearchResults = DashboardsQuery['dashboards'];
+export type DashboardVersion = DashboardVersionsQuery['dashboardVersions'][number];
 
 // ── Dashboards ──────────────────────────────────────────────────────────
 
@@ -58,6 +63,7 @@ const DASHBOARD_BY_TOKEN = graphql(`
       name
       description
       definition
+      updatedAt
     }
   }
 `);
@@ -99,18 +105,32 @@ export async function createDashboard(opts: {
 // The editor persists a full definition snapshot (ADR-039). updateDashboard is a
 // full replacement — name/description are sent alongside so a save never wipes
 // either field; the caller passes the values it isn't editing back verbatim.
+// expectedUpdatedAt is an optimistic-concurrency precondition (ADR-039 versioning):
+// pass the updatedAt the editor loaded so a save fails (CONFLICT) if another writer
+// changed the dashboard since. It returns the new updatedAt so the caller can
+// advance its baseline for the next save.
 const UPDATE_DASHBOARD = graphql(`
-  mutation UpdateDashboard($token: String!, $request: DashboardCreateRequest!) {
-    updateDashboard(token: $token, request: $request) {
+  mutation UpdateDashboard(
+    $token: String!
+    $request: DashboardCreateRequest!
+    $expectedUpdatedAt: String
+  ) {
+    updateDashboard(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {
       token
+      updatedAt
     }
   }
 `);
 
 export async function updateDashboard(
   token: string,
-  input: { name?: string | null; description?: string | null; definition: string },
-): Promise<{ token: string }> {
+  input: {
+    name?: string | null;
+    description?: string | null;
+    definition: string;
+    expectedUpdatedAt?: string | null;
+  },
+): Promise<{ token: string; updatedAt: string | null }> {
   const data = await gql('dashboard-management', UPDATE_DASHBOARD, {
     request: {
       token,
@@ -119,8 +139,74 @@ export async function updateDashboard(
       definition: input.definition,
     },
     token,
+    expectedUpdatedAt: input.expectedUpdatedAt ?? null,
   });
   return data.updateDashboard;
+}
+
+// CONFLICT_MARKER matches the backend's ErrConflict message (dashboard-management
+// model/api.go). A save that fails the optimistic precondition surfaces as a
+// GraphQL error carrying this text; the editor uses it to show a reload-and-retry
+// hint rather than a generic error.
+export const CONFLICT_MARKER = 'modified by another writer';
+
+// ── Versioning (ADR-039) ──────────────────────────────────────────────────
+
+const DASHBOARD_VERSIONS = graphql(`
+  query DashboardVersions($token: String!) {
+    dashboardVersions(token: $token) {
+      version
+      label
+      description
+      publishedAt
+      publishedBy
+    }
+  }
+`);
+
+export async function listDashboardVersions(token: string): Promise<DashboardVersion[]> {
+  const data = await gql('dashboard-management', DASHBOARD_VERSIONS, { token });
+  return data.dashboardVersions;
+}
+
+const PUBLISH_DASHBOARD = graphql(`
+  mutation PublishDashboard($token: String!, $label: String, $description: String) {
+    publishDashboard(token: $token, label: $label, description: $description) {
+      version
+    }
+  }
+`);
+
+// publishDashboard freezes the current (saved) draft into a new immutable version.
+export async function publishDashboard(
+  token: string,
+  input: { label?: string; description?: string },
+): Promise<{ version: number }> {
+  const data = await gql('dashboard-management', PUBLISH_DASHBOARD, {
+    token,
+    label: input.label?.trim() ? input.label.trim() : null,
+    description: input.description?.trim() ? input.description.trim() : null,
+  });
+  return data.publishDashboard;
+}
+
+const ROLLBACK_DASHBOARD = graphql(`
+  mutation RollbackDashboard($token: String!, $version: Int!) {
+    rollbackDashboard(token: $token, version: $version) {
+      definition
+      updatedAt
+    }
+  }
+`);
+
+// rollbackDashboard re-drafts a published version into the draft, returning the new
+// draft definition + updatedAt so the editor can re-baseline without a reload.
+export async function rollbackDashboard(
+  token: string,
+  version: number,
+): Promise<{ definition: string; updatedAt: string | null }> {
+  const data = await gql('dashboard-management', ROLLBACK_DASHBOARD, { token, version });
+  return data.rollbackDashboard;
 }
 
 const DELETE_DASHBOARD = graphql(`

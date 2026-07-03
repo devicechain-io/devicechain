@@ -10,11 +10,12 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, History, Plus, Trash2 } from 'lucide-react';
 import { hasAuthority } from '@devicechain/client';
 import {
   addWidget,
   isDirty,
+  parseDashboardDefinition,
   serializeDefinition,
   setTitle,
   updateWidget,
@@ -37,10 +38,11 @@ import {
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useAuth } from '@/auth/AuthProvider';
-import { updateDashboard, deleteDashboard } from '@/lib/api/dashboards';
+import { updateDashboard, deleteDashboard, CONFLICT_MARKER } from '@/lib/api/dashboards';
 import { errMessage } from '@/routes/common';
 import { DashboardCanvas } from './DashboardCanvas';
 import { WidgetConfigPanel } from './WidgetConfigPanel';
+import { VersionHistorySheet } from './VersionHistorySheet';
 
 type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; message: string };
 
@@ -48,6 +50,7 @@ export function DashboardWorkspace({
   token,
   name,
   description,
+  updatedAt,
   loaded,
   hub,
   resolver,
@@ -55,6 +58,7 @@ export function DashboardWorkspace({
   token: string;
   name: string | null;
   description: string | null;
+  updatedAt: string | null;
   loaded: DashboardDefinition;
   hub: DashboardHub;
   resolver: DeviceResolver;
@@ -72,6 +76,10 @@ export function DashboardWorkspace({
   // Selection is owned here (not in the canvas) so the config panel and the canvas
   // stay in sync; leaving edit mode clears it.
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The optimistic-concurrency baseline: the updatedAt the editor last observed.
+  // Advanced after every save/rollback so a subsequent save doesn't self-conflict.
+  const [expectedUpdatedAt, setExpectedUpdatedAt] = useState<string | null>(updatedAt);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const dirty = isDirty(working, saved);
   const selected = working.widgets.find((w) => w.id === selectedId) ?? null;
@@ -129,18 +137,45 @@ export function DashboardWorkspace({
     const snapshot = working; // persist exactly what we serialize; later edits stay dirty
     setSaveState({ kind: 'saving' });
     // name tracks the (editable) title so a save never orphans the list label;
-    // description is preserved verbatim (the editor doesn't edit it).
+    // description is preserved verbatim (the editor doesn't edit it). expectedUpdatedAt
+    // is the optimistic-concurrency precondition — a stale one fails with CONFLICT.
     updateDashboard(token, {
       name: snapshot.title || null,
       description,
       definition: serializeDefinition(snapshot),
+      expectedUpdatedAt,
     })
-      .then(() => {
+      .then((result) => {
         setSaved(snapshot);
+        setExpectedUpdatedAt(result.updatedAt); // advance the baseline for the next save
         setSaveState({ kind: 'clean' });
         toast('Dashboard saved');
       })
-      .catch((err: unknown) => setSaveState({ kind: 'error', message: errMessage(err) }));
+      .catch((err: unknown) => {
+        const raw = errMessage(err);
+        const message = raw.includes(CONFLICT_MARKER)
+          ? 'This dashboard changed elsewhere. Reload the page to get the latest, then reapply your edits.'
+          : raw;
+        setSaveState({ kind: 'error', message });
+      });
+  };
+
+  // After a rollback the server draft IS the chosen version; re-baseline working +
+  // saved to it (seeding the title from the name like the initial load) so the
+  // editor reflects it and isn't spuriously dirty, and advance the concurrency
+  // baseline to the returned updatedAt.
+  const onRolledBack = (result: { definition: string; updatedAt: string | null }) => {
+    try {
+      let def = parseDashboardDefinition(JSON.parse(result.definition));
+      if (def.title === '' && name) def = setTitle(def, name);
+      setWorking(def);
+      setSaved(def);
+      setSelectedId(null);
+      setExpectedUpdatedAt(result.updatedAt);
+      setSaveState({ kind: 'clean' });
+    } catch {
+      toast('Rolled back, but the returned version could not be parsed. Reload the page.', 'error');
+    }
   };
 
   const remove = async () => {
@@ -177,12 +212,19 @@ export function DashboardWorkspace({
     </Button>
   );
 
+  const historyButton = (
+    <Button variant="outline" size="sm" onClick={() => setHistoryOpen(true)}>
+      <History size={14} /> History
+    </Button>
+  );
+
   const viewActions = (
     <div className="flex items-center gap-2">
       {statusEl}
       {/* Reachable so edits carried into view mode can be persisted without
           re-entering the editor. */}
       {dirty && saveButton}
+      {historyButton}
       <Button variant="outline" size="sm" onClick={toggleMode} disabled={!canEdit}>
         Edit
       </Button>
@@ -209,6 +251,7 @@ export function DashboardWorkspace({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
+      {historyButton}
       {saveButton}
       <Button variant="outline" size="sm" onClick={toggleMode}>
         Done
@@ -217,6 +260,7 @@ export function DashboardWorkspace({
   );
 
   return (
+    <>
     <PageShell
       title={heading}
       banner="dashboard"
@@ -280,5 +324,14 @@ export function DashboardWorkspace({
         </div>
       )}
     </PageShell>
+    <VersionHistorySheet
+      token={token}
+      open={historyOpen}
+      onOpenChange={setHistoryOpen}
+      dirty={dirty}
+      canWrite={canEdit}
+      onRolledBack={onRolledBack}
+    />
+    </>
   );
 }

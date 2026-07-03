@@ -16,16 +16,22 @@ import * as types from './graphql';
  */
 type Documents = {
     "\n  query Dashboards($criteria: DashboardSearchCriteria!) {\n    dashboards(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        createdAt\n        updatedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DashboardsDocument,
-    "\n  query Dashboard($token: String!) {\n    dashboard(token: $token) {\n      token\n      name\n      description\n      definition\n    }\n  }\n": typeof types.DashboardDocument,
+    "\n  query Dashboard($token: String!) {\n    dashboard(token: $token) {\n      token\n      name\n      description\n      definition\n      updatedAt\n    }\n  }\n": typeof types.DashboardDocument,
     "\n  mutation CreateDashboard($request: DashboardCreateRequest!) {\n    createDashboard(request: $request) {\n      token\n    }\n  }\n": typeof types.CreateDashboardDocument,
-    "\n  mutation UpdateDashboard($token: String!, $request: DashboardCreateRequest!) {\n    updateDashboard(token: $token, request: $request) {\n      token\n    }\n  }\n": typeof types.UpdateDashboardDocument,
+    "\n  mutation UpdateDashboard(\n    $token: String!\n    $request: DashboardCreateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateDashboard(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": typeof types.UpdateDashboardDocument,
+    "\n  query DashboardVersions($token: String!) {\n    dashboardVersions(token: $token) {\n      version\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n": typeof types.DashboardVersionsDocument,
+    "\n  mutation PublishDashboard($token: String!, $label: String, $description: String) {\n    publishDashboard(token: $token, label: $label, description: $description) {\n      version\n    }\n  }\n": typeof types.PublishDashboardDocument,
+    "\n  mutation RollbackDashboard($token: String!, $version: Int!) {\n    rollbackDashboard(token: $token, version: $version) {\n      definition\n      updatedAt\n    }\n  }\n": typeof types.RollbackDashboardDocument,
     "\n  mutation DeleteDashboard($token: String!) {\n    deleteDashboard(token: $token)\n  }\n": typeof types.DeleteDashboardDocument,
 };
 const documents: Documents = {
     "\n  query Dashboards($criteria: DashboardSearchCriteria!) {\n    dashboards(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        createdAt\n        updatedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DashboardsDocument,
-    "\n  query Dashboard($token: String!) {\n    dashboard(token: $token) {\n      token\n      name\n      description\n      definition\n    }\n  }\n": types.DashboardDocument,
+    "\n  query Dashboard($token: String!) {\n    dashboard(token: $token) {\n      token\n      name\n      description\n      definition\n      updatedAt\n    }\n  }\n": types.DashboardDocument,
     "\n  mutation CreateDashboard($request: DashboardCreateRequest!) {\n    createDashboard(request: $request) {\n      token\n    }\n  }\n": types.CreateDashboardDocument,
-    "\n  mutation UpdateDashboard($token: String!, $request: DashboardCreateRequest!) {\n    updateDashboard(token: $token, request: $request) {\n      token\n    }\n  }\n": types.UpdateDashboardDocument,
+    "\n  mutation UpdateDashboard(\n    $token: String!\n    $request: DashboardCreateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateDashboard(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": types.UpdateDashboardDocument,
+    "\n  query DashboardVersions($token: String!) {\n    dashboardVersions(token: $token) {\n      version\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n": types.DashboardVersionsDocument,
+    "\n  mutation PublishDashboard($token: String!, $label: String, $description: String) {\n    publishDashboard(token: $token, label: $label, description: $description) {\n      version\n    }\n  }\n": types.PublishDashboardDocument,
+    "\n  mutation RollbackDashboard($token: String!, $version: Int!) {\n    rollbackDashboard(token: $token, version: $version) {\n      definition\n      updatedAt\n    }\n  }\n": types.RollbackDashboardDocument,
     "\n  mutation DeleteDashboard($token: String!) {\n    deleteDashboard(token: $token)\n  }\n": types.DeleteDashboardDocument,
 };
 
@@ -36,7 +42,7 @@ export function graphql(source: "\n  query Dashboards($criteria: DashboardSearch
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query Dashboard($token: String!) {\n    dashboard(token: $token) {\n      token\n      name\n      description\n      definition\n    }\n  }\n"): typeof import('./graphql').DashboardDocument;
+export function graphql(source: "\n  query Dashboard($token: String!) {\n    dashboard(token: $token) {\n      token\n      name\n      description\n      definition\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').DashboardDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -44,7 +50,19 @@ export function graphql(source: "\n  mutation CreateDashboard($request: Dashboar
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  mutation UpdateDashboard($token: String!, $request: DashboardCreateRequest!) {\n    updateDashboard(token: $token, request: $request) {\n      token\n    }\n  }\n"): typeof import('./graphql').UpdateDashboardDocument;
+export function graphql(source: "\n  mutation UpdateDashboard(\n    $token: String!\n    $request: DashboardCreateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateDashboard(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').UpdateDashboardDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query DashboardVersions($token: String!) {\n    dashboardVersions(token: $token) {\n      version\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n"): typeof import('./graphql').DashboardVersionsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation PublishDashboard($token: String!, $label: String, $description: String) {\n    publishDashboard(token: $token, label: $label, description: $description) {\n      version\n    }\n  }\n"): typeof import('./graphql').PublishDashboardDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation RollbackDashboard($token: String!, $version: Int!) {\n    rollbackDashboard(token: $token, version: $version) {\n      definition\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').RollbackDashboardDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
