@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
+import { TokenField } from '@/components/ui/token-field';
 import { MultiSelect } from '@/components/ui/multi-select';
 import type { ComboboxOption } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
@@ -87,13 +88,18 @@ export function RoleForm({ role, onDone }: { role?: AdminRole; onDone: (message:
         </div>
       </FormField>
       <FormField label="Token" htmlFor="r-token">
-        <Input
-          id="r-token"
-          value={token}
-          disabled={editing}
-          placeholder="operator"
-          onChange={(e) => setToken(e.target.value)}
-        />
+        {editing ? (
+          <Input id="r-token" value={token} disabled />
+        ) : (
+          <TokenField
+            id="r-token"
+            entityType="role"
+            value={token}
+            onChange={setToken}
+            seed={name}
+            placeholder="operator"
+          />
+        )}
       </FormField>
       <FormField label="Name" htmlFor="r-name">
         <Input id="r-name" value={name} placeholder="Operator" onChange={(e) => setName(e.target.value)} />
