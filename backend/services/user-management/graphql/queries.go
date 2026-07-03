@@ -62,3 +62,22 @@ func (r *SchemaResolver) Me(ctx context.Context) (*CurrentIdentityResolver, erro
 	}
 	return &CurrentIdentityResolver{id: id}, nil
 }
+
+// IdentityMemberships re-reads the live memberships for a valid identity token
+// (ADR-033), so the console can refresh its tenant picker after a membership
+// change without a re-login. The identity token is passed as an argument and
+// validated internally (like selectTenant), so this runs before a tenant is
+// selected — there is no membership-bearing token to authenticate with yet.
+func (r *SchemaResolver) IdentityMemberships(ctx context.Context, args struct {
+	IdentityToken string
+}) ([]*MembershipResolver, error) {
+	infos, err := r.getIdentityManager(ctx).Memberships(ctx, args.IdentityToken)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*MembershipResolver, 0, len(infos))
+	for i := range infos {
+		out = append(out, &MembershipResolver{m: infos[i]})
+	}
+	return out, nil
+}

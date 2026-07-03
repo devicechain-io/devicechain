@@ -15,6 +15,7 @@ import {
   login as apiLogin,
   selectTenant as apiSelectTenant,
   refresh as apiRefresh,
+  getIdentityMemberships as apiIdentityMemberships,
   type IdentityAuth,
 } from '@/lib/api/user-management';
 import {
@@ -65,6 +66,12 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<IdentityAuth>;
   /** Exchange an identity token for a tenant-scoped session. */
   selectTenant: (identityToken: string, tenant: string) => Promise<void>;
+  /**
+   * Re-read the identity's live memberships (ADR-042 fix) so the tenant picker
+   * reflects a membership added/removed mid-session, without a re-login. A no-op
+   * when no identity session is held; failures are swallowed (best-effort).
+   */
+  refreshMemberships: () => Promise<void>;
   logout: () => void;
 
   // ── Identity session (admin console) ──
@@ -280,6 +287,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [applyTokens],
   );
 
+  // Re-read live memberships for the current identity session and replace the
+  // cached login snapshot, so a membership added/removed elsewhere (the admin
+  // console) shows in the tenant picker without a re-login. Best-effort: a
+  // missing session or a failed call leaves the current snapshot untouched.
+  const refreshMemberships = useCallback(async () => {
+    const current = identityRef.current;
+    if (!current || isExpired(current.identityToken, 0)) return;
+    try {
+      const memberships = await apiIdentityMemberships(current.identityToken);
+      applyIdentity({ ...current, memberships });
+    } catch {
+      // best-effort — keep the existing snapshot
+    }
+  }, [applyIdentity]);
+
   const claims = useMemo(
     () => (tokens ? decodeToken(tokens.accessToken) : null),
     [tokens],
@@ -300,13 +322,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       selectTenant,
+      refreshMemberships,
       logout,
       isIdentityAuthenticated: identityAlive,
       superuser: identityAlive && (identity?.superuser ?? false),
       memberships: identity?.memberships ?? [],
       identityToken: identityAlive ? (identity?.identityToken ?? null) : null,
     }),
-    [claims, sessionAlive, identityAlive, isLoading, login, selectTenant, logout, identity],
+    [
+      claims,
+      sessionAlive,
+      identityAlive,
+      isLoading,
+      login,
+      selectTenant,
+      refreshMemberships,
+      logout,
+      identity,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

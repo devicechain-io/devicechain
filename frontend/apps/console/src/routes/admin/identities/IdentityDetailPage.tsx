@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Ban, Power, Trash2, X } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
@@ -17,6 +17,7 @@ import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
+import { useAuth } from '@/auth/AuthProvider';
 import {
   listIdentities,
   listTenants,
@@ -51,8 +52,18 @@ export default function IdentityDetailPage() {
   const { toast } = useToast();
   const confirm = useConfirm();
 
+  const { refreshMemberships } = useAuth();
   const [version, reload] = useReload();
   const { data: identities, loading, error } = useQuery(listIdentities, [version]);
+
+  // After a membership change, also refresh the signed-in identity's own
+  // memberships so a change to itself (e.g. a superuser granting itself a tenant)
+  // shows in the tenant picker immediately, without a re-login. A change to
+  // another identity re-reads own memberships harmlessly.
+  const onChanged = useCallback(() => {
+    reload();
+    void refreshMemberships();
+  }, [reload, refreshMemberships]);
   const { data: tenants } = useQuery(listTenants, [version]);
   const { data: systemRoles } = useQuery(() => listRoles('system'), [version]);
   const { data: tenantRoles } = useQuery(() => listRoles('tenant'), [version]);
@@ -145,7 +156,7 @@ export default function IdentityDetailPage() {
         tenantOptions={tenantOptions}
         systemRoleOptions={systemRoleOptions}
         tenantRoleOptions={tenantRoleOptions}
-        onChanged={reload}
+        onChanged={onChanged}
       />
     </PageShell>
   );

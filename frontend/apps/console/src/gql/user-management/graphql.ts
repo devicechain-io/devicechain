@@ -20,6 +20,13 @@ export type SelectTenantMutationVariables = Exact<{
 
 export type SelectTenantMutation = { selectTenant: { accessToken: string, refreshToken: string, expiresAt: string } };
 
+export type IdentityMembershipsQueryVariables = Exact<{
+  identityToken: string;
+}>;
+
+
+export type IdentityMembershipsQuery = { identityMemberships: Array<{ tenant: string, roles: Array<string> }> };
+
 export type RefreshMutationVariables = Exact<{
   refreshToken: string;
 }>;
@@ -86,6 +93,14 @@ export const SelectTenantDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<SelectTenantMutation, SelectTenantMutationVariables>;
+export const IdentityMembershipsDocument = new TypedDocumentString(`
+    query IdentityMemberships($identityToken: String!) {
+  identityMemberships(identityToken: $identityToken) {
+    tenant
+    roles
+  }
+}
+    `) as unknown as TypedDocumentString<IdentityMembershipsQuery, IdentityMembershipsQueryVariables>;
 export const RefreshDocument = new TypedDocumentString(`
     mutation Refresh($refreshToken: String!) {
   refresh(refreshToken: $refreshToken) {

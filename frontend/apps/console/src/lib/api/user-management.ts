@@ -64,6 +64,28 @@ export async function selectTenant(identityToken: string, tenant: string): Promi
   return data.selectTenant;
 }
 
+const IDENTITY_MEMBERSHIPS = graphql(`
+  query IdentityMemberships($identityToken: String!) {
+    identityMemberships(identityToken: $identityToken) {
+      tenant
+      roles
+    }
+  }
+`);
+
+// getIdentityMemberships re-reads the caller's live memberships from a valid
+// identity token so the tenant picker reflects a mid-session membership change
+// without a re-login. Runs anonymously — the token is validated as an argument.
+export async function getIdentityMemberships(identityToken: string): Promise<Membership[]> {
+  const data = await gql(
+    'user-management',
+    IDENTITY_MEMBERSHIPS,
+    { identityToken },
+    { anonymous: true },
+  );
+  return data.identityMemberships;
+}
+
 const REFRESH = graphql(`
   mutation Refresh($refreshToken: String!) {
     refresh(refreshToken: $refreshToken) {
