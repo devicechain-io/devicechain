@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -30,7 +31,7 @@ func newTestApi(t *testing.T) *Api {
 	// exactly as production does (ADR-042 P2): a non-conforming token fixture would
 	// fail here as it would live.
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
-	require.NoError(t, db.AutoMigrate(&Dashboard{}))
+	require.NoError(t, db.AutoMigrate(&Dashboard{}, &DashboardVersion{}))
 	// Mirror the migration's per-tenant partial unique index (ADR-042 P1) so the
 	// token-uniqueness tests run against the real constraint, not a bare table.
 	require.NoError(t, rdb.CreateTenantTokenIndex(db, &Dashboard{}))
@@ -62,7 +63,7 @@ func TestDashboardCrud(t *testing.T) {
 		Token:      "fleet",
 		Name:       strp("Fleet v2"),
 		Definition: `{"schemaVersion":1,"widgets":[{"id":"w1"}]}`,
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "Fleet v2", updated.Name.String)
 	assert.JSONEq(t, `{"schemaVersion":1,"widgets":[{"id":"w1"}]}`, string(updated.Definition))
@@ -131,7 +132,7 @@ func TestInvalidDefinitionRejected(t *testing.T) {
 	_, err = api.UpdateDashboard(ctx, "ok", &DashboardCreateRequest{
 		Token:      "ok",
 		Definition: "}{",
-	})
+	}, nil)
 	assert.ErrorIs(t, err, ErrInvalidDefinition)
 }
 
@@ -175,4 +176,106 @@ func TestTenantIsolation(t *testing.T) {
 	found, err := api.DashboardsByToken(other, []string{"shared-token"})
 	require.NoError(t, err)
 	assert.Empty(t, found, "dashboard must not be visible across tenants")
+}
+
+// TestUpdateOptimisticConcurrency confirms the expectedUpdatedAt precondition:
+// a stale timestamp is rejected with ErrConflict, the current one succeeds, and a
+// nil precondition is unconditional (backward-compatible last-write-wins).
+func TestUpdateOptimisticConcurrency(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	created, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "d", Definition: `{"schemaVersion":1}`})
+	require.NoError(t, err)
+	current := created.UpdatedAt.Format(time.RFC3339)
+
+	req := func() *DashboardCreateRequest {
+		return &DashboardCreateRequest{Token: "d", Definition: `{"schemaVersion":1,"widgets":[]}`}
+	}
+
+	// A wrong expected timestamp is a conflict (stands in for a concurrent writer
+	// having moved the row on; deterministic vs. relying on sub-second timing).
+	_, err = api.UpdateDashboard(ctx, "d", req(), strp("2000-01-01T00:00:00Z"))
+	assert.ErrorIs(t, err, ErrConflict)
+
+	// The current timestamp passes the precondition.
+	_, err = api.UpdateDashboard(ctx, "d", req(), &current)
+	require.NoError(t, err)
+
+	// No precondition → unconditional save.
+	_, err = api.UpdateDashboard(ctx, "d", req(), nil)
+	require.NoError(t, err)
+}
+
+// TestPublishVersionsAndRollback exercises the versioning lifecycle: publish
+// snapshots the draft, versions list newest-first with the right numbers/labels/
+// snapshots, and rollback re-drafts a snapshot without deleting history.
+func TestPublishVersionsAndRollback(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	defA := `{"schemaVersion":1,"widgets":[{"id":"a"}]}`
+	defB := `{"schemaVersion":1,"widgets":[{"id":"b"}]}`
+	defC := `{"schemaVersion":1,"widgets":[{"id":"c"}]}`
+
+	_, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "d", Definition: defA})
+	require.NoError(t, err)
+
+	// Publish A as v1.
+	v1, err := api.PublishDashboard(ctx, "d", strp("v1.0.0"), nil, "alice")
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), v1.Version)
+	assert.Equal(t, "alice", v1.PublishedBy)
+
+	// Move the draft to B, publish as v2.
+	_, err = api.UpdateDashboard(ctx, "d", &DashboardCreateRequest{Token: "d", Definition: defB}, nil)
+	require.NoError(t, err)
+	v2, err := api.PublishDashboard(ctx, "d", strp("v2.0.0"), strp("second"), "bob")
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), v2.Version)
+
+	// Versions list is newest-first with per-version snapshots preserved.
+	versions, err := api.DashboardVersions(ctx, "d")
+	require.NoError(t, err)
+	require.Len(t, versions, 2)
+	assert.Equal(t, int32(2), versions[0].Version)
+	assert.Equal(t, int32(1), versions[1].Version)
+	assert.JSONEq(t, defB, string(versions[0].Definition))
+	assert.JSONEq(t, defA, string(versions[1].Definition))
+
+	// Move the draft to C (unpublished), then roll back to v1 (defA).
+	_, err = api.UpdateDashboard(ctx, "d", &DashboardCreateRequest{Token: "d", Definition: defC}, nil)
+	require.NoError(t, err)
+	rolled, err := api.RollbackDashboard(ctx, "d", 1)
+	require.NoError(t, err)
+	assert.JSONEq(t, defA, string(rolled.Definition))
+
+	// History is append-only — rollback didn't delete any version.
+	versions, err = api.DashboardVersions(ctx, "d")
+	require.NoError(t, err)
+	assert.Len(t, versions, 2)
+
+	// Rolling back to a non-existent version errors, not silently succeeds.
+	_, err = api.RollbackDashboard(ctx, "d", 99)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+// TestVersionsTenantIsolation confirms versioning is confined to the owning tenant:
+// another tenant can neither see nor publish against the dashboard.
+func TestVersionsTenantIsolation(t *testing.T) {
+	api := newTestApi(t)
+	acme := core.WithTenant(context.Background(), "acme")
+	other := core.WithTenant(context.Background(), "other")
+
+	_, err := api.CreateDashboard(acme, &DashboardCreateRequest{Token: "d", Definition: `{"schemaVersion":1}`})
+	require.NoError(t, err)
+	_, err = api.PublishDashboard(acme, "d", nil, nil, "alice")
+	require.NoError(t, err)
+
+	// The other tenant can't see the dashboard, so versions/publish resolve to
+	// "no such dashboard" rather than leaking another tenant's history.
+	_, err = api.DashboardVersions(other, "d")
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	_, err = api.PublishDashboard(other, "d", nil, nil, "mallory")
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }

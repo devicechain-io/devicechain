@@ -48,6 +48,42 @@ func (r *DashboardResolver) Definition() string {
 	return string(r.M.Definition)
 }
 
+// DashboardVersionResolver resolves the fields of a published dashboard version.
+type DashboardVersionResolver struct {
+	M model.DashboardVersion
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *DashboardVersionResolver) Version() int32 {
+	return r.M.Version
+}
+
+func (r *DashboardVersionResolver) Label() *string {
+	return util.NullStr(r.M.Label)
+}
+
+func (r *DashboardVersionResolver) Description() *string {
+	return util.NullStr(r.M.Description)
+}
+
+func (r *DashboardVersionResolver) PublishedAt() string {
+	// publishedAt is non-null in the schema and CreatedAt is always set on a
+	// persisted version, so a nil format (zero time) collapses to empty rather
+	// than a resolver panic.
+	if s := util.FormatTime(r.M.CreatedAt); s != nil {
+		return *s
+	}
+	return ""
+}
+
+func (r *DashboardVersionResolver) PublishedBy() *string {
+	if r.M.PublishedBy == "" {
+		return nil
+	}
+	return &r.M.PublishedBy
+}
+
 // SearchResultsPaginationResolver resolves pagination info on a result page.
 type SearchResultsPaginationResolver struct {
 	M rdb.SearchResultsPagination

@@ -44,3 +44,23 @@ func (r *SchemaResolver) Dashboards(ctx context.Context, args struct {
 	}
 	return &DashboardSearchResultsResolver{M: *found, S: r, C: ctx}, nil
 }
+
+// DashboardVersions lists a dashboard's published versions, newest first.
+func (r *SchemaResolver) DashboardVersions(ctx context.Context, args struct {
+	Token string
+}) ([]*DashboardVersionResolver, error) {
+	if err := auth.Authorize(ctx, auth.DashboardRead); err != nil {
+		return nil, err
+	}
+
+	api := r.GetApi(ctx)
+	versions, err := api.DashboardVersions(ctx, args.Token)
+	if err != nil {
+		return nil, err
+	}
+	resolvers := make([]*DashboardVersionResolver, 0, len(versions))
+	for _, v := range versions {
+		resolvers = append(resolvers, &DashboardVersionResolver{M: *v, S: r, C: ctx})
+	}
+	return resolvers, nil
+}
