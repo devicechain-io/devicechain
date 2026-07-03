@@ -1,7 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { generateToken } from '@devicechain/client';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Button } from '@/components/ui/button';
@@ -16,6 +17,10 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { listSettings, setSetting, clearSetting, type Setting } from '@/lib/api/settings';
 import { Textarea, useReload, errMessage } from '@/routes/common';
 
+// The token-masks setting gets a live preview of what each entity type's mask
+// generates (ADR-042 P3), so an admin sees the effect of an edit immediately.
+const TOKEN_MASKS_KEY = 'entity.token_masks';
+
 // pretty renders a stored JSON value multi-line for editing; a value that somehow
 // does not parse is shown verbatim rather than lost.
 function pretty(json: string): string {
@@ -24,6 +29,42 @@ function pretty(json: string): string {
   } catch {
     return json;
   }
+}
+
+// MaskPreview shows a sample generated token per entity type for the current
+// (possibly unsaved) token-masks JSON. Purely illustrative — it re-samples only
+// when the JSON changes.
+function MaskPreview({ json }: { json: string }) {
+  const entries = useMemo(() => {
+    let masks: unknown;
+    try {
+      masks = JSON.parse(json);
+    } catch {
+      return null;
+    }
+    if (!masks || typeof masks !== 'object' || Array.isArray(masks)) return null;
+    return Object.entries(masks as Record<string, unknown>)
+      .filter(([, mask]) => typeof mask === 'string')
+      .map(([type, mask]) => [type, generateToken(mask as string, { seed: 'Sample Name' })] as const);
+  }, [json]);
+
+  if (!entries || entries.length === 0) return null;
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3 text-xs">
+      <p className="mb-2 font-medium text-muted-foreground">
+        Preview — a sample token per type (from the seed “Sample Name”)
+      </p>
+      <ul className="space-y-1 font-mono">
+        {entries.map(([type, sample]) => (
+          <li key={type} className="flex gap-2">
+            <span className="w-32 shrink-0 truncate text-muted-foreground">{type}</span>
+            <span className="text-muted-foreground">→</span>
+            <span className="text-foreground">{sample}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 export default function SettingsPage() {
@@ -128,6 +169,7 @@ function SettingCard({ setting, onChanged }: { setting: Setting; onChanged: () =
           className="min-h-32"
           onChange={(e) => setValue(e.target.value)}
         />
+        {setting.key === TOKEN_MASKS_KEY && <MaskPreview json={value} />}
         {setting.overridden && setting.updatedBy && (
           <p className="text-xs text-muted-foreground">
             Overridden by {setting.updatedBy}
