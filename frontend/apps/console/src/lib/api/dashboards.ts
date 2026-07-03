@@ -170,22 +170,36 @@ export async function listDashboardVersions(token: string): Promise<DashboardVer
 }
 
 const PUBLISH_DASHBOARD = graphql(`
-  mutation PublishDashboard($token: String!, $label: String, $description: String) {
-    publishDashboard(token: $token, label: $label, description: $description) {
+  mutation PublishDashboard(
+    $token: String!
+    $label: String
+    $description: String
+    $expectedUpdatedAt: String
+  ) {
+    publishDashboard(
+      token: $token
+      label: $label
+      description: $description
+      expectedUpdatedAt: $expectedUpdatedAt
+    ) {
       version
     }
   }
 `);
 
 // publishDashboard freezes the current (saved) draft into a new immutable version.
+// expectedUpdatedAt is the same precondition as updateDashboard: publish fails with
+// CONFLICT if the server draft moved on since — so it can't freeze another writer's
+// content while the author believes they published their own view.
 export async function publishDashboard(
   token: string,
-  input: { label?: string; description?: string },
+  input: { label?: string; description?: string; expectedUpdatedAt?: string | null },
 ): Promise<{ version: number }> {
   const data = await gql('dashboard-management', PUBLISH_DASHBOARD, {
     token,
     label: input.label?.trim() ? input.label.trim() : null,
     description: input.description?.trim() ? input.description.trim() : null,
+    expectedUpdatedAt: input.expectedUpdatedAt ?? null,
   });
   return data.publishDashboard;
 }

@@ -58,6 +58,7 @@ export type PublishDashboardMutationVariables = Exact<{
   token: string;
   label?: string | null | undefined;
   description?: string | null | undefined;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
@@ -157,8 +158,13 @@ export const DashboardVersionsDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<DashboardVersionsQuery, DashboardVersionsQueryVariables>;
 export const PublishDashboardDocument = new TypedDocumentString(`
-    mutation PublishDashboard($token: String!, $label: String, $description: String) {
-  publishDashboard(token: $token, label: $label, description: $description) {
+    mutation PublishDashboard($token: String!, $label: String, $description: String, $expectedUpdatedAt: String) {
+  publishDashboard(
+    token: $token
+    label: $label
+    description: $description
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     version
   }
 }

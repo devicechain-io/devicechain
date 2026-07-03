@@ -40,6 +40,7 @@ import {
   listDashboardVersions,
   publishDashboard,
   rollbackDashboard,
+  CONFLICT_MARKER,
   type DashboardVersion,
 } from '@/lib/api/dashboards';
 
@@ -50,7 +51,13 @@ export interface VersionHistorySheetProps {
   // Publishing snapshots the saved server draft; block it while the editor has
   // unsaved edits so the author isn't surprised by an older snapshot.
   dirty: boolean;
+  // A save in flight means the server draft (and its updatedAt) is mid-change —
+  // block publish/rollback until it settles so they don't race it.
+  saving: boolean;
   canWrite: boolean;
+  // The editor's optimistic-concurrency baseline, forwarded to publish so it fails
+  // if the server draft moved on since (another writer) rather than freezing it.
+  expectedUpdatedAt: string | null;
   // Called after a successful rollback with the new draft so the workspace can
   // re-baseline its working/saved copies (and updatedAt) without a page reload.
   onRolledBack: (result: { definition: string; updatedAt: string | null }) => void;
@@ -61,7 +68,9 @@ export function VersionHistorySheet({
   open,
   onOpenChange,
   dirty,
+  saving,
   canWrite,
+  expectedUpdatedAt,
   onRolledBack,
 }: VersionHistorySheetProps) {
   return (
@@ -80,7 +89,9 @@ export function VersionHistorySheet({
           <VersionHistoryBody
             token={token}
             dirty={dirty}
+            saving={saving}
             canWrite={canWrite}
+            expectedUpdatedAt={expectedUpdatedAt}
             onRolledBack={onRolledBack}
             onClose={() => onOpenChange(false)}
           />
@@ -93,13 +104,17 @@ export function VersionHistorySheet({
 function VersionHistoryBody({
   token,
   dirty,
+  saving,
   canWrite,
+  expectedUpdatedAt,
   onRolledBack,
   onClose,
 }: {
   token: string;
   dirty: boolean;
+  saving: boolean;
   canWrite: boolean;
+  expectedUpdatedAt: string | null;
   onRolledBack: (result: { definition: string; updatedAt: string | null }) => void;
   onClose: () => void;
 }) {
@@ -116,13 +131,19 @@ function VersionHistoryBody({
   const publish = async () => {
     setBusy(true);
     try {
-      const { version } = await publishDashboard(token, { label, description });
+      const { version } = await publishDashboard(token, { label, description, expectedUpdatedAt });
       toast(`Published version ${version}`);
       setLabel('');
       setDescription('');
       setRefreshKey((k) => k + 1);
     } catch (err) {
-      toast(errMessage(err), 'error');
+      const raw = errMessage(err);
+      toast(
+        raw.includes(CONFLICT_MARKER)
+          ? 'This dashboard changed elsewhere. Reload the page before publishing.'
+          : raw,
+        'error',
+      );
     } finally {
       setBusy(false);
     }
@@ -133,7 +154,7 @@ function VersionHistoryBody({
       !(await confirm({
         title: `Roll back to version ${v.version}?`,
         description:
-          'This replaces the current dashboard draft with that version. Any unsaved edits will be lost.',
+          'This replaces the current draft with that version. The current draft — including saved changes you have not published — will be lost.',
         confirmLabel: 'Roll back',
       }))
     )
@@ -169,7 +190,7 @@ function VersionHistoryBody({
           {dirty ? (
             <p className="text-sm text-muted-foreground">Save your changes before publishing.</p>
           ) : null}
-          <Button size="sm" onClick={publish} loading={busy} disabled={busy || dirty}>
+          <Button size="sm" onClick={publish} loading={busy} disabled={busy || dirty || saving}>
             Publish version
           </Button>
         </div>
@@ -204,7 +225,12 @@ function VersionHistoryBody({
                   <DataTableCell className="text-muted-foreground">{v.publishedBy || '—'}</DataTableCell>
                   <DataTableCell className="text-right">
                     {canWrite && (
-                      <Button variant="outline" size="sm" onClick={() => rollback(v)} disabled={busy}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => rollback(v)}
+                        disabled={busy || saving}
+                      >
                         <RotateCcw size={13} /> Roll back
                       </Button>
                     )}

@@ -222,7 +222,7 @@ func TestPublishVersionsAndRollback(t *testing.T) {
 	require.NoError(t, err)
 
 	// Publish A as v1.
-	v1, err := api.PublishDashboard(ctx, "d", strp("v1.0.0"), nil, "alice")
+	v1, err := api.PublishDashboard(ctx, "d", strp("v1.0.0"), nil, "alice", nil)
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), v1.Version)
 	assert.Equal(t, "alice", v1.PublishedBy)
@@ -230,7 +230,7 @@ func TestPublishVersionsAndRollback(t *testing.T) {
 	// Move the draft to B, publish as v2.
 	_, err = api.UpdateDashboard(ctx, "d", &DashboardCreateRequest{Token: "d", Definition: defB}, nil)
 	require.NoError(t, err)
-	v2, err := api.PublishDashboard(ctx, "d", strp("v2.0.0"), strp("second"), "bob")
+	v2, err := api.PublishDashboard(ctx, "d", strp("v2.0.0"), strp("second"), "bob", nil)
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), v2.Version)
 
@@ -269,13 +269,55 @@ func TestVersionsTenantIsolation(t *testing.T) {
 
 	_, err := api.CreateDashboard(acme, &DashboardCreateRequest{Token: "d", Definition: `{"schemaVersion":1}`})
 	require.NoError(t, err)
-	_, err = api.PublishDashboard(acme, "d", nil, nil, "alice")
+	_, err = api.PublishDashboard(acme, "d", nil, nil, "alice", nil)
 	require.NoError(t, err)
 
 	// The other tenant can't see the dashboard, so versions/publish resolve to
 	// "no such dashboard" rather than leaking another tenant's history.
 	_, err = api.DashboardVersions(other, "d")
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
-	_, err = api.PublishDashboard(other, "d", nil, nil, "mallory")
+	_, err = api.PublishDashboard(other, "d", nil, nil, "mallory", nil)
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+// TestPublishOptimisticPrecondition confirms publish honors expectedUpdatedAt: a
+// stale timestamp is refused (so publish can't freeze a draft that moved on), the
+// current one is accepted, and nil bypasses the check.
+func TestPublishOptimisticPrecondition(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	created, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "d", Definition: `{"schemaVersion":1}`})
+	require.NoError(t, err)
+	current := created.UpdatedAt.Format(time.RFC3339)
+
+	_, err = api.PublishDashboard(ctx, "d", nil, nil, "alice", strp("2000-01-01T00:00:00Z"))
+	assert.ErrorIs(t, err, ErrConflict)
+
+	v, err := api.PublishDashboard(ctx, "d", nil, nil, "alice", &current)
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), v.Version)
+}
+
+// TestDeleteRemovesVersions guards the cascade: deleting a dashboard must also drop
+// its version snapshots, not orphan them.
+func TestDeleteRemovesVersions(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	_, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "d", Definition: `{"schemaVersion":1}`})
+	require.NoError(t, err)
+	_, err = api.PublishDashboard(ctx, "d", strp("v1"), nil, "alice", nil)
+	require.NoError(t, err)
+	_, err = api.PublishDashboard(ctx, "d", strp("v2"), nil, "alice", nil)
+	require.NoError(t, err)
+
+	ok, err := api.DeleteDashboard(ctx, "d")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// No orphaned version rows remain for the deleted dashboard.
+	var count int64
+	require.NoError(t, api.RDB.DB(ctx).Model(&DashboardVersion{}).Count(&count).Error)
+	assert.Equal(t, int64(0), count)
 }

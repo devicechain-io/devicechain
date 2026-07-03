@@ -47,16 +47,17 @@ func (r *SchemaResolver) UpdateDashboard(ctx context.Context, args struct {
 
 // PublishDashboard freezes the current draft into a new immutable version.
 func (r *SchemaResolver) PublishDashboard(ctx context.Context, args struct {
-	Token       string
-	Label       *string
-	Description *string
+	Token             string
+	Label             *string
+	Description       *string
+	ExpectedUpdatedAt *string
 }) (*DashboardVersionResolver, error) {
 	if err := auth.Authorize(ctx, auth.DashboardWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	version, err := api.PublishDashboard(ctx, args.Token, args.Label, args.Description, publisher(ctx))
+	version, err := api.PublishDashboard(ctx, args.Token, args.Label, args.Description, publisher(ctx), args.ExpectedUpdatedAt)
 	if err != nil {
 		return nil, err
 	}

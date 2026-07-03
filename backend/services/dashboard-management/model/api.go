@@ -107,20 +107,54 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	updated := matches[0]
-	if expectedUpdatedAt != nil && updated.UpdatedAt.Format(time.RFC3339) != *expectedUpdatedAt {
+	current := matches[0]
+
+	// No precondition → unconditional last-write-wins (backward-compatible; used by
+	// non-interactive callers that don't track a version).
+	if expectedUpdatedAt == nil {
+		current.Token = request.Token
+		current.Name = rdb.NullStrOf(request.Name)
+		current.Description = rdb.NullStrOf(request.Description)
+		current.Definition = def
+		if err := api.RDB.DB(ctx).Save(current).Error; err != nil {
+			return nil, err
+		}
+		return current, nil
+	}
+
+	// Optimistic concurrency. A clean early-out against the caller's stated version
+	// (RFC3339 second precision — the exact string the caller was handed), then an
+	// ATOMIC guarded write: UPDATE ... WHERE updated_at = <the value just read>, so a
+	// concurrent save slipping in between the read and this write moves updated_at and
+	// matches zero rows (RowsAffected == 0) instead of being silently clobbered.
+	if current.UpdatedAt.Format(time.RFC3339) != *expectedUpdatedAt {
 		return nil, ErrConflict
 	}
-	updated.Token = request.Token
-	updated.Name = rdb.NullStrOf(request.Name)
-	updated.Description = rdb.NullStrOf(request.Description)
-	updated.Definition = def
-
-	result := api.RDB.DB(ctx).Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	res := api.RDB.DB(ctx).Model(&Dashboard{}).
+		Where("id = ? AND updated_at = ?", current.ID, current.UpdatedAt).
+		Updates(map[string]any{
+			"token":       request.Token,
+			"name":        rdb.NullStrOf(request.Name),
+			"description": rdb.NullStrOf(request.Description),
+			"definition":  def,
+		})
+	if res.Error != nil {
+		return nil, res.Error
 	}
-	return updated, nil
+	if res.RowsAffected == 0 {
+		return nil, ErrConflict
+	}
+
+	// Reload for the freshly-bumped updated_at — the caller advances its precondition
+	// baseline from the returned value.
+	reloaded, err := api.DashboardsByToken(ctx, []string{request.Token})
+	if err != nil {
+		return nil, err
+	}
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return reloaded[0], nil
 }
 
 // PublishDashboard freezes the dashboard's current draft into a new immutable
@@ -128,7 +162,7 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 // and description are optional user annotations; publishedBy is the caller's
 // identity. Concurrent publishes are safe: the unique (dashboard_id, version)
 // index rejects a duplicate version number.
-func (api *Api) PublishDashboard(ctx context.Context, token string, label *string, description *string, publishedBy string) (*DashboardVersion, error) {
+func (api *Api) PublishDashboard(ctx context.Context, token string, label *string, description *string, publishedBy string, expectedUpdatedAt *string) (*DashboardVersion, error) {
 	matches, err := api.DashboardsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -137,6 +171,13 @@ func (api *Api) PublishDashboard(ctx context.Context, token string, label *strin
 		return nil, gorm.ErrRecordNotFound
 	}
 	dash := matches[0]
+
+	// Optimistic precondition (same contract as UpdateDashboard): refuse to freeze a
+	// draft that moved on since the caller loaded it — otherwise publish could snapshot
+	// another writer's content while the author believes they froze their own view.
+	if expectedUpdatedAt != nil && dash.UpdatedAt.Format(time.RFC3339) != *expectedUpdatedAt {
+		return nil, ErrConflict
+	}
 
 	// Next version = max existing + 1 for this dashboard (tenant-confined already,
 	// both because dash was loaded tenant-scoped and via the scope callback here).
@@ -252,9 +293,30 @@ func (api *Api) Dashboards(ctx context.Context, criteria DashboardSearchCriteria
 // partial unique index that ignores soft-deleted rows — is tracked separately in
 // the "entity addressing & token policy" ADR.)
 func (api *Api) DeleteDashboard(ctx context.Context, token string) (bool, error) {
-	result := api.RDB.DB(ctx).Unscoped().Where("token = ?", token).Delete(&Dashboard{})
-	if result.Error != nil {
-		return false, result.Error
+	// Resolve the dashboard first (tenant-scoped) so we can drop its version history
+	// too — DashboardVersion.DashboardID is a plain column with no FK cascade, so a
+	// bare dashboard delete would orphan every snapshot (up to 1 MiB each) forever.
+	matches, err := api.DashboardsByToken(ctx, []string{token})
+	if err != nil {
+		return false, err
 	}
-	return result.RowsAffected > 0, nil
+	if len(matches) == 0 {
+		return false, nil
+	}
+	dashboardID := matches[0].ID
+
+	// Delete the versions and the dashboard atomically so a delete can't half-succeed
+	// and orphan rows. Hard deletes (Unscoped): a dashboard has no trash/restore, and
+	// the token unique index counts soft-deleted rows (see the rationale above); the
+	// tenant-scope callback still confines both statements to the caller's tenant.
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Unscoped().Where("dashboard_id = ?", dashboardID).Delete(&DashboardVersion{}).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Where("token = ?", token).Delete(&Dashboard{}).Error
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }

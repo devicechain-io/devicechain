@@ -83,7 +83,14 @@ type Mutation {
     # edit). Pass the updatedAt the caller last read.
     updateDashboard(token: String!, request: DashboardCreateRequest!, expectedUpdatedAt: String): Dashboard!
     # Freeze the current draft into a new immutable version (N+1) and return it.
-    publishDashboard(token: String!, label: String, description: String): DashboardVersion!
+    # expectedUpdatedAt is the same optimistic-concurrency precondition as
+    # updateDashboard: publish fails (CONFLICT) if the draft changed since.
+    publishDashboard(
+        token: String!
+        label: String
+        description: String
+        expectedUpdatedAt: String
+    ): DashboardVersion!
     # Re-draft: copy a published version's definition back into the draft. Returns
     # the updated dashboard. History is append-only; nothing is deleted.
     rollbackDashboard(token: String!, version: Int!): Dashboard!

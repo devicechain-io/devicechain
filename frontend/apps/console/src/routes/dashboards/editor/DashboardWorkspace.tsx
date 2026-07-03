@@ -167,7 +167,11 @@ export function DashboardWorkspace({
   const onRolledBack = (result: { definition: string; updatedAt: string | null }) => {
     try {
       let def = parseDashboardDefinition(JSON.parse(result.definition));
-      if (def.title === '' && name) def = setTitle(def, name);
+      // Seed the title from the CURRENT effective name (the last-saved title, which
+      // tracks renames) rather than the mount-time `name` prop — otherwise rolling
+      // back to a title-less version and re-saving would silently revert a rename.
+      const currentName = saved.title || name || '';
+      if (def.title === '' && currentName) def = setTitle(def, currentName);
       setWorking(def);
       setSaved(def);
       setSelectedId(null);
@@ -329,7 +333,9 @@ export function DashboardWorkspace({
       open={historyOpen}
       onOpenChange={setHistoryOpen}
       dirty={dirty}
+      saving={saveState.kind === 'saving'}
       canWrite={canEdit}
+      expectedUpdatedAt={expectedUpdatedAt}
       onRolledBack={onRolledBack}
     />
     </>
