@@ -2,21 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Pure state transforms for the canvas editor. Kept free of React/DOM so the
-// editing logic (move, resize, delete, reorder, retitle, dirty-check, serialize)
-// is unit-testable; DashboardEditor wires these to react-rnd + the save mutation.
+// editing logic (move, resize, delete, reorder, retitle, add) is unit-testable;
+// the editor UI (console + the reference /dash app) wires these to react-rnd and
+// the save mutation. Lives here — next to parse/serialize — because it is the
+// definition's edit lifecycle, not app-specific glue (ADR-039 authoring in the
+// console).
 //
-// The editor edits the 'base' breakpoint boxes only (D2 scope); per-breakpoint
-// responsive editing is deferred. Boxes are stored in grid cells — the canvas
-// multiplies by canvas.grid.size for pixels, so snapping is exact.
+// The editor edits the 'base' breakpoint boxes only; per-breakpoint responsive
+// editing is deferred. Boxes are stored in grid cells — the canvas multiplies by
+// canvas.grid.size for pixels, so snapping is exact.
 
-import {
-  BASE_BREAKPOINT,
-  generateWidgetId,
-  type DashboardDefinition,
-  type WidgetBox,
-  type WidgetInstance,
-  type WidgetType,
-} from '@devicechain/dashboards';
+import { BASE_BREAKPOINT, generateWidgetId } from './definition';
+import type { DashboardDefinition, WidgetBox, WidgetInstance, WidgetType } from './types';
 
 // The base box a widget is placed by in the editor.
 export function baseBox(widget: WidgetInstance): WidgetBox {
@@ -92,10 +89,6 @@ export function addWidget(
   };
   return { definition: { ...def, widgets: [...def.widgets, widget] }, id };
 }
-
-// (serializeDefinition + isDirty live in @devicechain/dashboards alongside
-// parseDashboardDefinition — they are the definition's serialize/compare lifecycle,
-// not editor-specific transforms.)
 
 // A pixel rectangle react-rnd reports after a drag/resize.
 export interface PixelRect {

@@ -18,12 +18,14 @@ type Documents = {
     "\n  query Dashboards($criteria: DashboardSearchCriteria!) {\n    dashboards(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        createdAt\n        updatedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DashboardsDocument,
     "\n  query Dashboard($token: String!) {\n    dashboard(token: $token) {\n      token\n      name\n      description\n      definition\n    }\n  }\n": typeof types.DashboardDocument,
     "\n  mutation CreateDashboard($request: DashboardCreateRequest!) {\n    createDashboard(request: $request) {\n      token\n    }\n  }\n": typeof types.CreateDashboardDocument,
+    "\n  mutation UpdateDashboard($token: String!, $request: DashboardCreateRequest!) {\n    updateDashboard(token: $token, request: $request) {\n      token\n    }\n  }\n": typeof types.UpdateDashboardDocument,
     "\n  mutation DeleteDashboard($token: String!) {\n    deleteDashboard(token: $token)\n  }\n": typeof types.DeleteDashboardDocument,
 };
 const documents: Documents = {
     "\n  query Dashboards($criteria: DashboardSearchCriteria!) {\n    dashboards(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        createdAt\n        updatedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DashboardsDocument,
     "\n  query Dashboard($token: String!) {\n    dashboard(token: $token) {\n      token\n      name\n      description\n      definition\n    }\n  }\n": types.DashboardDocument,
     "\n  mutation CreateDashboard($request: DashboardCreateRequest!) {\n    createDashboard(request: $request) {\n      token\n    }\n  }\n": types.CreateDashboardDocument,
+    "\n  mutation UpdateDashboard($token: String!, $request: DashboardCreateRequest!) {\n    updateDashboard(token: $token, request: $request) {\n      token\n    }\n  }\n": types.UpdateDashboardDocument,
     "\n  mutation DeleteDashboard($token: String!) {\n    deleteDashboard(token: $token)\n  }\n": types.DeleteDashboardDocument,
 };
 
@@ -39,6 +41,10 @@ export function graphql(source: "\n  query Dashboard($token: String!) {\n    das
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation CreateDashboard($request: DashboardCreateRequest!) {\n    createDashboard(request: $request) {\n      token\n    }\n  }\n"): typeof import('./graphql').CreateDashboardDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation UpdateDashboard($token: String!, $request: DashboardCreateRequest!) {\n    updateDashboard(token: $token, request: $request) {\n      token\n    }\n  }\n"): typeof import('./graphql').UpdateDashboardDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
