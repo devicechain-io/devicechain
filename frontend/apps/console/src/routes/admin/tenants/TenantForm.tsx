@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
+import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { createTenant, updateTenant, type AdminTenant } from '@/lib/api/admin';
 import { Textarea, errMessage } from '@/routes/common';
@@ -44,15 +45,20 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
       <FormField
         label="Token"
         htmlFor="t-token"
-        description={editing ? undefined : 'The tenant id used across the platform; it cannot change later.'}
+        description={editing ? 'The tenant id used across the platform; it cannot change.' : undefined}
       >
-        <Input
-          id="t-token"
-          value={token}
-          disabled={editing}
-          placeholder="acme"
-          onChange={(e) => setToken(e.target.value)}
-        />
+        {editing ? (
+          <Input id="t-token" value={token} disabled />
+        ) : (
+          <TokenField
+            id="t-token"
+            entityType="tenant"
+            value={token}
+            onChange={setToken}
+            seed={name}
+            placeholder="acme"
+          />
+        )}
       </FormField>
       <FormField label="Name" htmlFor="t-name">
         <Input id="t-name" value={name} placeholder="Acme Corp" onChange={(e) => setName(e.target.value)} />
