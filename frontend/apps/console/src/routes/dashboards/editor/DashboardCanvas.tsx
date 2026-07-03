@@ -1,15 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// DashboardEditor — the edit-mode canvas (ADR-039 PR D2, layout editing).
+// DashboardCanvas — the edit-mode canvas (ADR-039, authoring in the console).
 //
 // Each widget is wrapped in react-rnd for drag + resize, snapped to the canvas
-// grid; drag/resize commit a new base box through the pure editor-model transforms.
-// It is CONTROLLED: the parent owns the working DashboardDefinition (and the
-// save/dirty state in the header); this component owns only which widget is
-// selected. Widgets render live (WYSIWYG) but with pointer-events disabled so the
-// pointer drives react-rnd, not the widget. Editing targets the 'base' breakpoint
-// (D2 scope); add-widget + per-widget config is D2b.
+// grid; drag/resize commit a new base box through the pure editor-model transforms
+// from @devicechain/dashboards. It is CONTROLLED: the workspace owns the working
+// DashboardDefinition (and the save/dirty state); this component owns only which
+// widget is selected. Widgets render live (WYSIWYG) but with pointer-events
+// disabled so the pointer drives react-rnd, not the widget. Editing targets the
+// 'base' breakpoint; per-breakpoint responsive editing is deferred.
 
 import {
   baseBox,
@@ -23,19 +23,17 @@ import {
 import { ConnectedWidget } from '@devicechain/widgets';
 import { Rnd } from 'react-rnd';
 
-export interface DashboardEditorProps {
+export interface DashboardCanvasProps {
   definition: DashboardDefinition;
   onChange: (next: DashboardDefinition) => void;
   hub: DashboardHub;
   // Selection is lifted to the workspace (which owns the config panel); the
-  // editor is fully controlled — it reports clicks and reflects the current id.
+  // canvas is fully controlled — it reports clicks and reflects the current id.
   selectedId: string | null;
   onSelect: (id: string | null) => void;
 }
 
-// While editing, widgets render their live tail only (no bucketedMeasurements
-// history seed) — hence no DeviceResolver here; the view renderer owns seeding.
-export function DashboardEditor({ definition, onChange, hub, selectedId, onSelect }: DashboardEditorProps) {
+export function DashboardCanvas({ definition, onChange, hub, selectedId, onSelect }: DashboardCanvasProps) {
   const cell = definition.canvas.grid.size || 1;
 
   // Give the scroll area room below the lowest widget so there's somewhere to drag.
@@ -66,7 +64,10 @@ export function DashboardEditor({ definition, onChange, hub, selectedId, onSelec
               resizeGrid={[cell, cell]}
               bounds="parent"
               cancel=".rnd-no-drag"
-              style={{ zIndex: box.z, outline: selected ? '2px solid hsl(var(--primary))' : '1px dashed hsl(var(--border))' }}
+              style={{
+                zIndex: box.z,
+                outline: selected ? '2px solid hsl(var(--primary))' : '1px dashed hsl(var(--border))',
+              }}
               onMouseDown={(e: MouseEvent) => {
                 e.stopPropagation(); // don't let the canvas deselect
                 onSelect(widget.id);
@@ -95,9 +96,7 @@ export function DashboardEditor({ definition, onChange, hub, selectedId, onSelec
                     pointerEvents: 'auto',
                   }}
                 >
-                  <ToolbarButton onClick={() => onChange(bringToFront(definition, widget.id))}>
-                    Front
-                  </ToolbarButton>
+                  <ToolbarButton onClick={() => onChange(bringToFront(definition, widget.id))}>Front</ToolbarButton>
                   <ToolbarButton
                     danger
                     onClick={() => {

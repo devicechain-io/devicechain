@@ -7,11 +7,14 @@
 
 import { gql } from '@devicechain/client';
 import {
+  addWidget,
   createDeviceResolver,
   DashboardHub,
   isDirty,
   parseDashboardDefinition,
   serializeDefinition,
+  setTitle,
+  updateWidget,
   WIDGET_TYPES,
   type DashboardDefinition,
   type DeviceResolver,
@@ -22,7 +25,6 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { hasValidSession } from './auth';
 import { DashboardEditor } from './DashboardEditor';
-import { addWidget, setTitle, updateWidget } from './editor-model';
 import { DASHBOARD_BY_TOKEN, UPDATE_DASHBOARD } from './queries';
 import { WidgetConfigPanel } from './WidgetConfigPanel';
 

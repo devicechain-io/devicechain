@@ -89,6 +89,32 @@ describe('parseDashboardDefinition', () => {
       parseDashboardDefinition({ widgets: [{ type: 'label', layout: { tablet: box() } }] }),
     ).toThrow(/no 'base' box/);
   });
+
+  // Slot headroom (PR F): reserved runtime-binding shape parses + round-trips, but
+  // nothing authors it yet, so a slot-free definition must not gain a `slots` key.
+  it('omits slots entirely when the definition declares none', () => {
+    const def = parseDashboardDefinition({ widgets: [] });
+    expect('slots' in def).toBe(false);
+  });
+
+  it('normalizes a declared slots section and a slot datasource', () => {
+    const def = parseDashboardDefinition({
+      widgets: [
+        {
+          type: 'gauge',
+          layout: { base: box() },
+          datasource: { kind: 'slot', slot: 'primary', measurements: ['temperature'] },
+        },
+      ],
+      slots: { primary: { type: 'device', label: 'Primary thermostat' }, junk: 'nope' },
+    });
+    expect(def.slots).toEqual({ primary: { type: 'device', label: 'Primary thermostat' } });
+    expect(def.widgets[0].datasource).toEqual({
+      kind: 'slot',
+      slot: 'primary',
+      measurements: ['temperature'],
+    });
+  });
 });
 
 describe('resolveWidgetBox', () => {

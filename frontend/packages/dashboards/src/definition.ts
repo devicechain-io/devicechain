@@ -17,6 +17,7 @@ import {
   type Breakpoints,
   type Canvas,
   type DashboardDefinition,
+  type SlotDefinition,
   type WidgetBox,
   type WidgetInstance,
   type WidgetLayout,
@@ -59,12 +60,31 @@ export function parseDashboardDefinition(raw: unknown): DashboardDefinition {
   const widgetsRaw = raw.widgets;
   if (!Array.isArray(widgetsRaw)) throw new DashboardDefinitionError('widgets must be an array');
 
-  return {
+  const def: DashboardDefinition = {
     schemaVersion: numberAt(raw, 'schemaVersion', 1),
     title: typeof raw.title === 'string' ? raw.title : '',
     canvas: parseCanvas(raw.canvas),
     widgets: widgetsRaw.map((w, i) => parseWidget(w, i)),
   };
+  // slots — reserved runtime-binding headroom (PR F). Normalized when present so
+  // a stored definition round-trips, but omitted entirely otherwise so today's
+  // slot-free dashboards serialize unchanged (no spurious `"slots":{}` diff).
+  const slots = parseSlots(raw.slots);
+  if (slots) def.slots = slots;
+  return def;
+}
+
+function parseSlots(raw: unknown): Record<string, SlotDefinition> | undefined {
+  if (!isRecord(raw)) return undefined;
+  const slots: Record<string, SlotDefinition> = {};
+  for (const [name, spec] of Object.entries(raw)) {
+    if (!isRecord(spec)) continue;
+    const type = spec.type === 'anchor' ? 'anchor' : 'device';
+    const slot: SlotDefinition = { type };
+    if (typeof spec.label === 'string') slot.label = spec.label;
+    slots[name] = slot;
+  }
+  return Object.keys(slots).length > 0 ? slots : undefined;
 }
 
 function parseCanvas(raw: unknown): Canvas {
@@ -156,6 +176,12 @@ function parseDatasource(raw: unknown): WidgetInstance['datasource'] | undefined
       (selector as { aggregation?: unknown }).aggregation = raw.aggregation;
     }
     return selector;
+  }
+
+  if (kind === 'slot') {
+    // Reserved runtime-binding kind (PR F): normalized so it round-trips cleanly,
+    // but the Hub rejects it until the binding manifest lands (PR I).
+    return { kind: 'slot', slot: stringAt(raw, 'slot'), measurements: stringArrayAt(raw, 'measurements') };
   }
 
   // Reserved/other kinds: carry through opaquely (the hub rejects them).

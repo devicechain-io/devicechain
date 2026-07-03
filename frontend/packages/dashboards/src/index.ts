@@ -26,6 +26,8 @@ export type {
   DevicesSelector,
   RelatedTraversalSelector,
   EntityFromStateSelector,
+  SlotSelector,
+  SlotDefinition,
   MeasurementSample,
 } from './types';
 
@@ -48,6 +50,20 @@ export {
   DashboardDefinitionError,
   BASE_BREAKPOINT,
 } from './definition';
+
+// Pure canvas-editor transforms (move/resize/delete/reorder/add/retitle). The
+// authoring host (console, /dash) wires these to its drag/resize + save UI.
+export {
+  baseBox,
+  setWidgetBox,
+  deleteWidget,
+  bringToFront,
+  setTitle,
+  updateWidget,
+  addWidget,
+  pxToCellBox,
+  type PixelRect,
+} from './editor-model';
 
 // The device-management-backed resolver the Hub injects, and the event-management
 // history seeder the renderer backfills charts with — the runtime's coupling to the

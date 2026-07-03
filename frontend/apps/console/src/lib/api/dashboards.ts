@@ -96,6 +96,33 @@ export async function createDashboard(opts: {
   return data.createDashboard;
 }
 
+// The editor persists a full definition snapshot (ADR-039). updateDashboard is a
+// full replacement — name/description are sent alongside so a save never wipes
+// either field; the caller passes the values it isn't editing back verbatim.
+const UPDATE_DASHBOARD = graphql(`
+  mutation UpdateDashboard($token: String!, $request: DashboardCreateRequest!) {
+    updateDashboard(token: $token, request: $request) {
+      token
+    }
+  }
+`);
+
+export async function updateDashboard(
+  token: string,
+  input: { name?: string | null; description?: string | null; definition: string },
+): Promise<{ token: string }> {
+  const data = await gql('dashboard-management', UPDATE_DASHBOARD, {
+    request: {
+      token,
+      name: input.name ?? null,
+      description: input.description ?? null,
+      definition: input.definition,
+    },
+    token,
+  });
+  return data.updateDashboard;
+}
+
 const DELETE_DASHBOARD = graphql(`
   mutation DeleteDashboard($token: String!) {
     deleteDashboard(token: $token)

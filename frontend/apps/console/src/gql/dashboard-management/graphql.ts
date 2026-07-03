@@ -38,6 +38,14 @@ export type CreateDashboardMutationVariables = Exact<{
 
 export type CreateDashboardMutation = { createDashboard: { token: string } };
 
+export type UpdateDashboardMutationVariables = Exact<{
+  token: string;
+  request: DashboardCreateRequest;
+}>;
+
+
+export type UpdateDashboardMutation = { updateDashboard: { token: string } };
+
 export type DeleteDashboardMutationVariables = Exact<{
   token: string;
 }>;
@@ -99,6 +107,13 @@ export const CreateDashboardDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CreateDashboardMutation, CreateDashboardMutationVariables>;
+export const UpdateDashboardDocument = new TypedDocumentString(`
+    mutation UpdateDashboard($token: String!, $request: DashboardCreateRequest!) {
+  updateDashboard(token: $token, request: $request) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateDashboardMutation, UpdateDashboardMutationVariables>;
 export const DeleteDashboardDocument = new TypedDocumentString(`
     mutation DeleteDashboard($token: String!) {
   deleteDashboard(token: $token)

@@ -68,12 +68,26 @@ export interface EntityFromStateSelector {
   measurements: string[];
 }
 
+// slot — a NAMED reference into the dashboard's `slots` section, resolved to a
+// concrete entity at MOUNT by the host's binding manifest (ADR-039 runtime
+// binding). This makes a definition a reusable TEMPLATE: the widget names the
+// entity role (`slot`) and the measurements it wants, and two mounts of the same
+// definition can bind the slot to two different devices. RESERVED headroom in
+// PR F — parseable + round-trips, but the Hub rejects it until the binding
+// manifest lands (PR I). Authoring against slots (default bindings) is that PR.
+export interface SlotSelector {
+  kind: 'slot';
+  slot: string;
+  measurements: string[];
+}
+
 export type DatasourceSelector =
   | DeviceSelector
   | AnchorSelector
   | DevicesSelector
   | RelatedTraversalSelector
-  | EntityFromStateSelector;
+  | EntityFromStateSelector
+  | SlotSelector;
 
 // ---- Canvas + widgets -------------------------------------------------------
 
@@ -134,11 +148,24 @@ export interface Canvas {
   breakpoints: Breakpoints;
 }
 
+// A named entity role a dashboard declares and its widgets reference via a
+// SlotSelector. The host's binding manifest maps each slot to a concrete device
+// or anchor at mount. RESERVED headroom (PR F): parsed + round-tripped so PR I's
+// manifest lands additively; nothing authors slots yet.
+export interface SlotDefinition {
+  type: 'device' | 'anchor';
+  // Human-readable name shown in the (future) binding UI, e.g. 'Primary thermostat'.
+  label?: string;
+}
+
 export interface DashboardDefinition {
   schemaVersion: number;
   title: string;
   canvas: Canvas;
   widgets: WidgetInstance[];
+  // Named entity roles bound at mount (ADR-039 runtime binding). Optional and
+  // reserved in PR F — absent on every dashboard authored today.
+  slots?: Record<string, SlotDefinition>;
 }
 
 // ---- Live telemetry ---------------------------------------------------------

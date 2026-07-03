@@ -1,9 +1,9 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { isDirty, type DashboardDefinition } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
+import { isDirty } from './definition';
 import {
   addWidget,
   baseBox,
@@ -14,6 +14,7 @@ import {
   setWidgetBox,
   updateWidget,
 } from './editor-model';
+import type { DashboardDefinition } from './types';
 
 const box = (over = {}) => ({ x: 0, y: 0, w: 4, h: 3, z: 0, ...over });
 
