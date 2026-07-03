@@ -88,6 +88,7 @@ export default function DashboardDetailPage() {
       token={token}
       name={data.name ?? null}
       description={data.description ?? null}
+      updatedAt={data.updatedAt ?? null}
       loaded={parsed.definition}
       hub={hub}
       resolver={resolver}

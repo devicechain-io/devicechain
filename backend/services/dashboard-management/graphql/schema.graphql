@@ -50,18 +50,50 @@ type DashboardSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# An immutable published snapshot of a dashboard's definition (ADR-039 versioning).
+# The definition blob is deliberately omitted here — the list stays light; rollback
+# resolves a snapshot server-side by its integer version.
+type DashboardVersion {
+    # Monotonic per-dashboard version number.
+    version: Int!
+    # Optional user-supplied label (may embed a semver string; not parsed).
+    label: String
+    description: String
+    # When the version was published (the row's creation time).
+    publishedAt: String!
+    # The identity that published it (username, falling back to email).
+    publishedBy: String
+}
+
 type Query {
     # Look up a single dashboard by its token.
     dashboard(token: String!): Dashboard
     # Search dashboards by criteria.
     dashboards(criteria: DashboardSearchCriteria!): DashboardSearchResults!
+    # List a dashboard's published versions, newest first.
+    dashboardVersions(token: String!): [DashboardVersion!]!
 }
 
 type Mutation {
     # Create a new dashboard.
     createDashboard(request: DashboardCreateRequest!): Dashboard!
-    # Update the dashboard with the given (current) token.
-    updateDashboard(token: String!, request: DashboardCreateRequest!): Dashboard!
+    # Update the dashboard (draft) with the given (current) token. When
+    # expectedUpdatedAt is supplied it is an optimistic-concurrency precondition:
+    # the update fails if the dashboard's updatedAt has changed since (a concurrent
+    # edit). Pass the updatedAt the caller last read.
+    updateDashboard(token: String!, request: DashboardCreateRequest!, expectedUpdatedAt: String): Dashboard!
+    # Freeze the current draft into a new immutable version (N+1) and return it.
+    # expectedUpdatedAt is the same optimistic-concurrency precondition as
+    # updateDashboard: publish fails (CONFLICT) if the draft changed since.
+    publishDashboard(
+        token: String!
+        label: String
+        description: String
+        expectedUpdatedAt: String
+    ): DashboardVersion!
+    # Re-draft: copy a published version's definition back into the draft. Returns
+    # the updated dashboard. History is append-only; nothing is deleted.
+    rollbackDashboard(token: String!, version: Int!): Dashboard!
     # Delete the dashboard with the given token. Returns whether a row was deleted.
     deleteDashboard(token: String!): Boolean!
 }

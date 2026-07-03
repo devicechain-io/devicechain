@@ -4,6 +4,8 @@
 package model
 
 import (
+	"database/sql"
+
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -21,6 +23,30 @@ type Dashboard struct {
 	rdb.TokenReference
 	rdb.NamedEntity
 	Definition datatypes.JSON `gorm:"not null"`
+}
+
+// DashboardVersion is an immutable, published SNAPSHOT of a dashboard's definition
+// (ADR-039 versioning). The mutable working copy is the parent Dashboard row (the
+// "draft"); publishing freezes the draft into a new version (N+1). History is
+// append-only — rollback re-drafts a snapshot into the parent, it never deletes a
+// version. There is no token: a version is addressed by its parent + monotonic
+// integer, so it embeds TenantScoped (for isolation) but NOT TokenReference. The
+// publish timestamp is the row's CreatedAt (a version is created when published).
+type DashboardVersion struct {
+	gorm.Model
+	rdb.TenantScoped
+	// Parent dashboard + monotonic-per-dashboard version number; unique together so
+	// two concurrent publishes can't mint the same version (the loser's insert fails).
+	DashboardID uint  `gorm:"not null;uniqueIndex:uix_dashboard_versions_dashboard_version,priority:1"`
+	Version     int32 `gorm:"not null;uniqueIndex:uix_dashboard_versions_dashboard_version,priority:2"`
+	// User-supplied label/description for the version (MAY embed a semver string; the
+	// platform does not parse it). Optional.
+	Label       sql.NullString `gorm:"size:128"`
+	Description sql.NullString `gorm:"size:1024"`
+	// The full definition snapshot at publish time (stored opaquely, like Dashboard).
+	Definition datatypes.JSON `gorm:"not null"`
+	// The identity that published this version (claims username, falling back to email).
+	PublishedBy string `gorm:"size:256"`
 }
 
 // DashboardCreateRequest is the data required to create or update a dashboard.
