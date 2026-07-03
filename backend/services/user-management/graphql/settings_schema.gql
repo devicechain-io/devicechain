@@ -31,6 +31,10 @@ type Query {
     settings: [Setting!]!
     # One known setting by key (requires settings:read).
     setting(key: String!): Setting
+    # The effective entity token-mask map as a JSON-encoded string. Available to
+    # any authenticated user (not just settings admins) — every console user needs
+    # the masks to generate tokens in the create forms.
+    tokenMasks: String!
 }
 
 type Mutation {

@@ -36,6 +36,34 @@ export async function listSettings(): Promise<Setting[]> {
   return data.settings;
 }
 
+// The effective entity token-mask map, readable by any authenticated user (not
+// just settings admins) so create forms can generate tokens — see the tokenMasks
+// resolver. Cached after the first success (masks change rarely; a page reload
+// re-fetches); a failure is not cached so a later call can retry.
+const TOKEN_MASKS = graphql(`
+  query TokenMasks {
+    tokenMasks
+  }
+`);
+
+let masksCache: Record<string, string> | null = null;
+
+export async function getTokenMasks(): Promise<Record<string, string>> {
+  if (masksCache) return masksCache;
+  try {
+    const data = await gql('user-management/settings', TOKEN_MASKS, undefined, { identity: true });
+    const parsed: unknown = JSON.parse(data.tokenMasks);
+    const masks =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, string>)
+        : {};
+    masksCache = masks;
+    return masks;
+  } catch {
+    return {}; // never block a create form on masks — fall back to defaults
+  }
+}
+
 // ── Mutations ───────────────────────────────────────────────────────────
 
 const SET_SETTING = graphql(`

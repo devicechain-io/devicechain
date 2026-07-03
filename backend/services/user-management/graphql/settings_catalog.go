@@ -52,6 +52,22 @@ func (r *SettingsResolver) Settings(ctx context.Context) ([]*SettingResolver, er
 	return out, nil
 }
 
+// TokenMasks returns the effective entity token-mask map as a JSON string. Unlike
+// the other settings operations it requires only authentication (any signed-in
+// identity), not settings:read: every console user needs the masks to generate
+// tokens in the create forms, and the masks are non-sensitive UI templates
+// (ADR-042 P3). It is read-only, so there is no write counterpart here.
+func (r *SettingsResolver) TokenMasks(ctx context.Context) (string, error) {
+	if _, ok := auth.ClaimsFromContext(ctx); !ok {
+		return "", auth.ErrUnauthenticated
+	}
+	eff, err := r.getSettingsService(ctx).Get(ctx, settings.KeyTokenMasks)
+	if err != nil {
+		return "", err
+	}
+	return string(eff.Value), nil
+}
+
 // Setting resolves one known setting by key (requires settings:read).
 func (r *SettingsResolver) Setting(ctx context.Context, args struct{ Key string }) (*SettingResolver, error) {
 	if err := auth.Authorize(ctx, auth.SettingsRead); err != nil {

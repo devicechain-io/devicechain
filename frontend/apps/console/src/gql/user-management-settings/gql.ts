@@ -16,11 +16,13 @@ import * as types from './graphql';
  */
 type Documents = {
     "\n  query Settings {\n    settings {\n      key\n      description\n      value\n      overridden\n      updatedAt\n      updatedBy\n    }\n  }\n": typeof types.SettingsDocument,
+    "\n  query TokenMasks {\n    tokenMasks\n  }\n": typeof types.TokenMasksDocument,
     "\n  mutation SetSetting($key: String!, $value: String!) {\n    setSetting(key: $key, value: $value) {\n      key\n      description\n      value\n      overridden\n      updatedAt\n      updatedBy\n    }\n  }\n": typeof types.SetSettingDocument,
     "\n  mutation ClearSetting($key: String!) {\n    clearSetting(key: $key) {\n      key\n      description\n      value\n      overridden\n      updatedAt\n      updatedBy\n    }\n  }\n": typeof types.ClearSettingDocument,
 };
 const documents: Documents = {
     "\n  query Settings {\n    settings {\n      key\n      description\n      value\n      overridden\n      updatedAt\n      updatedBy\n    }\n  }\n": types.SettingsDocument,
+    "\n  query TokenMasks {\n    tokenMasks\n  }\n": types.TokenMasksDocument,
     "\n  mutation SetSetting($key: String!, $value: String!) {\n    setSetting(key: $key, value: $value) {\n      key\n      description\n      value\n      overridden\n      updatedAt\n      updatedBy\n    }\n  }\n": types.SetSettingDocument,
     "\n  mutation ClearSetting($key: String!) {\n    clearSetting(key: $key) {\n      key\n      description\n      value\n      overridden\n      updatedAt\n      updatedBy\n    }\n  }\n": types.ClearSettingDocument,
 };
@@ -29,6 +31,10 @@ const documents: Documents = {
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query Settings {\n    settings {\n      key\n      description\n      value\n      overridden\n      updatedAt\n      updatedBy\n    }\n  }\n"): typeof import('./graphql').SettingsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query TokenMasks {\n    tokenMasks\n  }\n"): typeof import('./graphql').TokenMasksDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

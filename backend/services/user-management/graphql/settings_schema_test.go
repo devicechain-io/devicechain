@@ -45,6 +45,9 @@ func TestSettingsFailClosed(t *testing.T) {
 
 	_, err = r.ClearSetting(ctx, struct{ Key string }{Key: "entity.token_masks"})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	_, err = r.TokenMasks(ctx)
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 }
 
 // TestSettingsForbidWithoutAuthority confirms an authenticated identity lacking the
