@@ -53,10 +53,13 @@ export function EntityPicker({
   id?: string;
   placeholder?: string;
 }) {
-  const { data, loading } = useQuery(() => loadEntities(kind), [kind]);
+  const { data, loading, error } = useQuery(() => loadEntities(kind), [kind]);
 
   const options = useMemo<ComboboxOption[]>(() => {
-    const rows = data ?? [];
+    // While a new kind loads, useQuery keeps the PREVIOUS kind's data — surfacing
+    // it would let a fast click store a wrong-kind token (e.g. a customer token as
+    // an `area` binding). Show nothing but the current value until the fetch lands.
+    const rows = loading ? [] : (data ?? []);
     const opts: ComboboxOption[] = rows.map((e) => ({
       value: e.token,
       label: e.name || e.token,
@@ -68,7 +71,7 @@ export function EntityPicker({
       opts.unshift({ value, label: value });
     }
     return opts;
-  }, [data, value]);
+  }, [data, loading, value]);
 
   return (
     <Combobox
@@ -78,7 +81,9 @@ export function EntityPicker({
       onChange={onChange}
       placeholder={loading ? 'Loading…' : (placeholder ?? `Select ${kind}…`)}
       searchPlaceholder={`Search ${kind}s…`}
-      emptyMessage={loading ? 'Loading…' : `No ${kind}s found.`}
+      // Distinguish a failed load from a genuinely empty tenant so the user doesn't
+      // "fix" a widget by rebinding when the real problem was a fetch error.
+      emptyMessage={loading ? 'Loading…' : error ? `Failed to load ${kind}s.` : `No ${kind}s found.`}
     />
   );
 }

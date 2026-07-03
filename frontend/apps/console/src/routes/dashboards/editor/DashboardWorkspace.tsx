@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import { hasAuthority } from '@devicechain/client';
 import {
   addWidget,
@@ -38,7 +38,7 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useAuth } from '@/auth/AuthProvider';
 import { updateDashboard, deleteDashboard } from '@/lib/api/dashboards';
-import { BackLink, errMessage } from '@/routes/common';
+import { errMessage } from '@/routes/common';
 import { DashboardCanvas } from './DashboardCanvas';
 import { WidgetConfigPanel } from './WidgetConfigPanel';
 
@@ -88,6 +88,32 @@ export function DashboardWorkspace({
     return () => window.removeEventListener('beforeunload', handler);
   }, [dirty]);
 
+  // A stale save-error otherwise sticks until the next save attempt (replacing the
+  // "unsaved changes" hint and going invisible in view mode). Clear it as soon as
+  // the user edits again — a new working copy means the failed save is moot.
+  useEffect(() => {
+    setSaveState((s) => (s.kind === 'error' ? { kind: 'clean' } : s));
+  }, [working]);
+
+  // In-app navigation (BackLink / sidebar) unmounts this workspace and drops
+  // unsaved edits — beforeunload only covers tab close. The console mounts a
+  // BrowserRouter (no data router → no useBlocker), so guard the one back-nav this
+  // component owns with a confirm. Sidebar nav mid-edit is the residual gap
+  // (needs a data-router migration) — mitigated by keeping the unsaved indicator
+  // and Save reachable in view mode below.
+  const leaveGuarded = async (to: string) => {
+    if (
+      dirty &&
+      !(await confirm({
+        title: 'Discard unsaved changes?',
+        description: 'Your unsaved dashboard edits will be lost.',
+        confirmLabel: 'Discard',
+      }))
+    )
+      return;
+    navigate(to);
+  };
+
   const addWidgetOfType = (type: WidgetType) => {
     const { definition, id } = addWidget(working, type);
     setWorking(definition);
@@ -135,8 +161,28 @@ export function DashboardWorkspace({
     }
   };
 
+  // Shown in BOTH modes so an unsaved edit is never disguised: after Done, view
+  // mode still renders `working` (the dirty copy), so without this the user sees
+  // their edits as if saved and loses them on nav (the review's top finding).
+  const statusEl =
+    saveState.kind === 'error' ? (
+      <span className="text-sm text-destructive">{saveState.message}</span>
+    ) : dirty ? (
+      <span className="text-sm text-muted-foreground">Unsaved changes</span>
+    ) : null;
+
+  const saveButton = (
+    <Button size="sm" onClick={save} disabled={!dirty || saveState.kind === 'saving'}>
+      {saveState.kind === 'saving' ? 'Saving…' : 'Save'}
+    </Button>
+  );
+
   const viewActions = (
     <div className="flex items-center gap-2">
+      {statusEl}
+      {/* Reachable so edits carried into view mode can be persisted without
+          re-entering the editor. */}
+      {dirty && saveButton}
       <Button variant="outline" size="sm" onClick={toggleMode} disabled={!canEdit}>
         Edit
       </Button>
@@ -148,12 +194,7 @@ export function DashboardWorkspace({
 
   const editActions = (
     <div className="flex items-center gap-2">
-      {saveState.kind === 'error' && (
-        <span className="text-sm text-destructive">{saveState.message}</span>
-      )}
-      {dirty && saveState.kind !== 'error' && (
-        <span className="text-sm text-muted-foreground">Unsaved changes</span>
-      )}
+      {statusEl}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm">
@@ -168,9 +209,7 @@ export function DashboardWorkspace({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
-      <Button size="sm" onClick={save} disabled={!dirty || saveState.kind === 'saving'}>
-        {saveState.kind === 'saving' ? 'Saving…' : 'Save'}
-      </Button>
+      {saveButton}
       <Button variant="outline" size="sm" onClick={toggleMode}>
         Done
       </Button>
@@ -183,7 +222,12 @@ export function DashboardWorkspace({
       banner="dashboard"
       description={
         <div className="mt-1">
-          <BackLink to="/dashboards">Dashboards</BackLink>
+          <button
+            onClick={() => void leaveGuarded('/dashboards')}
+            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft size={14} /> Dashboards
+          </button>
         </div>
       }
       action={mode === 'edit' ? editActions : viewActions}
@@ -218,6 +262,10 @@ export function DashboardWorkspace({
           </div>
           {selected && (
             <WidgetConfigPanel
+              // Remount per widget so the config panel's local input buffers (e.g.
+              // the measurements text field) don't carry one widget's keystrokes
+              // onto the next when both take the same datasource branch.
+              key={selected.id}
               widget={selected}
               onChange={(next) => setWorking(updateWidget(working, next.id, next))}
               onClose={() => setSelectedId(null)}
