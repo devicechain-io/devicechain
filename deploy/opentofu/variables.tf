@@ -55,6 +55,25 @@ variable "nats_enable_tls" {
   default     = true
 }
 
+variable "nats_enable_auth" {
+  description = "Enable broker authentication + the device auth-callout (ADR-025). Defaults false because it needs credentials minted out-of-band (nkeys aren't a TF primitive); the bring-up (dcctl / up.sh) mints them, sets this true, and threads the same values into the services' instance config. The broker flag and the client flag MUST agree."
+  type        = bool
+  default     = false
+}
+
+variable "nats_callout_issuer_public" {
+  description = "Public account nkey (A...) the auth-callout signs device user JWTs with. Minted by the bring-up; required when nats_enable_auth is true."
+  type        = string
+  default     = ""
+}
+
+variable "nats_service_password" {
+  description = "Password for the shared `dc_service` static login every internal service presents. Minted by the bring-up; required when nats_enable_auth is true. Sensitive."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 # --- Relational Postgres (control-plane RDB) ------------------------------------
 
 variable "postgres_image" {

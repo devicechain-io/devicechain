@@ -52,7 +52,69 @@ variable "enable_tls" {
   default     = true
 }
 
+variable "enable_auth" {
+  description = "Enable broker authentication (ADR-025): an APP account with a shared service login + an auth_callout that delegates device connects to device-management. Requires callout_issuer_public + service_password (minted out-of-band, since nkeys aren't a TF primitive), and the same values threaded into the services' instance config."
+  type        = bool
+  default     = false
+}
+
+variable "callout_issuer_public" {
+  description = "Public account nkey (A...) the auth-callout responder signs device user JWTs with — the server's trust anchor. Required when enable_auth is true."
+  type        = string
+  default     = ""
+}
+
+variable "service_password" {
+  description = "Password for the shared static `dc_service` login every internal service presents (exempt from the device callout). Required when enable_auth is true. Sensitive."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 locals {
+  # Service name the internal services present (see natsauth.ServiceUser). Kept in
+  # sync with the Go constant; a mismatch would lock every service out.
+  service_user = "dc_service"
+
+  # Broker-auth config merged into nats-server.conf (config.merge) when enabled: a
+  # single APP account holds services (static dc_service login, exempt) and devices
+  # (callout-placed via aud=APP with tenant-scoped perms). JetStream is enabled on
+  # APP because the MQTT gateway stores sessions there. SYS is the system account.
+  # Always the full map (no ternary) — it is only referenced on the enable_auth
+  # branch of chart_values_encoded, so var.service_password / callout_issuer_public
+  # being "" when disabled is harmless.
+  #
+  # TWO tradeoffs, acceptable for the local/dev bring-up, to harden for production:
+  #  1. The service_password renders PLAINTEXT into the nats chart's ConfigMap (the
+  #     chart puts all of config.merge there). Anyone with `configmap get` in the
+  #     namespace reads the full-privilege service credential. Production fix: a
+  #     bcrypt hash in the config, or the chart's `<< $VAR >>` include-from-Secret.
+  #  2. Enabling auth on a cluster that previously ran without accounts abandons the
+  #     old default-account ($G) JetStream state (streams/KV/MQTT sessions) — no
+  #     crash, but a decisive cutover that assumes FRESH JetStream state. Fine
+  #     pre-GA; a real migration would export/import streams across accounts.
+  auth_merge_content = {
+    accounts = {
+      APP = {
+        jetstream = "enabled"
+        users     = [{ user = local.service_user, password = var.service_password }]
+      }
+      SYS = {}
+    }
+    system_account = "SYS"
+    authorization = {
+      # NUMBER of seconds, not a duration string: nats-server's authorization
+      # timeout parser only accepts int/float and silently ignores a string,
+      # leaving the 1s default — too tight for the TLS handshake + callout
+      # round-trip (DB + secret check) and a source of flaky connects under load.
+      timeout = 5
+      auth_callout = {
+        issuer     = var.callout_issuer_public
+        auth_users = [local.service_user]
+        account    = "APP"
+      }
+    }
+  }
   tls_secret_name       = "${var.release_name}-tls"
   tls_ca_configmap_name = "${var.release_name}-ca"
   # SANs cover every in-cluster name a client dials the broker by: the short
@@ -65,6 +127,57 @@ locals {
     "${var.release_name}.${var.namespace}.svc.cluster.local",
     "localhost",
   ]
+
+  # Base chart values (TLS material + listeners). config.merge (broker-auth) is
+  # added conditionally below.
+  chart_values = {
+    # Reference the CA-only ConfigMap in every tls block + the nats-box contexts
+    # so in-cluster tooling verifies the broker without mounting the server key.
+    tlsCA = {
+      enabled       = var.enable_tls
+      configMapName = var.enable_tls ? local.tls_ca_configmap_name : null
+    }
+    config = {
+      jetstream = {
+        enabled = true
+        fileStore = {
+          pvc = {
+            enabled = true
+            size    = var.jetstream_storage
+          }
+        }
+      }
+      # Each tls block emits BOTH keys on both toggle states so the HCL branches
+      # unify: a `? {enabled=true,secretName=x} : {enabled=false}` shape would
+      # coerce enabled to the STRING "true"/"false", which chart 2.14.2's ternary
+      # on tls.enabled rejects. `secretName = ... : null` keeps enabled a real bool.
+      nats = {
+        tls = {
+          enabled    = var.enable_tls
+          secretName = var.enable_tls ? local.tls_secret_name : null
+        }
+      }
+      mqtt = {
+        enabled = true
+        tls = {
+          enabled    = var.enable_tls
+          secretName = var.enable_tls ? local.tls_secret_name : null
+        }
+      }
+      cluster = {
+        enabled  = var.ha
+        replicas = var.ha ? 3 : 1
+      }
+    }
+  }
+
+  # The rendered Helm values. The auth toggle is applied at the STRING level
+  # (yamlencode output), not the map level: `{config.merge = {...}}` and the
+  # base config are different object types that an HCL ternary cannot unify, but
+  # two yamlencode() results are both strings and unify cleanly.
+  chart_values_encoded = var.enable_auth ? yamlencode(merge(local.chart_values, {
+    config = merge(local.chart_values.config, { merge = local.auth_merge_content })
+  })) : yamlencode(local.chart_values)
 }
 
 # --- TLS material (ADR-025) --------------------------------------------------
@@ -184,51 +297,20 @@ resource "helm_release" "nats" {
     kubernetes_config_map_v1.nats_ca,
   ]
 
-  # https://github.com/nats-io/k8s — config.* maps onto nats-server config.
-  #
-  # NOTE: each tls/tlsCA block emits BOTH keys on both toggle states so the two
-  # HCL branches have an identical type. A `? {enabled=true, secretName=x} :
-  # {enabled=false}` shape unifies to map(string) and would coerce `enabled` to
-  # the STRING "true"/"false", which chart 2.14.2's `ternary` on tls.enabled
-  # rejects — failing the render in BOTH states. `secretName = ... : null` keeps
-  # the value a real bool and drops the reference when off (chart default nil).
-  values = [yamlencode({
-    # Reference the CA-only ConfigMap in every tls block + the nats-box contexts
-    # so in-cluster tooling verifies the broker without mounting the server key.
-    tlsCA = {
-      enabled       = var.enable_tls
-      configMapName = var.enable_tls ? local.tls_ca_configmap_name : null
-    }
+  # https://github.com/nats-io/k8s — config.* maps onto nats-server config. The
+  # rendered values (TLS listeners + optional broker-auth) are built in locals
+  # above; see local.chart_values_encoded for the auth toggle.
+  values = [local.chart_values_encoded]
 
-    config = {
-      jetstream = {
-        enabled = true
-        fileStore = {
-          pvc = {
-            enabled = true
-            size    = var.jetstream_storage
-          }
-        }
-      }
-      nats = {
-        tls = {
-          enabled    = var.enable_tls
-          secretName = var.enable_tls ? local.tls_secret_name : null
-        }
-      }
-      mqtt = {
-        enabled = true
-        tls = {
-          enabled    = var.enable_tls
-          secretName = var.enable_tls ? local.tls_secret_name : null
-        }
-      }
-      cluster = {
-        enabled  = var.ha
-        replicas = var.ha ? 3 : 1
-      }
+  lifecycle {
+    # Fail closed on a manual apply that turns auth on without minting the
+    # credentials (the bring-up always provides them together): an empty issuer /
+    # password would render a broker that rejects every device and every service.
+    precondition {
+      condition     = !var.enable_auth || (var.callout_issuer_public != "" && var.service_password != "")
+      error_message = "nats enable_auth=true requires non-empty callout_issuer_public and service_password (mint them via dcctl / the genauth helper)."
     }
-  })]
+  }
 }
 
 output "client_url" {

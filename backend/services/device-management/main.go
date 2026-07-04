@@ -35,6 +35,11 @@ var (
 	InboundEventsProcessor *processor.InboundEventsProcessor
 	ResolvedEventsWriter   messaging.MessageWriter
 	FailedEventsWriter     messaging.MessageWriter
+
+	// CalloutResponder answers NATS auth-callout requests for device connections
+	// (ADR-025). Non-nil only when the broker is configured for auth callout (the
+	// issuer seed is present in the instance config).
+	CalloutResponder *processor.CalloutResponder
 )
 
 func main() {
@@ -191,11 +196,30 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start the device auth-callout responder once the broker is configured for it
+	// (ADR-025): it delegates every device connect at the broker back to
+	// AuthenticateDevice. Absent an issuer seed the broker isn't running callout,
+	// so there is nothing to serve.
+	if seed := Microservice.InstanceConfiguration.Infrastructure.Nats.Auth.CalloutIssuerSeed; seed != "" {
+		CalloutResponder = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, seed)
+		if err = CalloutResponder.Start(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// Stop the auth-callout responder first (before the NATS connection closes) so
+	// no in-flight device connect is left unanswered.
+	if CalloutResponder != nil {
+		if err := CalloutResponder.Stop(); err != nil {
+			return err
+		}
+	}
+
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
 	if err != nil {

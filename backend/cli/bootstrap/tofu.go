@@ -52,6 +52,16 @@ func applyInfra(ctx context.Context, st *State) error {
 	if looksLocal(st.KubeContext) {
 		opts = append(opts, tfexec.Var("ingress_use_host_port=true"))
 	}
+	// Broker authentication (ADR-025): enable auth callout on NATS and pass the
+	// minted public issuer + service password. The same values (seed + password)
+	// go into the instance config in helmInstall, so the broker and clients agree.
+	if pub := st.Values["natsCalloutIssuerPublic"]; pub != "" {
+		opts = append(opts,
+			tfexec.Var("nats_enable_auth=true"),
+			tfexec.Var("nats_callout_issuer_public="+pub),
+			tfexec.Var("nats_service_password="+st.Values["natsServicePassword"]),
+		)
+	}
 	if err := tf.Apply(ctx, opts...); err != nil {
 		return fmt.Errorf("tofu apply: %w", err)
 	}

@@ -12,7 +12,12 @@
 # is being implemented to automate exactly this sequence, after which the
 # INFRA→CORE→CHART→SEED block collapses to one `dcctl bootstrap local` call.
 #
-# Idempotent: safe to re-run. Override behaviour via the env vars below.
+# Idempotent: safe to re-run for a fresh cluster. NOTE (ADR-025): each run mints
+# FRESH NATS auth credentials, so re-running against a LIVE cluster rotates them —
+# the broker reloads first, then services are locked out of NATS until the Helm
+# step rolls their pods with the new instance config (self-heals; a failure
+# between the two strands the cluster locked-out until a full re-run). Prefer a
+# clean down.sh + up.sh for a re-provision.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -126,7 +131,23 @@ kubeconfig_context = "$CONTEXT"
 ingress_use_host_port = true
 EOF
 fi
-( cd "$TF_DIR" && "$TF" init -input=false >/dev/null && "$TF" apply -input=false -auto-approve )
+# Broker authentication (ADR-025): mint the NATS auth-callout credentials — the
+# issuer nkey + the shared service password. nkeys aren't a TF/bash primitive, so
+# a tiny Go helper is the shared minting entrypoint (dcctl mints the same in-proc).
+# The public issuer + password go to the NATS config (tofu); the seed + password
+# go to the instance config (helm) — one mint, both sides, so they can't drift.
+step "minting NATS broker-auth credentials"
+# Clear any inherited values first: `eval` masks genauth's exit code, and the
+# `${VAR:?}` guards below only trip on UNSET vars — so a stale value sourced from
+# the environment could otherwise survive a failed mint.
+unset NATS_CALLOUT_ISSUER_PUBLIC NATS_CALLOUT_ISSUER_SEED NATS_SERVICE_PASSWORD
+eval "$(cd "$ROOT" && go run ./backend/core/natsauth/cmd/genauth)"
+: "${NATS_CALLOUT_ISSUER_PUBLIC:?minting failed}" "${NATS_CALLOUT_ISSUER_SEED:?}" "${NATS_SERVICE_PASSWORD:?}"
+
+( cd "$TF_DIR" && "$TF" init -input=false >/dev/null && "$TF" apply -input=false -auto-approve \
+    -var "nats_enable_auth=true" \
+    -var "nats_callout_issuer_public=$NATS_CALLOUT_ISSUER_PUBLIC" \
+    -var "nats_service_password=$NATS_SERVICE_PASSWORD" )
 
 # NATS TLS material (ADR-025): the broker terminates TLS and emits its CA as an
 # output; thread it into the instance config so services + the MQTT source dial
@@ -144,6 +165,17 @@ if [ "$NATS_TLS_ENABLED" = "true" ]; then
   NATS_TLS_ARGS+=(--set-file "instance.config.infrastructure.nats.tls.ca=${NATS_CA_FILE}")
   step "NATS TLS enabled — threading the broker CA into the instance config"
 fi
+
+# Thread the broker-auth material into the instance config so every service
+# presents the shared service credential, and device-management gets the callout
+# issuer seed. nkey/hex values carry no --set metacharacters, so plain --set is
+# safe. The values match what the tofu apply configured on the broker.
+NATS_AUTH_ARGS=(
+  --set "instance.config.infrastructure.nats.auth.user=dc_service"
+  --set "instance.config.infrastructure.nats.auth.password=${NATS_SERVICE_PASSWORD}"
+  --set "instance.config.infrastructure.nats.auth.calloutIssuerSeed=${NATS_CALLOUT_ISSUER_SEED}"
+)
+step "NATS auth enabled — threading the service credential + callout seed into the instance config"
 
 # ---- 5. core (CRDs + operator) ---------------------------------------------
 log "🧩 Core — CRDs + operator ($OPERATOR_IMG)"
@@ -163,6 +195,7 @@ helm --kube-context "$CONTEXT" upgrade --install dc "$CHART_DIR" \
   --set image.tag="$VERSION" \
   --set metrics.enabled=false \
   "${NATS_TLS_ARGS[@]}" \
+  "${NATS_AUTH_ARGS[@]}" \
   --wait --timeout 10m
 
 # ---- 7. seed ---------------------------------------------------------------

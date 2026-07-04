@@ -93,6 +93,13 @@ func NewNatsManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
 	return nmgr
 }
 
+// Conn exposes the underlying NATS connection for core (non-JetStream)
+// request/reply patterns such as the ADR-025 auth-callout responder. It is nil
+// until ExecuteInitialize has connected.
+func (nmgr *NatsManager) Conn() *nats.Conn {
+	return nmgr.nc
+}
+
 // NatsUrl returns the NATS connection url from instance configuration.
 func (nmgr *NatsManager) NatsUrl() string {
 	cfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats
@@ -413,6 +420,12 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 	}
 	if tlsConfig != nil {
 		opts = append(opts, nats.Secure(tlsConfig))
+	}
+	// Present the shared service credential once broker auth is enabled (ADR-025);
+	// internal services are exempt from the device callout via auth_users, so this
+	// static login is what places them in the APP account with full permissions.
+	if natscfg.Auth.User != "" {
+		opts = append(opts, nats.UserInfo(natscfg.Auth.User, natscfg.Auth.Password))
 	}
 	nc, err := nats.Connect(url, opts...)
 	if err != nil {

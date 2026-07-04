@@ -121,13 +121,17 @@ func buildEventSources() error {
 			// When applied, serverName is the dialed host, matched against the SANs.
 			natscfg := Microservice.InstanceConfiguration.Infrastructure.Nats
 			var tlsConfig *tls.Config
+			var user, pass string
 			if source.Configuration["host"] == natscfg.Hostname {
 				tlsConfig, err = natscfg.TLSConfig(source.Configuration["host"])
 				if err != nil {
 					return err
 				}
+				// The gateway source authenticates as the shared service user when
+				// broker auth is on; an external-broker source keeps its own creds.
+				user, pass = natscfg.Auth.User, natscfg.Auth.Password
 			}
-			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, tlsConfig,
+			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, tlsConfig, user, pass,
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed)
 			if err != nil {
 				return err
