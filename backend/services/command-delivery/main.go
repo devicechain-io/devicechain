@@ -6,8 +6,6 @@ package main
 import (
 	"context"
 
-	gql "github.com/graph-gophers/graphql-go"
-
 	"github.com/devicechain-io/dc-command-delivery/config"
 	"github.com/devicechain-io/dc-command-delivery/graphql"
 	"github.com/devicechain-io/dc-command-delivery/model"
@@ -133,7 +131,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	gqlcb := core.NewNoOpLifecycleCallbacks()
 
 	schema := graphql.SchemaContent
-	parsed := gql.MustParseSchema(schema, &graphql.SchemaResolver{})
+	parsed := gqlcore.MustParseSchema(schema, &graphql.SchemaResolver{})
 
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
 	// validator in the background and gate the data plane on readiness rather
