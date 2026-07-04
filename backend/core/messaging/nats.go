@@ -183,10 +183,22 @@ func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
 // (fail-closed): a write with no tenant in context is rejected rather than
 // published unscoped. All messages in one call share the caller's tenant, so
 // the subject is derived once.
+//
+// The tenant is validated against the global token grammar (ADR-042) before it is
+// spliced into the subject — the universal belt-and-suspenders behind ADR-025's
+// broker grant. Every producer's tenant flows through here, and some of it
+// originates from device-controlled addressing (an event-source derives it from an
+// MQTT topic / HTTP path). A tenant carrying "." / "*" / ">" would shift subject
+// segments or inject a cross-tenant wildcard, so a malformed tenant is rejected
+// here rather than published to a corrupted subject. Legitimate tenants always
+// pass: the same grammar is enforced when a tenant is created.
 func (w *natsWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
 		return core.ErrNoTenant
+	}
+	if err := core.ValidateToken(tenant); err != nil {
+		return fmt.Errorf("messaging: refusing to publish to a subject for an invalid tenant: %w", err)
 	}
 	subject := ScopedSubject(w.nmgr.Microservice.InstanceId, tenant, w.suffix)
 	for i := range msgs {
@@ -324,6 +336,14 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 // is cancelled (the client unsubscribed or the socket closed). A slow reader
 // drops messages (bounded buffer) rather than stalling the pipeline.
 func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffix string) (<-chan Message, error) {
+	// Validate the tenant before it becomes a subscription filter — the read-side
+	// twin of the WriteMessages guard, and the higher-blast-radius one: a tenant of
+	// "*"/">" here would subscribe across EVERY tenant's live feed, not just corrupt
+	// one publish. Legitimate tenants (a verified JWT claim, grammar-checked at
+	// creation) always pass; a malformed one is rejected rather than fanned in.
+	if err := core.ValidateToken(tenant); err != nil {
+		return nil, fmt.Errorf("messaging: refusing to subscribe to a subject for an invalid tenant: %w", err)
+	}
 	subject := ScopedSubject(nmgr.Microservice.InstanceId, tenant, suffix)
 	raw := make(chan *nats.Msg, liveBuffer)
 	sub, err := nmgr.nc.ChanSubscribe(subject, raw)

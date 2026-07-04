@@ -91,6 +91,14 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing tenant in path", http.StatusBadRequest)
 		return
 	}
+	// A syntactically invalid tenant is knowable at request time and can never be
+	// published to a valid subject, so reject it synchronously with a 400 rather
+	// than accept (202) an event the async publish path will only drop. Mirrors the
+	// fail-closed guard in messaging.WriteMessages (both call core.ValidateToken).
+	if err := core.ValidateToken(tenant); err != nil {
+		http.Error(w, fmt.Sprintf("invalid tenant in path: %v", err), http.StatusBadRequest)
+		return
+	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {

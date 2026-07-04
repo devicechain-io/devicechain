@@ -241,7 +241,10 @@ functionalAreas:
     config: {}
   device-management:
     config:
-      deviceAuthMode: optional
+      # disabled | optional | required. required (the hardened default, ADR-025)
+      # rejects any inbound event that does not present a valid device credential;
+      # relax to optional/disabled only for a trusted/bootstrapping transport.
+      deviceAuthMode: required
   event-sources:
     config: {}
     # HTTP device-ingest listener (PR #38): event-sources serves

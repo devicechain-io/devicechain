@@ -25,7 +25,7 @@ import (
 // KeyTokenMasks is the first setting (ADR-042): per-entity-type token mask
 // templates the console uses to generate and normalize tokens. The backend never
 // interprets it (masks are advisory client-side; the backend enforces only the
-// global token grammar — see rdb.ValidateToken).
+// global token grammar — see core.ValidateToken).
 const KeyTokenMasks = "entity.token_masks"
 
 // Definition is a known system setting: its key, its code default value, and a

@@ -10,11 +10,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// The default configuration is valid and defaults the auth mode to optional and
+// The default configuration is valid and defaults the auth mode to required and
 // the hot-path cache sizes/TTLs to their defaults (ADR-022 review B2).
 func TestDefaultConfigurationValid(t *testing.T) {
 	cfg := NewDeviceManagementConfiguration()
-	assert.Equal(t, AuthModeOptional, cfg.DeviceAuthMode)
+	assert.Equal(t, AuthModeRequired, cfg.DeviceAuthMode)
 	assert.Equal(t, DefaultDeviceCacheTtlSeconds, cfg.DeviceCacheTtlSeconds)
 	assert.Equal(t, DefaultRelationshipCacheTtlSeconds, cfg.RelationshipCacheTtlSeconds)
 	assert.Equal(t, DefaultMetricDefCacheTtlSeconds, cfg.MetricDefCacheTtlSeconds)
@@ -46,6 +46,16 @@ func TestLoadRejectsNonPositiveCacheBound(t *testing.T) {
 func TestLoadDefaultsAuthMode(t *testing.T) {
 	cfg := &DeviceManagementConfiguration{}
 	err := core.LoadConfiguration([]byte(`{"RdbConfiguration":{"SqlDebug":true}}`), cfg)
+
+	assert.NoError(t, err)
+	assert.Equal(t, AuthModeRequired, cfg.DeviceAuthMode)
+}
+
+// An explicitly-set auth mode is preserved through load/default — the operator's
+// opt-out to "optional" is not clobbered by the new "required" default.
+func TestLoadPreservesExplicitAuthMode(t *testing.T) {
+	cfg := &DeviceManagementConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"DeviceAuthMode":"optional"}`), cfg)
 
 	assert.NoError(t, err)
 	assert.Equal(t, AuthModeOptional, cfg.DeviceAuthMode)

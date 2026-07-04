@@ -3,7 +3,13 @@
 
 package messaging
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/devicechain-io/dc-microservice/core"
+)
 
 func TestParseTenantFromSubject(t *testing.T) {
 	cases := []struct {
@@ -25,6 +31,26 @@ func TestParseTenantFromSubject(t *testing.T) {
 			t.Errorf("ParseTenantFromSubject(%q) = (%q, %v); want (%q, %v)",
 				tc.subject, tenant, ok, tc.tenant, tc.ok)
 		}
+	}
+}
+
+// The WriteMessages tenant guard must run BEFORE the tenant is spliced into a
+// subject (and before any nmgr/js dereference), so the security property — no
+// unsafe tenant reaches a subject — cannot be lost to a future reordering. A
+// zero-value natsWriter has no nmgr; if either rejection path is ever moved below
+// the subject construction, this test fails by nil-panic rather than silently
+// passing. The valid-tenant path is deliberately NOT exercised here: it would
+// legitimately nil-panic on the missing nmgr.
+func TestWriteMessagesRejectsBadTenant(t *testing.T) {
+	w := &natsWriter{}
+
+	if err := w.WriteMessages(context.Background()); !errors.Is(err, core.ErrNoTenant) {
+		t.Errorf("no-tenant write: got %v, want ErrNoTenant", err)
+	}
+
+	ctx := core.WithTenant(context.Background(), "acme.*") // wildcard-injecting tenant
+	if err := w.WriteMessages(ctx, Message{Value: []byte("x")}); err == nil {
+		t.Error("malformed-tenant write: got nil, want rejection before publish")
 	}
 }
 
