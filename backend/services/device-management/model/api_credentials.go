@@ -186,5 +186,12 @@ func (api *Api) DeviceCredentialByCredentialId(ctx context.Context, credentialTy
 	if len(found) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
+	// The partial unique index guarantees at most one live match. More than one
+	// means that invariant was violated (index missing or corrupt) — fail closed
+	// rather than silently authenticating against an ambiguous credential.
+	if len(found) > 1 {
+		return nil, fmt.Errorf("device credential lookup ambiguous: %d live rows for type %q id %q",
+			len(found), credentialType, credentialId)
+	}
 	return found[0], nil
 }
