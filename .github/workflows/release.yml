@@ -108,7 +108,7 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
-      - uses: ko-build/setup-ko@v0.7
+      - uses: ko-build/setup-ko@v0.10
 
       - name: Log in to ghcr
         env:
