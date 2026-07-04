@@ -40,6 +40,13 @@ const (
 	EventRead Authority = "event:read"
 	StateRead Authority = "state:read"
 
+	// Alarms (device-management, ADR-041). AlarmRead gates reading raised alarms;
+	// AlarmWrite gates the operator transitions (acknowledge, clear). Distinct from
+	// device:* because acknowledging an alarm is an operational action a monitoring
+	// operator performs, not a change to the device or its profile.
+	AlarmRead  Authority = "alarm:read"
+	AlarmWrite Authority = "alarm:write"
+
 	// Command delivery (command-delivery).
 	CommandRead  Authority = "command:read"
 	CommandWrite Authority = "command:write"
@@ -79,6 +86,8 @@ var vocabulary = map[Authority]struct{}{
 	DeviceWrite:    {},
 	EventRead:      {},
 	StateRead:      {},
+	AlarmRead:      {},
+	AlarmWrite:     {},
 	CommandRead:    {},
 	CommandWrite:   {},
 	DashboardRead:  {},

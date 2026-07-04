@@ -215,6 +215,31 @@ func (api *MockApi) AlarmDefinitionsByDeviceType(ctx context.Context, deviceType
 	return args.Get(0).([]*model.AlarmDefinition), args.Error(1)
 }
 
+func (api *MockApi) AlarmsById(ctx context.Context, ids []uint) ([]*model.Alarm, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.Alarm), args.Error(1)
+}
+
+func (api *MockApi) AlarmsByToken(ctx context.Context, tokens []string) ([]*model.Alarm, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.Alarm), args.Error(1)
+}
+
+func (api *MockApi) Alarms(ctx context.Context, criteria model.AlarmSearchCriteria) (*model.AlarmSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.AlarmSearchResults), args.Error(1)
+}
+
+func (api *MockApi) AcknowledgeAlarm(ctx context.Context, token string, by *string) (*model.Alarm, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.Alarm), args.Error(1)
+}
+
+func (api *MockApi) ClearAlarm(ctx context.Context, token string) (*model.Alarm, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.Alarm), args.Error(1)
+}
+
 func (api *MockApi) SetEntityAttribute(ctx context.Context, request *model.EntityAttributeSetRequest) (*model.EntityAttribute, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.EntityAttribute), args.Error(1)

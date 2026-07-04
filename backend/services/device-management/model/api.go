@@ -75,6 +75,14 @@ type DeviceManagementApi interface {
 	AlarmDefinitions(ctx context.Context, criteria AlarmDefinitionSearchCriteria) (*AlarmDefinitionSearchResults, error)
 	AlarmDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*AlarmDefinition, error)
 
+	// Alarms (raised, ADR-041). Raised by the evaluator (a later slice); the API here
+	// is read + the operator transitions.
+	AlarmsById(ctx context.Context, ids []uint) ([]*Alarm, error)
+	AlarmsByToken(ctx context.Context, tokens []string) ([]*Alarm, error)
+	Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*AlarmSearchResults, error)
+	AcknowledgeAlarm(ctx context.Context, token string, by *string) (*Alarm, error)
+	ClearAlarm(ctx context.Context, token string) (*Alarm, error)
+
 	// Entity attributes (ADR-012).
 	SetEntityAttribute(ctx context.Context, request *EntityAttributeSetRequest) (*EntityAttribute, error)
 	EntityAttributes(ctx context.Context, criteria EntityAttributeSearchCriteria) (*EntityAttributeSearchResults, error)
