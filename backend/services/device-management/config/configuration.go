@@ -12,6 +12,10 @@ import (
 const (
 	SUBJECT_FAILED_EVENTS   = "failed-events"
 	SUBJECT_RESOLVED_EVENTS = "resolved-events"
+	// SUBJECT_ALARM_EVENTS carries alarm state-change events (ADR-041) re-emitted on
+	// each alarm transition — the substrate for graphql-ws subscriptions (ADR-037)
+	// and notifications (ADR-017).
+	SUBJECT_ALARM_EVENTS = "alarm-events"
 )
 
 // Device authentication policy applied to inbound events (transport security,

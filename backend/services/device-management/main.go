@@ -34,6 +34,11 @@ var (
 	ResolvedEventsWriter   messaging.MessageWriter
 	FailedEventsWriter     messaging.MessageWriter
 
+	// AlarmEventsWriter publishes alarm state-change events (ADR-041). It backs the
+	// publisher injected into the shared Api so every alarm transition — evaluator or
+	// operator — emits onto the alarm-events stream.
+	AlarmEventsWriter messaging.MessageWriter
+
 	// AlarmEvaluator consumes the resolved-events stream this service produces and
 	// runs the SIMPLE alarm evaluator over resolved measurements (ADR-041). It is a
 	// distinct durable consumer from the persistence/state pipelines.
@@ -102,6 +107,16 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	FailedEventsWriter = fevents
+
+	// Add the alarm-events writer and inject a publisher over it into the shared Api
+	// (ADR-041). CachedApi embeds this same *Api, so both the evaluator and the
+	// GraphQL operator mutations emit alarm state-change events through it.
+	aevents, err := nmgr.NewWriter(config.SUBJECT_ALARM_EVENTS)
+	if err != nil {
+		return err
+	}
+	AlarmEventsWriter = aevents
+	Api.AlarmPublisher = processor.NewAlarmEventWriter(AlarmEventsWriter)
 
 	// Add and initialize inbound events processor.
 	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,

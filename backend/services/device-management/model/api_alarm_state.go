@@ -123,6 +123,7 @@ func (api *Api) AcknowledgeAlarm(ctx context.Context, token string, by *string) 
 		alarm.Acknowledged = true
 		alarm.AcknowledgedTime = ackTime
 		alarm.AcknowledgedBy = ackBy
+		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(alarm, AlarmEventAcknowledged, "", ackTime.Time))
 	}
 	return alarm, nil
 }
@@ -152,6 +153,7 @@ func (api *Api) ClearAlarm(ctx context.Context, token string) (*Alarm, error) {
 		}
 		alarm.State = string(AlarmStateCleared)
 		alarm.ClearedTime = clearedTime
+		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(alarm, AlarmEventCleared, "", clearedTime.Time))
 	}
 	return alarm, nil
 }

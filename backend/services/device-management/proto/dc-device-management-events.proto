@@ -123,3 +123,27 @@ message PResolvedAlertEntry {
 message PResolvedAlertsPayload {
     repeated PResolvedAlertEntry entries = 1;
 }
+
+/**
+ * Alarm state-change event (ADR-041): re-emitted whenever a raised alarm
+ * transitions (raised/escalated/de-escalated/cleared/acknowledged). It is a
+ * snapshot of the alarm after the transition plus the transition kind and the
+ * prior severity (for a severity change), and is the substrate for graphql-ws
+ * subscriptions (ADR-037) and notifications (ADR-017).
+ */
+message PAlarmStateChangeEvent {
+    string event_type = 1;
+    string alarm_token = 2;
+    string originator_type = 3;
+    uint64 originator_id = 4;
+    string alarm_key = 5;
+    string metric_key = 6;
+    string state = 7;
+    string severity = 8;
+    bool acknowledged = 9;
+    optional string previous_severity = 10;
+    optional string acknowledged_by = 11;
+    optional double last_value = 12;
+    optional string message = 13;
+    string occurred_time = 14;
+}

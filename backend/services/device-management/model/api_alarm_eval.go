@@ -203,7 +203,11 @@ func (api *Api) raiseOrEscalateAlarm(ctx context.Context, deviceId uint,
 			RaisedTime:     occurredTime,
 			LastValue:      lastValue,
 		}
-		return api.RDB.DB(ctx).Create(created).Error
+		if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
+			return err
+		}
+		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(created, AlarmEventRaised, "", occurredTime))
+		return nil
 	}
 
 	if existing.State == string(AlarmStateCleared) {
@@ -214,7 +218,7 @@ func (api *Api) raiseOrEscalateAlarm(ctx context.Context, deviceId uint,
 		if existing.ClearedTime.Valid && occurredTime.Before(existing.ClearedTime.Time) {
 			return nil
 		}
-		return api.RDB.DB(ctx).Model(existing).Updates(map[string]interface{}{
+		if err := api.RDB.DB(ctx).Model(existing).Updates(map[string]interface{}{
 			"last_value":        lastValue,
 			"severity":          severity,
 			"state":             string(AlarmStateActive),
@@ -223,13 +227,38 @@ func (api *Api) raiseOrEscalateAlarm(ctx context.Context, deviceId uint,
 			"acknowledged":      false,
 			"acknowledged_time": sql.NullTime{},
 			"acknowledged_by":   sql.NullString{},
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		// Reflect the reactivation on the in-memory row so the emitted event carries
+		// the new state (a map Updates does not write back into the struct).
+		existing.State = string(AlarmStateActive)
+		existing.Severity = severity
+		existing.RaisedTime = occurredTime
+		existing.ClearedTime = sql.NullTime{}
+		existing.Acknowledged = false
+		existing.AcknowledgedTime = sql.NullTime{}
+		existing.AcknowledgedBy = sql.NullString{}
+		existing.LastValue = lastValue
+		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(existing, AlarmEventRaised, "", occurredTime))
+		return nil
 	}
 	// Already ACTIVE: track the current highest-satisfied severity and latest value.
-	return api.RDB.DB(ctx).Model(existing).Updates(map[string]interface{}{
+	prevSeverity := existing.Severity
+	if err := api.RDB.DB(ctx).Model(existing).Updates(map[string]interface{}{
 		"last_value": lastValue,
 		"severity":   severity,
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+	existing.Severity = severity
+	existing.LastValue = lastValue
+	// Emit only when the severity actually moved: a value-only update is not a
+	// state change a subscriber needs (and would flood the stream at ingest rate).
+	if etype, changed := severityTransition(prevSeverity, severity); changed {
+		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(existing, etype, prevSeverity, occurredTime))
+	}
+	return nil
 }
 
 // autoClearAlarm moves an ACTIVE alarm for (device, alarmKey) to CLEARED because the
@@ -252,9 +281,18 @@ func (api *Api) autoClearAlarm(ctx context.Context, deviceId uint, alarmKey stri
 	if occurredTime.Before(existing.RaisedTime) {
 		return nil
 	}
-	return api.RDB.DB(ctx).Model(existing).Updates(map[string]interface{}{
+	clearedTime := sql.NullTime{Time: occurredTime, Valid: true}
+	lastValue := sql.NullFloat64{Float64: value, Valid: true}
+	if err := api.RDB.DB(ctx).Model(existing).Updates(map[string]interface{}{
 		"state":        string(AlarmStateCleared),
-		"cleared_time": sql.NullTime{Time: occurredTime, Valid: true},
-		"last_value":   sql.NullFloat64{Float64: value, Valid: true},
-	}).Error
+		"cleared_time": clearedTime,
+		"last_value":   lastValue,
+	}).Error; err != nil {
+		return err
+	}
+	existing.State = string(AlarmStateCleared)
+	existing.ClearedTime = clearedTime
+	existing.LastValue = lastValue
+	api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(existing, AlarmEventCleared, "", occurredTime))
+	return nil
 }
