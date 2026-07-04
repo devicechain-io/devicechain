@@ -51,6 +51,16 @@ func TestLoadDefaultsAuthMode(t *testing.T) {
 	assert.Equal(t, AuthModeRequired, cfg.DeviceAuthMode)
 }
 
+// An explicitly-set auth mode is preserved through load/default — the operator's
+// opt-out to "optional" is not clobbered by the new "required" default.
+func TestLoadPreservesExplicitAuthMode(t *testing.T) {
+	cfg := &DeviceManagementConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"DeviceAuthMode":"optional"}`), cfg)
+
+	assert.NoError(t, err)
+	assert.Equal(t, AuthModeOptional, cfg.DeviceAuthMode)
+}
+
 // An invalid auth mode fails the load closed.
 func TestLoadRejectsInvalidAuthMode(t *testing.T) {
 	cfg := &DeviceManagementConfiguration{}

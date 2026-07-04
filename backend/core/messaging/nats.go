@@ -198,7 +198,7 @@ func (w *natsWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
 		return core.ErrNoTenant
 	}
 	if err := core.ValidateToken(tenant); err != nil {
-		return fmt.Errorf("refusing to publish to a subject for an invalid tenant: %w", err)
+		return fmt.Errorf("messaging: refusing to publish to a subject for an invalid tenant: %w", err)
 	}
 	subject := ScopedSubject(w.nmgr.Microservice.InstanceId, tenant, w.suffix)
 	for i := range msgs {
@@ -336,6 +336,14 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 // is cancelled (the client unsubscribed or the socket closed). A slow reader
 // drops messages (bounded buffer) rather than stalling the pipeline.
 func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffix string) (<-chan Message, error) {
+	// Validate the tenant before it becomes a subscription filter — the read-side
+	// twin of the WriteMessages guard, and the higher-blast-radius one: a tenant of
+	// "*"/">" here would subscribe across EVERY tenant's live feed, not just corrupt
+	// one publish. Legitimate tenants (a verified JWT claim, grammar-checked at
+	// creation) always pass; a malformed one is rejected rather than fanned in.
+	if err := core.ValidateToken(tenant); err != nil {
+		return nil, fmt.Errorf("messaging: refusing to subscribe to a subject for an invalid tenant: %w", err)
+	}
 	subject := ScopedSubject(nmgr.Microservice.InstanceId, tenant, suffix)
 	raw := make(chan *nats.Msg, liveBuffer)
 	sub, err := nmgr.nc.ChanSubscribe(subject, raw)

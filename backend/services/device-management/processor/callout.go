@@ -11,7 +11,6 @@ import (
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/natsauth"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
@@ -169,7 +168,7 @@ func parseDeviceCredential(username, password string) (string, *model.PresentedC
 	// enforced when a tenant is created (it excludes `.`/`*`/`>`/`:`), so this is
 	// defense-in-depth that keeps the "no subject injection" property local to the
 	// callout rather than resting on a distant invariant.
-	if rdb.ValidateToken(tenant) != nil {
+	if core.ValidateToken(tenant) != nil {
 		return "", nil, false
 	}
 	if password != "" {

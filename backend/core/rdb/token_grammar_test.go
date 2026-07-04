@@ -46,48 +46,9 @@ func newGrammarDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestValidateToken(t *testing.T) {
-	valid := []string{
-		"device-1", "a", "ops-overview", "abc123", "0", "9-lives",
-		"Ops", "SDK7GV3WXZ3FBXZ", // uppercase machine identifiers (VINs, serials)
-		"device_1", "a_b", // underscore is subject-safe
-		"550e8400-e29b-41d4-a716-446655440000", // a uuid (auto-minted claim token)
-	}
-	for _, tok := range valid {
-		if err := ValidateToken(tok); err != nil {
-			t.Errorf("ValidateToken(%q) = %v, want nil", tok, err)
-		}
-	}
-
-	invalid := []string{
-		"",             // empty
-		"ops overview", // space
-		"-lead",        // leading hyphen
-		"_lead",        // leading underscore
-		"a.b",          // dot — shifts NATS subject segments
-		"a*b",          // NATS wildcard
-		"a>b",          // NATS wildcard
-		"a/b",          // MQTT separator
-		"a+b",          // MQTT wildcard
-		"a#b",          // MQTT wildcard
-		"a:b",          // subject-hazardous punctuation
-		"café",         // non-ascii
-	}
-	for _, tok := range invalid {
-		if err := ValidateToken(tok); err == nil {
-			t.Errorf("ValidateToken(%q) = nil, want error", tok)
-		}
-	}
-
-	// Length bound.
-	long := make([]byte, MaxTokenLen+1)
-	for i := range long {
-		long[i] = 'a'
-	}
-	if err := ValidateToken(string(long)); err == nil {
-		t.Errorf("ValidateToken(len %d) = nil, want error", MaxTokenLen+1)
-	}
-}
+// The grammar itself is unit-tested in the core package (core.TestValidateToken).
+// These tests cover the rdb-specific concern: that RegisterTokenGrammar's GORM
+// create/update callbacks actually apply it.
 
 func TestTokenGrammarCallback_Create(t *testing.T) {
 	db := newGrammarDB(t)

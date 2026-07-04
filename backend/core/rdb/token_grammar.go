@@ -17,21 +17,10 @@ import (
 // user-management Tenant and Role). A schema exposing this field is token-keyed.
 const tokenFieldName = "Token"
 
-// MaxTokenLen bounds a token's length, matching the size:128 storage column on
-// TokenReference.Token. Aliased to the canonical grammar in core so the storage
-// column, the create/update guard, and the messaging subject guard share one
-// bound.
-const MaxTokenLen = core.MaxTokenLen
-
-// ValidateToken reports whether a token conforms to the global grammar (ADR-042).
-// It delegates to core.ValidateToken — the single source of truth shared with the
-// messaging subject guard (ADR-025) — and is the fail-closed check applied to
-// every token at create/update by the callbacks RegisterTokenGrammar installs. It
-// stays exported here so existing storage-layer callers (and any explicit
-// generation path) keep a stable entry point.
-func ValidateToken(token string) error {
-	return core.ValidateToken(token)
-}
+// The token grammar itself (regexp, length bound, and the fail-closed
+// core.ValidateToken check) lives in the leaf core package as the single source of
+// truth (ADR-042), shared with the messaging subject guard (ADR-025). This file
+// installs the GORM create/update callbacks that apply it at the storage layer.
 
 // RegisterTokenGrammar installs global GORM Before callbacks that enforce the
 // token grammar for any model whose schema exposes a Token field (embedded
@@ -119,13 +108,13 @@ func checkRowToken(db *gorm.DB, field *schema.Field, rv reflect.Value, requireTo
 		val, isZero := field.ValueOf(db.Statement.Context, rv)
 		if isZero {
 			if requireToken {
-				_ = db.AddError(ValidateToken(""))
+				_ = db.AddError(core.ValidateToken(""))
 				return false
 			}
 			return true // update not touching the token
 		}
 		token, _ := val.(string)
-		if err := ValidateToken(token); err != nil {
+		if err := core.ValidateToken(token); err != nil {
 			_ = db.AddError(err)
 			return false
 		}
@@ -144,7 +133,7 @@ func checkMapToken(db *gorm.DB, field *schema.Field, m map[string]interface{}, r
 	v, present := lookupMapToken(m, field)
 	if !present {
 		if requireToken {
-			_ = db.AddError(ValidateToken(""))
+			_ = db.AddError(core.ValidateToken(""))
 			return false
 		}
 		return true // update not touching the token
@@ -159,7 +148,7 @@ func checkMapToken(db *gorm.DB, field *schema.Field, m map[string]interface{}, r
 		_ = db.AddError(fmt.Errorf("token must be set as a string, got %T", v))
 		return false
 	}
-	if err := ValidateToken(token); err != nil {
+	if err := core.ValidateToken(token); err != nil {
 		_ = db.AddError(err)
 		return false
 	}
