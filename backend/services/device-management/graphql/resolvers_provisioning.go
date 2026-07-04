@@ -126,36 +126,3 @@ func (r *ProvisioningProfileSearchResultsResolver) Pagination() *SearchResultsPa
 		C: r.C,
 	}
 }
-
-// --------------------------
-// Provision device result resolver
-// --------------------------
-
-type ProvisionDeviceResultResolver struct {
-	M model.ProvisionDeviceResult
-	S *SchemaResolver
-	C context.Context
-}
-
-func (r *ProvisionDeviceResultResolver) DeviceToken() string {
-	if r.M.Device != nil {
-		return r.M.Device.Token
-	}
-	return ""
-}
-
-func (r *ProvisionDeviceResultResolver) CredentialType() string {
-	return r.M.CredentialType
-}
-
-func (r *ProvisionDeviceResultResolver) CredentialId() string {
-	return r.M.CredentialId
-}
-
-func (r *ProvisionDeviceResultResolver) CredentialValue() *string {
-	return r.M.CredentialValue
-}
-
-func (r *ProvisionDeviceResultResolver) Created() bool {
-	return r.M.Created
-}

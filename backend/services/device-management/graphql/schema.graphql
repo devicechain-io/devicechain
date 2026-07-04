@@ -400,30 +400,6 @@ type ProvisioningProfileSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Self-registration request a connecting device presents (ADR-012). The device
-# supplies only its provision key+secret and the identity it claims; the tenant is
-# resolved from the globally-unique provision key.
-input ProvisionDeviceRequest {
-    provisionKey: String!
-    provisionSecret: String!
-    deviceToken: String!
-    name: String
-    metadata: String
-}
-
-# Result returned to a successfully provisioned device: the resolved identity and
-# the credential it must authenticate with going forward. credentialValue is set
-# only for credential types that carry a separate secret; for an ACCESS_TOKEN the
-# bearer secret is the credentialId itself. created reports whether this call
-# brought the device into existence.
-type ProvisionDeviceResult {
-    deviceToken: String!
-    credentialType: String!
-    credentialId: String!
-    credentialValue: String
-    created: Boolean!
-}
-
 # A device's possession claim (ADR-012): a one-time, optionally expiring secret an
 # eventual owner presents to assign the device to a customer. The claim secret is
 # write-only and is never exposed on this type.
@@ -1056,10 +1032,6 @@ type Mutation {
     updateProvisioningProfile(token: String!, request: ProvisioningProfileCreateRequest): ProvisioningProfile!
     # Delete a single provisioning profile.
     deleteProvisioningProfile(token: String!): Boolean!
-    # Self-register a device against a provisioning profile. Unauthenticated: the
-    # tenant is resolved from the provision key and the key+secret is the gate.
-    # Returns the credential the device must authenticate with going forward.
-    provisionDevice(request: ProvisionDeviceRequest!): ProvisionDeviceResult!
     # Open (or reopen) a possession claim on a device with a secret an eventual
     # owner will present.
     initiateDeviceClaim(request: DeviceClaimInitiateRequest!): DeviceClaim!
