@@ -14,12 +14,16 @@ backend/
     event-sources/            inbound device transports (MQTT/NATS), decode → pipeline
     device-state/             live last-known-state projection per device
     command-delivery/         persistent two-way command dispatch
-    dashboard-management/     dashboard-definition CRUD (ADR-039)
+    dashboard-management/     dashboard CRUD + versioning (draft/publish/rollback); definitions are
+                              versioned tenant resources stored as opaque JSON (ADR-039)
   k8s/                        controller-runtime operator (Instance CRD; tenants are control-plane DB rows, ADR-033)
   cli/                        dcctl — bootstrap/destroy + admin tooling
 deploy/                       Helm chart (deploy/helm) + OpenTofu modules (deploy/opentofu)
-frontend/                     npm workspace — apps/console (React 19 + Vite + Tailwind + shadcn/ui, client-preset
-                              codegen) + packages/{client,dashboards,widgets} (SDK, dashboard runtime, widgets; ADR-039)
+frontend/                     npm workspace (React 19 + Vite + Tailwind + shadcn/ui, client-preset codegen):
+                              apps/console (authoring — canvas editor, versioning, synthetic preview, slot
+                              authoring, export) + apps/dashboard (the /dash app — a VIEWER-ONLY reference
+                              external embedder with its own login) + packages/{client,dashboards,widgets}
+                              (SDK, dashboard runtime + slot/binding-manifest model, ECharts widgets; ADR-039)
 docs/                         Docusaurus site
 hack/                         license header + dev scripts
 _legacy/                      archived pre-migration SiteWhere code — NOT in the workspace, not built; do not edit
