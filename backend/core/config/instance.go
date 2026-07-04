@@ -3,7 +3,11 @@
 
 package config
 
-import "fmt"
+import (
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+)
 
 // NATS configuration parameters
 type NatsConfiguration struct {
@@ -12,6 +16,44 @@ type NatsConfiguration struct {
 	// StreamReplicas is the JetStream replica count for created streams
 	// (1 for single-node dev; raise to 3 for the HA topology in ADR-018).
 	StreamReplicas uint32
+	// Tls, when enabled, makes clients dial the broker over TLS and verify the
+	// server certificate against Ca (ADR-025). The broker terminates TLS on both
+	// the 4222 client listener and the 1883 MQTT gateway with a cert this CA
+	// signs, so this single flag governs every client connection. Server-auth
+	// only in v1 — no client certificate is presented (device authentication is
+	// the separate auth-callout half of ADR-025).
+	Tls NatsTlsConfiguration
+}
+
+// NatsTlsConfiguration controls client-side TLS to the NATS broker (ADR-025).
+type NatsTlsConfiguration struct {
+	Enabled bool
+	// Ca is the PEM-encoded CA certificate(s) that signed the NATS server cert.
+	// The broker lives in the shared infra namespace, so rather than mount its
+	// cert Secret cross-namespace, the bring-up threads the CA into this instance
+	// config (which every service already loads) from the OpenTofu nats_ca output.
+	Ca string
+}
+
+// TLSConfig builds the client tls.Config for connecting to NATS with the given
+// serverName (matched against the certificate SANs), or (nil, nil) when TLS is
+// disabled. Callers pass nil straight through to leave the connection plaintext.
+func (c NatsConfiguration) TLSConfig(serverName string) (*tls.Config, error) {
+	if !c.Tls.Enabled {
+		return nil, nil
+	}
+	if c.Tls.Ca == "" {
+		return nil, fmt.Errorf("infrastructure.nats.tls is enabled but tls.ca is empty")
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(c.Tls.Ca)) {
+		return nil, fmt.Errorf("infrastructure.nats.tls.ca contained no valid PEM certificates")
+	}
+	return &tls.Config{
+		RootCAs:    pool,
+		ServerName: serverName,
+		MinVersion: tls.VersionTLS12,
+	}, nil
 }
 
 // Prometheus metrics configuration. Metrics are served on the GraphQL HTTP port

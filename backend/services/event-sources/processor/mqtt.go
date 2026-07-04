@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"strconv"
 	"strings"
@@ -27,6 +28,11 @@ type MqttEventSource struct {
 	BrokerPort int
 	Topic      string
 
+	// tlsConfig, when non-nil, dials the broker over TLS (ssl://) and verifies its
+	// certificate — the client side of the ADR-025 TLS'd MQTT gateway. nil leaves
+	// the connection plaintext (tcp://).
+	tlsConfig *tls.Config
+
 	Client  mqtt.Client
 	Decoder Decoder
 
@@ -38,8 +44,10 @@ type MqttEventSource struct {
 	failed    func(string, string, []byte, error)
 }
 
-// Create a new MQTT event source based on the given configuration.
-func NewMqttEventSource(id string, config map[string]string, decoder Decoder,
+// Create a new MQTT event source based on the given configuration. tlsConfig is
+// non-nil when the broker terminates TLS on the MQTT gateway (ADR-025), in which
+// case the client dials ssl:// and verifies the server; nil dials plaintext.
+func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Config, decoder Decoder,
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}),
 	failed func(string, string, []byte, error)) (*MqttEventSource, error) {
@@ -53,6 +61,7 @@ func NewMqttEventSource(id string, config map[string]string, decoder Decoder,
 		BrokerHost: config["host"],
 		BrokerPort: port,
 		Topic:      config["topic"],
+		tlsConfig:  tlsConfig,
 		Decoder:    decoder,
 	}
 
@@ -111,7 +120,14 @@ func (es *MqttEventSource) Initialize(ctx context.Context) error {
 // Initialize event source (as called by lifecycle manager)
 func (es *MqttEventSource) ExecuteInitialize(ctx context.Context) error {
 	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tcp://%s:%d", es.BrokerHost, es.BrokerPort))
+	// ssl:// + a verified TLS config when the gateway terminates TLS (ADR-025),
+	// otherwise plaintext tcp://.
+	scheme := "tcp"
+	if es.tlsConfig != nil {
+		scheme = "ssl"
+		opts.SetTLSConfig(es.tlsConfig)
+	}
+	opts.AddBroker(fmt.Sprintf("%s://%s:%d", scheme, es.BrokerHost, es.BrokerPort))
 	opts.SetClientID("devicechain")
 	opts.SetDefaultPublishHandler(es.onMessage)
 	opts.OnConnect = es.onConnect

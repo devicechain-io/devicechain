@@ -128,6 +128,23 @@ EOF
 fi
 ( cd "$TF_DIR" && "$TF" init -input=false >/dev/null && "$TF" apply -input=false -auto-approve )
 
+# NATS TLS material (ADR-025): the broker terminates TLS and emits its CA as an
+# output; thread it into the instance config so services + the MQTT source dial
+# over TLS and verify the broker. The broker flag and the client flag MUST agree,
+# so both come from the same tofu outputs. No `|| echo false` fallback: a failed
+# read must abort under `set -e`, not silently disable the client while the broker
+# still requires TLS (every service would then fail to connect, masked by NATS'
+# retry-forever). The apply just above succeeded, so the outputs exist.
+NATS_TLS_ENABLED=$(cd "$TF_DIR" && "$TF" output -raw nats_tls_enabled)
+NATS_TLS_ARGS=(--set "instance.config.infrastructure.nats.tls.enabled=${NATS_TLS_ENABLED}")
+if [ "$NATS_TLS_ENABLED" = "true" ]; then
+  NATS_CA_FILE="$(mktemp)"
+  trap 'rm -f "$NATS_CA_FILE"' EXIT
+  ( cd "$TF_DIR" && "$TF" output -raw nats_ca ) > "$NATS_CA_FILE"
+  NATS_TLS_ARGS+=(--set-file "instance.config.infrastructure.nats.tls.ca=${NATS_CA_FILE}")
+  step "NATS TLS enabled — threading the broker CA into the instance config"
+fi
+
 # ---- 5. core (CRDs + operator) ---------------------------------------------
 log "🧩 Core — CRDs + operator ($OPERATOR_IMG)"
 make -C "$OPERATOR_DIR" install
@@ -145,6 +162,7 @@ helm --kube-context "$CONTEXT" upgrade --install dc "$CHART_DIR" \
   --set image.registry="$REGISTRY" \
   --set image.tag="$VERSION" \
   --set metrics.enabled=false \
+  "${NATS_TLS_ARGS[@]}" \
   --wait --timeout 10m
 
 # ---- 7. seed ---------------------------------------------------------------

@@ -398,11 +398,23 @@ func (nmgr *NatsManager) Initialize(ctx context.Context) error {
 // ExecuteInitialize connects to NATS and obtains a JetStream context.
 func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 	url := nmgr.NatsUrl()
-	nc, err := nats.Connect(url,
+	natscfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats
+	opts := []nats.Option{
 		nats.Name(nmgr.Microservice.FunctionalArea),
 		nats.MaxReconnects(-1),
 		nats.RetryOnFailedConnect(true),
-	)
+	}
+	// When the broker terminates TLS (ADR-025) every client must dial over TLS or
+	// the handshake on the TLS-required port fails; verify the server against the
+	// CA threaded into the instance config.
+	tlsConfig, err := natscfg.TLSConfig(natscfg.Hostname)
+	if err != nil {
+		return err
+	}
+	if tlsConfig != nil {
+		opts = append(opts, nats.Secure(tlsConfig))
+	}
+	nc, err := nats.Connect(url, opts...)
 	if err != nil {
 		return err
 	}

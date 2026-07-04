@@ -21,6 +21,16 @@ output "nats_mqtt_url" {
   value       = module.nats.mqtt_url
 }
 
+output "nats_ca" {
+  description = "PEM-encoded CA that signed the NATS server cert (ADR-025). Empty when TLS is off. The bring-up threads this into every service's instance config (infrastructure.nats.tls.ca) so clients verify the broker over TLS."
+  value       = module.nats.ca_pem
+}
+
+output "nats_tls_enabled" {
+  description = "Whether the broker terminates TLS. Drives the matching client-side flag (infrastructure.nats.tls.enabled) — the two MUST agree or clients cannot connect."
+  value       = module.nats.tls_enabled
+}
+
 output "postgres_host" {
   description = "Host:port of the relational Postgres."
   value       = module.postgres.host

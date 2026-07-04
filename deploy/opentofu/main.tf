@@ -16,6 +16,7 @@ module "nats" {
   chart_version     = var.nats_chart_version
   jetstream_storage = var.nats_jetstream_storage
   ha                = var.ha
+  enable_tls        = var.nats_enable_tls
 
   depends_on = [module.namespace]
 }
