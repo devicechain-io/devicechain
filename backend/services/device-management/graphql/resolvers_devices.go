@@ -307,3 +307,22 @@ func (r *DeviceTypeResolver) MetricDefinitions() ([]*MetricDefinitionResolver, e
 	}
 	return result, nil
 }
+
+// Command definitions declared on this device profile (ADR-043).
+func (r *DeviceTypeResolver) CommandDefinitions() ([]*CommandDefinitionResolver, error) {
+	api := r.S.GetApi(r.C)
+	found, err := api.CommandDefinitionsByDeviceType(r.C, r.M.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*CommandDefinitionResolver, 0)
+	for _, cd := range found {
+		result = append(result, &CommandDefinitionResolver{
+			M: *cd,
+			S: r.S,
+			C: r.C,
+		})
+	}
+	return result, nil
+}

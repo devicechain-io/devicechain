@@ -120,7 +120,8 @@ func deleteParentType[T any](ctx context.Context, api *Api,
 // --- Devices (ADR-013) ---------------------------------------------------------
 
 // DeleteDeviceType deletes a device type. Refused while any device references it;
-// its owned metric definitions (ADR-016) are cascade-removed.
+// its owned metric definitions (ADR-016) and command definitions (ADR-043) are
+// cascade-removed.
 func (api *Api) DeleteDeviceType(ctx context.Context, token string) (bool, error) {
 	matches, err := api.DeviceTypesByToken(ctx, []string{token})
 	if err != nil {
@@ -139,6 +140,9 @@ func (api *Api) DeleteDeviceType(ctx context.Context, token string) (bool, error
 	}
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Unscoped().Where("device_type_id = ?", dt.ID).Delete(&MetricDefinition{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("device_type_id = ?", dt.ID).Delete(&CommandDefinition{}).Error; err != nil {
 			return err
 		}
 		return tx.Unscoped().Where("token = ?", token).Delete(&DeviceType{}).Error
@@ -244,6 +248,11 @@ func (api *Api) RemoveEntityRelationship(ctx context.Context, token string) (boo
 // DeleteMetricDefinition deletes a single metric definition by token (ADR-016).
 func (api *Api) DeleteMetricDefinition(ctx context.Context, token string) (bool, error) {
 	return api.hardDeleteByToken(ctx, &MetricDefinition{}, token)
+}
+
+// DeleteCommandDefinition deletes a single command definition by token (ADR-043).
+func (api *Api) DeleteCommandDefinition(ctx context.Context, token string) (bool, error) {
+	return api.hardDeleteByToken(ctx, &CommandDefinition{}, token)
 }
 
 // DeleteProvisioningProfile deletes a single provisioning profile by token (ADR-012).

@@ -14,5 +14,6 @@ var (
 		NewEntityAttributeSchema(),
 		NewProvisioningProfileSchema(),
 		NewDeviceClaimSchema(),
+		NewCommandDefinitionSchema(),
 	}
 )

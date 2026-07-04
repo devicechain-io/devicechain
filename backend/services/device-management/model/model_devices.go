@@ -32,8 +32,9 @@ type DeviceType struct {
 	rdb.BrandedEntity
 	rdb.MetadataEntity
 
-	Devices           []Device
-	MetricDefinitions []MetricDefinition
+	Devices            []Device
+	MetricDefinitions  []MetricDefinition
+	CommandDefinitions []CommandDefinition
 }
 
 // Search criteria for locating device types.

@@ -61,6 +61,7 @@ type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity 
     borderColor: String
     metadata: String
     metricDefinitions: [MetricDefinition!]!
+    commandDefinitions: [CommandDefinition!]!
 }
 
 # Represents a typed, unit-bearing metric declared on a device profile (ADR-016).
@@ -110,6 +111,51 @@ input MetricDefinitionSearchCriteria {
 # Search results returned from metric definition query.
 type MetricDefinitionSearchResults {
     results: [MetricDefinition!]!
+    pagination: SearchResultsPagination!
+}
+
+# Represents a typed command declared on a device profile (ADR-043). parameterSchema
+# is the ordered []CommandParameter argument contract as a JSON string, intended to
+# drive the console command form and, once the delivery path is wired (W1.1b), to
+# constrain an issued command's payload. Null when the command declares no
+# structured arguments.
+type CommandDefinition implements Model & TokenReference & NamedEntity & MetadataEntity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    name: String
+    description: String
+    deviceType: DeviceType!
+    commandKey: String!
+    parameterSchema: String
+    metadata: String
+}
+
+# Data required to create a command definition. parameterSchema is a JSON array of
+# CommandParameter descriptors; it is validated for well-formedness on create.
+input CommandDefinitionCreateRequest {
+    token: String!
+    deviceTypeToken: String!
+    commandKey: String!
+    name: String
+    description: String
+    parameterSchema: String
+    metadata: String
+}
+
+# Criteria used when searching for command definitions.
+input CommandDefinitionSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    deviceType: String
+    commandKey: String
+}
+
+# Search results returned from command definition query.
+type CommandDefinitionSearchResults {
+    results: [CommandDefinition!]!
     pagination: SearchResultsPagination!
 }
 
@@ -887,6 +933,12 @@ type Query {
     metricDefinitionsByToken(tokens: [String!]!): [MetricDefinition!]!
     # List metric definitions that meet criteria.
     metricDefinitions(criteria: MetricDefinitionSearchCriteria!): MetricDefinitionSearchResults!
+    # Find command definitions by unique id.
+    commandDefinitionsById(ids: [ID!]!): [CommandDefinition!]!
+    # Find command definitions by unique token.
+    commandDefinitionsByToken(tokens: [String!]!): [CommandDefinition!]!
+    # List command definitions that meet criteria.
+    commandDefinitions(criteria: CommandDefinitionSearchCriteria!): CommandDefinitionSearchResults!
     # List entity attributes that meet criteria.
     entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
     # Query the append-only audit journal (ADR-019); tenant-scoped, newest first.
@@ -996,7 +1048,8 @@ type Mutation {
     # Update an existing device type.
     updateDeviceType(token: String!, request: DeviceTypeCreateRequest): DeviceType!
     # Delete a device type. Refused while any device references it; its owned
-    # metric definitions are cascade-removed. Returns whether a row was deleted.
+    # metric and command definitions are cascade-removed. Returns whether a row
+    # was deleted.
     deleteDeviceType(token: String!): Boolean!
     # Create a new metric definition.
     createMetricDefinition(request: MetricDefinitionCreateRequest): MetricDefinition!
@@ -1004,6 +1057,12 @@ type Mutation {
     updateMetricDefinition(token: String!, request: MetricDefinitionCreateRequest): MetricDefinition!
     # Delete a single metric definition.
     deleteMetricDefinition(token: String!): Boolean!
+    # Create a new command definition.
+    createCommandDefinition(request: CommandDefinitionCreateRequest): CommandDefinition!
+    # Update an existing command definition.
+    updateCommandDefinition(token: String!, request: CommandDefinitionCreateRequest): CommandDefinition!
+    # Delete a single command definition.
+    deleteCommandDefinition(token: String!): Boolean!
     # Set (upsert) an entity attribute.
     setEntityAttribute(request: EntityAttributeSetRequest!): EntityAttribute!
     # Delete an entity attribute by its natural key.

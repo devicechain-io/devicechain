@@ -59,6 +59,14 @@ type DeviceManagementApi interface {
 	MetricDefinitions(ctx context.Context, criteria MetricDefinitionSearchCriteria) (*MetricDefinitionSearchResults, error)
 	MetricDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*MetricDefinition, error)
 
+	// Command definitions (ADR-043).
+	CreateCommandDefinition(ctx context.Context, request *CommandDefinitionCreateRequest) (*CommandDefinition, error)
+	UpdateCommandDefinition(ctx context.Context, token string, request *CommandDefinitionCreateRequest) (*CommandDefinition, error)
+	CommandDefinitionsById(ctx context.Context, ids []uint) ([]*CommandDefinition, error)
+	CommandDefinitionsByToken(ctx context.Context, tokens []string) ([]*CommandDefinition, error)
+	CommandDefinitions(ctx context.Context, criteria CommandDefinitionSearchCriteria) (*CommandDefinitionSearchResults, error)
+	CommandDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*CommandDefinition, error)
+
 	// Entity attributes (ADR-012).
 	SetEntityAttribute(ctx context.Context, request *EntityAttributeSetRequest) (*EntityAttribute, error)
 	EntityAttributes(ctx context.Context, criteria EntityAttributeSearchCriteria) (*EntityAttributeSearchResults, error)
