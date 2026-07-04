@@ -6,8 +6,8 @@ package rdb
 import (
 	"fmt"
 	"reflect"
-	"regexp"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
 )
@@ -18,42 +18,19 @@ import (
 const tokenFieldName = "Token"
 
 // MaxTokenLen bounds a token's length, matching the size:128 storage column on
-// TokenReference.Token.
-const MaxTokenLen = 128
+// TokenReference.Token. Aliased to the canonical grammar in core so the storage
+// column, the create/update guard, and the messaging subject guard share one
+// bound.
+const MaxTokenLen = core.MaxTokenLen
 
-// tokenGrammar is the single, type-independent grammar every entity token must
-// satisfy (ADR-042 P2). It is a *security* grammar, not a house-style one: its
-// only job is to keep a token safe everywhere tokens are spliced into
-// infrastructure namespaces. A tenant token becomes the middle segment of a NATS
-// subject (messaging.ScopedSubject → "inst.<tenant>.suffix", recovered by
-// splitting on "."), so a "." shifts subject segments and "*"/">" inject NATS
-// wildcards that match across tenants; "/", "+" and "#" are likewise hazardous on
-// MQTT topics; whitespace and other punctuation break subject/URL/log handling.
-//
-// It therefore allows letters (either case), digits, hyphen and underscore, and
-// nothing else — which admits machine-supplied identifiers like uppercase device
-// serials and VINs (the platform's own sample data), while still rejecting every
-// metacharacter above. Case-folding a token to a lowercase-kebab house style is a
-// *presentation* concern owned by the console/masks (ADR-042 P3), not enforced
-// here: the backend rejects an unsafe token rather than silently rewriting an
-// identifier a device or client chose.
-var tokenGrammar = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
-
-// ValidateToken reports whether a token conforms to the global grammar. It is the
-// fail-closed guard applied to every token at create/update by the callbacks
-// RegisterTokenGrammar installs; it is also exported so any explicit generation
-// path can check a candidate.
+// ValidateToken reports whether a token conforms to the global grammar (ADR-042).
+// It delegates to core.ValidateToken — the single source of truth shared with the
+// messaging subject guard (ADR-025) — and is the fail-closed check applied to
+// every token at create/update by the callbacks RegisterTokenGrammar installs. It
+// stays exported here so existing storage-layer callers (and any explicit
+// generation path) keep a stable entry point.
 func ValidateToken(token string) error {
-	if token == "" {
-		return fmt.Errorf("token must not be empty")
-	}
-	if len(token) > MaxTokenLen {
-		return fmt.Errorf("token %q exceeds the maximum length of %d", token, MaxTokenLen)
-	}
-	if !tokenGrammar.MatchString(token) {
-		return fmt.Errorf("token %q is invalid: must be letters, digits, hyphens and underscores, starting with a letter or digit (%s)", token, tokenGrammar.String())
-	}
-	return nil
+	return core.ValidateToken(token)
 }
 
 // RegisterTokenGrammar installs global GORM Before callbacks that enforce the
