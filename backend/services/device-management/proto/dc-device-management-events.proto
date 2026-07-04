@@ -146,4 +146,5 @@ message PAlarmStateChangeEvent {
     optional double last_value = 12;
     optional string message = 13;
     string occurred_time = 14;
+    string raised_time = 15;
 }

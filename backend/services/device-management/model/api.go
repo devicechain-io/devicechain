@@ -32,6 +32,12 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 // emitAlarmEvent publishes an alarm state-change event when a publisher is wired,
 // and is a no-op otherwise. Emission is best-effort (the publisher logs its own
 // failures) so a transition never depends on the event reaching the stream.
+//
+// It assumes the caller has already committed the transition: the alarm write paths
+// run on the autocommit connection (rdb.DB(ctx) carries no transaction), so the emit
+// is post-commit and never fires for a rolled-back change. If a future caller wraps a
+// transition in an explicit transaction, it must emit after the commit, not from
+// inside the closure.
 func (api *Api) emitAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent) {
 	if api.AlarmPublisher != nil {
 		api.AlarmPublisher.PublishAlarmEvent(ctx, event)

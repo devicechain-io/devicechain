@@ -6,6 +6,7 @@ package model
 import (
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
@@ -62,6 +63,7 @@ func TestSeverityTransition(t *testing.T) {
 // nullable columns to pointers so a subscriber can tell "absent" from a zero value,
 // and carries the transition kind and prior severity through unchanged.
 func TestNewAlarmStateChangeEvent(t *testing.T) {
+	raised := time.Date(2026, 7, 4, 10, 30, 0, 0, time.UTC)
 	a := &Alarm{
 		TokenReference: rdb.TokenReference{Token: "alarm-tok"},
 		OriginatorType: "device",
@@ -71,6 +73,7 @@ func TestNewAlarmStateChangeEvent(t *testing.T) {
 		State:          string(AlarmStateActive),
 		Severity:       string(AlarmSeverityCritical),
 		Acknowledged:   true,
+		RaisedTime:     raised,
 		AcknowledgedBy: sql.NullString{String: "op@example.com", Valid: true},
 		LastValue:      sql.NullFloat64{Float64: 123.5, Valid: true},
 		Message:        sql.NullString{String: "too hot", Valid: true},
@@ -82,6 +85,9 @@ func TestNewAlarmStateChangeEvent(t *testing.T) {
 		ev.State != string(AlarmStateActive) || ev.Severity != string(AlarmSeverityCritical) ||
 		ev.PreviousSeverity != string(AlarmSeverityMajor) || !ev.Acknowledged {
 		t.Fatalf("unexpected scalar mapping: %+v", ev)
+	}
+	if !ev.RaisedTime.Equal(raised) {
+		t.Errorf("raisedTime = %s, want %s", ev.RaisedTime, raised)
 	}
 	if ev.AcknowledgedBy == nil || *ev.AcknowledgedBy != "op@example.com" {
 		t.Errorf("acknowledgedBy = %v, want op@example.com", ev.AcknowledgedBy)

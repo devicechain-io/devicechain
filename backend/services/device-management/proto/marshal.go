@@ -266,9 +266,13 @@ func UnmarshalResolvedPayload(etype esmodel.EventType, payload []byte) (interfac
 	}
 }
 
-// Marshal an alarm state-change event to protobuf bytes (ADR-041). OccurredTime is
-// serialized as RFC3339; the optional scalar fields map to protobuf's optional
-// (pointer) encoding so a subscriber can distinguish "absent" from a zero value.
+// Marshal an alarm state-change event to protobuf bytes (ADR-041). Timestamps use
+// RFC3339Nano — unlike the resolved-event stream (whole-second RFC3339, telemetry
+// keyed by a hypertable partition), this stream drives ordered live UI updates and an
+// operator ack/clear stamps a sub-second time.Now() into the row, so preserving that
+// precision keeps the event's timeline consistent with the row and lets two same-tick
+// transitions order. The optional scalar fields map to protobuf's optional (pointer)
+// encoding so a subscriber can distinguish "absent" from a zero value.
 func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, error) {
 	pbevent := &PAlarmStateChangeEvent{
 		EventType:      string(event.EventType),
@@ -283,7 +287,8 @@ func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, e
 		AcknowledgedBy: event.AcknowledgedBy,
 		LastValue:      event.LastValue,
 		Message:        event.Message,
-		OccurredTime:   event.OccurredTime.Format(time.RFC3339),
+		OccurredTime:   event.OccurredTime.Format(time.RFC3339Nano),
+		RaisedTime:     event.RaisedTime.Format(time.RFC3339Nano),
 	}
 	if event.PreviousSeverity != "" {
 		ps := event.PreviousSeverity
@@ -304,7 +309,11 @@ func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEven
 		return nil, err
 	}
 
-	occurred, err := time.Parse(time.RFC3339, pbevent.OccurredTime)
+	occurred, err := time.Parse(time.RFC3339Nano, pbevent.OccurredTime)
+	if err != nil {
+		return nil, err
+	}
+	raised, err := time.Parse(time.RFC3339Nano, pbevent.RaisedTime)
 	if err != nil {
 		return nil, err
 	}
@@ -322,6 +331,7 @@ func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEven
 		AcknowledgedBy: pbevent.AcknowledgedBy,
 		LastValue:      pbevent.LastValue,
 		Message:        pbevent.Message,
+		RaisedTime:     raised,
 		OccurredTime:   occurred,
 	}
 	if pbevent.PreviousSeverity != nil {

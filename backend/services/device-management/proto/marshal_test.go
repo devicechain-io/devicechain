@@ -55,7 +55,10 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 // optional scalars must round-trip as present (not collapsed to a zero value) so a
 // de-escalation's prior severity and a cleared alarm's last value are preserved.
 func TestMarshalAlarmStateChangeEventRoundTrips(t *testing.T) {
-	occurred := time.Now().UTC().Truncate(time.Second)
+	// Sub-second precision must survive: an operator ack/clear stamps a nanosecond
+	// time.Now() into the row and this stream is what a subscriber orders on.
+	raised := time.Date(2026, 7, 4, 10, 30, 0, 111222333, time.UTC)
+	occurred := time.Date(2026, 7, 4, 10, 42, 17, 987654321, time.UTC)
 	by := "op@example.com"
 	last := 123.5
 	msg := "temperature above 100"
@@ -74,6 +77,7 @@ func TestMarshalAlarmStateChangeEventRoundTrips(t *testing.T) {
 		AcknowledgedBy:   &by,
 		LastValue:        &last,
 		Message:          &msg,
+		RaisedTime:       raised,
 		OccurredTime:     occurred,
 	}
 
@@ -82,9 +86,11 @@ func TestMarshalAlarmStateChangeEventRoundTrips(t *testing.T) {
 
 	got, err := UnmarshalAlarmStateChangeEvent(bytes)
 	assert.NoError(t, err)
-	assert.True(t, got.OccurredTime.Equal(occurred), "occurred time round-trip: got %s want %s", got.OccurredTime, occurred)
+	assert.True(t, got.OccurredTime.Equal(occurred), "occurred time round-trip (nanos): got %s want %s", got.OccurredTime, occurred)
+	assert.True(t, got.RaisedTime.Equal(raised), "raised time round-trip (nanos): got %s want %s", got.RaisedTime, raised)
 	// Zero the times so the rest of the struct can be compared by value.
 	event.OccurredTime, got.OccurredTime = time.Time{}, time.Time{}
+	event.RaisedTime, got.RaisedTime = time.Time{}, time.Time{}
 	assert.Equal(t, event, got)
 
 	// An event with the optional fields absent round-trips with nil pointers and an

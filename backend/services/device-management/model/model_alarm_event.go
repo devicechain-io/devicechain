@@ -84,6 +84,12 @@ type AlarmStateChangeEvent struct {
 	LastValue      *float64
 	Message        *string
 
+	// RaisedTime is when the current alarm cycle began (the row's RaisedTime). Paired
+	// with OccurredTime it lets a subscriber show how long an alarm was active without
+	// re-querying — e.g. a CLEARED notification "active 42m" — the standard clear/ack
+	// line.
+	RaisedTime time.Time
+
 	// OccurredTime is the event time that drove the transition — the measurement's
 	// occurred time for an evaluator transition, or the operation time for an operator
 	// ack/clear — so the emitted timeline matches the alarm's own timestamps.
@@ -133,6 +139,7 @@ func newAlarmStateChangeEvent(a *Alarm, etype AlarmEventType, prevSeverity strin
 		Severity:         a.Severity,
 		Acknowledged:     a.Acknowledged,
 		PreviousSeverity: prevSeverity,
+		RaisedTime:       a.RaisedTime,
 		OccurredTime:     occurredTime,
 	}
 	if a.AcknowledgedBy.Valid {

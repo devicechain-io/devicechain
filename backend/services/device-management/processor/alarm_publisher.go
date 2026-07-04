@@ -42,6 +42,9 @@ func (w *AlarmEventWriter) PublishAlarmEvent(ctx context.Context, event *model.A
 		return
 	}
 	if err := w.writer.WriteMessages(ctx, messaging.Message{Value: bytes}); err != nil {
-		w.writer.HandleResponse(err)
+		// Log with the alarm identity here (the writer's HandleResponse logs only the
+		// subject) so a dropped transition on a specific alarm is diagnosable.
+		log.Error().Err(err).Str("alarm", event.AlarmToken).Str("event", event.EventType.String()).
+			Msg("Unable to publish alarm state-change event")
 	}
 }

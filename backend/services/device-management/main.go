@@ -214,13 +214,17 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
-	err = GraphQLManager.Start(ctx)
+	// Start nats manager before the GraphQL server. createNatsComponents (run by
+	// NatsManager.Start) injects the alarm-event publisher into the shared Api; doing
+	// it before the HTTP server accepts traffic establishes happens-before for the
+	// resolver goroutines that read Api.AlarmPublisher, so an early acknowledgeAlarm/
+	// clearAlarm mutation neither races the write nor silently emits no event.
+	err = NatsManager.Start(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Start nats manager.
-	err = NatsManager.Start(ctx)
+	err = GraphQLManager.Start(ctx)
 	if err != nil {
 		return err
 	}
@@ -273,14 +277,16 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
-	// Stop nats manager.
-	err = NatsManager.Stop(ctx)
+	// Stop graphql manager before nats: draining the HTTP server first ensures no
+	// in-flight ack/clear mutation tries to publish an alarm event to a NATS
+	// connection that is already shutting down (mirrors the start order).
+	err = GraphQLManager.Stop(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Stop graphql manager.
-	err = GraphQLManager.Stop(ctx)
+	// Stop nats manager.
+	err = NatsManager.Stop(ctx)
 	if err != nil {
 		return err
 	}
