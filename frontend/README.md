@@ -1,72 +1,89 @@
-# DeviceChain Web Console
+# DeviceChain Frontend
 
-The management UI for DeviceChain — a React + Vite single-page app that talks to
-the backend services over GraphQL. This is the launch-slice scaffold: it
-authenticates against the user-management RBAC service (ADR-008) and renders the
-access-control surfaces (users, roles), with device/event/state pages to follow.
+An **npm workspace** of React apps and libraries that talk to the backend
+services over GraphQL. It contains the management console, an embeddable
+dashboard runtime published as packages, and a reference external dashboard
+viewer.
+
+## Workspace layout
+
+```
+frontend/
+  apps/
+    console/         The management console (served at /). Authenticates against
+                     user-management (ADR-008/033) and hosts every admin surface:
+                     devices, events, device state, commands, RBAC, tenant admin,
+                     and dashboard AUTHORING (canvas editor, versioning, synthetic
+                     preview, slot binding, export). React 19 + Vite + Tailwind +
+                     shadcn/ui, graphql-codegen client-preset.
+    dashboard/       The /dash app — a VIEWER-ONLY reference external embedder
+                     (ADR-039). It brings its own login, takes an EXPORTED
+                     definition + a host binding manifest, and renders view-only.
+                     Proof of the embed story: one definition + two manifests →
+                     two live dashboards on different devices.
+  packages/
+    client/          @devicechain/client — the SDK: the GraphQL-over-fetch transport
+                     + token seam, JWT helpers, and a graphql-ws subscribe() client.
+    dashboards/      @devicechain/dashboards — the dashboard runtime + definition
+                     contract: DashboardHub (multiplexes live subscriptions), the
+                     slot / binding-manifest model, parse/serialize/migrate, and the
+                     canvas-editor transforms.
+    widgets/         @devicechain/widgets — six built-in widgets (time-series chart
+                     + gauge over Apache ECharts, latest-card, table, label, image)
+                     + the view-only DashboardRenderer. Pure { widget, data }
+                     contract; themed via CSS vars (no Tailwind — run anywhere).
+```
 
 ## Stack
 
 - **React 19** + **TypeScript** (strict), bundled with **Vite 6**
-- **Tailwind CSS v4** (via `@tailwindcss/vite`) with a zinc shadcn/ui theme
-- **shadcn/ui** primitives under `src/components/ui` (Radix + `class-variance-authority`)
-- **react-router-dom 7** for routing
-- **sonner** for toasts, **lucide-react** for icons
-- A small **GraphQL-over-fetch** client (`src/lib/graphql/client.ts`) — no Apollo
-- A custom **JWT `AuthProvider`** (`src/auth/`) — login/refresh against user-management
+- **Tailwind CSS v4** with a zinc **shadcn/ui** theme (console only; the widget
+  packages are Tailwind-free so a host can embed them)
+- **react-router-dom 7**, **sonner** toasts, **lucide-react** icons
+- The **`@devicechain/client`** SDK — a fetch-based GraphQL client (no Apollo) plus
+  a `graphql-ws` subscription client for live telemetry
+- **graphql-codegen** (client-preset) types the console's operations; the SDK and
+  reference viewer hand-author their typed documents (`documentMode: 'string'`)
 
 ## Getting started
 
 ```bash
 cd frontend
-npm install
-cp .env.example .env.local   # adjust VITE_GATEWAY_TARGET if needed
-npm run dev                  # http://localhost:5173
+npm install                  # installs the whole workspace
+npm run codegen              # generate the console's typed GraphQL operations
+npm run dev                  # per-app dev server (e.g. apps/console)
 ```
 
-The dev server proxies `/api/<area>/...` to `VITE_GATEWAY_TARGET` (default
-`http://localhost:8080`), stripping the `/api/<area>` prefix so a single locally
-run service answers on its plain `/graphql` path. Point `VITE_GATEWAY_TARGET` at
-the DeviceChain ingress (deploy/opentofu + deploy/helm) and switch the rewrite in
-`vite.config.ts` to strip only `/api` to exercise full multi-service routing.
+To exercise the full stack, deploy onto the local kind cluster (see
+`deploy/local/`) and use `deploy/local/bounce.sh frontend` to rebuild + roll the
+frontend image, then browse the ingress at `http://localhost/`.
 
-## How auth works
+## How auth works (two-tier — ADR-033)
 
-`login(username, password)` returns an access/refresh JWT pair (the username is
-globally unique; the tenant comes from the signed token, not a form field). The
-`AuthProvider` persists the pair, decodes the access token for display/routing,
-and registers a token getter with the GraphQL client that transparently refreshes
-the access token when it nears expiry. The decoded claims are **never** trusted
-for authorization — every protected operation is enforced server-side by the
-token's authorities.
+Login is two steps. `login(email, password)` authenticates the **global identity**
+and returns an instance-scoped **identity token** plus the list of tenants the
+identity may act in. `selectTenant(identityToken, tenant)` exchanges it for a
+tenant-scoped **access/refresh** JWT pair. The console's `AuthProvider` holds the
+session, decodes the access token for display/routing, and registers a token
+getter with the SDK that transparently refreshes the access token near expiry.
+Decoded claims are **never** trusted for authorization — every protected operation
+is enforced server-side by the token's authorities.
 
-## Layout
+The `/dash` viewer runs the same two-step login independently (it does **not**
+reuse the console's session).
 
-```
-src/
-  auth/            AuthProvider + useAuth (JWT session)
-  components/
-    ui/            shadcn/ui primitives (borrowed, import-rewritten)
-    ThemeProvider, ThemeToggle
-  lib/
-    api/           typed GraphQL operations per service
-    auth/          JWT decode helpers
-    graphql/       fetch-based GraphQL client + token injection
-    hooks/         use-query, use-mobile, use-local-storage
-  routes/          Login, AppLayout, AppSidebar, NavUser, Dashboard, users/, roles/
+## CI gates (run before committing)
+
+```bash
+npm ci && npm run codegen && npm run typecheck && npm run build && npm test
 ```
 
 ## Scripts
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev` | Start the dev server |
-| `npm run build` | Type-check then production build |
-| `npm run typecheck` | `tsc --noEmit` |
-| `npm run preview` | Preview the production build |
-
-## Adding more shadcn primitives
-
-`components.json` is configured (zinc base, `@/components/ui`), so
-`npx shadcn@latest add <component>` drops new primitives straight into
-`src/components/ui`.
+| `npm run dev` | Start a dev server |
+| `npm run codegen` | Regenerate the console's typed GraphQL operations |
+| `npm run typecheck` | `tsc --noEmit` across the workspace |
+| `npm run build` | Type-check + production build (all apps) |
+| `npm test` | Vitest across the packages |

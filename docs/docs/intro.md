@@ -6,7 +6,7 @@ title: Introduction
 
 # DeviceChain
 
-DeviceChain is a modern, cloud-native **IoT Application Enablement Platform** built in Go and React. It connects, manages, and processes data from large, heterogeneous device fleets — device lifecycle, telemetry ingestion, command & control, organizational modeling, and multi-tenancy — and exposes everything through a GraphQL API.
+DeviceChain is a modern, cloud-native **IoT Application Enablement Platform** built in Go and React. It connects, manages, and processes data from large, heterogeneous device fleets — device lifecycle, telemetry ingestion, command & control, organizational modeling, and multi-tenancy — and exposes everything through a GraphQL API and embeddable, version-controlled dashboards.
 
 It is a ground-up rebuild of the SiteWhere platform that keeps the proven domain model while replacing the heavy Java/Spring stack with efficient, operationally simple microservices that run on any Kubernetes cluster.
 
@@ -17,7 +17,8 @@ It is a ground-up rebuild of the SiteWhere platform that keeps the proven domain
 - **GraphQL-first API** — introspectable and self-documenting; no generated client stubs.
 - **A lean, fully open-source stack** — NATS JetStream is the entire messaging / MQTT / KV backbone, native JWT handles auth, TimescaleDB is the single data store, and OpenTofu provisions infrastructure. Two dependencies to run locally: **NATS + TimescaleDB**.
 - **A uniform relationship model** — device context is a typed relationship graph rather than rigid assignments, so new entity types compose without schema churn.
-- **Self-hosted and unmetered** — Apache-2.0 with no open-core split and no per-device pricing. The device inventory, twin state, command delivery, multi-tenancy, high availability, and SSO are part of the open platform, not a paid tier — run it inside your own environment with full data ownership.
+- **Embeddable, versioned dashboards** — a canvas-first layout (layering, background images, per-breakpoint responsive) with built-in Apache ECharts widgets, live subscriptions, draft/publish/rollback versioning, and a runtime binding model (one definition + a host manifest → live on any device). Shipped as npm packages so any app can embed the viewer.
+- **Self-hosted and unmetered** — Apache-2.0 with no open-core split and no per-device pricing. The device inventory, twin state, command delivery, dashboards, multi-tenancy, high availability, and SSO are part of the open platform, not a paid tier — run it inside your own environment with full data ownership.
 
 ## How the platform is organized
 
@@ -25,7 +26,10 @@ DeviceChain is a set of cooperating microservices over a shared core library:
 
 - **event-sources** — pluggable inbound transports (MQTT today; HTTP, CoAP, WebSocket planned) that decode raw device messages onto the pipeline.
 - **device-management** — devices, profiles, the relationship graph, and event resolution.
-- **event-management** — persists resolved events to TimescaleDB and serves time-series queries.
+- **event-management** — persists resolved events to TimescaleDB and serves time-series queries (including live subscriptions over a graphql-ws bridge).
+- **device-state** — the live last-known-state projection per device (current reading per measurement).
+- **command-delivery** — persistent two-way command dispatch to devices.
+- **dashboard-management** — versioned dashboard definitions (draft, publish/rollback, export) rendered by the embeddable widget packages.
 - **user-management** — global identities, per-tenant memberships, the role catalog, and JWT issuance/validation.
 - **operator (k8s)** — reconciles CRDs into the running platform.
 
