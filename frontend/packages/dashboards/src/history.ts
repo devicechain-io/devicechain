@@ -13,7 +13,7 @@ import { gql } from '@devicechain/client';
 
 import { BUCKETED_MEASUREMENTS } from './queries';
 import type { DeviceResolver } from './hub';
-import type { MeasurementSample, WidgetInstance } from './types';
+import type { DatasourceSelector, MeasurementSample, SlotBinding, WidgetInstance } from './types';
 
 export interface HistoryWindow {
   startTime: string;
@@ -40,8 +40,13 @@ export async function fetchWidgetHistory(
   widget: WidgetInstance,
   resolver: DeviceResolver,
   window: HistoryWindow,
+  bindings?: Record<string, SlotBinding>,
 ): Promise<MeasurementSample[]> {
-  const ds = widget.datasource;
+  // Resolve a slot selector to its bound entity so a migrated (slot-based) dashboard
+  // still backfills — otherwise every device-turned-slot would lose its history seed.
+  // A device binding seeds like a device selector; an anchor binding (or unbound
+  // slot) seeds nothing, matching the anchor path below.
+  const ds = resolveHistorySelector(widget.datasource, bindings);
   if (!ds || ds.kind !== 'device') return [];
 
   try {
@@ -80,4 +85,27 @@ export async function fetchWidgetHistory(
   } catch {
     return [];
   }
+}
+
+// resolveHistorySelector maps a slot selector to the concrete device/anchor selector
+// its binding points at (carrying the widget's measurement names), so history seeding
+// can treat a bound slot exactly like a direct selector. Non-slot selectors pass
+// through unchanged; an unbound slot or an anchor binding yields a non-device selector
+// that the caller then seeds as empty.
+function resolveHistorySelector(
+  ds: DatasourceSelector | undefined,
+  bindings?: Record<string, SlotBinding>,
+): DatasourceSelector | undefined {
+  if (!ds || ds.kind !== 'slot') return ds;
+  // Own-property lookup (a slot could be named 'constructor' etc.); an unbound slot
+  // resolves to undefined → empty seed.
+  const binding =
+    bindings && Object.prototype.hasOwnProperty.call(bindings, ds.slot) ? bindings[ds.slot] : undefined;
+  if (binding?.kind === 'device') {
+    return { kind: 'device', deviceToken: binding.deviceToken, measurements: ds.measurements };
+  }
+  if (binding?.kind === 'anchor') {
+    return { kind: 'anchor', anchor: binding.anchor, measurements: ds.measurements };
+  }
+  return undefined; // unbound slot → no seed
 }

@@ -17,7 +17,7 @@ import {
   type MeasurementStreamResult,
   type MeasurementStreamVariables,
 } from './internal/measurement-doc';
-import type { AnchorTarget, DatasourceSelector, MeasurementSample } from './types';
+import type { AnchorTarget, DatasourceSelector, MeasurementSample, SlotBinding } from './types';
 
 const EVENT_AREA: Area = 'event-management';
 
@@ -45,6 +45,10 @@ export interface WidgetStreamSink {
 
 export interface DashboardHubConfig {
   resolver: DeviceResolver;
+  // The effective slot→entity manifest (slot defaults merged with any host override;
+  // see effectiveBindings). A widget's `slot` selector resolves through this. Absent
+  // slots render as an empty placeholder. Can be replaced later via setBindings.
+  bindings?: Record<string, SlotBinding>;
 }
 
 // WidgetDataSource is the minimal contract a widget renderer needs from a data
@@ -73,9 +77,20 @@ export class DashboardHub implements WidgetDataSource {
   private readonly resolver: DeviceResolver;
   // One entry per distinct numeric device id that has at least one subscriber.
   private readonly streams = new Map<string, DeviceStream>();
+  // slot name → concrete entity binding. Consulted when a widget's selector is a
+  // `slot`. Mutable so the authoring host can rebind live (setBindings).
+  private bindings: Record<string, SlotBinding>;
 
   constructor(config: DashboardHubConfig) {
     this.resolver = config.resolver;
+    this.bindings = config.bindings ?? {};
+  }
+
+  // setBindings replaces the slot manifest. New subscriptions resolve through it;
+  // callers that need already-open slot streams to re-resolve should re-subscribe
+  // (the console keys the renderer on the manifest to do exactly that).
+  setBindings(bindings: Record<string, SlotBinding>): void {
+    this.bindings = bindings;
   }
 
   // subscribeWidget binds a widget's datasource to a sink and returns a disposer.
@@ -123,31 +138,58 @@ export class DashboardHub implements WidgetDataSource {
     datasource: DatasourceSelector,
   ): Promise<Array<{ deviceId: string; names: Set<string> }>> {
     switch (datasource.kind) {
-      case 'device': {
-        const id = await this.resolver.deviceIdForToken(datasource.deviceToken);
-        // An unknown token is a misconfigured widget, not an empty result — throw
-        // so the sink hears an error and the widget can show "device not found"
-        // instead of a blank pane that never fills. (An anchor resolving to zero
-        // devices, below, IS a valid empty state and stays silent.)
-        if (id == null) {
-          throw new Error(
-            `dashboard device token '${datasource.deviceToken}' did not resolve to a device`,
-          );
-        }
-        return [{ deviceId: id, names: new Set(datasource.measurements) }];
-      }
-      case 'anchor': {
-        const ids = await this.resolver.devicesForAnchor(datasource.anchor);
-        return ids.map((deviceId) => ({
-          deviceId,
-          names: new Set(datasource.measurements),
-        }));
+      case 'device':
+        return this.resolveBinding(
+          { kind: 'device', deviceToken: datasource.deviceToken },
+          new Set(datasource.measurements),
+        );
+      case 'anchor':
+        return this.resolveBinding(
+          { kind: 'anchor', anchor: datasource.anchor },
+          new Set(datasource.measurements),
+        );
+      case 'slot': {
+        // Own-property lookup: a slot named 'constructor'/'__proto__'/'toString' must
+        // NOT resolve to an inherited Object.prototype member (which is truthy and
+        // would bypass the unbound-placeholder guard, then crash on binding.kind).
+        // An unbound slot is a valid placeholder (a template the host hasn't bound),
+        // not an error — resolve to zero devices, a silent empty state (like an anchor
+        // with no members), so the widget shows an empty pane, not an error.
+        const binding = Object.prototype.hasOwnProperty.call(this.bindings, datasource.slot)
+          ? this.bindings[datasource.slot]
+          : undefined;
+        if (!binding) return [];
+        return this.resolveBinding(binding, new Set(datasource.measurements));
       }
       default:
         throw new Error(
           `dashboard selector kind '${datasource.kind}' is not supported yet`,
         );
     }
+  }
+
+  // resolveBinding turns a concrete entity binding (device or anchor) into the
+  // device streams to open, each carrying the given measurement names. Shared by the
+  // device/anchor selectors and by slot resolution (whose binding is either kind).
+  private async resolveBinding(
+    binding: SlotBinding,
+    names: Set<string>,
+  ): Promise<Array<{ deviceId: string; names: Set<string> }>> {
+    if (binding.kind === 'device') {
+      const id = await this.resolver.deviceIdForToken(binding.deviceToken);
+      // An unknown token is a misconfigured widget, not an empty result — throw so
+      // the sink hears an error and the widget can show "device not found" instead of
+      // a blank pane that never fills. (An anchor resolving to zero devices IS a
+      // valid empty state and stays silent.)
+      if (id == null) {
+        throw new Error(
+          `dashboard device token '${binding.deviceToken}' did not resolve to a device`,
+        );
+      }
+      return [{ deviceId: id, names }];
+    }
+    const ids = await this.resolver.devicesForAnchor(binding.anchor);
+    return ids.map((deviceId) => ({ deviceId, names }));
   }
 
   // attach registers a subscriber on a device's stream (opening the upstream on

@@ -28,8 +28,11 @@ export type {
   EntityFromStateSelector,
   SlotSelector,
   SlotDefinition,
+  SlotBinding,
   MeasurementSample,
 } from './types';
+
+export { effectiveBindings } from './bindings';
 
 export { WIDGET_TYPES } from './types';
 

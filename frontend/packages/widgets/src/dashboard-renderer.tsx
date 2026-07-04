@@ -17,6 +17,7 @@ import {
   type WidgetDataSource,
   type DeviceResolver,
   type MeasurementSample,
+  type SlotBinding,
   type WidgetInstance,
 } from '@devicechain/dashboards';
 import { useEffect, useState } from 'react';
@@ -31,6 +32,9 @@ export interface DashboardRendererProps {
   // Default true; set false for offline preview, where the data source (e.g.
   // SyntheticDataSource) supplies its own history and the backend must not be hit.
   seedHistory?: boolean;
+  // The effective slot manifest, so a slot-based widget's history seed resolves to
+  // the bound device (must match the bindings on `hub`). Omit for slot-free dashboards.
+  bindings?: Record<string, SlotBinding>;
 }
 
 export function DashboardRenderer({
@@ -38,9 +42,10 @@ export function DashboardRenderer({
   hub,
   resolver,
   seedHistory = true,
+  bindings,
 }: DashboardRendererProps) {
   const breakpoint = useActiveBreakpoint(definition.canvas.breakpoints);
-  const histories = useWidgetHistories(definition.widgets, resolver, seedHistory);
+  const histories = useWidgetHistories(definition.widgets, resolver, seedHistory, bindings);
 
   // Boxes are expressed in grid cells; the grid size turns them into pixels so a
   // definition is resolution-independent (and snap-to-grid stays exact).
@@ -102,8 +107,12 @@ function useWidgetHistories(
   widgets: WidgetInstance[],
   resolver: DeviceResolver,
   enabled: boolean,
+  bindings: Record<string, SlotBinding> | undefined,
 ): Record<string, MeasurementSample[]> {
   const [histories, setHistories] = useState<Record<string, MeasurementSample[]>>({});
+  // Value-compare the manifest so an unchanged-but-new object reference doesn't
+  // refetch history every render.
+  const bindingsKey = bindings ? JSON.stringify(bindings) : null;
 
   useEffect(() => {
     // Preview (enabled=false) must not touch the backend; clear any prior seed so a
@@ -115,14 +124,18 @@ function useWidgetHistories(
     let cancelled = false;
     const historyWindow = defaultHistoryWindow();
     Promise.all(
-      widgets.map(async (w) => [w.id, await fetchWidgetHistory(w, resolver, historyWindow)] as const),
+      widgets.map(
+        async (w) => [w.id, await fetchWidgetHistory(w, resolver, historyWindow, bindings)] as const,
+      ),
     ).then((entries) => {
       if (!cancelled) setHistories(Object.fromEntries(entries));
     });
     return () => {
       cancelled = true;
     };
-  }, [widgets, resolver, enabled]);
+    // bindings read via bindingsKey (value identity), not reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [widgets, resolver, enabled, bindingsKey]);
 
   return histories;
 }

@@ -6,8 +6,9 @@
 // DashboardHub does, so the renderer and widgets consume it unchanged — but instead
 // of subscribing to backend telemetry it generates values from a chosen waveform.
 // This lets an author validate layout, scales, and thresholds before any device has
-// reported (and it works for ANY selector, including unbound slots the live hub
-// rejects, because it only reads the datasource's measurement names — never resolves
+// reported (and it works for ANY selector, including a slot with no binding — which
+// the live hub renders empty — because it only reads the datasource's measurement
+// names, never resolves
 // a device).
 
 import type { WidgetDataSource, WidgetStreamSink } from './hub';

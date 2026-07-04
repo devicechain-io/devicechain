@@ -17,6 +17,7 @@ import {
   type Breakpoints,
   type Canvas,
   type DashboardDefinition,
+  type SlotBinding,
   type SlotDefinition,
   type WidgetBox,
   type WidgetInstance,
@@ -66,9 +67,9 @@ export function parseDashboardDefinition(raw: unknown): DashboardDefinition {
     canvas: parseCanvas(raw.canvas),
     widgets: widgetsRaw.map((w, i) => parseWidget(w, i)),
   };
-  // slots — reserved runtime-binding headroom (PR F). Normalized when present so
-  // a stored definition round-trips, but omitted entirely otherwise so today's
-  // slot-free dashboards serialize unchanged (no spurious `"slots":{}` diff).
+  // slots — the runtime-binding section (ADR-039). Normalized when present so a
+  // stored definition round-trips, but omitted entirely otherwise so a slot-free
+  // dashboard serializes unchanged (no spurious `"slots":{}` diff).
   const slots = parseSlots(raw.slots);
   if (slots) def.slots = slots;
   return def;
@@ -82,9 +83,38 @@ function parseSlots(raw: unknown): Record<string, SlotDefinition> | undefined {
     const type = spec.type === 'anchor' ? 'anchor' : 'device';
     const slot: SlotDefinition = { type };
     if (typeof spec.label === 'string') slot.label = spec.label;
+    const binding = parseBinding(spec.defaultBinding);
+    if (binding) slot.defaultBinding = binding;
     slots[name] = slot;
   }
   return Object.keys(slots).length > 0 ? slots : undefined;
+}
+
+// parseBinding normalizes a slot's default entity binding (device token or anchor
+// target), or drops it (undefined) when absent/malformed. The entity only — a
+// binding never carries measurement names (those live on the widget's selector).
+function parseBinding(raw: unknown): SlotBinding | undefined {
+  if (!isRecord(raw)) return undefined;
+  if (raw.kind === 'device') {
+    const token = stringAt(raw, 'deviceToken');
+    return token ? { kind: 'device', deviceToken: token } : undefined;
+  }
+  if (raw.kind === 'anchor') {
+    const anchorRec = isRecord(raw.anchor) ? raw.anchor : {};
+    const targetToken = stringAt(anchorRec, 'targetToken');
+    // Drop an anchor binding with no target (symmetric with the empty-device-token
+    // case) — it names no entity, so it can't be a default binding.
+    if (!targetToken) return undefined;
+    return {
+      kind: 'anchor',
+      anchor: {
+        relationship: stringAt(anchorRec, 'relationship'),
+        targetType: stringAt(anchorRec, 'targetType') as AnchorTarget['targetType'],
+        targetToken,
+      },
+    };
+  }
+  return undefined;
 }
 
 function parseCanvas(raw: unknown): Canvas {
@@ -179,8 +209,8 @@ function parseDatasource(raw: unknown): WidgetInstance['datasource'] | undefined
   }
 
   if (kind === 'slot') {
-    // Reserved runtime-binding kind (PR F): normalized so it round-trips cleanly,
-    // but the Hub rejects it until the binding manifest lands (PR I).
+    // Runtime-binding kind: the entity is resolved at mount via the Hub's binding
+    // manifest; the widget carries only the slot name + the measurements it wants.
     return { kind: 'slot', slot: stringAt(raw, 'slot'), measurements: stringArrayAt(raw, 'measurements') };
   }
 

@@ -219,6 +219,82 @@ describe('DashboardHub', () => {
     expect(hub.openStreamCount).toBe(0);
   });
 
+  it('resolves a slot selector through its device binding', async () => {
+    const hub = new DashboardHub({
+      resolver: newResolver(),
+      bindings: { primary: { kind: 'device', deviceToken: 'therm-001' } },
+    });
+    const sink = { next: vi.fn() };
+
+    hub.subscribeWidget({ kind: 'slot', slot: 'primary', measurements: ['temperature'] }, sink);
+    await flush();
+
+    expect(hub.openStreamCount).toBe(1);
+    h.streams[0].sink.next({ measurementStream: sampleFor('4', 'temperature', 21) });
+    expect(sink.next).toHaveBeenCalledWith(expect.objectContaining({ value: 21 }));
+  });
+
+  it('resolves a slot selector through an anchor binding (one stream per member)', async () => {
+    const hub = new DashboardHub({
+      resolver: newResolver(),
+      bindings: {
+        area: { kind: 'anchor', anchor: { relationship: 'assigned', targetType: 'area', targetToken: 'plant-1' } },
+      },
+    });
+    hub.subscribeWidget({ kind: 'slot', slot: 'area', measurements: ['temperature'] }, { next: vi.fn() });
+    await flush();
+    expect(hub.openStreamCount).toBe(2); // members '4' and '5'
+  });
+
+  it('errors a slot whose device binding token is unknown (like a direct device)', async () => {
+    const hub = new DashboardHub({
+      resolver: newResolver(),
+      bindings: { primary: { kind: 'device', deviceToken: 'ghost' } },
+    });
+    const sink = { next: vi.fn(), error: vi.fn() };
+
+    hub.subscribeWidget({ kind: 'slot', slot: 'primary', measurements: ['t'] }, sink);
+    await flush();
+
+    expect(sink.error).toHaveBeenCalledTimes(1);
+    expect((sink.error.mock.calls[0][0] as Error).message).toContain('ghost');
+    expect(hub.openStreamCount).toBe(0);
+  });
+
+  it('treats a prototype-named slot as unbound, not a crash', async () => {
+    const hub = new DashboardHub({ resolver: newResolver() }); // empty bindings
+    const sink = { next: vi.fn(), error: vi.fn() };
+
+    // 'constructor' etc. are inherited on a plain object; the own-property guard must
+    // treat them as unbound (silent placeholder), not resolve to Object.prototype.
+    hub.subscribeWidget({ kind: 'slot', slot: 'constructor', measurements: ['t'] }, sink);
+    await flush();
+
+    expect(hub.openStreamCount).toBe(0);
+    expect(sink.error).not.toHaveBeenCalled();
+  });
+
+  it('renders an unbound slot as a silent placeholder — no stream, no error', async () => {
+    const hub = new DashboardHub({ resolver: newResolver() }); // no bindings
+    const sink = { next: vi.fn(), error: vi.fn() };
+
+    hub.subscribeWidget({ kind: 'slot', slot: 'nope', measurements: ['temperature'] }, sink);
+    await flush();
+
+    expect(hub.openStreamCount).toBe(0);
+    expect(sink.error).not.toHaveBeenCalled(); // unbound = placeholder, not an error
+    expect(sink.next).not.toHaveBeenCalled();
+  });
+
+  it('setBindings applies to subsequent slot subscriptions', async () => {
+    const hub = new DashboardHub({ resolver: newResolver() });
+    hub.setBindings({ primary: { kind: 'device', deviceToken: 'therm-001' } });
+
+    hub.subscribeWidget({ kind: 'slot', slot: 'primary', measurements: ['temperature'] }, { next: vi.fn() });
+    await flush();
+    expect(hub.openStreamCount).toBe(1);
+  });
+
   it('disposeAll tears down every open upstream', async () => {
     const hub = new DashboardHub({ resolver: newResolver() });
 
