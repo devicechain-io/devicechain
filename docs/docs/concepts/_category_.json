@@ -3,6 +3,6 @@
   "position": 2,
   "link": {
     "type": "generated-index",
-    "description": "How DeviceChain is designed — architecture, the domain model, and multi-tenancy."
+    "description": "How DeviceChain is designed — architecture, the domain model, multi-tenancy, and dashboards."
   }
 }
