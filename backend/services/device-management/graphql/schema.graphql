@@ -1136,9 +1136,9 @@ type Mutation {
     # Delete a single command definition.
     deleteCommandDefinition(token: String!): Boolean!
     # Create a new alarm definition.
-    createAlarmDefinition(request: AlarmDefinitionCreateRequest): AlarmDefinition!
+    createAlarmDefinition(request: AlarmDefinitionCreateRequest!): AlarmDefinition!
     # Update an existing alarm definition.
-    updateAlarmDefinition(token: String!, request: AlarmDefinitionCreateRequest): AlarmDefinition!
+    updateAlarmDefinition(token: String!, request: AlarmDefinitionCreateRequest!): AlarmDefinition!
     # Delete a single alarm definition.
     deleteAlarmDefinition(token: String!): Boolean!
     # Set (upsert) an entity attribute.

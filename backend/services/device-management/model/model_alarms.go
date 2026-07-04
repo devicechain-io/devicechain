@@ -111,6 +111,13 @@ func (s AlarmSeverity) String() string { return string(s) }
 // objects. The condition is flat-relational (not a nested document) — Simple is a
 // threshold comparison; Duration/Repeating add a hold time / occurrence window.
 //
+// One AlarmKey may declare several rows, one per Severity tier (e.g. temp>80 → MAJOR
+// and temp>100 → CRITICAL both key "over-temp"): the row is unique by
+// (device_type_id, AlarmKey, Severity), and the evaluator escalates a single active
+// alarm in place to the highest satisfied tier (ADR-041 dec 3). All tiers of one
+// AlarmKey watch the same MetricKey (enforced at declaration) so they describe one
+// escalating condition rather than unrelated alarms sharing a name.
+//
 // The threshold is either static (Threshold) or dynamic (ThresholdAttr names an
 // entity attribute resolved at evaluation, ADR-041); exactly one is set. MinValue/
 // MaxValue on the referenced MetricDefinition are ingest-validation bounds, not

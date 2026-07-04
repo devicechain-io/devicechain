@@ -38,6 +38,9 @@ func (api *Api) CreateAlarmDefinition(ctx context.Context,
 	if err := ValidateAlarmDefinition(request); err != nil {
 		return nil, err
 	}
+	if err := api.checkAlarmKeyMetric(ctx, matches[0].ID, request.AlarmKey, request.MetricKey, ""); err != nil {
+		return nil, err
+	}
 
 	created := &AlarmDefinition{
 		TokenReference: rdb.TokenReference{Token: request.Token},
@@ -113,11 +116,41 @@ func (api *Api) UpdateAlarmDefinition(ctx context.Context, token string,
 		updated.DeviceType = matches[0]
 	}
 
+	if updated.DeviceType != nil {
+		if err := api.checkAlarmKeyMetric(ctx, updated.DeviceType.ID, request.AlarmKey, request.MetricKey, token); err != nil {
+			return nil, err
+		}
+	}
+
 	result := api.RDB.DB(ctx).Save(updated)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	return updated, nil
+}
+
+// checkAlarmKeyMetric enforces that every severity tier of one alarm key on a
+// profile watches the same metric (ADR-041): tiers of a single alarm describe one
+// escalating condition, so a same-key rule bound to a different metric is a
+// misconfiguration. excludeToken skips the row being updated. Best-effort at the
+// app layer (the unique index only guards (profile, key, severity)); concurrent
+// creates of conflicting tiers is a benign, rare edge left to the evaluator.
+func (api *Api) checkAlarmKeyMetric(ctx context.Context,
+	deviceTypeId uint, alarmKey, metricKey, excludeToken string) error {
+	q := api.RDB.DB(ctx).Model(&AlarmDefinition{}).
+		Where("device_type_id = ? AND alarm_key = ? AND metric_key <> ?", deviceTypeId, alarmKey, metricKey)
+	if excludeToken != "" {
+		q = q.Where("token <> ?", excludeToken)
+	}
+	var count int64
+	if err := q.Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return fmt.Errorf("alarm key %q on this profile already watches a different metric; "+
+			"the severity tiers of one alarm must share a metric", alarmKey)
+	}
+	return nil
 }
 
 // Get alarm definitions by id.

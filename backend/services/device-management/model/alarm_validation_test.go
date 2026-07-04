@@ -66,6 +66,7 @@ func TestValidateAlarmDefinition(t *testing.T) {
 		{"missing metric", func(r *AlarmDefinitionCreateRequest) { r.MetricKey = "" }, false},
 		{"no threshold source", func(r *AlarmDefinitionCreateRequest) { r.Threshold = nil }, false},
 		{"both threshold sources", func(r *AlarmDefinitionCreateRequest) { r.ThresholdAttr = str("maxTemp") }, false},
+		{"whitespace attr is no source", func(r *AlarmDefinitionCreateRequest) { r.Threshold = nil; r.ThresholdAttr = str("  ") }, false},
 		{"simple with duration rejected", func(r *AlarmDefinitionCreateRequest) { r.DurationSeconds = i32(30) }, false},
 		{
 			"duration ok",

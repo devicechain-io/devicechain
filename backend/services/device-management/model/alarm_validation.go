@@ -3,7 +3,10 @@
 
 package model
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ValidateAlarmDefinition checks that an alarm rule is well-formed at declaration
 // (ADR-041): known condition type / operator / severity, a metric to watch, exactly
@@ -28,7 +31,7 @@ func ValidateAlarmDefinition(r *AlarmDefinitionCreateRequest) error {
 	// A threshold comes from exactly one source: a static value or a dynamic
 	// entity-attribute key (ADR-041). Neither or both is a misconfiguration.
 	hasStatic := r.Threshold != nil
-	hasDynamic := r.ThresholdAttr != nil && *r.ThresholdAttr != ""
+	hasDynamic := r.ThresholdAttr != nil && strings.TrimSpace(*r.ThresholdAttr) != ""
 	if hasStatic == hasDynamic {
 		return fmt.Errorf("alarm definition must set exactly one of threshold or thresholdAttr")
 	}

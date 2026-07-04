@@ -21,9 +21,11 @@ func NewAlarmDefinitionSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20260704140000",
 		Migrate: func(tx *gorm.DB) error {
-			// The (device_type_id, alarm_key) lookup index is unique so a profile
-			// cannot declare the same alarm twice; tenant isolation is enforced by
-			// the app-layer tenant scope on the embedded TenantScoped.
+			// The (device_type_id, alarm_key, severity) lookup index is unique: one
+			// alarm key may declare several severity tiers (e.g. temp>80 → MAJOR,
+			// temp>100 → CRITICAL) so the evaluator can escalate in place (ADR-041
+			// dec 3), but not two rules at the same tier. Tenant isolation is
+			// enforced by the app-layer tenant scope on the embedded TenantScoped.
 			type AlarmDefinition struct {
 				gorm.Model
 				rdb.TenantScoped
@@ -36,7 +38,7 @@ func NewAlarmDefinitionSchema() *gormigrate.Migration {
 				MetricKey     string `gorm:"not null;size:128"`
 				ConditionType string `gorm:"not null;size:16"`
 				Operator      string `gorm:"not null;size:8"`
-				Severity      string `gorm:"not null;size:16"`
+				Severity      string `gorm:"not null;size:16;index:idx_alarm_definition_key,unique,priority:3"`
 
 				Threshold     sql.NullFloat64
 				ThresholdAttr sql.NullString
