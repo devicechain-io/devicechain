@@ -95,18 +95,18 @@ func (api *Api) EventExistsByAltId(ctx context.Context, db *gorm.DB, altId strin
 }
 
 // upsertParentEvents inserts the parent `events` rows for a batch of child event
-// requests (location/measurement/alert) before the children, so the child
-// insert's (device_id, event_type, occurred_time) foreign key is satisfied. The
-// rows are deduped on that natural key and inserted ON CONFLICT DO NOTHING:
-// multiple measurements in one message share a single parent event, and a
-// redelivered message re-presents the same key.
+// requests (location/measurement/alert) before the children, so a reader joining a
+// payload row to its base event on the natural key (device_id, event_type,
+// occurred_time) always finds the parent. The rows are deduped on that natural key
+// and inserted ON CONFLICT DO NOTHING: multiple measurements in one message share a
+// single parent event, and a redelivered message re-presents the same key.
 //
-// This replaces GORM's implicit belongs-to upsert of the Event association. On a
-// composite-primary-key hypertable that upsert emits an `ON CONFLICT DO UPDATE`
-// with no inference target — invalid SQL (SQLSTATE 42601) — so it failed every
-// insert. Creating the parent explicitly (and omitting the association on the
-// child insert) keeps the parent/child write in one statement each without that
-// path.
+// The payload tables carry no DB foreign key into `events` — an FK referencing a
+// hypertable blocks drop_chunks on the parent (ADR-026 amd) — so parent-first
+// ordering is an app-layer invariant this function upholds, not a constraint the
+// database enforces. (It also sidesteps GORM's implicit belongs-to upsert, which on
+// a composite-primary-key hypertable emitted an `ON CONFLICT DO UPDATE` with no
+// inference target — invalid SQL, SQLSTATE 42601.)
 func upsertParentEvents(ctx context.Context, db *gorm.DB, events []*Event) error {
 	if len(events) == 0 {
 		return nil
@@ -178,10 +178,10 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 	if err := upsertParentEvents(ctx, db, parents); err != nil {
 		return nil, err
 	}
-	// The parent events are upserted above; omit the association so GORM inserts
-	// the child rows directly against the (device_id, event_type, occurred_time)
-	// foreign key rather than re-upserting the parent.
-	result := db.WithContext(ctx).Omit("Event").Create(&created)
+	// The parent events are upserted above; the child rows are inserted directly and
+	// relate to the base event by the natural key (device_id, event_type,
+	// occurred_time) — no association / foreign key (ADR-026 amd, see events.go).
+	result := db.WithContext(ctx).Create(&created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -212,10 +212,10 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 	if err := upsertParentEvents(ctx, db, parents); err != nil {
 		return nil, err
 	}
-	// The parent events are upserted above; omit the association so GORM inserts
-	// the child rows directly against the (device_id, event_type, occurred_time)
-	// foreign key rather than re-upserting the parent.
-	result := db.WithContext(ctx).Omit("Event").Create(&created)
+	// The parent events are upserted above; the child rows are inserted directly and
+	// relate to the base event by the natural key (device_id, event_type,
+	// occurred_time) — no association / foreign key (ADR-026 amd, see events.go).
+	result := db.WithContext(ctx).Create(&created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -247,10 +247,10 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 	if err := upsertParentEvents(ctx, db, parents); err != nil {
 		return nil, err
 	}
-	// The parent events are upserted above; omit the association so GORM inserts
-	// the child rows directly against the (device_id, event_type, occurred_time)
-	// foreign key rather than re-upserting the parent.
-	result := db.WithContext(ctx).Omit("Event").Create(&created)
+	// The parent events are upserted above; the child rows are inserted directly and
+	// relate to the base event by the natural key (device_id, event_type,
+	// occurred_time) — no association / foreign key (ADR-026 amd, see events.go).
+	result := db.WithContext(ctx).Create(&created)
 	if result.Error != nil {
 		return nil, result.Error
 	}

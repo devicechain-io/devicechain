@@ -18,13 +18,17 @@ func NewInitialSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20220420000000",
 		Migrate: func(tx *gorm.DB) error {
+			// The payload tables carry no foreign key into events: they are hypertables
+			// in their own right (converted below), and an FK referencing a hypertable
+			// blocks drop_chunks on the parent (ADR-026 amd). They relate to the base
+			// event by the natural key (device_id, event_type, occurred_time).
+
 			// Location event fields.
 			type LocationEvent struct {
 				rdb.TenantScoped
 				DeviceId     uint              `gorm:"not null"`
 				EventType    esmodel.EventType `gorm:"not null"`
 				OccurredTime time.Time         `gorm:"not null"`
-				Event        Event             `gorm:"foreignKey:DeviceId,EventType,OccurredTime;References:DeviceId,EventType,OccurredTime"`
 				// Elevation is metres (decimal(12,4)), not degrees — see events.go.
 				Latitude  sql.NullFloat64 `gorm:"type:decimal(10,8);"`
 				Longitude sql.NullFloat64 `gorm:"type:decimal(11,8);"`
@@ -37,7 +41,6 @@ func NewInitialSchema() *gormigrate.Migration {
 				DeviceId     uint              `gorm:"not null"`
 				EventType    esmodel.EventType `gorm:"not null"`
 				OccurredTime time.Time         `gorm:"not null"`
-				Event        Event             `gorm:"foreignKey:DeviceId,EventType,OccurredTime;References:DeviceId,EventType,OccurredTime"`
 				Name         string            `gorm:"not null"`
 				Value        sql.NullFloat64   `gorm:"type:decimal(20,8);"`
 				Classifier   *uint
@@ -49,7 +52,6 @@ func NewInitialSchema() *gormigrate.Migration {
 				DeviceId     uint              `gorm:"not null"`
 				EventType    esmodel.EventType `gorm:"not null"`
 				OccurredTime time.Time         `gorm:"not null"`
-				Event        Event             `gorm:"foreignKey:DeviceId,EventType,OccurredTime;References:DeviceId,EventType,OccurredTime"`
 				Type         string            `gorm:"not null"`
 				Level        uint32            `gorm:"not null"`
 				Message      string
@@ -75,10 +77,23 @@ func NewInitialSchema() *gormigrate.Migration {
 				return err
 			}
 
-			// Convert to a hypertable.
+			// Convert the base events table to a hypertable.
 			err = tx.Raw("SELECT create_hypertable('event-management.events', 'occurred_time');").Row().Err()
 			if err != nil {
 				return err
+			}
+
+			// The three payload tables are hypertables in their own right, partitioned
+			// on occurred_time alongside events, so their chunks age out with the parent
+			// (ADR-026 amd). They carry no FK into events (an FK into a hypertable blocks
+			// drop_chunks on the parent); the payload↔event relationship is the natural
+			// key (device_id, event_type, occurred_time) joined at the app layer.
+			for _, table := range []string{"location_events", "measurement_events", "alert_events"} {
+				err = tx.Raw("SELECT create_hypertable('event-management." + table +
+					"', 'occurred_time', if_not_exists => TRUE);").Row().Err()
+				if err != nil {
+					return err
+				}
 			}
 
 			// Add index on device id.

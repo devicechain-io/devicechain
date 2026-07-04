@@ -40,13 +40,20 @@ type EventAnchor struct {
 	AnchorId     uint              `gorm:"not null"`
 }
 
+// The three payload tables (location/measurement/alert) are hypertables in their
+// own right, partitioned on occurred_time alongside the base events hypertable
+// (ADR-026 amd). They relate to the base event by the natural key (device_id,
+// event_type, occurred_time) — a plain app-level join, not a DB foreign key: an FK
+// referencing a hypertable blocks drop_chunks on the parent, so the data-lifecycle
+// (retention/compression) work would be un-droppable. Insert order is enforced by
+// upsertParentEvents (parent first), not by a constraint (see model/api.go).
+
 // Location event fields.
 type LocationEvent struct {
 	rdb.TenantScoped
 	DeviceId     uint              `gorm:"not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
-	Event        Event             `gorm:"foreignKey:DeviceId,EventType,OccurredTime;References:DeviceId,EventType,OccurredTime"`
 	// Latitude/Longitude are degrees, so 8 fractional digits (~1.1mm) with just
 	// enough integer room for ±90 / ±180. Elevation is metres, not degrees: it
 	// needs integer range (mountains, aircraft, orbit), not sub-degree precision —
@@ -71,7 +78,6 @@ type MeasurementEvent struct {
 	DeviceId     uint              `gorm:"not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
-	Event        Event             `gorm:"foreignKey:DeviceId,EventType,OccurredTime;References:DeviceId,EventType,OccurredTime"`
 	Name         string            `gorm:"not null"`
 	Value        sql.NullFloat64   `gorm:"type:decimal(20,8);"`
 	Classifier   *uint
@@ -91,7 +97,6 @@ type AlertEvent struct {
 	DeviceId     uint              `gorm:"not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
-	Event        Event             `gorm:"foreignKey:DeviceId,EventType,OccurredTime;References:DeviceId,EventType,OccurredTime"`
 	Type         string            `gorm:"not null"`
 	Level        uint32            `gorm:"not null"`
 	Message      string
