@@ -4,6 +4,8 @@
 package rdb
 
 import (
+	"math"
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -51,24 +53,20 @@ func TestPaginateAppliesBounds(t *testing.T) {
 	}
 
 	// pageSize:0 must NOT return everything — it defaults and thus carries a LIMIT.
-	if sql := sqlFor(Pagination{PageNumber: 1, PageSize: 0}); !contains(sql, "LIMIT") {
+	if sql := sqlFor(Pagination{PageNumber: 1, PageSize: 0}); !strings.Contains(sql, "LIMIT") {
 		t.Errorf("pageSize:0 produced no LIMIT (unbounded scan): %q", sql)
 	}
 	// An over-max request is still LIMITed (clamped), never unbounded.
-	if sql := sqlFor(Pagination{PageNumber: 1, PageSize: 100000}); !contains(sql, "LIMIT") {
+	if sql := sqlFor(Pagination{PageNumber: 1, PageSize: 100000}); !strings.Contains(sql, "LIMIT") {
 		t.Errorf("over-max request produced no LIMIT: %q", sql)
 	}
+	// A max-int page number must not overflow the offset into a negative (wrapping
+	// to an early page) — int64 math keeps it a large, past-the-end offset.
+	if sql := sqlFor(Pagination{PageNumber: math.MaxInt32, PageSize: 100}); !strings.Contains(sql, "LIMIT") || strings.Contains(sql, "OFFSET -") {
+		t.Errorf("max page number overflowed the offset: %q", sql)
+	}
 	// The explicit internal Unbounded path is the ONLY way to omit the LIMIT.
-	if sql := sqlFor(Pagination{Unbounded: true}); contains(sql, "LIMIT") {
+	if sql := sqlFor(Pagination{Unbounded: true}); strings.Contains(sql, "LIMIT") {
 		t.Errorf("Unbounded path unexpectedly carried a LIMIT: %q", sql)
 	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

@@ -156,7 +156,13 @@ func Paginate(pag Pagination) func(db *gorm.DB) *gorm.DB {
 			return db
 		}
 		size := pag.EffectivePageSize()
-		offset := (pag.PageNumber - 1) * size
+		// int64 so a large PageNumber (up to the GraphQL Int max) can't overflow the
+		// offset and wrap back to an early page; a past-the-end offset just yields an
+		// empty page, and the LIMIT is always applied.
+		offset := (int64(pag.PageNumber) - 1) * int64(size)
+		if offset < 0 {
+			offset = 0
+		}
 		return db.Offset(int(offset)).Limit(int(size))
 	}
 }

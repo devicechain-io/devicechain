@@ -354,6 +354,10 @@ func (api *Api) ProvisionDeviceBootstrap(ctx context.Context, request *Provision
 func (api *Api) mintOrReuseCredential(ctx context.Context, deviceToken string, credentialType string, now time.Time) (string, error) {
 	enabled := true
 	existing, err := api.DeviceCredentials(ctx, DeviceCredentialSearchCriteria{
+		// Reuse must consider every live credential of this type for the device, not
+		// a bounded page — the explicit internal unbounded path (ADR-029). A bounded
+		// default could miss a reusable credential past the page and mint a duplicate.
+		Pagination:     rdb.Pagination{Unbounded: true},
 		Device:         &deviceToken,
 		CredentialType: &credentialType,
 		Enabled:        &enabled,
