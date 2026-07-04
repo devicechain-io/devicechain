@@ -16,5 +16,6 @@ var (
 		NewDeviceClaimSchema(),
 		NewCommandDefinitionSchema(),
 		NewAlarmDefinitionSchema(),
+		NewAlarmSchema(),
 	}
 )

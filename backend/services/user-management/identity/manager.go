@@ -446,6 +446,7 @@ var viewerAuthorities = []string{
 	string(auth.EventRead),
 	string(auth.StateRead),
 	string(auth.CommandRead),
+	string(auth.AlarmRead),
 }
 
 // unionStrings returns the de-duplicated union of two string slices, preserving

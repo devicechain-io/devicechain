@@ -225,6 +225,53 @@ type AlarmDefinitionSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# A raised alarm (ADR-041) — the operational counterpart to AlarmDefinition. Raised
+# by the evaluator when a device measurement meets a rule, keyed by (originator,
+# alarmKey): there is at most one live alarm per key, so re-crossings dedup into the
+# same row and severity escalates in place. The four-state model is state (ACTIVE |
+# CLEARED) crossed with acknowledged. The originator is addressed uniformly by
+# (originatorType, originatorId) (ADR-013); today it is always a device.
+type Alarm implements Model & TokenReference & MetadataEntity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    originatorType: String!
+    originatorId: ID!
+    alarmKey: String!
+    metricKey: String!
+    state: String!
+    acknowledged: Boolean!
+    severity: String!
+    raisedTime: String
+    clearedTime: String
+    acknowledgedTime: String
+    acknowledgedBy: String
+    lastValue: Float
+    message: String
+    metadata: String
+}
+
+# Criteria used when searching for alarms. All facets are optional and AND together;
+# originator restricts to a single entity by its (originatorType, originator token).
+input AlarmSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    originatorType: String
+    originator: String
+    state: String
+    severity: String
+    acknowledged: Boolean
+    alarmKey: String
+}
+
+# Search results returned from an alarm query.
+type AlarmSearchResults {
+    results: [Alarm!]!
+    pagination: SearchResultsPagination!
+}
+
 # Represents a single current-state attribute for an entity (ADR-012).
 type EntityAttribute implements Model {
     id: ID!
@@ -1011,6 +1058,12 @@ type Query {
     alarmDefinitionsByToken(tokens: [String!]!): [AlarmDefinition!]!
     # List alarm definitions that meet criteria.
     alarmDefinitions(criteria: AlarmDefinitionSearchCriteria!): AlarmDefinitionSearchResults!
+    # Find raised alarms by unique id.
+    alarmsById(ids: [ID!]!): [Alarm!]!
+    # Find raised alarms by unique token.
+    alarmsByToken(tokens: [String!]!): [Alarm!]!
+    # List raised alarms that meet criteria.
+    alarms(criteria: AlarmSearchCriteria!): AlarmSearchResults!
     # List entity attributes that meet criteria.
     entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
     # Query the append-only audit journal (ADR-019); tenant-scoped, newest first.
@@ -1141,6 +1194,11 @@ type Mutation {
     updateAlarmDefinition(token: String!, request: AlarmDefinitionCreateRequest!): AlarmDefinition!
     # Delete a single alarm definition.
     deleteAlarmDefinition(token: String!): Boolean!
+    # Acknowledge a raised alarm (operator action). The acknowledging identity is the
+    # authenticated subject, recorded server-side — not a client-supplied value.
+    acknowledgeAlarm(token: String!): Alarm!
+    # Clear a raised alarm (manual operator override).
+    clearAlarm(token: String!): Alarm!
     # Set (upsert) an entity attribute.
     setEntityAttribute(request: EntityAttributeSetRequest!): EntityAttribute!
     # Delete an entity attribute by its natural key.

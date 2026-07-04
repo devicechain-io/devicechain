@@ -89,6 +89,13 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 			"entity_type = ? AND entity_id = ?", string(etype), id).Delete(&EntityAttribute{}).Error; err != nil {
 			return err
 		}
+		// Cascade the entity's alarms (ADR-041): like attributes they address their
+		// originator by uniform (originator_type, originator_id) with no DB foreign
+		// key, so an alarm must not outlive the entity it was raised on.
+		if err := tx.Unscoped().Where(
+			"originator_type = ? AND originator_id = ?", string(etype), id).Delete(&Alarm{}).Error; err != nil {
+			return err
+		}
 		if cascade != nil {
 			if err := cascade(tx, id); err != nil {
 				return err
