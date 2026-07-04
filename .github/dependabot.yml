@@ -1,0 +1,81 @@
+# Dependabot configuration for DeviceChain.
+#
+# Goal: security + freshness signal without a flood of one-PR-per-dependency.
+# Strategy:
+#   - Weekly schedule (batched, predictable) rather than daily.
+#   - Minor + patch bumps are GROUPED into a single PR per ecosystem.
+#   - Major bumps are left UNGROUPED so each lands as its own reviewable PR
+#     (Go major bumps here have bitten us before, e.g. pgx / tablewriter).
+#
+# The Go workspace (go.work) has one go.mod per module; the `directories`
+# glob below fans Dependabot across all of them in one ecosystem entry.
+version: 2
+
+updates:
+  # ---- Go modules (all workspace members) --------------------------------
+  - package-ecosystem: "gomod"
+    directories:
+      - "/backend/core"
+      - "/backend/cli"
+      - "/backend/k8s"
+      - "/backend/services/*"
+      - "/deploy"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      go-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # ---- Frontend (npm workspace: apps/* + packages/*) ---------------------
+  # A single lockfile at frontend/ covers the whole workspace.
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # ---- Container base images --------------------------------------------
+  - package-ecosystem: "docker"
+    directories:
+      - "/backend/k8s"
+      - "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      docker:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # ---- GitHub Actions ----------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(ci)"
