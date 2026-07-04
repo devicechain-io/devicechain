@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 )
 
@@ -59,8 +60,10 @@ func validateParamLevel(params []CommandParameter, path string) error {
 	return nil
 }
 
-// checkParamConstraints validates that a scalar descriptor's own Default/bounds
-// are internally consistent with its DataType.
+// checkParamConstraints validates that a scalar descriptor's own bounds, enum,
+// and Default are internally consistent with its DataType, so an unsatisfiable
+// parameter (e.g. an INT enum of ["abc"], or a default outside its own enum) is
+// rejected at declaration rather than silently stranding the command.
 func checkParamConstraints(p CommandParameter, where string) error {
 	if (p.MinValue != nil || p.MaxValue != nil) &&
 		p.DataType != MetricDouble && p.DataType != MetricInt {
@@ -69,12 +72,68 @@ func checkParamConstraints(p CommandParameter, where string) error {
 	if p.MinValue != nil && p.MaxValue != nil && *p.MinValue > *p.MaxValue {
 		return fmt.Errorf("command parameter %q has minValue > maxValue", where)
 	}
+	if len(p.Enum) > 0 {
+		if p.DataType == MetricBoolean {
+			return fmt.Errorf("command parameter %q declares an enum on BOOLEAN", where)
+		}
+		for _, e := range p.Enum {
+			if err := validateScalarLiteral(p, e); err != nil {
+				return fmt.Errorf("command parameter %q enum value %q: %w", where, e, err)
+			}
+		}
+	}
 	if p.Default != nil {
-		if err := validateScalar(p, *p.Default, where); err != nil {
+		if err := validateDefault(p, *p.Default, where); err != nil {
 			return fmt.Errorf("command parameter %q default: %w", where, err)
 		}
 	}
 	return nil
+}
+
+// validateScalarLiteral checks that an author-declared string literal (an enum
+// member) parses as the parameter's declared scalar type.
+func validateScalarLiteral(p CommandParameter, value string) error {
+	switch p.DataType {
+	case MetricDouble:
+		if _, err := strconv.ParseFloat(value, 64); err != nil {
+			return fmt.Errorf("%q is not a valid %s", value, p.DataType)
+		}
+	case MetricInt:
+		if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+			return fmt.Errorf("%q is not a valid %s", value, p.DataType)
+		}
+	case MetricString:
+		// Any string is a valid STRING literal.
+	}
+	return nil
+}
+
+// validateDefault checks a declared Default (its string form) against the
+// parameter's scalar type, numeric bounds, and enum allow-list.
+func validateDefault(p CommandParameter, value string, where string) error {
+	switch p.DataType {
+	case MetricDouble, MetricInt:
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("%q is not a valid %s", value, p.DataType)
+		}
+		if p.DataType == MetricInt && f != math.Trunc(f) {
+			return fmt.Errorf("%q is not a valid %s", value, p.DataType)
+		}
+		if err := checkParamBounds(p, f, where); err != nil {
+			return err
+		}
+		return checkParamEnumNumeric(p, f, where)
+	case MetricBoolean:
+		if _, err := strconv.ParseBool(value); err != nil {
+			return fmt.Errorf("%q is not a valid %s", value, p.DataType)
+		}
+		return nil
+	case MetricString:
+		return checkParamEnumString(p, value, where)
+	default:
+		return nil
+	}
 }
 
 // ValidateCommandPayload checks a command payload against a command definition's
@@ -88,6 +147,9 @@ func checkParamConstraints(p CommandParameter, where string) error {
 // of the nested object. A definition with a nil/empty schema accepts any
 // well-formed JSON object (the backward-compatible free-form path).
 func ValidateCommandPayload(def *CommandDefinition, payload []byte) error {
+	if def == nil {
+		return fmt.Errorf("nil command definition")
+	}
 	schema, err := def.parameterSchema()
 	if err != nil {
 		return fmt.Errorf("command %q: %w", def.CommandKey, err)
@@ -98,9 +160,9 @@ func ValidateCommandPayload(def *CommandDefinition, payload []byte) error {
 	if len(schema) == 0 {
 		return nil
 	}
-	// A payload is optional; validate an absent payload as an empty object so a
-	// command that declares only optional parameters still enqueues.
-	if len(bytes.TrimSpace(payload)) == 0 {
+	// An absent payload — empty, whitespace, or a JSON null — is validated as an
+	// empty object so a command that declares only optional parameters enqueues.
+	if trimmed := bytes.TrimSpace(payload); len(trimmed) == 0 || string(trimmed) == "null" {
 		if req := firstRequired(schema); req != "" {
 			return fmt.Errorf("command %q: required parameter %q is missing", def.CommandKey, req)
 		}
@@ -167,29 +229,18 @@ func validatePayloadLevel(params []CommandParameter, obj map[string]json.RawMess
 }
 
 // validateScalarValue checks a raw JSON value against a scalar descriptor: the
-// JSON type matches the declared DataType, then numeric bounds and enum.
+// JSON type matches the declared DataType, then numeric bounds and the enum.
 func validateScalarValue(p CommandParameter, raw json.RawMessage, where string) error {
 	switch p.DataType {
 	case MetricDouble, MetricInt:
-		var num json.Number
-		dec := json.NewDecoder(bytes.NewReader(raw))
-		dec.UseNumber()
-		if err := dec.Decode(&num); err != nil {
-			return fmt.Errorf("parameter %q: %s is not a valid %s", where, raw, p.DataType)
-		}
-		if p.DataType == MetricInt {
-			if _, err := strconv.ParseInt(num.String(), 10, 64); err != nil {
-				return fmt.Errorf("parameter %q: %s is not a valid %s", where, raw, p.DataType)
-			}
-		}
-		f, err := num.Float64()
+		f, err := jsonNumberValue(p.DataType, raw)
 		if err != nil {
 			return fmt.Errorf("parameter %q: %s is not a valid %s", where, raw, p.DataType)
 		}
 		if err := checkParamBounds(p, f, where); err != nil {
 			return err
 		}
-		return checkParamEnum(p, num.String(), where)
+		return checkParamEnumNumeric(p, f, where)
 	case MetricBoolean:
 		var b bool
 		if err := json.Unmarshal(raw, &b); err != nil {
@@ -201,7 +252,7 @@ func validateScalarValue(p CommandParameter, raw json.RawMessage, where string) 
 		if err := json.Unmarshal(raw, &s); err != nil {
 			return fmt.Errorf("parameter %q: %s is not a valid %s", where, raw, p.DataType)
 		}
-		return checkParamEnum(p, s, where)
+		return checkParamEnumString(p, s, where)
 	default:
 		// An unknown declared type is a schema fault caught by ValidateParameterSchema
 		// at declaration; do not reject the payload on its behalf.
@@ -209,20 +260,24 @@ func validateScalarValue(p CommandParameter, raw json.RawMessage, where string) 
 	}
 }
 
-// validateScalar checks a declared Default (a string form) against a scalar
-// descriptor, reusing ValidateMetricValue's value-shaped semantics.
-func validateScalar(p CommandParameter, value string, where string) error {
-	def := &MetricDefinition{
-		MetricKey: where,
-		DataType:  p.DataType.String(),
+// jsonNumberValue decodes a numeric JSON value as a float64. For INT it accepts
+// any integral value — 10, 10.0, 1e2 — and rejects a fractional one, since JSON
+// has no distinct integer type and a producer may legitimately emit "10.0".
+func jsonNumberValue(dt MetricDataType, raw json.RawMessage) (float64, error) {
+	var num json.Number
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&num); err != nil {
+		return 0, err
 	}
-	if p.MinValue != nil {
-		def.MinValue.Valid, def.MinValue.Float64 = true, *p.MinValue
+	f, err := num.Float64()
+	if err != nil {
+		return 0, err
 	}
-	if p.MaxValue != nil {
-		def.MaxValue.Valid, def.MaxValue.Float64 = true, *p.MaxValue
+	if dt == MetricInt && (math.IsInf(f, 0) || f != math.Trunc(f)) {
+		return 0, fmt.Errorf("%s is not an integer", raw)
 	}
-	return ValidateMetricValue(def, value)
+	return f, nil
 }
 
 func checkParamBounds(p CommandParameter, v float64, where string) error {
@@ -235,7 +290,8 @@ func checkParamBounds(p CommandParameter, v float64, where string) error {
 	return nil
 }
 
-func checkParamEnum(p CommandParameter, value string, where string) error {
+// checkParamEnumString enforces a STRING enum allow-list by exact match.
+func checkParamEnumString(p CommandParameter, value string, where string) error {
 	if len(p.Enum) == 0 {
 		return nil
 	}
@@ -245,6 +301,21 @@ func checkParamEnum(p CommandParameter, value string, where string) error {
 		}
 	}
 	return fmt.Errorf("parameter %q: %q is not one of the allowed values %v", where, value, p.Enum)
+}
+
+// checkParamEnumNumeric enforces a numeric enum allow-list by comparing values
+// numerically, so a payload 1.50 satisfies an enum entry "1.5". Entries are
+// validated as parseable numbers at declaration (checkParamConstraints).
+func checkParamEnumNumeric(p CommandParameter, v float64, where string) error {
+	if len(p.Enum) == 0 {
+		return nil
+	}
+	for _, a := range p.Enum {
+		if af, err := strconv.ParseFloat(a, 64); err == nil && af == v {
+			return nil
+		}
+	}
+	return fmt.Errorf("parameter %q: %v is not one of the allowed values %v", where, v, p.Enum)
 }
 
 // firstRequired returns the path of the first required parameter in the schema,
@@ -258,16 +329,35 @@ func firstRequired(params []CommandParameter) string {
 	return ""
 }
 
+// decodeObject decodes a JSON object. It uses Unmarshal (not a streaming Decoder)
+// so trailing garbage after the closing brace is rejected rather than silently
+// accepted into the enqueued payload.
 func decodeObject(raw []byte) (map[string]json.RawMessage, error) {
 	var obj map[string]json.RawMessage
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	if err := dec.Decode(&obj); err != nil {
+	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, fmt.Errorf("payload is not a JSON object: %w", err)
 	}
 	if obj == nil {
 		return nil, fmt.Errorf("payload is not a JSON object")
 	}
 	return obj, nil
+}
+
+// decodeParameterSchemaStrict decodes a parameter-schema document rejecting any
+// unrecognized field, so an author's typo'd constraint key (e.g. "maximum" for
+// "maxValue") is caught at declaration rather than silently dropped. A nil/empty
+// document decodes to a nil slice.
+func decodeParameterSchemaStrict(raw []byte) ([]CommandParameter, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var schema []CommandParameter
+	if err := dec.Decode(&schema); err != nil {
+		return nil, fmt.Errorf("parameter schema is not valid JSON: %w", err)
+	}
+	return schema, nil
 }
 
 func isJSONNull(raw json.RawMessage) bool {

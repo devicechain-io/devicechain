@@ -115,9 +115,10 @@ type MetricDefinitionSearchResults {
 }
 
 # Represents a typed command declared on a device profile (ADR-043). parameterSchema
-# is the ordered []CommandParameter argument contract as a JSON string; the console
-# parses it to render the command form and the delivery path validates a payload
-# against it. Null when the command declares no structured arguments.
+# is the ordered []CommandParameter argument contract as a JSON string, intended to
+# drive the console command form and, once the delivery path is wired (W1.1b), to
+# constrain an issued command's payload. Null when the command declares no
+# structured arguments.
 type CommandDefinition implements Model & TokenReference & NamedEntity & MetadataEntity {
     id: ID!
     createdAt: String
