@@ -1,11 +1,11 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import {
-  DashboardHub,
   createDeviceResolver,
+  migrateToSlots,
   parseDashboardDefinition,
   setTitle,
   type DashboardDefinition,
@@ -25,12 +25,12 @@ export default function DashboardDetailPage() {
 
   const { data, loading, error } = useQuery(() => getDashboard(token), [token]);
 
-  // The runtime: one resolver (token/anchor → device ids) backing one hub that
-  // multiplexes every widget's live stream. Torn down on unmount so the socket
-  // subscriptions don't leak when leaving the page.
+  // The resolver (token/anchor → device ids) that backs both the hub's stream
+  // resolution and the renderer's history seeding. The hub itself is created by the
+  // workspace, keyed on the slot manifest so a rebind gets a hub that already carries
+  // the new bindings (constructing-with-bindings avoids an effect-ordering race where
+  // widgets would subscribe before setBindings ran).
   const resolver = useMemo(() => createDeviceResolver(), []);
-  const hub = useMemo(() => new DashboardHub({ resolver }), [resolver]);
-  useEffect(() => () => hub.disposeAll(), [hub]);
 
   // Parse the stored JSON into a DashboardDefinition. A malformed definition must
   // surface as an error state, not a white screen — hence the guarded parse. The
@@ -44,6 +44,10 @@ export default function DashboardDetailPage() {
     try {
       let definition = parseDashboardDefinition(JSON.parse(data.definition));
       if (definition.title === '' && data.name) definition = setTitle(definition, data.name);
+      // Decisive pre-GA cutover: rewrite any concrete device/anchor selectors into
+      // default-bound slots on load (idempotent), so authoring is slot-based and the
+      // dashboard is export-ready. Persisted on the next save; renders identically.
+      definition = migrateToSlots(definition);
       return { definition };
     } catch (err) {
       return { error: err instanceof Error ? err.message : 'Invalid dashboard definition.' };
@@ -90,7 +94,6 @@ export default function DashboardDetailPage() {
       description={data.description ?? null}
       updatedAt={data.updatedAt ?? null}
       loaded={parsed.definition}
-      hub={hub}
       resolver={resolver}
     />
   );

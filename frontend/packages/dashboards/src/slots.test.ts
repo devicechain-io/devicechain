@@ -1,0 +1,183 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+import { describe, expect, it } from 'vitest';
+
+import { parseDashboardDefinition, serializeDefinition } from './definition';
+import {
+  bindWidgetSlot,
+  clearWidgetDatasource,
+  migrateToSlots,
+  pruneSlots,
+  resolveConcrete,
+  sameBinding,
+  widgetBinding,
+} from './slots';
+import type { DashboardDefinition, DatasourceSelector, SlotBinding, WidgetInstance } from './types';
+
+const anchorSel = (targetToken: string, extra: Partial<DatasourceSelector> = {}): DatasourceSelector =>
+  ({
+    kind: 'anchor',
+    anchor: { relationship: 'contains', targetType: 'area', targetToken },
+    measurements: ['t'],
+    ...extra,
+  }) as DatasourceSelector;
+
+const box = { x: 0, y: 0, w: 4, h: 3, z: 0 };
+
+function widget(id: string, datasource?: WidgetInstance['datasource']): WidgetInstance {
+  return { id, type: 'gauge', layout: { base: box }, ...(datasource ? { datasource } : {}) };
+}
+
+function def(widgets: WidgetInstance[], slots?: DashboardDefinition['slots']): DashboardDefinition {
+  return {
+    schemaVersion: 1,
+    title: 'T',
+    canvas: { grid: { snap: true, size: 8 }, breakpoints: { base: 0 } },
+    widgets,
+    ...(slots ? { slots } : {}),
+  };
+}
+
+const devA: SlotBinding = { kind: 'device', deviceToken: 'therm-001' };
+
+describe('sameBinding', () => {
+  it('compares device and anchor bindings by value', () => {
+    expect(sameBinding(devA, { kind: 'device', deviceToken: 'therm-001' })).toBe(true);
+    expect(sameBinding(devA, { kind: 'device', deviceToken: 'other' })).toBe(false);
+    const a: SlotBinding = { kind: 'anchor', anchor: { relationship: 'r', targetType: 'area', targetToken: 'x' } };
+    expect(sameBinding(a, { kind: 'anchor', anchor: { relationship: 'r', targetType: 'area', targetToken: 'x' } })).toBe(true);
+    expect(sameBinding(a, devA)).toBe(false);
+  });
+});
+
+describe('migrateToSlots', () => {
+  it('rewrites concrete selectors to slots and dedups identical bindings', () => {
+    const d = def([
+      widget('a', { kind: 'device', deviceToken: 'therm-001', measurements: ['temperature'] }),
+      widget('b', { kind: 'device', deviceToken: 'therm-001', measurements: ['humidity'] }),
+      widget('c', { kind: 'device', deviceToken: 'other', measurements: [] }),
+    ]);
+    const m = migrateToSlots(d);
+    // a + b share one slot (same device); c gets its own.
+    expect(Object.keys(m.slots!)).toHaveLength(2);
+    expect(m.widgets[0].datasource).toEqual({ kind: 'slot', slot: 'slot-1', measurements: ['temperature'] });
+    expect(m.widgets[1].datasource).toEqual({ kind: 'slot', slot: 'slot-1', measurements: ['humidity'] });
+    expect(m.widgets[2].datasource).toEqual({ kind: 'slot', slot: 'slot-2', measurements: [] });
+    expect(m.slots!['slot-1']).toEqual({ type: 'device', label: 'therm-001', defaultBinding: devA });
+  });
+
+  it('is idempotent — a slot-based definition passes through unchanged', () => {
+    const d = migrateToSlots(
+      def([widget('a', { kind: 'device', deviceToken: 'therm-001', measurements: ['t'] })]),
+    );
+    expect(migrateToSlots(d)).toEqual(d);
+  });
+
+  it('leaves a slot-free (label/image only) dashboard untouched, no slots key', () => {
+    const d = def([widget('a')]); // no datasource
+    const m = migrateToSlots(d);
+    expect('slots' in m).toBe(false);
+    expect(m).toBe(d); // same reference — no work done
+  });
+
+  it('migrates an anchor selector and round-trips through serialize/parse', () => {
+    const m = migrateToSlots(def([widget('a', anchorSel('plant-1'))]));
+    expect(m.widgets[0].datasource).toEqual({ kind: 'slot', slot: 'slot-1', measurements: ['t'] });
+    expect(m.slots!['slot-1']).toEqual({
+      type: 'anchor',
+      label: 'plant-1',
+      defaultBinding: { kind: 'anchor', anchor: { relationship: 'contains', targetType: 'area', targetToken: 'plant-1' } },
+    });
+    // The default binding survives a serialize→parse round-trip (the D1 data-loss guard).
+    expect(parseDashboardDefinition(JSON.parse(serializeDefinition(m)))).toEqual(m);
+  });
+
+  it('leaves a partial anchor (no target token) as a concrete selector, no data loss', () => {
+    const d = def([widget('a', anchorSel(''))]);
+    const m = migrateToSlots(d);
+    expect(m).toBe(d); // nothing complete to migrate → same reference, no slots:{}
+  });
+
+  it('leaves an aggregated anchor concrete (slot model has no aggregation)', () => {
+    const d = def([widget('a', anchorSel('plant-1', { aggregation: { window: '1m', fn: 'avg' } }))]);
+    const m = migrateToSlots(d);
+    expect(m).toBe(d);
+  });
+
+  it('does not attach a slots:{} for an empty-token device (nothing to migrate)', () => {
+    const d = def([widget('a', { kind: 'device', deviceToken: '', measurements: [] })]);
+    const m = migrateToSlots(d);
+    expect(m).toBe(d);
+    expect('slots' in m).toBe(false);
+  });
+});
+
+describe('bindWidgetSlot — duplicate-binding slots', () => {
+  it('keeps the widget on its own slot for a measurements-only edit (no rehome)', () => {
+    // Two slots share the SAME device binding but distinct identities (a valid import /
+    // I-3 template shape). Editing widget B's measurements must NOT collapse it onto A's.
+    const d = def([widget('a', { kind: 'slot', slot: 'slot-1', measurements: [] }), widget('b', { kind: 'slot', slot: 'slot-2', measurements: [] })], {
+      'slot-1': { type: 'device', defaultBinding: devA },
+      'slot-2': { type: 'device', defaultBinding: devA },
+    });
+    const next = bindWidgetSlot(d, 'b', devA, ['humidity']);
+    expect(next.widgets[1].datasource).toEqual({ kind: 'slot', slot: 'slot-2', measurements: ['humidity'] });
+    expect(Object.keys(next.slots!)).toEqual(['slot-1', 'slot-2']); // slot-2 preserved
+  });
+});
+
+describe('bindWidgetSlot', () => {
+  it('creates a slot for a new binding and points the widget at it', () => {
+    const d = def([widget('a', { kind: 'slot', slot: 'slot-1', measurements: [] })], {
+      'slot-1': { type: 'device', defaultBinding: { kind: 'device', deviceToken: 'old' } },
+    });
+    const next = bindWidgetSlot(d, 'a', devA, ['temperature']);
+    // A new binding forks a new slot; the old one is left (prune reclaims it).
+    expect(next.widgets[0].datasource).toEqual({ kind: 'slot', slot: 'slot-2', measurements: ['temperature'] });
+    expect(next.slots!['slot-2'].defaultBinding).toEqual(devA);
+  });
+
+  it('reuses an existing slot with the same binding (dedup)', () => {
+    const d = def([widget('a', { kind: 'slot', slot: 'slot-1', measurements: [] }), widget('b')], {
+      'slot-1': { type: 'device', defaultBinding: devA },
+    });
+    const next = bindWidgetSlot(d, 'b', devA, ['humidity']);
+    expect(next.widgets[1].datasource).toEqual({ kind: 'slot', slot: 'slot-1', measurements: ['humidity'] });
+    expect(Object.keys(next.slots!)).toEqual(['slot-1']); // no new slot
+  });
+});
+
+describe('pruneSlots', () => {
+  it('drops unreferenced slots and omits the key when empty', () => {
+    const d = def([widget('a', { kind: 'slot', slot: 'slot-1', measurements: [] })], {
+      'slot-1': { type: 'device', defaultBinding: devA },
+      'slot-2': { type: 'device', defaultBinding: { kind: 'device', deviceToken: 'orphan' } },
+    });
+    const pruned = pruneSlots(d);
+    expect(Object.keys(pruned.slots!)).toEqual(['slot-1']);
+
+    const cleared = pruneSlots(clearWidgetDatasource(d, 'a'));
+    expect('slots' in cleared).toBe(false);
+  });
+});
+
+describe('widgetBinding / resolveConcrete', () => {
+  it('resolves a slot widget through its default binding', () => {
+    const d = def([widget('a', { kind: 'slot', slot: 'slot-1', measurements: ['t'] })], {
+      'slot-1': { type: 'device', defaultBinding: devA },
+    });
+    expect(widgetBinding(d, d.widgets[0])).toEqual(devA);
+    expect(resolveConcrete(d, d.widgets[0])).toEqual({
+      kind: 'device',
+      deviceToken: 'therm-001',
+      measurements: ['t'],
+    });
+  });
+
+  it('returns undefined for an unbound slot or a datasource-less widget', () => {
+    const d = def([widget('a', { kind: 'slot', slot: 'ghost', measurements: [] }), widget('b')]);
+    expect(resolveConcrete(d, d.widgets[0])).toBeUndefined();
+    expect(resolveConcrete(d, d.widgets[1])).toBeUndefined();
+  });
+});
