@@ -259,6 +259,17 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 		return nil, ErrInvalidToken
 	}
 
+	// Reject a tenant token that violates the grammar before it is spliced into the
+	// minted access token's claims and the per-tenant NATS subjects. The superuser
+	// branch below grants any tenant string with no membership lookup, so this is
+	// the one authorization path that would otherwise skip the grammar the rest of
+	// the system relies on (defense-in-depth for ADR-042; tenant creation already
+	// enforces it). Audited as a failed login, matching the no-membership denial.
+	if err := core.ValidateToken(tenant); err != nil {
+		m.recordAuth(ctx, rdb.AuditOpLoginFailed, id.Email, tenant)
+		return nil, ErrInvalidCredentials
+	}
+
 	su := isSuperuser(id)
 	mem := findMembership(id.Memberships, tenant)
 	if mem == nil && !su {
