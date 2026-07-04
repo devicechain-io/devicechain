@@ -32,6 +32,17 @@ CONTEXT="kind-${CLUSTER}"
 INSTANCE=${INSTANCE:-devicechain}
 PROFILE=${PROFILE:-full}
 SKIP_PREFLIGHT=${SKIP_PREFLIGHT:-0}
+# Ingress host. Default to localhost so the browse URL below actually resolves on
+# kind (the chart default is devicechain.local, which would 404 a plain localhost
+# request). Override HOST for a real DNS name.
+HOST=${HOST:-localhost}
+# Ingress TLS. Off by default for local dev: the chart's self-signed cert makes
+# the browser warn on every visit (NET::ERR_CERT_AUTHORITY_INVALID) with no
+# benefit on localhost — same rationale as dcctl's --no-tls. Set INGRESS_TLS=1 to
+# serve HTTPS. (Browser-facing ingress cert only; the NATS/broker TLS from
+# ADR-025 is independent and always on.)
+INGRESS_TLS=${INGRESS_TLS:-0}
+if [ "$INGRESS_TLS" = "1" ]; then INGRESS_SCHEME=https; else INGRESS_SCHEME=http; fi
 
 # Image source. End users deploy published images at the repo VERSION (single
 # source of truth); developers opt into building from source.
@@ -191,6 +202,8 @@ helm --kube-context "$CONTEXT" upgrade --install dc "$CHART_DIR" \
   --set instance.id="$INSTANCE" \
   --set profile="$PROFILE" \
   --set ingress.enabled=true \
+  --set ingress.host="$HOST" \
+  --set ingress.tls.enabled="$([ "$INGRESS_TLS" = "1" ] && echo true || echo false)" \
   --set image.registry="$REGISTRY" \
   --set image.tag="$VERSION" \
   --set metrics.enabled=false \
@@ -215,7 +228,7 @@ LB_IP=$(kubectl --context "$CONTEXT" get svc -A \
 echo "  context:     $CONTEXT"
 echo "  instance:    $INSTANCE  (namespace: dc-$INSTANCE)"
 echo "  images:      $REGISTRY/<area>:$VERSION"
-echo "  ingress:     http://localhost  /  https://localhost  (node port mappings)"
+echo "  console:     $INGRESS_SCHEME://$HOST  (INGRESS_TLS=1 for https)"
 [ -n "$LB_IP" ] && { echo "  LoadBalancers:"; echo "$LB_IP" | sed 's/^/    /'; }
 echo
 echo "  kubectl --context $CONTEXT get pods -A"
