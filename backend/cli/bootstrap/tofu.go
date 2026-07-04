@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -53,6 +54,36 @@ func applyInfra(ctx context.Context, st *State) error {
 	}
 	if err := tf.Apply(ctx, opts...); err != nil {
 		return fmt.Errorf("tofu apply: %w", err)
+	}
+
+	// Read the NATS TLS material back out (ADR-025): the broker terminates TLS and
+	// emits its CA, which the Helm step threads into the instance config so
+	// services dial over TLS. The broker flag and the client flag come from the
+	// same outputs so they cannot drift apart.
+	outputs, err := tf.Output(ctx)
+	if err != nil {
+		return fmt.Errorf("reading tofu outputs: %w", err)
+	}
+	// Decode errors are propagated, not swallowed: a broker that terminates TLS
+	// paired with a client that (silently) fell back to plaintext is the one
+	// failure the two-flags-one-source design exists to prevent, and NATS'
+	// retry-forever masks it as a healthy-but-mute service. Fail the bootstrap
+	// loudly instead.
+	if meta, ok := outputs["nats_tls_enabled"]; ok {
+		var enabled bool
+		if err := json.Unmarshal(meta.Value, &enabled); err != nil {
+			return fmt.Errorf("decoding nats_tls_enabled output: %w", err)
+		}
+		if enabled {
+			st.Values["natsTlsEnabled"] = "true"
+		}
+	}
+	if meta, ok := outputs["nats_ca"]; ok {
+		var ca string
+		if err := json.Unmarshal(meta.Value, &ca); err != nil {
+			return fmt.Errorf("decoding nats_ca output: %w", err)
+		}
+		st.Values["natsCA"] = ca
 	}
 	return nil
 }

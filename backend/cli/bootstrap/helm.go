@@ -46,8 +46,25 @@ func helmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 
+	// When the broker terminates TLS (ADR-025), merge the CA + enable flag into the
+	// instance config so services dial NATS/MQTT over TLS. Deep-merges over the
+	// chart's instance.config defaults (hostname/port/persistence are preserved).
+	instanceVals := map[string]interface{}{"id": st.Instance}
+	if st.Values["natsTlsEnabled"] == "true" {
+		instanceVals["config"] = map[string]interface{}{
+			"infrastructure": map[string]interface{}{
+				"nats": map[string]interface{}{
+					"tls": map[string]interface{}{
+						"enabled": true,
+						"ca":      st.Values["natsCA"],
+					},
+				},
+			},
+		}
+	}
+
 	vals := map[string]interface{}{
-		"instance": map[string]interface{}{"id": st.Instance},
+		"instance": instanceVals,
 		"profile":  st.Profile,
 		// Set the host explicitly (matching the chart default) so the deployed
 		// ingress and the access report agree on one value. --no-tls turns off the

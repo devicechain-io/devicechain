@@ -37,6 +37,15 @@ instance:
         hostname: dc-nats.dc-system
         port: 4222
         streamReplicas: 1
+        # Client-side TLS to the broker (ADR-025). MUST match the broker: the
+        # OpenTofu nats module terminates TLS on the 4222 + 1883 listeners and
+        # emits its CA as the `nats_ca` output, which the bring-up threads in here
+        # (enabled=true + ca=<PEM>). Off by default so the chart renders without a
+        # CA; enabling without a matching broker cert (or vice versa) breaks every
+        # client connection, so the two are always driven together.
+        tls:
+          enabled: false
+          ca: ""
       metrics:
         enabled: true
         httpPort: 9090

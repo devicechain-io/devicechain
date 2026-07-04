@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 
 	gql "github.com/graph-gophers/graphql-go"
@@ -112,7 +113,21 @@ func buildEventSources() error {
 		// Create event source.
 		switch source.Type {
 		case processor.TYPE_MQTT:
-			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration,
+			// The broker's TLS material (ADR-025) belongs to the NATS MQTT gateway,
+			// so only apply it to a source that actually dials the gateway. A source
+			// pointed at some other MQTT broker must NOT be forced to verify against
+			// the NATS CA (it would dial ssl:// at a plaintext port or fail
+			// verification); per-source TLS for external brokers is a later concern.
+			// When applied, serverName is the dialed host, matched against the SANs.
+			natscfg := Microservice.InstanceConfiguration.Infrastructure.Nats
+			var tlsConfig *tls.Config
+			if source.Configuration["host"] == natscfg.Hostname {
+				tlsConfig, err = natscfg.TLSConfig(source.Configuration["host"])
+				if err != nil {
+					return err
+				}
+			}
+			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, tlsConfig,
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed)
 			if err != nil {
 				return err
