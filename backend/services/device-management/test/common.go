@@ -155,6 +155,36 @@ func (api *MockApi) MetricDefinitionsByDeviceType(ctx context.Context, deviceTyp
 	return args.Get(0).([]*model.MetricDefinition), args.Error(1)
 }
 
+func (api *MockApi) CreateCommandDefinition(ctx context.Context, request *model.CommandDefinitionCreateRequest) (*model.CommandDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.CommandDefinition), args.Error(1)
+}
+
+func (api *MockApi) UpdateCommandDefinition(ctx context.Context, token string, request *model.CommandDefinitionCreateRequest) (*model.CommandDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.CommandDefinition), args.Error(1)
+}
+
+func (api *MockApi) CommandDefinitionsById(ctx context.Context, ids []uint) ([]*model.CommandDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.CommandDefinition), args.Error(1)
+}
+
+func (api *MockApi) CommandDefinitionsByToken(ctx context.Context, tokens []string) ([]*model.CommandDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.CommandDefinition), args.Error(1)
+}
+
+func (api *MockApi) CommandDefinitions(ctx context.Context, criteria model.CommandDefinitionSearchCriteria) (*model.CommandDefinitionSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.CommandDefinitionSearchResults), args.Error(1)
+}
+
+func (api *MockApi) CommandDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*model.CommandDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.CommandDefinition), args.Error(1)
+}
+
 func (api *MockApi) SetEntityAttribute(ctx context.Context, request *model.EntityAttributeSetRequest) (*model.EntityAttribute, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.EntityAttribute), args.Error(1)

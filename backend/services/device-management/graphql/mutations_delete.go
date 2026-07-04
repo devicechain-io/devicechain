@@ -152,6 +152,14 @@ func (r *SchemaResolver) DeleteMetricDefinition(ctx context.Context, args struct
 	return r.GetApi(ctx).DeleteMetricDefinition(ctx, args.Token)
 }
 
+// Delete a single command definition.
+func (r *SchemaResolver) DeleteCommandDefinition(ctx context.Context, args struct{ Token string }) (bool, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return false, err
+	}
+	return r.GetApi(ctx).DeleteCommandDefinition(ctx, args.Token)
+}
+
 // Delete a single provisioning profile.
 func (r *SchemaResolver) DeleteProvisioningProfile(ctx context.Context, args struct{ Token string }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
