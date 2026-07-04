@@ -32,6 +32,10 @@ CONTEXT="kind-${CLUSTER}"
 INSTANCE=${INSTANCE:-devicechain}
 PROFILE=${PROFILE:-full}
 SKIP_PREFLIGHT=${SKIP_PREFLIGHT:-0}
+# Ingress host. Default to localhost so the browse URL below actually resolves on
+# kind (the chart default is devicechain.local, which would 404 a plain localhost
+# request). Override HOST for a real DNS name.
+HOST=${HOST:-localhost}
 
 # Image source. End users deploy published images at the repo VERSION (single
 # source of truth); developers opt into building from source.
@@ -191,6 +195,7 @@ helm --kube-context "$CONTEXT" upgrade --install dc "$CHART_DIR" \
   --set instance.id="$INSTANCE" \
   --set profile="$PROFILE" \
   --set ingress.enabled=true \
+  --set ingress.host="$HOST" \
   --set image.registry="$REGISTRY" \
   --set image.tag="$VERSION" \
   --set metrics.enabled=false \
@@ -215,7 +220,7 @@ LB_IP=$(kubectl --context "$CONTEXT" get svc -A \
 echo "  context:     $CONTEXT"
 echo "  instance:    $INSTANCE  (namespace: dc-$INSTANCE)"
 echo "  images:      $REGISTRY/<area>:$VERSION"
-echo "  ingress:     http://localhost  /  https://localhost  (node port mappings)"
+echo "  ingress:     http://$HOST  /  https://$HOST  (node port mappings)"
 [ -n "$LB_IP" ] && { echo "  LoadBalancers:"; echo "$LB_IP" | sed 's/^/    /'; }
 echo
 echo "  kubectl --context $CONTEXT get pods -A"
