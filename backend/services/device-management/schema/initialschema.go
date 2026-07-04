@@ -46,6 +46,15 @@ func NewInitialSchema() *gormigrate.Migration {
 					return err
 				}
 			}
+			// ADR-014: the (credential_type, credential_id) resolve lookup must be
+			// unique among LIVE rows only. A struct-tag unique index would count
+			// soft-deleted rows — a rotated credential's slot would stay locked and a
+			// tombstone could still be resolved to a device. The partial predicate
+			// frees the slot on delete and confines the invariant to resolvable rows.
+			if err := rdb.CreatePartialUniqueIndex(tx, &v1.DeviceCredential{},
+				"idx_device_credential_lookup", "credential_type", "credential_id"); err != nil {
+				return err
+			}
 			return nil
 		},
 		Rollback: func(tx *gorm.DB) error {

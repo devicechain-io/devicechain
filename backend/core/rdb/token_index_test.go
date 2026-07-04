@@ -76,3 +76,52 @@ func TestCreateTenantTokenIndex(t *testing.T) {
 		t.Fatalf("token must be reusable after soft-delete, got: %v", err)
 	}
 }
+
+// credThing mirrors DeviceCredential's uniqueness shape: a soft-deletable entity
+// whose (type, id) pair must be unique among live rows only (ADR-014), with no
+// tenant column in the index (the ADR-025 callout resolves with no tenant).
+type credThing struct {
+	gorm.Model
+	CredentialType string
+	CredentialId   string
+}
+
+// CreatePartialUniqueIndex enforces uniqueness among LIVE rows only: a duplicate
+// live pair is rejected, a soft-deleted row frees the pair for reuse, and the
+// creation is idempotent.
+func TestCreatePartialUniqueIndex(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := db.AutoMigrate(&credThing{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	mk := func() error {
+		return CreatePartialUniqueIndex(db, &credThing{}, "uix_cred_thing_lookup", "credential_type", "credential_id")
+	}
+	if err := mk(); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	// Idempotent — a re-applied migration must not error.
+	if err := mk(); err != nil {
+		t.Fatalf("create index (2nd call must be a no-op): %v", err)
+	}
+
+	row := func() *credThing { return &credThing{CredentialType: "mqtt", CredentialId: "dev-1"} }
+
+	if err := db.Create(row()).Error; err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	// A second LIVE (mqtt, dev-1) — rejected.
+	if err := db.Create(row()).Error; err == nil {
+		t.Fatalf("duplicate live credential pair must be rejected")
+	}
+	// After a soft-delete the pair is reusable.
+	if err := db.Where("credential_type = ? and credential_id = ?", "mqtt", "dev-1").Delete(&credThing{}).Error; err != nil {
+		t.Fatalf("soft-delete: %v", err)
+	}
+	if err := db.Create(row()).Error; err != nil {
+		t.Fatalf("pair must be reusable after soft-delete, got: %v", err)
+	}
+}

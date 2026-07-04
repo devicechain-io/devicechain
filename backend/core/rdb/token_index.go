@@ -5,9 +5,35 @@ package rdb
 
 import (
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 )
+
+// CreatePartialUniqueIndex creates (idempotently) a UNIQUE index on the given
+// columns of a soft-deletable entity's table, restricted to LIVE rows via
+// WHERE deleted_at IS NULL. GORM's struct-tag `unique` index counts soft-deleted
+// rows, so a deleted row keeps its slot locked forever and a lookup can still
+// match a tombstone; the partial predicate frees the slot on delete and keeps the
+// uniqueness invariant scoped to rows that are actually resolvable. GORM cannot
+// express a partial index via struct tags, so callers create these explicitly,
+// once per model, immediately after AutoMigrate. Valid on Postgres and (the test
+// harness) SQLite alike.
+func CreatePartialUniqueIndex(tx *gorm.DB, model any, name string, columns ...string) error {
+	stmt := &gorm.Statement{DB: tx}
+	if err := stmt.Parse(model); err != nil {
+		return fmt.Errorf("parse model for partial unique index %s: %w", name, err)
+	}
+	quoted := make([]string, len(columns))
+	for i, c := range columns {
+		quoted[i] = stmt.Quote(c)
+	}
+	sql := fmt.Sprintf(
+		"CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s (%s) WHERE deleted_at IS NULL",
+		stmt.Quote(name), stmt.Quote(stmt.Table), strings.Join(quoted, ", "),
+	)
+	return tx.Exec(sql).Error
+}
 
 // CreateTenantTokenIndex creates (idempotently) the per-tenant partial unique index
 // on a token-referenced, tenant-scoped, soft-deletable entity's table: a token is
@@ -33,11 +59,6 @@ func CreateTenantTokenIndex(tx *gorm.DB, model any) error {
 	if err := stmt.Parse(model); err != nil {
 		return fmt.Errorf("parse model for tenant-token index: %w", err)
 	}
-	table := stmt.Table
-	name := "uix_" + table + "_tenant_token"
-	sql := fmt.Sprintf(
-		"CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s (tenant_id, token) WHERE deleted_at IS NULL",
-		stmt.Quote(name), stmt.Quote(table),
-	)
-	return tx.Exec(sql).Error
+	name := "uix_" + stmt.Table + "_tenant_token"
+	return CreatePartialUniqueIndex(tx, model, name, "tenant_id", "token")
 }
