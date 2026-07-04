@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	gql "github.com/graph-gophers/graphql-go"
-
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -132,7 +130,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// absent token is allowed through, see the auth handler).
 	Microservice.MarkReady(IdentityManager.Validator())
 
-	parsed := gql.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{})
+	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{})
 	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(), *parsed,
 		providers, Microservice.Readiness)
 	if err := GraphQLManager.Initialize(ctx); err != nil {
@@ -162,7 +160,7 @@ func registerAdminHandler() {
 	adminProviders := map[gqlcore.ContextKey]interface{}{
 		graphql.ContextAdminKey: adminSvc,
 	}
-	adminSchema := gql.MustParseSchema(graphql.AdminSchemaContent, &graphql.AdminResolver{})
+	adminSchema := gqlcore.MustParseSchema(graphql.AdminSchemaContent, &graphql.AdminResolver{})
 	http.Handle("/admin/graphql", gqlcore.NewAdminHttpHandler(adminSchema, adminProviders, Microservice.Readiness))
 }
 
@@ -174,7 +172,7 @@ func registerSettingsHandler() {
 	settingsProviders := map[gqlcore.ContextKey]interface{}{
 		graphql.ContextSettingsKey: settingsSvc,
 	}
-	settingsSchema := gql.MustParseSchema(graphql.SettingsSchemaContent, &graphql.SettingsResolver{})
+	settingsSchema := gqlcore.MustParseSchema(graphql.SettingsSchemaContent, &graphql.SettingsResolver{})
 	http.Handle("/settings/graphql", gqlcore.NewAdminHttpHandler(settingsSchema, settingsProviders, Microservice.Readiness))
 }
 

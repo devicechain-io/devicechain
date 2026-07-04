@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"fmt"
 
-	gql "github.com/graph-gophers/graphql-go"
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-event-sources/config"
@@ -259,7 +258,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// Create and initialize graphql manager.
 	schema := graphql.SchemaContent
-	parsed := gql.MustParseSchema(schema, &graphql.SchemaResolver{})
+	parsed := gqlcore.MustParseSchema(schema, &graphql.SchemaResolver{})
 
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
 	// validator in the background and gate the data plane on readiness rather

@@ -65,13 +65,6 @@ func (gql *GraphQLManager) Start(ctx context.Context) error {
 
 // Lifecycle callback that runs startup logic.
 func (gql *GraphQLManager) ExecuteStart(context.Context) error {
-	graphiqlHandler, err := graphiql.NewGraphiqlHandler(fmt.Sprintf("/%s/%s/%s/%s",
-		gql.Microservice.InstanceId, gql.Microservice.TenantId, gql.Microservice.FunctionalArea,
-		"graphql"))
-	if err != nil {
-		panic(err)
-	}
-
 	// Add handler for queries. A WebSocket upgrade on the same /graphql path is
 	// routed to the graphql-transport-ws subscription handler (ADR-037); a plain
 	// POST goes to the HTTP relay handler. Sharing one path lets a client derive
@@ -80,7 +73,19 @@ func (gql *GraphQLManager) ExecuteStart(context.Context) error {
 		NewHttpHandler(&gql.Schema, gql.ContextProviders, gql.Gate),
 		NewSubscriptionHandler(&gql.Schema, gql.ContextProviders, gql.Gate),
 	))
-	http.Handle("/graphiql", graphiqlHandler)
+
+	// The /graphiql explorer is developer tooling — register it only when dev tools
+	// are enabled (secure by default, ADR-029). It pairs with schema introspection,
+	// which MustParseSchema gates on the same flag; a prod deploy exposes neither.
+	if DevToolsEnabled() {
+		graphiqlHandler, err := graphiql.NewGraphiqlHandler(fmt.Sprintf("/%s/%s/%s/%s",
+			gql.Microservice.InstanceId, gql.Microservice.TenantId, gql.Microservice.FunctionalArea,
+			"graphql"))
+		if err != nil {
+			panic(err)
+		}
+		http.Handle("/graphiql", graphiqlHandler)
+	}
 
 	// Add handler for metrics
 	http.Handle("/metrics", promhttp.Handler())
