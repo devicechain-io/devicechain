@@ -77,18 +77,19 @@ func TestCreateTenantTokenIndex(t *testing.T) {
 	}
 }
 
-// credThing mirrors DeviceCredential's uniqueness shape: a soft-deletable entity
-// whose (type, id) pair must be unique among live rows only (ADR-014), with no
-// tenant column in the index (the ADR-025 callout resolves with no tenant).
+// credThing mirrors DeviceCredential's uniqueness shape: a soft-deletable,
+// tenant-scoped entity whose (tenant_id, type, id) tuple must be unique among live
+// rows only (ADR-014) — per-tenant, since resolution always runs under a tenant.
 type credThing struct {
 	gorm.Model
+	TenantId       string
 	CredentialType string
 	CredentialId   string
 }
 
 // CreatePartialUniqueIndex enforces uniqueness among LIVE rows only: a duplicate
-// live pair is rejected, a soft-deleted row frees the pair for reuse, and the
-// creation is idempotent.
+// live tuple is rejected, the same tuple is allowed across tenants, a soft-deleted
+// row frees the tuple for reuse, and the creation is idempotent.
 func TestCreatePartialUniqueIndex(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -98,7 +99,7 @@ func TestCreatePartialUniqueIndex(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 	mk := func() error {
-		return CreatePartialUniqueIndex(db, &credThing{}, "uix_cred_thing_lookup", "credential_type", "credential_id")
+		return CreatePartialUniqueIndex(db, &credThing{}, "uix_cred_thing_lookup", "tenant_id", "credential_type", "credential_id")
 	}
 	if err := mk(); err != nil {
 		t.Fatalf("create index: %v", err)
@@ -108,20 +109,27 @@ func TestCreatePartialUniqueIndex(t *testing.T) {
 		t.Fatalf("create index (2nd call must be a no-op): %v", err)
 	}
 
-	row := func() *credThing { return &credThing{CredentialType: "mqtt", CredentialId: "dev-1"} }
+	row := func(tenant string) *credThing {
+		return &credThing{TenantId: tenant, CredentialType: "mqtt", CredentialId: "dev-1"}
+	}
 
-	if err := db.Create(row()).Error; err != nil {
+	if err := db.Create(row("A")).Error; err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	// A second LIVE (mqtt, dev-1) — rejected.
-	if err := db.Create(row()).Error; err == nil {
-		t.Fatalf("duplicate live credential pair must be rejected")
+	// The same (type, id) under a different tenant — allowed (per-tenant, not global).
+	if err := db.Create(row("B")).Error; err != nil {
+		t.Fatalf("cross-tenant credential reuse must be allowed, got: %v", err)
 	}
-	// After a soft-delete the pair is reusable.
-	if err := db.Where("credential_type = ? and credential_id = ?", "mqtt", "dev-1").Delete(&credThing{}).Error; err != nil {
+	// A second LIVE (A, mqtt, dev-1) — rejected.
+	if err := db.Create(row("A")).Error; err == nil {
+		t.Fatalf("duplicate live credential tuple within a tenant must be rejected")
+	}
+	// After a soft-delete the tuple is reusable under tenant A.
+	if err := db.Where("tenant_id = ? and credential_type = ? and credential_id = ?", "A", "mqtt", "dev-1").
+		Delete(&credThing{}).Error; err != nil {
 		t.Fatalf("soft-delete: %v", err)
 	}
-	if err := db.Create(row()).Error; err != nil {
-		t.Fatalf("pair must be reusable after soft-delete, got: %v", err)
+	if err := db.Create(row("A")).Error; err != nil {
+		t.Fatalf("tuple must be reusable after soft-delete, got: %v", err)
 	}
 }

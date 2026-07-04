@@ -75,13 +75,16 @@ type DeviceGroup struct {
 }
 
 // DeviceCredential holds rotatable authentication material resolved at connect
-// time to the owning device (ADR-014). The (credential_type, credential_id) pair
-// is unique among LIVE rows only — enforced by a partial unique index
-// (idx_device_credential_lookup, WHERE deleted_at IS NULL) created in the schema
-// migration, NOT a struct-tag unique index (which counts soft-deleted tombstones,
-// locking a rotated credential's slot forever and letting a tombstone still be
-// resolved). Uniqueness is intentionally global, not per-tenant: the ADR-025
-// broker callout resolves a presented credential with no tenant in context.
+// time to the owning device (ADR-014). The (tenant_id, credential_type,
+// credential_id) tuple is unique among LIVE rows only — enforced by a partial
+// unique index (idx_device_credential_lookup, WHERE deleted_at IS NULL) created in
+// the schema migration, NOT a struct-tag unique index (which counts soft-deleted
+// tombstones, locking a rotated credential's slot forever and letting a tombstone
+// still be resolved). Uniqueness is per-tenant because resolution always runs
+// under a tenant (the ADR-025 callout parses it from the MQTT username; the event
+// resolver carries it on the pipeline context), so the tenant-scoped DB callback
+// already confines every lookup — a global constraint would only add a cross-tenant
+// squatting/existence oracle with no auth benefit.
 type DeviceCredential struct {
 	gorm.Model
 	rdb.TenantScoped

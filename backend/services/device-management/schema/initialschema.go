@@ -51,8 +51,12 @@ func NewInitialSchema() *gormigrate.Migration {
 			// soft-deleted rows — a rotated credential's slot would stay locked and a
 			// tombstone could still be resolved to a device. The partial predicate
 			// frees the slot on delete and confines the invariant to resolvable rows.
+			// Scoped per-tenant (tenant_id leads): credential resolution always runs
+			// under a tenant (the callout parses it from the MQTT username, the event
+			// resolver from the pipeline context), so per-tenant uniqueness suffices —
+			// and it avoids a cross-tenant credential-id squatting/existence oracle.
 			if err := rdb.CreatePartialUniqueIndex(tx, &v1.DeviceCredential{},
-				"idx_device_credential_lookup", "credential_type", "credential_id"); err != nil {
+				"idx_device_credential_lookup", "tenant_id", "credential_type", "credential_id"); err != nil {
 				return err
 			}
 			return nil
