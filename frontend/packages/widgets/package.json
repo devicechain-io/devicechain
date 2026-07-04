@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@devicechain/dashboards": "*",
-    "echarts": "^5.5.0"
+    "echarts": "^6.1.0"
   },
   "peerDependencies": {
     "react": "^19.0.0",
