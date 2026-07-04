@@ -191,6 +191,51 @@ func (suite *EventResolverTestSuite) TestMeasurementValidationPasses() {
 	assert.Empty(suite.T(), results[0].Resolved.Anchors)
 }
 
+// A declared metric binds its definition id as the measurement's classifier, so
+// the persisted value is self-describing (ADR-016).
+func (suite *EventResolverTestSuite) TestMeasurementClassifierBound() {
+	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 42}, MetricKey: "temp", DataType: "DOUBLE"}
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
+
+	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
+		context.Background(), deviceWithToken("TEST-123"), nil, measurementEvent("temp", "42"))
+
+	assert.NoError(suite.T(), err)
+	entry := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0]
+	if assert.NotNil(suite.T(), entry.Classifier) {
+		assert.Equal(suite.T(), uint64(42), *entry.Classifier)
+	}
+	assert.Equal(suite.T(), "42", entry.Value)
+}
+
+// A BOOLEAN metric is normalized to 1/0 so it stores in the numeric column, and
+// still carries its classifier.
+func (suite *EventResolverTestSuite) TestMeasurementBooleanNormalized() {
+	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 7}, MetricKey: "engaged", DataType: "BOOLEAN"}
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
+
+	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
+		context.Background(), deviceWithToken("TEST-123"), nil, measurementEvent("engaged", "true"))
+
+	assert.NoError(suite.T(), err)
+	entry := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0]
+	assert.Equal(suite.T(), "1", entry.Value)
+	assert.NotNil(suite.T(), entry.Classifier)
+}
+
+// An undeclared measurement key resolves unclassified and unchanged (lenient).
+func (suite *EventResolverTestSuite) TestMeasurementUndeclaredUnclassified() {
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
+
+	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
+		context.Background(), deviceWithToken("TEST-123"), nil, measurementEvent("humidity", "55"))
+
+	assert.NoError(suite.T(), err)
+	entry := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0]
+	assert.Nil(suite.T(), entry.Classifier)
+	assert.Equal(suite.T(), "55", entry.Value)
+}
+
 // A tracked relationship builds a device with ID 1 as source and the given target.
 func trackedRel(id uint, targetType string, targetId uint) dmodel.EntityRelationship {
 	return dmodel.EntityRelationship{

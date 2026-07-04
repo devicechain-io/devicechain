@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -54,14 +55,23 @@ func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
 	}
 }
 
-// Parse a (possibly null) string into a float64.
+// ErrDeterministic marks a persistence failure that no amount of redelivery can
+// fix — bad data, such as a non-numeric measurement or location value — so the
+// event is dead-lettered on the first failure rather than NAK-retried to the
+// delivery cap (ADR-024). A transient failure (e.g. a DB blip) is not wrapped and
+// keeps the retry path.
+var ErrDeterministic = errors.New("deterministic persistence failure")
+
+// Parse a (possibly null) string into a float64. A non-numeric value is a
+// deterministic failure (the value can never be stored in the numeric column), so
+// the error is wrapped as such rather than left to NAK-retry pointlessly.
 func parseNullableFloat64(val *string) (*float64, error) {
 	if val == nil {
 		return nil, nil
 	}
 	parsed, err := strconv.ParseFloat(*val, 64)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %q is not numeric: %v", ErrDeterministic, *val, err)
 	}
 	return &parsed, nil
 }
@@ -317,14 +327,19 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 
 			// Persist the event using the per-message tenant context.
 			if _, err := ep.PersistEvent(msgctx, *event); err != nil {
-				// Persist errors are treated as transient and retryable. Retry
-				// via redelivery up to the redelivery cap; on the final attempt
-				// route to the dead-letter path and ack to stop retrying.
-				if unpersisted.NumDelivered >= messaging.MaxDeliver {
-					ep.Failed(tenant, 0, *event, err, unpersisted.CorrelationID())
+				// A deterministic failure (bad data) can never succeed on redelivery,
+				// so dead-letter it on the first failure (ADR-024). A transient
+				// failure is retried via redelivery up to the cap, then dead-lettered.
+				switch {
+				case errors.Is(err, ErrDeterministic):
+					ep.Failed(tenant, uint(dmproto.FailureReason_Invalid), *event, err, unpersisted.CorrelationID())
 					unpersisted.Ack()
 					done(core.ResultFailed)
-				} else {
+				case unpersisted.NumDelivered >= messaging.MaxDeliver:
+					ep.Failed(tenant, uint(dmproto.FailureReason_ApiCallFailed), *event, err, unpersisted.CorrelationID())
+					unpersisted.Ack()
+					done(core.ResultFailed)
+				default:
 					unpersisted.Nak()
 					done(core.ResultRetry)
 				}

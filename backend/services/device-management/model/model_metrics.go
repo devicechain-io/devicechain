@@ -32,6 +32,22 @@ func (t MetricDataType) Valid() bool {
 	}
 }
 
+// StorableAsMetric reports whether a measurement of this type can be stored in the
+// numeric time-series column (ADR-016 amd). Metrics are numeric, aggregatable
+// time-series: DOUBLE and INT store directly and BOOLEAN stores as 0/1 (a
+// duty-cycle-aggregatable value). STRING is not storable — a string-valued signal
+// can not be averaged/min/maxed, so it is device state (an attribute /
+// latest-value), not a metric. (The full MetricDataType set is still valid for
+// command parameters, ADR-043, which are not time-series.)
+func (t MetricDataType) StorableAsMetric() bool {
+	switch t {
+	case MetricDouble, MetricInt, MetricBoolean:
+		return true
+	default:
+		return false
+	}
+}
+
 // String returns the underlying string value.
 func (t MetricDataType) String() string {
 	return string(t)

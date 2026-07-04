@@ -22,9 +22,15 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	// Validate the metric data-type vocabulary.
+	// Validate the metric data-type vocabulary and storability (ADR-016 amd): a
+	// metric must be a numeric, aggregatable time-series type; STRING telemetry is
+	// device state, not a metric.
 	if !MetricDataType(request.DataType).Valid() {
 		return nil, fmt.Errorf("invalid metric data type: %s", request.DataType)
+	}
+	if !MetricDataType(request.DataType).StorableAsMetric() {
+		return nil, fmt.Errorf("metric data type %s is not storable as a time-series measurement; "+
+			"model string-valued telemetry as device state (ADR-016 amd)", request.DataType)
 	}
 
 	created := &MetricDefinition{
@@ -65,9 +71,15 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	// Validate the metric data-type vocabulary.
+	// Validate the metric data-type vocabulary and storability (ADR-016 amd): a
+	// metric must be a numeric, aggregatable time-series type; STRING telemetry is
+	// device state, not a metric.
 	if !MetricDataType(request.DataType).Valid() {
 		return nil, fmt.Errorf("invalid metric data type: %s", request.DataType)
+	}
+	if !MetricDataType(request.DataType).StorableAsMetric() {
+		return nil, fmt.Errorf("metric data type %s is not storable as a time-series measurement; "+
+			"model string-valued telemetry as device state (ADR-016 amd)", request.DataType)
 	}
 
 	// Update fields that changed.

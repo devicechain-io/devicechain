@@ -23,3 +23,21 @@ func TestMetricDataTypeValid(t *testing.T) {
 		}
 	}
 }
+
+// StorableAsMetric accepts only the numeric, aggregatable types (DOUBLE/INT/
+// BOOLEAN); STRING is a valid type but is not storable as a time-series metric
+// (ADR-016 amd — string-valued telemetry is device state, not a metric).
+func TestMetricDataTypeStorableAsMetric(t *testing.T) {
+	storable := []MetricDataType{MetricDouble, MetricInt, MetricBoolean}
+	for _, dt := range storable {
+		if !dt.StorableAsMetric() {
+			t.Errorf("expected metric data type %q to be storable", dt)
+		}
+	}
+	notStorable := []MetricDataType{MetricString, "", "OBJECT"}
+	for _, dt := range notStorable {
+		if dt.StorableAsMetric() {
+			t.Errorf("expected metric data type %q to not be storable", dt)
+		}
+	}
+}

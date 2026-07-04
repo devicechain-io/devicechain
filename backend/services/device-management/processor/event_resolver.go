@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/config"
@@ -165,32 +166,73 @@ func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, devi
 	return nil, fmt.Errorf("can not resolve locations payload. invalid unresolved payload type")
 }
 
-// Resolve a measurements event payload.
+// Resolve a measurements event payload. Each measurement is bound to its metric
+// definition (ADR-016): the classifier FK makes the stored value self-describing
+// (unit/type resolvable through the definition), and a BOOLEAN metric is
+// normalized to 0/1 so it stores in the numeric measurement column. An undeclared
+// key resolves unclassified and unchanged (lenient — matching validateMeasurements).
 func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, device *model.Device,
 	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
-	if mpayload, ok := event.Payload.(*esmodel.UnresolvedMeasurementsPayload); ok {
-		rmpayload := &model.ResolvedMeasurementsPayload{}
-		rmsentries := make([]model.ResolvedMeasurementsEntry, 0)
-		for _, umsentry := range mpayload.Entries {
-			rmentries := make([]model.ResolvedMeasurementEntry, 0)
-			for mxkey, mxvalue := range umsentry.Measurements {
-				rmentry := model.ResolvedMeasurementEntry{
-					Name:       mxkey,
-					Value:      mxvalue,
-					Classifier: nil,
-				}
-				rmentries = append(rmentries, rmentry)
-			}
-			rmsentry := model.ResolvedMeasurementsEntry{
-				Entries:      rmentries,
-				OccurredTime: umsentry.OccurredTime,
-			}
-			rmsentries = append(rmsentries, rmsentry)
-		}
-		rmpayload.Entries = rmsentries
-		return rmpayload, nil
+	mpayload, ok := event.Payload.(*esmodel.UnresolvedMeasurementsPayload)
+	if !ok {
+		return nil, fmt.Errorf("can not resolve measurements payload. invalid unresolved payload type")
 	}
-	return nil, fmt.Errorf("can not resolve measurements payload. invalid unresolved payload type")
+	byKey, err := rez.metricDefsByKey(ctx, device)
+	if err != nil {
+		return nil, err
+	}
+	rmpayload := &model.ResolvedMeasurementsPayload{}
+	rmsentries := make([]model.ResolvedMeasurementsEntry, 0)
+	for _, umsentry := range mpayload.Entries {
+		rmentries := make([]model.ResolvedMeasurementEntry, 0)
+		for mxkey, mxvalue := range umsentry.Measurements {
+			rmentry := model.ResolvedMeasurementEntry{Name: mxkey, Value: mxvalue}
+			if def, declared := byKey[mxkey]; declared {
+				id := uint64(def.ID)
+				rmentry.Classifier = &id
+				if model.MetricDataType(def.DataType) == model.MetricBoolean {
+					rmentry.Value = normalizeBool(mxvalue)
+				}
+			}
+			rmentries = append(rmentries, rmentry)
+		}
+		rmsentry := model.ResolvedMeasurementsEntry{
+			Entries:      rmentries,
+			OccurredTime: umsentry.OccurredTime,
+		}
+		rmsentries = append(rmsentries, rmsentry)
+	}
+	rmpayload.Entries = rmsentries
+	return rmpayload, nil
+}
+
+// metricDefsByKey loads the device profile's metric definitions keyed by MetricKey
+// (cached through the API). Returns an empty map when none are declared.
+func (rez *EventResolver) metricDefsByKey(ctx context.Context,
+	device *model.Device) (map[string]*model.MetricDefinition, error) {
+	defs, err := rez.Api.MetricDefinitionsByDeviceType(ctx, device.DeviceTypeId)
+	if err != nil {
+		return nil, err
+	}
+	byKey := make(map[string]*model.MetricDefinition, len(defs))
+	for _, d := range defs {
+		byKey[d.MetricKey] = d
+	}
+	return byKey, nil
+}
+
+// normalizeBool renders a validated boolean measurement as "1"/"0" so it stores in
+// the numeric measurement column. A value that does not parse is left unchanged
+// (validateMeasurements already rejected a non-boolean value upstream).
+func normalizeBool(value string) string {
+	b, err := strconv.ParseBool(value)
+	if err != nil {
+		return value
+	}
+	if b {
+		return "1"
+	}
+	return "0"
 }
 
 // Resolve a alerts event payload.
@@ -315,16 +357,12 @@ func (rez *EventResolver) validateMeasurements(ctx context.Context, device *mode
 	if !ok {
 		return 0, nil
 	}
-	defs, err := rez.Api.MetricDefinitionsByDeviceType(ctx, device.DeviceTypeId)
+	byKey, err := rez.metricDefsByKey(ctx, device)
 	if err != nil {
 		return uint(dmproto.FailureReason_ApiCallFailed), err
 	}
-	if len(defs) == 0 {
+	if len(byKey) == 0 {
 		return 0, nil
-	}
-	byKey := make(map[string]*model.MetricDefinition, len(defs))
-	for _, d := range defs {
-		byKey[d.MetricKey] = d
 	}
 	for _, entry := range payload.Entries {
 		for name, value := range entry.Measurements {
