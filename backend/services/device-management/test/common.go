@@ -185,6 +185,36 @@ func (api *MockApi) CommandDefinitionsByDeviceType(ctx context.Context, deviceTy
 	return args.Get(0).([]*model.CommandDefinition), args.Error(1)
 }
 
+func (api *MockApi) CreateAlarmDefinition(ctx context.Context, request *model.AlarmDefinitionCreateRequest) (*model.AlarmDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.AlarmDefinition), args.Error(1)
+}
+
+func (api *MockApi) UpdateAlarmDefinition(ctx context.Context, token string, request *model.AlarmDefinitionCreateRequest) (*model.AlarmDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.AlarmDefinition), args.Error(1)
+}
+
+func (api *MockApi) AlarmDefinitionsById(ctx context.Context, ids []uint) ([]*model.AlarmDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.AlarmDefinition), args.Error(1)
+}
+
+func (api *MockApi) AlarmDefinitionsByToken(ctx context.Context, tokens []string) ([]*model.AlarmDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.AlarmDefinition), args.Error(1)
+}
+
+func (api *MockApi) AlarmDefinitions(ctx context.Context, criteria model.AlarmDefinitionSearchCriteria) (*model.AlarmDefinitionSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.AlarmDefinitionSearchResults), args.Error(1)
+}
+
+func (api *MockApi) AlarmDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*model.AlarmDefinition, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*model.AlarmDefinition), args.Error(1)
+}
+
 func (api *MockApi) SetEntityAttribute(ctx context.Context, request *model.EntityAttributeSetRequest) (*model.EntityAttribute, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.EntityAttribute), args.Error(1)

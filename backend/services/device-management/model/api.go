@@ -67,6 +67,14 @@ type DeviceManagementApi interface {
 	CommandDefinitions(ctx context.Context, criteria CommandDefinitionSearchCriteria) (*CommandDefinitionSearchResults, error)
 	CommandDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*CommandDefinition, error)
 
+	// Alarm definitions (ADR-041).
+	CreateAlarmDefinition(ctx context.Context, request *AlarmDefinitionCreateRequest) (*AlarmDefinition, error)
+	UpdateAlarmDefinition(ctx context.Context, token string, request *AlarmDefinitionCreateRequest) (*AlarmDefinition, error)
+	AlarmDefinitionsById(ctx context.Context, ids []uint) ([]*AlarmDefinition, error)
+	AlarmDefinitionsByToken(ctx context.Context, tokens []string) ([]*AlarmDefinition, error)
+	AlarmDefinitions(ctx context.Context, criteria AlarmDefinitionSearchCriteria) (*AlarmDefinitionSearchResults, error)
+	AlarmDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*AlarmDefinition, error)
+
 	// Entity attributes (ADR-012).
 	SetEntityAttribute(ctx context.Context, request *EntityAttributeSetRequest) (*EntityAttribute, error)
 	EntityAttributes(ctx context.Context, criteria EntityAttributeSearchCriteria) (*EntityAttributeSearchResults, error)
