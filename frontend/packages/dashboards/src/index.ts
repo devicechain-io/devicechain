@@ -32,7 +32,7 @@ export type {
   MeasurementSample,
 } from './types';
 
-export { effectiveBindings } from './bindings';
+export { effectiveBindings, parseBindingManifest, stripDefaultBindings } from './bindings';
 
 export {
   migrateToSlots,
@@ -65,6 +65,7 @@ export {
 
 export {
   parseDashboardDefinition,
+  parseSlotBinding,
   serializeDefinition,
   isDirty,
   resolveWidgetBox,

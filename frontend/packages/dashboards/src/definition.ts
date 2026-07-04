@@ -83,17 +83,18 @@ function parseSlots(raw: unknown): Record<string, SlotDefinition> | undefined {
     const type = spec.type === 'anchor' ? 'anchor' : 'device';
     const slot: SlotDefinition = { type };
     if (typeof spec.label === 'string') slot.label = spec.label;
-    const binding = parseBinding(spec.defaultBinding);
+    const binding = parseSlotBinding(spec.defaultBinding);
     if (binding) slot.defaultBinding = binding;
     slots[name] = slot;
   }
   return Object.keys(slots).length > 0 ? slots : undefined;
 }
 
-// parseBinding normalizes a slot's default entity binding (device token or anchor
-// target), or drops it (undefined) when absent/malformed. The entity only — a
-// binding never carries measurement names (those live on the widget's selector).
-function parseBinding(raw: unknown): SlotBinding | undefined {
+// parseSlotBinding normalizes a slot binding (device token or anchor target), or
+// drops it (undefined) when absent/malformed. The entity only — a binding never
+// carries measurement names (those live on the widget's selector). Exported so the
+// runtime binding manifest (parseBindingManifest) validates host input the same way.
+export function parseSlotBinding(raw: unknown): SlotBinding | undefined {
   if (!isRecord(raw)) return undefined;
   if (raw.kind === 'device') {
     const token = stringAt(raw, 'deviceToken');
