@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { effectiveBindings } from './bindings';
+import { effectiveBindings, parseBindingManifest, stripDefaultBindings } from './bindings';
 import type { DashboardDefinition, SlotBinding } from './types';
 
 function def(slots: DashboardDefinition['slots']): DashboardDefinition {
@@ -42,5 +42,68 @@ describe('effectiveBindings', () => {
 
   it('returns an empty manifest for a slot-free definition', () => {
     expect(effectiveBindings(def(undefined))).toEqual({});
+  });
+});
+
+describe('parseBindingManifest', () => {
+  it('validates a host manifest, dropping malformed entries', () => {
+    const raw = {
+      primary: { kind: 'device', deviceToken: 'therm-9' },
+      area: { kind: 'anchor', anchor: { relationship: 'contains', targetType: 'area', targetToken: 'plant-2' } },
+      bad1: { kind: 'device', deviceToken: '' }, // empty token → dropped
+      bad2: { kind: 'nonsense' }, // unknown kind → dropped
+      bad3: 'not an object',
+    };
+    expect(parseBindingManifest(raw)).toEqual({
+      primary: { kind: 'device', deviceToken: 'therm-9' },
+      area: { kind: 'anchor', anchor: { relationship: 'contains', targetType: 'area', targetToken: 'plant-2' } },
+    });
+  });
+
+  it('returns {} for a non-object', () => {
+    expect(parseBindingManifest(null)).toEqual({});
+    expect(parseBindingManifest([])).toEqual({});
+    expect(parseBindingManifest('x')).toEqual({});
+  });
+
+  it('ignores a __proto__ key without polluting the prototype', () => {
+    const raw = JSON.parse('{"__proto__": {"kind":"device","deviceToken":"x"}, "ok": {"kind":"device","deviceToken":"y"}}');
+    const out = parseBindingManifest(raw);
+    expect(out).toEqual({ ok: { kind: 'device', deviceToken: 'y' } });
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype); // not swapped
+    expect(({} as Record<string, unknown>).kind).toBeUndefined(); // no global pollution
+  });
+
+  it('a manifest overrides a definition default via effectiveBindings', () => {
+    const d = def({ primary: { type: 'device', defaultBinding: devA } });
+    const manifest = parseBindingManifest({ primary: { kind: 'device', deviceToken: 'host-device' } });
+    expect(effectiveBindings(d, manifest)).toEqual({ primary: { kind: 'device', deviceToken: 'host-device' } });
+  });
+});
+
+describe('stripDefaultBindings', () => {
+  it('removes slot default bindings but keeps slot names/types/labels', () => {
+    const d = def({ primary: { type: 'device', label: 'Thermostat', defaultBinding: devA } });
+    const t = stripDefaultBindings(d);
+    expect(t.slots).toEqual({ primary: { type: 'device', label: 'Thermostat' } });
+    // The stripped template has no effective bindings without a host manifest.
+    expect(effectiveBindings(t)).toEqual({});
+  });
+
+  it('no-ops a slot-free definition', () => {
+    const d = def(undefined);
+    expect(stripDefaultBindings(d)).toBe(d);
+  });
+
+  it('a template + a matching host manifest resolves the slot (the embed contract)', () => {
+    const authored = def({ primary: { type: 'device', label: 'therm-001', defaultBinding: devA } });
+    const template = stripDefaultBindings(authored);
+    const hostA = parseBindingManifest({ primary: { kind: 'device', deviceToken: 'host-a' } });
+    const hostB = parseBindingManifest({ primary: { kind: 'device', deviceToken: 'host-b' } });
+    // One template, two manifests → two different bindings.
+    expect(effectiveBindings(template, hostA)).toEqual({ primary: { kind: 'device', deviceToken: 'host-a' } });
+    expect(effectiveBindings(template, hostB)).toEqual({ primary: { kind: 'device', deviceToken: 'host-b' } });
+    // A non-template (defaults kept) renders the author's device with no manifest.
+    expect(effectiveBindings(authored)).toEqual({ primary: devA });
   });
 });

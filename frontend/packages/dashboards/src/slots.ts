@@ -50,7 +50,7 @@ function nextSlotName(slots: Record<string, SlotDefinition>): string {
 function bindingOfSelector(ds: DatasourceSelector | undefined): SlotBinding | undefined {
   if (ds?.kind === 'device') return ds.deviceToken ? { kind: 'device', deviceToken: ds.deviceToken } : undefined;
   // Guard an empty target token (symmetric with device): a token-less anchor names no
-  // entity, so it can't be a binding — and parseBinding would drop it, so slotting it
+  // entity, so it can't be a binding — and parseSlotBinding would drop it, so slotting it
   // would silently lose the relationship/targetType on reload.
   if (ds?.kind === 'anchor') {
     return ds.anchor.targetToken ? { kind: 'anchor', anchor: ds.anchor } : undefined;

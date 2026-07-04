@@ -1,191 +1,242 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The dashboard app shell. Resolves the dashboard token from the path (/dash/<token>),
-// gates on a reused console session, loads the definition from dashboard-management,
-// parses it, and hands it to the renderer with a hub + concrete DeviceResolver.
+// The standalone dashboard viewer — the ADR-039 reference external embedder. It
+// proves the embed story: bring your OWN auth (its own login, NOT the console's
+// dc-auth session), paste an EXPORTED definition + an optional binding manifest,
+// and render view-only. One definition + two manifests → two live dashboards on
+// two different devices.
+//
+// Three steps: (1) sign in (login → selectTenant → a tenant access token held in
+// React state); (2) load (paste + parse a definition and manifest); (3) view
+// (render the definition read-only through a hub bound to the manifest). There is
+// NO editing, no save, no token fetch.
 
-import { gql } from '@devicechain/client';
+import { gql, setAuthTokenGetter } from '@devicechain/client';
 import {
-  addWidget,
   createDeviceResolver,
   DashboardHub,
-  isDirty,
+  effectiveBindings,
+  migrateToSlots,
+  parseBindingManifest,
   parseDashboardDefinition,
-  serializeDefinition,
-  setTitle,
-  updateWidget,
-  WIDGET_TYPES,
   type DashboardDefinition,
-  type DeviceResolver,
-  type WidgetType,
+  type SlotBinding,
 } from '@devicechain/dashboards';
 import { DashboardRenderer } from '@devicechain/widgets';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { hasValidSession } from './auth';
-import { DashboardEditor } from './DashboardEditor';
-import { DASHBOARD_BY_TOKEN, UPDATE_DASHBOARD } from './queries';
-import { WidgetConfigPanel } from './WidgetConfigPanel';
+import { LOGIN, type Membership, SELECT_TENANT } from './queries';
 
-// The dashboard token is the path segment after the /dash/ base.
-function dashboardTokenFromPath(): string {
-  const path = window.location.pathname.replace(/^\/dash\/?/, '');
-  const segment = path.split('/')[0] ?? '';
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    // A malformed %-escape (URIError) → treat as no token rather than throwing.
-    return '';
-  }
+// A loaded, parsed dashboard ready to render: the definition plus the effective
+// binding manifest (defaults merged with the pasted override) it renders against.
+interface Loaded {
+  definition: DashboardDefinition;
+  manifest: Record<string, SlotBinding>;
 }
-
-type LoadState =
-  | { status: 'loading' }
-  | { status: 'ready'; definition: DashboardDefinition; description: string | null }
-  | { status: 'error'; message: string };
-
-type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; message: string };
 
 export default function App() {
-  const token = useMemo(dashboardTokenFromPath, []);
-  // One resolver shared by the hub (stream resolution) and the renderer (history
-  // seeding) so token→id / anchor→devices lookups are cached once, and one hub for
-  // the app's lifetime, torn down on unmount.
-  const resolver = useMemo(() => createDeviceResolver(), []);
-  const hub = useMemo(() => new DashboardHub({ resolver }), [resolver]);
-  useEffect(() => () => hub.disposeAll(), [hub]);
+  // The tenant access token, once signed in. Kept in state (to drive the UI) AND a
+  // ref (so the token getter, registered once, always reads the latest value).
+  const [token, setToken] = useState<string | null>(null);
+  const tokenRef = useRef<string | null>(null);
+  tokenRef.current = token;
 
-  if (!hasValidSession()) return <SignInPrompt />;
-  if (!token) return <Message title="No dashboard selected" detail="Open a dashboard from the console." />;
-  return <DashboardView token={token} hub={hub} resolver={resolver} />;
+  // The parsed dashboard to view, once loaded. Null → show the load form (Step 2).
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
+
+  // Register the token getter ONCE at mount: it always returns the latest token
+  // from the ref. There is no refresh logic — this is a reference viewer, so when
+  // the token expires the user simply signs in again.
+  useEffect(() => {
+    setAuthTokenGetter(async () => tokenRef.current);
+    return () => setAuthTokenGetter(null);
+  }, []);
+
+  const signOut = () => {
+    setToken(null);
+    setLoaded(null);
+  };
+
+  if (!token) return <SignIn onAuthed={setToken} />; // Step 1
+  if (!loaded) return <Load onRender={setLoaded} onSignOut={signOut} />; // Step 2
+  return <View loaded={loaded} onChange={() => setLoaded(null)} onSignOut={signOut} />; // Step 3
 }
 
-function DashboardView({
-  token,
-  hub,
-  resolver,
-}: {
-  token: string;
-  hub: DashboardHub;
-  resolver: DeviceResolver;
-}) {
-  const [state, setState] = useState<LoadState>({ status: 'loading' });
+// ── Step 1: Sign in ─────────────────────────────────────────────────────────
+// email + password → login → identity token + memberships. Zero memberships is an
+// error; one auto-selects; many show a picker. selectTenant yields the access token.
 
-  useEffect(() => {
-    let cancelled = false;
-    setState({ status: 'loading' });
-    gql('dashboard-management', DASHBOARD_BY_TOKEN, { token })
+function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [identityToken, setIdentityToken] = useState<string | null>(null);
+  const [memberships, setMemberships] = useState<Membership[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectTenant = (idToken: string, tenant: string) => {
+    setBusy(true);
+    setError(null);
+    gql('user-management', SELECT_TENANT, { identityToken: idToken, tenant }, { anonymous: true })
+      .then((r) => onAuthed(r.selectTenant.accessToken))
+      .catch((err: unknown) => {
+        setError(errorMessage(err));
+        setBusy(false);
+      });
+  };
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    gql('user-management', LOGIN, { email, password }, { anonymous: true })
       .then((r) => {
-        if (cancelled) return;
-        if (!r.dashboard) {
-          setState({ status: 'error', message: `Dashboard "${token}" not found.` });
+        const { identityToken: idToken, memberships: mships } = r.login;
+        if (mships.length === 0) {
+          setError('This account has no tenants.');
+          setBusy(false);
           return;
         }
-        let definition = parseDashboardDefinition(JSON.parse(r.dashboard.definition));
-        // If the stored definition has no title, seed it from the dashboard's name
-        // so BOTH the working and saved baselines start seeded — otherwise the seed
-        // would only land on the working copy and read as a spurious dirty edit.
-        if (definition.title === '' && r.dashboard.name) {
-          definition = setTitle(definition, r.dashboard.name);
+        if (mships.length === 1) {
+          selectTenant(idToken, mships[0].tenant);
+          return;
         }
-        setState({ status: 'ready', definition, description: r.dashboard.description ?? null });
+        // More than one — hold the identity token and let the user pick a tenant.
+        setIdentityToken(idToken);
+        setMemberships(mships);
+        setBusy(false);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setState({ status: 'error', message: errorMessage(err) });
+        setError(errorMessage(err));
+        setBusy(false);
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
+  };
 
-  if (state.status === 'loading') return <Message title="Loading…" />;
-  if (state.status === 'error') return <Message title="Couldn’t load dashboard" detail={state.message} />;
+  // Tenant picker (only when the identity has more than one membership).
+  if (identityToken) {
+    return (
+      <Centered>
+        <Card>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>Choose a tenant</div>
+          {error && <ErrorText>{error}</ErrorText>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {memberships.map((m) => (
+              <HeaderButton
+                key={m.tenant}
+                onClick={() => selectTenant(identityToken, m.tenant)}
+                disabled={busy}
+              >
+                {m.tenant}
+              </HeaderButton>
+            ))}
+          </div>
+        </Card>
+      </Centered>
+    );
+  }
 
   return (
-    <DashboardWorkspace
-      key={token}
-      token={token}
-      loaded={state.definition}
-      description={state.description}
-      hub={hub}
-      resolver={resolver}
-    />
+    <Centered>
+      <form onSubmit={submit} style={{ display: 'contents' }}>
+        <Card>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>Sign in</div>
+          <Field label="Email">
+            <TextInput
+              type="email"
+              value={email}
+              onChange={setEmail}
+              autoComplete="username"
+              autoFocus
+            />
+          </Field>
+          <Field label="Password">
+            <TextInput
+              type="password"
+              value={password}
+              onChange={setPassword}
+              autoComplete="current-password"
+            />
+          </Field>
+          {error && <ErrorText>{error}</ErrorText>}
+          <HeaderButton type="submit" primary disabled={busy}>
+            {busy ? 'Signing in…' : 'Sign in'}
+          </HeaderButton>
+        </Card>
+      </form>
+    </Centered>
   );
 }
 
-// DashboardWorkspace holds the view/edit mode and the working copy of the
-// definition. View renders the read-only DashboardRenderer; edit renders the
-// react-rnd canvas. Save persists the working copy via updateDashboard and
-// re-baselines the dirty check.
-function DashboardWorkspace({
-  token,
-  loaded,
-  description,
-  hub,
-  resolver,
+// ── Step 2: Load ────────────────────────────────────────────────────────────
+// Paste an exported definition + an optional binding manifest, parse both, and
+// advance. Parse errors show inline; nothing throws to a white screen.
+
+// Matches dashboard-management's server-side definition cap (1 MiB).
+const MAX_PASTE_BYTES = 1 << 20;
+
+const MANIFEST_HELP =
+  '{ "slotName": { "kind": "device", "deviceToken": "..." } }  or  ' +
+  '{ "slotName": { "kind": "anchor", "anchor": { "relationship": "...", "targetType": "area", "targetToken": "..." } } }';
+
+function Load({
+  onRender,
+  onSignOut,
 }: {
-  token: string;
-  loaded: DashboardDefinition;
-  description: string | null;
-  hub: DashboardHub;
-  resolver: DeviceResolver;
+  onRender: (loaded: Loaded) => void;
+  onSignOut: () => void;
 }) {
-  const [mode, setMode] = useState<'view' | 'edit'>('view');
-  const [working, setWorking] = useState<DashboardDefinition>(loaded);
-  const [saved, setSaved] = useState<DashboardDefinition>(loaded);
-  // One save state, not scattered saving/error booleans — can't be both at once.
-  const [saveState, setSaveState] = useState<SaveState>({ kind: 'clean' });
-  // Selection is owned here (not in the editor) so the config panel and the
-  // editor stay in sync; leaving edit mode clears it.
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [definitionText, setDefinitionText] = useState('');
+  const [manifestText, setManifestText] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
-  const dirty = isDirty(working, saved);
-  const title = working.title || token;
-  const selected = working.widgets.find((w) => w.id === selectedId) ?? null;
+  const render = () => {
+    setError(null);
 
-  // Warn before a tab close/reload discards unsaved edits (the browser shows its
-  // own generic prompt when a beforeunload handler cancels). Only armed while dirty.
-  useEffect(() => {
-    if (!dirty) return;
-    const handler = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = '';
-    };
-    window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
-  }, [dirty]);
+    // Bound the paste on the main thread (parse is synchronous) — matches the
+    // server's definition size cap; a giant paste would only freeze this tab.
+    if (definitionText.length > MAX_PASTE_BYTES) {
+      setError('Definition is too large (over 1 MiB).');
+      return;
+    }
 
-  const addWidgetOfType = (type: WidgetType) => {
-    const { definition, id } = addWidget(working, type);
-    setWorking(definition);
-    setSelectedId(id); // open the new widget's config panel
-  };
+    // Parse the definition (required).
+    let definition: DashboardDefinition;
+    try {
+      definition = migrateToSlots(parseDashboardDefinition(JSON.parse(definitionText)));
+    } catch (err) {
+      setError(`Definition: ${errorMessage(err)}`);
+      return;
+    }
 
-  const toggleMode = () => {
-    setSelectedId(null);
-    setMode(mode === 'edit' ? 'view' : 'edit');
-  };
+    // Parse the manifest (optional — empty → no overrides).
+    let manifest: Record<string, SlotBinding> = {};
+    if (manifestText.trim() !== '') {
+      let rawManifest: unknown;
+      try {
+        rawManifest = JSON.parse(manifestText);
+      } catch (err) {
+        setError(`Binding manifest: ${errorMessage(err)}`);
+        return;
+      }
+      if (rawManifest === null || typeof rawManifest !== 'object' || Array.isArray(rawManifest)) {
+        setError('Binding manifest must be a JSON object of slot → binding.');
+        return;
+      }
+      manifest = parseBindingManifest(rawManifest);
+      // Surface dropped entries (a typo'd shape) rather than silently binding the
+      // wrong entity — or, for a stripped template, an unexplained blank widget.
+      const dropped = Object.keys(rawManifest).length - Object.keys(manifest).length;
+      if (dropped > 0) {
+        setError(
+          `Binding manifest: ${dropped} ${dropped === 1 ? 'entry was' : 'entries were'} ignored — ` +
+            'check the shape (kind + deviceToken, or anchor with a targetToken).',
+        );
+        return;
+      }
+    }
 
-  const save = () => {
-    const snapshot = working; // persist exactly what we serialize; later edits stay dirty
-    setSaveState({ kind: 'saving' });
-    gql('dashboard-management', UPDATE_DASHBOARD, {
-      token,
-      // description is preserved verbatim (the editor doesn't edit it); name tracks
-      // the (now-seeded) title so a save never wipes either field.
-      request: {
-        token,
-        name: snapshot.title || null,
-        description,
-        definition: serializeDefinition(snapshot),
-      },
-    })
-      .then(() => {
-        setSaved(snapshot);
-        setSaveState({ kind: 'clean' });
-      })
-      .catch((err: unknown) => setSaveState({ kind: 'error', message: errorMessage(err) }));
+    onRender({ definition, manifest });
   };
 
   return (
@@ -200,102 +251,238 @@ function DashboardWorkspace({
           flex: '0 0 auto',
         }}
       >
-        {mode === 'edit' ? (
-          <input
-            value={working.title}
-            onChange={(e) => setWorking(setTitle(working, e.target.value))}
-            placeholder="Dashboard title"
-            style={{
-              flex: '1 1 auto',
-              fontSize: 16,
-              fontWeight: 600,
-              padding: '4px 8px',
-              borderRadius: 6,
-              border: '1px solid hsl(var(--border))',
-              background: 'hsl(var(--card))',
-              color: 'hsl(var(--foreground))',
-            }}
-          />
-        ) : (
-          <div style={{ flex: '1 1 auto', fontWeight: 600 }}>{title}</div>
-        )}
-
-        {saveState.kind === 'error' && (
-          <span style={{ color: 'hsl(var(--destructive))', fontSize: 13 }}>{saveState.message}</span>
-        )}
-        {mode === 'edit' && dirty && saveState.kind !== 'error' && (
-          <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 13 }}>Unsaved changes</span>
-        )}
-
-        {mode === 'edit' && <AddWidgetMenu onAdd={addWidgetOfType} />}
-        {mode === 'edit' && (
-          <HeaderButton onClick={save} disabled={!dirty || saveState.kind === 'saving'} primary>
-            {saveState.kind === 'saving' ? 'Saving…' : 'Save'}
-          </HeaderButton>
-        )}
-        <HeaderButton onClick={toggleMode}>{mode === 'edit' ? 'Done' : 'Edit'}</HeaderButton>
+        <div style={{ flex: '1 1 auto', fontWeight: 600 }}>Load a dashboard</div>
+        <HeaderButton onClick={onSignOut}>Sign out</HeaderButton>
       </header>
 
-      <main style={{ flex: '1 1 auto', minHeight: 0 }}>
-        {mode === 'edit' ? (
-          <div style={{ display: 'flex', height: '100%' }}>
-            <div style={{ flex: '1 1 auto', minWidth: 0 }}>
-              <DashboardEditor
-                definition={working}
-                onChange={setWorking}
-                hub={hub}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-              />
-            </div>
-            {selected && (
-              <WidgetConfigPanel
-                widget={selected}
-                onChange={(next) => setWorking(updateWidget(working, next.id, next))}
-                onClose={() => setSelectedId(null)}
-              />
-            )}
-          </div>
-        ) : (
-          <DashboardRenderer definition={working} hub={hub} resolver={resolver} />
-        )}
+      <main
+        style={{
+          flex: '1 1 auto',
+          minHeight: 0,
+          overflow: 'auto',
+          padding: 24,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+          maxWidth: 900,
+          width: '100%',
+          margin: '0 auto',
+        }}
+      >
+        <Field label="Definition (JSON)">
+          <TextArea
+            value={definitionText}
+            onChange={setDefinitionText}
+            rows={14}
+            placeholder="Paste an exported dashboard definition…"
+          />
+        </Field>
+
+        <Field label="Binding manifest (JSON, optional)" hint={MANIFEST_HELP}>
+          <TextArea
+            value={manifestText}
+            onChange={setManifestText}
+            rows={7}
+            placeholder="{ }"
+          />
+        </Field>
+
+        {error && <ErrorText>{error}</ErrorText>}
+
+        <div>
+          <HeaderButton onClick={render} primary disabled={definitionText.trim() === ''}>
+            Render
+          </HeaderButton>
+        </div>
       </main>
     </div>
   );
 }
 
-// AddWidgetMenu is a native select that adds a widget of the chosen type, then
-// snaps back to its placeholder so it reads as an action, not a stored value.
-function AddWidgetMenu({ onAdd }: { onAdd: (type: WidgetType) => void }) {
+// ── Step 3: View ────────────────────────────────────────────────────────────
+// Render the parsed definition read-only through a hub bound to the effective
+// manifest. VIEW-ONLY — no edit mode, no save, no react-rnd.
+
+function View({
+  loaded,
+  onChange,
+  onSignOut,
+}: {
+  loaded: Loaded;
+  onChange: () => void;
+  onSignOut: () => void;
+}) {
+  const { definition, manifest } = loaded;
+
+  // The effective slot→entity manifest (definition defaults merged with the pasted
+  // override). One resolver shared by the hub (stream resolution) and the renderer
+  // (history seeding); one hub for this view's lifetime, torn down on unmount.
+  const bindings = useMemo(() => effectiveBindings(definition, manifest), [definition, manifest]);
+  const resolver = useMemo(() => createDeviceResolver(), []);
+  const hub = useMemo(() => new DashboardHub({ resolver, bindings }), [resolver, bindings]);
+  useEffect(() => () => hub.disposeAll(), [hub]);
+
+  const title = definition.title || 'Dashboard';
+
   return (
-    <select
-      value=""
-      onChange={(e) => {
-        const type = e.target.value as WidgetType;
-        if (type) onAdd(type);
-        e.target.value = '';
-      }}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <header
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '8px 16px',
+          borderBottom: '1px solid hsl(var(--border))',
+          flex: '0 0 auto',
+        }}
+      >
+        <div style={{ flex: '1 1 auto', fontWeight: 600 }}>{title}</div>
+        <HeaderButton onClick={onChange}>Change</HeaderButton>
+        <HeaderButton onClick={onSignOut}>Sign out</HeaderButton>
+      </header>
+
+      <main style={{ flex: '1 1 auto', minHeight: 0 }}>
+        <DashboardRenderer
+          definition={definition}
+          hub={hub}
+          resolver={resolver}
+          bindings={bindings}
+        />
+      </main>
+    </div>
+  );
+}
+
+// ── Presentational helpers (inline styles + CSS vars — no Tailwind/shadcn) ────
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : 'Unexpected error';
+}
+
+function Centered({ children }: { children: React.ReactNode }) {
+  return (
+    <div
       style={{
-        fontSize: 14,
-        padding: '6px 10px',
-        borderRadius: 6,
-        border: '1px solid hsl(var(--border))',
-        cursor: 'pointer',
-        color: 'hsl(var(--foreground))',
-        background: 'hsl(var(--card))',
-        flex: '0 0 auto',
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
       }}
     >
-      <option value="" disabled>
-        + Add widget
-      </option>
-      {WIDGET_TYPES.map((type) => (
-        <option key={type} value={type}>
-          {type}
-        </option>
-      ))}
-    </select>
+      {children}
+    </div>
   );
+}
+
+function Card({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+        width: '100%',
+        maxWidth: 360,
+        padding: 24,
+        borderRadius: 10,
+        border: '1px solid hsl(var(--border))',
+        background: 'hsl(var(--card))',
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span style={{ fontSize: 13, fontWeight: 600, color: 'hsl(var(--foreground))' }}>{label}</span>
+      {children}
+      {hint && (
+        <span style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))', fontFamily: 'monospace' }}>
+          {hint}
+        </span>
+      )}
+    </label>
+  );
+}
+
+function TextInput({
+  value,
+  onChange,
+  type = 'text',
+  autoComplete,
+  autoFocus,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  type?: string;
+  autoComplete?: string;
+  autoFocus?: boolean;
+}) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      autoComplete={autoComplete}
+      autoFocus={autoFocus}
+      style={{
+        fontSize: 14,
+        padding: '8px 10px',
+        borderRadius: 6,
+        border: '1px solid hsl(var(--border))',
+        background: 'hsl(var(--background))',
+        color: 'hsl(var(--foreground))',
+      }}
+    />
+  );
+}
+
+function TextArea({
+  value,
+  onChange,
+  rows,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  rows: number;
+  placeholder?: string;
+}) {
+  return (
+    <textarea
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      rows={rows}
+      placeholder={placeholder}
+      spellCheck={false}
+      style={{
+        fontSize: 13,
+        fontFamily: 'monospace',
+        padding: '8px 10px',
+        borderRadius: 6,
+        border: '1px solid hsl(var(--border))',
+        background: 'hsl(var(--background))',
+        color: 'hsl(var(--foreground))',
+        resize: 'vertical',
+      }}
+    />
+  );
+}
+
+function ErrorText({ children }: { children: React.ReactNode }) {
+  return <div style={{ color: 'hsl(var(--destructive))', fontSize: 13 }}>{children}</div>;
 }
 
 function HeaderButton({
@@ -303,14 +490,17 @@ function HeaderButton({
   onClick,
   disabled,
   primary,
+  type = 'button',
 }: {
   children: React.ReactNode;
-  onClick: () => void;
+  onClick?: () => void;
   disabled?: boolean;
   primary?: boolean;
+  type?: 'button' | 'submit';
 }) {
   return (
     <button
+      type={type}
       onClick={onClick}
       disabled={disabled}
       style={{
@@ -327,38 +517,5 @@ function HeaderButton({
     >
       {children}
     </button>
-  );
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : 'Unexpected error';
-}
-
-function SignInPrompt() {
-  return (
-    <Message
-      title="Sign in required"
-      detail="Your session has expired or you’re not signed in. Sign in through the console, then reopen this dashboard."
-    />
-  );
-}
-
-function Message({ title, detail }: { title: string; detail?: string }) {
-  return (
-    <div
-      style={{
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        padding: 24,
-        textAlign: 'center',
-      }}
-    >
-      <div style={{ fontSize: 18, fontWeight: 600 }}>{title}</div>
-      {detail && <div style={{ color: 'hsl(var(--muted-foreground))', maxWidth: 420 }}>{detail}</div>}
-    </div>
   );
 }

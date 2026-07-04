@@ -1,69 +1,61 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Hand-authored typed GraphQL documents for the dashboard app.
+// Hand-authored typed GraphQL documents for the standalone dashboard viewer.
 //
 // Like the SDK packages, this app carries no graphql-codegen — the SDK runs in
 // documentMode 'string', so a raw query string cast to TypedDocument<Result, Vars>
-// is exactly what a generated document is at runtime. Each doc targets one service
-// area (see the `gql(area, ...)` call sites).
+// is exactly what a generated document is at runtime. The viewer only needs the
+// two-step auth flow (ADR-033): login authenticates the identity and lists its
+// tenants; selectTenant exchanges the identity token for a tenant access token.
+// The definition itself is pasted in, not fetched — so there is no dashboard query.
 
 import type { TypedDocument } from '@devicechain/client';
 
-// ── user-management: exchange a refresh token for a fresh session ─────────────
-// Anonymous (no bearer): used by auth.ts to renew an expired access token from the
-// console's stored refresh token so the dashboard doesn't silently go stale.
+// ── user-management: authenticate a global identity ──────────────────────────
+// Anonymous (no bearer). Returns an instance-scoped identity token + the tenants
+// the identity may act in; the caller picks one via selectTenant.
 
-export interface RefreshResult {
-  refresh: { accessToken: string; refreshToken: string };
+export interface Membership {
+  tenant: string;
+  roles: string[];
 }
-export interface RefreshVariables {
-  refreshToken: string;
+export interface LoginResult {
+  login: { identityToken: string; memberships: Membership[] };
+}
+export interface LoginVariables {
+  email: string;
+  password: string;
 }
 
-export const REFRESH = `
-  mutation Refresh($refreshToken: String!) {
-    refresh(refreshToken: $refreshToken) {
+export const LOGIN = `
+  mutation Login($email: String!, $password: String!) {
+    login(email: $email, password: $password) {
+      identityToken
+      memberships {
+        tenant
+        roles
+      }
+    }
+  }
+` as unknown as TypedDocument<LoginResult, LoginVariables>;
+
+// ── user-management: exchange the identity token for a tenant session ────────
+// Anonymous (the identity token is validated as an argument). Returns the
+// tenant-scoped access token the viewer attaches to every subsequent request.
+
+export interface SelectTenantResult {
+  selectTenant: { accessToken: string };
+}
+export interface SelectTenantVariables {
+  identityToken: string;
+  tenant: string;
+}
+
+export const SELECT_TENANT = `
+  mutation SelectTenant($identityToken: String!, $tenant: String!) {
+    selectTenant(identityToken: $identityToken, tenant: $tenant) {
       accessToken
-      refreshToken
     }
   }
-` as unknown as TypedDocument<RefreshResult, RefreshVariables>;
-
-// ── dashboard-management: load a dashboard's definition ──────────────────────
-
-export interface DashboardResult {
-  dashboard: { token: string; name: string | null; description: string | null; definition: string } | null;
-}
-export interface DashboardVariables {
-  token: string;
-}
-
-export const DASHBOARD_BY_TOKEN = `
-  query Dashboard($token: String!) {
-    dashboard(token: $token) {
-      token
-      name
-      description
-      definition
-    }
-  }
-` as unknown as TypedDocument<DashboardResult, DashboardVariables>;
-
-// ── dashboard-management: save an edited definition ──────────────────────────
-
-export interface UpdateDashboardResult {
-  updateDashboard: { token: string };
-}
-export interface UpdateDashboardVariables {
-  token: string;
-  request: { token: string; name?: string | null; description?: string | null; definition: string };
-}
-
-export const UPDATE_DASHBOARD = `
-  mutation UpdateDashboard($token: String!, $request: DashboardCreateRequest!) {
-    updateDashboard(token: $token, request: $request) {
-      token
-    }
-  }
-` as unknown as TypedDocument<UpdateDashboardResult, UpdateDashboardVariables>;
+` as unknown as TypedDocument<SelectTenantResult, SelectTenantVariables>;

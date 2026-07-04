@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, FlaskConical, History, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Download, FlaskConical, History, Plus, Trash2 } from 'lucide-react';
 import { hasAuthority } from '@devicechain/client';
 import {
   addWidget,
@@ -25,6 +25,7 @@ import {
   resolveConcrete,
   serializeDefinition,
   setTitle,
+  stripDefaultBindings,
   updateWidget,
   widgetSlotName,
   SyntheticDataSource,
@@ -302,6 +303,52 @@ export function DashboardWorkspace({
     </Button>
   );
 
+  // Export the current definition (ADR-039). A plain export keeps the slot default
+  // bindings (renders as-is); "as template" strips them so a host must supply a binding
+  // manifest (the reference /dash viewer). Pretty-printed for a readable file/paste.
+  const exportJson = (template: boolean) =>
+    JSON.stringify(template ? stripDefaultBindings(working) : working, null, 2);
+  const copyExport = async (template: boolean) => {
+    // navigator.clipboard is undefined on a non-secure context (plain http over a LAN
+    // IP) — the optional chain would resolve silently and falsely claim "copied".
+    if (!navigator.clipboard) {
+      toast('Clipboard unavailable here — use Download instead.', 'error');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(exportJson(template));
+      toast(template ? 'Template (unbound) copied' : 'Definition copied');
+    } catch (err) {
+      toast(errMessage(err), 'error');
+    }
+  };
+  const downloadExport = () => {
+    const blob = new Blob([exportJson(false)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${token}.dashboard.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm">
+          <Download size={14} /> Export
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={downloadExport}>Download JSON</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void copyExport(false)}>Copy JSON</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void copyExport(true)}>
+          Copy as template (unbound)
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
   // Preview toggle + (when on) a generator picker. Shown in both modes so an author
   // can lay out against synthetic data or review it.
   const previewControl = (
@@ -334,6 +381,7 @@ export function DashboardWorkspace({
           re-entering the editor. */}
       {dirty && saveButton}
       {previewControl}
+      {exportMenu}
       {historyButton}
       <Button variant="outline" size="sm" onClick={toggleMode} disabled={!canEdit}>
         Edit
@@ -362,6 +410,7 @@ export function DashboardWorkspace({
         </DropdownMenuContent>
       </DropdownMenu>
       {previewControl}
+      {exportMenu}
       {historyButton}
       {saveButton}
       <Button variant="outline" size="sm" onClick={toggleMode}>
