@@ -235,7 +235,7 @@ jobs:
           echo "Frontend tags: $tags"
 
       - name: Build + push console image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: frontend
           file: frontend/Dockerfile
