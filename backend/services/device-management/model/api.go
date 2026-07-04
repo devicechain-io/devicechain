@@ -12,6 +12,14 @@ import (
 
 type Api struct {
 	RDB *rdb.RdbManager
+
+	// AlarmPublisher emits alarm state-change events (ADR-041). It is injected at
+	// wiring time (the concrete publisher owns a NATS writer, so it cannot be built
+	// until the messaging layer exists) and may be nil — in tests, or before wiring —
+	// in which case emission is disabled. Both the evaluator and the operator API
+	// mutate alarms through this shared *Api, so setting it here gives one uniform
+	// event stream for every transition.
+	AlarmPublisher AlarmEventPublisher
 }
 
 // Create a new API instance.
@@ -19,6 +27,21 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 	api := &Api{}
 	api.RDB = rdb
 	return api
+}
+
+// emitAlarmEvent publishes an alarm state-change event when a publisher is wired,
+// and is a no-op otherwise. Emission is best-effort (the publisher logs its own
+// failures) so a transition never depends on the event reaching the stream.
+//
+// It assumes the caller has already committed the transition: the alarm write paths
+// run on the autocommit connection (rdb.DB(ctx) carries no transaction), so the emit
+// is post-commit and never fires for a rolled-back change. If a future caller wraps a
+// transition in an explicit transaction, it must emit after the commit, not from
+// inside the closure.
+func (api *Api) emitAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent) {
+	if api.AlarmPublisher != nil {
+		api.AlarmPublisher.PublishAlarmEvent(ctx, event)
+	}
 }
 
 // Interface for device management API (used for mocking)

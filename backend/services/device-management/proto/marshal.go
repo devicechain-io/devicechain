@@ -266,6 +266,80 @@ func UnmarshalResolvedPayload(etype esmodel.EventType, payload []byte) (interfac
 	}
 }
 
+// Marshal an alarm state-change event to protobuf bytes (ADR-041). Timestamps use
+// RFC3339Nano — unlike the resolved-event stream (whole-second RFC3339, telemetry
+// keyed by a hypertable partition), this stream drives ordered live UI updates and an
+// operator ack/clear stamps a sub-second time.Now() into the row, so preserving that
+// precision keeps the event's timeline consistent with the row and lets two same-tick
+// transitions order. The optional scalar fields map to protobuf's optional (pointer)
+// encoding so a subscriber can distinguish "absent" from a zero value.
+func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, error) {
+	pbevent := &PAlarmStateChangeEvent{
+		EventType:      string(event.EventType),
+		AlarmToken:     event.AlarmToken,
+		OriginatorType: event.OriginatorType,
+		OriginatorId:   uint64(event.OriginatorId),
+		AlarmKey:       event.AlarmKey,
+		MetricKey:      event.MetricKey,
+		State:          event.State,
+		Severity:       event.Severity,
+		Acknowledged:   event.Acknowledged,
+		AcknowledgedBy: event.AcknowledgedBy,
+		LastValue:      event.LastValue,
+		Message:        event.Message,
+		OccurredTime:   event.OccurredTime.Format(time.RFC3339Nano),
+		RaisedTime:     event.RaisedTime.Format(time.RFC3339Nano),
+	}
+	if event.PreviousSeverity != "" {
+		ps := event.PreviousSeverity
+		pbevent.PreviousSeverity = &ps
+	}
+
+	bytes, err := proto.Marshal(pbevent)
+	if err != nil {
+		return nil, err
+	}
+	return bytes, nil
+}
+
+// Unmarshal an encoded alarm state-change event.
+func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEvent, error) {
+	pbevent := &PAlarmStateChangeEvent{}
+	if err := proto.Unmarshal(encoded, pbevent); err != nil {
+		return nil, err
+	}
+
+	occurred, err := time.Parse(time.RFC3339Nano, pbevent.OccurredTime)
+	if err != nil {
+		return nil, err
+	}
+	raised, err := time.Parse(time.RFC3339Nano, pbevent.RaisedTime)
+	if err != nil {
+		return nil, err
+	}
+
+	event := &model.AlarmStateChangeEvent{
+		EventType:      model.AlarmEventType(pbevent.EventType),
+		AlarmToken:     pbevent.AlarmToken,
+		OriginatorType: pbevent.OriginatorType,
+		OriginatorId:   uint(pbevent.OriginatorId),
+		AlarmKey:       pbevent.AlarmKey,
+		MetricKey:      pbevent.MetricKey,
+		State:          pbevent.State,
+		Severity:       pbevent.Severity,
+		Acknowledged:   pbevent.Acknowledged,
+		AcknowledgedBy: pbevent.AcknowledgedBy,
+		LastValue:      pbevent.LastValue,
+		Message:        pbevent.Message,
+		RaisedTime:     raised,
+		OccurredTime:   occurred,
+	}
+	if pbevent.PreviousSeverity != nil {
+		event.PreviousSeverity = *pbevent.PreviousSeverity
+	}
+	return event, nil
+}
+
 // Marshal a resolved event to protobuf bytes.
 func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 	// Encode payload.

@@ -203,7 +203,11 @@ func (api *Api) raiseOrEscalateAlarm(ctx context.Context, deviceId uint,
 			RaisedTime:     occurredTime,
 			LastValue:      lastValue,
 		}
-		return api.RDB.DB(ctx).Create(created).Error
+		if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
+			return err
+		}
+		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(created, AlarmEventRaised, "", occurredTime))
+		return nil
 	}
 
 	if existing.State == string(AlarmStateCleared) {
@@ -214,22 +218,71 @@ func (api *Api) raiseOrEscalateAlarm(ctx context.Context, deviceId uint,
 		if existing.ClearedTime.Valid && occurredTime.Before(existing.ClearedTime.Time) {
 			return nil
 		}
-		return api.RDB.DB(ctx).Model(existing).Updates(map[string]interface{}{
-			"last_value":        lastValue,
-			"severity":          severity,
-			"state":             string(AlarmStateActive),
-			"raised_time":       occurredTime,
-			"cleared_time":      sql.NullTime{},
-			"acknowledged":      false,
-			"acknowledged_time": sql.NullTime{},
-			"acknowledged_by":   sql.NullString{},
-		}).Error
+		// Predicate the flip on the from-state and gate the emit on a row actually
+		// changing: a concurrent operator ClearAlarm / evaluator worker, or a delete
+		// cascade, may have moved the row between the read above and this write, in
+		// which case RowsAffected is 0 and we must neither claim the new state nor
+		// emit a phantom RAISED for a transition that did not happen.
+		res := api.RDB.DB(ctx).Model(existing).Where("state = ?", string(AlarmStateCleared)).
+			Updates(map[string]interface{}{
+				"last_value":        lastValue,
+				"severity":          severity,
+				"state":             string(AlarmStateActive),
+				"raised_time":       occurredTime,
+				"cleared_time":      sql.NullTime{},
+				"acknowledged":      false,
+				"acknowledged_time": sql.NullTime{},
+				"acknowledged_by":   sql.NullString{},
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return nil
+		}
+		// Reflect the reactivation on the in-memory row so the emitted event carries
+		// the new state (a map Updates does not write back into the struct).
+		existing.State = string(AlarmStateActive)
+		existing.Severity = severity
+		existing.RaisedTime = occurredTime
+		existing.ClearedTime = sql.NullTime{}
+		existing.Acknowledged = false
+		existing.AcknowledgedTime = sql.NullTime{}
+		existing.AcknowledgedBy = sql.NullString{}
+		existing.LastValue = lastValue
+		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(existing, AlarmEventRaised, "", occurredTime))
+		return nil
 	}
 	// Already ACTIVE: track the current highest-satisfied severity and latest value.
-	return api.RDB.DB(ctx).Model(existing).Updates(map[string]interface{}{
-		"last_value": lastValue,
-		"severity":   severity,
-	}).Error
+	// Out-of-order guard (mirrors the reactivate/auto-clear guards): a measurement
+	// predating this alarm cycle must not drive its severity or emit a spurious
+	// escalate/de-escalate. A reorder *within* the active window (both readings after
+	// the raise) still lands latest-processed-wins; a full fix needs a per-alarm
+	// last-evaluated-time watermark (deferred, see 2.C notes).
+	if occurredTime.Before(existing.RaisedTime) {
+		return nil
+	}
+	prevSeverity := existing.Severity
+	res := api.RDB.DB(ctx).Model(existing).Where("state = ?", string(AlarmStateActive)).
+		Updates(map[string]interface{}{
+			"last_value": lastValue,
+			"severity":   severity,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	// A concurrent clear won the row: don't resurrect its severity or emit.
+	if res.RowsAffected == 0 {
+		return nil
+	}
+	existing.Severity = severity
+	existing.LastValue = lastValue
+	// Emit only when the severity actually moved: a value-only update is not a
+	// state change a subscriber needs (and would flood the stream at ingest rate).
+	if etype, changed := severityTransition(prevSeverity, severity); changed {
+		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(existing, etype, prevSeverity, occurredTime))
+	}
+	return nil
 }
 
 // autoClearAlarm moves an ACTIVE alarm for (device, alarmKey) to CLEARED because the
@@ -252,9 +305,25 @@ func (api *Api) autoClearAlarm(ctx context.Context, deviceId uint, alarmKey stri
 	if occurredTime.Before(existing.RaisedTime) {
 		return nil
 	}
-	return api.RDB.DB(ctx).Model(existing).Updates(map[string]interface{}{
-		"state":        string(AlarmStateCleared),
-		"cleared_time": sql.NullTime{Time: occurredTime, Valid: true},
-		"last_value":   sql.NullFloat64{Float64: value, Valid: true},
-	}).Error
+	clearedTime := sql.NullTime{Time: occurredTime, Valid: true}
+	lastValue := sql.NullFloat64{Float64: value, Valid: true}
+	// Predicate on ACTIVE + gate the emit on RowsAffected so a concurrent clear (a
+	// manual ClearAlarm or another worker) doesn't produce a second CLEARED event.
+	res := api.RDB.DB(ctx).Model(existing).Where("state = ?", string(AlarmStateActive)).
+		Updates(map[string]interface{}{
+			"state":        string(AlarmStateCleared),
+			"cleared_time": clearedTime,
+			"last_value":   lastValue,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil
+	}
+	existing.State = string(AlarmStateCleared)
+	existing.ClearedTime = clearedTime
+	existing.LastValue = lastValue
+	api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(existing, AlarmEventCleared, "", occurredTime))
+	return nil
 }

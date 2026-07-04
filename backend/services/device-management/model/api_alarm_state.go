@@ -113,16 +113,24 @@ func (api *Api) AcknowledgeAlarm(ctx context.Context, token string, by *string) 
 	if !alarm.Acknowledged {
 		ackTime := sql.NullTime{Time: time.Now().UTC(), Valid: true}
 		ackBy := rdb.NullStrOf(by)
-		if err := api.RDB.DB(ctx).Model(alarm).Updates(map[string]interface{}{
-			"acknowledged":      true,
-			"acknowledged_time": ackTime,
-			"acknowledged_by":   ackBy,
-		}).Error; err != nil {
-			return nil, err
+		// Predicate on the unacked state so two concurrent acks don't both emit an
+		// ACKNOWLEDGED event (and the loser doesn't overwrite the winner's identity);
+		// gate the struct update + emit on a row actually changing.
+		res := api.RDB.DB(ctx).Model(alarm).Where("acknowledged = ?", false).
+			Updates(map[string]interface{}{
+				"acknowledged":      true,
+				"acknowledged_time": ackTime,
+				"acknowledged_by":   ackBy,
+			})
+		if res.Error != nil {
+			return nil, res.Error
 		}
-		alarm.Acknowledged = true
-		alarm.AcknowledgedTime = ackTime
-		alarm.AcknowledgedBy = ackBy
+		if res.RowsAffected > 0 {
+			alarm.Acknowledged = true
+			alarm.AcknowledgedTime = ackTime
+			alarm.AcknowledgedBy = ackBy
+			api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(alarm, AlarmEventAcknowledged, "", ackTime.Time))
+		}
 	}
 	return alarm, nil
 }
@@ -144,14 +152,21 @@ func (api *Api) ClearAlarm(ctx context.Context, token string) (*Alarm, error) {
 	alarm := matches[0]
 	if alarm.State != string(AlarmStateCleared) {
 		clearedTime := sql.NullTime{Time: time.Now().UTC(), Valid: true}
-		if err := api.RDB.DB(ctx).Model(alarm).Updates(map[string]interface{}{
-			"state":        string(AlarmStateCleared),
-			"cleared_time": clearedTime,
-		}).Error; err != nil {
-			return nil, err
+		// Predicate on not-already-cleared so a concurrent auto-clear (evaluator) and
+		// this manual clear don't both emit CLEARED; gate the emit on RowsAffected.
+		res := api.RDB.DB(ctx).Model(alarm).Where("state <> ?", string(AlarmStateCleared)).
+			Updates(map[string]interface{}{
+				"state":        string(AlarmStateCleared),
+				"cleared_time": clearedTime,
+			})
+		if res.Error != nil {
+			return nil, res.Error
 		}
-		alarm.State = string(AlarmStateCleared)
-		alarm.ClearedTime = clearedTime
+		if res.RowsAffected > 0 {
+			alarm.State = string(AlarmStateCleared)
+			alarm.ClearedTime = clearedTime
+			api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(alarm, AlarmEventCleared, "", clearedTime.Time))
+		}
 	}
 	return alarm, nil
 }

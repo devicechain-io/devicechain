@@ -48,3 +48,70 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 	// The full anchor set survives the round-trip.
 	assert.Equal(t, event.Anchors, got.Anchors)
 }
+
+// An alarm state-change event (ADR-041) must survive the marshal/unmarshal round-trip
+// intact: it crosses the messaging hop to the subscription bridge (2.E) and
+// notification consumers, and every field drives what a subscriber renders. The
+// optional scalars must round-trip as present (not collapsed to a zero value) so a
+// de-escalation's prior severity and a cleared alarm's last value are preserved.
+func TestMarshalAlarmStateChangeEventRoundTrips(t *testing.T) {
+	// Sub-second precision must survive: an operator ack/clear stamps a nanosecond
+	// time.Now() into the row and this stream is what a subscriber orders on.
+	raised := time.Date(2026, 7, 4, 10, 30, 0, 111222333, time.UTC)
+	occurred := time.Date(2026, 7, 4, 10, 42, 17, 987654321, time.UTC)
+	by := "op@example.com"
+	last := 123.5
+	msg := "temperature above 100"
+
+	event := &model.AlarmStateChangeEvent{
+		EventType:        model.AlarmEventEscalated,
+		AlarmToken:       "alarm-tok",
+		OriginatorType:   "device",
+		OriginatorId:     7,
+		AlarmKey:         "over-temp",
+		MetricKey:        "temp",
+		State:            string(model.AlarmStateActive),
+		Severity:         string(model.AlarmSeverityCritical),
+		PreviousSeverity: string(model.AlarmSeverityMajor),
+		Acknowledged:     true,
+		AcknowledgedBy:   &by,
+		LastValue:        &last,
+		Message:          &msg,
+		RaisedTime:       raised,
+		OccurredTime:     occurred,
+	}
+
+	bytes, err := MarshalAlarmStateChangeEvent(event)
+	assert.NoError(t, err)
+
+	got, err := UnmarshalAlarmStateChangeEvent(bytes)
+	assert.NoError(t, err)
+	assert.True(t, got.OccurredTime.Equal(occurred), "occurred time round-trip (nanos): got %s want %s", got.OccurredTime, occurred)
+	assert.True(t, got.RaisedTime.Equal(raised), "raised time round-trip (nanos): got %s want %s", got.RaisedTime, raised)
+	// Zero the times so the rest of the struct can be compared by value.
+	event.OccurredTime, got.OccurredTime = time.Time{}, time.Time{}
+	event.RaisedTime, got.RaisedTime = time.Time{}, time.Time{}
+	assert.Equal(t, event, got)
+
+	// An event with the optional fields absent round-trips with nil pointers and an
+	// empty previous severity (a first raise / auto-clear carries neither).
+	bare := &model.AlarmStateChangeEvent{
+		EventType:      model.AlarmEventRaised,
+		AlarmToken:     "a2",
+		OriginatorType: "device",
+		OriginatorId:   1,
+		AlarmKey:       "k",
+		MetricKey:      "m",
+		State:          string(model.AlarmStateActive),
+		Severity:       string(model.AlarmSeverityWarning),
+		OccurredTime:   occurred,
+	}
+	bytes, err = MarshalAlarmStateChangeEvent(bare)
+	assert.NoError(t, err)
+	gotBare, err := UnmarshalAlarmStateChangeEvent(bytes)
+	assert.NoError(t, err)
+	assert.Nil(t, gotBare.AcknowledgedBy)
+	assert.Nil(t, gotBare.LastValue)
+	assert.Nil(t, gotBare.Message)
+	assert.Equal(t, "", gotBare.PreviousSeverity)
+}
