@@ -62,9 +62,11 @@ func (api *Api) countReferencing(ctx context.Context, refModel interface{}, colu
 
 // deleteEdgeEntity hard-deletes an edge-participating entity (one of the ADR-013
 // entity-type registry types) by token, first removing every relationship edge in
-// which it is the source or target so no dangling edge is left behind. An optional
-// cascade removes owned child rows (e.g. a device's credentials) in the same
-// transaction. Returns false (no error) when the token names no entity.
+// which it is the source or target so no dangling edge is left behind, and every
+// EntityAttribute owned by it (ADR-012/044) so no attribute outlives its entity.
+// An optional cascade removes further owned child rows (e.g. a device's
+// credentials) in the same transaction. Returns false (no error) when the token
+// names no entity.
 func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model interface{},
 	token string, cascade func(tx *gorm.DB, id uint) error) (bool, error) {
 	id, err := api.ResolveEntityToken(ctx, string(etype), token)
@@ -78,6 +80,13 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		if err := tx.Unscoped().Where(
 			"(source_type = ? AND source_id = ?) OR (target_type = ? AND target_id = ?)",
 			string(etype), id, string(etype), id).Delete(&EntityRelationship{}).Error; err != nil {
+			return err
+		}
+		// Cascade the entity's attributes: they address their owner by
+		// (entity_type, entity_id) with no DB foreign key, so nothing else removes
+		// them (ADR-044 same-service RI gap).
+		if err := tx.Unscoped().Where(
+			"entity_type = ? AND entity_id = ?", string(etype), id).Delete(&EntityAttribute{}).Error; err != nil {
 			return err
 		}
 		if cascade != nil {
