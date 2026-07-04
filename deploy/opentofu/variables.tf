@@ -56,7 +56,7 @@ variable "nats_enable_tls" {
 }
 
 variable "nats_enable_auth" {
-  description = "Enable broker authentication + the device auth-callout (ADR-025). Defaults false because it needs credentials minted out-of-band (nkeys aren't a TF primitive); the bring-up (dcctl / up.sh) mints them, sets this true, and threads the same values into the services' instance config. The broker flag and the client flag MUST agree."
+  description = "Enable broker authentication + the device auth-callout (ADR-025). Defaults false because it needs credentials minted out-of-band (nkeys aren't a TF primitive); the bring-up (dcctl / up.sh) mints them, sets this true, and threads the corresponding plaintext credential into the services' instance config (the broker gets the bcrypt hash). The broker flag and the client flag MUST agree."
   type        = bool
   default     = false
 }
@@ -67,8 +67,8 @@ variable "nats_callout_issuer_public" {
   default     = ""
 }
 
-variable "nats_service_password" {
-  description = "Password for the shared `dc_service` static login every internal service presents. Minted by the bring-up; required when nats_enable_auth is true. Sensitive."
+variable "nats_service_password_bcrypt" {
+  description = "BCRYPT HASH ($2a$...) of the shared `dc_service` password, placed in the broker config (the plaintext goes only into the services' instance-config Secret; the broker bcrypt-compares). Minted by the bring-up; required when nats_enable_auth is true. Sensitive."
   type        = string
   default     = ""
   sensitive   = true

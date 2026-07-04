@@ -11,13 +11,17 @@
 //
 //	eval "$(go run ./backend/core/natsauth/cmd/genauth)"
 //
-// Emits:
+// Emits (each value single-quoted so it is eval-safe):
 //
-//	NATS_CALLOUT_ISSUER_PUBLIC=A...   # server-config auth_callout.issuer (public)
-//	NATS_CALLOUT_ISSUER_SEED=SA...    # the device-management responder signs with this
-//	NATS_SERVICE_PASSWORD=...         # shared dc_service login password
+//	NATS_CALLOUT_ISSUER_PUBLIC='A...'      # server-config auth_callout.issuer (public)
+//	NATS_CALLOUT_ISSUER_SEED='SA...'       # the device-management responder signs with this
+//	NATS_SERVICE_PASSWORD='...'            # PLAINTEXT dc_service login → services (helm Secret)
+//	NATS_SERVICE_PASSWORD_BCRYPT='$2a$...' # bcrypt hash of the same → broker config (tofu)
 //
-// The values are the nkey/hex alphabet only, so eval-ing them is injection-safe.
+// The issuer/seed/password use the nkey/hex alphabet, but the bcrypt hash contains
+// '$' (and '/', '.'), so every value is emitted in SINGLE quotes: the shell treats
+// the '$' literally on `eval`, with no variable expansion. The bcrypt alphabet
+// contains no single-quote, so single-quoting needs no escaping.
 package main
 
 import (
@@ -33,7 +37,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "genauth:", err)
 		os.Exit(1)
 	}
-	fmt.Printf("NATS_CALLOUT_ISSUER_PUBLIC=%s\n", c.IssuerPublic)
-	fmt.Printf("NATS_CALLOUT_ISSUER_SEED=%s\n", c.IssuerSeed)
-	fmt.Printf("NATS_SERVICE_PASSWORD=%s\n", c.ServicePassword)
+	fmt.Printf("NATS_CALLOUT_ISSUER_PUBLIC='%s'\n", c.IssuerPublic)
+	fmt.Printf("NATS_CALLOUT_ISSUER_SEED='%s'\n", c.IssuerSeed)
+	fmt.Printf("NATS_SERVICE_PASSWORD='%s'\n", c.ServicePassword)
+	fmt.Printf("NATS_SERVICE_PASSWORD_BCRYPT='%s'\n", c.ServicePasswordBcrypt)
 }

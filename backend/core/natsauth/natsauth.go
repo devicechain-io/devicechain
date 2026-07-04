@@ -21,6 +21,7 @@ import (
 
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nkeys"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // AppAccount is the single NATS account every connection lands in — services
@@ -44,10 +45,18 @@ const ServiceUser = "dc_service"
 // for prompt revocation) is a later refinement if a tenant needs it.
 const DefaultUserJWTTTL = 12 * time.Hour
 
+// servicePasswordBcryptCost is the bcrypt cost the service-password hash is minted
+// at — matching `nats server passwd`'s default (11), a balance of brute-force
+// resistance against the one-time per-connect verification cost on the broker.
+const servicePasswordBcryptCost = 11
+
 // Credentials is the set of broker-auth secrets minted once at bootstrap. The
-// public issuer key + service password go into the NATS server config; the issuer
-// seed + service password go into the services' instance config (the seed only
-// the device-management callout responder uses). See ADR-025 provisioning.
+// public issuer key + the BCRYPT service-password hash go into the NATS server
+// config (a plain ConfigMap — so the hash, never the plaintext, is what a
+// configmap-reader sees); the issuer seed + the PLAINTEXT service password go into
+// the services' instance config (a Secret) — services present the plaintext and
+// the broker bcrypt-compares it. The seed is used only by the device-management
+// callout responder. See ADR-025 provisioning.
 type Credentials struct {
 	// IssuerPublic is the account nkey public key (A...) placed in the server
 	// config's auth_callout.issuer — the trust anchor for callout-minted JWTs.
@@ -55,14 +64,21 @@ type Credentials struct {
 	// IssuerSeed is the account nkey seed (SA...) the callout responder signs
 	// device user JWTs with. Secret.
 	IssuerSeed string
-	// ServicePassword is the password for the shared ServiceUser static login.
-	// Secret.
+	// ServicePassword is the plaintext password for the shared ServiceUser static
+	// login, presented by every internal service. Secret — goes into the instance
+	// config Secret, NOT the broker ConfigMap.
 	ServicePassword string
+	// ServicePasswordBcrypt is the bcrypt hash of ServicePassword, placed verbatim
+	// in the broker's auth_users password field. nats-server detects the $2a$
+	// prefix and bcrypt-compares the presented plaintext, so the broker config
+	// carries no recoverable secret.
+	ServicePasswordBcrypt string
 }
 
 // GenerateCredentials mints a fresh set of broker-auth credentials: an account
-// nkey (the callout issuer) and a random service password. Uses crypto/rand
-// throughout so nothing is predictable.
+// nkey (the callout issuer) and a random service password (plus its bcrypt hash
+// for the broker config). Uses crypto/rand throughout so nothing is predictable.
+// The plaintext and its hash are minted together here so they can never drift.
 func GenerateCredentials() (Credentials, error) {
 	akp, err := nkeys.CreateAccount()
 	if err != nil {
@@ -80,10 +96,15 @@ func GenerateCredentials() (Credentials, error) {
 	if err != nil {
 		return Credentials{}, fmt.Errorf("generating service password: %w", err)
 	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(pw), servicePasswordBcryptCost)
+	if err != nil {
+		return Credentials{}, fmt.Errorf("hashing service password: %w", err)
+	}
 	return Credentials{
-		IssuerPublic:    pub,
-		IssuerSeed:      string(seed),
-		ServicePassword: pw,
+		IssuerPublic:          pub,
+		IssuerSeed:            string(seed),
+		ServicePassword:       pw,
+		ServicePasswordBcrypt: string(hash),
 	}, nil
 }
 

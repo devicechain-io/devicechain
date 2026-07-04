@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nkeys"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // GenerateCredentials mints a usable account issuer keypair (public A..., seed
@@ -31,6 +32,20 @@ func TestGenerateCredentials(t *testing.T) {
 	}
 	if len(c.ServicePassword) < 32 {
 		t.Errorf("service password too short: %d chars", len(c.ServicePassword))
+	}
+
+	// The bcrypt hash placed in the broker config must verify against the plaintext
+	// the services present — the whole point of the split. This also pins that we
+	// hash the plaintext (not something else) and that the two never drift.
+	if err := bcrypt.CompareHashAndPassword([]byte(c.ServicePasswordBcrypt), []byte(c.ServicePassword)); err != nil {
+		t.Errorf("bcrypt hash does not verify against the plaintext service password: %v", err)
+	}
+	// It is a hash, not the plaintext, and carries the bcrypt identifier.
+	if c.ServicePasswordBcrypt == c.ServicePassword {
+		t.Error("bcrypt field must not equal the plaintext password")
+	}
+	if len(c.ServicePasswordBcrypt) < 4 || c.ServicePasswordBcrypt[:4] != "$2a$" {
+		t.Errorf("bcrypt hash should start with $2a$, got %q", c.ServicePasswordBcrypt)
 	}
 
 	c2, _ := GenerateCredentials()

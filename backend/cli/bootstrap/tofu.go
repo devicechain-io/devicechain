@@ -53,13 +53,15 @@ func applyInfra(ctx context.Context, st *State) error {
 		opts = append(opts, tfexec.Var("ingress_use_host_port=true"))
 	}
 	// Broker authentication (ADR-025): enable auth callout on NATS and pass the
-	// minted public issuer + service password. The same values (seed + password)
-	// go into the instance config in helmInstall, so the broker and clients agree.
+	// minted public issuer + the bcrypt hash of the service password. The plaintext
+	// password + seed go into the instance config in helmInstall; nats-server
+	// bcrypt-compares the plaintext, so the broker and clients agree. (tfexec passes
+	// vars as argv, no shell — the hash's `$` is literal.)
 	if pub := st.Values["natsCalloutIssuerPublic"]; pub != "" {
 		opts = append(opts,
 			tfexec.Var("nats_enable_auth=true"),
 			tfexec.Var("nats_callout_issuer_public="+pub),
-			tfexec.Var("nats_service_password="+st.Values["natsServicePassword"]),
+			tfexec.Var("nats_service_password_bcrypt="+st.Values["natsServicePasswordBcrypt"]),
 		)
 	}
 	if err := tf.Apply(ctx, opts...); err != nil {

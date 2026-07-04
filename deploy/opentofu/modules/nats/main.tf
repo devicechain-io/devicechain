@@ -53,7 +53,7 @@ variable "enable_tls" {
 }
 
 variable "enable_auth" {
-  description = "Enable broker authentication (ADR-025): an APP account with a shared service login + an auth_callout that delegates device connects to device-management. Requires callout_issuer_public + service_password (minted out-of-band, since nkeys aren't a TF primitive), and the same values threaded into the services' instance config."
+  description = "Enable broker authentication (ADR-025): an APP account with a shared service login + an auth_callout that delegates device connects to device-management. Requires callout_issuer_public + service_password_bcrypt (minted out-of-band, since nkeys aren't a TF primitive), with the plaintext password threaded into the services' instance config."
   type        = bool
   default     = false
 }
@@ -64,8 +64,8 @@ variable "callout_issuer_public" {
   default     = ""
 }
 
-variable "service_password" {
-  description = "Password for the shared static `dc_service` login every internal service presents (exempt from the device callout). Required when enable_auth is true. Sensitive."
+variable "service_password_bcrypt" {
+  description = "BCRYPT HASH ($2a$...) of the shared static `dc_service` password. It is what lands in the broker config; nats-server bcrypt-compares the plaintext each service presents. The plaintext is never rendered here. Required when enable_auth is true. Sensitive."
   type        = string
   default     = ""
   sensitive   = true
@@ -81,23 +81,28 @@ locals {
   # (callout-placed via aud=APP with tenant-scoped perms). JetStream is enabled on
   # APP because the MQTT gateway stores sessions there. SYS is the system account.
   # Always the full map (no ternary) — it is only referenced on the enable_auth
-  # branch of chart_values_encoded, so var.service_password / callout_issuer_public
-  # being "" when disabled is harmless.
+  # branch of chart_values_encoded, so var.service_password_bcrypt /
+  # callout_issuer_public being "" when disabled is harmless.
   #
-  # TWO tradeoffs, acceptable for the local/dev bring-up, to harden for production:
-  #  1. The service_password renders PLAINTEXT into the nats chart's ConfigMap (the
-  #     chart puts all of config.merge there). Anyone with `configmap get` in the
-  #     namespace reads the full-privilege service credential. Production fix: a
-  #     bcrypt hash in the config, or the chart's `<< $VAR >>` include-from-Secret.
-  #  2. Enabling auth on a cluster that previously ran without accounts abandons the
-  #     old default-account ($G) JetStream state (streams/KV/MQTT sessions) — no
-  #     crash, but a decisive cutover that assumes FRESH JetStream state. Fine
-  #     pre-GA; a real migration would export/import streams across accounts.
+  # The dc_service password is stored as a BCRYPT HASH ($2a$...), not plaintext: the
+  # chart renders config.merge into a ConfigMap, so a plaintext password would let
+  # anyone with `configmap get` read the full-privilege credential. nats-server
+  # detects the $2a$ prefix and bcrypt-compares the plaintext each service presents
+  # (that plaintext lives only in the services' instance-config Secret). The chart
+  # renders the value as a JSON double-quoted string, which nats-server treats
+  # literally — env-var expansion applies only to bare (unquoted) config tokens, so
+  # the hash's `$` is not expanded.
+  #
+  # Remaining tradeoff, acceptable pre-GA: enabling auth on a cluster that
+  # previously ran without accounts abandons the old default-account ($G) JetStream
+  # state (streams/KV/MQTT sessions) — no crash, but a decisive cutover that assumes
+  # FRESH JetStream state. A real migration would export/import streams across
+  # accounts.
   auth_merge_content = {
     accounts = {
       APP = {
         jetstream = "enabled"
-        users     = [{ user = local.service_user, password = var.service_password }]
+        users     = [{ user = local.service_user, password = var.service_password_bcrypt }]
       }
       SYS = {}
     }
@@ -307,8 +312,8 @@ resource "helm_release" "nats" {
     # credentials (the bring-up always provides them together): an empty issuer /
     # password would render a broker that rejects every device and every service.
     precondition {
-      condition     = !var.enable_auth || (var.callout_issuer_public != "" && var.service_password != "")
-      error_message = "nats enable_auth=true requires non-empty callout_issuer_public and service_password (mint them via dcctl / the genauth helper)."
+      condition     = !var.enable_auth || (var.callout_issuer_public != "" && var.service_password_bcrypt != "")
+      error_message = "nats enable_auth=true requires non-empty callout_issuer_public and service_password_bcrypt (mint them via dcctl / the genauth helper)."
     }
   }
 }
