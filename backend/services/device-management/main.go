@@ -34,6 +34,12 @@ var (
 	ResolvedEventsWriter   messaging.MessageWriter
 	FailedEventsWriter     messaging.MessageWriter
 
+	// AlarmEvaluator consumes the resolved-events stream this service produces and
+	// runs the SIMPLE alarm evaluator over resolved measurements (ADR-041). It is a
+	// distinct durable consumer from the persistence/state pipelines.
+	ResolvedEventsReader messaging.MessageReader
+	AlarmEvaluator       *processor.AlarmEvaluator
+
 	// CalloutResponder answers NATS auth-callout requests for device connections
 	// (ADR-025). Non-nil only when the broker is configured for auth callout (the
 	// issuer seed is present in the instance config).
@@ -101,6 +107,22 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,
 		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode)
 	err = InboundEventsProcessor.Initialize(context.Background())
+	if err != nil {
+		return err
+	}
+
+	// Reader for the resolved-events stream (this service's own output, consumed
+	// back as a distinct durable) that feeds the alarm evaluator.
+	revreader, err := nmgr.NewReader(config.SUBJECT_RESOLVED_EVENTS)
+	if err != nil {
+		return err
+	}
+	ResolvedEventsReader = revreader
+
+	// Add and initialize the alarm evaluator (ADR-041).
+	AlarmEvaluator = processor.NewAlarmEvaluator(Microservice, ResolvedEventsReader,
+		core.NewNoOpLifecycleCallbacks(), CachedApi)
+	err = AlarmEvaluator.Initialize(context.Background())
 	if err != nil {
 		return err
 	}
@@ -194,6 +216,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start the alarm evaluator.
+	err = AlarmEvaluator.Start(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Start the device auth-callout responder once the broker is configured for it
 	// (ADR-025): it delegates every device connect at the broker back to
 	// AuthenticateDevice. Absent an issuer seed the broker isn't running callout,
@@ -224,6 +252,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
+	// Stop the alarm evaluator before the NATS connection drains.
+	err = AlarmEvaluator.Stop(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Stop nats manager.
 	err = NatsManager.Stop(ctx)
 	if err != nil {
@@ -249,6 +283,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 func beforeMicroserviceTerminated(ctx context.Context) error {
 	// Terminate inbound events processor.
 	err := InboundEventsProcessor.Terminate(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Terminate the alarm evaluator.
+	err = AlarmEvaluator.Terminate(ctx)
 	if err != nil {
 		return err
 	}
