@@ -10,17 +10,23 @@ import (
 )
 
 // Acknowledge an alarm. An operator asserts they have seen the alarm; this is
-// orthogonal to its ACTIVE/CLEARED state. by is an optional operator reference.
+// orthogonal to its ACTIVE/CLEARED state. The acknowledging identity is taken from
+// the authenticated subject (not a caller-supplied value) so the accountability
+// trail can't be forged.
 func (r *SchemaResolver) AcknowledgeAlarm(ctx context.Context, args struct {
 	Token string
-	By    *string
 }) (*AlarmResolver, error) {
 	if err := auth.Authorize(ctx, auth.AlarmWrite); err != nil {
 		return nil, err
 	}
 
+	var by *string
+	if claims, ok := auth.ClaimsFromContext(ctx); ok && claims.Username != "" {
+		by = &claims.Username
+	}
+
 	api := r.GetApi(ctx)
-	updated, err := api.AcknowledgeAlarm(ctx, args.Token, args.By)
+	updated, err := api.AcknowledgeAlarm(ctx, args.Token, by)
 	if err != nil {
 		return nil, err
 	}

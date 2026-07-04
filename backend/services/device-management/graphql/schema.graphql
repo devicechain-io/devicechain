@@ -1194,8 +1194,9 @@ type Mutation {
     updateAlarmDefinition(token: String!, request: AlarmDefinitionCreateRequest!): AlarmDefinition!
     # Delete a single alarm definition.
     deleteAlarmDefinition(token: String!): Boolean!
-    # Acknowledge a raised alarm (operator action); by is an optional operator reference.
-    acknowledgeAlarm(token: String!, by: String): Alarm!
+    # Acknowledge a raised alarm (operator action). The acknowledging identity is the
+    # authenticated subject, recorded server-side — not a client-supplied value.
+    acknowledgeAlarm(token: String!): Alarm!
     # Clear a raised alarm (manual operator override).
     clearAlarm(token: String!): Alarm!
     # Set (upsert) an entity attribute.

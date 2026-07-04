@@ -52,7 +52,10 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 		id, err := api.ResolveEntityToken(ctx, *criteria.OriginatorType, *criteria.Originator)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return &AlarmSearchResults{Results: make([]Alarm, 0)}, nil
+				return &AlarmSearchResults{
+					Results:    make([]Alarm, 0),
+					Pagination: rdb.SearchResultsPagination{},
+				}, nil
 			}
 			return nil, err
 		}
@@ -91,8 +94,13 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 // AcknowledgeAlarm records an operator acknowledgment of the alarm named by token.
 // Acknowledgment is orthogonal to the ACTIVE/CLEARED state (a still-active alarm may
 // be acknowledged) and is idempotent — re-acknowledging is a no-op that returns the
-// current row. by is an opaque operator reference (e.g. a username). Returns
-// ErrRecordNotFound when the token names no alarm.
+// current row. by is the acknowledging identity, stamped by the caller from the
+// authenticated subject. Returns ErrRecordNotFound when the token names no alarm.
+//
+// The write is column-limited (only the three ack columns) rather than a full-row
+// Save: the evaluator (a later slice) mutates other columns of the same row in place
+// (severity escalation, LastValue, re-raise), so writing back a stale full row would
+// clobber a concurrent evaluation.
 func (api *Api) AcknowledgeAlarm(ctx context.Context, token string, by *string) (*Alarm, error) {
 	matches, err := api.AlarmsByToken(ctx, []string{token})
 	if err != nil {
@@ -103,12 +111,18 @@ func (api *Api) AcknowledgeAlarm(ctx context.Context, token string, by *string) 
 	}
 	alarm := matches[0]
 	if !alarm.Acknowledged {
-		alarm.Acknowledged = true
-		alarm.AcknowledgedTime = sql.NullTime{Time: time.Now().UTC(), Valid: true}
-		alarm.AcknowledgedBy = rdb.NullStrOf(by)
-		if result := api.RDB.DB(ctx).Save(alarm); result.Error != nil {
-			return nil, result.Error
+		ackTime := sql.NullTime{Time: time.Now().UTC(), Valid: true}
+		ackBy := rdb.NullStrOf(by)
+		if err := api.RDB.DB(ctx).Model(alarm).Updates(map[string]interface{}{
+			"acknowledged":      true,
+			"acknowledged_time": ackTime,
+			"acknowledged_by":   ackBy,
+		}).Error; err != nil {
+			return nil, err
 		}
+		alarm.Acknowledged = true
+		alarm.AcknowledgedTime = ackTime
+		alarm.AcknowledgedBy = ackBy
 	}
 	return alarm, nil
 }
@@ -117,7 +131,8 @@ func (api *Api) AcknowledgeAlarm(ctx context.Context, token string, by *string) 
 // to CLEARED and stamping ClearedTime. This is the human override; the evaluator also
 // auto-clears when a condition resolves (a later slice). Idempotent — clearing an
 // already-CLEARED alarm returns the current row. Returns ErrRecordNotFound when the
-// token names no alarm.
+// token names no alarm. Column-limited for the same concurrency reason as
+// AcknowledgeAlarm.
 func (api *Api) ClearAlarm(ctx context.Context, token string) (*Alarm, error) {
 	matches, err := api.AlarmsByToken(ctx, []string{token})
 	if err != nil {
@@ -128,11 +143,15 @@ func (api *Api) ClearAlarm(ctx context.Context, token string) (*Alarm, error) {
 	}
 	alarm := matches[0]
 	if alarm.State != string(AlarmStateCleared) {
-		alarm.State = string(AlarmStateCleared)
-		alarm.ClearedTime = sql.NullTime{Time: time.Now().UTC(), Valid: true}
-		if result := api.RDB.DB(ctx).Save(alarm); result.Error != nil {
-			return nil, result.Error
+		clearedTime := sql.NullTime{Time: time.Now().UTC(), Valid: true}
+		if err := api.RDB.DB(ctx).Model(alarm).Updates(map[string]interface{}{
+			"state":        string(AlarmStateCleared),
+			"cleared_time": clearedTime,
+		}).Error; err != nil {
+			return nil, err
 		}
+		alarm.State = string(AlarmStateCleared)
+		alarm.ClearedTime = clearedTime
 	}
 	return alarm, nil
 }
