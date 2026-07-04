@@ -8,9 +8,10 @@
 
 // ---- Datasource selectors ---------------------------------------------------
 //
-// A selector is a tagged union (discriminated on `kind`). Phase 1 resolves two
-// kinds (device, anchor); the rest are reserved — present so definitions stay
-// forward-compatible, but the Hub rejects them today (mirroring the backend).
+// A selector is a tagged union (discriminated on `kind`). The Hub resolves
+// `device`, `anchor`, and `slot` (the last via its binding manifest); the
+// remaining kinds are reserved — present so definitions stay forward-compatible,
+// but the Hub rejects them until implemented.
 
 // device — one device's measurements (latest-card, gauge, single-series chart).
 export interface DeviceSelector {
@@ -72,9 +73,9 @@ export interface EntityFromStateSelector {
 // concrete entity at MOUNT by the host's binding manifest (ADR-039 runtime
 // binding). This makes a definition a reusable TEMPLATE: the widget names the
 // entity role (`slot`) and the measurements it wants, and two mounts of the same
-// definition can bind the slot to two different devices. RESERVED headroom in
-// PR F — parseable + round-trips, but the Hub rejects it until the binding
-// manifest lands (PR I). Authoring against slots (default bindings) is that PR.
+// definition can bind the slot to two different devices. The Hub resolves it via
+// the binding manifest (a slot's defaultBinding, overridable by the host); an
+// unbound slot renders as an empty placeholder.
 export interface SlotSelector {
   kind: 'slot';
   slot: string;
@@ -148,14 +149,27 @@ export interface Canvas {
   breakpoints: Breakpoints;
 }
 
+// A concrete entity a slot resolves to — a device (by token) or an anchor target.
+// This is the ENTITY only; the measurement names stay on the widget's SlotSelector
+// (so a shared slot can feed different widgets different measurements). A slot's
+// default binding lives in its SlotDefinition; the host's mount-time manifest can
+// override it (see effectiveBindings).
+export type SlotBinding =
+  | { kind: 'device'; deviceToken: string }
+  | { kind: 'anchor'; anchor: AnchorTarget };
+
 // A named entity role a dashboard declares and its widgets reference via a
-// SlotSelector. The host's binding manifest maps each slot to a concrete device
-// or anchor at mount. RESERVED headroom (PR F): parsed + round-tripped so PR I's
-// manifest lands additively; nothing authors slots yet.
+// SlotSelector. The host's binding manifest maps each slot to a concrete device or
+// anchor at mount; `defaultBinding` is the slot's own binding (set by the authoring
+// tenant) used when the host supplies no override — so a dashboard renders
+// immediately for its author AND is export-ready as a template (strip the defaults,
+// the host rebinds).
 export interface SlotDefinition {
   type: 'device' | 'anchor';
-  // Human-readable name shown in the (future) binding UI, e.g. 'Primary thermostat'.
+  // Human-readable name shown in the binding UI, e.g. 'Primary thermostat'.
   label?: string;
+  // The slot's default entity binding (the author's tenant); a host manifest overrides.
+  defaultBinding?: SlotBinding;
 }
 
 export interface DashboardDefinition {
@@ -163,8 +177,8 @@ export interface DashboardDefinition {
   title: string;
   canvas: Canvas;
   widgets: WidgetInstance[];
-  // Named entity roles bound at mount (ADR-039 runtime binding). Optional and
-  // reserved in PR F — absent on every dashboard authored today.
+  // Named entity roles bound at mount (ADR-039 runtime binding). Optional — absent
+  // on a dashboard that uses no slots.
   slots?: Record<string, SlotDefinition>;
 }
 

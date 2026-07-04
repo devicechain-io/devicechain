@@ -97,7 +97,7 @@ describe('parseDashboardDefinition', () => {
     expect('slots' in def).toBe(false);
   });
 
-  it('normalizes a declared slots section and a slot datasource', () => {
+  it('normalizes a declared slots section (with default binding) and a slot datasource', () => {
     const def = parseDashboardDefinition({
       widgets: [
         {
@@ -106,9 +106,38 @@ describe('parseDashboardDefinition', () => {
           datasource: { kind: 'slot', slot: 'primary', measurements: ['temperature'] },
         },
       ],
-      slots: { primary: { type: 'device', label: 'Primary thermostat' }, junk: 'nope' },
+      slots: {
+        primary: {
+          type: 'device',
+          label: 'Primary thermostat',
+          defaultBinding: { kind: 'device', deviceToken: 'therm-001' },
+        },
+        area: {
+          type: 'anchor',
+          defaultBinding: {
+            kind: 'anchor',
+            anchor: { relationship: 'assigned', targetType: 'area', targetToken: 'plant-1' },
+          },
+        },
+        junk: 'nope',
+      },
     });
-    expect(def.slots).toEqual({ primary: { type: 'device', label: 'Primary thermostat' } });
+    expect(def.slots).toEqual({
+      primary: {
+        type: 'device',
+        label: 'Primary thermostat',
+        defaultBinding: { kind: 'device', deviceToken: 'therm-001' },
+      },
+      area: {
+        type: 'anchor',
+        defaultBinding: {
+          kind: 'anchor',
+          anchor: { relationship: 'assigned', targetType: 'area', targetToken: 'plant-1' },
+        },
+      },
+    });
+    // Round-trips through serialize/parse unchanged.
+    expect(parseDashboardDefinition(JSON.parse(JSON.stringify(def)))).toEqual(def);
     expect(def.widgets[0].datasource).toEqual({
       kind: 'slot',
       slot: 'primary',
