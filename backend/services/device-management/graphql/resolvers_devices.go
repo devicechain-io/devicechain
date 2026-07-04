@@ -326,3 +326,22 @@ func (r *DeviceTypeResolver) CommandDefinitions() ([]*CommandDefinitionResolver,
 	}
 	return result, nil
 }
+
+// Alarm definitions declared on this device profile (ADR-041).
+func (r *DeviceTypeResolver) AlarmDefinitions() ([]*AlarmDefinitionResolver, error) {
+	api := r.S.GetApi(r.C)
+	found, err := api.AlarmDefinitionsByDeviceType(r.C, r.M.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*AlarmDefinitionResolver, 0)
+	for _, ad := range found {
+		result = append(result, &AlarmDefinitionResolver{
+			M: *ad,
+			S: r.S,
+			C: r.C,
+		})
+	}
+	return result, nil
+}

@@ -62,6 +62,7 @@ type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity 
     metadata: String
     metricDefinitions: [MetricDefinition!]!
     commandDefinitions: [CommandDefinition!]!
+    alarmDefinitions: [AlarmDefinition!]!
 }
 
 # Represents a typed, unit-bearing metric declared on a device profile (ADR-016).
@@ -156,6 +157,71 @@ input CommandDefinitionSearchCriteria {
 # Search results returned from command definition query.
 type CommandDefinitionSearchResults {
     results: [CommandDefinition!]!
+    pagination: SearchResultsPagination!
+}
+
+# Represents an alarm rule declared on a device profile (ADR-041). It watches a
+# metric (metricKey) and raises an alarm of the given severity when the condition
+# is met. conditionType is SIMPLE | DURATION | REPEATING; operator is the
+# comparison (GT/GTE/LT/LTE/EQ/NEQ) against a static threshold or a dynamic
+# threshold sourced from the entity attribute named by thresholdAttr (exactly one
+# is set). duration/repeat fields apply to the DURATION/REPEATING condition types.
+type AlarmDefinition implements Model & TokenReference & NamedEntity & MetadataEntity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    name: String
+    description: String
+    deviceType: DeviceType!
+    alarmKey: String!
+    metricKey: String!
+    conditionType: String!
+    operator: String!
+    severity: String!
+    threshold: Float
+    thresholdAttr: String
+    durationSeconds: Int
+    repeatCount: Int
+    repeatWindowSeconds: Int
+    enabled: Boolean!
+    metadata: String
+}
+
+# Data required to create an alarm definition. Exactly one of threshold /
+# thresholdAttr must be set; the condition type dictates which duration/repeat
+# fields are required (validated on create).
+input AlarmDefinitionCreateRequest {
+    token: String!
+    deviceTypeToken: String!
+    alarmKey: String!
+    metricKey: String!
+    name: String
+    description: String
+    conditionType: String!
+    operator: String!
+    severity: String!
+    threshold: Float
+    thresholdAttr: String
+    durationSeconds: Int
+    repeatCount: Int
+    repeatWindowSeconds: Int
+    enabled: Boolean!
+    metadata: String
+}
+
+# Criteria used when searching for alarm definitions.
+input AlarmDefinitionSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    deviceType: String
+    metricKey: String
+}
+
+# Search results returned from alarm definition query.
+type AlarmDefinitionSearchResults {
+    results: [AlarmDefinition!]!
     pagination: SearchResultsPagination!
 }
 
@@ -939,6 +1005,12 @@ type Query {
     commandDefinitionsByToken(tokens: [String!]!): [CommandDefinition!]!
     # List command definitions that meet criteria.
     commandDefinitions(criteria: CommandDefinitionSearchCriteria!): CommandDefinitionSearchResults!
+    # Find alarm definitions by unique id.
+    alarmDefinitionsById(ids: [ID!]!): [AlarmDefinition!]!
+    # Find alarm definitions by unique token.
+    alarmDefinitionsByToken(tokens: [String!]!): [AlarmDefinition!]!
+    # List alarm definitions that meet criteria.
+    alarmDefinitions(criteria: AlarmDefinitionSearchCriteria!): AlarmDefinitionSearchResults!
     # List entity attributes that meet criteria.
     entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
     # Query the append-only audit journal (ADR-019); tenant-scoped, newest first.
@@ -1048,8 +1120,8 @@ type Mutation {
     # Update an existing device type.
     updateDeviceType(token: String!, request: DeviceTypeCreateRequest): DeviceType!
     # Delete a device type. Refused while any device references it; its owned
-    # metric and command definitions are cascade-removed. Returns whether a row
-    # was deleted.
+    # metric, command, and alarm definitions are cascade-removed. Returns whether a
+    # row was deleted.
     deleteDeviceType(token: String!): Boolean!
     # Create a new metric definition.
     createMetricDefinition(request: MetricDefinitionCreateRequest): MetricDefinition!
@@ -1063,6 +1135,12 @@ type Mutation {
     updateCommandDefinition(token: String!, request: CommandDefinitionCreateRequest): CommandDefinition!
     # Delete a single command definition.
     deleteCommandDefinition(token: String!): Boolean!
+    # Create a new alarm definition.
+    createAlarmDefinition(request: AlarmDefinitionCreateRequest!): AlarmDefinition!
+    # Update an existing alarm definition.
+    updateAlarmDefinition(token: String!, request: AlarmDefinitionCreateRequest!): AlarmDefinition!
+    # Delete a single alarm definition.
+    deleteAlarmDefinition(token: String!): Boolean!
     # Set (upsert) an entity attribute.
     setEntityAttribute(request: EntityAttributeSetRequest!): EntityAttribute!
     # Delete an entity attribute by its natural key.

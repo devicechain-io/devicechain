@@ -35,6 +35,7 @@ type DeviceType struct {
 	Devices            []Device
 	MetricDefinitions  []MetricDefinition
 	CommandDefinitions []CommandDefinition
+	AlarmDefinitions   []AlarmDefinition
 }
 
 // Search criteria for locating device types.
