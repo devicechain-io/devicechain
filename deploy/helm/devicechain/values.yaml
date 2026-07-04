@@ -46,6 +46,15 @@ instance:
         tls:
           enabled: false
           ca: ""
+        # Broker authentication (ADR-025). When the NATS module has auth callout
+        # enabled, the bring-up threads the shared service credential here so every
+        # service authenticates, plus (device-management only) the callout issuer
+        # seed. Empty = the broker requires no auth. Kept in lockstep with the
+        # broker: enabling one without the other locks every service out.
+        auth:
+          user: ""
+          password: ""
+          calloutIssuerSeed: ""
       metrics:
         enabled: true
         httpPort: 9090

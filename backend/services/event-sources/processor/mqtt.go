@@ -33,6 +33,13 @@ type MqttEventSource struct {
 	// the connection plaintext (tcp://).
 	tlsConfig *tls.Config
 
+	// username/password present the shared service credential when broker auth is
+	// enabled (ADR-025). event-sources connects to the MQTT gateway as a trusted
+	// service, not a device: presenting the static service login authenticates it
+	// statically (exempt from the device callout). Empty = no auth (pre-cutover).
+	username string
+	password string
+
 	Client  mqtt.Client
 	Decoder Decoder
 
@@ -47,7 +54,9 @@ type MqttEventSource struct {
 // Create a new MQTT event source based on the given configuration. tlsConfig is
 // non-nil when the broker terminates TLS on the MQTT gateway (ADR-025), in which
 // case the client dials ssl:// and verifies the server; nil dials plaintext.
-func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Config, decoder Decoder,
+// username/password present the shared service credential when broker auth is on
+// (empty = anonymous).
+func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Config, username, password string, decoder Decoder,
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}),
 	failed func(string, string, []byte, error)) (*MqttEventSource, error) {
@@ -62,6 +71,8 @@ func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Conf
 		BrokerPort: port,
 		Topic:      config["topic"],
 		tlsConfig:  tlsConfig,
+		username:   username,
+		password:   password,
 		Decoder:    decoder,
 	}
 
@@ -129,6 +140,13 @@ func (es *MqttEventSource) ExecuteInitialize(ctx context.Context) error {
 	}
 	opts.AddBroker(fmt.Sprintf("%s://%s:%d", scheme, es.BrokerHost, es.BrokerPort))
 	opts.SetClientID("devicechain")
+	// Present the service credential when broker auth is enabled (ADR-025) so the
+	// gateway authenticates this connection statically rather than routing it
+	// through the device callout.
+	if es.username != "" {
+		opts.SetUsername(es.username)
+		opts.SetPassword(es.password)
+	}
 	opts.SetDefaultPublishHandler(es.onMessage)
 	opts.OnConnect = es.onConnect
 	opts.OnConnectionLost = es.onConnectionLost

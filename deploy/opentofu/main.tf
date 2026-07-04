@@ -12,11 +12,14 @@ module "namespace" {
 module "nats" {
   source = "./modules/nats"
 
-  namespace         = var.namespace
-  chart_version     = var.nats_chart_version
-  jetstream_storage = var.nats_jetstream_storage
-  ha                = var.ha
-  enable_tls        = var.nats_enable_tls
+  namespace             = var.namespace
+  chart_version         = var.nats_chart_version
+  jetstream_storage     = var.nats_jetstream_storage
+  ha                    = var.ha
+  enable_tls            = var.nats_enable_tls
+  enable_auth           = var.nats_enable_auth
+  callout_issuer_public = var.nats_callout_issuer_public
+  service_password      = var.nats_service_password
 
   depends_on = [module.namespace]
 }

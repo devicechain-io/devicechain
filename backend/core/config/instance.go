@@ -23,6 +23,29 @@ type NatsConfiguration struct {
 	// only in v1 — no client certificate is presented (device authentication is
 	// the separate auth-callout half of ADR-025).
 	Tls NatsTlsConfiguration
+	// Auth carries the broker-authentication material once auth callout is enabled
+	// (ADR-025): the shared service credential every internal service presents, and
+	// (device-management only) the callout issuer seed.
+	Auth NatsAuthConfiguration
+}
+
+// NatsAuthConfiguration is the broker-authentication material threaded into the
+// instance config once auth callout is enabled (ADR-025).
+type NatsAuthConfiguration struct {
+	// User / Password are the shared static service credential every internal
+	// service presents to the broker (the `dc_service` login in the callout's
+	// auth_users, so service connections bypass the device callout). Empty means
+	// the broker requires no client auth (pre-cutover), and clients connect
+	// anonymously.
+	User     string
+	Password string
+	// CalloutIssuerSeed is the account nkey seed the device-management auth-callout
+	// responder signs device user JWTs with. Only device-management consumes it; it
+	// is carried in every service's instance config for provisioning simplicity
+	// (all services already share the instance config's secrets — a trusted-
+	// boundary tradeoff to revisit if per-service isolation is needed). Empty
+	// elsewhere and when the callout is disabled.
+	CalloutIssuerSeed string
 }
 
 // NatsTlsConfiguration controls client-side TLS to the NATS broker (ADR-025).

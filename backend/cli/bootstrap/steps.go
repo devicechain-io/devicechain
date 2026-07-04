@@ -16,6 +16,7 @@ import (
 
 	apply "github.com/devicechain-io/dc-k8s/apply"
 	dck8s "github.com/devicechain-io/dc-k8s/config"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/fatih/color"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -87,6 +88,19 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	if err != nil {
 		return fail("generating db password", err)
 	}
+
+	// Mint the NATS broker-auth credentials (ADR-025): the callout issuer nkey and
+	// the shared service password. These can't be generated declaratively (nkeys
+	// aren't a TF primitive), so dcctl mints them here and threads the public
+	// issuer + password into the NATS config (applyInfra) and the seed + password
+	// into the services' instance config (helmInstall) — one mint, both sides.
+	creds, err := natsauth.GenerateCredentials()
+	if err != nil {
+		return fail("minting NATS auth credentials", err)
+	}
+	st.Values["natsCalloutIssuerPublic"] = creds.IssuerPublic
+	st.Values["natsCalloutIssuerSeed"] = creds.IssuerSeed
+	st.Values["natsServicePassword"] = creds.ServicePassword
 
 	// Resolve the image source. Default to published images at a pinned version;
 	// the developer path builds from source into a local registry instead.

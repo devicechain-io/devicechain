@@ -11,6 +11,7 @@ import (
 	"time"
 
 	assets "github.com/devicechain-io/dc-deploy"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -46,20 +47,29 @@ func helmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 
-	// When the broker terminates TLS (ADR-025), merge the CA + enable flag into the
-	// instance config so services dial NATS/MQTT over TLS. Deep-merges over the
-	// chart's instance.config defaults (hostname/port/persistence are preserved).
-	instanceVals := map[string]interface{}{"id": st.Instance}
+	// Thread the broker-auth material into the instance config (ADR-025): the CA +
+	// TLS flag, plus the shared service credential every service presents and the
+	// callout issuer seed device-management signs with. Built as one nats map and
+	// deep-merged over the chart's instance.config defaults (hostname/port/
+	// persistence are preserved).
+	natsVals := map[string]interface{}{}
 	if st.Values["natsTlsEnabled"] == "true" {
+		natsVals["tls"] = map[string]interface{}{
+			"enabled": true,
+			"ca":      st.Values["natsCA"],
+		}
+	}
+	if seed := st.Values["natsCalloutIssuerSeed"]; seed != "" {
+		natsVals["auth"] = map[string]interface{}{
+			"user":              natsauth.ServiceUser,
+			"password":          st.Values["natsServicePassword"],
+			"calloutIssuerSeed": seed,
+		}
+	}
+	instanceVals := map[string]interface{}{"id": st.Instance}
+	if len(natsVals) > 0 {
 		instanceVals["config"] = map[string]interface{}{
-			"infrastructure": map[string]interface{}{
-				"nats": map[string]interface{}{
-					"tls": map[string]interface{}{
-						"enabled": true,
-						"ca":      st.Values["natsCA"],
-					},
-				},
-			},
+			"infrastructure": map[string]interface{}{"nats": natsVals},
 		}
 	}
 
