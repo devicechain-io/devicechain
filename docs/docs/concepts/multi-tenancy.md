@@ -18,7 +18,7 @@ Tenants are **not** Kubernetes resources. A tenant is a control-plane **database
 ## Isolation
 
 - **Storage (enforced)** — every tenant-owned row carries a `tenant_id`, and a central database scope applies a `WHERE tenant_id = …` predicate to every read and stamps it on every write. The scope is **fail-closed**: a tenant-scoped query with no tenant in context is rejected, so a missing filter cannot leak another tenant's data. The per-request tenant comes from the caller's verified JWT tenant claim, and the per-message tenant is derived from the messaging subject.
-- **Messaging** — subjects are scoped per tenant (`{instance}.{tenant}.{suffix}`), so a tenant's traffic is namespaced on the bus.
+- **Messaging (enforced)** — subjects are scoped per tenant (`{instance}.{tenant}.{suffix}`), so a tenant's traffic is namespaced on the bus. On the **device plane** this is enforced at the broker (ADR-025): the MQTT/NATS listeners are TLS, a NATS auth-callout binds each device connection to its own tenant's subjects, and the messaging write/subscribe points reject a malformed tenant segment — so a device cannot publish into or subscribe to another tenant's subjects.
 - **Auth** — JWTs carry tenant claims that resolve the request tenant; services validate them locally without a per-request network call.
 
 ## Why shared microservices

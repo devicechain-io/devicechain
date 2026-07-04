@@ -43,9 +43,18 @@ The platform resolves the credential to its owning device and verifies it — ho
 
 - `disabled` — the self-asserted `device` token is trusted (no credential needed).
 - `optional` — a presented credential is authoritative; without one the device token is trusted.
-- `required` — a valid credential must be presented or the event is rejected.
+- `required` — a valid credential must be presented or the event is rejected. **This is the default** (ADR-025).
 
 When a credential authenticates, the resolved device is authoritative: a `device` token naming a *different* device is rejected, so one authenticated device cannot impersonate another.
+
+## Two layers: the connection and the event
+
+The credential above is the **per-event** check. In addition, MQTT/NATS **connections** are authenticated at the broker itself (ADR-025):
+
+- The MQTT and NATS listeners are **TLS** — a device connects over TLS with the instance CA.
+- A NATS **auth-callout** authenticates the connection and binds it to per-tenant subjects, so a device can only publish or subscribe within its own tenant. For an `MQTT_BASIC` device, the connection presents MQTT username **`{tenant}:{credentialId}`** and the credential password — the same credential that authenticates its events — so a device that can't authenticate can't even connect.
+
+See [Connecting a Device](./connecting-a-device.md) for the transport details.
 
 ## Register a credential (console)
 

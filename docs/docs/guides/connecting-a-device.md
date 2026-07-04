@@ -8,7 +8,7 @@ title: Connecting a Device
 Devices connect to DeviceChain over **MQTT** (served directly by NATS' built-in MQTT server on port 1883 — no separate broker) or **HTTP**. Both transports feed the same decode → resolve → persist pipeline, so the JSON event body is identical between them.
 
 :::note Status
-MQTT and HTTP ingestion are available. **Device authentication is available**: a device can present a credential (access token, MQTT-basic username/secret, or X.509 thumbprint) that the platform resolves to the owning device and verifies — honoring expiry and revocation-by-disable — and an instance can be configured to reject events that don't authenticate. See [Device credentials](./device-credentials.md). Additional transports (CoAP, WebSocket) and the full self-service provisioning/claiming flow are still planned.
+MQTT and HTTP ingestion are available. **Connections are secured at the broker (ADR-025):** the MQTT/NATS listeners are **TLS**, and a NATS auth-callout authenticates each connection and binds it to per-tenant subjects, so a device can only publish or subscribe within its own tenant. Device authentication is also enforced **per event** by credential, and the default device-auth mode is **`required`** — so a credential is expected on both the connection and the event. See [Device credentials](./device-credentials.md). Additional transports (CoAP, WebSocket) and the full self-service provisioning/claiming flow are still planned.
 :::
 
 ## The event body
@@ -27,19 +27,25 @@ Every inbound event — over any transport — is a JSON object:
 
 - `device` — the device's stable token.
 - `eventType` — `Measurement`, `Location`, or `Alert` (also `NewRelationship`).
-- `credentialType` / `credentialId` — the credential the device presents (ADR-014). `MQTT_BASIC` additionally carries `credentialSecret`. Omit these only when the instance's device-auth mode is not `required`.
+- `credentialType` / `credentialId` — the credential the device presents (ADR-014). `MQTT_BASIC` additionally carries `credentialSecret`. Omit these only when the instance's device-auth mode is set to `disabled` or `optional`; the **default is `required`**, so a credential is expected.
 - `payload` — shape depends on `eventType`; measurement values are strings.
 
 ## MQTT
 
-An MQTT topic maps directly to a NATS subject, so a publish on `dc/{tenant}/devices/{token}/events` is consumed by `event-sources` as the subject `dc.{tenant}.devices.{token}.events`. Publish the event body to your device's events topic:
+An MQTT topic maps directly to a NATS subject, so a publish on `dc/{tenant}/devices/{token}/events` is consumed by `event-sources` as the subject `dc.{tenant}.devices.{token}.events`.
+
+The listener is **TLS** and the connection is **broker-authenticated** (ADR-025): connect over TLS with the instance CA and present the device's credential as the MQTT username **`{tenant}:{credentialId}`** and password. Publish the event body to your device's events topic:
 
 ```bash
 mosquitto_pub \
-  -h localhost -p 1883 \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -u 'acme:<credentialId>' -P '<credentialSecret>' \
   -t "dc/acme/devices/sensor-001/events" \
-  -m '{"device":"sensor-001","eventType":"Measurement","credentialType":"ACCESS_TOKEN","credentialId":"<token>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
+  -m '{"device":"sensor-001","eventType":"Measurement","credentialType":"MQTT_BASIC","credentialId":"<credentialId>","credentialSecret":"<credentialSecret>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
+
+The credential authenticates the connection (broker) and the event (pipeline). The TLS host, CA source, and port exposure depend on how the instance is deployed — see [Deployment](../deployment/kubernetes-operator.md).
 
 ## HTTP
 
