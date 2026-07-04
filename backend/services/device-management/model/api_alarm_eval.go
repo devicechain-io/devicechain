@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"strconv"
 	"time"
 
@@ -15,6 +16,18 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// parseFiniteFloat parses s as a finite float64. A non-numeric or non-finite value
+// (NaN/±Inf) is rejected: it can neither be compared meaningfully against a threshold
+// nor stored, and a sentinel like "NaN" must not silently clear a live alarm (NaN
+// fails every ordered comparison) or fire a NEQ tier.
+func parseFiniteFloat(s string) (float64, bool) {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	return v, true
+}
 
 // This file is the DB-facing half of the SIMPLE alarm evaluator (ADR-041): it loads
 // a device's alarm rules, evaluates them against an incoming resolved measurement
@@ -46,11 +59,9 @@ func (api *Api) EvaluateMeasurementAlarms(ctx context.Context, deviceId uint,
 	values := make(map[string]float64)
 	for _, entry := range payload.Entries {
 		for _, mx := range entry.Entries {
-			v, err := strconv.ParseFloat(mx.Value, 64)
-			if err != nil {
-				continue
+			if v, ok := parseFiniteFloat(mx.Value); ok {
+				values[mx.Name] = v
 			}
-			values[mx.Name] = v
 		}
 	}
 	if len(values) == 0 {
@@ -86,15 +97,20 @@ func (api *Api) EvaluateMeasurementAlarms(ctx context.Context, deviceId uint,
 	}
 
 	for alarmKey, tiers := range byKey {
-		value, ok := values[tiers[0].MetricKey]
+		metricKey := tiers[0].MetricKey
+		value, ok := values[metricKey]
 		if !ok {
 			continue
 		}
-		severity, satisfied := highestSatisfiedSeverity(tiers, value, func(t *AlarmDefinition) (float64, bool) {
-			return api.resolveThreshold(ctx, deviceId, t)
-		})
+		severity, satisfied, err := highestSatisfiedSeverity(tiers, value, metricKey,
+			func(t *AlarmDefinition) (float64, bool, error) {
+				return api.resolveThreshold(ctx, deviceId, t)
+			})
+		if err != nil {
+			return err
+		}
 		if satisfied {
-			if err := api.raiseOrEscalateAlarm(ctx, deviceId, alarmKey, tiers[0].MetricKey,
+			if err := api.raiseOrEscalateAlarm(ctx, deviceId, alarmKey, metricKey,
 				severity, value, occurredTime); err != nil {
 				return err
 			}
@@ -114,28 +130,30 @@ func (api *Api) EvaluateMeasurementAlarms(ctx context.Context, deviceId uint,
 // from the device) wins, with a shared-scope value (device-readable config) as
 // fallback. A missing or non-numeric attribute yields no threshold, so the tier is
 // skipped rather than firing on a bogus bound.
-func (api *Api) resolveThreshold(ctx context.Context, deviceId uint, rule *AlarmDefinition) (float64, bool) {
+func (api *Api) resolveThreshold(ctx context.Context, deviceId uint, rule *AlarmDefinition) (float64, bool, error) {
 	if rule.Threshold.Valid {
-		return rule.Threshold.Float64, true
+		return rule.Threshold.Float64, true, nil
 	}
 	if !rule.ThresholdAttr.Valid || rule.ThresholdAttr.String == "" {
-		return 0, false
+		return 0, false, nil
 	}
 	for _, scope := range []AttributeScope{AttributeScopeServer, AttributeScopeShared} {
 		s := string(scope)
 		attrs, err := api.EntityAttributesByEntity(ctx, string(entity.TypeDevice), deviceId, &s)
 		if err != nil {
-			return 0, false
+			// A DB failure is not "no threshold": surfacing it lets the caller retry
+			// rather than skip the tier and spuriously auto-clear a live alarm.
+			return 0, false, err
 		}
 		for _, a := range attrs {
 			if a.AttrKey == rule.ThresholdAttr.String && a.Value.Valid {
-				if v, err := strconv.ParseFloat(a.Value.String, 64); err == nil {
-					return v, true
+				if v, ok := parseFiniteFloat(a.Value.String); ok {
+					return v, true, nil
 				}
 			}
 		}
 	}
-	return 0, false
+	return 0, false, nil
 }
 
 // alarmByOriginatorKey returns the single live alarm for (originator, alarmKey), or
@@ -188,19 +206,30 @@ func (api *Api) raiseOrEscalateAlarm(ctx context.Context, deviceId uint,
 		return api.RDB.DB(ctx).Create(created).Error
 	}
 
-	updates := map[string]interface{}{
+	if existing.State == string(AlarmStateCleared) {
+		// Out-of-order guard: a measurement older than the clear it would undo must
+		// not reactivate the alarm (workers/redelivery can reorder a device's
+		// measurements). Without this a stale high reading delivered after a newer
+		// low reading would re-raise a just-cleared alarm and leave it stuck ACTIVE.
+		if existing.ClearedTime.Valid && occurredTime.Before(existing.ClearedTime.Time) {
+			return nil
+		}
+		return api.RDB.DB(ctx).Model(existing).Updates(map[string]interface{}{
+			"last_value":        lastValue,
+			"severity":          severity,
+			"state":             string(AlarmStateActive),
+			"raised_time":       occurredTime,
+			"cleared_time":      sql.NullTime{},
+			"acknowledged":      false,
+			"acknowledged_time": sql.NullTime{},
+			"acknowledged_by":   sql.NullString{},
+		}).Error
+	}
+	// Already ACTIVE: track the current highest-satisfied severity and latest value.
+	return api.RDB.DB(ctx).Model(existing).Updates(map[string]interface{}{
 		"last_value": lastValue,
 		"severity":   severity,
-	}
-	if existing.State == string(AlarmStateCleared) {
-		updates["state"] = string(AlarmStateActive)
-		updates["raised_time"] = occurredTime
-		updates["cleared_time"] = sql.NullTime{}
-		updates["acknowledged"] = false
-		updates["acknowledged_time"] = sql.NullTime{}
-		updates["acknowledged_by"] = sql.NullString{}
-	}
-	return api.RDB.DB(ctx).Model(existing).Updates(updates).Error
+	}).Error
 }
 
 // autoClearAlarm moves an ACTIVE alarm for (device, alarmKey) to CLEARED because the
@@ -215,6 +244,12 @@ func (api *Api) autoClearAlarm(ctx context.Context, deviceId uint, alarmKey stri
 		return err
 	}
 	if existing == nil || existing.State == string(AlarmStateCleared) {
+		return nil
+	}
+	// Out-of-order guard: a measurement older than the raise it would undo must not
+	// clear the alarm. Without this a stale low reading delivered after the reading
+	// that raised the alarm would immediately clear a still-valid alarm.
+	if occurredTime.Before(existing.RaisedTime) {
 		return nil
 	}
 	return api.RDB.DB(ctx).Model(existing).Updates(map[string]interface{}{

@@ -35,17 +35,27 @@ func satisfiesOperator(op AlarmOperator, value, threshold float64) bool {
 // highestSatisfiedSeverity evaluates every tier of one alarm key against value and
 // returns the severity of the most-severe (lowest Rank) tier whose condition is met,
 // plus whether any tier was met. thresholdOf resolves a tier's threshold (static or
-// dynamic); a tier whose threshold can't be resolved, or whose severity is unknown,
-// is skipped. Tiers are the rows sharing an (device_type, alarm_key) — e.g.
-// temp>80→MAJOR and temp>100→CRITICAL — so this is where escalate-in-place is
-// decided: at value 120 both fire and CRITICAL wins; at 90 only MAJOR; at 50 none
-// (→ the caller auto-clears).
-func highestSatisfiedSeverity(tiers []*AlarmDefinition, value float64,
-	thresholdOf func(*AlarmDefinition) (float64, bool)) (string, bool) {
+// dynamic); a tier whose threshold is genuinely absent/non-numeric, or whose severity
+// is unknown, is skipped, but a threshold-resolution *error* (e.g. a DB failure) is
+// propagated so the caller can retry rather than mistake it for "no threshold" and
+// spuriously clear a live alarm. Only tiers watching metricKey are considered — a
+// mis-declared tier bound to a different metric (the #202 same-key coherence check is
+// best-effort) must not fire on this metric's value. Tiers are the rows sharing a
+// (device_type, alarm_key) — e.g. temp>80→MAJOR and temp>100→CRITICAL — so this is
+// where escalate-in-place is decided: at value 120 both fire and CRITICAL wins; at 90
+// only MAJOR; at 50 none (→ the caller auto-clears).
+func highestSatisfiedSeverity(tiers []*AlarmDefinition, value float64, metricKey string,
+	thresholdOf func(*AlarmDefinition) (float64, bool, error)) (string, bool, error) {
 	bestRank := -1
 	best := ""
 	for _, t := range tiers {
-		threshold, ok := thresholdOf(t)
+		if t.MetricKey != metricKey {
+			continue
+		}
+		threshold, ok, err := thresholdOf(t)
+		if err != nil {
+			return "", false, err
+		}
 		if !ok {
 			continue
 		}
@@ -61,5 +71,5 @@ func highestSatisfiedSeverity(tiers []*AlarmDefinition, value float64,
 			best = t.Severity
 		}
 	}
-	return best, bestRank != -1
+	return best, bestRank != -1, nil
 }

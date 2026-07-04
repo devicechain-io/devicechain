@@ -5,6 +5,7 @@ package model
 
 import (
 	"database/sql"
+	"errors"
 	"testing"
 )
 
@@ -48,11 +49,11 @@ func staticTier(severity string, op AlarmOperator, threshold float64) *AlarmDefi
 }
 
 // staticThreshold is the threshold resolver used in the pure-logic tests.
-func staticThreshold(t *AlarmDefinition) (float64, bool) {
+func staticThreshold(t *AlarmDefinition) (float64, bool, error) {
 	if t.Threshold.Valid {
-		return t.Threshold.Float64, true
+		return t.Threshold.Float64, true, nil
 	}
-	return 0, false
+	return 0, false, nil
 }
 
 // highestSatisfiedSeverity returns the most-severe satisfied tier — the crux of
@@ -65,19 +66,20 @@ func TestHighestSatisfiedSeverity(t *testing.T) {
 		staticTier(string(AlarmSeverityCritical), AlarmOpGreater, 100),
 	}
 
-	if sev, ok := highestSatisfiedSeverity(tiers, 120, staticThreshold); !ok || sev != string(AlarmSeverityCritical) {
-		t.Errorf("value 120: got (%q, %v), want (CRITICAL, true)", sev, ok)
+	if sev, ok, err := highestSatisfiedSeverity(tiers, 120, "", staticThreshold); err != nil || !ok || sev != string(AlarmSeverityCritical) {
+		t.Errorf("value 120: got (%q, %v, %v), want (CRITICAL, true, nil)", sev, ok, err)
 	}
-	if sev, ok := highestSatisfiedSeverity(tiers, 90, staticThreshold); !ok || sev != string(AlarmSeverityMajor) {
-		t.Errorf("value 90: got (%q, %v), want (MAJOR, true)", sev, ok)
+	if sev, ok, err := highestSatisfiedSeverity(tiers, 90, "", staticThreshold); err != nil || !ok || sev != string(AlarmSeverityMajor) {
+		t.Errorf("value 90: got (%q, %v, %v), want (MAJOR, true, nil)", sev, ok, err)
 	}
-	if sev, ok := highestSatisfiedSeverity(tiers, 50, staticThreshold); ok {
-		t.Errorf("value 50: got (%q, %v), want (\"\", false)", sev, ok)
+	if sev, ok, err := highestSatisfiedSeverity(tiers, 50, "", staticThreshold); err != nil || ok {
+		t.Errorf("value 50: got (%q, %v, %v), want (\"\", false, nil)", sev, ok, err)
 	}
 }
 
-// A tier whose threshold can't be resolved, or whose severity is unknown, is skipped
-// rather than treated as satisfied.
+// A tier whose threshold can't be resolved, or whose severity is unknown, or that
+// watches a different metric than the key, is skipped rather than treated as
+// satisfied.
 func TestHighestSatisfiedSeveritySkips(t *testing.T) {
 	// Dynamic-threshold tier with no resolver value → skipped even though the op
 	// would trivially match.
@@ -88,13 +90,31 @@ func TestHighestSatisfiedSeveritySkips(t *testing.T) {
 		ThresholdAttr: sql.NullString{String: "limit", Valid: true},
 		Enabled:       true,
 	}
-	if sev, ok := highestSatisfiedSeverity([]*AlarmDefinition{dyn}, 1000, staticThreshold); ok {
-		t.Errorf("unresolvable threshold: got (%q, %v), want (\"\", false)", sev, ok)
+	if sev, ok, err := highestSatisfiedSeverity([]*AlarmDefinition{dyn}, 1000, "", staticThreshold); err != nil || ok {
+		t.Errorf("unresolvable threshold: got (%q, %v, %v), want (\"\", false, nil)", sev, ok, err)
 	}
 
 	// Unknown severity → skipped.
 	bad := staticTier("SEVERE", AlarmOpGreater, 0)
-	if sev, ok := highestSatisfiedSeverity([]*AlarmDefinition{bad}, 5, staticThreshold); ok {
-		t.Errorf("unknown severity: got (%q, %v), want (\"\", false)", sev, ok)
+	if sev, ok, err := highestSatisfiedSeverity([]*AlarmDefinition{bad}, 5, "", staticThreshold); err != nil || ok {
+		t.Errorf("unknown severity: got (%q, %v, %v), want (\"\", false, nil)", sev, ok, err)
+	}
+
+	// A tier watching a different metric than the key must not fire on this value.
+	rogue := staticTier(string(AlarmSeverityCritical), AlarmOpGreater, 0)
+	rogue.MetricKey = "humidity"
+	if sev, ok, err := highestSatisfiedSeverity([]*AlarmDefinition{rogue}, 100, "temp", staticThreshold); err != nil || ok {
+		t.Errorf("mismatched metric: got (%q, %v, %v), want (\"\", false, nil)", sev, ok, err)
+	}
+}
+
+// A threshold-resolution error is propagated (not swallowed as "no threshold"), so
+// the caller retries instead of spuriously clearing a live alarm.
+func TestHighestSatisfiedSeverityPropagatesError(t *testing.T) {
+	boom := errors.New("db blip")
+	failing := func(*AlarmDefinition) (float64, bool, error) { return 0, false, boom }
+	tier := staticTier(string(AlarmSeverityMajor), AlarmOpGreater, 0)
+	if _, _, err := highestSatisfiedSeverity([]*AlarmDefinition{tier}, 5, "", failing); !errors.Is(err, boom) {
+		t.Errorf("expected propagated error, got %v", err)
 	}
 }
