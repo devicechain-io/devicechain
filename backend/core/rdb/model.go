@@ -113,21 +113,57 @@ func NullFloat64Of(value *float64) sql.NullFloat64 {
 	}
 }
 
+// Page-size bounds applied to every list query routed through Paginate/ListOf
+// (ADR-029). A request that names no size falls back to DefaultPageSize; anything
+// above MaxPageSize is clamped. Without this a `pageSize:0` (or a huge value) from
+// external GraphQL is an unbounded scan into one pod's heap — a trivial
+// single-credential DoS.
+const (
+	DefaultPageSize = 100
+	MaxPageSize     = 1000
+)
+
 // Information for paged result sets
 type Pagination struct {
 	PageNumber int32
 	PageSize   int32
+	// Unbounded requests every matching row with no LIMIT. It is for internal
+	// callers that genuinely need the full set (e.g. resolving a device's tracked
+	// relationships); the external GraphQL inputs map only PageNumber/PageSize, so
+	// an untrusted client can never set this and can never request a full scan.
+	Unbounded bool
+}
+
+// EffectivePageSize resolves the page size actually applied (ADR-029): below 1
+// falls back to DefaultPageSize, above MaxPageSize is clamped. Unbounded is a
+// separate no-LIMIT path and is not reflected here. ListOf uses this so its
+// reported PageStart/PageEnd match the LIMIT Paginate applied.
+func (pag Pagination) EffectivePageSize() int32 {
+	if pag.PageSize < 1 {
+		return DefaultPageSize
+	}
+	if pag.PageSize > MaxPageSize {
+		return MaxPageSize
+	}
+	return pag.PageSize
 }
 
 // Scope function used to implement pagination.
 func Paginate(pag Pagination) func(db *gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
-		// Page size of less than 1 means return all.
-		if pag.PageSize < 1 {
+		// Explicit internal all-rows path (never reachable from external input).
+		if pag.Unbounded {
 			return db
 		}
-		offset := (pag.PageNumber - 1) * pag.PageSize
-		return db.Offset(int(offset)).Limit(int(pag.PageSize))
+		size := pag.EffectivePageSize()
+		// int64 so a large PageNumber (up to the GraphQL Int max) can't overflow the
+		// offset and wrap back to an early page; a past-the-end offset just yields an
+		// empty page, and the LIMIT is always applied.
+		offset := (int64(pag.PageNumber) - 1) * int64(size)
+		if offset < 0 {
+			offset = 0
+		}
+		return db.Offset(int(offset)).Limit(int(size))
 	}
 }
 

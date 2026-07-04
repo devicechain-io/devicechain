@@ -277,7 +277,10 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Devic
 	tracked := true
 	sourceType := string(entity.TypeDevice)
 	criteria := model.EntityRelationshipSearchCriteria{
-		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 0},
+		// A device's tracked-relationship set is denormalized in full onto every
+		// event, so this genuinely needs all rows — the explicit internal unbounded
+		// path, not the (now bounded) default (ADR-029).
+		Pagination: rdb.Pagination{Unbounded: true},
 		SourceType: &sourceType,
 		SourceId:   &device.ID,
 		Tracked:    &tracked,

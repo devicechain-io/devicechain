@@ -78,8 +78,9 @@ func (rdb *RdbManager) ListOf(ctx context.Context, mdl interface{}, filters func
 	}
 	result.Scopes(Paginate(pag))
 
-	// Short-circuit for returning all.
-	if pag.PageSize < 1 {
+	// Short-circuit for the explicit internal all-rows path (Paginate applied no
+	// LIMIT). External requests never set Unbounded and so are always bounded below.
+	if pag.Unbounded {
 		return result, SearchResultsPagination{
 			PageStart:    1,
 			PageEnd:      total,
@@ -87,13 +88,16 @@ func (rdb *RdbManager) ListOf(ctx context.Context, mdl interface{}, filters func
 		}
 	}
 
-	last := pag.PageNumber * pag.PageSize
+	// Use the effective (defaulted/clamped) page size so the reported span matches
+	// the LIMIT/OFFSET Paginate actually applied (ADR-029).
+	size := pag.EffectivePageSize()
+	last := pag.PageNumber * size
 	if total < last {
 		last = total
 	}
 
 	srpag := SearchResultsPagination{
-		PageStart:    (pag.PageNumber-1)*pag.PageSize + 1,
+		PageStart:    (pag.PageNumber-1)*size + 1,
 		PageEnd:      last,
 		TotalRecords: total,
 	}
