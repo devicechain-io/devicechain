@@ -15,6 +15,7 @@
 import type {
   AnchorSelector,
   AnchorTarget,
+  ConcreteSelector,
   DatasourceSelector,
   DeviceSelector,
   WidgetInstance,
@@ -43,11 +44,28 @@ const TARGET_TYPE_OPTIONS: ComboboxOption[] = [
 
 export interface WidgetConfigPanelProps {
   widget: WidgetInstance;
+  // The widget's data source resolved to a slot-free entity view (device/anchor +
+  // measurements), or undefined when unbound. The panel edits THIS; the workspace
+  // maps changes back to slot storage (find-or-create slot, prune).
+  datasource: ConcreteSelector | undefined;
+  // The slot this widget is bound through — shown as a muted hint so the author can
+  // see it's slot-backed (matters for export). undefined when unbound.
+  slotName?: string;
+  // Title/text/type-specific option edits (widget-only; datasource is separate).
   onChange: (next: WidgetInstance) => void;
+  // Data-source edits: the new entity view, or undefined for "None".
+  onDatasource: (next: ConcreteSelector | undefined) => void;
   onClose: () => void;
 }
 
-export function WidgetConfigPanel({ widget, onChange, onClose }: WidgetConfigPanelProps) {
+export function WidgetConfigPanel({
+  widget,
+  datasource,
+  slotName,
+  onChange,
+  onDatasource,
+  onClose,
+}: WidgetConfigPanelProps) {
   // Read/write a single options key, dropping it when cleared so the widget falls
   // back to its default rather than reading an empty string/NaN.
   const setOption = (key: string, value: string | number | undefined) => {
@@ -55,10 +73,6 @@ export function WidgetConfigPanel({ widget, onChange, onClose }: WidgetConfigPan
     if (value === undefined || value === '') delete options[key];
     else options[key] = value;
     onChange({ ...widget, options });
-  };
-
-  const setDatasource = (datasource: DatasourceSelector | undefined) => {
-    onChange({ ...widget, datasource });
   };
 
   return (
@@ -78,7 +92,19 @@ export function WidgetConfigPanel({ widget, onChange, onClose }: WidgetConfigPan
         <TitleFields widget={widget} setOption={setOption} />
 
         {DATA_WIDGETS.has(widget.type) && (
-          <DatasourceFields datasource={widget.datasource} onChange={setDatasource} />
+          <>
+            {/* DatasourceFields edits a device/anchor selector, which is exactly a
+                ConcreteSelector — the workspace re-stores it as a slot. */}
+            <DatasourceFields
+              datasource={datasource}
+              onChange={(ds) => onDatasource(ds as ConcreteSelector | undefined)}
+            />
+            {datasource && slotName && (
+              <p className="text-xs text-muted-foreground">
+                Bound via slot <span className="font-mono">{slotName}</span>
+              </p>
+            )}
+          </>
         )}
 
         <TypeOptions widget={widget} setOption={setOption} />

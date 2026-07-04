@@ -8,23 +8,32 @@
 // react-rnd canvas + the widget config panel. Editing is gated on dashboard:write
 // (the server enforces it too — this just hides a button the caller can't use).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, FlaskConical, History, Plus, Trash2 } from 'lucide-react';
 import { hasAuthority } from '@devicechain/client';
 import {
   addWidget,
+  bindWidgetSlot,
+  clearWidgetDatasource,
+  DashboardHub,
+  effectiveBindings,
   isDirty,
+  migrateToSlots,
   parseDashboardDefinition,
+  pruneSlots,
+  resolveConcrete,
   serializeDefinition,
   setTitle,
   updateWidget,
+  widgetSlotName,
   SyntheticDataSource,
   SYNTHETIC_GENERATORS,
   WIDGET_TYPES,
+  type ConcreteSelector,
   type DashboardDefinition,
-  type DashboardHub,
   type DeviceResolver,
+  type SlotBinding,
   type SyntheticGenerator,
   type WidgetType,
 } from '@devicechain/dashboards';
@@ -50,13 +59,53 @@ import { VersionHistorySheet } from './VersionHistorySheet';
 
 type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; message: string };
 
+// useDebouncedValue returns `value`, but only advances the returned value `ms` after
+// `key` stops changing (rapid changes reset the timer). The initial value applies
+// immediately (no first-load delay). Used to coalesce rapid slot-binding edits before
+// the expensive hub reconstruction.
+function useDebouncedValue<T>(value: T, key: string, ms: number): T {
+  const [debounced, setDebounced] = useState(value);
+  const latest = useRef(value);
+  latest.current = value;
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(latest.current), ms);
+    return () => clearTimeout(t);
+  }, [key, ms]);
+  return debounced;
+}
+
+// applyDatasource maps a config-panel edit (a slot-free device/anchor view, or None)
+// back to slot storage: bind the widget to the slot for that entity (creating/reusing
+// it), or clear it — then prune any slot no widget references anymore.
+function applyDatasource(
+  def: DashboardDefinition,
+  widgetId: string,
+  ds: ConcreteSelector | undefined,
+): DashboardDefinition {
+  if (!ds) return pruneSlots(clearWidgetDatasource(def, widgetId));
+  // Only slot a COMPLETE binding (an entity has been chosen). While a selector is being
+  // filled in (e.g. an anchor with no target picked yet), keep it as a concrete
+  // selector — so the partial config isn't lost on save/reload, and so we don't churn
+  // the slot manifest / rebuild the hub on every keystroke of the relationship field.
+  // It becomes a default-bound slot as soon as it's complete.
+  const token = ds.kind === 'device' ? ds.deviceToken : ds.anchor.targetToken;
+  if (!token) {
+    const widgets = def.widgets.map((w) => (w.id === widgetId ? { ...w, datasource: ds } : w));
+    return pruneSlots({ ...def, widgets });
+  }
+  const binding: SlotBinding =
+    ds.kind === 'device'
+      ? { kind: 'device', deviceToken: ds.deviceToken }
+      : { kind: 'anchor', anchor: ds.anchor };
+  return pruneSlots(bindWidgetSlot(def, widgetId, binding, ds.measurements));
+}
+
 export function DashboardWorkspace({
   token,
   name,
   description,
   updatedAt,
   loaded,
-  hub,
   resolver,
 }: {
   token: string;
@@ -64,7 +113,6 @@ export function DashboardWorkspace({
   description: string | null;
   updatedAt: string | null;
   loaded: DashboardDefinition;
-  hub: DashboardHub;
   resolver: DeviceResolver;
 }) {
   const navigate = useNavigate();
@@ -91,7 +139,26 @@ export function DashboardWorkspace({
   const [generator, setGenerator] = useState<SyntheticGenerator>('sine');
   const synthetic = useMemo(() => new SyntheticDataSource({ generator }), [generator]);
   useEffect(() => () => synthetic.disposeAll(), [synthetic]);
-  const dataHub = preview ? synthetic : hub;
+
+  // The live slot manifest: each slot's default binding (the console adds no host
+  // override — that's the /dash embedder's job, PR I-3). Its JSON key changes ONLY
+  // when a slot's binding changes (not on layout edits, which recompute an equal
+  // manifest). The hub is CONSTRUCTED WITH these bindings and re-created when they
+  // change, so widgets always subscribe against current bindings (constructing-with,
+  // rather than a post-mount setBindings, avoids a child-effect-before-parent-effect
+  // race). A new hub instance also makes useMeasurementStream resubscribe — that's
+  // the live rebind. Torn down when replaced so streams don't leak.
+  const bindings = useMemo(() => effectiveBindings(working), [working]);
+  const bindingsKey = useMemo(() => JSON.stringify(bindings), [bindings]);
+  // Debounce the manifest that drives the (expensive) hub reconstruction so rapid
+  // binding edits (e.g. typing an anchor relationship) coalesce into ONE rebuild rather
+  // than tearing down every widget's stream per keystroke.
+  const hubBindings = useDebouncedValue(bindings, bindingsKey, 250);
+  const hubKey = useMemo(() => JSON.stringify(hubBindings), [hubBindings]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const liveHub = useMemo(() => new DashboardHub({ resolver, bindings: hubBindings }), [resolver, hubKey]);
+  useEffect(() => () => liveHub.disposeAll(), [liveHub]);
+  const dataHub = preview ? synthetic : liveHub;
 
   const dirty = isDirty(working, saved);
   const selected = working.widgets.find((w) => w.id === selectedId) ?? null;
@@ -184,6 +251,7 @@ export function DashboardWorkspace({
       // back to a title-less version and re-saving would silently revert a rename.
       const currentName = saved.title || name || '';
       if (def.title === '' && currentName) def = setTitle(def, currentName);
+      def = migrateToSlots(def); // keep the editor slot-based (a version may be concrete)
       setWorking(def);
       setSaved(def);
       setSelectedId(null);
@@ -341,7 +409,9 @@ export function DashboardWorkspace({
           <div className="min-w-0 flex-1">
             <DashboardCanvas
               definition={working}
-              onChange={setWorking}
+              // Prune slots orphaned by a widget delete (canvas edits go through here);
+              // a no-op for move/resize since those keep every widget's slot reference.
+              onChange={(next) => setWorking(pruneSlots(next))}
               hub={dataHub}
               selectedId={selectedId}
               onSelect={setSelectedId}
@@ -354,7 +424,10 @@ export function DashboardWorkspace({
               // onto the next when both take the same datasource branch.
               key={selected.id}
               widget={selected}
+              datasource={resolveConcrete(working, selected)}
+              slotName={widgetSlotName(selected)}
               onChange={(next) => setWorking(updateWidget(working, next.id, next))}
+              onDatasource={(ds) => setWorking(applyDatasource(working, selected.id, ds))}
               onClose={() => setSelectedId(null)}
             />
           )}
@@ -368,6 +441,7 @@ export function DashboardWorkspace({
             hub={dataHub}
             resolver={resolver}
             seedHistory={!preview}
+            bindings={hubBindings}
           />
         </div>
       )}

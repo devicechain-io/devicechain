@@ -34,6 +34,18 @@ export type {
 
 export { effectiveBindings } from './bindings';
 
+export {
+  migrateToSlots,
+  bindWidgetSlot,
+  clearWidgetDatasource,
+  pruneSlots,
+  widgetBinding,
+  widgetSlotName,
+  sameBinding,
+  resolveConcrete,
+  type ConcreteSelector,
+} from './slots';
+
 export { WIDGET_TYPES } from './types';
 
 export {
