@@ -92,8 +92,9 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// Mint the NATS broker-auth credentials (ADR-025): the callout issuer nkey and
 	// the shared service password. These can't be generated declaratively (nkeys
 	// aren't a TF primitive), so dcctl mints them here and threads the public
-	// issuer + password into the NATS config (applyInfra) and the seed + password
-	// into the services' instance config (helmInstall) — one mint, both sides.
+	// issuer + bcrypt password hash into the NATS config (applyInfra) and the seed +
+	// plaintext password into the services' instance config (helmInstall) — one
+	// mint, both sides, so the hash and the plaintext it verifies can't drift.
 	creds, err := natsauth.GenerateCredentials()
 	if err != nil {
 		return fail("minting NATS auth credentials", err)
@@ -101,6 +102,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	st.Values["natsCalloutIssuerPublic"] = creds.IssuerPublic
 	st.Values["natsCalloutIssuerSeed"] = creds.IssuerSeed
 	st.Values["natsServicePassword"] = creds.ServicePassword
+	st.Values["natsServicePasswordBcrypt"] = creds.ServicePasswordBcrypt
 
 	// Resolve the image source. Default to published images at a pinned version;
 	// the developer path builds from source into a local registry instead.
