@@ -49,6 +49,13 @@ const (
 	// against this.
 	MaxDeliver = 5
 
+	// rebindBackoffMin/Max bound the self-heal retry when a reader's durable consumer
+	// goes away (e.g. deleted by an older pod's Unsubscribe during a rolling update).
+	// The reader re-binds with capped exponential backoff so a persistent failure does
+	// not busy-loop the way a bare Fetch-error retry would.
+	rebindBackoffMin = 500 * time.Millisecond
+	rebindBackoffMax = 5 * time.Second
+
 	// liveBuffer bounds a live subscription's in-flight buffer. A fan-out live
 	// feed (SubscribeLive) prefers dropping under a slow client to stalling the
 	// shared pipeline, so a full buffer drops (NATS slow-consumer) rather than
@@ -239,8 +246,12 @@ func (w *natsWriter) HandleResponse(err error) {
 // for a suffix. The shared microservice consumes all tenants' messages here and
 // derives the per-message tenant from the delivered subject.
 type natsReader struct {
-	suffix string
-	sub    *nats.Subscription
+	nmgr    *NatsManager
+	suffix  string
+	stream  string
+	subject string
+	durable string
+	sub     *nats.Subscription
 	// gate pauses consumption until the service's data plane is ready (ADR-022
 	// decision 3): a degraded service parks in ReadMessage instead of draining
 	// messages without live auth.
@@ -251,34 +262,109 @@ type natsReader struct {
 	pending []*nats.Msg
 }
 
+// consumerConfig is the durable pull-consumer configuration (A4) — explicit-ack so a
+// message is only removed once a consumer acks it after durable handling (A3), a
+// deliberate AckWait sized to persistence latency, a finite MaxDeliver so a poison
+// message stops redelivering, and the cross-tenant wildcard filter. DeliverPolicy is
+// left at its zero value (DeliverAll), matching the prior PullSubscribe-created
+// consumer.
+func (r *natsReader) consumerConfig() *nats.ConsumerConfig {
+	return &nats.ConsumerConfig{
+		Durable:       r.durable,
+		AckPolicy:     nats.AckExplicitPolicy,
+		AckWait:       ackWait,
+		MaxDeliver:    MaxDeliver,
+		FilterSubject: r.subject,
+	}
+}
+
+// bind (re)creates the durable consumer if needed and binds a pull subscription to
+// it WITHOUT owning its lifecycle. This is the fix for the rolling-update hazard: a
+// pull subscription that CREATED its consumer deletes it on Unsubscribe/Drain
+// (nats.go sets the delete-consumer flag), so during a rolling update — where the
+// old and new pods briefly share this one durable — the terminating pod would delete
+// the consumer out from under the new pod, which then hot-spins on a dead
+// subscription. Creating the consumer out-of-band (AddConsumer is idempotent for a
+// matching durable) and attaching with nats.Bind leaves the client's delete flag off,
+// so the durable survives every pod's shutdown. bind is also the self-heal path:
+// ReadMessage calls it to re-attach if the consumer ever does go away.
+func (r *natsReader) bind() error {
+	// Drop any stale subscription first. With a bound sub this does not delete the
+	// durable; it just releases the old (dead) subscription on a re-bind.
+	if r.sub != nil {
+		_ = r.sub.Unsubscribe()
+		r.sub = nil
+	}
+	if _, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig()); err != nil {
+		return err
+	}
+	sub, err := r.nmgr.js.PullSubscribe(r.subject, r.durable, nats.Bind(r.stream, r.durable))
+	if err != nil {
+		return err
+	}
+	r.sub = sub
+	return nil
+}
+
 // NewReader creates a durable pull consumer for the given subject suffix,
 // subscribing to the cross-tenant wildcard so one shared pod drains every
 // tenant. The durable name is scoped to the instance + functional area + suffix
-// (not the tenant).
+// (not the tenant), so every replica of a service shares one consumer and each
+// message is delivered to exactly one of them.
 func (nmgr *NatsManager) NewReader(suffix string) (MessageReader, error) {
 	stream, err := nmgr.ensureStream(suffix)
 	if err != nil {
 		return nil, err
 	}
-	subject := WildcardSubject(nmgr.Microservice.InstanceId, suffix)
-	durable := DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
-	// Explicit consumer config (A4) rather than server defaults: explicit-ack so a
-	// message is only removed once a consumer acks it after durable handling (A3),
-	// a deliberate AckWait sized to persistence latency, and a finite MaxDeliver so
-	// a poison message stops redelivering and is routed to the dead-letter path by
-	// the consumer instead of looping forever.
-	sub, err := nmgr.js.PullSubscribe(subject, durable, nats.BindStream(stream),
-		nats.AckExplicit(),
-		nats.AckWait(ackWait),
-		nats.MaxDeliver(MaxDeliver),
-	)
-	if err != nil {
+	r := &natsReader{
+		nmgr:    nmgr,
+		suffix:  suffix,
+		stream:  stream,
+		subject: WildcardSubject(nmgr.Microservice.InstanceId, suffix),
+		durable: DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix),
+		gate:    nmgr.Microservice.Readiness,
+	}
+	if err := r.bind(); err != nil {
 		return nil, err
 	}
-	r := &natsReader{suffix: suffix, sub: sub, gate: nmgr.Microservice.Readiness}
 	nmgr.readers = append(nmgr.readers, r)
-	log.Info().Str("durable", durable).Str("subject", subject).Msg("Added new NATS reader")
+	log.Info().Str("durable", r.durable).Str("subject", r.subject).Msg("Added new NATS reader")
 	return r, nil
+}
+
+// isConsumerGone reports whether a Fetch error means the durable consumer no longer
+// exists (deleted, not found, inactive) or is unreachable (no responders) — the
+// conditions the reader self-heals from by re-binding, as opposed to a transient
+// timeout or a shutdown-time connection close.
+func isConsumerGone(err error) bool {
+	return errors.Is(err, nats.ErrConsumerDeleted) ||
+		errors.Is(err, nats.ErrConsumerNotFound) ||
+		errors.Is(err, nats.ErrConsumerNotActive) ||
+		errors.Is(err, nats.ErrNoResponders)
+}
+
+// rebindWithBackoff re-attaches the reader to its durable consumer (recreating it if
+// needed), retrying with capped exponential backoff until it succeeds or ctx is
+// cancelled (shutdown). It never gives up on its own: a consumer the service is
+// meant to be draining should be restored, not abandoned.
+func (r *natsReader) rebindWithBackoff(ctx context.Context) error {
+	backoff := rebindBackoffMin
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		if err := r.bind(); err != nil {
+			log.Error().Err(err).Str("durable", r.durable).Msg("Re-bind of durable consumer failed; will retry")
+			if backoff *= 2; backoff > rebindBackoffMax {
+				backoff = rebindBackoffMax
+			}
+			continue
+		}
+		log.Info().Str("durable", r.durable).Msg("Re-bound durable consumer")
+		return nil
+	}
 }
 
 // ReadMessage returns the next message, blocking until one is available, the
@@ -311,6 +397,18 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 					errors.Is(err, nats.ErrSubscriptionClosed) ||
 					errors.Is(err, nats.ErrConnectionDraining) {
 					return Message{}, io.EOF
+				}
+				// The durable consumer went away underneath us — e.g. an older pod's
+				// Unsubscribe during a rolling update, or a broker restart. Re-bind to
+				// it (recreating it if needed) with bounded backoff instead of
+				// hot-spinning on a dead subscription. A cancelled context during the
+				// backoff means shutdown, surfaced as EOF.
+				if isConsumerGone(err) {
+					log.Warn().Err(err).Str("durable", r.durable).Msg("Durable consumer unavailable; re-binding")
+					if rebindErr := r.rebindWithBackoff(ctx); rebindErr != nil {
+						return Message{}, io.EOF
+					}
+					continue
 				}
 				return Message{}, err
 			}
