@@ -5,12 +5,12 @@ package model
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -137,8 +137,18 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 		if err := tx.Create(version).Error; err != nil {
 			return err
 		}
-		return tx.Model(&DeviceProfile{}).Where("id = ?", profile.ID).
-			Update("active_version", version.Version).Error
+		res := tx.Model(&DeviceProfile{}).Where("id = ?", profile.ID).
+			Update("active_version", version.Version)
+		if res.Error != nil {
+			return res.Error
+		}
+		// The profile was deleted between the load and here (its cascade already
+		// removed the version rows): roll the whole publish back rather than commit
+		// a version row no device can ever resolve.
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("%w: device profile %q", gorm.ErrRecordNotFound, token)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -168,12 +178,18 @@ func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version
 		return nil, fmt.Errorf("%w: device profile %q has no version %d", gorm.ErrRecordNotFound, token, version)
 	}
 
-	if err := api.RDB.DB(ctx).Model(&DeviceProfile{}).Where("id = ?", profile.ID).
-		Update("active_version", version).Error; err != nil {
-		return nil, err
+	res := api.RDB.DB(ctx).Model(&DeviceProfile{}).Where("id = ?", profile.ID).
+		Update("active_version", version)
+	if res.Error != nil {
+		return nil, res.Error
 	}
-	profile.ActiveVersion = sql.NullInt32{Int32: version, Valid: true}
-	return profile, nil
+	// The profile was deleted between the existence check and here.
+	if res.RowsAffected == 0 {
+		return nil, fmt.Errorf("%w: device profile %q", gorm.ErrRecordNotFound, token)
+	}
+	// Reload so the returned profile carries the freshly-bumped updated_at (the
+	// column-scoped Update advanced it in the DB) rather than the pre-update value.
+	return api.deviceProfileByToken(ctx, token)
 }
 
 // DeviceProfileVersions lists a profile's published versions, newest first. Returns
@@ -210,9 +226,14 @@ func (api *Api) activeProfileSnapshot(ctx context.Context, profileId uint) (*Pro
 		profileId, profiles[0].ActiveVersion.Int32).First(&version)
 	if result.Error != nil {
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			// The pointer references a version that no longer exists (should not
-			// happen — versions are append-only): resolve nothing rather than error
-			// the hot ingest path.
+			// The pointer references a version that no longer exists. This should be
+			// impossible (versions are append-only and the delete cascade is
+			// transactional), so it signals an invariant breach — DB surgery, a bug,
+			// a botched upgrade. Resolve nothing rather than error the hot ingest
+			// path, but log it: silent device inertness is exactly the failure a
+			// "can't happen" branch must make visible.
+			log.Warn().Uint("profile", profileId).Int32("activeVersion", profiles[0].ActiveVersion.Int32).
+				Msg("device profile active_version references a missing version row; resolving empty capability")
 			return parseProfileSnapshot(nil)
 		}
 		return nil, result.Error

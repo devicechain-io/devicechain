@@ -36,7 +36,9 @@ func (r *SchemaResolver) PublishDeviceProfile(ctx context.Context, args struct {
 		return nil, err
 	}
 
-	api := r.GetApi(ctx)
+	// Route through the cached decorator so publishing evicts the shared ingest
+	// cache (a publish changes what devices resolve); reads use the plain api.
+	api := r.GetCachedApi(ctx)
 	version, err := api.PublishDeviceProfile(ctx, args.Token, args.Label, args.Description, publisher(ctx))
 	if err != nil {
 		return nil, err
@@ -54,7 +56,9 @@ func (r *SchemaResolver) RollbackDeviceProfile(ctx context.Context, args struct 
 		return nil, err
 	}
 
-	api := r.GetApi(ctx)
+	// Route through the cached decorator so the rollback evicts the shared ingest
+	// cache (the active version pointer moved); reads use the plain api.
+	api := r.GetCachedApi(ctx)
 	updated, err := api.RollbackDeviceProfile(ctx, args.Token, args.Version)
 	if err != nil {
 		return nil, err

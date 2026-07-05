@@ -186,9 +186,13 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// is already connected here (NatsManager.Initialize above), before the
 	// subscription server accepts a client.
 	providers := map[gqlcore.ContextKey]interface{}{
-		gqlcore.ContextRdbKey:  RdbManager,
-		gqlcore.ContextApiKey:  Api,
-		gqlcore.ContextNatsKey: NatsManager,
+		gqlcore.ContextRdbKey: RdbManager,
+		gqlcore.ContextApiKey: Api,
+		// The cached decorator is offered alongside the plain api so the profile
+		// publish/rollback mutations can invalidate the shared ingest cache they
+		// share with the processor (ADR-045 slice c); all other resolvers use Api.
+		graphql.ContextCachedApiKey: CachedApi,
+		gqlcore.ContextNatsKey:      NatsManager,
 	}
 
 	// Create and initialize graphql manager.

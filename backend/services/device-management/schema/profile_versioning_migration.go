@@ -17,10 +17,17 @@ import (
 // capability set) and the device_profiles.active_version pointer (the published
 // version a device resolves). It is additive and carries no data step — pre-GA
 // decisive cutover, fresh bring-up assumed: on a fresh install there are no profiles
-// to back-fill, and a profile takes effect only once explicitly published (an
-// existing profile on a non-fresh upgrade needs a one-time publish). The snapshots
-// are inline (frozen) and must produce the same columns as
+// to back-fill, and a profile takes effect only once explicitly published. The
+// snapshots are inline (frozen) and must produce the same columns as
 // model.DeviceProfileVersion / model.DeviceProfile.
+//
+// Deploy note (non-fresh upgrade only): every pre-existing profile lands with
+// active_version = NULL and resolves an empty capability set until a one-time
+// publish per profile. Until republished, metric ingest goes unvalidated/
+// unclassified and live alarms neither escalate nor auto-clear (they strand in their
+// current state), so a populated cluster upgrading in place should be swept with a
+// publish of every profile. Not a concern on the fresh bring-up this is validated
+// against; the GA migration-squash bakes the final shape.
 func NewProfileVersioningSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20260705170000",
