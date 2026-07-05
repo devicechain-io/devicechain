@@ -202,7 +202,7 @@ export default function AlarmsPage() {
       description={
         <div className="mt-1 flex items-center gap-3">
           <span className="text-sm text-muted-foreground">
-            Alarms raised across this tenant (ADR-041), live as they change.
+            Alarms raised across this tenant, live as they change.
           </span>
           <LiveIndicator status={status} />
           {lastEvent && (
