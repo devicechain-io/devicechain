@@ -20,6 +20,9 @@ func (api *Api) CreateNotificationChannel(ctx context.Context,
 	if err := validateJSONObject(request.Config, "config"); err != nil {
 		return nil, err
 	}
+	if err := validateJSONObject(request.Metadata, "metadata"); err != nil {
+		return nil, err
+	}
 
 	created := &NotificationChannel{
 		TokenReference: rdb.TokenReference{Token: request.Token},
@@ -57,6 +60,9 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 		return nil, err
 	}
 	if err := validateJSONObject(request.Config, "config"); err != nil {
+		return nil, err
+	}
+	if err := validateJSONObject(request.Metadata, "metadata"); err != nil {
 		return nil, err
 	}
 
@@ -117,6 +123,13 @@ func (api *Api) NotificationChannels(ctx context.Context,
 // DeleteNotificationChannel hard-deletes a channel by token. It fails closed if
 // the channel is still referenced by a routing rule (ErrChannelInUse) rather than
 // leaving a rule pointing at a missing channel.
+//
+// The reference count and the delete are separate statements (there is no DB
+// foreign key on notification_rules.channel_id by design), so a rule created
+// against this channel in the narrow window between them would be left dangling.
+// That is acceptable pre-GA: the schema makes a rule's channel nullable and reads
+// preload it, so a dangling rule renders channel:null rather than erroring, and the
+// N.C dispatcher must already tolerate a rule whose channel resolves to nothing.
 func (api *Api) DeleteNotificationChannel(ctx context.Context, token string) (bool, error) {
 	matches, err := api.NotificationChannelsByToken(ctx, []string{token})
 	if err != nil {

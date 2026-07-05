@@ -79,6 +79,13 @@ func TestCreateChannelSecretAndValidation(t *testing.T) {
 	}); err == nil {
 		t.Fatal("expected malformed config to be rejected")
 	}
+
+	// Malformed metadata JSON fails closed (parity with policy metadata).
+	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
+		Token: "bad-meta", ChannelType: ChannelTypeWebhook, Metadata: strPtr("{nope"), Enabled: true,
+	}); err == nil {
+		t.Fatal("expected malformed metadata to be rejected")
+	}
 }
 
 // Update preserves the secret when the request omits it (nil), replaces it when a

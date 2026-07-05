@@ -18,13 +18,14 @@ type NotificationManagementConfiguration struct {
 }
 
 // NewNotificationManagementConfiguration returns a configuration with defaults
-// applied.
+// applied. SqlDebug is intentionally left at its zero value (SQL query logging
+// OFF): GORM's debug logger interpolates bound parameters into the traced
+// statement, which would echo a channel's reversible write-only delivery secret
+// (SMTP password / bearer token) into the pod log on every create/rotate —
+// defeating the resolver-layer write-only guarantee. Enable it per-environment via
+// instance config only for local debugging.
 func NewNotificationManagementConfiguration() *NotificationManagementConfiguration {
-	cfg := &NotificationManagementConfiguration{
-		RdbConfiguration: config.MicroserviceDatastoreConfiguration{
-			SqlDebug: true,
-		},
-	}
+	cfg := &NotificationManagementConfiguration{}
 	cfg.ApplyDefaults()
 	return cfg
 }

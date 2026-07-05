@@ -36,7 +36,7 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 		if err := tx.Create(policy).Error; err != nil {
 			return err
 		}
-		rules, err := api.buildRules(ctx, tx, policy.ID, request.Rules)
+		rules, err := api.buildRules(tx, policy.ID, request.Rules)
 		if err != nil {
 			return err
 		}
@@ -90,7 +90,7 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 		if err := tx.Unscoped().Where("policy_id = ?", policy.ID).Delete(&NotificationRule{}).Error; err != nil {
 			return err
 		}
-		rules, err := api.buildRules(ctx, tx, policy.ID, request.Rules)
+		rules, err := api.buildRules(tx, policy.ID, request.Rules)
 		if err != nil {
 			return err
 		}
@@ -114,9 +114,9 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 
 // buildRules resolves each rule request to a NotificationRule owned by policyId,
 // resolving the channel token to its id (fails closed on an unknown channel) and
-// validating recipients as a JSON string array. It uses tx so the resolution reads
-// within the write transaction.
-func (api *Api) buildRules(ctx context.Context, tx *gorm.DB, policyId uint,
+// validating recipients as a JSON string array. It reads through tx, which already
+// carries the tenant-scoped context, so the channel lookup is tenant-isolated.
+func (api *Api) buildRules(tx *gorm.DB, policyId uint,
 	requests []*NotificationRuleCreateRequest) ([]*NotificationRule, error) {
 	rules := make([]*NotificationRule, 0, len(requests))
 	for _, rr := range requests {
