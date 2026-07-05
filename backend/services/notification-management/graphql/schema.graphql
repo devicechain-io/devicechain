@@ -4,16 +4,26 @@
 #
 # Notification Management GraphQL Schema (ADR-017)
 #
-# This first slice serves only the service's static capability declaration: which
-# channel-adapter types it can deliver an alarm notification through. The per-tenant
-# notification policy (recipients, per-severity routing, throttle) and its CRUD land
-# in a later slice; they hang off this same Query root.
+# The alarm→human last mile. The schema serves the service's static capability
+# declaration (which channel-adapter types it can deliver through) plus the
+# per-tenant notification CONFIGURATION: the delivery channels (with their
+# write-only secrets) and the routing policies that map alarm severities to
+# channels + recipients. It also exposes read-only per-alarm notification state —
+# the substrate the dispatcher (N.C) writes and the escalation scheduler (N.D)
+# reads; population lands in those slices.
 
-# A delivery channel the notification subsystem defines. `id` is the stable key a
-# policy will reference when it routes an alarm to a channel; `label`/`description`
-# drive the channel-type picker in the console. `available` is false until a working
-# adapter for the type ships (a policy may still be authored against a defined type,
-# but nothing is delivered through it until its adapter lands).
+# Pagination info for search results.
+type SearchResultsPagination {
+    pageStart: Int
+    pageEnd: Int
+    totalRecords: Int
+}
+
+# A delivery-channel TYPE the notification subsystem defines. `id` is the stable
+# key a channel is configured against; `label`/`description` drive the channel-type
+# picker in the console. `available` is false until a working adapter for the type
+# ships (a channel may still be configured against a defined type, but nothing is
+# delivered through it until its adapter lands).
 type NotificationChannelType {
     id: String!
     label: String!
@@ -21,12 +31,188 @@ type NotificationChannelType {
     available: Boolean!
 }
 
+# A tenant's configured delivery endpoint: a concrete instance of a channel type
+# (smtp, webhook) with the non-secret connection config a policy delivers through.
+type NotificationChannel {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    name: String
+    description: String
+    channelType: String!
+    # Non-secret, type-specific connection config as a JSON document (SMTP
+    # host/port/from; webhook URL/method/headers).
+    config: String
+    # Whether a delivery secret (SMTP password, bearer token) is configured. The
+    # secret itself is write-only and is never returned on read.
+    hasSecret: Boolean!
+    enabled: Boolean!
+    metadata: String
+}
+
+# Data required to create or update a delivery channel. `secret` is write-only:
+# on create it sets the secret; on UPDATE a null secret LEAVES THE EXISTING SECRET
+# UNCHANGED (it cannot be read back to resend), while a non-null value replaces it
+# and an empty string clears it.
+input NotificationChannelCreateRequest {
+    token: String!
+    name: String
+    description: String
+    channelType: String!
+    config: String
+    secret: String
+    enabled: Boolean!
+    metadata: String
+}
+
+# Criteria used when searching for delivery channels.
+input NotificationChannelSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    channelType: String
+    enabled: Boolean
+}
+
+# Search results returned from a delivery-channel query.
+type NotificationChannelSearchResults {
+    results: [NotificationChannel!]!
+    pagination: SearchResultsPagination!
+}
+
+# A single routing rule within a policy: for alarms matching `severity` (exact, or
+# "*" for any), deliver through `channel` to `recipients`.
+type NotificationRule {
+    id: ID!
+    severity: String!
+    channel: NotificationChannel
+    # Opaque JSON array of recipient strings the channel adapter interprets (email
+    # addresses for SMTP; may be empty for a webhook whose endpoint is the channel).
+    recipients: String
+}
+
+# A tenant's routing policy: which raised alarms get delivered, to whom, through
+# which channels. `deviceTypeToken` optionally scopes the policy to one device
+# profile (null = tenant-wide). `throttleSeconds` is the minimum gap between
+# notifications for the same alarm (null = no throttle).
+type NotificationPolicy {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    name: String
+    description: String
+    deviceTypeToken: String
+    throttleSeconds: Int
+    enabled: Boolean!
+    rules: [NotificationRule!]!
+    metadata: String
+}
+
+# A rule inside a policy create/update. The channel is named by token and resolved
+# on write; an unknown channel token fails the whole policy write.
+input NotificationRuleCreateRequest {
+    severity: String!
+    channelToken: String!
+    recipients: String
+}
+
+# Data required to create or update a routing policy together with its full rule
+# set (rules replaces any existing rules on update).
+input NotificationPolicyCreateRequest {
+    token: String!
+    name: String
+    description: String
+    deviceTypeToken: String
+    throttleSeconds: Int
+    enabled: Boolean!
+    # The policy's full rule set; pass [] for a policy with no rules yet. On update
+    # this replaces any existing rules.
+    rules: [NotificationRuleCreateRequest!]!
+    metadata: String
+}
+
+# Criteria used when searching for routing policies.
+input NotificationPolicySearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    deviceTypeToken: String
+    enabled: Boolean
+}
+
+# Search results returned from a routing-policy query.
+type NotificationPolicySearchResults {
+    results: [NotificationPolicy!]!
+    pagination: SearchResultsPagination!
+}
+
+# The per-alarm notification/escalation state: one row per raised alarm, tracking
+# what the service has done about it. Read-only in this slice — the notified
+# timestamps are written by the dispatcher (N.C) and the escalation fields by the
+# scheduler (N.D).
+type NotificationState {
+    id: ID!
+    alarmToken: String!
+    alarmKey: String!
+    severity: String!
+    firstNotifiedAt: String
+    lastNotifiedAt: String
+    notifyCount: Int!
+    acknowledgedAt: String
+    clearedAt: String
+    escalationLevel: Int!
+    lastEscalatedAt: String
+}
+
+# Criteria used when searching per-alarm notification state.
+input NotificationStateSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    alarmKey: String
+    severity: String
+}
+
+# Search results returned from a notification-state query.
+type NotificationStateSearchResults {
+    results: [NotificationState!]!
+    pagination: SearchResultsPagination!
+}
+
 type Query {
     # The channel-adapter types the notification subsystem defines (a static
-    # capability list — a policy picks channels from these; see `available`).
+    # capability list — a channel picks its type from these; see `available`).
     notificationChannelTypes: [NotificationChannelType!]!
+
+    # Delivery channels.
+    notificationChannelsById(ids: [String!]!): [NotificationChannel!]!
+    notificationChannelsByToken(tokens: [String!]!): [NotificationChannel!]!
+    notificationChannels(criteria: NotificationChannelSearchCriteria!): NotificationChannelSearchResults!
+
+    # Routing policies.
+    notificationPoliciesById(ids: [String!]!): [NotificationPolicy!]!
+    notificationPoliciesByToken(tokens: [String!]!): [NotificationPolicy!]!
+    notificationPolicies(criteria: NotificationPolicySearchCriteria!): NotificationPolicySearchResults!
+
+    # Per-alarm notification state (read-only).
+    notificationStatesByAlarmToken(alarmTokens: [String!]!): [NotificationState!]!
+    notificationStates(criteria: NotificationStateSearchCriteria!): NotificationStateSearchResults!
+}
+
+type Mutation {
+    # Delivery channels.
+    createNotificationChannel(request: NotificationChannelCreateRequest!): NotificationChannel!
+    updateNotificationChannel(token: String!, request: NotificationChannelCreateRequest!): NotificationChannel!
+    deleteNotificationChannel(token: String!): Boolean!
+
+    # Routing policies.
+    createNotificationPolicy(request: NotificationPolicyCreateRequest!): NotificationPolicy!
+    updateNotificationPolicy(token: String!, request: NotificationPolicyCreateRequest!): NotificationPolicy!
+    deleteNotificationPolicy(token: String!): Boolean!
 }
 
 schema {
     query: Query
+    mutation: Mutation
 }

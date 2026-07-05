@@ -57,6 +57,14 @@ const (
 	DashboardRead  Authority = "dashboard:read"
 	DashboardWrite Authority = "dashboard:write"
 
+	// Notifications (notification-management, ADR-017). Gate the per-tenant
+	// notification configuration API: the delivery channels (SMTP/webhook, with
+	// their write-only secrets) and the routing policies that map alarm severities
+	// to channels + recipients. Distinct from alarm:* because configuring who gets
+	// paged is an administrative concern, separate from acknowledging an alarm.
+	NotificationRead  Authority = "notification:read"
+	NotificationWrite Authority = "notification:write"
+
 	// Audit journal read (ADR-019). Gates the read-side query over the append-only
 	// audit_events table; the journal is written by construction and is never
 	// mutated through the API, so there is no audit:write.
@@ -75,26 +83,28 @@ const (
 // rejected at write time rather than silently granting nothing. It is extended as
 // each service's resolvers are brought under enforcement.
 var vocabulary = map[Authority]struct{}{
-	AuthorityAll:   {},
-	UserRead:       {},
-	UserWrite:      {},
-	RoleRead:       {},
-	RoleWrite:      {},
-	TenantRead:     {},
-	TenantWrite:    {},
-	DeviceRead:     {},
-	DeviceWrite:    {},
-	EventRead:      {},
-	StateRead:      {},
-	AlarmRead:      {},
-	AlarmWrite:     {},
-	CommandRead:    {},
-	CommandWrite:   {},
-	DashboardRead:  {},
-	DashboardWrite: {},
-	AuditRead:      {},
-	SettingsRead:   {},
-	SettingsWrite:  {},
+	AuthorityAll:      {},
+	UserRead:          {},
+	UserWrite:         {},
+	RoleRead:          {},
+	RoleWrite:         {},
+	TenantRead:        {},
+	TenantWrite:       {},
+	DeviceRead:        {},
+	DeviceWrite:       {},
+	EventRead:         {},
+	StateRead:         {},
+	AlarmRead:         {},
+	AlarmWrite:        {},
+	CommandRead:       {},
+	CommandWrite:      {},
+	DashboardRead:     {},
+	DashboardWrite:    {},
+	NotificationRead:  {},
+	NotificationWrite: {},
+	AuditRead:         {},
+	SettingsRead:      {},
+	SettingsWrite:     {},
 }
 
 // ValidAuthority reports whether s names a known authority (including the

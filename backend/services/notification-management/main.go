@@ -10,17 +10,22 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-notification-management/config"
 	"github.com/devicechain-io/dc-notification-management/graphql"
+	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/devicechain-io/dc-notification-management/processor"
+	"github.com/devicechain-io/dc-notification-management/schema"
 )
 
 var (
 	Microservice  *core.Microservice
 	Configuration *config.NotificationManagementConfiguration
 
+	RdbManager     *rdb.RdbManager
 	GraphQLManager *gqlcore.GraphQLManager
 	NatsManager    *messaging.NatsManager
+	Api            *model.Api
 
 	AlarmEventsReader     messaging.MessageReader
 	NotificationProcessor *processor.NotificationProcessor
@@ -97,14 +102,29 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
+	// Create and initialize rdb manager (runs the notification schema migrations).
+	// The per-tenant channels, policies, and per-alarm notification state are
+	// served from RDB.
+	RdbManager = rdb.NewRdbManager(Microservice, core.NewNoOpLifecycleCallbacks(), schema.Migrations,
+		Microservice.InstanceConfiguration.Persistence.Rdb, Configuration.RdbConfiguration)
+	if err := RdbManager.Initialize(ctx); err != nil {
+		return err
+	}
+	Api = model.NewApi(RdbManager)
+
 	// Create and initialize nats manager (which invokes createNatsComponents).
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
 	if err := NatsManager.Initialize(ctx); err != nil {
 		return err
 	}
 
-	// Create and initialize graphql manager. The schema is static (the channel-type
-	// capability list), so it needs no context providers.
+	// Create and initialize graphql manager. The schema now serves the notification
+	// configuration CRUD (channels/policies) backed by the rdb Api, plus the static
+	// channel-type capability list.
+	providers := map[gqlcore.ContextKey]interface{}{
+		gqlcore.ContextRdbKey: RdbManager,
+		gqlcore.ContextApiKey: Api,
+	}
 	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{})
 
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
@@ -113,12 +133,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Microservice.StartInstanceAuthGate(ctx)
 
 	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(),
-		*parsed, map[gqlcore.ContextKey]interface{}{}, Microservice.Readiness)
+		*parsed, providers, Microservice.Readiness)
 	return GraphQLManager.Initialize(ctx)
 }
 
 // afterMicroserviceStarted starts components after the microservice is started.
 func afterMicroserviceStarted(ctx context.Context) error {
+	if err := RdbManager.Start(ctx); err != nil {
+		return err
+	}
 	if err := GraphQLManager.Start(ctx); err != nil {
 		return err
 	}
@@ -136,7 +159,10 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := NatsManager.Stop(ctx); err != nil {
 		return err
 	}
-	return GraphQLManager.Stop(ctx)
+	if err := GraphQLManager.Stop(ctx); err != nil {
+		return err
+	}
+	return RdbManager.Stop(ctx)
 }
 
 // beforeMicroserviceTerminated terminates components in reverse dependency order.
@@ -147,5 +173,8 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	if err := NatsManager.Terminate(ctx); err != nil {
 		return err
 	}
-	return GraphQLManager.Terminate(ctx)
+	if err := GraphQLManager.Terminate(ctx); err != nil {
+		return err
+	}
+	return RdbManager.Terminate(ctx)
 }

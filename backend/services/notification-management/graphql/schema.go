@@ -4,8 +4,12 @@
 package graphql
 
 import (
+	"context"
 	_ "embed"
+	"strconv"
 
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-notification-management/model"
 )
 
@@ -13,10 +17,33 @@ import (
 var SchemaContent string
 
 // SchemaResolver is the root resolver for the notification-management schema. It
-// holds no dependencies yet: this slice serves only the static channel-type
-// capability list. The policy-CRUD slice will give it an Api handle (via the
-// GraphQL context, as the other services do) when it needs one.
+// reaches its dependencies (the rdb manager and the notification Api) through the
+// GraphQL request context, which main.go populates as providers — the same
+// pattern the other services use.
 type SchemaResolver struct{}
+
+// GetRdbManager returns the rdb manager from the request context.
+func (s *SchemaResolver) GetRdbManager(ctx context.Context) *rdb.RdbManager {
+	return ctx.Value(gqlcore.ContextRdbKey).(*rdb.RdbManager)
+}
+
+// GetApi returns the notification Api from the request context.
+func (s *SchemaResolver) GetApi(ctx context.Context) *model.Api {
+	return ctx.Value(gqlcore.ContextApiKey).(*model.Api)
+}
+
+// asUintIds converts string ids to uint ids.
+func (s *SchemaResolver) asUintIds(val []string) ([]uint, error) {
+	ids := make([]uint, 0, len(val))
+	for _, sid := range val {
+		id, err := strconv.ParseUint(sid, 0, 64)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, uint(id))
+	}
+	return ids, nil
+}
 
 // NotificationChannelTypes returns the static catalog of channel-adapter types the
 // service can deliver through (ADR-017).
