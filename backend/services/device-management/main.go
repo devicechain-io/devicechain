@@ -181,10 +181,14 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Api = model.NewApi(RdbManager)
 	CachedApi = model.NewCachedApi(Api, caches)
 
-	// Map of providers that will be injected into graphql http context.
+	// Map of providers that will be injected into graphql http context. The NATS
+	// manager backs the live alarm subscription resolver (SubscribeLive, ADR-037); it
+	// is already connected here (NatsManager.Initialize above), before the
+	// subscription server accepts a client.
 	providers := map[gqlcore.ContextKey]interface{}{
-		gqlcore.ContextRdbKey: RdbManager,
-		gqlcore.ContextApiKey: Api,
+		gqlcore.ContextRdbKey:  RdbManager,
+		gqlcore.ContextApiKey:  Api,
+		gqlcore.ContextNatsKey: NatsManager,
 	}
 
 	// Create and initialize graphql manager.
