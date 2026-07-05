@@ -4,6 +4,17 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+export type AlarmSearchCriteria = {
+  acknowledged?: boolean | null | undefined;
+  alarmKey?: string | null | undefined;
+  originator?: string | null | undefined;
+  originatorType?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+  severity?: string | null | undefined;
+  state?: string | null | undefined;
+};
+
 export type AreaCreateRequest = {
   areaTypeToken: string;
   description?: string | null | undefined;
@@ -248,6 +259,38 @@ export type EntityRelationshipSearchCriteria = {
   targetType?: string | null | undefined;
   tracked?: boolean | null | undefined;
 };
+
+export type AlarmsQueryVariables = Exact<{
+  criteria: AlarmSearchCriteria;
+}>;
+
+
+export type AlarmsQuery = { alarms: { results: Array<{ id: string, token: string, originatorType: string, originatorId: string, originatorToken: string | null, alarmKey: string, metricKey: string, state: string, acknowledged: boolean, severity: string, raisedTime: string | null, clearedTime: string | null, acknowledgedTime: string | null, acknowledgedBy: string | null, lastValue: number | null, message: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type AcknowledgeAlarmMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type AcknowledgeAlarmMutation = { acknowledgeAlarm: { id: string } };
+
+export type ClearAlarmMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type ClearAlarmMutation = { clearAlarm: { id: string } };
+
+export type AlarmStreamSubscriptionVariables = Exact<{
+  originatorType?: string | null | undefined;
+  originator?: string | null | undefined;
+  state?: string | null | undefined;
+  severity?: string | null | undefined;
+  alarmKey?: string | null | undefined;
+}>;
+
+
+export type AlarmStreamSubscription = { alarmStream: { eventType: string, alarmToken: string, originatorType: string, originatorId: string, originatorToken: string | null, alarmKey: string, metricKey: string, state: string, severity: string, previousSeverity: string | null, acknowledged: boolean, acknowledgedBy: string | null, lastValue: number | null, message: string | null, raisedTime: string | null, occurredTime: string } };
 
 export type AreasQueryVariables = Exact<{
   criteria: AreaSearchCriteria;
@@ -758,6 +801,77 @@ export class TypedDocumentString<TResult, TVariables>
   }
 }
 
+export const AlarmsDocument = new TypedDocumentString(`
+    query Alarms($criteria: AlarmSearchCriteria!) {
+  alarms(criteria: $criteria) {
+    results {
+      id
+      token
+      originatorType
+      originatorId
+      originatorToken
+      alarmKey
+      metricKey
+      state
+      acknowledged
+      severity
+      raisedTime
+      clearedTime
+      acknowledgedTime
+      acknowledgedBy
+      lastValue
+      message
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AlarmsQuery, AlarmsQueryVariables>;
+export const AcknowledgeAlarmDocument = new TypedDocumentString(`
+    mutation AcknowledgeAlarm($token: String!) {
+  acknowledgeAlarm(token: $token) {
+    id
+  }
+}
+    `) as unknown as TypedDocumentString<AcknowledgeAlarmMutation, AcknowledgeAlarmMutationVariables>;
+export const ClearAlarmDocument = new TypedDocumentString(`
+    mutation ClearAlarm($token: String!) {
+  clearAlarm(token: $token) {
+    id
+  }
+}
+    `) as unknown as TypedDocumentString<ClearAlarmMutation, ClearAlarmMutationVariables>;
+export const AlarmStreamDocument = new TypedDocumentString(`
+    subscription AlarmStream($originatorType: String, $originator: String, $state: String, $severity: String, $alarmKey: String) {
+  alarmStream(
+    originatorType: $originatorType
+    originator: $originator
+    state: $state
+    severity: $severity
+    alarmKey: $alarmKey
+  ) {
+    eventType
+    alarmToken
+    originatorType
+    originatorId
+    originatorToken
+    alarmKey
+    metricKey
+    state
+    severity
+    previousSeverity
+    acknowledged
+    acknowledgedBy
+    lastValue
+    message
+    raisedTime
+    occurredTime
+  }
+}
+    `) as unknown as TypedDocumentString<AlarmStreamSubscription, AlarmStreamSubscriptionVariables>;
 export const AreasDocument = new TypedDocumentString(`
     query Areas($criteria: AreaSearchCriteria!) {
   areas(criteria: $criteria) {

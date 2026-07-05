@@ -239,6 +239,11 @@ type Alarm implements Model & TokenReference & MetadataEntity {
     token: String!
     originatorType: String!
     originatorId: ID!
+    # The originator's token, resolved on demand (device originators only today);
+    # null when the originator is not a device or no longer exists. Mirrors
+    # AlarmEvent.originatorToken so a live list and its reconciling query address the
+    # originator the same way.
+    originatorToken: String
     alarmKey: String!
     metricKey: String!
     state: String!

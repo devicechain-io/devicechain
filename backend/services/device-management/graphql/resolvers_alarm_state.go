@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/entity"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	gql "github.com/graph-gophers/graphql-go"
 )
@@ -56,6 +57,28 @@ func (r *AlarmResolver) Metadata() *string { return util.MetadataStr(r.M.Metadat
 func (r *AlarmResolver) OriginatorType() string { return r.M.OriginatorType }
 
 func (r *AlarmResolver) OriginatorId() gql.ID { return gql.ID(fmt.Sprint(r.M.OriginatorId)) }
+
+// OriginatorToken resolves the originator's token on demand — a device lookup by id,
+// mirroring AlarmEvent.OriginatorToken so the query and the live stream expose the
+// originator identically. Returns nil when the originator is not a device or no
+// longer exists, and surfaces a lookup failure as a field error. Lazy by design: the
+// lookup runs only when the client selects this field, keeping it off the list path
+// when unused. It takes graphql-go's per-resolve context, so it inherits that call's
+// timeout and stays tenant-scoped.
+func (r *AlarmResolver) OriginatorToken(ctx context.Context) (*string, error) {
+	if r.M.OriginatorType != string(entity.TypeDevice) {
+		return nil, nil
+	}
+	devices, err := r.S.GetApi(ctx).DevicesById(ctx, []uint{r.M.OriginatorId})
+	if err != nil {
+		return nil, err
+	}
+	if len(devices) == 0 {
+		return nil, nil
+	}
+	t := devices[0].Token
+	return &t, nil
+}
 
 func (r *AlarmResolver) AlarmKey() string { return r.M.AlarmKey }
 

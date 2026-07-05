@@ -15,6 +15,10 @@ import * as types from './graphql';
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
+    "\n  query Alarms($criteria: AlarmSearchCriteria!) {\n    alarms(criteria: $criteria) {\n      results {\n        id\n        token\n        originatorType\n        originatorId\n        originatorToken\n        alarmKey\n        metricKey\n        state\n        acknowledged\n        severity\n        raisedTime\n        clearedTime\n        acknowledgedTime\n        acknowledgedBy\n        lastValue\n        message\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.AlarmsDocument,
+    "\n  mutation AcknowledgeAlarm($token: String!) {\n    acknowledgeAlarm(token: $token) {\n      id\n    }\n  }\n": typeof types.AcknowledgeAlarmDocument,
+    "\n  mutation ClearAlarm($token: String!) {\n    clearAlarm(token: $token) {\n      id\n    }\n  }\n": typeof types.ClearAlarmDocument,
+    "\n  subscription AlarmStream(\n    $originatorType: String\n    $originator: String\n    $state: String\n    $severity: String\n    $alarmKey: String\n  ) {\n    alarmStream(\n      originatorType: $originatorType\n      originator: $originator\n      state: $state\n      severity: $severity\n      alarmKey: $alarmKey\n    ) {\n      eventType\n      alarmToken\n      originatorType\n      originatorId\n      originatorToken\n      alarmKey\n      metricKey\n      state\n      severity\n      previousSeverity\n      acknowledged\n      acknowledgedBy\n      lastValue\n      message\n      raisedTime\n      occurredTime\n    }\n  }\n": typeof types.AlarmStreamDocument,
     "\n  query Areas($criteria: AreaSearchCriteria!) {\n    areas(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        areaType {\n          id\n          token\n          name\n          icon\n          backgroundColor\n          foregroundColor\n          borderColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.AreasDocument,
     "\n  query AreaByToken($tokens: [String!]!) {\n    areasByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n      areaType {\n        id\n        token\n        name\n        icon\n        backgroundColor\n        foregroundColor\n        borderColor\n      }\n    }\n  }\n": typeof types.AreaByTokenDocument,
     "\n  mutation CreateArea($request: AreaCreateRequest) {\n    createArea(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      areaType {\n        id\n        token\n        name\n        icon\n        backgroundColor\n        foregroundColor\n        borderColor\n      }\n    }\n  }\n": typeof types.CreateAreaDocument,
@@ -84,6 +88,10 @@ type Documents = {
     "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": typeof types.RemoveEntityRelationshipsDocument,
 };
 const documents: Documents = {
+    "\n  query Alarms($criteria: AlarmSearchCriteria!) {\n    alarms(criteria: $criteria) {\n      results {\n        id\n        token\n        originatorType\n        originatorId\n        originatorToken\n        alarmKey\n        metricKey\n        state\n        acknowledged\n        severity\n        raisedTime\n        clearedTime\n        acknowledgedTime\n        acknowledgedBy\n        lastValue\n        message\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AlarmsDocument,
+    "\n  mutation AcknowledgeAlarm($token: String!) {\n    acknowledgeAlarm(token: $token) {\n      id\n    }\n  }\n": types.AcknowledgeAlarmDocument,
+    "\n  mutation ClearAlarm($token: String!) {\n    clearAlarm(token: $token) {\n      id\n    }\n  }\n": types.ClearAlarmDocument,
+    "\n  subscription AlarmStream(\n    $originatorType: String\n    $originator: String\n    $state: String\n    $severity: String\n    $alarmKey: String\n  ) {\n    alarmStream(\n      originatorType: $originatorType\n      originator: $originator\n      state: $state\n      severity: $severity\n      alarmKey: $alarmKey\n    ) {\n      eventType\n      alarmToken\n      originatorType\n      originatorId\n      originatorToken\n      alarmKey\n      metricKey\n      state\n      severity\n      previousSeverity\n      acknowledged\n      acknowledgedBy\n      lastValue\n      message\n      raisedTime\n      occurredTime\n    }\n  }\n": types.AlarmStreamDocument,
     "\n  query Areas($criteria: AreaSearchCriteria!) {\n    areas(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        createdAt\n        areaType {\n          id\n          token\n          name\n          icon\n          backgroundColor\n          foregroundColor\n          borderColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AreasDocument,
     "\n  query AreaByToken($tokens: [String!]!) {\n    areasByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      createdAt\n      areaType {\n        id\n        token\n        name\n        icon\n        backgroundColor\n        foregroundColor\n        borderColor\n      }\n    }\n  }\n": types.AreaByTokenDocument,
     "\n  mutation CreateArea($request: AreaCreateRequest) {\n    createArea(request: $request) {\n      id\n      token\n      name\n      description\n      createdAt\n      areaType {\n        id\n        token\n        name\n        icon\n        backgroundColor\n        foregroundColor\n        borderColor\n      }\n    }\n  }\n": types.CreateAreaDocument,
@@ -153,6 +161,22 @@ const documents: Documents = {
     "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": types.RemoveEntityRelationshipsDocument,
 };
 
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query Alarms($criteria: AlarmSearchCriteria!) {\n    alarms(criteria: $criteria) {\n      results {\n        id\n        token\n        originatorType\n        originatorId\n        originatorToken\n        alarmKey\n        metricKey\n        state\n        acknowledged\n        severity\n        raisedTime\n        clearedTime\n        acknowledgedTime\n        acknowledgedBy\n        lastValue\n        message\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').AlarmsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation AcknowledgeAlarm($token: String!) {\n    acknowledgeAlarm(token: $token) {\n      id\n    }\n  }\n"): typeof import('./graphql').AcknowledgeAlarmDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation ClearAlarm($token: String!) {\n    clearAlarm(token: $token) {\n      id\n    }\n  }\n"): typeof import('./graphql').ClearAlarmDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  subscription AlarmStream(\n    $originatorType: String\n    $originator: String\n    $state: String\n    $severity: String\n    $alarmKey: String\n  ) {\n    alarmStream(\n      originatorType: $originatorType\n      originator: $originator\n      state: $state\n      severity: $severity\n      alarmKey: $alarmKey\n    ) {\n      eventType\n      alarmToken\n      originatorType\n      originatorId\n      originatorToken\n      alarmKey\n      metricKey\n      state\n      severity\n      previousSeverity\n      acknowledged\n      acknowledgedBy\n      lastValue\n      message\n      raisedTime\n      occurredTime\n    }\n  }\n"): typeof import('./graphql').AlarmStreamDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
+  AlertTriangle,
   Boxes,
   Building2,
   ChevronRight,
@@ -56,6 +57,7 @@ type NavNode = NavLeaf | NavGroupNode;
 const NAV: NavNode[] = [
   { label: 'Dashboard', href: '/', icon: LayoutGrid },
   { label: 'Dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read' },
+  { label: 'Alarms', href: '/alarms', icon: AlertTriangle, requires: 'alarm:read' },
   {
     label: 'Devices',
     icon: Cpu,
