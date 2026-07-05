@@ -26,8 +26,8 @@ type DeviceTypeCreateRequest struct {
 	ProfileToken *string
 	// Manufacturer + Model are identity facets (ADR-045 decision 8): they name
 	// the device this type is, and stay correct even when many types share one
-	// profile. Discovery facets, free-text (a curatable suggestion list backs the
-	// authoring UI later).
+	// profile. Discovery facets, free-text; the authoring UI suggests values
+	// already in use (FacetValues), with explicit curation left for later.
 	Manufacturer *string
 	Model        *string
 	Metadata     *string
@@ -51,10 +51,13 @@ type DeviceType struct {
 	ProfileId *uint `gorm:"index"`
 	Profile   *DeviceProfile
 
-	Manufacturer sql.NullString `gorm:"size:128"` // identity facet (ADR-045 decision 8)
+	// Manufacturer + Model are indexed identity facets (ADR-045 decision 8): they
+	// back the distinct-value suggestion lists and are meant to be filtered/grouped
+	// on, so the index matches DeviceProfile.Category's.
+	Manufacturer sql.NullString `gorm:"size:128;index"` // identity facet (ADR-045 decision 8)
 	// ModelName is the device model facet; the Go field avoids colliding with the
 	// embedded gorm.Model, the DB column + GraphQL field stay "model".
-	ModelName sql.NullString `gorm:"column:model;size:128"`
+	ModelName sql.NullString `gorm:"column:model;size:128;index"`
 
 	Devices []Device
 	// The metric/command/alarm definitions moved onto DeviceProfile in ADR-045

@@ -89,6 +89,7 @@ type Documents = {
     "\n  mutation UpdateDeviceProfile($token: String!, $request: DeviceProfileCreateRequest) {\n    updateDeviceProfile(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      category\n      activeVersion\n      deviceTypeCount\n      metadata\n      createdAt\n    }\n  }\n": typeof types.UpdateDeviceProfileDocument,
     "\n  mutation DeleteDeviceProfile($token: String!) {\n    deleteDeviceProfile(token: $token)\n  }\n": typeof types.DeleteDeviceProfileDocument,
     "\n  query DeviceProfileVersions($token: String!) {\n    deviceProfileVersions(token: $token) {\n      version\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n": typeof types.DeviceProfileVersionsDocument,
+    "\n  query FacetValues($facet: DeviceFacet!) {\n    facetValues(facet: $facet)\n  }\n": typeof types.FacetValuesDocument,
     "\n  mutation PublishDeviceProfile($token: String!, $label: String, $description: String) {\n    publishDeviceProfile(token: $token, label: $label, description: $description) {\n      version\n    }\n  }\n": typeof types.PublishDeviceProfileDocument,
     "\n  mutation RollbackDeviceProfile($token: String!, $version: Int!) {\n    rollbackDeviceProfile(token: $token, version: $version) {\n      token\n      activeVersion\n    }\n  }\n": typeof types.RollbackDeviceProfileDocument,
     "\n  query MetricDefinitions($criteria: MetricDefinitionSearchCriteria!) {\n    metricDefinitions(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        metricKey\n        dataType\n        unit\n        minValue\n        maxValue\n        enum\n        descriptor\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.MetricDefinitionsDocument,
@@ -182,6 +183,7 @@ const documents: Documents = {
     "\n  mutation UpdateDeviceProfile($token: String!, $request: DeviceProfileCreateRequest) {\n    updateDeviceProfile(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      category\n      activeVersion\n      deviceTypeCount\n      metadata\n      createdAt\n    }\n  }\n": types.UpdateDeviceProfileDocument,
     "\n  mutation DeleteDeviceProfile($token: String!) {\n    deleteDeviceProfile(token: $token)\n  }\n": types.DeleteDeviceProfileDocument,
     "\n  query DeviceProfileVersions($token: String!) {\n    deviceProfileVersions(token: $token) {\n      version\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n": types.DeviceProfileVersionsDocument,
+    "\n  query FacetValues($facet: DeviceFacet!) {\n    facetValues(facet: $facet)\n  }\n": types.FacetValuesDocument,
     "\n  mutation PublishDeviceProfile($token: String!, $label: String, $description: String) {\n    publishDeviceProfile(token: $token, label: $label, description: $description) {\n      version\n    }\n  }\n": types.PublishDeviceProfileDocument,
     "\n  mutation RollbackDeviceProfile($token: String!, $version: Int!) {\n    rollbackDeviceProfile(token: $token, version: $version) {\n      token\n      activeVersion\n    }\n  }\n": types.RollbackDeviceProfileDocument,
     "\n  query MetricDefinitions($criteria: MetricDefinitionSearchCriteria!) {\n    metricDefinitions(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        metricKey\n        dataType\n        unit\n        minValue\n        maxValue\n        enum\n        descriptor\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.MetricDefinitionsDocument,
@@ -497,6 +499,10 @@ export function graphql(source: "\n  mutation DeleteDeviceProfile($token: String
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query DeviceProfileVersions($token: String!) {\n    deviceProfileVersions(token: $token) {\n      version\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n"): typeof import('./graphql').DeviceProfileVersionsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query FacetValues($facet: DeviceFacet!) {\n    facetValues(facet: $facet)\n  }\n"): typeof import('./graphql').FacetValuesDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

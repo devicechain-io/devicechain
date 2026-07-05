@@ -242,6 +242,11 @@ export type DeviceCredentialSearchCriteria = {
   pageSize: number;
 };
 
+export type DeviceFacet =
+  | 'CATEGORY'
+  | 'MANUFACTURER'
+  | 'MODEL';
+
 export type DeviceGroupCreateRequest = {
   backgroundColor?: string | null | undefined;
   borderColor?: string | null | undefined;
@@ -875,6 +880,13 @@ export type DeviceProfileVersionsQueryVariables = Exact<{
 
 
 export type DeviceProfileVersionsQuery = { deviceProfileVersions: Array<{ version: number, label: string | null, description: string | null, publishedAt: string, publishedBy: string | null }> };
+
+export type FacetValuesQueryVariables = Exact<{
+  facet: DeviceFacet;
+}>;
+
+
+export type FacetValuesQuery = { facetValues: Array<string> };
 
 export type PublishDeviceProfileMutationVariables = Exact<{
   token: string;
@@ -2155,6 +2167,11 @@ export const DeviceProfileVersionsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<DeviceProfileVersionsQuery, DeviceProfileVersionsQueryVariables>;
+export const FacetValuesDocument = new TypedDocumentString(`
+    query FacetValues($facet: DeviceFacet!) {
+  facetValues(facet: $facet)
+}
+    `) as unknown as TypedDocumentString<FacetValuesQuery, FacetValuesQueryVariables>;
 export const PublishDeviceProfileDocument = new TypedDocumentString(`
     mutation PublishDeviceProfile($token: String!, $label: String, $description: String) {
   publishDeviceProfile(token: $token, label: $label, description: $description) {

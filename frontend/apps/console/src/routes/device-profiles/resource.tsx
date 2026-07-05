@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
+import { SuggestField } from '@/components/ui/suggest-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Textarea, errMessage, typeCountLabel } from '@/routes/common';
 import {
@@ -43,8 +44,8 @@ import {
 const Dash = () => <span className="text-muted-foreground">—</span>;
 
 // Basic-tab form: the profile header (token, name, description, category). Category
-// is the free-text capability facet (ADR-045 decision 8); a curatable suggestion
-// list backs it in a later slice. Metadata is carried forward untouched on edit.
+// is the free-text capability facet (ADR-045 decision 8), suggesting the values
+// already in use via SuggestField. Metadata is carried forward untouched on edit.
 function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (message: string) => void }) {
   const editing = entity != null;
   const [token, setToken] = useState(entity?.token ?? '');
@@ -99,8 +100,12 @@ function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (mess
       <FormField label="Name" htmlFor="p-name">
         <Input id="p-name" value={name} onChange={(e) => setName(e.target.value)} />
       </FormField>
-      <FormField label="Category" htmlFor="p-category" description="Functional device class, e.g. thermostat, meter, gateway.">
-        <Input id="p-category" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="thermostat" />
+      <FormField
+        label="Category"
+        htmlFor="p-category"
+        description="Functional device class, e.g. thermostat, meter, gateway. Suggests categories already in use; you can type a new one."
+      >
+        <SuggestField id="p-category" facet="CATEGORY" value={category} onChange={setCategory} placeholder="thermostat" />
       </FormField>
       <FormField label="Description" htmlFor="p-description">
         <Textarea id="p-description" value={description} onChange={(e) => setDescription(e.target.value)} />
