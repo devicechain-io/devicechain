@@ -232,13 +232,13 @@ export function CommandDefinitionForm({
       <FormField
         label="Parameter schema"
         htmlFor="c-schema"
-        description="Optional JSON array of parameters (ADR-043). Leave blank for a no-argument command."
+        description='Optional JSON array of parameters (ADR-043), each { "name", "dataType", … }. Leave blank for a no-argument command.'
       >
         <Textarea
           id="c-schema"
           value={parameterSchema}
           onChange={(e) => setParameterSchema(e.target.value)}
-          placeholder='[{"key":"level","type":"INT"}]'
+          placeholder='[{"name":"level","dataType":"INT","required":true}]'
           className="min-h-28"
         />
       </FormField>
@@ -268,6 +268,12 @@ export function AlarmDefinitionForm({
   onDone: (message: string) => void;
 }) {
   const editing = entity != null;
+  // An "advanced" rule uses a non-SIMPLE condition (DURATION/REPEATING) or a dynamic
+  // threshold (thresholdAttr) — shapes this static-threshold form doesn't author.
+  // When editing one we preserve its condition/threshold/tier fields verbatim (so we
+  // never null them or send a conflicting static threshold) and let the operator edit
+  // only the parts this form does own (metric, operator, severity, name, enabled).
+  const advanced = editing && (entity.conditionType !== ALARM_CONDITION_SIMPLE || !!entity.thresholdAttr);
   const [alarmKey, setAlarmKey] = useState(entity?.alarmKey ?? '');
   const [token, setToken] = useState(entity?.token ?? '');
   const [name, setName] = useState(entity?.name ?? '');
@@ -296,13 +302,16 @@ export function AlarmDefinitionForm({
         metricKey: metricKey.trim(),
         name: opt(name),
         description: opt(description),
-        conditionType: ALARM_CONDITION_SIMPLE,
+        // Preserve the condition/threshold shape of an advanced rule; author SIMPLE
+        // static for new/basic rules. Exactly one of threshold/thresholdAttr is sent,
+        // so the two never conflict.
+        conditionType: entity?.conditionType ?? ALARM_CONDITION_SIMPLE,
         operator,
         severity,
-        threshold: optNum(threshold),
+        threshold: advanced ? (entity?.threshold ?? undefined) : optNum(threshold),
+        thresholdAttr: advanced ? (entity?.thresholdAttr ?? undefined) : undefined,
         enabled,
-        // Carry forward the advanced tiers this form doesn't edit.
-        thresholdAttr: entity?.thresholdAttr ?? undefined,
+        // Carry forward the DURATION/REPEATING tiers this form doesn't edit.
         durationSeconds: entity?.durationSeconds ?? undefined,
         repeatCount: entity?.repeatCount ?? undefined,
         repeatWindowSeconds: entity?.repeatWindowSeconds ?? undefined,
@@ -325,6 +334,13 @@ export function AlarmDefinitionForm({
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+      {advanced && (
+        <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+          This rule uses advanced settings (a dynamic threshold or duration/repeat tiers) authored
+          via the API. Those are preserved as-is; you can edit the metric, operator, severity, name,
+          and enabled state here.
+        </p>
+      )}
       <FormField label="Alarm key" htmlFor="a-key" description="Stable id for this alarm, e.g. overheat.">
         <Input id="a-key" value={alarmKey} onChange={(e) => setAlarmKey(e.target.value)} placeholder="overheat" />
       </FormField>
@@ -354,7 +370,15 @@ export function AlarmDefinitionForm({
           <Combobox id="a-op" value={operator} onChange={setOperator} options={ALARM_OPERATORS} allowClear={false} />
         </FormField>
         <FormField label="Threshold" htmlFor="a-thr">
-          <Input id="a-thr" type="number" value={threshold} onChange={(e) => setThreshold(e.target.value)} placeholder="85" />
+          {advanced ? (
+            <Input
+              id="a-thr"
+              value={entity?.thresholdAttr ? `attr: ${entity.thresholdAttr}` : (entity?.threshold?.toString() ?? '—')}
+              disabled
+            />
+          ) : (
+            <Input id="a-thr" type="number" value={threshold} onChange={(e) => setThreshold(e.target.value)} placeholder="85" />
+          )}
         </FormField>
         <FormField label="Severity" htmlFor="a-sev">
           <Combobox id="a-sev" value={severity} onChange={setSeverity} options={ALARM_SEVERITIES} allowClear={false} />
@@ -379,7 +403,7 @@ export function AlarmDefinitionForm({
         editing={editing}
         singular="alarm rule"
         busy={busy}
-        disabled={busy || !alarmKey.trim() || !metricKey.trim() || threshold.trim() === '' || (!editing && !token.trim())}
+        disabled={busy || !alarmKey.trim() || !metricKey.trim() || (!advanced && threshold.trim() === '') || (!editing && !token.trim())}
         onClick={submit}
       />
     </div>

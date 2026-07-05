@@ -35,14 +35,18 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
     [version, resource.basePath, token],
   );
 
-  if (loading) {
+  // Only take over the whole page on the FIRST load / hard error. useQuery keeps the
+  // prior data and flips loading during a background refetch (e.g. a tab calling
+  // reload after publish); blanking the page then would unmount the tab bar and
+  // bounce the user back to "Basic". While data is present, refetches update in place.
+  if (loading && !item) {
     return (
       <PageShell title={token} banner={resource.banner}>
         <LoadingState description={`Loading ${resource.singular}…`} />
       </PageShell>
     );
   }
-  if (error) {
+  if (error && !item) {
     return (
       <PageShell title={token} banner={resource.banner}>
         <ErrorState description={error} />

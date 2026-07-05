@@ -138,7 +138,14 @@ export function VersionsPanel({
 
       <FormDrawer
         open={publishing}
-        onOpenChange={setPublishing}
+        onOpenChange={(open) => {
+          setPublishing(open);
+          // Discard an abandoned draft's label/description so the next open is clean.
+          if (!open) {
+            setLabel('');
+            setDescription('');
+          }
+        }}
         title="Publish profile"
         description="Freeze the current draft into a new version and make it the version devices resolve."
       >

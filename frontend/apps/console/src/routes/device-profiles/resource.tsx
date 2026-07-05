@@ -114,8 +114,6 @@ function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (mess
   );
 }
 
-const num = (n: number | null | undefined) => (n == null ? null : n);
-
 export const deviceProfileResource: RegistryResource<DeviceProfile> = {
   basePath: '/device-profiles',
   titlePlural: 'Device Profiles',
@@ -156,7 +154,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
             {
               header: 'Range',
               cell: (d) =>
-                num(d.minValue) == null && num(d.maxValue) == null ? (
+                d.minValue == null && d.maxValue == null ? (
                   <Dash />
                 ) : (
                   <span className="tabular-nums">
