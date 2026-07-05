@@ -16,6 +16,7 @@ import AuditPage from '@/routes/audit/AuditPage';
 import { ResourceListPage, ResourceDetailPage, type RegistryResource } from '@/components/registry';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { deviceTypeResource } from '@/routes/device-types/resource';
+import { deviceProfileResource } from '@/routes/device-profiles/resource';
 import { deviceGroupResource } from '@/routes/device-groups/resource';
 import { assetResource } from '@/routes/assets/resource';
 import { assetTypeResource } from '@/routes/asset-types/resource';
@@ -45,6 +46,7 @@ import AdminSettingsPage from '@/routes/admin/SettingsPage';
 // element T is invariant; each is consumed by a generic page that re-narrows it.
 const REGISTRY_RESOURCES: RegistryResource<any>[] = [
   deviceTypeResource,
+  deviceProfileResource,
   deviceGroupResource,
   assetResource,
   assetTypeResource,

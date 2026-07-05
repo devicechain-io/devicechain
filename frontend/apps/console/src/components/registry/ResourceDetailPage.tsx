@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import type { ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Trash2 } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
@@ -34,14 +35,18 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
     [version, resource.basePath, token],
   );
 
-  if (loading) {
+  // Only take over the whole page on the FIRST load / hard error. useQuery keeps the
+  // prior data and flips loading during a background refetch (e.g. a tab calling
+  // reload after publish); blanking the page then would unmount the tab bar and
+  // bounce the user back to "Basic". While data is present, refetches update in place.
+  if (loading && !item) {
     return (
       <PageShell title={token} banner={resource.banner}>
         <LoadingState description={`Loading ${resource.singular}…`} />
       </PageShell>
     );
   }
-  if (error) {
+  if (error && !item) {
     return (
       <PageShell title={token} banner={resource.banner}>
         <ErrorState description={error} />
@@ -85,7 +90,14 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
       })}
     </SectionPanel>
   );
-  const extra = resource.renderDetailExtra?.(item, reload);
+  // Detail tabs beside "Basic": the N-tab list wins (device profiles), else the
+  // legacy single labelled extra (a group's Members, a type's Appearance).
+  const extraTabs: { value: string; label: string; content: ReactNode }[] = resource.detailTabs
+    ? resource.detailTabs.map((t) => ({ value: t.value, label: t.label, content: t.render(item, reload) }))
+    : (() => {
+        const extra = resource.renderDetailExtra?.(item, reload);
+        return extra ? [{ value: 'extra', label: resource.detailExtraLabel ?? 'More', content: extra }] : [];
+      })();
   const heading = resource.nameOf?.(item) || token;
   const type = resource.typeOf?.(item);
 
@@ -105,16 +117,24 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
         </Button>
       }
     >
-      {/* The form always lives under a "Basic" tab — a single-tab bar is a
-          deliberate, forward-looking frame for tabs added later. A labelled extra
-          (e.g. a group's Members) becomes a second tab beside it. */}
+      {/* The form always lives under a "Basic" tab; any labelled extras (a group's
+          Members, a profile's Metrics/Commands/Alarm Rules/Versions) become tabs
+          beside it. */}
       <Tabs defaultValue="basic">
         <TabsList>
           <TabsTrigger value="basic">Basic</TabsTrigger>
-          {extra && <TabsTrigger value="extra">{resource.detailExtraLabel ?? 'More'}</TabsTrigger>}
+          {extraTabs.map((t) => (
+            <TabsTrigger key={t.value} value={t.value}>
+              {t.label}
+            </TabsTrigger>
+          ))}
         </TabsList>
         <TabsContent value="basic">{form}</TabsContent>
-        {extra && <TabsContent value="extra">{extra}</TabsContent>}
+        {extraTabs.map((t) => (
+          <TabsContent key={t.value} value={t.value}>
+            {t.content}
+          </TabsContent>
+        ))}
       </Tabs>
     </PageShell>
   );

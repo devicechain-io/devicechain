@@ -30,6 +30,15 @@ export interface RegistryColumn<T> {
   className?: string;
 }
 
+/** A named detail-page tab beside "Basic". Its render receives the loaded entity
+ *  and a reload callback to refresh the page after a save. */
+export interface DetailTab<T> {
+  /** Stable tab key (unique within the resource). */
+  value: string;
+  label: string;
+  render: (item: T, reload: () => void) => ReactNode;
+}
+
 export interface RegistryResource<T> {
   /** Route base, e.g. "/device-types". The /new and /:token routes hang off it. */
   basePath: string;
@@ -69,6 +78,9 @@ export interface RegistryResource<T> {
   /** When set alongside renderDetailExtra, the detail page splits into a "Basic"
    *  tab (the form) and a second tab with this label holding the extra content. */
   detailExtraLabel?: string;
+  /** Multiple named detail tabs beside "Basic" (e.g. a device profile's Metrics,
+   *  Commands, Alarm Rules, Versions). Takes precedence over renderDetailExtra. */
+  detailTabs?: DetailTab<T>[];
   /** Override the delete confirmation prompt. */
   removeConfirm?: (item: T) => string;
 }
