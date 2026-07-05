@@ -20,10 +20,24 @@ type DeviceTypeCreateRequest struct {
 	BackgroundColor *string
 	ForegroundColor *string
 	BorderColor     *string
-	Metadata        *string
+	// ProfileToken references the DeviceProfile this type adopts (ADR-045).
+	// Optional: a type with no profile is valid, it just grants its devices no
+	// typed capability. Empty/omitted clears the reference.
+	ProfileToken *string
+	// Manufacturer + Model are identity facets (ADR-045 decision 8): they name
+	// the device this type is, and stay correct even when many types share one
+	// profile. Discovery facets, free-text (a curatable suggestion list backs the
+	// authoring UI later).
+	Manufacturer *string
+	Model        *string
+	Metadata     *string
 }
 
-// Represents a device type.
+// Represents a device type — the taxonomy/identity of a device (name, appearance,
+// manufacturer/model), classifying its devices and referencing the DeviceProfile
+// (ADR-045). The metric/command/alarm definitions still hang off the type in this
+// slice; they relocate onto the referenced profile in a later slice, at which point
+// the profile becomes the capability contract the type resolves through.
 type DeviceType struct {
 	gorm.Model
 	rdb.TenantScoped
@@ -31,6 +45,16 @@ type DeviceType struct {
 	rdb.NamedEntity
 	rdb.BrandedEntity
 	rdb.MetadataEntity
+
+	// ProfileId is the nullable reference to the adopted DeviceProfile (ADR-045);
+	// capability resolves device → type → profile. Nil means no profile adopted.
+	ProfileId *uint `gorm:"index"`
+	Profile   *DeviceProfile
+
+	Manufacturer sql.NullString `gorm:"size:128"` // identity facet (ADR-045 decision 8)
+	// ModelName is the device model facet; the Go field avoids colliding with the
+	// embedded gorm.Model, the DB column + GraphQL field stay "model".
+	ModelName sql.NullString `gorm:"column:model;size:128"`
 
 	Devices            []Device
 	MetricDefinitions  []MetricDefinition

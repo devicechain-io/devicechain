@@ -75,6 +75,35 @@ func (r *DeviceTypeResolver) Metadata() *string {
 	return util.MetadataStr(r.M.Metadata)
 }
 
+// Profile resolves the adopted DeviceProfile (ADR-045), or nil when the type has
+// none. Uses the preloaded association when present, else loads by id. A lookup
+// error is surfaced (not swallowed to nil) so a transient failure never
+// masquerades as "no profile"; a genuinely absent id resolves to nil.
+func (r *DeviceTypeResolver) Profile() (*DeviceProfileResolver, error) {
+	if r.M.Profile != nil {
+		return &DeviceProfileResolver{M: *r.M.Profile, S: r.S, C: r.C}, nil
+	}
+	if r.M.ProfileId == nil {
+		return nil, nil
+	}
+	found, err := r.S.GetApi(r.C).DeviceProfilesById(r.C, []uint{*r.M.ProfileId})
+	if err != nil {
+		return nil, err
+	}
+	if len(found) == 0 {
+		return nil, nil
+	}
+	return &DeviceProfileResolver{M: *found[0], S: r.S, C: r.C}, nil
+}
+
+func (r *DeviceTypeResolver) Manufacturer() *string {
+	return util.NullStr(r.M.Manufacturer)
+}
+
+func (r *DeviceTypeResolver) Model() *string {
+	return util.NullStr(r.M.ModelName)
+}
+
 // -----------------------------------
 // Device type search results resolver
 // -----------------------------------
@@ -289,7 +318,8 @@ func (r *DeviceGroupSearchResultsResolver) Pagination() *SearchResultsPagination
 	}
 }
 
-// Metric definitions declared on this device profile (ADR-016).
+// Metric definitions declared on this device type — relocating to its DeviceProfile
+// in ADR-045 slice b (ADR-016).
 func (r *DeviceTypeResolver) MetricDefinitions() ([]*MetricDefinitionResolver, error) {
 	api := r.S.GetApi(r.C)
 	found, err := api.MetricDefinitionsByDeviceType(r.C, r.M.ID)
@@ -308,7 +338,8 @@ func (r *DeviceTypeResolver) MetricDefinitions() ([]*MetricDefinitionResolver, e
 	return result, nil
 }
 
-// Command definitions declared on this device profile (ADR-043).
+// Command definitions declared on this device type — relocating to its DeviceProfile
+// in ADR-045 slice b (ADR-043).
 func (r *DeviceTypeResolver) CommandDefinitions() ([]*CommandDefinitionResolver, error) {
 	api := r.S.GetApi(r.C)
 	found, err := api.CommandDefinitionsByDeviceType(r.C, r.M.ID)
@@ -327,7 +358,8 @@ func (r *DeviceTypeResolver) CommandDefinitions() ([]*CommandDefinitionResolver,
 	return result, nil
 }
 
-// Alarm definitions declared on this device profile (ADR-041).
+// Alarm definitions declared on this device type — relocating to its DeviceProfile
+// in ADR-045 slice b (ADR-041).
 func (r *DeviceTypeResolver) AlarmDefinitions() ([]*AlarmDefinitionResolver, error) {
 	api := r.S.GetApi(r.C)
 	found, err := api.AlarmDefinitionsByDeviceType(r.C, r.M.ID)

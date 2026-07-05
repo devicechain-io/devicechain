@@ -5,13 +5,42 @@ package model
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
 
+// resolveProfileId maps an optional profile token to a profile id for the
+// DeviceType → DeviceProfile reference (ADR-045). A nil/empty token resolves to
+// nil (no profile adopted — a valid, capability-limited type); an unknown token
+// is a fail-closed error rather than a silently dangling reference.
+func (api *Api) resolveProfileId(ctx context.Context, token *string) (*uint, error) {
+	if token == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*token)
+	if trimmed == "" {
+		return nil, nil
+	}
+	matches, err := api.DeviceProfilesByToken(ctx, []string{trimmed})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("%w: device profile %q", gorm.ErrRecordNotFound, trimmed)
+	}
+	id := matches[0].ID
+	return &id, nil
+}
+
 // Create a new device type.
 func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateRequest) (*DeviceType, error) {
+	profileId, err := api.resolveProfileId(ctx, request.ProfileToken)
+	if err != nil {
+		return nil, err
+	}
 	created := &DeviceType{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -30,6 +59,9 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: rdb.MetadataStrOf(request.Metadata),
 		},
+		ProfileId:    profileId,
+		Manufacturer: rdb.NullStrOf(request.Manufacturer),
+		ModelName:    rdb.NullStrOf(request.Model),
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -41,6 +73,10 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 // Update an existing device type.
 func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 	request *DeviceTypeCreateRequest) (*DeviceType, error) {
+	profileId, err := api.resolveProfileId(ctx, request.ProfileToken)
+	if err != nil {
+		return nil, err
+	}
 	matches, err := api.DeviceTypesByToken(ctx, []string{request.Token})
 	if err != nil {
 		return nil, err
@@ -59,6 +95,9 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor)
 	found.BorderColor = rdb.NullStrOf(request.BorderColor)
 	found.Metadata = rdb.MetadataStrOf(request.Metadata)
+	found.ProfileId = profileId
+	found.Manufacturer = rdb.NullStrOf(request.Manufacturer)
+	found.ModelName = rdb.NullStrOf(request.Model)
 
 	result := api.RDB.DB(ctx).Save(found)
 	if result.Error != nil {

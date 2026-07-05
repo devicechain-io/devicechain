@@ -229,8 +229,11 @@ export type DeviceTypeCreateRequest = {
   foregroundColor?: string | null | undefined;
   icon?: string | null | undefined;
   imageUrl?: string | null | undefined;
+  manufacturer?: string | null | undefined;
   metadata?: string | null | undefined;
+  model?: string | null | undefined;
   name?: string | null | undefined;
+  profileToken?: string | null | undefined;
   token: string;
 };
 
@@ -685,21 +688,21 @@ export type DeviceTypesQueryVariables = Exact<{
 }>;
 
 
-export type DeviceTypesQuery = { deviceTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type DeviceTypesQuery = { deviceTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, manufacturer: string | null, model: string | null, createdAt: string | null, profile: { token: string } | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type DeviceTypeByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type DeviceTypeByTokenQuery = { deviceTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null }> };
+export type DeviceTypeByTokenQuery = { deviceTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, manufacturer: string | null, model: string | null, createdAt: string | null, profile: { token: string } | null }> };
 
 export type CreateDeviceTypeMutationVariables = Exact<{
   request?: DeviceTypeCreateRequest | null | undefined;
 }>;
 
 
-export type CreateDeviceTypeMutation = { createDeviceType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null } };
+export type CreateDeviceTypeMutation = { createDeviceType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, manufacturer: string | null, model: string | null, createdAt: string | null, profile: { token: string } | null } };
 
 export type UpdateDeviceTypeMutationVariables = Exact<{
   token: string;
@@ -707,7 +710,7 @@ export type UpdateDeviceTypeMutationVariables = Exact<{
 }>;
 
 
-export type UpdateDeviceTypeMutation = { updateDeviceType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, createdAt: string | null } };
+export type UpdateDeviceTypeMutation = { updateDeviceType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, manufacturer: string | null, model: string | null, createdAt: string | null, profile: { token: string } | null } };
 
 export type DeleteDeviceTypeMutationVariables = Exact<{
   token: string;
@@ -1692,6 +1695,11 @@ export const DeviceTypesDocument = new TypedDocumentString(`
       backgroundColor
       foregroundColor
       borderColor
+      manufacturer
+      model
+      profile {
+        token
+      }
       createdAt
     }
     pagination {
@@ -1713,6 +1721,11 @@ export const DeviceTypeByTokenDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    manufacturer
+    model
+    profile {
+      token
+    }
     createdAt
   }
 }
@@ -1728,6 +1741,11 @@ export const CreateDeviceTypeDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    manufacturer
+    model
+    profile {
+      token
+    }
     createdAt
   }
 }
@@ -1743,6 +1761,11 @@ export const UpdateDeviceTypeDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    manufacturer
+    model
+    profile {
+      token
+    }
     createdAt
   }
 }

@@ -75,7 +75,7 @@ export default function AuditPage() {
   return (
     <PageShell
       title="Audit"
-      description="Every change to this tenant's registry, recorded by construction (ADR-019)."
+      description="Every change to this tenant's registry, recorded by construction."
       action={
         <div className="flex items-center gap-2">
           <Combobox

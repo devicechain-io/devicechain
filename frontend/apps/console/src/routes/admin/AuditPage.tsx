@@ -85,7 +85,7 @@ export default function AdminAuditPage() {
   return (
     <PageShell
       title="Audit"
-      description="Authentication events and identity, role & tenant administration across the instance (ADR-019)."
+      description="Authentication events and identity, role & tenant administration across the instance."
       action={
         <div className="flex items-center gap-2">
           <Combobox

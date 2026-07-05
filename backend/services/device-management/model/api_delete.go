@@ -172,6 +172,28 @@ func (api *Api) DeleteDeviceType(ctx context.Context, token string) (bool, error
 	return true, nil
 }
 
+// DeleteDeviceProfile deletes a device profile (ADR-045). Refused while any device
+// type references it — a shared capability contract must not vanish out from under
+// the types that adopt it (fail closed, mirroring DeleteDeviceType's in-use guard).
+func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, error) {
+	matches, err := api.DeviceProfilesByToken(ctx, []string{token})
+	if err != nil {
+		return false, err
+	}
+	if len(matches) == 0 {
+		return false, nil
+	}
+	dp := matches[0]
+	n, err := api.countReferencing(ctx, &DeviceType{}, "profile_id", dp.ID)
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return false, fmt.Errorf("%w: %d device type(s) reference device profile %q", ErrEntityInUse, n, token)
+	}
+	return api.hardDeleteByToken(ctx, &DeviceProfile{}, token)
+}
+
 // DeleteDevice deletes a device, cascade-removing its credentials (ADR-014) and
 // every relationship edge it participates in (its assignments, ADR-013).
 func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
