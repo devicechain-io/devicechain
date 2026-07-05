@@ -20,7 +20,9 @@
           "event-sources",
           "event-management",
           "device-state",
-          "command-delivery"
+          "dashboard-management",
+          "command-delivery",
+          "notification-management"
         ]
       },
       "uniqueItems": true,

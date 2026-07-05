@@ -262,3 +262,5 @@ functionalAreas:
     config: {}
   command-delivery:
     config: {}
+  notification-management:
+    config: {}

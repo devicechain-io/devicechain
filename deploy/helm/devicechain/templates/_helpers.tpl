@@ -15,7 +15,7 @@ encoded — pub/sub (ADR-003) makes an absent peer safe, so only hard edges gate
 */}}
 {{- define "devicechain.enabledAreas" -}}
   {{- $profiles := dict
-      "full"        (list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery")
+      "full"        (list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" "notification-management")
       "telemetry"   (list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management")
       "ingest-only" (list "user-management" "device-management" "event-sources")
   -}}
@@ -26,8 +26,9 @@ encoded — pub/sub (ADR-003) makes an absent peer safe, so only hard edges gate
       "device-state"         (list "device-management")
       "dashboard-management" (list "device-management")
       "command-delivery"     (list "device-management")
+      "notification-management" (list "device-management")
   -}}
-  {{- $known := list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" -}}
+  {{- $known := list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" "notification-management" -}}
 
   {{- $profile := .Values.profile | default "" -}}
   {{- $explicit := .Values.enabledFunctionalAreas | default (list) -}}

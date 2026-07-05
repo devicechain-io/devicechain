@@ -34,6 +34,7 @@ const (
 	DeviceState      FunctionalArea = "device-state"
 	DashboardMgmt    FunctionalArea = "dashboard-management"
 	CommandDelivery  FunctionalArea = "command-delivery"
+	NotificationMgmt FunctionalArea = "notification-management"
 )
 
 // Manifest is a functional area's deployment contract (ADR-022 decision 2): the
@@ -65,7 +66,7 @@ var catalog = map[FunctionalArea]Manifest{
 	DeviceManagement: {
 		Area:     DeviceManagement,
 		Core:     true,
-		Produces: []string{"resolved-events", "failed-events"},
+		Produces: []string{"resolved-events", "failed-events", "alarm-events"},
 		Consumes: []string{"inbound-events"},
 		SoftDeps: []FunctionalArea{UserManagement, EventSources},
 	},
@@ -103,6 +104,16 @@ var catalog = map[FunctionalArea]Manifest{
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
+	NotificationMgmt: {
+		// The alarm→human last mile (ADR-017): a durable consumer of the alarm-events
+		// envelope (ADR-041, produced by device-management) that fans transitions to
+		// notification channels. Functionally dead without the area producing what it
+		// consumes, so device-management is a Hard dep.
+		Area:     NotificationMgmt,
+		Consumes: []string{"alarm-events"},
+		HardDeps: []FunctionalArea{DeviceManagement},
+		SoftDeps: []FunctionalArea{UserManagement},
+	},
 }
 
 // Profile names a curated, valid enabled set (ADR-022 decision 2). Every profile
@@ -124,6 +135,7 @@ var profiles = map[Profile][]FunctionalArea{
 	ProfileFull: {
 		UserManagement, DeviceManagement, EventSources,
 		EventManagement, DeviceState, DashboardMgmt, CommandDelivery,
+		NotificationMgmt,
 	},
 	ProfileTelemetry: {
 		UserManagement, DeviceManagement, EventSources, EventManagement, DeviceState, DashboardMgmt,
