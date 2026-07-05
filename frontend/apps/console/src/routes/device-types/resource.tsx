@@ -50,6 +50,12 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
           backgroundColor: dt?.backgroundColor,
           foregroundColor: dt?.foregroundColor,
           borderColor: dt?.borderColor,
+          // Preserve fields this form doesn't edit — DeviceType update is
+          // full-replace, so omitting them would null the profile ref + facets
+          // (ADR-045). The authoring UI (slice d) will edit them directly.
+          profileToken: dt?.profile?.token,
+          manufacturer: dt?.manufacturer,
+          model: dt?.model,
         })
       }
       onDone={onDone}
@@ -60,7 +66,16 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
   renderDetailExtra: (dt, reload) => (
     <TypeAppearanceForm
       entity={dt}
-      update={(req) => updateDeviceType(dt.token, req)}
+      update={(req) =>
+        updateDeviceType(dt.token, {
+          ...req,
+          // Same full-replace preservation as the basic form (ADR-045): the shared
+          // appearance form doesn't carry the profile ref or identity facets.
+          profileToken: dt.profile?.token,
+          manufacturer: dt.manufacturer,
+          model: dt.model,
+        })
+      }
       onSaved={reload}
     />
   ),

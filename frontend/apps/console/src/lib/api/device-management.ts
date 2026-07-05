@@ -175,6 +175,11 @@ const DEVICE_TYPES = graphql(`
         backgroundColor
         foregroundColor
         borderColor
+        manufacturer
+        model
+        profile {
+          token
+        }
         createdAt
       }
       pagination {
@@ -212,6 +217,11 @@ const DEVICE_TYPE_BY_TOKEN = graphql(`
       backgroundColor
       foregroundColor
       borderColor
+      manufacturer
+      model
+      profile {
+        token
+      }
       createdAt
     }
   }
@@ -233,6 +243,11 @@ const CREATE_DEVICE_TYPE = graphql(`
       backgroundColor
       foregroundColor
       borderColor
+      manufacturer
+      model
+      profile {
+        token
+      }
       createdAt
     }
   }
@@ -254,6 +269,11 @@ const UPDATE_DEVICE_TYPE = graphql(`
       backgroundColor
       foregroundColor
       borderColor
+      manufacturer
+      model
+      profile {
+        token
+      }
       createdAt
     }
   }

@@ -59,13 +59,32 @@ type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity 
     backgroundColor: String
     foregroundColor: String
     borderColor: String
+    profile: DeviceProfile
+    manufacturer: String
+    model: String
     metadata: String
     metricDefinitions: [MetricDefinition!]!
     commandDefinitions: [CommandDefinition!]!
     alarmDefinitions: [AlarmDefinition!]!
 }
 
-# Represents a typed, unit-bearing metric declared on a device profile (ADR-016).
+# Represents a device profile (ADR-045) — the reusable, tenant-scoped capability
+# contract a device type adopts. Distinct from the type's taxonomy/appearance; many
+# types may share one profile. It becomes the home for the metric/command/alarm
+# definitions (those relocate onto it in a later slice).
+type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEntity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    name: String
+    description: String
+    category: String
+    metadata: String
+}
+
+# Represents a typed, unit-bearing metric declared on a device type (moving to its DeviceProfile in ADR-045 slice b) (ADR-016).
 type MetricDefinition implements Model & TokenReference & NamedEntity & MetadataEntity {
     id: ID!
     createdAt: String
@@ -115,7 +134,7 @@ type MetricDefinitionSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a typed command declared on a device profile (ADR-043). parameterSchema
+# Represents a typed command declared on a device type (moving to its DeviceProfile in ADR-045 slice b) (ADR-043). parameterSchema
 # is the ordered []CommandParameter argument contract as a JSON string, intended to
 # drive the console command form and, once the delivery path is wired (W1.1b), to
 # constrain an issued command's payload. Null when the command declares no
@@ -160,7 +179,7 @@ type CommandDefinitionSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents an alarm rule declared on a device profile (ADR-041). It watches a
+# Represents an alarm rule declared on a device type (moving to its DeviceProfile in ADR-045 slice b) (ADR-041). It watches a
 # metric (metricKey) and raises an alarm of the given severity when the condition
 # is met. conditionType is SIMPLE | DURATION | REPEATING; operator is the
 # comparison (GT/GTE/LT/LTE/EQ/NEQ) against a static threshold or a dynamic
@@ -374,6 +393,11 @@ input DeviceTypeCreateRequest {
     backgroundColor: String
     foregroundColor: String
     borderColor: String
+    # References the DeviceProfile this type adopts (ADR-045). Optional; empty or
+    # omitted leaves the type with no profile. An unknown token is rejected.
+    profileToken: String
+    manufacturer: String
+    model: String
     metadata: String
 }
 
@@ -386,6 +410,27 @@ input DeviceTypeSearchCriteria {
 # Search results returned from device type query.
 type DeviceTypeSearchResults {
     results: [DeviceType!]!
+    pagination: SearchResultsPagination!
+}
+
+# Data required to create a device profile (ADR-045).
+input DeviceProfileCreateRequest {
+    token: String!
+    name: String
+    description: String
+    category: String
+    metadata: String
+}
+
+# Criteria used when searching for device profiles.
+input DeviceProfileSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+}
+
+# Search results returned from device profile query.
+type DeviceProfileSearchResults {
+    results: [DeviceProfile!]!
     pagination: SearchResultsPagination!
 }
 
@@ -1045,6 +1090,12 @@ type Query {
     deviceTypesByToken(tokens: [String!]!): [DeviceType!]!
     # List device types that meet criteria.
     deviceTypes(criteria: DeviceTypeSearchCriteria!): DeviceTypeSearchResults!
+    # Find device profiles by unique id.
+    deviceProfilesById(ids: [ID!]!): [DeviceProfile!]!
+    # Find device profiles by unique token.
+    deviceProfilesByToken(tokens: [String!]!): [DeviceProfile!]!
+    # List device profiles that meet criteria.
+    deviceProfiles(criteria: DeviceProfileSearchCriteria!): DeviceProfileSearchResults!
     # Find metric definitions by unique id.
     metricDefinitionsById(ids: [ID!]!): [MetricDefinition!]!
     # Find metric definitions by unique token.
@@ -1181,6 +1232,13 @@ type Mutation {
     # metric, command, and alarm definitions are cascade-removed. Returns whether a
     # row was deleted.
     deleteDeviceType(token: String!): Boolean!
+    # Create a new device profile (ADR-045).
+    createDeviceProfile(request: DeviceProfileCreateRequest): DeviceProfile!
+    # Update an existing device profile, located by the token argument (ADR-045).
+    updateDeviceProfile(token: String!, request: DeviceProfileCreateRequest): DeviceProfile!
+    # Delete a device profile (ADR-045). Refused while any device type references
+    # it. Returns whether a row was deleted.
+    deleteDeviceProfile(token: String!): Boolean!
     # Create a new metric definition.
     createMetricDefinition(request: MetricDefinitionCreateRequest): MetricDefinition!
     # Update an existing metric definition.

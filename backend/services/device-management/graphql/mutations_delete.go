@@ -24,6 +24,14 @@ func (r *SchemaResolver) DeleteDeviceType(ctx context.Context, args struct{ Toke
 	return r.GetApi(ctx).DeleteDeviceType(ctx, args.Token)
 }
 
+// Delete a device profile (refused while device types reference it, ADR-045).
+func (r *SchemaResolver) DeleteDeviceProfile(ctx context.Context, args struct{ Token string }) (bool, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return false, err
+	}
+	return r.GetApi(ctx).DeleteDeviceProfile(ctx, args.Token)
+}
+
 // Delete a device, cascade-removing its credentials and relationship edges.
 func (r *SchemaResolver) DeleteDevice(ctx context.Context, args struct{ Token string }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
