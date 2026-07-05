@@ -15,6 +15,7 @@ import {
   MapPin,
   Package,
   ScrollText,
+  SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -66,6 +67,7 @@ const NAV: NavNode[] = [
       // devicetype:read), so both share the same requirement.
       { label: 'Devices', href: '/devices', icon: Cpu, requires: 'device:read' },
       { label: 'Device Types', href: '/device-types', icon: Boxes, requires: 'device:read' },
+      { label: 'Device Profiles', href: '/device-profiles', icon: SlidersHorizontal, requires: 'device:read' },
       { label: 'Device Groups', href: '/device-groups', icon: Layers, requires: 'device:read' },
     ],
   },

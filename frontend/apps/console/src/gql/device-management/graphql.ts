@@ -4,6 +4,32 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+export type AlarmDefinitionCreateRequest = {
+  alarmKey: string;
+  conditionType: string;
+  description?: string | null | undefined;
+  deviceProfileToken: string;
+  durationSeconds?: number | null | undefined;
+  enabled: boolean;
+  metadata?: string | null | undefined;
+  metricKey: string;
+  name?: string | null | undefined;
+  operator: string;
+  repeatCount?: number | null | undefined;
+  repeatWindowSeconds?: number | null | undefined;
+  severity: string;
+  threshold?: number | null | undefined;
+  thresholdAttr?: string | null | undefined;
+  token: string;
+};
+
+export type AlarmDefinitionSearchCriteria = {
+  deviceProfile?: string | null | undefined;
+  metricKey?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+};
+
 export type AlarmSearchCriteria = {
   acknowledged?: boolean | null | undefined;
   alarmKey?: string | null | undefined;
@@ -123,6 +149,23 @@ export type AuditEventSearchCriteria = {
   tableName?: string | null | undefined;
 };
 
+export type CommandDefinitionCreateRequest = {
+  commandKey: string;
+  description?: string | null | undefined;
+  deviceProfileToken: string;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  parameterSchema?: string | null | undefined;
+  token: string;
+};
+
+export type CommandDefinitionSearchCriteria = {
+  commandKey?: string | null | undefined;
+  deviceProfile?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+};
+
 export type CustomerCreateRequest = {
   customerTypeToken: string;
   description?: string | null | undefined;
@@ -216,6 +259,19 @@ export type DeviceGroupSearchCriteria = {
   pageSize: number;
 };
 
+export type DeviceProfileCreateRequest = {
+  category?: string | null | undefined;
+  description?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  token: string;
+};
+
+export type DeviceProfileSearchCriteria = {
+  pageNumber: number;
+  pageSize: number;
+};
+
 export type DeviceSearchCriteria = {
   deviceType?: string | null | undefined;
   pageNumber: number;
@@ -261,6 +317,28 @@ export type EntityRelationshipSearchCriteria = {
   target?: string | null | undefined;
   targetType?: string | null | undefined;
   tracked?: boolean | null | undefined;
+};
+
+export type MetricDefinitionCreateRequest = {
+  dataType: string;
+  description?: string | null | undefined;
+  descriptor?: string | null | undefined;
+  deviceProfileToken: string;
+  enum?: string | null | undefined;
+  maxValue?: number | null | undefined;
+  metadata?: string | null | undefined;
+  metricKey: string;
+  minValue?: number | null | undefined;
+  name?: string | null | undefined;
+  token: string;
+  unit?: string | null | undefined;
+};
+
+export type MetricDefinitionSearchCriteria = {
+  deviceProfile?: string | null | undefined;
+  metricKey?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
 };
 
 export type AlarmsQueryVariables = Exact<{
@@ -754,6 +832,153 @@ export type DeleteDeviceGroupMutationVariables = Exact<{
 
 
 export type DeleteDeviceGroupMutation = { deleteDeviceGroup: boolean };
+
+export type DeviceProfilesQueryVariables = Exact<{
+  criteria: DeviceProfileSearchCriteria;
+}>;
+
+
+export type DeviceProfilesQuery = { deviceProfiles: { results: Array<{ id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, metadata: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type DeviceProfileByTokenQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type DeviceProfileByTokenQuery = { deviceProfilesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, metadata: string | null, createdAt: string | null }> };
+
+export type CreateDeviceProfileMutationVariables = Exact<{
+  request?: DeviceProfileCreateRequest | null | undefined;
+}>;
+
+
+export type CreateDeviceProfileMutation = { createDeviceProfile: { id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, metadata: string | null, createdAt: string | null } };
+
+export type UpdateDeviceProfileMutationVariables = Exact<{
+  token: string;
+  request?: DeviceProfileCreateRequest | null | undefined;
+}>;
+
+
+export type UpdateDeviceProfileMutation = { updateDeviceProfile: { id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, metadata: string | null, createdAt: string | null } };
+
+export type DeleteDeviceProfileMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteDeviceProfileMutation = { deleteDeviceProfile: boolean };
+
+export type DeviceProfileVersionsQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeviceProfileVersionsQuery = { deviceProfileVersions: Array<{ version: number, label: string | null, description: string | null, publishedAt: string, publishedBy: string | null }> };
+
+export type PublishDeviceProfileMutationVariables = Exact<{
+  token: string;
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+}>;
+
+
+export type PublishDeviceProfileMutation = { publishDeviceProfile: { version: number } };
+
+export type RollbackDeviceProfileMutationVariables = Exact<{
+  token: string;
+  version: number;
+}>;
+
+
+export type RollbackDeviceProfileMutation = { rollbackDeviceProfile: { token: string, activeVersion: number | null } };
+
+export type MetricDefinitionsQueryVariables = Exact<{
+  criteria: MetricDefinitionSearchCriteria;
+}>;
+
+
+export type MetricDefinitionsQuery = { metricDefinitions: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metricKey: string, dataType: string, unit: string | null, minValue: number | null, maxValue: number | null, enum: string | null, descriptor: string | null, metadata: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type CreateMetricDefinitionMutationVariables = Exact<{
+  request?: MetricDefinitionCreateRequest | null | undefined;
+}>;
+
+
+export type CreateMetricDefinitionMutation = { createMetricDefinition: { id: string, token: string } };
+
+export type UpdateMetricDefinitionMutationVariables = Exact<{
+  token: string;
+  request?: MetricDefinitionCreateRequest | null | undefined;
+}>;
+
+
+export type UpdateMetricDefinitionMutation = { updateMetricDefinition: { id: string, token: string } };
+
+export type DeleteMetricDefinitionMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteMetricDefinitionMutation = { deleteMetricDefinition: boolean };
+
+export type CommandDefinitionsQueryVariables = Exact<{
+  criteria: CommandDefinitionSearchCriteria;
+}>;
+
+
+export type CommandDefinitionsQuery = { commandDefinitions: { results: Array<{ id: string, token: string, name: string | null, description: string | null, commandKey: string, parameterSchema: string | null, metadata: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type CreateCommandDefinitionMutationVariables = Exact<{
+  request?: CommandDefinitionCreateRequest | null | undefined;
+}>;
+
+
+export type CreateCommandDefinitionMutation = { createCommandDefinition: { id: string, token: string } };
+
+export type UpdateCommandDefinitionMutationVariables = Exact<{
+  token: string;
+  request?: CommandDefinitionCreateRequest | null | undefined;
+}>;
+
+
+export type UpdateCommandDefinitionMutation = { updateCommandDefinition: { id: string, token: string } };
+
+export type DeleteCommandDefinitionMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteCommandDefinitionMutation = { deleteCommandDefinition: boolean };
+
+export type AlarmDefinitionsQueryVariables = Exact<{
+  criteria: AlarmDefinitionSearchCriteria;
+}>;
+
+
+export type AlarmDefinitionsQuery = { alarmDefinitions: { results: Array<{ id: string, token: string, name: string | null, description: string | null, alarmKey: string, metricKey: string, conditionType: string, operator: string, severity: string, threshold: number | null, thresholdAttr: string | null, durationSeconds: number | null, repeatCount: number | null, repeatWindowSeconds: number | null, enabled: boolean, metadata: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type CreateAlarmDefinitionMutationVariables = Exact<{
+  request: AlarmDefinitionCreateRequest;
+}>;
+
+
+export type CreateAlarmDefinitionMutation = { createAlarmDefinition: { id: string, token: string } };
+
+export type UpdateAlarmDefinitionMutationVariables = Exact<{
+  token: string;
+  request: AlarmDefinitionCreateRequest;
+}>;
+
+
+export type UpdateAlarmDefinitionMutation = { updateAlarmDefinition: { id: string, token: string } };
+
+export type DeleteAlarmDefinitionMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteAlarmDefinitionMutation = { deleteAlarmDefinition: boolean };
 
 export type EntityRelationshipsQueryVariables = Exact<{
   criteria: EntityRelationshipSearchCriteria;
@@ -1831,6 +2056,237 @@ export const DeleteDeviceGroupDocument = new TypedDocumentString(`
   deleteDeviceGroup(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteDeviceGroupMutation, DeleteDeviceGroupMutationVariables>;
+export const DeviceProfilesDocument = new TypedDocumentString(`
+    query DeviceProfiles($criteria: DeviceProfileSearchCriteria!) {
+  deviceProfiles(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      category
+      activeVersion
+      metadata
+      createdAt
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceProfilesQuery, DeviceProfilesQueryVariables>;
+export const DeviceProfileByTokenDocument = new TypedDocumentString(`
+    query DeviceProfileByToken($tokens: [String!]!) {
+  deviceProfilesByToken(tokens: $tokens) {
+    id
+    token
+    name
+    description
+    category
+    activeVersion
+    metadata
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceProfileByTokenQuery, DeviceProfileByTokenQueryVariables>;
+export const CreateDeviceProfileDocument = new TypedDocumentString(`
+    mutation CreateDeviceProfile($request: DeviceProfileCreateRequest) {
+  createDeviceProfile(request: $request) {
+    id
+    token
+    name
+    description
+    category
+    activeVersion
+    metadata
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<CreateDeviceProfileMutation, CreateDeviceProfileMutationVariables>;
+export const UpdateDeviceProfileDocument = new TypedDocumentString(`
+    mutation UpdateDeviceProfile($token: String!, $request: DeviceProfileCreateRequest) {
+  updateDeviceProfile(token: $token, request: $request) {
+    id
+    token
+    name
+    description
+    category
+    activeVersion
+    metadata
+    createdAt
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateDeviceProfileMutation, UpdateDeviceProfileMutationVariables>;
+export const DeleteDeviceProfileDocument = new TypedDocumentString(`
+    mutation DeleteDeviceProfile($token: String!) {
+  deleteDeviceProfile(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteDeviceProfileMutation, DeleteDeviceProfileMutationVariables>;
+export const DeviceProfileVersionsDocument = new TypedDocumentString(`
+    query DeviceProfileVersions($token: String!) {
+  deviceProfileVersions(token: $token) {
+    version
+    label
+    description
+    publishedAt
+    publishedBy
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceProfileVersionsQuery, DeviceProfileVersionsQueryVariables>;
+export const PublishDeviceProfileDocument = new TypedDocumentString(`
+    mutation PublishDeviceProfile($token: String!, $label: String, $description: String) {
+  publishDeviceProfile(token: $token, label: $label, description: $description) {
+    version
+  }
+}
+    `) as unknown as TypedDocumentString<PublishDeviceProfileMutation, PublishDeviceProfileMutationVariables>;
+export const RollbackDeviceProfileDocument = new TypedDocumentString(`
+    mutation RollbackDeviceProfile($token: String!, $version: Int!) {
+  rollbackDeviceProfile(token: $token, version: $version) {
+    token
+    activeVersion
+  }
+}
+    `) as unknown as TypedDocumentString<RollbackDeviceProfileMutation, RollbackDeviceProfileMutationVariables>;
+export const MetricDefinitionsDocument = new TypedDocumentString(`
+    query MetricDefinitions($criteria: MetricDefinitionSearchCriteria!) {
+  metricDefinitions(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      metricKey
+      dataType
+      unit
+      minValue
+      maxValue
+      enum
+      descriptor
+      metadata
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<MetricDefinitionsQuery, MetricDefinitionsQueryVariables>;
+export const CreateMetricDefinitionDocument = new TypedDocumentString(`
+    mutation CreateMetricDefinition($request: MetricDefinitionCreateRequest) {
+  createMetricDefinition(request: $request) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<CreateMetricDefinitionMutation, CreateMetricDefinitionMutationVariables>;
+export const UpdateMetricDefinitionDocument = new TypedDocumentString(`
+    mutation UpdateMetricDefinition($token: String!, $request: MetricDefinitionCreateRequest) {
+  updateMetricDefinition(token: $token, request: $request) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateMetricDefinitionMutation, UpdateMetricDefinitionMutationVariables>;
+export const DeleteMetricDefinitionDocument = new TypedDocumentString(`
+    mutation DeleteMetricDefinition($token: String!) {
+  deleteMetricDefinition(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteMetricDefinitionMutation, DeleteMetricDefinitionMutationVariables>;
+export const CommandDefinitionsDocument = new TypedDocumentString(`
+    query CommandDefinitions($criteria: CommandDefinitionSearchCriteria!) {
+  commandDefinitions(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      commandKey
+      parameterSchema
+      metadata
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CommandDefinitionsQuery, CommandDefinitionsQueryVariables>;
+export const CreateCommandDefinitionDocument = new TypedDocumentString(`
+    mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {
+  createCommandDefinition(request: $request) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<CreateCommandDefinitionMutation, CreateCommandDefinitionMutationVariables>;
+export const UpdateCommandDefinitionDocument = new TypedDocumentString(`
+    mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {
+  updateCommandDefinition(token: $token, request: $request) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateCommandDefinitionMutation, UpdateCommandDefinitionMutationVariables>;
+export const DeleteCommandDefinitionDocument = new TypedDocumentString(`
+    mutation DeleteCommandDefinition($token: String!) {
+  deleteCommandDefinition(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteCommandDefinitionMutation, DeleteCommandDefinitionMutationVariables>;
+export const AlarmDefinitionsDocument = new TypedDocumentString(`
+    query AlarmDefinitions($criteria: AlarmDefinitionSearchCriteria!) {
+  alarmDefinitions(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      alarmKey
+      metricKey
+      conditionType
+      operator
+      severity
+      threshold
+      thresholdAttr
+      durationSeconds
+      repeatCount
+      repeatWindowSeconds
+      enabled
+      metadata
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AlarmDefinitionsQuery, AlarmDefinitionsQueryVariables>;
+export const CreateAlarmDefinitionDocument = new TypedDocumentString(`
+    mutation CreateAlarmDefinition($request: AlarmDefinitionCreateRequest!) {
+  createAlarmDefinition(request: $request) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<CreateAlarmDefinitionMutation, CreateAlarmDefinitionMutationVariables>;
+export const UpdateAlarmDefinitionDocument = new TypedDocumentString(`
+    mutation UpdateAlarmDefinition($token: String!, $request: AlarmDefinitionCreateRequest!) {
+  updateAlarmDefinition(token: $token, request: $request) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateAlarmDefinitionMutation, UpdateAlarmDefinitionMutationVariables>;
+export const DeleteAlarmDefinitionDocument = new TypedDocumentString(`
+    mutation DeleteAlarmDefinition($token: String!) {
+  deleteAlarmDefinition(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteAlarmDefinitionMutation, DeleteAlarmDefinitionMutationVariables>;
 export const EntityRelationshipsDocument = new TypedDocumentString(`
     query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {
   entityRelationships(criteria: $criteria) {
