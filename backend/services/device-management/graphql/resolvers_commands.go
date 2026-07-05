@@ -66,16 +66,16 @@ func (r *CommandDefinitionResolver) ParameterSchema() *string {
 	return util.MetadataStr(r.M.ParameterSchema)
 }
 
-func (r *CommandDefinitionResolver) DeviceType() *DeviceTypeResolver {
-	if r.M.DeviceType != nil {
-		return &DeviceTypeResolver{
-			M: *r.M.DeviceType,
+func (r *CommandDefinitionResolver) DeviceProfile() *DeviceProfileResolver {
+	if r.M.DeviceProfile != nil {
+		return &DeviceProfileResolver{
+			M: *r.M.DeviceProfile,
 			S: r.S,
 			C: r.C,
 		}
 	} else {
-		ids := []string{fmt.Sprintf("%d", r.M.DeviceTypeId)}
-		rez, err := r.S.DeviceTypesById(r.C, struct{ Ids []string }{Ids: ids})
+		ids := []string{fmt.Sprintf("%d", r.M.DeviceProfileId)}
+		rez, err := r.S.DeviceProfilesById(r.C, struct{ Ids []string }{Ids: ids})
 		if err != nil || len(rez) == 0 {
 			return nil
 		}

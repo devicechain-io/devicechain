@@ -135,9 +135,10 @@ func deleteParentType[T any](ctx context.Context, api *Api,
 
 // --- Devices (ADR-013) ---------------------------------------------------------
 
-// DeleteDeviceType deletes a device type. Refused while any device references it;
-// its owned metric definitions (ADR-016), command definitions (ADR-043), and alarm
-// definitions (ADR-041) are cascade-removed.
+// DeleteDeviceType deletes a device type. Refused while any device references it.
+// The metric/command/alarm definitions belong to the type's DeviceProfile now
+// (ADR-045 slice b), which is independent (possibly shared), so deleting a type no
+// longer touches them — the profile and its definitions survive.
 func (api *Api) DeleteDeviceType(ctx context.Context, token string) (bool, error) {
 	matches, err := api.DeviceTypesByToken(ctx, []string{token})
 	if err != nil {
@@ -154,27 +155,14 @@ func (api *Api) DeleteDeviceType(ctx context.Context, token string) (bool, error
 	if n > 0 {
 		return false, fmt.Errorf("%w: %d device(s) reference device type %q", ErrEntityInUse, n, token)
 	}
-	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Unscoped().Where("device_type_id = ?", dt.ID).Delete(&MetricDefinition{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Unscoped().Where("device_type_id = ?", dt.ID).Delete(&CommandDefinition{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Unscoped().Where("device_type_id = ?", dt.ID).Delete(&AlarmDefinition{}).Error; err != nil {
-			return err
-		}
-		return tx.Unscoped().Where("token = ?", token).Delete(&DeviceType{}).Error
-	})
-	if err != nil {
-		return false, err
-	}
-	return true, nil
+	return api.hardDeleteByToken(ctx, &DeviceType{}, token)
 }
 
 // DeleteDeviceProfile deletes a device profile (ADR-045). Refused while any device
 // type references it — a shared capability contract must not vanish out from under
-// the types that adopt it (fail closed, mirroring DeleteDeviceType's in-use guard).
+// the types that adopt it (fail closed). Its owned metric (ADR-016), command
+// (ADR-043), and alarm (ADR-041) definitions are cascade-removed — the cascade the
+// device type used to own before the definitions moved onto the profile (slice b).
 func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, error) {
 	matches, err := api.DeviceProfilesByToken(ctx, []string{token})
 	if err != nil {
@@ -191,7 +179,22 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 	if n > 0 {
 		return false, fmt.Errorf("%w: %d device type(s) reference device profile %q", ErrEntityInUse, n, token)
 	}
-	return api.hardDeleteByToken(ctx, &DeviceProfile{}, token)
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&MetricDefinition{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&CommandDefinition{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&AlarmDefinition{}).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Where("token = ?", token).Delete(&DeviceProfile{}).Error
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // DeleteDevice deletes a device, cascade-removing its credentials (ADR-014) and

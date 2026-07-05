@@ -14,7 +14,7 @@ import (
 // Create a new metric definition.
 func (api *Api) CreateMetricDefinition(ctx context.Context,
 	request *MetricDefinitionCreateRequest) (*MetricDefinition, error) {
-	matches, err := api.DeviceTypesByToken(ctx, []string{request.DeviceTypeToken})
+	matches, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
 	if err != nil {
 		return nil, err
 	}
@@ -44,14 +44,14 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: rdb.MetadataStrOf(request.Metadata),
 		},
-		DeviceType: matches[0],
-		MetricKey:  request.MetricKey,
-		DataType:   request.DataType,
-		Unit:       rdb.NullStrOf(request.Unit),
-		MinValue:   rdb.NullFloat64Of(request.MinValue),
-		MaxValue:   rdb.NullFloat64Of(request.MaxValue),
-		Enum:       rdb.MetadataStrOf(request.Enum),
-		Descriptor: rdb.NullStrOf(request.Descriptor),
+		DeviceProfile: matches[0],
+		MetricKey:     request.MetricKey,
+		DataType:      request.DataType,
+		Unit:          rdb.NullStrOf(request.Unit),
+		MinValue:      rdb.NullFloat64Of(request.MinValue),
+		MaxValue:      rdb.NullFloat64Of(request.MaxValue),
+		Enum:          rdb.MetadataStrOf(request.Enum),
+		Descriptor:    rdb.NullStrOf(request.Descriptor),
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -96,16 +96,16 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 	updated.Enum = rdb.MetadataStrOf(request.Enum)
 	updated.Descriptor = rdb.NullStrOf(request.Descriptor)
 
-	// Update device type if changed.
-	if updated.DeviceType == nil || request.DeviceTypeToken != updated.DeviceType.Token {
-		matches, err := api.DeviceTypesByToken(ctx, []string{request.DeviceTypeToken})
+	// Update device profile if changed.
+	if updated.DeviceProfile == nil || request.DeviceProfileToken != updated.DeviceProfile.Token {
+		matches, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
 		if err != nil {
 			return nil, err
 		}
 		if len(matches) == 0 {
 			return nil, gorm.ErrRecordNotFound
 		}
-		updated.DeviceType = matches[0]
+		updated.DeviceProfile = matches[0]
 	}
 
 	result := api.RDB.DB(ctx).Save(updated)
@@ -119,7 +119,7 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 func (api *Api) MetricDefinitionsById(ctx context.Context, ids []uint) ([]*MetricDefinition, error) {
 	found := make([]*MetricDefinition, 0)
 	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceType")
+	result = result.Preload("DeviceProfile")
 	result = result.Find(&found, ids)
 	if result.Error != nil {
 		return nil, result.Error
@@ -131,7 +131,7 @@ func (api *Api) MetricDefinitionsById(ctx context.Context, ids []uint) ([]*Metri
 func (api *Api) MetricDefinitionsByToken(ctx context.Context, tokens []string) ([]*MetricDefinition, error) {
 	found := make([]*MetricDefinition, 0)
 	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceType")
+	result = result.Preload("DeviceProfile")
 	result = result.Find(&found, "token in ?", tokens)
 	if result.Error != nil {
 		return nil, result.Error
@@ -144,14 +144,14 @@ func (api *Api) MetricDefinitions(ctx context.Context,
 	criteria MetricDefinitionSearchCriteria) (*MetricDefinitionSearchResults, error) {
 	results := make([]MetricDefinition, 0)
 	db, pag := api.RDB.ListOf(ctx, &MetricDefinition{}, func(result *gorm.DB) *gorm.DB {
-		if criteria.DeviceType != nil {
-			result = result.Where("device_type_id = (?)",
-				api.RDB.DB(ctx).Model(&DeviceType{}).Select("id").Where("token = ?", criteria.DeviceType))
+		if criteria.DeviceProfile != nil {
+			result = result.Where("device_profile_id = (?)",
+				api.RDB.DB(ctx).Model(&DeviceProfile{}).Select("id").Where("token = ?", criteria.DeviceProfile))
 		}
 		if criteria.MetricKey != nil {
 			result = result.Where("metric_key = ?", *criteria.MetricKey)
 		}
-		return result.Preload("DeviceType")
+		return result.Preload("DeviceProfile")
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
@@ -165,14 +165,25 @@ func (api *Api) MetricDefinitions(ctx context.Context,
 	}, nil
 }
 
-// MetricDefinitionsByDeviceType loads all metric definitions declared on a device
-// profile without pagination. This is the direct loader the ingest validation path
-// uses to type/normalize measurements against the profile (ADR-016).
-func (api *Api) MetricDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*MetricDefinition, error) {
+// MetricDefinitionsByDeviceProfile loads all metric definitions declared on a
+// device profile without pagination (ADR-016/ADR-045).
+func (api *Api) MetricDefinitionsByDeviceProfile(ctx context.Context, profileId uint) ([]*MetricDefinition, error) {
 	found := make([]*MetricDefinition, 0)
-	result := api.RDB.DB(ctx).Where("device_type_id = ?", deviceTypeId).Find(&found)
+	result := api.RDB.DB(ctx).Where("device_profile_id = ?", profileId).Find(&found)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	return found, nil
+}
+
+// MetricDefinitionsByDeviceType is the ingest validation path's loader: it resolves
+// the type → profile hop (ADR-045) and returns the profile's metric definitions.
+// A type with no profile has no definitions, so it returns empty — the common
+// untyped/profile-less case the cache is careful to remember.
+func (api *Api) MetricDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*MetricDefinition, error) {
+	profileId, ok, err := api.profileIdForDeviceType(ctx, deviceTypeId)
+	if err != nil || !ok {
+		return []*MetricDefinition{}, err
+	}
+	return api.MetricDefinitionsByDeviceProfile(ctx, profileId)
 }

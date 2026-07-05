@@ -87,12 +87,12 @@ func (r *AlarmDefinitionResolver) RepeatWindowSeconds() *int32 {
 	return nullInt32(r.M.RepeatWindowSeconds)
 }
 
-func (r *AlarmDefinitionResolver) DeviceType() *DeviceTypeResolver {
-	if r.M.DeviceType != nil {
-		return &DeviceTypeResolver{M: *r.M.DeviceType, S: r.S, C: r.C}
+func (r *AlarmDefinitionResolver) DeviceProfile() *DeviceProfileResolver {
+	if r.M.DeviceProfile != nil {
+		return &DeviceProfileResolver{M: *r.M.DeviceProfile, S: r.S, C: r.C}
 	}
-	ids := []string{fmt.Sprintf("%d", r.M.DeviceTypeId)}
-	rez, err := r.S.DeviceTypesById(r.C, struct{ Ids []string }{Ids: ids})
+	ids := []string{fmt.Sprintf("%d", r.M.DeviceProfileId)}
+	rez, err := r.S.DeviceProfilesById(r.C, struct{ Ids []string }{Ids: ids})
 	if err != nil || len(rez) == 0 {
 		return nil
 	}

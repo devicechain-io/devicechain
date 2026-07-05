@@ -42,6 +42,14 @@ type DeviceProfile struct {
 	// fork-adopted from an ADR-046 catalog entry ("catalog-profile@version"). Unset
 	// and unused in v1; present so the future catalog drops in additively.
 	Provenance sql.NullString `gorm:"size:256"`
+
+	// The typed capability definitions the profile owns (ADR-045 slice b): the
+	// inbound metric vocabulary (ADR-016), the outbound command vocabulary
+	// (ADR-043), and the alarm rules (ADR-041). A device resolves these through
+	// its type's profile.
+	MetricDefinitions  []MetricDefinition
+	CommandDefinitions []CommandDefinition
+	AlarmDefinitions   []AlarmDefinition
 }
 
 // Search criteria for locating device profiles. Pagination-only for now; the

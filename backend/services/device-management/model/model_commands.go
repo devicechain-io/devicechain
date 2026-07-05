@@ -40,8 +40,8 @@ type CommandParameter struct {
 	Parameters  []CommandParameter `json:"parameters,omitempty"` // object only; nested descriptors
 }
 
-// CommandDefinition is a typed command declared on a Device Profile (the
-// DeviceType entity, ADR-043). It gives the command vocabulary structure: each
+// CommandDefinition is a typed command declared on a DeviceProfile (ADR-043/
+// ADR-045). It gives the command vocabulary structure: each
 // definition names a CommandKey the profile's devices accept and carries an
 // ordered parameter schema describing that command's arguments. The console reads
 // the schema to render a command form; the delivery path validates an issued
@@ -64,8 +64,8 @@ type CommandDefinition struct {
 	rdb.NamedEntity
 	rdb.MetadataEntity
 
-	DeviceTypeId    uint
-	DeviceType      *DeviceType
+	DeviceProfileId uint
+	DeviceProfile   *DeviceProfile
 	CommandKey      string          // the command the profile's devices accept
 	ParameterSchema *datatypes.JSON // ordered []CommandParameter (JSONB); nil = no declared params
 }
@@ -75,20 +75,20 @@ type CommandDefinition struct {
 // on create/update (see ValidateParameterSchema). A nil or empty schema declares
 // a command that takes no structured arguments.
 type CommandDefinitionCreateRequest struct {
-	Token           string
-	DeviceTypeToken string
-	CommandKey      string
-	Name            *string
-	Description     *string
-	ParameterSchema *string
-	Metadata        *string
+	Token              string
+	DeviceProfileToken string
+	CommandKey         string
+	Name               *string
+	Description        *string
+	ParameterSchema    *string
+	Metadata           *string
 }
 
 // Search criteria for locating command definitions.
 type CommandDefinitionSearchCriteria struct {
 	rdb.Pagination
-	DeviceType *string // device type token
-	CommandKey *string
+	DeviceProfile *string // device profile token
+	CommandKey    *string
 }
 
 // Results for command definition search.

@@ -56,10 +56,9 @@ type DeviceType struct {
 	// embedded gorm.Model, the DB column + GraphQL field stay "model".
 	ModelName sql.NullString `gorm:"column:model;size:128"`
 
-	Devices            []Device
-	MetricDefinitions  []MetricDefinition
-	CommandDefinitions []CommandDefinition
-	AlarmDefinitions   []AlarmDefinition
+	Devices []Device
+	// The metric/command/alarm definitions moved onto DeviceProfile in ADR-045
+	// slice b; a type reaches them through its profile.
 }
 
 // Search criteria for locating device types.

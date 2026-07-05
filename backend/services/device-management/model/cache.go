@@ -26,8 +26,9 @@ type Caches struct {
 	// RelationshipsBySource caches a device's tracked relationships (keyed by
 	// tenant+source device id).
 	RelationshipsBySource *messaging.Cache
-	// MetricDefsByType caches a device type's declared metric definitions (keyed by
-	// tenant+device type id), read on the hot path by ingest-time metric validation
+	// MetricDefsByType caches the metric definitions resolved for a device type (via
+	// its profile, ADR-045; keyed by tenant+device type id — what the hot path holds),
+	// read on the hot path by ingest-time metric validation
 	// (ADR-016). Empty results are cached too — an untyped device type is the common
 	// case and should not query on every event.
 	MetricDefsByType *messaging.Cache
