@@ -6,7 +6,7 @@
 // semantic colour (kept local here rather than widening the shared Badge variants,
 // which are tied to the app's accent/CSS-variable palette). Colour is backed by an
 // icon + label so status never reads on hue alone.
-import { AlertTriangle, BellRing, CheckCircle2, CircleCheck } from 'lucide-react';
+import { AlertTriangle, BellRing, CircleCheck, UserCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const pillBase =
@@ -54,7 +54,7 @@ export function AlarmStatusBadge({
           'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-400',
         )}
       >
-        <CheckCircle2 size={12} /> Acknowledged
+        <UserCheck size={12} /> Acknowledged
       </span>
     );
   }
@@ -78,7 +78,7 @@ const EVENT_ICONS: Record<string, typeof AlertTriangle> = {
   ESCALATED: AlertTriangle,
   DEESCALATED: AlertTriangle,
   CLEARED: CircleCheck,
-  ACKNOWLEDGED: CheckCircle2,
+  ACKNOWLEDGED: UserCheck,
 };
 
 export function AlarmEventTypeBadge({ eventType }: { eventType: string }) {

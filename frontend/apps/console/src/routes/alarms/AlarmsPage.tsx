@@ -63,7 +63,7 @@ function LiveIndicator({ status }: { status: AlarmStreamStatus }) {
   const map: Record<AlarmStreamStatus, { dot: string; label: string }> = {
     live: { dot: 'bg-green-500', label: 'Live' },
     connecting: { dot: 'bg-muted-foreground', label: 'Connecting…' },
-    error: { dot: 'bg-amber-500', label: 'Reconnecting…' },
+    reconnecting: { dot: 'bg-amber-500', label: 'Reconnecting…' },
   };
   const { dot, label } = map[status];
   return (
@@ -92,7 +92,10 @@ export default function AlarmsPage() {
   const [severity, setSeverity] = useState('');
   const [ack, setAck] = useState('');
   const [version, reload] = useReload();
-  const [acting, setActing] = useState<string | null>(null);
+  // In-flight ack/clear actions, keyed `${token}:${action}` — a Set so one row's
+  // action never disables another's, and a button spins only for its own action.
+  const [acting, setActing] = useState<ReadonlySet<string>>(() => new Set());
+  const inFlight = useRef<Set<string>>(new Set());
   const [lastEvent, setLastEvent] = useState<AlarmEvent | null>(null);
 
   const acknowledged = ack === '' ? undefined : ack === 'true';
@@ -141,7 +144,9 @@ export default function AlarmsPage() {
     [scheduleReconcile],
   );
 
-  const { status } = useAlarmStream({ state: state || undefined, severity: severity || undefined }, onEvent);
+  // Subscribe unfiltered (the stream carries only this tenant's transitions); on a
+  // reconnect, reconcile the query to catch anything missed during the gap.
+  const { status } = useAlarmStream(onEvent, reload);
 
   // Periodic reconcile backstop (the schema's own guidance for the at-most-once
   // stream): a dropped event with no later event to trigger a refetch would otherwise
@@ -151,8 +156,15 @@ export default function AlarmsPage() {
     return () => window.clearInterval(id);
   }, [reload]);
 
+  const rowBusy = (token: string) => acting.has(`${token}:ack`) || acting.has(`${token}:clear`);
+
   const act = async (token: string, action: 'ack' | 'clear') => {
-    setActing(token);
+    const key = `${token}:${action}`;
+    // Synchronous single-flight guard: a second click landing before the disabled
+    // state renders can't fire a duplicate mutation.
+    if (inFlight.current.has(key)) return;
+    inFlight.current.add(key);
+    setActing((s) => new Set(s).add(key));
     try {
       if (action === 'ack') {
         await acknowledgeAlarm(token);
@@ -167,7 +179,12 @@ export default function AlarmsPage() {
     } catch (err) {
       toast(errMessage(err), 'error');
     } finally {
-      setActing(null);
+      inFlight.current.delete(key);
+      setActing((s) => {
+        const n = new Set(s);
+        n.delete(key);
+        return n;
+      });
     }
   };
 
@@ -275,8 +292,8 @@ export default function AlarmsPage() {
                             <Button
                               variant="outline"
                               size="sm"
-                              loading={acting === a.token}
-                              disabled={acting != null}
+                              loading={acting.has(`${a.token}:ack`)}
+                              disabled={rowBusy(a.token)}
                               onClick={() => act(a.token, 'ack')}
                             >
                               Acknowledge
@@ -285,8 +302,8 @@ export default function AlarmsPage() {
                           <Button
                             variant="outline"
                             size="sm"
-                            loading={acting === a.token}
-                            disabled={acting != null}
+                            loading={acting.has(`${a.token}:clear`)}
+                            disabled={rowBusy(a.token)}
                             onClick={() => act(a.token, 'clear')}
                           >
                             Clear
