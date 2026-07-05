@@ -1311,7 +1311,59 @@ type Mutation {
     deleteAreaGroup(token: String!): Boolean!
 }
 
+# A single alarm state-change, pushed live to a subscriber (ADR-041 / ADR-037). It
+# is the transition envelope re-emitted by the evaluator and the operator API — not
+# the stored Alarm row — so it carries the transition kind (eventType) and, for a
+# severity move, the prior severity, alongside a snapshot of the alarm after the
+# change. Address the alarm by token to re-query it; the originator is the uniform
+# (type, id) reference, with originatorToken resolved on demand for a device.
+type AlarmEvent {
+    # One of RAISED, ESCALATED, DEESCALATED, CLEARED, ACKNOWLEDGED.
+    eventType: String!
+    # Token of the alarm this event is about (stable across its lifecycle).
+    alarmToken: String!
+    originatorType: String!
+    originatorId: ID!
+    # The originator's token, resolved on demand (device originators only today);
+    # null when the originator is not a device or no longer exists.
+    originatorToken: String
+    alarmKey: String!
+    metricKey: String!
+    # Alarm state after the transition: ACTIVE | CLEARED.
+    state: String!
+    # Severity after the transition.
+    severity: String!
+    # The severity held before an in-place change; set only for ESCALATED/DEESCALATED.
+    previousSeverity: String
+    acknowledged: Boolean!
+    acknowledgedBy: String
+    lastValue: Float
+    message: String
+    # When the current alarm cycle began (pairs with occurredTime for "active 42m").
+    raisedTime: String
+    # The event time that drove the transition (measurement time, or operation time
+    # for an operator ack/clear).
+    occurredTime: String!
+}
+
+# Live alarm stream (ADR-037). Pushes each alarm transition to the subscriber as it
+# happens — scoped to the subscriber's tenant — from subscribe time onward with no
+# historical backfill (use the alarm queries for current state). Optional filters
+# narrow the feed to one originator, state, severity, or alarm key.
+type Subscription {
+    # Streams alarm state-change events. When originator is supplied, originatorType
+    # is required and the token is resolved to its id once at subscribe time.
+    alarmStream(
+        originatorType: String
+        originator: String
+        state: String
+        severity: String
+        alarmKey: String
+    ): AlarmEvent!
+}
+
 schema {
     query: Query
     mutation: Mutation
+    subscription: Subscription
 }

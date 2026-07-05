@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
@@ -26,6 +27,12 @@ func (s *SchemaResolver) GetRdbManager(ctx context.Context) *rdb.RdbManager {
 // Get api from context.
 func (s *SchemaResolver) GetApi(ctx context.Context) *model.Api {
 	return ctx.Value(gqlcore.ContextApiKey).(*model.Api)
+}
+
+// Get nats manager from context. Backs the live subscription resolvers
+// (SubscribeLive); injected as a provider in main.go once the manager is connected.
+func (s *SchemaResolver) GetNats(ctx context.Context) *messaging.NatsManager {
+	return ctx.Value(gqlcore.ContextNatsKey).(*messaging.NatsManager)
 }
 
 // Convert string ids to uint ids.
