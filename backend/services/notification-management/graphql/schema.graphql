@@ -1,0 +1,29 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+#
+# Notification Management GraphQL Schema (ADR-017)
+#
+# This first slice serves only the service's static capability declaration: which
+# channel-adapter types it can deliver an alarm notification through. The per-tenant
+# notification policy (recipients, per-severity routing, throttle) and its CRUD land
+# in a later slice; they hang off this same Query root.
+
+# A delivery channel the notification service supports. `id` is the stable key a
+# policy will reference when it routes an alarm to a channel; `label`/`description`
+# drive the channel-type picker in the console.
+type NotificationChannelType {
+    id: String!
+    label: String!
+    description: String!
+}
+
+type Query {
+    # The channel-adapter types this service can deliver through (a static
+    # capability list — a policy picks channels from these).
+    notificationChannelTypes: [NotificationChannelType!]!
+}
+
+schema {
+    query: Query
+}
