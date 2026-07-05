@@ -47,6 +47,14 @@ export interface SubscriptionSink<T> {
   next: (data: T) => void;
   error?: (err: unknown) => void;
   complete?: () => void;
+  // Connection-level signals for the shared per-area socket, distinct from the
+  // per-operation next/error/complete above. `connected` fires on each successful
+  // connection_ack — `wasRetry` distinguishes a reconnect (after a dropped socket)
+  // from the first connect; `closed` fires on each socket close (graphql-ws then
+  // auto-retries a transient close). A consumer that only needs data can omit both;
+  // a live-status indicator uses them to tell "connected but idle" from "offline".
+  connected?: (wasRetry: boolean) => void;
+  closed?: () => void;
 }
 
 // subscribe binds a typed subscription document to a sink and returns an
@@ -59,19 +67,34 @@ export function subscribe<TResult, TVariables>(
   variables: TVariables extends Record<string, never> ? undefined : TVariables,
   sink: SubscriptionSink<TResult>,
 ): () => void {
-  return clientFor(area).subscribe<TResult>(
-    {
-      query: document.toString(),
-      variables: variables as Record<string, unknown> | undefined,
-    },
-    {
-      next: (result) => {
-        if (result.data != null) sink.next(result.data);
+  const client = clientFor(area);
+  // Client-level connection events are registered per subscribe() and torn down with
+  // it, alongside the operation itself, so a single dispose() call releases both.
+  const disposers: Array<() => void> = [];
+  if (sink.connected) {
+    disposers.push(client.on('connected', (_socket, _payload, wasRetry) => sink.connected!(wasRetry)));
+  }
+  if (sink.closed) {
+    disposers.push(client.on('closed', () => sink.closed!()));
+  }
+  disposers.push(
+    client.subscribe<TResult>(
+      {
+        query: document.toString(),
+        variables: variables as Record<string, unknown> | undefined,
       },
-      error: (err) => sink.error?.(err),
-      complete: () => sink.complete?.(),
-    },
+      {
+        next: (result) => {
+          if (result.data != null) sink.next(result.data);
+        },
+        error: (err) => sink.error?.(err),
+        complete: () => sink.complete?.(),
+      },
+    ),
   );
+  return () => {
+    for (const dispose of disposers) dispose();
+  };
 }
 
 // disposeSubscriptions tears down every cached area client (their sockets). A

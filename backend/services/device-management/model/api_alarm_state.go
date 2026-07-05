@@ -82,7 +82,11 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 		if criteria.AlarmKey != nil {
 			result = result.Where("alarm_key = ?", *criteria.AlarmKey)
 		}
-		return result
+		// Deterministic order: newest cycle first, id as a stable tiebreak. Without
+		// it the heap order shifts under every in-place UPDATE (ack, escalation, a
+		// last-value write on each matching measurement), so a live console that
+		// reconciles by re-querying would see rows reshuffle and page boundaries move.
+		return result.Order("raised_time DESC, id DESC")
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {

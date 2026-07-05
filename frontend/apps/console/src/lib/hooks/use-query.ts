@@ -28,7 +28,12 @@ export function useQuery<T>(loader: () => Promise<T>, deps: unknown[] = []): Que
         if (cancelled) return;
         const message =
           err instanceof GraphQLRequestError ? err.message : 'Failed to load data.';
-        setState({ data: null, loading: false, error: message });
+        // Keep the prior data on error rather than blanking it: a page that
+        // re-runs on a timer (e.g. a live-reconciling list) would otherwise flip
+        // its whole view to an error state on one transient blip. Callers that gate
+        // an error view on `data == null` keep showing stale-but-good rows; callers
+        // that check `error` first are unaffected (data is present but unread).
+        setState((s) => ({ data: s.data, loading: false, error: message }));
       });
     return () => {
       cancelled = true;

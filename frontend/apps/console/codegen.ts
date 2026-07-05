@@ -24,6 +24,7 @@ const config: CodegenConfig = {
         'src/lib/api/relationships.ts',
         'src/lib/api/audit.ts',
         'src/lib/api/credentials.ts',
+        'src/lib/api/alarms.ts',
       ],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
