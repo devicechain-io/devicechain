@@ -41,7 +41,10 @@ func (r *SchemaResolver) UpdateDeviceType(ctx context.Context, args struct {
 		return nil, err
 	}
 
-	api := r.GetApi(ctx)
+	// Route through the caching decorator: attaching/detaching/changing the
+	// profile (ADR-045) changes what the ingest path resolves for this type, so
+	// the update must evict the type's cached metric definitions.
+	api := r.GetCachedApi(ctx)
 	updated, err := api.UpdateDeviceType(ctx, args.Token, args.Request)
 	if err != nil {
 		return nil, err

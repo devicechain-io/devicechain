@@ -68,6 +68,12 @@ func (r *DeviceProfileResolver) ActiveVersion() *int32 {
 	return &v
 }
 
+// DeviceTypeCount is how many device types currently adopt this profile (ADR-045);
+// the authoring UI shows it so a shared profile's blast radius is visible.
+func (r *DeviceProfileResolver) DeviceTypeCount() (int32, error) {
+	return r.S.GetApi(r.C).DeviceTypeCountForProfile(r.C, r.M.ID)
+}
+
 // The typed capability definitions the profile owns (ADR-045 slice b): metrics
 // (ADR-016), commands (ADR-043), alarm rules (ADR-041).
 

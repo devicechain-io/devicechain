@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { Textarea, errMessage } from '@/routes/common';
+import { Textarea, errMessage, typeCountLabel } from '@/routes/common';
 import {
   tokenColumn,
   descriptionColumn,
@@ -129,6 +129,14 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
   columns: [
     tokenColumn<DeviceProfile>(),
     { header: 'Category', cell: (p) => p.category || <Dash /> },
+    {
+      header: 'Used by',
+      cell: (p) => (
+        <span className={p.deviceTypeCount === 0 ? 'text-muted-foreground' : 'tabular-nums'}>
+          {typeCountLabel(p.deviceTypeCount)}
+        </span>
+      ),
+    },
     descriptionColumn<DeviceProfile>(),
     createdColumn<DeviceProfile>(),
   ],
@@ -143,7 +151,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
         <DefinitionsPanel
           profileToken={p.token}
           singular="metric"
-          description="The typed, unit-bearing measurements a device reports (ADR-016)."
+          description="The typed, unit-bearing measurements a device reports."
           load={listMetricDefinitions}
           remove={deleteMetricDefinition}
           removeConfirm={(d) => `Delete metric “${d.metricKey}”?`}
@@ -174,7 +182,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
         <DefinitionsPanel
           profileToken={p.token}
           singular="command"
-          description="The commands a device accepts, with their optional parameter schema (ADR-043)."
+          description="The commands a device accepts, with their optional parameter schema."
           load={listCommandDefinitions}
           remove={deleteCommandDefinition}
           removeConfirm={(d) => `Delete command “${d.commandKey}”?`}
@@ -194,7 +202,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
         <DefinitionsPanel
           profileToken={p.token}
           singular="alarm rule"
-          description="Threshold rules that raise alarms from a watched metric (ADR-041)."
+          description="Threshold rules that raise alarms from a watched metric."
           load={listAlarmDefinitions}
           remove={deleteAlarmDefinition}
           removeConfirm={(d) => `Delete alarm rule “${d.alarmKey}” (${d.severity})?`}
@@ -220,7 +228,12 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
       value: 'versions',
       label: 'Versions',
       render: (p, reload) => (
-        <VersionsPanel profileToken={p.token} activeVersion={p.activeVersion ?? null} onChanged={reload} />
+        <VersionsPanel
+          profileToken={p.token}
+          activeVersion={p.activeVersion ?? null}
+          deviceTypeCount={p.deviceTypeCount}
+          onChanged={reload}
+        />
       ),
     },
   ],

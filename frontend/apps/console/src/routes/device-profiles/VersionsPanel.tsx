@@ -44,11 +44,14 @@ function fmtTime(iso: string): string {
 export function VersionsPanel({
   profileToken,
   activeVersion,
+  deviceTypeCount,
   onChanged,
 }: {
   profileToken: string;
   /** The profile's currently-active published version, or null if never published. */
   activeVersion: number | null;
+  /** How many device types adopt this profile — publishing affects all of them. */
+  deviceTypeCount: number;
   /** Refresh the parent detail so the active-version badge updates after a change. */
   onChanged: () => void;
 }) {
@@ -128,6 +131,11 @@ export function VersionsPanel({
             new version. Devices resolve the active version, so draft edits take effect only when
             published.
           </p>
+          {deviceTypeCount > 1 && (
+            <p className="text-amber-600 dark:text-amber-500">
+              Used by {deviceTypeCount} device types — publishing changes what all of them resolve.
+            </p>
+          )}
         </div>
         {canWrite && (
           <Button size="sm" onClick={() => setPublishing(true)} className="shrink-0">
