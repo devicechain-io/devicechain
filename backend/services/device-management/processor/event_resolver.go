@@ -279,8 +279,8 @@ func (rez *EventResolver) ResolveEventPayload(ctx context.Context, device *model
 // being dropped (ADR-013 addendum 2026-07-01).
 func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	device *model.Device, event *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
-	// Validate measurements against the device type's declared metric definitions
-	// (ADR-016): a non-conforming value routes the whole event to the dead-letter
+	// Validate measurements against the device's metric definitions (resolved via
+	// its type's profile, ADR-016/ADR-045): a non-conforming value routes the whole event to the dead-letter
 	// path rather than persisting bad data.
 	if event.EventType == esmodel.Measurement {
 		if reason, err := rez.validateMeasurements(ctx, device, event); err != nil {
@@ -343,8 +343,8 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Devic
 	return anchors, 0, nil
 }
 
-// validateMeasurements enforces the device type's declared metric definitions
-// against an inbound measurement event (ADR-016). It returns (0, nil) when the
+// validateMeasurements enforces the device's metric definitions (resolved via its
+// type's profile, ADR-045) against an inbound measurement event (ADR-016). It returns (0, nil) when the
 // event conforms or the device type declares no metrics. A transient
 // definition-lookup failure returns FailureReason_ApiCallFailed (retryable); a
 // non-conforming value returns FailureReason_Invalid, routing the event to the

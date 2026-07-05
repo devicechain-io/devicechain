@@ -24,7 +24,7 @@ func nullInt64Of(v *int32) sql.NullInt64 {
 // Create a new alarm definition (ADR-041).
 func (api *Api) CreateAlarmDefinition(ctx context.Context,
 	request *AlarmDefinitionCreateRequest) (*AlarmDefinition, error) {
-	matches, err := api.DeviceTypesByToken(ctx, []string{request.DeviceTypeToken})
+	matches, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func (api *Api) CreateAlarmDefinition(ctx context.Context,
 			Description: rdb.NullStrOf(request.Description),
 		},
 		MetadataEntity:      rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
-		DeviceType:          matches[0],
+		DeviceProfile:       matches[0],
 		AlarmKey:            request.AlarmKey,
 		MetricKey:           request.MetricKey,
 		ConditionType:       request.ConditionType,
@@ -104,20 +104,20 @@ func (api *Api) UpdateAlarmDefinition(ctx context.Context, token string,
 	updated.RepeatWindowSeconds = nullInt64Of(request.RepeatWindowSeconds)
 	updated.Enabled = request.Enabled
 
-	// Update device type if changed.
-	if updated.DeviceType == nil || request.DeviceTypeToken != updated.DeviceType.Token {
-		matches, err := api.DeviceTypesByToken(ctx, []string{request.DeviceTypeToken})
+	// Update device profile if changed.
+	if updated.DeviceProfile == nil || request.DeviceProfileToken != updated.DeviceProfile.Token {
+		matches, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
 		if err != nil {
 			return nil, err
 		}
 		if len(matches) == 0 {
 			return nil, gorm.ErrRecordNotFound
 		}
-		updated.DeviceType = matches[0]
+		updated.DeviceProfile = matches[0]
 	}
 
-	if updated.DeviceType != nil {
-		if err := api.checkAlarmKeyMetric(ctx, updated.DeviceType.ID, request.AlarmKey, request.MetricKey, token); err != nil {
+	if updated.DeviceProfile != nil {
+		if err := api.checkAlarmKeyMetric(ctx, updated.DeviceProfile.ID, request.AlarmKey, request.MetricKey, token); err != nil {
 			return nil, err
 		}
 	}
@@ -136,9 +136,9 @@ func (api *Api) UpdateAlarmDefinition(ctx context.Context, token string,
 // app layer (the unique index only guards (profile, key, severity)); concurrent
 // creates of conflicting tiers is a benign, rare edge left to the evaluator.
 func (api *Api) checkAlarmKeyMetric(ctx context.Context,
-	deviceTypeId uint, alarmKey, metricKey, excludeToken string) error {
+	profileId uint, alarmKey, metricKey, excludeToken string) error {
 	q := api.RDB.DB(ctx).Model(&AlarmDefinition{}).
-		Where("device_type_id = ? AND alarm_key = ? AND metric_key <> ?", deviceTypeId, alarmKey, metricKey)
+		Where("device_profile_id = ? AND alarm_key = ? AND metric_key <> ?", profileId, alarmKey, metricKey)
 	if excludeToken != "" {
 		q = q.Where("token <> ?", excludeToken)
 	}
@@ -156,7 +156,7 @@ func (api *Api) checkAlarmKeyMetric(ctx context.Context,
 // Get alarm definitions by id.
 func (api *Api) AlarmDefinitionsById(ctx context.Context, ids []uint) ([]*AlarmDefinition, error) {
 	found := make([]*AlarmDefinition, 0)
-	result := api.RDB.DB(ctx).Preload("DeviceType").Find(&found, ids)
+	result := api.RDB.DB(ctx).Preload("DeviceProfile").Find(&found, ids)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -166,7 +166,7 @@ func (api *Api) AlarmDefinitionsById(ctx context.Context, ids []uint) ([]*AlarmD
 // Get alarm definitions by token.
 func (api *Api) AlarmDefinitionsByToken(ctx context.Context, tokens []string) ([]*AlarmDefinition, error) {
 	found := make([]*AlarmDefinition, 0)
-	result := api.RDB.DB(ctx).Preload("DeviceType").Find(&found, "token in ?", tokens)
+	result := api.RDB.DB(ctx).Preload("DeviceProfile").Find(&found, "token in ?", tokens)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -178,14 +178,14 @@ func (api *Api) AlarmDefinitions(ctx context.Context,
 	criteria AlarmDefinitionSearchCriteria) (*AlarmDefinitionSearchResults, error) {
 	results := make([]AlarmDefinition, 0)
 	db, pag := api.RDB.ListOf(ctx, &AlarmDefinition{}, func(result *gorm.DB) *gorm.DB {
-		if criteria.DeviceType != nil {
-			result = result.Where("device_type_id = (?)",
-				api.RDB.DB(ctx).Model(&DeviceType{}).Select("id").Where("token = ?", criteria.DeviceType))
+		if criteria.DeviceProfile != nil {
+			result = result.Where("device_profile_id = (?)",
+				api.RDB.DB(ctx).Model(&DeviceProfile{}).Select("id").Where("token = ?", criteria.DeviceProfile))
 		}
 		if criteria.MetricKey != nil {
 			result = result.Where("metric_key = ?", *criteria.MetricKey)
 		}
-		return result.Preload("DeviceType")
+		return result.Preload("DeviceProfile")
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
@@ -194,16 +194,26 @@ func (api *Api) AlarmDefinitions(ctx context.Context,
 	return &AlarmDefinitionSearchResults{Results: results, Pagination: pag}, nil
 }
 
-// AlarmDefinitionsByDeviceType loads all alarm rules declared on a device profile
-// without pagination — the direct loader the alarm evaluator (ADR-041) resolves a
-// profile's rules through when a measurement arrives.
-func (api *Api) AlarmDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*AlarmDefinition, error) {
+// AlarmDefinitionsByDeviceProfile loads all alarm rules declared on a device
+// profile without pagination (ADR-041/ADR-045).
+func (api *Api) AlarmDefinitionsByDeviceProfile(ctx context.Context, profileId uint) ([]*AlarmDefinition, error) {
 	found := make([]*AlarmDefinition, 0)
-	result := api.RDB.DB(ctx).Where("device_type_id = ?", deviceTypeId).Find(&found)
+	result := api.RDB.DB(ctx).Where("device_profile_id = ?", profileId).Find(&found)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	return found, nil
+}
+
+// AlarmDefinitionsByDeviceType is the alarm evaluator's loader (ADR-041): it
+// resolves the type → profile hop (ADR-045) when a measurement arrives and returns
+// the profile's rules; a device whose type has no profile has no rules (empty).
+func (api *Api) AlarmDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*AlarmDefinition, error) {
+	profileId, ok, err := api.profileIdForDeviceType(ctx, deviceTypeId)
+	if err != nil || !ok {
+		return []*AlarmDefinition{}, err
+	}
+	return api.AlarmDefinitionsByDeviceProfile(ctx, profileId)
 }
 
 // validateAlarmKey enforces that an alarm key is present and token-grammar-safe

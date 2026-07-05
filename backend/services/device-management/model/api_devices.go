@@ -35,6 +35,30 @@ func (api *Api) resolveProfileId(ctx context.Context, token *string) (*uint, err
 	return &id, nil
 }
 
+// profileIdForDeviceType resolves a device type's adopted profile id (ADR-045),
+// the type → profile hop the capability-resolution path (device → type → profile)
+// depends on. Returns (0, false) when the type is unknown or has no profile — a
+// valid, capability-limited type whose devices simply have no definitions.
+func (api *Api) profileIdForDeviceType(ctx context.Context, deviceTypeId uint) (uint, bool, error) {
+	types, err := api.DeviceTypesById(ctx, []uint{deviceTypeId})
+	if err != nil {
+		return 0, false, err
+	}
+	if len(types) == 0 || types[0].ProfileId == nil {
+		return 0, false, nil
+	}
+	return *types[0].ProfileId, true, nil
+}
+
+// deviceTypeIdsForProfile returns the ids of every device type that adopts the
+// given profile (ADR-045). Used to fan cache eviction back out to the type keys the
+// ingest path is indexed by when a profile's definitions change.
+func (api *Api) deviceTypeIdsForProfile(ctx context.Context, profileId uint) ([]uint, error) {
+	var ids []uint
+	err := api.RDB.DB(ctx).Model(&DeviceType{}).Where("profile_id = ?", profileId).Pluck("id", &ids).Error
+	return ids, err
+}
+
 // Create a new device type.
 func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateRequest) (*DeviceType, error) {
 	profileId, err := api.resolveProfileId(ctx, request.ProfileToken)

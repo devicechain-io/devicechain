@@ -103,8 +103,8 @@ func (s AlarmSeverity) Rank() int {
 // String returns the underlying string value.
 func (s AlarmSeverity) String() string { return string(s) }
 
-// AlarmDefinition is an alarm rule declared on a Device Profile (the DeviceType
-// entity, ADR-041), structurally parallel to MetricDefinition and CommandDefinition.
+// AlarmDefinition is an alarm rule declared on a DeviceProfile (ADR-041/ADR-045),
+// structurally parallel to MetricDefinition and CommandDefinition.
 // It names a metric to watch and a condition that, when met, raises an alarm of the
 // given severity keyed by (originator, AlarmKey). Hanging the rule off the profile
 // keeps alarm config travelling with the fleet definition, not as free-floating
@@ -113,7 +113,7 @@ func (s AlarmSeverity) String() string { return string(s) }
 //
 // One AlarmKey may declare several rows, one per Severity tier (e.g. temp>80 → MAJOR
 // and temp>100 → CRITICAL both key "over-temp"): the row is unique by
-// (device_type_id, AlarmKey, Severity), and the evaluator escalates a single active
+// (device_profile_id, AlarmKey, Severity), and the evaluator escalates a single active
 // alarm in place to the highest satisfied tier (ADR-041 dec 3). All tiers of one
 // AlarmKey watch the same MetricKey (enforced at declaration) so they describe one
 // escalating condition rather than unrelated alarms sharing a name.
@@ -129,8 +129,8 @@ type AlarmDefinition struct {
 	rdb.NamedEntity
 	rdb.MetadataEntity
 
-	DeviceTypeId uint
-	DeviceType   *DeviceType
+	DeviceProfileId uint
+	DeviceProfile   *DeviceProfile
 
 	AlarmKey      string // stable alarm identifier, unique per profile (token grammar)
 	MetricKey     string // the measurement this rule evaluates (a MetricDefinition key)
@@ -151,7 +151,7 @@ type AlarmDefinition struct {
 // Data required to create an alarm definition.
 type AlarmDefinitionCreateRequest struct {
 	Token               string
-	DeviceTypeToken     string
+	DeviceProfileToken  string
 	AlarmKey            string
 	MetricKey           string
 	Name                *string
@@ -171,8 +171,8 @@ type AlarmDefinitionCreateRequest struct {
 // Search criteria for locating alarm definitions.
 type AlarmDefinitionSearchCriteria struct {
 	rdb.Pagination
-	DeviceType *string // device type token
-	MetricKey  *string
+	DeviceProfile *string // device profile token
+	MetricKey     *string
 }
 
 // Results for alarm definition search.

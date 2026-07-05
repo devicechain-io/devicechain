@@ -15,7 +15,7 @@ import (
 // Create a new command definition (ADR-043).
 func (api *Api) CreateCommandDefinition(ctx context.Context,
 	request *CommandDefinitionCreateRequest) (*CommandDefinition, error) {
-	matches, err := api.DeviceTypesByToken(ctx, []string{request.DeviceTypeToken})
+	matches, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: rdb.MetadataStrOf(request.Metadata),
 		},
-		DeviceType:      matches[0],
+		DeviceProfile:   matches[0],
 		CommandKey:      request.CommandKey,
 		ParameterSchema: rdb.MetadataStrOf(request.ParameterSchema),
 	}
@@ -79,16 +79,16 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 	updated.CommandKey = request.CommandKey
 	updated.ParameterSchema = rdb.MetadataStrOf(request.ParameterSchema)
 
-	// Update device type if changed.
-	if updated.DeviceType == nil || request.DeviceTypeToken != updated.DeviceType.Token {
-		matches, err := api.DeviceTypesByToken(ctx, []string{request.DeviceTypeToken})
+	// Update device profile if changed.
+	if updated.DeviceProfile == nil || request.DeviceProfileToken != updated.DeviceProfile.Token {
+		matches, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
 		if err != nil {
 			return nil, err
 		}
 		if len(matches) == 0 {
 			return nil, gorm.ErrRecordNotFound
 		}
-		updated.DeviceType = matches[0]
+		updated.DeviceProfile = matches[0]
 	}
 
 	result := api.RDB.DB(ctx).Save(updated)
@@ -102,7 +102,7 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 func (api *Api) CommandDefinitionsById(ctx context.Context, ids []uint) ([]*CommandDefinition, error) {
 	found := make([]*CommandDefinition, 0)
 	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceType")
+	result = result.Preload("DeviceProfile")
 	result = result.Find(&found, ids)
 	if result.Error != nil {
 		return nil, result.Error
@@ -114,7 +114,7 @@ func (api *Api) CommandDefinitionsById(ctx context.Context, ids []uint) ([]*Comm
 func (api *Api) CommandDefinitionsByToken(ctx context.Context, tokens []string) ([]*CommandDefinition, error) {
 	found := make([]*CommandDefinition, 0)
 	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceType")
+	result = result.Preload("DeviceProfile")
 	result = result.Find(&found, "token in ?", tokens)
 	if result.Error != nil {
 		return nil, result.Error
@@ -127,14 +127,14 @@ func (api *Api) CommandDefinitions(ctx context.Context,
 	criteria CommandDefinitionSearchCriteria) (*CommandDefinitionSearchResults, error) {
 	results := make([]CommandDefinition, 0)
 	db, pag := api.RDB.ListOf(ctx, &CommandDefinition{}, func(result *gorm.DB) *gorm.DB {
-		if criteria.DeviceType != nil {
-			result = result.Where("device_type_id = (?)",
-				api.RDB.DB(ctx).Model(&DeviceType{}).Select("id").Where("token = ?", criteria.DeviceType))
+		if criteria.DeviceProfile != nil {
+			result = result.Where("device_profile_id = (?)",
+				api.RDB.DB(ctx).Model(&DeviceProfile{}).Select("id").Where("token = ?", criteria.DeviceProfile))
 		}
 		if criteria.CommandKey != nil {
 			result = result.Where("command_key = ?", *criteria.CommandKey)
 		}
-		return result.Preload("DeviceType")
+		return result.Preload("DeviceProfile")
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
@@ -148,18 +148,26 @@ func (api *Api) CommandDefinitions(ctx context.Context,
 	}, nil
 }
 
-// CommandDefinitionsByDeviceType loads all command definitions declared on a
-// device profile without pagination — the no-pagination loader for reading a
-// profile's full command vocabulary (e.g. the console command form). It is one
-// candidate source for the enqueue-time validation to be added in W1.1b; that
-// cross-service lookup path is decided in that follow-up, not committed here.
-func (api *Api) CommandDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*CommandDefinition, error) {
+// CommandDefinitionsByDeviceProfile loads all command definitions declared on a
+// device profile without pagination — the loader for reading a profile's full
+// command vocabulary (e.g. the console command form) (ADR-043/ADR-045).
+func (api *Api) CommandDefinitionsByDeviceProfile(ctx context.Context, profileId uint) ([]*CommandDefinition, error) {
 	found := make([]*CommandDefinition, 0)
-	result := api.RDB.DB(ctx).Where("device_type_id = ?", deviceTypeId).Find(&found)
+	result := api.RDB.DB(ctx).Where("device_profile_id = ?", profileId).Find(&found)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	return found, nil
+}
+
+// CommandDefinitionsByDeviceType resolves the type → profile hop (ADR-045) and
+// returns the profile's command vocabulary; empty for a type with no profile.
+func (api *Api) CommandDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*CommandDefinition, error) {
+	profileId, ok, err := api.profileIdForDeviceType(ctx, deviceTypeId)
+	if err != nil || !ok {
+		return []*CommandDefinition{}, err
+	}
+	return api.CommandDefinitionsByDeviceProfile(ctx, profileId)
 }
 
 // validateCommandKey enforces that a command key is present and token-grammar-safe

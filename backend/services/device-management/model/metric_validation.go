@@ -85,7 +85,8 @@ func checkEnum(def *MetricDefinition, value string) error {
 // and validates the value against it. Lenient by design (ADR-016): a measurement
 // whose key is not declared on the profile passes through unvalidated, so the
 // metric model is an additive typing layer rather than a strict allow-list. defs
-// is the device type's declared definitions, keyed by MetricKey.
+// is the device's resolved metric definitions (device → type → profile, ADR-045),
+// keyed by MetricKey.
 func ValidateMeasurement(defs map[string]*MetricDefinition, name string, value string) error {
 	def, declared := defs[name]
 	if !declared {

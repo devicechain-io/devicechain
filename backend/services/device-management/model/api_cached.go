@@ -216,9 +216,10 @@ func (capi *CachedApi) CreateMetricDefinition(ctx context.Context, request *Metr
 	return created, nil
 }
 
-// UpdateMetricDefinition forwards to the DB then evicts the affected device type's
-// cached definitions so a changed bound/type/enum takes effect on the next event
-// (bounded further by the cache TTL if a def is retargeted to another type).
+// UpdateMetricDefinition forwards to the DB then evicts the cached definitions of
+// every device type adopting the affected profile so a changed bound/type/enum
+// takes effect on the next event (bounded further by the cache TTL if a def is
+// retargeted to another profile).
 func (capi *CachedApi) UpdateMetricDefinition(ctx context.Context, token string, request *MetricDefinitionCreateRequest) (*MetricDefinition, error) {
 	updated, err := capi.Api.UpdateMetricDefinition(ctx, token, request)
 	if err != nil {
@@ -228,12 +229,24 @@ func (capi *CachedApi) UpdateMetricDefinition(ctx context.Context, token string,
 	return updated, nil
 }
 
-// evictMetricDefs drops the cached definitions for a definition's device type.
+// evictMetricDefs drops the cached definitions for a changed metric definition.
+// The ingest cache is keyed by device type (what the hot path has), but a
+// definition now lives on the profile (ADR-045), so eviction fans back out to
+// every device type that adopts the definition's profile. A shared profile is
+// rare and this is off the hot path; the cache TTL bounds any miss.
 func (capi *CachedApi) evictMetricDefs(ctx context.Context, def *MetricDefinition) {
 	if def == nil {
 		return
 	}
-	if tenant, ok := core.TenantFromContext(ctx); ok {
-		_ = capi.caches.MetricDefsByType.Delete(ctx, metricDefsByTypeKey(tenant, def.DeviceTypeId))
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return
+	}
+	typeIds, err := capi.Api.deviceTypeIdsForProfile(ctx, def.DeviceProfileId)
+	if err != nil {
+		return
+	}
+	for _, typeId := range typeIds {
+		_ = capi.caches.MetricDefsByType.Delete(ctx, metricDefsByTypeKey(tenant, typeId))
 	}
 }

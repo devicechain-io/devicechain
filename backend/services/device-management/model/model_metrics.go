@@ -53,11 +53,11 @@ func (t MetricDataType) String() string {
 	return string(t)
 }
 
-// MetricDefinition is a typed, unit-bearing metric declared on a Device Profile
-// (the DeviceType entity, ADR-016). Measurement events reference it by Key within
-// the device's profile; the platform can validate/normalize on ingest and expose
-// unit + type through the API. Hanging the definition off the profile (not each
-// event) keeps the hot path cheap and the fleet consistent.
+// MetricDefinition is a typed, unit-bearing metric declared on a DeviceProfile
+// (ADR-016/ADR-045). Measurement events reference it by Key within the device's
+// profile (resolved device → type → profile); the platform can validate/normalize
+// on ingest and expose unit + type through the API. Hanging the definition off the
+// profile (not each event) keeps the hot path cheap and lets many types share one.
 type MetricDefinition struct {
 	gorm.Model
 	rdb.TenantScoped
@@ -65,38 +65,38 @@ type MetricDefinition struct {
 	rdb.NamedEntity
 	rdb.MetadataEntity
 
-	DeviceTypeId uint
-	DeviceType   *DeviceType
-	MetricKey    string         // referenced by measurement events
-	DataType     string         // one of MetricDataType
-	Unit         sql.NullString // UCUM code, e.g. Cel, kW, m/s
-	MinValue     sql.NullFloat64
-	MaxValue     sql.NullFloat64
-	Enum         *datatypes.JSON // optional allowed-values array
-	Descriptor   sql.NullString  // optional WoT @type / capability tag
+	DeviceProfileId uint
+	DeviceProfile   *DeviceProfile
+	MetricKey       string         // referenced by measurement events
+	DataType        string         // one of MetricDataType
+	Unit            sql.NullString // UCUM code, e.g. Cel, kW, m/s
+	MinValue        sql.NullFloat64
+	MaxValue        sql.NullFloat64
+	Enum            *datatypes.JSON // optional allowed-values array
+	Descriptor      sql.NullString  // optional WoT @type / capability tag
 }
 
 // Data required to create a metric definition.
 type MetricDefinitionCreateRequest struct {
-	Token           string
-	DeviceTypeToken string
-	MetricKey       string
-	Name            *string
-	Description     *string
-	DataType        string
-	Unit            *string
-	MinValue        *float64
-	MaxValue        *float64
-	Enum            *string
-	Descriptor      *string
-	Metadata        *string
+	Token              string
+	DeviceProfileToken string
+	MetricKey          string
+	Name               *string
+	Description        *string
+	DataType           string
+	Unit               *string
+	MinValue           *float64
+	MaxValue           *float64
+	Enum               *string
+	Descriptor         *string
+	Metadata           *string
 }
 
 // Search criteria for locating metric definitions.
 type MetricDefinitionSearchCriteria struct {
 	rdb.Pagination
-	DeviceType *string // device type token
-	MetricKey  *string
+	DeviceProfile *string // device profile token
+	MetricKey     *string
 }
 
 // Results for metric definition search.
