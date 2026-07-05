@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
+import { SuggestField } from '@/components/ui/suggest-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Textarea, errMessage, typeCountLabel } from '@/routes/common';
 import {
@@ -100,7 +101,7 @@ function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (mess
         <Input id="p-name" value={name} onChange={(e) => setName(e.target.value)} />
       </FormField>
       <FormField label="Category" htmlFor="p-category" description="Functional device class, e.g. thermostat, meter, gateway.">
-        <Input id="p-category" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="thermostat" />
+        <SuggestField id="p-category" facet="CATEGORY" value={category} onChange={setCategory} placeholder="thermostat" />
       </FormField>
       <FormField label="Description" htmlFor="p-description">
         <Textarea id="p-description" value={description} onChange={(e) => setDescription(e.target.value)} />

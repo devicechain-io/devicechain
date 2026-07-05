@@ -5,6 +5,7 @@ import { RegistryTypeForm, tokenColumn, descriptionColumn, createdColumn, type R
 import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { TypeAppearanceForm } from '@/components/TypeAppearanceForm';
 import { ProfilePanel } from './ProfilePanel';
+import { TypeIdentityForm } from './TypeIdentityForm';
 import {
   listDeviceTypes,
   getDeviceType,
@@ -58,6 +59,11 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
   ),
   removeConfirm: (dt) => `Delete device type “${dt.token}”? This cannot be undone.`,
   detailTabs: [
+    {
+      value: 'identity',
+      label: 'Identity',
+      render: (dt, reload) => <TypeIdentityForm entity={dt} onSaved={reload} />,
+    },
     {
       value: 'appearance',
       label: 'Appearance',

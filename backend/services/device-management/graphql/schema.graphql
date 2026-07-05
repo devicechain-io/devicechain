@@ -65,6 +65,15 @@ type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity 
     metadata: String
 }
 
+# A discovery facet (ADR-045 decision 8) whose in-use values suggest completions in
+# the authoring UI. MANUFACTURER/MODEL live on the device type; CATEGORY on the
+# profile.
+enum DeviceFacet {
+    MANUFACTURER
+    MODEL
+    CATEGORY
+}
+
 # Represents a device profile (ADR-045) — the reusable, tenant-scoped capability
 # contract a device type adopts. Distinct from the type's taxonomy/appearance; many
 # types may share one profile. It is the home for the metric/command/alarm
@@ -1125,6 +1134,10 @@ type Query {
     deviceProfiles(criteria: DeviceProfileSearchCriteria!): DeviceProfileSearchResults!
     # List a device profile's published versions, newest first (ADR-045 versioning).
     deviceProfileVersions(token: String!): [DeviceProfileVersion!]!
+    # The distinct non-empty values a discovery facet currently holds across the
+    # tenant's device types / profiles — the suggestions offered under the free-text
+    # facet inputs (ADR-045 decision 8). Sorted; empty until values are in use.
+    facetValues(facet: DeviceFacet!): [String!]!
     # Find metric definitions by unique id.
     metricDefinitionsById(ids: [ID!]!): [MetricDefinition!]!
     # Find metric definitions by unique token.

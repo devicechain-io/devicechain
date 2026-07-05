@@ -20,5 +20,6 @@ var (
 		NewDeviceProfileSchema(),
 		NewDefinitionsToProfileSchema(),
 		NewProfileVersioningSchema(),
+		NewFacetIndexSchema(),
 	}
 )

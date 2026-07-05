@@ -21,7 +21,10 @@ import type {
   CommandDefinitionCreateRequest,
   AlarmDefinitionsQuery,
   AlarmDefinitionCreateRequest,
+  DeviceFacet,
 } from '@/gql/device-management/graphql';
+
+export type { DeviceFacet };
 
 // Public types are derived from the generated operation results so they always
 // reflect the actual selection sets and can never drift from the schema.
@@ -606,6 +609,22 @@ const DEVICE_PROFILE_VERSIONS = graphql(`
 export async function listDeviceProfileVersions(token: string): Promise<DeviceProfileVersion[]> {
   const data = await gql('device-management', DEVICE_PROFILE_VERSIONS, { token });
   return data.deviceProfileVersions;
+}
+
+// ── Discovery facets (ADR-045 decision 8) ─────────────────────────────────
+
+const FACET_VALUES = graphql(`
+  query FacetValues($facet: DeviceFacet!) {
+    facetValues(facet: $facet)
+  }
+`);
+
+// The distinct in-use values of a facet (manufacturer/model/category), suggested
+// under the free-text facet inputs. Fetched fresh per input mount so a value just
+// added elsewhere shows up next time; the list is small and off any hot path.
+export async function getFacetValues(facet: DeviceFacet): Promise<string[]> {
+  const data = await gql('device-management', FACET_VALUES, { facet });
+  return data.facetValues;
 }
 
 const PUBLISH_DEVICE_PROFILE = graphql(`

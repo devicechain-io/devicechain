@@ -51,10 +51,13 @@ type DeviceType struct {
 	ProfileId *uint `gorm:"index"`
 	Profile   *DeviceProfile
 
-	Manufacturer sql.NullString `gorm:"size:128"` // identity facet (ADR-045 decision 8)
+	// Manufacturer + Model are indexed identity facets (ADR-045 decision 8): they
+	// back the distinct-value suggestion lists and are meant to be filtered/grouped
+	// on, so the index matches DeviceProfile.Category's.
+	Manufacturer sql.NullString `gorm:"size:128;index"` // identity facet (ADR-045 decision 8)
 	// ModelName is the device model facet; the Go field avoids colliding with the
 	// embedded gorm.Model, the DB column + GraphQL field stay "model".
-	ModelName sql.NullString `gorm:"column:model;size:128"`
+	ModelName sql.NullString `gorm:"column:model;size:128;index"`
 
 	Devices []Device
 	// The metric/command/alarm definitions moved onto DeviceProfile in ADR-045
