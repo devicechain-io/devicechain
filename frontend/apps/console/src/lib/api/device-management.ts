@@ -205,6 +205,8 @@ const DEVICE_TYPES = graphql(`
         model
         profile {
           token
+          name
+          category
         }
         createdAt
       }
@@ -247,6 +249,8 @@ const DEVICE_TYPE_BY_TOKEN = graphql(`
       model
       profile {
         token
+        name
+        category
       }
       createdAt
     }
@@ -273,6 +277,8 @@ const CREATE_DEVICE_TYPE = graphql(`
       model
       profile {
         token
+        name
+        category
       }
       createdAt
     }
@@ -299,6 +305,8 @@ const UPDATE_DEVICE_TYPE = graphql(`
       model
       profile {
         token
+        name
+        category
       }
       createdAt
     }
@@ -311,6 +319,27 @@ export async function updateDeviceType(
 ): Promise<DeviceType> {
   const data = await gql('device-management', UPDATE_DEVICE_TYPE, { token, request });
   return data.updateDeviceType;
+}
+
+// updateDeviceType is a full replace, so any field omitted from the request is
+// nulled. A partial editor (the basic form, the appearance form, the profile
+// control) therefore has to carry forward every field it does not itself edit;
+// this returns that carry-forward base so the three editors share one field list
+// instead of each maintaining a copy that can drift (the ADR-045 preservation
+// trap). Callers spread it and override only what they change.
+export function deviceTypePreserved(dt: DeviceType): DeviceTypeCreateRequest {
+  return {
+    token: dt.token,
+    name: dt.name ?? undefined,
+    description: dt.description ?? undefined,
+    icon: dt.icon ?? undefined,
+    backgroundColor: dt.backgroundColor ?? undefined,
+    foregroundColor: dt.foregroundColor ?? undefined,
+    borderColor: dt.borderColor ?? undefined,
+    profileToken: dt.profile?.token ?? undefined,
+    manufacturer: dt.manufacturer ?? undefined,
+    model: dt.model ?? undefined,
+  };
 }
 
 const DELETE_DEVICE_TYPE = graphql(`
@@ -437,6 +466,7 @@ const DEVICE_PROFILES = graphql(`
         description
         category
         activeVersion
+        deviceTypeCount
         metadata
         createdAt
       }
@@ -470,6 +500,7 @@ const DEVICE_PROFILE_BY_TOKEN = graphql(`
       description
       category
       activeVersion
+      deviceTypeCount
       metadata
       createdAt
     }
@@ -490,6 +521,7 @@ const CREATE_DEVICE_PROFILE = graphql(`
       description
       category
       activeVersion
+      deviceTypeCount
       metadata
       createdAt
     }
@@ -512,6 +544,7 @@ const UPDATE_DEVICE_PROFILE = graphql(`
       description
       category
       activeVersion
+      deviceTypeCount
       metadata
       createdAt
     }

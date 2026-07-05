@@ -4,11 +4,13 @@
 import { RegistryTypeForm, tokenColumn, descriptionColumn, createdColumn, type RegistryResource } from '@/components/registry';
 import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { TypeAppearanceForm } from '@/components/TypeAppearanceForm';
+import { ProfilePanel } from './ProfilePanel';
 import {
   listDeviceTypes,
   getDeviceType,
   createDeviceType,
   updateDeviceType,
+  deviceTypePreserved,
   deleteDeviceType,
   type DeviceType,
 } from '@/lib/api/device-management';
@@ -42,41 +44,38 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
       tokenPlaceholder="thermostat"
       create={(req) => createDeviceType(req)}
       update={(token, req) =>
+        // Carry forward every field this form doesn't edit (appearance, profile
+        // ref, facets); DeviceType update is full-replace. See deviceTypePreserved.
         updateDeviceType(token, {
-          token: req.token,
+          ...(dt ? deviceTypePreserved(dt) : { token }),
+          token,
           name: req.name,
           description: req.description,
-          icon: dt?.icon,
-          backgroundColor: dt?.backgroundColor,
-          foregroundColor: dt?.foregroundColor,
-          borderColor: dt?.borderColor,
-          // Preserve fields this form doesn't edit — DeviceType update is
-          // full-replace, so omitting them would null the profile ref + facets
-          // (ADR-045). The authoring UI (slice d) will edit them directly.
-          profileToken: dt?.profile?.token,
-          manufacturer: dt?.manufacturer,
-          model: dt?.model,
         })
       }
       onDone={onDone}
     />
   ),
   removeConfirm: (dt) => `Delete device type “${dt.token}”? This cannot be undone.`,
-  detailExtraLabel: 'Appearance',
-  renderDetailExtra: (dt, reload) => (
-    <TypeAppearanceForm
-      entity={dt}
-      update={(req) =>
-        updateDeviceType(dt.token, {
-          ...req,
-          // Same full-replace preservation as the basic form (ADR-045): the shared
-          // appearance form doesn't carry the profile ref or identity facets.
-          profileToken: dt.profile?.token,
-          manufacturer: dt.manufacturer,
-          model: dt.model,
-        })
-      }
-      onSaved={reload}
-    />
-  ),
+  detailTabs: [
+    {
+      value: 'appearance',
+      label: 'Appearance',
+      render: (dt, reload) => (
+        <TypeAppearanceForm
+          entity={dt}
+          update={(req) =>
+            // The appearance form edits icon/colors; carry the rest forward.
+            updateDeviceType(dt.token, { ...deviceTypePreserved(dt), ...req })
+          }
+          onSaved={reload}
+        />
+      ),
+    },
+    {
+      value: 'profile',
+      label: 'Profile',
+      render: (dt, reload) => <ProfilePanel entity={dt} onChanged={reload} />,
+    },
+  ],
 };

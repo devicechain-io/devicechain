@@ -232,7 +232,7 @@ export function CommandDefinitionForm({
       <FormField
         label="Parameter schema"
         htmlFor="c-schema"
-        description='Optional JSON array of parameters (ADR-043), each { "name", "dataType", … }. Leave blank for a no-argument command.'
+        description='Optional JSON array of parameters, each { "name", "dataType", … }. Leave blank for a no-argument command.'
       >
         <Textarea
           id="c-schema"

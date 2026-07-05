@@ -59,6 +59,15 @@ func (api *Api) deviceTypeIdsForProfile(ctx context.Context, profileId uint) ([]
 	return ids, err
 }
 
+// DeviceTypeCountForProfile returns how many device types currently adopt the
+// given profile (ADR-045). A profile is a shared contract, so the authoring UI
+// surfaces this to warn that a definition change affects every adopting type.
+func (api *Api) DeviceTypeCountForProfile(ctx context.Context, profileId uint) (int32, error) {
+	var count int64
+	err := api.RDB.DB(ctx).Model(&DeviceType{}).Where("profile_id = ?", profileId).Count(&count).Error
+	return int32(count), err
+}
+
 // Create a new device type.
 func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateRequest) (*DeviceType, error) {
 	profileId, err := api.resolveProfileId(ctx, request.ProfileToken)

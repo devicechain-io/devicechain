@@ -83,6 +83,10 @@ type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEnt
     # (ADR-045 versioning); null until the profile is first published — an
     # unpublished profile's definitions are inert (a device resolves nothing).
     activeVersion: Int
+    # How many device types currently adopt this profile. A profile is a shared
+    # contract, so editing its definitions affects every adopting type; the
+    # authoring UI surfaces this before a publish.
+    deviceTypeCount: Int!
     # The profile's DRAFT capability definitions — the editable working copy. A
     # device resolves the active PUBLISHED version, not these; edits here take
     # effect only when published.
