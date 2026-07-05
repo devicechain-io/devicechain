@@ -32,6 +32,13 @@ export function errMessage(err: unknown): string {
   return 'Could not reach the server.';
 }
 
+// typeCountLabel renders a device-type adoption count (ADR-045): "unused" at zero,
+// else a pluralized "N type(s)". Shared by the profiles list column and the
+// type-picker options so the two stay in lockstep.
+export function typeCountLabel(count: number): string {
+  return count === 0 ? 'unused' : `${count} type${count === 1 ? '' : 's'}`;
+}
+
 // rowLinkProps makes a whole table row behave like a link to a detail page:
 // clickable, keyboard-focusable, and activatable with Enter/Space. Spread it onto
 // a DataTableRow whose cells are plain content; a nested interactive control (e.g.

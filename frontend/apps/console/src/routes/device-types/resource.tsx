@@ -44,11 +44,11 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
       tokenPlaceholder="thermostat"
       create={(req) => createDeviceType(req)}
       update={(token, req) =>
+        // RegistryTypeForm only calls update when editing, so dt is always set.
         // Carry forward every field this form doesn't edit (appearance, profile
         // ref, facets); DeviceType update is full-replace. See deviceTypePreserved.
         updateDeviceType(token, {
-          ...(dt ? deviceTypePreserved(dt) : { token }),
-          token,
+          ...deviceTypePreserved(dt!),
           name: req.name,
           description: req.description,
         })

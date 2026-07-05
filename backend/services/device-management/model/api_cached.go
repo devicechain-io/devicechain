@@ -175,6 +175,25 @@ func (capi *CachedApi) CreateEntityRelationship(ctx context.Context,
 	return created, nil
 }
 
+// UpdateDeviceType forwards to the DB then evicts the type's cached metric
+// definitions. Attaching, changing, or detaching the type's profile (ADR-045)
+// changes what the ingest path resolves for this type — the same class of
+// resolution change as a publish/rollback on the profile — so the type's cached
+// def set must be dropped. Bounded further by the cache TTL if eviction fails.
+func (capi *CachedApi) UpdateDeviceType(ctx context.Context, token string,
+	request *DeviceTypeCreateRequest) (*DeviceType, error) {
+	updated, err := capi.Api.UpdateDeviceType(ctx, token, request)
+	if err != nil {
+		return nil, err
+	}
+	if updated != nil {
+		if tenant, ok := core.TenantFromContext(ctx); ok {
+			_ = capi.caches.MetricDefsByType.Delete(ctx, metricDefsByTypeKey(tenant, updated.ID))
+		}
+	}
+	return updated, nil
+}
+
 // metricDefsByTypeKey builds the tenant-scoped cache key for a device type's
 // declared metric definitions, keyed by the device type row id.
 func metricDefsByTypeKey(tenant string, deviceTypeId uint) string {

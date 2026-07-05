@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { Textarea, errMessage } from '@/routes/common';
+import { Textarea, errMessage, typeCountLabel } from '@/routes/common';
 import {
   tokenColumn,
   descriptionColumn,
@@ -131,14 +131,11 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
     { header: 'Category', cell: (p) => p.category || <Dash /> },
     {
       header: 'Used by',
-      cell: (p) =>
-        p.deviceTypeCount === 0 ? (
-          <span className="text-muted-foreground">unused</span>
-        ) : (
-          <span className="tabular-nums">
-            {p.deviceTypeCount} type{p.deviceTypeCount === 1 ? '' : 's'}
-          </span>
-        ),
+      cell: (p) => (
+        <span className={p.deviceTypeCount === 0 ? 'text-muted-foreground' : 'tabular-nums'}>
+          {typeCountLabel(p.deviceTypeCount)}
+        </span>
+      ),
     },
     descriptionColumn<DeviceProfile>(),
     createdColumn<DeviceProfile>(),

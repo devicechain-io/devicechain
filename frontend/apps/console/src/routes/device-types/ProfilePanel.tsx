@@ -9,7 +9,7 @@
 // limited (honest, not an error) — its devices are still classified and shown,
 // but carry no typed capabilities.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, ArrowRight, Plus, SlidersHorizontal, Unlink } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -18,7 +18,7 @@ import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
-import { errMessage, useReload } from '@/routes/common';
+import { errMessage, typeCountLabel, useReload } from '@/routes/common';
 import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
 import {
@@ -28,6 +28,9 @@ import {
   deviceTypePreserved,
   type DeviceType,
 } from '@/lib/api/device-management';
+
+// The attached-profile shape carried on DeviceType.profile ({token,name,category}).
+type AttachedProfile = NonNullable<DeviceType['profile']>;
 
 export function ProfilePanel({
   entity,
@@ -44,13 +47,26 @@ export function ProfilePanel({
   // The picker (and its adopting-type counts) reloads after each change so a
   // freshly created profile appears and shared counts stay accurate.
   const [version, reloadProfiles] = useReload();
-  const { data, loading } = useQuery(
+  const { data, loading, error } = useQuery(
     () => listDeviceProfiles({ pageNumber: 1, pageSize: 1000 }),
     [version],
   );
   const profiles = data?.results ?? [];
 
-  const attached = entity.profile;
+  const [picking, setPicking] = useState(false);
+  const [selected, setSelected] = useState('');
+  const [busy, setBusy] = useState<'attach' | 'detach' | 'create' | null>(null);
+
+  // Optimistic override: on a successful change the attached card / amber notice
+  // would otherwise briefly show the OLD state (which comes from the parent's
+  // entity) while the parent refetches, contradicting the success toast. Hold the
+  // new value here until entity.profile catches up, then drop back to entity.
+  const [override, setOverride] = useState<{ profile: AttachedProfile | null } | null>(null);
+  useEffect(() => {
+    setOverride(null);
+  }, [entity.profile?.token]);
+  const attached = override ? override.profile : (entity.profile ?? null);
+
   // The attached profile's adopting-type count comes from the picker list (which
   // carries deviceTypeCount) rather than DeviceType.profile, so the device-type
   // list page doesn't pay a per-row count query.
@@ -58,47 +74,40 @@ export function ProfilePanel({
     ? profiles.find((p) => p.token === attached.token)?.deviceTypeCount
     : undefined;
 
-  const [picking, setPicking] = useState(false);
-  const [selected, setSelected] = useState('');
-  const [busy, setBusy] = useState<'attach' | 'detach' | 'create' | null>(null);
-
   const options: ComboboxOption[] = profiles
     .filter((p) => p.token !== attached?.token)
     .map((p) => ({
       value: p.token,
       label: p.name ? `${p.name} (${p.token})` : p.token,
-      description: [
-        p.category || null,
-        p.deviceTypeCount === 0
-          ? 'unused'
-          : `used by ${p.deviceTypeCount} type${p.deviceTypeCount === 1 ? '' : 's'}`,
-      ]
-        .filter(Boolean)
-        .join(' · '),
+      description: [p.category || null, typeCountLabel(p.deviceTypeCount)].filter(Boolean).join(' · '),
     }));
+
+  const closePicker = () => {
+    setPicking(false);
+    setSelected('');
+  };
 
   // DeviceType update is full-replace; carry everything forward and override only
   // the profile ref (undefined detaches).
   const setProfile = (profileToken: string | undefined) =>
     updateDeviceType(entity.token, { ...deviceTypePreserved(entity), profileToken });
 
-  const afterChange = () => {
-    reloadProfiles();
-    onChanged();
-  };
-
   const doAttach = async (token: string) => {
     setBusy('attach');
     try {
       await setProfile(token);
       toast(`Attached profile “${token}”`);
-      setPicking(false);
-      setSelected('');
-      afterChange();
+      const picked = profiles.find((p) => p.token === token);
+      setOverride({
+        profile: { token, name: picked?.name ?? null, category: picked?.category ?? null },
+      });
+      closePicker();
+      onChanged();
     } catch (err) {
       toast(errMessage(err), 'error');
     } finally {
       setBusy(null);
+      reloadProfiles();
     }
   };
 
@@ -116,12 +125,14 @@ export function ProfilePanel({
     try {
       await setProfile(undefined);
       toast('Profile detached');
-      setPicking(false);
-      afterChange();
+      setOverride({ profile: null });
+      closePicker();
+      onChanged();
     } catch (err) {
       toast(errMessage(err), 'error');
     } finally {
       setBusy(null);
+      reloadProfiles();
     }
   };
 
@@ -134,12 +145,16 @@ export function ProfilePanel({
       });
       await setProfile(created.token);
       toast(`Created and attached profile “${created.token}”`);
-      setPicking(false);
-      afterChange();
+      setOverride({
+        profile: { token: created.token, name: created.name ?? null, category: created.category ?? null },
+      });
+      closePicker();
+      onChanged();
     } catch (err) {
       toast(errMessage(err), 'error');
     } finally {
       setBusy(null);
+      reloadProfiles();
     }
   };
 
@@ -207,39 +222,42 @@ export function ProfilePanel({
           )}
           {canWrite ? (
             <>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                <div className="flex-1 space-y-1.5">
-                  <label htmlFor="attach-profile" className="text-xs font-medium text-muted-foreground">
-                    Attach an existing profile
-                  </label>
-                  <Combobox
-                    id="attach-profile"
-                    options={options}
-                    value={selected}
-                    onChange={setSelected}
-                    placeholder={loading ? 'Loading profiles…' : 'Select a profile…'}
-                    emptyMessage="No other profiles."
-                    disabled={loading}
-                  />
+              {error && !data ? (
+                <p className="text-sm text-destructive">
+                  Couldn’t load the profiles to choose from. You can still create one below.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <div className="flex-1 space-y-1.5">
+                    <label htmlFor="attach-profile" className="text-xs font-medium text-muted-foreground">
+                      Attach an existing profile
+                    </label>
+                    <Combobox
+                      id="attach-profile"
+                      options={options}
+                      value={selected}
+                      onChange={setSelected}
+                      placeholder={loading ? 'Loading profiles…' : 'Select a profile…'}
+                      emptyMessage="No other profiles."
+                      disabled={loading}
+                    />
+                  </div>
+                  <Button
+                    onClick={() => doAttach(selected)}
+                    disabled={!selected}
+                    loading={busy === 'attach'}
+                  >
+                    Attach
+                  </Button>
                 </div>
-                <Button onClick={() => doAttach(selected)} disabled={!selected} loading={busy === 'attach'}>
-                  Attach
-                </Button>
-              </div>
+              )}
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground">or</span>
                 <Button variant="outline" size="sm" onClick={doCreateForType} loading={busy === 'create'}>
                   <Plus size={14} /> Create a profile for this type
                 </Button>
                 {attached && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setPicking(false);
-                      setSelected('');
-                    }}
-                  >
+                  <Button variant="ghost" size="sm" onClick={closePicker}>
                     Cancel
                   </Button>
                 )}

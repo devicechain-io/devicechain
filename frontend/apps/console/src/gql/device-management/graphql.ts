@@ -766,21 +766,21 @@ export type DeviceTypesQueryVariables = Exact<{
 }>;
 
 
-export type DeviceTypesQuery = { deviceTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, manufacturer: string | null, model: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type DeviceTypesQuery = { deviceTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, manufacturer: string | null, model: string | null, metadata: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type DeviceTypeByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type DeviceTypeByTokenQuery = { deviceTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, manufacturer: string | null, model: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null }> };
+export type DeviceTypeByTokenQuery = { deviceTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, manufacturer: string | null, model: string | null, metadata: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null }> };
 
 export type CreateDeviceTypeMutationVariables = Exact<{
   request?: DeviceTypeCreateRequest | null | undefined;
 }>;
 
 
-export type CreateDeviceTypeMutation = { createDeviceType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, manufacturer: string | null, model: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null } };
+export type CreateDeviceTypeMutation = { createDeviceType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, manufacturer: string | null, model: string | null, metadata: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null } };
 
 export type UpdateDeviceTypeMutationVariables = Exact<{
   token: string;
@@ -788,7 +788,7 @@ export type UpdateDeviceTypeMutationVariables = Exact<{
 }>;
 
 
-export type UpdateDeviceTypeMutation = { updateDeviceType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, manufacturer: string | null, model: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null } };
+export type UpdateDeviceTypeMutation = { updateDeviceType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, manufacturer: string | null, model: string | null, metadata: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null } };
 
 export type DeleteDeviceTypeMutationVariables = Exact<{
   token: string;
@@ -1920,8 +1920,10 @@ export const DeviceTypesDocument = new TypedDocumentString(`
       backgroundColor
       foregroundColor
       borderColor
+      imageUrl
       manufacturer
       model
+      metadata
       profile {
         token
         name
@@ -1948,8 +1950,10 @@ export const DeviceTypeByTokenDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    imageUrl
     manufacturer
     model
+    metadata
     profile {
       token
       name
@@ -1970,8 +1974,10 @@ export const CreateDeviceTypeDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    imageUrl
     manufacturer
     model
+    metadata
     profile {
       token
       name
@@ -1992,8 +1998,10 @@ export const UpdateDeviceTypeDocument = new TypedDocumentString(`
     backgroundColor
     foregroundColor
     borderColor
+    imageUrl
     manufacturer
     model
+    metadata
     profile {
       token
       name

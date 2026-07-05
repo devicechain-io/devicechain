@@ -201,8 +201,10 @@ const DEVICE_TYPES = graphql(`
         backgroundColor
         foregroundColor
         borderColor
+        imageUrl
         manufacturer
         model
+        metadata
         profile {
           token
           name
@@ -245,8 +247,10 @@ const DEVICE_TYPE_BY_TOKEN = graphql(`
       backgroundColor
       foregroundColor
       borderColor
+      imageUrl
       manufacturer
       model
+      metadata
       profile {
         token
         name
@@ -273,8 +277,10 @@ const CREATE_DEVICE_TYPE = graphql(`
       backgroundColor
       foregroundColor
       borderColor
+      imageUrl
       manufacturer
       model
+      metadata
       profile {
         token
         name
@@ -301,8 +307,10 @@ const UPDATE_DEVICE_TYPE = graphql(`
       backgroundColor
       foregroundColor
       borderColor
+      imageUrl
       manufacturer
       model
+      metadata
       profile {
         token
         name
@@ -327,19 +335,30 @@ export async function updateDeviceType(
 // this returns that carry-forward base so the three editors share one field list
 // instead of each maintaining a copy that can drift (the ADR-045 preservation
 // trap). Callers spread it and override only what they change.
+//
+// The `satisfies` guard makes a future field added to DeviceTypeCreateRequest a
+// compile error here until it is carried forward too — the whole point of a single
+// source of truth. Every request field must therefore be listed (the DeviceType
+// selection sets carry them all so this can), so `profileToken` maps from the
+// nested `profile` object.
 export function deviceTypePreserved(dt: DeviceType): DeviceTypeCreateRequest {
+  // Values use `?? null` (not undefined): the generated input fields are
+  // `string | null`, and for a full replace an explicit null and an omitted field
+  // both land as a nil *string server-side.
   return {
     token: dt.token,
-    name: dt.name ?? undefined,
-    description: dt.description ?? undefined,
-    icon: dt.icon ?? undefined,
-    backgroundColor: dt.backgroundColor ?? undefined,
-    foregroundColor: dt.foregroundColor ?? undefined,
-    borderColor: dt.borderColor ?? undefined,
-    profileToken: dt.profile?.token ?? undefined,
-    manufacturer: dt.manufacturer ?? undefined,
-    model: dt.model ?? undefined,
-  };
+    name: dt.name ?? null,
+    description: dt.description ?? null,
+    imageUrl: dt.imageUrl ?? null,
+    icon: dt.icon ?? null,
+    backgroundColor: dt.backgroundColor ?? null,
+    foregroundColor: dt.foregroundColor ?? null,
+    borderColor: dt.borderColor ?? null,
+    profileToken: dt.profile?.token ?? null,
+    manufacturer: dt.manufacturer ?? null,
+    model: dt.model ?? null,
+    metadata: dt.metadata ?? null,
+  } satisfies Required<DeviceTypeCreateRequest>;
 }
 
 const DELETE_DEVICE_TYPE = graphql(`
