@@ -38,6 +38,12 @@ const (
 // Notifier. The A3 ack/nak contract rides on each messaging.Message, so the worker
 // that dispatches an event is the one that acks (success / poison) or naks
 // (transient) it.
+//
+// The pool has no per-alarm partitioning, so transitions for one alarm can be
+// dispatched out of order and (at-least-once) more than once. device-state tolerates
+// this because its merge is idempotent and monotonic on OccurredTime; a Notifier has
+// no such guard by default, so the ordering/idempotency burden is spelled out as the
+// Notifier contract (notifier.go) for the real dispatcher to honor.
 type NotificationProcessor struct {
 	Microservice *core.Microservice
 	Reader       messaging.MessageReader
@@ -185,12 +191,20 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 	}
 
 	// Dispatch to the notifier. A returned error is transient (a channel hiccup):
-	// nak for redelivery until the finite MaxDeliver cap, then give up so a stuck
-	// notification does not loop forever.
+	// nak for redelivery until the finite MaxDeliver cap, then give up.
+	//
+	// TODO(notifications N.C): redelivery here is immediate (no backoff) and the
+	// give-up branch DROPS the notification — there is no dead-letter path, and
+	// ResultFailed's "dead-letter" label (core/metrics.go) is aspirational for this
+	// consumer. That disposition is safe for the current LogNotifier (which never
+	// errors) but must not ship behind a real channel adapter: a critical page lost
+	// to a brief outage defeats the point of the durable consumer. Before N.C, add
+	// NakWithDelay/backoff and a real dead-letter sink (or make the adapter own its
+	// retry/durability). See the Notifier error contract in notifier.go.
 	if err := np.Notifier.Notify(msgctx, event); err != nil {
 		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).Msg("Notification dispatch failed")
 		if msg.NumDelivered >= messaging.MaxDeliver {
-			log.Error().Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).Msg(fmt.Sprintf("Giving up on notification after %d attempts", msg.NumDelivered))
+			log.Error().Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).Msg(fmt.Sprintf("Notification permanently DROPPED after %d failed attempts (no dead-letter path yet)", msg.NumDelivered))
 			msg.Ack()
 			done(core.ResultFailed)
 		} else {

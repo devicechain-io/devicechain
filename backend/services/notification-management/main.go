@@ -66,6 +66,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Durable reader over the cross-tenant alarm-events wildcard (ADR-041). The
 	// durable name is per instance + area, so replicas share one consumer and each
 	// event is delivered to exactly one of them.
+	//
+	// TODO(notifications N.C): NewReader creates the durable with JetStream's default
+	// DeliverAll, so the FIRST time this area is enabled on a running instance the
+	// consumer replays up to streamMaxAge (7d) of retained alarm transitions. Harmless
+	// for the LogNotifier (log noise) but a page-storm of stale alarms once a real
+	// channel adapter lands — enabling notification-management on an existing fleet
+	// would page humans about days-old alarms. Before N.C, give NewReader a
+	// DeliverPolicy(New) option for this consumer (the durable position persists
+	// thereafter, so downtime-safety is kept) or age-guard events in dispatchOne.
+	// Corollary: the stream is LimitsPolicy, so an outage longer than streamMaxAge
+	// drops events the consumer never sees — "briefly down" is safe, a week down is not.
 	aevents, err := nmgr.NewReader(dmconfig.SUBJECT_ALARM_EVENTS)
 	if err != nil {
 		return err

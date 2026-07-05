@@ -36,3 +36,4 @@ type NotificationChannelTypeResolver struct {
 func (r *NotificationChannelTypeResolver) Id() string          { return r.M.Id }
 func (r *NotificationChannelTypeResolver) Label() string       { return r.M.Label }
 func (r *NotificationChannelTypeResolver) Description() string { return r.M.Description }
+func (r *NotificationChannelTypeResolver) Available() bool     { return r.M.Available }

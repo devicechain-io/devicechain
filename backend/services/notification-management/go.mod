@@ -68,6 +68,4 @@ replace github.com/devicechain-io/dc-device-management => ../device-management
 
 replace github.com/devicechain-io/dc-event-sources => ../event-sources
 
-replace github.com/devicechain-io/dc-k8s => ../../k8s
-
 replace github.com/devicechain-io/dc-microservice => ../../core

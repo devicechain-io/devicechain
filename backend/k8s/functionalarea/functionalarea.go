@@ -66,7 +66,7 @@ var catalog = map[FunctionalArea]Manifest{
 	DeviceManagement: {
 		Area:     DeviceManagement,
 		Core:     true,
-		Produces: []string{"resolved-events", "failed-events"},
+		Produces: []string{"resolved-events", "failed-events", "alarm-events"},
 		Consumes: []string{"inbound-events"},
 		SoftDeps: []FunctionalArea{UserManagement, EventSources},
 	},

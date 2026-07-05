@@ -18,11 +18,31 @@ import (
 // to deliver it through. Keeping this an interface lets later slices drop in the
 // policy-driven multi-channel dispatcher without touching the consumer plumbing.
 //
-// A returned error is treated as transient by the processor (the message is naked
-// for redelivery up to the finite MaxDeliver cap), so an implementation should
-// return an error only for a retryable failure (a channel timeout), not for a
-// permanent one (a malformed policy) — the latter should be logged and swallowed so
-// a poison notification does not loop.
+// The delivery contract an implementation MUST honor — the consumer is a durable,
+// worker-pooled JetStream reader, so:
+//
+//   - At-least-once, not exactly-once. Notify may be re-invoked with the same event
+//     after a nak (a returned error) or a crash before ack. A multi-channel Notifier
+//     that returns an error after PARTIAL success (email sent, Slack timed out) gets
+//     the WHOLE event redelivered and will double-send the channel that succeeded —
+//     so per-channel delivery must be idempotent, or per-channel completion tracked,
+//     before returning an error. Prefer per-channel retry inside Notify over leaning
+//     on redelivery (see the error contract below).
+//   - Unordered. A pool of workers dispatches concurrently with no per-alarm
+//     partitioning, so transitions for the same alarm (RAISED then auto-CLEARED) can
+//     arrive out of order, and a redelivered RAISED can land after a later CLEARED.
+//     An implementation that must not e.g. mail "cleared" before "raised" must order
+//     on the event's OccurredTime/RaisedTime itself.
+//   - Bounded execution. Notify runs on a background context (drain-on-shutdown), so
+//     it must bound its own duration; a hung channel call stalls graceful shutdown.
+//
+// Error contract: a returned error is treated as TRANSIENT by the processor and the
+// message is naked for redelivery — but redelivery today has no backoff and a finite
+// MaxDeliver cap, after which the notification is DROPPED (there is no dead-letter
+// path yet). Return an error only for a genuinely retryable failure; log-and-swallow
+// a permanent one (a malformed policy) so a poison notification does not loop. A real
+// channel adapter should own its own retry/backoff/durability rather than rely on
+// processor redelivery for reliability.
 type Notifier interface {
 	Notify(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error
 }
