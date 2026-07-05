@@ -207,13 +207,20 @@ func (api *Api) AlarmDefinitionsByDeviceProfile(ctx context.Context, profileId u
 
 // AlarmDefinitionsByDeviceType is the alarm evaluator's loader (ADR-041): it
 // resolves the type → profile hop (ADR-045) when a measurement arrives and returns
-// the profile's rules; a device whose type has no profile has no rules (empty).
+// the rules of the profile's currently-active PUBLISHED version (decision 4), not
+// the draft — a device is evaluated against published rules, so draft edits are
+// inert until published. A device whose type has no profile, or whose profile is not
+// yet published, has no rules (empty).
 func (api *Api) AlarmDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*AlarmDefinition, error) {
 	profileId, ok, err := api.profileIdForDeviceType(ctx, deviceTypeId)
 	if err != nil || !ok {
 		return []*AlarmDefinition{}, err
 	}
-	return api.AlarmDefinitionsByDeviceProfile(ctx, profileId)
+	snap, err := api.activeProfileSnapshot(ctx, profileId)
+	if err != nil {
+		return nil, err
+	}
+	return snap.Alarms, nil
 }
 
 // validateAlarmKey enforces that an alarm key is present and token-grammar-safe

@@ -161,13 +161,19 @@ func (api *Api) CommandDefinitionsByDeviceProfile(ctx context.Context, profileId
 }
 
 // CommandDefinitionsByDeviceType resolves the type → profile hop (ADR-045) and
-// returns the profile's command vocabulary; empty for a type with no profile.
+// returns the command vocabulary of the profile's currently-active PUBLISHED version
+// (decision 4) — the commands a device actually accepts are the published ones, not
+// the draft. Empty for a type with no profile or a profile not yet published.
 func (api *Api) CommandDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*CommandDefinition, error) {
 	profileId, ok, err := api.profileIdForDeviceType(ctx, deviceTypeId)
 	if err != nil || !ok {
 		return []*CommandDefinition{}, err
 	}
-	return api.CommandDefinitionsByDeviceProfile(ctx, profileId)
+	snap, err := api.activeProfileSnapshot(ctx, profileId)
+	if err != nil {
+		return nil, err
+	}
+	return snap.Commands, nil
 }
 
 // validateCommandKey enforces that a command key is present and token-grammar-safe

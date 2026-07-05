@@ -58,6 +58,16 @@ func (r *DeviceProfileResolver) Metadata() *string {
 	return util.MetadataStr(r.M.Metadata)
 }
 
+// ActiveVersion is the published version a device resolves through this profile
+// (ADR-045 versioning), or null when the profile has never been published.
+func (r *DeviceProfileResolver) ActiveVersion() *int32 {
+	if !r.M.ActiveVersion.Valid {
+		return nil
+	}
+	v := r.M.ActiveVersion.Int32
+	return &v
+}
+
 // The typed capability definitions the profile owns (ADR-045 slice b): metrics
 // (ADR-016), commands (ADR-043), alarm rules (ADR-041).
 

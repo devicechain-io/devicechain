@@ -43,6 +43,13 @@ type DeviceProfile struct {
 	// and unused in v1; present so the future catalog drops in additively.
 	Provenance sql.NullString `gorm:"size:256"`
 
+	// ActiveVersion is the published version (ADR-045 decision 4) a device resolves
+	// through this profile — the currently-live capability set. Null until the
+	// profile is first published: an unpublished profile has no active capability
+	// (its draft definitions are inert), the same limiting case as a type with no
+	// profile. Rollback flips this pointer; publish advances it to the new version.
+	ActiveVersion sql.NullInt32
+
 	// The typed capability definitions the profile owns (ADR-045 slice b): the
 	// inbound metric vocabulary (ADR-016), the outbound command vocabulary
 	// (ADR-043), and the alarm rules (ADR-041). A device resolves these through
