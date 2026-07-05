@@ -79,9 +79,32 @@ type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEnt
     description: String
     category: String
     metadata: String
+    # The published version a device currently resolves through this profile
+    # (ADR-045 versioning); null until the profile is first published — an
+    # unpublished profile's definitions are inert (a device resolves nothing).
+    activeVersion: Int
+    # The profile's DRAFT capability definitions — the editable working copy. A
+    # device resolves the active PUBLISHED version, not these; edits here take
+    # effect only when published.
     metricDefinitions: [MetricDefinition!]!
     commandDefinitions: [CommandDefinition!]!
     alarmDefinitions: [AlarmDefinition!]!
+}
+
+# An immutable published snapshot of a device profile's whole capability set
+# (ADR-045 versioning): its metric, command, and alarm definitions frozen together.
+# The snapshot blob is deliberately omitted here — the list stays light; a device
+# resolves the active version server-side, and rollback re-points it by version.
+type DeviceProfileVersion {
+    # Monotonic per-profile version number.
+    version: Int!
+    # Optional user-supplied label (may embed a semver string; not parsed).
+    label: String
+    description: String
+    # When the version was published (the row's creation time).
+    publishedAt: String!
+    # The identity that published it (username, falling back to email).
+    publishedBy: String
 }
 
 # Represents a typed, unit-bearing metric declared on a device profile (ADR-016/ADR-045).
@@ -1096,6 +1119,8 @@ type Query {
     deviceProfilesByToken(tokens: [String!]!): [DeviceProfile!]!
     # List device profiles that meet criteria.
     deviceProfiles(criteria: DeviceProfileSearchCriteria!): DeviceProfileSearchResults!
+    # List a device profile's published versions, newest first (ADR-045 versioning).
+    deviceProfileVersions(token: String!): [DeviceProfileVersion!]!
     # Find metric definitions by unique id.
     metricDefinitionsById(ids: [ID!]!): [MetricDefinition!]!
     # Find metric definitions by unique token.
@@ -1240,6 +1265,12 @@ type Mutation {
     # it; its owned metric, command, and alarm definitions are cascade-removed.
     # Returns whether a row was deleted.
     deleteDeviceProfile(token: String!): Boolean!
+    # Publish the profile's current draft as a new immutable version and make it the
+    # version devices resolve (ADR-045 versioning). label/description are optional.
+    publishDeviceProfile(token: String!, label: String, description: String): DeviceProfileVersion!
+    # Re-point the profile's active published version at an existing version — a
+    # non-destructive rollback; the draft is untouched. Returns the updated profile.
+    rollbackDeviceProfile(token: String!, version: Int!): DeviceProfile!
     # Create a new metric definition.
     createMetricDefinition(request: MetricDefinitionCreateRequest): MetricDefinition!
     # Update an existing metric definition.

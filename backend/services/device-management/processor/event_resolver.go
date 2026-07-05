@@ -188,6 +188,13 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 		for mxkey, mxvalue := range umsentry.Measurements {
 			rmentry := model.ResolvedMeasurementEntry{Name: mxkey, Value: mxvalue}
 			if def, declared := byKey[mxkey]; declared {
+				// The classifier is the metric definition's id AS OF the profile's
+				// active PUBLISHED version (ADR-045 slice c) — the definitions come
+				// from that version's snapshot, not the live draft. A later draft
+				// edit/delete does not change already-stamped classifiers, and a
+				// classifier can outlive its (hard-deleted) draft row, so any future
+				// classifier→definition hydration must resolve through the version
+				// snapshot, not metricDefinitionsById on the live table.
 				id := uint64(def.ID)
 				rmentry.Classifier = &id
 				if model.MetricDataType(def.DataType) == model.MetricBoolean {

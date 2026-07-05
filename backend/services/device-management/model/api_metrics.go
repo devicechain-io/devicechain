@@ -177,13 +177,20 @@ func (api *Api) MetricDefinitionsByDeviceProfile(ctx context.Context, profileId 
 }
 
 // MetricDefinitionsByDeviceType is the ingest validation path's loader: it resolves
-// the type → profile hop (ADR-045) and returns the profile's metric definitions.
-// A type with no profile has no definitions, so it returns empty — the common
-// untyped/profile-less case the cache is careful to remember.
+// the type → profile hop (ADR-045) and returns the metric definitions of the
+// profile's currently-active PUBLISHED version (decision 4), not the mutable draft —
+// a device sees the capability set that was published, so draft edits are inert
+// until published. A type with no profile, or a profile not yet published, has no
+// definitions, so it returns empty — the common untyped/unpublished case the cache
+// is careful to remember.
 func (api *Api) MetricDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*MetricDefinition, error) {
 	profileId, ok, err := api.profileIdForDeviceType(ctx, deviceTypeId)
 	if err != nil || !ok {
 		return []*MetricDefinition{}, err
 	}
-	return api.MetricDefinitionsByDeviceProfile(ctx, profileId)
+	snap, err := api.activeProfileSnapshot(ctx, profileId)
+	if err != nil {
+		return nil, err
+	}
+	return snap.Metrics, nil
 }

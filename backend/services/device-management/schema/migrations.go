@@ -19,5 +19,6 @@ var (
 		NewAlarmSchema(),
 		NewDeviceProfileSchema(),
 		NewDefinitionsToProfileSchema(),
+		NewProfileVersioningSchema(),
 	}
 )

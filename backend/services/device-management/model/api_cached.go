@@ -205,44 +205,46 @@ func (capi *CachedApi) MetricDefinitionsByDeviceType(ctx context.Context, device
 	return defs, nil
 }
 
-// CreateMetricDefinition forwards to the DB then evicts the affected device type's
-// cached definitions so a newly declared metric is enforced on the next event.
-func (capi *CachedApi) CreateMetricDefinition(ctx context.Context, request *MetricDefinitionCreateRequest) (*MetricDefinition, error) {
-	created, err := capi.Api.CreateMetricDefinition(ctx, request)
+// PublishDeviceProfile forwards to the DB then evicts the cached definitions of
+// every device type adopting the profile: resolution serves the active PUBLISHED
+// version (ADR-045 slice c), so a publish is exactly when the cached set changes and
+// must be dropped (a draft edit does not change resolution, so def create/update no
+// longer evict). Bounded further by the cache TTL if the eviction fan-out fails.
+func (capi *CachedApi) PublishDeviceProfile(ctx context.Context, token string,
+	label, description *string, publishedBy string) (*DeviceProfileVersion, error) {
+	version, err := capi.Api.PublishDeviceProfile(ctx, token, label, description, publishedBy)
 	if err != nil {
 		return nil, err
 	}
-	capi.evictMetricDefs(ctx, created)
-	return created, nil
+	capi.evictProfileResolution(ctx, version.DeviceProfileId)
+	return version, nil
 }
 
-// UpdateMetricDefinition forwards to the DB then evicts the cached definitions of
-// every device type adopting the affected profile so a changed bound/type/enum
-// takes effect on the next event (bounded further by the cache TTL if a def is
-// retargeted to another profile).
-func (capi *CachedApi) UpdateMetricDefinition(ctx context.Context, token string, request *MetricDefinitionCreateRequest) (*MetricDefinition, error) {
-	updated, err := capi.Api.UpdateMetricDefinition(ctx, token, request)
+// RollbackDeviceProfile forwards to the DB then evicts the cached definitions of
+// every device type adopting the profile, since the active version pointer (what
+// resolution reads) just moved.
+func (capi *CachedApi) RollbackDeviceProfile(ctx context.Context, token string, version int32) (*DeviceProfile, error) {
+	profile, err := capi.Api.RollbackDeviceProfile(ctx, token, version)
 	if err != nil {
 		return nil, err
 	}
-	capi.evictMetricDefs(ctx, updated)
-	return updated, nil
+	if profile != nil {
+		capi.evictProfileResolution(ctx, profile.ID)
+	}
+	return profile, nil
 }
 
-// evictMetricDefs drops the cached definitions for a changed metric definition.
-// The ingest cache is keyed by device type (what the hot path has), but a
-// definition now lives on the profile (ADR-045), so eviction fans back out to
-// every device type that adopts the definition's profile. A shared profile is
-// rare and this is off the hot path; the cache TTL bounds any miss.
-func (capi *CachedApi) evictMetricDefs(ctx context.Context, def *MetricDefinition) {
-	if def == nil {
-		return
-	}
+// evictProfileResolution drops the cached definitions of every device type adopting
+// the profile whose active version changed. The ingest cache is keyed by device
+// type (what the hot path has), but versioning lives on the profile (ADR-045), so
+// eviction fans back out across the adopting types. A shared profile is rare and
+// this is off the hot path; the cache TTL bounds any miss.
+func (capi *CachedApi) evictProfileResolution(ctx context.Context, profileId uint) {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
 		return
 	}
-	typeIds, err := capi.Api.deviceTypeIdsForProfile(ctx, def.DeviceProfileId)
+	typeIds, err := capi.Api.deviceTypeIdsForProfile(ctx, profileId)
 	if err != nil {
 		return
 	}

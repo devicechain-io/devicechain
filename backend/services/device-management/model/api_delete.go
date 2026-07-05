@@ -189,6 +189,10 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&AlarmDefinition{}).Error; err != nil {
 			return err
 		}
+		// The profile's published version history (ADR-045 slice c) goes with it.
+		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&DeviceProfileVersion{}).Error; err != nil {
+			return err
+		}
 		return tx.Unscoped().Where("token = ?", token).Delete(&DeviceProfile{}).Error
 	})
 	if err != nil {
