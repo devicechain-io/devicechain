@@ -26,8 +26,8 @@ type DeviceTypeCreateRequest struct {
 	ProfileToken *string
 	// Manufacturer + Model are identity facets (ADR-045 decision 8): they name
 	// the device this type is, and stay correct even when many types share one
-	// profile. Discovery facets, free-text (a curatable suggestion list backs the
-	// authoring UI later).
+	// profile. Discovery facets, free-text; the authoring UI suggests values
+	// already in use (FacetValues), with explicit curation left for later.
 	Manufacturer *string
 	Model        *string
 	Metadata     *string

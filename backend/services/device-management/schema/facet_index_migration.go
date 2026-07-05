@@ -27,14 +27,17 @@ func NewFacetIndexSchema() *gormigrate.Migration {
 			return tx.AutoMigrate(&DeviceType{})
 		},
 		Rollback: func(tx *gorm.DB) error {
+			// Drop by Go FIELD name (not column): gorm's Migrator resolves an index
+			// through the struct's index tags to the same generated name AutoMigrate
+			// created, whereas a bare column string never matches.
 			type DeviceType struct {
 				gorm.Model
-				Manufacturer sql.NullString
-				ModelName    sql.NullString `gorm:"column:model"`
+				Manufacturer sql.NullString `gorm:"size:128;index"`
+				ModelName    sql.NullString `gorm:"column:model;size:128;index"`
 			}
-			for _, col := range []string{"manufacturer", "model"} {
-				if tx.Migrator().HasIndex(&DeviceType{}, col) {
-					if err := tx.Migrator().DropIndex(&DeviceType{}, col); err != nil {
+			for _, field := range []string{"Manufacturer", "ModelName"} {
+				if tx.Migrator().HasIndex(&DeviceType{}, field) {
+					if err := tx.Migrator().DropIndex(&DeviceType{}, field); err != nil {
 						return err
 					}
 				}

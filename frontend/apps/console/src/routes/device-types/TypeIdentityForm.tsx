@@ -28,7 +28,11 @@ export function TypeIdentityForm({ entity, onSaved }: { entity: DeviceType; onSa
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const dirty = manufacturer !== (entity.manufacturer ?? '') || model !== (entity.model ?? '');
+  // Compare trimmed values — submit sends trimmed, so a whitespace-only edit is not
+  // "dirty" and Save stays disabled (it would otherwise re-enable after a no-op save,
+  // since the tab does not remount on the parent reload).
+  const dirty =
+    manufacturer.trim() !== (entity.manufacturer ?? '') || model.trim() !== (entity.model ?? '');
 
   const submit = async () => {
     setFormError(null);
@@ -63,10 +67,11 @@ export function TypeIdentityForm({ entity, onSaved }: { entity: DeviceType; onSa
           value={manufacturer}
           onChange={setManufacturer}
           placeholder="Acme Corp"
+          disabled={!canWrite}
         />
       </FormField>
       <FormField label="Model" htmlFor="dt-model">
-        <SuggestField id="dt-model" facet="MODEL" value={model} onChange={setModel} placeholder="TS-100" />
+        <SuggestField id="dt-model" facet="MODEL" value={model} onChange={setModel} placeholder="TS-100" disabled={!canWrite} />
       </FormField>
       {canWrite && (
         <div className="flex gap-2">

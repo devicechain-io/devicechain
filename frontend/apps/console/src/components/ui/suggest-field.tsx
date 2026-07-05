@@ -18,6 +18,7 @@ export function SuggestField({
   value,
   onChange,
   placeholder,
+  disabled,
 }: {
   id: string;
   /** Which discovery facet's in-use values to suggest. */
@@ -25,6 +26,7 @@ export function SuggestField({
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const listId = `${id}-suggestions`;
@@ -44,13 +46,15 @@ export function SuggestField({
 
   return (
     <>
+      {/* No autoComplete="off": some Firefox versions suppress the datalist dropdown
+          entirely when it is set, which would silently drop the suggestions. */}
       <Input
         id={id}
         list={listId}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        autoComplete="off"
+        disabled={disabled}
       />
       <datalist id={listId}>
         {suggestions.map((s) => (
