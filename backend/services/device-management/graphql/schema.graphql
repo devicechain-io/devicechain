@@ -1350,6 +1350,12 @@ type AlarmEvent {
 # happens — scoped to the subscriber's tenant — from subscribe time onward with no
 # historical backfill (use the alarm queries for current state). Optional filters
 # narrow the feed to one originator, state, severity, or alarm key.
+#
+# Delivery is best-effort (at-most-once): the stored Alarm row is the source of
+# truth, and an event may be dropped (a transient publish failure, or a slow
+# consumer). A client that merges this stream into a live list must reconcile — re-run
+# the alarm queries on reconnect and periodically — so a dropped event can't leave a
+# stale row (e.g. a missed CLEARED showing a ghost active alarm).
 type Subscription {
     # Streams alarm state-change events. When originator is supplied, originatorType
     # is required and the token is resolved to its id once at subscribe time.

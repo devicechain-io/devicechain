@@ -75,6 +75,16 @@ func (r *SchemaResolver) AlarmStream(ctx context.Context, args struct {
 		return nil, core.ErrNoTenant
 	}
 
+	// Reject an unknown state/severity up front rather than accept a filter that can
+	// never match — a silently-empty stream is undebuggable, the same reason the
+	// originator path below surfaces an error instead of yielding nothing.
+	if args.State != nil && !model.AlarmState(*args.State).Valid() {
+		return nil, fmt.Errorf("invalid state %q", *args.State)
+	}
+	if args.Severity != nil && !model.AlarmSeverity(*args.Severity).Valid() {
+		return nil, fmt.Errorf("invalid severity %q", *args.Severity)
+	}
+
 	filter := alarmEventFilter{
 		originatorType: args.OriginatorType,
 		state:          args.State,
@@ -146,18 +156,24 @@ func (r *AlarmEventResolver) OriginatorId() gql.ID { return gql.ID(fmt.Sprint(r.
 
 // OriginatorToken resolves the originator's token on demand — a device lookup by id,
 // since the evaluator raises alarms on devices today. It returns nil when the
-// originator is not a device or no longer exists. Lazy by design: the lookup runs
-// only when the client selects this field, keeping it off the per-event fan-out path.
-func (r *AlarmEventResolver) OriginatorToken() *string {
+// originator is not a device or no longer exists, and surfaces a lookup failure as a
+// field error (rather than an indistinguishable null). Lazy by design: the lookup
+// runs only when the client selects this field, keeping it off the per-event fan-out
+// path. It takes the injected per-event context (graphql-go's per-resolve subCtx),
+// so it inherits that call's timeout and stays tenant-scoped.
+func (r *AlarmEventResolver) OriginatorToken(ctx context.Context) (*string, error) {
 	if r.E.OriginatorType != string(entity.TypeDevice) {
-		return nil
+		return nil, nil
 	}
-	devices, err := r.S.GetApi(r.C).DevicesById(r.C, []uint{r.E.OriginatorId})
-	if err != nil || len(devices) == 0 {
-		return nil
+	devices, err := r.S.GetApi(ctx).DevicesById(ctx, []uint{r.E.OriginatorId})
+	if err != nil {
+		return nil, err
+	}
+	if len(devices) == 0 {
+		return nil, nil
 	}
 	t := devices[0].Token
-	return &t
+	return &t, nil
 }
 
 func (r *AlarmEventResolver) AlarmKey() string { return r.E.AlarmKey }
