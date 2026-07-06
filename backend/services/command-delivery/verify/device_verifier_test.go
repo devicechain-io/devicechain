@@ -83,3 +83,30 @@ func TestDeviceExists_NoTenant(t *testing.T) {
 		t.Fatal("expected an error when no tenant is in context")
 	}
 }
+
+// The load-bearing property: a device-management outage must ERROR (so the caller
+// fails closed and refuses the enqueue), never return exists=false — which would
+// wrongly read a reachable-but-down owner as "device absent".
+func TestDeviceExists_OutageErrorsNotAbsent(t *testing.T) {
+	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: "svc", ExpiresAt: 1 << 40})
+	}))
+	defer mint.Close()
+	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer dm.Close()
+
+	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)}, "shh", "cd", []string{string(auth.DeviceRead)})
+	v := NewDeviceVerifier(client, dm.URL)
+
+	exists, err := v.DeviceExists(core.WithTenant(context.Background(), "A"), "known")
+	if err == nil {
+		t.Fatal("expected an error on a device-management outage (must not read as 'device absent')")
+	}
+	if exists {
+		t.Fatal("outage returned exists=true")
+	}
+}

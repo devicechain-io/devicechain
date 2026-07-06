@@ -106,6 +106,13 @@ func wireDeviceVerifier() {
 		log.Warn().Msg("Service secret not configured — command-delivery will NOT verify device existence before enqueue (W1.1b disabled).")
 		return
 	}
+	// Guard the device-management coordinate too: a config document predating this
+	// feature carries no deviceManagement block, and building http://:0/graphql
+	// would fail every enqueue. Degrade to no-verification (loudly) rather than trap.
+	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) — command-delivery will NOT verify device existence before enqueue (W1.1b disabled).")
+		return
+	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", []string{string(auth.DeviceRead)})
 	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
 	Api.DeviceVerifier = verify.NewDeviceVerifier(client, url)

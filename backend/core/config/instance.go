@@ -98,8 +98,11 @@ type UserManagementConfiguration struct {
 
 // DeviceManagementConfiguration locates the device-management GraphQL endpoint for
 // synchronous cross-service calls (ADR-044 amendment) — e.g. command-delivery
-// verifying a target device exists before enqueue (W1.1b). Only callers that make
-// such a check consume it, so it is defaulted but not required at startup.
+// verifying a target device exists before enqueue (W1.1b). Only that caller
+// consumes it, and only when the service secret is also set, so it is neither
+// required by Validate nor filled by ApplyDefaults; command-delivery guards on it
+// at startup (warn-and-skip if unset). The Helm chart supplies the in-cluster
+// coordinate for a normal deploy.
 type DeviceManagementConfiguration struct {
 	Hostname string
 	Port     uint32
