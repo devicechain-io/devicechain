@@ -28,12 +28,40 @@ import { FormField } from '@/components/ui/form-field';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { EntityPicker, type EntityKind } from './EntityPicker';
 
-// Widgets that carry a datasource (label/image do not).
-const DATA_WIDGETS = new Set<WidgetType>(['latest-card', 'gauge', 'timeseries-chart', 'table']);
+// Widgets that carry a datasource (label/image do not). Alarm widgets carry one too —
+// as SCOPE (which entity's alarms), where "None" means tenant-wide (all alarms).
+const ALARM_WIDGETS = new Set<WidgetType>(['alarm-table', 'alarm-count']);
+const DATA_WIDGETS = new Set<WidgetType>([
+  'latest-card',
+  'gauge',
+  'timeseries-chart',
+  'table',
+  ...ALARM_WIDGETS,
+]);
 
 const KIND_OPTIONS: ComboboxOption[] = [
   { value: 'device', label: 'Device' },
   { value: 'anchor', label: 'Anchor' },
+];
+
+const ALARM_STATE_OPTIONS: ComboboxOption[] = [
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'CLEARED', label: 'Cleared' },
+];
+
+const ALARM_SEVERITY_OPTIONS: ComboboxOption[] = [
+  { value: 'CRITICAL', label: 'Critical' },
+  { value: 'MAJOR', label: 'Major' },
+  { value: 'MINOR', label: 'Minor' },
+  { value: 'WARNING', label: 'Warning' },
+  { value: 'INDETERMINATE', label: 'Indeterminate' },
+];
+
+// Stored as the string 'true'/'false' (absent = any) — the widget maps it back to the
+// boolean acknowledged filter.
+const ALARM_ACK_OPTIONS: ComboboxOption[] = [
+  { value: 'false', label: 'Unacknowledged' },
+  { value: 'true', label: 'Acknowledged' },
 ];
 
 const TARGET_TYPE_OPTIONS: ComboboxOption[] = [
@@ -94,14 +122,22 @@ export function WidgetConfigPanel({
         {DATA_WIDGETS.has(widget.type) && (
           <>
             {/* DatasourceFields edits a device/anchor selector, which is exactly a
-                ConcreteSelector — the workspace re-stores it as a slot. */}
+                ConcreteSelector — the workspace re-stores it as a slot. Alarm widgets
+                use it as scope and don't carry measurement names. */}
             <DatasourceFields
               datasource={datasource}
+              label={ALARM_WIDGETS.has(widget.type) ? 'Scope' : 'Data source'}
+              showMeasurements={!ALARM_WIDGETS.has(widget.type)}
               onChange={(ds) => onDatasource(ds as ConcreteSelector | undefined)}
             />
             {datasource && slotName && (
               <p className="text-xs text-muted-foreground">
                 Bound via slot <span className="font-mono">{slotName}</span>
+              </p>
+            )}
+            {ALARM_WIDGETS.has(widget.type) && !datasource && (
+              <p className="text-xs text-muted-foreground">
+                No scope selected — showing all alarms (tenant-wide).
               </p>
             )}
           </>
@@ -184,6 +220,41 @@ function TypeOptions({
       </>
     );
   }
+  if (widget.type === 'alarm-table' || widget.type === 'alarm-count') {
+    return (
+      <>
+        <FormField label="State" description="Which alarm states to include.">
+          <Combobox
+            options={ALARM_STATE_OPTIONS}
+            value={optString(widget, 'state')}
+            onChange={(v) => setOption('state', v || undefined)}
+            placeholder="Any"
+          />
+        </FormField>
+        <FormField label="Severity" description="Limit to one severity.">
+          <Combobox
+            options={ALARM_SEVERITY_OPTIONS}
+            value={optString(widget, 'severity')}
+            onChange={(v) => setOption('severity', v || undefined)}
+            placeholder="Any"
+          />
+        </FormField>
+        <FormField label="Acknowledged" description="Filter by acknowledgement.">
+          <Combobox
+            options={ALARM_ACK_OPTIONS}
+            value={optString(widget, 'acknowledged')}
+            onChange={(v) => setOption('acknowledged', v || undefined)}
+            placeholder="Any"
+          />
+        </FormField>
+        {widget.type === 'alarm-table' && (
+          <FormField label="Max rows" description="Newest alarms shown before scrolling.">
+            <NumberInput value={optNumber(widget, 'maxRows')} onChange={(v) => setOption('maxRows', v)} />
+          </FormField>
+        )}
+      </>
+    );
+  }
   return null; // chart/table/label/image have no extra options beyond above
 }
 
@@ -198,9 +269,15 @@ const EMPTY_ANCHOR: AnchorSelector = {
 
 function DatasourceFields({
   datasource,
+  label = 'Data source',
+  showMeasurements = true,
   onChange,
 }: {
   datasource: DatasourceSelector | undefined;
+  label?: string;
+  // Alarm widgets scope by entity but carry no measurement names, so they hide the
+  // measurements field.
+  showMeasurements?: boolean;
   onChange: (next: DatasourceSelector | undefined) => void;
 }) {
   // Only device/anchor are offered; a stored reserved kind (devices, slot, …)
@@ -215,22 +292,28 @@ function DatasourceFields({
 
   return (
     <div className="space-y-3 rounded-md border border-border p-3">
-      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Data source</div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
       <FormField label="Kind">
         <Combobox options={KIND_OPTIONS} value={kind} onChange={onKind} placeholder="None" />
       </FormField>
 
-      {datasource?.kind === 'device' && <DeviceFields selector={datasource} onChange={onChange} />}
-      {datasource?.kind === 'anchor' && <AnchorFields selector={datasource} onChange={onChange} />}
+      {datasource?.kind === 'device' && (
+        <DeviceFields selector={datasource} showMeasurements={showMeasurements} onChange={onChange} />
+      )}
+      {datasource?.kind === 'anchor' && (
+        <AnchorFields selector={datasource} showMeasurements={showMeasurements} onChange={onChange} />
+      )}
     </div>
   );
 }
 
 function DeviceFields({
   selector,
+  showMeasurements,
   onChange,
 }: {
   selector: DeviceSelector;
+  showMeasurements: boolean;
   onChange: (next: DatasourceSelector) => void;
 }) {
   return (
@@ -242,21 +325,25 @@ function DeviceFields({
           onChange={(token) => onChange({ ...selector, deviceToken: token })}
         />
       </FormField>
-      <FormField label="Measurements" description="Comma-separated; leave blank for all.">
-        <MeasurementsInput
-          measurements={selector.measurements}
-          onChange={(m) => onChange({ ...selector, measurements: m })}
-        />
-      </FormField>
+      {showMeasurements && (
+        <FormField label="Measurements" description="Comma-separated; leave blank for all.">
+          <MeasurementsInput
+            measurements={selector.measurements}
+            onChange={(m) => onChange({ ...selector, measurements: m })}
+          />
+        </FormField>
+      )}
     </>
   );
 }
 
 function AnchorFields({
   selector,
+  showMeasurements,
   onChange,
 }: {
   selector: AnchorSelector;
+  showMeasurements: boolean;
   onChange: (next: DatasourceSelector) => void;
 }) {
   const setAnchor = (patch: Partial<AnchorTarget>) =>
@@ -288,12 +375,14 @@ function AnchorFields({
           onChange={(token) => setAnchor({ targetToken: token })}
         />
       </FormField>
-      <FormField label="Measurements" description="Comma-separated; leave blank for all.">
-        <MeasurementsInput
-          measurements={selector.measurements}
-          onChange={(m) => onChange({ ...selector, measurements: m })}
-        />
-      </FormField>
+      {showMeasurements && (
+        <FormField label="Measurements" description="Comma-separated; leave blank for all.">
+          <MeasurementsInput
+            measurements={selector.measurements}
+            onChange={(m) => onChange({ ...selector, measurements: m })}
+          />
+        </FormField>
+      )}
     </>
   );
 }

@@ -3,7 +3,13 @@
 
 // React bindings between the imperative DashboardHub / DOM theme and widget state.
 
-import type { WidgetDataSource, DatasourceSelector, MeasurementSample } from '@devicechain/dashboards';
+import type {
+  AlarmRow,
+  AlarmSubscription,
+  DatasourceSelector,
+  MeasurementSample,
+  WidgetDataSource,
+} from '@devicechain/dashboards';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 
 import { resolveChartTheme, type ChartTheme } from './theme';
@@ -13,6 +19,15 @@ export interface MeasurementStreamState {
   latest: Record<string, MeasurementSample>;
   // A rolling, chronological window of recent samples (drives the time chart).
   samples: MeasurementSample[];
+  error: unknown | null;
+}
+
+// The state an alarm widget renders from: the current rows (newest first, capped),
+// the total match count (past the page — drives alarm-count), and load/error flags.
+export interface AlarmStreamState {
+  alarms: AlarmRow[];
+  total: number;
+  loading: boolean;
   error: unknown | null;
 }
 
@@ -84,6 +99,37 @@ export function useMeasurementStream(
       error: live.error,
     };
   }, [initialSamples, live, windowSize]);
+}
+
+const EMPTY_ALARMS: AlarmStreamState = { alarms: [], total: 0, loading: true, error: null };
+
+// useAlarmStream binds an alarm widget's scope+filters through the hub's alarm channel
+// and keeps the latest snapshot. It re-subscribes when the subscription changes
+// (value-compared, so a re-rendered-but-equal object doesn't churn) and tears down on
+// unmount. The hub delivers whole snapshots (query-then-reconcile), so this holds the
+// last one rather than accumulating — the query is the source of truth.
+export function useAlarmStream(
+  hub: WidgetDataSource,
+  subscription: AlarmSubscription,
+): AlarmStreamState {
+  const [state, setState] = useState<AlarmStreamState>(EMPTY_ALARMS);
+
+  // Value-compare the subscription so an unchanged-but-new object reference doesn't
+  // resubscribe every render.
+  const key = JSON.stringify(subscription);
+
+  useEffect(() => {
+    setState(EMPTY_ALARMS); // reset to loading whenever the subscription changes
+    return hub.subscribeAlarms(subscription, {
+      next: (snapshot) =>
+        setState({ alarms: snapshot.alarms, total: snapshot.total, loading: false, error: null }),
+      error: (err) => setState((prev) => ({ ...prev, loading: false, error: err })),
+    });
+    // `subscription` is intentionally read via `key` (value identity), not reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hub, key]);
+
+  return state;
 }
 
 export interface ElementSize {

@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type {
+  AlarmRow,
+  AlarmSnapshot,
+  AlarmStreamSink,
+  AlarmSubscription,
   DashboardHub,
   DatasourceSelector,
   MeasurementSample,
@@ -12,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(cleanup);
 
-import { useMeasurementStream } from './hooks';
+import { useAlarmStream, useMeasurementStream } from './hooks';
 
 function fakeHub() {
   let sink: WidgetStreamSink | null = null;
@@ -103,5 +107,84 @@ describe('useMeasurementStream', () => {
 
     // 2 history + 2 live = 4, capped to the newest 3.
     expect(result.current.samples.map((s) => s.value)).toEqual([2, 3, 4]);
+  });
+});
+
+function fakeAlarmHub() {
+  let sink: AlarmStreamSink | null = null;
+  const unsub = vi.fn();
+  const hub = {
+    // Only the two methods the alarm hook path touches; the measurement one is a no-op.
+    subscribeWidget: () => () => {},
+    subscribeAlarms: (_subscription: AlarmSubscription, s: AlarmStreamSink) => {
+      sink = s;
+      return unsub;
+    },
+  } as unknown as DashboardHub;
+  return {
+    hub,
+    unsub,
+    push: (snapshot: AlarmSnapshot) => act(() => sink?.next(snapshot)),
+    fail: (err: unknown) => act(() => sink?.error?.(err)),
+  };
+}
+
+const alarmSub: AlarmSubscription = { pageSize: 50 };
+
+const alarm = (over: Partial<AlarmRow> = {}): AlarmRow => ({
+  token: 'a-1',
+  originatorType: 'device',
+  originatorToken: 'thermostat-01',
+  alarmKey: 'over-temperature',
+  metricKey: 'temperature',
+  state: 'ACTIVE',
+  acknowledged: false,
+  severity: 'CRITICAL',
+  raisedTime: '2026-07-05T12:00:00Z',
+  clearedTime: null,
+  acknowledgedTime: null,
+  acknowledgedBy: null,
+  lastValue: 87.4,
+  message: null,
+  ...over,
+});
+
+describe('useAlarmStream', () => {
+  it('starts in a loading state before any snapshot arrives', () => {
+    const f = fakeAlarmHub();
+    const { result } = renderHook(() => useAlarmStream(f.hub, alarmSub));
+    expect(result.current.loading).toBe(true);
+    expect(result.current.alarms).toEqual([]);
+    expect(result.current.total).toBe(0);
+  });
+
+  it('holds the latest snapshot and clears loading', () => {
+    const f = fakeAlarmHub();
+    const { result } = renderHook(() => useAlarmStream(f.hub, alarmSub));
+
+    f.push({ alarms: [alarm({ token: 'a-1' }), alarm({ token: 'a-2' })], total: 9 });
+
+    expect(result.current.alarms.map((a) => a.token)).toEqual(['a-1', 'a-2']);
+    expect(result.current.total).toBe(9);
+    expect(result.current.loading).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('records a sink error and stops loading', () => {
+    const f = fakeAlarmHub();
+    const { result } = renderHook(() => useAlarmStream(f.hub, alarmSub));
+
+    const err = new Error('alarms query failed');
+    f.fail(err);
+
+    expect(result.current.error).toBe(err);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('unsubscribes on unmount', () => {
+    const f = fakeAlarmHub();
+    const { unmount } = renderHook(() => useAlarmStream(f.hub, alarmSub));
+    unmount();
+    expect(f.unsub).toHaveBeenCalledTimes(1);
   });
 });

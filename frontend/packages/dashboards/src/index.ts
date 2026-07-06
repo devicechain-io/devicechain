@@ -30,6 +30,7 @@ export type {
   SlotDefinition,
   SlotBinding,
   MeasurementSample,
+  AlarmRow,
 } from './types';
 
 export { effectiveBindings, parseBindingManifest, stripDefaultBindings } from './bindings';
@@ -54,6 +55,9 @@ export {
   type DeviceResolver,
   type WidgetStreamSink,
   type WidgetDataSource,
+  type AlarmSubscription,
+  type AlarmSnapshot,
+  type AlarmStreamSink,
 } from './hub';
 
 export {

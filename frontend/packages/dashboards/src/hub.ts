@@ -10,16 +10,30 @@
 // fan-out ThingsBoard collapses under (#3454). The Hub owns the subscription
 // lifecycle; widgets just hand it a datasource selector and a sink.
 
-import { subscribe, type Area, type SubscriptionSink } from '@devicechain/client';
+import { gql, subscribe, type Area, type SubscriptionSink } from '@devicechain/client';
 
+import {
+  ALARM_STREAM,
+  ALARMS_QUERY,
+  type AlarmSearchCriteriaInput,
+  type AlarmStreamResult,
+} from './internal/alarm-doc';
 import {
   MEASUREMENT_STREAM,
   type MeasurementStreamResult,
   type MeasurementStreamVariables,
 } from './internal/measurement-doc';
-import type { AnchorTarget, DatasourceSelector, MeasurementSample, SlotBinding } from './types';
+import type { AlarmRow, AnchorTarget, DatasourceSelector, MeasurementSample, SlotBinding } from './types';
 
 const EVENT_AREA: Area = 'event-management';
+const DEVICE_AREA: Area = 'device-management';
+
+// Alarm channel cadence. The live stream is a best-effort trigger, so the poll is
+// the correctness backstop (an alarm cleared while the socket was down still
+// converges within one poll); the debounce coalesces a burst of events into one
+// re-query.
+const ALARM_RECONCILE_DEBOUNCE_MS = 800;
+const ALARM_POLL_MS = 30_000;
 
 // DeviceResolver turns the graph references in a dashboard definition into the
 // device tokens event-management keys on (measurementStream(deviceToken:), per
@@ -40,6 +54,38 @@ export interface WidgetStreamSink {
   error?: (err: unknown) => void;
 }
 
+// ── Alarm channel ────────────────────────────────────────────────────────
+//
+// Alarm widgets consume a different surface than telemetry: the raised-alarm rows
+// (ADR-041), read query-then-reconcile. An alarm subscription describes the SCOPE
+// (which entity's alarms) plus the server-side filters, and receives whole snapshots
+// (not incremental events), because the authoritative rows come from the query.
+
+// AlarmSubscription is one alarm widget's interest: its scope selector (undefined =
+// tenant-wide — every alarm the viewer can see) plus filters. `pageSize` bounds the
+// rows returned (an alarm table shows the newest N); the total count reported in a
+// snapshot is independent of it (server totalRecords), so an alarm-count reflects the
+// true match count even past the page.
+export interface AlarmSubscription {
+  datasource?: DatasourceSelector;
+  state?: string;
+  severity?: string;
+  acknowledged?: boolean;
+  pageSize: number;
+}
+
+// A full alarm snapshot: the current rows (newest first, capped to pageSize) and the
+// total number of alarms matching the filter (past the page). One replaces the last.
+export interface AlarmSnapshot {
+  alarms: AlarmRow[];
+  total: number;
+}
+
+export interface AlarmStreamSink {
+  next: (snapshot: AlarmSnapshot) => void;
+  error?: (err: unknown) => void;
+}
+
 export interface DashboardHubConfig {
   resolver: DeviceResolver;
   // The effective slot→entity manifest (slot defaults merged with any host override;
@@ -55,6 +101,11 @@ export interface DashboardHubConfig {
 // not the concrete class, so a host can feed either without widgets knowing which.
 export interface WidgetDataSource {
   subscribeWidget(datasource: DatasourceSelector, sink: WidgetStreamSink): () => void;
+  // Bind an alarm widget's scope+filters to a sink; returns a disposer. Delivers
+  // whole snapshots (query-then-reconcile), not incremental events. Implemented by
+  // both the live hub and the synthetic preview source so alarm widgets render
+  // identically from either.
+  subscribeAlarms(subscription: AlarmSubscription, sink: AlarmStreamSink): () => void;
 }
 
 // One widget's interest in a device stream: the measurement names it wants (an
@@ -74,6 +125,11 @@ export class DashboardHub implements WidgetDataSource {
   private readonly resolver: DeviceResolver;
   // One entry per distinct device token that has at least one subscriber.
   private readonly streams = new Map<string, DeviceStream>();
+  // Live alarm-subscription disposers. The alarm channel isn't ref-counted through
+  // `streams` (it holds a poll/debounce/trigger per subscription, not a shared device
+  // stream), so its disposers are tracked here for disposeAll() to reach — otherwise an
+  // imperative host closing the dashboard would leak every alarm widget's poll + socket.
+  private readonly alarmDisposers = new Set<() => void>();
   // slot name → concrete entity binding. Consulted when a widget's selector is a
   // `slot`. Mutable so the authoring host can rebind live (setBindings).
   private bindings: Record<string, SlotBinding>;
@@ -116,10 +172,146 @@ export class DashboardHub implements WidgetDataSource {
     return dispose;
   }
 
-  // disposeAll tears down every upstream stream (e.g. on dashboard close).
+  // subscribeAlarms binds an alarm widget's scope+filters to a sink and returns a
+  // disposer. Unlike the measurement channel it is NOT multiplexed — alarm widgets are
+  // few, and each carries its own filter — so every subscription opens its own trigger
+  // stream + reconcile poll (sharing one tenant-wide trigger stream across widgets is a
+  // deferred optimization). Query-then-reconcile: an initial query, then the live
+  // ALARM_STREAM debounced into re-queries, plus a poll backstop and a reconnect
+  // re-query. Scope resolution is async (slot/anchor → devices); the disposer is
+  // returned synchronously and cancels a still-pending resolution.
+  subscribeAlarms(subscription: AlarmSubscription, sink: AlarmStreamSink): () => void {
+    let disposed = false;
+    let debounce: ReturnType<typeof setTimeout> | undefined;
+    let poll: ReturnType<typeof setInterval> | undefined;
+    let unsubscribe: (() => void) | undefined;
+    // Monotonic generation: only the newest reconcile's result may be emitted, so a
+    // slow query that resolves after a newer one can't overwrite fresher rows.
+    let generation = 0;
+
+    const dispose = (): void => {
+      disposed = true;
+      if (debounce) clearTimeout(debounce);
+      if (poll) clearInterval(poll);
+      unsubscribe?.();
+      this.alarmDisposers.delete(dispose);
+    };
+    this.alarmDisposers.add(dispose);
+
+    const reconcile = (tokens: string[], tenantWide: boolean): void => {
+      const gen = ++generation;
+      this.queryAlarms(subscription, tokens, tenantWide)
+        .then((snapshot) => {
+          if (!disposed && gen === generation) sink.next(snapshot);
+        })
+        .catch((err) => {
+          if (!disposed && gen === generation) sink.error?.(err);
+        });
+    };
+
+    this.resolveAlarmScope(subscription.datasource)
+      .then((scope) => {
+        if (disposed) return;
+
+        // A scoped widget that resolves to no device (an unbound slot, an empty anchor)
+        // shows an empty state — NOT tenant-wide. Only a widget with no datasource at
+        // all is tenant-wide. Nothing to stream/poll here. Scope is resolved once (like
+        // the measurement channel): a slot rebind rebuilds the hub and re-resolves, but
+        // organic anchor-membership change isn't picked up until the hub is rebuilt —
+        // a deferred enhancement shared with the measurement channel.
+        if (!scope.tenantWide && scope.tokens.length === 0) {
+          sink.next({ alarms: [], total: 0 });
+          return;
+        }
+
+        const trigger = (): void => {
+          if (debounce) clearTimeout(debounce);
+          debounce = setTimeout(() => reconcile(scope.tokens, scope.tenantWide), ALARM_RECONCILE_DEBOUNCE_MS);
+        };
+        // Subscribe unfiltered (server filters resolve once at subscribe time and a
+        // widget's scope may span devices) and treat every event as a reconcile
+        // trigger — the query re-applies the scope+filters. On reconnect, re-query to
+        // catch transitions missed while the socket was down.
+        const adapter: SubscriptionSink<AlarmStreamResult> = {
+          next: () => trigger(),
+          connected: (wasRetry) => {
+            if (wasRetry) reconcile(scope.tokens, scope.tenantWide);
+          },
+        };
+        unsubscribe = subscribe(DEVICE_AREA, ALARM_STREAM, {}, adapter);
+        poll = setInterval(() => reconcile(scope.tokens, scope.tenantWide), ALARM_POLL_MS);
+        reconcile(scope.tokens, scope.tenantWide); // initial load
+      })
+      .catch((err) => {
+        if (!disposed) sink.error?.(err);
+      });
+
+    return dispose;
+  }
+
+  // resolveAlarmScope turns an alarm widget's scope selector into the originator device
+  // tokens to filter on, or tenant-wide when it carries no datasource. Reuses the same
+  // device/anchor/slot resolution the measurement channel does.
+  private async resolveAlarmScope(
+    datasource: DatasourceSelector | undefined,
+  ): Promise<{ tenantWide: boolean; tokens: string[] }> {
+    if (!datasource) return { tenantWide: true, tokens: [] };
+    const groups = await this.resolveDevices(datasource);
+    return { tenantWide: false, tokens: groups.map((g) => g.deviceToken) };
+  }
+
+  // queryAlarms reads the authoritative rows. Tenant-wide is one query; a scoped widget
+  // runs one query per originator device (the alarms query filters a single originator)
+  // and merges — deduped by token, newest first, capped to pageSize; total is the sum of
+  // per-originator match counts.
+  private async queryAlarms(
+    sub: AlarmSubscription,
+    tokens: string[],
+    tenantWide: boolean,
+  ): Promise<AlarmSnapshot> {
+    const base = {
+      pageNumber: 1, // the alarms query paginates 1-based
+      pageSize: sub.pageSize,
+      state: sub.state ?? null,
+      severity: sub.severity ?? null,
+      acknowledged: sub.acknowledged ?? null,
+    } satisfies Partial<AlarmSearchCriteriaInput>;
+
+    if (tenantWide) {
+      const data = await gql(DEVICE_AREA, ALARMS_QUERY, {
+        criteria: { ...base, originatorType: null, originator: null },
+      });
+      return { alarms: data.alarms.results, total: data.alarms.pagination.totalRecords };
+    }
+
+    const pages = await Promise.all(
+      tokens.map((token) =>
+        gql(DEVICE_AREA, ALARMS_QUERY, {
+          criteria: { ...base, originatorType: 'device', originator: token },
+        }),
+      ),
+    );
+    const byToken = new Map<string, AlarmRow>();
+    let total = 0;
+    for (const page of pages) {
+      total += page.alarms.pagination.totalRecords;
+      for (const row of page.alarms.results) byToken.set(row.token, row);
+    }
+    const alarms = [...byToken.values()]
+      .sort((a, b) => (b.raisedTime ?? '').localeCompare(a.raisedTime ?? ''))
+      .slice(0, sub.pageSize);
+    return { alarms, total };
+  }
+
+  // disposeAll tears down every upstream stream (e.g. on dashboard close): the
+  // ref-counted measurement device streams AND every alarm subscription's poll +
+  // trigger. Iterate a copy of the alarm disposers since each removes itself from the
+  // set as it runs.
   disposeAll(): void {
     for (const stream of this.streams.values()) stream.unsubscribe();
     this.streams.clear();
+    for (const dispose of [...this.alarmDisposers]) dispose();
+    this.alarmDisposers.clear();
   }
 
   // The number of distinct upstream device streams currently open (observability
