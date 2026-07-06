@@ -237,13 +237,13 @@ func (suite *EventResolverTestSuite) TestMeasurementUndeclaredUnclassified() {
 }
 
 // A tracked relationship builds a device with ID 1 as source and the given target.
-func trackedRel(id uint, targetType string, targetId uint) dmodel.EntityRelationship {
+func trackedRel(id uint, targetType string, targetToken string) dmodel.EntityRelationship {
 	return dmodel.EntityRelationship{
-		Model:      gorm.Model{ID: id},
-		SourceType: "device",
-		SourceId:   1,
-		TargetType: targetType,
-		TargetId:   targetId,
+		Model:       gorm.Model{ID: id},
+		SourceType:  "device",
+		SourceId:    1,
+		TargetType:  targetType,
+		TargetToken: targetToken,
 	}
 }
 
@@ -268,7 +268,7 @@ func (suite *EventResolverTestSuite) TestSingleAssignmentAnchored() {
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	suite.API.Mock.On("EntityRelationships").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
-			trackedRel(7, "customer", 3),
+			trackedRel(7, "customer", "cust-3"),
 		}}, nil)
 
 	results, _, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
@@ -277,7 +277,7 @@ func (suite *EventResolverTestSuite) TestSingleAssignmentAnchored() {
 	assert.NoError(suite.T(), err)
 	assert.Len(suite.T(), results, 1)
 	assert.Equal(suite.T(), []dmodel.ResolvedAnchor{
-		{AnchorType: "customer", AnchorId: 3, RelationshipId: 7},
+		{AnchorType: "customer", AnchorToken: "cust-3", RelationshipId: 7},
 	}, results[0].Resolved.Anchors)
 }
 
@@ -287,9 +287,9 @@ func (suite *EventResolverTestSuite) TestMultipleAssignmentsAllAnchored() {
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	suite.API.Mock.On("EntityRelationships").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
-			trackedRel(5, "area", 9),
-			trackedRel(2, "customer", 3),
-			trackedRel(8, "asset", 1),
+			trackedRel(5, "area", "area-9"),
+			trackedRel(2, "customer", "cust-3"),
+			trackedRel(8, "asset", "asset-1"),
 		}}, nil)
 
 	results, _, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
@@ -298,9 +298,9 @@ func (suite *EventResolverTestSuite) TestMultipleAssignmentsAllAnchored() {
 	assert.NoError(suite.T(), err)
 	assert.Len(suite.T(), results, 1)
 	assert.ElementsMatch(suite.T(), []dmodel.ResolvedAnchor{
-		{AnchorType: "area", AnchorId: 9, RelationshipId: 5},
-		{AnchorType: "customer", AnchorId: 3, RelationshipId: 2},
-		{AnchorType: "asset", AnchorId: 1, RelationshipId: 8},
+		{AnchorType: "area", AnchorToken: "area-9", RelationshipId: 5},
+		{AnchorType: "customer", AnchorToken: "cust-3", RelationshipId: 2},
+		{AnchorType: "asset", AnchorToken: "asset-1", RelationshipId: 8},
 	}, results[0].Resolved.Anchors)
 }
 

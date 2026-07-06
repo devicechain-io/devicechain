@@ -157,6 +157,7 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 				SourceId:           sourceId,
 				TargetType:         request.TargetType,
 				TargetId:           targetId,
+				TargetToken:        request.Target,
 				RelationshipTypeId: rt.ID,
 			}
 			if err := tx.Create(edge).Error; err != nil {

@@ -38,8 +38,8 @@ func (r *DeviceStateResolver) DeletedAt() *string {
 	return util.FormatTime(r.M.DeletedAt.Time)
 }
 
-func (r *DeviceStateResolver) DeviceId() int32 {
-	return int32(r.M.DeviceId)
+func (r *DeviceStateResolver) DeviceToken() string {
+	return r.M.DeviceToken
 }
 
 func (r *DeviceStateResolver) Active() bool {
@@ -104,8 +104,8 @@ func (r *LatestMeasurementResolver) DeletedAt() *string {
 	return util.FormatTime(r.M.DeletedAt.Time)
 }
 
-func (r *LatestMeasurementResolver) DeviceId() int32 {
-	return int32(r.M.DeviceId)
+func (r *LatestMeasurementResolver) DeviceToken() string {
+	return r.M.DeviceToken
 }
 
 func (r *LatestMeasurementResolver) Name() string {

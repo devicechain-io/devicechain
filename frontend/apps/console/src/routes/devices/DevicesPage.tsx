@@ -57,11 +57,11 @@ export default function DevicesPage() {
   );
 
   const results = data?.results ?? [];
-  const ids = results.map((d) => Number(d.id));
+  const tokens = results.map((d) => d.token);
   // Status is best-effort and loaded separately: if state:read is missing or no
   // state exists yet, this query just yields nothing and the list is unaffected.
-  const { data: states } = useQuery(() => getDeviceStates(ids), [ids.join(',')]);
-  const activeById = new Map((states ?? []).map((s) => [s.deviceId, s.active]));
+  const { data: states } = useQuery(() => getDeviceStates(tokens), [tokens.join(',')]);
+  const activeByToken = new Map((states ?? []).map((s) => [s.deviceToken, s.active]));
 
   return (
     <PageShell
@@ -107,7 +107,7 @@ export default function DevicesPage() {
                   {...rowLinkProps(() => navigate(`/devices/${encodeURIComponent(device.token)}`))}
                 >
                   <DataTableCell>
-                    <StatusDot active={activeById.get(Number(device.id))} />
+                    <StatusDot active={activeByToken.get(device.token)} />
                   </DataTableCell>
                   <DataTableCell>
                     <span className="font-mono text-xs text-foreground">{device.token}</span>

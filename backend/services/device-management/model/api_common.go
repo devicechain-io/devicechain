@@ -113,6 +113,7 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 		SourceId:           sourceId,
 		TargetType:         request.TargetType,
 		TargetId:           targetId,
+		TargetToken:        request.Target,
 		RelationshipTypeId: rtmatches[0].ID,
 	}
 	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {

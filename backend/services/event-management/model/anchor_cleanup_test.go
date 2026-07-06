@@ -22,9 +22,9 @@ func TestDeleteAnchorsForEntity(t *testing.T) {
 	occurred := time.Date(2026, 7, 6, 20, 0, 0, 0, time.UTC)
 
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
-		{DeviceId: 4, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorId: 3},
-		{DeviceId: 4, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorId: 9},
-		{DeviceId: 7, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorId: 3},
+		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
+		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
+		{DeviceToken: "device-7", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -37,19 +37,19 @@ func TestDeleteAnchorsForEntity(t *testing.T) {
 
 	// Deleting a DEVICE removes every anchor it sourced (its two rows), leaving
 	// device 7's anchor untouched.
-	n, err := api.DeleteAnchorsForEntity(ctx, "device", 4)
+	n, err := api.DeleteAnchorsForEntity(ctx, "device", "device-4")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), n)
 	assert.Equal(t, int64(1), count())
 
 	// Deleting a CUSTOMER removes rows targeting it — device 7's remaining anchor.
-	n, err = api.DeleteAnchorsForEntity(ctx, "customer", 3)
+	n, err = api.DeleteAnchorsForEntity(ctx, "customer", "cust-3")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), n)
 	assert.Equal(t, int64(0), count())
 
 	// Idempotent: deleting an already-absent entity removes nothing, no error.
-	n, err = api.DeleteAnchorsForEntity(ctx, "device", 4)
+	n, err = api.DeleteAnchorsForEntity(ctx, "device", "device-4")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), n)
 }
@@ -65,18 +65,18 @@ func TestDeleteAnchorsForEntity_DeviceAsTarget(t *testing.T) {
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
 		// Device 7 (a gateway) tracks device 4 (a sensor): device 7's events anchor
 		// to device 4 as a target.
-		{DeviceId: 7, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "device", AnchorId: 4},
+		{DeviceToken: "device-7", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "device", AnchorToken: "device-4"},
 		// Device 4's own event anchored to its customer.
-		{DeviceId: 4, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorId: 3},
+		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
 		// An unrelated device's anchor that must survive.
-		{DeviceId: 9, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorId: 3},
+		{DeviceToken: "device-9", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	// Deleting device 4 must remove BOTH its source row (device_id=4) and the row
 	// where it is device 7's target (anchor device=4) — two rows.
-	n, err := api.DeleteAnchorsForEntity(ctx, "device", 4)
+	n, err := api.DeleteAnchorsForEntity(ctx, "device", "device-4")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), n)
 
@@ -90,13 +90,13 @@ func TestDeleteAnchorsForEntity_TenantScoped(t *testing.T) {
 	api := newPersistenceTestApi(t)
 	acme := core.WithTenant(context.Background(), "acme")
 	if err := api.CreateEventAnchors(acme, api.RDB.DB(acme), []*EventAnchor{
-		{DeviceId: 4, EventType: esmodel.Measurement, OccurredTime: time.Now().UTC(), AnchorType: "customer", AnchorId: 3},
+		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: time.Now().UTC(), AnchorType: "customer", AnchorToken: "cust-3"},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	other := core.WithTenant(context.Background(), "other")
-	n, err := api.DeleteAnchorsForEntity(other, "device", 4)
+	n, err := api.DeleteAnchorsForEntity(other, "device", "device-4")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), n, "must not delete another tenant's anchors")
 

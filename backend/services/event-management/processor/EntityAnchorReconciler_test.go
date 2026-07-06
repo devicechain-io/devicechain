@@ -33,17 +33,17 @@ func deletedMsg(t *testing.T, subject string, event *dmodel.EntityDeletedEvent, 
 
 const reconcilerSubject = "instance1.acme.entity-deleted"
 
-// A device deletion cleans anchors by device_id and acks.
+// A device deletion cleans anchors by device token and acks.
 func TestReconciler_DeletesAndAcks(t *testing.T) {
 	api := new(emtest.MockApi)
-	api.Mock.On("DeleteAnchorsForEntity", "device", uint(4)).Return(2, nil)
+	api.Mock.On("DeleteAnchorsForEntity", "device", "dev-4").Return(2, nil)
 	r := &EntityAnchorReconciler{Api: api}
 	ack := &stubAck{}
 
 	r.handle(context.Background(), deletedMsg(t, reconcilerSubject,
 		&dmodel.EntityDeletedEvent{EntityType: entity.TypeDevice, EntityId: 4, EntityToken: "dev-4", DeletedTime: time.Now().UTC()}, 1, ack))
 
-	api.Mock.AssertCalled(t, "DeleteAnchorsForEntity", "device", uint(4))
+	api.Mock.AssertCalled(t, "DeleteAnchorsForEntity", "device", "dev-4")
 	assert.Equal(t, 1, ack.acked)
 	assert.Equal(t, 0, ack.naked)
 }
@@ -77,12 +77,12 @@ func TestReconciler_NoTenantDropped(t *testing.T) {
 // A transient DB error naks for redelivery while below the poison ceiling.
 func TestReconciler_TransientErrorNaks(t *testing.T) {
 	api := new(emtest.MockApi)
-	api.Mock.On("DeleteAnchorsForEntity", "customer", uint(3)).Return(0, errors.New("db down"))
+	api.Mock.On("DeleteAnchorsForEntity", "customer", "cust-3").Return(0, errors.New("db down"))
 	r := &EntityAnchorReconciler{Api: api}
 	ack := &stubAck{}
 
 	r.handle(context.Background(), deletedMsg(t, reconcilerSubject,
-		&dmodel.EntityDeletedEvent{EntityType: entity.TypeCustomer, EntityId: 3, EntityToken: "acme", DeletedTime: time.Now().UTC()}, 1, ack))
+		&dmodel.EntityDeletedEvent{EntityType: entity.TypeCustomer, EntityId: 3, EntityToken: "cust-3", DeletedTime: time.Now().UTC()}, 1, ack))
 
 	assert.Equal(t, 1, ack.naked)
 	assert.Equal(t, 0, ack.acked)
@@ -92,12 +92,12 @@ func TestReconciler_TransientErrorNaks(t *testing.T) {
 // than naked forever.
 func TestReconciler_PoisonCeilingDrops(t *testing.T) {
 	api := new(emtest.MockApi)
-	api.Mock.On("DeleteAnchorsForEntity", "customer", uint(3)).Return(0, errors.New("db down"))
+	api.Mock.On("DeleteAnchorsForEntity", "customer", "cust-3").Return(0, errors.New("db down"))
 	r := &EntityAnchorReconciler{Api: api}
 	ack := &stubAck{}
 
 	r.handle(context.Background(), deletedMsg(t, reconcilerSubject,
-		&dmodel.EntityDeletedEvent{EntityType: entity.TypeCustomer, EntityId: 3, DeletedTime: time.Now().UTC()}, messaging.MaxDeliver, ack))
+		&dmodel.EntityDeletedEvent{EntityType: entity.TypeCustomer, EntityId: 3, EntityToken: "cust-3", DeletedTime: time.Now().UTC()}, messaging.MaxDeliver, ack))
 
 	assert.Equal(t, 1, ack.acked)
 	assert.Equal(t, 0, ack.naked)

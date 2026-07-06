@@ -190,7 +190,7 @@ func (ep *EventPersistenceWorker) PersistAlertEvents(ctx context.Context, db *go
 // so the same reading is queryable by each of the device's assignment dimensions.
 func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmodel.ResolvedEvent) (*EventPersistenceResults, error) {
 	pevent := model.Event{
-		DeviceId:      event.SourceDeviceId,
+		DeviceToken:   event.SourceDeviceToken,
 		OccurredTime:  event.OccurredTime,
 		Source:        event.Source,
 		AltId:         rdb.NullStrOf(event.AltId),
@@ -270,11 +270,11 @@ func (ep *EventPersistenceWorker) persistEventAnchors(ctx context.Context, db *g
 	anchors := make([]*model.EventAnchor, 0, len(event.Anchors))
 	for _, a := range event.Anchors {
 		anchors = append(anchors, &model.EventAnchor{
-			DeviceId:     event.SourceDeviceId,
+			DeviceToken:  event.SourceDeviceToken,
 			EventType:    event.EventType,
 			OccurredTime: event.OccurredTime,
 			AnchorType:   a.AnchorType,
-			AnchorId:     a.AnchorId,
+			AnchorToken:  a.AnchorToken,
 		})
 	}
 	return ep.Api.CreateEventAnchors(ctx, db, anchors)

@@ -22,8 +22,8 @@ func NewInitialSchema() *gormigrate.Migration {
 			type DeviceState struct {
 				gorm.Model
 				rdb.TenantScoped
-				DeviceId            uint `gorm:"uniqueIndex;not null"`
-				Active              bool `gorm:"not null;default:false"`
+				DeviceToken         string `gorm:"uniqueIndex;not null;type:varchar(128)"`
+				Active              bool   `gorm:"not null;default:false"`
 				LastConnectTime     sql.NullTime
 				LastDisconnectTime  sql.NullTime
 				LastActivityTime    sql.NullTime

@@ -240,7 +240,7 @@ func (api *MockApi) ClearAlarm(ctx context.Context, token string) (*model.Alarm,
 	return args.Get(0).(*model.Alarm), args.Error(1)
 }
 
-func (api *MockApi) EvaluateMeasurementAlarms(ctx context.Context, deviceId uint, payload *model.ResolvedMeasurementsPayload, occurredTime time.Time) error {
+func (api *MockApi) EvaluateMeasurementAlarms(ctx context.Context, deviceToken string, payload *model.ResolvedMeasurementsPayload, occurredTime time.Time) error {
 	args := api.Mock.Called()
 	return args.Error(0)
 }

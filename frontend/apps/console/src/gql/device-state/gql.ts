@@ -15,22 +15,22 @@ import * as types from './graphql';
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
-    "\n  query DeviceStatesByDeviceId($deviceIds: [Int!]!) {\n    deviceStatesByDeviceId(deviceIds: $deviceIds) {\n      id\n      deviceId\n      active\n      lastConnectTime\n      lastDisconnectTime\n      lastActivityTime\n      inactivityTimeout\n    }\n  }\n": typeof types.DeviceStatesByDeviceIdDocument,
-    "\n  query LatestMeasurements($deviceId: Int!) {\n    latestMeasurements(deviceId: $deviceId) {\n      id\n      name\n      value\n      occurredTime\n    }\n  }\n": typeof types.LatestMeasurementsDocument,
+    "\n  query DeviceStatesByDeviceToken($deviceTokens: [String!]!) {\n    deviceStatesByDeviceToken(deviceTokens: $deviceTokens) {\n      id\n      deviceToken\n      active\n      lastConnectTime\n      lastDisconnectTime\n      lastActivityTime\n      inactivityTimeout\n    }\n  }\n": typeof types.DeviceStatesByDeviceTokenDocument,
+    "\n  query LatestMeasurements($deviceToken: String!) {\n    latestMeasurements(deviceToken: $deviceToken) {\n      id\n      name\n      value\n      occurredTime\n    }\n  }\n": typeof types.LatestMeasurementsDocument,
 };
 const documents: Documents = {
-    "\n  query DeviceStatesByDeviceId($deviceIds: [Int!]!) {\n    deviceStatesByDeviceId(deviceIds: $deviceIds) {\n      id\n      deviceId\n      active\n      lastConnectTime\n      lastDisconnectTime\n      lastActivityTime\n      inactivityTimeout\n    }\n  }\n": types.DeviceStatesByDeviceIdDocument,
-    "\n  query LatestMeasurements($deviceId: Int!) {\n    latestMeasurements(deviceId: $deviceId) {\n      id\n      name\n      value\n      occurredTime\n    }\n  }\n": types.LatestMeasurementsDocument,
+    "\n  query DeviceStatesByDeviceToken($deviceTokens: [String!]!) {\n    deviceStatesByDeviceToken(deviceTokens: $deviceTokens) {\n      id\n      deviceToken\n      active\n      lastConnectTime\n      lastDisconnectTime\n      lastActivityTime\n      inactivityTimeout\n    }\n  }\n": types.DeviceStatesByDeviceTokenDocument,
+    "\n  query LatestMeasurements($deviceToken: String!) {\n    latestMeasurements(deviceToken: $deviceToken) {\n      id\n      name\n      value\n      occurredTime\n    }\n  }\n": types.LatestMeasurementsDocument,
 };
 
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query DeviceStatesByDeviceId($deviceIds: [Int!]!) {\n    deviceStatesByDeviceId(deviceIds: $deviceIds) {\n      id\n      deviceId\n      active\n      lastConnectTime\n      lastDisconnectTime\n      lastActivityTime\n      inactivityTimeout\n    }\n  }\n"): typeof import('./graphql').DeviceStatesByDeviceIdDocument;
+export function graphql(source: "\n  query DeviceStatesByDeviceToken($deviceTokens: [String!]!) {\n    deviceStatesByDeviceToken(deviceTokens: $deviceTokens) {\n      id\n      deviceToken\n      active\n      lastConnectTime\n      lastDisconnectTime\n      lastActivityTime\n      inactivityTimeout\n    }\n  }\n"): typeof import('./graphql').DeviceStatesByDeviceTokenDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query LatestMeasurements($deviceId: Int!) {\n    latestMeasurements(deviceId: $deviceId) {\n      id\n      name\n      value\n      occurredTime\n    }\n  }\n"): typeof import('./graphql').LatestMeasurementsDocument;
+export function graphql(source: "\n  query LatestMeasurements($deviceToken: String!) {\n    latestMeasurements(deviceToken: $deviceToken) {\n      id\n      name\n      value\n      occurredTime\n    }\n  }\n"): typeof import('./graphql').LatestMeasurementsDocument;
 
 
 export function graphql(source: string) {

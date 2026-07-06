@@ -6,7 +6,6 @@ package graphql
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"strconv"
 
 	dmconfig "github.com/devicechain-io/dc-device-management/config"
@@ -27,8 +26,8 @@ import (
 // unsubscribes or disconnects (ctx cancelled). Named distinctly from the
 // measurementEvents query because both resolve off the one root resolver.
 func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
-	DeviceId *string
-	Name     *string
+	DeviceToken *string
+	Name        *string
 }) (<-chan *MeasurementEventResolver, error) {
 	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
 		return nil, err
@@ -55,7 +54,7 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 			if resolved.EventType != esmodel.Measurement {
 				continue
 			}
-			if args.DeviceId != nil && fmt.Sprint(resolved.SourceDeviceId) != *args.DeviceId {
+			if args.DeviceToken != nil && resolved.SourceDeviceToken != *args.DeviceToken {
 				continue
 			}
 			payload, ok := resolved.Payload.(*dmmodel.ResolvedMeasurementsPayload)
@@ -85,7 +84,7 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 // the DB round trip), so a streamed event resolves identically to a queried one.
 func measurementFromResolved(e *dmmodel.ResolvedEvent, mx dmmodel.ResolvedMeasurementEntry) model.MeasurementEvent {
 	me := model.MeasurementEvent{
-		DeviceId:     e.SourceDeviceId,
+		DeviceToken:  e.SourceDeviceToken,
 		EventType:    e.EventType,
 		OccurredTime: e.OccurredTime,
 		Name:         mx.Name,

@@ -47,7 +47,7 @@ func parseFiniteFloat(s string) (float64, bool) {
 // occurredTime is the measurement's event time and is stamped as the alarm's
 // raised/cleared time so the alarm timeline reflects when the condition changed, not
 // when it was processed.
-func (api *Api) EvaluateMeasurementAlarms(ctx context.Context, deviceId uint,
+func (api *Api) EvaluateMeasurementAlarms(ctx context.Context, deviceToken string,
 	payload *ResolvedMeasurementsPayload, occurredTime time.Time) error {
 	if payload == nil {
 		return nil
@@ -68,13 +68,19 @@ func (api *Api) EvaluateMeasurementAlarms(ctx context.Context, deviceId uint,
 		return nil
 	}
 
-	devices, err := api.DevicesById(ctx, []uint{deviceId})
+	// Resolve the source device by its token (ADR-044): the wire carries the token,
+	// not the row id. DevicesByToken is the cached lookup the resolver just populated,
+	// so this is a cache hit on the hot path. The numeric id drives every id-keyed
+	// internal below (alarm originator, threshold attributes) — those stay device-
+	// management-local references.
+	devices, err := api.DevicesByToken(ctx, []string{deviceToken})
 	if err != nil {
 		return err
 	}
 	if len(devices) == 0 {
 		return nil
 	}
+	deviceId := devices[0].ID
 	deviceTypeId := devices[0].DeviceTypeId
 
 	defs, err := api.AlarmDefinitionsByDeviceType(ctx, deviceTypeId)

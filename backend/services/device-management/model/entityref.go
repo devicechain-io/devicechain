@@ -18,17 +18,19 @@ import (
 // loading an entity by id on read (typed loader for the GraphQL Entity
 // interface). Adding a new entity type is a single entry here — no schema change.
 type entityLoader struct {
-	resolveToken func(ctx context.Context, api *Api, token string) (uint, error)
-	loadById     func(ctx context.Context, api *Api, id uint) (interface{}, error)
-	existingIds  func(ctx context.Context, api *Api, ids []uint) ([]uint, error)
+	resolveToken   func(ctx context.Context, api *Api, token string) (uint, error)
+	loadById       func(ctx context.Context, api *Api, id uint) (interface{}, error)
+	existingIds    func(ctx context.Context, api *Api, ids []uint) ([]uint, error)
+	existingTokens func(ctx context.Context, api *Api, tokens []string) ([]string, error)
 }
 
 // loaderFor builds an entityLoader from a type's by-token and by-id accessors and
-// an id extractor, so each registry entry is a single line.
+// an id/token extractor, so each registry entry is a single line.
 func loaderFor[T any](
 	byToken func(*Api, context.Context, []string) ([]*T, error),
 	byId func(*Api, context.Context, []uint) ([]*T, error),
 	idOf func(*T) uint,
+	tokenOf func(*T) string,
 ) entityLoader {
 	return entityLoader{
 		resolveToken: func(ctx context.Context, api *Api, token string) (uint, error) {
@@ -65,19 +67,33 @@ func loaderFor[T any](
 			}
 			return existing, nil
 		},
+		existingTokens: func(ctx context.Context, api *Api, tokens []string) ([]string, error) {
+			if len(tokens) == 0 {
+				return []string{}, nil
+			}
+			matches, err := byToken(api, ctx, tokens)
+			if err != nil {
+				return nil, err
+			}
+			existing := make([]string, 0, len(matches))
+			for _, m := range matches {
+				existing = append(existing, tokenOf(m))
+			}
+			return existing, nil
+		},
 	}
 }
 
 // entityLoaders maps each entity type to its loader (ADR-013).
 var entityLoaders = map[entity.Type]entityLoader{
-	entity.TypeDevice:        loaderFor((*Api).DevicesByToken, (*Api).DevicesById, func(m *Device) uint { return m.ID }),
-	entity.TypeDeviceGroup:   loaderFor((*Api).DeviceGroupsByToken, (*Api).DeviceGroupsById, func(m *DeviceGroup) uint { return m.ID }),
-	entity.TypeAsset:         loaderFor((*Api).AssetsByToken, (*Api).AssetsById, func(m *Asset) uint { return m.ID }),
-	entity.TypeAssetGroup:    loaderFor((*Api).AssetGroupsByToken, (*Api).AssetGroupsById, func(m *AssetGroup) uint { return m.ID }),
-	entity.TypeArea:          loaderFor((*Api).AreasByToken, (*Api).AreasById, func(m *Area) uint { return m.ID }),
-	entity.TypeAreaGroup:     loaderFor((*Api).AreaGroupsByToken, (*Api).AreaGroupsById, func(m *AreaGroup) uint { return m.ID }),
-	entity.TypeCustomer:      loaderFor((*Api).CustomersByToken, (*Api).CustomersById, func(m *Customer) uint { return m.ID }),
-	entity.TypeCustomerGroup: loaderFor((*Api).CustomerGroupsByToken, (*Api).CustomerGroupsById, func(m *CustomerGroup) uint { return m.ID }),
+	entity.TypeDevice:        loaderFor((*Api).DevicesByToken, (*Api).DevicesById, func(m *Device) uint { return m.ID }, func(m *Device) string { return m.Token }),
+	entity.TypeDeviceGroup:   loaderFor((*Api).DeviceGroupsByToken, (*Api).DeviceGroupsById, func(m *DeviceGroup) uint { return m.ID }, func(m *DeviceGroup) string { return m.Token }),
+	entity.TypeAsset:         loaderFor((*Api).AssetsByToken, (*Api).AssetsById, func(m *Asset) uint { return m.ID }, func(m *Asset) string { return m.Token }),
+	entity.TypeAssetGroup:    loaderFor((*Api).AssetGroupsByToken, (*Api).AssetGroupsById, func(m *AssetGroup) uint { return m.ID }, func(m *AssetGroup) string { return m.Token }),
+	entity.TypeArea:          loaderFor((*Api).AreasByToken, (*Api).AreasById, func(m *Area) uint { return m.ID }, func(m *Area) string { return m.Token }),
+	entity.TypeAreaGroup:     loaderFor((*Api).AreaGroupsByToken, (*Api).AreaGroupsById, func(m *AreaGroup) uint { return m.ID }, func(m *AreaGroup) string { return m.Token }),
+	entity.TypeCustomer:      loaderFor((*Api).CustomersByToken, (*Api).CustomersById, func(m *Customer) uint { return m.ID }, func(m *Customer) string { return m.Token }),
+	entity.TypeCustomerGroup: loaderFor((*Api).CustomerGroupsByToken, (*Api).CustomerGroupsById, func(m *CustomerGroup) uint { return m.ID }, func(m *CustomerGroup) string { return m.Token }),
 }
 
 // ResolveEntityToken resolves an entity reference (type + token) to its row id,
@@ -114,6 +130,21 @@ func (api *Api) ExistingEntityIds(ctx context.Context, etype string, ids []uint)
 		return []uint{}, nil
 	}
 	return loader.existingIds(ctx, api, ids)
+}
+
+// ExistingEntityTokens returns the subset of tokens that resolve to an existing
+// entity of the given type in the caller's tenant. Unknown type → error. (ADR-044:
+// the reconciliation sweep addresses cross-service refs by token, so it asks which
+// tokens still resolve to find orphaned anchors.)
+func (api *Api) ExistingEntityTokens(ctx context.Context, etype string, tokens []string) ([]string, error) {
+	loader, ok := entityLoaders[entity.Type(etype)]
+	if !ok {
+		return nil, fmt.Errorf("unknown entity type %q", etype)
+	}
+	if len(tokens) == 0 {
+		return []string{}, nil
+	}
+	return loader.existingTokens(ctx, api, tokens)
 }
 
 // IsEntityType reports whether t names a known entity type.

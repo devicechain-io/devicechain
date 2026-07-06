@@ -15,10 +15,10 @@ import (
 )
 
 // eventKey builds a stable synthetic id for an event from its composite key
-// (the event tables use (deviceId, eventType, occurredTime) as their natural
+// (the event tables use (deviceToken, eventType, occurredTime) as their natural
 // key rather than a surrogate id column).
-func eventKey(deviceId uint, eventType int64, occurredTime time.Time) string {
-	return fmt.Sprintf("%d:%d:%d", deviceId, eventType, occurredTime.UnixNano())
+func eventKey(deviceToken string, eventType int64, occurredTime time.Time) string {
+	return fmt.Sprintf("%s:%d:%d", deviceToken, eventType, occurredTime.UnixNano())
 }
 
 // Converts a *uint to a string pointer (graphql ids are strings).
@@ -49,11 +49,11 @@ type EventResolver struct {
 }
 
 func (r *EventResolver) Id() gql.ID {
-	return gql.ID(eventKey(r.M.DeviceId, int64(r.M.EventType), r.M.OccurredTime))
+	return gql.ID(eventKey(r.M.DeviceToken, int64(r.M.EventType), r.M.OccurredTime))
 }
 
-func (r *EventResolver) DeviceId() string {
-	return fmt.Sprint(r.M.DeviceId)
+func (r *EventResolver) DeviceToken() string {
+	return r.M.DeviceToken
 }
 
 func (r *EventResolver) EventType() int32 {
@@ -75,6 +75,29 @@ func (r *EventResolver) Source() string {
 func (r *EventResolver) AltId() *string {
 	return util.NullStr(r.M.AltId)
 }
+
+// Anchors resolves the event's anchor set (ADR-013/044): the tracked-relationship
+// targets it is queryable by, each named by (type, token). Read from event_anchors
+// by the event's natural key. Only resolved when the caller selects `anchors`, so a
+// plain event list pays nothing.
+func (r *EventResolver) Anchors() ([]*EventAnchorRefResolver, error) {
+	api := r.S.GetApi(r.C)
+	anchors, err := api.AnchorsForEvent(r.C, r.M.DeviceToken, r.M.EventType, r.M.OccurredTime)
+	if err != nil {
+		return nil, err
+	}
+	return mapResolvers(anchors, func(m model.EventAnchor) *EventAnchorRefResolver {
+		return &EventAnchorRefResolver{M: m}
+	}), nil
+}
+
+// EventAnchorRefResolver exposes one anchor as its (type, token) address.
+type EventAnchorRefResolver struct {
+	M model.EventAnchor
+}
+
+func (r *EventAnchorRefResolver) Type() string  { return r.M.AnchorType }
+func (r *EventAnchorRefResolver) Token() string { return r.M.AnchorToken }
 
 // mapResolvers builds a resolver slice from a model slice, preserving the
 // schema/context wiring shared by every typed result resolver.
@@ -117,11 +140,11 @@ type LocationEventResolver struct {
 }
 
 func (r *LocationEventResolver) Id() gql.ID {
-	return gql.ID(eventKey(r.M.DeviceId, int64(r.M.EventType), r.M.OccurredTime))
+	return gql.ID(eventKey(r.M.DeviceToken, int64(r.M.EventType), r.M.OccurredTime))
 }
 
-func (r *LocationEventResolver) DeviceId() string {
-	return fmt.Sprint(r.M.DeviceId)
+func (r *LocationEventResolver) DeviceToken() string {
+	return r.M.DeviceToken
 }
 
 func (r *LocationEventResolver) EventType() int32 {
@@ -171,11 +194,11 @@ type MeasurementEventResolver struct {
 }
 
 func (r *MeasurementEventResolver) Id() gql.ID {
-	return gql.ID(eventKey(r.M.DeviceId, int64(r.M.EventType), r.M.OccurredTime))
+	return gql.ID(eventKey(r.M.DeviceToken, int64(r.M.EventType), r.M.OccurredTime))
 }
 
-func (r *MeasurementEventResolver) DeviceId() string {
-	return fmt.Sprint(r.M.DeviceId)
+func (r *MeasurementEventResolver) DeviceToken() string {
+	return r.M.DeviceToken
 }
 
 func (r *MeasurementEventResolver) EventType() int32 {
@@ -268,11 +291,11 @@ type AlertEventResolver struct {
 }
 
 func (r *AlertEventResolver) Id() gql.ID {
-	return gql.ID(eventKey(r.M.DeviceId, int64(r.M.EventType), r.M.OccurredTime))
+	return gql.ID(eventKey(r.M.DeviceToken, int64(r.M.EventType), r.M.OccurredTime))
 }
 
-func (r *AlertEventResolver) DeviceId() string {
-	return fmt.Sprint(r.M.DeviceId)
+func (r *AlertEventResolver) DeviceToken() string {
+	return r.M.DeviceToken
 }
 
 func (r *AlertEventResolver) EventType() int32 {

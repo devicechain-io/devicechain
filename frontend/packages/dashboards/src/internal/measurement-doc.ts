@@ -18,15 +18,15 @@ export interface MeasurementStreamResult {
 }
 
 export interface MeasurementStreamVariables {
-  deviceId?: string | null;
+  deviceToken?: string | null;
   name?: string | null;
 }
 
 export const MEASUREMENT_STREAM = `
-  subscription MeasurementStream($deviceId: String, $name: String) {
-    measurementStream(deviceId: $deviceId, name: $name) {
+  subscription MeasurementStream($deviceToken: String, $name: String) {
+    measurementStream(deviceToken: $deviceToken, name: $name) {
       id
-      deviceId
+      deviceToken
       eventType
       occurredTime
       name

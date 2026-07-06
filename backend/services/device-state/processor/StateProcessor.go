@@ -199,15 +199,15 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 	}
 
 	// Update the originating device's live connectivity projection for every event.
-	if _, err := sp.Api.MergeDeviceState(msgctx, event.SourceDeviceId, event.OccurredTime); err != nil {
-		disposeTransient(err, fmt.Sprintf("device state projection update for device %d", event.SourceDeviceId))
+	if _, err := sp.Api.MergeDeviceState(msgctx, event.SourceDeviceToken, event.OccurredTime); err != nil {
+		disposeTransient(err, fmt.Sprintf("device state projection update for device %s", event.SourceDeviceToken))
 		return
 	}
 
 	// For a measurement event, also advance the per-key latest-value projection.
 	if event.EventType == esmodel.Measurement {
 		if err := sp.mergeLatestMeasurements(msgctx, event); err != nil {
-			disposeTransient(err, fmt.Sprintf("latest-measurement projection update for device %d", event.SourceDeviceId))
+			disposeTransient(err, fmt.Sprintf("latest-measurement projection update for device %s", event.SourceDeviceToken))
 			return
 		}
 	}
@@ -255,7 +255,7 @@ func (sp *StateProcessor) mergeLatestMeasurements(ctx context.Context, event *dm
 			})
 		}
 	}
-	return sp.Api.MergeLatestMeasurements(ctx, event.SourceDeviceId, inputs)
+	return sp.Api.MergeLatestMeasurements(ctx, event.SourceDeviceToken, inputs)
 }
 
 // Lifecycle callback that runs startup logic.

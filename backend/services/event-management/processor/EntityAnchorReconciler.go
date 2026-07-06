@@ -130,7 +130,7 @@ func (r *EntityAnchorReconciler) handle(ctx context.Context, msg messaging.Messa
 		_ = msg.Ack()
 		return
 	}
-	removed, err := r.Api.DeleteAnchorsForEntity(tctx, string(event.EntityType), event.EntityId)
+	removed, err := r.Api.DeleteAnchorsForEntity(tctx, string(event.EntityType), event.EntityToken)
 	if err != nil {
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Err(err).Str("entity", event.EntityToken).Int("delivered", msg.NumDelivered).

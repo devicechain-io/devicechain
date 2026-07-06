@@ -11,21 +11,16 @@ import (
 	"github.com/devicechain-io/dc-device-state/model"
 )
 
-// Find device states by originating device id.
-func (r *SchemaResolver) DeviceStatesByDeviceId(ctx context.Context, args struct {
-	DeviceIds []int32
+// Find device states by originating device token.
+func (r *SchemaResolver) DeviceStatesByDeviceToken(ctx context.Context, args struct {
+	DeviceTokens []string
 }) ([]*DeviceStateResolver, error) {
 	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	ids := make([]uint, 0, len(args.DeviceIds))
-	for _, id := range args.DeviceIds {
-		ids = append(ids, uint(id))
-	}
-
-	found, err := api.DeviceStatesByDeviceId(ctx, ids)
+	found, err := api.DeviceStatesByDeviceToken(ctx, args.DeviceTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -66,14 +61,14 @@ func (r *SchemaResolver) DeviceStates(ctx context.Context, args struct {
 // LatestMeasurements returns the current value of every measurement name for a
 // device (the live-readings projection).
 func (r *SchemaResolver) LatestMeasurements(ctx context.Context, args struct {
-	DeviceId int32
+	DeviceToken string
 }) ([]*LatestMeasurementResolver, error) {
 	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	found, err := api.LatestMeasurementsByDeviceId(ctx, uint(args.DeviceId))
+	found, err := api.LatestMeasurementsByDeviceToken(ctx, args.DeviceToken)
 	if err != nil {
 		return nil, err
 	}

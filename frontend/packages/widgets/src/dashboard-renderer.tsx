@@ -15,7 +15,6 @@ import {
   type Breakpoints,
   type DashboardDefinition,
   type WidgetDataSource,
-  type DeviceResolver,
   type MeasurementSample,
   type SlotBinding,
   type WidgetInstance,
@@ -27,7 +26,6 @@ import { ConnectedWidget } from './connected-widget';
 export interface DashboardRendererProps {
   definition: DashboardDefinition;
   hub: WidgetDataSource;
-  resolver: DeviceResolver;
   // Whether to backfill each widget from bucketedMeasurements (a real backend call).
   // Default true; set false for offline preview, where the data source (e.g.
   // SyntheticDataSource) supplies its own history and the backend must not be hit.
@@ -40,12 +38,11 @@ export interface DashboardRendererProps {
 export function DashboardRenderer({
   definition,
   hub,
-  resolver,
   seedHistory = true,
   bindings,
 }: DashboardRendererProps) {
   const breakpoint = useActiveBreakpoint(definition.canvas.breakpoints);
-  const histories = useWidgetHistories(definition.widgets, resolver, seedHistory, bindings);
+  const histories = useWidgetHistories(definition.widgets, seedHistory, bindings);
 
   // Boxes are expressed in grid cells; the grid size turns them into pixels so a
   // definition is resolution-independent (and snap-to-grid stays exact).
@@ -105,7 +102,6 @@ function useActiveBreakpoint(breakpoints: Breakpoints): string {
 // churn the stream's seed). Fetched in parallel; failures yield an empty seed.
 function useWidgetHistories(
   widgets: WidgetInstance[],
-  resolver: DeviceResolver,
   enabled: boolean,
   bindings: Record<string, SlotBinding> | undefined,
 ): Record<string, MeasurementSample[]> {
@@ -125,7 +121,7 @@ function useWidgetHistories(
     const historyWindow = defaultHistoryWindow();
     Promise.all(
       widgets.map(
-        async (w) => [w.id, await fetchWidgetHistory(w, resolver, historyWindow, bindings)] as const,
+        async (w) => [w.id, await fetchWidgetHistory(w, historyWindow, bindings)] as const,
       ),
     ).then((entries) => {
       if (!cancelled) setHistories(Object.fromEntries(entries));
@@ -135,7 +131,7 @@ function useWidgetHistories(
     };
     // bindings read via bindingsKey (value identity), not reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [widgets, resolver, enabled, bindingsKey]);
+  }, [widgets, enabled, bindingsKey]);
 
   return histories;
 }

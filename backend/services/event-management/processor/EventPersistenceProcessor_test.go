@@ -94,11 +94,11 @@ func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopNonEof() {
 func buildResolvedEvent(etype esmodel.EventType, payload interface{}) *dmodel.ResolvedEvent {
 	altid := "alternateId"
 	return &dmodel.ResolvedEvent{
-		Source:         "mysource",
-		AltId:          &altid,
-		SourceDeviceId: 1,
+		Source:            "mysource",
+		AltId:             &altid,
+		SourceDeviceToken: "device-1",
 		Anchors: []dmodel.ResolvedAnchor{
-			{AnchorType: "asset", AnchorId: 1, RelationshipId: 1},
+			{AnchorType: "asset", AnchorToken: "asset-1", RelationshipId: 1},
 		},
 		EventType: etype,
 		Payload:   payload,

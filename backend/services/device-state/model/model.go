@@ -17,7 +17,7 @@ import (
 type DeviceState struct {
 	gorm.Model
 	rdb.TenantScoped
-	DeviceId            uint
+	DeviceToken         string
 	Active              bool
 	LastConnectTime     sql.NullTime
 	LastDisconnectTime  sql.NullTime
@@ -41,7 +41,7 @@ func (DeviceState) AuditExempt() bool { return true }
 type LatestMeasurement struct {
 	gorm.Model
 	rdb.TenantScoped
-	DeviceId     uint
+	DeviceToken  string
 	Name         string
 	Value        sql.NullFloat64
 	Classifier   *uint
@@ -61,9 +61,9 @@ type LatestMeasurementInput struct {
 	OccurredTime time.Time
 }
 
-// Search criteria for locating device states. Note: DeviceId is filterable via
-// the API but is not exposed in the GraphQL criteria (graph-gophers can not bind
-// an optional Int onto a Go *uint); use deviceStatesByDeviceId for id lookups.
+// Search criteria for locating device states. Note: DeviceToken is filterable via
+// the API but is not exposed in the GraphQL criteria; use deviceStatesByDeviceToken
+// for token lookups.
 type DeviceStateSearchCriteria struct {
 	rdb.Pagination
 	Active *bool

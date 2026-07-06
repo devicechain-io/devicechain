@@ -26,7 +26,7 @@ type DeviceState implements Model {
     createdAt: String
     updatedAt: String
     deletedAt: String
-    deviceId: Int!
+    deviceToken: String!
     active: Boolean!
     lastConnectTime: String
     lastDisconnectTime: String
@@ -44,15 +44,15 @@ type LatestMeasurement implements Model {
     createdAt: String
     updatedAt: String
     deletedAt: String
-    deviceId: Int!
+    deviceToken: String!
     name: String!
     value: Float
     classifier: Int
     occurredTime: String!
 }
 
-# Criteria used when searching for device states. Device-id lookups are served by
-# the deviceStatesByDeviceId query instead of a criteria field.
+# Criteria used when searching for device states. Device-token lookups are served
+# by the deviceStatesByDeviceToken query instead of a criteria field.
 input DeviceStateSearchCriteria {
     pageNumber: Int!
     pageSize: Int!
@@ -67,12 +67,12 @@ type DeviceStateSearchResults {
 
 # Queries for accessing device state.
 type Query {
-    # Get device states for one or more devices by device id.
-    deviceStatesByDeviceId(deviceIds: [Int!]!): [DeviceState!]!
+    # Get device states for one or more devices by device token.
+    deviceStatesByDeviceToken(deviceTokens: [String!]!): [DeviceState!]!
     # Search for device states that match the given criteria.
     deviceStates(criteria: DeviceStateSearchCriteria!): DeviceStateSearchResults!
     # Current value of every measurement name for a device (live readings).
-    latestMeasurements(deviceId: Int!): [LatestMeasurement!]!
+    latestMeasurements(deviceToken: String!): [LatestMeasurement!]!
 }
 
 schema {

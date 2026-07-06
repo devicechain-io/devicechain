@@ -4,15 +4,15 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
-export type DeviceStatesByDeviceIdQueryVariables = Exact<{
-  deviceIds: Array<number> | number;
+export type DeviceStatesByDeviceTokenQueryVariables = Exact<{
+  deviceTokens: Array<string> | string;
 }>;
 
 
-export type DeviceStatesByDeviceIdQuery = { deviceStatesByDeviceId: Array<{ id: string, deviceId: number, active: boolean, lastConnectTime: string | null, lastDisconnectTime: string | null, lastActivityTime: string | null, inactivityTimeout: number }> };
+export type DeviceStatesByDeviceTokenQuery = { deviceStatesByDeviceToken: Array<{ id: string, deviceToken: string, active: boolean, lastConnectTime: string | null, lastDisconnectTime: string | null, lastActivityTime: string | null, inactivityTimeout: number }> };
 
 export type LatestMeasurementsQueryVariables = Exact<{
-  deviceId: number;
+  deviceToken: string;
 }>;
 
 
@@ -37,11 +37,11 @@ export class TypedDocumentString<TResult, TVariables>
   }
 }
 
-export const DeviceStatesByDeviceIdDocument = new TypedDocumentString(`
-    query DeviceStatesByDeviceId($deviceIds: [Int!]!) {
-  deviceStatesByDeviceId(deviceIds: $deviceIds) {
+export const DeviceStatesByDeviceTokenDocument = new TypedDocumentString(`
+    query DeviceStatesByDeviceToken($deviceTokens: [String!]!) {
+  deviceStatesByDeviceToken(deviceTokens: $deviceTokens) {
     id
-    deviceId
+    deviceToken
     active
     lastConnectTime
     lastDisconnectTime
@@ -49,10 +49,10 @@ export const DeviceStatesByDeviceIdDocument = new TypedDocumentString(`
     inactivityTimeout
   }
 }
-    `) as unknown as TypedDocumentString<DeviceStatesByDeviceIdQuery, DeviceStatesByDeviceIdQueryVariables>;
+    `) as unknown as TypedDocumentString<DeviceStatesByDeviceTokenQuery, DeviceStatesByDeviceTokenQueryVariables>;
 export const LatestMeasurementsDocument = new TypedDocumentString(`
-    query LatestMeasurements($deviceId: Int!) {
-  latestMeasurements(deviceId: $deviceId) {
+    query LatestMeasurements($deviceToken: String!) {
+  latestMeasurements(deviceToken: $deviceToken) {
     id
     name
     value

@@ -7,6 +7,8 @@ import (
 	"context"
 	"time"
 
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
+
 	emmodel "github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -70,9 +72,14 @@ func (api *MockApi) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors
 	return args.Error(0)
 }
 
-func (api *MockApi) DeleteAnchorsForEntity(ctx context.Context, entityType string, entityId uint) (int64, error) {
-	args := api.Mock.Called(entityType, entityId)
+func (api *MockApi) DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string) (int64, error) {
+	args := api.Mock.Called(entityType, entityToken)
 	return int64(args.Int(0)), args.Error(1)
+}
+
+func (api *MockApi) AnchorsForEvent(ctx context.Context, deviceToken string, eventType esmodel.EventType, occurredTime time.Time) ([]emmodel.EventAnchor, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]emmodel.EventAnchor), args.Error(1)
 }
 
 func (api *MockApi) DistinctAnchorTenants(ctx context.Context) ([]string, error) {

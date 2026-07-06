@@ -175,7 +175,7 @@ func (ae *AlarmEvaluator) evaluateMessage(ctx context.Context, workerId int, msg
 		return
 	}
 
-	if err := ae.Api.EvaluateMeasurementAlarms(msgctx, event.SourceDeviceId, payload, event.OccurredTime); err != nil {
+	if err := ae.Api.EvaluateMeasurementAlarms(msgctx, event.SourceDeviceToken, payload, event.OccurredTime); err != nil {
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Err(err).Int("worker", workerId).
 				Msg("Alarm evaluation failed past redelivery cap; dropping (state re-derives from next measurement)")

@@ -23,11 +23,11 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 	processed := occurred.Add(50 * time.Millisecond).Truncate(time.Second)
 
 	event := &model.ResolvedEvent{
-		Source:         "http1",
-		SourceDeviceId: 4,
+		Source:            "http1",
+		SourceDeviceToken: "device-001",
 		Anchors: []model.ResolvedAnchor{
-			{AnchorType: "customer", AnchorId: 3, RelationshipId: 5},
-			{AnchorType: "area", AnchorId: 9, RelationshipId: 8},
+			{AnchorType: "customer", AnchorToken: "acme", RelationshipId: 5},
+			{AnchorType: "area", AnchorToken: "warehouse-3", RelationshipId: 8},
 		},
 		OccurredTime:  occurred,
 		ProcessedTime: processed,

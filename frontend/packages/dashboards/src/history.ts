@@ -12,7 +12,6 @@
 import { gql } from '@devicechain/client';
 
 import { BUCKETED_MEASUREMENTS } from './queries';
-import type { DeviceResolver } from './hub';
 import type { DatasourceSelector, MeasurementSample, SlotBinding, WidgetInstance } from './types';
 
 export interface HistoryWindow {
@@ -38,7 +37,6 @@ export function defaultHistoryWindow(): HistoryWindow {
 // still fills the widget.
 export async function fetchWidgetHistory(
   widget: WidgetInstance,
-  resolver: DeviceResolver,
   window: HistoryWindow,
   bindings?: Record<string, SlotBinding>,
 ): Promise<MeasurementSample[]> {
@@ -50,8 +48,9 @@ export async function fetchWidgetHistory(
   if (!ds || ds.kind !== 'device') return [];
 
   try {
-    const deviceId = await resolver.deviceIdForToken(ds.deviceToken);
-    if (!deviceId) return [];
+    // measurementStream and bucketedMeasurements are keyed by device token (ADR-044),
+    // so the token goes straight into the criteria — no token→id hop.
+    const deviceToken = ds.deviceToken;
 
     // Seed each requested measurement (or all, when the widget lists none).
     const names: Array<string | undefined> = ds.measurements.length ? ds.measurements : [undefined];
@@ -59,7 +58,7 @@ export async function fetchWidgetHistory(
       names.map((name) =>
         gql('event-management', BUCKETED_MEASUREMENTS, {
           criteria: {
-            deviceId,
+            deviceToken,
             name,
             startTime: window.startTime,
             endTime: window.endTime,
@@ -73,8 +72,8 @@ export async function fetchWidgetHistory(
       .flat()
       .filter((b) => b.avg != null)
       .map((b) => ({
-        id: `${deviceId}-${b.name}-${b.bucketStart}`,
-        deviceId,
+        id: `${deviceToken}-${b.name}-${b.bucketStart}`,
+        deviceToken,
         eventType: 0,
         occurredTime: b.bucketStart,
         name: b.name,

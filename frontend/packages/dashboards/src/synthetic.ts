@@ -89,7 +89,7 @@ export class SyntheticDataSource implements WidgetDataSource {
       const value = this.valueFor(name, tMs, walk);
       const s: MeasurementSample = {
         id: `syn-${seq++}`,
-        deviceId: 'synthetic',
+        deviceToken: 'synthetic',
         eventType: 0,
         occurredTime: new Date(tMs).toISOString(),
         name,

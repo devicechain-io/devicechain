@@ -21,5 +21,6 @@ var (
 		NewDefinitionsToProfileSchema(),
 		NewProfileVersioningSchema(),
 		NewFacetIndexSchema(),
+		NewRelationshipTargetTokenSchema(),
 	}
 )

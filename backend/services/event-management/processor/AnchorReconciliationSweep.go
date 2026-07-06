@@ -6,7 +6,6 @@ package processor
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
@@ -140,12 +139,12 @@ func (s *AnchorReconciliationSweep) sweepTenant(ctx context.Context, tenant stri
 	}
 	var removed int64
 	for _, r := range refs {
-		if existing[refKey(r.Type, r.Id)] {
+		if existing[refKey(r.Type, r.Token)] {
 			continue
 		}
-		n, err := s.Api.DeleteAnchorsForEntity(tctx, r.Type, r.Id)
+		n, err := s.Api.DeleteAnchorsForEntity(tctx, r.Type, r.Token)
 		if err != nil {
-			log.Error().Err(err).Str("tenant", tenant).Str("type", r.Type).Uint("id", r.Id).
+			log.Error().Err(err).Str("tenant", tenant).Str("type", r.Type).Str("token", r.Token).
 				Msg("Anchor sweep: delete failed")
 			continue
 		}
@@ -157,7 +156,7 @@ func (s *AnchorReconciliationSweep) sweepTenant(ctx context.Context, tenant stri
 	}
 }
 
-func refKey(t string, id uint) string { return t + "|" + strconv.FormatUint(uint64(id), 10) }
+func refKey(t string, token string) string { return t + "|" + token }
 
 // maxRefsPerResolve bounds a single existence query so a large tenant's ref set
 // neither overflows svcclient's response cap nor the target's SQL IN-list limit — a
@@ -171,7 +170,7 @@ func dedupeRefs(refs []emmodel.AnchorRef) []emmodel.AnchorRef {
 	seen := make(map[string]bool, len(refs))
 	out := make([]emmodel.AnchorRef, 0, len(refs))
 	for _, r := range refs {
-		k := refKey(r.Type, r.Id)
+		k := refKey(r.Type, r.Token)
 		if seen[k] {
 			continue
 		}
@@ -198,30 +197,28 @@ func (s *AnchorReconciliationSweep) resolveExisting(ctx context.Context, tenant 
 	return existing, nil
 }
 
-// resolveChunk queries one batch and records the existing refs into `existing`. An
-// unexpected/unparseable id in the response is a hard error, not a silent skip: the
-// stakes (a "missing" ref gets its anchors deleted) mean any surprise must fail safe.
+// resolveChunk queries one batch and records the existing refs into `existing`. The
+// refs are addressed by (type, token) (ADR-044): device-management echoes back the
+// subset that still resolves, and anything it omits is treated as deleted (its
+// anchors get swept), so the call fails safe by returning any transport error to the
+// caller (which then skips the tenant rather than deleting on an unconfirmed set).
 func (s *AnchorReconciliationSweep) resolveChunk(ctx context.Context, tenant string, refs []emmodel.AnchorRef, existing map[string]bool) error {
 	inputs := make([]map[string]any, len(refs))
 	for i, r := range refs {
-		inputs[i] = map[string]any{"type": r.Type, "id": strconv.FormatUint(uint64(r.Id), 10)}
+		inputs[i] = map[string]any{"type": r.Type, "token": r.Token}
 	}
 	var out struct {
 		ExistingEntityRefs []struct {
-			Type string `json:"type"`
-			Id   string `json:"id"`
+			Type  string `json:"type"`
+			Token string `json:"token"`
 		} `json:"existingEntityRefs"`
 	}
-	const q = `query($refs: [EntityRefInput!]!) { existingEntityRefs(refs: $refs) { type id } }`
+	const q = `query($refs: [EntityRefInput!]!) { existingEntityRefs(refs: $refs) { type token } }`
 	if err := s.client.Query(ctx, s.dmURL, tenant, q, map[string]any{"refs": inputs}, &out); err != nil {
 		return err
 	}
 	for _, r := range out.ExistingEntityRefs {
-		id, err := strconv.ParseUint(r.Id, 10, 64)
-		if err != nil {
-			return fmt.Errorf("sweep: device-management returned an unparseable id %q", r.Id)
-		}
-		existing[refKey(r.Type, uint(id))] = true
+		existing[refKey(r.Type, r.Token)] = true
 	}
 	return nil
 }

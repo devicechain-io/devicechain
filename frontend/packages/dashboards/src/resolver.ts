@@ -6,24 +6,18 @@
 // to device-management's schema (the Hub itself couples to event-management's
 // measurementStream), so the widget/renderer layers above stay purely presentational.
 //
-//   deviceIdForToken — devicesByToken → numeric Device.id (measurementStream filters
-//                      on the numeric id, not the token).
 //   devicesForAnchor — entityRelationships filtered to (source=device, target=anchor)
-//                      → each relationship's source id is a member device.
+//                      → each relationship's source token is a member device (the Hub
+//                      opens one measurementStream per token, per ADR-044).
 //
-// Results are memoized per-token/per-anchor for the resolver's lifetime: a dashboard
-// resolves the same handful of devices/anchors repeatedly (re-mounts, re-renders),
-// and the membership is stable for a viewing session.
+// Results are memoized per-anchor for the resolver's lifetime: a dashboard resolves
+// the same handful of anchors repeatedly (re-mounts, re-renders), and the membership
+// is stable for a viewing session.
 
 import { gql } from '@devicechain/client';
 
 import type { DeviceResolver } from './hub';
-import {
-  DEVICES_BY_TOKEN,
-  DEVICES_FOR_ANCHOR,
-  type DevicesByTokenResult,
-  type EntityRelationshipsResult,
-} from './queries';
+import { DEVICES_FOR_ANCHOR, type EntityRelationshipsResult } from './queries';
 import type { AnchorTarget } from './types';
 
 // A generous page size for anchor membership — Phase 1 dashboards anchor to areas
@@ -31,24 +25,9 @@ import type { AnchorTarget } from './types';
 const ANCHOR_PAGE_SIZE = 500;
 
 export function createDeviceResolver(): DeviceResolver {
-  const tokenCache = new Map<string, Promise<string | null>>();
   const anchorCache = new Map<string, Promise<string[]>>();
 
   return {
-    deviceIdForToken(token: string): Promise<string | null> {
-      let pending = tokenCache.get(token);
-      if (!pending) {
-        pending = gql('device-management', DEVICES_BY_TOKEN, { tokens: [token] })
-          .then((r: DevicesByTokenResult) => r.devicesByToken[0]?.id ?? null)
-          .catch((err) => {
-            tokenCache.delete(token); // don't cache a transient failure
-            throw err;
-          });
-        tokenCache.set(token, pending);
-      }
-      return pending;
-    },
-
     devicesForAnchor(anchor: AnchorTarget): Promise<string[]> {
       const key = `${anchor.relationship}|${anchor.targetType}|${anchor.targetToken}`;
       let pending = anchorCache.get(key);
@@ -64,7 +43,7 @@ export function createDeviceResolver(): DeviceResolver {
           },
         })
           .then((r: EntityRelationshipsResult) =>
-            r.entityRelationships.results.map((rel) => rel.source.id),
+            r.entityRelationships.results.map((rel) => rel.source.token),
           )
           .catch((err) => {
             anchorCache.delete(key);

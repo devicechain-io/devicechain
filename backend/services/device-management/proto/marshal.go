@@ -383,19 +383,19 @@ func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 	for _, a := range event.Anchors {
 		anchors = append(anchors, &PResolvedAnchor{
 			AnchorType:     a.AnchorType,
-			AnchorId:       uint64(a.AnchorId),
+			AnchorToken:    a.AnchorToken,
 			RelationshipId: uint64(a.RelationshipId),
 		})
 	}
 	pbevent := &PResolvedEvent{
-		Source:         event.Source,
-		AltId:          event.AltId,
-		SourceDeviceId: uint64(event.SourceDeviceId),
-		Anchors:        anchors,
-		OccurredTime:   event.OccurredTime.Format(time.RFC3339),
-		ProcessedTime:  event.ProcessedTime.Format(time.RFC3339),
-		EventType:      int64(event.EventType),
-		Payload:        pybytes,
+		Source:            event.Source,
+		AltId:             event.AltId,
+		SourceDeviceToken: event.SourceDeviceToken,
+		Anchors:           anchors,
+		OccurredTime:      event.OccurredTime.Format(time.RFC3339),
+		ProcessedTime:     event.ProcessedTime.Format(time.RFC3339),
+		EventType:         int64(event.EventType),
+		Payload:           pybytes,
 	}
 
 	// Marshal event to bytes.
@@ -435,20 +435,20 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 	for _, a := range pbevent.Anchors {
 		anchors = append(anchors, model.ResolvedAnchor{
 			AnchorType:     a.AnchorType,
-			AnchorId:       uint(a.AnchorId),
+			AnchorToken:    a.AnchorToken,
 			RelationshipId: uint(a.RelationshipId),
 		})
 	}
 
 	event := &model.ResolvedEvent{
-		Source:         pbevent.Source,
-		AltId:          pbevent.AltId,
-		SourceDeviceId: uint(pbevent.SourceDeviceId),
-		Anchors:        anchors,
-		OccurredTime:   occurred,
-		ProcessedTime:  processed,
-		EventType:      esmodel.EventType(pbevent.EventType),
-		Payload:        payload,
+		Source:            pbevent.Source,
+		AltId:             pbevent.AltId,
+		SourceDeviceToken: pbevent.SourceDeviceToken,
+		Anchors:           anchors,
+		OccurredTime:      occurred,
+		ProcessedTime:     processed,
+		EventType:         esmodel.EventType(pbevent.EventType),
+		Payload:           payload,
 	}
 
 	return event, nil

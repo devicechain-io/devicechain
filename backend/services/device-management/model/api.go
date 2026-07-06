@@ -162,7 +162,9 @@ type DeviceManagementApi interface {
 	ClearAlarm(ctx context.Context, token string) (*Alarm, error)
 	// EvaluateMeasurementAlarms is the SIMPLE alarm evaluator (ADR-041): it upserts
 	// alarm state from a resolved measurements payload (raise/escalate/auto-clear).
-	EvaluateMeasurementAlarms(ctx context.Context, deviceId uint, payload *ResolvedMeasurementsPayload, occurredTime time.Time) error
+	// The source device is named by its token (ADR-044); the evaluator resolves it to
+	// the local row id for its id-keyed alarm state.
+	EvaluateMeasurementAlarms(ctx context.Context, deviceToken string, payload *ResolvedMeasurementsPayload, occurredTime time.Time) error
 
 	// Entity attributes (ADR-012).
 	SetEntityAttribute(ctx context.Context, request *EntityAttributeSetRequest) (*EntityAttribute, error)
