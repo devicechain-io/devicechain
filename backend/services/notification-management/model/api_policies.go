@@ -158,6 +158,17 @@ func (api *Api) NotificationPoliciesByToken(ctx context.Context, tokens []string
 	return found, result.Error
 }
 
+// EnabledNotificationPolicies loads every enabled policy (with rules + channels) for
+// the caller tenant. It is the dispatcher's read path (N.C): unpaginated because the
+// dispatcher must weigh all of a tenant's policies against each alarm, and a tenant's
+// policy set is small operator-authored configuration, not device-scale data.
+func (api *Api) EnabledNotificationPolicies(ctx context.Context) ([]*NotificationPolicy, error) {
+	found := make([]*NotificationPolicy, 0)
+	result := api.RDB.DB(ctx).Preload("Rules").Preload("Rules.Channel").
+		Where("enabled = ?", true).Find(&found)
+	return found, result.Error
+}
+
 // NotificationPolicies searches policies (with rules) by criteria.
 func (api *Api) NotificationPolicies(ctx context.Context,
 	criteria NotificationPolicySearchCriteria) (*NotificationPolicySearchResults, error) {

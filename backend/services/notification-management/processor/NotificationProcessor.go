@@ -190,17 +190,17 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 		return
 	}
 
-	// Dispatch to the notifier. A returned error is transient (a channel hiccup):
-	// nak for redelivery until the finite MaxDeliver cap, then give up.
+	// Dispatch to the notifier. The PolicyNotifier (N.C) owns a bounded in-line retry
+	// per channel and returns an error ONLY when nothing was delivered (so a nak can
+	// never double-send a channel that already succeeded); that error is transient, so
+	// nak for redelivery until the finite MaxDeliver cap.
 	//
-	// TODO(notifications N.C): redelivery here is immediate (no backoff) and the
-	// give-up branch DROPS the notification — there is no dead-letter path, and
-	// ResultFailed's "dead-letter" label (core/metrics.go) is aspirational for this
-	// consumer. That disposition is safe for the current LogNotifier (which never
-	// errors) but must not ship behind a real channel adapter: a critical page lost
-	// to a brief outage defeats the point of the durable consumer. Before N.C, add
-	// NakWithDelay/backoff and a real dead-letter sink (or make the adapter own its
-	// retry/durability). See the Notifier error contract in notifier.go.
+	// TODO(notifications N.D): redelivery here is still immediate (no backoff) and the
+	// give-up branch DROPS the notification after MaxDeliver — there is no dead-letter
+	// path, and ResultFailed's "dead-letter" label (core/metrics.go) is aspirational for
+	// this consumer. The PolicyNotifier's in-line retry (attempts × timeout) is the
+	// primary reliability window; add NakWithDelay/backoff and a real dead-letter sink
+	// here to survive an outage longer than that window. See the contract in notifier.go.
 	if err := np.Notifier.Notify(msgctx, event); err != nil {
 		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).Msg("Notification dispatch failed")
 		if msg.NumDelivered >= messaging.MaxDeliver {

@@ -29,6 +29,7 @@ var (
 
 	AlarmEventsReader     messaging.MessageReader
 	NotificationProcessor *processor.NotificationProcessor
+	RetentionSweeper      *processor.RetentionSweeper
 )
 
 func main() {
@@ -72,26 +73,27 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// durable name is per instance + area, so replicas share one consumer and each
 	// event is delivered to exactly one of them.
 	//
-	// TODO(notifications N.C): NewReader creates the durable with JetStream's default
-	// DeliverAll, so the FIRST time this area is enabled on a running instance the
-	// consumer replays up to streamMaxAge (7d) of retained alarm transitions. Harmless
-	// for the LogNotifier (log noise) but a page-storm of stale alarms once a real
-	// channel adapter lands — enabling notification-management on an existing fleet
-	// would page humans about days-old alarms. Before N.C, give NewReader a
-	// DeliverPolicy(New) option for this consumer (the durable position persists
-	// thereafter, so downtime-safety is kept) or age-guard events in dispatchOne.
-	// Corollary: the stream is LimitsPolicy, so an outage longer than streamMaxAge
-	// drops events the consumer never sees — "briefly down" is safe, a week down is not.
-	aevents, err := nmgr.NewReader(dmconfig.SUBJECT_ALARM_EVENTS)
+	// DeliverNew starts the durable at the stream tail on first creation, so enabling
+	// this service on a running fleet does NOT replay up to streamMaxAge (7d) of
+	// retained alarm transitions and page humans about days-old alarms. Downtime-safety
+	// is unaffected: once the durable exists its ack cursor persists, so a restart
+	// resumes from the last ack. (The stream is LimitsPolicy, so an outage longer than
+	// streamMaxAge still drops unseen events — "briefly down" is safe, a week is not.)
+	// N.B created this durable with the default DeliverAll; the policy change rides a
+	// fresh bring-up, per the pre-GA decisive-cutover convention.
+	aevents, err := nmgr.NewReader(dmconfig.SUBJECT_ALARM_EVENTS, messaging.ReaderWithDeliverNew())
 	if err != nil {
 		return err
 	}
 	AlarmEventsReader = aevents
 
-	// First slice: log the notification the service would deliver. Later slices swap
-	// in the policy-driven channel dispatcher behind the same Notifier seam.
+	// The policy-driven channel dispatcher (N.C): evaluate each tenant's notification
+	// policies and deliver matching alarms through the configured SMTP/webhook channels,
+	// maintaining the per-alarm NotificationState. It replaces the first-slice
+	// LogNotifier behind the same Notifier seam.
+	notifier := processor.NewPolicyNotifier(Api, Configuration.DeliveryAttempts, Configuration.DeliveryTimeout())
 	NotificationProcessor = processor.NewNotificationProcessor(Microservice, AlarmEventsReader,
-		core.NewNoOpLifecycleCallbacks(), processor.NewLogNotifier())
+		core.NewNoOpLifecycleCallbacks(), notifier)
 	return NotificationProcessor.Initialize(context.Background())
 }
 
@@ -111,6 +113,18 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 	Api = model.NewApi(RdbManager)
+
+	// Retention sweep: prune cleared per-alarm state older than the retention window so
+	// the notification state stays bounded (ADR-017 N.C). A negative interval disables
+	// it (the table then grows unbounded — operator opt-out only).
+	if Configuration.RetentionSweepSeconds >= 0 {
+		RetentionSweeper = processor.NewRetentionSweeper(Microservice, Api,
+			Configuration.StateRetention(), Configuration.RetentionSweepInterval(),
+			core.NewNoOpLifecycleCallbacks())
+		if err := RetentionSweeper.Initialize(ctx); err != nil {
+			return err
+		}
+	}
 
 	// Create and initialize nats manager (which invokes createNatsComponents).
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
@@ -148,11 +162,22 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := NatsManager.Start(ctx); err != nil {
 		return err
 	}
-	return NotificationProcessor.Start(ctx)
+	if err := NotificationProcessor.Start(ctx); err != nil {
+		return err
+	}
+	if RetentionSweeper != nil {
+		return RetentionSweeper.Start(ctx)
+	}
+	return nil
 }
 
 // beforeMicroserviceStopped stops components in reverse dependency order.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	if RetentionSweeper != nil {
+		if err := RetentionSweeper.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	if err := NotificationProcessor.Stop(ctx); err != nil {
 		return err
 	}
@@ -167,6 +192,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // beforeMicroserviceTerminated terminates components in reverse dependency order.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if RetentionSweeper != nil {
+		if err := RetentionSweeper.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	if err := NotificationProcessor.Terminate(ctx); err != nil {
 		return err
 	}
