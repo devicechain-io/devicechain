@@ -14,8 +14,21 @@ import (
 	"gorm.io/gorm"
 )
 
+// DeviceVerifier confirms a target device exists (in the request's tenant) before
+// a command is enqueued against it (ADR-044 amendment / W1.1b). It is
+// dependency-inverted — the model depends only on this narrow interface, never on
+// the sync-call machinery (svcclient) — mirroring device-management's
+// AlarmEventPublisher seam. A nil verifier (unconfigured service secret) skips the
+// check, preserving the prior enqueue-anything behavior; command-delivery logs the
+// disabled mode loudly at startup.
+type DeviceVerifier interface {
+	DeviceExists(ctx context.Context, deviceToken string) (bool, error)
+}
+
 type Api struct {
 	RDB *rdb.RdbManager
+	// DeviceVerifier, when set, gates CreateCommand on the target device existing.
+	DeviceVerifier DeviceVerifier
 }
 
 // NewApi creates a new API instance.
@@ -76,6 +89,21 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	}
 	if request.Metadata != nil && !json.Valid([]byte(*request.Metadata)) {
 		return nil, fmt.Errorf("command metadata is not valid JSON")
+	}
+
+	// Verify the target device exists before enqueuing (W1.1b) — a synchronous
+	// read against device-management, the authoritative owner. This is a read-time
+	// invariant check (does it exist *now*?), the case the async projection can't
+	// answer, so it is the sanctioned sync-call use (ADR-044 decision rule). When no
+	// verifier is wired (service secret unconfigured) the check is skipped.
+	if api.DeviceVerifier != nil {
+		exists, err := api.DeviceVerifier.DeviceExists(ctx, request.DeviceToken)
+		if err != nil {
+			return nil, fmt.Errorf("verifying target device %q: %w", request.DeviceToken, err)
+		}
+		if !exists {
+			return nil, fmt.Errorf("cannot enqueue command: device %q does not exist", request.DeviceToken)
+		}
 	}
 
 	created := &Command{

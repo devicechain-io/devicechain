@@ -96,6 +96,15 @@ type UserManagementConfiguration struct {
 	Port     uint32
 }
 
+// DeviceManagementConfiguration locates the device-management GraphQL endpoint for
+// synchronous cross-service calls (ADR-044 amendment) — e.g. command-delivery
+// verifying a target device exists before enqueue (W1.1b). Only callers that make
+// such a check consume it, so it is defaulted but not required at startup.
+type DeviceManagementConfiguration struct {
+	Hostname string
+	Port     uint32
+}
+
 // ServiceAuthConfiguration carries the shared secret backing the synchronous
 // cross-service call primitive (ADR-044 amendment). A caller presents Secret to
 // user-management's mint endpoint to obtain a short-lived service token; the mint
@@ -110,10 +119,11 @@ type ServiceAuthConfiguration struct {
 
 // Infrastructure configuration section
 type InfrastructureConfiguration struct {
-	Nats           NatsConfiguration
-	Metrics        MetricsConfiguration
-	UserManagement UserManagementConfiguration
-	ServiceAuth    ServiceAuthConfiguration
+	Nats             NatsConfiguration
+	Metrics          MetricsConfiguration
+	UserManagement   UserManagementConfiguration
+	DeviceManagement DeviceManagementConfiguration
+	ServiceAuth      ServiceAuthConfiguration
 }
 
 // Generic datastore configuration
@@ -172,6 +182,10 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 			},
 			UserManagement: UserManagementConfiguration{
 				Hostname: "dc-user-management.dc-system",
+				Port:     8080,
+			},
+			DeviceManagement: DeviceManagementConfiguration{
+				Hostname: "dc-device-management.dc-system",
 				Port:     8080,
 			},
 		},

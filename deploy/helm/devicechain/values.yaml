@@ -66,6 +66,12 @@ instance:
         # a stale pre-Helm coordinate that does not exist under ADR-022 rendering.)
         hostname: user-management
         port: 8080
+      deviceManagement:
+        # device-management is reached in-cluster by its instance-namespace Service
+        # name for synchronous cross-service calls (ADR-044 amendment): command-
+        # delivery verifies a target device exists before enqueue (W1.1b).
+        hostname: device-management
+        port: 8080
       serviceAuth:
         # Shared secret backing the synchronous cross-service call primitive
         # (ADR-044 amendment): a caller presents it to user-management's mint

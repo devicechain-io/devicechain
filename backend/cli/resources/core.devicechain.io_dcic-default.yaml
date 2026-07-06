@@ -14,6 +14,9 @@ spec:
       UserManagement:
         Hostname: dc-user-management.dc-system
         Port: 8080
+      DeviceManagement:
+        Hostname: dc-device-management.dc-system
+        Port: 8080
     Persistence:
       Rdb:
         Configuration:
