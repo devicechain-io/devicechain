@@ -12,10 +12,18 @@ import "github.com/golang-jwt/jwt/v5"
 // no tenant, carry the subject's *system* authorities, and authorize the admin
 // API + the tenant-selection exchange — the data-plane validator rejects them
 // precisely because they have no tenant claim.
+// Service tokens (ADR-044 amendment) are the instance-scoped *machine* tier: a
+// short-lived credential one service presents on a synchronous cross-service call
+// (core/svcclient). Like an identity token they carry no tenant — a service acts
+// across tenants on the platform's behalf and passes the tenant explicitly — but
+// they carry the caller's requested authorities so the callee still gates each
+// operation. They are minted only by user-management, only on presentation of the
+// shared service secret, so a client cannot obtain one.
 const (
 	TokenTypeAccess   = "access"
 	TokenTypeRefresh  = "refresh"
 	TokenTypeIdentity = "identity"
+	TokenTypeService  = "service"
 )
 
 // Claims is the DeviceChain JWT payload (ADR-008). The Tenant claim is the

@@ -5,9 +5,13 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -119,6 +123,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Serve the platform signing keys so other services can validate tokens.
 	registerKeyHandlers()
 
+	// Serve the service-token mint endpoint (ADR-044 amendment) so a caller can
+	// exchange the shared service secret for a short-lived machine token.
+	registerServiceTokenHandler()
+
 	// Map of providers injected into the graphql http context.
 	providers := map[gqlcore.ContextKey]interface{}{
 		graphql.ContextIdentityKey: IdentityManager,
@@ -189,6 +197,47 @@ func registerKeyHandlers() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(jwks)
+	})
+}
+
+// registerServiceTokenHandler serves the service-token mint endpoint (ADR-044
+// amendment). A caller presents the shared service secret (constant-time compared
+// against this instance's configured copy) and receives a short-lived service
+// token carrying its requested authorities, signed by the instance key so every
+// service's JWKS validator accepts it. The secret is the bootstrap trust root, so
+// an empty configured secret fails closed (minting disabled).
+func registerServiceTokenHandler() {
+	http.HandleFunc(auth.ServiceTokenPath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		secret := Microservice.InstanceConfiguration.Infrastructure.ServiceAuth.Secret
+		if secret == "" {
+			http.Error(w, "service-token minting is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		presented := r.Header.Get(auth.ServiceSecretHeader)
+		if subtle.ConstantTimeCompare([]byte(presented), []byte(secret)) != 1 {
+			http.Error(w, "invalid service secret", http.StatusUnauthorized)
+			return
+		}
+		var req auth.ServiceTokenRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.Subject == "" || len(req.Authorities) == 0 {
+			http.Error(w, "subject and authorities are required", http.StatusBadRequest)
+			return
+		}
+		tok, err := IdentityManager.IssueServiceToken(req.Subject, req.Authorities)
+		if err != nil {
+			http.Error(w, "failed to mint service token", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: tok.Token, ExpiresAt: tok.ExpiresAt.Unix()})
 	})
 }
 

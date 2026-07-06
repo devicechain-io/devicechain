@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -30,28 +31,73 @@ const (
 )
 
 // authPolicy decides how a handler authenticates a request before dispatching to
-// its schema. The two policies map to the two token tiers (ADR-033):
+// its schema. Its authenticate function verifies a present bearer token and
+// returns the claims plus the tenant to stamp into context ("" for none). The two
+// policies map to the request tiers:
 //
 //   - tenantPolicy (data plane): a bearer token is optional; when present it is
-//     validated as a tenant access token and its tenant stamped into context. An
-//     absent token runs unauthenticated so open entry points (the login mutation)
-//     stay reachable; every tenant-scoped operation still fails closed at the DB.
+//     admitted as either a tenant *access* token (tenant taken from the signed
+//     claim) or a *service* token (ADR-044 amendment — tenant taken from the
+//     verified caller's explicit header). An absent token runs unauthenticated so
+//     open entry points (the login mutation) stay reachable; every tenant-scoped
+//     operation still fails closed at the DB.
 //   - identityPolicy (admin plane): a bearer token is required and validated as an
 //     instance-scoped identity token; its claims are attached without a tenant, so
 //     admin operations run in the system context, across tenants.
 type authPolicy struct {
 	// required rejects a request that carries no bearer token (401).
 	required bool
-	// validate verifies a token of this policy's tier and returns its claims.
-	validate func(*auth.Validator, string) (*auth.Claims, error)
-	// setTenant stamps the claims' tenant into the request context (data plane).
-	setTenant bool
+	// authenticate verifies the token for this policy's tier and returns its claims
+	// and the tenant to stamp into context (empty stamps none). header resolves a
+	// request header by name — used to read the service-token tenant; transports
+	// with no such header (the WS subscription path) pass a resolver returning "",
+	// which makes service tokens inapplicable there (their tenant resolves empty
+	// and is rejected), leaving access/identity tokens working as before.
+	authenticate func(v *auth.Validator, token string, header func(string) string) (*auth.Claims, string, error)
 }
 
 var (
-	tenantPolicy   = authPolicy{required: false, validate: (*auth.Validator).Validate, setTenant: true}
-	identityPolicy = authPolicy{required: true, validate: (*auth.Validator).ValidateIdentity, setTenant: false}
+	tenantPolicy   = authPolicy{required: false, authenticate: authenticateDataPlane}
+	identityPolicy = authPolicy{required: true, authenticate: authenticateIdentity}
 )
+
+// authenticateDataPlane admits either tier the data plane accepts. It verifies the
+// signature once (Parse), then branches on the token type: an access token supplies
+// its own signed tenant; a service token (a verified machine caller) supplies the
+// tenant via the ServiceTenantHeader — honored only *after* the signature checks
+// out, so a client cannot forge tenancy with the header. Refresh/identity tokens
+// are refused here.
+func authenticateDataPlane(v *auth.Validator, token string, header func(string) string) (*auth.Claims, string, error) {
+	claims, err := v.Parse(token)
+	if err != nil {
+		return nil, "", err
+	}
+	switch claims.TokenType {
+	case auth.TokenTypeAccess:
+		if claims.Tenant == "" {
+			return nil, "", fmt.Errorf("auth: access token has no tenant claim")
+		}
+		return claims, claims.Tenant, nil
+	case auth.TokenTypeService:
+		tenant := header(auth.ServiceTenantHeader)
+		if tenant == "" {
+			return nil, "", fmt.Errorf("auth: service token presented without a %s header", auth.ServiceTenantHeader)
+		}
+		return claims, tenant, nil
+	default:
+		return nil, "", fmt.Errorf("auth: token type %q is not accepted on the data plane", claims.TokenType)
+	}
+}
+
+// authenticateIdentity validates an instance-scoped identity token and stamps no
+// tenant (the admin plane runs in the system context, across tenants).
+func authenticateIdentity(v *auth.Validator, token string, _ func(string) string) (*auth.Claims, string, error) {
+	claims, err := v.ValidateIdentity(token)
+	if err != nil {
+		return nil, "", err
+	}
+	return claims, "", nil
+}
 
 // Adds extra context to http request.
 type HttpHandler struct {
@@ -130,14 +176,14 @@ func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication is not available", http.StatusUnauthorized)
 		return
 	}
-	claims, err := h.policy.validate(validator, token)
+	claims, tenant, err := h.policy.authenticate(validator, token, r.Header.Get)
 	if err != nil {
 		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 		return
 	}
 	ctx := r.Context()
-	if h.policy.setTenant {
-		ctx = core.WithTenant(ctx, claims.Tenant)
+	if tenant != "" {
+		ctx = core.WithTenant(ctx, tenant)
 	}
 	ctx = auth.WithClaims(ctx, claims)
 	h.Relay.ServeHTTP(w, r.WithContext(ctx))

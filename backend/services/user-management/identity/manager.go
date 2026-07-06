@@ -239,6 +239,18 @@ func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityA
 	}, nil
 }
 
+// IssueServiceToken mints a short-lived instance-scoped service token (ADR-044
+// amendment) for a machine caller making a synchronous cross-service call. It
+// signs the requested subject + authorities with the instance key so any service's
+// JWKS validator accepts it. Authorization is the shared-secret check at the mint
+// endpoint that calls this — this method assumes the caller is already trusted.
+func (m *Manager) IssueServiceToken(subject string, authorities []string) (auth.IssuedToken, error) {
+	m.mu.RLock()
+	issuer := m.issuer
+	m.mu.RUnlock()
+	return issuer.IssueService(subject, authorities, uuid.NewString())
+}
+
 // SelectTenant exchanges a valid identity token for a tenant-scoped token pair
 // (ADR-033). The identity must hold an (enabled) membership in the tenant, unless
 // it is a superuser — which may enter any tenant with full authority, marked

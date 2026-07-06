@@ -66,11 +66,18 @@ func helmInstall(ctx context.Context, st *State) error {
 			"calloutIssuerSeed": seed,
 		}
 	}
-	instanceVals := map[string]interface{}{"id": st.Instance}
+	infraVals := map[string]interface{}{}
 	if len(natsVals) > 0 {
-		instanceVals["config"] = map[string]interface{}{
-			"infrastructure": map[string]interface{}{"nats": natsVals},
-		}
+		infraVals["nats"] = natsVals
+	}
+	// The shared service secret (ADR-044 amendment) backing the sync cross-service
+	// call primitive, threaded into every service's instance config.
+	if secret := st.Values["serviceAuthSecret"]; secret != "" {
+		infraVals["serviceAuth"] = map[string]interface{}{"secret": secret}
+	}
+	instanceVals := map[string]interface{}{"id": st.Instance}
+	if len(infraVals) > 0 {
+		instanceVals["config"] = map[string]interface{}{"infrastructure": infraVals}
 	}
 
 	vals := map[string]interface{}{

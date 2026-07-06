@@ -66,6 +66,13 @@ instance:
         # a stale pre-Helm coordinate that does not exist under ADR-022 rendering.)
         hostname: user-management
         port: 8080
+      serviceAuth:
+        # Shared secret backing the synchronous cross-service call primitive
+        # (ADR-044 amendment): a caller presents it to user-management's mint
+        # endpoint to obtain a short-lived service token, which the target service
+        # then validates via the normal JWKS. The bring-up (dcctl) mints a random
+        # value here; empty disables service-token minting (fail-closed).
+        secret: ""
     persistence:
       rdb:
         type: postgres95

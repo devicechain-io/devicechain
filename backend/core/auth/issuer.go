@@ -114,6 +114,19 @@ func (i *Issuer) IssueIdentity(email string, roles, authorities []string, jti st
 	})
 }
 
+// IssueService mints a short-lived instance-scoped *service* token (ADR-044
+// amendment): no tenant, the requested machine authorities, signed by the same
+// instance key so every service's existing JWKS validator accepts it with no new
+// trust configuration. subject names the calling service (audit). The data-plane
+// validator rejects it as an access token because it carries no tenant; a callee
+// admits it through the service tier and takes the tenant from an explicit header.
+func (i *Issuer) IssueService(subject string, authorities []string, jti string) (IssuedToken, error) {
+	return i.sign(tokenSpec{
+		tokenType: TokenTypeService, username: subject,
+		authorities: authorities, jti: jti, ttl: i.accessTTL,
+	})
+}
+
 func (i *Issuer) sign(spec tokenSpec) (IssuedToken, error) {
 	now := time.Now()
 	expires := now.Add(spec.ttl)
