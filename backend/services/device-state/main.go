@@ -132,7 +132,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// than exiting when user-management is briefly unreachable (amends ADR-008).
 	Microservice.StartInstanceAuthGate(ctx)
 
-	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, gqlcb, *parsed, providers, Microservice.Readiness)
+	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, gqlcb, parsed, providers, Microservice.Readiness)
 	err = GraphQLManager.Initialize(ctx)
 	if err != nil {
 		return err

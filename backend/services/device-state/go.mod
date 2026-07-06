@@ -8,7 +8,7 @@ require (
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-gormigrate/gormigrate/v2 v2.1.6
-	github.com/graph-gophers/graphql-go v1.4.0
+	github.com/graph-gophers/graphql-go v1.10.2
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.11.1
 	gorm.io/gorm v1.31.2

@@ -12,14 +12,14 @@ import (
 
 // Create a new entity relationship type.
 func (r *SchemaResolver) CreateEntityRelationshipType(ctx context.Context, args struct {
-	Request *model.EntityRelationshipTypeCreateRequest
+	Request model.EntityRelationshipTypeCreateRequest
 }) (*EntityRelationshipTypeResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	created, err := api.CreateEntityRelationshipType(ctx, args.Request)
+	created, err := api.CreateEntityRelationshipType(ctx, &args.Request)
 	if err != nil {
 		return nil, err
 	}
@@ -29,14 +29,14 @@ func (r *SchemaResolver) CreateEntityRelationshipType(ctx context.Context, args 
 // Update an existing entity relationship type by token.
 func (r *SchemaResolver) UpdateEntityRelationshipType(ctx context.Context, args struct {
 	Token   string
-	Request *model.EntityRelationshipTypeCreateRequest
+	Request model.EntityRelationshipTypeCreateRequest
 }) (*EntityRelationshipTypeResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateEntityRelationshipType(ctx, args.Token, args.Request)
+	updated, err := api.UpdateEntityRelationshipType(ctx, args.Token, &args.Request)
 	if err != nil {
 		return nil, err
 	}
@@ -45,14 +45,14 @@ func (r *SchemaResolver) UpdateEntityRelationshipType(ctx context.Context, args 
 
 // Create a new entity relationship.
 func (r *SchemaResolver) CreateEntityRelationship(ctx context.Context, args struct {
-	Request *model.EntityRelationshipCreateRequest
+	Request model.EntityRelationshipCreateRequest
 }) (*EntityRelationshipResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	created, err := api.CreateEntityRelationship(ctx, args.Request)
+	created, err := api.CreateEntityRelationship(ctx, &args.Request)
 	if err != nil {
 		return nil, err
 	}

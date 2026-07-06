@@ -13,14 +13,14 @@ import (
 
 // Open (or reopen) a possession claim on a device.
 func (r *SchemaResolver) InitiateDeviceClaim(ctx context.Context, args struct {
-	Request *model.DeviceClaimInitiateRequest
+	Request model.DeviceClaimInitiateRequest
 }) (*DeviceClaimResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	claim, err := api.InitiateDeviceClaim(ctx, args.Request)
+	claim, err := api.InitiateDeviceClaim(ctx, &args.Request)
 	if err != nil {
 		return nil, err
 	}
@@ -29,14 +29,14 @@ func (r *SchemaResolver) InitiateDeviceClaim(ctx context.Context, args struct {
 
 // Redeem a device's claim, assigning it to a customer on proof of possession.
 func (r *SchemaResolver) ClaimDevice(ctx context.Context, args struct {
-	Request *model.DeviceClaimRequest
+	Request model.DeviceClaimRequest
 }) (*EntityRelationshipResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	rel, err := api.ClaimDevice(ctx, args.Request, time.Now())
+	rel, err := api.ClaimDevice(ctx, &args.Request, time.Now())
 	if err != nil {
 		return nil, err
 	}

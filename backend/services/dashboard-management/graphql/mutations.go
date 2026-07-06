@@ -12,14 +12,14 @@ import (
 
 // CreateDashboard creates a new dashboard.
 func (r *SchemaResolver) CreateDashboard(ctx context.Context, args struct {
-	Request *model.DashboardCreateRequest
+	Request model.DashboardCreateRequest
 }) (*DashboardResolver, error) {
 	if err := auth.Authorize(ctx, auth.DashboardWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	created, err := api.CreateDashboard(ctx, args.Request)
+	created, err := api.CreateDashboard(ctx, &args.Request)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +30,7 @@ func (r *SchemaResolver) CreateDashboard(ctx context.Context, args struct {
 // expectedUpdatedAt, when supplied, is an optimistic-concurrency precondition.
 func (r *SchemaResolver) UpdateDashboard(ctx context.Context, args struct {
 	Token             string
-	Request           *model.DashboardCreateRequest
+	Request           model.DashboardCreateRequest
 	ExpectedUpdatedAt *string
 }) (*DashboardResolver, error) {
 	if err := auth.Authorize(ctx, auth.DashboardWrite); err != nil {
@@ -38,7 +38,7 @@ func (r *SchemaResolver) UpdateDashboard(ctx context.Context, args struct {
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateDashboard(ctx, args.Token, args.Request, args.ExpectedUpdatedAt)
+	updated, err := api.UpdateDashboard(ctx, args.Token, &args.Request, args.ExpectedUpdatedAt)
 	if err != nil {
 		return nil, err
 	}

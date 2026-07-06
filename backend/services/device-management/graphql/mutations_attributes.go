@@ -12,14 +12,14 @@ import (
 
 // Set (upsert) an entity attribute.
 func (r *SchemaResolver) SetEntityAttribute(ctx context.Context, args struct {
-	Request *model.EntityAttributeSetRequest
+	Request model.EntityAttributeSetRequest
 }) (*EntityAttributeResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	set, err := api.SetEntityAttribute(ctx, args.Request)
+	set, err := api.SetEntityAttribute(ctx, &args.Request)
 	if err != nil {
 		return nil, err
 	}

@@ -12,14 +12,14 @@ import (
 
 // CreateCommand issues (persists) a new command to a device.
 func (r *SchemaResolver) CreateCommand(ctx context.Context, args struct {
-	Request *model.CommandCreateRequest
+	Request model.CommandCreateRequest
 }) (*CommandResolver, error) {
 	if err := auth.Authorize(ctx, auth.CommandWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	created, err := api.CreateCommand(ctx, args.Request)
+	created, err := api.CreateCommand(ctx, &args.Request)
 	if err != nil {
 		return nil, err
 	}

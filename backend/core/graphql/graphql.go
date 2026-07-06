@@ -22,7 +22,7 @@ const (
 // Manages lifecycle of microservice GraphQL server.
 type GraphQLManager struct {
 	Microservice     *core.Microservice
-	Schema           graphql.Schema
+	Schema           *graphql.Schema
 	Server           *http.Server
 	ContextProviders map[ContextKey]interface{}
 	// Gate supplies the late-bound JWT validator and the readiness state the
@@ -35,7 +35,7 @@ type GraphQLManager struct {
 
 // Create a new graphql manager.
 func NewGraphQLManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
-	schema graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *GraphQLManager {
+	schema *graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *GraphQLManager {
 	gql := &GraphQLManager{
 		Microservice:     ms,
 		Schema:           schema,
@@ -70,8 +70,8 @@ func (gql *GraphQLManager) ExecuteStart(context.Context) error {
 	// POST goes to the HTTP relay handler. Sharing one path lets a client derive
 	// the ws:// URL from the http:// one, matching GraphQL client conventions.
 	http.Handle("/graphql", graphqlDispatcher(
-		NewHttpHandler(&gql.Schema, gql.ContextProviders, gql.Gate),
-		NewSubscriptionHandler(&gql.Schema, gql.ContextProviders, gql.Gate),
+		NewHttpHandler(gql.Schema, gql.ContextProviders, gql.Gate),
+		NewSubscriptionHandler(gql.Schema, gql.ContextProviders, gql.Gate),
 	))
 
 	// The /graphiql explorer is developer tooling — register it only when dev tools

@@ -12,13 +12,13 @@ import (
 
 // CreateNotificationPolicy creates a routing policy and its rule set.
 func (r *SchemaResolver) CreateNotificationPolicy(ctx context.Context, args struct {
-	Request *model.NotificationPolicyCreateRequest
+	Request model.NotificationPolicyCreateRequest
 }) (*NotificationPolicyResolver, error) {
 	if err := auth.Authorize(ctx, auth.NotificationWrite); err != nil {
 		return nil, err
 	}
 	api := r.GetApi(ctx)
-	created, err := api.CreateNotificationPolicy(ctx, args.Request)
+	created, err := api.CreateNotificationPolicy(ctx, &args.Request)
 	if err != nil {
 		return nil, err
 	}
@@ -28,13 +28,13 @@ func (r *SchemaResolver) CreateNotificationPolicy(ctx context.Context, args stru
 // UpdateNotificationPolicy updates a routing policy (replacing its rule set) by token.
 func (r *SchemaResolver) UpdateNotificationPolicy(ctx context.Context, args struct {
 	Token   string
-	Request *model.NotificationPolicyCreateRequest
+	Request model.NotificationPolicyCreateRequest
 }) (*NotificationPolicyResolver, error) {
 	if err := auth.Authorize(ctx, auth.NotificationWrite); err != nil {
 		return nil, err
 	}
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateNotificationPolicy(ctx, args.Token, args.Request)
+	updated, err := api.UpdateNotificationPolicy(ctx, args.Token, &args.Request)
 	if err != nil {
 		return nil, err
 	}

@@ -12,13 +12,13 @@ import (
 
 // CreateNotificationChannel creates a delivery channel.
 func (r *SchemaResolver) CreateNotificationChannel(ctx context.Context, args struct {
-	Request *model.NotificationChannelCreateRequest
+	Request model.NotificationChannelCreateRequest
 }) (*NotificationChannelResolver, error) {
 	if err := auth.Authorize(ctx, auth.NotificationWrite); err != nil {
 		return nil, err
 	}
 	api := r.GetApi(ctx)
-	created, err := api.CreateNotificationChannel(ctx, args.Request)
+	created, err := api.CreateNotificationChannel(ctx, &args.Request)
 	if err != nil {
 		return nil, err
 	}
@@ -28,13 +28,13 @@ func (r *SchemaResolver) CreateNotificationChannel(ctx context.Context, args str
 // UpdateNotificationChannel updates a delivery channel by token.
 func (r *SchemaResolver) UpdateNotificationChannel(ctx context.Context, args struct {
 	Token   string
-	Request *model.NotificationChannelCreateRequest
+	Request model.NotificationChannelCreateRequest
 }) (*NotificationChannelResolver, error) {
 	if err := auth.Authorize(ctx, auth.NotificationWrite); err != nil {
 		return nil, err
 	}
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateNotificationChannel(ctx, args.Token, args.Request)
+	updated, err := api.UpdateNotificationChannel(ctx, args.Token, &args.Request)
 	if err != nil {
 		return nil, err
 	}
