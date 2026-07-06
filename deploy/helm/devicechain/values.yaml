@@ -269,6 +269,9 @@ functionalAreas:
         port: 8081
   event-management:
     config: {}
+    # anchorSweepIntervalSeconds: 3600  # ADR-044 decision 3 reconciliation-sweep
+    # cadence. Unset defaults to hourly; a negative value disables the sweep (the
+    # entity.deleted consumer remains the primary anchor-cleanup path).
   device-state:
     config: {}
   dashboard-management:

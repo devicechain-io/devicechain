@@ -189,6 +189,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// hot inbound-event resolution path.
 	Api = model.NewApi(RdbManager)
 	CachedApi = model.NewCachedApi(Api, caches)
+	// The delete path evicts the hot-path caches through this seam so a delete does
+	// not leave ingest re-creating the removed entity's anchors (ADR-044 F2). The
+	// GraphQL deletes run on the plain *Api, so the evictor is wired onto it.
+	Api.CacheEvictor = CachedApi
 
 	// Map of providers that will be injected into graphql http context. The NATS
 	// manager backs the live alarm subscription resolver (SubscribeLive, ADR-037); it

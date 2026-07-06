@@ -10,8 +10,26 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
+
+// relationshipSourceDevices returns the distinct device source ids of the tracked
+// relationships matching cond — the devices whose cached relationship set turns
+// stale once those edges change (ADR-044 F2). A read error is logged, not surfaced:
+// eviction is best-effort, and a missed eviction is a bounded stale-cache window
+// (the entry expires at its TTL and, for a delete, the sweep cleans any resulting
+// orphan).
+func (api *Api) relationshipSourceDevices(ctx context.Context, cond string, args ...interface{}) []uint {
+	ids := make([]uint, 0)
+	err := api.RDB.DB(ctx).Model(&EntityRelationship{}).
+		Where("source_type = ?", string(entity.TypeDevice)).Where(cond, args...).
+		Distinct().Pluck("source_id", &ids).Error
+	if err != nil {
+		log.Warn().Err(err).Msg("Unable to resolve relationship source devices for cache eviction")
+	}
+	return ids
+}
 
 // This file holds the registry delete API. Deletes are uniform across the device
 // management entity families, so the shared mechanics live here rather than being
@@ -77,6 +95,10 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		}
 		return false, err
 	}
+	// Before the delete removes the relationship edges, capture the devices that
+	// track this entity as a target — their cached tracked-relationship set turns
+	// stale once the edge is gone (ADR-044 F2).
+	trackingSources := api.relationshipSourceDevices(ctx, "target_type = ? AND target_id = ?", string(etype), id)
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Unscoped().Where(
 			"(source_type = ? AND source_id = ?) OR (target_type = ? AND target_id = ?)",
@@ -118,6 +140,9 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		EntityToken: token,
 		DeletedTime: time.Now().UTC(),
 	})
+	// Drop the hot-path caches this delete invalidated so ingest stops resolving the
+	// removed entity and re-creating its anchors within the cache TTL (ADR-044 F2).
+	api.evictEntityDelete(ctx, etype, id, token, trackingSources)
 	return true, nil
 }
 
@@ -300,7 +325,16 @@ func (api *Api) DeleteEntityRelationshipType(ctx context.Context, token string) 
 // the explicit "unassign" operation — an assignment is a relationship edge
 // (ADR-013), so removing the edge unassigns the source from the target.
 func (api *Api) RemoveEntityRelationship(ctx context.Context, token string) (bool, error) {
-	return api.hardDeleteByToken(ctx, &EntityRelationship{}, token)
+	// Capture the source device before the edge is gone so its cached tracked set can
+	// be evicted (ADR-044 F2). Unlike a delete, the target entity survives here, so
+	// the reconciliation sweep will not repair a stale set — eviction is the only fix.
+	sources := api.relationshipSourceDevices(ctx, "token = ?", token)
+	deleted, err := api.hardDeleteByToken(ctx, &EntityRelationship{}, token)
+	if err != nil || !deleted {
+		return deleted, err
+	}
+	api.evictRelationshipSources(ctx, sources)
+	return deleted, nil
 }
 
 // --- Metrics & provisioning ----------------------------------------------------

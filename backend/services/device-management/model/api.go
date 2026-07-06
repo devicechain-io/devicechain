@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
@@ -25,6 +26,29 @@ type Api struct {
 	// reference holders can reconcile. Injected at wiring time like AlarmPublisher and
 	// may be nil (tests / pre-wiring), disabling emission.
 	EntityDeletedPublisher EntityEventPublisher
+
+	// CacheEvictor drops cached entries a delete invalidates (ADR-044 F2). Without
+	// it, after a delete the ingest hot path keeps resolving the removed device and
+	// keeps a referencing device's tracked relationships cached for up to the TTL,
+	// re-creating the very event_anchors the reconciler just removed. Injected at
+	// wiring time (it holds the cache layer); nil in tests disables eviction.
+	CacheEvictor CacheEvictor
+}
+
+// CacheEvictor drops the hot-path caches (ADR-022 B2) that a mutation makes stale.
+// Dependency-inverted so the model declares the need and the cache layer (CachedApi)
+// satisfies it.
+//
+// EvictEntityDelete handles an entity delete: the deleted device's own by-token +
+// relationship entries, plus the tracked relationships of every device that
+// referenced it as a target. EvictRelationshipSources handles an edge *removal*
+// (unassign): only the source devices' relationship entries, since the target
+// entity survives — and unlike a delete, the reconciliation sweep will not repair a
+// stale relationship set here (the target still resolves), so evicting is the only
+// fix.
+type CacheEvictor interface {
+	EvictEntityDelete(ctx context.Context, etype entity.Type, id uint, token string, trackingSourceDeviceIds []uint)
+	EvictRelationshipSources(ctx context.Context, sourceDeviceIds []uint)
 }
 
 // Create a new API instance.
@@ -56,6 +80,22 @@ func (api *Api) emitAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent
 func (api *Api) emitEntityDeleted(ctx context.Context, event *EntityDeletedEvent) {
 	if api.EntityDeletedPublisher != nil {
 		api.EntityDeletedPublisher.PublishEntityDeleted(ctx, event)
+	}
+}
+
+// evictEntityDelete drops the caches a delete invalidated when an evictor is wired,
+// and is a no-op otherwise. Called post-commit alongside emitEntityDeleted.
+func (api *Api) evictEntityDelete(ctx context.Context, etype entity.Type, id uint, token string, sources []uint) {
+	if api.CacheEvictor != nil {
+		api.CacheEvictor.EvictEntityDelete(ctx, etype, id, token, sources)
+	}
+}
+
+// evictRelationshipSources drops the cached tracked-relationship sets of the given
+// source devices when an evictor is wired (ADR-044 F2). No-op otherwise.
+func (api *Api) evictRelationshipSources(ctx context.Context, sourceDeviceIds []uint) {
+	if api.CacheEvictor != nil && len(sourceDeviceIds) > 0 {
+		api.CacheEvictor.EvictRelationshipSources(ctx, sourceDeviceIds)
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 type entityLoader struct {
 	resolveToken func(ctx context.Context, api *Api, token string) (uint, error)
 	loadById     func(ctx context.Context, api *Api, id uint) (interface{}, error)
+	existingIds  func(ctx context.Context, api *Api, ids []uint) ([]uint, error)
 }
 
 // loaderFor builds an entityLoader from a type's by-token and by-id accessors and
@@ -49,6 +50,20 @@ func loaderFor[T any](
 				return nil, nil
 			}
 			return matches[0], nil
+		},
+		existingIds: func(ctx context.Context, api *Api, ids []uint) ([]uint, error) {
+			if len(ids) == 0 {
+				return []uint{}, nil
+			}
+			matches, err := byId(api, ctx, ids)
+			if err != nil {
+				return nil, err
+			}
+			existing := make([]uint, 0, len(matches))
+			for _, m := range matches {
+				existing = append(existing, idOf(m))
+			}
+			return existing, nil
 		},
 	}
 }
@@ -85,6 +100,20 @@ func (api *Api) LoadEntity(ctx context.Context, etype string, id uint) (interfac
 		return nil, fmt.Errorf("unknown entity type %q", etype)
 	}
 	return loader.loadById(ctx, api, id)
+}
+
+// ExistingEntityIds returns the subset of ids that resolve to an existing entity
+// of the given type in the caller's tenant. Unknown type → error. (ADR-044
+// decision 3: the reconciliation sweep uses this to find orphaned anchors.)
+func (api *Api) ExistingEntityIds(ctx context.Context, etype string, ids []uint) ([]uint, error) {
+	loader, ok := entityLoaders[entity.Type(etype)]
+	if !ok {
+		return nil, fmt.Errorf("unknown entity type %q", etype)
+	}
+	if len(ids) == 0 {
+		return []uint{}, nil
+	}
+	return loader.existingIds(ctx, api, ids)
 }
 
 // IsEntityType reports whether t names a known entity type.

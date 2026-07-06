@@ -43,6 +43,41 @@ func NewCachedApi(api *Api, caches *Caches) *CachedApi {
 	}
 }
 
+// EvictEntityDelete satisfies model.CacheEvictor (ADR-044 F2): it drops the caches
+// a delete invalidated. A deleted device loses its by-token entry and its own
+// tracked-relationship entry; every device that tracked the deleted entity as a
+// target loses its relationship entry (the cached set still lists the gone edge).
+// No tenant in context means the caches were bypassed on write, so nothing to evict.
+func (capi *CachedApi) EvictEntityDelete(ctx context.Context, etype entity.Type, id uint, token string, trackingSourceDeviceIds []uint) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return
+	}
+	if etype == entity.TypeDevice {
+		_ = capi.caches.DeviceByToken.Delete(ctx, deviceByTokenKey(tenant, token))
+		_ = capi.caches.RelationshipsBySource.Delete(ctx, relationshipsBySourceKey(tenant, id))
+	}
+	capi.evictRelationshipSources(ctx, tenant, trackingSourceDeviceIds)
+}
+
+// EvictRelationshipSources drops the cached tracked-relationship set of each given
+// source device (ADR-044 F2): after an edge is removed the set still lists the gone
+// edge. No tenant in context means the caches were bypassed on write, nothing to
+// evict.
+func (capi *CachedApi) EvictRelationshipSources(ctx context.Context, sourceDeviceIds []uint) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return
+	}
+	capi.evictRelationshipSources(ctx, tenant, sourceDeviceIds)
+}
+
+func (capi *CachedApi) evictRelationshipSources(ctx context.Context, tenant string, sourceDeviceIds []uint) {
+	for _, sid := range sourceDeviceIds {
+		_ = capi.caches.RelationshipsBySource.Delete(ctx, relationshipsBySourceKey(tenant, sid))
+	}
+}
+
 // deviceByTokenKey builds the tenant-scoped cache key for a single device token.
 // The tenant is part of the key so a hit can never cross tenant boundaries.
 func deviceByTokenKey(tenant string, token string) string {

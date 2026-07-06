@@ -5,16 +5,21 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-event-management/config"
 	"github.com/devicechain-io/dc-event-management/graphql"
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-event-management/processor"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/svcclient"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -33,6 +38,8 @@ var (
 
 	EntityDeletedReader    messaging.MessageReader
 	EntityAnchorReconciler *processor.EntityAnchorReconciler
+
+	AnchorSweep *processor.AnchorReconciliationSweep
 )
 
 func main() {
@@ -108,6 +115,35 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	return nil
 }
 
+// wireAnchorSweep builds the reconciliation sweep (ADR-044 decision 3) when it is
+// configured — a positive interval plus the shared service secret and the
+// device-management endpoint it queries. It is disabled (with a log line) otherwise:
+// the entity.deleted consumer remains the primary path, so a missing sweep degrades
+// gracefully rather than failing startup.
+func wireAnchorSweep(ctx context.Context) error {
+	interval := Configuration.AnchorSweepIntervalSeconds
+	if interval <= 0 {
+		log.Info().Msg("Anchor reconciliation sweep disabled (interval <= 0).")
+		return nil
+	}
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 ||
+		infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("Service secret, device-management, or user-management endpoint not configured — anchor reconciliation sweep disabled.")
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-management", []string{string(auth.DeviceRead)})
+	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	AnchorSweep = processor.NewAnchorReconciliationSweep(Microservice, Api, client, dmURL,
+		time.Duration(interval)*time.Second, core.NewNoOpLifecycleCallbacks())
+	if err := AnchorSweep.Initialize(ctx); err != nil {
+		return err
+	}
+	log.Info().Str("deviceManagement", dmURL).Int("intervalSeconds", interval).
+		Msg("Anchor reconciliation sweep enabled (ADR-044 decision 3).")
+	return nil
+}
+
 // Called after microservice has been initialized.
 func afterMicroserviceInitialized(ctx context.Context) error {
 	// Parse configuration.
@@ -135,6 +171,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
 	err = NatsManager.Initialize(ctx)
 	if err != nil {
+		return err
+	}
+
+	// Build the reconciliation sweep (ADR-044 decision 3), the backstop for
+	// entity-deletion events missed by the primary consumer.
+	if err := wireAnchorSweep(ctx); err != nil {
 		return err
 	}
 
@@ -198,11 +240,25 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start the reconciliation sweep, if configured.
+	if AnchorSweep != nil {
+		if err := AnchorSweep.Start(ctx); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// Stop the reconciliation sweep, if running.
+	if AnchorSweep != nil {
+		if err := AnchorSweep.Stop(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Stop entity-anchor reconciler.
 	if err := EntityAnchorReconciler.Stop(ctx); err != nil {
 		return err
