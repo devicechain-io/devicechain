@@ -136,7 +136,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Microservice.MarkReady(IdentityManager.Validator())
 
 	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{})
-	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(), *parsed,
+	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(), parsed,
 		providers, Microservice.Readiness)
 	if err := GraphQLManager.Initialize(ctx); err != nil {
 		return err

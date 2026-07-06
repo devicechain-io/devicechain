@@ -133,7 +133,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Microservice.StartInstanceAuthGate(ctx)
 
 	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(),
-		*parsed, providers, Microservice.Readiness)
+		parsed, providers, Microservice.Readiness)
 	return GraphQLManager.Initialize(ctx)
 }
 
