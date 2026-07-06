@@ -15,10 +15,10 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
-	"github.com/olekukonko/tablewriter"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
@@ -135,17 +135,12 @@ func (ms *Microservice) Banner() {
 /_____/\___/|___/_/\___/\___/\____/_/ /_/\__,_/_/_/ /_/ 
 
 `))
-	table := tablewriter.NewWriter(os.Stdout)
-	table.SetBorder(false)
-	table.SetAutoWrapText(false)
-	data := [][]string{
-		{"Tenant", fmt.Sprintf("%s (%s)", ms.TenantName, ms.TenantId)},
-		{"Microservice", fmt.Sprintf("%s (%s)", ms.MicroserviceName, ms.MicroserviceId)},
-	}
-	for _, v := range data {
-		table.Append(v)
-	}
-	table.Render()
+	// A borderless two-column key/value banner. text/tabwriter (stdlib) aligns the
+	// value column across rows, which is all this startup banner needs.
+	table := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintf(table, "  Tenant\t%s (%s)\n", ms.TenantName, ms.TenantId)
+	fmt.Fprintf(table, "  Microservice\t%s (%s)\n", ms.MicroserviceName, ms.MicroserviceId)
+	table.Flush()
 	fmt.Println()
 }
 
