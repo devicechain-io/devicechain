@@ -15,16 +15,17 @@ import (
 // Criteria used when searching for events of any type. The same criteria is
 // shared by the base-event and typed-event reads. Time range is applied to the
 // occurred_time column; the optional relationship anchor filters on the uniform
-// (anchor_type, anchor_id) columns (ADR-013) — the type names an entity class
-// (e.g. "customer") and the id is that entity's row id.
+// (anchor_type, anchor_token) columns (ADR-013/044) — the type names an entity
+// class (e.g. "customer") and the token is that entity's stable per-tenant token.
+// The device is likewise named by its token, not a device-management row id.
 type EventSearchCriteria struct {
 	rdb.Pagination
-	DeviceId   *uint
-	EventTypes []esmodel.EventType
-	StartTime  *time.Time
-	EndTime    *time.Time
-	AnchorType *string
-	AnchorId   *uint
+	DeviceToken *string
+	EventTypes  []esmodel.EventType
+	StartTime   *time.Time
+	EndTime     *time.Time
+	AnchorType  *string
+	AnchorToken *string
 }
 
 // Search results returned from a base event query.
@@ -65,13 +66,13 @@ func IsAnchorType(t string) bool {
 // time_bucket interval). Unlike a paginated read it returns every matching
 // bucket, so callers should always bound it with a time range.
 type MeasurementAggregationCriteria struct {
-	DeviceId        *uint
+	DeviceToken     *string
 	Name            *string
 	EventTypes      []esmodel.EventType
 	StartTime       *time.Time
 	EndTime         *time.Time
 	AnchorType      *string
-	AnchorId        *uint
+	AnchorToken     *string
 	IntervalSeconds int64
 }
 

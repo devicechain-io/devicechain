@@ -73,20 +73,22 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 
 // MergeToResolveEvent assembles a resolved event from the inbound event and the
 // device's tracked-relationship targets, denormalized as a set of uniform
-// (type, id) anchors (ADR-013). An empty anchor set yields an anchorless event —
-// the device is unassigned — which still persists and projects, keyed on the
-// device, rather than being dropped (ADR-013 addendum 2026-07-01).
+// (type, token) anchors (ADR-013/044). An empty anchor set yields an anchorless
+// event — the device is unassigned — which still persists and projects, keyed on
+// the device, rather than being dropped (ADR-013 addendum 2026-07-01). The source
+// device travels as its token (ADR-044): the numeric row id stays inside
+// device-management and never reaches event-management / device-state.
 func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []model.ResolvedAnchor,
 	event *esmodel.UnresolvedEvent, rezPayload interface{}) (*EventResolutionResults, error) {
 	resolved := &model.ResolvedEvent{
-		Source:         event.Source,
-		AltId:          event.AltId,
-		SourceDeviceId: device.ID,
-		Anchors:        anchors,
-		OccurredTime:   event.OccurredTime,
-		ProcessedTime:  event.ProcessedTime,
-		EventType:      event.EventType,
-		Payload:        rezPayload,
+		Source:            event.Source,
+		AltId:             event.AltId,
+		SourceDeviceToken: device.Token,
+		Anchors:           anchors,
+		OccurredTime:      event.OccurredTime,
+		ProcessedTime:     event.ProcessedTime,
+		EventType:         event.EventType,
+		Payload:           rezPayload,
 	}
 	return &EventResolutionResults{Device: device, Resolved: resolved}, nil
 }
@@ -133,9 +135,9 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	}
 
 	// Merge info from device and created assignment into event — the new
-	// relationship is itself the event's single anchor.
+	// relationship is itself the event's single anchor, addressed by target token.
 	anchors := []model.ResolvedAnchor{
-		{AnchorType: created.TargetType, AnchorId: created.TargetId, RelationshipId: created.ID},
+		{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID},
 	}
 	resolved, err := rez.MergeToResolveEvent(device, anchors, event, payload)
 	if err != nil {
@@ -341,9 +343,19 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Devic
 	anchors := make([]model.ResolvedAnchor, 0, len(drels.Results))
 	for i := range drels.Results {
 		r := &drels.Results[i]
+		// TargetToken is denormalized at relationship-create time (ADR-044). An empty
+		// value means a row predating that column on a non-fresh cluster (the migration
+		// does not backfill) — emitting it would write an unqueryable empty-token anchor
+		// and make the sweep churn on it, so skip it loudly rather than corrupt silently.
+		if r.TargetToken == "" {
+			log.Warn().Str("device", device.Token).Str("relationship", r.Token).
+				Str("targetType", r.TargetType).
+				Msg("Skipping anchor with empty target token (relationship predates the ADR-044 denormalization; recreate it)")
+			continue
+		}
 		anchors = append(anchors, model.ResolvedAnchor{
 			AnchorType:     r.TargetType,
-			AnchorId:       r.TargetId,
+			AnchorToken:    r.TargetToken,
 			RelationshipId: r.ID,
 		})
 	}

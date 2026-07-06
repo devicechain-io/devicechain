@@ -11,14 +11,17 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
-// Event with token references resolved. DeviceId names the originating device.
-// The device's tracked-relationship targets are recorded as a *set* of anchors
-// in the sibling EventAnchor table (ADR-013 addendum 2026-07-01) rather than a
-// single denormalized pair, so an event assigned to several targets is queryable
-// by each; an unassigned device's event simply has no anchor rows.
+// Event with token references resolved. DeviceToken names the originating device
+// by its stable per-tenant token (ADR-044): event-management never stores
+// device-management's numeric row ids, which are meaningless across the seam and
+// break under id reuse. The device's tracked-relationship targets are recorded as
+// a *set* of anchors in the sibling EventAnchor table (ADR-013 addendum
+// 2026-07-01) rather than a single denormalized pair, so an event assigned to
+// several targets is queryable by each; an unassigned device's event simply has no
+// anchor rows.
 type Event struct {
 	rdb.TenantScoped
-	DeviceId      uint
+	DeviceToken   string `gorm:"type:varchar(128)"`
 	EventType     esmodel.EventType
 	OccurredTime  time.Time
 	Source        string
@@ -28,16 +31,18 @@ type Event struct {
 
 // EventAnchor is one anchor of an event: a device's tracked-relationship target
 // (ADR-013) denormalized so the event is queryable by that (anchor_type,
-// anchor_id) dimension. It points back to the base event by its natural key
-// (device_id, event_type, occurred_time); occurred_time is also the hypertable
-// partition column. One event has zero or more anchor rows.
+// anchor_token) dimension. Both the source device and the anchor target are named
+// by their stable per-tenant tokens (ADR-044), not device-management row ids. It
+// points back to the base event by its natural key (device_token, event_type,
+// occurred_time); occurred_time is also the hypertable partition column. One event
+// has zero or more anchor rows.
 type EventAnchor struct {
 	rdb.TenantScoped
-	DeviceId     uint              `gorm:"not null"`
+	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
 	AnchorType   string            `gorm:"not null"`
-	AnchorId     uint              `gorm:"not null"`
+	AnchorToken  string            `gorm:"type:varchar(128);not null"`
 }
 
 // The three payload tables (location/measurement/alert) are hypertables in their
@@ -51,7 +56,7 @@ type EventAnchor struct {
 // Location event fields.
 type LocationEvent struct {
 	rdb.TenantScoped
-	DeviceId     uint              `gorm:"not null"`
+	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
 	// Latitude/Longitude are degrees, so 8 fractional digits (~1.1mm) with just
@@ -75,7 +80,7 @@ type LocationEventCreateRequest struct {
 // Measurement event fields.
 type MeasurementEvent struct {
 	rdb.TenantScoped
-	DeviceId     uint              `gorm:"not null"`
+	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
 	Name         string            `gorm:"not null"`
@@ -94,7 +99,7 @@ type MeasurementEventCreateRequest struct {
 // Alert event fields.
 type AlertEvent struct {
 	rdb.TenantScoped
-	DeviceId     uint              `gorm:"not null"`
+	DeviceToken  string            `gorm:"type:varchar(128);not null"`
 	EventType    esmodel.EventType `gorm:"not null"`
 	OccurredTime time.Time         `gorm:"not null"`
 	Type         string            `gorm:"not null"`

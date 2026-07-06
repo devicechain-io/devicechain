@@ -185,11 +185,11 @@ export interface DashboardDefinition {
 // ---- Live telemetry ---------------------------------------------------------
 
 // A live measurement sample delivered to a widget. Mirrors event-management's
-// MeasurementEvent; `deviceId` is the numeric device id the event carries (the
-// value measurementStream filters on), not the device token.
+// MeasurementEvent; `deviceToken` is the device token the event carries (the
+// value measurementStream is keyed on, per ADR-044).
 export interface MeasurementSample {
   id: string;
-  deviceId: string;
+  deviceToken: string;
   eventType: number;
   occurredTime: string | null;
   name: string;

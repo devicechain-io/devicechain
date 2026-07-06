@@ -9,12 +9,12 @@ import (
 	"github.com/devicechain-io/dc-microservice/entity"
 )
 
-// AnchorRef is an entity reference held by event_anchors: a type + raw row id. The
-// reconciliation sweep (ADR-044 decision 3) resolves these against device-management
-// to find anchors whose referenced entity was deleted.
+// AnchorRef is an entity reference held by event_anchors: a type + stable per-tenant
+// token (ADR-044). The reconciliation sweep (ADR-044 decision 3) resolves these
+// against device-management to find anchors whose referenced entity was deleted.
 type AnchorRef struct {
-	Type string
-	Id   uint
+	Type  string
+	Token string
 }
 
 // DistinctAnchorTenants returns every tenant that currently has event_anchors. It is
@@ -28,25 +28,26 @@ func (api *Api) DistinctAnchorTenants(ctx context.Context) ([]string, error) {
 }
 
 // DistinctAnchorRefs returns the distinct entity references in the current tenant's
-// anchors: each source device (a "device" ref) and each (anchor_type, anchor_id)
-// target. Tenant-scoped via the context.
+// anchors: each source device (a "device" ref) and each (anchor_type, anchor_token)
+// target, all addressed by stable per-tenant token (ADR-044). Tenant-scoped via the
+// context.
 func (api *Api) DistinctAnchorRefs(ctx context.Context) ([]AnchorRef, error) {
 	refs := make([]AnchorRef, 0)
 
 	targets := make([]AnchorRef, 0)
 	if err := api.RDB.DB(ctx).Model(&EventAnchor{}).
-		Select("DISTINCT anchor_type AS type, anchor_id AS id").Scan(&targets).Error; err != nil {
+		Select("DISTINCT anchor_type AS type, anchor_token AS token").Scan(&targets).Error; err != nil {
 		return nil, err
 	}
 	refs = append(refs, targets...)
 
-	deviceIds := make([]uint, 0)
+	deviceTokens := make([]string, 0)
 	if err := api.RDB.DB(ctx).Model(&EventAnchor{}).
-		Distinct().Pluck("device_id", &deviceIds).Error; err != nil {
+		Distinct().Pluck("device_token", &deviceTokens).Error; err != nil {
 		return nil, err
 	}
-	for _, id := range deviceIds {
-		refs = append(refs, AnchorRef{Type: string(entity.TypeDevice), Id: id})
+	for _, token := range deviceTokens {
+		refs = append(refs, AnchorRef{Type: string(entity.TypeDevice), Token: token})
 	}
 	return refs, nil
 }

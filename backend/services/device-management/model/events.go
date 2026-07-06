@@ -65,22 +65,26 @@ type ResolvedAlertsPayload struct {
 // Event with token references resolved and the originating device's tracked
 // relationships merged onto it as a set of anchors (ADR-013). The set is empty
 // when the device has no tracked relationship (it still resolves and persists).
+// The source device is carried as its stable per-tenant token (ADR-044): the
+// numeric row id is internal to device-management and never crosses the seam to
+// event-management / device-state.
 type ResolvedEvent struct {
-	Source         string
-	AltId          *string
-	SourceDeviceId uint
-	Anchors        []ResolvedAnchor
-	OccurredTime   time.Time
-	ProcessedTime  time.Time
-	EventType      esmodel.EventType
-	Payload        interface{}
+	Source            string
+	AltId             *string
+	SourceDeviceToken string
+	Anchors           []ResolvedAnchor
+	OccurredTime      time.Time
+	ProcessedTime     time.Time
+	EventType         esmodel.EventType
+	Payload           interface{}
 }
 
 // ResolvedAnchor is one of a resolved event's anchors — a tracked relationship's
-// target as a uniform (type, id) reference (ADR-013).
+// target as a uniform (type, token) reference (ADR-013/044). The target is named
+// by its stable per-tenant token so the reference survives across the service seam.
 type ResolvedAnchor struct {
 	AnchorType     string
-	AnchorId       uint
+	AnchorToken    string
 	RelationshipId uint
 }
 

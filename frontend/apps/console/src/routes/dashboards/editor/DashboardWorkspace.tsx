@@ -488,7 +488,6 @@ export function DashboardWorkspace({
           <DashboardRenderer
             definition={working}
             hub={dataHub}
-            resolver={resolver}
             seedHistory={!preview}
             bindings={hubBindings}
           />

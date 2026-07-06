@@ -315,8 +315,8 @@ function View({
   const { definition, manifest } = loaded;
 
   // The effective slot→entity manifest (definition defaults merged with the pasted
-  // override). One resolver shared by the hub (stream resolution) and the renderer
-  // (history seeding); one hub for this view's lifetime, torn down on unmount.
+  // override). The resolver backs the hub's anchor→device-token expansion; one hub
+  // for this view's lifetime, torn down on unmount.
   const bindings = useMemo(() => effectiveBindings(definition, manifest), [definition, manifest]);
   const resolver = useMemo(() => createDeviceResolver(), []);
   const hub = useMemo(() => new DashboardHub({ resolver, bindings }), [resolver, bindings]);
@@ -345,7 +345,6 @@ function View({
         <DashboardRenderer
           definition={definition}
           hub={hub}
-          resolver={resolver}
           bindings={bindings}
         />
       </main>

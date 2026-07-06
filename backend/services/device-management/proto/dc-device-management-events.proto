@@ -31,23 +31,27 @@ message PFailedEvent {
 
 /**
  * A single resolved anchor: one of the device's tracked relationships at event
- * time, denormalized so the event is queryable by that (type, id) dimension
- * (ADR-013). A device with several tracked relationships yields several anchors.
+ * time, denormalized so the event is queryable by that (type, token) dimension
+ * (ADR-013/044). The target is addressed by its stable per-tenant token, not a
+ * device-management row id, so the reference stays valid across the service seam.
+ * A device with several tracked relationships yields several anchors.
  */
 message PResolvedAnchor {
 	string anchor_type = 1;
-	uint64 anchor_id = 2;
+	string anchor_token = 2;
 	uint64 relationship_id = 3;
 }
 
 /**
  * Event that was successfully resolved. It carries the full set of the device's
- * tracked-relationship anchors (empty when the device is unassigned).
+ * tracked-relationship anchors (empty when the device is unassigned). The source
+ * device is addressed by its token (ADR-044): the numeric row id never crosses the
+ * seam to event-management / device-state.
  */
  message PResolvedEvent {
 	string source = 1;
 	optional string alt_id = 2;
-	uint64 source_device_id = 3;
+	string source_device_token = 3;
 	repeated PResolvedAnchor anchors = 4;
     string occurred_time = 7;
     string processed_time = 8;

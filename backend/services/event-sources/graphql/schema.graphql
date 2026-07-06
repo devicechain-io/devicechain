@@ -2,12 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-# Contains queries executed against model.
+# Contains queries executed against model. event-sources exposes no read API of
+# its own (it is an ingest transport); the placeholder field keeps the type
+# non-empty, which the GraphQL runtime (graphql-go 1.10) requires.
 type Query {
+    _empty: Boolean
 }
 
-# Contains mutations executed against model.
+# Contains mutations executed against model. Ingest happens over the device-plane
+# transports, not this API; the placeholder keeps the type non-empty.
 type Mutation {
+    _empty: Boolean
 }
 
 schema {

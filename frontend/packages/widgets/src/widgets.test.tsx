@@ -52,7 +52,7 @@ const widget = (
 
 const sample = (name: string, value: number, time: string): MeasurementSample => ({
   id: `${name}-${time}`,
-  deviceId: '4',
+  deviceToken: 'therm-001',
   eventType: 0,
   occurredTime: time,
   name,

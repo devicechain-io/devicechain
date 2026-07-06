@@ -5,13 +5,13 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 export type EventAnchor = {
-  id: string;
+  token: string;
   type: string;
 };
 
 export type EventSearchCriteria = {
   anchor?: EventAnchor | null | undefined;
-  deviceId?: string | null | undefined;
+  deviceToken?: string | null | undefined;
   endTime?: string | null | undefined;
   eventTypes?: Array<number> | null | undefined;
   pageNumber: number;
@@ -24,7 +24,7 @@ export type EventsQueryVariables = Exact<{
 }>;
 
 
-export type EventsQuery = { events: { results: Array<{ id: string, deviceId: string, eventType: number, occurredTime: string | null, source: string }>, pagination: { totalRecords: number | null } } };
+export type EventsQuery = { events: { results: Array<{ id: string, deviceToken: string, eventType: number, occurredTime: string | null, source: string }>, pagination: { totalRecords: number | null } } };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -50,7 +50,7 @@ export const EventsDocument = new TypedDocumentString(`
   events(criteria: $criteria) {
     results {
       id
-      deviceId
+      deviceToken
       eventType
       occurredTime
       source

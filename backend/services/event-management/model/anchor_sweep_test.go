@@ -5,7 +5,6 @@ package model
 
 import (
 	"context"
-	"strconv"
 	"testing"
 	"time"
 
@@ -21,9 +20,9 @@ func TestDistinctAnchorRefs(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	occurred := time.Date(2026, 7, 6, 20, 0, 0, 0, time.UTC)
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
-		{DeviceId: 4, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorId: 3},
-		{DeviceId: 4, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorId: 9},
-		{DeviceId: 7, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorId: 3}, // dup target
+		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
+		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
+		{DeviceToken: "device-7", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"}, // dup target
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -33,13 +32,13 @@ func TestDistinctAnchorRefs(t *testing.T) {
 
 	set := make(map[string]bool)
 	for _, r := range refs {
-		set[r.Type+"|"+strconv.FormatUint(uint64(r.Id), 10)] = true
+		set[r.Type+"|"+r.Token] = true
 	}
 	// two distinct targets + two distinct source devices
-	assert.True(t, set["customer|3"], "customer 3 target")
-	assert.True(t, set["area|9"], "area 9 target")
-	assert.True(t, set["device|4"], "device 4 source")
-	assert.True(t, set["device|7"], "device 7 source")
+	assert.True(t, set["customer|cust-3"], "customer 3 target")
+	assert.True(t, set["area|area-9"], "area 9 target")
+	assert.True(t, set["device|device-4"], "device 4 source")
+	assert.True(t, set["device|device-7"], "device 7 source")
 	assert.Len(t, set, 4, "customer 3 appears once despite two anchors")
 }
 
@@ -51,7 +50,7 @@ func TestDistinctAnchorTenants(t *testing.T) {
 	for _, tenant := range []string{"acme", "globex"} {
 		tctx := core.WithTenant(context.Background(), tenant)
 		if err := api.CreateEventAnchors(tctx, api.RDB.DB(tctx), []*EventAnchor{
-			{DeviceId: 1, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorId: 1},
+			{DeviceToken: "device-1", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-1"},
 		}); err != nil {
 			t.Fatalf("seed %s: %v", tenant, err)
 		}

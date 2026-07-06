@@ -21,9 +21,9 @@ func TestMeasurementFromResolved(t *testing.T) {
 	occurred := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	classifier := uint64(3)
 	resolved := &dmmodel.ResolvedEvent{
-		SourceDeviceId: 4,
-		OccurredTime:   occurred,
-		EventType:      esmodel.Measurement,
+		SourceDeviceToken: "device-4",
+		OccurredTime:      occurred,
+		EventType:         esmodel.Measurement,
 	}
 
 	me := measurementFromResolved(resolved, dmmodel.ResolvedMeasurementEntry{
@@ -32,7 +32,7 @@ func TestMeasurementFromResolved(t *testing.T) {
 		Classifier: &classifier,
 	})
 
-	assert.Equal(t, uint(4), me.DeviceId)
+	assert.Equal(t, "device-4", me.DeviceToken)
 	assert.Equal(t, esmodel.Measurement, me.EventType)
 	assert.Equal(t, occurred, me.OccurredTime)
 	assert.Equal(t, "temperature", me.Name)
@@ -45,7 +45,7 @@ func TestMeasurementFromResolved(t *testing.T) {
 // A non-numeric measurement value leaves Value null rather than erroring, so one
 // bad reading does not drop the stream.
 func TestMeasurementFromResolvedNonNumeric(t *testing.T) {
-	me := measurementFromResolved(&dmmodel.ResolvedEvent{SourceDeviceId: 1}, dmmodel.ResolvedMeasurementEntry{
+	me := measurementFromResolved(&dmmodel.ResolvedEvent{SourceDeviceToken: "device-1"}, dmmodel.ResolvedMeasurementEntry{
 		Name:  "state",
 		Value: "OPEN",
 	})

@@ -26,7 +26,7 @@ func NewInitialSchema() *gormigrate.Migration {
 			// Location event fields.
 			type LocationEvent struct {
 				rdb.TenantScoped
-				DeviceId     uint              `gorm:"not null"`
+				DeviceToken  string            `gorm:"type:varchar(128);not null"`
 				EventType    esmodel.EventType `gorm:"not null"`
 				OccurredTime time.Time         `gorm:"not null"`
 				// Elevation is metres (decimal(12,4)), not degrees — see events.go.
@@ -38,7 +38,7 @@ func NewInitialSchema() *gormigrate.Migration {
 			// Measurement event fields.
 			type MeasurementEvent struct {
 				rdb.TenantScoped
-				DeviceId     uint              `gorm:"not null"`
+				DeviceToken  string            `gorm:"type:varchar(128);not null"`
 				EventType    esmodel.EventType `gorm:"not null"`
 				OccurredTime time.Time         `gorm:"not null"`
 				Name         string            `gorm:"not null"`
@@ -49,7 +49,7 @@ func NewInitialSchema() *gormigrate.Migration {
 			// Alert event fields.
 			type AlertEvent struct {
 				rdb.TenantScoped
-				DeviceId     uint              `gorm:"not null"`
+				DeviceToken  string            `gorm:"type:varchar(128);not null"`
 				EventType    esmodel.EventType `gorm:"not null"`
 				OccurredTime time.Time         `gorm:"not null"`
 				Type         string            `gorm:"not null"`
@@ -58,11 +58,19 @@ func NewInitialSchema() *gormigrate.Migration {
 				Source       string
 			}
 
-			// Base event fields. The relationship target is denormalized as a
-			// single uniform (anchor_type, anchor_id) pair (ADR-013).
+			// Base event fields. The originating device is keyed by its token
+			// (ADR-044). A device token is unique only PER TENANT (ADR-042), so
+			// tenant_id must lead the composite primary key — otherwise two tenants
+			// with a same-named device emitting at the same instant collide and one
+			// parent event is silently dropped by upsertParentEvents' ON CONFLICT DO
+			// NOTHING. (tenant_id is declared explicitly rather than via the shared
+			// rdb.TenantScoped embed because only this table needs it in the PK.)
+			// The relationship target is denormalized as a single uniform
+			// (anchor_type, anchor_id) pair here (ADR-013), superseded by the
+			// event_anchors set table (these two columns are dropped there).
 			type Event struct {
-				rdb.TenantScoped
-				DeviceId      uint              `gorm:"primaryKey"`
+				TenantId      string            `gorm:"primaryKey;not null;size:128"`
+				DeviceToken   string            `gorm:"primaryKey;type:varchar(128)"`
 				EventType     esmodel.EventType `gorm:"primaryKey"`
 				OccurredTime  time.Time         `gorm:"primaryKey"`
 				Source        string
@@ -96,8 +104,21 @@ func NewInitialSchema() *gormigrate.Migration {
 				}
 			}
 
-			// Add index on device id.
-			tx.Exec("CREATE INDEX ON \"event-management\".\"events\" (device_id, occurred_time DESC);")
+			// The device is keyed by its token (ADR-044). The token is opaque and only
+			// ever exact-matched, so force C collation on every device_token column:
+			// bytewise memcmp comparisons (no locale overhead) and smaller, faster
+			// B-trees than the default collation on these high-volume hypertables. The
+			// index below inherits the column's collation.
+			for _, t := range []string{"events", "location_events", "measurement_events", "alert_events"} {
+				tx.Exec("ALTER TABLE \"event-management\".\"" + t +
+					"\" ALTER COLUMN device_token TYPE varchar(128) COLLATE \"C\";")
+				if tx.Error != nil {
+					return tx.Error
+				}
+			}
+
+			// Add index on device token.
+			tx.Exec("CREATE INDEX ON \"event-management\".\"events\" (device_token, occurred_time DESC);")
 			if tx.Error != nil {
 				return tx.Error
 			}

@@ -10,32 +10,14 @@
 
 import type { TypedDocument } from '@devicechain/client';
 
-// ── device-management: resolve a device token to its numeric id ──────────────
-// measurementStream filters on the numeric Device.id, not the token.
-
-export interface DevicesByTokenResult {
-  devicesByToken: Array<{ id: string; token: string }>;
-}
-export interface DevicesByTokenVariables {
-  tokens: string[];
-}
-
-export const DEVICES_BY_TOKEN = `
-  query DevicesByToken($tokens: [String!]!) {
-    devicesByToken(tokens: $tokens) {
-      id
-      token
-    }
-  }
-` as unknown as TypedDocument<DevicesByTokenResult, DevicesByTokenVariables>;
-
 // ── device-management: the devices anchored to a target (area/customer/asset) ─
 // Filters relationships whose source is a device and whose target is the anchor
-// entity; `source { id }` yields each member device's numeric id.
+// entity; `source { token }` yields each member device's token (measurementStream
+// is keyed by token, per ADR-044).
 
 export interface EntityRelationshipsResult {
   entityRelationships: {
-    results: Array<{ source: { id: string } }>;
+    results: Array<{ source: { token: string } }>;
   };
 }
 export interface EntityRelationshipsVariables {
@@ -54,7 +36,7 @@ export const DEVICES_FOR_ANCHOR = `
     entityRelationships(criteria: $criteria) {
       results {
         source {
-          id
+          token
         }
       }
     }
@@ -73,7 +55,7 @@ export interface BucketedMeasurementsResult {
 }
 export interface BucketedMeasurementsVariables {
   criteria: {
-    deviceId: string;
+    deviceToken: string;
     name?: string | null;
     startTime: string;
     endTime: string;

@@ -129,16 +129,16 @@ export default function DeviceDetailPage() {
         <TabsContent value="connectivity">
           <div className="space-y-4">
             <SectionPanel title="Connectivity">
-              <DeviceStatePanel deviceId={device.id} />
+              <DeviceStatePanel deviceToken={device.token} />
             </SectionPanel>
             <SectionPanel title="Latest readings">
-              <DeviceReadingsPanel deviceId={device.id} />
+              <DeviceReadingsPanel deviceToken={device.token} />
             </SectionPanel>
           </div>
         </TabsContent>
         <TabsContent value="events">
           <SectionPanel>
-            <DeviceEventsPanel deviceId={device.id} />
+            <DeviceEventsPanel deviceToken={device.token} />
           </SectionPanel>
         </TabsContent>
         <TabsContent value="commands">
@@ -159,10 +159,10 @@ export default function DeviceDetailPage() {
 // DeviceStatePanel loads the device-state projection independently of the rest
 // of the page: if the tenant's role lacks state:read the query errors and this
 // panel shows an ErrorState rather than breaking the page.
-function DeviceStatePanel({ deviceId }: { deviceId: string }) {
+function DeviceStatePanel({ deviceToken }: { deviceToken: string }) {
   const { data: state, loading, error } = useQuery(
-    () => getDeviceState(Number(deviceId)),
-    [deviceId],
+    () => getDeviceState(deviceToken),
+    [deviceToken],
   );
 
   if (loading) return <LoadingState description="Loading state…" />;
@@ -198,10 +198,10 @@ function DeviceStatePanel({ deviceId }: { deviceId: string }) {
 // reported — the O(1) latest-value projection from device-state. Loads
 // independently: if the role lacks state:read the query errors and this panel
 // degrades to an ErrorState rather than breaking the page.
-function DeviceReadingsPanel({ deviceId }: { deviceId: string }) {
+function DeviceReadingsPanel({ deviceToken }: { deviceToken: string }) {
   const { data, loading, error } = useQuery(
-    () => getLatestMeasurements(Number(deviceId)),
-    [deviceId],
+    () => getLatestMeasurements(deviceToken),
+    [deviceToken],
   );
 
   if (loading) return <LoadingState description="Loading readings…" />;
@@ -235,10 +235,10 @@ function DeviceReadingsPanel({ deviceId }: { deviceId: string }) {
 // DeviceEventsPanel loads the most recent events independently of the rest of
 // the page: if the tenant's role lacks event:read the query errors and this
 // panel shows an ErrorState rather than breaking the page.
-function DeviceEventsPanel({ deviceId }: { deviceId: string }) {
+function DeviceEventsPanel({ deviceToken }: { deviceToken: string }) {
   const { data, loading, error } = useQuery(
-    () => listEvents({ deviceId, pageNumber: 1, pageSize: 10 }),
-    [deviceId],
+    () => listEvents({ deviceToken, pageNumber: 1, pageSize: 10 }),
+    [deviceToken],
   );
 
   if (loading) return <LoadingState description="Loading events…" />;

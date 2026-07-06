@@ -25,11 +25,11 @@ export default function DashboardDetailPage() {
 
   const { data, loading, error } = useQuery(() => getDashboard(token), [token]);
 
-  // The resolver (token/anchor → device ids) that backs both the hub's stream
-  // resolution and the renderer's history seeding. The hub itself is created by the
-  // workspace, keyed on the slot manifest so a rebind gets a hub that already carries
-  // the new bindings (constructing-with-bindings avoids an effect-ordering race where
-  // widgets would subscribe before setBindings ran).
+  // The resolver (anchor → device tokens) that backs the hub's stream resolution.
+  // The hub itself is created by the workspace, keyed on the slot manifest so a
+  // rebind gets a hub that already carries the new bindings (constructing-with-
+  // bindings avoids an effect-ordering race where widgets would subscribe before
+  // setBindings ran).
   const resolver = useMemo(() => createDeviceResolver(), []);
 
   // Parse the stored JSON into a DashboardDefinition. A malformed definition must

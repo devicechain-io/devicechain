@@ -28,17 +28,17 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 
 // Interface for device state API (used for mocking)
 type DeviceStateApi interface {
-	MergeDeviceState(ctx context.Context, deviceId uint, occurredAt time.Time) (*DeviceState, error)
-	DeviceStatesByDeviceId(ctx context.Context, deviceIds []uint) ([]*DeviceState, error)
+	MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time) (*DeviceState, error)
+	DeviceStatesByDeviceToken(ctx context.Context, deviceTokens []string) ([]*DeviceState, error)
 	DeviceStates(ctx context.Context, criteria DeviceStateSearchCriteria) (*DeviceStateSearchResults, error)
 	SweepInactive(ctx context.Context, now time.Time) (int64, error)
-	MergeLatestMeasurements(ctx context.Context, deviceId uint, inputs []LatestMeasurementInput) error
-	LatestMeasurementsByDeviceId(ctx context.Context, deviceId uint) ([]*LatestMeasurement, error)
+	MergeLatestMeasurements(ctx context.Context, deviceToken string, inputs []LatestMeasurementInput) error
+	LatestMeasurementsByDeviceToken(ctx context.Context, deviceToken string) ([]*LatestMeasurement, error)
 }
 
 // MergeDeviceState updates (or creates) the live state projection for a device
 // in response to a resolved event. It is the write path of the projection.
-func (api *Api) MergeDeviceState(ctx context.Context, deviceId uint, occurredAt time.Time) (*DeviceState, error) {
+func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time) (*DeviceState, error) {
 	// The 5 decode workers can process two events for the same device
 	// concurrently. Read-modify-write the row inside a transaction that takes a
 	// row lock (SELECT … FOR UPDATE), so same-device merges serialize and a later
@@ -46,14 +46,15 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceId uint, occurredAt 
 	found := &DeviceState{}
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("device_id = ?", deviceId).First(found)
+			Where("device_token = ?", deviceToken).First(found)
 		if result.Error != nil {
 			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 				// First event seen for this device: create a new active row. A
-				// concurrent first event loses the device_id unique index race and
-				// errors out (redelivered), rather than producing a duplicate.
+				// concurrent first event loses the (tenant_id, device_token) unique
+				// index race and errors out (redelivered), rather than producing a
+				// duplicate.
 				found = &DeviceState{
-					DeviceId:          deviceId,
+					DeviceToken:       deviceToken,
 					Active:            true,
 					LastActivityTime:  sql.NullTime{Time: occurredAt, Valid: true},
 					LastConnectTime:   sql.NullTime{Time: occurredAt, Valid: true},
@@ -90,7 +91,7 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceId uint, occurredAt 
 // per key, and it only advances a key when the incoming reading is newer
 // (out-of-order safe): a delayed old value never clobbers a newer stored one.
 // All entries in the event commit together in one transaction.
-func (api *Api) MergeLatestMeasurements(ctx context.Context, deviceId uint, inputs []LatestMeasurementInput) error {
+func (api *Api) MergeLatestMeasurements(ctx context.Context, deviceToken string, inputs []LatestMeasurementInput) error {
 	if len(inputs) == 0 {
 		return nil
 	}
@@ -98,14 +99,14 @@ func (api *Api) MergeLatestMeasurements(ctx context.Context, deviceId uint, inpu
 		for _, in := range inputs {
 			found := &LatestMeasurement{}
 			result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("device_id = ? AND name = ?", deviceId, in.Name).First(found)
+				Where("device_token = ? AND name = ?", deviceToken, in.Name).First(found)
 			if result.Error != nil {
 				if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 					// First value for this (device, name): create it. A concurrent
 					// first create loses the unique-index race and errors out
 					// (redelivered), rather than producing a duplicate row.
 					created := &LatestMeasurement{
-						DeviceId:     deviceId,
+						DeviceToken:  deviceToken,
 						Name:         in.Name,
 						Value:        in.Value,
 						Classifier:   in.Classifier,
@@ -133,21 +134,21 @@ func (api *Api) MergeLatestMeasurements(ctx context.Context, deviceId uint, inpu
 	})
 }
 
-// LatestMeasurementsByDeviceId returns the current value of every measurement
+// LatestMeasurementsByDeviceToken returns the current value of every measurement
 // name for a device (name-ordered) — the live "current readings" surface.
-func (api *Api) LatestMeasurementsByDeviceId(ctx context.Context, deviceId uint) ([]*LatestMeasurement, error) {
+func (api *Api) LatestMeasurementsByDeviceToken(ctx context.Context, deviceToken string) ([]*LatestMeasurement, error) {
 	found := make([]*LatestMeasurement, 0)
-	result := api.RDB.DB(ctx).Where("device_id = ?", deviceId).Order("name asc").Find(&found)
+	result := api.RDB.DB(ctx).Where("device_token = ?", deviceToken).Order("name asc").Find(&found)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	return found, nil
 }
 
-// Get device states by originating device id.
-func (api *Api) DeviceStatesByDeviceId(ctx context.Context, deviceIds []uint) ([]*DeviceState, error) {
+// Get device states by originating device token.
+func (api *Api) DeviceStatesByDeviceToken(ctx context.Context, deviceTokens []string) ([]*DeviceState, error) {
 	found := make([]*DeviceState, 0)
-	result := api.RDB.DB(ctx).Find(&found, "device_id in ?", deviceIds)
+	result := api.RDB.DB(ctx).Find(&found, "device_token in ?", deviceTokens)
 	if result.Error != nil {
 		return nil, result.Error
 	}

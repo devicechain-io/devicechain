@@ -12,24 +12,35 @@ type SearchResultsPagination {
     totalRecords: Int
 }
 
-# A persisted base event with token references resolved. The originating device's
-# tracked-relationship targets are recorded as a set of anchors in event_anchors
-# (ADR-013 addendum 2026-07-01), queryable via the (anchorType, anchorId) search
-# filter below; an event with no assignment simply has no anchor rows.
+# One anchor of an event: a tracked-relationship target the event is queryable by.
+# Both the type (an entity class, e.g. "customer") and the token (that entity's
+# stable per-tenant token) name the target across the service seam — never a
+# device-management row id (ADR-044).
+type EventAnchorRef {
+    type: String!
+    token: String!
+}
+
+# A persisted base event with token references resolved. The originating device is
+# named by its token (ADR-044). Its tracked-relationship targets are recorded as a
+# set of anchors in event_anchors (ADR-013 addendum 2026-07-01), exposed as `anchors`
+# and queryable via the (type, token) search filter below; an event with no
+# assignment simply has no anchor rows.
 type Event {
     id: ID!
-    deviceId: String!
+    deviceToken: String!
     eventType: Int!
     occurredTime: String
     processedTime: String
     source: String!
     altId: String
+    anchors: [EventAnchorRef!]!
 }
 
 # A persisted location event.
 type LocationEvent {
     id: ID!
-    deviceId: String!
+    deviceToken: String!
     eventType: Int!
     occurredTime: String
     latitude: Float
@@ -40,7 +51,7 @@ type LocationEvent {
 # A persisted measurement event (one row per measurement entry).
 type MeasurementEvent {
     id: ID!
-    deviceId: String!
+    deviceToken: String!
     eventType: Int!
     occurredTime: String
     name: String!
@@ -51,7 +62,7 @@ type MeasurementEvent {
 # A persisted alert event (one row per alert entry).
 type AlertEvent {
     id: ID!
-    deviceId: String!
+    deviceToken: String!
     eventType: Int!
     occurredTime: String
     type: String!
@@ -61,18 +72,19 @@ type AlertEvent {
 }
 
 # Relationship anchor used to filter events. The type names an entity class
-# (e.g. "customer", "area") and the id is that entity's row id; together they
-# filter the uniform (anchorType, anchorId) columns on the base event table.
+# (e.g. "customer", "area") and the token is that entity's stable per-tenant token;
+# together they filter the (anchorType, anchorToken) columns on event_anchors
+# (ADR-044).
 input EventAnchor {
     type: String!
-    id: String!
+    token: String!
 }
 
 # Criteria used when searching for events. Times are RFC3339 strings.
 input EventSearchCriteria {
     pageNumber: Int!
     pageSize: Int!
-    deviceId: String
+    deviceToken: String
     eventTypes: [Int!]
     startTime: String
     endTime: String
@@ -108,7 +120,7 @@ type AlertEventSearchResults {
 # measurement-name filter. intervalSeconds is the time_bucket width and must be
 # >= 1. Always bound this with a time range — it returns every matching bucket.
 input MeasurementAggregationCriteria {
-    deviceId: String
+    deviceToken: String
     name: String
     eventTypes: [Int!]
     startTime: String
@@ -151,10 +163,10 @@ type Mutation {
 # subscribe time onward with no historical backfill; use the queries for history.
 type Subscription {
     # Streams measurement events as they resolve, optionally filtered to one
-    # device and/or one measurement name. Drives live charts, gauges, and cards.
-    # Named measurementStream (not measurementEvents, the historical query) since
-    # both fields resolve off the one root resolver.
-    measurementStream(deviceId: String, name: String): MeasurementEvent!
+    # device (by token) and/or one measurement name. Drives live charts, gauges,
+    # and cards. Named measurementStream (not measurementEvents, the historical
+    # query) since both fields resolve off the one root resolver.
+    measurementStream(deviceToken: String, name: String): MeasurementEvent!
 }
 
 schema {

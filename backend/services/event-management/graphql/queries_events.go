@@ -8,7 +8,6 @@ import (
 	_ "embed"
 	"fmt"
 	"github.com/devicechain-io/dc-microservice/auth"
-	"strconv"
 	"time"
 
 	"github.com/devicechain-io/dc-event-management/model"
@@ -16,21 +15,22 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
-// GraphQL representation of the relationship anchor input.
+// GraphQL representation of the relationship anchor input. The target is named by
+// its stable per-tenant token (ADR-044), not a device-management row id.
 type EventAnchorInput struct {
-	Type string
-	Id   string
+	Type  string
+	Token string
 }
 
 // GraphQL representation of the event search criteria input.
 type EventSearchCriteriaInput struct {
-	PageNumber int32
-	PageSize   int32
-	DeviceId   *string
-	EventTypes *[]int32
-	StartTime  *string
-	EndTime    *string
-	Anchor     *EventAnchorInput
+	PageNumber  int32
+	PageSize    int32
+	DeviceToken *string
+	EventTypes  *[]int32
+	StartTime   *string
+	EndTime     *string
+	Anchor      *EventAnchorInput
 }
 
 // Convert a GraphQL criteria input into the model search criteria.
@@ -42,13 +42,8 @@ func toEventSearchCriteria(in EventSearchCriteriaInput) (model.EventSearchCriter
 		},
 	}
 
-	if in.DeviceId != nil {
-		id, err := strconv.ParseUint(*in.DeviceId, 0, 64)
-		if err != nil {
-			return criteria, err
-		}
-		uid := uint(id)
-		criteria.DeviceId = &uid
+	if in.DeviceToken != nil {
+		criteria.DeviceToken = in.DeviceToken
 	}
 
 	if in.EventTypes != nil {
@@ -79,14 +74,10 @@ func toEventSearchCriteria(in EventSearchCriteriaInput) (model.EventSearchCriter
 		if !model.IsAnchorType(in.Anchor.Type) {
 			return criteria, fmt.Errorf("unknown anchor type %q", in.Anchor.Type)
 		}
-		id, err := strconv.ParseUint(in.Anchor.Id, 0, 64)
-		if err != nil {
-			return criteria, err
-		}
-		uid := uint(id)
 		atype := in.Anchor.Type
+		atoken := in.Anchor.Token
 		criteria.AnchorType = &atype
-		criteria.AnchorId = &uid
+		criteria.AnchorToken = &atoken
 	}
 
 	return criteria, nil
@@ -94,7 +85,7 @@ func toEventSearchCriteria(in EventSearchCriteriaInput) (model.EventSearchCriter
 
 // GraphQL representation of the measurement aggregation criteria input.
 type MeasurementAggregationCriteriaInput struct {
-	DeviceId        *string
+	DeviceToken     *string
 	Name            *string
 	EventTypes      *[]int32
 	StartTime       *string
@@ -114,13 +105,8 @@ func toMeasurementAggregationCriteria(in MeasurementAggregationCriteriaInput) (m
 		return criteria, fmt.Errorf("intervalSeconds must be >= 1")
 	}
 
-	if in.DeviceId != nil {
-		id, err := strconv.ParseUint(*in.DeviceId, 0, 64)
-		if err != nil {
-			return criteria, err
-		}
-		uid := uint(id)
-		criteria.DeviceId = &uid
+	if in.DeviceToken != nil {
+		criteria.DeviceToken = in.DeviceToken
 	}
 
 	if in.EventTypes != nil {
@@ -151,14 +137,10 @@ func toMeasurementAggregationCriteria(in MeasurementAggregationCriteriaInput) (m
 		if !model.IsAnchorType(in.Anchor.Type) {
 			return criteria, fmt.Errorf("unknown anchor type %q", in.Anchor.Type)
 		}
-		id, err := strconv.ParseUint(in.Anchor.Id, 0, 64)
-		if err != nil {
-			return criteria, err
-		}
-		uid := uint(id)
 		atype := in.Anchor.Type
+		atoken := in.Anchor.Token
 		criteria.AnchorType = &atype
-		criteria.AnchorId = &uid
+		criteria.AnchorToken = &atoken
 	}
 
 	return criteria, nil

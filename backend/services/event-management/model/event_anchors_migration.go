@@ -16,10 +16,12 @@ import (
 // reading — which the single-pair schema could not express.
 //
 // event_anchors is a TimescaleDB hypertable partitioned on occurred_time, so its
-// rows partition and age out alongside the events they index. The lookup index
-// (tenant_id, anchor_type, anchor_id, occurred_time DESC) serves "events for
+// rows partition and age out alongside the events they index. Both the source
+// device and the anchor target are named by their stable per-tenant tokens
+// (ADR-044), never device-management row ids. The lookup index
+// (tenant_id, anchor_type, anchor_token, occurred_time DESC) serves "events for
 // customer X / area Y, most recent first"; the events keyed by an anchor are
-// fetched by their natural key (device_id, event_type, occurred_time).
+// fetched by their natural key (device_token, event_type, occurred_time).
 func NewEventAnchorsTable() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20260701130000",
@@ -31,8 +33,17 @@ func NewEventAnchorsTable() *gormigrate.Migration {
 				`'occurred_time', if_not_exists => TRUE);`).Error; err != nil {
 				return err
 			}
+			// The device and anchor tokens are opaque and only ever exact-matched;
+			// force C collation for bytewise comparisons and a tighter lookup index
+			// (ADR-044). The index created below inherits these column collations.
+			for _, col := range []string{"device_token", "anchor_token"} {
+				if err := tx.Exec(`ALTER TABLE "event-management"."event_anchors" ` +
+					`ALTER COLUMN ` + col + ` TYPE varchar(128) COLLATE "C";`).Error; err != nil {
+					return err
+				}
+			}
 			if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_event_anchors_lookup ` +
-				`ON "event-management"."event_anchors" (tenant_id, anchor_type, anchor_id, occurred_time DESC);`).Error; err != nil {
+				`ON "event-management"."event_anchors" (tenant_id, anchor_type, anchor_token, occurred_time DESC);`).Error; err != nil {
 				return err
 			}
 			// The base event no longer carries a single denormalized anchor — the set

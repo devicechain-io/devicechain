@@ -5,7 +5,9 @@ package model
 
 import (
 	"context"
+	"time"
 
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"gorm.io/gorm"
 )
 
@@ -14,8 +16,8 @@ import (
 // separately (anchorFilter) because it joins through the event_anchors set table.
 func commonEventFilters(criteria EventSearchCriteria) func(db *gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
-		if criteria.DeviceId != nil {
-			db = db.Where("device_id = ?", *criteria.DeviceId)
+		if criteria.DeviceToken != nil {
+			db = db.Where("device_token = ?", *criteria.DeviceToken)
 		}
 		if len(criteria.EventTypes) > 0 {
 			db = db.Where("event_type IN ?", criteria.EventTypes)
@@ -30,31 +32,49 @@ func commonEventFilters(criteria EventSearchCriteria) func(db *gorm.DB) *gorm.DB
 	}
 }
 
-// hasAnchor reports whether the criteria carries a usable (anchor_type, anchor_id)
+// hasAnchor reports whether the criteria carries a usable (anchor_type, anchor_token)
 // pair to filter on.
 func hasAnchor(criteria EventSearchCriteria) bool {
-	return criteria.AnchorType != nil && criteria.AnchorId != nil
+	return criteria.AnchorType != nil && criteria.AnchorToken != nil
 }
 
 // anchorKeySubquery returns the tenant-scoped set of event keys
-// (device_id, event_type, occurred_time) that carry the requested anchor, read
-// from the event_anchors set table (ADR-013 addendum 2026-07-01). An event is
-// found by any of its assignment dimensions because each is its own anchor row.
-// Runs through DB(ctx) so the tenant predicate applies to the subquery too.
-func (api *Api) anchorKeySubquery(ctx context.Context, anchorType string, anchorId uint) *gorm.DB {
+// (device_token, event_type, occurred_time) that carry the requested anchor, read
+// from the event_anchors set table (ADR-013 addendum 2026-07-01). The anchor target
+// is addressed by its stable per-tenant token (ADR-044). An event is found by any of
+// its assignment dimensions because each is its own anchor row. Runs through DB(ctx)
+// so the tenant predicate applies to the subquery too.
+func (api *Api) anchorKeySubquery(ctx context.Context, anchorType string, anchorToken string) *gorm.DB {
 	return api.RDB.DB(ctx).Model(&EventAnchor{}).
-		Select("device_id, event_type, occurred_time").
-		Where("anchor_type = ? AND anchor_id = ?", anchorType, anchorId)
+		Select("device_token, event_type, occurred_time").
+		Where("anchor_type = ? AND anchor_token = ?", anchorType, anchorToken)
 }
 
 // anchorFilter restricts a query to the events carrying the requested anchor by
 // joining through the event_anchors set table. A no-op when no anchor is set.
 func (api *Api) anchorFilter(ctx context.Context, criteria EventSearchCriteria, result *gorm.DB) *gorm.DB {
 	if hasAnchor(criteria) {
-		result = result.Where("(device_id, event_type, occurred_time) IN (?)",
-			api.anchorKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorId))
+		result = result.Where("(device_token, event_type, occurred_time) IN (?)",
+			api.anchorKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorToken))
 	}
 	return result
+}
+
+// AnchorsForEvent returns the anchor set of one event, addressed by its natural key
+// (device_token, event_type, occurred_time). Backs the Event.anchors GraphQL field
+// (ADR-013/044) — the tracked-relationship targets the event is queryable by, each
+// as a (type, token) reference. Tenant-scoped via DB(ctx).
+func (api *Api) AnchorsForEvent(ctx context.Context, deviceToken string,
+	eventType esmodel.EventType, occurredTime time.Time) ([]EventAnchor, error) {
+	anchors := make([]EventAnchor, 0)
+	err := api.RDB.DB(ctx).Model(&EventAnchor{}).
+		Where("device_token = ? AND event_type = ? AND occurred_time = ?",
+			deviceToken, eventType, occurredTime).
+		Find(&anchors).Error
+	if err != nil {
+		return nil, err
+	}
+	return anchors, nil
 }
 
 // Search for base events that meet criteria. The anchor filter joins through the
@@ -117,8 +137,8 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 			"name, "+
 			"avg(value) AS avg, min(value) AS min, max(value) AS max, "+
 			"sum(value) AS sum, count(value) AS count", criteria.IntervalSeconds)
-	if criteria.DeviceId != nil {
-		db = db.Where("device_id = ?", *criteria.DeviceId)
+	if criteria.DeviceToken != nil {
+		db = db.Where("device_token = ?", *criteria.DeviceToken)
 	}
 	if len(criteria.EventTypes) > 0 {
 		db = db.Where("event_type IN ?", criteria.EventTypes)
@@ -132,9 +152,9 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 	if criteria.EndTime != nil {
 		db = db.Where("occurred_time <= ?", *criteria.EndTime)
 	}
-	if criteria.AnchorType != nil && criteria.AnchorId != nil {
-		db = db.Where("(device_id, event_type, occurred_time) IN (?)",
-			api.anchorKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorId))
+	if criteria.AnchorType != nil && criteria.AnchorToken != nil {
+		db = db.Where("(device_token, event_type, occurred_time) IN (?)",
+			api.anchorKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorToken))
 	}
 	db = db.Group("bucket_start, name").Order("bucket_start ASC, name ASC")
 	if err := db.Scan(&results).Error; err != nil {

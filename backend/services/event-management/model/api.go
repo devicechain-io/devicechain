@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -46,9 +47,11 @@ type EventManagementApi interface {
 	CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*EventAnchor) error
 
 	// DeleteAnchorsForEntity removes event_anchors rows referencing a deleted
-	// entity (ADR-044): device deletes match device_id, other entities match
-	// (anchor_type, anchor_id). Idempotent + tenant-scoped. Returns rows removed.
-	DeleteAnchorsForEntity(ctx context.Context, entityType string, entityId uint) (int64, error)
+	// entity (ADR-044): device deletes match device_token, other entities match
+	// (anchor_type, anchor_token). `before` bounds the delete to events older than
+	// it (guards token reuse); a zero value is unbounded (the sweep). Idempotent +
+	// tenant-scoped. Returns rows removed.
+	DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string, before time.Time) (int64, error)
 
 	// DistinctAnchorTenants returns every tenant with event_anchors (cross-tenant;
 	// needs a system context). DistinctAnchorRefs returns the current tenant's
@@ -65,6 +68,10 @@ type EventManagementApi interface {
 	// alternateId was already persisted for the tenant in context, backing
 	// idempotent ingestion of a redelivered message.
 	EventExistsByAltId(ctx context.Context, db *gorm.DB, altId string, occurred time.Time) (bool, error)
+
+	// AnchorsForEvent returns one event's anchor set by its natural key
+	// (device_token, event_type, occurred_time), backing the Event.anchors field.
+	AnchorsForEvent(ctx context.Context, deviceToken string, eventType esmodel.EventType, occurredTime time.Time) ([]EventAnchor, error)
 
 	Events(ctx context.Context, criteria EventSearchCriteria) (*EventSearchResults, error)
 	LocationEvents(ctx context.Context, criteria EventSearchCriteria) (*LocationEventSearchResults, error)
@@ -108,7 +115,7 @@ func (api *Api) EventExistsByAltId(ctx context.Context, db *gorm.DB, altId strin
 
 // upsertParentEvents inserts the parent `events` rows for a batch of child event
 // requests (location/measurement/alert) before the children, so a reader joining a
-// payload row to its base event on the natural key (device_id, event_type,
+// payload row to its base event on the natural key (device_token, event_type,
 // occurred_time) always finds the parent. The rows are deduped on that natural key
 // and inserted ON CONFLICT DO NOTHING: multiple measurements in one message share a
 // single parent event, and a redelivered message re-presents the same key.
@@ -126,15 +133,20 @@ func upsertParentEvents(ctx context.Context, db *gorm.DB, events []*Event) error
 	seen := make(map[string]struct{}, len(events))
 	distinct := make([]*Event, 0, len(events))
 	for _, e := range events {
-		key := fmt.Sprintf("%d|%d|%d", e.DeviceId, int64(e.EventType), e.OccurredTime.UnixNano())
+		key := fmt.Sprintf("%s|%d|%d", e.DeviceToken, int64(e.EventType), e.OccurredTime.UnixNano())
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
 		distinct = append(distinct, e)
 	}
+	// The conflict target is the full primary key including tenant_id: a device
+	// token is unique only per tenant (ADR-042), so omitting tenant_id here would
+	// let one tenant's parent event suppress another tenant's identical-key event.
+	// tenant_id is stamped onto each row by the tenant-scope create callback before
+	// the insert, so the value is present when the conflict is evaluated.
 	return db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "device_id"}, {Name: "event_type"}, {Name: "occurred_time"}},
+		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}, {Name: "event_type"}, {Name: "occurred_time"}},
 		DoNothing: true,
 	}).Create(distinct).Error
 }
@@ -179,7 +191,7 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 	for _, request := range requests {
 		parents = append(parents, &request.Event)
 		created = append(created, &LocationEvent{
-			DeviceId:     request.DeviceId,
+			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.OccurredTime,
 			Latitude:     rdb.NullFloat64Of(request.Latitude),
@@ -213,7 +225,7 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 	for _, request := range requests {
 		parents = append(parents, &request.Event)
 		created = append(created, &MeasurementEvent{
-			DeviceId:     request.DeviceId,
+			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.OccurredTime,
 			Name:         request.Name,
@@ -247,7 +259,7 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 	for _, request := range requests {
 		parents = append(parents, &request.Event)
 		created = append(created, &AlertEvent{
-			DeviceId:     request.DeviceId,
+			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.OccurredTime,
 			Type:         request.Type,
@@ -281,24 +293,37 @@ func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*
 	return db.WithContext(ctx).Create(anchors).Error
 }
 
-// DeleteAnchorsForEntity removes every event_anchors row referencing a deleted
-// entity (ADR-044 cross-service RI). A deleted device is the SOURCE of its anchors
-// (matched by device_id); a deleted anchor target (customer / area / asset and
-// their groups) is matched by (anchor_type, anchor_id). Idempotent — deleting
-// already-absent rows is a no-op — and tenant-scoped via the fail-closed callback
-// (the caller stamps the tenant from the event's subject). Returns rows removed.
-func (api *Api) DeleteAnchorsForEntity(ctx context.Context, entityType string, entityId uint) (int64, error) {
+// DeleteAnchorsForEntity removes event_anchors rows referencing a deleted entity
+// (ADR-044 cross-service RI). A deleted device is the SOURCE of its anchors
+// (matched by device_token); a deleted anchor target (customer / area / asset and
+// their groups) is matched by (anchor_type, anchor_token). The entity is named by
+// its stable per-tenant token, carried on the entity.deleted event. Idempotent —
+// deleting already-absent rows is a no-op — and tenant-scoped via the fail-closed
+// callback (the caller stamps the tenant from the event's subject). Returns rows
+// removed.
+//
+// `before` bounds the cleanup to anchors of events that occurred strictly before it
+// (ADR-044 decision-4 amendment, "token = stable identity"): a token freed on delete
+// can be reused (ADR-042), so a redelivered/replayed deletion event must not wipe the
+// anchors of a NEW device that later adopted the same token — those events are newer
+// than the deletion. A zero `before` means unbounded: the reconciliation sweep passes
+// it because the sweep only deletes when the token resolves to no entity at all, so
+// every matching anchor is a true orphan.
+func (api *Api) DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string, before time.Time) (int64, error) {
 	db := api.RDB.DB(ctx).Model(&EventAnchor{})
 	if entityType == string(entity.TypeDevice) {
-		// A device is always the anchor SOURCE (device_id), but it can ALSO be an
+		// A device is always the anchor SOURCE (device_token), but it can ALSO be an
 		// anchor target: a tracked device→device relationship (e.g. gateway→sensor)
-		// records rows with (anchor_type="device", anchor_id=other). Clean both, or a
-		// deleted device leaves dangling target rows on its trackers' events.
-		db = db.Where("device_id = ? OR (anchor_type = ? AND anchor_id = ?)",
-			entityId, string(entity.TypeDevice), entityId)
+		// records rows with (anchor_type="device", anchor_token=other). Clean both, or
+		// a deleted device leaves dangling target rows on its trackers' events.
+		db = db.Where("device_token = ? OR (anchor_type = ? AND anchor_token = ?)",
+			entityToken, string(entity.TypeDevice), entityToken)
 	} else {
 		// Every other entity type is only ever an anchor target (never a source).
-		db = db.Where("anchor_type = ? AND anchor_id = ?", entityType, entityId)
+		db = db.Where("anchor_type = ? AND anchor_token = ?", entityType, entityToken)
+	}
+	if !before.IsZero() {
+		db = db.Where("occurred_time < ?", before)
 	}
 	result := db.Delete(&EventAnchor{})
 	return result.RowsAffected, result.Error

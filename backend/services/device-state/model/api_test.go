@@ -74,7 +74,7 @@ func TestMergeAndSweep(t *testing.T) {
 	base := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
 
 	// First event creates an active row.
-	ds, err := api.MergeDeviceState(ctx, 100, base)
+	ds, err := api.MergeDeviceState(ctx, "device-100", base)
 	if err != nil {
 		t.Fatalf("initial merge failed: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestMergeAndSweep(t *testing.T) {
 	}
 
 	// A later event advances last-activity time but does not re-connect.
-	ds, err = api.MergeDeviceState(ctx, 100, base.Add(1*time.Minute))
+	ds, err = api.MergeDeviceState(ctx, "device-100", base.Add(1*time.Minute))
 	if err != nil {
 		t.Fatalf("second merge failed: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestMergeAndSweep(t *testing.T) {
 	}
 
 	// An older event must NOT roll last-activity time backward.
-	ds, err = api.MergeDeviceState(ctx, 100, base.Add(-1*time.Hour))
+	ds, err = api.MergeDeviceState(ctx, "device-100", base.Add(-1*time.Hour))
 	if err != nil {
 		t.Fatalf("stale merge failed: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestMergeAndSweep(t *testing.T) {
 		t.Fatalf("expected 1 device flipped inactive, got %d", flipped)
 	}
 
-	states, err := api.DeviceStatesByDeviceId(ctx, []uint{100})
+	states, err := api.DeviceStatesByDeviceToken(ctx, []string{"device-100"})
 	if err != nil || len(states) != 1 {
 		t.Fatalf("lookup after sweep failed: %v (n=%d)", err, len(states))
 	}
@@ -125,7 +125,7 @@ func TestMergeAndSweep(t *testing.T) {
 	}
 
 	// A new event reconnects the device and clears the inactivity alarm.
-	ds, err = api.MergeDeviceState(ctx, 100, now.Add(1*time.Minute))
+	ds, err = api.MergeDeviceState(ctx, "device-100", now.Add(1*time.Minute))
 	if err != nil {
 		t.Fatalf("reconnect merge failed: %v", err)
 	}

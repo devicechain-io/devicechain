@@ -17,7 +17,7 @@ import (
 )
 
 // newPersistenceTestApi builds an in-memory sqlite Api with the base events table
-// and the measurement_events child, wired by the same (device_id, event_type,
+// and the measurement_events child, wired by the same (device_token, event_type,
 // occurred_time) foreign key as production. Foreign keys are enforced so the test
 // proves the parent event is written before its children; the unique index on the
 // natural key is both the FK target and the ON CONFLICT arbiter used by
@@ -36,7 +36,7 @@ func newPersistenceTestApi(t *testing.T) *Api {
 		t.Fatalf("failed to migrate events: %v", err)
 	}
 	if err := db.Exec(`CREATE UNIQUE INDEX idx_events_natural_key ` +
-		`ON events (device_id, event_type, occurred_time);`).Error; err != nil {
+		`ON events (tenant_id, device_token, event_type, occurred_time);`).Error; err != nil {
 		t.Fatalf("failed to create natural-key index: %v", err)
 	}
 	if err := db.AutoMigrate(&MeasurementEvent{}, &EventAnchor{}); err != nil {
@@ -56,30 +56,30 @@ func TestMeasurementsQueryableByEachAnchor(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	occurred := time.Date(2026, 7, 1, 20, 0, 0, 0, time.UTC)
 
-	parent := Event{DeviceId: 4, EventType: esmodel.Measurement, OccurredTime: occurred, Source: "http1"}
+	parent := Event{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, Source: "http1"}
 	if _, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
 		[]*MeasurementEventCreateRequest{{Event: parent, Name: "temperature", Value: f64(21.5)}}); err != nil {
 		t.Fatalf("CreateMeasurementEvents: %v", err)
 	}
 	// The device is assigned to a customer AND an area: one anchor row per target.
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
-		{DeviceId: 4, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorId: 3},
-		{DeviceId: 4, EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorId: 9},
+		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
+		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
 	}); err != nil {
 		t.Fatalf("CreateEventAnchors: %v", err)
 	}
 
-	byAnchor := func(atype string, aid uint) int {
-		res, err := api.MeasurementEvents(ctx, EventSearchCriteria{AnchorType: &atype, AnchorId: &aid})
+	byAnchor := func(atype string, atoken string) int {
+		res, err := api.MeasurementEvents(ctx, EventSearchCriteria{AnchorType: &atype, AnchorToken: &atoken})
 		if err != nil {
-			t.Fatalf("MeasurementEvents(%s,%d): %v", atype, aid, err)
+			t.Fatalf("MeasurementEvents(%s,%s): %v", atype, atoken, err)
 		}
 		return len(res.Results)
 	}
 
-	assert.Equal(t, 1, byAnchor("customer", 3), "found by its customer anchor")
-	assert.Equal(t, 1, byAnchor("area", 9), "found by its area anchor")
-	assert.Equal(t, 0, byAnchor("asset", 1), "not found by an unassigned dimension")
+	assert.Equal(t, 1, byAnchor("customer", "cust-3"), "found by its customer anchor")
+	assert.Equal(t, 1, byAnchor("area", "area-9"), "found by its area anchor")
+	assert.Equal(t, 0, byAnchor("asset", "asset-1"), "not found by an unassigned dimension")
 }
 
 // A measurement message carrying several metrics at one instant is one parent
@@ -93,7 +93,7 @@ func TestCreateMeasurementEventsWritesParentAndChildren(t *testing.T) {
 	occurred := time.Date(2026, 7, 1, 19, 12, 26, 0, time.UTC)
 
 	parent := Event{
-		DeviceId:      4,
+		DeviceToken:   "device-4",
 		EventType:     esmodel.Measurement,
 		OccurredTime:  occurred,
 		Source:        "http1",
@@ -130,7 +130,7 @@ func TestCreateMeasurementEventsWritesParentAndChildren(t *testing.T) {
 		t.Fatalf("expected 2 measurement rows, got %d", len(children))
 	}
 	for _, c := range children {
-		if c.DeviceId != 4 || c.EventType != esmodel.Measurement || !c.OccurredTime.Equal(occurred) {
+		if c.DeviceToken != "device-4" || c.EventType != esmodel.Measurement || !c.OccurredTime.Equal(occurred) {
 			t.Fatalf("child fk columns do not match parent: %+v", c)
 		}
 	}

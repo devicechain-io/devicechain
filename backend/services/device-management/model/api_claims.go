@@ -165,11 +165,15 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 	}
 
 	rel := &EntityRelationship{
-		TokenReference:     rdb.TokenReference{Token: uuid.New().String()},
-		SourceType:         string(entity.TypeDevice),
-		SourceId:           claim.DeviceId,
-		TargetType:         string(entity.TypeCustomer),
-		TargetId:           customerId,
+		TokenReference: rdb.TokenReference{Token: uuid.New().String()},
+		SourceType:     string(entity.TypeDevice),
+		SourceId:       claim.DeviceId,
+		TargetType:     string(entity.TypeCustomer),
+		TargetId:       customerId,
+		// Denormalize the target token (ADR-044) so a claimed device's events emit
+		// customer-addressed anchors; without it the anchor token is empty and the
+		// device's telemetry is unqueryable by its claiming customer.
+		TargetToken:        request.CustomerToken,
 		RelationshipTypeId: rtMatches[0].ID,
 	}
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {

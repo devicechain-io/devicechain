@@ -1040,16 +1040,16 @@ interface Entity {
     token: String!
 }
 
-# A uniform (type, id) reference to an entity (ADR-013).
+# A uniform (type, token) reference to an entity (ADR-013/044).
 input EntityRefInput {
     type: String!
-    id: ID!
+    token: String!
 }
 
-# A uniform (type, id) reference to an entity (ADR-013), returned from a query.
+# A uniform (type, token) reference to an entity (ADR-013/044), returned from a query.
 type EntityRef {
     type: String!
-    id: ID!
+    token: String!
 }
 
 # Represents a type of relation between entities.

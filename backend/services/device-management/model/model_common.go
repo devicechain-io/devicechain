@@ -50,10 +50,17 @@ type EntityRelationship struct {
 	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.MetadataEntity
-	SourceType         string
-	SourceId           uint
-	TargetType         string
-	TargetId           uint
+	SourceType string
+	SourceId   uint
+	TargetType string
+	TargetId   uint
+	// TargetToken denormalizes the target entity's stable per-tenant token
+	// alongside its resolved row id. It is stamped from the create request's target
+	// token (which was just resolved to TargetId) so the event resolver can emit
+	// token-addressed anchors (ADR-044) without an extra id→token lookup on the
+	// ingest hot path — the target token rides the row (and its RelationshipsBySource
+	// cache entry) for free.
+	TargetToken        string `gorm:"size:128"`
 	RelationshipTypeId uint
 	RelationshipType   EntityRelationshipType
 }

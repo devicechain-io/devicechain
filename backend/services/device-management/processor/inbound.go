@@ -170,7 +170,10 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 		bytes, err := proto.MarshalResolvedEvent(&item.event)
 		if err == nil {
 			msg := messaging.Message{
-				Key:   []byte(strconv.FormatInt(int64(item.event.SourceDeviceId), 10)),
+				// Partition on the source device token so a device's events stay
+				// ordered on one stream partition (ADR-044): the token is 1:1 with the
+				// device, so ordering is preserved and no id crosses the seam.
+				Key:   []byte(item.event.SourceDeviceToken),
 				Value: bytes,
 			}.WithCorrelationID(item.correlation)
 			err = iproc.ResolvedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)

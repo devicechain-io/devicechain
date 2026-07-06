@@ -15,7 +15,7 @@ const EVENTS = graphql(`
     events(criteria: $criteria) {
       results {
         id
-        deviceId
+        deviceToken
         eventType
         occurredTime
         source
@@ -28,7 +28,7 @@ const EVENTS = graphql(`
 `);
 
 export async function listEvents(opts: {
-  deviceId: string;
+  deviceToken: string;
   pageNumber: number;
   pageSize: number;
 }): Promise<EventsQuery['events']> {
@@ -37,7 +37,7 @@ export async function listEvents(opts: {
       criteria: {
         pageNumber: opts.pageNumber,
         pageSize: opts.pageSize,
-        deviceId: opts.deviceId,
+        deviceToken: opts.deviceToken,
       },
     })
   ).events;

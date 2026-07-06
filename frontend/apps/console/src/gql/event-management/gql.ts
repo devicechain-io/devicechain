@@ -15,16 +15,16 @@ import * as types from './graphql';
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
-    "\n  query Events($criteria: EventSearchCriteria!) {\n    events(criteria: $criteria) {\n      results {\n        id\n        deviceId\n        eventType\n        occurredTime\n        source\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": typeof types.EventsDocument,
+    "\n  query Events($criteria: EventSearchCriteria!) {\n    events(criteria: $criteria) {\n      results {\n        id\n        deviceToken\n        eventType\n        occurredTime\n        source\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": typeof types.EventsDocument,
 };
 const documents: Documents = {
-    "\n  query Events($criteria: EventSearchCriteria!) {\n    events(criteria: $criteria) {\n      results {\n        id\n        deviceId\n        eventType\n        occurredTime\n        source\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": types.EventsDocument,
+    "\n  query Events($criteria: EventSearchCriteria!) {\n    events(criteria: $criteria) {\n      results {\n        id\n        deviceToken\n        eventType\n        occurredTime\n        source\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": types.EventsDocument,
 };
 
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query Events($criteria: EventSearchCriteria!) {\n    events(criteria: $criteria) {\n      results {\n        id\n        deviceId\n        eventType\n        occurredTime\n        source\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').EventsDocument;
+export function graphql(source: "\n  query Events($criteria: EventSearchCriteria!) {\n    events(criteria: $criteria) {\n      results {\n        id\n        deviceToken\n        eventType\n        occurredTime\n        source\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').EventsDocument;
 
 
 export function graphql(source: string) {

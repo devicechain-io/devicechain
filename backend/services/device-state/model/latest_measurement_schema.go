@@ -23,7 +23,7 @@ func NewLatestMeasurementSchema() *gormigrate.Migration {
 			type LatestMeasurement struct {
 				gorm.Model
 				rdb.TenantScoped
-				DeviceId     uint            `gorm:"not null"`
+				DeviceToken  string          `gorm:"not null;type:varchar(128)"`
 				Name         string          `gorm:"not null;size:128"`
 				Value        sql.NullFloat64 `gorm:"type:decimal(20,8)"`
 				Classifier   *uint
@@ -36,7 +36,7 @@ func NewLatestMeasurementSchema() *gormigrate.Migration {
 			// the tenant-scoped per-device read and guards against duplicate creates
 			// racing across pods (a losing concurrent create errors and is redelivered).
 			return tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_latest_measurement_tenant_device_name ` +
-				`ON "device-state".latest_measurements (tenant_id, device_id, name);`).Error
+				`ON "device-state".latest_measurements (tenant_id, device_token, name);`).Error
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return tx.Migrator().DropTable("latest_measurements")

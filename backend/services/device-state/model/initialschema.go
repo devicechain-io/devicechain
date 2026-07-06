@@ -6,7 +6,6 @@ package model
 import (
 	"database/sql"
 
-	"github.com/devicechain-io/dc-microservice/rdb"
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
 	"gorm.io/gorm"
 )
@@ -18,12 +17,18 @@ func NewInitialSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20220601000000",
 		Migrate: func(tx *gorm.DB) error {
-			// Live current-state projection for one device.
+			// Live current-state projection for one device. A device token is unique
+			// only PER TENANT (ADR-042), so the uniqueness constraint must be the
+			// composite (tenant_id, device_token) — a bare unique index on
+			// device_token would reject a second tenant that reuses another tenant's
+			// token, failing every MergeDeviceState for that device. tenant_id is
+			// declared explicitly here (rather than via the rdb.TenantScoped embed the
+			// runtime model still uses) so it can lead the composite unique index.
 			type DeviceState struct {
 				gorm.Model
-				rdb.TenantScoped
-				DeviceId            uint `gorm:"uniqueIndex;not null"`
-				Active              bool `gorm:"not null;default:false"`
+				TenantId            string `gorm:"uniqueIndex:idx_device_state_tenant_token,priority:1;not null;size:128"`
+				DeviceToken         string `gorm:"uniqueIndex:idx_device_state_tenant_token,priority:2;not null;type:varchar(128)"`
+				Active              bool   `gorm:"not null;default:false"`
 				LastConnectTime     sql.NullTime
 				LastDisconnectTime  sql.NullTime
 				LastActivityTime    sql.NullTime

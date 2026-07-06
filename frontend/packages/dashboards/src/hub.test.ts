@@ -6,13 +6,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DashboardHub, type DeviceResolver } from './hub';
 import type { MeasurementSample } from './types';
 
-// A controllable fake of the SDK's subscribe(): every call records the device id
+// A controllable fake of the SDK's subscribe(): every call records the device token
 // it was opened for and its sink, so a test can push samples into a stream and
 // assert when it is torn down. vi.hoisted shares the registry with the hoisted
 // vi.mock factory.
 const h = vi.hoisted(() => ({
   streams: [] as Array<{
-    deviceId: string;
+    deviceToken: string;
     sink: { next: (d: { measurementStream: MeasurementSample }) => void; error?: (e: unknown) => void };
     closed: boolean;
   }>,
@@ -22,10 +22,10 @@ vi.mock('@devicechain/client', () => ({
   subscribe: (
     _area: string,
     _doc: unknown,
-    variables: { deviceId: string },
+    variables: { deviceToken: string },
     sink: { next: (d: { measurementStream: MeasurementSample }) => void; error?: (e: unknown) => void },
   ) => {
-    const entry = { deviceId: variables.deviceId, sink, closed: false };
+    const entry = { deviceToken: variables.deviceToken, sink, closed: false };
     h.streams.push(entry);
     return () => {
       entry.closed = true;
@@ -33,12 +33,12 @@ vi.mock('@devicechain/client', () => ({
   },
 }));
 
-// Flush pending microtasks so async selector resolution (token→id) settles.
+// Flush pending microtasks so async selector resolution (anchor→devices) settles.
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-const sampleFor = (deviceId: string, name: string, value: number): MeasurementSample => ({
-  id: `${deviceId}-${name}`,
-  deviceId,
+const sampleFor = (deviceToken: string, name: string, value: number): MeasurementSample => ({
+  id: `${deviceToken}-${name}`,
+  deviceToken,
   eventType: 0,
   occurredTime: null,
   name,
@@ -48,8 +48,7 @@ const sampleFor = (deviceId: string, name: string, value: number): MeasurementSa
 
 function newResolver(overrides: Partial<DeviceResolver> = {}): DeviceResolver {
   return {
-    deviceIdForToken: vi.fn(async (token: string) => (token === 'therm-001' ? '4' : null)),
-    devicesForAnchor: vi.fn(async () => ['4', '5']),
+    devicesForAnchor: vi.fn(async () => ['therm-004', 'therm-005']),
     ...overrides,
   };
 }
@@ -80,7 +79,7 @@ describe('DashboardHub', () => {
     hub.subscribeWidget({ kind: 'device', deviceToken: 'therm-001', measurements: ['humidity'] }, humiditySink);
     await flush();
 
-    h.streams[0].sink.next({ measurementStream: sampleFor('4', 'temperature', 21.5) });
+    h.streams[0].sink.next({ measurementStream: sampleFor('therm-001', 'temperature', 21.5) });
 
     expect(tempSink.next).toHaveBeenCalledTimes(1);
     expect(tempSink.next).toHaveBeenCalledWith(expect.objectContaining({ name: 'temperature', value: 21.5 }));
@@ -123,9 +122,11 @@ describe('DashboardHub', () => {
     );
     await flush();
 
-    expect(hub.openStreamCount).toBe(2); // members '4' and '5'
-    h.streams.find((s) => s.deviceId === '5')!.sink.next({ measurementStream: sampleFor('5', 'temperature', 30) });
-    expect(sink.next).toHaveBeenCalledWith(expect.objectContaining({ deviceId: '5', value: 30 }));
+    expect(hub.openStreamCount).toBe(2); // members 'therm-004' and 'therm-005'
+    h.streams
+      .find((s) => s.deviceToken === 'therm-005')!
+      .sink.next({ measurementStream: sampleFor('therm-005', 'temperature', 30) });
+    expect(sink.next).toHaveBeenCalledWith(expect.objectContaining({ deviceToken: 'therm-005', value: 30 }));
   });
 
   it('rejects a reserved selector kind via sink.error, opening no stream', async () => {
@@ -137,19 +138,6 @@ describe('DashboardHub', () => {
 
     expect(sink.error).toHaveBeenCalledTimes(1);
     expect((sink.error.mock.calls[0][0] as Error).message).toContain('not supported yet');
-    expect(hub.openStreamCount).toBe(0);
-  });
-
-  it('signals sink.error for an unknown device token, opening no stream', async () => {
-    const hub = new DashboardHub({ resolver: newResolver() });
-    const sink = { next: vi.fn(), error: vi.fn() };
-
-    hub.subscribeWidget({ kind: 'device', deviceToken: 'ghost', measurements: ['t'] }, sink);
-    await flush();
-
-    // A typo'd/deleted token surfaces as an error, not a silently blank widget.
-    expect(sink.error).toHaveBeenCalledTimes(1);
-    expect((sink.error.mock.calls[0][0] as Error).message).toContain('ghost');
     expect(hub.openStreamCount).toBe(0);
   });
 
@@ -174,7 +162,7 @@ describe('DashboardHub', () => {
     await flush();
     expect(hub.openStreamCount).toBe(1);
     expect(h.streams.length).toBe(2); // one dead + one fresh
-    h.streams[1].sink.next({ measurementStream: sampleFor('4', 'temperature', 22) });
+    h.streams[1].sink.next({ measurementStream: sampleFor('therm-001', 'temperature', 22) });
     expect(sinkB.next).toHaveBeenCalledWith(expect.objectContaining({ value: 22 }));
   });
 
@@ -201,7 +189,7 @@ describe('DashboardHub', () => {
     // Now the OLD subscriber detaches: the guard must leave the fresh stream intact.
     disposeA();
     expect(hub.openStreamCount).toBe(1);
-    h.streams[1].sink.next({ measurementStream: sampleFor('4', 'temperature', 99) });
+    h.streams[1].sink.next({ measurementStream: sampleFor('therm-001', 'temperature', 99) });
     expect(sinkB.next).toHaveBeenCalledWith(expect.objectContaining({ value: 99 }));
   });
 
@@ -212,7 +200,7 @@ describe('DashboardHub', () => {
       { kind: 'device', deviceToken: 'therm-001', measurements: ['temperature'] },
       { next: vi.fn() },
     );
-    dispose(); // tear down synchronously, before the async token→id resolves
+    dispose(); // tear down synchronously, before the async selector resolution settles
     await flush();
 
     expect(h.streams.length).toBe(0);
@@ -230,7 +218,7 @@ describe('DashboardHub', () => {
     await flush();
 
     expect(hub.openStreamCount).toBe(1);
-    h.streams[0].sink.next({ measurementStream: sampleFor('4', 'temperature', 21) });
+    h.streams[0].sink.next({ measurementStream: sampleFor('therm-001', 'temperature', 21) });
     expect(sink.next).toHaveBeenCalledWith(expect.objectContaining({ value: 21 }));
   });
 
@@ -243,22 +231,7 @@ describe('DashboardHub', () => {
     });
     hub.subscribeWidget({ kind: 'slot', slot: 'area', measurements: ['temperature'] }, { next: vi.fn() });
     await flush();
-    expect(hub.openStreamCount).toBe(2); // members '4' and '5'
-  });
-
-  it('errors a slot whose device binding token is unknown (like a direct device)', async () => {
-    const hub = new DashboardHub({
-      resolver: newResolver(),
-      bindings: { primary: { kind: 'device', deviceToken: 'ghost' } },
-    });
-    const sink = { next: vi.fn(), error: vi.fn() };
-
-    hub.subscribeWidget({ kind: 'slot', slot: 'primary', measurements: ['t'] }, sink);
-    await flush();
-
-    expect(sink.error).toHaveBeenCalledTimes(1);
-    expect((sink.error.mock.calls[0][0] as Error).message).toContain('ghost');
-    expect(hub.openStreamCount).toBe(0);
+    expect(hub.openStreamCount).toBe(2); // members 'therm-004' and 'therm-005'
   });
 
   it('treats a prototype-named slot as unbound, not a crash', async () => {
