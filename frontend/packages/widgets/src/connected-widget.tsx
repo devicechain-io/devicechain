@@ -181,7 +181,7 @@ function WidgetUnavailableFrame({ widget }: { widget: WidgetInstance }): ReactNo
           color: 'hsl(var(--muted-foreground))',
         }}
       >
-        <div style={{ fontSize: 20, lineHeight: 1 }}>⃠</div>
+        <div style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">⊘</div>
         <div style={{ fontSize: 13, fontWeight: 600 }}>Device unavailable</div>
         <div style={{ fontSize: 11, opacity: 0.8 }}>The bound device no longer exists.</div>
       </div>

@@ -63,15 +63,26 @@ export function createDeviceResolver(): DeviceResolver {
       return pending;
     },
 
+    // deviceExists caches only a POSITIVE result (a live device is stable for the
+    // session); a negative and an error both drop the entry so a later check re-queries.
+    // ADR-042 frees a token on delete, so a deleted-then-recreated device must be able to
+    // recover on a long-lived viewer (the availability hook re-checks on a timer while a
+    // widget shows unavailable) rather than staying stuck "gone" for the whole session.
+    // The in-flight promise is still shared, so concurrent checks for one token coalesce.
+    // (Batching distinct tokens into one devicesByToken call is a deferred optimization —
+    // Phase-1 dashboards bind a handful of devices.)
     deviceExists(deviceToken: string): Promise<boolean> {
       let pending = existsCache.get(deviceToken);
       if (!pending) {
         pending = gql('device-management', DEVICES_BY_TOKEN, { tokens: [deviceToken] })
-          .then((r: DevicesByTokenResult) => r.devicesByToken.some((d) => d.token === deviceToken))
+          .then((r: DevicesByTokenResult) => {
+            const exists = r.devicesByToken.some((d) => d.token === deviceToken);
+            if (!exists) existsCache.delete(deviceToken);
+            return exists;
+          })
           .catch((err) => {
-            // Don't cache a failure as "gone": drop it so the next check retries, and
-            // rethrow so the caller treats an existence-check outage as inconclusive
-            // (available) rather than falsely rendering a live device unavailable.
+            // A failure is inconclusive, not "gone": drop the entry so the next check
+            // retries, and rethrow so the caller fails open (renders available).
             existsCache.delete(deviceToken);
             throw err;
           });

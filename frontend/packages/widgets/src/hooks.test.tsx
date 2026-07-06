@@ -296,4 +296,36 @@ describe('useDatasourceAvailability', () => {
     await act(async () => {});
     expect(f.isDatasourceAvailable).toHaveBeenCalledTimes(2);
   });
+
+  it('is available immediately with no datasource — never queries', async () => {
+    const f = availabilityHub(false); // would report unavailable IF it were asked
+    const { result } = renderHook(() => useDatasourceAvailability(f.hub, undefined));
+    await act(async () => {});
+    expect(result.current).toBe('available');
+    expect(f.isDatasourceAvailable).not.toHaveBeenCalled();
+  });
+
+  it('re-validates while unavailable so a recreated device recovers (then stops polling)', async () => {
+    vi.useFakeTimers();
+    try {
+      let exists = false;
+      const isDatasourceAvailable = vi.fn(() => Promise.resolve(exists));
+      const hub = { isDatasourceAvailable } as unknown as DashboardHub;
+      const { result } = renderHook(() => useDatasourceAvailability(hub, deviceDs));
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(result.current).toBe('unavailable');
+
+      exists = true; // device recreated with the same token (ADR-042 frees tokens)
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(result.current).toBe('available');
+      expect(isDatasourceAvailable).toHaveBeenCalledTimes(2);
+
+      // Recovered → polling stops (no further checks).
+      await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+      expect(isDatasourceAvailable).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

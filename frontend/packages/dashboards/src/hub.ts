@@ -613,12 +613,15 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // kind isn't resolved yet).
   private availabilityToken(datasource: DatasourceSelector | undefined): string | undefined {
     if (!datasource) return undefined;
-    if (datasource.kind === 'device') return datasource.deviceToken;
+    // An empty token (a half-authored or hand-edited definition) has nothing to
+    // validate — treat it like an unbound slot (available/empty), not a device that
+    // "no longer exists", and skip the guaranteed-empty query.
+    if (datasource.kind === 'device') return datasource.deviceToken || undefined;
     if (datasource.kind === 'slot') {
       const binding = Object.prototype.hasOwnProperty.call(this.bindings, datasource.slot)
         ? this.bindings[datasource.slot]
         : undefined;
-      return binding && binding.kind === 'device' ? binding.deviceToken : undefined;
+      return binding && binding.kind === 'device' ? binding.deviceToken || undefined : undefined;
     }
     return undefined;
   }
