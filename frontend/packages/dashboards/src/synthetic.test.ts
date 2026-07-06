@@ -3,6 +3,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { AlarmSnapshot, AlarmSubscription } from './hub';
 import { SyntheticDataSource } from './synthetic';
 import type { MeasurementSample } from './types';
 import type { DatasourceSelector } from './types';
@@ -108,5 +109,58 @@ describe('SyntheticDataSource', () => {
     const alpha = samples.find((s) => s.name === 'alpha')!.value;
     const beta = samples.find((s) => s.name === 'beta')!.value;
     expect(alpha).not.toBe(beta); // different phase → different value at the same instant
+  });
+});
+
+function collectAlarms() {
+  const snapshots: AlarmSnapshot[] = [];
+  return { sink: { next: (s: AlarmSnapshot) => snapshots.push(s) }, snapshots };
+}
+
+describe('SyntheticDataSource.subscribeAlarms', () => {
+  it('emits a non-empty snapshot of AlarmRows synchronously on subscribe', () => {
+    const src = new SyntheticDataSource();
+    const { sink, snapshots } = collectAlarms();
+    const sub: AlarmSubscription = { pageSize: 50 };
+
+    src.subscribeAlarms(sub, sink);
+
+    expect(snapshots).toHaveLength(1); // immediate, before any timer tick
+    const snap = snapshots[0];
+    expect(snap.alarms.length).toBeGreaterThan(0);
+    expect(snap.total).toBe(snap.alarms.length);
+    // Each row is a well-formed AlarmRow.
+    for (const row of snap.alarms) {
+      expect(typeof row.token).toBe('string');
+      expect(typeof row.severity).toBe('string');
+      expect(typeof row.alarmKey).toBe('string');
+      expect('raisedTime' in row).toBe(true);
+    }
+  });
+
+  it('applies the severity filter, yielding only matching rows', () => {
+    const src = new SyntheticDataSource();
+    const { sink, snapshots } = collectAlarms();
+    const sub: AlarmSubscription = { pageSize: 50, severity: 'CRITICAL' };
+
+    src.subscribeAlarms(sub, sink);
+
+    const snap = snapshots[0];
+    expect(snap.alarms.length).toBeGreaterThan(0);
+    expect(snap.alarms.every((a) => a.severity === 'CRITICAL')).toBe(true);
+  });
+
+  it('stops emitting after the returned disposer is called', () => {
+    const src = new SyntheticDataSource({ intervalMs: 1000 });
+    const { sink, snapshots } = collectAlarms();
+    const dispose = src.subscribeAlarms({ pageSize: 50 }, sink);
+
+    vi.advanceTimersByTime(2500); // ~2 re-emits on top of the initial
+    const afterRun = snapshots.length;
+    expect(afterRun).toBeGreaterThan(1);
+
+    dispose();
+    vi.advanceTimersByTime(5000);
+    expect(snapshots).toHaveLength(afterRun); // no emit after dispose
   });
 });

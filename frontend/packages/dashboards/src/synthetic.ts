@@ -11,8 +11,8 @@
 // names, never resolves
 // a device).
 
-import type { WidgetDataSource, WidgetStreamSink } from './hub';
-import type { DatasourceSelector, MeasurementSample } from './types';
+import type { AlarmStreamSink, AlarmSubscription, WidgetDataSource, WidgetStreamSink } from './hub';
+import type { AlarmRow, DatasourceSelector, MeasurementSample } from './types';
 
 // The waveforms an author can preview with. Sine is the default (smooth, obviously
 // synthetic); ramp is a sawtooth; random-walk drifts within range.
@@ -43,6 +43,23 @@ export interface SyntheticDataSourceConfig {
 // A measurement name for a selector that lists none (empty = "all" on the live hub);
 // gives cards/gauges/charts something to render in preview.
 const DEFAULT_NAME = 'value';
+
+// A canonical spread of synthetic alarms (one per severity, mixed state/ack) so an
+// author previewing an alarm table/count sees populated, representative rows before any
+// real alarm has raised. The filter on the subscription is applied so the preview
+// reflects the widget's configured scope-of-interest.
+const SYNTHETIC_ALARMS: ReadonlyArray<
+  Pick<
+    AlarmRow,
+    'severity' | 'state' | 'acknowledged' | 'alarmKey' | 'metricKey' | 'lastValue' | 'originatorToken' | 'message'
+  >
+> = [
+  { severity: 'CRITICAL', state: 'ACTIVE', acknowledged: false, alarmKey: 'over-temperature', metricKey: 'temperature', lastValue: 87.4, originatorToken: 'thermostat-01', message: 'Temperature above 85°C' },
+  { severity: 'MAJOR', state: 'ACTIVE', acknowledged: true, alarmKey: 'low-battery', metricKey: 'battery', lastValue: 12, originatorToken: 'sensor-14', message: 'Battery below 15%' },
+  { severity: 'MINOR', state: 'ACTIVE', acknowledged: false, alarmKey: 'humidity-high', metricKey: 'humidity', lastValue: 78, originatorToken: 'sensor-03', message: 'Relative humidity above threshold' },
+  { severity: 'WARNING', state: 'CLEARED', acknowledged: true, alarmKey: 'signal-weak', metricKey: 'rssi', lastValue: -89, originatorToken: 'gateway-02', message: 'Weak uplink signal' },
+  { severity: 'INDETERMINATE', state: 'ACTIVE', acknowledged: false, alarmKey: 'self-test', metricKey: 'status', lastValue: null, originatorToken: 'device-99', message: null },
+];
 
 // Deterministic small hash of a name → a stable phase offset, so multiple series on
 // one dashboard are visibly out of phase rather than overlapping identically.
@@ -113,6 +130,51 @@ export class SyntheticDataSource implements WidgetDataSource {
     }, this.intervalMs);
     this.timers.add(timer);
 
+    return () => {
+      if (this.timers.delete(timer)) clearInterval(timer);
+    };
+  }
+
+  // subscribeAlarms emits a synthetic alarm snapshot for preview. The canonical set is
+  // filtered by the subscription (state/severity/ack) so the preview reflects what the
+  // widget is configured to show; scope (datasource) is ignored — preview never resolves
+  // a device. Re-emits on the same cadence with advancing raised times so the table
+  // looks live. Returns whole snapshots, matching the live hub's contract.
+  subscribeAlarms(subscription: AlarmSubscription, sink: AlarmStreamSink): () => void {
+    const matches = SYNTHETIC_ALARMS.filter(
+      (a) =>
+        (!subscription.state || a.state === subscription.state) &&
+        (!subscription.severity || a.severity === subscription.severity) &&
+        (subscription.acknowledged == null || a.acknowledged === subscription.acknowledged),
+    );
+
+    const emit = (): void => {
+      const now = Date.now();
+      const rows: AlarmRow[] = matches.map((a, i) => {
+        const raised = new Date(now - i * 45_000).toISOString();
+        return {
+          token: `syn-alarm-${i}`,
+          originatorType: 'device',
+          alarmKey: a.alarmKey,
+          metricKey: a.metricKey,
+          state: a.state,
+          acknowledged: a.acknowledged,
+          severity: a.severity,
+          originatorToken: a.originatorToken,
+          lastValue: a.lastValue,
+          message: a.message,
+          raisedTime: raised,
+          clearedTime: a.state === 'CLEARED' ? raised : null,
+          acknowledgedTime: a.acknowledged ? raised : null,
+          acknowledgedBy: a.acknowledged ? 'preview@devicechain' : null,
+        };
+      });
+      sink.next({ alarms: rows.slice(0, subscription.pageSize), total: rows.length });
+    };
+
+    emit();
+    const timer = setInterval(emit, this.intervalMs);
+    this.timers.add(timer);
     return () => {
       if (this.timers.delete(timer)) clearInterval(timer);
     };

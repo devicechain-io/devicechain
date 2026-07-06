@@ -14,8 +14,13 @@ export { DashboardRenderer, type DashboardRendererProps } from './dashboard-rend
 // Renderer entry point: binds the hub to a widget by type.
 export { ConnectedWidget, type ConnectedWidgetProps } from './connected-widget';
 
-// Registry + widget contract.
-export { WIDGET_REGISTRY } from './registry';
+// Registries + widget contract + channel classifier.
+export {
+  WIDGET_REGISTRY,
+  ALARM_WIDGET_REGISTRY,
+  WIDGET_CHANNEL,
+  type WidgetChannel,
+} from './registry';
 export { pickSample, type WidgetProps, type WidgetComponent } from './widget';
 
 // Individual widgets (for direct/custom use).
@@ -25,11 +30,25 @@ export { TimeSeriesChart } from './widgets/time-series-chart';
 export { Table } from './widgets/table';
 export { Label } from './widgets/label';
 export { Image } from './widgets/image';
+export { AlarmTable } from './widgets/alarm-table';
+export { AlarmCount } from './widgets/alarm-count';
+export {
+  severityColor,
+  severityLabel,
+  severityRank,
+  highestSeverity,
+} from './widgets/severity';
 
 // Building blocks for custom widgets.
 export { WidgetFrame, type WidgetFrameProps } from './frame';
 export { EChart, type EChartOption } from './echart';
-export { useMeasurementStream, useChartTheme, type MeasurementStreamState } from './hooks';
+export {
+  useMeasurementStream,
+  useAlarmStream,
+  useChartTheme,
+  type MeasurementStreamState,
+  type AlarmStreamState,
+} from './hooks';
 export {
   buildLineOption,
   buildGaugeOption,

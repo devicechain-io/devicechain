@@ -65,9 +65,14 @@ function humanizeType(type: WidgetType): string {
 }
 
 // defaultOptions is the starter options bag for a freshly added widget: labels
-// carry placeholder text, everything else a title.
+// carry placeholder text, alarm widgets default to the active alarms (the useful
+// operations default), everything else just a title.
 function defaultOptions(type: WidgetType): Record<string, unknown> {
-  return type === 'label' ? { text: 'New label' } : { title: humanizeType(type) };
+  if (type === 'label') return { text: 'New label' };
+  if (type === 'alarm-table' || type === 'alarm-count') {
+    return { title: humanizeType(type), state: 'ACTIVE' };
+  }
+  return { title: humanizeType(type) };
 }
 
 // addWidget appends a new default widget of the given type, placed on top

@@ -14,14 +14,16 @@ import type { MeasurementStreamState } from './hooks';
 // resolved live data — it never touches the DashboardHub directly. This is the
 // public custom-widget interface: a widget is a function of (widget, data), so it
 // renders identically from a live stream, a recorded window, or a test fixture.
-// ConnectedWidget binds the hub to this contract; WIDGET_REGISTRY maps type →
-// component.
-export interface WidgetProps {
+// ConnectedWidget binds the hub to this contract and dispatches on the widget's data
+// CHANNEL (see WIDGET_CHANNEL): measurement widgets receive a MeasurementStreamState
+// (the default), alarm widgets an AlarmStreamState. The data type is a generic so each
+// widget declares exactly the shape it consumes.
+export interface WidgetProps<D = MeasurementStreamState> {
   widget: WidgetInstance;
-  data: MeasurementStreamState;
+  data: D;
 }
 
-export type WidgetComponent = ComponentType<WidgetProps>;
+export type WidgetComponent<D = MeasurementStreamState> = ComponentType<WidgetProps<D>>;
 
 // pickSample chooses the sample a single-value widget (card, gauge) shows: the
 // named measurement, or the first available when no name is pinned.

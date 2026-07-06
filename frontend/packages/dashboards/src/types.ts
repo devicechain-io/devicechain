@@ -94,6 +94,11 @@ export type DatasourceSelector =
 
 // The built-in widget types. Kept as a runtime array so parse/validation and the
 // widget registry share one source of truth (WidgetType is derived from it).
+//
+// Widgets fall into data CHANNELS (see WIDGET_CHANNEL in @devicechain/widgets): the
+// measurement widgets stream telemetry samples; the alarm widgets consume the raised-
+// alarm surface (ADR-041) via the hub's alarm channel. A widget's channel decides
+// which hook/registry the renderer binds it through.
 export const WIDGET_TYPES = [
   'timeseries-chart',
   'latest-card',
@@ -101,6 +106,8 @@ export const WIDGET_TYPES = [
   'table',
   'label',
   'image',
+  'alarm-table',
+  'alarm-count',
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
@@ -195,4 +202,28 @@ export interface MeasurementSample {
   name: string;
   value: number | null;
   classifier: string | null;
+}
+
+// A raised alarm as an alarm widget sees it (ADR-041). Mirrors device-management's
+// stored Alarm row (the source of truth), NOT the transient AlarmEvent envelope — the
+// hub's alarm channel treats the live stream as a reconcile trigger and re-reads the
+// authoritative rows via the alarms query. `token` is the stable alarm token (the row
+// key + the ack/clear handle); `originatorToken` is the device token when the
+// originator is a device (null otherwise). Kept decoupled from the device-management
+// GraphQL types so the widget layer carries no service coupling.
+export interface AlarmRow {
+  token: string;
+  originatorType: string;
+  originatorToken: string | null;
+  alarmKey: string;
+  metricKey: string;
+  state: string; // ACTIVE | CLEARED
+  acknowledged: boolean;
+  severity: string; // CRITICAL | MAJOR | MINOR | WARNING | INDETERMINATE
+  raisedTime: string | null;
+  clearedTime: string | null;
+  acknowledgedTime: string | null;
+  acknowledgedBy: string | null;
+  lastValue: number | null;
+  message: string | null;
 }
