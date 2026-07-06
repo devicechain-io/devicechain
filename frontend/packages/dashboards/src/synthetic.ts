@@ -11,7 +11,13 @@
 // names, never resolves
 // a device).
 
-import type { AlarmStreamSink, AlarmSubscription, WidgetDataSource, WidgetStreamSink } from './hub';
+import type {
+  AlarmStreamSink,
+  AlarmSubscription,
+  WidgetActions,
+  WidgetDataSource,
+  WidgetStreamSink,
+} from './hub';
 import type { AlarmRow, DatasourceSelector, MeasurementSample } from './types';
 
 // The waveforms an author can preview with. Sine is the default (smooth, obviously
@@ -73,7 +79,7 @@ function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v;
 }
 
-export class SyntheticDataSource implements WidgetDataSource {
+export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
   private readonly generator: SyntheticGenerator;
   private readonly intervalMs: number;
   private readonly backfill: number;
@@ -178,6 +184,21 @@ export class SyntheticDataSource implements WidgetDataSource {
     return () => {
       if (this.timers.delete(timer)) clearInterval(timer);
     };
+  }
+
+  // ── WidgetActions (preview stubs) ────────────────────────────────────────
+  // Preview shows action controls (so an author sees the real layout), so can() is
+  // always true; the actions themselves are no-ops — preview never mutates the backend.
+  can(): boolean {
+    return true;
+  }
+
+  async acknowledgeAlarm(): Promise<void> {
+    // no-op in preview
+  }
+
+  async clearAlarm(): Promise<void> {
+    // no-op in preview
   }
 
   // disposeAll stops every live stream (e.g. when preview is turned off). Individual

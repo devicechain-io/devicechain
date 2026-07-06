@@ -12,7 +12,7 @@
 // (render the definition read-only through a hub bound to the manifest). There is
 // NO editing, no save, no token fetch.
 
-import { gql, setAuthTokenGetter } from '@devicechain/client';
+import { decodeToken, gql, setAuthTokenGetter } from '@devicechain/client';
 import {
   createDeviceResolver,
   DashboardHub,
@@ -60,7 +60,12 @@ export default function App() {
 
   if (!token) return <SignIn onAuthed={setToken} />; // Step 1
   if (!loaded) return <Load onRender={setLoaded} onSignOut={signOut} />; // Step 2
-  return <View loaded={loaded} onChange={() => setLoaded(null)} onSignOut={signOut} />; // Step 3
+  // The viewer's authorities gate action controls (alarm ack/clear); the server enforces
+  // them regardless. Decoded from the access token this reference viewer holds.
+  const authorities = decodeToken(token)?.authorities ?? [];
+  return (
+    <View loaded={loaded} authorities={authorities} onChange={() => setLoaded(null)} onSignOut={signOut} />
+  ); // Step 3
 }
 
 // ── Step 1: Sign in ─────────────────────────────────────────────────────────
@@ -305,10 +310,12 @@ function Load({
 
 function View({
   loaded,
+  authorities,
   onChange,
   onSignOut,
 }: {
   loaded: Loaded;
+  authorities: string[];
   onChange: () => void;
   onSignOut: () => void;
 }) {
@@ -319,7 +326,13 @@ function View({
   // for this view's lifetime, torn down on unmount.
   const bindings = useMemo(() => effectiveBindings(definition, manifest), [definition, manifest]);
   const resolver = useMemo(() => createDeviceResolver(), []);
-  const hub = useMemo(() => new DashboardHub({ resolver, bindings }), [resolver, bindings]);
+  const authoritiesKey = authorities.join(',');
+  const hub = useMemo(
+    () => new DashboardHub({ resolver, bindings, authorities }),
+    // authorities read via authoritiesKey (value identity), not array reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [resolver, bindings, authoritiesKey],
+  );
   useEffect(() => () => hub.disposeAll(), [hub]);
 
   const title = definition.title || 'Dashboard';
@@ -345,6 +358,7 @@ function View({
         <DashboardRenderer
           definition={definition}
           hub={hub}
+          actions={hub}
           bindings={bindings}
         />
       </main>

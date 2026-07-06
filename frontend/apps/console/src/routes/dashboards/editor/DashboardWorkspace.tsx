@@ -156,8 +156,15 @@ export function DashboardWorkspace({
   // than tearing down every widget's stream per keystroke.
   const hubBindings = useDebouncedValue(bindings, bindingsKey, 250);
   const hubKey = useMemo(() => JSON.stringify(hubBindings), [hubBindings]);
+  // The hub carries the viewer's authorities so action widgets (alarm ack/clear) can
+  // gate their controls; the server enforces alarm:write regardless.
+  const authorities = claims?.authorities;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const liveHub = useMemo(() => new DashboardHub({ resolver, bindings: hubBindings }), [resolver, hubKey]);
+  const liveHub = useMemo(
+    () => new DashboardHub({ resolver, bindings: hubBindings, authorities }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [resolver, hubKey, JSON.stringify(authorities ?? [])],
+  );
   useEffect(() => () => liveHub.disposeAll(), [liveHub]);
   const dataHub = preview ? synthetic : liveHub;
 
@@ -462,6 +469,7 @@ export function DashboardWorkspace({
               // a no-op for move/resize since those keep every widget's slot reference.
               onChange={(next) => setWorking(pruneSlots(next))}
               hub={dataHub}
+              actions={dataHub}
               selectedId={selectedId}
               onSelect={setSelectedId}
             />
@@ -488,6 +496,7 @@ export function DashboardWorkspace({
           <DashboardRenderer
             definition={working}
             hub={dataHub}
+            actions={dataHub}
             seedHistory={!preview}
             bindings={hubBindings}
           />

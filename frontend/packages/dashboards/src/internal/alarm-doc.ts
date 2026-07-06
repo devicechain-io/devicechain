@@ -99,3 +99,33 @@ export const ALARM_STREAM = `
     }
   }
 ` as unknown as TypedDocument<AlarmStreamResult, AlarmStreamVariables>;
+
+// ── Operator actions (writes) ────────────────────────────────────────────
+// acknowledge/clear an alarm by token (device-management, require alarm:write). The
+// acknowledging identity is taken server-side from the authenticated subject; the
+// caller supplies only the token. Only the token is selected back — the hub reconciles
+// the rows via the query afterward.
+
+export interface AlarmMutationVariables {
+  token: string;
+}
+
+export interface AlarmMutationResult {
+  [key: string]: { token: string };
+}
+
+export const ACKNOWLEDGE_ALARM = `
+  mutation DashboardAcknowledgeAlarm($token: String!) {
+    acknowledgeAlarm(token: $token) {
+      token
+    }
+  }
+` as unknown as TypedDocument<AlarmMutationResult, AlarmMutationVariables>;
+
+export const CLEAR_ALARM = `
+  mutation DashboardClearAlarm($token: String!) {
+    clearAlarm(token: $token) {
+      token
+    }
+  }
+` as unknown as TypedDocument<AlarmMutationResult, AlarmMutationVariables>;

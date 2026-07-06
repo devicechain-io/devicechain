@@ -18,6 +18,7 @@ import {
   pxToCellBox,
   setWidgetBox,
   type DashboardDefinition,
+  type WidgetActions,
   type WidgetDataSource,
 } from '@devicechain/dashboards';
 import { ConnectedWidget } from '@devicechain/widgets';
@@ -27,13 +28,17 @@ export interface DashboardCanvasProps {
   definition: DashboardDefinition;
   onChange: (next: DashboardDefinition) => void;
   hub: WidgetDataSource;
+  // Action seam, so an action widget shows its controls in the layout (WYSIWYG). The
+  // canvas makes each widget pointer-inert during editing, so the controls are visible
+  // but inert — react-rnd owns drag/resize.
+  actions?: WidgetActions;
   // Selection is lifted to the workspace (which owns the config panel); the
   // canvas is fully controlled — it reports clicks and reflects the current id.
   selectedId: string | null;
   onSelect: (id: string | null) => void;
 }
 
-export function DashboardCanvas({ definition, onChange, hub, selectedId, onSelect }: DashboardCanvasProps) {
+export function DashboardCanvas({ definition, onChange, hub, actions, selectedId, onSelect }: DashboardCanvasProps) {
   const cell = definition.canvas.grid.size || 1;
 
   // Give the scroll area room below the lowest widget so there's somewhere to drag.
@@ -79,7 +84,7 @@ export function DashboardCanvas({ definition, onChange, hub, selectedId, onSelec
             >
               {/* Live widget, but inert to the pointer so react-rnd owns drag/resize. */}
               <div style={{ width: '100%', height: '100%', pointerEvents: 'none' }}>
-                <ConnectedWidget widget={widget} hub={hub} />
+                <ConnectedWidget widget={widget} hub={hub} actions={actions} />
               </div>
 
               {selected && (

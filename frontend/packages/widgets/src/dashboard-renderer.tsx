@@ -14,6 +14,7 @@ import {
   resolveWidgetBox,
   type Breakpoints,
   type DashboardDefinition,
+  type WidgetActions,
   type WidgetDataSource,
   type MeasurementSample,
   type SlotBinding,
@@ -27,6 +28,10 @@ import { WIDGET_CHANNEL } from './registry';
 export interface DashboardRendererProps {
   definition: DashboardDefinition;
   hub: WidgetDataSource;
+  // The action seam (writes) for acting widgets (alarm ack/clear, command send). Omit
+  // for a strictly read-only mount; the same instance as `hub` when the runtime provides
+  // both (DashboardHub / SyntheticDataSource implement WidgetActions).
+  actions?: WidgetActions;
   // Whether to backfill each widget from bucketedMeasurements (a real backend call).
   // Default true; set false for offline preview, where the data source (e.g.
   // SyntheticDataSource) supplies its own history and the backend must not be hit.
@@ -39,6 +44,7 @@ export interface DashboardRendererProps {
 export function DashboardRenderer({
   definition,
   hub,
+  actions,
   seedHistory = true,
   bindings,
 }: DashboardRendererProps) {
@@ -76,7 +82,12 @@ export function DashboardRenderer({
               zIndex: box.z,
             }}
           >
-            <ConnectedWidget widget={widget} hub={hub} initialSamples={histories[widget.id]} />
+            <ConnectedWidget
+              widget={widget}
+              hub={hub}
+              actions={actions}
+              initialSamples={histories[widget.id]}
+            />
           </div>
         );
       })}

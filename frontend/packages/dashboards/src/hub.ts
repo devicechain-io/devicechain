@@ -13,8 +13,10 @@
 import { gql, subscribe, type Area, type SubscriptionSink } from '@devicechain/client';
 
 import {
+  ACKNOWLEDGE_ALARM,
   ALARM_STREAM,
   ALARMS_QUERY,
+  CLEAR_ALARM,
   type AlarmSearchCriteriaInput,
   type AlarmStreamResult,
 } from './internal/alarm-doc';
@@ -86,12 +88,35 @@ export interface AlarmStreamSink {
   error?: (err: unknown) => void;
 }
 
+// ── Action seam (writes) ─────────────────────────────────────────────────
+//
+// Read widgets are pure `(widget, data)`; a widget that ACTS (acknowledge/clear an
+// alarm, send a command) never touches the SDK either — it calls this seam, which the
+// renderer threads in from the runtime. So preview stays offline (SyntheticDataSource
+// implements a no-op/echo WidgetActions) and the "widget never reaches the backend"
+// invariant holds. `can` gates the UI: a widget hides an action the viewer isn't
+// authorized for (the server enforces it regardless).
+export interface WidgetActions {
+  // Acknowledge / clear a raised alarm by token (requires alarm:write). Resolves when
+  // the mutation succeeds; the runtime reconciles the affected alarm widgets so the
+  // change shows immediately rather than waiting for the next poll.
+  acknowledgeAlarm(alarmToken: string): Promise<void>;
+  clearAlarm(alarmToken: string): Promise<void>;
+  // Whether the current viewer holds an authority (e.g. 'alarm:write'). Drives whether
+  // an action control renders at all.
+  can(authority: string): boolean;
+}
+
 export interface DashboardHubConfig {
   resolver: DeviceResolver;
   // The effective slot→entity manifest (slot defaults merged with any host override;
   // see effectiveBindings). A widget's `slot` selector resolves through this. Absent
   // slots render as an empty placeholder. Can be replaced later via setBindings.
   bindings?: Record<string, SlotBinding>;
+  // The current viewer's authorities (access-token claims). Drives `can()` — which
+  // gates whether a widget's action controls render. Omitted/empty = no write actions
+  // (the read-only default); '*' grants all. The server enforces authority regardless.
+  authorities?: string[];
 }
 
 // WidgetDataSource is the minimal contract a widget renderer needs from a data
@@ -121,8 +146,13 @@ interface DeviceStream {
   unsubscribe: () => void;
 }
 
-export class DashboardHub implements WidgetDataSource {
+export class DashboardHub implements WidgetDataSource, WidgetActions {
   private readonly resolver: DeviceResolver;
+  // The viewer's authorities (for can()); '*' is the superuser wildcard.
+  private readonly authorities: ReadonlySet<string>;
+  // Per alarm-subscription reconcile triggers — invoked after an ack/clear so the
+  // affected alarm widgets refresh immediately instead of waiting for the poll/stream.
+  private readonly alarmReconcilers = new Set<() => void>();
   // One entry per distinct device token that has at least one subscriber.
   private readonly streams = new Map<string, DeviceStream>();
   // Live alarm-subscription disposers. The alarm channel isn't ref-counted through
@@ -137,6 +167,7 @@ export class DashboardHub implements WidgetDataSource {
   constructor(config: DashboardHubConfig) {
     this.resolver = config.resolver;
     this.bindings = config.bindings ?? {};
+    this.authorities = new Set(config.authorities ?? []);
   }
 
   // setBindings replaces the slot manifest. New subscriptions resolve through it;
@@ -185,6 +216,7 @@ export class DashboardHub implements WidgetDataSource {
     let debounce: ReturnType<typeof setTimeout> | undefined;
     let poll: ReturnType<typeof setInterval> | undefined;
     let unsubscribe: (() => void) | undefined;
+    let reconciler: (() => void) | undefined;
     // Monotonic generation: only the newest reconcile's result may be emitted, so a
     // slow query that resolves after a newer one can't overwrite fresher rows.
     let generation = 0;
@@ -194,6 +226,7 @@ export class DashboardHub implements WidgetDataSource {
       if (debounce) clearTimeout(debounce);
       if (poll) clearInterval(poll);
       unsubscribe?.();
+      if (reconciler) this.alarmReconcilers.delete(reconciler);
       this.alarmDisposers.delete(dispose);
     };
     this.alarmDisposers.add(dispose);
@@ -240,6 +273,10 @@ export class DashboardHub implements WidgetDataSource {
         };
         unsubscribe = subscribe(DEVICE_AREA, ALARM_STREAM, {}, adapter);
         poll = setInterval(() => reconcile(scope.tokens, scope.tenantWide), ALARM_POLL_MS);
+        // Register a reconcile trigger so an ack/clear (via the action seam) refreshes
+        // this widget immediately, not on the next poll tick.
+        reconciler = () => reconcile(scope.tokens, scope.tenantWide);
+        this.alarmReconcilers.add(reconciler);
         reconcile(scope.tokens, scope.tenantWide); // initial load
       })
       .catch((err) => {
@@ -301,6 +338,33 @@ export class DashboardHub implements WidgetDataSource {
       .sort((a, b) => (b.raisedTime ?? '').localeCompare(a.raisedTime ?? ''))
       .slice(0, sub.pageSize);
     return { alarms, total };
+  }
+
+  // ── WidgetActions (the write seam) ───────────────────────────────────────
+
+  // can reports whether the viewer holds an authority ('*' grants all). Drives whether
+  // a widget renders an action control; the server enforces authority regardless.
+  can(authority: string): boolean {
+    return this.authorities.has('*') || this.authorities.has(authority);
+  }
+
+  // acknowledgeAlarm / clearAlarm mutate the alarm by token, then nudge every open alarm
+  // widget to reconcile so the change shows at once. The mutation reaches device-management
+  // (the acknowledging identity is taken server-side from the token).
+  async acknowledgeAlarm(alarmToken: string): Promise<void> {
+    await gql(DEVICE_AREA, ACKNOWLEDGE_ALARM, { token: alarmToken });
+    this.reconcileAlarms();
+  }
+
+  async clearAlarm(alarmToken: string): Promise<void> {
+    await gql(DEVICE_AREA, CLEAR_ALARM, { token: alarmToken });
+    this.reconcileAlarms();
+  }
+
+  // reconcileAlarms re-queries every open alarm subscription (after a mutation). Iterate
+  // a copy — a reconcile won't mutate the set, but this is cheap insurance.
+  private reconcileAlarms(): void {
+    for (const reconcile of [...this.alarmReconcilers]) reconcile();
   }
 
   // disposeAll tears down every upstream stream (e.g. on dashboard close): the
