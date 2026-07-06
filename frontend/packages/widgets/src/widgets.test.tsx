@@ -120,6 +120,7 @@ describe('ConnectedWidget', () => {
         sink = s;
         return () => {};
       },
+      isDatasourceAvailable: async () => true,
     } as unknown as DashboardHub;
 
     render(<ConnectedWidget widget={widget('latest-card', { precision: 0 })} hub={hub} />);
@@ -134,11 +135,23 @@ describe('ConnectedWidget', () => {
         sink = s;
         return () => {};
       },
+      isDatasourceAvailable: async () => true,
     } as unknown as DashboardHub;
 
     render(<ConnectedWidget widget={widget('latest-card', { title: 'Temp', precision: 0 })} hub={hub} />);
     act(() => sink?.error?.(new Error('device not found')));
     expect(screen.getByText('Data unavailable')).toBeTruthy();
     expect(screen.getByText(/device not found/)).toBeTruthy();
+  });
+
+  it('renders a "Device unavailable" pane when the bound device no longer exists', async () => {
+    const hub = {
+      subscribeWidget: (_ds: DatasourceSelector, _s: WidgetStreamSink) => () => {},
+      isDatasourceAvailable: async () => false, // deleted device
+    } as unknown as DashboardHub;
+
+    render(<ConnectedWidget widget={widget('latest-card', { precision: 0 })} hub={hub} />);
+    await act(async () => {}); // let the optimistic availability check resolve
+    expect(screen.getByText('Device unavailable')).toBeTruthy();
   });
 });

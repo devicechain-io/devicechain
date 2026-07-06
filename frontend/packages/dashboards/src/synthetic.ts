@@ -242,6 +242,13 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
     };
   }
 
+  // isDatasourceAvailable — preview always resolves data (it generates it), so every
+  // datasource is "available"; an author previewing a template never sees the
+  // deleted-device state.
+  async isDatasourceAvailable(): Promise<boolean> {
+    return true;
+  }
+
   // ── WidgetActions (preview stubs) ────────────────────────────────────────
   // Preview shows action controls (so an author sees the real layout), so can() is
   // always true; the actions themselves are no-ops — preview never mutates the backend.

@@ -74,6 +74,10 @@ export interface DeviceResolver {
   // "the Hub expands an anchor to its current membership" lives (Phase 1);
   // server-side expansion is a Phase-2 optimization.
   devicesForAnchor(anchor: AnchorTarget): Promise<string[]>;
+  // Whether a device with this token currently exists (device-management). Backs the
+  // widget availability check: a dashboard references a device by a stable token
+  // (ADR-044), and a since-deleted device's token no longer resolves.
+  deviceExists(deviceToken: string): Promise<boolean>;
 }
 
 // WidgetStreamSink receives live samples for one widget, across every device its
@@ -211,6 +215,14 @@ export interface WidgetDataSource {
   // command-history snapshots on a poll (command-delivery has no subscription).
   // Implemented by both the live hub and the synthetic preview source.
   subscribeCommands(subscription: CommandSubscription, sink: CommandStreamSink): () => void;
+  // Whether a widget's bound entity still exists. Optimistic + async: a widget renders
+  // from its stream immediately, and this resolves separately — only a device selector
+  // (or a slot bound to a device) whose token no longer resolves reports false, so the
+  // widget shows "unavailable" instead of a blank pane. Anchor / unbound-slot / no-
+  // datasource report true (their empty state is legitimate, not "unavailable"). Fails
+  // OPEN (true) on an inconclusive check, so a device-management blip never falsely marks
+  // a live device unavailable.
+  isDatasourceAvailable(datasource: DatasourceSelector | undefined): Promise<boolean>;
 }
 
 // One widget's interest in a device stream: the measurement names it wants (an
@@ -579,6 +591,36 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // + test hook — proves multiplexing collapses shared devices to one stream).
   get openStreamCount(): number {
     return this.streams.size;
+  }
+
+  // isDatasourceAvailable reports whether a widget's bound device still exists. Only a
+  // device selector (or a slot bound to a device) is validated — an anchor, an unbound
+  // slot, or no datasource has a legitimate empty state and is always "available". Fails
+  // open: an existence-check outage returns true (never falsely mark a live device gone).
+  async isDatasourceAvailable(datasource: DatasourceSelector | undefined): Promise<boolean> {
+    const deviceToken = this.availabilityToken(datasource);
+    if (deviceToken === undefined) return true;
+    try {
+      return await this.resolver.deviceExists(deviceToken);
+    } catch {
+      return true;
+    }
+  }
+
+  // availabilityToken returns the single device token whose existence gates a widget's
+  // availability, or undefined when there is nothing device-specific to validate (an
+  // anchor's membership is self-validating; an unbound slot is a placeholder; a reserved
+  // kind isn't resolved yet).
+  private availabilityToken(datasource: DatasourceSelector | undefined): string | undefined {
+    if (!datasource) return undefined;
+    if (datasource.kind === 'device') return datasource.deviceToken;
+    if (datasource.kind === 'slot') {
+      const binding = Object.prototype.hasOwnProperty.call(this.bindings, datasource.slot)
+        ? this.bindings[datasource.slot]
+        : undefined;
+      return binding && binding.kind === 'device' ? binding.deviceToken : undefined;
+    }
+    return undefined;
   }
 
   // resolveDevices turns a selector into the devices to stream, each with the

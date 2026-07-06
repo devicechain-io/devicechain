@@ -43,6 +43,28 @@ export const DEVICES_FOR_ANCHOR = `
   }
 ` as unknown as TypedDocument<EntityRelationshipsResult, EntityRelationshipsVariables>;
 
+// ── device-management: which of the given device tokens still exist ──────────
+// A dashboard references a device by a STABLE token (ADR-044); the token re-key
+// dropped the token→id hop that used to fail on a deleted device, so a widget bound to
+// a since-deleted device streamed nothing and rendered blank. This existence check
+// restores the "unavailable" signal — devicesByToken returns only the tokens that
+// resolve, so a missing token is absent from the result.
+
+export interface DevicesByTokenResult {
+  devicesByToken: Array<{ token: string }>;
+}
+export interface DevicesByTokenVariables {
+  tokens: string[];
+}
+
+export const DEVICES_BY_TOKEN = `
+  query DashboardDevicesByToken($tokens: [String!]!) {
+    devicesByToken(tokens: $tokens) {
+      token
+    }
+  }
+` as unknown as TypedDocument<DevicesByTokenResult, DevicesByTokenVariables>;
+
 // ── event-management: bucketed history for chart seeding ─────────────────────
 
 export interface MeasurementBucket {

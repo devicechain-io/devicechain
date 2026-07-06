@@ -56,10 +56,12 @@ export {
   useMeasurementStream,
   useAlarmStream,
   useCommandStream,
+  useDatasourceAvailability,
   useChartTheme,
   type MeasurementStreamState,
   type AlarmStreamState,
   type CommandStreamState,
+  type DatasourceAvailability,
 } from './hooks';
 export {
   buildLineOption,

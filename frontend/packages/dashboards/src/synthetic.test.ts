@@ -229,4 +229,8 @@ describe('SyntheticDataSource action stubs', () => {
     const src = new SyntheticDataSource();
     await expect(src.sendCommand()).resolves.toEqual({ token: expect.any(String) });
   });
+
+  it('every datasource is available in preview (never the deleted-device state)', async () => {
+    await expect(new SyntheticDataSource().isDatasourceAvailable()).resolves.toBe(true);
+  });
 });

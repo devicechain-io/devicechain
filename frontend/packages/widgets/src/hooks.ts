@@ -187,6 +187,44 @@ export function useCommandStream(
   return state;
 }
 
+// A widget's bound-entity availability: 'unknown' until the async check resolves
+// (render optimistically meanwhile), then 'available', or 'unavailable' when the bound
+// device no longer exists (a deleted device's stable token, ADR-044).
+export type DatasourceAvailability = 'unknown' | 'available' | 'unavailable';
+
+// useDatasourceAvailability resolves whether a widget's bound device still exists,
+// WITHOUT blocking the widget's data stream (optimistic + async): it starts 'unknown'
+// (the widget renders normally), then flips to 'available'/'unavailable' once the hub's
+// existence check resolves. Fails open (→'available') so a check outage never falsely
+// blanks a live widget. Re-checks when the datasource changes (value-compared).
+export function useDatasourceAvailability(
+  hub: WidgetDataSource,
+  datasource: DatasourceSelector | undefined,
+): DatasourceAvailability {
+  const [state, setState] = useState<DatasourceAvailability>('unknown');
+  const key = datasource ? JSON.stringify(datasource) : null;
+
+  useEffect(() => {
+    setState('unknown');
+    let cancelled = false;
+    hub
+      .isDatasourceAvailable(datasource)
+      .then((ok) => {
+        if (!cancelled) setState(ok ? 'available' : 'unavailable');
+      })
+      .catch(() => {
+        if (!cancelled) setState('available'); // fail open
+      });
+    return () => {
+      cancelled = true;
+    };
+    // `datasource` is intentionally read via `key` (value identity), not reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hub, key]);
+
+  return state;
+}
+
 export interface ElementSize {
   width: number;
   height: number;

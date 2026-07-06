@@ -19,7 +19,7 @@ import type {
 import type { ReactNode } from 'react';
 
 import { WidgetFrame } from './frame';
-import { useAlarmStream, useCommandStream, useMeasurementStream } from './hooks';
+import { useAlarmStream, useCommandStream, useDatasourceAvailability, useMeasurementStream } from './hooks';
 import {
   ALARM_WIDGET_REGISTRY,
   CONTROL_WIDGET_REGISTRY,
@@ -47,6 +47,15 @@ export interface ConnectedWidgetProps {
 }
 
 export function ConnectedWidget({ widget, hub, actions, initialSamples }: ConnectedWidgetProps) {
+  // A widget bound to a since-deleted device (its stable token no longer resolves)
+  // shows an "unavailable" pane rather than a blank one — checked optimistically, so a
+  // valid widget renders from its stream without waiting on this. Uniform across every
+  // channel, so it wraps the dispatch below.
+  const availability = useDatasourceAvailability(hub, widget.datasource);
+  if (availability === 'unavailable') {
+    return <WidgetUnavailableFrame widget={widget} />;
+  }
+
   const channel = WIDGET_CHANNEL[widget.type];
   if (channel === 'alarm') {
     return <AlarmConnectedWidget widget={widget} hub={hub} actions={actions} />;
@@ -148,6 +157,36 @@ function parseAcknowledged(value: string | undefined): boolean | undefined {
   if (value === 'true') return true;
   if (value === 'false') return false;
   return undefined;
+}
+
+// WidgetUnavailableFrame is shown when a widget's bound device no longer exists (a
+// deleted device's stable token). Distinct from the error frame: not a transient
+// failure to retry, but a settled "this entity is gone" — so it reads as a state, not
+// an error.
+function WidgetUnavailableFrame({ widget }: { widget: WidgetInstance }): ReactNode {
+  return (
+    <WidgetFrame title={optString(widget.options, 'title')}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 4,
+          width: '100%',
+          height: '100%',
+          padding: 12,
+          boxSizing: 'border-box',
+          textAlign: 'center',
+          color: 'hsl(var(--muted-foreground))',
+        }}
+      >
+        <div style={{ fontSize: 20, lineHeight: 1 }}>⃠</div>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>Device unavailable</div>
+        <div style={{ fontSize: 11, opacity: 0.8 }}>The bound device no longer exists.</div>
+      </div>
+    </WidgetFrame>
+  );
 }
 
 // A resolution/socket error surfaces as a muted error state rather than a blank pane.

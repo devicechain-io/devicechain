@@ -17,7 +17,12 @@
 import { gql } from '@devicechain/client';
 
 import type { DeviceResolver } from './hub';
-import { DEVICES_FOR_ANCHOR, type EntityRelationshipsResult } from './queries';
+import {
+  DEVICES_BY_TOKEN,
+  DEVICES_FOR_ANCHOR,
+  type DevicesByTokenResult,
+  type EntityRelationshipsResult,
+} from './queries';
 import type { AnchorTarget } from './types';
 
 // A generous page size for anchor membership — Phase 1 dashboards anchor to areas
@@ -26,6 +31,10 @@ const ANCHOR_PAGE_SIZE = 500;
 
 export function createDeviceResolver(): DeviceResolver {
   const anchorCache = new Map<string, Promise<string[]>>();
+  // Memoize existence per token for the resolver's lifetime: many widgets on a
+  // dashboard bind the same device, and a device's existence is stable for a viewing
+  // session (a delete mid-session is rare and the next mount re-checks).
+  const existsCache = new Map<string, Promise<boolean>>();
 
   return {
     devicesForAnchor(anchor: AnchorTarget): Promise<string[]> {
@@ -50,6 +59,23 @@ export function createDeviceResolver(): DeviceResolver {
             throw err;
           });
         anchorCache.set(key, pending);
+      }
+      return pending;
+    },
+
+    deviceExists(deviceToken: string): Promise<boolean> {
+      let pending = existsCache.get(deviceToken);
+      if (!pending) {
+        pending = gql('device-management', DEVICES_BY_TOKEN, { tokens: [deviceToken] })
+          .then((r: DevicesByTokenResult) => r.devicesByToken.some((d) => d.token === deviceToken))
+          .catch((err) => {
+            // Don't cache a failure as "gone": drop it so the next check retries, and
+            // rethrow so the caller treats an existence-check outage as inconclusive
+            // (available) rather than falsely rendering a live device unavailable.
+            existsCache.delete(deviceToken);
+            throw err;
+          });
+        existsCache.set(deviceToken, pending);
       }
       return pending;
     },
