@@ -74,6 +74,56 @@ func TestDeleteDevice_EmitsEntityDeleted(t *testing.T) {
 	assert.Len(t, capture.events, 1, "no emit for a token that matches nothing")
 }
 
+// captureEvictor records EvictEntityDelete calls.
+type evictCall struct {
+	etype   entity.Type
+	id      uint
+	token   string
+	sources []uint
+}
+type captureEvictor struct{ calls []evictCall }
+
+func (c *captureEvictor) EvictEntityDelete(_ context.Context, etype entity.Type, id uint, token string, sources []uint) {
+	c.calls = append(c.calls, evictCall{etype, id, token, sources})
+}
+
+// Deleting an entity evicts the hot-path caches (ADR-044 F2): the deleted device's
+// own keys, plus the relationship cache of every device that tracked it as a target.
+func TestDeleteDevice_EvictsCaches(t *testing.T) {
+	api := newDeleteEmitTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	evictor := &captureEvictor{}
+	api.CacheEvictor = evictor
+
+	// Device A (the target) and device B, which tracks A.
+	a := &Device{}
+	a.Token = "dev-a"
+	b := &Device{}
+	b.Token = "dev-b"
+	if err := api.RDB.DB(ctx).Create(a).Error; err != nil {
+		t.Fatalf("seed a: %v", err)
+	}
+	if err := api.RDB.DB(ctx).Create(b).Error; err != nil {
+		t.Fatalf("seed b: %v", err)
+	}
+	rel := &EntityRelationship{SourceType: "device", SourceId: b.ID, TargetType: "device", TargetId: a.ID}
+	rel.Token = "rel-1"
+	if err := api.RDB.DB(ctx).Create(rel).Error; err != nil {
+		t.Fatalf("seed relationship: %v", err)
+	}
+
+	deleted, err := api.DeleteDevice(ctx, "dev-a")
+	assert.NoError(t, err)
+	assert.True(t, deleted)
+	if assert.Len(t, evictor.calls, 1) {
+		call := evictor.calls[0]
+		assert.Equal(t, entity.TypeDevice, call.etype)
+		assert.Equal(t, a.ID, call.id)
+		assert.Equal(t, "dev-a", call.token)
+		assert.Equal(t, []uint{b.ID}, call.sources, "device B tracked A as a target, so its relationship cache is evicted")
+	}
+}
+
 // With no publisher wired the delete still succeeds — emission is a nil-safe no-op.
 func TestDeleteDevice_NoPublisherIsNoOp(t *testing.T) {
 	api := newDeleteEmitTestApi(t)

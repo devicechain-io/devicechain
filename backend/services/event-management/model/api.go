@@ -50,6 +50,12 @@ type EventManagementApi interface {
 	// (anchor_type, anchor_id). Idempotent + tenant-scoped. Returns rows removed.
 	DeleteAnchorsForEntity(ctx context.Context, entityType string, entityId uint) (int64, error)
 
+	// DistinctAnchorTenants returns every tenant with event_anchors (cross-tenant;
+	// needs a system context). DistinctAnchorRefs returns the current tenant's
+	// distinct entity references. Both feed the reconciliation sweep (ADR-044).
+	DistinctAnchorTenants(ctx context.Context) ([]string, error)
+	DistinctAnchorRefs(ctx context.Context) ([]AnchorRef, error)
+
 	// PersistInTx runs fn inside a single database transaction whose handle
 	// carries the supplied (tenant-scoped) context, so a message's events are
 	// committed all-or-nothing (ADR-022 E5).

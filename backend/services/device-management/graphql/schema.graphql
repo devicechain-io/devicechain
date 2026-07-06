@@ -1040,6 +1040,18 @@ interface Entity {
     token: String!
 }
 
+# A uniform (type, id) reference to an entity (ADR-013).
+input EntityRefInput {
+    type: String!
+    id: ID!
+}
+
+# A uniform (type, id) reference to an entity (ADR-013), returned from a query.
+type EntityRef {
+    type: String!
+    id: ID!
+}
+
 # Represents a type of relation between entities.
 type EntityRelationshipType implements Model & TokenReference & NamedEntity & MetadataEntity {
     id: ID!
@@ -1205,6 +1217,11 @@ type Query {
     entityRelationshipsByToken(tokens: [String!]!): [EntityRelationship!]!
     # List entity relationships that meet criteria.
     entityRelationships(criteria: EntityRelationshipSearchCriteria!): EntityRelationshipSearchResults!
+    # Return the subset of the given (type, id) references that resolve to an
+    # existing entity in the caller's tenant (ADR-044 decision 3). The
+    # event-management reconciliation sweep uses this to find orphaned anchors whose
+    # referenced entity was deleted.
+    existingEntityRefs(refs: [EntityRefInput!]!): [EntityRef!]!
 
     # Find asset types by unique id.
     assetTypesById(ids: [ID!]!): [AssetType!]!

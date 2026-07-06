@@ -77,6 +77,13 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		}
 		return false, err
 	}
+	// Before the delete removes the relationship edges, capture the devices that
+	// track this entity as a target — their cached tracked-relationship set will be
+	// stale once the edge is gone (ADR-044 F2). Best-effort; over-eviction is safe.
+	var trackingSources []uint
+	_ = api.RDB.DB(ctx).Model(&EntityRelationship{}).
+		Where("source_type = ? AND target_type = ? AND target_id = ?", string(entity.TypeDevice), string(etype), id).
+		Distinct().Pluck("source_id", &trackingSources)
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Unscoped().Where(
 			"(source_type = ? AND source_id = ?) OR (target_type = ? AND target_id = ?)",
@@ -118,6 +125,9 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		EntityToken: token,
 		DeletedTime: time.Now().UTC(),
 	})
+	// Drop the hot-path caches this delete invalidated so ingest stops resolving the
+	// removed entity and re-creating its anchors within the cache TTL (ADR-044 F2).
+	api.evictEntityDelete(ctx, etype, id, token, trackingSources)
 	return true, nil
 }
 
