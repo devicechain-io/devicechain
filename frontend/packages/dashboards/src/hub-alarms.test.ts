@@ -253,4 +253,59 @@ describe('DashboardHub alarm channel', () => {
     expect(errors).toHaveLength(1);
     expect((errors[0] as Error).message).toBe('boom');
   });
+
+  describe('action seam', () => {
+    it('can() reflects the viewer authorities ("*" grants all)', () => {
+      expect(new DashboardHub({ resolver: newResolver(), authorities: ['alarm:write'] }).can('alarm:write')).toBe(true);
+      expect(new DashboardHub({ resolver: newResolver(), authorities: ['alarm:write'] }).can('command:write')).toBe(false);
+      expect(new DashboardHub({ resolver: newResolver(), authorities: ['*'] }).can('anything')).toBe(true);
+      expect(new DashboardHub({ resolver: newResolver() }).can('alarm:write')).toBe(false);
+    });
+
+    it('acknowledgeAlarm mutates then reconciles the open alarm widgets', async () => {
+      h.gql.mockResolvedValue(page([]));
+      const hub = new DashboardHub({ resolver: newResolver(), authorities: ['*'] });
+      hub.subscribeAlarms({ pageSize: 10 }, { next: () => {} });
+      await settle();
+      expect(h.gql).toHaveBeenCalledTimes(1); // initial query
+
+      await hub.acknowledgeAlarm('alarm-1');
+      await settle();
+
+      // The mutation was issued with just the token…
+      const mutation = h.gql.mock.calls.find(
+        (c) => (c[2] as { token?: string }).token === 'alarm-1',
+      );
+      expect(mutation).toBeTruthy();
+      // …and an open subscription reconciled (initial + mutation + re-query).
+      expect(h.gql).toHaveBeenCalledTimes(3);
+    });
+
+    it('clearAlarm mutates and reconciles', async () => {
+      h.gql.mockResolvedValue(page([]));
+      const hub = new DashboardHub({ resolver: newResolver(), authorities: ['*'] });
+      hub.subscribeAlarms({ pageSize: 10 }, { next: () => {} });
+      await settle();
+
+      await hub.clearAlarm('alarm-9');
+      await settle();
+
+      expect(h.gql.mock.calls.some((c) => (c[2] as { token?: string }).token === 'alarm-9')).toBe(true);
+      expect(h.gql).toHaveBeenCalledTimes(3);
+    });
+
+    it('a disposed alarm widget is not reconciled by a later mutation', async () => {
+      h.gql.mockResolvedValue(page([]));
+      const hub = new DashboardHub({ resolver: newResolver(), authorities: ['*'] });
+      const dispose = hub.subscribeAlarms({ pageSize: 10 }, { next: () => {} });
+      await settle();
+      dispose();
+
+      await hub.acknowledgeAlarm('alarm-1');
+      await settle();
+
+      // initial query (1) + mutation (2) only — no reconcile, the reconciler was removed.
+      expect(h.gql).toHaveBeenCalledTimes(2);
+    });
+  });
 });

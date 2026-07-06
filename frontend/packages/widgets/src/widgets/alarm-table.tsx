@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // alarm-table — the raised alarms in the widget's scope (ADR-041), newest first, with
-// a severity stripe per row. Read-only: acknowledge/clear actions arrive with the
-// widget action seam (a later slice). Bound through the hub's alarm channel, so it
-// renders identically from live data or the synthetic preview source.
+// a severity stripe per row. When the runtime supplies an action seam AND the viewer
+// holds alarm:write, each active row gets Acknowledge / Clear controls; otherwise the
+// table is read-only. Bound through the hub's alarm channel, so it renders identically
+// from live data or the synthetic preview source.
 
-import type { AlarmRow } from '@devicechain/dashboards';
-import type { CSSProperties } from 'react';
+import type { AlarmRow, WidgetActions } from '@devicechain/dashboards';
+import { useState, type CSSProperties } from 'react';
 
 import type { AlarmStreamState } from '../hooks';
 import { formatDateTime, formatValue } from '../format';
@@ -38,8 +39,11 @@ function statusLabel(alarm: AlarmRow): string {
   return alarm.acknowledged ? 'Acknowledged' : 'Active';
 }
 
-export function AlarmTable({ widget, data }: WidgetProps<AlarmStreamState>) {
+export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamState>) {
   const { alarms, total, loading } = data;
+  // Actions render only when the runtime supplies a seam AND the viewer may write.
+  const canAct = actions?.can('alarm:write') ?? false;
+  const columns = canAct ? 8 : 7;
 
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
@@ -75,12 +79,17 @@ export function AlarmTable({ widget, data }: WidgetProps<AlarmStreamState>) {
                 <th scope="col" style={headCell}>
                   Raised
                 </th>
+                {canAct ? (
+                  <th scope="col" style={{ ...headCell, textAlign: 'right' }}>
+                    Actions
+                  </th>
+                ) : null}
               </tr>
             </thead>
             <tbody>
               {alarms.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ ...cell, textAlign: 'center', color: css('muted-foreground') }}>
+                  <td colSpan={columns} style={{ ...cell, textAlign: 'center', color: css('muted-foreground') }}>
                     {loading ? 'Loading…' : 'No alarms'}
                   </td>
                 </tr>
@@ -108,6 +117,12 @@ export function AlarmTable({ widget, data }: WidgetProps<AlarmStreamState>) {
                       <td style={{ ...cell, color: css('muted-foreground') }}>
                         {formatDateTime(alarm.raisedTime)}
                       </td>
+                      {canAct ? (
+                        <td style={{ ...cell, textAlign: 'right' }}>
+                          {/* actions is defined whenever canAct is true. */}
+                          <AlarmRowActions alarm={alarm} actions={actions as WidgetActions} />
+                        </td>
+                      ) : null}
                     </tr>
                   );
                 })
@@ -129,5 +144,82 @@ export function AlarmTable({ widget, data }: WidgetProps<AlarmStreamState>) {
         ) : null}
       </div>
     </WidgetFrame>
+  );
+}
+
+const actionButton: CSSProperties = {
+  padding: '2px 8px',
+  fontSize: 12,
+  lineHeight: 1.4,
+  borderRadius: 4,
+  border: `1px solid ${css('border')}`,
+  background: css('card'),
+  color: css('foreground'),
+  cursor: 'pointer',
+};
+
+// AlarmRowActions owns the pending/error state for one row's Acknowledge / Clear. Only
+// an ACTIVE alarm is actionable (a cleared — or any future non-active — state shows
+// "—"); an acknowledged one still shows Clear. After a successful mutation the hub
+// reconciles the table, so the row updates itself.
+function AlarmRowActions({ alarm, actions }: { alarm: AlarmRow; actions: WidgetActions }) {
+  const [pending, setPending] = useState<'ack' | 'clear' | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  if (alarm.state !== 'ACTIVE') {
+    return <span style={{ color: css('muted-foreground') }}>—</span>;
+  }
+
+  const run = (kind: 'ack' | 'clear', op: () => Promise<void>) => {
+    setPending(kind);
+    setFailed(false);
+    // Call op() synchronously (so an immediate dispatch is observable) but guard a
+    // synchronous throw too, so a misbehaving seam can't leave the row stuck-disabled.
+    let promise: Promise<void>;
+    try {
+      promise = op();
+    } catch {
+      setFailed(true);
+      setPending(null);
+      return;
+    }
+    promise.catch(() => setFailed(true)).finally(() => setPending(null));
+  };
+
+  return (
+    <span style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+      {failed ? (
+        <span
+          role="img"
+          aria-label="Action failed — retry"
+          title="Action failed — retry"
+          style={{ color: severityColor('CRITICAL'), fontSize: 12 }}
+        >
+          ⚠
+        </span>
+      ) : null}
+      {!alarm.acknowledged ? (
+        <button
+          type="button"
+          style={{ ...actionButton, opacity: pending ? 0.6 : 1 }}
+          disabled={pending !== null}
+          aria-busy={pending === 'ack'}
+          aria-label={`Acknowledge alarm ${alarm.alarmKey}`}
+          onClick={() => run('ack', () => actions.acknowledgeAlarm(alarm.token))}
+        >
+          {pending === 'ack' ? '…' : 'Ack'}
+        </button>
+      ) : null}
+      <button
+        type="button"
+        style={{ ...actionButton, opacity: pending ? 0.6 : 1 }}
+        disabled={pending !== null}
+        aria-busy={pending === 'clear'}
+        aria-label={`Clear alarm ${alarm.alarmKey}`}
+        onClick={() => run('clear', () => actions.clearAlarm(alarm.token))}
+      >
+        {pending === 'clear' ? '…' : 'Clear'}
+      </button>
+    </span>
   );
 }

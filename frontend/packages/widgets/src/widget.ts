@@ -5,7 +5,7 @@
 // implements, plus small helpers for reading a widget's opaque `options` bag and
 // picking the measurement a single-value widget should show.
 
-import type { MeasurementSample, WidgetInstance } from '@devicechain/dashboards';
+import type { MeasurementSample, WidgetActions, WidgetInstance } from '@devicechain/dashboards';
 import type { ComponentType } from 'react';
 
 import type { MeasurementStreamState } from './hooks';
@@ -21,6 +21,10 @@ import type { MeasurementStreamState } from './hooks';
 export interface WidgetProps<D = MeasurementStreamState> {
   widget: WidgetInstance;
   data: D;
+  // The action seam (writes), threaded in by the renderer. Undefined when the runtime
+  // supplies none — an acting widget then renders read-only. Present for the live hub and
+  // the synthetic preview source alike, so an action widget renders identically in both.
+  actions?: WidgetActions;
 }
 
 export type WidgetComponent<D = MeasurementStreamState> = ComponentType<WidgetProps<D>>;

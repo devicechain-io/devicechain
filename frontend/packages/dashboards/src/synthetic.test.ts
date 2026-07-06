@@ -164,3 +164,15 @@ describe('SyntheticDataSource.subscribeAlarms', () => {
     expect(snapshots).toHaveLength(afterRun); // no emit after dispose
   });
 });
+
+describe('SyntheticDataSource action stubs', () => {
+  it('grants every authority so preview shows action controls', () => {
+    expect(new SyntheticDataSource().can()).toBe(true);
+  });
+
+  it('acknowledge/clear resolve without touching a backend', async () => {
+    const src = new SyntheticDataSource();
+    await expect(src.acknowledgeAlarm()).resolves.toBeUndefined();
+    await expect(src.clearAlarm()).resolves.toBeUndefined();
+  });
+});

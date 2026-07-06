@@ -58,6 +58,7 @@ export {
   type AlarmSubscription,
   type AlarmSnapshot,
   type AlarmStreamSink,
+  type WidgetActions,
 } from './hub';
 
 export {

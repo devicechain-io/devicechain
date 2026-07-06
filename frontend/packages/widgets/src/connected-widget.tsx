@@ -11,6 +11,7 @@
 import type {
   AlarmSubscription,
   MeasurementSample,
+  WidgetActions,
   WidgetDataSource,
   WidgetInstance,
 } from '@devicechain/dashboards';
@@ -28,15 +29,17 @@ const DEFAULT_ALARM_ROWS = 50;
 export interface ConnectedWidgetProps {
   widget: WidgetInstance;
   hub: WidgetDataSource;
+  // The action seam (writes), threaded to acting widgets. Undefined = read-only.
+  actions?: WidgetActions;
   // Optional history backfill for this widget (from bucketedMeasurements), seeded
   // under the live tail so a chart isn't blank until the first live sample. Ignored by
   // alarm widgets (their channel reconciles from a query, not a history seed).
   initialSamples?: MeasurementSample[];
 }
 
-export function ConnectedWidget({ widget, hub, initialSamples }: ConnectedWidgetProps) {
+export function ConnectedWidget({ widget, hub, actions, initialSamples }: ConnectedWidgetProps) {
   if (WIDGET_CHANNEL[widget.type] === 'alarm') {
-    return <AlarmConnectedWidget widget={widget} hub={hub} />;
+    return <AlarmConnectedWidget widget={widget} hub={hub} actions={actions} />;
   }
   return <MeasurementConnectedWidget widget={widget} hub={hub} initialSamples={initialSamples} />;
 }
@@ -54,7 +57,15 @@ function MeasurementConnectedWidget({ widget, hub, initialSamples }: ConnectedWi
   return <Component widget={widget} data={data} />;
 }
 
-function AlarmConnectedWidget({ widget, hub }: { widget: WidgetInstance; hub: WidgetDataSource }) {
+function AlarmConnectedWidget({
+  widget,
+  hub,
+  actions,
+}: {
+  widget: WidgetInstance;
+  hub: WidgetDataSource;
+  actions?: WidgetActions;
+}) {
   const data = useAlarmStream(hub, alarmSubscription(widget));
 
   // Show the error pane ONLY when there's nothing to display (the initial load failed).
@@ -67,7 +78,7 @@ function AlarmConnectedWidget({ widget, hub }: { widget: WidgetInstance; hub: Wi
 
   const Component = ALARM_WIDGET_REGISTRY[widget.type as keyof typeof ALARM_WIDGET_REGISTRY];
   if (!Component) return null;
-  return <Component widget={widget} data={data} />;
+  return <Component widget={widget} data={data} actions={actions} />;
 }
 
 // alarmSubscription reads an alarm widget's scope+filters from its definition: the
