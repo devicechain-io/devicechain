@@ -12,8 +12,8 @@ package model
 //
 // Available reports whether a working adapter for the type actually ships yet, so a
 // policy UI can list a defined-but-not-yet-deliverable type without implying a
-// notification through it would be sent. Every type is unavailable until its adapter
-// lands (N.C); the flag flips per-type as each adapter ships.
+// notification through it would be sent. Both v1 types deliver as of N.C; the flag
+// stays as the seam a future defined-but-unshipped type (SMS, push) would use.
 type ChannelType struct {
 	Id          string
 	Label       string
@@ -33,18 +33,19 @@ const (
 // SupportedChannelTypes is the catalog of channel types this service defines, in
 // display order. ADR-017 ships SMTP + webhook (Slack incoming webhooks can be
 // targeted) in v1; SMS/push stay pluggable community adapters and are intentionally
-// absent. Available is false on every type until its adapter ships (N.C).
+// absent. Both types are available as of N.C (their adapters ship in the processor
+// layer — keep in sync with newAdapterRegistry).
 var SupportedChannelTypes = []ChannelType{
 	{
 		Id:          ChannelTypeSMTP,
 		Label:       "Email (SMTP)",
 		Description: "Deliver alarm notifications as email through an SMTP server.",
-		Available:   false,
+		Available:   true,
 	},
 	{
 		Id:          ChannelTypeWebhook,
 		Label:       "Webhook",
-		Description: "POST alarm notifications as JSON to an HTTP endpoint. A Slack incoming webhook can be targeted once payload templating lands with the adapter.",
-		Available:   false,
+		Description: "POST alarm notifications as JSON to an HTTP endpoint. A Slack incoming webhook can be targeted (the payload carries a text summary).",
+		Available:   true,
 	},
 }

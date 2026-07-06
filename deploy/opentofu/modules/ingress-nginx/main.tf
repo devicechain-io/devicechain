@@ -51,6 +51,17 @@ locals {
       enabled = true
     }
     ingressClass = var.ingress_class
+    # The DeviceChain instance Ingress uses a configuration-snippet annotation, which
+    # ingress-nginx >=1.9 disables by default and >=1.15 further gates behind an
+    # annotation risk level. Re-enable both so the Helm chart's Ingress admits on a
+    # default (unpinned/latest) controller install; without this the instance chart's
+    # helm apply is rejected by the admission webhook ("Snippet directives are
+    # disabled" / "risky annotation"). Local-dev trust boundary: the only Ingress
+    # author is the DeviceChain chart itself.
+    allowSnippetAnnotations = true
+    config = {
+      "annotations-risk-level" = "Critical"
+    }
   }
   # kind recipe: bind node 80/443 directly, no LoadBalancer to wait on.
   ingress_controller_host_port = {

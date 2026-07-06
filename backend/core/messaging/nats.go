@@ -284,6 +284,28 @@ type natsReader struct {
 	// periodic consumer-liveness probe. Only the single read-loop goroutine touches
 	// it, so it needs no synchronization.
 	consecutiveTimeouts int
+	// deliverNew, when set, creates the durable at the stream tail (DeliverNewPolicy)
+	// instead of the default DeliverAll — see ReaderWithDeliverNew.
+	deliverNew bool
+}
+
+// ReaderOption tunes a reader's durable consumer at creation time. Options only
+// affect the FIRST creation of a given durable: the consumer config is frozen on the
+// server, so an option that changes consumerConfig will make AddConsumer reject an
+// already-created durable and crash-loop startup on a non-fresh cluster (see the
+// warning on consumerConfig). Changing an option therefore rides a fresh bring-up
+// (down+up) or an explicit consumer migration — the pre-GA decisive cutover.
+type ReaderOption func(*natsReader)
+
+// ReaderWithDeliverNew starts the durable at the stream tail (DeliverNewPolicy) on
+// first creation instead of replaying the retained stream (the default DeliverAll).
+// Use it for a consumer where replaying history on first enable would be harmful —
+// e.g. the notification dispatcher, where DeliverAll would page humans about every
+// alarm retained in the stream (up to streamMaxAge) the first time the service is
+// enabled on a running fleet. Downtime-safety is unaffected: once the durable exists
+// its ack cursor persists, so a restart still resumes from the last ack, not the tail.
+func ReaderWithDeliverNew() ReaderOption {
+	return func(r *natsReader) { r.deliverNew = true }
 }
 
 // consumerConfig is the durable pull-consumer configuration (A4) — explicit-ack so a
@@ -305,7 +327,7 @@ type natsReader struct {
 // fresh bring-up (down+up) or an explicit consumer migration (pre-GA: prefer the
 // decisive cutover).
 func (r *natsReader) consumerConfig() *nats.ConsumerConfig {
-	return &nats.ConsumerConfig{
+	cfg := &nats.ConsumerConfig{
 		Durable:       r.durable,
 		AckPolicy:     nats.AckExplicitPolicy,
 		AckWait:       ackWait,
@@ -313,6 +335,14 @@ func (r *natsReader) consumerConfig() *nats.ConsumerConfig {
 		MaxAckPending: readerMaxAckPending,
 		FilterSubject: r.subject,
 	}
+	// DeliverPolicy is otherwise left at its zero value (DeliverAll) so AddConsumer
+	// stays idempotent against durables older builds created without setting it; a
+	// reader that opted into ReaderWithDeliverNew pins DeliverNew on its own durable
+	// (a distinct, per-service consumer, so it forks no shared config).
+	if r.deliverNew {
+		cfg.DeliverPolicy = nats.DeliverNewPolicy
+	}
+	return cfg
 }
 
 // bind (re)creates the durable consumer if needed and binds a pull subscription to
@@ -349,7 +379,7 @@ func (r *natsReader) bind() error {
 // tenant. The durable name is scoped to the instance + functional area + suffix
 // (not the tenant), so every replica of a service shares one consumer and each
 // message is delivered to exactly one of them.
-func (nmgr *NatsManager) NewReader(suffix string) (MessageReader, error) {
+func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (MessageReader, error) {
 	stream, err := nmgr.ensureStream(suffix)
 	if err != nil {
 		return nil, err
@@ -361,6 +391,9 @@ func (nmgr *NatsManager) NewReader(suffix string) (MessageReader, error) {
 		subject: WildcardSubject(nmgr.Microservice.InstanceId, suffix),
 		durable: DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix),
 		gate:    nmgr.Microservice.Readiness,
+	}
+	for _, opt := range opts {
+		opt(r)
 	}
 	if err := r.bind(); err != nil {
 		return nil, err
