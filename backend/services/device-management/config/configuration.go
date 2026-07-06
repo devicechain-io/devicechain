@@ -16,6 +16,11 @@ const (
 	// each alarm transition — the substrate for graphql-ws subscriptions (ADR-037)
 	// and notifications (ADR-017).
 	SUBJECT_ALARM_EVENTS = "alarm-events"
+	// SUBJECT_ENTITY_DELETED carries entity-deletion events (ADR-044): emitted when an
+	// edge entity (device, customer, area, asset, and their groups) is deleted, so
+	// cross-service reference holders (event-management's event_anchors) can reconcile
+	// dangling references. At-least-once, idempotent, tenant on the subject.
+	SUBJECT_ENTITY_DELETED = "entity-deleted"
 )
 
 // Device authentication policy applied to inbound events (transport security,

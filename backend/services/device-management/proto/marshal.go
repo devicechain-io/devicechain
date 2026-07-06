@@ -9,6 +9,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/entity"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -338,6 +339,35 @@ func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEven
 		event.PreviousSeverity = *pbevent.PreviousSeverity
 	}
 	return event, nil
+}
+
+// Marshal an entity-deletion event to protobuf bytes (ADR-044).
+func MarshalEntityDeletedEvent(event *model.EntityDeletedEvent) ([]byte, error) {
+	pbevent := &PEntityDeletedEvent{
+		EntityType:  string(event.EntityType),
+		EntityId:    uint64(event.EntityId),
+		EntityToken: event.EntityToken,
+		DeletedTime: event.DeletedTime.Format(time.RFC3339Nano),
+	}
+	return proto.Marshal(pbevent)
+}
+
+// Unmarshal an encoded entity-deletion event.
+func UnmarshalEntityDeletedEvent(encoded []byte) (*model.EntityDeletedEvent, error) {
+	pbevent := &PEntityDeletedEvent{}
+	if err := proto.Unmarshal(encoded, pbevent); err != nil {
+		return nil, err
+	}
+	deleted, err := time.Parse(time.RFC3339Nano, pbevent.DeletedTime)
+	if err != nil {
+		return nil, err
+	}
+	return &model.EntityDeletedEvent{
+		EntityType:  entity.Type(pbevent.EntityType),
+		EntityId:    uint(pbevent.EntityId),
+		EntityToken: pbevent.EntityToken,
+		DeletedTime: deleted,
+	}, nil
 }
 
 // Marshal a resolved event to protobuf bytes.

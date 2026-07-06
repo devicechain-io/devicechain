@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -43,6 +44,11 @@ type EventManagementApi interface {
 	// handle (a transaction), so the event is queryable by each of the device's
 	// tracked-relationship dimensions.
 	CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*EventAnchor) error
+
+	// DeleteAnchorsForEntity removes event_anchors rows referencing a deleted
+	// entity (ADR-044): device deletes match device_id, other entities match
+	// (anchor_type, anchor_id). Idempotent + tenant-scoped. Returns rows removed.
+	DeleteAnchorsForEntity(ctx context.Context, entityType string, entityId uint) (int64, error)
 
 	// PersistInTx runs fn inside a single database transaction whose handle
 	// carries the supplied (tenant-scoped) context, so a message's events are
@@ -267,4 +273,21 @@ func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*
 		return nil
 	}
 	return db.WithContext(ctx).Create(anchors).Error
+}
+
+// DeleteAnchorsForEntity removes every event_anchors row referencing a deleted
+// entity (ADR-044 cross-service RI). A deleted device is the SOURCE of its anchors
+// (matched by device_id); a deleted anchor target (customer / area / asset and
+// their groups) is matched by (anchor_type, anchor_id). Idempotent — deleting
+// already-absent rows is a no-op — and tenant-scoped via the fail-closed callback
+// (the caller stamps the tenant from the event's subject). Returns rows removed.
+func (api *Api) DeleteAnchorsForEntity(ctx context.Context, entityType string, entityId uint) (int64, error) {
+	db := api.RDB.DB(ctx).Model(&EventAnchor{})
+	if entityType == string(entity.TypeDevice) {
+		db = db.Where("device_id = ?", entityId)
+	} else {
+		db = db.Where("anchor_type = ? AND anchor_id = ?", entityType, entityId)
+	}
+	result := db.Delete(&EventAnchor{})
+	return result.RowsAffected, result.Error
 }

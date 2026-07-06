@@ -20,6 +20,11 @@ type Api struct {
 	// mutate alarms through this shared *Api, so setting it here gives one uniform
 	// event stream for every transition.
 	AlarmPublisher AlarmEventPublisher
+
+	// EntityDeletedPublisher emits entity-deletion events (ADR-044) so cross-service
+	// reference holders can reconcile. Injected at wiring time like AlarmPublisher and
+	// may be nil (tests / pre-wiring), disabling emission.
+	EntityDeletedPublisher EntityEventPublisher
 }
 
 // Create a new API instance.
@@ -41,6 +46,16 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 func (api *Api) emitAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent) {
 	if api.AlarmPublisher != nil {
 		api.AlarmPublisher.PublishAlarmEvent(ctx, event)
+	}
+}
+
+// emitEntityDeleted publishes an entity-deletion event when a publisher is wired,
+// and is a no-op otherwise. Like emitAlarmEvent it is best-effort and must be called
+// after the delete has committed: deleteEdgeEntity emits only once its transaction
+// returns nil, so the event never fires for a rolled-back delete.
+func (api *Api) emitEntityDeleted(ctx context.Context, event *EntityDeletedEvent) {
+	if api.EntityDeletedPublisher != nil {
+		api.EntityDeletedPublisher.PublishEntityDeleted(ctx, event)
 	}
 }
 
