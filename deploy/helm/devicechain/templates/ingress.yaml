@@ -48,6 +48,13 @@ metadata:
   annotations:
     # Strip the /api/<area> prefix so the request reaches the service at its own root.
     nginx.ingress.kubernetes.io/rewrite-target: /$2
+    # The /auth/* endpoints (JWKS + the service-token mint, ADR-044 amendment) are
+    # consumed by peers in-cluster via the Service DNS, never through this public
+    # host. Refuse them at the edge so the mint — a shared-secret→token exchange —
+    # is not a publicly reachable oracle; in-cluster callers hit the Service
+    # directly and are unaffected.
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      if ($request_uri ~* "^/api/[^/]+/auth(/|$)") { return 404; }
     {{- if $tls.enabled }}
     {{- if $tls.selfSigned }}
     cert-manager.io/issuer: {{ $tls.issuerName }}

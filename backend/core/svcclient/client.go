@@ -33,6 +33,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -57,7 +58,11 @@ type Client struct {
 	subject     string
 	authorities []string
 
-	mu        sync.Mutex
+	// group single-flights concurrent mints so a burst of first calls (or a
+	// simultaneous refresh) collapses to one round-trip to user-management.
+	group singleflight.Group
+
+	mu        sync.RWMutex
 	token     string
 	expiresAt time.Time
 }
@@ -145,50 +150,77 @@ func (c *Client) Query(ctx context.Context, baseURL, tenant, query string, varia
 	return nil
 }
 
-// serviceToken returns a valid cached token or mints a fresh one. Minting happens
-// under the lock so a burst of first calls collapses to a single mint rather than
-// stampeding user-management.
+// serviceToken returns a valid cached token, or mints a fresh one. A still-valid
+// cached token is served under a read lock without ever blocking on a refresh; only
+// when the cache is empty or within refreshSkew of expiry does it mint. The mint is
+// single-flighted (one round-trip for a concurrent burst) and the wait is
+// context-aware, so a caller whose deadline elapses returns promptly instead of
+// blocking on a lock. The mint itself runs on a detached context so one caller
+// cancelling does not abort a refresh shared by others (its own timeout bounds it).
 func (c *Client) serviceToken(ctx context.Context) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.token != "" && time.Now().Before(c.expiresAt.Add(-refreshSkew)) {
-		return c.token, nil
+	c.mu.RLock()
+	tok, exp := c.token, c.expiresAt
+	c.mu.RUnlock()
+	if tok != "" && time.Now().Before(exp.Add(-refreshSkew)) {
+		return tok, nil
 	}
 	if c.secret == "" {
 		return "", fmt.Errorf("svcclient: service-to-service auth is not configured (empty service secret)")
 	}
 
+	ch := c.group.DoChan("mint", func() (any, error) {
+		minted, expiresAt, err := c.mint(context.Background())
+		if err != nil {
+			return "", err
+		}
+		c.mu.Lock()
+		c.token, c.expiresAt = minted, expiresAt
+		c.mu.Unlock()
+		return minted, nil
+	})
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return "", res.Err
+		}
+		return res.Val.(string), nil
+	}
+}
+
+// mint exchanges the shared secret for a fresh service token at user-management's
+// mint endpoint. It returns the token and its expiry; the caller stores them.
+func (c *Client) mint(ctx context.Context) (string, time.Time, error) {
 	body, err := json.Marshal(auth.ServiceTokenRequest{Subject: c.subject, Authorities: c.authorities})
 	if err != nil {
-		return "", fmt.Errorf("svcclient: marshal mint request: %w", err)
+		return "", time.Time{}, fmt.Errorf("svcclient: marshal mint request: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.mintURL, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("svcclient: build mint request: %w", err)
+		return "", time.Time{}, fmt.Errorf("svcclient: build mint request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(auth.ServiceSecretHeader, c.secret)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("svcclient: mint token: %w", err)
+		return "", time.Time{}, fmt.Errorf("svcclient: mint token: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return "", fmt.Errorf("svcclient: read mint response: %w", err)
+		return "", time.Time{}, fmt.Errorf("svcclient: read mint response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("svcclient: mint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return "", time.Time{}, fmt.Errorf("svcclient: mint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	var minted auth.ServiceTokenResponse
 	if err := json.Unmarshal(raw, &minted); err != nil {
-		return "", fmt.Errorf("svcclient: decode mint response: %w", err)
+		return "", time.Time{}, fmt.Errorf("svcclient: decode mint response: %w", err)
 	}
 	if minted.Token == "" {
-		return "", fmt.Errorf("svcclient: mint returned an empty token")
+		return "", time.Time{}, fmt.Errorf("svcclient: mint returned an empty token")
 	}
-	c.token = minted.Token
-	c.expiresAt = time.Unix(minted.ExpiresAt, 0)
-	return c.token, nil
+	return minted.Token, time.Unix(minted.ExpiresAt, 0), nil
 }

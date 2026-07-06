@@ -83,6 +83,14 @@ func authenticateDataPlane(v *auth.Validator, token string, header func(string) 
 		if tenant == "" {
 			return nil, "", fmt.Errorf("auth: service token presented without a %s header", auth.ServiceTenantHeader)
 		}
+		// The tenant flows into per-tenant NATS subject construction (dc.{tenant}.…)
+		// downstream, where '.', '*', '>' are structural. Enforce the token grammar
+		// here so a malformed tenant is rejected at the boundary rather than
+		// splicing into a subject — belt-and-suspenders even though only a verified
+		// service token reaches this branch.
+		if err := core.ValidateToken(tenant); err != nil {
+			return nil, "", fmt.Errorf("auth: invalid %s value: %w", auth.ServiceTenantHeader, err)
+		}
 		return claims, tenant, nil
 	default:
 		return nil, "", fmt.Errorf("auth: token type %q is not accepted on the data plane", claims.TokenType)

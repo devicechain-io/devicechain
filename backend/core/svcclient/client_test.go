@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
@@ -107,8 +109,62 @@ func TestQuery_MissingTenantRejected(t *testing.T) {
 	mint := mintServer(t, "shh", &mints)
 	defer mint.Close()
 	c := clientFor(mint, "shh")
-	if err := c.Query(context.Background(), mint.URL, "  ", "query{x}", nil, nil); err == nil {
+	err := c.Query(context.Background(), mint.URL, "  ", "query{x}", nil, nil)
+	if err == nil {
 		t.Fatal("Query accepted an empty tenant")
+	}
+	if !strings.Contains(err.Error(), "tenant is required") {
+		t.Fatalf("wrong error for empty tenant: %v", err)
+	}
+	if atomic.LoadInt32(&mints) != 0 {
+		t.Fatal("minting was attempted for a request rejected before auth")
+	}
+}
+
+// A token whose expiry falls inside the refresh skew is never cached — each call
+// re-mints. This pins the skew arithmetic: a sign flip would silently either serve
+// expired tokens or (as here) fail to re-mint, and this test would catch the latter.
+func TestQuery_RemintsWhenTokenNearsExpiry(t *testing.T) {
+	var mints int32
+	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&mints, 1)
+		var req auth.ServiceTokenRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		// Expire 30s out — inside svcclient's 60s refresh skew, so it is never cached.
+		_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{
+			Token:     "near-expiry",
+			ExpiresAt: time.Now().Unix() + 30,
+		})
+	}))
+	defer mint.Close()
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer target.Close()
+
+	c := clientFor(mint, "shh")
+	for i := 0; i < 2; i++ {
+		if err := c.Query(context.Background(), target.URL, "tenant-a", "query{x}", nil, nil); err != nil {
+			t.Fatalf("Query %d: %v", i, err)
+		}
+	}
+	if n := atomic.LoadInt32(&mints); n != 2 {
+		t.Fatalf("expected a re-mint per call for a near-expiry token, got %d mints", n)
+	}
+}
+
+// A mint that returns a non-200 (here, the wrong-secret 401) surfaces as an error
+// from Query rather than a silent empty token.
+func TestQuery_MintRejectionSurfaces(t *testing.T) {
+	var mints int32
+	mint := mintServer(t, "right", &mints)
+	defer mint.Close()
+	c := clientFor(mint, "wrong")
+	if err := c.Query(context.Background(), mint.URL, "tenant-a", "query{x}", nil, nil); err == nil {
+		t.Fatal("Query succeeded despite the mint rejecting the secret")
+	}
+	if atomic.LoadInt32(&mints) != 0 {
+		t.Fatal("mint counter advanced despite a rejected secret")
 	}
 }
 

@@ -92,10 +92,11 @@ func (v *Validator) SetKeys(keys map[string]*rsa.PublicKey) {
 	v.mu.Unlock()
 }
 
-// Validate parses and verifies an access-token string. It enforces the RS256
-// signature, a present and unexpired exp, and that the token is an *access*
-// token (refresh tokens are never accepted on the request path). The validated
-// claims are returned on success.
+// Validate parses and verifies an *access*-token string: the RS256 signature, a
+// present and unexpired exp, the access token type, and a non-empty tenant claim.
+// The data-plane handler itself now admits both access and service tokens through
+// Parse (so it can source the tenant differently per tier); Validate remains the
+// single-tier helper for callers that specifically expect a tenant access token.
 func (v *Validator) Validate(tokenString string) (*Claims, error) {
 	return v.validateTyped(tokenString, TokenTypeAccess, true)
 }
@@ -111,7 +112,7 @@ func (v *Validator) ValidateIdentity(tokenString string) (*Claims, error) {
 // ValidateRefresh parses and verifies a *refresh* token. Used by the issuing
 // service's /refresh path to confirm a refresh token's signature before
 // consulting its server-side store. Refresh tokens are never accepted on the
-// API request path (that is Validate's job).
+// API request path (the data plane's Parse-based check rejects their token type).
 func (v *Validator) ValidateRefresh(tokenString string) (*Claims, error) {
 	return v.validateTyped(tokenString, TokenTypeRefresh, true)
 }

@@ -15,6 +15,12 @@ import (
 const (
 	DefaultAccessTTL  = 15 * time.Minute
 	DefaultRefreshTTL = 7 * 24 * time.Hour
+	// ServiceTokenTTL is the lifetime of a machine service token (ADR-044
+	// amendment). Deliberately a fixed constant, decoupled from the operator-tunable
+	// human access-token TTL: a service token's lifetime is an internal concern of
+	// the sync-call primitive, and it must stay comfortably longer than svcclient's
+	// refresh skew so a caller isn't forced to mint on every call.
+	ServiceTokenTTL = 15 * time.Minute
 )
 
 // Issuer mints RS256-signed access and refresh tokens. Only user-management
@@ -123,7 +129,7 @@ func (i *Issuer) IssueIdentity(email string, roles, authorities []string, jti st
 func (i *Issuer) IssueService(subject string, authorities []string, jti string) (IssuedToken, error) {
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeService, username: subject,
-		authorities: authorities, jti: jti, ttl: i.accessTTL,
+		authorities: authorities, jti: jti, ttl: ServiceTokenTTL,
 	})
 }
 
