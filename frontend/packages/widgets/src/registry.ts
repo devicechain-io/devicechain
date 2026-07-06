@@ -9,10 +9,11 @@
 
 import type { WidgetType } from '@devicechain/dashboards';
 
-import type { AlarmStreamState } from './hooks';
+import type { AlarmStreamState, CommandStreamState } from './hooks';
 import type { WidgetComponent } from './widget';
 import { AlarmCount } from './widgets/alarm-count';
 import { AlarmTable } from './widgets/alarm-table';
+import { CommandButton } from './widgets/command-button';
 import { Gauge } from './widgets/gauge';
 import { Image } from './widgets/image';
 import { Label } from './widgets/label';
@@ -25,7 +26,7 @@ import { TimeSeriesChart } from './widgets/time-series-chart';
 // exhaustive over WidgetType (a new type won't compile without a channel), and the
 // per-channel type subsets are DERIVED from it, so the channel map and the two
 // registries can't drift out of sync.
-export type WidgetChannel = 'measurement' | 'alarm';
+export type WidgetChannel = 'measurement' | 'alarm' | 'control';
 
 export const WIDGET_CHANNEL = {
   'timeseries-chart': 'measurement',
@@ -36,12 +37,14 @@ export const WIDGET_CHANNEL = {
   image: 'measurement',
   'alarm-table': 'alarm',
   'alarm-count': 'alarm',
+  'command-button': 'control',
 } as const satisfies Record<WidgetType, WidgetChannel>;
 
 // The widget types on each channel, derived from WIDGET_CHANNEL so the registries below
 // stay exhaustive without a hand-maintained parallel union.
 type AlarmWidgetType = { [K in WidgetType]: (typeof WIDGET_CHANNEL)[K] extends 'alarm' ? K : never }[WidgetType];
-type MeasurementWidgetType = Exclude<WidgetType, AlarmWidgetType>;
+type ControlWidgetType = { [K in WidgetType]: (typeof WIDGET_CHANNEL)[K] extends 'control' ? K : never }[WidgetType];
+type MeasurementWidgetType = Exclude<WidgetType, AlarmWidgetType | ControlWidgetType>;
 
 export const WIDGET_REGISTRY: Record<MeasurementWidgetType, WidgetComponent> = {
   'timeseries-chart': TimeSeriesChart,
@@ -55,4 +58,8 @@ export const WIDGET_REGISTRY: Record<MeasurementWidgetType, WidgetComponent> = {
 export const ALARM_WIDGET_REGISTRY: Record<AlarmWidgetType, WidgetComponent<AlarmStreamState>> = {
   'alarm-table': AlarmTable,
   'alarm-count': AlarmCount,
+};
+
+export const CONTROL_WIDGET_REGISTRY: Record<ControlWidgetType, WidgetComponent<CommandStreamState>> = {
+  'command-button': CommandButton,
 };

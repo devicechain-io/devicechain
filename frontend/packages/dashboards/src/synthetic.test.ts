@@ -3,7 +3,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { AlarmSnapshot, AlarmSubscription } from './hub';
+import type { AlarmSnapshot, AlarmSubscription, CommandSnapshot } from './hub';
 import { SyntheticDataSource } from './synthetic';
 import type { MeasurementSample } from './types';
 import type { DatasourceSelector } from './types';
@@ -165,6 +165,55 @@ describe('SyntheticDataSource.subscribeAlarms', () => {
   });
 });
 
+function collectCommands() {
+  const snapshots: CommandSnapshot[] = [];
+  return { sink: { next: (s: CommandSnapshot) => snapshots.push(s) }, snapshots };
+}
+
+describe('SyntheticDataSource.subscribeCommands', () => {
+  it('emits a non-empty command history with a bound target device synchronously', () => {
+    const src = new SyntheticDataSource();
+    const { sink, snapshots } = collectCommands();
+
+    src.subscribeCommands({ pageSize: 20 }, sink);
+
+    expect(snapshots).toHaveLength(1); // immediate, before any timer tick
+    const snap = snapshots[0];
+    expect(snap.deviceToken).toBeTruthy(); // a target device so Send renders
+    expect(snap.commands.length).toBeGreaterThan(0);
+    expect(snap.total).toBe(snap.commands.length);
+    for (const row of snap.commands) {
+      expect(typeof row.token).toBe('string');
+      expect(typeof row.name).toBe('string');
+      expect(typeof row.status).toBe('string');
+    }
+  });
+
+  it('caps the emitted history to the page size', () => {
+    const src = new SyntheticDataSource();
+    const { sink, snapshots } = collectCommands();
+
+    src.subscribeCommands({ pageSize: 2 }, sink);
+
+    expect(snapshots[0].commands).toHaveLength(2);
+    expect(snapshots[0].total).toBeGreaterThan(2); // total still reflects the full set
+  });
+
+  it('stops emitting after the returned disposer is called', () => {
+    const src = new SyntheticDataSource({ intervalMs: 1000 });
+    const { sink, snapshots } = collectCommands();
+    const dispose = src.subscribeCommands({ pageSize: 20 }, sink);
+
+    vi.advanceTimersByTime(2500);
+    const afterRun = snapshots.length;
+    expect(afterRun).toBeGreaterThan(1);
+
+    dispose();
+    vi.advanceTimersByTime(5000);
+    expect(snapshots).toHaveLength(afterRun);
+  });
+});
+
 describe('SyntheticDataSource action stubs', () => {
   it('grants every authority so preview shows action controls', () => {
     expect(new SyntheticDataSource().can()).toBe(true);
@@ -174,5 +223,10 @@ describe('SyntheticDataSource action stubs', () => {
     const src = new SyntheticDataSource();
     await expect(src.acknowledgeAlarm()).resolves.toBeUndefined();
     await expect(src.clearAlarm()).resolves.toBeUndefined();
+  });
+
+  it('sendCommand resolves with a stub dispatch token', async () => {
+    const src = new SyntheticDataSource();
+    await expect(src.sendCommand()).resolves.toEqual({ token: expect.any(String) });
   });
 });

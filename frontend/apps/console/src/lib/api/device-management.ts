@@ -768,6 +768,23 @@ export async function listCommandDefinitions(profileToken: string): Promise<Comm
   return data.commandDefinitions.results;
 }
 
+// listCommandDefinitionsForDevice resolves a device to the command definitions it
+// accepts, following the device → type → profile chain (ADR-045): the definitions live
+// on the device profile, so a device with no type, or a type with no profile, has none.
+// Used by the dashboard command-button authoring UI, which scopes to a device but needs
+// that device's command vocabulary. Returns [] when the chain doesn't resolve.
+export async function listCommandDefinitionsForDevice(
+  deviceToken: string,
+): Promise<CommandDefinition[]> {
+  const device = await getDevice(deviceToken);
+  const typeToken = device?.deviceType?.token;
+  if (!typeToken) return [];
+  const deviceType = await getDeviceType(typeToken);
+  const profileToken = deviceType?.profile?.token;
+  if (!profileToken) return [];
+  return listCommandDefinitions(profileToken);
+}
+
 const CREATE_COMMAND_DEFINITION = graphql(`
   mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {
     createCommandDefinition(request: $request) {

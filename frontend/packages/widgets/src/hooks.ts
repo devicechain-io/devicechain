@@ -6,6 +6,8 @@
 import type {
   AlarmRow,
   AlarmSubscription,
+  CommandRow,
+  CommandSubscription,
   DatasourceSelector,
   MeasurementSample,
   WidgetDataSource,
@@ -26,6 +28,17 @@ export interface MeasurementStreamState {
 // the total match count (past the page — drives alarm-count), and load/error flags.
 export interface AlarmStreamState {
   alarms: AlarmRow[];
+  total: number;
+  loading: boolean;
+  error: unknown | null;
+}
+
+// The state a command widget renders from: the resolved target device (null = unbound,
+// so it can't issue), the recent commands (newest first, capped) with live status, the
+// total count, and load/error flags.
+export interface CommandStreamState {
+  deviceToken: string | null;
+  commands: CommandRow[];
   total: number;
   loading: boolean;
   error: unknown | null;
@@ -123,6 +136,48 @@ export function useAlarmStream(
     return hub.subscribeAlarms(subscription, {
       next: (snapshot) =>
         setState({ alarms: snapshot.alarms, total: snapshot.total, loading: false, error: null }),
+      error: (err) => setState((prev) => ({ ...prev, loading: false, error: err })),
+    });
+    // `subscription` is intentionally read via `key` (value identity), not reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hub, key]);
+
+  return state;
+}
+
+const EMPTY_COMMANDS: CommandStreamState = {
+  deviceToken: null,
+  commands: [],
+  total: 0,
+  loading: true,
+  error: null,
+};
+
+// useCommandStream binds a command widget's scope through the hub's control channel and
+// keeps the latest command-history snapshot. It re-subscribes when the subscription
+// changes (value-compared) and tears down on unmount. The hub delivers whole snapshots
+// (poll-then-emit), so this holds the last one rather than accumulating.
+export function useCommandStream(
+  hub: WidgetDataSource,
+  subscription: CommandSubscription,
+): CommandStreamState {
+  const [state, setState] = useState<CommandStreamState>(EMPTY_COMMANDS);
+
+  // Value-compare the subscription so an unchanged-but-new object reference doesn't
+  // resubscribe every render.
+  const key = JSON.stringify(subscription);
+
+  useEffect(() => {
+    setState(EMPTY_COMMANDS); // reset to loading whenever the subscription changes
+    return hub.subscribeCommands(subscription, {
+      next: (snapshot) =>
+        setState({
+          deviceToken: snapshot.deviceToken,
+          commands: snapshot.commands,
+          total: snapshot.total,
+          loading: false,
+          error: null,
+        }),
       error: (err) => setState((prev) => ({ ...prev, loading: false, error: err })),
     });
     // `subscription` is intentionally read via `key` (value identity), not reference.

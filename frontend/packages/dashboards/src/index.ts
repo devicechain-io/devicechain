@@ -31,6 +31,9 @@ export type {
   SlotBinding,
   MeasurementSample,
   AlarmRow,
+  CommandRow,
+  CommandParameter,
+  CommandParamDataType,
 } from './types';
 
 export { effectiveBindings, parseBindingManifest, stripDefaultBindings } from './bindings';
@@ -58,6 +61,10 @@ export {
   type AlarmSubscription,
   type AlarmSnapshot,
   type AlarmStreamSink,
+  type CommandSubscription,
+  type CommandSnapshot,
+  type CommandStreamSink,
+  type CommandDispatch,
   type WidgetActions,
 } from './hub';
 

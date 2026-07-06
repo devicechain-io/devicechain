@@ -97,8 +97,9 @@ export type DatasourceSelector =
 //
 // Widgets fall into data CHANNELS (see WIDGET_CHANNEL in @devicechain/widgets): the
 // measurement widgets stream telemetry samples; the alarm widgets consume the raised-
-// alarm surface (ADR-041) via the hub's alarm channel. A widget's channel decides
-// which hook/registry the renderer binds it through.
+// alarm surface (ADR-041) via the hub's alarm channel; the control widget (command-
+// button) issues commands and tracks their delivery lifecycle via the command channel.
+// A widget's channel decides which hook/registry the renderer binds it through.
 export const WIDGET_TYPES = [
   'timeseries-chart',
   'latest-card',
@@ -108,6 +109,7 @@ export const WIDGET_TYPES = [
   'image',
   'alarm-table',
   'alarm-count',
+  'command-button',
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
@@ -226,4 +228,49 @@ export interface AlarmRow {
   acknowledgedBy: string | null;
   lastValue: number | null;
   message: string | null;
+}
+
+// ---- Commands (control channel) ---------------------------------------------
+
+// A device command as the command-button widget sees it (command-delivery). Mirrors
+// the stored Command row: `token` is the client-minted dispatch id (also the cancel
+// handle); `status` carries the lifecycle enum (QUEUED → SENT → DELIVERED →
+// SUCCESSFUL, plus TIMEOUT/EXPIRED/FAILED) as a plain string — the service declares
+// no GraphQL enum. Kept decoupled from command-delivery's GraphQL types so the widget
+// layer carries no service coupling.
+export interface CommandRow {
+  token: string;
+  name: string;
+  status: string; // QUEUED | SENT | DELIVERED | SUCCESSFUL | TIMEOUT | EXPIRED | FAILED
+  payload: string | null; // request JSON (as issued)
+  responsePayload: string | null; // device response JSON
+  error: string | null;
+  queuedTime: string | null;
+  sentTime: string | null;
+  deliveredTime: string | null;
+  respondedTime: string | null;
+}
+
+// The scalar value types a command parameter can carry, reusing device-management's
+// MetricDataType vocabulary (ADR-016).
+export type CommandParamDataType = 'DOUBLE' | 'INT' | 'BOOLEAN' | 'STRING';
+
+// One descriptor in a CommandDefinition's parameter schema (ADR-043). The console
+// bakes the selected command's parsed schema into the widget's options at author time;
+// the command-button widget renders it as a typed form. A SCALAR parameter is a single
+// typed value (dataType + optional unit/bounds/enum/default); an OBJECT parameter nests
+// a child `parameters` list. `kind` absent means SCALAR. Deliberately structural (no
+// device-management import) so the widget package stays decoupled.
+export interface CommandParameter {
+  name: string;
+  description?: string;
+  kind?: 'SCALAR' | 'OBJECT';
+  dataType?: CommandParamDataType;
+  unit?: string;
+  required?: boolean;
+  default?: string | null;
+  minValue?: number | null;
+  maxValue?: number | null;
+  enum?: string[];
+  parameters?: CommandParameter[];
 }

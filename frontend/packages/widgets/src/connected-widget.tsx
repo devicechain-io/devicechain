@@ -10,6 +10,7 @@
 
 import type {
   AlarmSubscription,
+  CommandSubscription,
   MeasurementSample,
   WidgetActions,
   WidgetDataSource,
@@ -18,13 +19,21 @@ import type {
 import type { ReactNode } from 'react';
 
 import { WidgetFrame } from './frame';
-import { useAlarmStream, useMeasurementStream } from './hooks';
-import { ALARM_WIDGET_REGISTRY, WIDGET_CHANNEL, WIDGET_REGISTRY } from './registry';
+import { useAlarmStream, useCommandStream, useMeasurementStream } from './hooks';
+import {
+  ALARM_WIDGET_REGISTRY,
+  CONTROL_WIDGET_REGISTRY,
+  WIDGET_CHANNEL,
+  WIDGET_REGISTRY,
+} from './registry';
 import { optNumber, optString } from './widget';
 
 // Rows an alarm table shows before scrolling; also the default page size the count
 // query reads (the count itself uses the server total, independent of this).
 const DEFAULT_ALARM_ROWS = 50;
+
+// Recent commands a command-button shows in its history before scrolling.
+const DEFAULT_COMMAND_ROWS = 20;
 
 export interface ConnectedWidgetProps {
   widget: WidgetInstance;
@@ -38,8 +47,12 @@ export interface ConnectedWidgetProps {
 }
 
 export function ConnectedWidget({ widget, hub, actions, initialSamples }: ConnectedWidgetProps) {
-  if (WIDGET_CHANNEL[widget.type] === 'alarm') {
+  const channel = WIDGET_CHANNEL[widget.type];
+  if (channel === 'alarm') {
     return <AlarmConnectedWidget widget={widget} hub={hub} actions={actions} />;
+  }
+  if (channel === 'control') {
+    return <ControlConnectedWidget widget={widget} hub={hub} actions={actions} />;
   }
   return <MeasurementConnectedWidget widget={widget} hub={hub} initialSamples={initialSamples} />;
 }
@@ -79,6 +92,39 @@ function AlarmConnectedWidget({
   const Component = ALARM_WIDGET_REGISTRY[widget.type as keyof typeof ALARM_WIDGET_REGISTRY];
   if (!Component) return null;
   return <Component widget={widget} data={data} actions={actions} />;
+}
+
+function ControlConnectedWidget({
+  widget,
+  hub,
+  actions,
+}: {
+  widget: WidgetInstance;
+  hub: WidgetDataSource;
+  actions?: WidgetActions;
+}) {
+  const data = useCommandStream(hub, commandSubscription(widget));
+
+  // Like the alarm channel, only blank to the error pane when the initial load failed
+  // (nothing to show); a transient poll error after a good snapshot keeps the last-good
+  // history on screen — the channel re-polls and self-heals.
+  if (data.error && data.commands.length === 0 && data.total === 0) {
+    return <WidgetErrorFrame widget={widget} error={data.error} />;
+  }
+
+  const Component = CONTROL_WIDGET_REGISTRY[widget.type as keyof typeof CONTROL_WIDGET_REGISTRY];
+  if (!Component) return null;
+  return <Component widget={widget} data={data} actions={actions} />;
+}
+
+// commandSubscription reads a command widget's scope (the target device) from its
+// definition; the command name + parameter schema live in the widget's options (baked by
+// the console), not the subscription. pageSize bounds the recent-command history shown.
+function commandSubscription(widget: WidgetInstance): CommandSubscription {
+  return {
+    datasource: widget.datasource,
+    pageSize: Math.max(1, optNumber(widget.options, 'maxRows') ?? DEFAULT_COMMAND_ROWS),
+  };
 }
 
 // alarmSubscription reads an alarm widget's scope+filters from its definition: the
