@@ -190,6 +190,65 @@ func TestIssueIdentity_RoundTripAndTierIsolation(t *testing.T) {
 	}
 }
 
+func TestIssueService_RoundTripAndTierIsolation(t *testing.T) {
+	key := mustKey(t)
+	iss := NewIssuer(key, "test", time.Minute, time.Hour)
+	v := NewValidator(&key.PublicKey)
+
+	// A service token carries no tenant but the requested machine authorities, and
+	// round-trips through ValidateService.
+	st, err := iss.IssueService("command-delivery", []string{string(DeviceRead)}, "jti-svc")
+	if err != nil {
+		t.Fatalf("IssueService: %v", err)
+	}
+	claims, err := v.ValidateService(st.Token)
+	if err != nil {
+		t.Fatalf("ValidateService: %v", err)
+	}
+	if claims.Tenant != "" || claims.Username != "command-delivery" || claims.TokenType != TokenTypeService {
+		t.Fatalf("unexpected service claims: %+v", claims)
+	}
+	if !claims.HasAuthority(DeviceRead) || claims.HasAuthority(DeviceWrite) {
+		t.Fatalf("service token should grant exactly device:read: %+v", claims.Authorities)
+	}
+
+	// Tier isolation: the data-plane Validate must reject a service token (wrong
+	// type, no tenant claim), and ValidateService must reject an access token.
+	if _, err := v.Validate(st.Token); err == nil {
+		t.Fatal("data-plane Validate accepted a service token")
+	}
+	at, err := iss.IssueAccess("tenant-a", "alice", nil, nil, "jti-a")
+	if err != nil {
+		t.Fatalf("IssueAccess: %v", err)
+	}
+	if _, err := v.ValidateService(at.Token); err == nil {
+		t.Fatal("ValidateService accepted a tenant access token")
+	}
+}
+
+// Parse verifies the signature/expiry but asserts neither type nor tenant, so the
+// data-plane handler can branch on the token type itself.
+func TestParse_VerifiesSignatureWithoutTypeAssertion(t *testing.T) {
+	key := mustKey(t)
+	iss := NewIssuer(key, "test", time.Minute, time.Hour)
+	v := NewValidator(&key.PublicKey)
+
+	st, _ := iss.IssueService("svc", []string{string(DeviceRead)}, "jti-svc")
+	claims, err := v.Parse(st.Token)
+	if err != nil {
+		t.Fatalf("Parse rejected a valid service token: %v", err)
+	}
+	if claims.TokenType != TokenTypeService {
+		t.Fatalf("Parse lost the token type: %+v", claims)
+	}
+	// But a bad signature is still rejected.
+	other := mustKey(t)
+	forged := signRaw(t, jwt.SigningMethodRS256, other, accessClaims("tenant-a", time.Now().Add(time.Hour)))
+	if _, err := v.Parse(forged); err == nil {
+		t.Fatal("Parse accepted a token signed by a different key")
+	}
+}
+
 func TestIssueTenantAccess_CarriesEmailAndSudo(t *testing.T) {
 	key := mustKey(t)
 	iss := NewIssuer(key, "test", time.Minute, time.Hour)

@@ -104,6 +104,18 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	st.Values["natsServicePassword"] = creds.ServicePassword
 	st.Values["natsServicePasswordBcrypt"] = creds.ServicePasswordBcrypt
 
+	// Mint the shared service secret (ADR-044 amendment) backing the synchronous
+	// cross-service call primitive: a caller presents it to user-management's mint
+	// endpoint for a short-lived service token. Threaded into every service's
+	// instance config (helmInstall); user-management compares the presented value
+	// against its copy. One secret, all services — the same trusted-boundary
+	// tradeoff the NATS service credential above makes.
+	serviceSecret, err := randomSecret(32)
+	if err != nil {
+		return fail("minting service auth secret", err)
+	}
+	st.Values["serviceAuthSecret"] = serviceSecret
+
 	// Resolve the image source. Default to published images at a pinned version;
 	// the developer path builds from source into a local registry instead.
 	if st.ImageRegistry == "" {

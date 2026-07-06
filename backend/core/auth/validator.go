@@ -92,10 +92,11 @@ func (v *Validator) SetKeys(keys map[string]*rsa.PublicKey) {
 	v.mu.Unlock()
 }
 
-// Validate parses and verifies an access-token string. It enforces the RS256
-// signature, a present and unexpired exp, and that the token is an *access*
-// token (refresh tokens are never accepted on the request path). The validated
-// claims are returned on success.
+// Validate parses and verifies an *access*-token string: the RS256 signature, a
+// present and unexpired exp, the access token type, and a non-empty tenant claim.
+// The data-plane handler itself now admits both access and service tokens through
+// Parse (so it can source the tenant differently per tier); Validate remains the
+// single-tier helper for callers that specifically expect a tenant access token.
 func (v *Validator) Validate(tokenString string) (*Claims, error) {
 	return v.validateTyped(tokenString, TokenTypeAccess, true)
 }
@@ -111,17 +112,39 @@ func (v *Validator) ValidateIdentity(tokenString string) (*Claims, error) {
 // ValidateRefresh parses and verifies a *refresh* token. Used by the issuing
 // service's /refresh path to confirm a refresh token's signature before
 // consulting its server-side store. Refresh tokens are never accepted on the
-// API request path (that is Validate's job).
+// API request path (the data plane's Parse-based check rejects their token type).
 func (v *Validator) ValidateRefresh(tokenString string) (*Claims, error) {
 	return v.validateTyped(tokenString, TokenTypeRefresh, true)
 }
 
+// ValidateService parses and verifies a *service*-tier token (ADR-044
+// amendment): the instance-scoped machine credential a service presents on a
+// synchronous cross-service call. Like an identity token it carries no tenant
+// (the caller passes the tenant explicitly), so requireTenant is false; the
+// callee gates the call on the token's authorities.
+func (v *Validator) ValidateService(tokenString string) (*Claims, error) {
+	return v.validateTyped(tokenString, TokenTypeService, false)
+}
+
+// Parse verifies a token's signature and expiry (pinned RS256, present exp) and
+// returns its claims WITHOUT asserting a token type or a tenant. The data-plane
+// handler uses it to admit either an access token (tenant from the signed claim)
+// or a service token (tenant from an explicit header) through one verified path;
+// the type-asserting Validate* helpers are the right choice everywhere a single
+// tier is expected.
+func (v *Validator) Parse(tokenString string) (*Claims, error) {
+	claims := &Claims{}
+	if _, err := v.parser.ParseWithClaims(tokenString, claims, v.keyfunc); err != nil {
+		return nil, err
+	}
+	return claims, nil
+}
+
 // validateTyped verifies the signature/expiry and asserts the token type. When
 // requireTenant is set it also asserts a non-empty tenant claim (the data-plane
-// invariant); the instance-scoped identity tier passes requireTenant=false.
+// invariant); the instance-scoped identity/service tiers pass requireTenant=false.
 func (v *Validator) validateTyped(tokenString, expectedType string, requireTenant bool) (*Claims, error) {
-	claims := &Claims{}
-	_, err := v.parser.ParseWithClaims(tokenString, claims, v.keyfunc)
+	claims, err := v.Parse(tokenString)
 	if err != nil {
 		return nil, err
 	}

@@ -96,11 +96,24 @@ type UserManagementConfiguration struct {
 	Port     uint32
 }
 
+// ServiceAuthConfiguration carries the shared secret backing the synchronous
+// cross-service call primitive (ADR-044 amendment). A caller presents Secret to
+// user-management's mint endpoint to obtain a short-lived service token; the mint
+// endpoint compares it (constant-time) against its copy of the same value. It is
+// threaded into every service's instance config for provisioning simplicity (the
+// same trusted-boundary tradeoff NatsAuth already makes — all services share the
+// instance config's secrets). Empty disables service-token minting: user-management
+// refuses to mint and svcclient refuses to call, both fail-closed.
+type ServiceAuthConfiguration struct {
+	Secret string
+}
+
 // Infrastructure configuration section
 type InfrastructureConfiguration struct {
 	Nats           NatsConfiguration
 	Metrics        MetricsConfiguration
 	UserManagement UserManagementConfiguration
+	ServiceAuth    ServiceAuthConfiguration
 }
 
 // Generic datastore configuration

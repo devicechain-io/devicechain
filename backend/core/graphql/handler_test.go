@@ -4,13 +4,148 @@
 package graphql
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/assert"
 )
+
+// testIssuerValidator builds a matched issuer/validator over a fresh keypair.
+func testIssuerValidator(t *testing.T) (*auth.Issuer, *auth.Validator) {
+	t.Helper()
+	key, err := auth.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	return auth.NewIssuer(key, "test", time.Minute, time.Hour), auth.NewValidator(&key.PublicKey)
+}
+
+// A verified service token is admitted on the data plane with its tenant taken
+// from the ServiceTenantHeader; a transport that supplies no such header (the WS
+// path passes an empty resolver) makes the service token inapplicable and rejected.
+func TestAuthenticateDataPlane_ServiceToken(t *testing.T) {
+	iss, v := testIssuerValidator(t)
+	st, err := iss.IssueService("command-delivery", []string{string(auth.DeviceRead)}, "jti-svc")
+	if err != nil {
+		t.Fatalf("IssueService: %v", err)
+	}
+
+	claims, tenant, err := authenticateDataPlane(v, st.Token, func(h string) string {
+		if h == auth.ServiceTenantHeader {
+			return "tenant-a"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("data plane rejected a valid service token: %v", err)
+	}
+	if tenant != "tenant-a" {
+		t.Fatalf("service token tenant not taken from header: %q", tenant)
+	}
+	if !claims.HasAuthority(auth.DeviceRead) {
+		t.Fatalf("service token authorities lost: %+v", claims.Authorities)
+	}
+
+	if _, _, err := authenticateDataPlane(v, st.Token, func(string) string { return "" }); err == nil {
+		t.Fatal("service token accepted with no tenant header (e.g. on the WS transport)")
+	}
+}
+
+// An access token's tenant always comes from its signed claim — a spoofed
+// ServiceTenantHeader must never override it (the header is honored only for the
+// service tier, and only after signature verification).
+func TestAuthenticateDataPlane_AccessTokenTenantFromClaimNotHeader(t *testing.T) {
+	iss, v := testIssuerValidator(t)
+	at, err := iss.IssueAccess("tenant-b", "alice", nil, []string{string(auth.DeviceRead)}, "jti-a")
+	if err != nil {
+		t.Fatalf("IssueAccess: %v", err)
+	}
+	_, tenant, err := authenticateDataPlane(v, at.Token, func(string) string { return "attacker-tenant" })
+	if err != nil {
+		t.Fatalf("data plane rejected a valid access token: %v", err)
+	}
+	if tenant != "tenant-b" {
+		t.Fatalf("access-token tenant must come from the signed claim, got %q", tenant)
+	}
+}
+
+// echoRoot reports the request's resolved tenant and whether its claims grant
+// device:read, so an end-to-end test can prove ServeHTTP stamped both from a
+// service token.
+type echoRoot struct{}
+
+func (*echoRoot) WhoAmI(ctx context.Context) string {
+	tenant, _ := core.TenantFromContext(ctx)
+	claims, _ := auth.ClaimsFromContext(ctx)
+	return fmt.Sprintf("%s:%v", tenant, claims != nil && claims.HasAuthority(auth.DeviceRead))
+}
+
+// End-to-end through ServeHTTP: a service token + X-DC-Tenant header must reach a
+// resolver with the tenant stamped from the header and the authorities from the
+// token. This exercises the real r.Header.Get resolver + core.WithTenant wiring the
+// unit test bypasses.
+func TestServeHTTP_ServiceTokenEndToEnd(t *testing.T) {
+	iss, v := testIssuerValidator(t)
+	gate := core.NewReadinessGate()
+	gate.MarkReady(v)
+	schema := MustParseSchema(`schema { query: Query } type Query { whoAmI: String! }`, &echoRoot{})
+	srv := httptest.NewServer(NewHttpHandler(schema, map[ContextKey]interface{}{}, gate))
+	defer srv.Close()
+
+	st, err := iss.IssueService("command-delivery", []string{string(auth.DeviceRead)}, "jti-svc")
+	if err != nil {
+		t.Fatalf("IssueService: %v", err)
+	}
+	body, _ := json.Marshal(map[string]string{"query": "query{whoAmI}"})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+st.Token)
+	req.Header.Set(auth.ServiceTenantHeader, "tenant-a")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d body=%s", resp.StatusCode, raw)
+	}
+	var out struct {
+		Data struct{ WhoAmI string } `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, raw)
+	}
+	if out.Data.WhoAmI != "tenant-a:true" {
+		t.Fatalf("service token did not stamp tenant+authorities end-to-end: %q", out.Data.WhoAmI)
+	}
+}
+
+// Neither identity nor refresh tokens are accepted on the data plane.
+func TestAuthenticateDataPlane_RejectsOtherTiers(t *testing.T) {
+	iss, v := testIssuerValidator(t)
+	idt, err := iss.IssueIdentity("a@b.c", nil, []string{string(auth.AuthorityAll)}, "jti-id")
+	if err != nil {
+		t.Fatalf("IssueIdentity: %v", err)
+	}
+	rt, err := iss.IssueRefresh("tenant-a", "alice", nil, nil, "jti-r")
+	if err != nil {
+		t.Fatalf("IssueRefresh: %v", err)
+	}
+	for name, tok := range map[string]string{"identity": idt.Token, "refresh": rt.Token} {
+		if _, _, err := authenticateDataPlane(v, tok, func(string) string { return "tenant-a" }); err == nil {
+			t.Fatalf("data plane accepted a %s token", name)
+		}
+	}
+}
 
 // While the readiness gate is closed the validator is nil, so a presented bearer
 // token is rejected with 401 rather than being silently trusted or passed

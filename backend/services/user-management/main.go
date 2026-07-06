@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -119,6 +120,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Serve the platform signing keys so other services can validate tokens.
 	registerKeyHandlers()
 
+	// Serve the service-token mint endpoint (ADR-044 amendment) so a caller can
+	// exchange the shared service secret for a short-lived machine token.
+	registerServiceTokenHandler()
+
 	// Map of providers injected into the graphql http context.
 	providers := map[gqlcore.ContextKey]interface{}{
 		graphql.ContextIdentityKey: IdentityManager,
@@ -190,6 +195,20 @@ func registerKeyHandlers() {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(jwks)
 	})
+}
+
+// registerServiceTokenHandler serves the service-token mint endpoint (ADR-044
+// amendment). A caller presents the shared service secret (compared constant-time
+// against this instance's configured copy) and receives a short-lived service
+// token carrying its requested authorities, signed by the instance key so every
+// service's JWKS validator accepts it. The secret is the bootstrap trust root, so
+// an empty configured secret fails closed (minting disabled). The handler body
+// lives in identity so its branches are unit-tested.
+func registerServiceTokenHandler() {
+	http.Handle(auth.ServiceTokenPath, identity.ServiceTokenHandler(
+		func() string { return Microservice.InstanceConfiguration.Infrastructure.ServiceAuth.Secret },
+		IdentityManager.IssueServiceToken,
+	))
 }
 
 // Called after microservice has been started.

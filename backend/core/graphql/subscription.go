@@ -275,12 +275,15 @@ func (c *wsConnection) authenticate(ctx context.Context, payload json.RawMessage
 	if validator == nil {
 		return nil, errors.New("authentication is not available")
 	}
-	claims, err := c.handler.policy.validate(validator, token)
+	// The WS transport carries no HTTP headers, so service tokens (whose tenant
+	// rides a header) are inapplicable here; the empty resolver makes them resolve
+	// to no tenant and be rejected, leaving access/identity tokens working.
+	claims, tenant, err := c.handler.policy.authenticate(validator, token, func(string) string { return "" })
 	if err != nil {
 		return nil, errors.New("invalid or expired token")
 	}
-	if c.handler.policy.setTenant {
-		ctx = core.WithTenant(ctx, claims.Tenant)
+	if tenant != "" {
+		ctx = core.WithTenant(ctx, tenant)
 	}
 	ctx = auth.WithClaims(ctx, claims)
 	return ctx, nil

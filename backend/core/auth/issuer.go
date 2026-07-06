@@ -15,6 +15,12 @@ import (
 const (
 	DefaultAccessTTL  = 15 * time.Minute
 	DefaultRefreshTTL = 7 * 24 * time.Hour
+	// ServiceTokenTTL is the lifetime of a machine service token (ADR-044
+	// amendment). Deliberately a fixed constant, decoupled from the operator-tunable
+	// human access-token TTL: a service token's lifetime is an internal concern of
+	// the sync-call primitive, and it must stay comfortably longer than svcclient's
+	// refresh skew so a caller isn't forced to mint on every call.
+	ServiceTokenTTL = 15 * time.Minute
 )
 
 // Issuer mints RS256-signed access and refresh tokens. Only user-management
@@ -111,6 +117,19 @@ func (i *Issuer) IssueIdentity(email string, roles, authorities []string, jti st
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeIdentity, username: email, email: email,
 		roles: roles, authorities: authorities, jti: jti, ttl: i.accessTTL,
+	})
+}
+
+// IssueService mints a short-lived instance-scoped *service* token (ADR-044
+// amendment): no tenant, the requested machine authorities, signed by the same
+// instance key so every service's existing JWKS validator accepts it with no new
+// trust configuration. subject names the calling service (audit). The data-plane
+// validator rejects it as an access token because it carries no tenant; a callee
+// admits it through the service tier and takes the tenant from an explicit header.
+func (i *Issuer) IssueService(subject string, authorities []string, jti string) (IssuedToken, error) {
+	return i.sign(tokenSpec{
+		tokenType: TokenTypeService, username: subject,
+		authorities: authorities, jti: jti, ttl: ServiceTokenTTL,
 	})
 }
 
