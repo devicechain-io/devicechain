@@ -118,6 +118,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	AlarmEventsWriter = aevents
 	Api.AlarmPublisher = processor.NewAlarmEventWriter(AlarmEventsWriter)
 
+	// Add the entity-deleted writer and inject a publisher over it into the shared
+	// Api (ADR-044): the delete paths (deleteEdgeEntity) emit an entity-deletion
+	// event so event-management can reconcile dangling event_anchors.
+	devents, err := nmgr.NewWriter(config.SUBJECT_ENTITY_DELETED)
+	if err != nil {
+		return err
+	}
+	Api.EntityDeletedPublisher = processor.NewEntityDeletedWriter(devents)
+
 	// Add and initialize inbound events processor.
 	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,
 		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode)

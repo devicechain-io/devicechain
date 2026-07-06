@@ -9,6 +9,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -114,4 +115,27 @@ func TestMarshalAlarmStateChangeEventRoundTrips(t *testing.T) {
 	assert.Nil(t, gotBare.LastValue)
 	assert.Nil(t, gotBare.Message)
 	assert.Equal(t, "", gotBare.PreviousSeverity)
+}
+
+// The entity-deletion envelope must survive the marshal/unmarshal round trip
+// (ADR-044): event-management keys anchor cleanup on the entity id, and the token +
+// deleted time are carried for logging/future reshape, so a dropped field would
+// misfire or lose the cleanup.
+func TestMarshalEntityDeletedEventRoundTrips(t *testing.T) {
+	when := time.Date(2026, 7, 6, 8, 30, 0, 123456789, time.UTC)
+	event := &model.EntityDeletedEvent{
+		EntityType:  entity.TypeCustomer,
+		EntityId:    4242,
+		EntityToken: "acme-corp",
+		DeletedTime: when,
+	}
+	bytes, err := MarshalEntityDeletedEvent(event)
+	assert.NoError(t, err)
+
+	got, err := UnmarshalEntityDeletedEvent(bytes)
+	assert.NoError(t, err)
+	assert.Equal(t, entity.TypeCustomer, got.EntityType)
+	assert.Equal(t, uint(4242), got.EntityId)
+	assert.Equal(t, "acme-corp", got.EntityToken)
+	assert.True(t, got.DeletedTime.Equal(when), "deleted time must round-trip")
 }

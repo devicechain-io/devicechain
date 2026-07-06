@@ -148,3 +148,19 @@ message PAlarmStateChangeEvent {
     string occurred_time = 14;
     string raised_time = 15;
 }
+
+/**
+ * Entity-deletion event (ADR-044): emitted when an edge entity is deleted in
+ * device-management so cross-service reference holders (event-management's
+ * event_anchors) can drop dangling references. The entity is named by both its
+ * uniform (type, token) address (ADR-013/042) and its raw row id — the id is what
+ * event_anchors currently key on, the token is for logging and the future
+ * token-reference reshape (ADR-044 decision 4). The tenant travels on the subject,
+ * not in the payload.
+ */
+message PEntityDeletedEvent {
+    string entity_type = 1;
+    uint64 entity_id = 2;
+    string entity_token = 3;
+    string deleted_time = 4;
+}

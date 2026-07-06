@@ -30,6 +30,9 @@ var (
 	ResolvedEventsReader      messaging.MessageReader
 	EventPersistenceProcessor *processor.EventPersistenceProcessor
 	FailedEventsWriter        messaging.MessageWriter
+
+	EntityDeletedReader    messaging.MessageReader
+	EntityAnchorReconciler *processor.EntityAnchorReconciler
 )
 
 func main() {
@@ -87,6 +90,19 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), Api)
 	err = EventPersistenceProcessor.Initialize(context.Background())
 	if err != nil {
+		return err
+	}
+
+	// Reader + reconciler for entity-deletion events (ADR-044): drops event_anchors
+	// rows referencing an entity deleted in device-management. Durable, idempotent.
+	dentity, err := nmgr.NewReader(dmconfig.SUBJECT_ENTITY_DELETED)
+	if err != nil {
+		return err
+	}
+	EntityDeletedReader = dentity
+	EntityAnchorReconciler = processor.NewEntityAnchorReconciler(Microservice, EntityDeletedReader,
+		Api, core.NewNoOpLifecycleCallbacks())
+	if err := EntityAnchorReconciler.Initialize(context.Background()); err != nil {
 		return err
 	}
 	return nil
@@ -176,11 +192,22 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start entity-anchor reconciler.
+	err = EntityAnchorReconciler.Start(ctx)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// Stop entity-anchor reconciler.
+	if err := EntityAnchorReconciler.Stop(ctx); err != nil {
+		return err
+	}
+
 	// Stop event persistence processor.
 	err := EventPersistenceProcessor.Stop(ctx)
 	if err != nil {
