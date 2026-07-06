@@ -10,7 +10,7 @@
 # baked in at build time, so one image serves any instance.
 
 # --- build stage: produce frontend/dist ------------------------------------
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 
 # Install deps against the lockfile first so the layer caches across source-only
