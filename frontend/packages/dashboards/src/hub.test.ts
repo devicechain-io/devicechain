@@ -49,6 +49,7 @@ const sampleFor = (deviceToken: string, name: string, value: number): Measuremen
 function newResolver(overrides: Partial<DeviceResolver> = {}): DeviceResolver {
   return {
     devicesForAnchor: vi.fn(async () => ['therm-004', 'therm-005']),
+    deviceExists: vi.fn(async () => true),
     ...overrides,
   };
 }
@@ -285,5 +286,64 @@ describe('DashboardHub', () => {
     hub.disposeAll();
     expect(hub.openStreamCount).toBe(0);
     expect(h.streams.every((s) => s.closed)).toBe(true);
+  });
+});
+
+describe('DashboardHub.isDatasourceAvailable', () => {
+  it('a device selector is available iff the device exists', async () => {
+    const exists = new DashboardHub({ resolver: newResolver({ deviceExists: vi.fn(async () => true) }) });
+    await expect(
+      exists.isDatasourceAvailable({ kind: 'device', deviceToken: 'live', measurements: [] }),
+    ).resolves.toBe(true);
+
+    const gone = new DashboardHub({ resolver: newResolver({ deviceExists: vi.fn(async () => false) }) });
+    await expect(
+      gone.isDatasourceAvailable({ kind: 'device', deviceToken: 'deleted', measurements: [] }),
+    ).resolves.toBe(false);
+  });
+
+  it('a slot bound to a device checks that device; an unbound slot is available', async () => {
+    const deviceExists = vi.fn(async () => false);
+    const hub = new DashboardHub({
+      resolver: newResolver({ deviceExists }),
+      bindings: { primary: { kind: 'device', deviceToken: 'deleted' } },
+    });
+    await expect(
+      hub.isDatasourceAvailable({ kind: 'slot', slot: 'primary', measurements: [] }),
+    ).resolves.toBe(false);
+    // An unbound slot is a template placeholder, not "unavailable".
+    await expect(
+      hub.isDatasourceAvailable({ kind: 'slot', slot: 'unbound', measurements: [] }),
+    ).resolves.toBe(true);
+    expect(deviceExists).toHaveBeenCalledTimes(1); // only the bound slot queried
+  });
+
+  it('an anchor, a slot bound to an anchor, and no datasource never query existence', async () => {
+    const deviceExists = vi.fn(async () => false);
+    const hub = new DashboardHub({
+      resolver: newResolver({ deviceExists }),
+      bindings: { area: { kind: 'anchor', anchor: { relationship: 'in', targetType: 'area', targetToken: 'a1' } } },
+    });
+    await expect(hub.isDatasourceAvailable(undefined)).resolves.toBe(true);
+    await expect(
+      hub.isDatasourceAvailable({
+        kind: 'anchor',
+        anchor: { relationship: 'in', targetType: 'area', targetToken: 'a1' },
+        measurements: [],
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      hub.isDatasourceAvailable({ kind: 'slot', slot: 'area', measurements: [] }),
+    ).resolves.toBe(true);
+    expect(deviceExists).not.toHaveBeenCalled(); // anchors are self-validating (empty ≠ unavailable)
+  });
+
+  it('fails open (available) when the existence check errors — never falsely mark a live device gone', async () => {
+    const hub = new DashboardHub({
+      resolver: newResolver({ deviceExists: vi.fn(async () => { throw new Error('device-mgmt down'); }) }),
+    });
+    await expect(
+      hub.isDatasourceAvailable({ kind: 'device', deviceToken: 'x', measurements: [] }),
+    ).resolves.toBe(true);
   });
 });

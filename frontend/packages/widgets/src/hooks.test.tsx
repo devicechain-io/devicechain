@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(cleanup);
 
-import { useAlarmStream, useCommandStream, useMeasurementStream } from './hooks';
+import { useAlarmStream, useCommandStream, useDatasourceAvailability, useMeasurementStream } from './hooks';
 
 function fakeHub() {
   let sink: WidgetStreamSink | null = null;
@@ -251,5 +251,81 @@ describe('useCommandStream', () => {
     const { unmount } = renderHook(() => useCommandStream(f.hub, commandSub));
     unmount();
     expect(f.unsub).toHaveBeenCalledTimes(1);
+  });
+});
+
+function availabilityHub(result: boolean | Promise<boolean> | (() => Promise<boolean>)) {
+  const isDatasourceAvailable = vi.fn(() =>
+    typeof result === 'function' ? result() : Promise.resolve(result),
+  );
+  return { hub: { isDatasourceAvailable } as unknown as DashboardHub, isDatasourceAvailable };
+}
+
+const deviceDs: DatasourceSelector = { kind: 'device', deviceToken: 'd1', measurements: [] };
+
+describe('useDatasourceAvailability', () => {
+  it('starts unknown (optimistic), then resolves available', async () => {
+    const f = availabilityHub(true);
+    const { result } = renderHook(() => useDatasourceAvailability(f.hub, deviceDs));
+    expect(result.current).toBe('unknown');
+    await act(async () => {});
+    expect(result.current).toBe('available');
+  });
+
+  it('flips to unavailable when the device is gone', async () => {
+    const f = availabilityHub(false);
+    const { result } = renderHook(() => useDatasourceAvailability(f.hub, deviceDs));
+    await act(async () => {});
+    expect(result.current).toBe('unavailable');
+  });
+
+  it('fails open (available) when the check rejects', async () => {
+    const f = availabilityHub(() => Promise.reject(new Error('down')));
+    const { result } = renderHook(() => useDatasourceAvailability(f.hub, deviceDs));
+    await act(async () => {});
+    expect(result.current).toBe('available');
+  });
+
+  it('re-checks when the datasource changes', async () => {
+    const f = availabilityHub(true);
+    const { rerender } = renderHook(({ ds }) => useDatasourceAvailability(f.hub, ds), {
+      initialProps: { ds: deviceDs },
+    });
+    await act(async () => {});
+    rerender({ ds: { kind: 'device', deviceToken: 'd2', measurements: [] } });
+    await act(async () => {});
+    expect(f.isDatasourceAvailable).toHaveBeenCalledTimes(2);
+  });
+
+  it('is available immediately with no datasource — never queries', async () => {
+    const f = availabilityHub(false); // would report unavailable IF it were asked
+    const { result } = renderHook(() => useDatasourceAvailability(f.hub, undefined));
+    await act(async () => {});
+    expect(result.current).toBe('available');
+    expect(f.isDatasourceAvailable).not.toHaveBeenCalled();
+  });
+
+  it('re-validates while unavailable so a recreated device recovers (then stops polling)', async () => {
+    vi.useFakeTimers();
+    try {
+      let exists = false;
+      const isDatasourceAvailable = vi.fn(() => Promise.resolve(exists));
+      const hub = { isDatasourceAvailable } as unknown as DashboardHub;
+      const { result } = renderHook(() => useDatasourceAvailability(hub, deviceDs));
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(result.current).toBe('unavailable');
+
+      exists = true; // device recreated with the same token (ADR-042 frees tokens)
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(result.current).toBe('available');
+      expect(isDatasourceAvailable).toHaveBeenCalledTimes(2);
+
+      // Recovered → polling stops (no further checks).
+      await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+      expect(isDatasourceAvailable).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

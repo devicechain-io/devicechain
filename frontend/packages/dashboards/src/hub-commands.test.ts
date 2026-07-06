@@ -39,7 +39,7 @@ function page(rows: CommandRow[], total = rows.length) {
 }
 
 function newResolver(devices: string[] = []): DeviceResolver {
-  return { devicesForAnchor: vi.fn(async () => devices) };
+  return { devicesForAnchor: vi.fn(async () => devices), deviceExists: vi.fn(async () => true) };
 }
 
 // The criteria of the Nth gql() call (call args are [area, doc, { criteria }]).

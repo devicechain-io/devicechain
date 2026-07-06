@@ -187,6 +187,79 @@ export function useCommandStream(
   return state;
 }
 
+// A widget's bound-entity availability: 'unknown' until the async check resolves
+// (render optimistically meanwhile), then 'available', or 'unavailable' when the bound
+// device no longer exists (a deleted device's stable token, ADR-044).
+export type DatasourceAvailability = 'unknown' | 'available' | 'unavailable';
+
+// While a widget shows "unavailable", re-check on this cadence so a device deleted then
+// recreated with the same token (ADR-042 frees tokens on delete) recovers on a long-lived
+// viewer without a reload. Only runs while unavailable — a live device is checked once.
+const AVAILABILITY_REVALIDATE_MS = 60_000;
+
+// useDatasourceAvailability resolves whether a widget's bound device still exists,
+// WITHOUT blocking the widget's data stream (optimistic + async): it starts 'unknown'
+// (the widget renders normally), then flips to 'available'/'unavailable' once the hub's
+// existence check resolves. Fails open (→'available') so a check outage never falsely
+// blanks a live widget. A widget with no datasource is trivially available (no query).
+// Re-checks when the datasource changes (value-compared), and periodically while
+// unavailable so a recreated device recovers.
+export function useDatasourceAvailability(
+  hub: WidgetDataSource,
+  datasource: DatasourceSelector | undefined,
+): DatasourceAvailability {
+  const [state, setState] = useState<DatasourceAvailability>('unknown');
+  const key = datasource ? JSON.stringify(datasource) : null;
+
+  useEffect(() => {
+    // No datasource (label/image, or tenant-wide) has nothing to validate — available
+    // immediately, no query, no re-render churn.
+    if (!datasource) {
+      setState('available');
+      return;
+    }
+    setState('unknown');
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    const stopTimer = (): void => {
+      if (timer) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    };
+
+    const check = (): void => {
+      hub
+        .isDatasourceAvailable(datasource)
+        .then((ok) => {
+          if (cancelled) return;
+          setState(ok ? 'available' : 'unavailable');
+          if (ok) stopTimer(); // recovered (or was fine) — stop polling
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setState('available'); // fail open
+          stopTimer();
+        });
+    };
+
+    check();
+    // Poll only matters once unavailable; harmlessly runs until the first check clears it
+    // for a live device (cleared in the resolver above, well before the first tick).
+    timer = setInterval(check, AVAILABILITY_REVALIDATE_MS);
+
+    return () => {
+      cancelled = true;
+      stopTimer();
+    };
+    // `datasource` is intentionally read via `key` (value identity), not reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hub, key]);
+
+  return state;
+}
+
 export interface ElementSize {
   width: number;
   height: number;
