@@ -48,8 +48,10 @@ type EventManagementApi interface {
 
 	// DeleteAnchorsForEntity removes event_anchors rows referencing a deleted
 	// entity (ADR-044): device deletes match device_token, other entities match
-	// (anchor_type, anchor_token). Idempotent + tenant-scoped. Returns rows removed.
-	DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string) (int64, error)
+	// (anchor_type, anchor_token). `before` bounds the delete to events older than
+	// it (guards token reuse); a zero value is unbounded (the sweep). Idempotent +
+	// tenant-scoped. Returns rows removed.
+	DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string, before time.Time) (int64, error)
 
 	// DistinctAnchorTenants returns every tenant with event_anchors (cross-tenant;
 	// needs a system context). DistinctAnchorRefs returns the current tenant's
@@ -291,15 +293,23 @@ func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*
 	return db.WithContext(ctx).Create(anchors).Error
 }
 
-// DeleteAnchorsForEntity removes every event_anchors row referencing a deleted
-// entity (ADR-044 cross-service RI). A deleted device is the SOURCE of its anchors
+// DeleteAnchorsForEntity removes event_anchors rows referencing a deleted entity
+// (ADR-044 cross-service RI). A deleted device is the SOURCE of its anchors
 // (matched by device_token); a deleted anchor target (customer / area / asset and
 // their groups) is matched by (anchor_type, anchor_token). The entity is named by
 // its stable per-tenant token, carried on the entity.deleted event. Idempotent —
 // deleting already-absent rows is a no-op — and tenant-scoped via the fail-closed
 // callback (the caller stamps the tenant from the event's subject). Returns rows
 // removed.
-func (api *Api) DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string) (int64, error) {
+//
+// `before` bounds the cleanup to anchors of events that occurred strictly before it
+// (ADR-044 decision-4 amendment, "token = stable identity"): a token freed on delete
+// can be reused (ADR-042), so a redelivered/replayed deletion event must not wipe the
+// anchors of a NEW device that later adopted the same token — those events are newer
+// than the deletion. A zero `before` means unbounded: the reconciliation sweep passes
+// it because the sweep only deletes when the token resolves to no entity at all, so
+// every matching anchor is a true orphan.
+func (api *Api) DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string, before time.Time) (int64, error) {
 	db := api.RDB.DB(ctx).Model(&EventAnchor{})
 	if entityType == string(entity.TypeDevice) {
 		// A device is always the anchor SOURCE (device_token), but it can ALSO be an
@@ -311,6 +321,9 @@ func (api *Api) DeleteAnchorsForEntity(ctx context.Context, entityType string, e
 	} else {
 		// Every other entity type is only ever an anchor target (never a source).
 		db = db.Where("anchor_type = ? AND anchor_token = ?", entityType, entityToken)
+	}
+	if !before.IsZero() {
+		db = db.Where("occurred_time < ?", before)
 	}
 	result := db.Delete(&EventAnchor{})
 	return result.RowsAffected, result.Error

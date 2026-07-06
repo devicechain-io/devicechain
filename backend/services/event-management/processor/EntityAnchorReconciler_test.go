@@ -36,14 +36,14 @@ const reconcilerSubject = "instance1.acme.entity-deleted"
 // A device deletion cleans anchors by device token and acks.
 func TestReconciler_DeletesAndAcks(t *testing.T) {
 	api := new(emtest.MockApi)
-	api.Mock.On("DeleteAnchorsForEntity", "device", "dev-4").Return(2, nil)
+	api.Mock.On("DeleteAnchorsForEntity", "device", "dev-4", mock.Anything).Return(2, nil)
 	r := &EntityAnchorReconciler{Api: api}
 	ack := &stubAck{}
 
 	r.handle(context.Background(), deletedMsg(t, reconcilerSubject,
 		&dmodel.EntityDeletedEvent{EntityType: entity.TypeDevice, EntityId: 4, EntityToken: "dev-4", DeletedTime: time.Now().UTC()}, 1, ack))
 
-	api.Mock.AssertCalled(t, "DeleteAnchorsForEntity", "device", "dev-4")
+	api.Mock.AssertCalled(t, "DeleteAnchorsForEntity", "device", "dev-4", mock.Anything)
 	assert.Equal(t, 1, ack.acked)
 	assert.Equal(t, 0, ack.naked)
 }
@@ -57,7 +57,7 @@ func TestReconciler_PoisonDropped(t *testing.T) {
 	r.handle(context.Background(), messaging.NewConsumedMessage(reconcilerSubject, []byte("not-proto"), 1, nil, ack))
 
 	assert.Equal(t, 1, ack.acked)
-	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything)
+	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // A subject with no parseable tenant is dropped (acked) without a cleanup attempt —
@@ -71,13 +71,13 @@ func TestReconciler_NoTenantDropped(t *testing.T) {
 		&dmodel.EntityDeletedEvent{EntityType: entity.TypeDevice, EntityId: 4, DeletedTime: time.Now().UTC()}, 1, ack))
 
 	assert.Equal(t, 1, ack.acked)
-	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything)
+	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // A transient DB error naks for redelivery while below the poison ceiling.
 func TestReconciler_TransientErrorNaks(t *testing.T) {
 	api := new(emtest.MockApi)
-	api.Mock.On("DeleteAnchorsForEntity", "customer", "cust-3").Return(0, errors.New("db down"))
+	api.Mock.On("DeleteAnchorsForEntity", "customer", "cust-3", mock.Anything).Return(0, errors.New("db down"))
 	r := &EntityAnchorReconciler{Api: api}
 	ack := &stubAck{}
 
@@ -92,7 +92,7 @@ func TestReconciler_TransientErrorNaks(t *testing.T) {
 // than naked forever.
 func TestReconciler_PoisonCeilingDrops(t *testing.T) {
 	api := new(emtest.MockApi)
-	api.Mock.On("DeleteAnchorsForEntity", "customer", "cust-3").Return(0, errors.New("db down"))
+	api.Mock.On("DeleteAnchorsForEntity", "customer", "cust-3", mock.Anything).Return(0, errors.New("db down"))
 	r := &EntityAnchorReconciler{Api: api}
 	ack := &stubAck{}
 

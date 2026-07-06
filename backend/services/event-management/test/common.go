@@ -72,8 +72,8 @@ func (api *MockApi) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors
 	return args.Error(0)
 }
 
-func (api *MockApi) DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string) (int64, error) {
-	args := api.Mock.Called(entityType, entityToken)
+func (api *MockApi) DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string, before time.Time) (int64, error) {
+	args := api.Mock.Called(entityType, entityToken, before)
 	return int64(args.Int(0)), args.Error(1)
 }
 

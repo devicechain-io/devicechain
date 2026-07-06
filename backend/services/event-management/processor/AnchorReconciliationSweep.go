@@ -142,7 +142,10 @@ func (s *AnchorReconciliationSweep) sweepTenant(ctx context.Context, tenant stri
 		if existing[refKey(r.Type, r.Token)] {
 			continue
 		}
-		n, err := s.Api.DeleteAnchorsForEntity(tctx, r.Type, r.Token)
+		// Unbounded (zero time): the sweep deletes only refs that resolve to NO
+		// entity at all, so every matching anchor is a true orphan regardless of when
+		// its event occurred (ADR-044 decision-4 amendment).
+		n, err := s.Api.DeleteAnchorsForEntity(tctx, r.Type, r.Token, time.Time{})
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Str("type", r.Type).Str("token", r.Token).
 				Msg("Anchor sweep: delete failed")

@@ -130,7 +130,9 @@ func (r *EntityAnchorReconciler) handle(ctx context.Context, msg messaging.Messa
 		_ = msg.Ack()
 		return
 	}
-	removed, err := r.Api.DeleteAnchorsForEntity(tctx, string(event.EntityType), event.EntityToken)
+	// Bound the cleanup to events older than the deletion so a replayed deletion
+	// event can't wipe a reused token's newer anchors (ADR-044 decision-4 amendment).
+	removed, err := r.Api.DeleteAnchorsForEntity(tctx, string(event.EntityType), event.EntityToken, event.DeletedTime)
 	if err != nil {
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Err(err).Str("entity", event.EntityToken).Int("delivered", msg.NumDelivered).

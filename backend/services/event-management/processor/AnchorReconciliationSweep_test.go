@@ -71,13 +71,13 @@ func TestSweep_DeletesOrphansOnly(t *testing.T) {
 		{Type: "device", Token: "device-1"},   // exists
 		{Type: "customer", Token: "cust-999"}, // orphan
 	}, nil)
-	api.Mock.On("DeleteAnchorsForEntity", "customer", "cust-999").Return(3, nil)
+	api.Mock.On("DeleteAnchorsForEntity", "customer", "cust-999", mock.Anything).Return(3, nil)
 
 	sweep := sweepHarness(t, api, map[string]bool{"device|device-1": true}, false)
 	sweep.runOnce(context.Background())
 
-	api.Mock.AssertCalled(t, "DeleteAnchorsForEntity", "customer", "cust-999")
-	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", "device", "device-1")
+	api.Mock.AssertCalled(t, "DeleteAnchorsForEntity", "customer", "cust-999", mock.Anything)
+	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", "device", "device-1", mock.Anything)
 }
 
 // FAIL SAFE: if device-management can't be reached, the sweep must delete NOTHING —
@@ -92,7 +92,7 @@ func TestSweep_FailsSafeOnResolveError(t *testing.T) {
 	sweep := sweepHarness(t, api, nil, true /* outage */)
 	sweep.runOnce(context.Background())
 
-	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything)
+	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // mintOnly builds a mint stub + a config pointing svcclient at it.
@@ -145,7 +145,7 @@ func TestSweep_ChunksLargeRefSet(t *testing.T) {
 	if got := atomic.LoadInt32(&requests); got != 2 {
 		t.Fatalf("expected 2 chunked requests for %d refs, got %d", maxRefsPerResolve+50, got)
 	}
-	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything) // all exist
+	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything, mock.Anything) // all exist
 }
 
 // A tenant with no anchors resolves nothing and deletes nothing.
@@ -157,5 +157,5 @@ func TestSweep_EmptyTenantNoop(t *testing.T) {
 	sweep := sweepHarness(t, api, nil, false)
 	sweep.runOnce(context.Background())
 
-	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything)
+	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything, mock.Anything)
 }
