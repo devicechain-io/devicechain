@@ -37,6 +37,24 @@ type NotificationPolicy struct {
 	DeviceTypeToken sql.NullString
 	ThrottleSeconds sql.NullInt64
 	Enabled         bool
+
+	// Escalation (ADR-017 N.D). When EscalateAfterSeconds is set (> 0), an alarm this
+	// policy notified that stays neither acknowledged nor cleared this long after its
+	// last notification is re-notified through the same channels by the escalation
+	// scheduler, up to MaxEscalations times (NULL/0 = the service-wide default cap). A
+	// NULL/0 EscalateAfterSeconds disables escalation for the policy — a policy pages
+	// once on RAISED (and again on ESCALATED) but never re-pages on a timer.
+	//
+	// Escalation state is ONE clock and tier per alarm, not per policy: when several
+	// escalation-enabled policies match the same alarm, the shortest EscalateAfterSeconds
+	// drives the re-notification cadence (each re-notification re-arms the shared clock)
+	// and every policy's cap is measured against the shared tier. So a fast policy and a
+	// slow policy on one alarm do not run independent escalation chains — the fast one
+	// paces re-notification for both. Independent per-policy escalation schedules would
+	// need per-(alarm, policy) state and is a deferred enhancement.
+	EscalateAfterSeconds sql.NullInt64
+	MaxEscalations       sql.NullInt64
+
 	// Rules are the policy's owned routing rules; loaded with the policy and
 	// replaced wholesale on update. The FK is the shortened PolicyId (not the GORM
 	// default NotificationPolicyID), so it is named explicitly.
@@ -73,14 +91,16 @@ type NotificationRuleCreateRequest struct {
 // policy together with its full rule set (Rules replaces any existing rules on
 // update).
 type NotificationPolicyCreateRequest struct {
-	Token           string
-	Name            *string
-	Description     *string
-	DeviceTypeToken *string
-	ThrottleSeconds *int32
-	Enabled         bool
-	Rules           []*NotificationRuleCreateRequest
-	Metadata        *string
+	Token                string
+	Name                 *string
+	Description          *string
+	DeviceTypeToken      *string
+	ThrottleSeconds      *int32
+	EscalateAfterSeconds *int32
+	MaxEscalations       *int32
+	Enabled              bool
+	Rules                []*NotificationRuleCreateRequest
+	Metadata             *string
 }
 
 // NotificationPolicySearchCriteria locates policies by optional filters.

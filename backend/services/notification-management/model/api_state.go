@@ -92,31 +92,83 @@ func (api *Api) RecordNotification(ctx context.Context, alarmToken, alarmKey, se
 }
 
 // MarkAcknowledged stamps AcknowledgedAt on the alarm's state row so the escalation
-// scheduler (N.D) stops re-notifying. It is an update-if-exists: a no-op when no row
-// exists (the alarm was never notified) or one is already acknowledged, so it is
-// idempotent and safe under the at-least-once/unordered delivery contract.
-func (api *Api) MarkAcknowledged(ctx context.Context, alarmToken string, at time.Time) error {
-	return api.RDB.DB(ctx).Model(&NotificationState{}).
-		Where("alarm_token = ? AND acknowledged_at IS NULL", alarmToken).
-		Update("acknowledged_at", at).Error
+// scheduler (N.D) stops re-notifying. It is an upsert tombstone (see markTerminal):
+// idempotent, and it creates a resolved row even when the alarm was never notified so a
+// later out-of-order RAISED cannot resurrect it into an escalating open row.
+func (api *Api) MarkAcknowledged(ctx context.Context, alarmToken, alarmKey, severity string, at time.Time) error {
+	return api.markTerminal(ctx, alarmToken, alarmKey, severity, "acknowledged_at", at)
 }
 
 // MarkCleared stamps ClearedAt on the alarm's state row so escalation stops and the
-// retention sweep can prune it after the grace window. Update-if-exists and
-// idempotent, like MarkAcknowledged.
+// retention sweep can prune it after the grace window. Upsert tombstone, like
+// MarkAcknowledged.
+func (api *Api) MarkCleared(ctx context.Context, alarmToken, alarmKey, severity string, at time.Time) error {
+	return api.markTerminal(ctx, alarmToken, alarmKey, severity, "cleared_at", at)
+}
+
+// markTerminal records a terminal (acknowledged or cleared) transition on the alarm's
+// state row, stamping the named column. It is an upsert tombstone: if the row already
+// exists the stamp is set only when still NULL (idempotent under at-least-once
+// redelivery); if no row exists yet it CREATES a resolved tombstone row carrying the
+// stamp.
 //
-// Ordering caveat (an N.D precondition): the dispatch pool is unordered, so a CLEARED
-// can be processed before the RAISED that would create the row. When that happens the
-// clear is a no-op and a later-delivered RAISED creates a row with ClearedAt NULL —
-// the escalation scheduler (N.D) must therefore re-verify an alarm's live state at
-// escalation time rather than trust this projection alone, and such a row is not
-// pruned by the cleared-only retention sweep until its alarm is cleared again. The
-// interleaving requires a raise+auto-clear within one dispatch latency, so it is rare;
-// closing it fully (an upsert tombstone) is deferred to N.D where it becomes load-bearing.
-func (api *Api) MarkCleared(ctx context.Context, alarmToken string, at time.Time) error {
-	return api.RDB.DB(ctx).Model(&NotificationState{}).
-		Where("alarm_token = ? AND cleared_at IS NULL", alarmToken).
-		Update("cleared_at", at).Error
+// Creating the tombstone is what closes the unordered-delivery race the escalation
+// scheduler depends on: the dispatch pool is unordered, so a CLEARED/ACKNOWLEDGED can
+// be processed before the RAISED that would create the row. Were this a plain
+// update-if-exists, the terminal event would be a no-op and a later-delivered RAISED
+// would create a fresh OPEN row (both stamps NULL) that the scheduler would then
+// escalate forever, even though the alarm is already resolved. With the tombstone the
+// row exists resolved first; the later RAISED's RecordNotification finds it and only
+// bumps NotifyCount, preserving the terminal stamp, so the scheduler's
+// "cleared_at IS NULL AND acknowledged_at IS NULL" filter permanently excludes it.
+//
+// The read-modify-write runs under a row lock (SELECT … FOR UPDATE) so concurrent
+// terminal transitions for one alarm serialize; a concurrent first insert loses the
+// (tenant_id, alarm_token) unique-index race and errors out, which the caller returns
+// as a safe redelivery (the transition is idempotent).
+func (api *Api) markTerminal(ctx context.Context, alarmToken, alarmKey, severity, column string, at time.Time) error {
+	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		found := &NotificationState{}
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("alarm_token = ?", alarmToken).First(found)
+		if result.Error != nil {
+			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+				tombstone := &NotificationState{
+					AlarmToken: alarmToken,
+					AlarmKey:   alarmKey,
+					Severity:   severity,
+				}
+				stamp(tombstone, column, at)
+				return tx.Create(tombstone).Error
+			}
+			return result.Error
+		}
+		// Stamp only when still NULL so a redelivered terminal event does not move the
+		// first-seen resolution time.
+		if terminalStampIsNull(found, column) {
+			stamp(found, column, at)
+			return tx.Save(found).Error
+		}
+		return nil
+	})
+}
+
+// stamp sets the named terminal timestamp column on a state row.
+func stamp(s *NotificationState, column string, at time.Time) {
+	v := sql.NullTime{Time: at, Valid: true}
+	if column == "cleared_at" {
+		s.ClearedAt = v
+	} else {
+		s.AcknowledgedAt = v
+	}
+}
+
+// terminalStampIsNull reports whether the named terminal timestamp column is unset.
+func terminalStampIsNull(s *NotificationState, column string) bool {
+	if column == "cleared_at" {
+		return !s.ClearedAt.Valid
+	}
+	return !s.AcknowledgedAt.Valid
 }
 
 // TouchSeverity records an alarm's new severity on its state row after a
@@ -126,6 +178,49 @@ func (api *Api) TouchSeverity(ctx context.Context, alarmToken, severity string) 
 	return api.RDB.DB(ctx).Model(&NotificationState{}).
 		Where("alarm_token = ?", alarmToken).
 		Update("severity", severity).Error
+}
+
+// OpenNotificationStates loads the caller tenant's escalation candidates: rows for
+// alarms that have been notified at least once (LastNotifiedAt set) and are still
+// neither acknowledged nor cleared. The escalation scheduler (N.D) weighs each against
+// the tenant's escalation-enabled policies to decide re-notification. The set is the
+// tenant's currently-open unresolved alarms — small operator-actionable data, not
+// device-scale — so it is loaded unpaginated. The per-policy escalation cap
+// (EscalationLevel) is evaluated in the scheduler, not filtered here.
+func (api *Api) OpenNotificationStates(ctx context.Context) ([]*NotificationState, error) {
+	found := make([]*NotificationState, 0)
+	result := api.RDB.DB(ctx).
+		Where("cleared_at IS NULL AND acknowledged_at IS NULL AND last_notified_at IS NOT NULL").
+		Find(&found)
+	return found, result.Error
+}
+
+// ClaimEscalation atomically claims the next escalation tier for an open alarm BEFORE
+// the scheduler (N.D) delivers it, returning whether the claim was won. It is a
+// compare-and-swap: a single predicated UPDATE advances EscalationLevel (and re-arms the
+// notified stamps/count — an escalation IS a notification) only if the row is still at
+// expectedLevel and still neither acknowledged nor cleared.
+//
+// Claiming before delivering is what makes the timer loop safe to run in EVERY replica
+// and across a rolling update's overlapping old+new pods (unlike the durable consumer,
+// the scheduler has no JetStream one-of-N delivery to lean on). Two pods that both plan
+// the same tier race on this UPDATE; PostgreSQL row-locks it, so exactly one sees
+// escalation_level == expectedLevel and wins (RowsAffected == 1) — the loser matches no
+// row (RowsAffected == 0) and must not deliver. The tradeoff versus recording after the
+// send is a rare MISSED escalation if a pod dies between winning the claim and sending —
+// preferred over paging every operator twice on every deploy. A CAS loss also covers the
+// alarm resolving between the scheduler's read and the claim.
+func (api *Api) ClaimEscalation(ctx context.Context, alarmToken string, expectedLevel int, at time.Time) (bool, error) {
+	result := api.RDB.DB(ctx).Model(&NotificationState{}).
+		Where("alarm_token = ? AND escalation_level = ? AND acknowledged_at IS NULL AND cleared_at IS NULL",
+			alarmToken, expectedLevel).
+		Updates(map[string]any{
+			"escalation_level":  gorm.Expr("escalation_level + 1"),
+			"last_escalated_at": at,
+			"last_notified_at":  at,
+			"notify_count":      gorm.Expr("notify_count + 1"),
+		})
+	return result.RowsAffected == 1, result.Error
 }
 
 // DistinctStateTenants lists the tenants that currently have any notification-state

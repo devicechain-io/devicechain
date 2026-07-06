@@ -32,6 +32,9 @@ func NewNotificationPolicySchema() *gormigrate.Migration {
 				DeviceTypeToken sql.NullString `gorm:"size:128;index"`
 				ThrottleSeconds sql.NullInt64
 				Enabled         bool `gorm:"not null;default:true"`
+
+				EscalateAfterSeconds sql.NullInt64
+				MaxEscalations       sql.NullInt64
 			}
 			type NotificationRule struct {
 				gorm.Model

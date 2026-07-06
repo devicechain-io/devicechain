@@ -9,6 +9,7 @@ import (
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-notification-management/model"
 )
 
 // RenderedNotification is the channel-independent rendering of one alarm transition
@@ -82,6 +83,55 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 	}
 	if event.Message != nil && *event.Message != "" {
 		payload["message"] = *event.Message
+	}
+
+	return &RenderedNotification{Subject: subject, TextBody: b.String(), Payload: payload}
+}
+
+// renderEscalation builds the re-notification message for an open alarm that the
+// escalation scheduler (N.D) re-pages. It is rendered from the persisted
+// NotificationState rather than the original alarm event (which the scheduler does not
+// have), so it carries the durable identity + progress fields — enough for a human to
+// recognize the still-open alarm and act. level is the escalation number this delivery
+// represents (1 = first re-notification). Payload mirrors the event rendering's shape
+// (a "text" summary plus structured keys) so a Slack/webhook endpoint renders it the
+// same way.
+func renderEscalation(state *model.NotificationState, level int) *RenderedNotification {
+	subject := fmt.Sprintf("[%s] Alarm still unresolved (escalation %d): %s",
+		state.Severity, level, state.AlarmKey)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Alarm %s is still unacknowledged and uncleared after %d notification(s).\n\n",
+		state.AlarmKey, state.NotifyCount)
+	writeField(&b, "Severity", state.Severity)
+	writeField(&b, "Escalation", fmt.Sprintf("%d", level))
+	writeField(&b, "Notifications", fmt.Sprintf("%d", state.NotifyCount))
+	if state.FirstNotifiedAt.Valid {
+		writeField(&b, "First notified", formatTime(state.FirstNotifiedAt.Time))
+	}
+	if state.LastNotifiedAt.Valid {
+		writeField(&b, "Last notified", formatTime(state.LastNotifiedAt.Time))
+	}
+
+	payload := map[string]any{
+		// RENOTIFIED, not ESCALATED: this is a timed re-notification of an unchanged
+		// alarm. The alarm event stream's ESCALATED means the alarm's SEVERITY worsened
+		// (renderNotification emits that), so a webhook keying on eventType must be able
+		// to tell a reminder from a real severity change.
+		"text":         subject,
+		"eventType":    "RENOTIFIED",
+		"alarmToken":   state.AlarmToken,
+		"alarmKey":     state.AlarmKey,
+		"severity":     state.Severity,
+		"escalation":   level,
+		"notifyCount":  state.NotifyCount,
+		"acknowledged": false,
+	}
+	if state.FirstNotifiedAt.Valid {
+		payload["firstNotifiedTime"] = formatTime(state.FirstNotifiedAt.Time)
+	}
+	if state.LastNotifiedAt.Valid {
+		payload["lastNotifiedTime"] = formatTime(state.LastNotifiedAt.Time)
 	}
 
 	return &RenderedNotification{Subject: subject, TextBody: b.String(), Payload: payload}

@@ -28,8 +28,10 @@ var (
 	Api            *model.Api
 
 	AlarmEventsReader     messaging.MessageReader
+	Notifier              *processor.PolicyNotifier
 	NotificationProcessor *processor.NotificationProcessor
 	RetentionSweeper      *processor.RetentionSweeper
+	EscalationScheduler   *processor.EscalationScheduler
 )
 
 func main() {
@@ -87,13 +89,10 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	AlarmEventsReader = aevents
 
-	// The policy-driven channel dispatcher (N.C): evaluate each tenant's notification
-	// policies and deliver matching alarms through the configured SMTP/webhook channels,
-	// maintaining the per-alarm NotificationState. It replaces the first-slice
-	// LogNotifier behind the same Notifier seam.
-	notifier := processor.NewPolicyNotifier(Api, Configuration.DeliveryAttempts, Configuration.DeliveryTimeout())
+	// The policy-driven channel dispatcher (N.C, built in afterMicroserviceInitialized so
+	// the escalation scheduler can share it) drives the consumer behind the Notifier seam.
 	NotificationProcessor = processor.NewNotificationProcessor(Microservice, AlarmEventsReader,
-		core.NewNoOpLifecycleCallbacks(), notifier)
+		core.NewNoOpLifecycleCallbacks(), Notifier)
 	return NotificationProcessor.Initialize(context.Background())
 }
 
@@ -114,6 +113,14 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	}
 	Api = model.NewApi(RdbManager)
 
+	// The policy-driven channel dispatcher (N.C): evaluate each tenant's notification
+	// policies and deliver matching alarms through the configured SMTP/webhook channels,
+	// maintaining the per-alarm NotificationState. It replaces the first-slice LogNotifier
+	// behind the Notifier seam and is shared by the consumer processor (event-driven
+	// dispatch) and the escalation scheduler (timed re-notification), so both deliver
+	// through one adapter registry and retry policy.
+	Notifier = processor.NewPolicyNotifier(Api, Configuration.DeliveryAttempts, Configuration.DeliveryTimeout())
+
 	// Retention sweep: prune cleared per-alarm state older than the retention window so
 	// the notification state stays bounded (ADR-017 N.C). A negative interval disables
 	// it (the table then grows unbounded — operator opt-out only).
@@ -122,6 +129,18 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			Configuration.StateRetention(), Configuration.RetentionSweepInterval(),
 			core.NewNoOpLifecycleCallbacks())
 		if err := RetentionSweeper.Initialize(ctx); err != nil {
+			return err
+		}
+	}
+
+	// Escalation scheduler (N.D): re-notify open alarms that stay unacknowledged and
+	// uncleared past their policy's escalation window, up to a bounded number of tiers. A
+	// negative interval disables escalation (alarms then page only on event transitions).
+	if Configuration.EscalationSweepSeconds >= 0 {
+		EscalationScheduler = processor.NewEscalationScheduler(Microservice, Api, Notifier,
+			Configuration.EscalationSweepInterval(), Configuration.DefaultMaxEscalations,
+			core.NewNoOpLifecycleCallbacks())
+		if err := EscalationScheduler.Initialize(ctx); err != nil {
 			return err
 		}
 	}
@@ -166,13 +185,23 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 	if RetentionSweeper != nil {
-		return RetentionSweeper.Start(ctx)
+		if err := RetentionSweeper.Start(ctx); err != nil {
+			return err
+		}
+	}
+	if EscalationScheduler != nil {
+		return EscalationScheduler.Start(ctx)
 	}
 	return nil
 }
 
 // beforeMicroserviceStopped stops components in reverse dependency order.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	if EscalationScheduler != nil {
+		if err := EscalationScheduler.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	if RetentionSweeper != nil {
 		if err := RetentionSweeper.Stop(ctx); err != nil {
 			return err
@@ -192,6 +221,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // beforeMicroserviceTerminated terminates components in reverse dependency order.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if EscalationScheduler != nil {
+		if err := EscalationScheduler.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	if RetentionSweeper != nil {
 		if err := RetentionSweeper.Terminate(ctx); err != nil {
 			return err

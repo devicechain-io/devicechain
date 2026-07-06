@@ -4,11 +4,13 @@
 package processor
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-notification-management/model"
 )
 
 func floatPtr(v float64) *float64 { return &v }
@@ -82,5 +84,41 @@ func TestRenderNotificationMinimal(t *testing.T) {
 	}
 	if !strings.Contains(r.Subject, "escalated") {
 		t.Fatalf("subject verb wrong: %q", r.Subject)
+	}
+}
+
+// The escalation rendering is built from the persisted state (no original event) and
+// carries the identity + progress a human needs to recognize the still-open alarm.
+func TestRenderEscalation(t *testing.T) {
+	first := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	last := time.Date(2026, 7, 6, 12, 5, 0, 0, time.UTC)
+	state := &model.NotificationState{
+		AlarmToken:      "alarm-9",
+		AlarmKey:        "temperature.high",
+		Severity:        "CRITICAL",
+		NotifyCount:     2,
+		FirstNotifiedAt: sql.NullTime{Time: first, Valid: true},
+		LastNotifiedAt:  sql.NullTime{Time: last, Valid: true},
+	}
+
+	r := renderEscalation(state, 3)
+
+	if !strings.Contains(r.Subject, "[CRITICAL]") || !strings.Contains(r.Subject, "temperature.high") ||
+		!strings.Contains(r.Subject, "escalation 3") {
+		t.Fatalf("subject missing pieces: %q", r.Subject)
+	}
+	for _, want := range []string{"CRITICAL", "temperature.high", "2 notification"} {
+		if !strings.Contains(r.TextBody, want) {
+			t.Fatalf("body missing %q:\n%s", want, r.TextBody)
+		}
+	}
+	if r.Payload["text"] != r.Subject {
+		t.Fatalf("payload text != subject")
+	}
+	if r.Payload["eventType"] != "RENOTIFIED" || r.Payload["escalation"] != 3 {
+		t.Fatalf("payload wrong: %+v", r.Payload)
+	}
+	if r.Payload["lastNotifiedTime"] != "2026-07-06T12:05:00Z" {
+		t.Fatalf("payload lastNotifiedTime = %v", r.Payload["lastNotifiedTime"])
 	}
 }

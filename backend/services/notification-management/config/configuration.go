@@ -41,6 +41,16 @@ type NotificationManagementConfiguration struct {
 	// RetentionSweepSeconds is how often the retention sweep runs. Unset (0) defaults
 	// to hourly; a negative value disables the sweep.
 	RetentionSweepSeconds int
+	// EscalationSweepSeconds is how often the escalation scheduler (N.D) re-checks open
+	// alarms for a due re-notification — the granularity at which per-policy escalation
+	// windows are honored. Unset (0) defaults to 60s; a negative value disables
+	// escalation entirely (an alarm then pages only on its event transitions).
+	EscalationSweepSeconds int
+	// DefaultMaxEscalations bounds how many times the scheduler re-pages a single alarm
+	// when its matching policy does not set its own MaxEscalations. Escalation is always
+	// capped so a lost terminal event (a CLEARED/ACK dropped past the consumer's
+	// redelivery cap) can only re-page a bounded number of times. Unset (0) defaults to 5.
+	DefaultMaxEscalations int
 }
 
 // NewNotificationManagementConfiguration returns a configuration with defaults
@@ -58,10 +68,12 @@ func NewNotificationManagementConfiguration() *NotificationManagementConfigurati
 
 // Default dispatch tunables, applied when a field is left at its zero value.
 const (
-	defaultDeliverySeconds       = 10
-	defaultDeliveryAttempts      = 3
-	defaultStateRetentionSeconds = 7 * 24 * 60 * 60 // 7 days
-	defaultRetentionSweepSeconds = 60 * 60          // hourly
+	defaultDeliverySeconds        = 10
+	defaultDeliveryAttempts       = 3
+	defaultStateRetentionSeconds  = 7 * 24 * 60 * 60 // 7 days
+	defaultRetentionSweepSeconds  = 60 * 60          // hourly
+	defaultEscalationSweepSeconds = 60               // once a minute
+	defaultMaxEscalations         = 5
 )
 
 // ApplyDefaults is the ADR-022 decision-1 defaulting hook. It defaults the dispatch
@@ -80,6 +92,12 @@ func (c *NotificationManagementConfiguration) ApplyDefaults() {
 	if c.RetentionSweepSeconds == 0 {
 		c.RetentionSweepSeconds = defaultRetentionSweepSeconds
 	}
+	if c.EscalationSweepSeconds == 0 {
+		c.EscalationSweepSeconds = defaultEscalationSweepSeconds
+	}
+	if c.DefaultMaxEscalations == 0 {
+		c.DefaultMaxEscalations = defaultMaxEscalations
+	}
 }
 
 // Validate is the ADR-022 decision-1 validation hook. It fails closed on a tunable
@@ -94,6 +112,9 @@ func (c *NotificationManagementConfiguration) Validate() error {
 	}
 	if c.StateRetentionSeconds < 0 {
 		return fmt.Errorf("StateRetentionSeconds must not be negative, got %d", c.StateRetentionSeconds)
+	}
+	if c.DefaultMaxEscalations < 1 {
+		return fmt.Errorf("DefaultMaxEscalations must be at least 1, got %d", c.DefaultMaxEscalations)
 	}
 	return nil
 }
@@ -111,4 +132,9 @@ func (c *NotificationManagementConfiguration) StateRetention() time.Duration {
 // RetentionSweepInterval returns the retention-sweep tick period as a duration.
 func (c *NotificationManagementConfiguration) RetentionSweepInterval() time.Duration {
 	return time.Duration(c.RetentionSweepSeconds) * time.Second
+}
+
+// EscalationSweepInterval returns the escalation-scheduler tick period as a duration.
+func (c *NotificationManagementConfiguration) EscalationSweepInterval() time.Duration {
+	return time.Duration(c.EscalationSweepSeconds) * time.Second
 }

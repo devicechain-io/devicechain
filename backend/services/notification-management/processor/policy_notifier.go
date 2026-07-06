@@ -61,10 +61,10 @@ func NewPolicyNotifier(api *model.Api, attempts int, timeout time.Duration) *Pol
 func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
 	switch event.EventType {
 	case dmmodel.AlarmEventAcknowledged:
-		// Idempotent state update; a DB error is safe to retry (no side effects).
-		return n.api.MarkAcknowledged(ctx, event.AlarmToken, event.OccurredTime)
+		// Idempotent tombstone upsert; a DB error is safe to retry (no side effects).
+		return n.api.MarkAcknowledged(ctx, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime)
 	case dmmodel.AlarmEventCleared:
-		return n.api.MarkCleared(ctx, event.AlarmToken, event.OccurredTime)
+		return n.api.MarkCleared(ctx, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime)
 	case dmmodel.AlarmEventDeescalated:
 		return n.api.TouchSeverity(ctx, event.AlarmToken, event.Severity)
 	case dmmodel.AlarmEventRaised, dmmodel.AlarmEventEscalated:
@@ -162,31 +162,7 @@ func (n *PolicyNotifier) plan(event *dmmodel.AlarmStateChangeEvent,
 				Msg("Skipping policy: within throttle window")
 			continue
 		}
-		for i := range p.Rules {
-			rule := p.Rules[i]
-			if !severityMatches(rule.Severity, event.Severity) {
-				continue
-			}
-			if rule.Channel == nil {
-				log.Warn().Str("policy", p.Token).Msg("Rule references a missing channel; skipping")
-				continue
-			}
-			if !rule.Channel.Enabled {
-				continue
-			}
-			if _, ok := n.adapters[rule.Channel.ChannelType]; !ok {
-				log.Warn().Str("channel", rule.Channel.Token).Str("type", rule.Channel.ChannelType).
-					Msg("No adapter for channel type; skipping")
-				continue
-			}
-			recipients := parseRecipients(rule.Recipients)
-			key := rule.Channel.Token + "|" + strings.Join(recipients, ",")
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			out = append(out, delivery{channel: rule.Channel, recipients: recipients})
-		}
+		out = n.appendRuleDeliveries(p.Token, event.Severity, p.Rules, seen, out)
 	}
 	return out
 }
@@ -207,6 +183,150 @@ func (n *PolicyNotifier) throttled(event *dmmodel.AlarmStateChangeEvent,
 	}
 	gap := event.OccurredTime.Sub(state.LastNotifiedAt.Time)
 	return gap < time.Duration(p.ThrottleSeconds.Int64)*time.Second
+}
+
+// Escalate re-notifies one open alarm on the escalation scheduler's tick (ADR-017 N.D).
+// It re-evaluates the tenant's enabled policies against the alarm's persisted state and,
+// when any escalation-enabled policy's window has elapsed and its cap is not yet reached,
+// atomically CLAIMS the next tier and then delivers through the due policies' channels.
+// defaultMax is the service-wide escalation cap applied to a policy that does not set its
+// own MaxEscalations.
+//
+// Claim-before-send (ClaimEscalation) makes the timer loop safe to run in every replica
+// and across overlapping deploy pods: exactly one claimant delivers a given tier. A lost
+// claim (another pod won, or the alarm resolved between the read and the claim) is a
+// silent no-op. Because the tier is advanced by the claim, escalation stays bounded even
+// if the subsequent send fails — the accepted tradeoff is a rare missed page if the pod
+// dies between claim and send. An error is returned only for a DB error on the claim or
+// when the claim was won but every delivery failed, so the scheduler logs and retries the
+// alarm on a later tick.
+//
+// Escalation uses ONE shared clock and tier per alarm (state.LastNotifiedAt /
+// EscalationLevel), not per policy: when several escalation-enabled policies match one
+// alarm, the shortest window drives re-notification and every policy's cap is measured
+// against the shared tier. See NotificationPolicy.EscalateAfterSeconds for the semantics
+// and the deferred per-policy-clock enhancement.
+func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.NotificationState,
+	policies []*model.NotificationPolicy, now time.Time, defaultMax int) error {
+	deliveries := n.planEscalation(state, policies, now, defaultMax)
+	if len(deliveries) == 0 {
+		return nil
+	}
+	claimed, err := n.api.ClaimEscalation(ctx, state.AlarmToken, state.EscalationLevel, now)
+	if err != nil {
+		return fmt.Errorf("claiming escalation tier for alarm %q: %w", state.AlarmToken, err)
+	}
+	if !claimed {
+		// Another replica escalated this tier first, or the alarm resolved between the
+		// scheduler's read and here. Either way we must not deliver.
+		return nil
+	}
+	rendered := renderEscalation(state, state.EscalationLevel+1)
+	delivered := 0
+	for _, d := range deliveries {
+		if n.deliverWithRetry(ctx, d, rendered) {
+			delivered++
+		}
+	}
+	if delivered == 0 {
+		return fmt.Errorf("all %d escalation deliveries failed for alarm %q after claiming the tier",
+			len(deliveries), state.AlarmToken)
+	}
+	return nil
+}
+
+// planEscalation resolves the enabled policies to the deduplicated channel deliveries
+// for re-notifying an open alarm. A policy contributes only when escalation is enabled
+// (EscalateAfterSeconds > 0), its window has elapsed since the alarm's last
+// notification, and the alarm's current EscalationLevel is below the policy's effective
+// cap. Matching, channel filtering, and (channel, recipients) dedup reuse the same
+// per-rule logic as the event-driven plan. Device-type-scoped policies are skipped
+// (scoping deferred, ADR-044), as in dispatch.
+func (n *PolicyNotifier) planEscalation(state *model.NotificationState,
+	policies []*model.NotificationPolicy, now time.Time, defaultMax int) []delivery {
+	seen := make(map[string]bool)
+	out := make([]delivery, 0)
+	for _, p := range policies {
+		if p.DeviceTypeToken.Valid && p.DeviceTypeToken.String != "" {
+			continue
+		}
+		if !escalationDue(state, p, now, defaultMax) {
+			continue
+		}
+		out = n.appendRuleDeliveries(p.Token, state.Severity, p.Rules, seen, out)
+	}
+	return out
+}
+
+// appendRuleDeliveries appends the deduplicated (channel, recipients) deliveries for the
+// rules of one policy that match severity, skipping — and warning about — a rule whose
+// channel is missing, disabled, or has no adapter. seen dedups across the whole plan so
+// two policies routing to the same place send once. Shared by the event-driven plan and
+// the escalation plan so a misconfigured channel is logged on both paths.
+func (n *PolicyNotifier) appendRuleDeliveries(policyToken, severity string,
+	rules []model.NotificationRule, seen map[string]bool, out []delivery) []delivery {
+	for i := range rules {
+		rule := rules[i]
+		if !severityMatches(rule.Severity, severity) {
+			continue
+		}
+		if rule.Channel == nil {
+			log.Warn().Str("policy", policyToken).Msg("Rule references a missing channel; skipping")
+			continue
+		}
+		if !rule.Channel.Enabled {
+			continue
+		}
+		if _, ok := n.adapters[rule.Channel.ChannelType]; !ok {
+			log.Warn().Str("channel", rule.Channel.Token).Str("type", rule.Channel.ChannelType).
+				Msg("No adapter for channel type; skipping")
+			continue
+		}
+		recipients := parseRecipients(rule.Recipients)
+		key := rule.Channel.Token + "|" + strings.Join(recipients, ",")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, delivery{channel: rule.Channel, recipients: recipients})
+	}
+	return out
+}
+
+// escalationDue reports whether policy p wants to re-notify the open alarm now: it has
+// escalation enabled, its per-alarm window has elapsed since the last notification, and
+// the alarm has not yet reached the policy's effective escalation cap.
+//
+// The window is measured wall-clock now minus LastNotifiedAt. LastNotifiedAt is first
+// stamped by dispatch from the alarm event's OccurredTime, so an alarm whose RAISED is
+// processed from a backlog (a restart replaying downtime) can be seen as already past its
+// window and draw one spurious re-notification on the next tick — it self-corrects, since
+// ClaimEscalation re-stamps the window with wall-clock time. Fully separating "when we
+// notified" (wall clock) from the event's occurred time is a deferred refinement.
+func escalationDue(state *model.NotificationState, p *model.NotificationPolicy,
+	now time.Time, defaultMax int) bool {
+	if !p.EscalateAfterSeconds.Valid || p.EscalateAfterSeconds.Int64 <= 0 {
+		return false
+	}
+	if !state.LastNotifiedAt.Valid {
+		return false
+	}
+	if state.EscalationLevel >= effectiveMaxEscalations(p, defaultMax) {
+		return false
+	}
+	window := time.Duration(p.EscalateAfterSeconds.Int64) * time.Second
+	return now.Sub(state.LastNotifiedAt.Time) >= window
+}
+
+// effectiveMaxEscalations is the policy's own MaxEscalations when set (> 0), else the
+// service-wide default cap. Escalation is always bounded so a lost terminal event
+// (a CLEARED/ACK dropped after the consumer's redelivery cap) can re-page at most this
+// many times, not forever.
+func effectiveMaxEscalations(p *model.NotificationPolicy, defaultMax int) int {
+	if p.MaxEscalations.Valid && p.MaxEscalations.Int64 > 0 {
+		return int(p.MaxEscalations.Int64)
+	}
+	return defaultMax
 }
 
 // deliverWithRetry sends one delivery, retrying up to n.attempts with a short linear
