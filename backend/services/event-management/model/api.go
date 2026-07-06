@@ -284,8 +284,14 @@ func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*
 func (api *Api) DeleteAnchorsForEntity(ctx context.Context, entityType string, entityId uint) (int64, error) {
 	db := api.RDB.DB(ctx).Model(&EventAnchor{})
 	if entityType == string(entity.TypeDevice) {
-		db = db.Where("device_id = ?", entityId)
+		// A device is always the anchor SOURCE (device_id), but it can ALSO be an
+		// anchor target: a tracked device→device relationship (e.g. gateway→sensor)
+		// records rows with (anchor_type="device", anchor_id=other). Clean both, or a
+		// deleted device leaves dangling target rows on its trackers' events.
+		db = db.Where("device_id = ? OR (anchor_type = ? AND anchor_id = ?)",
+			entityId, string(entity.TypeDevice), entityId)
 	} else {
+		// Every other entity type is only ever an anchor target (never a source).
 		db = db.Where("anchor_type = ? AND anchor_id = ?", entityType, entityId)
 	}
 	result := db.Delete(&EventAnchor{})

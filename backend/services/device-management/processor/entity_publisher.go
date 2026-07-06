@@ -21,8 +21,9 @@ import (
 // Publishing is best-effort: the tenant-scoped writer derives the subject from the
 // tenant in the caller's context (the delete runs under the request's tenant), so no
 // tenant plumbing is needed here. A marshal or publish failure is logged and
-// swallowed — the delete is the source of truth and the reconciliation sweep catches
-// a missed event, so a dropped publish must never fail or retry the delete.
+// swallowed — the delete is the source of truth and the planned reconciliation sweep
+// (ADR-044 decision 3) will catch a missed event, so a dropped publish must never
+// fail or retry the delete.
 type EntityDeletedWriter struct {
 	writer messaging.MessageWriter
 }
