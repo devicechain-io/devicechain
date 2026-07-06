@@ -42,6 +42,16 @@ const EVENT_AREA: Area = 'event-management';
 const DEVICE_AREA: Area = 'device-management';
 const COMMAND_AREA: Area = 'command-delivery';
 
+// randomToken mints a command dispatch token (its idempotency key + cancel handle).
+// crypto.randomUUID is only defined in a secure context, so fall back to a random-hex
+// token for a plain-HTTP on-prem host — matching the guarded pattern generateWidgetId
+// uses rather than throwing at send time.
+function randomToken(): string {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `cmd-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
+}
+
 // Alarm channel cadence. The live stream is a best-effort trigger, so the poll is
 // the correctness backstop (an alarm cleared while the socket was down still
 // converges within one poll); the debounce coalesces a burst of events into one
@@ -151,9 +161,10 @@ export interface CommandDispatch {
 // invariant holds. `can` gates the UI: a widget hides an action the viewer isn't
 // authorized for (the server enforces it regardless).
 //
-// Growing this interface (e.g. the command widget's sendCommand) is a breaking change
-// for any external host implementing it. Pre-GA that's acceptable per repo convention;
-// once external implementers exist, add new capabilities as OPTIONAL methods.
+// Growing this interface is a breaking change for any external host implementing it.
+// The alarm actions (acknowledgeAlarm/clearAlarm) are the required baseline; capabilities
+// added later — like sendCommand below — are declared OPTIONAL so a host predating them
+// still satisfies the type, and consumers feature-detect (typeof actions?.sendCommand).
 export interface WidgetActions {
   // Acknowledge / clear a raised alarm by token (requires alarm:write). Resolves when
   // the mutation succeeds; the runtime reconciles the affected alarm widgets so the
@@ -530,7 +541,7 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // so the new command shows at once. The mutation reaches command-delivery (requires
   // command:write, enforced server-side regardless of can()).
   async sendCommand(deviceToken: string, name: string, payload?: string): Promise<CommandDispatch> {
-    const token = crypto.randomUUID();
+    const token = randomToken();
     await gql(COMMAND_AREA, CREATE_COMMAND, {
       request: { token, deviceToken, name, payload: payload ?? null },
     });

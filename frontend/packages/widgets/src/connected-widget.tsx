@@ -105,13 +105,10 @@ function ControlConnectedWidget({
 }) {
   const data = useCommandStream(hub, commandSubscription(widget));
 
-  // Like the alarm channel, only blank to the error pane when the initial load failed
-  // (nothing to show); a transient poll error after a good snapshot keeps the last-good
-  // history on screen — the channel re-polls and self-heals.
-  if (data.error && data.commands.length === 0 && data.total === 0) {
-    return <WidgetErrorFrame widget={widget} error={data.error} />;
-  }
-
+  // Unlike the read-only widgets, a command-button is NEVER replaced by the error pane:
+  // its primary control is the send form (a separate authority from reading history), so
+  // a history poll error must not tear the form down. The widget surfaces the error
+  // inline instead.
   const Component = CONTROL_WIDGET_REGISTRY[widget.type as keyof typeof CONTROL_WIDGET_REGISTRY];
   if (!Component) return null;
   return <Component widget={widget} data={data} actions={actions} />;

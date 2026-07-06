@@ -297,6 +297,13 @@ function TypeOptions({
       </>
     );
   }
+  if (widget.type === 'command-button') {
+    return (
+      <FormField label="Max rows" description="Recent commands shown in the history before scrolling.">
+        <NumberInput value={optNumber(widget, 'maxRows')} onChange={(v) => setOption('maxRows', v)} />
+      </FormField>
+    );
+  }
   return null; // chart/table/label/image have no extra options beyond above
 }
 
@@ -461,6 +468,13 @@ function CommandFields({
     label: def.name ? `${def.name} (${def.commandKey})` : def.commandKey,
   }));
 
+  // A command baked from a previous target device may not exist on the current one (the
+  // author repointed the device without re-picking). Flag it — non-destructively, since
+  // the datasource and options update through separate handlers — so the author re-picks
+  // rather than silently issuing a command the new device's profile doesn't define.
+  const staleSelection =
+    commandName !== '' && !loading && !error && !definitions.some((d) => d.commandKey === commandName);
+
   return (
     <div className="space-y-3 rounded-md border border-border p-3">
       <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Command</div>
@@ -470,19 +484,28 @@ function CommandFields({
         <p className="text-xs text-muted-foreground">Loading commands…</p>
       ) : error ? (
         <p className="text-xs text-muted-foreground">Couldn’t load commands: {error}</p>
-      ) : definitions.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          This device’s profile defines no commands. Add a command definition to its device profile.
-        </p>
       ) : (
-        <FormField label="Command" description="The command this button issues.">
-          <Combobox
-            options={options}
-            value={commandName}
-            onChange={(key) => onSelect(definitions.find((d) => d.commandKey === key))}
-            placeholder="Select a command"
-          />
-        </FormField>
+        <>
+          {staleSelection && (
+            <p className="text-xs text-destructive">
+              “{commandName}” isn’t defined on this device. Pick a command below.
+            </p>
+          )}
+          {definitions.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              This device’s profile defines no commands. Add a command definition to its device profile.
+            </p>
+          ) : (
+            <FormField label="Command" description="The command this button issues.">
+              <Combobox
+                options={options}
+                value={commandName}
+                onChange={(key) => onSelect(definitions.find((d) => d.commandKey === key))}
+                placeholder="Select a command"
+              />
+            </FormField>
+          )}
+        </>
       )}
     </div>
   );

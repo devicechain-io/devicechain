@@ -154,7 +154,7 @@ describe('CommandButton', () => {
       />,
     );
     expect((screen.getByRole('button', { name: /send/i }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText(/Bind a device/i)).toBeTruthy();
+    expect(screen.getByText(/No device is selected/i)).toBeTruthy();
   });
 
   it('lists recent commands with their status', () => {
@@ -183,5 +183,48 @@ describe('CommandButton', () => {
       />,
     );
     expect(screen.getByText(/structured parameter/i)).toBeTruthy();
+  });
+
+  it('blocks send when a required structured parameter can’t be supplied', () => {
+    const send = makeSend();
+    const schema = JSON.stringify([{ name: 'config', kind: 'OBJECT', required: true }]);
+    render(
+      <CommandButton
+        widget={widget({ commandName: 'configure', parameterSchema: schema })}
+        data={state()}
+        actions={writableActions(send)}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.getByText(/required structured parameter/i)).toBeTruthy();
+  });
+
+  it('renders a BOOLEAN default of "True" as a checked box and sends true', () => {
+    const send = makeSend();
+    const schema = JSON.stringify([{ name: 'enabled', dataType: 'BOOLEAN', default: 'True' }]);
+    render(
+      <CommandButton
+        widget={widget({ commandName: 'toggle', parameterSchema: schema })}
+        data={state()}
+        actions={writableActions(send)}
+      />,
+    );
+    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+    expect(JSON.parse(send.mock.calls[0][2]!)).toEqual({ enabled: true });
+  });
+
+  it('shows an inline history error instead of replacing the send form', () => {
+    render(
+      <CommandButton
+        widget={widget({ commandName: 'reboot' })}
+        data={state({ error: new Error('nope'), commands: [], total: 0 })}
+        actions={writableActions()}
+      />,
+    );
+    // Form stays (Send present) and the error is inline, not a full-widget error frame.
+    expect(screen.getByRole('button', { name: /send/i })).toBeTruthy();
+    expect(screen.getByText(/Couldn’t load command history/i)).toBeTruthy();
   });
 });

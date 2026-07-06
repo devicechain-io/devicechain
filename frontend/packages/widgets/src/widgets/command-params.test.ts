@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { buildPayload, defaultValues, isScalar, parseParameterSchema, validateParams } from './command-params';
+import { buildPayload, defaultValues, isScalar, parseBool, parseParameterSchema, validateParams } from './command-params';
 
 describe('parseParameterSchema', () => {
   it('parses a JSON array of descriptors', () => {
@@ -26,6 +26,32 @@ describe('parseParameterSchema', () => {
     expect(params).toHaveLength(1);
     expect(params[0].name).toBe('ok');
   });
+
+  it('sanitizes wrong-typed fields so a hand-edited schema can never crash the form', () => {
+    // enum as a string (has .length but not an array), default as a number, bounds NaN,
+    // unknown dataType — all coerced/dropped rather than trusted.
+    const [p] = parseParameterSchema(
+      '[{"name":"x","enum":"on","default":5,"minValue":"lo","dataType":"WEIRD","kind":"NOPE"}]',
+    );
+    expect(p.enum).toBeUndefined();
+    expect(p.default).toBeUndefined();
+    expect(p.minValue).toBeUndefined();
+    expect(p.dataType).toBeUndefined();
+    expect(p.kind).toBeUndefined(); // unknown kind → treated as SCALAR (isScalar true)
+    expect(isScalar(p)).toBe(true);
+  });
+
+  it('keeps only string members of a valid enum array', () => {
+    const [p] = parseParameterSchema('[{"name":"mode","enum":["a",1,"b",null]}]');
+    expect(p.enum).toEqual(['a', 'b']);
+  });
+});
+
+describe('parseBool', () => {
+  it('accepts the strconv.ParseBool truthy spellings', () => {
+    for (const t of ['true', 'True', 'TRUE', '1', 't', 'yes', 'on']) expect(parseBool(t)).toBe(true);
+    for (const f of ['false', 'False', '0', 'f', 'no', 'off', '']) expect(parseBool(f)).toBe(false);
+  });
 });
 
 describe('isScalar', () => {
@@ -45,6 +71,11 @@ describe('defaultValues', () => {
     ]);
     expect(values).toEqual({ a: '5' });
   });
+
+  it('always seeds a BOOLEAN to a concrete true/false, normalizing the default spelling', () => {
+    expect(defaultValues([{ name: 'on', dataType: 'BOOLEAN', default: 'True' }])).toEqual({ on: 'true' });
+    expect(defaultValues([{ name: 'on', dataType: 'BOOLEAN' }])).toEqual({ on: 'false' }); // no default → false
+  });
 });
 
 describe('validateParams', () => {
@@ -55,6 +86,17 @@ describe('validateParams', () => {
 
   it('allows an empty optional value', () => {
     expect(validateParams([{ name: 'a' }], {})).toEqual({});
+  });
+
+  it('never flags a BOOLEAN as required-missing (a checkbox always has a value)', () => {
+    expect(validateParams([{ name: 'on', dataType: 'BOOLEAN', required: true }], {})).toEqual({});
+  });
+
+  it('blocks a required OBJECT parameter (unsatisfiable in the typed form)', () => {
+    const errors = validateParams([{ name: 'config', kind: 'OBJECT', required: true }], {});
+    expect(errors.config).toContain('not supported');
+    // a non-required OBJECT is allowed (silently omitted)
+    expect(validateParams([{ name: 'config', kind: 'OBJECT' }], {})).toEqual({});
   });
 
   it('rejects a non-numeric INT/DOUBLE and enforces integer-ness', () => {
@@ -101,8 +143,10 @@ describe('buildPayload', () => {
     expect(JSON.parse(payload!)).toEqual({ a: 'x' });
   });
 
-  it('treats BOOLEAN as false unless the value is exactly "true"', () => {
-    const payload = buildPayload([{ name: 'on', dataType: 'BOOLEAN' }], { on: 'false' });
-    expect(JSON.parse(payload!)).toEqual({ on: false });
+  it('always includes a BOOLEAN and interprets truthy spellings', () => {
+    expect(JSON.parse(buildPayload([{ name: 'on', dataType: 'BOOLEAN' }], { on: 'false' })!)).toEqual({ on: false });
+    expect(JSON.parse(buildPayload([{ name: 'on', dataType: 'BOOLEAN' }], { on: 'True' })!)).toEqual({ on: true });
+    // even with an empty value map, a boolean sends its (false) state rather than being omitted
+    expect(JSON.parse(buildPayload([{ name: 'on', dataType: 'BOOLEAN' }], {})!)).toEqual({ on: false });
   });
 });

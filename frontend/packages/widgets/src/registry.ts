@@ -41,10 +41,15 @@ export const WIDGET_CHANNEL = {
 } as const satisfies Record<WidgetType, WidgetChannel>;
 
 // The widget types on each channel, derived from WIDGET_CHANNEL so the registries below
-// stay exhaustive without a hand-maintained parallel union.
-type AlarmWidgetType = { [K in WidgetType]: (typeof WIDGET_CHANNEL)[K] extends 'alarm' ? K : never }[WidgetType];
-type ControlWidgetType = { [K in WidgetType]: (typeof WIDGET_CHANNEL)[K] extends 'control' ? K : never }[WidgetType];
-type MeasurementWidgetType = Exclude<WidgetType, AlarmWidgetType | ControlWidgetType>;
+// stay exhaustive without a hand-maintained parallel union. Each channel derives its
+// members the same way (a self-describing `extends '<channel>'` filter), so adding a
+// fourth channel never silently folds its types into another registry.
+type WidgetTypeOn<C extends WidgetChannel> = {
+  [K in WidgetType]: (typeof WIDGET_CHANNEL)[K] extends C ? K : never;
+}[WidgetType];
+type MeasurementWidgetType = WidgetTypeOn<'measurement'>;
+type AlarmWidgetType = WidgetTypeOn<'alarm'>;
+type ControlWidgetType = WidgetTypeOn<'control'>;
 
 export const WIDGET_REGISTRY: Record<MeasurementWidgetType, WidgetComponent> = {
   'timeseries-chart': TimeSeriesChart,

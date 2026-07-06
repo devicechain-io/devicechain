@@ -9,9 +9,15 @@
 // SUCCESSFUL / FAILED …) — the two-way visibility ThingsBoard's fire-and-forget RPC
 // lacks. Bound through the hub's control channel, so it renders identically from live
 // data or the synthetic preview source.
+//
+// The baked schema is a SNAPSHOT taken when the author picked the command: a later edit
+// to the profile's command definition (a changed schema, or a deleted command) leaves
+// this widget's form stale until the author re-picks it. That's acceptable — dashboards
+// are opaque snapshots — and a since-removed command fails visibly at the delivery
+// boundary (the server validates device existence and JSON); it isn't silently wrong.
 
 import type { CommandParameter } from '@devicechain/dashboards';
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import type { CommandStreamState } from '../hooks';
 import { formatDateTime } from '../format';
@@ -23,6 +29,7 @@ import {
   buildPayload,
   defaultValues,
   isScalar,
+  parseBool,
   parseParameterSchema,
   validateParams,
 } from './command-params';
@@ -42,9 +49,14 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
   const [pending, setPending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sentToken, setSentToken] = useState<string | null>(null);
+  // Bumped whenever the configured command changes; an in-flight send captures the
+  // current value and drops its result if it settles after a repoint (so command A's
+  // dispatch token/error can't land under a freshly-configured command B).
+  const sendGen = useRef(0);
 
   // Reset the form to the schema's defaults whenever the configured command changes.
   useEffect(() => {
+    sendGen.current += 1;
     setValues(defaultValues(params));
     setErrors({});
     setSendError(null);
@@ -79,6 +91,7 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
       return;
     }
     const payload = buildPayload(params, values);
+    const gen = sendGen.current; // capture: drop the result if the command is repointed mid-flight
     setPending(true);
     setSendError(null);
     // Call synchronously so a dispatch is observable, but guard a synchronous throw so a
@@ -92,9 +105,15 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
       return;
     }
     promise
-      .then((dispatch) => setSentToken(dispatch.token))
-      .catch((err) => setSendError(errText(err)))
-      .finally(() => setPending(false));
+      .then((dispatch) => {
+        if (gen === sendGen.current) setSentToken(dispatch.token);
+      })
+      .catch((err) => {
+        if (gen === sendGen.current) setSendError(errText(err));
+      })
+      .finally(() => {
+        if (gen === sendGen.current) setPending(false);
+      });
   };
 
   return (
@@ -110,6 +129,7 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
                 isScalar(param) ? (
                   <ParamField
                     key={param.name}
+                    widgetId={widget.id}
                     param={param}
                     value={values[param.name] ?? ''}
                     error={errors[param.name]}
@@ -117,8 +137,10 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
                     onChange={(v) => setField(param.name, v)}
                   />
                 ) : (
-                  <div key={param.name} style={hint}>
-                    {param.name}: structured parameter — not editable here.
+                  // A structured (OBJECT) parameter isn't form-editable. A REQUIRED one
+                  // blocks sending (validateParams flags it); flag that in the note.
+                  <div key={param.name} style={{ ...hint, color: param.required ? commandStatusColor('FAILED') : css('muted-foreground') }}>
+                    {param.name}: {param.required ? 'required ' : ''}structured parameter — not supported here.
                   </div>
                 ),
               )}
@@ -138,7 +160,7 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
               ) : !hasSeam ? (
                 <div style={hint}>Commands aren’t available in this view.</div>
               ) : !deviceToken ? (
-                <div style={hint}>Bind a device to issue this command.</div>
+                <div style={hint}>No device is selected for this command.</div>
               ) : null}
               {sendError ? (
                 <div role="alert" style={{ ...hint, color: commandStatusColor('FAILED') }}>
@@ -148,7 +170,7 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
             </div>
 
             {/* Recent-command history with live delivery status. */}
-            <CommandHistory commands={data.commands} sentToken={sentToken} loading={data.loading} />
+            <CommandHistory commands={data.commands} sentToken={sentToken} loading={data.loading} error={data.error} />
           </>
         )}
       </div>
@@ -159,19 +181,23 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
 // ── Parameter field ──────────────────────────────────────────────────────
 
 function ParamField({
+  widgetId,
   param,
   value,
   error,
   disabled,
   onChange,
 }: {
+  widgetId: string;
   param: CommandParameter;
   value: string;
   error?: string;
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
-  const labelId = `cmd-${param.name}`;
+  // Scope the input id to the widget so two command-buttons sharing a parameter name
+  // don't produce duplicate DOM ids (which would misdirect a label click to the first).
+  const labelId = `cmd-${widgetId}-${param.name}`;
   const unit = param.unit ? ` (${param.unit})` : '';
   return (
     <label htmlFor={labelId} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -221,7 +247,7 @@ function ParamInput({
         id={id}
         type="checkbox"
         style={{ width: 16, height: 16 }}
-        checked={value === 'true'}
+        checked={parseBool(value)}
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked ? 'true' : 'false')}
       />
@@ -250,11 +276,17 @@ function CommandHistory({
   commands,
   sentToken,
   loading,
+  error,
 }: {
   commands: CommandStreamState['commands'];
   sentToken: string | null;
   loading: boolean;
+  error: unknown;
 }) {
+  // An error is shown inline here (not by replacing the whole widget) so a transient poll
+  // blip never tears down the still-usable send form. Last-good rows stay on screen when
+  // present; only an empty-and-errored history shows the notice.
+  const empty = commands.length === 0;
   return (
     <div
       style={{
@@ -265,8 +297,10 @@ function CommandHistory({
         paddingTop: 6,
       }}
     >
-      {commands.length === 0 ? (
-        <div style={{ ...hint, textAlign: 'center' }}>{loading ? 'Loading…' : 'No commands issued yet.'}</div>
+      {empty ? (
+        <div style={{ ...hint, textAlign: 'center', color: error ? commandStatusColor('FAILED') : css('muted-foreground') }}>
+          {error ? 'Couldn’t load command history.' : loading ? 'Loading…' : 'No commands issued yet.'}
+        </div>
       ) : (
         <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
           {commands.map((command) => (
