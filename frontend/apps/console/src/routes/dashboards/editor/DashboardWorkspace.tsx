@@ -159,9 +159,9 @@ export function DashboardWorkspace({
   // The hub carries the viewer's authorities so action widgets (alarm ack/clear) can
   // gate their controls; the server enforces alarm:write regardless.
   const authorities = claims?.authorities;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const liveHub = useMemo(
     () => new DashboardHub({ resolver, bindings: hubBindings, authorities }),
+    // resolver/bindings read via hubKey, authorities via its stringified value.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [resolver, hubKey, JSON.stringify(authorities ?? [])],
   );

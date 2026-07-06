@@ -158,29 +158,43 @@ const actionButton: CSSProperties = {
   cursor: 'pointer',
 };
 
-// AlarmRowActions owns the pending/error state for one row's Acknowledge / Clear. A
-// cleared alarm is terminal (nothing to do); an acknowledged one still shows Clear.
-// After a successful mutation the hub reconciles the table, so the row updates itself.
+// AlarmRowActions owns the pending/error state for one row's Acknowledge / Clear. Only
+// an ACTIVE alarm is actionable (a cleared — or any future non-active — state shows
+// "—"); an acknowledged one still shows Clear. After a successful mutation the hub
+// reconciles the table, so the row updates itself.
 function AlarmRowActions({ alarm, actions }: { alarm: AlarmRow; actions: WidgetActions }) {
   const [pending, setPending] = useState<'ack' | 'clear' | null>(null);
   const [failed, setFailed] = useState(false);
 
-  if (alarm.state === 'CLEARED') {
+  if (alarm.state !== 'ACTIVE') {
     return <span style={{ color: css('muted-foreground') }}>—</span>;
   }
 
   const run = (kind: 'ack' | 'clear', op: () => Promise<void>) => {
     setPending(kind);
     setFailed(false);
-    op()
-      .catch(() => setFailed(true))
-      .finally(() => setPending(null));
+    // Call op() synchronously (so an immediate dispatch is observable) but guard a
+    // synchronous throw too, so a misbehaving seam can't leave the row stuck-disabled.
+    let promise: Promise<void>;
+    try {
+      promise = op();
+    } catch {
+      setFailed(true);
+      setPending(null);
+      return;
+    }
+    promise.catch(() => setFailed(true)).finally(() => setPending(null));
   };
 
   return (
     <span style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
       {failed ? (
-        <span title="Action failed — retry" style={{ color: severityColor('CRITICAL'), fontSize: 12 }}>
+        <span
+          role="img"
+          aria-label="Action failed — retry"
+          title="Action failed — retry"
+          style={{ color: severityColor('CRITICAL'), fontSize: 12 }}
+        >
           ⚠
         </span>
       ) : null}
@@ -189,6 +203,8 @@ function AlarmRowActions({ alarm, actions }: { alarm: AlarmRow; actions: WidgetA
           type="button"
           style={{ ...actionButton, opacity: pending ? 0.6 : 1 }}
           disabled={pending !== null}
+          aria-busy={pending === 'ack'}
+          aria-label={`Acknowledge alarm ${alarm.alarmKey}`}
           onClick={() => run('ack', () => actions.acknowledgeAlarm(alarm.token))}
         >
           {pending === 'ack' ? '…' : 'Ack'}
@@ -198,6 +214,8 @@ function AlarmRowActions({ alarm, actions }: { alarm: AlarmRow; actions: WidgetA
         type="button"
         style={{ ...actionButton, opacity: pending ? 0.6 : 1 }}
         disabled={pending !== null}
+        aria-busy={pending === 'clear'}
+        aria-label={`Clear alarm ${alarm.alarmKey}`}
         onClick={() => run('clear', () => actions.clearAlarm(alarm.token))}
       >
         {pending === 'clear' ? '…' : 'Clear'}

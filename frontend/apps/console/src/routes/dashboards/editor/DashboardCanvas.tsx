@@ -82,8 +82,11 @@ export function DashboardCanvas({ definition, onChange, hub, actions, selectedId
                 commitBox({ x: pos.x, y: pos.y, w: ref.offsetWidth, h: ref.offsetHeight })
               }
             >
-              {/* Live widget, but inert to the pointer so react-rnd owns drag/resize. */}
-              <div style={{ width: '100%', height: '100%', pointerEvents: 'none' }}>
+              {/* Live widget, fully INERT while editing so react-rnd owns interaction:
+                  `inert` removes it from pointer AND keyboard/focus, so an action widget's
+                  controls (alarm Ack/Clear) can't fire a real mutation via Tab+Enter mid-
+                  layout — pointer-events alone wouldn't stop keyboard activation. */}
+              <div inert style={{ width: '100%', height: '100%', pointerEvents: 'none' }}>
                 <ConnectedWidget widget={widget} hub={hub} actions={actions} />
               </div>
 

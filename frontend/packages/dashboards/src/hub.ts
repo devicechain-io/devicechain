@@ -96,6 +96,10 @@ export interface AlarmStreamSink {
 // implements a no-op/echo WidgetActions) and the "widget never reaches the backend"
 // invariant holds. `can` gates the UI: a widget hides an action the viewer isn't
 // authorized for (the server enforces it regardless).
+//
+// Growing this interface (e.g. the command widget's sendCommand) is a breaking change
+// for any external host implementing it. Pre-GA that's acceptable per repo convention;
+// once external implementers exist, add new capabilities as OPTIONAL methods.
 export interface WidgetActions {
   // Acknowledge / clear a raised alarm by token (requires alarm:write). Resolves when
   // the mutation succeeds; the runtime reconciles the affected alarm widgets so the
@@ -361,8 +365,10 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     this.reconcileAlarms();
   }
 
-  // reconcileAlarms re-queries every open alarm subscription (after a mutation). Iterate
-  // a copy — a reconcile won't mutate the set, but this is cheap insurance.
+  // reconcileAlarms re-queries every open alarm subscription hub-wide (after a mutation).
+  // Hub-wide is deliberate: one alarm can appear in several widgets (different scopes),
+  // and the acked/cleared row must refresh in all of them; scoping the nudge would need
+  // per-reconciler token knowledge for no real saving. Iterate a copy for safety.
   private reconcileAlarms(): void {
     for (const reconcile of [...this.alarmReconcilers]) reconcile();
   }
