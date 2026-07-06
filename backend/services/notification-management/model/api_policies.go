@@ -28,10 +28,12 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 				Name:        rdb.NullStrOf(request.Name),
 				Description: rdb.NullStrOf(request.Description),
 			},
-			MetadataEntity:  rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
-			DeviceTypeToken: rdb.NullStrOf(request.DeviceTypeToken),
-			ThrottleSeconds: nullInt64OfInt32(request.ThrottleSeconds),
-			Enabled:         request.Enabled,
+			MetadataEntity:       rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+			DeviceTypeToken:      rdb.NullStrOf(request.DeviceTypeToken),
+			ThrottleSeconds:      nullInt64OfInt32(request.ThrottleSeconds),
+			EscalateAfterSeconds: nullInt64OfInt32(request.EscalateAfterSeconds),
+			MaxEscalations:       nullInt64OfInt32(request.MaxEscalations),
+			Enabled:              request.Enabled,
 		}
 		if err := tx.Create(policy).Error; err != nil {
 			return err
@@ -82,6 +84,8 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 		policy.Metadata = rdb.MetadataStrOf(request.Metadata)
 		policy.DeviceTypeToken = rdb.NullStrOf(request.DeviceTypeToken)
 		policy.ThrottleSeconds = nullInt64OfInt32(request.ThrottleSeconds)
+		policy.EscalateAfterSeconds = nullInt64OfInt32(request.EscalateAfterSeconds)
+		policy.MaxEscalations = nullInt64OfInt32(request.MaxEscalations)
 		policy.Enabled = request.Enabled
 		if err := tx.Omit("Rules").Save(policy).Error; err != nil {
 			return err

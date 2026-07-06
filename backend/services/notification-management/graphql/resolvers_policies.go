@@ -53,6 +53,12 @@ func (r *NotificationPolicyResolver) DeviceTypeToken() *string {
 
 func (r *NotificationPolicyResolver) ThrottleSeconds() *int32 { return nullInt32(r.M.ThrottleSeconds) }
 
+func (r *NotificationPolicyResolver) EscalateAfterSeconds() *int32 {
+	return nullInt32(r.M.EscalateAfterSeconds)
+}
+
+func (r *NotificationPolicyResolver) MaxEscalations() *int32 { return nullInt32(r.M.MaxEscalations) }
+
 func (r *NotificationPolicyResolver) Enabled() bool { return r.M.Enabled }
 
 func (r *NotificationPolicyResolver) Metadata() *string { return util.MetadataStr(r.M.Metadata) }

@@ -203,6 +203,77 @@ func TestDeliverWithRetry(t *testing.T) {
 	}
 }
 
+// escalatingPolicy builds an enabled policy with escalation configured.
+func escalatingPolicy(token string, afterSeconds int64, maxEsc int64, rules ...model.NotificationRule) *model.NotificationPolicy {
+	p := policy(token, rules...)
+	p.EscalateAfterSeconds = sql.NullInt64{Int64: afterSeconds, Valid: true}
+	if maxEsc > 0 {
+		p.MaxEscalations = sql.NullInt64{Int64: maxEsc, Valid: true}
+	}
+	return p
+}
+
+func openState(severity string, lastNotified time.Time, level int) *model.NotificationState {
+	return &model.NotificationState{
+		AlarmToken: "a1", AlarmKey: "k", Severity: severity,
+		LastNotifiedAt:  sql.NullTime{Time: lastNotified, Valid: true},
+		EscalationLevel: level,
+	}
+}
+
+func TestPlanEscalation(t *testing.T) {
+	adapters := map[string]ChannelAdapter{model.ChannelTypeSMTP: &fakeAdapter{}}
+	n := testNotifier(adapters)
+	smtp := enabledChannel("smtp-1", model.ChannelTypeSMTP)
+	now := time.Now().UTC()
+	defaultMax := 5
+
+	// Window elapsed, under cap → one delivery.
+	p := escalatingPolicy("p", 300, 0, rule("CRITICAL", smtp, "ops@x.com"))
+	state := openState("CRITICAL", now.Add(-10*time.Minute), 1)
+	if got := n.planEscalation(state, []*model.NotificationPolicy{p}, now, defaultMax); len(got) != 1 {
+		t.Fatalf("due escalation: expected 1 delivery, got %d", len(got))
+	}
+
+	// Window not yet elapsed → nothing.
+	fresh := openState("CRITICAL", now.Add(-1*time.Minute), 1)
+	if got := n.planEscalation(fresh, []*model.NotificationPolicy{p}, now, defaultMax); len(got) != 0 {
+		t.Fatalf("not-due escalation: expected 0, got %d", len(got))
+	}
+
+	// Escalation disabled (no EscalateAfterSeconds) → nothing.
+	noEsc := policy("no-esc", rule("CRITICAL", smtp, "ops@x.com"))
+	if got := n.planEscalation(state, []*model.NotificationPolicy{noEsc}, now, defaultMax); len(got) != 0 {
+		t.Fatalf("disabled escalation: expected 0, got %d", len(got))
+	}
+
+	// Cap reached (policy MaxEscalations = 2, level = 2) → nothing.
+	capped := escalatingPolicy("capped", 300, 2, rule("CRITICAL", smtp, "ops@x.com"))
+	atCap := openState("CRITICAL", now.Add(-10*time.Minute), 2)
+	if got := n.planEscalation(atCap, []*model.NotificationPolicy{capped}, now, defaultMax); len(got) != 0 {
+		t.Fatalf("capped escalation: expected 0, got %d", len(got))
+	}
+
+	// Default cap applies when policy sets none (level = defaultMax) → nothing.
+	atDefaultCap := openState("CRITICAL", now.Add(-10*time.Minute), defaultMax)
+	if got := n.planEscalation(atDefaultCap, []*model.NotificationPolicy{p}, now, defaultMax); len(got) != 0 {
+		t.Fatalf("default-cap escalation: expected 0, got %d", len(got))
+	}
+
+	// Severity mismatch → nothing.
+	if got := n.planEscalation(openState("MINOR", now.Add(-10*time.Minute), 0),
+		[]*model.NotificationPolicy{escalatingPolicy("q", 300, 0, rule("CRITICAL", smtp, "ops@x.com"))},
+		now, defaultMax); len(got) != 0 {
+		t.Fatalf("severity mismatch: expected 0, got %d", len(got))
+	}
+
+	// Two escalating policies to the same channel+recipients → deduped to one.
+	p2 := escalatingPolicy("p2", 300, 0, rule(model.SeverityAny, smtp, "ops@x.com"))
+	if got := n.planEscalation(state, []*model.NotificationPolicy{p, p2}, now, defaultMax); len(got) != 1 {
+		t.Fatalf("dedup: expected 1 delivery, got %d", len(got))
+	}
+}
+
 func TestParseRecipients(t *testing.T) {
 	if parseRecipients(nil) != nil {
 		t.Fatal("nil → nil")

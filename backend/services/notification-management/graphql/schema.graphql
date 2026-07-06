@@ -95,7 +95,13 @@ type NotificationRule {
 # A tenant's routing policy: which raised alarms get delivered, to whom, through
 # which channels. `deviceTypeToken` optionally scopes the policy to one device
 # profile (null = tenant-wide). `throttleSeconds` is the minimum gap between
-# notifications for the same alarm (null = no throttle).
+# notifications for the same alarm (null = no throttle). `escalateAfterSeconds`, when
+# set (> 0), re-notifies an alarm that stays unacknowledged and uncleared that long
+# after its last notification, up to `maxEscalations` times (null = a service default
+# cap); a null/0 `escalateAfterSeconds` disables escalation for the policy. Escalation
+# is one shared clock and tier per alarm: if several escalating policies match an alarm,
+# the shortest window sets the re-notification cadence and each cap counts against the
+# shared tier.
 type NotificationPolicy {
     id: ID!
     createdAt: String
@@ -106,6 +112,8 @@ type NotificationPolicy {
     description: String
     deviceTypeToken: String
     throttleSeconds: Int
+    escalateAfterSeconds: Int
+    maxEscalations: Int
     enabled: Boolean!
     rules: [NotificationRule!]!
     metadata: String
@@ -127,6 +135,8 @@ input NotificationPolicyCreateRequest {
     description: String
     deviceTypeToken: String
     throttleSeconds: Int
+    escalateAfterSeconds: Int
+    maxEscalations: Int
     enabled: Boolean!
     # The policy's full rule set; pass [] for a policy with no rules yet. On update
     # this replaces any existing rules.
