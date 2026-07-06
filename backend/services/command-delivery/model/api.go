@@ -11,11 +11,25 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
+// DeviceVerifier confirms a target device exists (in the request's tenant) before
+// a command is enqueued against it (ADR-044 amendment / W1.1b). It is
+// dependency-inverted — the model depends only on this narrow interface, never on
+// the sync-call machinery (svcclient) — mirroring device-management's
+// AlarmEventPublisher seam. A nil verifier (unconfigured service secret) skips the
+// check, preserving the prior enqueue-anything behavior; command-delivery logs the
+// disabled mode loudly at startup.
+type DeviceVerifier interface {
+	DeviceExists(ctx context.Context, deviceToken string) (bool, error)
+}
+
 type Api struct {
 	RDB *rdb.RdbManager
+	// DeviceVerifier, when set, gates CreateCommand on the target device existing.
+	DeviceVerifier DeviceVerifier
 }
 
 // NewApi creates a new API instance.
@@ -78,6 +92,36 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		return nil, fmt.Errorf("command metadata is not valid JSON")
 	}
 
+	// Parse the optional TTL (RFC3339) — a cheap local check done before the remote
+	// verification below, so a malformed request fails without a wasted round trip.
+	var expiresAt sql.NullTime
+	if request.ExpiresAt != nil {
+		parsed, err := time.Parse(time.RFC3339, *request.ExpiresAt)
+		if err != nil {
+			return nil, err
+		}
+		expiresAt = sql.NullTime{Time: parsed, Valid: true}
+	}
+
+	// Verify the target device exists before enqueuing (W1.1b) — a synchronous
+	// read against device-management, the authoritative owner. This is a read-time
+	// invariant check (does it exist *now*?), the case the async projection can't
+	// answer, so it is the sanctioned sync-call use (ADR-044 decision rule). When no
+	// verifier is wired (service secret unconfigured) the check is skipped. A
+	// verification *failure* (device-management unreachable) fails closed — a ghost
+	// command is never persisted — but the detail is logged, not returned, so the
+	// tenant API client does not learn the in-cluster topology.
+	if api.DeviceVerifier != nil {
+		exists, err := api.DeviceVerifier.DeviceExists(ctx, request.DeviceToken)
+		if err != nil {
+			log.Error().Err(err).Str("deviceToken", request.DeviceToken).Msg("Device existence verification failed; refusing enqueue.")
+			return nil, fmt.Errorf("cannot enqueue command: device verification is unavailable")
+		}
+		if !exists {
+			return nil, fmt.Errorf("cannot enqueue command: device %q does not exist", request.DeviceToken)
+		}
+	}
+
 	created := &Command{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -90,15 +134,7 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		Payload:     rdb.MetadataStrOf(request.Payload),
 		Status:      CommandQueued.String(),
 		QueuedTime:  time.Now(),
-	}
-
-	// Parse optional TTL (RFC3339).
-	if request.ExpiresAt != nil {
-		parsed, err := time.Parse(time.RFC3339, *request.ExpiresAt)
-		if err != nil {
-			return nil, err
-		}
-		created.ExpiresAt = sql.NullTime{Time: parsed, Valid: true}
+		ExpiresAt:   expiresAt,
 	}
 
 	result := api.RDB.DB(ctx).Create(created)

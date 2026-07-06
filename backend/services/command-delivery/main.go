@@ -5,15 +5,20 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/devicechain-io/dc-command-delivery/config"
 	"github.com/devicechain-io/dc-command-delivery/graphql"
 	"github.com/devicechain-io/dc-command-delivery/model"
 	"github.com/devicechain-io/dc-command-delivery/processor"
+	"github.com/devicechain-io/dc-command-delivery/verify"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/svcclient"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -91,6 +96,29 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	return nil
 }
 
+// wireDeviceVerifier installs the W1.1b device-existence check on the Api when the
+// shared service secret is configured, logging the enabled/disabled mode at startup
+// so a misconfigured deploy (empty secret) is visible rather than silently skipping
+// verification at enqueue time.
+func wireDeviceVerifier() {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" {
+		log.Warn().Msg("Service secret not configured — command-delivery will NOT verify device existence before enqueue (W1.1b disabled).")
+		return
+	}
+	// Guard the device-management coordinate too: a config document predating this
+	// feature carries no deviceManagement block, and building http://:0/graphql
+	// would fail every enqueue. Degrade to no-verification (loudly) rather than trap.
+	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) — command-delivery will NOT verify device existence before enqueue (W1.1b disabled).")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", []string{string(auth.DeviceRead)})
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	Api.DeviceVerifier = verify.NewDeviceVerifier(client, url)
+	log.Info().Str("deviceManagement", url).Msg("Command enqueue will verify device existence against device-management (W1.1b).")
+}
+
 // Called after microservice has been initialized.
 func afterMicroserviceInitialized(ctx context.Context) error {
 	// Parse configuration.
@@ -113,6 +141,13 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// Wrap api around rdb manager.
 	Api = model.NewApi(RdbManager)
+
+	// Wire the device-existence verifier (W1.1b): a synchronous check against
+	// device-management before a command is enqueued (ADR-044 amendment). Enabled
+	// only when the shared service secret is configured; otherwise the enqueue path
+	// runs without verification and we say so loudly rather than fail closed (a
+	// nonexistent-device command is an integrity nuisance, not a security breach).
+	wireDeviceVerifier()
 
 	// Create and initialize nats manager.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
