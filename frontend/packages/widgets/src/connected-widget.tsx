@@ -57,7 +57,13 @@ function MeasurementConnectedWidget({ widget, hub, initialSamples }: ConnectedWi
 function AlarmConnectedWidget({ widget, hub }: { widget: WidgetInstance; hub: WidgetDataSource }) {
   const data = useAlarmStream(hub, alarmSubscription(widget));
 
-  if (data.error) return <WidgetErrorFrame widget={widget} error={data.error} />;
+  // Show the error pane ONLY when there's nothing to display (the initial load failed).
+  // Once a snapshot has loaded, a later transient poll/query error keeps the last-good
+  // rows on screen — the channel re-queries every 30s and self-heals, so blanking a
+  // populated table on one blip is the exact blink the console page avoids.
+  if (data.error && data.alarms.length === 0 && data.total === 0) {
+    return <WidgetErrorFrame widget={widget} error={data.error} />;
+  }
 
   const Component = ALARM_WIDGET_REGISTRY[widget.type as keyof typeof ALARM_WIDGET_REGISTRY];
   if (!Component) return null;
@@ -65,17 +71,29 @@ function AlarmConnectedWidget({ widget, hub }: { widget: WidgetInstance; hub: Wi
 }
 
 // alarmSubscription reads an alarm widget's scope+filters from its definition: the
-// datasource (undefined = tenant-wide) and the state/severity options. A count needs
-// only the total, so it reads a minimal page; a table reads its configured row cap.
+// datasource (undefined = tenant-wide) plus the state/severity/acknowledged filters. A
+// count reports the server total (independent of pageSize) but still reads a page so its
+// worst-severity accent samples the current alarms rather than only the single newest;
+// a table reads its configured, clamped row cap.
 function alarmSubscription(widget: WidgetInstance): AlarmSubscription {
   const pageSize =
-    widget.type === 'alarm-count' ? 1 : optNumber(widget.options, 'maxRows') ?? DEFAULT_ALARM_ROWS;
+    widget.type === 'alarm-count'
+      ? DEFAULT_ALARM_ROWS
+      : Math.max(1, optNumber(widget.options, 'maxRows') ?? DEFAULT_ALARM_ROWS);
   return {
     datasource: widget.datasource,
     state: optString(widget.options, 'state'),
     severity: optString(widget.options, 'severity'),
+    acknowledged: parseAcknowledged(optString(widget.options, 'acknowledged')),
     pageSize,
   };
+}
+
+// The acknowledged filter is stored as 'true' / 'false' (or absent = any).
+function parseAcknowledged(value: string | undefined): boolean | undefined {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return undefined;
 }
 
 // A resolution/socket error surfaces as a muted error state rather than a blank pane.

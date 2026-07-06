@@ -22,6 +22,7 @@ import {
 import { useEffect, useState } from 'react';
 
 import { ConnectedWidget } from './connected-widget';
+import { WIDGET_CHANNEL } from './registry';
 
 export interface DashboardRendererProps {
   definition: DashboardDefinition;
@@ -121,7 +122,16 @@ function useWidgetHistories(
     const historyWindow = defaultHistoryWindow();
     Promise.all(
       widgets.map(
-        async (w) => [w.id, await fetchWidgetHistory(w, historyWindow, bindings)] as const,
+        // Only measurement widgets consume a history seed; an alarm widget's channel
+        // reconciles from a query, so backfilling it would fire a wasted (and
+        // all-measurements) bucketedMeasurements query whose result it ignores.
+        async (w) =>
+          [
+            w.id,
+            WIDGET_CHANNEL[w.type] === 'measurement'
+              ? await fetchWidgetHistory(w, historyWindow, bindings)
+              : [],
+          ] as const,
       ),
     ).then((entries) => {
       if (!cancelled) setHistories(Object.fromEntries(entries));

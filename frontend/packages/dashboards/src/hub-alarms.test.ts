@@ -229,6 +229,19 @@ describe('DashboardHub alarm channel', () => {
     expect(h.gql).toHaveBeenCalledTimes(1); // no further polls
   });
 
+  it('disposeAll tears down alarm subscriptions (poll + trigger stream)', async () => {
+    h.gql.mockResolvedValue(page([]));
+    const hub = new DashboardHub({ resolver: newResolver() });
+    hub.subscribeAlarms({ pageSize: 10 }, { next: () => {} });
+    await settle();
+    expect(h.gql).toHaveBeenCalledTimes(1);
+
+    hub.disposeAll();
+    expect(h.subs[0].closed).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.gql).toHaveBeenCalledTimes(1); // poll stopped
+  });
+
   it('surfaces a query error to the sink', async () => {
     h.gql.mockRejectedValue(new Error('boom'));
     const hub = new DashboardHub({ resolver: newResolver() });

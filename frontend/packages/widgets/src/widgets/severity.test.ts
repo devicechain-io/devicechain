@@ -24,7 +24,8 @@ describe('severityRank', () => {
 describe('severityColor', () => {
   it('maps a known severity to its fixed color', () => {
     expect(severityColor('CRITICAL')).toBe('#dc2626');
-    expect(severityColor('MAJOR')).toBe('#ea580c');
+    expect(severityColor('MAJOR')).toBe('#f97316');
+    expect(severityColor('WARNING')).toBe('#0ea5e9'); // sky — aligned with the console ramp
   });
 
   it('falls back to a muted slate for an unknown severity', () => {

@@ -125,6 +125,11 @@ export class DashboardHub implements WidgetDataSource {
   private readonly resolver: DeviceResolver;
   // One entry per distinct device token that has at least one subscriber.
   private readonly streams = new Map<string, DeviceStream>();
+  // Live alarm-subscription disposers. The alarm channel isn't ref-counted through
+  // `streams` (it holds a poll/debounce/trigger per subscription, not a shared device
+  // stream), so its disposers are tracked here for disposeAll() to reach — otherwise an
+  // imperative host closing the dashboard would leak every alarm widget's poll + socket.
+  private readonly alarmDisposers = new Set<() => void>();
   // slot name → concrete entity binding. Consulted when a widget's selector is a
   // `slot`. Mutable so the authoring host can rebind live (setBindings).
   private bindings: Record<string, SlotBinding>;
@@ -189,7 +194,9 @@ export class DashboardHub implements WidgetDataSource {
       if (debounce) clearTimeout(debounce);
       if (poll) clearInterval(poll);
       unsubscribe?.();
+      this.alarmDisposers.delete(dispose);
     };
+    this.alarmDisposers.add(dispose);
 
     const reconcile = (tokens: string[], tenantWide: boolean): void => {
       const gen = ++generation;
@@ -208,7 +215,10 @@ export class DashboardHub implements WidgetDataSource {
 
         // A scoped widget that resolves to no device (an unbound slot, an empty anchor)
         // shows an empty state — NOT tenant-wide. Only a widget with no datasource at
-        // all is tenant-wide. Nothing to stream/poll; a later rebind builds a new hub.
+        // all is tenant-wide. Nothing to stream/poll here. Scope is resolved once (like
+        // the measurement channel): a slot rebind rebuilds the hub and re-resolves, but
+        // organic anchor-membership change isn't picked up until the hub is rebuilt —
+        // a deferred enhancement shared with the measurement channel.
         if (!scope.tenantWide && scope.tokens.length === 0) {
           sink.next({ alarms: [], total: 0 });
           return;
@@ -293,10 +303,15 @@ export class DashboardHub implements WidgetDataSource {
     return { alarms, total };
   }
 
-  // disposeAll tears down every upstream stream (e.g. on dashboard close).
+  // disposeAll tears down every upstream stream (e.g. on dashboard close): the
+  // ref-counted measurement device streams AND every alarm subscription's poll +
+  // trigger. Iterate a copy of the alarm disposers since each removes itself from the
+  // set as it runs.
   disposeAll(): void {
     for (const stream of this.streams.values()) stream.unsubscribe();
     this.streams.clear();
+    for (const dispose of [...this.alarmDisposers]) dispose();
+    this.alarmDisposers.clear();
   }
 
   // The number of distinct upstream device streams currently open (observability

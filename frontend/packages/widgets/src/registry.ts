@@ -21,11 +21,13 @@ import { Table } from './widgets/table';
 import { TimeSeriesChart } from './widgets/time-series-chart';
 
 // A widget's data channel: which hub subscription + registry the renderer binds it
-// through. Adding a WidgetType forces an entry here (the Record is exhaustive), so a
-// new type can never silently fall through the renderer's dispatch.
+// through. WIDGET_CHANNEL is the SINGLE source of truth — `satisfies` keeps it
+// exhaustive over WidgetType (a new type won't compile without a channel), and the
+// per-channel type subsets are DERIVED from it, so the channel map and the two
+// registries can't drift out of sync.
 export type WidgetChannel = 'measurement' | 'alarm';
 
-export const WIDGET_CHANNEL: Record<WidgetType, WidgetChannel> = {
+export const WIDGET_CHANNEL = {
   'timeseries-chart': 'measurement',
   'latest-card': 'measurement',
   gauge: 'measurement',
@@ -34,12 +36,11 @@ export const WIDGET_CHANNEL: Record<WidgetType, WidgetChannel> = {
   image: 'measurement',
   'alarm-table': 'alarm',
   'alarm-count': 'alarm',
-};
+} as const satisfies Record<WidgetType, WidgetChannel>;
 
-// The alarm-channel widget types. Kept as an explicit union so both registries stay
-// exhaustive: alarm types are registered in ALARM_WIDGET_REGISTRY, and every OTHER
-// type (Exclude) must appear in WIDGET_REGISTRY.
-type AlarmWidgetType = 'alarm-table' | 'alarm-count';
+// The widget types on each channel, derived from WIDGET_CHANNEL so the registries below
+// stay exhaustive without a hand-maintained parallel union.
+type AlarmWidgetType = { [K in WidgetType]: (typeof WIDGET_CHANNEL)[K] extends 'alarm' ? K : never }[WidgetType];
 type MeasurementWidgetType = Exclude<WidgetType, AlarmWidgetType>;
 
 export const WIDGET_REGISTRY: Record<MeasurementWidgetType, WidgetComponent> = {

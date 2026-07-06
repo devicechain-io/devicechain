@@ -4,15 +4,17 @@
 // Alarm-severity presentation shared by the alarm widgets (ADR-041 vocabulary:
 // CRITICAL | MAJOR | MINOR | WARNING | INDETERMINATE). Severity is SEMANTIC color —
 // deliberately fixed, not derived from the dashboard accent — so a critical alarm
-// reads the same red on every tenant's theme. Colors are chosen to hold contrast on
-// both light and dark widget surfaces.
+// reads the same red on every tenant's theme. The warm-to-cool ramp mirrors the
+// console's alarm badges (red → orange → amber → sky → slate) so an operator reads the
+// same hue for the same severity on both surfaces; shades are tuned to hold contrast as
+// a foreground color on both light and dark widget backgrounds.
 
 const SEVERITY_COLORS: Record<string, string> = {
-  CRITICAL: '#dc2626',
-  MAJOR: '#ea580c',
-  MINOR: '#d97706',
-  WARNING: '#ca8a04',
-  INDETERMINATE: '#64748b',
+  CRITICAL: '#dc2626', // red-600
+  MAJOR: '#f97316', // orange-500
+  MINOR: '#d97706', // amber-600 (readable as foreground; console uses amber-400 as a fill)
+  WARNING: '#0ea5e9', // sky-500 — cool end of the ramp, matching the console
+  INDETERMINATE: '#64748b', // slate-500
 };
 
 const SEVERITY_ORDER: Record<string, number> = {

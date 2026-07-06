@@ -57,6 +57,13 @@ const ALARM_SEVERITY_OPTIONS: ComboboxOption[] = [
   { value: 'INDETERMINATE', label: 'Indeterminate' },
 ];
 
+// Stored as the string 'true'/'false' (absent = any) — the widget maps it back to the
+// boolean acknowledged filter.
+const ALARM_ACK_OPTIONS: ComboboxOption[] = [
+  { value: 'false', label: 'Unacknowledged' },
+  { value: 'true', label: 'Acknowledged' },
+];
+
 const TARGET_TYPE_OPTIONS: ComboboxOption[] = [
   { value: 'customer', label: 'Customer' },
   { value: 'area', label: 'Area' },
@@ -229,6 +236,14 @@ function TypeOptions({
             options={ALARM_SEVERITY_OPTIONS}
             value={optString(widget, 'severity')}
             onChange={(v) => setOption('severity', v || undefined)}
+            placeholder="Any"
+          />
+        </FormField>
+        <FormField label="Acknowledged" description="Filter by acknowledgement.">
+          <Combobox
+            options={ALARM_ACK_OPTIONS}
+            value={optString(widget, 'acknowledged')}
+            onChange={(v) => setOption('acknowledged', v || undefined)}
             placeholder="Any"
           />
         </FormField>
