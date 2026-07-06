@@ -231,7 +231,7 @@ describe('DashboardHub', () => {
     });
     hub.subscribeWidget({ kind: 'slot', slot: 'area', measurements: ['temperature'] }, { next: vi.fn() });
     await flush();
-    expect(hub.openStreamCount).toBe(2); // members '4' and '5'
+    expect(hub.openStreamCount).toBe(2); // members 'therm-004' and 'therm-005'
   });
 
   it('treats a prototype-named slot as unbound, not a crash', async () => {

@@ -138,8 +138,13 @@ func upsertParentEvents(ctx context.Context, db *gorm.DB, events []*Event) error
 		seen[key] = struct{}{}
 		distinct = append(distinct, e)
 	}
+	// The conflict target is the full primary key including tenant_id: a device
+	// token is unique only per tenant (ADR-042), so omitting tenant_id here would
+	// let one tenant's parent event suppress another tenant's identical-key event.
+	// tenant_id is stamped onto each row by the tenant-scope create callback before
+	// the insert, so the value is present when the conflict is evaluated.
 	return db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "device_token"}, {Name: "event_type"}, {Name: "occurred_time"}},
+		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}, {Name: "event_type"}, {Name: "occurred_time"}},
 		DoNothing: true,
 	}).Create(distinct).Error
 }

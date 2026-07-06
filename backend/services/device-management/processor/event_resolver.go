@@ -343,6 +343,16 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Devic
 	anchors := make([]model.ResolvedAnchor, 0, len(drels.Results))
 	for i := range drels.Results {
 		r := &drels.Results[i]
+		// TargetToken is denormalized at relationship-create time (ADR-044). An empty
+		// value means a row predating that column on a non-fresh cluster (the migration
+		// does not backfill) — emitting it would write an unqueryable empty-token anchor
+		// and make the sweep churn on it, so skip it loudly rather than corrupt silently.
+		if r.TargetToken == "" {
+			log.Warn().Str("device", device.Token).Str("relationship", r.Token).
+				Str("targetType", r.TargetType).
+				Msg("Skipping anchor with empty target token (relationship predates the ADR-044 denormalization; recreate it)")
+			continue
+		}
 		anchors = append(anchors, model.ResolvedAnchor{
 			AnchorType:     r.TargetType,
 			AnchorToken:    r.TargetToken,

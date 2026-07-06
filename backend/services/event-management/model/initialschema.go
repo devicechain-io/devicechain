@@ -59,11 +59,17 @@ func NewInitialSchema() *gormigrate.Migration {
 			}
 
 			// Base event fields. The originating device is keyed by its token
-			// (ADR-044). The relationship target is denormalized as a single uniform
+			// (ADR-044). A device token is unique only PER TENANT (ADR-042), so
+			// tenant_id must lead the composite primary key — otherwise two tenants
+			// with a same-named device emitting at the same instant collide and one
+			// parent event is silently dropped by upsertParentEvents' ON CONFLICT DO
+			// NOTHING. (tenant_id is declared explicitly rather than via the shared
+			// rdb.TenantScoped embed because only this table needs it in the PK.)
+			// The relationship target is denormalized as a single uniform
 			// (anchor_type, anchor_id) pair here (ADR-013), superseded by the
 			// event_anchors set table (these two columns are dropped there).
 			type Event struct {
-				rdb.TenantScoped
+				TenantId      string            `gorm:"primaryKey;not null;size:128"`
 				DeviceToken   string            `gorm:"primaryKey;type:varchar(128)"`
 				EventType     esmodel.EventType `gorm:"primaryKey"`
 				OccurredTime  time.Time         `gorm:"primaryKey"`

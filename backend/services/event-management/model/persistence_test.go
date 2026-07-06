@@ -36,7 +36,7 @@ func newPersistenceTestApi(t *testing.T) *Api {
 		t.Fatalf("failed to migrate events: %v", err)
 	}
 	if err := db.Exec(`CREATE UNIQUE INDEX idx_events_natural_key ` +
-		`ON events (device_token, event_type, occurred_time);`).Error; err != nil {
+		`ON events (tenant_id, device_token, event_type, occurred_time);`).Error; err != nil {
 		t.Fatalf("failed to create natural-key index: %v", err)
 	}
 	if err := db.AutoMigrate(&MeasurementEvent{}, &EventAnchor{}); err != nil {

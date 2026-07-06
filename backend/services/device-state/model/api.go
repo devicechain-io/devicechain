@@ -50,8 +50,9 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 		if result.Error != nil {
 			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 				// First event seen for this device: create a new active row. A
-				// concurrent first event loses the device_token unique index race and
-				// errors out (redelivered), rather than producing a duplicate.
+				// concurrent first event loses the (tenant_id, device_token) unique
+				// index race and errors out (redelivered), rather than producing a
+				// duplicate.
 				found = &DeviceState{
 					DeviceToken:       deviceToken,
 					Active:            true,

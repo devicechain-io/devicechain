@@ -69,10 +69,11 @@ func (api *Api) EvaluateMeasurementAlarms(ctx context.Context, deviceToken strin
 	}
 
 	// Resolve the source device by its token (ADR-044): the wire carries the token,
-	// not the row id. DevicesByToken is the cached lookup the resolver just populated,
-	// so this is a cache hit on the hot path. The numeric id drives every id-keyed
-	// internal below (alarm originator, threshold attributes) — those stay device-
-	// management-local references.
+	// not the row id. This is one indexed lookup per measurement message — the same
+	// cost as the DevicesById call it replaces (this method is on *Api, so the call
+	// binds to the uncached accessor even when the evaluator holds a CachedApi). The
+	// numeric id drives every id-keyed internal below (alarm originator, threshold
+	// attributes) — those stay device-management-local references.
 	devices, err := api.DevicesByToken(ctx, []string{deviceToken})
 	if err != nil {
 		return err
