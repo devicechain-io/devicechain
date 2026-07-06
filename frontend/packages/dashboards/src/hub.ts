@@ -21,14 +21,36 @@ import {
   type AlarmStreamResult,
 } from './internal/alarm-doc';
 import {
+  COMMANDS_QUERY,
+  CREATE_COMMAND,
+} from './internal/command-doc';
+import {
   MEASUREMENT_STREAM,
   type MeasurementStreamResult,
   type MeasurementStreamVariables,
 } from './internal/measurement-doc';
-import type { AlarmRow, AnchorTarget, DatasourceSelector, MeasurementSample, SlotBinding } from './types';
+import type {
+  AlarmRow,
+  AnchorTarget,
+  CommandRow,
+  DatasourceSelector,
+  MeasurementSample,
+  SlotBinding,
+} from './types';
 
 const EVENT_AREA: Area = 'event-management';
 const DEVICE_AREA: Area = 'device-management';
+const COMMAND_AREA: Area = 'command-delivery';
+
+// randomToken mints a command dispatch token (its idempotency key + cancel handle).
+// crypto.randomUUID is only defined in a secure context, so fall back to a random-hex
+// token for a plain-HTTP on-prem host — matching the guarded pattern generateWidgetId
+// uses rather than throwing at send time.
+function randomToken(): string {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `cmd-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
+}
 
 // Alarm channel cadence. The live stream is a best-effort trigger, so the poll is
 // the correctness backstop (an alarm cleared while the socket was down still
@@ -36,6 +58,12 @@ const DEVICE_AREA: Area = 'device-management';
 // re-query.
 const ALARM_RECONCILE_DEBOUNCE_MS = 800;
 const ALARM_POLL_MS = 30_000;
+
+// Command channel cadence. command-delivery exposes NO subscription, so the control
+// channel is poll-only — but a command's lifecycle (QUEUED→SENT→DELIVERED→SUCCESSFUL)
+// resolves in seconds, so it polls far faster than the alarm channel. An issued command
+// reconciles immediately (not on the next tick) so the operator sees it appear at once.
+const COMMAND_POLL_MS = 4_000;
 
 // DeviceResolver turns the graph references in a dashboard definition into the
 // device tokens event-management keys on (measurementStream(deviceToken:), per
@@ -88,6 +116,42 @@ export interface AlarmStreamSink {
   error?: (err: unknown) => void;
 }
 
+// ── Control channel ──────────────────────────────────────────────────────
+//
+// The command-button widget issues commands to a device and watches their delivery
+// lifecycle. Unlike telemetry/alarms there is no live subscription (command-delivery
+// exposes none), so the channel is poll-only: a device-scoped `commands` query re-read
+// on a short interval (and immediately after an issue). A command targets ONE device,
+// so a subscription resolves its scope to a single device token.
+
+// CommandSubscription is one command widget's interest: its scope (which device) plus
+// the page size bounding the recent-command history it shows. A command button binds a
+// single device; an unscoped (or unresolved) widget has no target and renders empty.
+export interface CommandSubscription {
+  datasource?: DatasourceSelector;
+  pageSize: number;
+}
+
+// A command-history snapshot: the resolved target device (null when unbound — the
+// widget then can't issue), the recent commands (newest first, capped to pageSize) and
+// the total matching count. One replaces the last (poll-then-emit).
+export interface CommandSnapshot {
+  deviceToken: string | null;
+  commands: CommandRow[];
+  total: number;
+}
+
+export interface CommandStreamSink {
+  next: (snapshot: CommandSnapshot) => void;
+  error?: (err: unknown) => void;
+}
+
+// The result of issuing a command: its freshly-minted dispatch token, so the widget can
+// highlight the command it just sent as it moves through the lifecycle.
+export interface CommandDispatch {
+  token: string;
+}
+
 // ── Action seam (writes) ─────────────────────────────────────────────────
 //
 // Read widgets are pure `(widget, data)`; a widget that ACTS (acknowledge/clear an
@@ -97,15 +161,23 @@ export interface AlarmStreamSink {
 // invariant holds. `can` gates the UI: a widget hides an action the viewer isn't
 // authorized for (the server enforces it regardless).
 //
-// Growing this interface (e.g. the command widget's sendCommand) is a breaking change
-// for any external host implementing it. Pre-GA that's acceptable per repo convention;
-// once external implementers exist, add new capabilities as OPTIONAL methods.
+// Growing this interface is a breaking change for any external host implementing it.
+// The alarm actions (acknowledgeAlarm/clearAlarm) are the required baseline; capabilities
+// added later — like sendCommand below — are declared OPTIONAL so a host predating them
+// still satisfies the type, and consumers feature-detect (typeof actions?.sendCommand).
 export interface WidgetActions {
   // Acknowledge / clear a raised alarm by token (requires alarm:write). Resolves when
   // the mutation succeeds; the runtime reconciles the affected alarm widgets so the
   // change shows immediately rather than waiting for the next poll.
   acknowledgeAlarm(alarmToken: string): Promise<void>;
   clearAlarm(alarmToken: string): Promise<void>;
+  // Issue a command to a device (requires command:write). The runtime mints the dispatch
+  // token and returns it; it also reconciles the command widgets so the new command
+  // appears at once. OPTIONAL: added after this interface shipped, so a host predating it
+  // (or a strictly read-only one) may omit it — a command widget then renders its Send
+  // control disabled. `payload` is the request body sent to the device verbatim (the
+  // widget serializes its typed parameter form to JSON).
+  sendCommand?(deviceToken: string, name: string, payload?: string): Promise<CommandDispatch>;
   // Whether the current viewer holds an authority (e.g. 'alarm:write'). Drives whether
   // an action control renders at all.
   can(authority: string): boolean;
@@ -135,6 +207,10 @@ export interface WidgetDataSource {
   // both the live hub and the synthetic preview source so alarm widgets render
   // identically from either.
   subscribeAlarms(subscription: AlarmSubscription, sink: AlarmStreamSink): () => void;
+  // Bind a command widget's scope to a sink; returns a disposer. Delivers whole
+  // command-history snapshots on a poll (command-delivery has no subscription).
+  // Implemented by both the live hub and the synthetic preview source.
+  subscribeCommands(subscription: CommandSubscription, sink: CommandStreamSink): () => void;
 }
 
 // One widget's interest in a device stream: the measurement names it wants (an
@@ -157,6 +233,9 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // Per alarm-subscription reconcile triggers — invoked after an ack/clear so the
   // affected alarm widgets refresh immediately instead of waiting for the poll/stream.
   private readonly alarmReconcilers = new Set<() => void>();
+  // Per command-subscription reconcile triggers — invoked after an issue so the command
+  // widgets show the new command immediately instead of waiting for the next poll tick.
+  private readonly commandReconcilers = new Set<() => void>();
   // One entry per distinct device token that has at least one subscriber.
   private readonly streams = new Map<string, DeviceStream>();
   // Live alarm-subscription disposers. The alarm channel isn't ref-counted through
@@ -164,6 +243,10 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // stream), so its disposers are tracked here for disposeAll() to reach — otherwise an
   // imperative host closing the dashboard would leak every alarm widget's poll + socket.
   private readonly alarmDisposers = new Set<() => void>();
+  // Live command-subscription disposers (same rationale as alarmDisposers — the control
+  // channel holds a poll per subscription, not a shared device stream), so disposeAll()
+  // can tear down every command widget's poll.
+  private readonly commandDisposers = new Set<() => void>();
   // slot name → concrete entity binding. Consulted when a widget's selector is a
   // `slot`. Mutable so the authoring host can rebind live (setBindings).
   private bindings: Record<string, SlotBinding>;
@@ -344,6 +427,94 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     return { alarms, total };
   }
 
+  // ── Control channel ──────────────────────────────────────────────────────
+
+  // subscribeCommands binds a command widget's scope to a sink and returns a disposer.
+  // Poll-only (command-delivery has no subscription): resolve the target device once,
+  // then re-read its recent commands on an interval (and immediately after an issue via
+  // the reconciler). Scope resolution is async; the disposer is returned synchronously
+  // and cancels a still-pending resolution.
+  subscribeCommands(subscription: CommandSubscription, sink: CommandStreamSink): () => void {
+    let disposed = false;
+    let poll: ReturnType<typeof setInterval> | undefined;
+    let reconciler: (() => void) | undefined;
+    let deviceToken: string | null = null;
+    // Monotonic generation: a slow poll that resolves after a newer one can't overwrite
+    // fresher rows.
+    let generation = 0;
+
+    const dispose = (): void => {
+      disposed = true;
+      if (poll) clearInterval(poll);
+      if (reconciler) this.commandReconcilers.delete(reconciler);
+      this.commandDisposers.delete(dispose);
+    };
+    this.commandDisposers.add(dispose);
+
+    const reconcile = (): void => {
+      const gen = ++generation;
+      this.queryCommands(subscription, deviceToken)
+        .then((snapshot) => {
+          if (!disposed && gen === generation) sink.next(snapshot);
+        })
+        .catch((err) => {
+          if (!disposed && gen === generation) sink.error?.(err);
+        });
+    };
+
+    this.resolveCommandScope(subscription.datasource)
+      .then((token) => {
+        if (disposed) return;
+        deviceToken = token;
+        // A command button needs a single target device. Unscoped/unresolved (an unbound
+        // slot, no device) → an empty state, NOT tenant-wide: a command can't be issued
+        // to "all devices". Nothing to poll.
+        if (!deviceToken) {
+          sink.next({ deviceToken: null, commands: [], total: 0 });
+          return;
+        }
+        poll = setInterval(reconcile, COMMAND_POLL_MS);
+        reconciler = reconcile;
+        this.commandReconcilers.add(reconciler);
+        reconcile(); // initial load
+      })
+      .catch((err) => {
+        if (!disposed) sink.error?.(err);
+      });
+
+    return dispose;
+  }
+
+  // resolveCommandScope turns a command widget's scope selector into its single target
+  // device token (a command targets one device), or null when it carries no datasource
+  // or resolves to no device. When a selector expands to several devices (an anchor), the
+  // first is the target — the console restricts command widgets to a device scope, so
+  // this is a defensive fallback, not the authoring path.
+  private async resolveCommandScope(
+    datasource: DatasourceSelector | undefined,
+  ): Promise<string | null> {
+    if (!datasource) return null;
+    const groups = await this.resolveDevices(datasource);
+    return groups[0]?.deviceToken ?? null;
+  }
+
+  // queryCommands reads the recent commands for the target device (newest first, capped
+  // to pageSize) with their live delivery status.
+  private async queryCommands(
+    sub: CommandSubscription,
+    deviceToken: string | null,
+  ): Promise<CommandSnapshot> {
+    if (!deviceToken) return { deviceToken: null, commands: [], total: 0 };
+    const data = await gql(COMMAND_AREA, COMMANDS_QUERY, {
+      criteria: { pageNumber: 1, pageSize: sub.pageSize, deviceToken, status: null },
+    });
+    return {
+      deviceToken,
+      commands: data.commands.results,
+      total: data.commands.pagination.totalRecords,
+    };
+  }
+
   // ── WidgetActions (the write seam) ───────────────────────────────────────
 
   // can reports whether the viewer holds an authority ('*' grants all). Drives whether
@@ -365,6 +536,19 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     this.reconcileAlarms();
   }
 
+  // sendCommand issues a command to a device, minting the dispatch token here (the
+  // idempotency key + cancel handle), then nudges every open command widget to reconcile
+  // so the new command shows at once. The mutation reaches command-delivery (requires
+  // command:write, enforced server-side regardless of can()).
+  async sendCommand(deviceToken: string, name: string, payload?: string): Promise<CommandDispatch> {
+    const token = randomToken();
+    await gql(COMMAND_AREA, CREATE_COMMAND, {
+      request: { token, deviceToken, name, payload: payload ?? null },
+    });
+    this.reconcileCommands();
+    return { token };
+  }
+
   // reconcileAlarms re-queries every open alarm subscription hub-wide (after a mutation).
   // Hub-wide is deliberate: one alarm can appear in several widgets (different scopes),
   // and the acked/cleared row must refresh in all of them; scoping the nudge would need
@@ -373,15 +557,22 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     for (const reconcile of [...this.alarmReconcilers]) reconcile();
   }
 
+  // reconcileCommands re-polls every open command subscription (after an issue). Iterate
+  // a copy for safety.
+  private reconcileCommands(): void {
+    for (const reconcile of [...this.commandReconcilers]) reconcile();
+  }
+
   // disposeAll tears down every upstream stream (e.g. on dashboard close): the
-  // ref-counted measurement device streams AND every alarm subscription's poll +
-  // trigger. Iterate a copy of the alarm disposers since each removes itself from the
-  // set as it runs.
+  // ref-counted measurement device streams AND every alarm/command subscription's poll +
+  // trigger. Iterate a copy of the disposer sets since each removes itself as it runs.
   disposeAll(): void {
     for (const stream of this.streams.values()) stream.unsubscribe();
     this.streams.clear();
     for (const dispose of [...this.alarmDisposers]) dispose();
     this.alarmDisposers.clear();
+    for (const dispose of [...this.commandDisposers]) dispose();
+    this.commandDisposers.clear();
   }
 
   // The number of distinct upstream device streams currently open (observability

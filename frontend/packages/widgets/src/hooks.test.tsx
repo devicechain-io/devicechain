@@ -6,6 +6,9 @@ import type {
   AlarmSnapshot,
   AlarmStreamSink,
   AlarmSubscription,
+  CommandSnapshot,
+  CommandStreamSink,
+  CommandSubscription,
   DashboardHub,
   DatasourceSelector,
   MeasurementSample,
@@ -16,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(cleanup);
 
-import { useAlarmStream, useMeasurementStream } from './hooks';
+import { useAlarmStream, useCommandStream, useMeasurementStream } from './hooks';
 
 function fakeHub() {
   let sink: WidgetStreamSink | null = null;
@@ -184,6 +187,68 @@ describe('useAlarmStream', () => {
   it('unsubscribes on unmount', () => {
     const f = fakeAlarmHub();
     const { unmount } = renderHook(() => useAlarmStream(f.hub, alarmSub));
+    unmount();
+    expect(f.unsub).toHaveBeenCalledTimes(1);
+  });
+});
+
+function fakeCommandHub() {
+  let sink: CommandStreamSink | null = null;
+  const unsub = vi.fn();
+  const hub = {
+    subscribeWidget: () => () => {},
+    subscribeCommands: (_subscription: CommandSubscription, s: CommandStreamSink) => {
+      sink = s;
+      return unsub;
+    },
+  } as unknown as DashboardHub;
+  return {
+    hub,
+    unsub,
+    push: (snapshot: CommandSnapshot) => act(() => sink?.next(snapshot)),
+    fail: (err: unknown) => act(() => sink?.error?.(err)),
+  };
+}
+
+const commandSub: CommandSubscription = { datasource: { kind: 'device', deviceToken: 'd1', measurements: [] }, pageSize: 20 };
+
+describe('useCommandStream', () => {
+  it('starts loading before any snapshot', () => {
+    const f = fakeCommandHub();
+    const { result } = renderHook(() => useCommandStream(f.hub, commandSub));
+    expect(result.current.loading).toBe(true);
+    expect(result.current.deviceToken).toBeNull();
+    expect(result.current.commands).toEqual([]);
+  });
+
+  it('holds the latest command snapshot and clears loading', () => {
+    const f = fakeCommandHub();
+    const { result } = renderHook(() => useCommandStream(f.hub, commandSub));
+
+    f.push({
+      deviceToken: 'd1',
+      commands: [{ token: 'c-1', name: 'reboot', status: 'SENT', payload: null, responsePayload: null, error: null, queuedTime: null, sentTime: null, deliveredTime: null, respondedTime: null }],
+      total: 1,
+    });
+
+    expect(result.current.deviceToken).toBe('d1');
+    expect(result.current.commands.map((c) => c.token)).toEqual(['c-1']);
+    expect(result.current.total).toBe(1);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('records a sink error and stops loading', () => {
+    const f = fakeCommandHub();
+    const { result } = renderHook(() => useCommandStream(f.hub, commandSub));
+    const err = new Error('commands query failed');
+    f.fail(err);
+    expect(result.current.error).toBe(err);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('unsubscribes on unmount', () => {
+    const f = fakeCommandHub();
+    const { unmount } = renderHook(() => useCommandStream(f.hub, commandSub));
     unmount();
     expect(f.unsub).toHaveBeenCalledTimes(1);
   });

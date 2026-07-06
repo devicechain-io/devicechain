@@ -133,9 +133,9 @@ function useWidgetHistories(
     const historyWindow = defaultHistoryWindow();
     Promise.all(
       widgets.map(
-        // Only measurement widgets consume a history seed; an alarm widget's channel
-        // reconciles from a query, so backfilling it would fire a wasted (and
-        // all-measurements) bucketedMeasurements query whose result it ignores.
+        // Only measurement widgets consume a history seed; a non-measurement widget
+        // (alarm, command) reconciles from its own channel, so backfilling it would fire
+        // a wasted (and all-measurements) bucketedMeasurements query it ignores.
         async (w) =>
           [
             w.id,

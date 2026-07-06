@@ -14,11 +14,14 @@
 import type {
   AlarmStreamSink,
   AlarmSubscription,
+  CommandDispatch,
+  CommandStreamSink,
+  CommandSubscription,
   WidgetActions,
   WidgetDataSource,
   WidgetStreamSink,
 } from './hub';
-import type { AlarmRow, DatasourceSelector, MeasurementSample } from './types';
+import type { AlarmRow, CommandRow, DatasourceSelector, MeasurementSample } from './types';
 
 // The waveforms an author can preview with. Sine is the default (smooth, obviously
 // synthetic); ramp is a sawtooth; random-walk drifts within range.
@@ -66,6 +69,20 @@ const SYNTHETIC_ALARMS: ReadonlyArray<
   { severity: 'WARNING', state: 'CLEARED', acknowledged: true, alarmKey: 'signal-weak', metricKey: 'rssi', lastValue: -89, originatorToken: 'gateway-02', message: 'Weak uplink signal' },
   { severity: 'INDETERMINATE', state: 'ACTIVE', acknowledged: false, alarmKey: 'self-test', metricKey: 'status', lastValue: null, originatorToken: 'device-99', message: null },
 ];
+
+// A canonical spread of synthetic commands (one per lifecycle stage) so an author
+// previewing a command-button sees a populated, representative history — an in-flight
+// command, a completed one, a failure — before any real command has been issued.
+const SYNTHETIC_COMMANDS: ReadonlyArray<Pick<CommandRow, 'name' | 'status' | 'payload' | 'responsePayload' | 'error'>> = [
+  { name: 'reboot', status: 'SENT', payload: '{"delaySeconds":5}', responsePayload: null, error: null },
+  { name: 'set-interval', status: 'SUCCESSFUL', payload: '{"seconds":30}', responsePayload: '{"ok":true}', error: null },
+  { name: 'calibrate', status: 'DELIVERED', payload: null, responsePayload: null, error: null },
+  { name: 'firmware-update', status: 'FAILED', payload: '{"version":"2.1.0"}', responsePayload: null, error: 'device offline' },
+];
+
+// The device a synthetic command-button reports as its target, so the Send control
+// renders (a real widget needs a bound device to issue against).
+const SYNTHETIC_COMMAND_DEVICE = 'synthetic-device';
 
 // Deterministic small hash of a name → a stable phase offset, so multiple series on
 // one dashboard are visibly out of phase rather than overlapping identically.
@@ -186,6 +203,45 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
     };
   }
 
+  // subscribeCommands emits a synthetic command history for preview so a command-button
+  // shows a populated, lifecycle-varied list (and a bound target device, so its Send
+  // control renders). Re-emits on the same cadence with advancing queued times. Scope
+  // (datasource) is ignored — preview never resolves a device. Returns whole snapshots,
+  // matching the live hub's contract.
+  subscribeCommands(subscription: CommandSubscription, sink: CommandStreamSink): () => void {
+    const emit = (): void => {
+      const now = Date.now();
+      const commands: CommandRow[] = SYNTHETIC_COMMANDS.map((c, i) => {
+        const queued = new Date(now - i * 20_000).toISOString();
+        const terminal = c.status === 'SUCCESSFUL' || c.status === 'FAILED';
+        return {
+          token: `syn-command-${i}`,
+          name: c.name,
+          status: c.status,
+          payload: c.payload,
+          responsePayload: c.responsePayload,
+          error: c.error,
+          queuedTime: queued,
+          sentTime: c.status === 'QUEUED' ? null : queued,
+          deliveredTime: c.status === 'QUEUED' || c.status === 'SENT' ? null : queued,
+          respondedTime: terminal ? queued : null,
+        };
+      });
+      sink.next({
+        deviceToken: SYNTHETIC_COMMAND_DEVICE,
+        commands: commands.slice(0, subscription.pageSize),
+        total: commands.length,
+      });
+    };
+
+    emit();
+    const timer = setInterval(emit, this.intervalMs);
+    this.timers.add(timer);
+    return () => {
+      if (this.timers.delete(timer)) clearInterval(timer);
+    };
+  }
+
   // ── WidgetActions (preview stubs) ────────────────────────────────────────
   // Preview shows action controls (so an author sees the real layout), so can() is
   // always true; the actions themselves are no-ops — preview never mutates the backend.
@@ -199,6 +255,11 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
 
   async clearAlarm(): Promise<void> {
     // no-op in preview
+  }
+
+  async sendCommand(): Promise<CommandDispatch> {
+    // no-op in preview — return a stub dispatch token so the widget's optimistic UI works
+    return { token: 'syn-dispatch' };
   }
 
   // disposeAll stops every live stream (e.g. when preview is turned off). Individual

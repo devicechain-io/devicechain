@@ -26,17 +26,25 @@ import { X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
+import { useQuery } from '@/lib/hooks/use-query';
+import {
+  listCommandDefinitionsForDevice,
+  type CommandDefinition,
+} from '@/lib/api/device-management';
 import { EntityPicker, type EntityKind } from './EntityPicker';
 
 // Widgets that carry a datasource (label/image do not). Alarm widgets carry one too —
-// as SCOPE (which entity's alarms), where "None" means tenant-wide (all alarms).
+// as SCOPE (which entity's alarms), where "None" means tenant-wide (all alarms). The
+// command-button carries one as its single TARGET device (device-only, no measurements).
 const ALARM_WIDGETS = new Set<WidgetType>(['alarm-table', 'alarm-count']);
+const CONTROL_WIDGETS = new Set<WidgetType>(['command-button']);
 const DATA_WIDGETS = new Set<WidgetType>([
   'latest-card',
   'gauge',
   'timeseries-chart',
   'table',
   ...ALARM_WIDGETS,
+  ...CONTROL_WIDGETS,
 ]);
 
 const KIND_OPTIONS: ComboboxOption[] = [
@@ -103,6 +111,18 @@ export function WidgetConfigPanel({
     onChange({ ...widget, options });
   };
 
+  // Write several option keys atomically (a value of undefined/'' drops that key). Used
+  // where one choice bakes multiple options at once (e.g. picking a command sets its
+  // name, label, and parameter schema together).
+  const setOptions = (patch: Record<string, string | number | undefined>) => {
+    const options = { ...(widget.options ?? {}) };
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined || value === '') delete options[key];
+      else options[key] = value;
+    }
+    onChange({ ...widget, options });
+  };
+
   return (
     <aside className="w-80 shrink-0 overflow-auto border-l bg-card p-4">
       <div className="mb-4 flex items-center justify-between">
@@ -123,11 +143,19 @@ export function WidgetConfigPanel({
           <>
             {/* DatasourceFields edits a device/anchor selector, which is exactly a
                 ConcreteSelector — the workspace re-stores it as a slot. Alarm widgets
-                use it as scope and don't carry measurement names. */}
+                use it as scope and don't carry measurement names; the command-button
+                targets a single device (device-only, no measurements). */}
             <DatasourceFields
               datasource={datasource}
-              label={ALARM_WIDGETS.has(widget.type) ? 'Scope' : 'Data source'}
-              showMeasurements={!ALARM_WIDGETS.has(widget.type)}
+              label={
+                CONTROL_WIDGETS.has(widget.type)
+                  ? 'Target device'
+                  : ALARM_WIDGETS.has(widget.type)
+                    ? 'Scope'
+                    : 'Data source'
+              }
+              showMeasurements={!ALARM_WIDGETS.has(widget.type) && !CONTROL_WIDGETS.has(widget.type)}
+              deviceOnly={CONTROL_WIDGETS.has(widget.type)}
               onChange={(ds) => onDatasource(ds as ConcreteSelector | undefined)}
             />
             {datasource && slotName && (
@@ -141,6 +169,20 @@ export function WidgetConfigPanel({
               </p>
             )}
           </>
+        )}
+
+        {widget.type === 'command-button' && (
+          <CommandFields
+            deviceToken={datasource?.kind === 'device' ? datasource.deviceToken : undefined}
+            commandName={optString(widget, 'commandName')}
+            onSelect={(def) =>
+              setOptions({
+                commandName: def?.commandKey,
+                commandLabel: def?.name ?? def?.commandKey,
+                parameterSchema: def?.parameterSchema ?? undefined,
+              })
+            }
+          />
         )}
 
         <TypeOptions widget={widget} setOption={setOption} />
@@ -255,6 +297,13 @@ function TypeOptions({
       </>
     );
   }
+  if (widget.type === 'command-button') {
+    return (
+      <FormField label="Max rows" description="Recent commands shown in the history before scrolling.">
+        <NumberInput value={optNumber(widget, 'maxRows')} onChange={(v) => setOption('maxRows', v)} />
+      </FormField>
+    );
+  }
   return null; // chart/table/label/image have no extra options beyond above
 }
 
@@ -271,6 +320,7 @@ function DatasourceFields({
   datasource,
   label = 'Data source',
   showMeasurements = true,
+  deviceOnly = false,
   onChange,
 }: {
   datasource: DatasourceSelector | undefined;
@@ -278,11 +328,15 @@ function DatasourceFields({
   // Alarm widgets scope by entity but carry no measurement names, so they hide the
   // measurements field.
   showMeasurements?: boolean;
+  // The command-button targets a single device, so it offers only the device kind.
+  deviceOnly?: boolean;
   onChange: (next: DatasourceSelector | undefined) => void;
 }) {
-  // Only device/anchor are offered; a stored reserved kind (devices, slot, …)
-  // reads as unset here rather than being shown in a form that can't edit it.
+  // Only device/anchor are offered (device only when deviceOnly); a stored reserved kind
+  // (devices, slot, …) reads as unset here rather than being shown in a form that can't
+  // edit it.
   const kind = datasource?.kind === 'anchor' ? 'anchor' : datasource?.kind === 'device' ? 'device' : '';
+  const kindOptions = deviceOnly ? KIND_OPTIONS.filter((o) => o.value === 'device') : KIND_OPTIONS;
 
   const onKind = (next: string) => {
     if (next === 'device') onChange(EMPTY_DEVICE);
@@ -294,7 +348,7 @@ function DatasourceFields({
     <div className="space-y-3 rounded-md border border-border p-3">
       <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
       <FormField label="Kind">
-        <Combobox options={KIND_OPTIONS} value={kind} onChange={onKind} placeholder="None" />
+        <Combobox options={kindOptions} value={kind} onChange={onKind} placeholder="None" />
       </FormField>
 
       {datasource?.kind === 'device' && (
@@ -384,6 +438,76 @@ function AnchorFields({
         </FormField>
       )}
     </>
+  );
+}
+
+// ---- Command selection (command-button) -------------------------------------
+
+// CommandFields lets the author pick which command the button issues, from the target
+// device's command vocabulary (its profile's command definitions, ADR-043). Picking one
+// bakes its key, label, and parameter schema into the widget's options — so the widget
+// renders its typed form at runtime with no device→profile resolution. Requires a target
+// device to be chosen first (that's where the command list comes from).
+function CommandFields({
+  deviceToken,
+  commandName,
+  onSelect,
+}: {
+  deviceToken: string | undefined;
+  commandName: string;
+  onSelect: (def: CommandDefinition | undefined) => void;
+}) {
+  const { data, loading, error } = useQuery(
+    () => (deviceToken ? listCommandDefinitionsForDevice(deviceToken) : Promise.resolve([])),
+    [deviceToken],
+  );
+  const definitions = data ?? [];
+
+  const options: ComboboxOption[] = definitions.map((def) => ({
+    value: def.commandKey,
+    label: def.name ? `${def.name} (${def.commandKey})` : def.commandKey,
+  }));
+
+  // A command baked from a previous target device may not exist on the current one (the
+  // author repointed the device without re-picking). Flag it — non-destructively, since
+  // the datasource and options update through separate handlers — so the author re-picks
+  // rather than silently issuing a command the new device's profile doesn't define.
+  const staleSelection =
+    commandName !== '' && !loading && !error && !definitions.some((d) => d.commandKey === commandName);
+
+  return (
+    <div className="space-y-3 rounded-md border border-border p-3">
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Command</div>
+      {!deviceToken ? (
+        <p className="text-xs text-muted-foreground">Select a target device to choose a command.</p>
+      ) : loading ? (
+        <p className="text-xs text-muted-foreground">Loading commands…</p>
+      ) : error ? (
+        <p className="text-xs text-muted-foreground">Couldn’t load commands: {error}</p>
+      ) : (
+        <>
+          {staleSelection && (
+            <p className="text-xs text-destructive">
+              “{commandName}” isn’t defined on this device. Pick a command below.
+            </p>
+          )}
+          {definitions.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              This device’s profile defines no commands. Add a command definition to its device profile.
+            </p>
+          ) : (
+            <FormField label="Command" description="The command this button issues.">
+              <Combobox
+                options={options}
+                value={commandName}
+                onChange={(key) => onSelect(definitions.find((d) => d.commandKey === key))}
+                placeholder="Select a command"
+              />
+            </FormField>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

@@ -18,6 +18,7 @@ export { ConnectedWidget, type ConnectedWidgetProps } from './connected-widget';
 export {
   WIDGET_REGISTRY,
   ALARM_WIDGET_REGISTRY,
+  CONTROL_WIDGET_REGISTRY,
   WIDGET_CHANNEL,
   type WidgetChannel,
 } from './registry';
@@ -32,12 +33,21 @@ export { Label } from './widgets/label';
 export { Image } from './widgets/image';
 export { AlarmTable } from './widgets/alarm-table';
 export { AlarmCount } from './widgets/alarm-count';
+export { CommandButton } from './widgets/command-button';
 export {
   severityColor,
   severityLabel,
   severityRank,
   highestSeverity,
 } from './widgets/severity';
+export { commandStatusColor, commandStatusLabel, isTerminalStatus } from './widgets/command-status';
+export {
+  parseParameterSchema,
+  defaultValues,
+  validateParams,
+  buildPayload,
+  isScalar,
+} from './widgets/command-params';
 
 // Building blocks for custom widgets.
 export { WidgetFrame, type WidgetFrameProps } from './frame';
@@ -45,9 +55,11 @@ export { EChart, type EChartOption } from './echart';
 export {
   useMeasurementStream,
   useAlarmStream,
+  useCommandStream,
   useChartTheme,
   type MeasurementStreamState,
   type AlarmStreamState,
+  type CommandStreamState,
 } from './hooks';
 export {
   buildLineOption,
