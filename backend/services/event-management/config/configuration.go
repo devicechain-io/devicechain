@@ -14,7 +14,8 @@ type EventManagementConfiguration struct {
 	// decision 3) runs — the low-frequency backstop that drops event_anchors rows
 	// whose referenced entity no longer resolves in device-management, catching any
 	// entity-deletion event missed during an outage or a cache-window re-creation.
-	// 0 disables the sweep (the entity.deleted consumer remains the primary path).
+	// Unset (0) defaults to hourly; a negative value disables the sweep (the
+	// entity.deleted consumer remains the primary path either way).
 	AnchorSweepIntervalSeconds int
 }
 

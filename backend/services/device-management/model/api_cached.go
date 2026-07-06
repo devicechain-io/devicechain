@@ -57,7 +57,23 @@ func (capi *CachedApi) EvictEntityDelete(ctx context.Context, etype entity.Type,
 		_ = capi.caches.DeviceByToken.Delete(ctx, deviceByTokenKey(tenant, token))
 		_ = capi.caches.RelationshipsBySource.Delete(ctx, relationshipsBySourceKey(tenant, id))
 	}
-	for _, sid := range trackingSourceDeviceIds {
+	capi.evictRelationshipSources(ctx, tenant, trackingSourceDeviceIds)
+}
+
+// EvictRelationshipSources drops the cached tracked-relationship set of each given
+// source device (ADR-044 F2): after an edge is removed the set still lists the gone
+// edge. No tenant in context means the caches were bypassed on write, nothing to
+// evict.
+func (capi *CachedApi) EvictRelationshipSources(ctx context.Context, sourceDeviceIds []uint) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return
+	}
+	capi.evictRelationshipSources(ctx, tenant, sourceDeviceIds)
+}
+
+func (capi *CachedApi) evictRelationshipSources(ctx context.Context, tenant string, sourceDeviceIds []uint) {
+	for _, sid := range sourceDeviceIds {
 		_ = capi.caches.RelationshipsBySource.Delete(ctx, relationshipsBySourceKey(tenant, sid))
 	}
 }

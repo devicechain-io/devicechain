@@ -180,9 +180,16 @@ func (api *Api) RemoveEntityRelationships(ctx context.Context, tokens []string) 
 	if len(tokens) == 0 {
 		return false, nil
 	}
+	// Capture the source devices before the edges are gone so their cached tracked
+	// sets can be evicted (ADR-044 F2); the targets survive, so the sweep won't
+	// repair a stale set here.
+	sources := api.relationshipSourceDevices(ctx, "token in ?", tokens)
 	result := api.RDB.DB(ctx).Unscoped().Where("token in ?", tokens).Delete(&EntityRelationship{})
 	if result.Error != nil {
 		return false, result.Error
+	}
+	if result.RowsAffected > 0 {
+		api.evictRelationshipSources(ctx, sources)
 	}
 	return result.RowsAffected > 0, nil
 }

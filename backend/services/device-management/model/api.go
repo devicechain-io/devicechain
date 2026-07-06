@@ -35,13 +35,20 @@ type Api struct {
 	CacheEvictor CacheEvictor
 }
 
-// CacheEvictor drops the hot-path caches (ADR-022 B2) that an entity delete makes
-// stale: the deleted device's own by-token + relationship entries, and the tracked
-// relationships of every device that referenced the deleted entity as a target
-// (their cache still lists the now-gone edge). Dependency-inverted so the model
-// declares the need and the cache layer (CachedApi) satisfies it.
+// CacheEvictor drops the hot-path caches (ADR-022 B2) that a mutation makes stale.
+// Dependency-inverted so the model declares the need and the cache layer (CachedApi)
+// satisfies it.
+//
+// EvictEntityDelete handles an entity delete: the deleted device's own by-token +
+// relationship entries, plus the tracked relationships of every device that
+// referenced it as a target. EvictRelationshipSources handles an edge *removal*
+// (unassign): only the source devices' relationship entries, since the target
+// entity survives — and unlike a delete, the reconciliation sweep will not repair a
+// stale relationship set here (the target still resolves), so evicting is the only
+// fix.
 type CacheEvictor interface {
 	EvictEntityDelete(ctx context.Context, etype entity.Type, id uint, token string, trackingSourceDeviceIds []uint)
+	EvictRelationshipSources(ctx context.Context, sourceDeviceIds []uint)
 }
 
 // Create a new API instance.
@@ -81,6 +88,14 @@ func (api *Api) emitEntityDeleted(ctx context.Context, event *EntityDeletedEvent
 func (api *Api) evictEntityDelete(ctx context.Context, etype entity.Type, id uint, token string, sources []uint) {
 	if api.CacheEvictor != nil {
 		api.CacheEvictor.EvictEntityDelete(ctx, etype, id, token, sources)
+	}
+}
+
+// evictRelationshipSources drops the cached tracked-relationship sets of the given
+// source devices when an evictor is wired (ADR-044 F2). No-op otherwise.
+func (api *Api) evictRelationshipSources(ctx context.Context, sourceDeviceIds []uint) {
+	if api.CacheEvictor != nil && len(sourceDeviceIds) > 0 {
+		api.CacheEvictor.EvictRelationshipSources(ctx, sourceDeviceIds)
 	}
 }
 

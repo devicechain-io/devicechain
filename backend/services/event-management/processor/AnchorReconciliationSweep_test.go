@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	emmodel "github.com/devicechain-io/dc-event-management/model"
@@ -91,6 +92,80 @@ func TestSweep_FailsSafeOnResolveError(t *testing.T) {
 	sweep.runOnce(context.Background())
 
 	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything)
+}
+
+// mintOnly builds a mint stub + a config pointing svcclient at it.
+func mintOnly(t *testing.T) config.UserManagementConfiguration {
+	t.Helper()
+	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: "svc", ExpiresAt: 1 << 40})
+	}))
+	t.Cleanup(mint.Close)
+	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	return config.UserManagementConfiguration{Hostname: host, Port: uint32(port)}
+}
+
+// SAFETY: an unparseable id in device-management's answer must fail the resolve
+// (skip the tenant), never bend toward deleting the "missing" ref's anchors.
+func TestSweep_UnparseableIdFailsSafe(t *testing.T) {
+	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"existingEntityRefs": []map[string]string{{"type": "customer", "id": "not-a-number"}},
+		}})
+	}))
+	defer dm.Close()
+
+	api := new(emtest.MockApi)
+	api.Mock.On("DistinctAnchorTenants").Return([]string{"acme"}, nil)
+	api.Mock.On("DistinctAnchorRefs").Return([]emmodel.AnchorRef{{Type: "customer", Id: 999}}, nil)
+
+	client := svcclient.New(mintOnly(t), "shh", "event-management", []string{string(auth.DeviceRead)})
+	sweep := &AnchorReconciliationSweep{Api: api, client: client, dmURL: dm.URL}
+	sweep.runOnce(context.Background())
+
+	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything)
+}
+
+// A ref set larger than one chunk is resolved across multiple requests (so a big
+// tenant does not overflow the response cap and silently skip forever).
+func TestSweep_ChunksLargeRefSet(t *testing.T) {
+	var requests int32
+	dm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		var body struct {
+			Variables struct {
+				Refs []struct {
+					Type string `json:"type"`
+					Id   string `json:"id"`
+				} `json:"refs"`
+			} `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		out := make([]map[string]string, 0, len(body.Variables.Refs))
+		for _, ref := range body.Variables.Refs {
+			out = append(out, map[string]string{"type": ref.Type, "id": ref.Id}) // all exist
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"existingEntityRefs": out}})
+	}))
+	defer dm.Close()
+
+	refs := make([]emmodel.AnchorRef, 0, maxRefsPerResolve+50)
+	for i := 1; i <= maxRefsPerResolve+50; i++ {
+		refs = append(refs, emmodel.AnchorRef{Type: "device", Id: uint(i)})
+	}
+	api := new(emtest.MockApi)
+	api.Mock.On("DistinctAnchorTenants").Return([]string{"acme"}, nil)
+	api.Mock.On("DistinctAnchorRefs").Return(refs, nil)
+
+	client := svcclient.New(mintOnly(t), "shh", "event-management", []string{string(auth.DeviceRead)})
+	sweep := &AnchorReconciliationSweep{Api: api, client: client, dmURL: dm.URL}
+	sweep.runOnce(context.Background())
+
+	if got := atomic.LoadInt32(&requests); got != 2 {
+		t.Fatalf("expected 2 chunked requests for %d refs, got %d", maxRefsPerResolve+50, got)
+	}
+	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything) // all exist
 }
 
 // A tenant with no anchors resolves nothing and deletes nothing.

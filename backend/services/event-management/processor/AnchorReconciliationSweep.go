@@ -128,6 +128,7 @@ func (s *AnchorReconciliationSweep) sweepTenant(ctx context.Context, tenant stri
 		log.Error().Err(err).Str("tenant", tenant).Msg("Anchor sweep: failed to collect refs")
 		return
 	}
+	refs = dedupeRefs(refs)
 	if len(refs) == 0 {
 		return
 	}
@@ -158,9 +159,49 @@ func (s *AnchorReconciliationSweep) sweepTenant(ctx context.Context, tenant stri
 
 func refKey(t string, id uint) string { return t + "|" + strconv.FormatUint(uint64(id), 10) }
 
+// maxRefsPerResolve bounds a single existence query so a large tenant's ref set
+// neither overflows svcclient's response cap nor the target's SQL IN-list limit — a
+// too-big request would error and (safely) skip the tenant, so the backstop would
+// silently stop working for exactly the tenants that need it. Chunking keeps it live.
+const maxRefsPerResolve = 500
+
+// dedupeRefs collapses duplicate refs (a device is both an anchor source and, for a
+// tracked device→device relationship, a target) so each is resolved and deleted once.
+func dedupeRefs(refs []emmodel.AnchorRef) []emmodel.AnchorRef {
+	seen := make(map[string]bool, len(refs))
+	out := make([]emmodel.AnchorRef, 0, len(refs))
+	for _, r := range refs {
+		k := refKey(r.Type, r.Id)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, r)
+	}
+	return out
+}
+
 // resolveExisting asks device-management which of refs still exist, returning a set
-// keyed by refKey. A transport/GraphQL error is returned so the caller fails safe.
+// keyed by refKey. It chunks the request; any chunk error is returned so the caller
+// fails safe (skips the tenant) rather than treating unresolved refs as absent.
 func (s *AnchorReconciliationSweep) resolveExisting(ctx context.Context, tenant string, refs []emmodel.AnchorRef) (map[string]bool, error) {
+	existing := make(map[string]bool, len(refs))
+	for start := 0; start < len(refs); start += maxRefsPerResolve {
+		end := start + maxRefsPerResolve
+		if end > len(refs) {
+			end = len(refs)
+		}
+		if err := s.resolveChunk(ctx, tenant, refs[start:end], existing); err != nil {
+			return nil, err
+		}
+	}
+	return existing, nil
+}
+
+// resolveChunk queries one batch and records the existing refs into `existing`. An
+// unexpected/unparseable id in the response is a hard error, not a silent skip: the
+// stakes (a "missing" ref gets its anchors deleted) mean any surprise must fail safe.
+func (s *AnchorReconciliationSweep) resolveChunk(ctx context.Context, tenant string, refs []emmodel.AnchorRef, existing map[string]bool) error {
 	inputs := make([]map[string]any, len(refs))
 	for i, r := range refs {
 		inputs[i] = map[string]any{"type": r.Type, "id": strconv.FormatUint(uint64(r.Id), 10)}
@@ -173,15 +214,14 @@ func (s *AnchorReconciliationSweep) resolveExisting(ctx context.Context, tenant 
 	}
 	const q = `query($refs: [EntityRefInput!]!) { existingEntityRefs(refs: $refs) { type id } }`
 	if err := s.client.Query(ctx, s.dmURL, tenant, q, map[string]any{"refs": inputs}, &out); err != nil {
-		return nil, err
+		return err
 	}
-	existing := make(map[string]bool, len(out.ExistingEntityRefs))
 	for _, r := range out.ExistingEntityRefs {
 		id, err := strconv.ParseUint(r.Id, 10, 64)
 		if err != nil {
-			continue
+			return fmt.Errorf("sweep: device-management returned an unparseable id %q", r.Id)
 		}
 		existing[refKey(r.Type, uint(id))] = true
 	}
-	return existing, nil
+	return nil
 }

@@ -74,17 +74,24 @@ func TestDeleteDevice_EmitsEntityDeleted(t *testing.T) {
 	assert.Len(t, capture.events, 1, "no emit for a token that matches nothing")
 }
 
-// captureEvictor records EvictEntityDelete calls.
+// captureEvictor records eviction calls.
 type evictCall struct {
 	etype   entity.Type
 	id      uint
 	token   string
 	sources []uint
 }
-type captureEvictor struct{ calls []evictCall }
+type captureEvictor struct {
+	calls      []evictCall
+	relSources [][]uint
+}
 
 func (c *captureEvictor) EvictEntityDelete(_ context.Context, etype entity.Type, id uint, token string, sources []uint) {
 	c.calls = append(c.calls, evictCall{etype, id, token, sources})
+}
+
+func (c *captureEvictor) EvictRelationshipSources(_ context.Context, sourceDeviceIds []uint) {
+	c.relSources = append(c.relSources, sourceDeviceIds)
 }
 
 // Deleting an entity evicts the hot-path caches (ADR-044 F2): the deleted device's
@@ -121,6 +128,64 @@ func TestDeleteDevice_EvictsCaches(t *testing.T) {
 		assert.Equal(t, a.ID, call.id)
 		assert.Equal(t, "dev-a", call.token)
 		assert.Equal(t, []uint{b.ID}, call.sources, "device B tracked A as a target, so its relationship cache is evicted")
+	}
+}
+
+// Deleting a NON-device anchor target (a customer tracked by a device) evicts the
+// tracking device's relationship cache but touches no device-by-token entry.
+func TestDeleteCustomer_EvictsTrackers(t *testing.T) {
+	api := newDeleteEmitTestApi(t)
+	if err := api.RDB.DB(context.Background()).AutoMigrate(&Customer{}); err != nil {
+		t.Fatalf("migrate customer: %v", err)
+	}
+	ctx := core.WithTenant(context.Background(), "acme")
+	evictor := &captureEvictor{}
+	api.CacheEvictor = evictor
+
+	cust := &Customer{}
+	cust.Token = "acme-corp"
+	dev := &Device{}
+	dev.Token = "dev-x"
+	if err := api.RDB.DB(ctx).Create(cust).Error; err != nil {
+		t.Fatalf("seed customer: %v", err)
+	}
+	if err := api.RDB.DB(ctx).Create(dev).Error; err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+	rel := &EntityRelationship{SourceType: "device", SourceId: dev.ID, TargetType: "customer", TargetId: cust.ID}
+	rel.Token = "rel-c"
+	if err := api.RDB.DB(ctx).Create(rel).Error; err != nil {
+		t.Fatalf("seed relationship: %v", err)
+	}
+
+	deleted, err := api.DeleteCustomer(ctx, "acme-corp")
+	assert.NoError(t, err)
+	assert.True(t, deleted)
+	if assert.Len(t, evictor.calls, 1) {
+		assert.Equal(t, entity.TypeCustomer, evictor.calls[0].etype)
+		assert.Equal(t, []uint{dev.ID}, evictor.calls[0].sources, "the tracking device's cache is evicted")
+	}
+}
+
+// Removing a relationship (unassign) evicts the source device's relationship cache
+// — the target survives, so nothing else repairs the stale set (ADR-044 F2 / F-1).
+func TestRemoveEntityRelationship_EvictsSource(t *testing.T) {
+	api := newDeleteEmitTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	evictor := &captureEvictor{}
+	api.CacheEvictor = evictor
+
+	rel := &EntityRelationship{SourceType: "device", SourceId: 77, TargetType: "customer", TargetId: 3}
+	rel.Token = "rel-u"
+	if err := api.RDB.DB(ctx).Create(rel).Error; err != nil {
+		t.Fatalf("seed relationship: %v", err)
+	}
+
+	removed, err := api.RemoveEntityRelationship(ctx, "rel-u")
+	assert.NoError(t, err)
+	assert.True(t, removed)
+	if assert.Len(t, evictor.relSources, 1) {
+		assert.Equal(t, []uint{77}, evictor.relSources[0])
 	}
 }
 

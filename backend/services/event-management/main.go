@@ -127,8 +127,9 @@ func wireAnchorSweep(ctx context.Context) error {
 		return nil
 	}
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	if infra.ServiceAuth.Secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
-		log.Warn().Msg("Service secret or device-management endpoint not configured — anchor reconciliation sweep disabled.")
+	if infra.ServiceAuth.Secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 ||
+		infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("Service secret, device-management, or user-management endpoint not configured — anchor reconciliation sweep disabled.")
 		return nil
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-management", []string{string(auth.DeviceRead)})
