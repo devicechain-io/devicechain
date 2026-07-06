@@ -36,7 +36,7 @@ jobs:
       modules: ${{ steps.mod.outputs.modules }}
       smoke: ${{ steps.smoke.outputs.smoke }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Discover services
         id: svc
@@ -83,7 +83,7 @@ jobs:
       matrix:
         module: ${{ fromJson(needs.discover.outputs.modules) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -135,7 +135,7 @@ jobs:
   license:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -161,7 +161,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:
@@ -194,7 +194,7 @@ jobs:
   helm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: azure/setup-helm@v5
 
@@ -214,7 +214,7 @@ jobs:
       run:
         working-directory: deploy/opentofu
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: opentofu/setup-opentofu@v2
 
@@ -242,7 +242,7 @@ jobs:
         # operator at backend/k8s -- assembled by the discover job.
         module: ${{ fromJson(needs.discover.outputs.smoke) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:

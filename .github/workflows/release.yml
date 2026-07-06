@@ -52,7 +52,7 @@ jobs:
       is_prerelease: ${{ steps.semver.outputs.is_prerelease }}
       smoke: ${{ steps.smoke.outputs.smoke }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate tag is strict semver
         id: semver
@@ -100,7 +100,7 @@ jobs:
         # (backend/k8s) -- assembled by the guard job.
         module: ${{ fromJson(needs.guard.outputs.smoke) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -168,7 +168,7 @@ jobs:
     needs: guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: azure/setup-helm@v5
 
@@ -207,7 +207,7 @@ jobs:
     needs: guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -250,7 +250,7 @@ jobs:
     needs: guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # goreleaser needs full history (tags + commits) for changelog/version.
           fetch-depth: 0
