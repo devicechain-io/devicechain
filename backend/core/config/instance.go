@@ -17,12 +17,16 @@ type NatsConfiguration struct {
 	// (1 for single-node dev; raise to 3 for the HA topology in ADR-018).
 	StreamReplicas uint32
 	// StreamMaxBytes / StreamMaxMsgs bound the on-disk size and message count of
-	// each per-suffix JetStream stream (ADR-023): a hard platform ceiling so a
-	// producer flood — or a wedged consumer that stops draining — cannot fill the
-	// broker's disk without limit. Paired with DiscardOld retention, hitting a
-	// ceiling evicts the OLDEST messages (the same backpressure as the 7-day age
-	// window, by size instead of time), so size these for the retention a busy
-	// cluster needs. StreamMaxMsgSize rejects an oversized single message at
+	// each per-suffix JetStream stream (ADR-023): a PER-STREAM platform ceiling so a
+	// producer flood — or a wedged consumer that stops draining — cannot grow one
+	// stream without limit. Paired with DiscardOld retention, hitting a ceiling
+	// evicts the OLDEST messages (the same backpressure as the 7-day age window, by
+	// size instead of time), so size these for the retention a busy cluster needs.
+	// Note this is a per-stream bound, not an aggregate-disk guarantee: the true
+	// disk ceiling is (stream count × StreamMaxBytes), which must fit the broker's
+	// JetStream store — the default keeps the ~8 streams within a modest PV. (An
+	// account-level max_file_store at the broker is the belt to this suspenders;
+	// tracked separately.) StreamMaxMsgSize rejects an oversized single message at
 	// publish. All three are fail-safe (ADR-023 never-unlimited): a zero, negative,
 	// or unset value is coerced to the platform default in ApplyDefaults rather
 	// than left at 0, which JetStream would treat as UNLIMITED. Raise them for a
@@ -161,14 +165,17 @@ type InstanceConfiguration struct {
 	Persistence    PersistenceConfiguration
 }
 
-// Platform-default JetStream stream bounds (ADR-023). Sized to bound a single
-// dev/small cluster's per-suffix stream against a runaway producer while leaving
-// generous room for a normal 7-day retention window; a high-throughput deployment
-// raises them via config. See NatsConfiguration for the fail-safe rules.
+// Platform-default JetStream stream bounds (ADR-023). Sized so the platform's
+// handful of per-suffix streams (~8) stay within a modest JetStream PV (8 × 1 GiB
+// = 8 GiB) while leaving generous room for a normal 7-day retention window; a
+// high-throughput deployment raises them via config. The message-size default
+// mirrors the broker's default max_payload (1 MiB) so the stream ceiling reflects
+// the limit actually enforced at publish rather than an inert larger value. See
+// NatsConfiguration for the fail-safe rules.
 const (
-	DefaultStreamMaxBytes   int64 = 2 << 30   // 2 GiB per stream
+	DefaultStreamMaxBytes   int64 = 1 << 30   // 1 GiB per stream
 	DefaultStreamMaxMsgs    int64 = 5_000_000 // 5M messages per stream
-	DefaultStreamMaxMsgSize int32 = 8 << 20   // 8 MiB per message
+	DefaultStreamMaxMsgSize int32 = 1 << 20   // 1 MiB per message (matches default max_payload)
 )
 
 // ApplyDefaults fills unset infrastructure fields with their defaults so an

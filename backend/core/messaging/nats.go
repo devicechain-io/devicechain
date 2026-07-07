@@ -198,6 +198,11 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			// only the byte/msg ceilings on the existing config, leaving subjects,
 			// storage, retention and replicas untouched. It is idempotent: concurrent
 			// pods compute the same desired bounds, so no advisory lock is needed.
+			// Config is the source of truth: an out-of-band tune (e.g. a raised
+			// MaxBytes set via the nats CLI) is intentionally reverted to the config
+			// value on the next restart — and shrinking a ceiling below current usage
+			// makes DiscardOld immediately evict the overflow. Change the bound via
+			// config, not out-of-band, to avoid that.
 			cfg := info.Config
 			if applyStreamBounds(&cfg, bounds) {
 				if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
