@@ -49,6 +49,12 @@ variable "nats_jetstream_storage" {
   default     = "8Gi"
 }
 
+variable "nats_jetstream_max_file_store" {
+  description = "Server-level max_file_store — the hard aggregate JetStream disk ceiling (ADR-023). Empty derives it as 90% of nats_jetstream_storage (filesystem headroom); set explicitly to override. Must be <= nats_jetstream_storage."
+  type        = string
+  default     = ""
+}
+
 variable "nats_enable_tls" {
   description = "Terminate TLS on the NATS client + MQTT listeners (ADR-025). Keep in sync with the services' instance config: when true the bring-up must thread the nats_ca output into infrastructure.nats.tls so clients dial over TLS. Set false only for plaintext debugging."
   type        = bool

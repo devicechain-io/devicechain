@@ -39,6 +39,20 @@ variable "chart_version" {
 variable "jetstream_storage" {
   type    = string
   default = "8Gi"
+  validation {
+    # Integer magnitude + unit only. The max_file_store headroom default floors 90%
+    # of the magnitude, so a fractional value like "1.5Gi" would drop to "1Gi" (a
+    # 33% cut, not 10%), and a unitless value would fail to parse. For a fractional
+    # volume, set jetstream_max_file_store explicitly.
+    condition     = can(regex("^[0-9]+[A-Za-z]+$", var.jetstream_storage))
+    error_message = "jetstream_storage must be an integer magnitude with a unit (e.g. \"8Gi\", \"512Mi\"); set jetstream_max_file_store explicitly for a fractional size."
+  }
+}
+
+variable "jetstream_max_file_store" {
+  description = "Server-level max_file_store — the hard aggregate JetStream disk ceiling (ADR-023). Empty (default) derives it as 90% of jetstream_storage, leaving filesystem headroom so JetStream errors cleanly before the volume is 100% full. Set explicitly (e.g. \"6Gi\") to override; must be <= jetstream_storage."
+  type        = string
+  default     = ""
 }
 
 variable "ha" {
@@ -75,6 +89,16 @@ locals {
   # Service name the internal services present (see natsauth.ServiceUser). Kept in
   # sync with the Go constant; a mismatch would lock every service out.
   service_user = "dc_service"
+
+  # js_max_file_store resolves the server-level max_file_store (see the
+  # jetstream_max_file_store variable and the fileStore.maxSize wiring below). When
+  # not overridden, it is 90% of the PVC size: split jetstream_storage into its
+  # numeric magnitude and unit (e.g. "8Gi" -> 8 + "Gi"), floor 90% of the magnitude,
+  # and reattach the unit ("8Gi" -> "7Gi"). The 10% left over is filesystem headroom
+  # so JetStream stops accepting data before the volume is physically full.
+  js_size_magnitude = tonumber(regex("^[0-9.]+", var.jetstream_storage))
+  js_size_unit      = regex("[A-Za-z]+$", var.jetstream_storage)
+  js_max_file_store = var.jetstream_max_file_store != "" ? var.jetstream_max_file_store : "${floor(local.js_size_magnitude * 0.9)}${local.js_size_unit}"
 
   # Broker-auth config merged into nats-server.conf (config.merge) when enabled: a
   # single APP account holds services (static dc_service login, exempt) and devices
@@ -150,6 +174,16 @@ locals {
             enabled = true
             size    = var.jetstream_storage
           }
+          # max_file_store — the server-level HARD AGGREGATE JetStream disk ceiling
+          # (ADR-023): the total file store across every account/stream/KV/MQTT
+          # session cannot exceed this, so a flood is bounded even before the
+          # per-stream MaxBytes ceilings, and JetStream returns clean publish errors
+          # instead of driving the volume to a wedged 100%-full state. The chart
+          # otherwise derives this from the PVC size (== the raw volume, no
+          # headroom); we set it explicitly BELOW the PVC (default 90%, see locals)
+          # so the filesystem keeps overhead room. The per-stream MaxBytes ceilings
+          # (backend config) sub-divide this budget across streams.
+          maxSize = local.js_max_file_store
         }
       }
       # Each tls block emits BOTH keys on both toggle states so the HCL branches

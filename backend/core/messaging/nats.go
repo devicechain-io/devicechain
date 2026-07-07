@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -100,6 +101,15 @@ type NatsManager struct {
 	readers   []*natsReader
 	writers   []*natsWriter
 	lifecycle core.LifecycleManager
+
+	// streamNames is the set of streams this service has ensured (deduped), guarded
+	// by streamMu because SubscribeLive can ensure a stream at runtime while the
+	// metrics sampler reads the set. The sampler polls each for fill (ADR-023).
+	streamMu    sync.Mutex
+	streamNames []string
+	metrics     *streamMetrics
+	stopSampler chan struct{}
+	samplerWg   sync.WaitGroup
 }
 
 // NewNatsManager creates a new NATS manager. oncreate is invoked on Start to
@@ -111,6 +121,7 @@ func NewNatsManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
 		oncreate:     oncreate,
 		readers:      make([]*natsReader, 0),
 		writers:      make([]*natsWriter, 0),
+		metrics:      newStreamMetrics(ms),
 	}
 	name := fmt.Sprintf("%s-%s", ms.FunctionalArea, "nats")
 	nmgr.lifecycle = core.NewLifecycleManager(name, nmgr, callbacks)
@@ -237,7 +248,48 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	nmgr.trackStream(name)
 	return name, nil
+}
+
+// trackStream records a stream this service has ensured, so the metrics sampler
+// polls it. Deduped and mutex-guarded because SubscribeLive can ensure a stream at
+// runtime concurrently with the sampler reading the set.
+func (nmgr *NatsManager) trackStream(name string) {
+	nmgr.streamMu.Lock()
+	defer nmgr.streamMu.Unlock()
+	for _, n := range nmgr.streamNames {
+		if n == name {
+			return
+		}
+	}
+	nmgr.streamNames = append(nmgr.streamNames, name)
+}
+
+// trackedStreams returns a snapshot of the ensured stream names for the sampler.
+func (nmgr *NatsManager) trackedStreams() []string {
+	nmgr.streamMu.Lock()
+	defer nmgr.streamMu.Unlock()
+	return append([]string(nil), nmgr.streamNames...)
+}
+
+// runStreamMetrics samples every ensured stream's fill on a fixed cadence until
+// stopped, so the size ceilings' DiscardOld eviction is observable rather than
+// silent (ADR-023). It re-snapshots the tracked set each tick to pick up any stream
+// a runtime SubscribeLive ensured after startup.
+func (nmgr *NatsManager) runStreamMetrics() {
+	defer nmgr.samplerWg.Done()
+	ticker := time.NewTicker(streamMetricsSampleInterval)
+	defer ticker.Stop()
+	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams()) // seed promptly, don't wait a full interval
+	for {
+		select {
+		case <-nmgr.stopSampler:
+			return
+		case <-ticker.C:
+			nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams())
+		}
+	}
 }
 
 // ----------------
@@ -730,10 +782,19 @@ func (nmgr *NatsManager) Start(ctx context.Context) error {
 	return nmgr.lifecycle.Start(ctx)
 }
 
-// ExecuteStart instantiates the service's readers/writers via oncreate.
+// ExecuteStart instantiates the service's readers/writers via oncreate, then starts
+// the stream-utilization sampler over the streams they ensured.
 func (nmgr *NatsManager) ExecuteStart(context.Context) error {
 	if err := nmgr.oncreate(nmgr); err != nil {
 		return err
+	}
+	// Guard against starting a second sampler if Start is ever retried without an
+	// intervening Stop (a real Starter.Postprocess failure): a nil stopSampler means
+	// none is running. ExecuteStop nils it back out.
+	if nmgr.stopSampler == nil {
+		nmgr.stopSampler = make(chan struct{})
+		nmgr.samplerWg.Add(1)
+		go nmgr.runStreamMetrics()
 	}
 	log.Info().Msg("NATS component creation completed successfully.")
 	return nil
@@ -744,8 +805,15 @@ func (nmgr *NatsManager) Stop(ctx context.Context) error {
 	return nmgr.lifecycle.Stop(ctx)
 }
 
-// ExecuteStop unsubscribes readers and drains the connection.
+// ExecuteStop stops the metrics sampler, unsubscribes readers, and drains the
+// connection. The sampler is stopped first (before Drain) so it is not mid-
+// StreamInfo when the connection closes.
 func (nmgr *NatsManager) ExecuteStop(context.Context) error {
+	if nmgr.stopSampler != nil {
+		close(nmgr.stopSampler)
+		nmgr.samplerWg.Wait()
+		nmgr.stopSampler = nil
+	}
 	log.Info().Msg("Shutting down NATS readers.")
 	for _, r := range nmgr.readers {
 		// A bound subscription's Unsubscribe does NOT delete the durable (that is the
