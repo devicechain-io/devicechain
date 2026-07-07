@@ -12,5 +12,6 @@ use (
 	./backend/services/event-sources
 	./backend/services/notification-management
 	./backend/services/user-management
+	./backend/sims/dc-simulator
 	./deploy
 )

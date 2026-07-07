@@ -1,0 +1,180 @@
+<!--
+Copyright The DeviceChain Authors
+SPDX-License-Identifier: Apache-2.0
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>dc-simulator — devicepulse</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0b0f14;
+    --card: #131a23;
+    --border: #24303d;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --accent: #4fd1c5;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fa;
+      --card: #ffffff;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --muted: #57606a;
+      --accent: #0969da;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 1.5rem;
+  }
+  h1 { font-size: 1.1rem; margin: 0 0 0.25rem; }
+  .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem; }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    margin-bottom: 1rem;
+  }
+  .dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--muted); }
+  .dot.live { background: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  tr:first-child td { color: var(--accent); font-weight: 600; }
+  .empty { color: var(--muted); padding: 1rem 0; }
+</style>
+</head>
+<body>
+  <h1>dc-simulator — devicepulse</h1>
+  <div class="sub" id="sub">loading configuration…</div>
+  <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">connecting…</span></div>
+  <table>
+    <thead>
+      <tr><th>Occurred</th><th>Device</th><th>Metric</th><th>Value</th><th>Unit</th><th>Data type</th></tr>
+    </thead>
+    <tbody id="rows"><tr><td class="empty" colspan="6">Waiting for the first measurement…</td></tr></tbody>
+  </table>
+
+<script>
+// This page deliberately does NOT bundle @devicechain/client: that package
+// ships only TypeScript source (package.json "main" points at src/index.ts,
+// no browser build is published anywhere this static page could load it
+// from) and a kind-cluster demo cannot assume internet egress to a CDN
+// either. Instead this is a minimal, dependency-free implementation of the
+// exact same wire protocol the SDK's subscribe() speaks — graphql-transport-ws
+// (see backend/core/graphql/subscription.go and
+// frontend/packages/client/src/subscribe.ts) — so behavior matches the SDK
+// call for call: connection_init carries {Authorization: "Bearer <token>"},
+// then one "subscribe" operation for measurementStream, "next" frames render
+// rows, ping/pong just keeps the socket alive.
+
+const MAX_ROWS = 25;
+const rowsEl = document.getElementById('rows');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const subEl = document.getElementById('sub');
+
+function setStatus(live, text) {
+  statusDot.classList.toggle('live', live);
+  statusText.textContent = text;
+}
+
+function addRow(evt) {
+  if (rowsEl.querySelector('.empty')) rowsEl.innerHTML = '';
+  const tr = document.createElement('tr');
+  const cells = [
+    evt.occurredTime ?? '',
+    evt.deviceToken ?? '',
+    evt.name ?? '',
+    evt.value ?? '',
+    evt.unit ?? '',
+    evt.dataType ?? '',
+  ];
+  for (const c of cells) {
+    const td = document.createElement('td');
+    td.textContent = c;
+    tr.appendChild(td);
+  }
+  rowsEl.insertBefore(tr, rowsEl.firstChild);
+  while (rowsEl.children.length > MAX_ROWS) {
+    rowsEl.removeChild(rowsEl.lastChild);
+  }
+}
+
+const MEASUREMENT_STREAM_QUERY = `subscription { measurementStream { deviceToken occurredTime name value unit dataType } }`;
+
+function subscribe(wsUrl, token) {
+  const socket = new WebSocket(wsUrl, 'graphql-transport-ws');
+  let opId = '1';
+
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify({ type: 'connection_init', payload: { Authorization: `Bearer ${token}` } }));
+  });
+
+  socket.addEventListener('message', (ev) => {
+    const msg = JSON.parse(ev.data);
+    switch (msg.type) {
+      case 'connection_ack':
+        setStatus(true, 'live');
+        socket.send(JSON.stringify({ id: opId, type: 'subscribe', payload: { query: MEASUREMENT_STREAM_QUERY } }));
+        break;
+      case 'ping':
+        socket.send(JSON.stringify({ type: 'pong' }));
+        break;
+      case 'next': {
+        const evt = msg.payload && msg.payload.data && msg.payload.data.measurementStream;
+        if (evt) addRow(evt);
+        break;
+      }
+      case 'error':
+        setStatus(false, 'subscription error — see console');
+        console.error('measurementStream error', msg.payload);
+        break;
+      case 'complete':
+        setStatus(false, 'stream completed');
+        break;
+      default:
+        break;
+    }
+  });
+
+  socket.addEventListener('close', () => {
+    // Reconnect via connect(), NOT subscribe(wsUrl, token): the access token has a
+    // ~900s TTL, so re-fetch /config.json for a fresh one instead of hammering the
+    // socket with a stale token forever.
+    setStatus(false, 'disconnected — retrying in 3s');
+    setTimeout(connect, 3000);
+  });
+  socket.addEventListener('error', () => socket.close());
+}
+
+async function connect() {
+  try {
+    const res = await fetch('/config.json');
+    if (!res.ok) throw new Error(`config.json returned ${res.status}`);
+    const cfg = await res.json();
+    subEl.textContent = `tenant ${cfg.tenant} · manifest ${cfg.manifestId} · ${cfg.wsUrl}`;
+    subscribe(cfg.wsUrl, cfg.token);
+  } catch (err) {
+    setStatus(false, 'failed to load configuration');
+    subEl.textContent = String(err);
+  }
+}
+
+connect();
+</script>
+</body>
+</html>

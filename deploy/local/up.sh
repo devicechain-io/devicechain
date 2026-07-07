@@ -238,7 +238,7 @@ log "🌱 Seed"
 # instance (needs the API reachable + auth), so they are an on-demand step, not
 # part of bring-up.
 step "bootstrap admin auto-seeded by user-management on first start (default password — change it)"
-step "load example data on demand:  dcctl seed construction --server localhost --instance $INSTANCE"
+step "run a simulation on demand:  dcctl sim create devicepulse --instance $INSTANCE  (then run dc-simulator with the printed handshake path)"
 
 # ---- 8. report -------------------------------------------------------------
 log "🚀 Ready"
