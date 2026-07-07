@@ -189,7 +189,18 @@ func TestMergeLatestMeasurementsBinding(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("newer merge: %v", err)
 	}
-	if temp = byName("temp"); temp.Unit == nil || *temp.Unit != "K" {
-		t.Fatalf("newer reading did not overwrite unit: %+v", temp)
+	if temp = byName("temp"); temp.Unit == nil || *temp.Unit != "K" || temp.Value.Float64 != 295 {
+		t.Fatalf("newer reading did not overwrite value+unit: %+v", temp)
+	}
+
+	// An older reading is ignored — it must not roll the unit back.
+	old := cel
+	if err := api.MergeLatestMeasurements(ctx, "device-1", []LatestMeasurementInput{
+		{Name: "temp", Value: num(10), Unit: &old, DataType: &double, OccurredTime: t0.Add(-time.Minute)},
+	}); err != nil {
+		t.Fatalf("older merge: %v", err)
+	}
+	if temp = byName("temp"); *temp.Unit != "K" || temp.Value.Float64 != 295 {
+		t.Fatalf("older reading wrongly overwrote the newer value/unit: %+v", temp)
 	}
 }
