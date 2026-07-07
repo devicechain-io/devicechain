@@ -113,16 +113,36 @@ func (s *Service) DeleteRole(ctx context.Context, scope, token string) (bool, er
 }
 
 // TenantInput is the data to create a tenant. Config is freeform JSON (ADR-033).
+// The Ingest* governance overrides are nil to inherit the platform default.
 type TenantInput struct {
-	Token  string
-	Name   string
-	Config map[string]any
+	Token                   string
+	Name                    string
+	Config                  map[string]any
+	IngestMessagesPerSecond *float64
+	IngestBurst             *int
 }
 
 // TenantMutableInput is the data to update a tenant: its token is fixed.
 type TenantMutableInput struct {
-	Name   string
-	Config map[string]any
+	Name                    string
+	Config                  map[string]any
+	IngestMessagesPerSecond *float64
+	IngestBurst             *int
+}
+
+// validateGovernance rejects a non-positive override. A nil field means "inherit
+// the platform default"; a provided value must be positive — a zero or negative
+// ceiling is never a valid override (the platform default, itself always
+// positive, is the fail-safe floor), so callers clear an override by omitting it,
+// not by setting it to zero.
+func validateGovernance(mps *float64, burst *int) error {
+	if mps != nil && *mps <= 0 {
+		return fmt.Errorf("ingestMessagesPerSecond override must be positive (got %v); omit it to inherit the platform default", *mps)
+	}
+	if burst != nil && *burst <= 0 {
+		return fmt.Errorf("ingestBurst override must be positive (got %d); omit it to inherit the platform default", *burst)
+	}
+	return nil
 }
 
 // CreateTenant registers a new tenant (enabled by default).
@@ -130,9 +150,14 @@ func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant
 	if in.Token == "" {
 		return nil, fmt.Errorf("token is required")
 	}
+	if err := validateGovernance(in.IngestMessagesPerSecond, in.IngestBurst); err != nil {
+		return nil, err
+	}
 	t := &iam.Tenant{
 		Token: in.Token, Enabled: true, Config: in.Config,
-		NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&in.Name)},
+		NamedEntity:             rdb.NamedEntity{Name: rdb.NullStrOf(&in.Name)},
+		IngestMessagesPerSecond: in.IngestMessagesPerSecond,
+		IngestBurst:             in.IngestBurst,
 	}
 	if err := s.iam.CreateTenant(ctx, t); err != nil {
 		return nil, err
@@ -140,14 +165,21 @@ func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant
 	return s.iam.TenantByToken(ctx, in.Token)
 }
 
-// UpdateTenant replaces a tenant's name and config.
+// UpdateTenant replaces a tenant's name, config, and governance overrides. A nil
+// override field clears it (reverting the tenant to the platform default), so the
+// update is a full replace of the mutable fields, not a partial patch.
 func (s *Service) UpdateTenant(ctx context.Context, token string, in TenantMutableInput) (*iam.Tenant, error) {
+	if err := validateGovernance(in.IngestMessagesPerSecond, in.IngestBurst); err != nil {
+		return nil, err
+	}
 	t, err := s.loadTenant(ctx, token)
 	if err != nil {
 		return nil, err
 	}
 	t.Name = rdb.NullStrOf(&in.Name)
 	t.Config = in.Config
+	t.IngestMessagesPerSecond = in.IngestMessagesPerSecond
+	t.IngestBurst = in.IngestBurst
 	if err := s.iam.UpdateTenant(ctx, t); err != nil {
 		return nil, err
 	}
