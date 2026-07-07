@@ -37,6 +37,16 @@ instance:
         hostname: dc-nats.dc-system
         port: 4222
         streamReplicas: 1
+        # Per-stream JetStream size ceilings (ADR-023): a hard platform bound so a
+        # producer flood or a wedged consumer cannot fill the broker disk. Paired
+        # with DiscardOld retention, hitting a ceiling evicts the OLDEST messages
+        # (size-based backpressure alongside the 7-day age window), so size these
+        # for the retention a busy cluster needs. Omitting a value (or setting 0)
+        # falls back to the built-in platform default — never unlimited. Raise them
+        # for a high-throughput deployment.
+        streamMaxBytes: 2147483648 # 2 GiB per stream
+        streamMaxMsgs: 5000000 # 5M messages per stream
+        streamMaxMsgSize: 8388608 # 8 MiB per message
         # Client-side TLS to the broker (ADR-025). MUST match the broker: the
         # OpenTofu nats module terminates TLS on the 4222 + 1883 listeners and
         # emits its CA as the `nats_ca` output, which the bring-up threads in here

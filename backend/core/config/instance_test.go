@@ -52,6 +52,43 @@ func TestDefaultInstanceConfigurationValid(t *testing.T) {
 	}
 }
 
+// The stream size bounds are fail-safe (ADR-023 never-unlimited): an omitted (0)
+// or negative value is coerced to the platform default rather than left at 0,
+// which JetStream would treat as unlimited; an explicit positive value is honored.
+func TestApplyDefaultsStreamBounds(t *testing.T) {
+	t.Run("zero and negative coerce to platform default", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			set  func(*NatsConfiguration)
+		}{
+			{"unset", func(n *NatsConfiguration) {}},
+			{"negative", func(n *NatsConfiguration) {
+				n.StreamMaxBytes, n.StreamMaxMsgs, n.StreamMaxMsgSize = -1, -1, -1
+			}},
+		} {
+			cfg := &InstanceConfiguration{}
+			tc.set(&cfg.Infrastructure.Nats)
+			cfg.ApplyDefaults()
+			n := cfg.Infrastructure.Nats
+			if n.StreamMaxBytes != DefaultStreamMaxBytes || n.StreamMaxMsgs != DefaultStreamMaxMsgs || n.StreamMaxMsgSize != DefaultStreamMaxMsgSize {
+				t.Errorf("%s: bounds not defaulted: %d/%d/%d", tc.name, n.StreamMaxBytes, n.StreamMaxMsgs, n.StreamMaxMsgSize)
+			}
+		}
+	})
+
+	t.Run("explicit positive values are honored", func(t *testing.T) {
+		cfg := &InstanceConfiguration{}
+		cfg.Infrastructure.Nats.StreamMaxBytes = 999
+		cfg.Infrastructure.Nats.StreamMaxMsgs = 42
+		cfg.Infrastructure.Nats.StreamMaxMsgSize = 7
+		cfg.ApplyDefaults()
+		n := cfg.Infrastructure.Nats
+		if n.StreamMaxBytes != 999 || n.StreamMaxMsgs != 42 || n.StreamMaxMsgSize != 7 {
+			t.Errorf("explicit bounds overwritten: %d/%d/%d", n.StreamMaxBytes, n.StreamMaxMsgs, n.StreamMaxMsgSize)
+		}
+	})
+}
+
 // Validate fails closed when the NATS backbone or the user-management endpoint
 // (which every service validates tokens against) is missing.
 func TestInstanceConfigurationValidateFailsClosed(t *testing.T) {

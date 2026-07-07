@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
@@ -140,23 +141,77 @@ func (nmgr *NatsManager) streamReplicas() int {
 	return r
 }
 
-// ensureStream creates the per-suffix stream if it does not already exist. The
-// stream captures every tenant's subjects for the suffix via the wildcard
-// subject, so a single stream backs both the scoped producers and the shared
-// wildcard consumer.
+// streamBounds are the platform ceilings applied to every per-suffix stream
+// (ADR-023): total on-disk bytes, total message count, and single-message size.
+type streamBounds struct {
+	maxBytes   int64
+	maxMsgs    int64
+	maxMsgSize int32
+}
+
+// streamBounds reads the configured ceilings, coercing any non-positive value to
+// the platform default so a stream is never created UNLIMITED (0 in a StreamConfig
+// means unlimited to JetStream). ApplyDefaults normally does this at config load;
+// this is belt-and-suspenders for a manually-built config in tests.
+func (nmgr *NatsManager) streamBounds() streamBounds {
+	c := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats
+	b := streamBounds{maxBytes: c.StreamMaxBytes, maxMsgs: c.StreamMaxMsgs, maxMsgSize: c.StreamMaxMsgSize}
+	if b.maxBytes <= 0 {
+		b.maxBytes = config.DefaultStreamMaxBytes
+	}
+	if b.maxMsgs <= 0 {
+		b.maxMsgs = config.DefaultStreamMaxMsgs
+	}
+	if b.maxMsgSize <= 0 {
+		b.maxMsgSize = config.DefaultStreamMaxMsgSize
+	}
+	return b
+}
+
+// applyStreamBounds copies the desired ceilings onto cfg and reports whether any
+// of them changed, so ensureStream issues an UpdateStream only on real drift. It
+// is a pure function to keep the reconcile decision unit-testable without a broker.
+func applyStreamBounds(cfg *nats.StreamConfig, b streamBounds) bool {
+	changed := cfg.MaxBytes != b.maxBytes || cfg.MaxMsgs != b.maxMsgs || cfg.MaxMsgSize != b.maxMsgSize
+	cfg.MaxBytes = b.maxBytes
+	cfg.MaxMsgs = b.maxMsgs
+	cfg.MaxMsgSize = b.maxMsgSize
+	return changed
+}
+
+// ensureStream creates the per-suffix stream if it does not already exist, and
+// reconciles its size ceilings if it does. The stream captures every tenant's
+// subjects for the suffix via the wildcard subject, so a single stream backs both
+// the scoped producers and the shared wildcard consumer.
 func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
+	bounds := nmgr.streamBounds()
 	// Retry on connection/server errors so a few seconds of NATS lag on a cluster
 	// restart degrades into a retry rather than a crash-loop (A6). A stream that
 	// does not yet exist (ErrStreamNotFound) is the normal first-run case and is
 	// handled by creating it, not retried.
 	err := core.RetryInfraConnect(context.Background(), "nats jetstream", func(context.Context) error {
-		if _, err := nmgr.js.StreamInfo(name); err == nil {
+		info, err := nmgr.js.StreamInfo(name)
+		if err == nil {
+			// The stream exists — an older build (or an earlier ceiling) may have left
+			// it unbounded, so reconcile the size limits in place. UpdateStream touches
+			// only the byte/msg ceilings on the existing config, leaving subjects,
+			// storage, retention and replicas untouched. It is idempotent: concurrent
+			// pods compute the same desired bounds, so no advisory lock is needed.
+			cfg := info.Config
+			if applyStreamBounds(&cfg, bounds) {
+				if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
+					return err
+				}
+				log.Info().Str("stream", name).Int64("maxBytes", bounds.maxBytes).
+					Int64("maxMsgs", bounds.maxMsgs).Int32("maxMsgSize", bounds.maxMsgSize).
+					Msg("Reconciled JetStream stream size ceilings")
+			}
 			return nil
 		} else if !errors.Is(err, nats.ErrStreamNotFound) {
 			return err
 		}
-		if _, err := nmgr.js.AddStream(&nats.StreamConfig{
+		cfg := &nats.StreamConfig{
 			Name:      name,
 			Subjects:  []string{WildcardSubject(nmgr.Microservice.InstanceId, suffix)},
 			Storage:   nats.FileStorage,
@@ -164,10 +219,14 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			Discard:   nats.DiscardOld,
 			MaxAge:    streamMaxAge,
 			Replicas:  nmgr.streamReplicas(),
-		}); err != nil {
+		}
+		applyStreamBounds(cfg, bounds)
+		if _, err := nmgr.js.AddStream(cfg); err != nil {
 			return err
 		}
-		log.Info().Str("stream", name).Msg("Created JetStream stream")
+		log.Info().Str("stream", name).Int64("maxBytes", bounds.maxBytes).
+			Int64("maxMsgs", bounds.maxMsgs).Int32("maxMsgSize", bounds.maxMsgSize).
+			Msg("Created JetStream stream")
 		return nil
 	})
 	if err != nil {
