@@ -9,8 +9,9 @@ DeviceChain models the physical world with a small set of composable concepts. T
 
 ## Core entities
 
-- **Device** — an instance of a device profile; the thing that connects and reports.
-- **Device Profile** *(evolving from "device type")* — shared configuration for a class of devices: transport, provisioning policy, alarm rules, OTA targets, and processing routing. Defining configuration once on a profile keeps a fleet consistent. *(In design.)*
+- **Device** — the thing that connects and reports; an instance of a device type.
+- **Device Type** — the **taxonomy/identity** layer: a device class's name, appearance (icon and colors), and classification for grouping and filtering. A device type references at most one device profile.
+- **Device Profile** — the **capability contract**: a distinct, **versioned** aggregate (draft → publish → rollback) that owns a device class's **metric**, **command**, and **alarm-rule** definitions. Many device types can share one profile — so the capability config is defined once and reused — and a device resolves its capabilities through `device → type → profile`. A device type without a profile is valid; it just classifies and displays its devices without granting a typed capability contract.
 - **Asset** — the real-world thing a device monitors (categorized as Device / Person / Hardware).
 - **Area** — a spatial/organizational location, optionally with polygon boundaries and zones; areas nest into hierarchies.
 - **Customer** — an organizational owner; customers also nest into hierarchies.

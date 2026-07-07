@@ -8,7 +8,7 @@ title: Dashboards
 DeviceChain includes an embeddable, version-controlled dashboard system for visualizing live device data. A dashboard is a **tenant-scoped resource** authored in the console and rendered from a portable JSON definition — the same definition can be embedded in any React app or opened in the standalone reference viewer.
 
 :::note Status
-Available: the canvas editor, the built-in widget set, live subscriptions, versioning (publish / rollback), synthetic preview, named slots + binding manifests, and export — plus the standalone `/dash` reference viewer. Planned: publishing the runtime packages to the public npm registry (they build in-repo today), richer datasource selectors (relationship-graph traversal, drill-down), widget actions, and additional widgets. (ADR-039)
+Available: the canvas editor, the built-in widget set (telemetry, alarm, and command/control widgets), live subscriptions, **widget actions** (alarm ack/clear, send command — server-authorized), versioning (publish / rollback), synthetic preview, named slots + binding manifests, and export — plus the standalone `/dash` reference viewer. Planned: publishing the runtime packages to the public npm registry (they build in-repo today), richer datasource selectors (relationship-graph traversal, drill-down), per-breakpoint layout editing, and additional widgets. (ADR-039)
 :::
 
 ## The canvas
@@ -17,18 +17,23 @@ A dashboard is a **canvas** of positioned widgets — absolute position and size
 
 ## Widgets
 
-Six built-in widgets render over [Apache ECharts](https://echarts.apache.org/):
+Built-in widgets span three channels — **telemetry**, **alarm**, and **control** — and render over [Apache ECharts](https://echarts.apache.org/):
 
-| Widget | Shows |
-|---|---|
-| **Time-series chart** | one or more measurement series over a time window |
-| **Gauge** | a single latest value against a range / thresholds |
-| **Latest-value card** | a single current reading with its timestamp |
-| **Table** | recent rows for a device or anchor |
-| **Label** | static text |
-| **Image** | a static image (e.g. a floor plan behind other widgets) |
+| Widget | Channel | Shows |
+|---|---|---|
+| **Time-series chart** | telemetry | one or more measurement series over a time window |
+| **Gauge** | telemetry | a single latest value against a range / thresholds |
+| **Latest-value card** | telemetry | a single current reading with its timestamp |
+| **Table** | telemetry | recent rows for a device or anchor |
+| **Label** | telemetry | static text |
+| **Image** | telemetry | a static image (e.g. a floor plan behind other widgets) |
+| **Alarm table** | alarm | live alarms for a device or anchor |
+| **Alarm count** | alarm | a rolled-up count of open alarms |
+| **Command / control** | control | a typed parameter form that dispatches a command and shows its live delivery lifecycle |
 
 Widgets are themed with CSS custom properties, so an embedding application controls their appearance without modifying widget code.
+
+Widgets can also carry **actions** — acknowledge or clear an alarm, or send a command — which the server authorizes against the caller's own tenant-scoped rights (for example, an action requiring `alarm:write` is inert for a read-only viewer).
 
 ## Datasources
 

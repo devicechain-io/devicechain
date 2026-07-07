@@ -11,13 +11,17 @@ DeviceChain is a set of stateless Go microservices over a shared core library, c
 
 | Component | Responsibility |
 |---|---|
-| **event-sources** | Inbound device transports. Decodes raw messages (JSON today; Protobuf and custom decoders planned) and publishes them onto the pipeline. |
-| **device-management** | Devices, device profiles, the typed relationship graph, and event resolution (attaching device + organizational context to each event). |
-| **event-management** | Persists resolved events to TimescaleDB and serves time-series queries over GraphQL. |
+| **event-sources** | Inbound device transports. Decodes raw messages (JSON today; Protobuf and custom decoders planned), applies a per-tenant ingest rate limit, and publishes them onto the pipeline. |
+| **device-management** | Devices, device types + versioned device profiles, the typed relationship graph, the alarm engine, and event resolution (attaching device + organizational context to each event). |
+| **event-management** | Persists resolved events to TimescaleDB, applies the data-lifecycle policies (compression / retention / rollups), and serves time-series queries over GraphQL. |
+| **device-state** | The live last-known-state projection per device — presence, latest location, and current reading per measurement. |
+| **command-delivery** | Persistent, two-way command dispatch to devices, tracked through a per-command lifecycle. |
+| **dashboard-management** | Versioned dashboard definitions (draft, publish / rollback, export), rendered by the embeddable widget packages. |
+| **notification-management** | Routes triggered alarms to humans — per-tenant policy over email (SMTP) and webhook, with per-severity escalation. |
 | **user-management** | Global identities, per-tenant memberships, the role catalog, and JWT issuance/validation. |
 | **operator** | A controller-runtime operator that manages the `DeviceChainInstance` lifecycle (status aggregation, config hot-reload). Workloads themselves are rendered by the Helm chart; tenants are control-plane database records, not reconciled resources. |
 
-Additional services — command delivery, device state, device registration, outbound connectors, batch operations, and scheduling — are planned. See the repository for current status.
+Additional services — outbound connectors, batch operations, and scheduling — are planned. See the repository for current status.
 
 ## The data and messaging backbone
 

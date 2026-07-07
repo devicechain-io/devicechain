@@ -49,7 +49,7 @@ The credential authenticates the connection (broker) and the event (pipeline). T
 
 ## HTTP
 
-`event-sources` also accepts events over HTTP on port **8081**. The tenant is taken from the path (mirroring the MQTT topic convention); the device and its credential ride in the body. `POST` returns **202 Accepted** once the event is queued:
+`event-sources` also accepts events over HTTP on port **8081**. The tenant is taken from the path (mirroring the MQTT topic convention); the device and its credential ride in the body. `POST` returns **202 Accepted** once the event is queued — or **429 Too Many Requests** if the tenant is over its ingest rate limit (a per-tenant limiter with a platform-default ceiling shields the shared pipeline; the MQTT path drops over-limit messages instead):
 
 ```bash
 curl -X POST http://localhost:8081/dc/acme/events \

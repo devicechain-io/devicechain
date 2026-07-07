@@ -25,11 +25,12 @@ It is a ground-up rebuild of the SiteWhere platform that keeps the proven domain
 DeviceChain is a set of cooperating microservices over a shared core library:
 
 - **event-sources** — pluggable inbound transports (MQTT today; HTTP, CoAP, WebSocket planned) that decode raw device messages onto the pipeline.
-- **device-management** — devices, profiles, the relationship graph, and event resolution.
+- **device-management** — devices, device types + versioned device profiles, the relationship graph, the alarm engine, and event resolution.
 - **event-management** — persists resolved events to TimescaleDB and serves time-series queries (including live subscriptions over a graphql-ws bridge).
 - **device-state** — the live last-known-state projection per device (current reading per measurement).
 - **command-delivery** — persistent two-way command dispatch to devices.
 - **dashboard-management** — versioned dashboard definitions (draft, publish/rollback, export) rendered by the embeddable widget packages.
+- **notification-management** — routes triggered alarms to humans over email (SMTP) and webhook, with per-severity escalation.
 - **user-management** — global identities, per-tenant memberships, the role catalog, and JWT issuance/validation.
 - **operator (k8s)** — reconciles CRDs into the running platform.
 
