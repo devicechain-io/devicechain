@@ -10,20 +10,23 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// ADR-029 query-shape ceilings. Every request is bounded by a maximum selection
-// nesting depth and a maximum raw query length, so a single hostile document
-// cannot force unbounded validation/execution work. Both are applied centrally in
-// MustParseSchema, so every service inherits them from one place, and both are
-// operator-tunable per service via env — but only UPWARD in effect: a missing,
-// unparseable, or below-1 value falls back to the secure default rather than
-// disabling the ceiling, mirroring rdb.EffectivePageSize and the never-unlimited
-// governance rule (ADR-023). There is deliberately no env value that turns a
-// ceiling off.
+// ADR-029 request-shape ceilings. Every request is bounded by a maximum body
+// size, a maximum raw query length, and a maximum selection-nesting depth, so a
+// single hostile document cannot force unbounded ingress/validation/execution
+// work. The query/depth ceilings are applied centrally in MustParseSchema and the
+// body ceiling in the HTTP handler, so every service inherits them from one place.
+// All three are operator-tunable per service via env, and can be tuned in either
+// direction, but none can be weakened to unlimited: a missing, unparseable, or
+// below-1 value falls back to the secure default rather than disabling the
+// ceiling, mirroring rdb.EffectivePageSize and the never-unlimited governance rule
+// (ADR-023). There is deliberately no env value that turns a ceiling off.
 const (
 	// EnvGraphQLMaxDepth overrides the maximum selection-set nesting depth.
 	EnvGraphQLMaxDepth = "DC_GRAPHQL_MAX_DEPTH"
 	// EnvGraphQLMaxQueryLength overrides the maximum raw query length in bytes.
 	EnvGraphQLMaxQueryLength = "DC_GRAPHQL_MAX_QUERY_LENGTH"
+	// EnvGraphQLMaxBodyBytes overrides the maximum HTTP request body size in bytes.
+	EnvGraphQLMaxBodyBytes = "DC_GRAPHQL_MAX_BODY_BYTES"
 
 	// DefaultGraphQLMaxDepth caps selection nesting. The deepest legitimate operation
 	// the platform issues is depth ~4; the canonical schema-introspection query
@@ -35,6 +38,12 @@ const (
 	// few KB (the introspection query ~5KB); 100KB leaves generous room while
 	// rejecting a multi-megabyte alias-amplified document before it is parsed.
 	DefaultGraphQLMaxQueryLength = 100_000
+	// DefaultGraphQLMaxBodyBytes caps the whole HTTP request body, which the query
+	// length alone does not (the JSON envelope + variables are decoded before the
+	// query string is length-checked). 4MB dwarfs any legitimate control-plane
+	// mutation — dashboard definitions travel as opaque JSON variables and run to
+	// tens of KB — while stopping a multi-hundred-MB body from being buffered.
+	DefaultGraphQLMaxBodyBytes = 4 << 20
 )
 
 // maxDepth resolves the effective selection-depth ceiling (see EnvGraphQLMaxDepth).
@@ -46,6 +55,12 @@ func maxDepth() int {
 // EnvGraphQLMaxQueryLength).
 func maxQueryLength() int {
 	return envPositiveInt(EnvGraphQLMaxQueryLength, DefaultGraphQLMaxQueryLength)
+}
+
+// maxBodyBytes resolves the effective HTTP request-body ceiling in bytes (see
+// EnvGraphQLMaxBodyBytes).
+func maxBodyBytes() int64 {
+	return int64(envPositiveInt(EnvGraphQLMaxBodyBytes, DefaultGraphQLMaxBodyBytes))
 }
 
 // envPositiveInt reads a positive integer from env, falling back to def when the

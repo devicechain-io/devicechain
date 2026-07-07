@@ -44,6 +44,20 @@ func TestDefaultDepthClearsIntrospection(t *testing.T) {
 	}
 }
 
+// Pin the shipped defaults so a future edit that silently loosens or tightens a
+// ceiling has to change this test on purpose.
+func TestDefaultConstants(t *testing.T) {
+	if DefaultGraphQLMaxDepth != 15 {
+		t.Errorf("DefaultGraphQLMaxDepth = %d, want 15", DefaultGraphQLMaxDepth)
+	}
+	if DefaultGraphQLMaxQueryLength != 100_000 {
+		t.Errorf("DefaultGraphQLMaxQueryLength = %d, want 100000", DefaultGraphQLMaxQueryLength)
+	}
+	if DefaultGraphQLMaxBodyBytes != 4<<20 {
+		t.Errorf("DefaultGraphQLMaxBodyBytes = %d, want %d", DefaultGraphQLMaxBodyBytes, 4<<20)
+	}
+}
+
 // nestRoot is a self-referential type so a test query can nest arbitrarily deep.
 type nestRoot struct{}
 

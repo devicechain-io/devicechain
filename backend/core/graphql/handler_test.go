@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,6 +127,36 @@ func TestServeHTTP_ServiceTokenEndToEnd(t *testing.T) {
 	}
 	if out.Data.WhoAmI != "tenant-a:true" {
 		t.Fatalf("service token did not stamp tenant+authorities end-to-end: %q", out.Data.WhoAmI)
+	}
+}
+
+// The request-body ceiling (ADR-029) is enforced before the body is fully read: a
+// body over the limit is rejected (400) rather than buffered into memory. A body
+// under the limit runs normally.
+func TestServeHTTP_BodySizeCeiling(t *testing.T) {
+	t.Setenv(EnvGraphQLMaxBodyBytes, "128")
+	schema := MustParseSchema(`schema { query: Query } type Query { whoAmI: String! }`, &echoRoot{})
+	srv := httptest.NewServer(NewHttpHandler(schema, map[ContextKey]interface{}{}, nil))
+	defer srv.Close()
+
+	post := func(body []byte) int {
+		resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		defer resp.Body.Close()
+		io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+
+	small, _ := json.Marshal(map[string]string{"query": "query{whoAmI}"})
+	if code := post(small); code != http.StatusOK {
+		t.Fatalf("a small body was rejected: code=%d", code)
+	}
+	// Pad the variables past the 128-byte ceiling; the decode must fail on size.
+	big, _ := json.Marshal(map[string]any{"query": "query{whoAmI}", "variables": map[string]string{"pad": strings.Repeat("x", 256)}})
+	if code := post(big); code != http.StatusBadRequest {
+		t.Fatalf("an over-size body was not rejected: code=%d", code)
 	}
 }
 
