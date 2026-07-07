@@ -157,6 +157,15 @@ func (h *HttpHandler) validator() *auth.Validator {
 
 // Handles http request processing.
 func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Cap the request body before anything reads it (ADR-029): the relay's JSON
+	// decode buffers the whole envelope — query + variables — into memory before
+	// the query-length ceiling can reject an oversized query, so without this a
+	// multi-hundred-MB body is a cheap memory-exhaustion vector. MaxBytesReader
+	// stops the read at the ceiling and surfaces a decode error instead.
+	if r.Body != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes())
+	}
+
 	for key, value := range h.ContextProviders {
 		r = r.WithContext(context.WithValue(r.Context(), key, value))
 	}
