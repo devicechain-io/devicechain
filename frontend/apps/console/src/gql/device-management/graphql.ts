@@ -217,6 +217,7 @@ export type CustomerTypeSearchCriteria = {
 export type DeviceCreateRequest = {
   description?: string | null | undefined;
   deviceTypeToken: string;
+  externalId?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
   token: string;
