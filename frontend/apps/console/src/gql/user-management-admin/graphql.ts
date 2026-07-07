@@ -40,12 +40,16 @@ export type AdminRoleUpdateRequest = {
 
 export type AdminTenantCreateRequest = {
   config?: string | null | undefined;
+  ingestBurst?: number | null | undefined;
+  ingestMessagesPerSecond?: number | null | undefined;
   name?: string | null | undefined;
   token: string;
 };
 
 export type AdminTenantUpdateRequest = {
   config?: string | null | undefined;
+  ingestBurst?: number | null | undefined;
+  ingestMessagesPerSecond?: number | null | undefined;
   name?: string | null | undefined;
 };
 
