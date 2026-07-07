@@ -30,6 +30,13 @@ type Tenant {
     description: String
 }
 
+# The ingest governance overrides for the tenant the caller is acting within. A
+# null field means the tenant inherits the platform default (never unlimited).
+type TenantGovernance {
+    ingestMessagesPerSecond: Float
+    ingestBurst: Int
+}
+
 # The identity the caller is signed in as (control plane), for display in the
 # console — its name, falling back to email.
 type CurrentIdentity {
@@ -47,6 +54,9 @@ type Query {
     ping: String!
     # The tenant the caller is currently acting within (self-scoped).
     tenant: Tenant!
+    # The ingest governance overrides for the caller's tenant (requires
+    # tenant:read); read by the enforcing service over a service token.
+    tenantGovernance: TenantGovernance!
     # The identity the caller is signed in as (self-scoped).
     me: CurrentIdentity!
     # Re-read the caller's live memberships from a valid identity token, so the

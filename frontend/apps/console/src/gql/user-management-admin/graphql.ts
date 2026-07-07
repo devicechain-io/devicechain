@@ -61,7 +61,7 @@ export type IdentitiesQuery = { identities: Array<{ id: string, email: string, f
 export type TenantsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, config: string | null, createdAt: string | null, updatedAt: string | null }> };
+export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, createdAt: string | null, updatedAt: string | null }> };
 
 export type RolesQueryVariables = Exact<{
   scope?: string | null | undefined;
@@ -184,7 +184,7 @@ export type CreateTenantMutationVariables = Exact<{
 }>;
 
 
-export type CreateTenantMutation = { createTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, createdAt: string | null, updatedAt: string | null } };
+export type CreateTenantMutation = { createTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, createdAt: string | null, updatedAt: string | null } };
 
 export type UpdateTenantMutationVariables = Exact<{
   token: string;
@@ -192,7 +192,7 @@ export type UpdateTenantMutationVariables = Exact<{
 }>;
 
 
-export type UpdateTenantMutation = { updateTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, createdAt: string | null, updatedAt: string | null } };
+export type UpdateTenantMutation = { updateTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, createdAt: string | null, updatedAt: string | null } };
 
 export type SetTenantEnabledMutationVariables = Exact<{
   token: string;
@@ -200,7 +200,7 @@ export type SetTenantEnabledMutationVariables = Exact<{
 }>;
 
 
-export type SetTenantEnabledMutation = { setTenantEnabled: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, createdAt: string | null, updatedAt: string | null } };
+export type SetTenantEnabledMutation = { setTenantEnabled: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, createdAt: string | null, updatedAt: string | null } };
 
 export type DeleteTenantMutationVariables = Exact<{
   token: string;
@@ -255,6 +255,8 @@ export const TenantsDocument = new TypedDocumentString(`
     name
     enabled
     config
+    ingestMessagesPerSecond
+    ingestBurst
     createdAt
     updatedAt
   }
@@ -466,6 +468,8 @@ export const CreateTenantDocument = new TypedDocumentString(`
     name
     enabled
     config
+    ingestMessagesPerSecond
+    ingestBurst
     createdAt
     updatedAt
   }
@@ -479,6 +483,8 @@ export const UpdateTenantDocument = new TypedDocumentString(`
     name
     enabled
     config
+    ingestMessagesPerSecond
+    ingestBurst
     createdAt
     updatedAt
   }
@@ -492,6 +498,8 @@ export const SetTenantEnabledDocument = new TypedDocumentString(`
     name
     enabled
     config
+    ingestMessagesPerSecond
+    ingestBurst
     createdAt
     updatedAt
   }

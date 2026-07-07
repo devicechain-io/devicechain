@@ -16,7 +16,7 @@ import * as types from './graphql';
  */
 type Documents = {
     "\n  query Identities {\n    identities {\n      id\n      email\n      firstName\n      lastName\n      enabled\n      systemRoles\n      memberships {\n        tenant\n        enabled\n        roles\n      }\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.IdentitiesDocument,
-    "\n  query Tenants {\n    tenants {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.TenantsDocument,
+    "\n  query Tenants {\n    tenants {\n      id\n      token\n      name\n      enabled\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.TenantsDocument,
     "\n  query Roles($scope: String) {\n    roles(scope: $scope) {\n      id\n      scope\n      token\n      name\n      description\n      authorities\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.RolesDocument,
     "\n  query AdminAuditEvents($criteria: AdminAuditEventSearchCriteria!) {\n    auditEvents(criteria: $criteria) {\n      results {\n        id\n        occurredTime\n        category\n        tenant\n        actor\n        operation\n        tableName\n        entityPk\n        entityLabel\n        rowsAffected\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.AdminAuditEventsDocument,
     "\n  query Authorities {\n    authorities\n  }\n": typeof types.AuthoritiesDocument,
@@ -32,14 +32,14 @@ type Documents = {
     "\n  mutation CreateRole($request: AdminRoleCreateRequest!) {\n    createRole(request: $request) {\n      id\n      scope\n      token\n      name\n      description\n      authorities\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.CreateRoleDocument,
     "\n  mutation UpdateRole($scope: String!, $token: String!, $request: AdminRoleUpdateRequest!) {\n    updateRole(scope: $scope, token: $token, request: $request) {\n      id\n      scope\n      token\n      name\n      description\n      authorities\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.UpdateRoleDocument,
     "\n  mutation DeleteRole($scope: String!, $token: String!) {\n    deleteRole(scope: $scope, token: $token)\n  }\n": typeof types.DeleteRoleDocument,
-    "\n  mutation CreateTenant($request: AdminTenantCreateRequest!) {\n    createTenant(request: $request) {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.CreateTenantDocument,
-    "\n  mutation UpdateTenant($token: String!, $request: AdminTenantUpdateRequest!) {\n    updateTenant(token: $token, request: $request) {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.UpdateTenantDocument,
-    "\n  mutation SetTenantEnabled($token: String!, $enabled: Boolean!) {\n    setTenantEnabled(token: $token, enabled: $enabled) {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.SetTenantEnabledDocument,
+    "\n  mutation CreateTenant($request: AdminTenantCreateRequest!) {\n    createTenant(request: $request) {\n      id\n      token\n      name\n      enabled\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.CreateTenantDocument,
+    "\n  mutation UpdateTenant($token: String!, $request: AdminTenantUpdateRequest!) {\n    updateTenant(token: $token, request: $request) {\n      id\n      token\n      name\n      enabled\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.UpdateTenantDocument,
+    "\n  mutation SetTenantEnabled($token: String!, $enabled: Boolean!) {\n    setTenantEnabled(token: $token, enabled: $enabled) {\n      id\n      token\n      name\n      enabled\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      createdAt\n      updatedAt\n    }\n  }\n": typeof types.SetTenantEnabledDocument,
     "\n  mutation DeleteTenant($token: String!) {\n    deleteTenant(token: $token)\n  }\n": typeof types.DeleteTenantDocument,
 };
 const documents: Documents = {
     "\n  query Identities {\n    identities {\n      id\n      email\n      firstName\n      lastName\n      enabled\n      systemRoles\n      memberships {\n        tenant\n        enabled\n        roles\n      }\n      createdAt\n      updatedAt\n    }\n  }\n": types.IdentitiesDocument,
-    "\n  query Tenants {\n    tenants {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n": types.TenantsDocument,
+    "\n  query Tenants {\n    tenants {\n      id\n      token\n      name\n      enabled\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      createdAt\n      updatedAt\n    }\n  }\n": types.TenantsDocument,
     "\n  query Roles($scope: String) {\n    roles(scope: $scope) {\n      id\n      scope\n      token\n      name\n      description\n      authorities\n      createdAt\n      updatedAt\n    }\n  }\n": types.RolesDocument,
     "\n  query AdminAuditEvents($criteria: AdminAuditEventSearchCriteria!) {\n    auditEvents(criteria: $criteria) {\n      results {\n        id\n        occurredTime\n        category\n        tenant\n        actor\n        operation\n        tableName\n        entityPk\n        entityLabel\n        rowsAffected\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AdminAuditEventsDocument,
     "\n  query Authorities {\n    authorities\n  }\n": types.AuthoritiesDocument,
@@ -55,9 +55,9 @@ const documents: Documents = {
     "\n  mutation CreateRole($request: AdminRoleCreateRequest!) {\n    createRole(request: $request) {\n      id\n      scope\n      token\n      name\n      description\n      authorities\n      createdAt\n      updatedAt\n    }\n  }\n": types.CreateRoleDocument,
     "\n  mutation UpdateRole($scope: String!, $token: String!, $request: AdminRoleUpdateRequest!) {\n    updateRole(scope: $scope, token: $token, request: $request) {\n      id\n      scope\n      token\n      name\n      description\n      authorities\n      createdAt\n      updatedAt\n    }\n  }\n": types.UpdateRoleDocument,
     "\n  mutation DeleteRole($scope: String!, $token: String!) {\n    deleteRole(scope: $scope, token: $token)\n  }\n": types.DeleteRoleDocument,
-    "\n  mutation CreateTenant($request: AdminTenantCreateRequest!) {\n    createTenant(request: $request) {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n": types.CreateTenantDocument,
-    "\n  mutation UpdateTenant($token: String!, $request: AdminTenantUpdateRequest!) {\n    updateTenant(token: $token, request: $request) {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n": types.UpdateTenantDocument,
-    "\n  mutation SetTenantEnabled($token: String!, $enabled: Boolean!) {\n    setTenantEnabled(token: $token, enabled: $enabled) {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n": types.SetTenantEnabledDocument,
+    "\n  mutation CreateTenant($request: AdminTenantCreateRequest!) {\n    createTenant(request: $request) {\n      id\n      token\n      name\n      enabled\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      createdAt\n      updatedAt\n    }\n  }\n": types.CreateTenantDocument,
+    "\n  mutation UpdateTenant($token: String!, $request: AdminTenantUpdateRequest!) {\n    updateTenant(token: $token, request: $request) {\n      id\n      token\n      name\n      enabled\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      createdAt\n      updatedAt\n    }\n  }\n": types.UpdateTenantDocument,
+    "\n  mutation SetTenantEnabled($token: String!, $enabled: Boolean!) {\n    setTenantEnabled(token: $token, enabled: $enabled) {\n      id\n      token\n      name\n      enabled\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      createdAt\n      updatedAt\n    }\n  }\n": types.SetTenantEnabledDocument,
     "\n  mutation DeleteTenant($token: String!) {\n    deleteTenant(token: $token)\n  }\n": types.DeleteTenantDocument,
 };
 
@@ -68,7 +68,7 @@ export function graphql(source: "\n  query Identities {\n    identities {\n     
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query Tenants {\n    tenants {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').TenantsDocument;
+export function graphql(source: "\n  query Tenants {\n    tenants {\n      id\n      token\n      name\n      enabled\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      createdAt\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').TenantsDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -132,15 +132,15 @@ export function graphql(source: "\n  mutation DeleteRole($scope: String!, $token
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  mutation CreateTenant($request: AdminTenantCreateRequest!) {\n    createTenant(request: $request) {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').CreateTenantDocument;
+export function graphql(source: "\n  mutation CreateTenant($request: AdminTenantCreateRequest!) {\n    createTenant(request: $request) {\n      id\n      token\n      name\n      enabled\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      createdAt\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').CreateTenantDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  mutation UpdateTenant($token: String!, $request: AdminTenantUpdateRequest!) {\n    updateTenant(token: $token, request: $request) {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').UpdateTenantDocument;
+export function graphql(source: "\n  mutation UpdateTenant($token: String!, $request: AdminTenantUpdateRequest!) {\n    updateTenant(token: $token, request: $request) {\n      id\n      token\n      name\n      enabled\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      createdAt\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').UpdateTenantDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  mutation SetTenantEnabled($token: String!, $enabled: Boolean!) {\n    setTenantEnabled(token: $token, enabled: $enabled) {\n      id\n      token\n      name\n      enabled\n      config\n      createdAt\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').SetTenantEnabledDocument;
+export function graphql(source: "\n  mutation SetTenantEnabled($token: String!, $enabled: Boolean!) {\n    setTenantEnabled(token: $token, enabled: $enabled) {\n      id\n      token\n      name\n      enabled\n      config\n      ingestMessagesPerSecond\n      ingestBurst\n      createdAt\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').SetTenantEnabledDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

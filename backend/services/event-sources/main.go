@@ -11,13 +11,16 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-event-sources/config"
+	"github.com/devicechain-io/dc-event-sources/governance"
 	"github.com/devicechain-io/dc-event-sources/graphql"
 	"github.com/devicechain-io/dc-event-sources/model"
 	processor "github.com/devicechain-io/dc-event-sources/processor"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -96,6 +99,32 @@ func initializeMetrics() {
 		"total_msg_rate_limited",
 		"Count of inbound messages shed for exceeding the per-tenant ingest rate limit",
 		[]string{"source"})
+}
+
+// buildRateLimiter constructs the per-tenant ingest limiter. When the service
+// secret and user-management endpoint are configured, per-tenant overrides
+// (ADR-023) are fetched from user-management over a service token and cached,
+// failing open to the platform default; otherwise every tenant is metered at the
+// platform default. Either way the ceiling is a real limit — never unlimited —
+// since ApplyDefaults guarantees positive platform defaults.
+func buildRateLimiter() {
+	def := governance.Limits{
+		MessagesPerSecond: Configuration.IngestRateLimit.MessagesPerSecond,
+		Burst:             Configuration.IngestRateLimit.Burst,
+	}
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant ingest overrides disabled; metering every tenant at the platform default.")
+		RateLimiter = core.NewTenantRateLimiter(func(string) (float64, int) {
+			return def.MessagesPerSecond, def.Burst
+		})
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.TenantRead)})
+	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	resolver := governance.NewTenantLimitResolver(governance.NewServiceFetcher(client, umURL, def), def)
+	RateLimiter = core.NewTenantRateLimiter(resolver.Resolve)
+	log.Info().Str("userManagement", umURL).Msg("Per-tenant ingest overrides enabled (fail-open to platform default).")
 }
 
 // Create decoder based on event source configuration.
@@ -266,11 +295,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Build the per-tenant ingest rate limiter from the (defaulted) configuration
-	// before the sources that use it. ApplyDefaults guarantees positive rates, so
-	// the limiter always meters — it is never unlimited.
-	RateLimiter = core.NewTenantRateLimiter(
-		Configuration.IngestRateLimit.MessagesPerSecond, Configuration.IngestRateLimit.Burst)
+	// Build the per-tenant ingest rate limiter before the sources that use it.
+	buildRateLimiter()
 
 	// Build event sources from configuration.
 	err = buildEventSources()

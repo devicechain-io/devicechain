@@ -17,19 +17,29 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
   const [token, setToken] = useState(tenant?.token ?? '');
   const [name, setName] = useState(tenant?.name ?? '');
   const [config, setConfig] = useState(tenant?.config ?? '');
+  const [ingestRate, setIngestRate] = useState(tenant?.ingestMessagesPerSecond?.toString() ?? '');
+  const [ingestBurst, setIngestBurst] = useState(tenant?.ingestBurst?.toString() ?? '');
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // An empty override field submits undefined, so the request omits it and the
+  // tenant inherits the platform default (clearing any existing override).
+  const optNum = (s: string): number | undefined => {
+    const n = Number(s.trim());
+    return s.trim() === '' || !Number.isFinite(n) ? undefined : n;
+  };
 
   const submit = async () => {
     setFormError(null);
     setBusy(true);
     try {
       const cfg = config.trim() === '' ? undefined : config;
+      const gov = { ingestMessagesPerSecond: optNum(ingestRate), ingestBurst: optNum(ingestBurst) };
       if (editing) {
-        await updateTenant(tenant.token, { name: name.trim() || undefined, config: cfg });
+        await updateTenant(tenant.token, { name: name.trim() || undefined, config: cfg, ...gov });
         onDone(`Tenant “${tenant.token}” updated`);
       } else {
-        await createTenant({ token: token.trim(), name: name.trim() || undefined, config: cfg });
+        await createTenant({ token: token.trim(), name: name.trim() || undefined, config: cfg, ...gov });
         onDone(`Tenant “${token.trim()}” created`);
       }
     } catch (err) {
@@ -71,6 +81,37 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
           onChange={(e) => setConfig(e.target.value)}
         />
       </FormField>
+      <div className="grid grid-cols-2 gap-2">
+        <FormField
+          label="Ingest rate (events/sec)"
+          htmlFor="t-ingest-rate"
+          description="Leave blank to inherit the platform default."
+        >
+          <Input
+            id="t-ingest-rate"
+            type="number"
+            min="0"
+            value={ingestRate}
+            placeholder="default"
+            onChange={(e) => setIngestRate(e.target.value)}
+          />
+        </FormField>
+        <FormField
+          label="Ingest burst"
+          htmlFor="t-ingest-burst"
+          description="Leave blank to inherit the platform default."
+        >
+          <Input
+            id="t-ingest-burst"
+            type="number"
+            min="0"
+            step="1"
+            value={ingestBurst}
+            placeholder="default"
+            onChange={(e) => setIngestBurst(e.target.value)}
+          />
+        </FormField>
+      </div>
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy || (!editing && !token.trim())}>
           {editing ? 'Save changes' : 'Create tenant'}
