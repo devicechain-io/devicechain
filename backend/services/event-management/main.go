@@ -217,6 +217,19 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Reconcile the TimescaleDB data-lifecycle policies (ADR-026) now that the
+	// hypertables exist (migrations ran in Initialize). Best-effort with loud
+	// logging inside; a returned error means the reconcile could not be attempted.
+	lc := Configuration.Lifecycle
+	compressAfterDays := config.DefaultCompressAfterDays
+	if lc.CompressAfterDays != nil { // normally set by ApplyDefaults; guard against a nil deref
+		compressAfterDays = *lc.CompressAfterDays
+	}
+	if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager,
+		lc.ChunkIntervalHours, compressAfterDays, lc.RetentionDays); err != nil {
+		return err
+	}
+
 	err = GraphQLManager.Start(ctx)
 	if err != nil {
 		return err

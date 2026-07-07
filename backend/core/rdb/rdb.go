@@ -154,30 +154,34 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 	// migrations already recorded by gormigrate and no-ops. (This pairs with the
 	// expand/contract discipline that keeps old and new schema mutually readable
 	// for the rollout window.)
-	if err := rdb.withMigrationLock(ctx, advisoryLockKey(mtable), m.Migrate); err != nil {
+	if err := rdb.WithAdvisoryLock(ctx, AdvisoryLockKey(mtable), m.Migrate); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// advisoryLockKey derives a stable bigint key for pg_advisory_lock from the
-// migration table name, so the lock namespace is per-service and deterministic
-// across pods and restarts. The uint64→int64 conversion may yield a negative
-// key; pg_advisory_lock takes the full signed bigint range, so that is fine and
-// every distinct hash still maps to a distinct lock.
-func advisoryLockKey(name string) int64 {
+// AdvisoryLockKey derives a stable bigint key for pg_advisory_lock from a name,
+// so the lock namespace is deterministic across pods and restarts. The
+// uint64→int64 conversion may yield a negative key; pg_advisory_lock takes the
+// full signed bigint range, so that is fine and every distinct hash still maps to
+// a distinct lock. Callers should namespace the name per concern (e.g. the
+// migration table name, or a per-service policy-reconcile key) so unrelated
+// startup work never serializes on the same lock.
+func AdvisoryLockKey(name string) int64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(name))
 	return int64(h.Sum64())
 }
 
-// withMigrationLock holds a Postgres session-level advisory lock for the duration
-// of fn, so only one pod migrates at a time. It pins a single pooled connection
-// for the lock's lifetime (a session lock is bound to the connection that took
-// it) and always releases it, even though fn's own statements run on other pooled
-// connections — advisory locks are instance-global, so they still serialize.
-func (rdb *RdbManager) withMigrationLock(ctx context.Context, key int64, fn func() error) error {
+// WithAdvisoryLock holds a Postgres session-level advisory lock for the duration
+// of fn, so only one pod runs it at a time (used to serialize migrations and
+// startup policy reconciliation across concurrently-rolling replicas). It pins a
+// single pooled connection for the lock's lifetime (a session lock is bound to the
+// connection that took it) and always releases it, even though fn's own statements
+// run on other pooled connections — advisory locks are instance-global, so they
+// still serialize.
+func (rdb *RdbManager) WithAdvisoryLock(ctx context.Context, key int64, fn func() error) error {
 	sqldb, err := rdb.Database.DB()
 	if err != nil {
 		return err
@@ -195,7 +199,7 @@ func (rdb *RdbManager) withMigrationLock(ctx context.Context, key int64, fn func
 	// timeout would spuriously fail this pod while a peer runs a legitimately slow
 	// migration.
 	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", key); err != nil {
-		return fmt.Errorf("acquire migration advisory lock: %w", err)
+		return fmt.Errorf("acquire advisory lock: %w", err)
 	}
 	// Release on the same session before the connection returns to the pool, so a
 	// reused connection does not carry a stale lock. Use a fresh, short context —
@@ -206,7 +210,7 @@ func (rdb *RdbManager) withMigrationLock(ctx context.Context, key int64, fn func
 		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if _, err := conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", key); err != nil {
-			log.Warn().Err(err).Msg("Failed to release migration advisory lock; it clears when the session ends.")
+			log.Warn().Err(err).Msg("Failed to release advisory lock; it clears when the session ends.")
 		}
 	}()
 
