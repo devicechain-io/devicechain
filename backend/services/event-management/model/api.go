@@ -17,6 +17,11 @@ import (
 
 type Api struct {
 	RDB *rdb.RdbManager
+
+	// RollupReadsDisabled, when true, forces every bucketed measurement read onto the
+	// raw hypertable instead of the measurement_rollups continuous aggregate (ADR-026
+	// kill-switch, set from config in main). The zero value keeps the rollup path on.
+	RollupReadsDisabled bool
 }
 
 // Create a new API instance.
