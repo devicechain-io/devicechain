@@ -78,6 +78,7 @@ type DeviceTypeSearchResults struct {
 // Data required to create a device.
 type DeviceCreateRequest struct {
 	Token           string
+	ExternalId      *string
 	Name            *string
 	Description     *string
 	DeviceTypeToken string
@@ -89,6 +90,7 @@ type Device struct {
 	gorm.Model
 	rdb.TenantScoped
 	rdb.TokenReference
+	rdb.ExternalReference
 	rdb.NamedEntity
 	rdb.MetadataEntity
 

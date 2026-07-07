@@ -477,6 +477,9 @@ type Device implements Model & TokenReference & NamedEntity & MetadataEntity & E
     updatedAt: String
     deletedAt: String
     token: String!
+    # Optional customer-owned business id (ADR-049) — a VIN, serial, asset tag —
+    # distinct from the token: opaque, not a credential, unique per tenant when set.
+    externalId: String
     name: String
     description: String
     deviceType: DeviceType!
@@ -486,6 +489,7 @@ type Device implements Model & TokenReference & NamedEntity & MetadataEntity & E
 # Data required to create a device.
 input DeviceCreateRequest {
     token: String!
+    externalId: String
     name: String
     description: String
     deviceTypeToken: String!
@@ -1182,6 +1186,8 @@ type Query {
     devicesById(ids: [ID!]!): [Device!]!
     # Find devices by unique token.
     devicesByToken(tokens: [String!]!): [Device!]!
+    # Find devices by customer-owned external id (ADR-049).
+    devicesByExternalId(externalIds: [String!]!): [Device!]!
     # List devices that meet criteria.
     devices(criteria: DeviceSearchCriteria!): DeviceSearchResults!
     # Find device groups by unique id.

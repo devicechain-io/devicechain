@@ -146,6 +146,32 @@ func (r *SchemaResolver) DevicesByToken(ctx context.Context, args struct {
 	return result, nil
 }
 
+// Find devices by their customer-owned external id (ADR-049).
+func (r *SchemaResolver) DevicesByExternalId(ctx context.Context, args struct {
+	ExternalIds []string
+}) ([]*DeviceResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
+	api := r.GetApi(ctx)
+	found, err := api.DevicesByExternalId(ctx, args.ExternalIds)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*DeviceResolver, 0)
+	for _, dv := range found {
+		dvr := &DeviceResolver{
+			M: *dv,
+			S: r,
+			C: ctx,
+		}
+		result = append(result, dvr)
+	}
+	return result, nil
+}
+
 // List all devices that match the given criteria.
 func (r *SchemaResolver) Devices(ctx context.Context, args struct {
 	Criteria model.DeviceSearchCriteria

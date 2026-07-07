@@ -35,6 +35,16 @@ type TokenReference struct {
 // (the registry families) inherits this via promotion.
 func (t TokenReference) AuditLabel() string { return t.Token }
 
+// Entity that carries an optional customer-owned external/business identifier
+// (ADR-049) — a VIN, serial, GS1 code, asset tag — distinct from the token. Unlike
+// the token it is opaque (no NATS/MQTT addressing grammar), not a credential, and
+// nullable; it exists only to be looked up by. Per-tenant uniqueness among live
+// rows WITH an id present is a partial unique index created by each service's
+// migration via rdb.CreateTenantExternalIdIndex (the token analog, ADR-042 P1).
+type ExternalReference struct {
+	ExternalId sql.NullString `gorm:"index;size:256"`
+}
+
 // Entity that has a name and description.
 type NamedEntity struct {
 	Name        sql.NullString `gorm:"size:128"`

@@ -62,3 +62,29 @@ func CreateTenantTokenIndex(tx *gorm.DB, model any) error {
 	name := "uix_" + stmt.Table + "_tenant_token"
 	return CreatePartialUniqueIndex(tx, model, name, "tenant_id", "token")
 }
+
+// CreateTenantExternalIdIndex creates (idempotently) the per-tenant partial unique
+// index on an entity's optional external id (ADR-049): an externalId, WHEN PRESENT,
+// is unique within a tenant among LIVE rows. It is the business-id analog of
+// CreateTenantTokenIndex, with one extra predicate — external_id IS NOT NULL — so
+// the many rows that carry no external id never collide with each other (NULLs are
+// excluded from the uniqueness set entirely, on Postgres and SQLite alike). Because
+// that second predicate cannot be expressed through CreatePartialUniqueIndex (which
+// hardcodes only deleted_at IS NULL), the index SQL is built here directly.
+//
+// Call once per external-id model, immediately after AutoMigrate, in the service's
+// schema migration. Valid on Postgres and (the test harness) SQLite alike.
+func CreateTenantExternalIdIndex(tx *gorm.DB, model any) error {
+	stmt := &gorm.Statement{DB: tx}
+	if err := stmt.Parse(model); err != nil {
+		return fmt.Errorf("parse model for tenant-external-id index: %w", err)
+	}
+	name := "uix_" + stmt.Table + "_tenant_external_id"
+	sql := fmt.Sprintf(
+		"CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s (%s, %s) "+
+			"WHERE deleted_at IS NULL AND external_id IS NOT NULL",
+		stmt.Quote(name), stmt.Quote(stmt.Table),
+		stmt.Quote("tenant_id"), stmt.Quote("external_id"),
+	)
+	return tx.Exec(sql).Error
+}
