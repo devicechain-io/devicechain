@@ -43,13 +43,18 @@ type HttpEventSource struct {
 	received  func(string, []byte)
 	decoded   func(string, string, *model.UnresolvedEvent, interface{})
 	failed    func(string, string, []byte, error)
+	// allow meters an inbound request against its tenant's ingest rate limit
+	// before the body is read/decoded; a false return sheds the request with a
+	// 429. nil disables metering (used by tests that exercise decoding directly).
+	allow func(string, string) bool
 }
 
 // Create a new HTTP event source based on the given configuration.
 func NewHttpEventSource(id string, config map[string]string, decoder Decoder,
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}),
-	failed func(string, string, []byte, error)) (*HttpEventSource, error) {
+	failed func(string, string, []byte, error),
+	allow func(string, string) bool) (*HttpEventSource, error) {
 	port := DEFAULT_HTTP_PORT
 	if raw, ok := config["port"]; ok && raw != "" {
 		parsed, err := strconv.Atoi(raw)
@@ -66,6 +71,7 @@ func NewHttpEventSource(id string, config map[string]string, decoder Decoder,
 		received: received,
 		decoded:  decoded,
 		failed:   failed,
+		allow:    allow,
 	}
 	es.lifecycle = core.NewLifecycleManager("http-event-source", es, core.NewNoOpLifecycleCallbacks())
 	return es, nil
@@ -97,6 +103,16 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// fail-closed guard in messaging.WriteMessages (both call core.ValidateToken).
 	if err := core.ValidateToken(tenant); err != nil {
 		http.Error(w, fmt.Sprintf("invalid tenant in path: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Meter against the tenant's ingest ceiling before reading or decoding the
+	// body, so a tenant over its limit is shed with a 429 having spent no decode
+	// CPU. Advise a Retry-After (RFC 6585 §4) so a well-behaved client backs off
+	// rather than immediately re-hitting the gate.
+	if es.allow != nil && !es.allow(es.Id, tenant) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "ingest rate limit exceeded for tenant", http.StatusTooManyRequests)
 		return
 	}
 

@@ -49,6 +49,10 @@ type MqttEventSource struct {
 	received  func(string, []byte)
 	decoded   func(string, string, *model.UnresolvedEvent, interface{})
 	failed    func(string, string, []byte, error)
+	// allow meters an inbound message against its tenant's ingest rate limit
+	// before it is queued for decode; a false return sheds the message. nil
+	// disables metering (used by tests that exercise decoding in isolation).
+	allow func(string, string) bool
 }
 
 // Create a new MQTT event source based on the given configuration. tlsConfig is
@@ -59,7 +63,8 @@ type MqttEventSource struct {
 func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Config, username, password string, decoder Decoder,
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}),
-	failed func(string, string, []byte, error)) (*MqttEventSource, error) {
+	failed func(string, string, []byte, error),
+	allow func(string, string) bool) (*MqttEventSource, error) {
 	port, err := strconv.Atoi(config["port"])
 	if err != nil {
 		return nil, err
@@ -80,6 +85,7 @@ func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Conf
 	es.received = received
 	es.decoded = decoded
 	es.failed = failed
+	es.allow = allow
 	return es, nil
 }
 
@@ -100,8 +106,6 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	if log.Debug().Enabled() {
 		log.Debug().Msg(fmt.Sprintf("Received message:\n%s from MQTT topic: %s\n", msg.Payload(), msg.Topic()))
 	}
-	es.received(es.Id, msg.Payload())
-
 	// Derive the per-message tenant from the topic up front; a message whose topic
 	// carries no tenant cannot be published to a tenant-scoped subject, so it is
 	// dropped (fail-closed) rather than decoded and published unscoped.
@@ -110,6 +114,27 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 		log.Warn().Msg(fmt.Sprintf("Dropping message with no parseable tenant in MQTT topic %q", msg.Topic()))
 		return
 	}
+	// Validate the tenant token grammar before it is used as a rate-limiter key
+	// (fail-closed, mirroring the HTTP path): tenantFromTopic only checks the
+	// segment is non-empty, so without this an arbitrary or oversized topic
+	// segment could seed an unbounded set of limiter buckets.
+	if err := core.ValidateToken(tenant); err != nil {
+		log.Warn().Msg(fmt.Sprintf("Dropping message with invalid tenant %q in MQTT topic: %v", tenant, err))
+		return
+	}
+
+	// Meter against the tenant's ingest ceiling before enqueue so a tenant over
+	// its limit sheds here, spending no decode CPU. MQTT has no per-message
+	// acknowledgement back to the publisher, so an over-limit message is simply
+	// dropped (the HTTP path returns 429 instead).
+	if es.allow != nil && !es.allow(es.Id, tenant) {
+		return
+	}
+
+	// Count the arrival only once it clears the gate, so a shed message is not
+	// counted as both inbound and rate-limited (matches the HTTP path, which
+	// accounts after the gate).
+	es.received(es.Id, msg.Payload())
 	es.messages <- rawMessage{tenant: tenant, payload: msg.Payload()}
 }
 
