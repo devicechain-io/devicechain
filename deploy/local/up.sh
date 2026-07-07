@@ -191,6 +191,21 @@ NATS_AUTH_ARGS=(
 )
 step "NATS auth enabled — threading the service credential + callout seed into the instance config"
 
+# The shared service secret (ADR-044 amendment) backing the synchronous
+# cross-service call primitive: a caller presents it to user-management's mint
+# endpoint for a short-lived service token; user-management compares the presented
+# value against its copy. Threaded into every service's instance config, so one
+# mint feeds every service and the presented value can't drift from the verifier's.
+# WITHOUT it every svcclient feature silently disables — the anchor-reconciliation
+# sweep, command-delivery device verification, and per-tenant ingest governance all
+# log "…not configured" and turn themselves off. Minted fresh per run like the NATS
+# creds above; hex carries no --set metacharacters. dcctl bootstrap mints the
+# equivalent in-proc (backend/cli/bootstrap/steps.go).
+step "minting the cross-service auth secret"
+SERVICE_AUTH_SECRET=$(openssl rand -hex 32)
+: "${SERVICE_AUTH_SECRET:?minting failed}"
+SERVICE_AUTH_ARGS=(--set "instance.config.infrastructure.serviceAuth.secret=${SERVICE_AUTH_SECRET}")
+
 # ---- 5. core (CRDs + operator) ---------------------------------------------
 log "🧩 Core — CRDs + operator ($OPERATOR_IMG)"
 make -C "$OPERATOR_DIR" install
@@ -212,6 +227,7 @@ helm --kube-context "$CONTEXT" upgrade --install dc "$CHART_DIR" \
   --set metrics.enabled=false \
   "${NATS_TLS_ARGS[@]}" \
   "${NATS_AUTH_ARGS[@]}" \
+  "${SERVICE_AUTH_ARGS[@]}" \
   --wait --timeout 10m
 
 # ---- 7. seed ---------------------------------------------------------------
