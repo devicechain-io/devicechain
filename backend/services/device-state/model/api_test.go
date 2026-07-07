@@ -145,3 +145,51 @@ func TestMergeAndSweep(t *testing.T) {
 		t.Fatalf("expected 0 flips right after reconnect, got %d", flipped)
 	}
 }
+
+// TestMergeLatestMeasurementsBinding covers the denormalized unit/dataType on the
+// latest-value projection (ADR-016): a bound reading persists them, an unbound one
+// leaves them null, and a strictly-newer reading overwrites them.
+func TestMergeLatestMeasurementsBinding(t *testing.T) {
+	api := newTestApi(t)
+	if err := api.RDB.Database.AutoMigrate(&LatestMeasurement{}); err != nil {
+		t.Fatalf("migrate latest_measurements: %v", err)
+	}
+	ctx := core.WithTenant(context.Background(), "acme")
+	t0 := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	cel, double := "Cel", "DOUBLE"
+
+	num := func(f float64) sql.NullFloat64 { return sql.NullFloat64{Float64: f, Valid: true} }
+	if err := api.MergeLatestMeasurements(ctx, "device-1", []LatestMeasurementInput{
+		{Name: "temp", Value: num(21.5), Unit: &cel, DataType: &double, OccurredTime: t0},
+		{Name: "humidity", Value: num(55), OccurredTime: t0},
+	}); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+
+	byName := func(name string) LatestMeasurement {
+		var m LatestMeasurement
+		if err := api.RDB.DB(ctx).Where("name = ?", name).First(&m).Error; err != nil {
+			t.Fatalf("load %s: %v", name, err)
+		}
+		return m
+	}
+	temp := byName("temp")
+	if temp.Unit == nil || *temp.Unit != "Cel" || temp.DataType == nil || *temp.DataType != "DOUBLE" {
+		t.Fatalf("bound temp did not persist unit/dataType: %+v", temp)
+	}
+	if hum := byName("humidity"); hum.Unit != nil || hum.DataType != nil {
+		t.Fatalf("unbound humidity should carry no unit/dataType: %+v", hum)
+	}
+
+	// A strictly-newer reading overwrites the denormalized fields (a republish could
+	// change the unit); an older one is ignored.
+	kelvin, updated := "K", double
+	if err := api.MergeLatestMeasurements(ctx, "device-1", []LatestMeasurementInput{
+		{Name: "temp", Value: num(295), Unit: &kelvin, DataType: &updated, OccurredTime: t0.Add(time.Minute)},
+	}); err != nil {
+		t.Fatalf("newer merge: %v", err)
+	}
+	if temp = byName("temp"); temp.Unit == nil || *temp.Unit != "K" {
+		t.Fatalf("newer reading did not overwrite unit: %+v", temp)
+	}
+}

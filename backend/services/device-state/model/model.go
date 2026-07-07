@@ -41,10 +41,17 @@ func (DeviceState) AuditExempt() bool { return true }
 type LatestMeasurement struct {
 	gorm.Model
 	rdb.TenantScoped
-	DeviceToken  string
-	Name         string
-	Value        sql.NullFloat64
-	Classifier   *uint
+	DeviceToken string
+	Name        string
+	Value       sql.NullFloat64
+	Classifier  *uint
+	// Unit + DataType are denormalized from the bound metric definition (ADR-016),
+	// mirroring the measurement_events history projection, so the last-known value is
+	// self-describing without a cross-service hop into device-management. Both are
+	// null for an undeclared (unbound) measurement. Unit is unbounded text to match
+	// the source column; DataType is a closed enum.
+	Unit         *string `gorm:"type:text"`
+	DataType     *string `gorm:"type:varchar(32)"`
 	OccurredTime time.Time
 }
 
@@ -58,6 +65,8 @@ type LatestMeasurementInput struct {
 	Name         string
 	Value        sql.NullFloat64
 	Classifier   *uint
+	Unit         *string
+	DataType     *string
 	OccurredTime time.Time
 }
 

@@ -110,6 +110,8 @@ func (api *Api) MergeLatestMeasurements(ctx context.Context, deviceToken string,
 						Name:         in.Name,
 						Value:        in.Value,
 						Classifier:   in.Classifier,
+						Unit:         in.Unit,
+						DataType:     in.DataType,
 						OccurredTime: in.OccurredTime,
 					}
 					if err := tx.Create(created).Error; err != nil {
@@ -124,6 +126,8 @@ func (api *Api) MergeLatestMeasurements(ctx context.Context, deviceToken string,
 			if in.OccurredTime.After(found.OccurredTime) {
 				found.Value = in.Value
 				found.Classifier = in.Classifier
+				found.Unit = in.Unit
+				found.DataType = in.DataType
 				found.OccurredTime = in.OccurredTime
 				if err := tx.Save(found).Error; err != nil {
 					return err

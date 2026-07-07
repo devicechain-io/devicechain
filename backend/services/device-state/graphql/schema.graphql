@@ -48,6 +48,11 @@ type LatestMeasurement implements Model {
     name: String!
     value: Float
     classifier: Int
+    # unit + dataType are denormalized from the bound metric definition (ADR-016) so
+    # the last-known value is self-describing; both are null for an undeclared
+    # measurement. dataType lets a consumer render a 0/1 BOOLEAN value as false/true.
+    unit: String
+    dataType: String
     occurredTime: String!
 }
 
