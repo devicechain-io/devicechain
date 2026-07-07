@@ -87,12 +87,19 @@ message PResolvedLocationsPayload {
 }
 
 /**
- * Single measurement entry for a measurement payload.
+ * Single measurement entry for a measurement payload. unit and data_type are
+ * denormalized from the bound metric definition at resolve time (ADR-016) — as of
+ * the profile's active PUBLISHED version, alongside the classifier — so the stored
+ * measurement is self-describing on read without a cross-service hop back into
+ * device-management, and stays consistent for historical rows across a later
+ * republish. Both are absent for an undeclared (unbound) measurement.
  */
  message PResolvedMeasurementEntry {
     string name = 1;
     string value = 2;
     optional uint64 classifier = 3;
+    optional string unit = 4;
+    optional string data_type = 5;
 }
 
 /**

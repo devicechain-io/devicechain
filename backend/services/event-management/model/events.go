@@ -77,7 +77,12 @@ type LocationEventCreateRequest struct {
 	Elevation *float64
 }
 
-// Measurement event fields.
+// Measurement event fields. Unit and DataType are denormalized from the bound
+// metric definition at resolve time (ADR-016), so a stored measurement is
+// self-describing on read — a consumer resolves its unit/type off the row rather
+// than joining back into device-management (a cross-service hop, ADR-044). They are
+// null for an undeclared (unbound) measurement, and are snapshot-consistent: a
+// later profile republish does not rewrite the unit/type of already-stored rows.
 type MeasurementEvent struct {
 	rdb.TenantScoped
 	DeviceToken  string            `gorm:"type:varchar(128);not null"`
@@ -86,6 +91,8 @@ type MeasurementEvent struct {
 	Name         string            `gorm:"not null"`
 	Value        sql.NullFloat64   `gorm:"type:decimal(20,8);"`
 	Classifier   *uint
+	Unit         *string `gorm:"type:varchar(64)"`
+	DataType     *string `gorm:"type:varchar(32)"`
 }
 
 // Information required to create a measurement event.
@@ -94,6 +101,8 @@ type MeasurementEventCreateRequest struct {
 	Name       string
 	Value      *float64
 	Classifier *uint
+	Unit       *string
+	DataType   *string
 }
 
 // MeasurementRollup is one row of the measurement_rollups continuous aggregate

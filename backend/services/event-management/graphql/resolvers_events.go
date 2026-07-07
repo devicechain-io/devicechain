@@ -221,6 +221,19 @@ func (r *MeasurementEventResolver) Classifier() *string {
 	return uintPtrStr(r.M.Classifier)
 }
 
+// Unit is the UCUM unit of the bound metric definition, denormalized at resolve
+// time (ADR-016); nil for an undeclared measurement.
+func (r *MeasurementEventResolver) Unit() *string {
+	return r.M.Unit
+}
+
+// DataType is the bound metric definition's data type (DOUBLE/INT/BOOLEAN),
+// denormalized at resolve time so a reader can interpret the stored numeric value
+// (e.g. render a 0/1 BOOLEAN as false/true); nil for an undeclared measurement.
+func (r *MeasurementEventResolver) DataType() *string {
+	return r.M.DataType
+}
+
 type MeasurementEventSearchResultsResolver struct {
 	M model.MeasurementEventSearchResults
 	S *SchemaResolver

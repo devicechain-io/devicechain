@@ -14,5 +14,6 @@ var (
 		NewMeasurementAggregationIndex(),
 		NewEventAnchorsTable(),
 		NewMeasurementRollupAggregate(),
+		NewMeasurementBindingColumns(),
 	}
 )

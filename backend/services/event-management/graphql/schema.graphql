@@ -48,7 +48,10 @@ type LocationEvent {
     elevation: Float
 }
 
-# A persisted measurement event (one row per measurement entry).
+# A persisted measurement event (one row per measurement entry). unit and dataType
+# are denormalized from the bound metric definition (ADR-016) so the reading is
+# self-describing; both are null for an undeclared measurement. dataType lets a
+# consumer interpret value — e.g. render a 0/1 BOOLEAN measurement as false/true.
 type MeasurementEvent {
     id: ID!
     deviceToken: String!
@@ -57,6 +60,8 @@ type MeasurementEvent {
     name: String!
     value: Float
     classifier: String
+    unit: String
+    dataType: String
 }
 
 # A persisted alert event (one row per alert entry).

@@ -169,10 +169,14 @@ func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, devi
 }
 
 // Resolve a measurements event payload. Each measurement is bound to its metric
-// definition (ADR-016): the classifier FK makes the stored value self-describing
-// (unit/type resolvable through the definition), and a BOOLEAN metric is
-// normalized to 0/1 so it stores in the numeric measurement column. An undeclared
-// key resolves unclassified and unchanged (lenient — matching validateMeasurements).
+// definition (ADR-016): the classifier FK plus the denormalized unit + data type
+// make the stored value self-describing on read (no cross-service hop back to the
+// definition), and a BOOLEAN metric is normalized to 0/1 so it stores in the
+// numeric measurement column. An undeclared key resolves unclassified and
+// unchanged when its value is numeric (lenient — matching validateMeasurements);
+// an undeclared NON-numeric value cannot land in the numeric column, so that one
+// entry is dropped (logged) rather than dead-lettering the whole event and losing
+// its valid siblings.
 func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, device *model.Device,
 	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	mpayload, ok := event.Payload.(*esmodel.UnresolvedMeasurementsPayload)
@@ -194,14 +198,30 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 				// active PUBLISHED version (ADR-045 slice c) — the definitions come
 				// from that version's snapshot, not the live draft. A later draft
 				// edit/delete does not change already-stamped classifiers, and a
-				// classifier can outlive its (hard-deleted) draft row, so any future
-				// classifier→definition hydration must resolve through the version
-				// snapshot, not metricDefinitionsById on the live table.
+				// classifier can outlive its (hard-deleted) draft row. unit + data
+				// type are denormalized from that same snapshot definition here, so
+				// the persisted measurement is self-describing without ever resolving
+				// the classifier back to a (possibly edited/deleted) live definition.
 				id := uint64(def.ID)
 				rmentry.Classifier = &id
+				dataType := def.DataType
+				rmentry.DataType = &dataType
+				if def.Unit.Valid {
+					unit := def.Unit.String
+					rmentry.Unit = &unit
+				}
 				if model.MetricDataType(def.DataType) == model.MetricBoolean {
 					rmentry.Value = normalizeBool(mxvalue)
 				}
+			} else if _, err := strconv.ParseFloat(mxvalue, 64); err != nil {
+				// Undeclared and non-numeric: a measurement stores in the numeric
+				// column, so this value cannot be persisted. Undeclared keys are
+				// best-effort (ADR-016 lenient additive typing), so drop just this
+				// entry instead of dead-lettering the whole event and discarding its
+				// valid numeric siblings. Declare it as a metric to persist it.
+				log.Debug().Str("device", device.Token).Str("metric", mxkey).Str("value", mxvalue).
+					Msg("Dropping undeclared non-numeric measurement (not storable; declare it as a metric to persist)")
+				continue
 			}
 			rmentries = append(rmentries, rmentry)
 		}

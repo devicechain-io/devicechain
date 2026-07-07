@@ -96,5 +96,7 @@ func measurementFromResolved(e *dmmodel.ResolvedEvent, mx dmmodel.ResolvedMeasur
 		c := uint(*mx.Classifier)
 		me.Classifier = &c
 	}
+	me.Unit = mx.Unit
+	me.DataType = mx.DataType
 	return me
 }

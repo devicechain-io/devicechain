@@ -22,6 +22,9 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 	occurred := time.Now().UTC().Truncate(time.Second)
 	processed := occurred.Add(50 * time.Millisecond).Truncate(time.Second)
 
+	classifier := uint64(42)
+	unit := "Cel"
+	dataType := "DOUBLE"
 	event := &model.ResolvedEvent{
 		Source:            "http1",
 		SourceDeviceToken: "device-001",
@@ -34,7 +37,8 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 		EventType:     esmodel.Measurement,
 		Payload: &model.ResolvedMeasurementsPayload{
 			Entries: []model.ResolvedMeasurementsEntry{
-				{Entries: []model.ResolvedMeasurementEntry{{Name: "temperature", Value: "21.5"}}},
+				{Entries: []model.ResolvedMeasurementEntry{{Name: "temperature", Value: "21.5",
+					Classifier: &classifier, Unit: &unit, DataType: &dataType}}},
 			},
 		},
 	}
@@ -48,6 +52,8 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 	assert.True(t, got.ProcessedTime.Equal(processed), "processed time round-trip: got %s want %s", got.ProcessedTime, processed)
 	// The full anchor set survives the round-trip.
 	assert.Equal(t, event.Anchors, got.Anchors)
+	// The bound classifier + denormalized unit/data type survive intact (ADR-016).
+	assert.Equal(t, event.Payload, got.Payload)
 }
 
 // An alarm state-change event (ADR-041) must survive the marshal/unmarshal round-trip

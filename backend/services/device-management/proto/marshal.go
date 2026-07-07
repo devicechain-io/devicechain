@@ -97,6 +97,8 @@ func MarshalPayloadForMeasurementsEvent(payload *model.ResolvedMeasurementsPaylo
 				Name:       mxentry.Name,
 				Value:      mxentry.Value,
 				Classifier: mxentry.Classifier,
+				Unit:       mxentry.Unit,
+				DataType:   mxentry.DataType,
 			}
 			pmxentries = append(pmxentries, pmxentry)
 		}
@@ -187,6 +189,8 @@ func UnmarshalPayloadForMeasurementsEvent(encoded []byte) (*model.ResolvedMeasur
 				Name:       pmx.Name,
 				Value:      pmx.Value,
 				Classifier: pmx.Classifier,
+				Unit:       pmx.Unit,
+				DataType:   pmx.DataType,
 			}
 			mxs = append(mxs, mx)
 		}
