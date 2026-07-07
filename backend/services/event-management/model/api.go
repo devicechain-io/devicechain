@@ -236,6 +236,8 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 			Name:         request.Name,
 			Value:        rdb.NullFloat64Of(request.Value),
 			Classifier:   request.Classifier,
+			Unit:         request.Unit,
+			DataType:     request.DataType,
 		})
 	}
 	if err := upsertParentEvents(ctx, db, parents); err != nil {

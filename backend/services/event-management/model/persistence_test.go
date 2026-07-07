@@ -100,7 +100,7 @@ func TestCreateMeasurementEventsWritesParentAndChildren(t *testing.T) {
 		ProcessedTime: occurred,
 	}
 	requests := []*MeasurementEventCreateRequest{
-		{Event: parent, Name: "temperature", Value: f64(21.5)},
+		{Event: parent, Name: "temperature", Value: f64(21.5), Unit: sptr("Cel"), DataType: sptr("DOUBLE")},
 		{Event: parent, Name: "humidity", Value: f64(48)},
 	}
 
@@ -137,6 +137,14 @@ func TestCreateMeasurementEventsWritesParentAndChildren(t *testing.T) {
 	if children[0].Name != "humidity" || children[1].Name != "temperature" {
 		t.Fatalf("unexpected child names: %s, %s", children[0].Name, children[1].Name)
 	}
+	// The bound metric's denormalized unit + data type persist on the row and are
+	// null for an unbound measurement (ADR-016).
+	if children[1].Unit == nil || *children[1].Unit != "Cel" || children[1].DataType == nil || *children[1].DataType != "DOUBLE" {
+		t.Fatalf("temperature unit/dataType did not persist: %+v", children[1])
+	}
+	if children[0].Unit != nil || children[0].DataType != nil {
+		t.Fatalf("unbound humidity should carry no unit/dataType: %+v", children[0])
+	}
 
 	// A redelivery of the same message re-presents the same parent key: the parent
 	// is not duplicated (ON CONFLICT DO NOTHING).
@@ -152,3 +160,5 @@ func TestCreateMeasurementEventsWritesParentAndChildren(t *testing.T) {
 }
 
 func f64(v float64) *float64 { return &v }
+
+func sptr(v string) *string { return &v }

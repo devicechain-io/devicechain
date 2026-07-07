@@ -139,6 +139,8 @@ func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, 
 				Name:       mx.Name,
 				Value:      fval,
 				Classifier: classifier,
+				Unit:       mx.Unit,
+				DataType:   mx.DataType,
 			})
 		}
 	}

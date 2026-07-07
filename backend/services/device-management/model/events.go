@@ -30,11 +30,17 @@ type ResolvedLocationsPayload struct {
 	Entries []ResolvedLocationEntry
 }
 
-// Entry with resolved info for a single measurement.
+// Entry with resolved info for a single measurement. Unit and DataType are
+// denormalized from the bound metric definition (ADR-016) as of the profile's
+// active published version — alongside Classifier — so the persisted measurement
+// is self-describing on read without a cross-service hop back into
+// device-management. Both are nil for an undeclared (unbound) measurement.
 type ResolvedMeasurementEntry struct {
 	Name       string
 	Value      string
 	Classifier *uint64
+	Unit       *string
+	DataType   *string
 }
 
 // Information for a measurements entry.

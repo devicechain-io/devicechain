@@ -191,10 +191,12 @@ func (suite *EventResolverTestSuite) TestMeasurementValidationPasses() {
 	assert.Empty(suite.T(), results[0].Resolved.Anchors)
 }
 
-// A declared metric binds its definition id as the measurement's classifier, so
-// the persisted value is self-describing (ADR-016).
+// A declared metric binds its definition id as the classifier and denormalizes the
+// definition's unit + data type onto the entry, so the persisted value is
+// self-describing on read without a cross-service hop (ADR-016).
 func (suite *EventResolverTestSuite) TestMeasurementClassifierBound() {
-	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 42}, MetricKey: "temp", DataType: "DOUBLE"}
+	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 42}, MetricKey: "temp", DataType: "DOUBLE",
+		Unit: sql.NullString{String: "Cel", Valid: true}}
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
 
 	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
@@ -206,10 +208,17 @@ func (suite *EventResolverTestSuite) TestMeasurementClassifierBound() {
 		assert.Equal(suite.T(), uint64(42), *entry.Classifier)
 	}
 	assert.Equal(suite.T(), "42", entry.Value)
+	if assert.NotNil(suite.T(), entry.Unit) {
+		assert.Equal(suite.T(), "Cel", *entry.Unit)
+	}
+	if assert.NotNil(suite.T(), entry.DataType) {
+		assert.Equal(suite.T(), "DOUBLE", *entry.DataType)
+	}
 }
 
 // A BOOLEAN metric is normalized to 1/0 so it stores in the numeric column, and
-// still carries its classifier.
+// still carries its classifier + denormalized data type (so a reader renders the
+// stored 0/1 as false/true). A unit-less metric denormalizes a nil unit.
 func (suite *EventResolverTestSuite) TestMeasurementBooleanNormalized() {
 	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 7}, MetricKey: "engaged", DataType: "BOOLEAN"}
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
@@ -221,9 +230,14 @@ func (suite *EventResolverTestSuite) TestMeasurementBooleanNormalized() {
 	entry := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0]
 	assert.Equal(suite.T(), "1", entry.Value)
 	assert.NotNil(suite.T(), entry.Classifier)
+	if assert.NotNil(suite.T(), entry.DataType) {
+		assert.Equal(suite.T(), "BOOLEAN", *entry.DataType)
+	}
+	assert.Nil(suite.T(), entry.Unit)
 }
 
-// An undeclared measurement key resolves unclassified and unchanged (lenient).
+// An undeclared numeric measurement resolves unclassified and unchanged (lenient),
+// carrying no denormalized unit/type.
 func (suite *EventResolverTestSuite) TestMeasurementUndeclaredUnclassified() {
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 
@@ -233,7 +247,63 @@ func (suite *EventResolverTestSuite) TestMeasurementUndeclaredUnclassified() {
 	assert.NoError(suite.T(), err)
 	entry := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0]
 	assert.Nil(suite.T(), entry.Classifier)
+	assert.Nil(suite.T(), entry.Unit)
+	assert.Nil(suite.T(), entry.DataType)
 	assert.Equal(suite.T(), "55", entry.Value)
+}
+
+// An undeclared NON-numeric measurement cannot land in the numeric column, so it is
+// dropped rather than dead-lettering the whole event — its valid numeric siblings
+// still resolve (ADR-016).
+func (suite *EventResolverTestSuite) TestMeasurementUndeclaredNonNumericDropped() {
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
+
+	event := &esmodel.UnresolvedEvent{
+		Device:    "TEST-123",
+		EventType: esmodel.Measurement,
+		Payload: &esmodel.UnresolvedMeasurementsPayload{
+			Entries: []esmodel.UnresolvedMeasurementsEntry{
+				{Measurements: map[string]string{"temp": "42", "label": "hello"}},
+			},
+		},
+	}
+
+	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
+		context.Background(), deviceWithToken("TEST-123"), nil, event)
+
+	assert.NoError(suite.T(), err)
+	entries := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries
+	if assert.Len(suite.T(), entries, 1) {
+		assert.Equal(suite.T(), "temp", entries[0].Name)
+		assert.Equal(suite.T(), "42", entries[0].Value)
+	}
+}
+
+// A declared but non-storable metric (STRING is device state, not a time-series
+// metric) is dropped rather than dead-lettering the whole event — a defensive
+// backstop, since creating such a definition is already rejected (ADR-016).
+func (suite *EventResolverTestSuite) TestMeasurementDeclaredNonStorableDropped() {
+	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 9}, MetricKey: "label", DataType: "STRING"}
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
+
+	event := &esmodel.UnresolvedEvent{
+		Device:    "TEST-123",
+		EventType: esmodel.Measurement,
+		Payload: &esmodel.UnresolvedMeasurementsPayload{
+			Entries: []esmodel.UnresolvedMeasurementsEntry{
+				{Measurements: map[string]string{"temp": "42", "label": "hello"}},
+			},
+		},
+	}
+
+	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
+		context.Background(), deviceWithToken("TEST-123"), nil, event)
+
+	assert.NoError(suite.T(), err)
+	entries := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries
+	if assert.Len(suite.T(), entries, 1) {
+		assert.Equal(suite.T(), "temp", entries[0].Name)
+	}
 }
 
 // A tracked relationship builds a device with ID 1 as source and the given target.
