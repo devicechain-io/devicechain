@@ -176,7 +176,10 @@ func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, devi
 // unchanged when its value is numeric (lenient — matching validateMeasurements);
 // an undeclared NON-numeric value cannot land in the numeric column, so that one
 // entry is dropped (logged) rather than dead-lettering the whole event and losing
-// its valid siblings.
+// its valid siblings. Callers must have run validateMeasurements first: this drops
+// only undeclared non-numeric (and defensively, non-storable declared) values, so a
+// DECLARED numeric metric carrying a non-numeric value relies on validation having
+// already rejected it upstream.
 func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, device *model.Device,
 	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	mpayload, ok := event.Payload.(*esmodel.UnresolvedMeasurementsPayload)
@@ -194,6 +197,15 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 		for mxkey, mxvalue := range umsentry.Measurements {
 			rmentry := model.ResolvedMeasurementEntry{Name: mxkey, Value: mxvalue}
 			if def, declared := byKey[mxkey]; declared {
+				if !model.MetricDataType(def.DataType).StorableAsMetric() {
+					// Declared but non-storable (STRING is device state, not a
+					// time-series metric — ADR-016). Creating such a definition is
+					// already rejected, so this is a defensive backstop: drop the entry
+					// rather than stamp a classifier onto a value that would then
+					// dead-letter the whole batch at persist.
+					dropMeasurement(device.Token, mxkey, mxvalue, "declared metric data type is not storable")
+					continue
+				}
 				// The classifier is the metric definition's id AS OF the profile's
 				// active PUBLISHED version (ADR-045 slice c) — the definitions come
 				// from that version's snapshot, not the live draft. A later draft
@@ -219,8 +231,7 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 				// best-effort (ADR-016 lenient additive typing), so drop just this
 				// entry instead of dead-lettering the whole event and discarding its
 				// valid numeric siblings. Declare it as a metric to persist it.
-				log.Debug().Str("device", device.Token).Str("metric", mxkey).Str("value", mxvalue).
-					Msg("Dropping undeclared non-numeric measurement (not storable; declare it as a metric to persist)")
+				dropMeasurement(device.Token, mxkey, mxvalue, "undeclared and non-numeric")
 				continue
 			}
 			rmentries = append(rmentries, rmentry)
@@ -248,6 +259,16 @@ func (rez *EventResolver) metricDefsByKey(ctx context.Context,
 		byKey[d.MetricKey] = d
 	}
 	return byKey, nil
+}
+
+// dropMeasurement logs an unstorable measurement entry that is being discarded
+// during resolution. Discarding device data is a misconfiguration worth surfacing
+// (the device sends something the numeric measurement column can never hold), so it
+// warns rather than debugs — matching the anchor-skip warning elsewhere in this
+// file. The remedy is in the message: declare the key as a numeric metric.
+func dropMeasurement(deviceToken, metricKey, value, reason string) {
+	log.Warn().Str("device", deviceToken).Str("metric", metricKey).Str("value", value).Str("reason", reason).
+		Msg("Dropping unstorable measurement (declare it as a numeric metric to persist)")
 }
 
 // normalizeBool renders a validated boolean measurement as "1"/"0" so it stores in

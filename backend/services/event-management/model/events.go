@@ -91,8 +91,12 @@ type MeasurementEvent struct {
 	Name         string            `gorm:"not null"`
 	Value        sql.NullFloat64   `gorm:"type:decimal(20,8);"`
 	Classifier   *uint
-	Unit         *string `gorm:"type:varchar(64)"`
-	DataType     *string `gorm:"type:varchar(32)"`
+	// Unit is unbounded text to match the source MetricDefinition.Unit (an unbounded
+	// column with no length validation) — a bound here could reject a long unit at
+	// INSERT as a non-deterministic (poison-retried) failure. DataType is a closed
+	// enum (max "BOOLEAN"), so a tight bound is safe.
+	Unit     *string `gorm:"type:text"`
+	DataType *string `gorm:"type:varchar(32)"`
 }
 
 // Information required to create a measurement event.

@@ -279,6 +279,33 @@ func (suite *EventResolverTestSuite) TestMeasurementUndeclaredNonNumericDropped(
 	}
 }
 
+// A declared but non-storable metric (STRING is device state, not a time-series
+// metric) is dropped rather than dead-lettering the whole event — a defensive
+// backstop, since creating such a definition is already rejected (ADR-016).
+func (suite *EventResolverTestSuite) TestMeasurementDeclaredNonStorableDropped() {
+	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 9}, MetricKey: "label", DataType: "STRING"}
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
+
+	event := &esmodel.UnresolvedEvent{
+		Device:    "TEST-123",
+		EventType: esmodel.Measurement,
+		Payload: &esmodel.UnresolvedMeasurementsPayload{
+			Entries: []esmodel.UnresolvedMeasurementsEntry{
+				{Measurements: map[string]string{"temp": "42", "label": "hello"}},
+			},
+		},
+	}
+
+	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
+		context.Background(), deviceWithToken("TEST-123"), nil, event)
+
+	assert.NoError(suite.T(), err)
+	entries := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries
+	if assert.Len(suite.T(), entries, 1) {
+		assert.Equal(suite.T(), "temp", entries[0].Name)
+	}
+}
+
 // A tracked relationship builds a device with ID 1 as source and the given target.
 func trackedRel(id uint, targetType string, targetToken string) dmodel.EntityRelationship {
 	return dmodel.EntityRelationship{
