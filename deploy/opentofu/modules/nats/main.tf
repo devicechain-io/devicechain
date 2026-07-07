@@ -39,6 +39,14 @@ variable "chart_version" {
 variable "jetstream_storage" {
   type    = string
   default = "8Gi"
+  validation {
+    # Integer magnitude + unit only. The max_file_store headroom default floors 90%
+    # of the magnitude, so a fractional value like "1.5Gi" would drop to "1Gi" (a
+    # 33% cut, not 10%), and a unitless value would fail to parse. For a fractional
+    # volume, set jetstream_max_file_store explicitly.
+    condition     = can(regex("^[0-9]+[A-Za-z]+$", var.jetstream_storage))
+    error_message = "jetstream_storage must be an integer magnitude with a unit (e.g. \"8Gi\", \"512Mi\"); set jetstream_max_file_store explicitly for a fractional size."
+  }
 }
 
 variable "jetstream_max_file_store" {

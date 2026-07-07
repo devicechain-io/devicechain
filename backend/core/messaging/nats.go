@@ -788,9 +788,14 @@ func (nmgr *NatsManager) ExecuteStart(context.Context) error {
 	if err := nmgr.oncreate(nmgr); err != nil {
 		return err
 	}
-	nmgr.stopSampler = make(chan struct{})
-	nmgr.samplerWg.Add(1)
-	go nmgr.runStreamMetrics()
+	// Guard against starting a second sampler if Start is ever retried without an
+	// intervening Stop (a real Starter.Postprocess failure): a nil stopSampler means
+	// none is running. ExecuteStop nils it back out.
+	if nmgr.stopSampler == nil {
+		nmgr.stopSampler = make(chan struct{})
+		nmgr.samplerWg.Add(1)
+		go nmgr.runStreamMetrics()
+	}
 	log.Info().Msg("NATS component creation completed successfully.")
 	return nil
 }
@@ -807,6 +812,7 @@ func (nmgr *NatsManager) ExecuteStop(context.Context) error {
 	if nmgr.stopSampler != nil {
 		close(nmgr.stopSampler)
 		nmgr.samplerWg.Wait()
+		nmgr.stopSampler = nil
 	}
 	log.Info().Msg("Shutting down NATS readers.")
 	for _, r := range nmgr.readers {
