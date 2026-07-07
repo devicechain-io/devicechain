@@ -35,12 +35,15 @@ func DevToolsEnabled() bool {
 	return enabled
 }
 
-// MustParseSchema parses a GraphQL schema, disabling introspection unless dev
-// tooling is explicitly enabled (see DevToolsEnabled). It centralizes the ADR-029
-// secure default so every service inherits it from one place rather than each
-// remembering to pass graphql.DisableIntrospection(). It panics on a parse error,
-// exactly like graphql.MustParseSchema, so it is a drop-in replacement.
+// MustParseSchema parses a GraphQL schema with the ADR-029 secure defaults applied:
+// a maximum selection depth, a maximum query length, and — unless dev tooling is
+// explicitly enabled (see DevToolsEnabled) — no introspection. They are appended
+// AFTER any caller-supplied opts so the secure defaults take precedence, and are
+// centralized here so every service inherits them from one place rather than each
+// remembering to pass them. It panics on a parse error, exactly like
+// graphql.MustParseSchema, so it is a drop-in replacement.
 func MustParseSchema(schema string, resolver interface{}, opts ...graphql.SchemaOpt) *graphql.Schema {
+	opts = append(opts, graphql.MaxDepth(maxDepth()), graphql.MaxQueryLength(maxQueryLength()))
 	if !DevToolsEnabled() {
 		opts = append(opts, graphql.DisableIntrospection())
 	}
