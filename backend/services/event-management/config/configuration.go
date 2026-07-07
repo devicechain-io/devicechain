@@ -57,6 +57,14 @@ type LifecycleConfiguration struct {
 	// (add_retention_policy). Retention DELETES telemetry, so it is OPT-IN: unset or
 	// 0 keeps data forever, and no default can silently start dropping data.
 	RetentionDays int
+
+	// DisableRollupReads is a kill-switch for the continuous-aggregate read path
+	// (ADR-026): when false (default) bucketed measurement reads whose interval is a
+	// whole multiple of the rollup's base bucket are served from the pre-aggregated
+	// measurement_rollups continuous aggregate; when true, every bucketed read scans
+	// the raw measurement_events hypertable (the pre-rollup behavior). It exists so an
+	// operator can fall back instantly if the rollup ever misbehaves, without a deploy.
+	DisableRollupReads bool
 }
 
 // Creates the default event management configuration

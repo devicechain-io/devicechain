@@ -96,6 +96,27 @@ type MeasurementEventCreateRequest struct {
 	Classifier *uint
 }
 
+// MeasurementRollup is one row of the measurement_rollups continuous aggregate
+// (ADR-026): for a single (tenant, device, event type, measurement name), the
+// partial aggregates of one fixed base bucket of measurement_events, so bucketed
+// dashboard reads hit pre-computed rollups instead of scanning raw rows. avg is
+// deliberately NOT stored — an average does not roll up (an average of averages is
+// wrong); the read derives avg = sum/count when re-bucketing to a coarser interval,
+// which is exact. min/max/sum/count all roll up directly. The table name pluralizes
+// to measurement_rollups (matching the continuous-aggregate view) and tenant_id
+// (via TenantScoped) makes reads fail-closed tenant-scoped exactly like the raw path.
+type MeasurementRollup struct {
+	rdb.TenantScoped
+	DeviceToken string `gorm:"type:varchar(128)"`
+	EventType   esmodel.EventType
+	Name        string
+	Bucket      time.Time
+	SumValue    sql.NullFloat64
+	MinValue    sql.NullFloat64
+	MaxValue    sql.NullFloat64
+	CountValue  int64
+}
+
 // Alert event fields.
 type AlertEvent struct {
 	rdb.TenantScoped

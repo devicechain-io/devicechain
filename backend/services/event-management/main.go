@@ -164,8 +164,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Create RDB caches.
 	model.InitializeCaches(RdbManager)
 
-	// Wrap api around rdb manager.
+	// Wrap api around rdb manager. The rollup read-path kill-switch (ADR-026) is set
+	// from config: bucketed reads use the measurement_rollups continuous aggregate
+	// unless an operator disables it.
 	Api = model.NewApi(RdbManager)
+	Api.RollupReadsDisabled = Configuration.Lifecycle.DisableRollupReads
 
 	// Create and initialize nats manager.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)

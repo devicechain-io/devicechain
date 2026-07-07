@@ -13,5 +13,6 @@ var (
 		NewAltIdIdempotencyIndex(),
 		NewMeasurementAggregationIndex(),
 		NewEventAnchorsTable(),
+		NewMeasurementRollupAggregate(),
 	}
 )
