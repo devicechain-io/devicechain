@@ -76,6 +76,8 @@ const TENANTS = graphql(`
       name
       enabled
       config
+      ingestMessagesPerSecond
+      ingestBurst
       createdAt
       updatedAt
     }
@@ -405,6 +407,8 @@ const CREATE_TENANT = graphql(`
       name
       enabled
       config
+      ingestMessagesPerSecond
+      ingestBurst
       createdAt
       updatedAt
     }
@@ -424,6 +428,8 @@ const UPDATE_TENANT = graphql(`
       name
       enabled
       config
+      ingestMessagesPerSecond
+      ingestBurst
       createdAt
       updatedAt
     }
@@ -443,6 +449,8 @@ const SET_TENANT_ENABLED = graphql(`
       name
       enabled
       config
+      ingestMessagesPerSecond
+      ingestBurst
       createdAt
       updatedAt
     }

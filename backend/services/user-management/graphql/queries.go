@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/core"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-user-management/iam"
 )
@@ -35,6 +36,48 @@ func (r *SchemaResolver) Tenant(ctx context.Context) (*TenantResolver, error) {
 		return nil, err
 	}
 	return &TenantResolver{t: t}, nil
+}
+
+// TenantGovernanceResolver resolves the TenantGovernance type: a tenant's ingest
+// governance overrides. A null field means the tenant inherits the platform
+// default (the enforcing service supplies that default), so a null here is not
+// "unlimited".
+type TenantGovernanceResolver struct {
+	t *iam.Tenant
+}
+
+func (r *TenantGovernanceResolver) IngestMessagesPerSecond() *float64 {
+	return r.t.IngestMessagesPerSecond
+}
+
+func (r *TenantGovernanceResolver) IngestBurst() *int32 {
+	if r.t.IngestBurst == nil {
+		return nil
+	}
+	v := int32(*r.t.IngestBurst)
+	return &v
+}
+
+// TenantGovernance returns the ingest governance overrides for the tenant the
+// caller is acting within — the read side of ADR-023 per-tenant limits, consumed
+// by the enforcing service (event-sources) over a service token. Unlike the
+// self-scoped Tenant query it keys off the tenant in *context* (stamped from the
+// caller's access token or, for a service token, the X-DC-Tenant header) rather
+// than a claims field, so a tenant-less service token resolves the header tenant.
+// Gated on tenant:read so only a caller granted that authority can read it.
+func (r *SchemaResolver) TenantGovernance(ctx context.Context) (*TenantGovernanceResolver, error) {
+	if err := auth.Authorize(ctx, auth.TenantRead); err != nil {
+		return nil, err
+	}
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return nil, core.ErrNoTenant
+	}
+	t, err := r.getIdentityManager(ctx).CurrentTenant(ctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	return &TenantGovernanceResolver{t: t}, nil
 }
 
 // CurrentIdentityResolver resolves the CurrentIdentity GraphQL type: the global
