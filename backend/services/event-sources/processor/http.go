@@ -27,16 +27,20 @@ const (
 )
 
 // HttpEventSource ingests device events over HTTP — the most common integration
-// after MQTT (TB §2.9). A device POSTs a JSON event to "/dc/{tenant}/events"; the
-// tenant is taken from the path (mirroring the MQTT "dc/{tenant}/..." topic
-// convention, ADR-006), the body is decoded by the configured decoder, and the
-// result is handed to the same decoded/failed callbacks the MQTT source uses, so
-// both transports share one publish path. Device credentials ride in the event
-// body (ADR-014), as on the MQTT path, so no separate transport auth is added here.
+// after MQTT (TB §2.9). A device POSTs a JSON event to
+// "/{instanceId}/{tenant}/events"; the instance and tenant are taken from the path
+// (mirroring the MQTT "{instanceId}/{tenant}/..." topic convention, ADR-006/ADR-048),
+// the body is decoded by the configured decoder, and the result is handed to the
+// same decoded/failed callbacks the MQTT source uses, so both transports share one
+// publish path. The instance id is a literal path segment so an event addressed to
+// another instance 404s here — the HTTP-side of the cross-instance isolation
+// boundary. Device credentials ride in the event body (ADR-014), as on the MQTT
+// path, so no separate transport auth is added here.
 type HttpEventSource struct {
-	Id      string
-	Port    int
-	Decoder Decoder
+	Id         string
+	Port       int
+	InstanceId string
+	Decoder    Decoder
 
 	server    *http.Server
 	lifecycle core.LifecycleManager
@@ -49,8 +53,9 @@ type HttpEventSource struct {
 	allow func(string, string) bool
 }
 
-// Create a new HTTP event source based on the given configuration.
-func NewHttpEventSource(id string, config map[string]string, decoder Decoder,
+// Create a new HTTP event source based on the given configuration. instanceId is
+// the literal first path segment the ingest route is scoped under (ADR-048).
+func NewHttpEventSource(id string, config map[string]string, instanceId string, decoder Decoder,
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}),
 	failed func(string, string, []byte, error),
@@ -65,13 +70,14 @@ func NewHttpEventSource(id string, config map[string]string, decoder Decoder,
 	}
 
 	es := &HttpEventSource{
-		Id:       id,
-		Port:     port,
-		Decoder:  decoder,
-		received: received,
-		decoded:  decoded,
-		failed:   failed,
-		allow:    allow,
+		Id:         id,
+		Port:       port,
+		InstanceId: instanceId,
+		Decoder:    decoder,
+		received:   received,
+		decoded:    decoded,
+		failed:     failed,
+		allow:      allow,
 	}
 	es.lifecycle = core.NewLifecycleManager("http-event-source", es, core.NewNoOpLifecycleCallbacks())
 	return es, nil
@@ -81,9 +87,11 @@ func NewHttpEventSource(id string, config map[string]string, decoder Decoder,
 // share one definition of the routes.
 func (es *HttpEventSource) handler() http.Handler {
 	mux := http.NewServeMux()
-	// The {tenant} path segment mirrors the MQTT topic's tenant level (ADR-006);
-	// the ServeMux only matches a non-empty segment, so a missing tenant 404s.
-	mux.HandleFunc("POST /dc/{tenant}/events", es.handleEvent)
+	// The route is scoped under this instance's id as a literal first segment
+	// (ADR-048) with the {tenant} segment mirroring the MQTT topic's tenant level
+	// (ADR-006); the ServeMux only matches a non-empty segment, so a missing tenant
+	// — or an event addressed to a different instance — 404s.
+	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/events", es.InstanceId), es.handleEvent)
 	return mux
 }
 

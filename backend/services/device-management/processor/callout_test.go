@@ -77,7 +77,7 @@ func newTestResponder(t *testing.T, authFn func(context.Context, *model.Presente
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := NewCalloutResponder(nil, fakeAuthApi{authFn: authFn}, creds.IssuerSeed)
+	r := NewCalloutResponder(nil, fakeAuthApi{authFn: authFn}, creds.IssuerSeed, "inst-1")
 	r.now = func() time.Time { return time.Unix(1_780_000_000, 0) }
 	return r, creds.IssuerPublic
 }
@@ -125,8 +125,8 @@ func TestAuthorizeGrant(t *testing.T) {
 	if uc.Audience != natsauth.AppAccount {
 		t.Errorf("audience = %q, want %q", uc.Audience, natsauth.AppAccount)
 	}
-	if got := []string(uc.Permissions.Pub.Allow); len(got) != 1 || got[0] != "dc.acme-corp.>" {
-		t.Errorf("pub allow = %v, want [dc.acme-corp.>]", got)
+	if got := []string(uc.Permissions.Pub.Allow); len(got) != 1 || got[0] != "inst-1.acme-corp.>" {
+		t.Errorf("pub allow = %v, want [inst-1.acme-corp.>]", got)
 	}
 }
 

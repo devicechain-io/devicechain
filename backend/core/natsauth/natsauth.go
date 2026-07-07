@@ -120,16 +120,20 @@ func GenerateCredentials() (Credentials, error) {
 const MqttDeliverySubject = "$MQTT.sub.>"
 
 // DevicePermissions returns the pub/sub subject allow-list for a device bound to
-// tenant. A device may only publish and subscribe under its own tenant's tree
-// (`dc.{tenant}.>` — the MQTT-topic→subject mapping of `dc/{tenant}/#`), which is
-// the subject-authorization binding that closes the cross-tenant hole (ADR-025).
-// `dc.{tenant}` (no trailing token) is included because an MQTT `dc/{tenant}/#`
-// filter maps to a subscription on both the wildcard tree and that level-up
-// subject. Tenant granularity in v1; per-device (`dc.{tenant}.{token}.>`) is a
-// later refinement.
-func DevicePermissions(tenant string) jwt.Permissions {
-	tree := fmt.Sprintf("dc.%s.>", tenant)
-	levelUp := fmt.Sprintf("dc.%s", tenant)
+// tenant within instanceId. A device may only publish and subscribe under its own
+// instance-and-tenant tree (`{instanceId}.{tenant}.>` — the MQTT-topic→subject
+// mapping of `{instanceId}/{tenant}/#`), which is the subject-authorization
+// binding that closes the cross-tenant hole (ADR-025) and, because the tree is
+// prefixed with the instance id rather than a literal, also the cross-instance
+// hole on a shared broker (ADR-048): two instances' devices never share a subject
+// tree even for identically-named tenants. `{instanceId}.{tenant}` (no trailing
+// token) is included because an MQTT `{instanceId}/{tenant}/#` filter maps to a
+// subscription on both the wildcard tree and that level-up subject. Tenant
+// granularity in v1; per-device (`{instanceId}.{tenant}.{token}.>`) is a later
+// refinement.
+func DevicePermissions(instanceId, tenant string) jwt.Permissions {
+	tree := fmt.Sprintf("%s.%s.>", instanceId, tenant)
+	levelUp := fmt.Sprintf("%s.%s", instanceId, tenant)
 	var p jwt.Permissions
 	p.Pub.Allow.Add(tree)
 	p.Sub.Allow.Add(tree, levelUp, MqttDeliverySubject)
@@ -139,8 +143,9 @@ func DevicePermissions(tenant string) jwt.Permissions {
 // SignDeviceUserJWT builds and signs the user JWT the callout returns for an
 // authenticated device. subject MUST be the server-supplied user nkey from the
 // authorization request (req.UserNkey); the JWT places the user in AppAccount
-// (via aud) with tenant-scoped permissions, signed by the issuer account seed.
-func SignDeviceUserJWT(issuerSeed, userNkey, tenant string, now time.Time, ttl time.Duration) (string, error) {
+// (via aud) with instance-and-tenant-scoped permissions (ADR-048), signed by the
+// issuer account seed.
+func SignDeviceUserJWT(issuerSeed, userNkey, instanceId, tenant string, now time.Time, ttl time.Duration) (string, error) {
 	akp, err := nkeys.FromSeed([]byte(issuerSeed))
 	if err != nil {
 		return "", fmt.Errorf("loading issuer seed: %w", err)
@@ -148,7 +153,7 @@ func SignDeviceUserJWT(issuerSeed, userNkey, tenant string, now time.Time, ttl t
 	uc := jwt.NewUserClaims(userNkey)
 	uc.Name = tenant
 	uc.Audience = AppAccount
-	uc.Permissions = DevicePermissions(tenant)
+	uc.Permissions = DevicePermissions(instanceId, tenant)
 	// Pin the credential to the MQTT connection type: the device plane is MQTT, so
 	// a device credential must not be usable to open a raw NATS connection (which
 	// would let it subscribe to the shared MqttDeliverySubject and read other

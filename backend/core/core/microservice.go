@@ -163,6 +163,18 @@ func (ms *Microservice) Run() error {
 // Issue initialize and start commands to microservice
 func (ms *Microservice) InitializeAndStart() error {
 	startedat := time.Now()
+	// Fail closed on a malformed instance id: it is spliced verbatim into every
+	// messaging subject ({instanceId}.{tenant}.suffix), the device-plane MQTT topic
+	// and HTTP ingest route (ADR-048), and (sanitized) into JetStream stream names,
+	// so a metacharacter ('.', '*', '>', '/', '+', '#', '{', '}', whitespace) would
+	// shift subject segments, inject a NATS/MQTT wildcard reaching across instances,
+	// or malform a route. ValidateToken is exactly this safety alphabet — the same
+	// guard tenants get where they are spliced into a subject — enforced once at
+	// startup rather than resting on the RFC-1123 namespace-name backstop upstream.
+	if err := ValidateToken(ms.InstanceId); err != nil {
+		log.Error().Err(err).Str("instanceId", ms.InstanceId).Msg("Invalid instance id (DC_INSTANCE_ID); refusing to start")
+		return fmt.Errorf("invalid instance id: %w", err)
+	}
 	err := ms.Initialize(ms.rootCtx)
 	if err != nil {
 		log.Error().Err(err).Msg("Unable to initialize microservice")

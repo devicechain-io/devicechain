@@ -167,6 +167,15 @@ func buildEventSources() error {
 				// The gateway source authenticates as the shared service user when
 				// broker auth is on; an external-broker source keeps its own creds.
 				user, pass = natscfg.Auth.User, natscfg.Auth.Password
+				// Scope the gateway subscription to THIS instance's device-plane tree
+				// (ADR-048): the topic's first level is the instance id, so the
+				// MQTT-topic→NATS-subject mapping ({instanceId}.{tenant}.…) matches the
+				// permission tree minted for device connections. On a shared broker one
+				// instance therefore never receives another instance's device traffic.
+				// The topic is fully derived from the instance id (not the configured
+				// value) since it is structural; a configured "topic" applies only to an
+				// external-broker source, which is not instance-scoped.
+				source.Configuration["topic"] = fmt.Sprintf("%s/+/#", Microservice.InstanceId)
 			}
 			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, tlsConfig, user, pass,
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed, onRateAllow)
@@ -175,7 +184,7 @@ func buildEventSources() error {
 			}
 			created = append(created, mqtt)
 		case processor.TYPE_HTTP:
-			http, err := processor.NewHttpEventSource(source.Id, source.Configuration,
+			http, err := processor.NewHttpEventSource(source.Id, source.Configuration, Microservice.InstanceId,
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed, onRateAllow)
 			if err != nil {
 				return err

@@ -90,9 +90,10 @@ func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Conf
 }
 
 // tenantFromTopic derives the tenant from an inbound MQTT topic of the form
-// "dc/{tenant}/..." (ADR-006): the tenant is the second of at least three
-// non-empty slash-separated segments. Parsed directly (no whole-string rewrite)
-// since this runs per inbound message.
+// "{instanceId}/{tenant}/..." (ADR-006/ADR-048): the tenant is the second of at
+// least three non-empty slash-separated segments. Only the second segment is read,
+// so this is agnostic to the (instance-id) prefix. Parsed directly (no whole-string
+// rewrite) since this runs per inbound message.
 func tenantFromTopic(topic string) (string, bool) {
 	parts := strings.SplitN(topic, "/", 3)
 	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {

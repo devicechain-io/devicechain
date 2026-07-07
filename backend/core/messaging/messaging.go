@@ -121,9 +121,9 @@ type MessageWriter interface {
 }
 
 // ParseTenantFromSubject extracts the tenant id from a messaging subject built
-// as "{instanceId}.{tenantId}.{suffix}" (and the ADR-006 MQTT mapping
-// "dc.{tenant}.devices.{token}.events" — the tenant is the second segment in
-// both). It returns the second dot-segment and true on a match, or ("", false)
+// as "{instanceId}.{tenantId}.{suffix}" (and the ADR-006/ADR-048 MQTT mapping
+// "{instanceId}.{tenant}.devices.{token}.events" — the tenant is the second
+// segment in both). It returns the second dot-segment and true on a match, or ("", false)
 // when the subject does not have at least three non-empty leading segments. Used
 // by ingest consumers to derive a per-message tenant for WithTenant.
 func ParseTenantFromSubject(subject string) (string, bool) {

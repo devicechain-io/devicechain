@@ -12,7 +12,8 @@ import (
 
 // rawMessage pairs an inbound transport message's payload with the tenant it
 // belongs to. The tenant is derived by the source from its own addressing (an
-// MQTT topic "dc/{tenant}/...", an HTTP path "/dc/{tenant}/...", ADR-006) before
+// MQTT topic "{instanceId}/{tenant}/...", an HTTP path "/{instanceId}/{tenant}/...",
+// ADR-006/ADR-048) before
 // the payload is enqueued, so it travels with the payload to the producer, which
 // publishes to the tenant-scoped subject.
 type rawMessage struct {

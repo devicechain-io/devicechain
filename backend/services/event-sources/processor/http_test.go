@@ -20,7 +20,7 @@ func newTestHttpSource(t *testing.T, allow func(string, string) bool) (*HttpEven
 	t.Helper()
 	dec := &capturedDecode{}
 	fail := &capturedFailure{}
-	es, err := NewHttpEventSource("http-test", map[string]string{}, NewJsonDecoder(map[string]string{}),
+	es, err := NewHttpEventSource("http-test", map[string]string{}, "inst-1", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
 		func(source string, tenant string, event *model.UnresolvedEvent, payload interface{}) {
 			dec.called = true
@@ -49,13 +49,13 @@ type capturedFailure struct {
 	err    error
 }
 
-// A well-formed measurement event posted to /dc/{tenant}/events is decoded, the
-// tenant is taken from the path, and the response is 202 Accepted.
+// A well-formed measurement event posted to /{instanceId}/{tenant}/events is
+// decoded, the tenant is taken from the path, and the response is 202 Accepted.
 func TestHttpEventSource_DecodeSuccess(t *testing.T) {
 	es, dec, fail := newTestHttpSource(t, nil)
 
 	body := `{"device":"sensor-001","eventType":"Measurement","payload":{"measurements":{"temp":21.5}}}`
-	req := httptest.NewRequest(http.MethodPost, "/dc/acme/events", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/inst-1/acme/events", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	es.handler().ServeHTTP(rec, req)
 
@@ -72,7 +72,7 @@ func TestHttpEventSource_DecodeSuccess(t *testing.T) {
 func TestHttpEventSource_DecodeFailure(t *testing.T) {
 	es, dec, fail := newTestHttpSource(t, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/dc/acme/events", strings.NewReader("not json"))
+	req := httptest.NewRequest(http.MethodPost, "/inst-1/acme/events", strings.NewReader("not json"))
 	rec := httptest.NewRecorder()
 	es.handler().ServeHTTP(rec, req)
 
@@ -87,7 +87,7 @@ func TestHttpEventSource_DecodeFailure(t *testing.T) {
 func TestHttpEventSource_MissingTenant(t *testing.T) {
 	es, dec, fail := newTestHttpSource(t, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/dc//events", strings.NewReader(`{}`))
+	req := httptest.NewRequest(http.MethodPost, "/inst-1//events", strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
 	es.handler().ServeHTTP(rec, req)
 
@@ -102,7 +102,7 @@ func TestHttpEventSource_RateLimited(t *testing.T) {
 	es, dec, fail := newTestHttpSource(t, func(string, string) bool { return false })
 
 	body := `{"device":"sensor-001","eventType":"Measurement","payload":{"measurements":{"temp":21.5}}}`
-	req := httptest.NewRequest(http.MethodPost, "/dc/acme/events", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/inst-1/acme/events", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	es.handler().ServeHTTP(rec, req)
 
@@ -115,7 +115,7 @@ func TestHttpEventSource_RateLimited(t *testing.T) {
 func TestHttpEventSource_WrongMethod(t *testing.T) {
 	es, _, _ := newTestHttpSource(t, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/dc/acme/events", nil)
+	req := httptest.NewRequest(http.MethodGet, "/inst-1/acme/events", nil)
 	rec := httptest.NewRecorder()
 	es.handler().ServeHTTP(rec, req)
 
@@ -124,17 +124,17 @@ func TestHttpEventSource_WrongMethod(t *testing.T) {
 
 // The configured port is parsed; an invalid port fails construction.
 func TestNewHttpEventSource_Port(t *testing.T) {
-	es, err := NewHttpEventSource("http-test", map[string]string{"port": "9000"}, NewJsonDecoder(map[string]string{}),
+	es, err := NewHttpEventSource("http-test", map[string]string{"port": "9000"}, "inst-1", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {}, nil, nil, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, 9000, es.Port)
 
-	_, err = NewHttpEventSource("http-test", map[string]string{"port": "abc"}, NewJsonDecoder(map[string]string{}),
+	_, err = NewHttpEventSource("http-test", map[string]string{"port": "abc"}, "inst-1", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {}, nil, nil, nil)
 	assert.Error(t, err)
 
 	// Absent port falls back to the default.
-	es, err = NewHttpEventSource("http-test", map[string]string{}, NewJsonDecoder(map[string]string{}),
+	es, err = NewHttpEventSource("http-test", map[string]string{}, "inst-1", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {}, nil, nil, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, DEFAULT_HTTP_PORT, es.Port)

@@ -21,8 +21,21 @@ import (
 const AuthCalloutSubject = "$SYS.REQ.USER.AUTH"
 
 // authCalloutQueue is the queue group the responder subscribes under, so that
-// across multiple device-management replicas exactly one instance handles each
+// across multiple device-management replicas exactly one replica handles each
 // authorization request (rather than every replica racing to answer it).
+//
+// It is deliberately NOT namespaced per ADR-048 instance (unlike the device
+// subject tree, which is). The auth callout is broker-global by construction —
+// one `$SYS.REQ.USER.AUTH` subject and one `auth_callout.issuer` account key per
+// broker — so on a shared broker all instances necessarily share a single callout
+// responder pool; a per-instance queue group would merely give every instance's
+// pool a copy of each request and have them race grant against deny. Correct
+// per-instance attribution on a shared broker — the responder resolving which
+// instance a connecting device belongs to (from the connect credentials, rather
+// than assuming its own, as authorize does via c.instanceId) and signing the JWT
+// for that instance's tree — is part of the shared-vs-dedicated infra-profile work
+// (ADR-048 D2). Today a broker serves a single instance, so the responder's own
+// instance id is the correct scope.
 const authCalloutQueue = "dc-device-callout"
 
 // genericAuthFailure is the single error string returned for every device
@@ -43,19 +56,23 @@ type CalloutResponder struct {
 	conn       *nats.Conn
 	api        model.DeviceManagementApi
 	issuerSeed string
+	instanceId string
 	ttl        time.Duration
 	now        func() time.Time
 	sub        *nats.Subscription
 }
 
 // NewCalloutResponder builds a responder over an established NATS connection (the
-// service's own trusted connection), the device-management API, and the account
-// issuer seed the minted user JWTs are signed with.
-func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, issuerSeed string) *CalloutResponder {
+// service's own trusted connection), the device-management API, the account issuer
+// seed the minted user JWTs are signed with, and the instance id the minted device
+// permissions are scoped under (ADR-048), so a device is confined to its own
+// instance's subject tree on a shared broker.
+func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, issuerSeed, instanceId string) *CalloutResponder {
 	return &CalloutResponder{
 		conn:       conn,
 		api:        api,
 		issuerSeed: issuerSeed,
+		instanceId: instanceId,
 		ttl:        natsauth.DefaultUserJWTTTL,
 		now:        time.Now,
 	}
@@ -129,7 +146,7 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 		return "", genericAuthFailure
 	}
 
-	signed, err := natsauth.SignDeviceUserJWT(c.issuerSeed, req.UserNkey, tenant, c.now(), c.ttl)
+	signed, err := natsauth.SignDeviceUserJWT(c.issuerSeed, req.UserNkey, c.instanceId, tenant, c.now(), c.ttl)
 	if err != nil {
 		log.Error().Err(err).Msg("Auth-callout failed to sign a device user JWT.")
 		return "", genericAuthFailure
@@ -164,7 +181,7 @@ func parseDeviceCredential(username, password string) (string, *model.PresentedC
 	}
 	tenant, credentialID := parts[0], parts[1]
 	// Validate the tenant against the token grammar locally before it is spliced
-	// into the device's `dc.{tenant}.>` permission subject. The grammar is already
+	// into the device's `{instanceId}.{tenant}.>` permission subject. The grammar is already
 	// enforced when a tenant is created (it excludes `.`/`*`/`>`/`:`), so this is
 	// defense-in-depth that keeps the "no subject injection" property local to the
 	// callout rather than resting on a distant invariant.
