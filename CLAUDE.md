@@ -8,14 +8,19 @@ A Go monorepo using **Go Workspaces** (`go.work`, Go 1.26). The workspace module
 backend/
   core/                       shared library — entity, auth, messaging, config, rdb, graphql
   services/                   one module per microservice:
-    device-management/        devices, profiles, the typed relationship graph, event resolution
+    device-management/        devices, device types + versioned device profiles (un-fused, ADR-045),
+                              the typed relationship graph, the alarm engine (ADR-041), event resolution
     user-management/          identities, per-tenant memberships, roles, two-tier JWT/JWKS
-    event-management/         persists + queries time-series events (TimescaleDB hypertables)
-    event-sources/            inbound device transports (MQTT/NATS), decode → pipeline
+    event-management/         persists + queries time-series events (TimescaleDB hypertables;
+                              data-lifecycle reconciler + measurement_rollups continuous aggregate, ADR-026)
+    event-sources/            inbound device transports (MQTT/NATS), decode → pipeline; per-tenant
+                              ingest rate limiting w/ platform-default ceiling (ADR-023)
     device-state/             live last-known-state projection per device
-    command-delivery/         persistent two-way command dispatch
+    command-delivery/         persistent two-way command dispatch (typed command defs on the profile, ADR-043)
     dashboard-management/     dashboard CRUD + versioning (draft/publish/rollback); definitions are
                               versioned tenant resources stored as opaque JSON (ADR-039)
+    notification-management/  alarm→human last mile: per-tenant policy, SMTP + webhook adapters,
+                              HA-safe escalation scheduler (ADR-017)
   k8s/                        controller-runtime operator (Instance CRD; tenants are control-plane DB rows, ADR-033)
   cli/                        dcctl — bootstrap/destroy + admin tooling
 deploy/                       Helm chart (deploy/helm) + OpenTofu modules (deploy/opentofu)

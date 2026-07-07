@@ -95,12 +95,13 @@ per tenant.
 | Service | Responsibility |
 |---|---|
 | **event-sources** | Inbound device transports. Decodes raw messages and publishes them onto the pipeline. |
-| **device-management** | Devices, device profiles, the typed relationship graph, and event resolution. |
+| **device-management** | Devices, device types + versioned device profiles, the typed relationship graph, the alarm engine, and event resolution. |
 | **event-management** | Persists resolved events to TimescaleDB and serves time-series queries over GraphQL. |
 | **user-management** | Identities, per-tenant memberships, roles, and two-tier JWT issuance / validation (JWKS). |
 | **device-state** | Live last-known-state projection per device (presence, latest location and measurements). |
 | **command-delivery** | Persistent, two-way command dispatch to devices. |
 | **dashboard-management** | Stores tenant dashboard definitions; the embeddable widget packages render live telemetry over them. |
+| **notification-management** | Routes triggered alarms to humans — per-tenant policy over email (SMTP) and webhook, with per-severity escalation. |
 | **operator** | A controller-runtime operator reconciling the `Instance` custom resource (an instance's deployment shape). |
 
 ### The backbone
@@ -169,9 +170,13 @@ DeviceChain models the physical world with a small set of composable concepts. T
 defining choice is that device *context* is expressed as a **typed relationship
 graph** rather than a fixed assignment record:
 
-- **Device** — an instance of a device profile; the thing that connects and reports.
-- **Device Profile** — shared configuration for a class of devices (transport,
-  provisioning, alarm rules, OTA targets, processing routing).
+- **Device** — the thing that connects and reports; an instance of a device type.
+- **Device Type** — the taxonomy/identity layer: name, appearance (icon/colors),
+  and classification. A type references at most one device profile.
+- **Device Profile** — a distinct, **versioned** (draft / publish / rollback)
+  capability aggregate that owns a device class's **metric**, **command**, and
+  **alarm-rule** definitions. Many types can share one profile, and a device
+  resolves its capabilities through `device → type → profile`.
 - **Asset** — the real-world thing a device monitors (Device / Person / Hardware).
 - **Area** — a spatial/organizational location, optionally with polygon boundaries
   and zones; areas nest into hierarchies.
@@ -231,7 +236,8 @@ Minimum to run locally: a NATS server (a single ~10MB binary) and TimescaleDB
 backend/    Go monorepo (Go Workspaces)
   core/       shared library — entity, auth, messaging, config, rdb, graphql
   services/   microservices — device-management, user-management, event-management,
-              event-sources, device-state, command-delivery, dashboard-management
+              event-sources, device-state, command-delivery, dashboard-management,
+              notification-management
   k8s/        Kubernetes operator (controller-runtime)
   cli/        dcctl — instance bootstrap / destroy and admin tooling
 frontend/   npm workspace — apps/console (React + TypeScript management console)
