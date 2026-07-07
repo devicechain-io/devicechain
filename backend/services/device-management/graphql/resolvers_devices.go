@@ -165,6 +165,10 @@ func (r *DeviceResolver) Token() string {
 	return r.M.Token
 }
 
+func (r *DeviceResolver) ExternalId() *string {
+	return util.NullStr(r.M.ExternalId)
+}
+
 func (r *DeviceResolver) Name() *string {
 	return util.NullStr(r.M.Name)
 }

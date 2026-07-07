@@ -22,5 +22,6 @@ var (
 		NewProfileVersioningSchema(),
 		NewFacetIndexSchema(),
 		NewRelationshipTargetTokenSchema(),
+		NewExternalIdSchema(),
 	}
 )

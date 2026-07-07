@@ -189,6 +189,9 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
 		},
+		ExternalReference: rdb.ExternalReference{
+			ExternalId: rdb.NullStrOf(request.ExternalId),
+		},
 		NamedEntity: rdb.NamedEntity{
 			Name:        rdb.NullStrOf(request.Name),
 			Description: rdb.NullStrOf(request.Description),
@@ -218,6 +221,7 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceC
 	// Update fields that changed.
 	updated := matches[0]
 	updated.Token = request.Token
+	updated.ExternalId = rdb.NullStrOf(request.ExternalId)
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
 	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
@@ -259,6 +263,19 @@ func (api *Api) DevicesByToken(ctx context.Context, tokens []string) ([]*Device,
 	result := api.RDB.DB(ctx)
 	result = result.Preload("DeviceType")
 	result = result.Find(&found, "token in ?", tokens)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return found, nil
+}
+
+// Get devices by their customer-owned external id (ADR-049). Only rows that carry
+// a matching non-null external id are returned; the token remains the addressing id.
+func (api *Api) DevicesByExternalId(ctx context.Context, externalIds []string) ([]*Device, error) {
+	found := make([]*Device, 0)
+	result := api.RDB.DB(ctx)
+	result = result.Preload("DeviceType")
+	result = result.Find(&found, "external_id in ?", externalIds)
 	if result.Error != nil {
 		return nil, result.Error
 	}
