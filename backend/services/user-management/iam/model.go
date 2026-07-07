@@ -129,6 +129,15 @@ type Tenant struct {
 	Token   string         `gorm:"uniqueIndex;not null;size:128"`
 	Enabled bool           `gorm:"not null;default:true"`
 	Config  map[string]any `gorm:"serializer:json"`
+
+	// Per-tenant governance overrides (ADR-023). A nil field means "inherit the
+	// platform default"; a set value raises or lowers the ceiling for this tenant
+	// only. Fail-safe by construction: the enforcing service treats a nil (or
+	// absent) limit as the platform default, never as unlimited, so a tenant with
+	// no override is still metered. These are the first of a family of governance
+	// knobs (retention windows, API limits) that will land alongside them.
+	IngestMessagesPerSecond *float64
+	IngestBurst             *int
 }
 
 func (Tenant) TableName() string { return "iam_tenants" }

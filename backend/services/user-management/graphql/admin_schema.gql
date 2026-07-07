@@ -40,6 +40,10 @@ type AdminTenant {
     enabled: Boolean!
     # Freeform per-tenant config as a JSON object string (null when unset).
     config: String
+    # Per-tenant ingest governance overrides. Null means the tenant inherits the
+    # platform default; a set value raises or lowers its ceiling.
+    ingestMessagesPerSecond: Float
+    ingestBurst: Int
 }
 
 # A globally-defined, named bundle of authorities (ADR-008 RBAC / ADR-033). Scope
@@ -73,17 +77,23 @@ input AdminRoleUpdateRequest {
     authorities: [String!]!
 }
 
-# Data to create a tenant. config is an optional JSON object string.
+# Data to create a tenant. config is an optional JSON object string. The ingest*
+# overrides are optional; omit them to inherit the platform default.
 input AdminTenantCreateRequest {
     token: String!
     name: String
     config: String
+    ingestMessagesPerSecond: Float
+    ingestBurst: Int
 }
 
-# Data to update a tenant (its token is fixed).
+# Data to update a tenant (its token is fixed). A null ingest* override clears it,
+# reverting the tenant to the platform default.
 input AdminTenantUpdateRequest {
     name: String
     config: String
+    ingestMessagesPerSecond: Float
+    ingestBurst: Int
 }
 
 # Data required to create a global identity. Each system role must name an
@@ -203,7 +213,8 @@ type Mutation {
 
     # Create a tenant, enabled by default (requires tenant:write).
     createTenant(request: AdminTenantCreateRequest!): AdminTenant!
-    # Update a tenant's name + config by token (requires tenant:write).
+    # Replace a tenant's name, config, and ingest overrides by token; omitting an
+    # ingest override clears it back to the platform default (requires tenant:write).
     updateTenant(token: String!, request: AdminTenantUpdateRequest!): AdminTenant!
     # Enable or disable a tenant (requires tenant:write).
     setTenantEnabled(token: String!, enabled: Boolean!): AdminTenant!
