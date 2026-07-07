@@ -51,7 +51,7 @@ jobs:
           # Full set of Go module dirs = non-service modules + discovered services.
           # Derived by finding every dir that holds a go.mod under the known roots.
           modules="$(
-            for d in backend/cli backend/core backend/k8s backend/services/*/; do
+            for d in backend/cli backend/core backend/k8s backend/services/*/ backend/sims/*/; do
               [ -f "${d%/}/go.mod" ] && echo "${d%/}"
             done | jq -R . | jq -s -c .
           )"
