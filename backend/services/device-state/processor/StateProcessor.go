@@ -251,6 +251,8 @@ func (sp *StateProcessor) mergeLatestMeasurements(ctx context.Context, event *dm
 				Name:         mx.Name,
 				Value:        sql.NullFloat64{Float64: f, Valid: true},
 				Classifier:   classifier,
+				Unit:         mx.Unit,
+				DataType:     mx.DataType,
 				OccurredTime: occurredAt,
 			})
 		}

@@ -127,6 +127,18 @@ func (r *LatestMeasurementResolver) Classifier() *int32 {
 	return nil
 }
 
+// Unit is the bound metric definition's unit, denormalized (ADR-016); nil for an
+// undeclared measurement.
+func (r *LatestMeasurementResolver) Unit() *string {
+	return r.M.Unit
+}
+
+// DataType is the bound metric definition's data type, denormalized so a reader can
+// interpret the value (e.g. render a 0/1 BOOLEAN as false/true); nil when unbound.
+func (r *LatestMeasurementResolver) DataType() *string {
+	return r.M.DataType
+}
+
 // OccurredTime is the reading's timestamp; it is a required field and always set.
 func (r *LatestMeasurementResolver) OccurredTime() string {
 	if s := util.FormatTime(r.M.OccurredTime); s != nil {
