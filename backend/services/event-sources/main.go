@@ -29,6 +29,10 @@ var (
 	GraphQLManager *gqlcore.GraphQLManager
 	NatsManager    *messaging.NatsManager
 
+	// RateLimiter meters inbound events per tenant against the platform ingest
+	// ceiling; over-limit events are shed at the receive point before decode.
+	RateLimiter *core.TenantRateLimiter
+
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
 	FailedDecodeWriter  messaging.MessageWriter
@@ -37,6 +41,7 @@ var (
 	MessagesCounter     *prometheus.CounterVec
 	DecodedCounter      *prometheus.CounterVec
 	FailedDecodeCounter *prometheus.CounterVec
+	RateLimitedCounter  *prometheus.CounterVec
 )
 
 func main() {
@@ -87,6 +92,10 @@ func initializeMetrics() {
 		"total_msg_failed_decode",
 		"Count of total messages that failed to decode",
 		[]string{"source"})
+	RateLimitedCounter = Microservice.NewCounterVec(
+		"total_msg_rate_limited",
+		"Count of inbound messages shed for exceeding the per-tenant ingest rate limit",
+		[]string{"source"})
 }
 
 // Create decoder based on event source configuration.
@@ -131,14 +140,14 @@ func buildEventSources() error {
 				user, pass = natscfg.Auth.User, natscfg.Auth.Password
 			}
 			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, tlsConfig, user, pass,
-				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed)
+				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed, onRateAllow)
 			if err != nil {
 				return err
 			}
 			created = append(created, mqtt)
 		case processor.TYPE_HTTP:
 			http, err := processor.NewHttpEventSource(source.Id, source.Configuration,
-				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed)
+				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed, onRateAllow)
 			if err != nil {
 				return err
 			}
@@ -155,6 +164,26 @@ func buildEventSources() error {
 func onMessageReceived(source string, raw []byte) {
 	// Increment counter for metrics.
 	MessagesCounter.WithLabelValues(source).Inc()
+}
+
+// onRateAllow meters one inbound message against its tenant's ingest ceiling. It
+// returns true when the message may proceed and false when it must be shed,
+// recording the shed against the per-(source, tenant) metric so a noisy tenant is
+// observable. Called at the receive point of each transport, before decode.
+func onRateAllow(source string, tenant string) bool {
+	if RateLimiter.Allow(tenant) {
+		return true
+	}
+	RateLimitedCounter.WithLabelValues(source).Inc()
+	// Per-tenant attribution is logged (debug) rather than carried as a metric
+	// label: this service does not verify tenant existence, so a tenant label would
+	// be an unbounded, attacker-influenceable cardinality vector. A safe per-tenant
+	// shed metric belongs with the bounded, known-tenant registry a later slice adds.
+	if log.Debug().Enabled() {
+		log.Debug().Str("source", source).Str("tenant", tenant).
+			Msg("Shed inbound event exceeding per-tenant ingest rate limit")
+	}
+	return false
 }
 
 // Called by event sources when an event is successfully decoded. The tenant is
@@ -236,6 +265,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// Build the per-tenant ingest rate limiter from the (defaulted) configuration
+	// before the sources that use it. ApplyDefaults guarantees positive rates, so
+	// the limiter always meters — it is never unlimited.
+	RateLimiter = core.NewTenantRateLimiter(
+		Configuration.IngestRateLimit.MessagesPerSecond, Configuration.IngestRateLimit.Burst)
 
 	// Build event sources from configuration.
 	err = buildEventSources()
