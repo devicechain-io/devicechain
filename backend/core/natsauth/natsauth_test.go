@@ -58,23 +58,24 @@ func TestGenerateCredentials(t *testing.T) {
 // subscribe additionally allows the level-up subject (MQTT `#` filter mapping) and
 // the MQTT QoS-1 delivery subject — but nothing cross-tenant.
 func TestDevicePermissions(t *testing.T) {
-	p := DevicePermissions("acme-corp")
-	if got := []string(p.Pub.Allow); len(got) != 1 || got[0] != "dc.acme-corp.>" {
-		t.Errorf("pub allow = %v, want [dc.acme-corp.>]", got)
+	p := DevicePermissions("inst-1", "acme-corp")
+	if got := []string(p.Pub.Allow); len(got) != 1 || got[0] != "inst-1.acme-corp.>" {
+		t.Errorf("pub allow = %v, want [inst-1.acme-corp.>]", got)
 	}
 	sub := map[string]bool{}
 	for _, s := range p.Sub.Allow {
 		sub[s] = true
 	}
-	for _, want := range []string{"dc.acme-corp.>", "dc.acme-corp", MqttDeliverySubject} {
+	for _, want := range []string{"inst-1.acme-corp.>", "inst-1.acme-corp", MqttDeliverySubject} {
 		if !sub[want] {
 			t.Errorf("sub allow %v missing %q", []string(p.Sub.Allow), want)
 		}
 	}
-	// No other tenant's tree, and the MQTT delivery subject is the shared internal
-	// one (guarded by the MQTT connection-type pin) — no `dc.*` wildcard.
+	// No other tenant's or instance's tree, and the MQTT delivery subject is the
+	// shared internal one (guarded by the MQTT connection-type pin) — no broad
+	// wildcard.
 	for _, s := range p.Sub.Allow {
-		if s == "dc.>" || s == ">" {
+		if s == "inst-1.>" || s == "dc.>" || s == ">" {
 			t.Errorf("sub allow %q is too broad", s)
 		}
 	}
@@ -92,7 +93,7 @@ func TestSignDeviceUserJWT(t *testing.T) {
 	userNkey, _ := ukp.PublicKey()
 	now := time.Unix(1_780_000_000, 0)
 
-	token, err := SignDeviceUserJWT(c.IssuerSeed, userNkey, "plant_07", now, DefaultUserJWTTTL)
+	token, err := SignDeviceUserJWT(c.IssuerSeed, userNkey, "inst-1", "plant_07", now, DefaultUserJWTTTL)
 	if err != nil {
 		t.Fatalf("SignDeviceUserJWT: %v", err)
 	}
@@ -110,8 +111,8 @@ func TestSignDeviceUserJWT(t *testing.T) {
 	if uc.Audience != AppAccount {
 		t.Errorf("audience = %q, want %q", uc.Audience, AppAccount)
 	}
-	if got := []string(uc.Permissions.Pub.Allow); len(got) != 1 || got[0] != "dc.plant_07.>" {
-		t.Errorf("pub allow = %v, want [dc.plant_07.>]", got)
+	if got := []string(uc.Permissions.Pub.Allow); len(got) != 1 || got[0] != "inst-1.plant_07.>" {
+		t.Errorf("pub allow = %v, want [inst-1.plant_07.>]", got)
 	}
 	if got := []string(uc.AllowedConnectionTypes); len(got) != 1 || got[0] != jwt.ConnectionTypeMqtt {
 		t.Errorf("allowed connection types = %v, want [MQTT] (device creds must be MQTT-only)", got)

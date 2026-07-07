@@ -267,7 +267,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	// AuthenticateDevice. Absent an issuer seed the broker isn't running callout,
 	// so there is nothing to serve.
 	if seed := Microservice.InstanceConfiguration.Infrastructure.Nats.Auth.CalloutIssuerSeed; seed != "" {
-		CalloutResponder = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, seed)
+		CalloutResponder = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, seed, Microservice.InstanceId)
 		if err = CalloutResponder.Start(); err != nil {
 			return err
 		}

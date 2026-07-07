@@ -85,9 +85,13 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 				Configuration: map[string]string{
 					"host": "dc-nats.dc-system",
 					"port": "1883",
-					// Tenant-bearing topic (ADR-006): "dc/{tenant}/...". The
-					// second level carries the tenant the producer scopes on.
-					"topic": "dc/+/#",
+					// Device-plane topic (ADR-006): "{instanceId}/{tenant}/...". The
+					// first level is the instance id and the second carries the tenant
+					// the producer scopes on. For the gateway source this value is
+					// replaced at bind time with the instance-scoped wildcard
+					// "{instanceId}/+/#" (ADR-048); the placeholder here documents the
+					// shape and applies only to an external-broker source.
+					"topic": "+/#",
 				},
 				Decoder: EventDecoder{
 					Type:          "json",
@@ -98,8 +102,8 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 			{
 				// HTTP ingest is on by default alongside MQTT (TB §2.9, the most
 				// common integration after MQTT). Devices POST events to
-				// "/dc/{tenant}/events"; the tenant is taken from the path, mirroring
-				// the MQTT topic convention (ADR-006).
+				// "/{instanceId}/{tenant}/events"; the instance and tenant are taken
+				// from the path, mirroring the MQTT topic convention (ADR-006/ADR-048).
 				Id:   "http1",
 				Type: "http",
 				Configuration: map[string]string{

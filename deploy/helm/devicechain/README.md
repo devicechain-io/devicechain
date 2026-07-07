@@ -84,7 +84,7 @@ functionalAreas:
   event-sources:
     extraPorts:
       - name: http-ingest
-        port: 8081   # POST /dc/{tenant}/events
+        port: 8081   # POST /{instanceId}/{tenant}/events
 ```
 
 `values.schema.json` validates the deployment-selection envelope (profile enum,

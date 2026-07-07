@@ -32,7 +32,7 @@ Every inbound event — over any transport — is a JSON object:
 
 ## MQTT
 
-An MQTT topic maps directly to a NATS subject, so a publish on `dc/{tenant}/devices/{token}/events` is consumed by `event-sources` as the subject `dc.{tenant}.devices.{token}.events`.
+An MQTT topic maps directly to a NATS subject, so a publish on `{instanceId}/{tenant}/devices/{token}/events` is consumed by `event-sources` as the subject `{instanceId}.{tenant}.devices.{token}.events`. The first segment is the **instance id** (the `instance.id` you deployed, e.g. `devicechain`): it namespaces the device plane so instances sharing a broker never cross over, and a device credential is authorized only for its own instance's subject tree.
 
 The listener is **TLS** and the connection is **broker-authenticated** (ADR-025): connect over TLS with the instance CA and present the device's credential as the MQTT username **`{tenant}:{credentialId}`** and password. Publish the event body to your device's events topic:
 
@@ -41,7 +41,7 @@ mosquitto_pub \
   --cafile instance-ca.crt \
   -h <mqtt-host> -p 1883 \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
-  -t "dc/acme/devices/sensor-001/events" \
+  -t "devicechain/acme/devices/sensor-001/events" \
   -m '{"device":"sensor-001","eventType":"Measurement","credentialType":"MQTT_BASIC","credentialId":"<credentialId>","credentialSecret":"<credentialSecret>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
@@ -49,10 +49,10 @@ The credential authenticates the connection (broker) and the event (pipeline). T
 
 ## HTTP
 
-`event-sources` also accepts events over HTTP on port **8081**. The tenant is taken from the path (mirroring the MQTT topic convention); the device and its credential ride in the body. `POST` returns **202 Accepted** once the event is queued — or **429 Too Many Requests** if the tenant is over its ingest rate limit (a per-tenant limiter with a platform-default ceiling shields the shared pipeline; the MQTT path drops over-limit messages instead):
+`event-sources` also accepts events over HTTP on port **8081**. The instance id and tenant are taken from the path `/{instanceId}/{tenant}/events` (mirroring the MQTT topic convention); the device and its credential ride in the body. `POST` returns **202 Accepted** once the event is queued — or **429 Too Many Requests** if the tenant is over its ingest rate limit (a per-tenant limiter with a platform-default ceiling shields the shared pipeline; the MQTT path drops over-limit messages instead):
 
 ```bash
-curl -X POST http://localhost:8081/dc/acme/events \
+curl -X POST http://localhost:8081/devicechain/acme/events \
   -H 'Content-Type: application/json' \
   -d '{"device":"sensor-001","eventType":"Measurement","credentialType":"ACCESS_TOKEN","credentialId":"<token>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```

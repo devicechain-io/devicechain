@@ -32,7 +32,7 @@ func (m *fakeMqttMessage) Ack()              {}
 func newTestMqttSource(t *testing.T, allow func(string, string) bool) (*MqttEventSource, *int) {
 	t.Helper()
 	receivedCount := 0
-	es, err := NewMqttEventSource("mqtt-test", map[string]string{"host": "h", "port": "1883", "topic": "dc/+/#"},
+	es, err := NewMqttEventSource("mqtt-test", map[string]string{"host": "h", "port": "1883", "topic": "inst-1/+/#"},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) { receivedCount++ },
 		func(string, string, *model.UnresolvedEvent, interface{}) {},
@@ -48,7 +48,7 @@ func newTestMqttSource(t *testing.T, allow func(string, string) bool) (*MqttEven
 func TestMqttOnMessage_Allowed(t *testing.T) {
 	es, received := newTestMqttSource(t, func(string, string) bool { return true })
 
-	es.onMessage(nil, &fakeMqttMessage{topic: "dc/acme/events", payload: []byte(`{"device":"d1"}`)})
+	es.onMessage(nil, &fakeMqttMessage{topic: "inst-1/acme/events", payload: []byte(`{"device":"d1"}`)})
 
 	assert.Len(t, es.messages, 1)
 	msg := <-es.messages
@@ -61,7 +61,7 @@ func TestMqttOnMessage_Allowed(t *testing.T) {
 func TestMqttOnMessage_RateLimited(t *testing.T) {
 	es, received := newTestMqttSource(t, func(string, string) bool { return false })
 
-	es.onMessage(nil, &fakeMqttMessage{topic: "dc/acme/events", payload: []byte(`{"device":"d1"}`)})
+	es.onMessage(nil, &fakeMqttMessage{topic: "inst-1/acme/events", payload: []byte(`{"device":"d1"}`)})
 
 	assert.Len(t, es.messages, 0, "shed message must not be enqueued")
 	assert.Equal(t, 0, *received, "shed message must not be counted as received")
@@ -74,7 +74,7 @@ func TestMqttOnMessage_InvalidTenantDropped(t *testing.T) {
 	es, _ := newTestMqttSource(t, func(string, string) bool { allowCalls++; return true })
 
 	// A space is outside the tenant token grammar (core.ValidateToken).
-	es.onMessage(nil, &fakeMqttMessage{topic: "dc/bad tenant/events", payload: []byte(`{}`)})
+	es.onMessage(nil, &fakeMqttMessage{topic: "inst-1/bad tenant/events", payload: []byte(`{}`)})
 
 	assert.Len(t, es.messages, 0)
 	assert.Equal(t, 0, allowCalls, "invalid tenant must be dropped before metering")
@@ -85,7 +85,7 @@ func TestMqttOnMessage_NoTenantDropped(t *testing.T) {
 	allowCalls := 0
 	es, _ := newTestMqttSource(t, func(string, string) bool { allowCalls++; return true })
 
-	es.onMessage(nil, &fakeMqttMessage{topic: "dc", payload: []byte(`{}`)})
+	es.onMessage(nil, &fakeMqttMessage{topic: "inst-1", payload: []byte(`{}`)})
 
 	assert.Len(t, es.messages, 0)
 	assert.Equal(t, 0, allowCalls)

@@ -273,7 +273,7 @@ functionalAreas:
   event-sources:
     config: {}
     # HTTP device-ingest listener (PR #38): event-sources serves
-    # POST /dc/{tenant}/events on 8081, in addition to the 8080 GraphQL/management
+    # POST /{instanceId}/{tenant}/events on 8081, in addition to the 8080 GraphQL/management
     # port. Exposed as an extra Service/container port so devices can reach it.
     # (The MQTT source dials out to the broker, so it needs no inbound port.)
     extraPorts:

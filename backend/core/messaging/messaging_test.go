@@ -18,7 +18,7 @@ func TestParseTenantFromSubject(t *testing.T) {
 		ok      bool
 	}{
 		{"instance1.tenant1.inbound-events", "tenant1", true},
-		{"dc.acme.devices.token.events", "acme", true}, // ADR-006 MQTT mapping
+		{"instance1.acme.devices.token.events", "acme", true}, // ADR-006/ADR-048 device-plane MQTT mapping
 		{"instance1.tenant1.a.b.c", "tenant1", true},
 		{"instance1..inbound-events", "", false}, // empty tenant
 		{"instance1.tenant1", "", false},         // too few segments

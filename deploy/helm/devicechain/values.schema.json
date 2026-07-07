@@ -32,7 +32,7 @@
       "type": "object",
       "required": ["id", "config"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$", "description": "Instance id: becomes DC_INSTANCE_ID and the target namespace, and is the first segment of every messaging subject, the device-plane MQTT topic, and the HTTP ingest route (ADR-048). Constrained to the token safety alphabet (letters, digits, hyphen, underscore) so it cannot inject a subject/MQTT/route metacharacter; the service also fail-closes on a malformed value at startup." },
         "createNamespace": { "type": "boolean" },
         "existingSecret": {
           "type": "string",
