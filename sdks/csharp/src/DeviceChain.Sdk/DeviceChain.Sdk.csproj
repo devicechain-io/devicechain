@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- netstandard2.1 is Unity's IL2CPP-consumable target; net8.0 for standalone .NET
+         hosts + the test project. The same source-gen JSON works on both. -->
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+    <RootNamespace>DeviceChain.Sdk</RootNamespace>
+    <AssemblyName>DeviceChain.Sdk</AssemblyName>
+    <PackageId>DeviceChain.Sdk</PackageId>
+    <Description>DeviceChain .NET client SDK — auth, GraphQL, live subscriptions, and device-plane telemetry over the platform wire (ADR-035). AOT/IL2CPP-safe.</Description>
+    <Authors>The DeviceChain Authors</Authors>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <!-- Flag AOT-incompatible patterns at build on the net8.0 target (the analyzer that
+       backs the Unity IL2CPP guarantee). -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- System.Text.Json is in-box on net8.0; referenced explicitly so the netstandard2.1
+         target (Unity) gets the same source-generator + API surface. -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <!-- Channels backs the subscribe stream's per-operation buffering (AOT-safe, no codegen). -->
+    <PackageReference Include="System.Threading.Channels" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

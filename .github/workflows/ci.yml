@@ -144,13 +144,17 @@ jobs:
           cache-dependency-path: "**/go.sum"
 
       - name: Check SPDX headers
-        # Go + hand-authored GraphQL/proto sources. YAML and the operator
-        # Dockerfile are excluded: those manifests are controller-gen-generated,
-        # so a header would drift away on every `make manifests` regeneration.
+        # Go + hand-authored GraphQL/proto sources + the C# SDK. YAML and the
+        # operator Dockerfile are excluded: those manifests are controller-gen-
+        # generated, so a header would drift away on every `make manifests`
+        # regeneration. .NET project/build files are excluded (addlicense has no
+        # header style for them); the .cs sources are checked.
         run: >
           go run github.com/google/addlicense@latest -check
           -ignore '**/*.yaml' -ignore '**/Dockerfile'
-          -f hack/license-header.txt backend
+          -ignore '**/*.csproj' -ignore '**/*.sln' -ignore '**/*.props'
+          -ignore '**/bin/**' -ignore '**/obj/**'
+          -f hack/license-header.txt backend sdks
 
   # ---------------------------------------------------------------------------
   # Frontend: codegen drift check, typecheck, unit tests, build.
@@ -189,6 +193,31 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # C# SDK (sdks/csharp): restore, build both TFMs (netstandard2.1 + net8.0), test.
+  # TreatWarningsAsErrors + IsAotCompatible keep the Unity/IL2CPP guarantee honest.
+  # ---------------------------------------------------------------------------
+  csharp:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/csharp
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Test
+        run: dotnet test --no-build -c Release
 
   # ---------------------------------------------------------------------------
   # Helm chart: lint and template render.

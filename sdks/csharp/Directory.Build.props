@@ -1,0 +1,19 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  Common build settings for the DeviceChain .NET SDK. Kept AOT/IL2CPP-safe (ADR-035
+  slice 3): source-generated JSON only, no Reflection.Emit / runtime codegen, so the
+  same assembly runs under Unity's IL2CPP as under CoreCLR.
+-->
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

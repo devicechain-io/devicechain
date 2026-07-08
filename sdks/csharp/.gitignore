@@ -1,0 +1,10 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+
+# NuGet
+*.nupkg
+.packages/
