@@ -29,12 +29,18 @@ type dashboardDefinition struct {
 
 type dashboardCanvas struct {
 	Grid        dashboardGrid  `json:"grid"`
+	Sizing      string         `json:"sizing"`
 	Breakpoints map[string]int `json:"breakpoints"`
 }
 
+// dashboardGrid mirrors CanvasGrid (ADR-039 amendment 2026-07-08): a high-res fluid
+// column count, a gutter in px, and a fixed row height in px. The viewer renders the
+// canvas as a real CSS Grid (`repeat(columns, 1fr)`), so a definition fills whatever
+// width its container gives it — no pixel widths baked in here.
 type dashboardGrid struct {
-	Snap bool `json:"snap"`
-	Size int  `json:"size"`
+	Columns   int `json:"columns"`
+	Gap       int `json:"gap"`
+	RowHeight int `json:"rowHeight"`
 }
 
 // dashboardWidget mirrors WidgetInstance. Datasource is a pointer so a widget
@@ -49,19 +55,17 @@ type dashboardWidget struct {
 	Options    map[string]any          `json:"options,omitempty"`
 }
 
-// dashboardBox is one breakpoint's layout box, expressed in GRID CELLS (not
-// pixels): the viewer renders each widget at (x*grid.size, y*grid.size) sized
-// (w*grid.size, h*grid.size) — see dashboard-renderer.tsx. With gridSize below
-// that makes one cell 8px, so a readable chart is ~60-70 cells wide, NOT 12
-// (12 cells = 96px = a thumbnail — the mistake a "12-column grid" intuition
-// invites). The console's own editor stores the same large cell counts once a
-// widget is dragged out from its 12x8 placeholder.
+// dashboardBox is one breakpoint's layout box as a CSS-Grid SPAN placement (WidgetBox
+// in types.ts): Col/Row are the 0-based start lines and ColSpan/RowSpan how many
+// tracks the widget covers. On the buildingpulse grid (dashboardGridColumns below)
+// a half-width chart is ColSpan ~14 of 24 — the columns are fluid, so the widget
+// fills that fraction of whatever width the viewer has, not a fixed pixel count.
 type dashboardBox struct {
-	X int `json:"x"`
-	Y int `json:"y"`
-	W int `json:"w"`
-	H int `json:"h"`
-	Z int `json:"z"`
+	Col     int `json:"col"`
+	ColSpan int `json:"colSpan"`
+	Row     int `json:"row"`
+	RowSpan int `json:"rowSpan"`
+	Z       int `json:"z"`
 }
 
 // dashboardDatasource models only the "device" datasource kind (DeviceSelector
@@ -73,13 +77,17 @@ type dashboardDatasource struct {
 	Measurements []string `json:"measurements"`
 }
 
-// dashboardGridSize is the pixels-per-cell the definition's canvas declares;
-// every box dimension below is in cells and renders at dimension*this many px.
-const dashboardGridSize = 8
+// The buildingpulse canvas grid: a 24-column fluid grid, 8px gutter, 40px rows —
+// matching the frontend's DEFAULT_GRID. Widgets place by span across these columns.
+const (
+	dashboardGridColumns   = 24
+	dashboardGridGap       = 8
+	dashboardGridRowHeight = 40
+)
 
-// baseLayout builds a Layout map with only the required "base" breakpoint box.
-func baseLayout(x, y, w, h, z int) map[string]dashboardBox {
-	return map[string]dashboardBox{"base": {X: x, Y: y, W: w, H: h, Z: z}}
+// baseLayout builds a Layout map with only the required "base" breakpoint span box.
+func baseLayout(col, colSpan, row, rowSpan, z int) map[string]dashboardBox {
+	return map[string]dashboardBox{"base": {Col: col, ColSpan: colSpan, Row: row, RowSpan: rowSpan, Z: z}}
 }
 
 // buildBuildingpulseDashboard renders the buildingpulse scenario's one
@@ -99,18 +107,25 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 		SchemaVersion: 1,
 		Title:         "Building Pulse",
 		Canvas: dashboardCanvas{
-			Grid:        dashboardGrid{Snap: true, Size: dashboardGridSize},
+			Grid: dashboardGrid{
+				Columns:   dashboardGridColumns,
+				Gap:       dashboardGridGap,
+				RowHeight: dashboardGridRowHeight,
+			},
+			// Fill the viewer's area — the fluid grid stretches to whatever width the
+			// console/embed gives it (ADR-039 amendment "fill area").
+			Sizing:      "fill",
 			Breakpoints: map[string]int{"base": 0},
 		},
-		// Boxes are in grid cells (× dashboardGridSize px). Layout: a wide
-		// temperature chart (576px) and a latest-values table (384px) side by
-		// side across the top row, with a full-width alarm table (960px) beneath
-		// them — sized to be readable in the console viewer, not thumbnails.
+		// Span placement on the 24-column grid: a wide temperature chart and a
+		// latest-values table side by side across the top (14 + 10 = 24 columns, 8
+		// rows tall), with a full-width alarm table beneath them (all 24 columns, 6
+		// rows). The columns are fluid, so this fills the viewer at any width.
 		Widgets: []dashboardWidget{
 			{
 				Id:     "w-chart",
 				Type:   "timeseries-chart",
-				Layout: baseLayout(0, 0, 72, 48, 0),
+				Layout: baseLayout(0, 14, 0, 8, 0),
 				Datasource: &dashboardDatasource{
 					Kind:         "device",
 					DeviceToken:  heroToken,
@@ -121,7 +136,7 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 			{
 				Id:     "w-table",
 				Type:   "table",
-				Layout: baseLayout(72, 0, 48, 48, 0),
+				Layout: baseLayout(14, 10, 0, 8, 0),
 				Datasource: &dashboardDatasource{
 					Kind:         "device",
 					DeviceToken:  heroToken,
@@ -132,7 +147,7 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 			{
 				Id:     "w-alarms",
 				Type:   "alarm-table",
-				Layout: baseLayout(0, 48, 120, 32, 0),
+				Layout: baseLayout(0, 24, 8, 6, 0),
 				// No Datasource: alarm-table with none is tenant-wide (every alarm
 				// the viewer can see), which is what the demo wants — any of the
 				// 12 thermostats raising MAJOR should show up here.

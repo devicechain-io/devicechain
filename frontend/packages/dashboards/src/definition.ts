@@ -16,6 +16,8 @@ import {
   type AnchorTarget,
   type Breakpoints,
   type Canvas,
+  type CanvasGrid,
+  type CanvasSizing,
   type DashboardDefinition,
   type SlotBinding,
   type SlotDefinition,
@@ -31,7 +33,10 @@ export const BASE_BREAKPOINT = 'base';
 
 const WIDGET_TYPE_SET: ReadonlySet<string> = new Set(WIDGET_TYPES);
 
-const DEFAULT_GRID = { snap: true, size: 8 } as const;
+// The default canvas grid: 24 fluid columns, an 8px gutter, 40px rows — a
+// high-resolution grid that fills its container width (ADR-039 amendment).
+const DEFAULT_GRID: CanvasGrid = { columns: 24, gap: 8, rowHeight: 40 };
+const DEFAULT_SIZING: CanvasSizing = 'fill';
 
 // Thrown when a definition cannot be coerced into a renderable shape. The message
 // names the offending path so a bad document is diagnosable, not just "invalid".
@@ -118,14 +123,46 @@ export function parseSlotBinding(raw: unknown): SlotBinding | undefined {
   return undefined;
 }
 
+// parseGrid coerces the canvas grid, filling defaults. `columns`/`rowHeight` are
+// floored to >=1 so a zero never yields an unusable `repeat(0,1fr)` / 0-px rows.
+// `gap` accepts a single number or a {row,col} pair; anything else → the default.
+function parseGrid(raw: unknown): CanvasGrid {
+  const rec = isRecord(raw) ? raw : {};
+  const columns = Math.max(1, Math.round(numberAt(rec, 'columns', DEFAULT_GRID.columns)));
+  const rowHeight = Math.max(1, numberAt(rec, 'rowHeight', DEFAULT_GRID.rowHeight));
+  let gap: CanvasGrid['gap'] = DEFAULT_GRID.gap;
+  if (typeof rec.gap === 'number' && Number.isFinite(rec.gap)) {
+    gap = Math.max(0, rec.gap);
+  } else if (isRecord(rec.gap)) {
+    // A missing axis falls back to the default gutter (not 0), so a partial
+    // `{gap:{row:12}}` keeps the default column gutter rather than losing it.
+    gap = {
+      row: Math.max(0, numberAt(rec.gap, 'row', DEFAULT_GRID.gap as number)),
+      col: Math.max(0, numberAt(rec.gap, 'col', DEFAULT_GRID.gap as number)),
+    };
+  }
+  return { columns, gap, rowHeight };
+}
+
+// parseSizing coerces the container-sizing knob. 'fill' (the default) or a
+// single-axis fixed box `{width}` / `{height}`; a malformed value falls back to fill.
+function parseSizing(raw: unknown): CanvasSizing {
+  if (isRecord(raw)) {
+    if (typeof raw.width === 'number' && Number.isFinite(raw.width)) {
+      return { width: Math.max(1, raw.width) };
+    }
+    if (typeof raw.height === 'number' && Number.isFinite(raw.height)) {
+      return { height: Math.max(1, raw.height) };
+    }
+  }
+  return DEFAULT_SIZING;
+}
+
 function parseCanvas(raw: unknown): Canvas {
   const rec = isRecord(raw) ? raw : {};
 
-  const gridRec = isRecord(rec.grid) ? rec.grid : {};
-  const grid = {
-    snap: typeof gridRec.snap === 'boolean' ? gridRec.snap : DEFAULT_GRID.snap,
-    size: numberAt(gridRec, 'size', DEFAULT_GRID.size),
-  };
+  const grid = parseGrid(rec.grid);
+  const sizing = parseSizing(rec.sizing);
 
   // Breakpoints must define 'base'; default a single base:0 so a definition that
   // omits responsive layouts still resolves.
@@ -136,7 +173,7 @@ function parseCanvas(raw: unknown): Canvas {
   }
   if (!(BASE_BREAKPOINT in breakpoints)) breakpoints[BASE_BREAKPOINT] = 0;
 
-  const canvas: Canvas = { grid, breakpoints };
+  const canvas: Canvas = { grid, sizing, breakpoints };
   if (isRecord(rec.background)) {
     const { color, imageUrl } = rec.background;
     canvas.background = {
@@ -233,13 +270,22 @@ function parseLayout(raw: unknown, index: number): WidgetLayout {
 }
 
 function parseBox(rec: Record<string, unknown>): WidgetBox {
-  return {
-    x: numberAt(rec, 'x', 0),
-    y: numberAt(rec, 'y', 0),
-    w: numberAt(rec, 'w', 1),
-    h: numberAt(rec, 'h', 1),
-    z: numberAt(rec, 'z', 0),
+  // col/row are 0-based start lines (clamped >=0); spans are >=1 so a widget can't
+  // vanish. offset is an optional signed-pixel nudge — carried only when present so a
+  // box without it round-trips unchanged.
+  const box: WidgetBox = {
+    col: Math.max(0, Math.round(numberAt(rec, 'col', 0))),
+    colSpan: Math.max(1, Math.round(numberAt(rec, 'colSpan', 1))),
+    row: Math.max(0, Math.round(numberAt(rec, 'row', 0))),
+    rowSpan: Math.max(1, Math.round(numberAt(rec, 'rowSpan', 1))),
+    // z rounds too: a fractional zIndex is invalid CSS and silently drops to auto,
+    // so keep it an integer like every other box field.
+    z: Math.round(numberAt(rec, 'z', 0)),
   };
+  if (isRecord(rec.offset)) {
+    box.offset = { x: numberAt(rec.offset, 'x', 0), y: numberAt(rec.offset, 'y', 0) };
+  }
+  return box;
 }
 
 // serializeDefinition is the canonical on-the-wire JSON — the inverse of

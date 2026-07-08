@@ -114,14 +114,21 @@ export const WIDGET_TYPES = [
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
 
-// Absolute placement + z-order — canvas-first layout (layering native, the
-// ThingsBoard default-layout gap we set out to beat).
+// Grid placement + z-order — CSS-Grid-native layout (ADR-039 amendment 2026-07-08).
+// A widget is placed by SPAN on the canvas grid: `col`/`row` are its 0-based start
+// line and `colSpan`/`rowSpan` how many tracks it covers — mapping to
+// `grid-column: col+1 / span colSpan` (rows likewise). Because the columns are
+// fractional (`repeat(columns, 1fr)`), the same box fills whatever width its
+// container gives it — no pixel width baked into the definition. Layering is native
+// via `z`; `offset` is a signed-pixel escape hatch for pixel-perfect nudge/overlap
+// beyond the grid lines (Derek's "margin and -margin").
 export interface WidgetBox {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
+  col: number;
+  colSpan: number;
+  row: number;
+  rowSpan: number;
   z: number;
+  offset?: { x: number; y: number };
 }
 
 // Per-breakpoint placement, keyed by breakpoint name. 'base' is required; a
@@ -144,10 +151,24 @@ export interface CanvasBackground {
   imageUrl?: string | null;
 }
 
+// The canvas grid (ADR-039 amendment 2026-07-08). `columns` is high-resolution
+// (24–48) so span placement stays near-free (the canvas-first differentiator vs.
+// ThingsBoard's rigid grid); `gap` is the gutter, one value or a {row,col} pair;
+// `rowHeight` is the fixed pixel height of each implicit grid row. Columns are
+// fluid (`repeat(columns, 1fr)`) so the board fills its container width; rows are
+// fixed-px (the `aspect` mode — rowHeight = colWidth × ratio — is the documented
+// fast-follow).
 export interface CanvasGrid {
-  snap: boolean;
-  size: number;
+  columns: number;
+  gap: number | { row: number; col: number };
+  rowHeight: number;
 }
+
+// How the grid is sized into its container — a MOUNT/embed knob the host may
+// override (renderer `sizing` prop). `fill`: the grid fills the container's width
+// (the default; the "fit into an area" case). `{width}`: a fixed-px-wide container
+// the fluid grid adjusts within. `{height}`: a fixed-px-tall container (rows scroll).
+export type CanvasSizing = 'fill' | { width: number } | { height: number };
 
 // Breakpoint name → min viewport width in px. 'base' is required.
 export type Breakpoints = Record<string, number>;
@@ -155,6 +176,7 @@ export type Breakpoints = Record<string, number>;
 export interface Canvas {
   background?: CanvasBackground;
   grid: CanvasGrid;
+  sizing: CanvasSizing;
   breakpoints: Breakpoints;
 }
 

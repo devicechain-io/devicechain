@@ -3,21 +3,26 @@
 
 // DashboardCanvas — the edit-mode canvas (ADR-039, authoring in the console).
 //
-// Each widget is wrapped in react-rnd for drag + resize, snapped to the canvas
-// grid; drag/resize commit a new base box through the pure editor-model transforms
-// from @devicechain/dashboards. It is CONTROLLED: the workspace owns the working
-// DashboardDefinition (and the save/dirty state); this component owns only which
-// widget is selected. Widgets render live (WYSIWYG) but with pointer-events
-// disabled so the pointer drives react-rnd, not the widget. Editing targets the
+// The canvas mirrors the viewer's CSS Grid (ADR-039 amendment 2026-07-08): it
+// measures its own rendered width, derives the pixel width of one fluid column, and
+// maps each widget's SPAN box to a pixel rect (gridBoxToPx) for react-rnd. Drag +
+// resize snap to grid lines (dragGrid/resizeGrid = one track's stride) and commit a
+// new span box (pxToGridBox) through the pure editor-model transforms. It is
+// CONTROLLED: the workspace owns the working DashboardDefinition (and the save/dirty
+// state); this component owns only which widget is selected. Widgets render live
+// (WYSIWYG) but pointer-inert so the pointer drives react-rnd. Editing targets the
 // 'base' breakpoint; per-breakpoint responsive editing is deferred.
 
+import { useLayoutEffect, useRef, useState } from 'react';
 import {
   baseBox,
   bringToFront,
   deleteWidget,
-  pxToCellBox,
+  gridBoxToPx,
+  pxToGridBox,
   setWidgetBox,
   type DashboardDefinition,
+  type GridGeometry,
   type WidgetActions,
   type WidgetDataSource,
 } from '@devicechain/dashboards';
@@ -38,14 +43,48 @@ export interface DashboardCanvasProps {
   onSelect: (id: string | null) => void;
 }
 
+// useMeasuredWidth reports an element's live content width (via ResizeObserver),
+// measured synchronously on mount so the grid geometry is ready on first paint. The
+// canvas needs it to turn fluid `1fr` columns into concrete pixel widths for react-rnd.
+function useMeasuredWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
+  const ref = useRef<T>(null);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setWidth(el.clientWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width];
+}
+
 export function DashboardCanvas({ definition, onChange, hub, actions, selectedId, onSelect }: DashboardCanvasProps) {
-  const cell = definition.canvas.grid.size || 1;
+  const { grid, sizing } = definition.canvas;
+  const [contentRef, measuredWidth] = useMeasuredWidth<HTMLDivElement>();
+
+  const rowGap = typeof grid.gap === 'number' ? grid.gap : grid.gap.row;
+  const colGap = typeof grid.gap === 'number' ? grid.gap : grid.gap.col;
+  // The pixel width of one fluid column at the current canvas width — the same math
+  // CSS applies to `repeat(columns, 1fr)`: total minus the inter-column gaps, split
+  // evenly. Floored at 1 so an unmeasured (width 0) first frame can't divide-by-zero.
+  const colWidth = Math.max(1, (measuredWidth - (grid.columns - 1) * colGap) / grid.columns);
+  const geom: GridGeometry = { colWidth, colGap, rowHeight: grid.rowHeight, rowGap };
+  const colStride = colWidth + colGap;
+  const rowStride = grid.rowHeight + rowGap;
+  // Mirror the viewer's fixed-width sizing so editing a fixed-width board sees the
+  // same column width (hence the same widget aspect ratios) it will render at — the
+  // ResizeObserver tracks this capped element, so `colWidth` follows automatically.
+  // Fixed-HEIGHT and fill both fill the pane width, so only {width} caps here.
+  const maxWidth = typeof sizing === 'object' && 'width' in sizing ? sizing.width : undefined;
 
   // Give the scroll area room below the lowest widget so there's somewhere to drag.
   const contentHeight =
     definition.widgets.reduce((max, w) => {
       const b = baseBox(w);
-      return Math.max(max, (b.y + b.h) * cell);
+      return Math.max(max, (b.row + b.rowSpan) * rowStride);
     }, 0) + 240;
 
   return (
@@ -53,20 +92,28 @@ export function DashboardCanvas({ definition, onChange, hub, actions, selectedId
       onMouseDown={() => onSelect(null)}
       style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto' }}
     >
-      <div style={{ position: 'relative', width: '100%', minHeight: contentHeight }}>
+      <div ref={contentRef} style={{ position: 'relative', width: '100%', maxWidth, minHeight: contentHeight }}>
         {definition.widgets.map((widget) => {
           const box = baseBox(widget);
+          const rect = gridBoxToPx(box, geom);
           const selected = widget.id === selectedId;
-          // Both drag and resize end by snapping a pixel rect back to a cell box.
+          // Both drag and resize end by snapping a pixel rect back to a span box,
+          // preserving z and any hand-set offset, clamped inside the column count.
           const commitBox = (px: { x: number; y: number; w: number; h: number }) =>
-            onChange(setWidgetBox(definition, widget.id, pxToCellBox(px, cell, box.z)));
+            onChange(setWidgetBox(definition, widget.id, pxToGridBox(px, geom, box.z, box.offset, grid.columns)));
           return (
             <Rnd
               key={widget.id}
-              size={{ width: box.w * cell, height: box.h * cell }}
-              position={{ x: box.x * cell, y: box.y * cell }}
-              dragGrid={[cell, cell]}
-              resizeGrid={[cell, cell]}
+              size={{ width: rect.w, height: rect.h }}
+              position={{ x: rect.x, y: rect.y }}
+              // Drag snaps live to the grid (react-draggable snaps DELTAS, so positions
+              // stay grid-congruent). Resize deliberately does NOT use `resizeGrid`:
+              // re-resizable snaps absolute size to stride multiples, but a legal
+              // N-span width is `N*stride - colGap` (never a stride multiple), so a
+              // grid-snapped resize ghost overhangs the gutter and, on a narrow canvas,
+              // can commit a different span than it showed. Instead resize is free and
+              // `pxToGridBox` snaps to the nearest legal span on release.
+              dragGrid={[colStride, rowStride]}
               bounds="parent"
               cancel=".rnd-no-drag"
               style={{
@@ -77,7 +124,7 @@ export function DashboardCanvas({ definition, onChange, hub, actions, selectedId
                 e.stopPropagation(); // don't let the canvas deselect
                 onSelect(widget.id);
               }}
-              onDragStop={(_e, d) => commitBox({ x: d.x, y: d.y, w: box.w * cell, h: box.h * cell })}
+              onDragStop={(_e, d) => commitBox({ x: d.x, y: d.y, w: rect.w, h: rect.h })}
               onResizeStop={(_e, _dir, ref, _delta, pos) =>
                 commitBox({ x: pos.x, y: pos.y, w: ref.offsetWidth, h: ref.offsetHeight })
               }

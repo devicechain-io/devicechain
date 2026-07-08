@@ -13,6 +13,7 @@ export type {
   Canvas,
   CanvasBackground,
   CanvasGrid,
+  CanvasSizing,
   Breakpoints,
   WidgetInstance,
   WidgetType,
@@ -95,10 +96,14 @@ export {
   deleteWidget,
   bringToFront,
   setTitle,
+  setCanvasGrid,
+  setCanvasSizing,
   updateWidget,
   addWidget,
-  pxToCellBox,
+  gridBoxToPx,
+  pxToGridBox,
   type PixelRect,
+  type GridGeometry,
 } from './editor-model';
 
 // The device-management-backed resolver the Hub injects, and the event-management
