@@ -55,6 +55,12 @@ export function optNumber(options: Options, key: string): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+// A boolean flag option: true only when explicitly stored true (absent/other → false), so
+// an opt-in feature stays off by default and a hand-edited value can't accidentally enable it.
+export function optBoolean(options: Options, key: string): boolean {
+  return options?.[key] === true;
+}
+
 // primaryMeasurementName is the measurement a single-value widget (card, gauge)
 // displays: an explicit `options.measurement`, else the first measurement its
 // datasource selects, else undefined (fall back to whatever arrives first).

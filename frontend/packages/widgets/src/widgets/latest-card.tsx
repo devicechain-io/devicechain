@@ -3,11 +3,19 @@
 
 // latest-card — the current value of one measurement, big and legible.
 
+import { flashTextStyle, useFlashOnChange } from '../flash';
 import { formatTimestamp, formatValue } from '../format';
 import { WidgetFrame } from '../frame';
 import { useElementSize } from '../hooks';
 import { css } from '../theme';
-import { optNumber, optString, pickSample, primaryMeasurementName, type WidgetProps } from '../widget';
+import {
+  optBoolean,
+  optNumber,
+  optString,
+  pickSample,
+  primaryMeasurementName,
+  type WidgetProps,
+} from '../widget';
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
@@ -20,6 +28,15 @@ export function LatestCard({ widget, data }: WidgetProps) {
   const unit = optString(widget.options, 'unit');
   const precision = optNumber(widget.options, 'precision');
   const display = formatValue(sample?.value, precision);
+
+  // Opt-in directional flash: tint the number green/red on a rise/fall, then fade back. The
+  // identity (device + measurement) suppresses a false flash when an anchor's single slot
+  // interleaves values across member devices, or the shown measurement switches.
+  const flashDirection = useFlashOnChange(
+    sample?.value,
+    optBoolean(widget.options, 'flashOnChange'),
+    sample && `${sample.deviceToken}:${sample.name}`,
+  );
 
   // Scale the value to the card so it doesn't overflow a small slot (falls back to
   // a comfortable size before first measure / in a non-DOM test).
@@ -37,7 +54,15 @@ export function LatestCard({ widget, data }: WidgetProps) {
           padding: '12px 16px',
         }}
       >
-        <div style={{ fontSize: valueFont, fontWeight: 600, lineHeight: 1.1, color: css('foreground') }}>
+        <div
+          style={{
+            fontSize: valueFont,
+            fontWeight: 600,
+            lineHeight: 1.1,
+            color: css('foreground'),
+            ...flashTextStyle(flashDirection),
+          }}
+        >
           {display}
           {sample?.value != null && unit ? (
             <span style={{ fontSize: Math.round(valueFont / 2), color: css('muted-foreground'), marginLeft: 6 }}>

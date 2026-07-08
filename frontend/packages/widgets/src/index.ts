@@ -22,7 +22,16 @@ export {
   WIDGET_CHANNEL,
   type WidgetChannel,
 } from './registry';
-export { pickSample, type WidgetProps, type WidgetComponent } from './widget';
+export { pickSample, optBoolean, type WidgetProps, type WidgetComponent } from './widget';
+
+// Directional change-flash (opt-in `flashOnChange`): a reusable hook + the flashing value cell.
+export {
+  useFlashOnChange,
+  flashTextStyle,
+  flashBackgroundStyle,
+  FlashValue,
+  type FlashDirection,
+} from './flash';
 
 // Individual widgets (for direct/custom use).
 export { LatestCard } from './widgets/latest-card';
