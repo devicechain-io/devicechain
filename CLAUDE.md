@@ -70,6 +70,9 @@ cd backend/cli && make build
 # frontend
 cd frontend && npm ci && npm run codegen && npm run typecheck && npm run build
 
+# C# SDK (public .NET/Unity client SDK — sdks/csharp, ADR-035 slice 3; AOT/IL2CPP-safe)
+cd sdks/csharp && dotnet build -c Release && dotnet test -c Release
+
 # helm
 helm lint deploy/helm/devicechain && helm template deploy/helm/devicechain >/dev/null
 
