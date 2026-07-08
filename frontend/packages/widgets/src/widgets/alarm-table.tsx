@@ -11,10 +11,11 @@ import type { AlarmRow, WidgetActions } from '@devicechain/dashboards';
 import { useState, type CSSProperties } from 'react';
 
 import type { AlarmStreamState } from '../hooks';
-import { formatDateTime, formatValue } from '../format';
+import { FlashValue } from '../flash';
+import { formatDateTime } from '../format';
 import { WidgetFrame, useWidgetSelect, type WidgetSelect } from '../frame';
 import { css } from '../theme';
-import { optNumber, optString, type WidgetProps } from '../widget';
+import { optBoolean, optNumber, optString, type WidgetProps } from '../widget';
 import { severityColor, severityLabel } from './severity';
 
 const cell: CSSProperties = { padding: '6px 10px', textAlign: 'left', whiteSpace: 'nowrap' };
@@ -48,6 +49,8 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
   // value (formatValue's default), matching the table widget. An alarm's raw lastValue is
   // otherwise a full-width float (e.g. 31.19073834583732).
   const precision = optNumber(widget.options, 'precision');
+  // Opt-in directional flash on the triggering value, per row (keyed by alarm token).
+  const flash = optBoolean(widget.options, 'flashOnChange');
   // Drill: when a `selectionTarget` slot is configured AND the renderer wired a selection
   // callback (view mode, a host that supports it), a device originator becomes a link that
   // re-points that slot — driving the per-device widgets to the clicked thermostat
@@ -126,7 +129,14 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                       <td style={cell} title={alarm.message ?? undefined}>
                         {alarm.alarmKey}
                       </td>
-                      <td style={{ ...cell, textAlign: 'right' }}>{formatValue(alarm.lastValue, precision)}</td>
+                      <td style={{ ...cell, textAlign: 'right' }}>
+                        <FlashValue
+                          value={alarm.lastValue}
+                          precision={precision}
+                          enabled={flash}
+                          identity={alarm.token}
+                        />
+                      </td>
                       <td style={{ ...cell, color: css('muted-foreground') }}>
                         {formatDateTime(alarm.raisedTime)}
                       </td>

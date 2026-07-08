@@ -233,7 +233,10 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 					Slot:         slotSelectedThermostat,
 					Measurements: []string{},
 				},
-				Options: map[string]any{"title": "Latest values", "precision": 1},
+				// flashOnChange gives each value a green/red directional cue on every tick
+				// (the selected thermostat is a single device, so each row is a distinct
+				// measurement — the flash reads a real per-metric rise/fall).
+				Options: map[string]any{"title": "Latest values", "precision": 1, "flashOnChange": true},
 			},
 			{
 				Id:     "w-alarms",
@@ -253,6 +256,7 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 					"title":           "Alarms",
 					"maxRows":         50,
 					"precision":       1,
+					"flashOnChange":   true,
 					"selectionTarget": slotSelectedThermostat,
 				},
 			},

@@ -108,10 +108,11 @@ export function WidgetConfigPanel({
   onClose,
 }: WidgetConfigPanelProps) {
   // Read/write a single options key, dropping it when cleared so the widget falls
-  // back to its default rather than reading an empty string/NaN.
-  const setOption = (key: string, value: string | number | undefined) => {
+  // back to its default rather than reading an empty string/NaN/false. Dropping a false
+  // boolean keeps opt-in flags absent-when-off (matching optBoolean's absent = false).
+  const setOption = (key: string, value: string | number | boolean | undefined) => {
     const options = { ...(widget.options ?? {}) };
-    if (value === undefined || value === '') delete options[key];
+    if (value === undefined || value === '' || value === false) delete options[key];
     else options[key] = value;
     onChange({ ...widget, options });
   };
@@ -260,7 +261,7 @@ function TypeOptions({
   setOption,
 }: {
   widget: WidgetInstance;
-  setOption: (key: string, value: string | number | undefined) => void;
+  setOption: (key: string, value: string | number | boolean | undefined) => void;
 }) {
   if (widget.type === 'gauge') {
     return (
@@ -274,6 +275,7 @@ function TypeOptions({
         <FormField label="Unit">
           <Input value={optString(widget, 'unit')} onChange={(e) => setOption('unit', e.target.value)} />
         </FormField>
+        <FlashToggle widget={widget} setOption={setOption} />
       </>
     );
   }
@@ -286,6 +288,7 @@ function TypeOptions({
         <FormField label="Precision">
           <NumberInput value={optNumber(widget, 'precision')} onChange={(v) => setOption('precision', v)} />
         </FormField>
+        <FlashToggle widget={widget} setOption={setOption} />
       </>
     );
   }
@@ -317,9 +320,12 @@ function TypeOptions({
           />
         </FormField>
         {widget.type === 'alarm-table' && (
-          <FormField label="Max rows" description="Newest alarms shown before scrolling.">
-            <NumberInput value={optNumber(widget, 'maxRows')} onChange={(v) => setOption('maxRows', v)} />
-          </FormField>
+          <>
+            <FormField label="Max rows" description="Newest alarms shown before scrolling.">
+              <NumberInput value={optNumber(widget, 'maxRows')} onChange={(v) => setOption('maxRows', v)} />
+            </FormField>
+            <FlashToggle widget={widget} setOption={setOption} />
+          </>
         )}
       </>
     );
@@ -333,12 +339,44 @@ function TypeOptions({
   }
   if (widget.type === 'table') {
     return (
-      <FormField label="Precision" description="Decimal places for numeric values (blank = full precision).">
-        <NumberInput value={optNumber(widget, 'precision')} onChange={(v) => setOption('precision', v)} />
-      </FormField>
+      <>
+        <FormField label="Precision" description="Decimal places for numeric values (blank = full precision).">
+          <NumberInput value={optNumber(widget, 'precision')} onChange={(v) => setOption('precision', v)} />
+        </FormField>
+        <FlashToggle widget={widget} setOption={setOption} />
+      </>
     );
   }
   return null; // chart/label/image have no extra options beyond above
+}
+
+// FlashToggle exposes the opt-in directional change-flash (widget option `flashOnChange`,
+// read by the widgets package's optBoolean): a value briefly tints green/red on a
+// rise/fall, then fades. Off by default; the option is dropped when unchecked.
+function FlashToggle({
+  widget,
+  setOption,
+}: {
+  widget: WidgetInstance;
+  setOption: (key: string, value: string | number | boolean | undefined) => void;
+}) {
+  const checked = widget.options?.flashOnChange === true;
+  return (
+    <label className="flex cursor-pointer items-start gap-2 text-sm text-foreground">
+      <input
+        type="checkbox"
+        className="mt-0.5"
+        checked={checked}
+        onChange={(e) => setOption('flashOnChange', e.target.checked)}
+      />
+      <span>
+        <span className="font-medium">Flash on change</span>
+        <span className="mt-0.5 block text-xs text-muted-foreground">
+          Briefly highlight a value green when it rises and red when it falls.
+        </span>
+      </span>
+    </label>
+  );
 }
 
 // ---- Datasource -------------------------------------------------------------
