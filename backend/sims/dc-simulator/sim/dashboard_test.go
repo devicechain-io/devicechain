@@ -23,19 +23,24 @@ var wireWidgetTypes = map[string]bool{
 	"command-button":   true,
 }
 
-// TestBuildBuildingpulseDashboardShape asserts the marshaled definition
-// matches the frontend parser's hard requirements (definition.ts's
-// parseDashboardDefinition/parseWidget/parseLayout): a JSON object,
-// widgets an array, every widget's type in WIDGET_TYPES, every widget
-// carrying layout.base, and the two device-bound widgets using a valid
-// "device" datasource shape.
-func TestBuildBuildingpulseDashboardShape(t *testing.T) {
-	devices := []DeviceInstance{
-		{Token: "bp-therm-001"},
-		{Token: "bp-therm-002"},
+// heroDevices is the minimal population buildBuildingpulseDashboard needs: a hero
+// device (devices[0]) carrying the "area" assignment the dashboard anchors its
+// `building` context slot on.
+func heroDevices() []DeviceInstance {
+	return []DeviceInstance{
+		{Token: "bp-therm-001", Assignments: []Assignment{{TargetType: "area", TargetToken: "bp-bldg-01"}}},
+		{Token: "bp-therm-002", Assignments: []Assignment{{TargetType: "area", TargetToken: "bp-bldg-01"}}},
 	}
+}
 
-	raw, err := buildBuildingpulseDashboard(devices)
+// TestBuildBuildingpulseDashboardShape asserts the marshaled definition matches the
+// frontend parser's hard requirements (definition.ts): a JSON object, widgets an
+// array, every widget's type in WIDGET_TYPES and carrying layout.base, and — the
+// ADR-039 selection amendment — a slot hierarchy where `selectedThermostat` is a
+// device scoped to the `building` anchor, the data widgets bind slots, and the alarm
+// table declares its drill target.
+func TestBuildBuildingpulseDashboardShape(t *testing.T) {
+	raw, err := buildBuildingpulseDashboard(heroDevices())
 	if err != nil {
 		t.Fatalf("buildBuildingpulseDashboard: %v", err)
 	}
@@ -70,6 +75,46 @@ func TestBuildBuildingpulseDashboardShape(t *testing.T) {
 		t.Errorf("canvas.sizing = %v, want \"fill\"", canvas["sizing"])
 	}
 
+	// The slot hierarchy: `building` is a root anchor (defaultBinding to bp-bldg-01),
+	// `selectedThermostat` is a device scoped to it (strategy manual) — matching
+	// parseSlots/validateScopes (a scoped slot's parent must be an anchor slot).
+	slots, ok := doc["slots"].(map[string]any)
+	if !ok {
+		t.Fatalf("definition has no slots object: %T", doc["slots"])
+	}
+	building, ok := slots["building"].(map[string]any)
+	if !ok {
+		t.Fatalf("slots.building is not an object: %T", slots["building"])
+	}
+	if building["type"] != "anchor" {
+		t.Errorf("slots.building.type = %v, want \"anchor\"", building["type"])
+	}
+	bindAnchor, _ := building["defaultBinding"].(map[string]any)
+	if bindAnchor["kind"] != "anchor" {
+		t.Errorf("slots.building.defaultBinding.kind = %v, want \"anchor\"", bindAnchor["kind"])
+	}
+	anchor, _ := bindAnchor["anchor"].(map[string]any)
+	if anchor["targetType"] != "area" || anchor["targetToken"] != "bp-bldg-01" {
+		t.Errorf("slots.building anchor = %v, want area/bp-bldg-01", anchor)
+	}
+	therm, ok := slots["selectedThermostat"].(map[string]any)
+	if !ok {
+		t.Fatalf("slots.selectedThermostat is not an object: %T", slots["selectedThermostat"])
+	}
+	if therm["type"] != "device" {
+		t.Errorf("slots.selectedThermostat.type = %v, want \"device\"", therm["type"])
+	}
+	scope, ok := therm["scope"].(map[string]any)
+	if !ok {
+		t.Fatalf("slots.selectedThermostat has no scope object: %T", therm["scope"])
+	}
+	if scope["parent"] != "building" {
+		t.Errorf("selectedThermostat.scope.parent = %v, want \"building\"", scope["parent"])
+	}
+	if scope["strategy"] != "manual" {
+		t.Errorf("selectedThermostat.scope.strategy = %v, want \"manual\"", scope["strategy"])
+	}
+
 	widgetsRaw, ok := doc["widgets"].([]any)
 	if !ok {
 		t.Fatalf("widgets is not a JSON array: %T", doc["widgets"])
@@ -78,8 +123,8 @@ func TestBuildBuildingpulseDashboardShape(t *testing.T) {
 		t.Fatalf("expected 3 widgets (chart+table+alarm-table), got %d", len(widgetsRaw))
 	}
 
-	sawDeviceDatasource := false
-	sawAlarmTableWithNoDatasource := false
+	sawThermostatSlot := false
+	sawBuildingScopedAlarmTable := false
 	for i, wr := range widgetsRaw {
 		widget, ok := wr.(map[string]any)
 		if !ok {
@@ -105,35 +150,35 @@ func TestBuildBuildingpulseDashboardShape(t *testing.T) {
 			}
 		}
 
-		ds, hasDatasource := widget["datasource"].(map[string]any)
+		ds, _ := widget["datasource"].(map[string]any)
 		switch typ {
 		case "timeseries-chart", "table":
-			if !hasDatasource {
-				t.Fatalf("widgets[%d] (%s) should carry a datasource", i, typ)
-			}
-			if ds["kind"] != "device" {
-				t.Errorf("widgets[%d] (%s) datasource.kind = %v, want \"device\"", i, typ, ds["kind"])
-			}
-			if ds["deviceToken"] != "bp-therm-001" {
-				t.Errorf("widgets[%d] (%s) datasource.deviceToken = %v, want the hero device (devices[0])", i, typ, ds["deviceToken"])
+			// Both data widgets bind the scoped device slot (not a raw device token).
+			if ds["kind"] != "slot" || ds["slot"] != "selectedThermostat" {
+				t.Errorf("widgets[%d] (%s) datasource = %v, want slot/selectedThermostat", i, typ, ds)
 			}
 			if _, ok := ds["measurements"].([]any); !ok {
 				t.Errorf("widgets[%d] (%s) datasource.measurements is not an array: %T", i, typ, ds["measurements"])
 			}
-			sawDeviceDatasource = true
+			sawThermostatSlot = true
 		case "alarm-table":
-			if hasDatasource {
-				t.Errorf("widgets[%d] (alarm-table) should have no datasource (tenant-wide)", i)
+			// The alarm table is scoped to the building and declares its drill target.
+			if ds["kind"] != "slot" || ds["slot"] != "building" {
+				t.Errorf("widgets[%d] (alarm-table) datasource = %v, want slot/building", i, ds)
 			}
-			sawAlarmTableWithNoDatasource = true
+			opts, _ := widget["options"].(map[string]any)
+			if opts["selectionTarget"] != "selectedThermostat" {
+				t.Errorf("alarm-table options.selectionTarget = %v, want \"selectedThermostat\"", opts["selectionTarget"])
+			}
+			sawBuildingScopedAlarmTable = true
 		}
 	}
 
-	if !sawDeviceDatasource {
-		t.Fatal("expected at least one widget with a device datasource")
+	if !sawThermostatSlot {
+		t.Fatal("expected the chart + table to bind the selectedThermostat slot")
 	}
-	if !sawAlarmTableWithNoDatasource {
-		t.Fatal("expected an alarm-table widget with no datasource (tenant-wide)")
+	if !sawBuildingScopedAlarmTable {
+		t.Fatal("expected a building-scoped alarm-table with a drill target")
 	}
 }
 
@@ -143,5 +188,14 @@ func TestBuildBuildingpulseDashboardShape(t *testing.T) {
 func TestBuildBuildingpulseDashboardRejectsEmptyDevices(t *testing.T) {
 	if _, err := buildBuildingpulseDashboard(nil); err == nil {
 		t.Fatal("expected an error building a dashboard with no devices")
+	}
+}
+
+// TestBuildBuildingpulseDashboardRequiresAreaAssignment checks that a hero device with
+// no area assignment (a malformed scenario) surfaces as an error rather than a
+// context-less dashboard.
+func TestBuildBuildingpulseDashboardRequiresAreaAssignment(t *testing.T) {
+	if _, err := buildBuildingpulseDashboard([]DeviceInstance{{Token: "bp-therm-001"}}); err == nil {
+		t.Fatal("expected an error when the hero device has no area assignment")
 	}
 }

@@ -181,3 +181,37 @@ describe('widgetBinding / resolveConcrete', () => {
     expect(resolveConcrete(d, d.widgets[1])).toBeUndefined();
   });
 });
+
+// Scope-aware helper fixes (ADR-039 selection amendment): dedup must not fold a plain
+// binding onto a scoped slot, and prune must keep a context-only parent slot.
+describe('scope-aware slot helpers', () => {
+  const deviceSel = (token: string): DatasourceSelector =>
+    ({ kind: 'device', deviceToken: token, measurements: ['t'] }) as DatasourceSelector;
+  const areaBinding: SlotBinding = {
+    kind: 'anchor',
+    anchor: { relationship: 'assigned', targetType: 'area', targetToken: 'b1' },
+  };
+
+  it('migrateToSlots does not fold a plain device selector onto a scoped slot sharing its binding', () => {
+    const d = def([widget('w1', deviceSel('therm-001'))], {
+      building: { type: 'anchor', defaultBinding: areaBinding },
+      selected: { type: 'device', defaultBinding: devA, scope: { parent: 'building', strategy: 'manual' } },
+    });
+    const m = migrateToSlots(d);
+    const ds = m.widgets[0].datasource as { kind: string; slot: string };
+    expect(ds.kind).toBe('slot');
+    expect(ds.slot).not.toBe('selected'); // a fresh PLAIN slot, not the scoped one
+    expect(m.slots![ds.slot].scope).toBeUndefined();
+  });
+
+  it('pruneSlots keeps a context-only parent slot that only a scoped child references', () => {
+    const d = def([widget('w1', { kind: 'slot', slot: 'therm', measurements: ['t'] })], {
+      building: { type: 'anchor', defaultBinding: areaBinding },
+      therm: { type: 'device', scope: { parent: 'building', strategy: 'first' } },
+    });
+    const pruned = pruneSlots(d);
+    // `building` is kept even though no widget binds it directly — the child's scope.parent
+    // closure keeps it, or the cascade would lose its top-level context.
+    expect(Object.keys(pruned.slots!).sort()).toEqual(['building', 'therm']);
+  });
+});

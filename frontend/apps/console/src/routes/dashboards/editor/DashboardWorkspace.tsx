@@ -8,7 +8,7 @@
 // react-rnd canvas + the widget config panel. Editing is gated on dashboard:write
 // (the server enforces it too — this just hides a button the caller can't use).
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Download, FlaskConical, History, Plus, Trash2 } from 'lucide-react';
 import { hasAuthority } from '@devicechain/client';
@@ -37,11 +37,12 @@ import {
   type ConcreteSelector,
   type DashboardDefinition,
   type DeviceResolver,
+  type SelectionTarget,
   type SlotBinding,
   type SyntheticGenerator,
   type WidgetType,
 } from '@devicechain/dashboards';
-import { DashboardRenderer } from '@devicechain/widgets';
+import { DashboardRenderer, useResolvedBindings } from '@devicechain/widgets';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -177,6 +178,17 @@ function NumberField({
   );
 }
 
+// isSlotScoped reports whether a widget's slot is context-driven (scoped) — the config
+// panel then shows its datasource read-only and applyDatasource ignores edits to it.
+function isSlotScoped(def: DashboardDefinition, slotName: string | undefined): boolean {
+  return !!(
+    slotName &&
+    def.slots &&
+    Object.prototype.hasOwnProperty.call(def.slots, slotName) &&
+    def.slots[slotName].scope
+  );
+}
+
 // applyDatasource maps a config-panel edit (a slot-free device/anchor view, or None)
 // back to slot storage: bind the widget to the slot for that entity (creating/reusing
 // it), or clear it — then prune any slot no widget references anymore.
@@ -185,6 +197,22 @@ function applyDatasource(
   widgetId: string,
   ds: ConcreteSelector | undefined,
 ): DashboardDefinition {
+  // A widget bound through a SCOPED slot is context-driven: its entity is derived by the
+  // cascade, not chosen here (scope authoring is a later slice). Ignore datasource edits
+  // for it so a panel interaction — including the partial-selector path below, which
+  // would sever the slot reference before bindWidgetSlot's scope-guard runs — can't
+  // silently destroy the hierarchy. The config panel shows this datasource read-only, so
+  // this is defense in depth, not the only guard.
+  const current = def.widgets.find((w) => w.id === widgetId)?.datasource;
+  const currentSlot = current?.kind === 'slot' ? current.slot : undefined;
+  if (
+    currentSlot &&
+    def.slots &&
+    Object.prototype.hasOwnProperty.call(def.slots, currentSlot) &&
+    def.slots[currentSlot].scope
+  ) {
+    return def;
+  }
   if (!ds) return pruneSlots(clearWidgetDatasource(def, widgetId));
   // Only slot a COMPLETE binding (an entity has been chosen). While a selector is being
   // filled in (e.g. an anchor with no target picked yet), keep it as a concrete
@@ -226,6 +254,14 @@ export function DashboardWorkspace({
 
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [working, setWorking] = useState<DashboardDefinition>(loaded);
+  // The view-driven selection overlay (ADR-039 selection amendment): an alarm-originator
+  // drill (and, in PR2b, a context-selector) accumulates slot→binding picks here. It
+  // lives OUTSIDE the hub so a hub rebuild (which a rebind triggers) never erases it.
+  // Cleared on mode switch so the author sees their own bindings, not a stale drill.
+  const [selection, setSelection] = useState<Record<string, SlotBinding>>({});
+  const select = useCallback((t: SelectionTarget) => {
+    setSelection((prev) => ({ ...prev, [t.slot]: t.binding }));
+  }, []);
   const [saved, setSaved] = useState<DashboardDefinition>(loaded);
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'clean' });
   // Selection is owned here (not in the canvas) so the config panel and the canvas
@@ -243,15 +279,18 @@ export function DashboardWorkspace({
   const synthetic = useMemo(() => new SyntheticDataSource({ generator }), [generator]);
   useEffect(() => () => synthetic.disposeAll(), [synthetic]);
 
-  // The live slot manifest: each slot's default binding (the console adds no host
-  // override — that's the /dash embedder's job, PR I-3). Its JSON key changes ONLY
-  // when a slot's binding changes (not on layout edits, which recompute an equal
-  // manifest). The hub is CONSTRUCTED WITH these bindings and re-created when they
-  // change, so widgets always subscribe against current bindings (constructing-with,
-  // rather than a post-mount setBindings, avoids a child-effect-before-parent-effect
-  // race). A new hub instance also makes useMeasurementStream resubscribe — that's
-  // the live rebind. Torn down when replaced so streams don't leak.
-  const bindings = useMemo(() => effectiveBindings(working), [working]);
+  // The live slot manifest. base = each slot's default binding (the console adds no host
+  // override — that's the /dash embedder's job, PR I-3); useResolvedBindings runs the
+  // scoped-slot cascade over it, resolving each scoped slot from its parent + the
+  // selection overlay and returning the settled manifest (a scope-free dashboard passes
+  // straight through, no async). Its JSON key changes ONLY when a binding actually changes
+  // (not on layout edits, which recompute an equal manifest). The hub is CONSTRUCTED WITH
+  // these bindings and re-created when they change, so widgets always subscribe against
+  // current bindings (constructing-with, rather than a post-mount setBindings, avoids a
+  // child-effect-before-parent-effect race) — this is also the path a drill selection
+  // takes: overlay → new manifest → hub rebuild. Torn down when replaced so streams don't leak.
+  const base = useMemo(() => effectiveBindings(working), [working]);
+  const bindings = useResolvedBindings(working, base, selection, resolver);
   const bindingsKey = useMemo(() => JSON.stringify(bindings), [bindings]);
   // Debounce the manifest that drives the (expensive) hub reconstruction so rapid
   // binding edits (e.g. typing an anchor relationship) coalesce into ONE rebuild rather
@@ -319,6 +358,7 @@ export function DashboardWorkspace({
 
   const toggleMode = () => {
     setSelectedId(null);
+    setSelection({}); // drop any drill selection so the other mode starts from the defaults
     setMode(mode === 'edit' ? 'view' : 'edit');
   };
 
@@ -592,6 +632,7 @@ export function DashboardWorkspace({
               widget={selected}
               datasource={resolveConcrete(working, selected)}
               slotName={widgetSlotName(selected)}
+              slotScoped={isSlotScoped(working, widgetSlotName(selected))}
               onChange={(next) => setWorking(updateWidget(working, next.id, next))}
               onDatasource={(ds) => setWorking(applyDatasource(working, selected.id, ds))}
               onClose={() => setSelectedId(null)}
@@ -609,6 +650,10 @@ export function DashboardWorkspace({
             actions={dataHub}
             seedHistory={!preview}
             bindings={hubBindings}
+            // No drill in preview: synthetic alarm rows carry fabricated originator
+            // tokens, and a drill would poison the live selection overlay with a token
+            // that's not a real member (blanking the widgets after preview is turned off).
+            select={preview ? undefined : select}
           />
         </div>
       )}

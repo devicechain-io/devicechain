@@ -21,6 +21,7 @@ import {
   type DashboardDefinition,
   type SlotBinding,
   type SlotDefinition,
+  type SlotScope,
   type WidgetBox,
   type WidgetInstance,
   type WidgetLayout,
@@ -84,15 +85,73 @@ function parseSlots(raw: unknown): Record<string, SlotDefinition> | undefined {
   if (!isRecord(raw)) return undefined;
   const slots: Record<string, SlotDefinition> = {};
   for (const [name, spec] of Object.entries(raw)) {
+    // Skip a `__proto__` key: `slots['__proto__'] = …` hits the prototype setter (the
+    // slot is lost + the map's prototype is swapped) rather than creating an own
+    // property — the same guard parseBindingManifest applies to its untrusted input.
+    if (name === '__proto__') continue;
     if (!isRecord(spec)) continue;
     const type = spec.type === 'anchor' ? 'anchor' : 'device';
     const slot: SlotDefinition = { type };
     if (typeof spec.label === 'string') slot.label = spec.label;
     const binding = parseSlotBinding(spec.defaultBinding);
     if (binding) slot.defaultBinding = binding;
+    // Carry a well-formed `scope` (the context hierarchy). Structural parse only here;
+    // cross-slot validity (parent exists, is an anchor, no cycles) is checked once the
+    // whole map is built — a scope-blind whitelist would DROP the field and silently
+    // erase the hierarchy on every load.
+    const scope = parseScope(spec.scope);
+    if (scope) slot.scope = scope;
     slots[name] = slot;
   }
-  return Object.keys(slots).length > 0 ? slots : undefined;
+  if (Object.keys(slots).length === 0) return undefined;
+  validateScopes(slots); // drops any scope with a missing/non-anchor/self/cyclic parent
+  return slots;
+}
+
+// parseScope reads a candidate `{ parent, strategy }` — structural shape only. A
+// non-string/empty parent drops the scope; an unrecognized strategy defaults to 'first'.
+function parseScope(raw: unknown): SlotScope | undefined {
+  if (!isRecord(raw)) return undefined;
+  const parent = typeof raw.parent === 'string' ? raw.parent : '';
+  if (!parent) return undefined;
+  return { parent, strategy: raw.strategy === 'manual' ? 'manual' : 'first' };
+}
+
+// validateScopes drops (in place) any slot scope whose parent is missing, not an
+// anchor-typed slot, self-referential, or part of a cycle — degrade, don't throw, since
+// the definition is opaque JSON the backend never validated. Dropping a bad scope leaves
+// the slot as a plain (root) slot rather than failing the whole dashboard to parse.
+function validateScopes(slots: Record<string, SlotDefinition>): void {
+  const drop: string[] = [];
+  for (const [name, slot] of Object.entries(slots)) {
+    if (!slot.scope) continue;
+    const parentName = slot.scope.parent;
+    const parent = Object.prototype.hasOwnProperty.call(slots, parentName) ? slots[parentName] : undefined;
+    if (!parent || parent.type !== 'anchor' || parentName === name || inScopeCycle(slots, name)) {
+      drop.push(name);
+    }
+  }
+  for (const name of drop) delete slots[name].scope;
+}
+
+// inScopeCycle walks the parent chain from `start`; a revisited node means the chain
+// reaches a loop (a forest has none). This also drops a slot that merely POINTS INTO a
+// cycle without being on it — a deliberately conservative degrade: every affected slot
+// becomes a safe root rather than risking a dangling parent, and real (non-hand-edited)
+// definitions never contain cycles. Reads scopes via own-property lookup so a slot named
+// '__proto__'/'constructor' can't reach an inherited member.
+function inScopeCycle(slots: Record<string, SlotDefinition>, start: string): boolean {
+  const seen = new Set<string>();
+  let cur: string | undefined = start;
+  while (cur) {
+    if (seen.has(cur)) return true;
+    seen.add(cur);
+    const slot: SlotDefinition | undefined = Object.prototype.hasOwnProperty.call(slots, cur)
+      ? slots[cur]
+      : undefined;
+    cur = slot?.scope?.parent;
+  }
+  return false;
 }
 
 // parseSlotBinding normalizes a slot binding (device token or anchor target), or

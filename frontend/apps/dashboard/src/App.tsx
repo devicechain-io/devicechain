@@ -21,10 +21,11 @@ import {
   parseBindingManifest,
   parseDashboardDefinition,
   type DashboardDefinition,
+  type SelectionTarget,
   type SlotBinding,
 } from '@devicechain/dashboards';
-import { DashboardRenderer } from '@devicechain/widgets';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { DashboardRenderer, useResolvedBindings } from '@devicechain/widgets';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { LOGIN, type Membership, SELECT_TENANT } from './queries';
 
@@ -321,17 +322,28 @@ function View({
 }) {
   const { definition, manifest } = loaded;
 
-  // The effective slot→entity manifest (definition defaults merged with the pasted
-  // override). The resolver backs the hub's anchor→device-token expansion; one hub
-  // for this view's lifetime, torn down on unmount.
-  const bindings = useMemo(() => effectiveBindings(definition, manifest), [definition, manifest]);
+  // base = definition defaults merged with the pasted manifest override; the cascade
+  // (useResolvedBindings) resolves scoped slots from their parent + the selection overlay
+  // and returns the settled manifest the hub + renderer use. The resolver backs both the
+  // hub's anchor→device-token expansion and the cascade's membership lookups.
   const resolver = useMemo(() => createDeviceResolver(), []);
+  const base = useMemo(() => effectiveBindings(definition, manifest), [definition, manifest]);
+  // The view-driven selection overlay (an alarm-originator drill). Lives outside the hub
+  // so the hub rebuild a rebind triggers never erases it.
+  const [selection, setSelection] = useState<Record<string, SlotBinding>>({});
+  const select = useCallback((t: SelectionTarget) => {
+    setSelection((prev) => ({ ...prev, [t.slot]: t.binding }));
+  }, []);
+  const bindings = useResolvedBindings(definition, base, selection, resolver);
+  const bindingsKey = useMemo(() => JSON.stringify(bindings), [bindings]);
   const authoritiesKey = authorities.join(',');
+  // One hub for this view's lifetime, rebuilt when the resolved bindings change (the
+  // shipped rebind path) and torn down on unmount.
   const hub = useMemo(
     () => new DashboardHub({ resolver, bindings, authorities }),
-    // authorities read via authoritiesKey (value identity), not array reference.
+    // bindings read via bindingsKey (value identity), authorities via authoritiesKey.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [resolver, bindings, authoritiesKey],
+    [resolver, bindingsKey, authoritiesKey],
   );
   useEffect(() => () => hub.disposeAll(), [hub]);
 
@@ -360,6 +372,7 @@ function View({
           hub={hub}
           actions={hub}
           bindings={bindings}
+          select={select}
         />
       </main>
     </div>

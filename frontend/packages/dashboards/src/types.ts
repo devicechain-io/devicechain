@@ -63,12 +63,6 @@ export interface RelatedTraversalSelector {
   measurements: string[];
 }
 
-export interface EntityFromStateSelector {
-  kind: 'entityFromState';
-  stateKey: string;
-  measurements: string[];
-}
-
 // slot — a NAMED reference into the dashboard's `slots` section, resolved to a
 // concrete entity at MOUNT by the host's binding manifest (ADR-039 runtime
 // binding). This makes a definition a reusable TEMPLATE: the widget names the
@@ -87,7 +81,6 @@ export type DatasourceSelector =
   | AnchorSelector
   | DevicesSelector
   | RelatedTraversalSelector
-  | EntityFromStateSelector
   | SlotSelector;
 
 // ---- Canvas + widgets -------------------------------------------------------
@@ -189,6 +182,23 @@ export type SlotBinding =
   | { kind: 'device'; deviceToken: string }
   | { kind: 'anchor'; anchor: AnchorTarget };
 
+// A slot's dependency on a PARENT slot — the scoped-slot context hierarchy (ADR-039
+// selection amendment). A scoped slot resolves RELATIVE to its parent's current
+// binding: `parent` names an anchor-typed slot whose member devices are this slot's
+// candidate set, and `strategy` picks among them:
+//   'first'  — auto-bind the parent's first member (ordered by token); zero members ⇒
+//              unbound. The slot follows the parent with no user input.
+//   'manual' — keep the current pick iff it is still a member of the (possibly changed)
+//              parent, else reset to unbound; a picker offers only the parent's members.
+// A slot with no `scope` is a ROOT context (the top-level entity, e.g. a building). The
+// relationship used to enumerate members is the parent anchor's own `relationship` (no
+// separate field). Single parent ⇒ the slots form a forest (no diamonds), so the cascade
+// order is well-defined. Replaces the reserved `entityFromState` selector.
+export interface SlotScope {
+  parent: string;
+  strategy: 'first' | 'manual';
+}
+
 // A named entity role a dashboard declares and its widgets reference via a
 // SlotSelector. The host's binding manifest maps each slot to a concrete device or
 // anchor at mount; `defaultBinding` is the slot's own binding (set by the authoring
@@ -200,7 +210,22 @@ export interface SlotDefinition {
   // Human-readable name shown in the binding UI, e.g. 'Primary thermostat'.
   label?: string;
   // The slot's default entity binding (the author's tenant); a host manifest overrides.
+  // For a SCOPED slot this is a FALLBACK only — the cascade (resolveContextBindings)
+  // derives the effective binding from the parent and always supersedes it (a `first`
+  // slot ignores it; a `manual` slot uses it as the initial pick, kept iff a member).
   defaultBinding?: SlotBinding;
+  // Optional dependency on a parent slot (the context hierarchy). Absent = a root context.
+  scope?: SlotScope;
+}
+
+// SelectionTarget is one view-driven selection: bind slot `slot` to `binding` (a device
+// drill from an alarm originator, a context-selector pick). The host accumulates these
+// into a selection overlay that the cascade resolves on top of the slot defaults. Named
+// its TARGET SLOT (no channels — the slot IS the channel; the cascade fans a parent
+// change out to its scoped children).
+export interface SelectionTarget {
+  slot: string;
+  binding: SlotBinding;
 }
 
 export interface DashboardDefinition {

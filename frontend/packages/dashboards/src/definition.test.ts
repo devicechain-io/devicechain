@@ -180,6 +180,57 @@ describe('parseDashboardDefinition', () => {
       measurements: ['temperature'],
     });
   });
+
+  // Scoped slots (ADR-039 selection amendment): a well-formed scope is carried; a scope
+  // with a missing / non-anchor / self / cyclic parent is dropped (degrade, don't throw)
+  // so a scope-blind whitelist can't silently erase the hierarchy on load.
+  describe('slot scope', () => {
+    const withSlots = (slots: Record<string, unknown>) =>
+      parseDashboardDefinition({ widgets: [], slots }).slots ?? {};
+
+    it('carries a valid scope onto an anchor parent (defaulting strategy to first)', () => {
+      const slots = withSlots({
+        building: { type: 'anchor' },
+        therm: { type: 'device', scope: { parent: 'building' } },
+      });
+      expect(slots.therm.scope).toEqual({ parent: 'building', strategy: 'first' });
+    });
+
+    it('keeps an explicit manual strategy', () => {
+      const slots = withSlots({
+        building: { type: 'anchor' },
+        therm: { type: 'device', scope: { parent: 'building', strategy: 'manual' } },
+      });
+      expect(slots.therm.scope).toEqual({ parent: 'building', strategy: 'manual' });
+    });
+
+    it('drops a scope whose parent is missing', () => {
+      const slots = withSlots({ therm: { type: 'device', scope: { parent: 'nope' } } });
+      expect(slots.therm.scope).toBeUndefined();
+    });
+
+    it('drops a scope whose parent is a device (non-anchor) slot', () => {
+      const slots = withSlots({
+        gateway: { type: 'device' },
+        therm: { type: 'device', scope: { parent: 'gateway' } },
+      });
+      expect(slots.therm.scope).toBeUndefined();
+    });
+
+    it('drops a self-referential scope', () => {
+      const slots = withSlots({ a: { type: 'anchor', scope: { parent: 'a' } } });
+      expect(slots.a.scope).toBeUndefined();
+    });
+
+    it('drops scopes forming a cycle', () => {
+      const slots = withSlots({
+        a: { type: 'anchor', scope: { parent: 'b' } },
+        b: { type: 'anchor', scope: { parent: 'a' } },
+      });
+      expect(slots.a.scope).toBeUndefined();
+      expect(slots.b.scope).toBeUndefined();
+    });
+  });
 });
 
 describe('resolveWidgetBox', () => {

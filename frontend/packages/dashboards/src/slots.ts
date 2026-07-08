@@ -59,9 +59,12 @@ function bindingOfSelector(ds: DatasourceSelector | undefined): SlotBinding | un
 }
 
 // findOrAddSlot returns the name of the slot bound to `binding`, creating one (in
-// the passed, freshly-copied map) when none exists. Dedup lives here.
+// the passed, freshly-copied map) when none exists. Dedup lives here. It only reuses a
+// PLAIN (unscoped) slot: a scoped slot follows a parent, so folding a plain widget onto
+// one that merely shares the same default binding would silently give the widget cascade
+// behavior it never asked for. The migration/authoring path only ever mints plain slots.
 function findOrAddSlot(slots: Record<string, SlotDefinition>, binding: SlotBinding): string {
-  const existing = Object.keys(slots).find((k) => sameBinding(slots[k].defaultBinding, binding));
+  const existing = Object.keys(slots).find((k) => !slots[k].scope && sameBinding(slots[k].defaultBinding, binding));
   if (existing) return existing;
   const name = nextSlotName(slots);
   slots[name] = { type: binding.kind, label: bindingLabel(binding), defaultBinding: binding };
@@ -110,9 +113,13 @@ export function bindWidgetSlot(
   const slots: Record<string, SlotDefinition> = { ...(def.slots ?? {}) };
   const current = def.widgets.find((w) => w.id === widgetId)?.datasource;
   const currentSlot = current?.kind === 'slot' ? current.slot : undefined;
+  const currentDef = currentSlot ? slots[currentSlot] : undefined;
+  // Keep the widget's own slot when it is SCOPED (a context slot the cascade drives —
+  // never silently rehome it onto a plain slot) or when the binding is unchanged;
+  // otherwise fork/reuse a plain slot for the new entity.
   const slot =
-    currentSlot && slots[currentSlot] && sameBinding(slots[currentSlot].defaultBinding, binding)
-      ? currentSlot // binding unchanged → keep this widget's own slot (don't rehome)
+    currentSlot && currentDef && (currentDef.scope || sameBinding(currentDef.defaultBinding, binding))
+      ? currentSlot
       : findOrAddSlot(slots, binding);
   const widgets = def.widgets.map((w) =>
     w.id === widgetId ? { ...w, datasource: { kind: 'slot' as const, slot, measurements } } : w,
@@ -135,8 +142,23 @@ export function clearWidgetDatasource(def: DashboardDefinition, widgetId: string
 // when none remain (so a dashboard that loses its last slot serializes clean).
 export function pruneSlots(def: DashboardDefinition): DashboardDefinition {
   if (!def.slots) return def;
+  const defSlots = def.slots;
   const used = new Set<string>();
   for (const w of def.widgets) if (w.datasource?.kind === 'slot') used.add(w.datasource.slot);
+  // Close `used` over scope.parent: a context-only parent slot (e.g. a root 'building'
+  // that no widget binds directly but a scoped child depends on) must be kept, or the
+  // child dangles and the cascade loses its top-level context. Walk each used slot's
+  // ancestor chain (guarded against a hand-edited cycle) adding every parent.
+  for (const start of [...used]) {
+    let cur: string | undefined = start;
+    const guard = new Set<string>();
+    while (cur && Object.prototype.hasOwnProperty.call(defSlots, cur) && !guard.has(cur)) {
+      guard.add(cur);
+      const parent: string | undefined = defSlots[cur].scope?.parent;
+      if (parent) used.add(parent);
+      cur = parent;
+    }
+  }
   const slots: Record<string, SlotDefinition> = {};
   for (const [name, slot] of Object.entries(def.slots)) if (used.has(name)) slots[name] = slot;
   if (Object.keys(slots).length === 0) {

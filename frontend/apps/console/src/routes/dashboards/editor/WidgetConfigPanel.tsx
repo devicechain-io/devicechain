@@ -87,6 +87,10 @@ export interface WidgetConfigPanelProps {
   // The slot this widget is bound through — shown as a muted hint so the author can
   // see it's slot-backed (matters for export). undefined when unbound.
   slotName?: string;
+  // Whether that slot is SCOPED (context-driven). A scoped slot's entity is derived by the
+  // cascade, not chosen here, so the datasource is shown read-only — editing it would be
+  // silently ignored (the workspace guards it), and scope authoring is a later slice.
+  slotScoped?: boolean;
   // Title/text/type-specific option edits (widget-only; datasource is separate).
   onChange: (next: WidgetInstance) => void;
   // Data-source edits: the new entity view, or undefined for "None".
@@ -98,6 +102,7 @@ export function WidgetConfigPanel({
   widget,
   datasource,
   slotName,
+  slotScoped,
   onChange,
   onDatasource,
   onClose,
@@ -139,7 +144,29 @@ export function WidgetConfigPanel({
       <div className="space-y-4">
         <TitleFields widget={widget} setOption={setOption} />
 
-        {DATA_WIDGETS.has(widget.type) && (
+        {DATA_WIDGETS.has(widget.type) && slotScoped && (
+          // A scoped slot is context-driven: its entity is set by the dashboard's selected
+          // context (and any drill-down), not chosen here. Show it read-only so an edit
+          // isn't silently ignored; wiring the context is a later slice.
+          <div className="space-y-2 rounded-md border border-border p-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Data source
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Set by the dashboard context
+              {slotName && (
+                <>
+                  {' '}
+                  (slot <span className="font-mono">{slotName}</span>)
+                </>
+              )}
+              . This widget follows the selected context and any drill-down; configuring the
+              context arrives in a later update.
+            </p>
+          </div>
+        )}
+
+        {DATA_WIDGETS.has(widget.type) && !slotScoped && (
           <>
             {/* DatasourceFields edits a device/anchor selector, which is exactly a
                 ConcreteSelector — the workspace re-stores it as a slot. Alarm widgets
