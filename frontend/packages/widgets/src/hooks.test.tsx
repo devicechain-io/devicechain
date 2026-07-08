@@ -14,12 +14,19 @@ import type {
   MeasurementSample,
   WidgetStreamSink,
 } from '@devicechain/dashboards';
-import { act, cleanup, renderHook } from '@testing-library/react';
+import type { DashboardDefinition, MemberResolver, SlotBinding } from '@devicechain/dashboards';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(cleanup);
 
-import { useAlarmStream, useCommandStream, useDatasourceAvailability, useMeasurementStream } from './hooks';
+import {
+  useAlarmStream,
+  useCommandStream,
+  useDatasourceAvailability,
+  useMeasurementStream,
+  useResolvedBindings,
+} from './hooks';
 
 function fakeHub() {
   let sink: WidgetStreamSink | null = null;
@@ -327,5 +334,40 @@ describe('useDatasourceAvailability', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('useResolvedBindings', () => {
+  const dashboard = (slots: DashboardDefinition['slots']): DashboardDefinition => ({
+    schemaVersion: 1,
+    title: '',
+    canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+    widgets: [],
+    slots,
+  });
+  const areaBinding: SlotBinding = {
+    kind: 'anchor',
+    anchor: { relationship: 'assigned', targetType: 'area', targetToken: 'b1' },
+  };
+
+  it('returns base+selection synchronously for a scope-free dashboard (no resolver call)', () => {
+    const def = dashboard({ s1: { type: 'device', defaultBinding: { kind: 'device', deviceToken: 'd1' } } });
+    const base = { s1: { kind: 'device', deviceToken: 'd1' } as SlotBinding };
+    const resolver: MemberResolver = { devicesForAnchor: vi.fn() };
+    const { result } = renderHook(() => useResolvedBindings(def, base, { s1: { kind: 'device', deviceToken: 'picked' } }, resolver));
+    expect(result.current).toEqual({ s1: { kind: 'device', deviceToken: 'picked' } }); // selection wins
+    expect(resolver.devicesForAnchor).not.toHaveBeenCalled();
+  });
+
+  it('runs the cascade for a scoped dashboard: first → the parent first member (by token)', async () => {
+    const def = dashboard({
+      building: { type: 'anchor', defaultBinding: areaBinding },
+      therm: { type: 'device', scope: { parent: 'building', strategy: 'first' } },
+    });
+    const base = { building: areaBinding };
+    const resolver: MemberResolver = { devicesForAnchor: vi.fn(async () => ['t2', 't1']) };
+    const { result } = renderHook(() => useResolvedBindings(def, base, {}, resolver));
+    await waitFor(() => expect(result.current.therm).toEqual({ kind: 'device', deviceToken: 't1' }));
+    expect(result.current.building).toEqual(areaBinding);
   });
 });

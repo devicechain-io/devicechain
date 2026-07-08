@@ -26,10 +26,11 @@ export type {
   AnchorAggregation,
   DevicesSelector,
   RelatedTraversalSelector,
-  EntityFromStateSelector,
   SlotSelector,
   SlotDefinition,
+  SlotScope,
   SlotBinding,
+  SelectionTarget,
   MeasurementSample,
   AlarmRow,
   CommandRow,
@@ -38,6 +39,14 @@ export type {
 } from './types';
 
 export { effectiveBindings, parseBindingManifest, stripDefaultBindings } from './bindings';
+
+export {
+  resolveContextBindings,
+  hasScopedSlots,
+  applySelection,
+  bindingsWithoutScopedSlots,
+  type MemberResolver,
+} from './context';
 
 export {
   migrateToSlots,

@@ -50,13 +50,21 @@ export {
 } from './widgets/command-params';
 
 // Building blocks for custom widgets.
-export { WidgetFrame, WidgetSubjectProvider, type WidgetFrameProps } from './frame';
+export {
+  WidgetFrame,
+  WidgetSubjectProvider,
+  WidgetSelectProvider,
+  useWidgetSelect,
+  type WidgetFrameProps,
+  type WidgetSelect,
+} from './frame';
 export { EChart, type EChartOption } from './echart';
 export {
   useMeasurementStream,
   useAlarmStream,
   useCommandStream,
   useDatasourceAvailability,
+  useResolvedBindings,
   useChartTheme,
   type MeasurementStreamState,
   type AlarmStreamState,

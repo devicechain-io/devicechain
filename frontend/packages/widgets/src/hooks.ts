@@ -8,13 +8,86 @@ import type {
   AlarmSubscription,
   CommandRow,
   CommandSubscription,
+  DashboardDefinition,
   DatasourceSelector,
+  MemberResolver,
   MeasurementSample,
+  SlotBinding,
   WidgetDataSource,
 } from '@devicechain/dashboards';
+import { bindingsWithoutScopedSlots, hasScopedSlots, resolveContextBindings } from '@devicechain/dashboards';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 
 import { resolveChartTheme, type ChartTheme } from './theme';
+
+// useResolvedBindings runs the scoped-slot cascade (ADR-039 selection amendment) for a
+// host: it takes the synchronous base manifest (effectiveBindings) plus the accumulated
+// selection overlay and returns the settled slot→binding map the host feeds to the hub +
+// renderer. Selection state lives in the host (so it survives the hub rebuild a rebind
+// triggers); this hook just derives bindings from it.
+//
+// The common scope-FREE dashboard needs no async work — the synchronous overlay (base
+// with the selection laid over it) is already correct, and the hook returns it directly,
+// preserving today's behavior. Only a dashboard with scoped slots runs the async pass,
+// guarded by a monotonic generation so a slow members response can't overwrite a newer
+// selection; it keeps the last settled map until the new one arrives (one re-key per
+// walk, never a stale partial). A resolution error is fail-safe: keep the last map.
+export function useResolvedBindings(
+  definition: DashboardDefinition,
+  base: Record<string, SlotBinding>,
+  selection: Record<string, SlotBinding>,
+  resolver: MemberResolver,
+): Record<string, SlotBinding> {
+  const scoped = useMemo(() => hasScopedSlots(definition), [definition]);
+  // Selection wins over base. Correct as-is for root + manual slots and every scope-free
+  // dashboard; scoped `first` slots are refined by the async pass below.
+  const overlaid = useMemo(() => ({ ...base, ...selection }), [base, selection]);
+  // Seed the settled map with scoped slots STRIPPED, so a scoped dashboard's first paint
+  // is unbound-not-stale (a scoped slot's default may be out of context) until the cascade
+  // derives it. For a scope-free dashboard this equals `overlaid`.
+  const [resolved, setResolved] = useState(() => bindingsWithoutScopedSlots(definition, overlaid));
+  const genRef = useRef(0);
+
+  useEffect(() => {
+    // Scope-free: `overlaid` is authoritative. Keep `resolved` synced to it anyway so that
+    // if the definition later gains a scope (an authoring edit), the flip to the `resolved`
+    // path starts from the CURRENT bindings, not a stale mount-time snapshot.
+    if (!scoped) {
+      setResolved((prev) => (sameBindings(prev, overlaid) ? prev : overlaid));
+      return;
+    }
+    const gen = ++genRef.current;
+    let live = true;
+    resolveContextBindings(definition, base, selection, resolver)
+      .then((next) => {
+        if (!live || gen !== genRef.current) return;
+        // Only swap when the value actually changed, so an equal re-resolve doesn't churn
+        // a new object reference (and rebuild the hub) for nothing.
+        setResolved((prev) => (sameBindings(prev, next) ? prev : next));
+      })
+      .catch(() => {
+        /* fail-safe: keep the last settled map */
+      });
+    return () => {
+      live = false;
+    };
+  }, [scoped, definition, base, selection, resolver, overlaid]);
+
+  return scoped ? resolved : overlaid;
+}
+
+// sameBindings is a value compare of two slot→binding maps (stable-key JSON), so the
+// hook can suppress a no-op re-key.
+function sameBindings(a: Record<string, SlotBinding>, b: Record<string, SlotBinding>): boolean {
+  const ak = Object.keys(a).sort();
+  const bk = Object.keys(b).sort();
+  if (ak.length !== bk.length) return false;
+  for (let i = 0; i < ak.length; i += 1) {
+    if (ak[i] !== bk[i]) return false;
+    if (JSON.stringify(a[ak[i]]) !== JSON.stringify(b[bk[i]])) return false;
+  }
+  return true;
+}
 
 export interface MeasurementStreamState {
   // The most recent sample per measurement name (drives cards, gauges, tables).

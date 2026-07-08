@@ -12,7 +12,7 @@ import { useState, type CSSProperties } from 'react';
 
 import type { AlarmStreamState } from '../hooks';
 import { formatDateTime, formatValue } from '../format';
-import { WidgetFrame } from '../frame';
+import { WidgetFrame, useWidgetSelect, type WidgetSelect } from '../frame';
 import { css } from '../theme';
 import { optNumber, optString, type WidgetProps } from '../widget';
 import { severityColor, severityLabel } from './severity';
@@ -48,6 +48,13 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
   // value (formatValue's default), matching the table widget. An alarm's raw lastValue is
   // otherwise a full-width float (e.g. 31.19073834583732).
   const precision = optNumber(widget.options, 'precision');
+  // Drill: when a `selectionTarget` slot is configured AND the renderer wired a selection
+  // callback (view mode, a host that supports it), a device originator becomes a link that
+  // re-points that slot — driving the per-device widgets to the clicked thermostat
+  // (ADR-039 selection amendment). Absent either, the originator is plain text.
+  const select = useWidgetSelect();
+  const selectionTarget = optString(widget.options, 'selectionTarget');
+  const drillTo = select && selectionTarget ? { select, slot: selectionTarget } : undefined;
 
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
@@ -113,7 +120,9 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                         </span>
                       </td>
                       <td style={{ ...cell, color: css('muted-foreground') }}>{statusLabel(alarm)}</td>
-                      <td style={cell}>{alarm.originatorToken ?? alarm.originatorType}</td>
+                      <td style={cell}>
+                        <OriginatorCell alarm={alarm} drillTo={drillTo} />
+                      </td>
                       <td style={cell} title={alarm.message ?? undefined}>
                         {alarm.alarmKey}
                       </td>
@@ -149,6 +158,43 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
       </div>
     </WidgetFrame>
   );
+}
+
+// OriginatorCell renders the alarm's originator. When drill is wired AND the originator
+// is a device (it carries a token), it is a link that re-points the target slot to that
+// device; otherwise it is plain text (the token, or the originator type when tokenless).
+// The drill target is a device binding — a building-scoped alarm table's originators are
+// already members of the context, so the drill stays in-context.
+function OriginatorCell({
+  alarm,
+  drillTo,
+}: {
+  alarm: AlarmRow;
+  drillTo: { select: WidgetSelect; slot: string } | undefined;
+}) {
+  if (drillTo && alarm.originatorType === 'device' && alarm.originatorToken) {
+    const token = alarm.originatorToken;
+    return (
+      <button
+        type="button"
+        onClick={() => drillTo.select({ slot: drillTo.slot, binding: { kind: 'device', deviceToken: token } })}
+        title={`Show ${token} in the linked widgets`}
+        style={{
+          padding: 0,
+          border: 'none',
+          background: 'none',
+          font: 'inherit',
+          color: css('primary'),
+          cursor: 'pointer',
+          textDecoration: 'underline',
+          textUnderlineOffset: 2,
+        }}
+      >
+        {token}
+      </button>
+    );
+  }
+  return <>{alarm.originatorToken ?? alarm.originatorType}</>;
 }
 
 const actionButton: CSSProperties = {

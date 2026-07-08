@@ -15,6 +15,12 @@ import type { DashboardDefinition, SlotBinding, SlotDefinition } from './types';
 // effectiveBindings merges a definition's slot default bindings with an optional
 // host manifest (manifest wins). Slots without a default and not in the manifest are
 // omitted → the Hub renders them as an empty placeholder.
+//
+// This is the BASE layer (defaults + manifest), computed synchronously. For a dashboard
+// with SCOPED slots it is NOT the final manifest: a scoped slot's default here is a
+// fallback that resolveContextBindings (the cascade) supersedes with a value derived
+// from the parent. A host with scoped slots feeds this map as `base` into the cascade
+// and hands the hub/renderer the cascade's output, not this map directly.
 export function effectiveBindings(
   definition: DashboardDefinition,
   manifest?: Record<string, SlotBinding>,

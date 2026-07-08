@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 afterEach(cleanup);
 
 import type { AlarmStreamState } from './hooks';
+import { WidgetSelectProvider, type WidgetSelect } from './frame';
 import { AlarmCount } from './widgets/alarm-count';
 import { AlarmTable } from './widgets/alarm-table';
 
@@ -89,6 +90,48 @@ describe('AlarmTable', () => {
   it('shows "Loading…" while loading with no rows yet', () => {
     render(<AlarmTable widget={widget('alarm-table')} data={state({ alarms: [], loading: true })} />);
     expect(screen.getByText('Loading…')).toBeTruthy();
+  });
+});
+
+// Originator drill (ADR-039 selection amendment): with a selectionTarget option AND a
+// wired select callback, a device originator becomes a link that re-points the target
+// slot; without either it stays plain text.
+describe('AlarmTable originator drill', () => {
+  const drillWidget = () => widget('alarm-table', { selectionTarget: 'selectedThermostat' });
+
+  it('fires select({slot, device-binding}) when a device originator is clicked', () => {
+    const select: WidgetSelect = vi.fn();
+    const alarms = [alarm({ token: 'a-1', originatorType: 'device', originatorToken: 'thermostat-07' })];
+    render(
+      <WidgetSelectProvider select={select}>
+        <AlarmTable widget={drillWidget()} data={state({ alarms, total: 1 })} />
+      </WidgetSelectProvider>,
+    );
+    fireEvent.click(screen.getByText('thermostat-07'));
+    expect(select).toHaveBeenCalledWith({
+      slot: 'selectedThermostat',
+      binding: { kind: 'device', deviceToken: 'thermostat-07' },
+    });
+  });
+
+  it('renders a plain (non-clickable) originator when no select is wired', () => {
+    const alarms = [alarm({ token: 'a-1', originatorType: 'device', originatorToken: 'thermostat-07' })];
+    render(<AlarmTable widget={drillWidget()} data={state({ alarms, total: 1 })} />);
+    // Present as text, but not as a button.
+    expect(screen.getByText('thermostat-07')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /thermostat-07/i })).toBeNull();
+  });
+
+  it('does not make a non-device originator a drill link', () => {
+    const select: WidgetSelect = vi.fn();
+    const alarms = [alarm({ token: 'a-1', originatorType: 'asset', originatorToken: 'asset-3' })];
+    render(
+      <WidgetSelectProvider select={select}>
+        <AlarmTable widget={drillWidget()} data={state({ alarms, total: 1 })} />
+      </WidgetSelectProvider>,
+    );
+    fireEvent.click(screen.getByText('asset-3'));
+    expect(select).not.toHaveBeenCalled();
   });
 });
 

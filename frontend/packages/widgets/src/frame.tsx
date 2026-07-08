@@ -7,6 +7,8 @@
 
 import { createContext, useContext, type CSSProperties, type ReactNode } from 'react';
 
+import type { SelectionTarget } from '@devicechain/dashboards';
+
 import { css } from './theme';
 
 // WidgetSubjectContext carries the resolved entity a widget shows (its datasource's
@@ -26,6 +28,33 @@ export function WidgetSubjectProvider({
   children: ReactNode;
 }) {
   return <WidgetSubjectContext.Provider value={label}>{children}</WidgetSubjectContext.Provider>;
+}
+
+// WidgetSelect is a view-interaction callback (ADR-039 selection amendment): a widget
+// drives a slot selection (an alarm-table originator drill, a context-selector pick) by
+// naming its target slot + the entity to bind. Kept DISTINCT from WidgetActions (the
+// write seam) — selection changes only the view's binding overlay, never the backend.
+// Provided by the renderer from the host; absent (undefined) in edit mode and any host
+// that wires no selection, so a widget feature-detects it before offering a drill.
+export type WidgetSelect = (target: SelectionTarget) => void;
+
+const WidgetSelectContext = createContext<WidgetSelect | undefined>(undefined);
+
+export function WidgetSelectProvider({
+  select,
+  children,
+}: {
+  select: WidgetSelect | undefined;
+  children: ReactNode;
+}) {
+  return <WidgetSelectContext.Provider value={select}>{children}</WidgetSelectContext.Provider>;
+}
+
+// useWidgetSelect returns the ambient selection callback, or undefined where selection is
+// not wired (edit mode, a read-only embedder). A widget renders its drill affordance only
+// when this is defined.
+export function useWidgetSelect(): WidgetSelect | undefined {
+  return useContext(WidgetSelectContext);
 }
 
 export interface WidgetFrameProps {

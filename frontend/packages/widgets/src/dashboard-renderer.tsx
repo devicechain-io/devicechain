@@ -29,7 +29,7 @@ import {
 import { useEffect, useState, type CSSProperties } from 'react';
 
 import { ConnectedWidget } from './connected-widget';
-import { WidgetSubjectProvider } from './frame';
+import { WidgetSelectProvider, WidgetSubjectProvider, type WidgetSelect } from './frame';
 import { WIDGET_CHANNEL } from './registry';
 
 export interface DashboardRendererProps {
@@ -50,6 +50,11 @@ export interface DashboardRendererProps {
   // force a dashboard authored `fill` into a fixed-px box, or vice versa). Omitted →
   // the definition's own `canvas.sizing`.
   sizing?: CanvasSizing;
+  // The selection callback (ADR-039 selection amendment): a widget (e.g. an alarm-table
+  // originator drill) calls it to re-point a slot; the host accumulates it into the
+  // selection overlay that produces `bindings`. Omit for a static dashboard — widgets
+  // then render no drill affordance.
+  select?: WidgetSelect;
 }
 
 export function DashboardRenderer({
@@ -59,6 +64,7 @@ export function DashboardRenderer({
   seedHistory = true,
   bindings,
   sizing,
+  select,
 }: DashboardRendererProps) {
   const breakpoint = useActiveBreakpoint(definition.canvas.breakpoints);
   const histories = useWidgetHistories(definition.widgets, seedHistory, bindings);
@@ -70,32 +76,34 @@ export function DashboardRenderer({
 
   return (
     <div style={sizingStyle(effectiveSizing, bg)}>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: `repeat(${grid.columns}, minmax(0, 1fr))`,
-          gridAutoRows: `${grid.rowHeight}px`,
-          columnGap: colGap,
-          rowGap,
-          width: '100%',
-        }}
-      >
-        {definition.widgets.map((widget) => {
-          const box = resolveWidgetBox(widget.layout, breakpoint);
-          return (
-            <div key={widget.id} style={gridItemStyle(box, grid.columns)}>
-              <WidgetSubjectProvider label={widgetSubjectLabel(widget, definition.slots, bindings)}>
-                <ConnectedWidget
-                  widget={widget}
-                  hub={hub}
-                  actions={actions}
-                  initialSamples={histories[widget.id]}
-                />
-              </WidgetSubjectProvider>
-            </div>
-          );
-        })}
-      </div>
+      <WidgetSelectProvider select={select}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${grid.columns}, minmax(0, 1fr))`,
+            gridAutoRows: `${grid.rowHeight}px`,
+            columnGap: colGap,
+            rowGap,
+            width: '100%',
+          }}
+        >
+          {definition.widgets.map((widget) => {
+            const box = resolveWidgetBox(widget.layout, breakpoint);
+            return (
+              <div key={widget.id} style={gridItemStyle(box, grid.columns)}>
+                <WidgetSubjectProvider label={widgetSubjectLabel(widget, definition.slots, bindings)}>
+                  <ConnectedWidget
+                    widget={widget}
+                    hub={hub}
+                    actions={actions}
+                    initialSamples={histories[widget.id]}
+                  />
+                </WidgetSubjectProvider>
+              </div>
+            );
+          })}
+        </div>
+      </WidgetSelectProvider>
     </div>
   );
 }
@@ -166,7 +174,11 @@ export function widgetSubjectLabel(
   } else if (ds.kind === 'anchor') {
     binding = { kind: 'anchor', anchor: ds.anchor };
   } else if (ds.kind === 'slot') {
-    binding = ownGet(bindings, ds.slot) ?? ownGet(slots, ds.slot)?.defaultBinding;
+    const slot = ownGet(slots, ds.slot);
+    // A SCOPED slot is authoritative in the resolved `bindings` only — the cascade omits
+    // it when unbound, so falling back to its default would name an entity that isn't
+    // being shown (a lying subtitle). A plain slot may still fall back to its default.
+    binding = slot?.scope ? ownGet(bindings, ds.slot) : ownGet(bindings, ds.slot) ?? slot?.defaultBinding;
   }
   if (binding?.kind === 'device') return binding.deviceToken;
   if (binding?.kind === 'anchor') return binding.anchor.targetToken;
