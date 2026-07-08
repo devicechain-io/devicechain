@@ -36,6 +36,10 @@ DeviceChain is a set of cooperating microservices over a shared core library:
 
 See [Architecture](./concepts/architecture.md) for how these fit together, and the [Domain Model](./concepts/domain-model.md) for the core concepts.
 
+## Trying it with simulated data
+
+DeviceChain includes a **device-simulation** tool (`dcctl sim`) for standing up realistic demo data without physical hardware. It provisions a scenario's full topology — customers, areas, assets, and devices — then drives live telemetry and alarms into the platform over the **same device wire a real device uses**, so you can explore the console, dashboards, and queries against a moving fleet. A simulation authenticates as a scoped, single-tenant identity like any other external client — it has no special access to the platform.
+
 ## Project status
 
 DeviceChain is pre-release and under active development. Pages in these docs mark whether a capability is **available**, **planned**, or **in design**. The [GitHub repository](https://github.com/devicechain-io/devicechain) is the source of truth for what currently builds and runs.
