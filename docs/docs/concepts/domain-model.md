@@ -44,6 +44,10 @@ DeviceChain distinguishes **current state** from **history**:
 
 A device has a **stable identity** that everything else references, kept separate from its **credentials** (the material it uses to authenticate). Credentials are pluggable — **access token**, **MQTT-basic** (username + password), and **X.509 certificate** — so a device can rotate or hold multiple credentials without changing its identity. A credential's secret is **write-only**: it is submitted when the credential is registered and never returned on read. See [Device credentials](../guides/device-credentials.md).
 
+A device may also carry an optional **`externalId`** — a customer-owned **business key** such as a VIN, serial number, GS1 code, or asset tag. It is distinct from both the internal identity and the credential: it is **opaque** (no format constraints), **unique within a tenant** when present, and **never used for addressing or authentication**. Its purpose is lookup and integration — matching a DeviceChain device to the identifier your other systems already use for the same physical thing.
+
 ## Events
 
 Each event records the reporting device, the event type, the device-reported and platform-received timestamps, an optional external correlation id (`alternateId`) for idempotent ingestion, and the resolved relationship anchor described above (null when the device is unassigned). Event categories include measurements, locations, alerts, command invocations and responses, and state changes.
+
+Measurements are **self-describing**: when a reading matches a metric defined on the device's profile, the platform stamps that metric's **unit** and **data type** directly onto the persisted reading (and onto the live last-known-state projection). A consumer reading a measurement gets its semantics — `22.4 °C`, a `DOUBLE` — without a second lookup against the profile.
