@@ -15,6 +15,7 @@
 import { decodeToken, gql, setAuthTokenGetter } from '@devicechain/client';
 import {
   createDeviceResolver,
+  createEntityLister,
   DashboardHub,
   effectiveBindings,
   migrateToSlots,
@@ -24,7 +25,7 @@ import {
   type SelectionTarget,
   type SlotBinding,
 } from '@devicechain/dashboards';
-import { DashboardRenderer, useResolvedBindings } from '@devicechain/widgets';
+import { DashboardRenderer, useResolvedBindings, useSlotCandidates } from '@devicechain/widgets';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { LOGIN, type Membership, SELECT_TENANT } from './queries';
@@ -327,6 +328,10 @@ function View({
   // and returns the settled manifest the hub + renderer use. The resolver backs both the
   // hub's anchor→device-token expansion and the cascade's membership lookups.
   const resolver = useMemo(() => createDeviceResolver(), []);
+  // The context/entity-selector candidate provider (ADR-039 selection amendment): backs a
+  // context-selector so a viewer can re-point the dashboard's top-level context or pick a
+  // member within it. Shares the resolver's device-management coupling via one factory.
+  const lister = useMemo(() => createEntityLister(), []);
   const base = useMemo(() => effectiveBindings(definition, manifest), [definition, manifest]);
   // The view-driven selection overlay (an alarm-originator drill). Lives outside the hub
   // so the hub rebuild a rebind triggers never erases it.
@@ -335,6 +340,7 @@ function View({
     setSelection((prev) => ({ ...prev, [t.slot]: t.binding }));
   }, []);
   const bindings = useResolvedBindings(definition, base, selection, resolver);
+  const candidates = useSlotCandidates(definition, bindings, resolver, lister);
   const bindingsKey = useMemo(() => JSON.stringify(bindings), [bindings]);
   const authoritiesKey = authorities.join(',');
   // One hub for this view's lifetime, rebuilt when the resolved bindings change (the
@@ -373,6 +379,7 @@ function View({
           actions={hub}
           bindings={bindings}
           select={select}
+          candidates={candidates}
         />
       </main>
     </div>

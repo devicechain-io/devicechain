@@ -31,6 +31,9 @@ export type {
   SlotScope,
   SlotBinding,
   SelectionTarget,
+  SelectionCandidate,
+  EntityCandidateLister,
+  EntityListKind,
   MeasurementSample,
   AlarmRow,
   CommandRow,
@@ -57,8 +60,15 @@ export {
   widgetSlotName,
   sameBinding,
   resolveConcrete,
+  setSlotScope,
+  anchorSlotNames,
   type ConcreteSelector,
 } from './slots';
+
+// The context/entity-selector's candidate resolver + the injected entity lister that backs
+// a root context-selector (ADR-039 selection amendment).
+export { resolveSlotCandidates } from './candidates';
+export { createEntityLister } from './entity-lister';
 
 export { WIDGET_TYPES } from './types';
 
@@ -93,6 +103,7 @@ export {
   resolveWidgetBox,
   activeBreakpoint,
   generateWidgetId,
+  canScopeSlot,
   DashboardDefinitionError,
   BASE_BREAKPOINT,
 } from './definition';

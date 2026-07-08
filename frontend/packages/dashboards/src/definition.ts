@@ -154,6 +154,39 @@ function inScopeCycle(slots: Record<string, SlotDefinition>, start: string): boo
   return false;
 }
 
+// canScopeSlot reports whether `child` may take a scope with parent `parentName` — the
+// authoring-time equivalent of the loader's validateScopes rules, so the editor cannot write
+// a scope the loader would silently drop on reload. A scope is valid iff the parent exists,
+// is an anchor-typed slot, is not the child itself, and adding the child→parent edge creates
+// no cycle (walking the parent's own ancestor chain must not reach the child). Reads scopes
+// via own-property lookup so a slot named '__proto__'/'constructor' can't reach an inherited
+// member. Pure — never mutates the slots map.
+export function canScopeSlot(
+  slots: Record<string, SlotDefinition>,
+  child: string,
+  parentName: string,
+): boolean {
+  if (child === parentName) return false;
+  const parent = Object.prototype.hasOwnProperty.call(slots, parentName) ? slots[parentName] : undefined;
+  if (!parent || parent.type !== 'anchor') return false;
+  // Would child→parent close a loop? The parent (transitively) must not already depend on
+  // the child. Guard against a pre-existing upstream cycle so this can't spin.
+  const seen = new Set<string>();
+  let cur: string | undefined = parentName;
+  while (cur) {
+    if (cur === child) return false;
+    // A chain that reaches a pre-existing cycle is rejected too (not just accepted-by-break),
+    // matching the loader's inScopeCycle, which drops any slot whose ancestry reaches a loop.
+    if (seen.has(cur)) return false;
+    seen.add(cur);
+    const slot: SlotDefinition | undefined = Object.prototype.hasOwnProperty.call(slots, cur)
+      ? slots[cur]
+      : undefined;
+    cur = slot?.scope?.parent;
+  }
+  return true;
+}
+
 // parseSlotBinding normalizes a slot binding (device token or anchor target), or
 // drops it (undefined) when absent/malformed. The entity only — a binding never
 // carries measurement names (those live on the widget's selector). Exported so the

@@ -21,6 +21,7 @@ var wireWidgetTypes = map[string]bool{
 	"alarm-table":      true,
 	"alarm-count":      true,
 	"command-button":   true,
+	"entity-selector":  true,
 }
 
 // heroDevices is the minimal population buildBuildingpulseDashboard needs: a hero
@@ -119,12 +120,13 @@ func TestBuildBuildingpulseDashboardShape(t *testing.T) {
 	if !ok {
 		t.Fatalf("widgets is not a JSON array: %T", doc["widgets"])
 	}
-	if len(widgetsRaw) != 3 {
-		t.Fatalf("expected 3 widgets (chart+table+alarm-table), got %d", len(widgetsRaw))
+	if len(widgetsRaw) != 5 {
+		t.Fatalf("expected 5 widgets (2 selectors + chart + table + alarm-table), got %d", len(widgetsRaw))
 	}
 
 	sawThermostatSlot := false
 	sawBuildingScopedAlarmTable := false
+	selectorTargets := map[string]bool{}
 	for i, wr := range widgetsRaw {
 		widget, ok := wr.(map[string]any)
 		if !ok {
@@ -133,7 +135,7 @@ func TestBuildBuildingpulseDashboardShape(t *testing.T) {
 
 		typ, ok := widget["type"].(string)
 		if !ok || !wireWidgetTypes[typ] {
-			t.Fatalf("widgets[%d] has type %v, not one of the 9 WIDGET_TYPES", i, widget["type"])
+			t.Fatalf("widgets[%d] has type %v, not one of the WIDGET_TYPES", i, widget["type"])
 		}
 
 		layout, ok := widget["layout"].(map[string]any)
@@ -171,6 +173,18 @@ func TestBuildBuildingpulseDashboardShape(t *testing.T) {
 				t.Errorf("alarm-table options.selectionTarget = %v, want \"selectedThermostat\"", opts["selectionTarget"])
 			}
 			sawBuildingScopedAlarmTable = true
+		case "entity-selector":
+			// A context/entity-selector carries no datasource; it names the slot it
+			// re-points in options.selectionTarget.
+			if ds != nil {
+				t.Errorf("widgets[%d] (entity-selector) should have no datasource, got %v", i, ds)
+			}
+			opts, _ := widget["options"].(map[string]any)
+			if target, _ := opts["selectionTarget"].(string); target != "" {
+				selectorTargets[target] = true
+			} else {
+				t.Errorf("widgets[%d] (entity-selector) has no options.selectionTarget", i)
+			}
 		}
 	}
 
@@ -179,6 +193,11 @@ func TestBuildBuildingpulseDashboardShape(t *testing.T) {
 	}
 	if !sawBuildingScopedAlarmTable {
 		t.Fatal("expected a building-scoped alarm-table with a drill target")
+	}
+	// Both context selectors are present: a root (building) picker and a member
+	// (selectedThermostat) picker.
+	if !selectorTargets["building"] || !selectorTargets["selectedThermostat"] {
+		t.Errorf("expected entity-selectors targeting building + selectedThermostat, got %v", selectorTargets)
 	}
 }
 

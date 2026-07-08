@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   activeBreakpoint,
   BASE_BREAKPOINT,
+  canScopeSlot,
   DashboardDefinitionError,
   generateWidgetId,
   isDirty,
@@ -13,6 +14,7 @@ import {
   resolveWidgetBox,
   serializeDefinition,
 } from './definition';
+import type { SlotDefinition } from './types';
 
 const box = (over = {}) => ({ col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0, ...over });
 
@@ -273,5 +275,48 @@ describe('serializeDefinition / isDirty', () => {
   it('isDirty is false for equal definitions and true after a change', () => {
     expect(isDirty(def(), def())).toBe(false);
     expect(isDirty({ ...def(), title: 'changed' }, def())).toBe(true);
+  });
+});
+
+describe('canScopeSlot', () => {
+  const slots: Record<string, SlotDefinition> = {
+    building: { type: 'anchor' },
+    gateway: { type: 'device' },
+    therm: { type: 'device' },
+    floor: { type: 'anchor', scope: { parent: 'building', strategy: 'first' } },
+  };
+
+  it('allows a device slot to scope to an anchor parent', () => {
+    expect(canScopeSlot(slots, 'therm', 'building')).toBe(true);
+  });
+
+  it('rejects a non-anchor parent', () => {
+    expect(canScopeSlot(slots, 'therm', 'gateway')).toBe(false);
+  });
+
+  it('rejects a missing parent', () => {
+    expect(canScopeSlot(slots, 'therm', 'nope')).toBe(false);
+  });
+
+  it('rejects a self-referential scope', () => {
+    expect(canScopeSlot(slots, 'building', 'building')).toBe(false);
+  });
+
+  it('rejects an edge that would create a cycle', () => {
+    // floor→building already; making building→floor would loop.
+    expect(canScopeSlot(slots, 'building', 'floor')).toBe(false);
+  });
+
+  it('agrees with the loader: a valid authored scope survives a parse round-trip', () => {
+    // canScopeSlot approves therm→building; the loader (validateScopes) must keep it.
+    expect(canScopeSlot(slots, 'therm', 'building')).toBe(true);
+    const parsed = parseDashboardDefinition({
+      widgets: [],
+      slots: {
+        building: { type: 'anchor' },
+        therm: { type: 'device', scope: { parent: 'building', strategy: 'manual' } },
+      },
+    });
+    expect(parsed.slots!.therm.scope).toEqual({ parent: 'building', strategy: 'manual' });
   });
 });

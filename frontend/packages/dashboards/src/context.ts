@@ -120,6 +120,10 @@ export async function resolveContextBindings(
       continue;
     }
     // Scoped: derive from the parent's ALREADY-settled binding (topo order guarantees it).
+    // Every strategy binds a DEVICE, so a scoped slot must be device-typed; a hand-edited
+    // anchor-typed scoped slot can't be derived (a device binding on an anchor slot mis-types
+    // downstream) → leave it unbound (the authoring UI only scopes device slots).
+    if (slot && slot.type !== 'device') continue;
     const parentBinding = ownGet(out, scope.parent);
     if (!parentBinding || parentBinding.kind !== 'anchor') continue; // parent unbound → child unbound
     let members: string[];

@@ -23,6 +23,7 @@ import { useAlarmStream, useCommandStream, useDatasourceAvailability, useMeasure
 import {
   ALARM_WIDGET_REGISTRY,
   CONTROL_WIDGET_REGISTRY,
+  SELECTION_WIDGET_REGISTRY,
   WIDGET_CHANNEL,
   WIDGET_REGISTRY,
 } from './registry';
@@ -63,7 +64,19 @@ export function ConnectedWidget({ widget, hub, actions, initialSamples }: Connec
   if (channel === 'control') {
     return <ControlConnectedWidget widget={widget} hub={hub} actions={actions} />;
   }
+  if (channel === 'selection') {
+    return <SelectionConnectedWidget widget={widget} />;
+  }
   return <MeasurementConnectedWidget widget={widget} hub={hub} initialSamples={initialSamples} />;
+}
+
+// A selection widget (entity-selector) consumes no hub data — it reads the ambient candidate
+// provider + selection callback. It carries no datasource, so the availability check above is
+// trivially satisfied and there is no stream to bind.
+function SelectionConnectedWidget({ widget }: { widget: WidgetInstance }) {
+  const Component = SELECTION_WIDGET_REGISTRY[widget.type as keyof typeof SELECTION_WIDGET_REGISTRY];
+  if (!Component) return null;
+  return <Component widget={widget} data={null} />;
 }
 
 function MeasurementConnectedWidget({ widget, hub, initialSamples }: ConnectedWidgetProps) {

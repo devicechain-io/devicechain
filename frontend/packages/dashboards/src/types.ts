@@ -103,6 +103,7 @@ export const WIDGET_TYPES = [
   'alarm-table',
   'alarm-count',
   'command-button',
+  'entity-selector',
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
@@ -216,6 +217,28 @@ export interface SlotDefinition {
   defaultBinding?: SlotBinding;
   // Optional dependency on a parent slot (the context hierarchy). Absent = a root context.
   scope?: SlotScope;
+}
+
+// The entity kinds a root context-selector can list (the anchor target types + a bare
+// device). A scoped child selector does NOT use this — its candidates are the parent
+// anchor's member devices, enumerated via the DeviceResolver, not a list query.
+export type EntityListKind = 'device' | 'customer' | 'area' | 'asset';
+
+// EntityCandidateLister lists the tenant's entities of one kind (token + optional name),
+// backing a ROOT context-selector's candidate set. Injected by the host (createEntityLister)
+// so the widgets/dashboards packages carry no extra device-management coupling beyond the
+// one place (resolver.ts) that already owns it. A flat list — nested customer→area→asset
+// tree picking is deferred.
+export type EntityCandidateLister = (
+  kind: EntityListKind,
+) => Promise<Array<{ token: string; name?: string | null }>>;
+
+// One option a context/entity-selector widget offers: the binding it would set, a display
+// label, and whether it is the slot's current pick. Produced by resolveSlotCandidates.
+export interface SelectionCandidate {
+  binding: SlotBinding;
+  label: string;
+  selected: boolean;
 }
 
 // SelectionTarget is one view-driven selection: bind slot `slot` to `binding` (a device
