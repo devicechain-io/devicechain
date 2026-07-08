@@ -714,14 +714,24 @@ const queryDashboardVersions = `query($token:String!){dashboardVersions(token:$t
 const mutationCreateDashboard = `mutation($request:DashboardCreateRequest!){` +
 	`createDashboard(request:$request){token}}`
 
+// expectedUpdatedAt is omitted, so the update is UNCONDITIONAL (no optimistic-
+// concurrency precondition) — the sim owns its dashboard and always writes the
+// current spec, it isn't reconciling against a concurrent human editor.
+const mutationUpdateDashboard = `mutation($token:String!,$request:DashboardCreateRequest!){` +
+	`updateDashboard(token:$token,request:$request){token}}`
+
 const mutationPublishDashboard = `mutation($token:String!){publishDashboard(token:$token){version}}`
 
-// ensureDashboard create-or-gets a dashboard by token against
-// dashboard-management, then publishes it if it has no published version yet
-// — the same "existence check gates create, a separate check gates publish"
-// shape ensureProfile uses (deviceProfile's activeVersion there;
-// dashboardVersions here, since Dashboard itself carries no publish-state
-// field).
+// ensureDashboard makes a dashboard match the spec (create-or-UPDATE the draft),
+// then publishes it if it has no published version yet. Updating rather than
+// create-or-getting is deliberate: createDashboard is create-or-get, so a
+// pre-existing dashboard (e.g. from an earlier sim run, or one left behind because
+// deleting the tenant does not yet cascade dashboard-management rows) would keep its
+// stale definition forever and a changed sim spec — a new layout, the fill-area
+// grid-schema cutover — would silently never reach the viewer. The console renders
+// the mutable DRAFT, so syncing the draft is what makes the current spec visible;
+// the publish gate only ensures at least one published version exists (publishing
+// on every run would pile up redundant versions since publish does not de-dup).
 func ensureDashboard(ctx context.Context, rt *Runtime, ds DashboardSpec) error {
 	var existing struct {
 		Dashboard *struct {
@@ -732,13 +742,13 @@ func ensureDashboard(ctx context.Context, rt *Runtime, ds DashboardSpec) error {
 		map[string]any{"token": ds.Token}, &existing); err != nil {
 		return fmt.Errorf("dashboard: %w", err)
 	}
+	req := map[string]any{
+		"token":       ds.Token,
+		"name":        ds.Name,
+		"description": ds.Description,
+		"definition":  ds.Definition,
+	}
 	if existing.Dashboard == nil {
-		req := map[string]any{
-			"token":       ds.Token,
-			"name":        ds.Name,
-			"description": ds.Description,
-			"definition":  ds.Definition,
-		}
 		var created struct {
 			CreateDashboard struct {
 				Token string `json:"token"`
@@ -749,6 +759,17 @@ func ensureDashboard(ctx context.Context, rt *Runtime, ds DashboardSpec) error {
 			return fmt.Errorf("createDashboard: %w", err)
 		}
 		log.Info().Str("token", ds.Token).Msg("created dashboard")
+	} else {
+		var updated struct {
+			UpdateDashboard struct {
+				Token string `json:"token"`
+			} `json:"updateDashboard"`
+		}
+		if err := rt.Session.Query(ctx, rt.Endpoints.DashboardMgmtGraphQL, mutationUpdateDashboard,
+			map[string]any{"token": ds.Token, "request": req}, &updated); err != nil {
+			return fmt.Errorf("updateDashboard: %w", err)
+		}
+		log.Info().Str("token", ds.Token).Msg("updated dashboard")
 	}
 
 	var versions struct {
