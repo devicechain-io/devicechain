@@ -151,7 +151,10 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 				// No Datasource: alarm-table with none is tenant-wide (every alarm
 				// the viewer can see), which is what the demo wants — any of the
 				// 12 thermostats raising MAJOR should show up here.
-				Options: map[string]any{"title": "Alarms", "maxRows": 50},
+				// precision rounds the triggering temperature in the Value column
+				// (matching the latest-values table); a raw alarm lastValue is
+				// otherwise a full-width float.
+				Options: map[string]any{"title": "Alarms", "maxRows": 50, "precision": 1},
 			},
 		},
 	}

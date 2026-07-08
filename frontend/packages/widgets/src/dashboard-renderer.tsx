@@ -18,6 +18,7 @@ import {
   type CanvasBackground,
   type CanvasSizing,
   type DashboardDefinition,
+  type SlotDefinition,
   type WidgetActions,
   type WidgetBox,
   type WidgetDataSource,
@@ -28,6 +29,7 @@ import {
 import { useEffect, useState, type CSSProperties } from 'react';
 
 import { ConnectedWidget } from './connected-widget';
+import { WidgetSubjectProvider } from './frame';
 import { WIDGET_CHANNEL } from './registry';
 
 export interface DashboardRendererProps {
@@ -82,12 +84,14 @@ export function DashboardRenderer({
           const box = resolveWidgetBox(widget.layout, breakpoint);
           return (
             <div key={widget.id} style={gridItemStyle(box, grid.columns)}>
-              <ConnectedWidget
-                widget={widget}
-                hub={hub}
-                actions={actions}
-                initialSamples={histories[widget.id]}
-              />
+              <WidgetSubjectProvider label={widgetSubjectLabel(widget, definition.slots, bindings)}>
+                <ConnectedWidget
+                  widget={widget}
+                  hub={hub}
+                  actions={actions}
+                  initialSamples={histories[widget.id]}
+                />
+              </WidgetSubjectProvider>
             </div>
           );
         })}
@@ -134,6 +138,39 @@ export function sizingStyle(sizing: CanvasSizing, bg: CanvasBackground | undefin
   if (sizing === 'fill') return { ...base, width: '100%', height: '100%' };
   if ('width' in sizing) return { ...base, width: sizing.width, maxWidth: '100%', height: '100%' };
   return { ...base, width: '100%', height: sizing.height };
+}
+
+// ownGet reads a string-keyed map defensively: only an OWN property, so a hand-edited
+// definition naming a slot `__proto__`/`constructor` reads as absent rather than
+// returning a prototype object (the same defense the hub applies to slot lookups).
+function ownGet<T>(map: Record<string, T> | undefined, key: string): T | undefined {
+  return map && Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+}
+
+// widgetSubjectLabel resolves the entity a widget shows — its datasource's bound device
+// or anchor — to a short label for the frame subtitle. A slot selector resolves through
+// the effective `bindings` (host manifest / selection overlay) first, then the slot's own
+// default, so the subtitle always names the CURRENTLY-resolved entity. Returns undefined
+// for a datasource-free widget (label/image), a tenant-wide alarm table, or a reserved
+// selector kind — the frame then shows no subtitle.
+export function widgetSubjectLabel(
+  widget: WidgetInstance,
+  slots: Record<string, SlotDefinition> | undefined,
+  bindings: Record<string, SlotBinding> | undefined,
+): string | undefined {
+  const ds = widget.datasource;
+  if (!ds) return undefined;
+  let binding: SlotBinding | undefined;
+  if (ds.kind === 'device') {
+    binding = ds.deviceToken ? { kind: 'device', deviceToken: ds.deviceToken } : undefined;
+  } else if (ds.kind === 'anchor') {
+    binding = { kind: 'anchor', anchor: ds.anchor };
+  } else if (ds.kind === 'slot') {
+    binding = ownGet(bindings, ds.slot) ?? ownGet(slots, ds.slot)?.defaultBinding;
+  }
+  if (binding?.kind === 'device') return binding.deviceToken;
+  if (binding?.kind === 'anchor') return binding.anchor.targetToken;
+  return undefined;
 }
 
 // useActiveBreakpoint tracks the viewport width and returns the active breakpoint

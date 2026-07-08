@@ -1,9 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import type { SlotBinding, SlotDefinition, WidgetInstance } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
-import { gridItemStyle, sizingStyle } from './dashboard-renderer';
+import { gridItemStyle, sizingStyle, widgetSubjectLabel } from './dashboard-renderer';
+
+// A minimal widget carrying only the datasource the subject resolver reads.
+function widgetWith(datasource: WidgetInstance['datasource']): WidgetInstance {
+  return { id: 'w', type: 'table', layout: { base: { col: 0, colSpan: 1, row: 0, rowSpan: 1, z: 0 } }, datasource };
+}
 
 // gridItemStyle owns the genuinely-new mapping: 0-based span box → CSS grid lines,
 // plus the clamp that keeps a widget inside the fluid column count (an overflow would
@@ -35,6 +41,58 @@ describe('gridItemStyle', () => {
   it('emits a translate transform only when an offset is present', () => {
     const style = gridItemStyle({ col: 0, colSpan: 1, row: 0, rowSpan: 1, z: 0, offset: { x: 5, y: -3 } }, 24);
     expect(style.transform).toBe('translate(5px, -3px)');
+  });
+});
+
+// widgetSubjectLabel resolves the entity a widget shows to the frame subtitle, from a
+// device/anchor selector directly or a slot selector through the effective bindings (with
+// the slot default as fallback) — the "which asset?" answer, updated once selection
+// re-points a slot.
+describe('widgetSubjectLabel', () => {
+  const anchorBinding: SlotBinding = {
+    kind: 'anchor',
+    anchor: { relationship: 'assigned', targetType: 'area', targetToken: 'building-1' },
+  };
+
+  it('names a device selector by its token', () => {
+    expect(widgetSubjectLabel(widgetWith({ kind: 'device', deviceToken: 'bp-therm-001', measurements: [] }), undefined, undefined)).toBe(
+      'bp-therm-001',
+    );
+  });
+
+  it('names an anchor selector by its target token', () => {
+    const w = widgetWith({ kind: 'anchor', anchor: anchorBinding.anchor, measurements: [] });
+    expect(widgetSubjectLabel(w, undefined, undefined)).toBe('building-1');
+  });
+
+  it('resolves a slot through the effective bindings (overlay wins over the slot default)', () => {
+    const slots: Record<string, SlotDefinition> = {
+      s1: { type: 'device', defaultBinding: { kind: 'device', deviceToken: 'default-dev' } },
+    };
+    const bindings: Record<string, SlotBinding> = { s1: { kind: 'device', deviceToken: 'selected-dev' } };
+    const w = widgetWith({ kind: 'slot', slot: 's1', measurements: [] });
+    expect(widgetSubjectLabel(w, slots, bindings)).toBe('selected-dev');
+  });
+
+  it('falls back to a slot default binding when no overlay is present', () => {
+    const slots: Record<string, SlotDefinition> = {
+      s1: { type: 'device', defaultBinding: { kind: 'device', deviceToken: 'default-dev' } },
+    };
+    const w = widgetWith({ kind: 'slot', slot: 's1', measurements: [] });
+    expect(widgetSubjectLabel(w, slots, undefined)).toBe('default-dev');
+  });
+
+  it('returns undefined for a datasource-free widget, an unbound slot, and a reserved kind', () => {
+    expect(widgetSubjectLabel(widgetWith(undefined), undefined, undefined)).toBeUndefined();
+    expect(widgetSubjectLabel(widgetWith({ kind: 'slot', slot: 'missing', measurements: [] }), {}, {})).toBeUndefined();
+    expect(
+      widgetSubjectLabel(widgetWith({ kind: 'devices', deviceTokens: ['a'], measurements: [] }), undefined, undefined),
+    ).toBeUndefined();
+  });
+
+  it('is prototype-safe: a slot named __proto__ resolves as absent, not a prototype object', () => {
+    const w = widgetWith({ kind: 'slot', slot: '__proto__', measurements: [] });
+    expect(widgetSubjectLabel(w, {}, {})).toBeUndefined();
   });
 });
 

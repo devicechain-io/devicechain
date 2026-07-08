@@ -5,18 +5,42 @@
 // that fills its dashboard-canvas slot, with an optional title bar. Styled with
 // inline CSS-variable references so it themes from the host without Tailwind.
 
-import type { CSSProperties, ReactNode } from 'react';
+import { createContext, useContext, type CSSProperties, type ReactNode } from 'react';
 
 import { css } from './theme';
 
+// WidgetSubjectContext carries the resolved entity a widget shows (its datasource's
+// bound device/anchor), computed once by the renderer and provided per widget. The
+// frame reads it as a subtitle so every board answers "which asset is this?" — and,
+// because it reads the RESOLVED binding, it updates for free once selection re-points a
+// slot (ADR-039 selection-overlay amendment). Kept as ambient context, not a widget
+// prop, so the pure widget contract (widget, data) stays untouched and no widget needs
+// to know how a subject is resolved.
+const WidgetSubjectContext = createContext<string | undefined>(undefined);
+
+export function WidgetSubjectProvider({
+  label,
+  children,
+}: {
+  label: string | undefined;
+  children: ReactNode;
+}) {
+  return <WidgetSubjectContext.Provider value={label}>{children}</WidgetSubjectContext.Provider>;
+}
+
 export interface WidgetFrameProps {
   title?: string;
+  // An explicit subject line; when omitted the frame falls back to the resolved-entity
+  // subject from WidgetSubjectContext.
+  subtitle?: string;
   children: ReactNode;
   // Extra style for the body region (e.g. removing padding for a chart canvas).
   bodyStyle?: CSSProperties;
 }
 
-export function WidgetFrame({ title, children, bodyStyle }: WidgetFrameProps) {
+export function WidgetFrame({ title, subtitle, children, bodyStyle }: WidgetFrameProps) {
+  const subject = useContext(WidgetSubjectContext);
+  const sub = subtitle ?? subject;
   return (
     <div
       style={{
@@ -32,17 +56,33 @@ export function WidgetFrame({ title, children, bodyStyle }: WidgetFrameProps) {
         overflow: 'hidden',
       }}
     >
-      {title ? (
+      {title || sub ? (
         <div
           style={{
             padding: '8px 12px',
-            fontSize: 12,
-            fontWeight: 600,
-            color: css('muted-foreground'),
             borderBottom: `1px solid ${css('border')}`,
           }}
         >
-          {title}
+          {title ? (
+            <div style={{ fontSize: 12, fontWeight: 600, color: css('muted-foreground') }}>{title}</div>
+          ) : null}
+          {sub ? (
+            <div
+              title={sub}
+              style={{
+                fontSize: 11,
+                fontWeight: 400,
+                color: css('muted-foreground'),
+                opacity: 0.75,
+                marginTop: title ? 2 : 0,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {sub}
+            </div>
+          ) : null}
         </div>
       ) : null}
       <div style={{ flex: 1, minHeight: 0, ...bodyStyle }}>{children}</div>
