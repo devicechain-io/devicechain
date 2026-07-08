@@ -26,7 +26,7 @@ import {
   type WidgetActions,
   type WidgetDataSource,
 } from '@devicechain/dashboards';
-import { ConnectedWidget } from '@devicechain/widgets';
+import { ConnectedWidget, WidgetSubjectProvider, widgetSubjectLabel } from '@devicechain/widgets';
 import { Rnd } from 'react-rnd';
 
 export interface DashboardCanvasProps {
@@ -134,7 +134,14 @@ export function DashboardCanvas({ definition, onChange, hub, actions, selectedId
                   controls (alarm Ack/Clear) can't fire a real mutation via Tab+Enter mid-
                   layout — pointer-events alone wouldn't stop keyboard activation. */}
               <div inert style={{ width: '100%', height: '100%', pointerEvents: 'none' }}>
-                <ConnectedWidget widget={widget} hub={hub} actions={actions} />
+                {/* Same resolved-entity subtitle the viewer shows, so the widget's frame
+                    (and hence its body height) is WYSIWYG between editing and viewing.
+                    Resolved from the working definition's slot defaults — edit mode has no
+                    live selection overlay (selection is inert here), so the author's own
+                    bindings are the right subject. */}
+                <WidgetSubjectProvider label={widgetSubjectLabel(widget, definition.slots, undefined)}>
+                  <ConnectedWidget widget={widget} hub={hub} actions={actions} />
+                </WidgetSubjectProvider>
               </div>
 
               {selected && (

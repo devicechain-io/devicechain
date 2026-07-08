@@ -14,7 +14,7 @@ import type { AlarmStreamState } from '../hooks';
 import { formatDateTime, formatValue } from '../format';
 import { WidgetFrame } from '../frame';
 import { css } from '../theme';
-import { optString, type WidgetProps } from '../widget';
+import { optNumber, optString, type WidgetProps } from '../widget';
 import { severityColor, severityLabel } from './severity';
 
 const cell: CSSProperties = { padding: '6px 10px', textAlign: 'left', whiteSpace: 'nowrap' };
@@ -44,6 +44,10 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
   // Actions render only when the runtime supplies a seam AND the viewer may write.
   const canAct = actions?.can('alarm:write') ?? false;
   const columns = canAct ? 8 : 7;
+  // Round the triggering value to a fixed precision when configured; unset keeps the raw
+  // value (formatValue's default), matching the table widget. An alarm's raw lastValue is
+  // otherwise a full-width float (e.g. 31.19073834583732).
+  const precision = optNumber(widget.options, 'precision');
 
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
@@ -113,7 +117,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                       <td style={cell} title={alarm.message ?? undefined}>
                         {alarm.alarmKey}
                       </td>
-                      <td style={{ ...cell, textAlign: 'right' }}>{formatValue(alarm.lastValue)}</td>
+                      <td style={{ ...cell, textAlign: 'right' }}>{formatValue(alarm.lastValue, precision)}</td>
                       <td style={{ ...cell, color: css('muted-foreground') }}>
                         {formatDateTime(alarm.raisedTime)}
                       </td>

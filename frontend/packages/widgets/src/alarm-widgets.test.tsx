@@ -68,6 +68,19 @@ describe('AlarmTable', () => {
     expect(screen.getByText('12')).toBeTruthy();
   });
 
+  it('rounds the value column to the configured precision', () => {
+    const alarms = [alarm({ token: 'a-1', lastValue: 31.19073834583732 })];
+    render(<AlarmTable widget={widget('alarm-table', { precision: 1 })} data={state({ alarms, total: 1 })} />);
+    expect(screen.getByText('31.2')).toBeTruthy();
+    expect(screen.queryByText('31.19073834583732')).toBeNull();
+  });
+
+  it('shows the raw value when no precision is configured', () => {
+    const alarms = [alarm({ token: 'a-1', lastValue: 31.19073834583732 })];
+    render(<AlarmTable widget={widget('alarm-table')} data={state({ alarms, total: 1 })} />);
+    expect(screen.getByText('31.19073834583732')).toBeTruthy();
+  });
+
   it('shows "No alarms" when the (loaded) list is empty', () => {
     render(<AlarmTable widget={widget('alarm-table')} data={state({ alarms: [], loading: false })} />);
     expect(screen.getByText('No alarms')).toBeTruthy();
