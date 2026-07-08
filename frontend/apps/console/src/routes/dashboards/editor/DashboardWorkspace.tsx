@@ -24,6 +24,8 @@ import {
   pruneSlots,
   resolveConcrete,
   serializeDefinition,
+  setCanvasGrid,
+  setCanvasSizing,
   setTitle,
   stripDefaultBindings,
   updateWidget,
@@ -31,6 +33,7 @@ import {
   SyntheticDataSource,
   SYNTHETIC_GENERATORS,
   WIDGET_TYPES,
+  type CanvasSizing,
   type ConcreteSelector,
   type DashboardDefinition,
   type DeviceResolver,
@@ -73,6 +76,105 @@ function useDebouncedValue<T>(value: T, key: string, ms: number): T {
     return () => clearTimeout(t);
   }, [key, ms]);
   return debounced;
+}
+
+// CanvasSettings — the grid-level knobs (ADR-039 amendment): column count, gutter,
+// row height, and how the board sizes into its container (fill / fixed width / fixed
+// height). Columns is high-res (24–48) so span placement stays near-free; sizing is
+// the "fill an area vs. fixed pixels" control. A compact bar next to the title.
+function CanvasSettings({
+  definition,
+  onChange,
+}: {
+  definition: DashboardDefinition;
+  onChange: (next: DashboardDefinition) => void;
+}) {
+  const { grid, sizing } = definition.canvas;
+  const gap = typeof grid.gap === 'number' ? grid.gap : grid.gap.row;
+  const mode: 'fill' | 'width' | 'height' = sizing === 'fill' ? 'fill' : 'width' in sizing ? 'width' : 'height';
+  const fixedPx = sizing === 'fill' ? 1200 : 'width' in sizing ? sizing.width : sizing.height;
+
+  const setMode = (next: 'fill' | 'width' | 'height') => {
+    const value: CanvasSizing =
+      next === 'fill' ? 'fill' : next === 'width' ? { width: fixedPx } : { height: fixedPx };
+    onChange(setCanvasSizing(definition, value));
+  };
+  const setFixedPx = (px: number) =>
+    onChange(setCanvasSizing(definition, mode === 'width' ? { width: px } : { height: px }));
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <NumberField
+        label="Columns"
+        value={grid.columns}
+        min={1}
+        onChange={(v) => onChange(setCanvasGrid(definition, { columns: v }))}
+      />
+      <NumberField
+        label="Row height"
+        value={grid.rowHeight}
+        min={1}
+        onChange={(v) => onChange(setCanvasGrid(definition, { rowHeight: v }))}
+      />
+      <NumberField
+        label="Gap"
+        value={gap}
+        min={0}
+        onChange={(v) => onChange(setCanvasGrid(definition, { gap: v }))}
+      />
+      <div className="flex items-center gap-2">
+        <label className="text-sm text-muted-foreground">Size</label>
+        <Combobox
+          options={[
+            { value: 'fill', label: 'Fill area' },
+            { value: 'width', label: 'Fixed width' },
+            { value: 'height', label: 'Fixed height' },
+          ]}
+          value={mode}
+          onChange={(v) => setMode(v as 'fill' | 'width' | 'height')}
+          allowClear={false}
+          className="h-9 w-36"
+        />
+        {mode !== 'fill' && (
+          <NumberField label="px" value={fixedPx} min={1} onChange={setFixedPx} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// NumberField — a labelled compact integer input that only commits finite values (a
+// transient empty/NaN input keeps the last good value rather than writing a 0/NaN box).
+function NumberField({
+  label,
+  value,
+  min,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <label className="whitespace-nowrap text-sm text-muted-foreground">{label}</label>
+      <Input
+        type="number"
+        min={min}
+        value={value}
+        onChange={(e) => {
+          // An empty field is a transient edit state, not a value — committing it
+          // would read `Number('') === 0` and (for a min-0 field like Gap) snap 0 back
+          // into the box the user just cleared. Only commit a real in-range number.
+          if (e.target.value === '') return;
+          const v = Number(e.target.value);
+          if (Number.isFinite(v) && v >= min) onChange(v);
+        }}
+        className="h-9 w-20"
+      />
+    </div>
+  );
 }
 
 // applyDatasource maps a config-panel edit (a slot-free device/anchor view, or None)
@@ -448,17 +550,20 @@ export function DashboardWorkspace({
       // nested scrollbar even when the content fit.
       subHeader={
         mode === 'edit' ? (
-          <div className="flex items-center gap-3 px-6 py-2">
-            <label htmlFor="dash-title" className="text-sm text-muted-foreground">
-              Title
-            </label>
-            <Input
-              id="dash-title"
-              value={working.title}
-              onChange={(e) => setWorking(setTitle(working, e.target.value))}
-              placeholder="Dashboard title"
-              className="max-w-sm"
-            />
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-6 py-2">
+            <div className="flex items-center gap-3">
+              <label htmlFor="dash-title" className="text-sm text-muted-foreground">
+                Title
+              </label>
+              <Input
+                id="dash-title"
+                value={working.title}
+                onChange={(e) => setWorking(setTitle(working, e.target.value))}
+                placeholder="Dashboard title"
+                className="max-w-sm"
+              />
+            </div>
+            <CanvasSettings definition={working} onChange={setWorking} />
           </div>
         ) : undefined
       }

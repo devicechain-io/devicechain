@@ -13,7 +13,7 @@ Available: the canvas editor, the built-in widget set (telemetry, alarm, and com
 
 ## The canvas
 
-A dashboard is a **canvas** of positioned widgets — absolute position and size, z-order / layering, an optional background image or color, and snap-to-grid. Because the layout is a canvas rather than a rigid grid, widgets can overlap and layer (for example, cards over a floor-plan image). Layouts are **per-breakpoint**, so a dashboard can arrange differently on different screen sizes.
+A dashboard lays widgets out on a **fluid CSS grid**: a high-resolution column grid (widgets are placed by column/row span, not fixed pixels), z-order / layering, an optional per-widget pixel offset for fine nudging or overlap, and an optional background image or color. Because the columns are fractional, a dashboard **fills the width of whatever container it is mounted in** — a panel, a fixed-width frame, or a full page — and a mount-time sizing knob (`fill`, fixed width, or fixed height) lets the host choose. Snap-to-grid is inherent to the grid, and because widgets can share cells and layer by z, they can still overlap (for example, cards over a floor-plan image). Layouts are **per-breakpoint**, so a dashboard can arrange differently on different screen sizes.
 
 ## Widgets
 

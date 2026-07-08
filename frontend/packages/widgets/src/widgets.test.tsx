@@ -45,7 +45,7 @@ const widget = (
 ): WidgetInstance => ({
   id: 'w',
   type,
-  layout: { base: { x: 0, y: 0, w: 2, h: 2, z: 1 } },
+  layout: { base: { col: 0, colSpan: 2, row: 0, rowSpan: 2, z: 1 } },
   datasource,
   options,
 });

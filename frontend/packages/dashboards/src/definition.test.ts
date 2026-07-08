@@ -14,16 +14,52 @@ import {
   serializeDefinition,
 } from './definition';
 
-const box = (over = {}) => ({ x: 0, y: 0, w: 4, h: 3, z: 0, ...over });
+const box = (over = {}) => ({ col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0, ...over });
 
 describe('parseDashboardDefinition', () => {
   it('fills defaults for a minimal definition', () => {
     const def = parseDashboardDefinition({ widgets: [] });
     expect(def.schemaVersion).toBe(1);
     expect(def.title).toBe('');
-    expect(def.canvas.grid).toEqual({ snap: true, size: 8 });
+    expect(def.canvas.grid).toEqual({ columns: 24, gap: 8, rowHeight: 40 });
+    expect(def.canvas.sizing).toBe('fill');
     expect(def.canvas.breakpoints[BASE_BREAKPOINT]).toBe(0); // base always present
     expect(def.widgets).toEqual([]);
+  });
+
+  it('coerces the grid (clamps columns/rowHeight, accepts a {row,col} gap) and sizing', () => {
+    const def = parseDashboardDefinition({
+      widgets: [],
+      canvas: {
+        grid: { columns: 0, gap: { row: 4, col: 12 }, rowHeight: -5 },
+        sizing: { width: 1200 },
+      },
+    });
+    expect(def.canvas.grid).toEqual({ columns: 1, gap: { row: 4, col: 12 }, rowHeight: 1 });
+    expect(def.canvas.sizing).toEqual({ width: 1200 });
+  });
+
+  it('parses a fixed-height sizing and an offset on a box', () => {
+    const def = parseDashboardDefinition({
+      widgets: [
+        { type: 'label', layout: { base: { ...box(), offset: { x: 5, y: -3 } } } },
+      ],
+      canvas: { sizing: { height: 800 } },
+    });
+    expect(def.canvas.sizing).toEqual({ height: 800 });
+    expect(def.widgets[0].layout.base.offset).toEqual({ x: 5, y: -3 });
+  });
+
+  it('defaults a partial {row,col} gap’s missing axis to the default gutter, not 0', () => {
+    const def = parseDashboardDefinition({ widgets: [], canvas: { grid: { gap: { row: 12 } } } });
+    expect(def.canvas.grid.gap).toEqual({ row: 12, col: 8 });
+  });
+
+  it('rounds a fractional z (invalid CSS zIndex silently drops to auto otherwise)', () => {
+    const def = parseDashboardDefinition({
+      widgets: [{ type: 'label', layout: { base: { ...box(), z: 1.6 } } }],
+    });
+    expect(def.widgets[0].layout.base.z).toBe(2);
   });
 
   it('keeps a valid widget and its datasource/options', () => {
@@ -148,9 +184,9 @@ describe('parseDashboardDefinition', () => {
 
 describe('resolveWidgetBox', () => {
   it('returns the breakpoint box when present, else falls back to base', () => {
-    const layout = { base: box({ w: 4 }), tablet: box({ w: 8 }) };
-    expect(resolveWidgetBox(layout, 'tablet').w).toBe(8);
-    expect(resolveWidgetBox(layout, 'mobile').w).toBe(4); // no 'mobile' → base
+    const layout = { base: box({ colSpan: 4 }), tablet: box({ colSpan: 8 }) };
+    expect(resolveWidgetBox(layout, 'tablet').colSpan).toBe(8);
+    expect(resolveWidgetBox(layout, 'mobile').colSpan).toBe(4); // no 'mobile' → base
   });
 });
 

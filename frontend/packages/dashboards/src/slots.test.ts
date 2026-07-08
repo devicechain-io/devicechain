@@ -23,7 +23,7 @@ const anchorSel = (targetToken: string, extra: Partial<DatasourceSelector> = {})
     ...extra,
   }) as DatasourceSelector;
 
-const box = { x: 0, y: 0, w: 4, h: 3, z: 0 };
+const box = { col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0 };
 
 function widget(id: string, datasource?: WidgetInstance['datasource']): WidgetInstance {
   return { id, type: 'gauge', layout: { base: box }, ...(datasource ? { datasource } : {}) };
@@ -33,7 +33,7 @@ function def(widgets: WidgetInstance[], slots?: DashboardDefinition['slots']): D
   return {
     schemaVersion: 1,
     title: 'T',
-    canvas: { grid: { snap: true, size: 8 }, breakpoints: { base: 0 } },
+    canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
     widgets,
     ...(slots ? { slots } : {}),
   };

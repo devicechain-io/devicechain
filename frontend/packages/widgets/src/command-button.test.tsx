@@ -13,7 +13,7 @@ import { CommandButton } from './widgets/command-button';
 const widget = (options: Record<string, unknown> = {}): WidgetInstance => ({
   id: 'w',
   type: 'command-button',
-  layout: { base: { x: 0, y: 0, w: 2, h: 2, z: 1 } },
+  layout: { base: { col: 0, colSpan: 2, row: 0, rowSpan: 2, z: 1 } },
   datasource: { kind: 'device', deviceToken: 'therm-1', measurements: [] },
   options,
 });
