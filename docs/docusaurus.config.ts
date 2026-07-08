@@ -5,7 +5,7 @@ import { themes as prismThemes } from 'prism-react-renderer';
 const config: Config = {
   title: 'DeviceChain',
   tagline: 'A modern, cloud-native IoT Application Enablement Platform',
-  favicon: 'img/favicon.ico',
+  favicon: 'img/favicon.svg',
 
   url: 'https://docs.devicechain.io',
   baseUrl: '/',
@@ -41,6 +41,10 @@ const config: Config = {
   themeConfig: {
     navbar: {
       title: 'DeviceChain',
+      logo: {
+        alt: 'DeviceChain',
+        src: 'img/logo.svg',
+      },
       items: [
         { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs' },
         {

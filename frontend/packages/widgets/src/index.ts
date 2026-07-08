@@ -19,6 +19,7 @@ export {
   WIDGET_REGISTRY,
   ALARM_WIDGET_REGISTRY,
   CONTROL_WIDGET_REGISTRY,
+  SELECTION_WIDGET_REGISTRY,
   WIDGET_CHANNEL,
   type WidgetChannel,
 } from './registry';
@@ -43,6 +44,7 @@ export { Image } from './widgets/image';
 export { AlarmTable } from './widgets/alarm-table';
 export { AlarmCount } from './widgets/alarm-count';
 export { CommandButton } from './widgets/command-button';
+export { EntitySelector } from './widgets/entity-selector';
 export {
   severityColor,
   severityLabel,
@@ -64,8 +66,11 @@ export {
   WidgetSubjectProvider,
   WidgetSelectProvider,
   useWidgetSelect,
+  WidgetCandidatesProvider,
+  useWidgetCandidates,
   type WidgetFrameProps,
   type WidgetSelect,
+  type WidgetCandidates,
 } from './frame';
 export { EChart, type EChartOption } from './echart';
 export {
@@ -74,10 +79,13 @@ export {
   useCommandStream,
   useDatasourceAvailability,
   useResolvedBindings,
+  useSlotCandidates,
+  useCandidates,
   useChartTheme,
   type MeasurementStreamState,
   type AlarmStreamState,
   type CommandStreamState,
+  type CandidatesState,
   type DatasourceAvailability,
 } from './hooks';
 export {

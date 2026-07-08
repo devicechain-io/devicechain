@@ -9,12 +9,14 @@
 // identical bindings collapse into ONE shared slot (dedup) — so a host manifest
 // binds each real entity once, and CompositeWidget-style sharing falls out for free.
 
+import { canScopeSlot } from './definition';
 import type {
   AnchorTarget,
   DashboardDefinition,
   DatasourceSelector,
   SlotBinding,
   SlotDefinition,
+  SlotScope,
   WidgetInstance,
 } from './types';
 
@@ -144,7 +146,15 @@ export function pruneSlots(def: DashboardDefinition): DashboardDefinition {
   if (!def.slots) return def;
   const defSlots = def.slots;
   const used = new Set<string>();
-  for (const w of def.widgets) if (w.datasource?.kind === 'slot') used.add(w.datasource.slot);
+  for (const w of def.widgets) {
+    if (w.datasource?.kind === 'slot') used.add(w.datasource.slot);
+    // A widget can also REFERENCE a slot without binding it: a context/entity-selector's
+    // (and an alarm-table drill's) `options.selectionTarget` names the slot it re-points.
+    // Miss it and deleting the data widget that binds that slot would prune it out from
+    // under the selector — a silent "No options". Count it as a use.
+    const target = w.options?.selectionTarget;
+    if (typeof target === 'string' && target.length > 0) used.add(target);
+  }
   // Close `used` over scope.parent: a context-only parent slot (e.g. a root 'building'
   // that no widget binds directly but a scoped child depends on) must be kept, or the
   // child dangles and the cascade loses its top-level context. Walk each used slot's
@@ -165,6 +175,38 @@ export function pruneSlots(def: DashboardDefinition): DashboardDefinition {
     const { slots: _drop, ...rest } = def;
     return rest;
   }
+  return { ...def, slots };
+}
+
+// anchorSlotNames lists the dashboard's anchor-typed slots — the candidate PARENTS a
+// scoped slot may attach to (an editor's parent picker), and the slots a root context-
+// selector can target. Empty when the dashboard has no slots.
+export function anchorSlotNames(def: DashboardDefinition): string[] {
+  const slots = def.slots ?? {};
+  return Object.keys(slots).filter((name) => slots[name].type === 'anchor');
+}
+
+// setSlotScope makes `slotName` scoped to a parent (the context hierarchy) or, with
+// `scope` undefined, clears its scope back to a root context — the editor's scope-authoring
+// transform. It is a no-op when the slot doesn't exist, or when the proposed scope is
+// invalid (canScopeSlot: parent missing/non-anchor/self/cycle) — degrade, never write a
+// scope the loader would drop on reload. Prototype-free (operates on the parsed slots map).
+export function setSlotScope(
+  def: DashboardDefinition,
+  slotName: string,
+  scope: SlotScope | undefined,
+): DashboardDefinition {
+  if (!def.slots || !Object.prototype.hasOwnProperty.call(def.slots, slotName)) return def;
+  const slots: Record<string, SlotDefinition> = { ...def.slots };
+  const current = slots[slotName];
+  if (!scope) {
+    if (!current.scope) return def; // already root — no-op (keeps the reference stable)
+    const { scope: _drop, ...rest } = current;
+    slots[slotName] = rest;
+    return { ...def, slots };
+  }
+  if (!canScopeSlot(slots, slotName, scope.parent)) return def;
+  slots[slotName] = { ...current, scope: { parent: scope.parent, strategy: scope.strategy } };
   return { ...def, slots };
 }
 

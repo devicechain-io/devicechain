@@ -208,15 +208,34 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 				Scope:          &dashboardScope{Parent: slotBuilding, Strategy: "manual"},
 			},
 		},
-		// Span placement on the 24-column grid: a wide temperature chart and a
-		// latest-values table side by side across the top (14 + 10 = 24 columns, 8
-		// rows tall), with a full-width alarm table beneath them (all 24 columns, 6
-		// rows). The columns are fluid, so this fills the viewer at any width.
+		// Span placement on the 24-column grid: a top band of two context selectors
+		// (building + thermostat, 2 rows tall), then a wide temperature chart and a
+		// latest-values table side by side (14 + 10 = 24 columns, 8 rows tall), with a
+		// full-width alarm table beneath (all 24 columns, 6 rows). The columns are fluid,
+		// so this fills the viewer at any width.
 		Widgets: []dashboardWidget{
+			{
+				// Root context-selector: pick which building the whole dashboard shows.
+				// Re-points the `building` anchor slot; the cascade fans the change out to
+				// its scoped child (selectedThermostat) so every widget follows.
+				Id:      "w-building-select",
+				Type:    "entity-selector",
+				Layout:  baseLayout(0, 12, 0, 2, 0),
+				Options: map[string]any{"title": "Building", "selectionTarget": slotBuilding},
+			},
+			{
+				// Member selector: pick which thermostat within the selected building the
+				// per-device widgets (chart + table) show — the manual companion to the
+				// alarm-originator drill.
+				Id:      "w-thermostat-select",
+				Type:    "entity-selector",
+				Layout:  baseLayout(12, 12, 0, 2, 0),
+				Options: map[string]any{"title": "Thermostat", "selectionTarget": slotSelectedThermostat},
+			},
 			{
 				Id:     "w-chart",
 				Type:   "timeseries-chart",
-				Layout: baseLayout(0, 14, 0, 8, 0),
+				Layout: baseLayout(0, 14, 2, 8, 0),
 				Datasource: &dashboardDatasource{
 					Kind:         "slot",
 					Slot:         slotSelectedThermostat,
@@ -227,7 +246,7 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 			{
 				Id:     "w-table",
 				Type:   "table",
-				Layout: baseLayout(14, 10, 0, 8, 0),
+				Layout: baseLayout(14, 10, 2, 8, 0),
 				Datasource: &dashboardDatasource{
 					Kind:         "slot",
 					Slot:         slotSelectedThermostat,
@@ -241,7 +260,7 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 			{
 				Id:     "w-alarms",
 				Type:   "alarm-table",
-				Layout: baseLayout(0, 24, 8, 6, 0),
+				Layout: baseLayout(0, 24, 10, 6, 0),
 				// Scoped to the building: only this building's thermostats' alarms show
 				// (the per-building context Derek asked for). selectionTarget names the
 				// slot an originator drill re-points — click an alarm's device and the

@@ -7,7 +7,7 @@
 
 import { createContext, useContext, type CSSProperties, type ReactNode } from 'react';
 
-import type { SelectionTarget } from '@devicechain/dashboards';
+import type { SelectionCandidate, SelectionTarget } from '@devicechain/dashboards';
 
 import { css } from './theme';
 
@@ -55,6 +55,33 @@ export function WidgetSelectProvider({
 // when this is defined.
 export function useWidgetSelect(): WidgetSelect | undefined {
   return useContext(WidgetSelectContext);
+}
+
+// WidgetCandidates is the ambient companion to WidgetSelect (ADR-039 selection amendment): a
+// context/entity-selector widget asks it for the options a target slot may bind to. The host
+// computes candidates from the definition's scope + resolved bindings (useSlotCandidates), so
+// the widget stays presentational and the pure widget contract stays untouched. Distinct from
+// the hub's data channels — candidates are a fetch-on-open list, not a live stream. Undefined
+// where not wired (edit/preview, a host that supplies no selection) → the selector is inert.
+export type WidgetCandidates = (slot: string) => Promise<SelectionCandidate[]>;
+
+const WidgetCandidatesContext = createContext<WidgetCandidates | undefined>(undefined);
+
+export function WidgetCandidatesProvider({
+  candidates,
+  children,
+}: {
+  candidates: WidgetCandidates | undefined;
+  children: ReactNode;
+}) {
+  return <WidgetCandidatesContext.Provider value={candidates}>{children}</WidgetCandidatesContext.Provider>;
+}
+
+// useWidgetCandidates returns the ambient candidate provider, or undefined where selection is
+// not wired. A selector widget renders its picker only when both this and useWidgetSelect are
+// defined.
+export function useWidgetCandidates(): WidgetCandidates | undefined {
+  return useContext(WidgetCandidatesContext);
 }
 
 export interface WidgetFrameProps {

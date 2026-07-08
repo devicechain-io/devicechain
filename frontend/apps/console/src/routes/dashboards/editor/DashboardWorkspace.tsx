@@ -16,6 +16,7 @@ import {
   addWidget,
   bindWidgetSlot,
   clearWidgetDatasource,
+  createEntityLister,
   DashboardHub,
   effectiveBindings,
   isDirty,
@@ -26,6 +27,7 @@ import {
   serializeDefinition,
   setCanvasGrid,
   setCanvasSizing,
+  setSlotScope,
   setTitle,
   stripDefaultBindings,
   updateWidget,
@@ -42,7 +44,7 @@ import {
   type SyntheticGenerator,
   type WidgetType,
 } from '@devicechain/dashboards';
-import { DashboardRenderer, useResolvedBindings } from '@devicechain/widgets';
+import { DashboardRenderer, useResolvedBindings, useSlotCandidates } from '@devicechain/widgets';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -292,6 +294,12 @@ export function DashboardWorkspace({
   const base = useMemo(() => effectiveBindings(working), [working]);
   const bindings = useResolvedBindings(working, base, selection, resolver);
   const bindingsKey = useMemo(() => JSON.stringify(bindings), [bindings]);
+  // The context/entity-selector candidate provider (ADR-039 selection amendment): a
+  // scoped slot's members come from the resolver, a root slot's from the tenant entity
+  // lister. Rebuilt with the resolved bindings so a parent switch refreshes a member
+  // picker. Passed to the view-mode renderer only (edit mode's canvas wires no selection).
+  const entityLister = useMemo(() => createEntityLister(), []);
+  const candidates = useSlotCandidates(working, bindings, resolver, entityLister);
   // Debounce the manifest that drives the (expensive) hub reconstruction so rapid
   // binding edits (e.g. typing an anchor relationship) coalesce into ONE rebuild rather
   // than tearing down every widget's stream per keystroke.
@@ -633,8 +641,16 @@ export function DashboardWorkspace({
               datasource={resolveConcrete(working, selected)}
               slotName={widgetSlotName(selected)}
               slotScoped={isSlotScoped(working, widgetSlotName(selected))}
+              slots={working.slots}
               onChange={(next) => setWorking(updateWidget(working, next.id, next))}
               onDatasource={(ds) => setWorking(applyDatasource(working, selected.id, ds))}
+              // Scope the selected widget's slot (parent + strategy), or clear it. setSlotScope
+              // validates (parent exists/anchor/no cycle) and no-ops an invalid change. Prune
+              // afterwards is unnecessary — scope never orphans a slot.
+              onScope={(scope) => {
+                const slot = widgetSlotName(selected);
+                if (slot) setWorking((w) => setSlotScope(w, slot, scope));
+              }}
               onClose={() => setSelectedId(null)}
             />
           )}
@@ -654,6 +670,9 @@ export function DashboardWorkspace({
             // tokens, and a drill would poison the live selection overlay with a token
             // that's not a real member (blanking the widgets after preview is turned off).
             select={preview ? undefined : select}
+            // Selector candidates likewise off in preview — synthetic data has no real
+            // entities to offer, and a pick would poison the live overlay.
+            candidates={preview ? undefined : candidates}
           />
         </div>
       )}

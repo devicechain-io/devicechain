@@ -5,15 +5,17 @@ import { describe, expect, it } from 'vitest';
 
 import { parseDashboardDefinition, serializeDefinition } from './definition';
 import {
+  anchorSlotNames,
   bindWidgetSlot,
   clearWidgetDatasource,
   migrateToSlots,
   pruneSlots,
   resolveConcrete,
   sameBinding,
+  setSlotScope,
   widgetBinding,
 } from './slots';
-import type { DashboardDefinition, DatasourceSelector, SlotBinding, WidgetInstance } from './types';
+import type { DashboardDefinition, DatasourceSelector, SlotBinding, SlotDefinition, WidgetInstance } from './types';
 
 const anchorSel = (targetToken: string, extra: Partial<DatasourceSelector> = {}): DatasourceSelector =>
   ({
@@ -213,5 +215,75 @@ describe('scope-aware slot helpers', () => {
     // `building` is kept even though no widget binds it directly — the child's scope.parent
     // closure keeps it, or the cascade would lose its top-level context.
     expect(Object.keys(pruned.slots!).sort()).toEqual(['building', 'therm']);
+  });
+});
+
+// slot definition helper for the scope-authoring transforms.
+const scopeDef = (slots: Record<string, SlotDefinition>): DashboardDefinition => ({
+  schemaVersion: 1,
+  title: '',
+  canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+  widgets: [],
+  slots,
+});
+
+describe('anchorSlotNames', () => {
+  it('lists only anchor-typed slots', () => {
+    const def = scopeDef({
+      building: { type: 'anchor' },
+      floor: { type: 'anchor' },
+      therm: { type: 'device' },
+    });
+    expect(anchorSlotNames(def).sort()).toEqual(['building', 'floor']);
+  });
+
+  it('is empty for a slot-free dashboard', () => {
+    expect(anchorSlotNames(scopeDef({}))).toEqual([]);
+  });
+});
+
+describe('setSlotScope', () => {
+  it('scopes a device slot to an anchor parent', () => {
+    const def = scopeDef({ building: { type: 'anchor' }, therm: { type: 'device' } });
+    const next = setSlotScope(def, 'therm', { parent: 'building', strategy: 'manual' });
+    expect(next.slots!.therm.scope).toEqual({ parent: 'building', strategy: 'manual' });
+  });
+
+  it('clears a scope back to root', () => {
+    const def = scopeDef({
+      building: { type: 'anchor' },
+      therm: { type: 'device', scope: { parent: 'building', strategy: 'first' } },
+    });
+    const next = setSlotScope(def, 'therm', undefined);
+    expect(next.slots!.therm.scope).toBeUndefined();
+  });
+
+  it('no-ops (same reference) clearing an already-root slot', () => {
+    const def = scopeDef({ therm: { type: 'device' } });
+    expect(setSlotScope(def, 'therm', undefined)).toBe(def);
+  });
+
+  it('rejects a non-anchor parent (no-op)', () => {
+    const def = scopeDef({ gw: { type: 'device' }, therm: { type: 'device' } });
+    expect(setSlotScope(def, 'therm', { parent: 'gw', strategy: 'first' })).toBe(def);
+  });
+
+  it('rejects a self-referential scope (no-op)', () => {
+    const def = scopeDef({ a: { type: 'anchor' } });
+    expect(setSlotScope(def, 'a', { parent: 'a', strategy: 'first' })).toBe(def);
+  });
+
+  it('rejects a scope that would create a cycle (no-op)', () => {
+    // a←b already; scoping b's parent to a's descendant (a→b) would loop.
+    const def = scopeDef({
+      a: { type: 'anchor', scope: { parent: 'b', strategy: 'first' } },
+      b: { type: 'anchor' },
+    });
+    expect(setSlotScope(def, 'b', { parent: 'a', strategy: 'first' })).toBe(def);
+  });
+
+  it('no-ops on an unknown slot', () => {
+    const def = scopeDef({ building: { type: 'anchor' } });
+    expect(setSlotScope(def, 'nope', { parent: 'building', strategy: 'first' })).toBe(def);
   });
 });

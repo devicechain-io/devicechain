@@ -10,14 +10,22 @@ import type {
   CommandSubscription,
   DashboardDefinition,
   DatasourceSelector,
+  EntityCandidateLister,
   MemberResolver,
   MeasurementSample,
+  SelectionCandidate,
   SlotBinding,
   WidgetDataSource,
 } from '@devicechain/dashboards';
-import { bindingsWithoutScopedSlots, hasScopedSlots, resolveContextBindings } from '@devicechain/dashboards';
+import {
+  bindingsWithoutScopedSlots,
+  hasScopedSlots,
+  resolveContextBindings,
+  resolveSlotCandidates,
+} from '@devicechain/dashboards';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 
+import { useWidgetCandidates, type WidgetCandidates } from './frame';
 import { resolveChartTheme, type ChartTheme } from './theme';
 
 // useResolvedBindings runs the scoped-slot cascade (ADR-039 selection amendment) for a
@@ -87,6 +95,84 @@ function sameBindings(a: Record<string, SlotBinding>, b: Record<string, SlotBind
     if (JSON.stringify(a[ak[i]]) !== JSON.stringify(b[bk[i]])) return false;
   }
   return true;
+}
+
+// useSlotCandidates builds the ambient candidate provider a host passes to the renderer
+// (ADR-039 selection amendment): a function slot→candidates that a context/entity-selector
+// widget calls. It closes over the CURRENT resolved bindings, so it is rebuilt whenever a
+// binding changes — a selector's option set (a scoped child's members) then follows the
+// parent for free, and a widget re-fetches because the provider identity changed. Returns
+// undefined when no lister is supplied (a host that wires no selection), so the selector
+// stays inert. Keyed by the bindings' VALUE so an equal-but-new bindings object doesn't
+// churn the provider (and every open selector's fetch) each render.
+export function useSlotCandidates(
+  definition: DashboardDefinition,
+  bindings: Record<string, SlotBinding>,
+  resolver: MemberResolver,
+  lister: EntityCandidateLister | undefined,
+): WidgetCandidates | undefined {
+  const bindingsKey = JSON.stringify(bindings);
+  return useMemo(
+    () => {
+      if (!lister) return undefined;
+      return (slot: string) => resolveSlotCandidates(definition, slot, bindings, resolver, lister);
+    },
+    // bindings read via bindingsKey (value identity), not reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [definition, bindingsKey, resolver, lister],
+  );
+}
+
+// The state a selector widget renders from: the target slot's current candidate options,
+// plus load/error flags. `wired` reports whether an ambient candidate provider exists — a
+// selector feature-detects on it (with the select callback) to stay inert where selection
+// isn't wired (edit/preview, a host that supplies no lister) rather than showing a dead picker.
+export interface CandidatesState {
+  candidates: SelectionCandidate[];
+  loading: boolean;
+  error: unknown | null;
+  wired: boolean;
+}
+
+// useCandidates resolves the options a selector widget offers for `slot` through the ambient
+// candidate provider. Re-fetches when the provider (i.e. the resolved bindings) or the slot
+// changes, guarded by a monotonic generation so a slow list can't overwrite a newer one
+// (the parent-switch-then-open race). Fail-safe: an error yields an empty option set.
+export function useCandidates(slot: string | undefined): CandidatesState {
+  const provider = useWidgetCandidates();
+  const wired = !!provider;
+  // Seed loading true when a fetch is imminent (provider + slot present) so the first paint
+  // reads "Loading…", not a spurious "No options" for the frame before the effect runs.
+  const [state, setState] = useState<Omit<CandidatesState, 'wired'>>(() => ({
+    candidates: [],
+    loading: Boolean(provider && slot),
+    error: null,
+  }));
+  const genRef = useRef(0);
+
+  useEffect(() => {
+    if (!provider || !slot) {
+      setState({ candidates: [], loading: false, error: null });
+      return;
+    }
+    const gen = ++genRef.current;
+    let live = true;
+    // Clear any prior error when a fresh (healthy) fetch starts, so a retry doesn't show
+    // "Loading…" and a stale error banner together.
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+    provider(slot)
+      .then((candidates) => {
+        if (live && gen === genRef.current) setState({ candidates, loading: false, error: null });
+      })
+      .catch((error: unknown) => {
+        if (live && gen === genRef.current) setState({ candidates: [], loading: false, error });
+      });
+    return () => {
+      live = false;
+    };
+  }, [provider, slot]);
+
+  return { ...state, wired };
 }
 
 export interface MeasurementStreamState {

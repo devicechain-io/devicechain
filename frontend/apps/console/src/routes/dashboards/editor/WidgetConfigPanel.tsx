@@ -18,6 +18,8 @@ import type {
   ConcreteSelector,
   DatasourceSelector,
   DeviceSelector,
+  SlotDefinition,
+  SlotScope,
   WidgetInstance,
   WidgetType,
 } from '@devicechain/dashboards';
@@ -78,6 +80,16 @@ const TARGET_TYPE_OPTIONS: ComboboxOption[] = [
   { value: 'asset', label: 'Asset' },
 ];
 
+const CONTEXT_MODE_OPTIONS: ComboboxOption[] = [
+  { value: 'root', label: 'Root context' },
+  { value: 'scoped', label: 'Scoped to a parent' },
+];
+
+const SCOPE_STRATEGY_OPTIONS: ComboboxOption[] = [
+  { value: 'first', label: 'First member' },
+  { value: 'manual', label: 'Manual pick' },
+];
+
 export interface WidgetConfigPanelProps {
   widget: WidgetInstance;
   // The widget's data source resolved to a slot-free entity view (device/anchor +
@@ -88,13 +100,19 @@ export interface WidgetConfigPanelProps {
   // see it's slot-backed (matters for export). undefined when unbound.
   slotName?: string;
   // Whether that slot is SCOPED (context-driven). A scoped slot's entity is derived by the
-  // cascade, not chosen here, so the datasource is shown read-only — editing it would be
-  // silently ignored (the workspace guards it), and scope authoring is a later slice.
+  // cascade from its parent, not chosen here, so the entity is shown read-only; the scope
+  // itself (parent + strategy) IS authored here via onScope.
   slotScoped?: boolean;
+  // The dashboard's slots — the candidate PARENTS for scope authoring and the candidate
+  // TARGETS for an entity-selector widget. Undefined on a slot-free dashboard.
+  slots?: Record<string, SlotDefinition>;
   // Title/text/type-specific option edits (widget-only; datasource is separate).
   onChange: (next: WidgetInstance) => void;
   // Data-source edits: the new entity view, or undefined for "None".
   onDatasource: (next: ConcreteSelector | undefined) => void;
+  // Set (or, with undefined, clear) the scope of the selected widget's slot — the scoped-slot
+  // context authoring (ADR-039). Undefined when the widget has no slot to scope.
+  onScope?: (scope: SlotScope | undefined) => void;
   onClose: () => void;
 }
 
@@ -103,8 +121,10 @@ export function WidgetConfigPanel({
   datasource,
   slotName,
   slotScoped,
+  slots,
   onChange,
   onDatasource,
+  onScope,
   onClose,
 }: WidgetConfigPanelProps) {
   // Read/write a single options key, dropping it when cleared so the widget falls
@@ -145,56 +165,78 @@ export function WidgetConfigPanel({
       <div className="space-y-4">
         <TitleFields widget={widget} setOption={setOption} />
 
-        {DATA_WIDGETS.has(widget.type) && slotScoped && (
-          // A scoped slot is context-driven: its entity is set by the dashboard's selected
-          // context (and any drill-down), not chosen here. Show it read-only so an edit
-          // isn't silently ignored; wiring the context is a later slice.
-          <div className="space-y-2 rounded-md border border-border p-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Data source
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Set by the dashboard context
-              {slotName && (
-                <>
-                  {' '}
-                  (slot <span className="font-mono">{slotName}</span>)
-                </>
-              )}
-              . This widget follows the selected context and any drill-down; configuring the
-              context arrives in a later update.
-            </p>
-          </div>
+        {widget.type === 'entity-selector' && (
+          <EntitySelectorFields
+            slots={slots}
+            selectionTarget={optString(widget, 'selectionTarget')}
+            onSelect={(target) => setOption('selectionTarget', target)}
+          />
         )}
 
-        {DATA_WIDGETS.has(widget.type) && !slotScoped && (
+        {DATA_WIDGETS.has(widget.type) && (
           <>
-            {/* DatasourceFields edits a device/anchor selector, which is exactly a
-                ConcreteSelector — the workspace re-stores it as a slot. Alarm widgets
-                use it as scope and don't carry measurement names; the command-button
-                targets a single device (device-only, no measurements). */}
-            <DatasourceFields
-              datasource={datasource}
-              label={
-                CONTROL_WIDGETS.has(widget.type)
-                  ? 'Target device'
-                  : ALARM_WIDGETS.has(widget.type)
-                    ? 'Scope'
-                    : 'Data source'
-              }
-              showMeasurements={!ALARM_WIDGETS.has(widget.type) && !CONTROL_WIDGETS.has(widget.type)}
-              deviceOnly={CONTROL_WIDGETS.has(widget.type)}
-              onChange={(ds) => onDatasource(ds as ConcreteSelector | undefined)}
-            />
-            {datasource && slotName && (
-              <p className="text-xs text-muted-foreground">
-                Bound via slot <span className="font-mono">{slotName}</span>
-              </p>
+            {/* Scope authoring (ADR-039): a DEVICE slot can FOLLOW a parent anchor context
+                (a thermostat within the selected building). Offered only for a device-typed
+                slot — the cascade's strategies bind devices, so scoping an anchor slot has no
+                meaning; an anchor slot stays a root context a selector can re-point. */}
+            {onScope && slotName && slots && slots[slotName]?.type === 'device' && (
+              <SlotScopeFields
+                slotName={slotName}
+                slots={slots}
+                scope={slots[slotName]?.scope}
+                onScope={onScope}
+              />
             )}
-            {ALARM_WIDGETS.has(widget.type) && !datasource && (
-              <p className="text-xs text-muted-foreground">
-                No scope selected — showing all alarms (tenant-wide).
-              </p>
+
+            {slotScoped ? (
+              // A scoped slot's ENTITY is derived by the cascade from its parent (plus any
+              // in-context pick), not chosen here — show it read-only. The scope itself is
+              // authored above.
+              <div className="space-y-2 rounded-md border border-border p-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Data source
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Derived from the parent context
+                  {slotName && (
+                    <>
+                      {' '}
+                      (slot <span className="font-mono">{slotName}</span>)
+                    </>
+                  )}
+                  . This widget follows the selected context and any drill-down.
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* DatasourceFields edits a device/anchor selector, which is exactly a
+                    ConcreteSelector — the workspace re-stores it as a slot. Alarm widgets
+                    use it as scope and don't carry measurement names; the command-button
+                    targets a single device (device-only, no measurements). */}
+                <DatasourceFields
+                  datasource={datasource}
+                  label={
+                    CONTROL_WIDGETS.has(widget.type)
+                      ? 'Target device'
+                      : ALARM_WIDGETS.has(widget.type)
+                        ? 'Scope'
+                        : 'Data source'
+                  }
+                  showMeasurements={!ALARM_WIDGETS.has(widget.type) && !CONTROL_WIDGETS.has(widget.type)}
+                  deviceOnly={CONTROL_WIDGETS.has(widget.type)}
+                  onChange={(ds) => onDatasource(ds as ConcreteSelector | undefined)}
+                />
+                {datasource && slotName && (
+                  <p className="text-xs text-muted-foreground">
+                    Bound via slot <span className="font-mono">{slotName}</span>
+                  </p>
+                )}
+                {ALARM_WIDGETS.has(widget.type) && !datasource && (
+                  <p className="text-xs text-muted-foreground">
+                    No scope selected — showing all alarms (tenant-wide).
+                  </p>
+                )}
+              </>
             )}
           </>
         )}
@@ -578,6 +620,133 @@ function CommandFields({
             </FormField>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+// ---- scoped-slot context authoring (ADR-039) --------------------------------
+
+// SlotScopeFields authors a device slot's CONTEXT: a root context (bound directly / by a
+// context-selector) or scoped to a parent anchor slot (following the selected building, say)
+// with a strategy — 'first' auto-follows the parent's first member, 'manual' keeps a chosen
+// member. The parent choices are the dashboard's OTHER anchor slots. Emitting undefined
+// clears the scope back to root. The workspace validates + applies (cycle/self/non-anchor
+// parents are rejected there), so this only offers structurally valid choices.
+function SlotScopeFields({
+  slotName,
+  slots,
+  scope,
+  onScope,
+}: {
+  slotName: string;
+  slots: Record<string, SlotDefinition>;
+  scope: SlotScope | undefined;
+  onScope: (scope: SlotScope | undefined) => void;
+}) {
+  const parents = Object.keys(slots).filter((n) => slots[n].type === 'anchor' && n !== slotName);
+  const mode = scope ? 'scoped' : 'root';
+  const strategy = scope?.strategy ?? 'first';
+  const parent = scope?.parent ?? '';
+
+  const setMode = (next: string) => {
+    if (next === 'root') return onScope(undefined);
+    const p = parent || parents[0];
+    if (p) onScope({ parent: p, strategy });
+  };
+
+  return (
+    <div className="space-y-3 rounded-md border border-border p-3">
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Context</div>
+      {parents.length === 0 && mode === 'root' ? (
+        <p className="text-xs text-muted-foreground">
+          Add a widget bound to a customer, area, or asset to use as a parent context — then this
+          slot can follow it.
+        </p>
+      ) : (
+        <>
+          <FormField
+            label="Binds to"
+            description="Root: chosen directly or by a context selector. Scoped: follows a parent context (e.g. a device within the selected building)."
+          >
+            <Combobox options={CONTEXT_MODE_OPTIONS} value={mode} onChange={setMode} allowClear={false} />
+          </FormField>
+          {mode === 'scoped' && (
+            <>
+              <FormField label="Parent slot">
+                <Combobox
+                  options={parents.map((p) => ({ value: p, label: p }))}
+                  value={parent}
+                  onChange={(p) => p && onScope({ parent: p, strategy })}
+                  allowClear={false}
+                  placeholder="Select a parent"
+                />
+              </FormField>
+              <FormField
+                label="Strategy"
+                description="First: auto-follow the parent's first member. Manual: keep a chosen member (a picker offers the parent's members)."
+              >
+                <Combobox
+                  options={SCOPE_STRATEGY_OPTIONS}
+                  value={strategy}
+                  onChange={(s) => onScope({ parent: parent || parents[0], strategy: s as SlotScope['strategy'] })}
+                  allowClear={false}
+                />
+              </FormField>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// EntitySelectorFields picks which slot an entity-selector widget re-points. A scoped slot
+// becomes a member picker (which device within the parent context); a root slot a context
+// picker (which building/customer the dashboard shows). The target is stored in the widget's
+// options; the runtime resolves the candidate set from the target slot's scope.
+function EntitySelectorFields({
+  slots,
+  selectionTarget,
+  onSelect,
+}: {
+  slots: Record<string, SlotDefinition> | undefined;
+  selectionTarget: string;
+  onSelect: (target: string | undefined) => void;
+}) {
+  const names = Object.keys(slots ?? {});
+  const options: ComboboxOption[] = names.map((name) => {
+    const slot = slots![name];
+    const role = slot.scope
+      ? `member of ${slot.scope.parent}`
+      : slot.type === 'anchor'
+        ? 'context'
+        : 'device';
+    return { value: name, label: name, description: role };
+  });
+
+  return (
+    <div className="space-y-3 rounded-md border border-border p-3">
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Selection target
+      </div>
+      {options.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          This dashboard has no slots yet. Bind a widget to a device or anchor first, then this
+          picker can re-point it.
+        </p>
+      ) : (
+        <FormField
+          label="Target slot"
+          description="The slot this picker re-points. A scoped slot becomes a member picker; a root slot a context picker."
+        >
+          <Combobox
+            options={options}
+            value={selectionTarget}
+            onChange={(v) => onSelect(v || undefined)}
+            placeholder="Select a slot"
+          />
+        </FormField>
       )}
     </div>
   );

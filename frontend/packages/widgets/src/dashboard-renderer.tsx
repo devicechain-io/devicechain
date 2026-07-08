@@ -29,7 +29,13 @@ import {
 import { useEffect, useState, type CSSProperties } from 'react';
 
 import { ConnectedWidget } from './connected-widget';
-import { WidgetSelectProvider, WidgetSubjectProvider, type WidgetSelect } from './frame';
+import {
+  WidgetCandidatesProvider,
+  WidgetSelectProvider,
+  WidgetSubjectProvider,
+  type WidgetCandidates,
+  type WidgetSelect,
+} from './frame';
 import { WIDGET_CHANNEL } from './registry';
 
 export interface DashboardRendererProps {
@@ -55,6 +61,10 @@ export interface DashboardRendererProps {
   // selection overlay that produces `bindings`. Omit for a static dashboard — widgets
   // then render no drill affordance.
   select?: WidgetSelect;
+  // The candidate provider (useSlotCandidates) an entity-selector widget reads to offer a
+  // target slot's options. Omit alongside `select` for a static/edit/preview mount — the
+  // selector then renders inert.
+  candidates?: WidgetCandidates;
 }
 
 export function DashboardRenderer({
@@ -65,6 +75,7 @@ export function DashboardRenderer({
   bindings,
   sizing,
   select,
+  candidates,
 }: DashboardRendererProps) {
   const breakpoint = useActiveBreakpoint(definition.canvas.breakpoints);
   const histories = useWidgetHistories(definition.widgets, seedHistory, bindings);
@@ -77,6 +88,7 @@ export function DashboardRenderer({
   return (
     <div style={sizingStyle(effectiveSizing, bg)}>
       <WidgetSelectProvider select={select}>
+        <WidgetCandidatesProvider candidates={candidates}>
         <div
           style={{
             display: 'grid',
@@ -103,6 +115,7 @@ export function DashboardRenderer({
             );
           })}
         </div>
+        </WidgetCandidatesProvider>
       </WidgetSelectProvider>
     </div>
   );

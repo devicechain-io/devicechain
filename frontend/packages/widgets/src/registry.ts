@@ -14,6 +14,7 @@ import type { WidgetComponent } from './widget';
 import { AlarmCount } from './widgets/alarm-count';
 import { AlarmTable } from './widgets/alarm-table';
 import { CommandButton } from './widgets/command-button';
+import { EntitySelector } from './widgets/entity-selector';
 import { Gauge } from './widgets/gauge';
 import { Image } from './widgets/image';
 import { Label } from './widgets/label';
@@ -26,7 +27,7 @@ import { TimeSeriesChart } from './widgets/time-series-chart';
 // exhaustive over WidgetType (a new type won't compile without a channel), and the
 // per-channel type subsets are DERIVED from it, so the channel map and the two
 // registries can't drift out of sync.
-export type WidgetChannel = 'measurement' | 'alarm' | 'control';
+export type WidgetChannel = 'measurement' | 'alarm' | 'control' | 'selection';
 
 export const WIDGET_CHANNEL = {
   'timeseries-chart': 'measurement',
@@ -38,6 +39,7 @@ export const WIDGET_CHANNEL = {
   'alarm-table': 'alarm',
   'alarm-count': 'alarm',
   'command-button': 'control',
+  'entity-selector': 'selection',
 } as const satisfies Record<WidgetType, WidgetChannel>;
 
 // The widget types on each channel, derived from WIDGET_CHANNEL so the registries below
@@ -50,6 +52,7 @@ type WidgetTypeOn<C extends WidgetChannel> = {
 type MeasurementWidgetType = WidgetTypeOn<'measurement'>;
 type AlarmWidgetType = WidgetTypeOn<'alarm'>;
 type ControlWidgetType = WidgetTypeOn<'control'>;
+type SelectionWidgetType = WidgetTypeOn<'selection'>;
 
 export const WIDGET_REGISTRY: Record<MeasurementWidgetType, WidgetComponent> = {
   'timeseries-chart': TimeSeriesChart,
@@ -67,4 +70,10 @@ export const ALARM_WIDGET_REGISTRY: Record<AlarmWidgetType, WidgetComponent<Alar
 
 export const CONTROL_WIDGET_REGISTRY: Record<ControlWidgetType, WidgetComponent<CommandStreamState>> = {
   'command-button': CommandButton,
+};
+
+// Selection widgets carry no hub data — they read the ambient candidate provider + selection
+// callback and drive a slot binding. `null` marks the empty data channel (see ConnectedWidget).
+export const SELECTION_WIDGET_REGISTRY: Record<SelectionWidgetType, WidgetComponent<null>> = {
+  'entity-selector': EntitySelector,
 };
