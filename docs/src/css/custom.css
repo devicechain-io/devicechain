@@ -1,24 +1,57 @@
 /**
  * DeviceChain docs theme overrides.
- * Docusaurus uses Infima; adjust the primary palette here.
+ *
+ * Kept in step with the brand: primary is the brandmark blue #208cb7 (the console's
+ * hsl(197 71% 42%)), and dark mode uses the same navy canvas as devicechain.io.
+ * If the brand changes, update the console (source of truth), then the marketing
+ * site (devicechain-website/brand.css), then this file.
  */
 :root {
-  --ifm-color-primary: #2563eb;
-  --ifm-color-primary-dark: #1d4ed8;
-  --ifm-color-primary-darker: #1e40af;
-  --ifm-color-primary-darkest: #1e3a8a;
-  --ifm-color-primary-light: #3b82f6;
-  --ifm-color-primary-lighter: #60a5fa;
-  --ifm-color-primary-lightest: #93c5fd;
+  --ifm-color-primary: #208cb7;
+  --ifm-color-primary-dark: #1c7fa6;
+  --ifm-color-primary-darker: #1b789d;
+  --ifm-color-primary-darkest: #166483;
+  --ifm-color-primary-light: #2299c9;
+  --ifm-color-primary-lighter: #23a0d1;
+  --ifm-color-primary-lightest: #36aedd;
   --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(32, 140, 183, 0.1);
 }
 
 [data-theme='dark'] {
-  --ifm-color-primary: #60a5fa;
-  --ifm-color-primary-dark: #3b82f6;
-  --ifm-color-primary-darker: #2563eb;
-  --ifm-color-primary-darkest: #1d4ed8;
-  --ifm-color-primary-light: #93c5fd;
-  --ifm-color-primary-lighter: #bfdbfe;
-  --ifm-color-primary-lightest: #dbeafe;
+  --ifm-color-primary: #24a3d6;
+  --ifm-color-primary-dark: #208cb7;
+  --ifm-color-primary-darker: #1c7fa6;
+  --ifm-color-primary-darkest: #166483;
+  --ifm-color-primary-light: #36aedd;
+  --ifm-color-primary-lighter: #59bce3;
+  --ifm-color-primary-lightest: #8ed1ec;
+
+  /* Navy canvas matching the devicechain.io landing page. */
+  --ifm-background-color: #0b1620;
+  --ifm-background-surface-color: #10202e;
+  --docusaurus-highlighted-code-line-bg: rgba(32, 140, 183, 0.18);
+}
+
+/*
+ * The "devicechain.io treatment": two soft brand-teal radial glows over the
+ * canvas, matching the marketing site + console. Painted on <body> and pinned
+ * to the viewport — the navbar/sidebar have their own solid surface colors, so
+ * the glow shows through only in the content region. Faint in light mode, full
+ * strength in dark (mirrors the console's --app-glow-* values).
+ */
+[data-theme='light'] body {
+  background-image:
+    radial-gradient(900px 600px at 50% -10%, rgba(32, 140, 183, 0.05), transparent 60%),
+    radial-gradient(700px 500px at 85% 110%, rgba(32, 140, 183, 0.03), transparent 55%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+}
+
+[data-theme='dark'] body {
+  background-image:
+    radial-gradient(900px 600px at 50% -10%, rgba(32, 140, 183, 0.2), transparent 60%),
+    radial-gradient(700px 500px at 85% 110%, rgba(32, 140, 183, 0.1), transparent 55%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
 }
