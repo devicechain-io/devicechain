@@ -442,6 +442,10 @@ export function DashboardWorkspace({
         </div>
       }
       action={mode === 'edit' ? editActions : viewActions}
+      // Both modes are full-bleed: the dashboard surface manages its own single
+      // scroll region. A non-full-bleed body (padding + its own overflow-auto)
+      // around a fixed-height renderer that ALSO scrolls produced a spurious
+      // nested scrollbar even when the content fit.
       subHeader={
         mode === 'edit' ? (
           <div className="flex items-center gap-3 px-6 py-2">
@@ -458,7 +462,7 @@ export function DashboardWorkspace({
           </div>
         ) : undefined
       }
-      fullBleed={mode === 'edit'}
+      fullBleed
     >
       {mode === 'edit' ? (
         <div className="flex h-full min-h-0">
@@ -490,9 +494,10 @@ export function DashboardWorkspace({
           )}
         </div>
       ) : (
-        // DashboardRenderer's root fills 100% width/height, so it needs a bounded
-        // container to give it real height inside the page flow.
-        <div style={{ position: 'relative', height: 'calc(100vh - 180px)', minHeight: 400 }}>
+        // Fill the page-shell's flex body (full-bleed) so the renderer's own
+        // overflow:auto is the single scroll region — no bounded/fixed height that
+        // double-scrolls against an outer container.
+        <div className="h-full min-h-0 p-4">
           <DashboardRenderer
             definition={working}
             hub={dataHub}

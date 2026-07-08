@@ -5,7 +5,9 @@ package sim
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"sort"
 	"sync/atomic"
 
 	"github.com/rs/zerolog/log"
@@ -106,4 +108,207 @@ func (s *devicepulse) Tick(ctx context.Context, rt *Runtime) error {
 		}
 	}
 	return nil
+}
+
+// Buildingpulse sizing + tokens (sim-slice2-buildingpulse-spec.md): a modest
+// demo topology, not a scale test — 3 buildings x 4 thermostats/building = 12
+// thermostats total.
+const (
+	buildingpulseBuildingCount      = 3
+	buildingpulseDevicesPerBuilding = 4
+	buildingpulseThermostatCount    = buildingpulseBuildingCount * buildingpulseDevicesPerBuilding
+)
+
+// Buildingpulse profile/device-type/metric tokens — fixed, not derived from any
+// handshake field, since this manifest is a static built-in scenario (mirrors
+// the Devicepulse* constants above).
+const (
+	BuildingpulseProfileToken    = "bp-thermostat-profile"
+	BuildingpulseDeviceTypeToken = "bp-thermostat"
+	BuildingpulseTemperatureKey  = "temperature"
+	BuildingpulseHumidityKey     = "humidity"
+	BuildingpulseSetpointKey     = "setpoint"
+	BuildingpulseCO2Key          = "co2"
+)
+
+// buildingpulseAlarmThreshold is the "assign it, then reuse it" pointer target
+// for AlarmDefSpec.Threshold — a local var rather than a package-level literal
+// because Go has no way to take the address of a float64 constant inline.
+var buildingpulseAlarmThreshold = 30.0
+
+// buildingpulse is the slice-2 reference scenario
+// (sim-slice2-buildingpulse-spec.md): a building-automation topology — one
+// customer, three buildings, one HVAC asset per building, and 12 thermostats
+// distributed round-robin across the buildings and all assigned to both their
+// building and the customer, so every measurement they emit carries an area
+// anchor and a customer anchor (ADR-013/044). Each tick emits all four metrics
+// in one Measurement; the temperature curve deterministically crosses the
+// alarm threshold, raising a live MAJOR alarm every cycle.
+type buildingpulse struct {
+	// seed drives all deterministic generation, threaded from the handshake —
+	// see devicepulse's identical field for the reset/idempotency rationale.
+	seed int64
+	// ticks counts Tick calls since process start, same role as devicepulse's.
+	ticks atomic.Int64
+}
+
+// NewBuildingpulse returns the buildingpulse reference Sim seeded from the
+// handshake.
+func NewBuildingpulse(seed int64) Sim {
+	return &buildingpulse{seed: seed}
+}
+
+func (s *buildingpulse) Manifest() SimManifest {
+	areas := make([]AreaSpec, buildingpulseBuildingCount)
+	assets := make([]AssetSpec, buildingpulseBuildingCount)
+	for i := 0; i < buildingpulseBuildingCount; i++ {
+		n := i + 1
+		areas[i] = AreaSpec{
+			Token:         fmt.Sprintf("bp-bldg-%02d", n),
+			Name:          fmt.Sprintf("Building %d", n),
+			AreaTypeToken: "bp-building",
+		}
+		assets[i] = AssetSpec{
+			Token:          fmt.Sprintf("bp-hvac-%02d", n),
+			Name:           fmt.Sprintf("HVAC Unit %d", n),
+			AssetTypeToken: "bp-hvac",
+		}
+	}
+
+	manifest := SimManifest{
+		Name: "buildingpulse",
+		Seed: s.seed,
+		CustomerTypes: []CustomerTypeSpec{
+			{Token: "bp-facility-owner", Name: "Facility Owner"},
+		},
+		Customers: []CustomerSpec{
+			{Token: "bp-acme", Name: "Acme Properties", CustomerTypeToken: "bp-facility-owner"},
+		},
+		AreaTypes: []AreaTypeSpec{
+			{Token: "bp-building", Name: "Building"},
+		},
+		Areas: areas,
+		AssetTypes: []AssetTypeSpec{
+			{Token: "bp-hvac", Name: "HVAC Unit"},
+		},
+		Assets: assets,
+		Profiles: []ProfileSpec{
+			{
+				Token:    BuildingpulseProfileToken,
+				Name:     "Building Pulse Thermostat Profile",
+				Category: "sensor",
+				Metrics: []MetricSpec{
+					{Key: BuildingpulseTemperatureKey, Name: "Temperature", DataType: "DOUBLE", Unit: "C"},
+					{Key: BuildingpulseHumidityKey, Name: "Humidity", DataType: "DOUBLE", Unit: "%"},
+					{Key: BuildingpulseSetpointKey, Name: "Setpoint", DataType: "DOUBLE", Unit: "C"},
+					{Key: BuildingpulseCO2Key, Name: "CO2", DataType: "DOUBLE", Unit: "ppm"},
+				},
+				Alarms: []AlarmDefSpec{
+					{
+						AlarmKey:      "temp-high",
+						MetricKey:     BuildingpulseTemperatureKey,
+						Name:          "High Temperature",
+						Description:   "Temperature has exceeded the comfortable operating range.",
+						ConditionType: "SIMPLE",
+						Operator:      "GT",
+						Severity:      "MAJOR",
+						Threshold:     &buildingpulseAlarmThreshold,
+						Enabled:       true,
+					},
+				},
+			},
+		},
+		DeviceTypes: []DeviceTypeSpec{
+			{Token: BuildingpulseDeviceTypeToken, Name: "Building Pulse Thermostat", ProfileToken: BuildingpulseProfileToken},
+		},
+		Populations: []PopulationSpec{
+			{
+				OfType:            BuildingpulseDeviceTypeToken,
+				Count:             buildingpulseThermostatCount,
+				TokenPattern:      "bp-therm-{n:03d}",
+				ExternalIdPattern: "AST-{n:05d}",
+				DistributeAcross:  []string{"area"},
+			},
+		},
+	}
+
+	// The dashboard binds to a concrete device token, so it is built here from
+	// this same manifest's own (pure, deterministic) Expand() output — not
+	// handed rt.Devices later — keeping Manifest() a single source of truth
+	// with no dependency on Provision having already run.
+	devices := manifest.Expand(manifest.Seed)
+	definition, err := buildBuildingpulseDashboard(devices)
+	if err != nil {
+		// buildBuildingpulseDashboard only fails marshaling static, well-typed Go
+		// structs — a failure here means a programming bug in dashboard.go, not a
+		// runtime condition, so fail loudly rather than silently handing
+		// Provision a manifest with a missing dashboard.
+		panic(fmt.Sprintf("buildingpulse: build dashboard definition: %v", err))
+	}
+	manifest.Dashboards = []DashboardSpec{
+		{
+			Token:       "bp-dashboard",
+			Name:        "Building Pulse",
+			Description: "Temperature, latest values, and live alarms for the Building Pulse demo scenario.",
+			Definition:  definition,
+		},
+	}
+	return manifest
+}
+
+func (s *buildingpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
+	return Provision(ctx, rt, s.Manifest())
+}
+
+// Tick emits all four metrics in one Measurement per device (EmitMeasurements,
+// not one EmitMeasurement call per metric). Each device gets a distinct phase
+// offset spaced evenly around a full sine period (2*pi / device count) so
+// that, at any tick, the device closest to the sine peak is at most half that
+// spacing away from it. With 12 evenly-spaced thermostats that worst case is
+// 15 degrees from the peak: sin(90-15 degrees) = sin(75 degrees) is about
+// 0.966, giving temperature = 24 + 8*0.966 is about 31.7 degrees C —
+// comfortably over the >30 degrees C alarm threshold every cycle, regardless
+// of n, without ever needing every device in phase at once.
+func (s *buildingpulse) Tick(ctx context.Context, rt *Runtime) error {
+	n := s.ticks.Add(1)
+	if len(rt.Devices) == 0 {
+		return nil
+	}
+	offset := 2 * math.Pi / float64(len(rt.Devices))
+
+	for i, d := range rt.Devices {
+		phase := float64(n)*0.3 + float64(i)*offset
+		metrics := map[string]float64{
+			BuildingpulseTemperatureKey: 24 + 8*math.Sin(phase),
+			BuildingpulseHumidityKey:    45 + 10*math.Sin(phase+1),
+			BuildingpulseSetpointKey:    22,
+			BuildingpulseCO2Key:         600 + 150*math.Sin(phase+2),
+		}
+		if err := EmitMeasurements(ctx, rt, d, metrics); err != nil {
+			log.Error().Err(err).Str("device", d.Token).Msg("emit measurements failed")
+			return err
+		}
+	}
+	return nil
+}
+
+// Registry maps a manifest id (Handshake.ManifestId) to its Sim constructor.
+// main.go looks up the handshake's ManifestId here to pick a driver, defaulting
+// to "devicepulse" when the field is empty (a pre-slice-2 handshake never set
+// it) so existing sim records keep working unchanged.
+var Registry = map[string]func(int64) Sim{
+	"devicepulse":   NewDevicepulse,
+	"buildingpulse": NewBuildingpulse,
+}
+
+// ManifestIds returns the Registry's known manifest ids, sorted — a single
+// source for user-facing "known ids" messaging (e.g. main.go's unknown-id
+// error) so a third scenario doesn't leave a stale hardcoded list behind.
+func ManifestIds() []string {
+	ids := make([]string, 0, len(Registry))
+	for id := range Registry {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }

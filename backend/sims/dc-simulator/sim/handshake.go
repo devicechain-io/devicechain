@@ -20,6 +20,16 @@ type Endpoints struct {
 	// DeviceMgmtGraphQL is device-management's tenant-scoped GraphQL endpoint,
 	// used for provisioning (TenantSession.Query's baseURL).
 	DeviceMgmtGraphQL string `json:"deviceMgmtGraphQL"`
+	// DashboardMgmtGraphQL is dashboard-management's tenant-scoped GraphQL
+	// endpoint, used for provisioning a scenario's dashboards (createDashboard
+	// + publishDashboard). Still tenant-scoped, not admin — the sim's one-
+	// directional admin rule is unchanged (sim-slice2-buildingpulse-spec.md).
+	//
+	// Required only when the chosen scenario actually provisions dashboards —
+	// Provision enforces that at bootstrap (guarded by manifest.Dashboards), NOT
+	// Validate below. A devicepulse scenario declares none, so a pre-slice-2
+	// handshake file that never carried this field still loads and runs.
+	DashboardMgmtGraphQL string `json:"dashboardMgmtGraphQL"`
 	// Ingress is the device-plane HTTP ingress base (event-sources); the sim
 	// POSTs to "{Ingress}/{instanceId}/{tenant}/events".
 	Ingress string `json:"ingress"`
@@ -78,6 +88,10 @@ func (h *Handshake) Validate() error {
 	if strings.TrimSpace(h.Endpoints.DeviceMgmtGraphQL) == "" {
 		missing = append(missing, "endpoints.deviceMgmtGraphQL")
 	}
+	// endpoints.dashboardMgmtGraphQL is intentionally NOT required here — it is
+	// needed only by scenarios that provision dashboards, which Provision
+	// enforces at bootstrap. Requiring it unconditionally would break a
+	// pre-slice-2 devicepulse handshake that never carried the field.
 	if strings.TrimSpace(h.Endpoints.Ingress) == "" {
 		missing = append(missing, "endpoints.ingress")
 	}
