@@ -67,12 +67,17 @@ func run(handshakePath, bind, port string) error {
 	if err != nil {
 		return err
 	}
-	if hs.ManifestId != "devicepulse" {
-		// Slice 1 ships exactly one manifest; a mismatch is almost certainly an
-		// operator/dcctl config error, so fail loud rather than silently running
-		// the wrong scenario.
-		log.Warn().Str("manifestId", hs.ManifestId).
-			Msg("only the devicepulse manifest is implemented; running it regardless")
+	// Pre-slice-2 handshake files never set manifestId; default to devicepulse
+	// (the original MVP scenario) so an existing sim record keeps working
+	// unchanged rather than suddenly failing to start.
+	manifestId := hs.ManifestId
+	if manifestId == "" {
+		manifestId = "devicepulse"
+	}
+	newDriver, ok := sim.Registry[manifestId]
+	if !ok {
+		log.Fatal().Str("manifestId", manifestId).Strs("known", sim.ManifestIds()).
+			Msg("unknown manifest id")
 	}
 
 	rt, err := sim.NewRuntime(hs)
@@ -80,20 +85,21 @@ func run(handshakePath, bind, port string) error {
 		return err
 	}
 
-	driver := sim.NewDevicepulse(hs.Seed)
+	driver := newDriver(hs.Seed)
 	lc := sim.NewLifecycle(driver, rt)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	log.Info().Str("tenant", hs.Tenant).Str("instance", hs.InstanceId).Msg("bootstrapping devicepulse")
+	log.Info().Str("tenant", hs.Tenant).Str("instance", hs.InstanceId).Str("manifestId", manifestId).
+		Msg("bootstrapping sim")
 	if err := lc.Bootstrap(ctx); err != nil {
 		return err
 	}
 	if err := lc.Start(ctx); err != nil {
 		return err
 	}
-	log.Info().Int("deviceCount", len(rt.Devices)).Msg("devicepulse running")
+	log.Info().Int("deviceCount", len(rt.Devices)).Msg("sim running")
 
 	webRoot, err := fs.Sub(webFiles, "web")
 	if err != nil {
@@ -102,7 +108,7 @@ func run(handshakePath, bind, port string) error {
 
 	mux := http.NewServeMux()
 	sim.NewControlServer(lc, rt).Register(mux)
-	sim.RegisterPresentation(mux, webRoot, rt, hs.ManifestId)
+	sim.RegisterPresentation(mux, webRoot, rt, manifestId)
 
 	srv := &http.Server{Addr: bind + ":" + port, Handler: mux}
 	go func() {

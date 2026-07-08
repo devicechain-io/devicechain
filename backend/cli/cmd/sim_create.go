@@ -31,6 +31,7 @@ stored password in sync with the identity).`,
 func init() {
 	simCreateCmd.Flags().Int64("seed", 1, "deterministic generation seed for the sim's populations")
 	simCreateCmd.Flags().String("ingress", "", "device-plane HTTP ingress base URL (default http(s)://<server>:8081)")
+	simCreateCmd.Flags().String("manifest", "devicepulse", "built-in scenario to run (devicepulse, buildingpulse)")
 	simCmd.AddCommand(simCreateCmd)
 }
 
@@ -48,6 +49,10 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	controlAddr, _ := cmd.Flags().GetString("control-addr")
 	ingress, _ := cmd.Flags().GetString("ingress")
 	seed, _ := cmd.Flags().GetInt64("seed")
+	manifestId, _ := cmd.Flags().GetString("manifest")
+	if err := sim.ValidateManifestId(manifestId); err != nil {
+		return err
+	}
 
 	tenant := sim.DeriveTenant(name)
 	email := sim.DeriveEmail(name)
@@ -102,7 +107,7 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 		SimEmail:    email,
 		SimPassword: password,
 		Endpoints:   endpoints,
-		ManifestId:  "devicepulse",
+		ManifestId:  manifestId,
 		Seed:        seed,
 		InstanceId:  instance,
 		ControlAddr: controlAddr,

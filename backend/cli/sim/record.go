@@ -24,10 +24,11 @@ import (
 // Endpoints mirrors dc-simulator/sim.Endpoints exactly (the handshake wire
 // contract). Keep the json tags in lockstep with that struct.
 type Endpoints struct {
-	UserGraphQL       string `json:"userGraphQL"`
-	DeviceMgmtGraphQL string `json:"deviceMgmtGraphQL"`
-	Ingress           string `json:"ingress"`
-	EventMgmtWS       string `json:"eventMgmtWS"`
+	UserGraphQL          string `json:"userGraphQL"`
+	DeviceMgmtGraphQL    string `json:"deviceMgmtGraphQL"`
+	DashboardMgmtGraphQL string `json:"dashboardMgmtGraphQL"`
+	Ingress              string `json:"ingress"`
+	EventMgmtWS          string `json:"eventMgmtWS"`
 }
 
 // Record is dcctl's local record for one sim. It is written verbatim as the
@@ -48,6 +49,25 @@ type Record struct {
 	// AdminURL is the /admin/graphql endpoint create resolved, persisted so destroy
 	// tears down against the same host it was created on (not a re-derived default).
 	AdminURL string `json:"adminURL"`
+}
+
+// KnownManifestIds are the manifest ids dc-simulator's registry (sim.go) knows
+// how to run. Mirrored here as a literal list — dcctl never imports the
+// dc-simulator module (it is a separate, untrusted-client binary) — so
+// `sim create --manifest` can fail fast on a typo rather than writing a
+// handshake dc-simulator will reject (or silently run the wrong scenario for)
+// at process start.
+var KnownManifestIds = []string{"devicepulse", "buildingpulse"}
+
+// ValidateManifestId rejects a --manifest value dc-simulator's registry
+// doesn't know.
+func ValidateManifestId(id string) error {
+	for _, known := range KnownManifestIds {
+		if id == known {
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown manifest %q (known: %s)", id, strings.Join(KnownManifestIds, ", "))
 }
 
 var nameGrammar = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -190,9 +210,10 @@ func ResolveEndpoints(server, ingress string, tls bool) Endpoints {
 		ingress = fmt.Sprintf("%s://%s:8081", h, server)
 	}
 	return Endpoints{
-		UserGraphQL:       fmt.Sprintf("%s://%s/api/user-management/graphql", h, server),
-		DeviceMgmtGraphQL: fmt.Sprintf("%s://%s/api/device-management/graphql", h, server),
-		Ingress:           ingress,
-		EventMgmtWS:       fmt.Sprintf("%s://%s/api/event-management/graphql", ws, server),
+		UserGraphQL:          fmt.Sprintf("%s://%s/api/user-management/graphql", h, server),
+		DeviceMgmtGraphQL:    fmt.Sprintf("%s://%s/api/device-management/graphql", h, server),
+		DashboardMgmtGraphQL: fmt.Sprintf("%s://%s/api/dashboard-management/graphql", h, server),
+		Ingress:              ingress,
+		EventMgmtWS:          fmt.Sprintf("%s://%s/api/event-management/graphql", ws, server),
 	}
 }

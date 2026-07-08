@@ -304,7 +304,14 @@ function TypeOptions({
       </FormField>
     );
   }
-  return null; // chart/table/label/image have no extra options beyond above
+  if (widget.type === 'table') {
+    return (
+      <FormField label="Precision" description="Decimal places for numeric values (blank = full precision).">
+        <NumberInput value={optNumber(widget, 'precision')} onChange={(v) => setOption('precision', v)} />
+      </FormField>
+    );
+  }
+  return null; // chart/label/image have no extra options beyond above
 }
 
 // ---- Datasource -------------------------------------------------------------

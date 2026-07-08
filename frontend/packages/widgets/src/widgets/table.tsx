@@ -9,7 +9,7 @@ import type { CSSProperties } from 'react';
 import { formatTimestamp, formatValue } from '../format';
 import { WidgetFrame } from '../frame';
 import { css } from '../theme';
-import { optString, type WidgetProps } from '../widget';
+import { optNumber, optString, type WidgetProps } from '../widget';
 
 const cell: CSSProperties = { padding: '6px 12px', textAlign: 'left' };
 const headCell: CSSProperties = {
@@ -24,6 +24,9 @@ const headCell: CSSProperties = {
 
 export function Table({ widget, data }: WidgetProps) {
   const rows = Object.values(data.latest).sort((a, b) => a.name.localeCompare(b.name));
+  // Round to a fixed number of decimals when configured; unset keeps the raw value
+  // (formatValue's default). A live sensor value is otherwise a wall of digits.
+  const precision = optNumber(widget.options, 'precision');
 
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
@@ -48,8 +51,10 @@ export function Table({ widget, data }: WidgetProps) {
                 <tr key={row.name}>
                   <td style={cell}>{row.name}</td>
                   <td style={{ ...cell, fontVariantNumeric: 'tabular-nums' }}>
-                    {formatValue(row.value)}
-                    {row.classifier ? ` ${row.classifier}` : ''}
+                    {formatValue(row.value, precision)}
+                    {/* classifier is deliberately NOT shown: it is the bound metric
+                        definition's internal id (ADR-016), not a user-facing label —
+                        appending it rendered as spurious digits after the value. */}
                   </td>
                   <td style={{ ...cell, color: css('muted-foreground') }}>{formatTimestamp(row.occurredTime)}</td>
                 </tr>

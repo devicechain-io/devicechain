@@ -22,20 +22,32 @@ const EmitInterval = 5 * time.Second
 // maxIngressResponseBytes bounds how much of an unexpected error body is read.
 const maxIngressResponseBytes = 4096
 
-// EmitMeasurement posts one Measurement event for device d over the real
-// device-plane HTTP ingress (the same route and JsonEvent shape any physical
-// device uses — no sim-only backdoor), authenticated by the credential
-// bootstrap.go provisioned for it. It expects HTTP 202 (accepted into the
-// pipeline; persistence/resolution happen asynchronously downstream).
+// EmitMeasurement posts one Measurement event carrying a single metric. It
+// delegates to EmitMeasurements so devicepulse (one metric per device) and
+// buildingpulse (four metrics in one event) share the exact same wire path.
 func EmitMeasurement(ctx context.Context, rt *Runtime, d DeviceInstance, metricKey string, value float64) error {
+	return EmitMeasurements(ctx, rt, d, map[string]float64{metricKey: value})
+}
+
+// EmitMeasurements posts one Measurement event for device d carrying every
+// entry in metrics as a single measurements map — the "rich emit" shape
+// (multiple metric keys in one entries[0].measurements object) rather than one
+// event per metric. It uses the same real device-plane HTTP ingress route and
+// JsonEvent shape any physical device uses (no sim-only backdoor),
+// authenticated by the credential bootstrap.go provisioned for d. It expects
+// HTTP 202 (accepted into the pipeline; persistence/resolution happen
+// asynchronously downstream).
+func EmitMeasurements(ctx context.Context, rt *Runtime, d DeviceInstance, metrics map[string]float64) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	credType := credentialTypeAccessToken
 	credId := d.CredentialId
 
+	values := make(map[string]string, len(metrics))
+	for key, value := range metrics {
+		values[key] = fmt.Sprintf("%v", value)
+	}
 	entry := map[string]any{
-		"measurements": map[string]string{
-			metricKey: fmt.Sprintf("%v", value),
-		},
+		"measurements": values,
 		"occurredTime": now,
 	}
 	payload, err := jsonRoundTrip(map[string]any{"entries": []any{entry}})
