@@ -87,7 +87,7 @@ namespace DeviceChain.Sdk.Unity.Samples
 
         private void EnsureLight()
         {
-            if (FindObjectOfType<Light>() != null)
+            if (FindExistingLight() != null)
             {
                 return;
             }
@@ -95,6 +95,17 @@ namespace DeviceChain.Sdk.Unity.Samples
             Light light = lightObject.AddComponent<Light>();
             light.type = LightType.Directional;
             lightObject.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+        }
+
+        // FindAnyObjectByType arrived in 2022.2; FindObjectOfType is deprecated in Unity 6 but is the
+        // only option on the package's 2021.3 floor — version-guard so both compile warning-free.
+        private static Light FindExistingLight()
+        {
+#if UNITY_2022_2_OR_NEWER
+            return FindAnyObjectByType<Light>();
+#else
+            return FindObjectOfType<Light>();
+#endif
         }
 
         // Pick a lit shader for whichever render pipeline is active; fall back to the built-in Standard.
