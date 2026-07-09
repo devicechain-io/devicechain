@@ -38,6 +38,15 @@ type Message struct {
 	Key          []byte
 	Value        []byte
 	NumDelivered int
+	// StreamSeq is the JetStream stream sequence of a consumed message — a durable,
+	// gapless, monotonically-increasing position in the stream. It is the stable id a
+	// checkpointing consumer (the event-processing DETECT engine, ADR-051) needs to
+	// dedup already-applied events after a restart-and-replay: the engine records the
+	// highest applied StreamSeq in its committed snapshot and drops any redelivery at
+	// or below it. It is 0 for produced/synthetic messages and for a consumed message
+	// whose broker metadata is unavailable (non-JetStream), so consumers that don't
+	// checkpoint are unaffected.
+	StreamSeq uint64
 	// Headers carries transport metadata across the pipeline (E15). Today it holds
 	// the correlation id used to follow a message through event-sources ->
 	// device-management -> event-management/device-state. It is transmitted via
@@ -112,6 +121,22 @@ func (m Message) Nak() error {
 type MessageReader interface {
 	ReadMessage(ctx context.Context) (Message, error)
 	HandleResponse(err error)
+}
+
+// ReplayReader is a bounded, strictly-ordered read of a stream from a start
+// sequence up to the head captured when it was opened. Read returns each message in
+// ascending stream-sequence order and then io.EOF once the head has been delivered.
+//
+// It exists for the DETECT engine's restart replay (ADR-051): a durable consumer's
+// post-crash redelivery is NOT ordered — a message held in Ack Pending past AckWait
+// can be overtaken by a newer delivery — which would let the engine's idempotent
+// "seq <= lastSeq" guard permanently discard a never-applied event. Replaying by
+// sequence, in order, from the committed snapshot up to the head is what makes
+// restart-and-replay correct. Kept transport-neutral so the consumer can be tested
+// without a broker. Close releases the underlying ephemeral consumer.
+type ReplayReader interface {
+	Read(ctx context.Context) (Message, error)
+	Close() error
 }
 
 // MessageWriter is the producer-side abstraction (kept small for unit testing).

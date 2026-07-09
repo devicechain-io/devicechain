@@ -519,6 +519,138 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	return r, nil
 }
 
+// natsReplayReader is the JetStream implementation of ReplayReader: an EPHEMERAL
+// pull consumer pinned to a start sequence, drained in order up to a fixed head
+// sequence. Unlike the durable reader it owns and acks its own consumer (the acks
+// only advance the throwaway ephemeral, which is deleted on Close / by
+// InactiveThreshold) — it exists purely to feed the engine the exact, ordered
+// prefix it missed, then it is discarded and the durable live reader takes over.
+type natsReplayReader struct {
+	sub      *nats.Subscription
+	js       nats.JetStreamContext
+	stream   string
+	head     uint64
+	doneSeq  uint64
+	pending  []*nats.Msg
+	timeouts int
+}
+
+// replayInactiveThreshold auto-deletes the ephemeral replay consumer if the reader
+// dies without Close (crash mid-replay), so orphaned consumers do not accumulate.
+const replayInactiveThreshold = 5 * time.Minute
+
+// maxReplayStuckFetches bounds how long replay waits on a broker that reports
+// messages retained up to the head yet delivers none — a stuck/broken broker, not a
+// drained one. Reaching it fails startup LOUDLY rather than silently ending replay
+// short of the head (which would reintroduce out-of-order live delivery for the
+// unread tail). At fetchTimeout per fetch this is ~tens of seconds.
+const maxReplayStuckFetches = 30
+
+// NewReplayReader opens an ephemeral, in-order read of the suffix's stream from
+// startSeq up to the current head, returning the reader and that head sequence. When
+// startSeq is already past the head (nothing to replay, or a snapshot ahead of a
+// re-created/truncated stream) it returns a reader that immediately reports io.EOF
+// and creates no consumer. The head is captured once, at open, so live messages
+// published during replay are left for the durable reader.
+func (nmgr *NatsManager) NewReplayReader(suffix string, startSeq uint64) (ReplayReader, uint64, error) {
+	name := StreamName(nmgr.Microservice.InstanceId, suffix)
+	info, err := nmgr.js.StreamInfo(name)
+	if err != nil {
+		if errors.Is(err, nats.ErrStreamNotFound) {
+			return &natsReplayReader{}, 0, nil // empty/absent stream: nothing to replay
+		}
+		return nil, 0, err
+	}
+	head := info.State.LastSeq
+	if startSeq > head {
+		return &natsReplayReader{head: head, doneSeq: head}, head, nil
+	}
+	subject := WildcardSubject(nmgr.Microservice.InstanceId, suffix)
+	sub, err := nmgr.js.PullSubscribe(subject, "", // empty durable => ephemeral consumer
+		nats.BindStream(name),
+		nats.StartSequence(startSeq),
+		nats.AckExplicit(),
+		nats.InactiveThreshold(replayInactiveThreshold))
+	if err != nil {
+		return nil, 0, err
+	}
+	log.Info().Str("stream", name).Uint64("startSeq", startSeq).Uint64("head", head).
+		Msg("Opened ordered replay reader")
+	return &natsReplayReader{sub: sub, js: nmgr.js, stream: name, head: head}, head, nil
+}
+
+// Read returns the next message in ascending stream order, or io.EOF once every
+// message through the head has been delivered. A message whose sequence is past the
+// head is a live publish that arrived after open; it is NOT delivered here (the
+// durable live reader owns it), so replay stays a clean, finite prefix.
+func (r *natsReplayReader) Read(ctx context.Context) (Message, error) {
+	if r.doneSeq >= r.head || r.sub == nil {
+		return Message{}, io.EOF
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return Message{}, io.EOF
+		}
+		if len(r.pending) == 0 {
+			msgs, err := r.sub.Fetch(fetchBatch, nats.MaxWait(fetchTimeout))
+			if err != nil {
+				if errors.Is(err, nats.ErrTimeout) {
+					// A timeout means nothing is deliverable this instant. Distinguish a
+					// genuinely DRAINED range (the messages up to head aged out, MaxAge)
+					// from transient broker slowness by consulting the stream: if its
+					// earliest retained sequence is already past the head, the whole replay
+					// range is gone — end replay cleanly. Otherwise messages in range still
+					// exist, so keep waiting; NEVER end replay early on transient slowness,
+					// which would leave a tail for the (unordered) live reader and
+					// reintroduce the out-of-order hazard this replay exists to prevent. A
+					// broker that retains through head yet delivers nothing for
+					// maxReplayStuckFetches fails startup loudly rather than truncating.
+					if info, ierr := r.js.StreamInfo(r.stream); ierr == nil && info.State.FirstSeq > r.head {
+						log.Warn().Uint64("doneSeq", r.doneSeq).Uint64("head", r.head).
+							Uint64("firstSeq", info.State.FirstSeq).
+							Msg("Replay range fully evicted (aged out below head); ending replay.")
+						r.doneSeq = r.head
+						return Message{}, io.EOF
+					}
+					r.timeouts++
+					if r.timeouts > maxReplayStuckFetches {
+						return Message{}, fmt.Errorf("replay stalled: stream %s retains messages through head %d but delivered none in %d fetches",
+							r.stream, r.head, r.timeouts)
+					}
+					continue
+				}
+				return Message{}, err
+			}
+			r.timeouts = 0
+			r.pending = msgs
+		}
+		nm := r.pending[0]
+		r.pending = r.pending[1:]
+		seq, deliv := msgMeta(nm)
+		if seq > r.head {
+			// A live message past the captured head: stop replay here and leave it (and
+			// everything after) to the durable reader. Do not ack — it is not ours.
+			r.doneSeq = r.head
+			return Message{}, io.EOF
+		}
+		// Ack advances (and lets InactiveThreshold reap) the throwaway ephemeral.
+		_ = nm.Ack()
+		r.doneSeq = seq
+		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), nil)
+		msg.StreamSeq = seq
+		return msg, nil
+	}
+}
+
+// Close releases the ephemeral consumer (best-effort; InactiveThreshold reaps it
+// anyway if this is missed).
+func (r *natsReplayReader) Close() error {
+	if r.sub != nil {
+		return r.sub.Unsubscribe()
+	}
+	return nil
+}
+
 // isConsumerGone reports whether a Fetch error means the durable consumer no longer
 // exists (deleted, not found, inactive) or is unreachable (no responders) — the
 // conditions the reader self-heals from by re-binding, as opposed to a transient
@@ -636,7 +768,10 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 		}
 		nm := r.pending[0]
 		r.pending = r.pending[1:]
-		return NewConsumedMessage(nm.Subject, nm.Data, deliveryCount(nm), natsHeaders(nm), natsAck{nm: nm}), nil
+		seq, deliv := msgMeta(nm)
+		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), natsAck{nm: nm})
+		msg.StreamSeq = seq
+		return msg, nil
 	}
 }
 
@@ -708,15 +843,21 @@ func natsHeaders(nm *nats.Msg) map[string]string {
 	return headers
 }
 
-// deliveryCount returns the JetStream delivery attempt count for a consumed
-// message (1 on first delivery), or 0 when metadata is unavailable (which can
-// happen for a non-JetStream message and should not block handling).
-func deliveryCount(nm *nats.Msg) int {
+// msgMeta returns the JetStream stream sequence and delivery-attempt count of a
+// consumed message in a single metadata parse (the reply subject is parsed once,
+// not once per field). Both are 0 when metadata is unavailable — a non-JetStream
+// message — which callers treat as "no durable position / first delivery".
+//
+// The stream sequence is the durable, gapless position a checkpointing consumer
+// records to dedup replays (ADR-051); a 0 never matches a real stream sequence, so
+// a metadata-less message is treated by the DETECT consumer as unprocessable rather
+// than as a valid checkpoint.
+func msgMeta(nm *nats.Msg) (streamSeq uint64, numDelivered int) {
 	md, err := nm.Metadata()
 	if err != nil {
-		return 0
+		return 0, 0
 	}
-	return int(md.NumDelivered)
+	return md.Sequence.Stream, int(md.NumDelivered)
 }
 
 // HandleResponse logs the result of a read operation.

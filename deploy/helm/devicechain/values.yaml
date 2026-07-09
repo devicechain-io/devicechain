@@ -294,8 +294,19 @@ functionalAreas:
     config: {}
   event-processing:
     config: {}
-    # ADR-051: the DETECT engine must run as ONE active instance per deployment
-    # (no two engines splitting the resolved-events durable, or windowed/absence
-    # detection breaks on restart). Today this only drops events, so replicas are
-    # harmless — but do NOT scale this area past 1 once DETECT lands, and the future
-    # singleton cutover needs a per-area Recreate strategy or leader election.
+    # checkpointEvents: 1000          # ADR-051: max applied events between snapshot
+    # checkpointIntervalSeconds: 10   # commits (whichever comes first). The engine
+    # acks the resolved-events durable only after the snapshot containing an event's
+    # effect commits (ack-on-checkpoint), so these bound write-amplification vs the
+    # ack/redelivery latency on a crash.
+    #
+    # ADR-051: the DETECT engine must run as ONE active instance per deployment (no
+    # two engines splitting the resolved-events durable, or windowed/absence detection
+    # breaks on restart). It holds durable window/timer state in the Postgres snapshot
+    # store; two concurrent engines would each see only HALF the events and diverge.
+    # The store's Save is MONOTONIC (it refuses to move the checkpoint sequence
+    # backward), which blocks the worst outcome — a lagging writer clobbering a newer
+    # checkpoint — but does NOT make split-brain safe. So do NOT scale this area past
+    # 1, and note that even a default rolling update briefly runs old+new pods
+    # together: the GA singleton cutover (a per-area Recreate strategy or leader
+    # election) lands with the DETECT deploy work, not here.
