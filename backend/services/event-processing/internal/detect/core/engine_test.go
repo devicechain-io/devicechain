@@ -28,6 +28,10 @@ func evValStep(seq uint64, rule, series string, sec int, val float64) step {
 	return step{ev: &Event{Seq: seq, Key: SeriesKey{Rule: rule, Series: series}, Time: at(sec), Value: val, Match: true}}
 }
 
+func evCorrStep(seq uint64, rule, anchor, member string, sec int) step {
+	return step{ev: &Event{Seq: seq, Key: SeriesKey{Rule: rule, Series: anchor}, Member: member, Time: at(sec), Match: true}}
+}
+
 func advStep(sec int) step {
 	t := at(sec)
 	return step{adv: &t}
@@ -44,6 +48,14 @@ func scenario() ([]Rule, []step) {
 		{ID: "rThr", Kind: Threshold},
 		{ID: "rRep", Kind: Repeating, Window: 10 * time.Second, Count: 3},
 		{ID: "rAgg", Kind: Aggregate, Window: 10 * time.Second, Agg: AggAvg, Op: GT, Thresh: 100},
+		// Slice 2b primitives.
+		{ID: "rDelta", Kind: DeltaRate, Op: GT, Thresh: 50},
+		{ID: "rCount", Kind: CountWindow, Count: 3, Agg: AggSum, Op: GT, Thresh: 10},
+		{ID: "rSess", Kind: Session, Gap: 5 * time.Second, Agg: AggCount, Op: GE, Thresh: 3},
+		{ID: "rSlide", Kind: SlidingAgg, Window: 10 * time.Second, Agg: AggMax, Op: GT, Thresh: 100},
+		{ID: "rSlideSum", Kind: SlidingAgg, Window: 5 * time.Second, Agg: AggSum, Op: GT, Thresh: 1.0},
+		{ID: "rCorr", Kind: Correlation, Window: 10 * time.Second, Count: 3, MemberCap: 100},
+		{ID: "rAbs2", Kind: Absence, Timeout: 10 * time.Second},
 	}
 	steps := []step{
 		evStep(1, "rAbs", "dev1", 0, true),   // arm dead-man -> deadline 10
@@ -75,6 +87,53 @@ func scenario() ([]Rule, []step) {
 		evStep(20, "rRep", "dev4", 61, true), // count 2
 		evStep(21, "rRep", "dev4", 62, true), // count 3 -> FIRE repeating @62
 		advStep(65),                          // wm=65: closes [50,60) avg 85 -> no fire
+
+		// DeltaRate: fire when the jump between consecutive samples exceeds 50.
+		evValStep(22, "rDelta", "dev6", 70, 100), // prime (no delta yet)
+		evValStep(23, "rDelta", "dev6", 72, 160), // +60 -> FIRE delta @72
+		evValStep(24, "rDelta", "dev6", 74, 180), // +20 -> no
+		evValStep(25, "rDelta", "dev6", 76, 240), // +60 -> FIRE delta @76
+		// CountWindow: every 3 matching events, sum > 10.
+		evValStep(26, "rCount", "dev7", 80, 4),
+		evValStep(27, "rCount", "dev7", 81, 4),
+		evValStep(28, "rCount", "dev7", 82, 4), // 3rd -> sum 12 > 10 -> FIRE count @82, reset
+		evValStep(29, "rCount", "dev7", 83, 1),
+		evValStep(30, "rCount", "dev7", 84, 1),
+		evValStep(31, "rCount", "dev7", 85, 1), // 3rd -> sum 3, not > 10 -> no fire
+		// Session: gap 5s, >= 3 events in the session; closes on the watermark.
+		evValStep(32, "rSess", "dev8", 90, 1),
+		evValStep(33, "rSess", "dev8", 91, 1),
+		evValStep(34, "rSess", "dev8", 92, 1), // session {90,91,92}; gap deadline 97
+		advStep(98),                           // wm=98 -> session closes @97, count 3 >= 3 -> FIRE session @97
+		// SlidingAgg: sliding 10s max > 100, edge-triggered.
+		evValStep(35, "rSlide", "dev9", 100, 90),  // max 90, no
+		evValStep(36, "rSlide", "dev9", 101, 150), // max 150 -> FIRE slide @101 (armed)
+		evValStep(37, "rSlide", "dev9", 108, 95),  // max still 150 (101 in window), armed -> no
+		evValStep(38, "rSlide", "dev9", 113, 95),  // cutoff 103 evicts 100,101 -> max 95 -> re-arm (no fire)
+		evValStep(39, "rSlide", "dev9", 114, 160), // max 160 -> FIRE slide @114
+		// Correlation: >= 3 distinct devices reporting in area1 within a sliding 10s window.
+		evCorrStep(40, "rCorr", "area1", "devA", 120), // distinct 1
+		evCorrStep(41, "rCorr", "area1", "devB", 121), // distinct 2
+		evCorrStep(42, "rCorr", "area1", "devC", 122), // distinct 3 -> FIRE correlation @122
+		evCorrStep(43, "rCorr", "area1", "devA", 123), // known member, count unchanged -> no
+		evCorrStep(44, "rCorr", "area1", "devD", 135), // cutoff 125 evicts A,B,C -> distinct 1 -> no
+
+		// Absence with an OUT-OF-ORDER heartbeat: the late (earlier-time) event must not shrink
+		// the dead-man deadline (scheduleForward). A gen-recycle or shrink bug fires early @158.
+		evStep(45, "rAbs2", "dev10", 150, true), // arm dead-man -> deadline 160
+		evStep(46, "rAbs2", "dev10", 148, true), // LATE heartbeat: forward-only keeps deadline 160
+		advStep(159),                            // wm=159: 160 > 159 -> NO fire
+		advStep(165),                            // wm=165: FIRE absence dev10 @160
+		// SlidingAgg re-arm across a SILENT gap: the window empties by time alone (no low sample),
+		// so the next breach must be a fresh crossing, not a swallowed one.
+		evValStep(47, "rSlide", "dev9", 200, 170), // cutoff 190 evicts all -> re-arm -> FIRE slide @200
+		// SlidingAgg over a fractional SUM with eviction residue: exercises verbatim-sum restore.
+		evValStep(48, "rSlideSum", "dev11", 210, 0.4), // sum 0.4, no
+		evValStep(49, "rSlideSum", "dev11", 211, 0.4), // sum 0.8, no
+		evValStep(50, "rSlideSum", "dev11", 212, 0.4), // sum 1.2 > 1.0 -> FIRE @212 (armed)
+		evValStep(51, "rSlideSum", "dev11", 220, 0.4), // cutoff 215 evicts 210-212 -> sum 0.4 -> re-arm
+		evValStep(52, "rSlideSum", "dev11", 221, 0.4), // sum 0.8, no
+		evValStep(53, "rSlideSum", "dev11", 222, 0.4), // sum 1.2 > 1.0 -> FIRE @222
 	}
 	return rules, steps
 }
@@ -89,6 +148,18 @@ func expected() map[Detection]bool {
 		{RuleID: "rRep", Series: "dev4", Kind: Repeating, At: at(42)}: true,
 		{RuleID: "rAgg", Series: "dev5", Kind: Aggregate, At: at(50)}: true,
 		{RuleID: "rRep", Series: "dev4", Kind: Repeating, At: at(62)}: true,
+		// Slice 2b primitives.
+		{RuleID: "rDelta", Series: "dev6", Kind: DeltaRate, At: at(72)}:       true,
+		{RuleID: "rDelta", Series: "dev6", Kind: DeltaRate, At: at(76)}:       true,
+		{RuleID: "rCount", Series: "dev7", Kind: CountWindow, At: at(82)}:     true,
+		{RuleID: "rSess", Series: "dev8", Kind: Session, At: at(97)}:          true,
+		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, At: at(101)}:     true,
+		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, At: at(114)}:     true,
+		{RuleID: "rCorr", Series: "area1", Kind: Correlation, At: at(122)}:    true,
+		{RuleID: "rAbs2", Series: "dev10", Kind: Absence, At: at(160)}:        true,
+		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, At: at(200)}:     true,
+		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, At: at(212)}: true,
+		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, At: at(222)}: true,
 	}
 }
 
@@ -218,6 +289,30 @@ func BenchmarkThroughput(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				seq++
 				e.ProcessEvent(Event{Seq: seq, Key: SeriesKey{Rule: "rAbs", Series: devs[i%series]}, Time: base.Add(time.Duration(i) * time.Millisecond), Match: true})
+				e.Drain()
+			}
+		})
+	}
+}
+
+// BenchmarkSlidingAgg exercises the monotonic-deque sliding-window path (the most
+// state-heavy Slice-2b primitive) across series count, so a regression in the deque or
+// eviction cost surfaces here rather than in production.
+func BenchmarkSlidingAgg(b *testing.B) {
+	for _, series := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprintf("series=%d", series), func(b *testing.B) {
+			rules := []Rule{{ID: "rSlide", Kind: SlidingAgg, Window: 5 * time.Second, Agg: AggMax, Op: GT, Thresh: 1e9}}
+			e := NewEngine(rules, 0)
+			devs := make([]string, series)
+			for i := range devs {
+				devs[i] = fmt.Sprintf("dev%d", i)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			var seq uint64
+			for i := 0; i < b.N; i++ {
+				seq++
+				e.ProcessEvent(Event{Seq: seq, Key: SeriesKey{Rule: "rSlide", Series: devs[i%series]}, Time: base.Add(time.Duration(i) * time.Millisecond), Value: float64(i % 97), Match: true})
 				e.Drain()
 			}
 		})

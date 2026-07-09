@@ -165,7 +165,7 @@ func (e *Engine) applyAggregate(ev Event, r Rule) {
 	}
 	start := ev.Time.Truncate(r.Window)
 	end := start.Add(r.Window)
-	if !end.After(e.wm) {
+	if !end.After(e.wm.now) {
 		return // window already closed past the lateness bound: drop the late event
 	}
 	pk := paneKey{Rule: r.ID, Series: ev.Key.Series, Start: start.UnixNano()}
@@ -176,6 +176,28 @@ func (e *Engine) applyAggregate(ev Event, r Rule) {
 		heap.Push(&e.closes, &closeItem{end: end, pk: pk})
 	}
 	pa.add(ev.Value)
+}
+
+// applyCountWindow handles a CountWindow rule: fold each matching value into an event-count
+// accumulator; when the Count-th event lands, evaluate Agg vs Thresh, emit on satisfaction,
+// and reset. It is a tumbling window measured in events rather than time — no watermark, no
+// timer — so replay just re-counts from the snapshotted partial accumulator.
+func (e *Engine) applyCountWindow(ev Event, r Rule) {
+	if !ev.Match || r.Count <= 0 {
+		return
+	}
+	pa := e.counts[ev.Key]
+	if pa == nil {
+		pa = &paneAgg{}
+		e.counts[ev.Key] = pa
+	}
+	pa.add(ev.Value)
+	if pa.count >= r.Count {
+		if cmp(r.Op, pa.value(r.Agg), r.Thresh) {
+			e.emit(r, ev.Key, ev.Time)
+		}
+		delete(e.counts, ev.Key)
+	}
 }
 
 // closePanes fires every tumbling window whose end has been crossed by the watermark.
@@ -241,6 +263,30 @@ func (e *Engine) snapshotWindows() ([]snapSliding, []snapPane) {
 		return panes[i].Start < panes[j].Start
 	})
 	return sliding, panes
+}
+
+type snapCount struct {
+	Rule   string  `json:"rule"`
+	Series string  `json:"series"`
+	Count  int     `json:"count"`
+	Sum    float64 `json:"sum"`
+	Min    float64 `json:"min"`
+	Max    float64 `json:"max"`
+}
+
+func (e *Engine) snapshotCounts() []snapCount {
+	out := make([]snapCount, 0, len(e.counts))
+	for k, pa := range e.counts {
+		out = append(out, snapCount{Rule: k.Rule, Series: k.Series, Count: pa.count, Sum: pa.sum, Min: pa.min, Max: pa.max})
+	}
+	sortByRuleSeries(out, func(i int) (string, string) { return out[i].Rule, out[i].Series })
+	return out
+}
+
+func (e *Engine) restoreCounts(in []snapCount) {
+	for _, c := range in {
+		e.counts[SeriesKey{Rule: c.Rule, Series: c.Series}] = &paneAgg{count: c.Count, sum: c.Sum, min: c.Min, max: c.Max}
+	}
 }
 
 // restoreWindows rebuilds the sliding buffers and tumbling panes (plus the close heap,

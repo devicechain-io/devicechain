@@ -62,26 +62,50 @@ func (p *timerPQ) Pop() any {
 }
 
 // timerWheel is a heap-ordered timer index with lazy, generation-stamped cancellation.
+// Generations are strictly MONOTONIC per key and never recycled (a fired timer bumps the
+// gen rather than deleting it): if the counter ever restarted at 1, a stale timer still in
+// the heap could match a recycled live gen and fire falsely — and because snapshot() keeps
+// only live timers, that revival would also make a restored run diverge from the clean one.
+// The gens map is thus bounded by the number of distinct keys with timer history (the same
+// cardinality class as every other per-key structure, governed by the state budget), not by
+// event volume. live records each key's current deadline so a reschedule can refuse to move
+// it EARLIER (see scheduleForward).
 type timerWheel struct {
 	pq   timerPQ
-	gens map[SeriesKey]uint64 // live generation per key
+	gens map[SeriesKey]uint64    // live generation per key (monotonic; never recycled)
+	live map[SeriesKey]time.Time // current live deadline per key
 }
 
 func newTimerWheel() *timerWheel {
-	return &timerWheel{gens: map[SeriesKey]uint64{}}
+	return &timerWheel{gens: map[SeriesKey]uint64{}, live: map[SeriesKey]time.Time{}}
 }
 
-// schedule sets (or resets) the deadline for key. Any previously-scheduled timer for the
-// same key is invalidated by the generation bump.
+// schedule sets (or resets) the deadline for key unconditionally. Any previously-scheduled
+// timer for the same key is invalidated by the generation bump. Used by Duration, where a
+// fresh matched run may legitimately set an earlier deadline than a stale, already-cancelled
+// timer.
 func (w *timerWheel) schedule(key SeriesKey, deadline time.Time) {
 	w.gens[key]++
+	w.live[key] = deadline
 	heap.Push(&w.pq, &timer{deadline: deadline, key: key, gen: w.gens[key]})
+}
+
+// scheduleForward resets the deadline for key but NEVER moves it earlier. Absence and Session
+// track the latest activity, so a bounded-late out-of-order event (an earlier event time)
+// must not shrink a deadline a later event time already extended — doing so fires the
+// dead-man prematurely (a false detection) or splits one session in two.
+func (w *timerWheel) scheduleForward(key SeriesKey, deadline time.Time) {
+	if cur, ok := w.live[key]; ok && !deadline.After(cur) {
+		return // a later (or equal) deadline already stands
+	}
+	w.schedule(key, deadline)
 }
 
 // cancel invalidates any pending timer for key without scheduling a new one.
 func (w *timerWheel) cancel(key SeriesKey) {
 	if _, ok := w.gens[key]; ok {
 		w.gens[key]++
+		delete(w.live, key)
 	}
 }
 
@@ -107,7 +131,11 @@ func (w *timerWheel) popDue(wm time.Time) []firedTimer {
 			continue // stale: superseded by a later reset/cancel
 		}
 		fired = append(fired, firedTimer{key: top.key, deadline: top.deadline})
-		delete(w.gens, top.key) // one-shot: firing consumes the live timer
+		// One-shot: firing consumes the live timer. BUMP (never delete) the gen so the value
+		// is never recycled — a later schedule for this key gets a strictly higher gen, so no
+		// stale heap entry can ever masquerade as live.
+		w.gens[top.key]++
+		delete(w.live, top.key)
 	}
 	return fired
 }
@@ -163,8 +191,12 @@ func restoreTimerWheel(timers []snapTimer, gens []snapGen) *timerWheel {
 	for _, g := range gens {
 		w.gens[SeriesKey{Rule: g.Rule, Series: g.Series}] = g.Gen
 	}
+	// snapshot() keeps only LIVE timers (one per key), so each restored timer is that key's
+	// current live deadline — enough to rebuild the forward-only `live` map exactly.
 	for _, t := range timers {
-		heap.Push(&w.pq, &timer{deadline: t.Deadline, key: SeriesKey{Rule: t.Rule, Series: t.Series}, gen: t.Gen})
+		key := SeriesKey{Rule: t.Rule, Series: t.Series}
+		heap.Push(&w.pq, &timer{deadline: t.Deadline, key: key, gen: t.Gen})
+		w.live[key] = t.Deadline
 	}
 	return w
 }
