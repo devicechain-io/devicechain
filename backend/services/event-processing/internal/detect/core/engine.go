@@ -110,6 +110,11 @@ func (e *Engine) Drain() []Detection {
 // replays from LastSeq+1 and re-derives identical firings.
 func (e *Engine) LastSeq() uint64 { return e.lastSeq }
 
+// Watermark is the engine's current logical time. The runtime denormalizes it onto
+// the checkpoint row so the operations surface can measure watermark lag (event
+// time vs wall clock) without deserializing the snapshot payload.
+func (e *Engine) Watermark() time.Time { return e.wm }
+
 // ProcessEvent applies one event: advance the watermark, fire any timers the advance
 // made due (as of the pre-event state), then apply the event's effect.
 func (e *Engine) ProcessEvent(ev Event) {
