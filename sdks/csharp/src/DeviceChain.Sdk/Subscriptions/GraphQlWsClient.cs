@@ -6,13 +6,13 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using DeviceChain.Sdk.Transport;
 
 namespace DeviceChain.Sdk.Subscriptions;
 
@@ -36,6 +36,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
     // growing without bound (latest-wins — right for live telemetry driving a chart/twin).
     private const int OperationBufferCapacity = 1024;
 
+    private readonly IWebSocketFactory _webSocketFactory;
     private readonly Uri _endpoint;
     private readonly TokenProvider? _tokenProvider;
     private readonly SemaphoreSlim _connectLock = new(1, 1);
@@ -46,12 +47,22 @@ public sealed class GraphQlWsClient : IAsyncDisposable
     private int _nextId;
     private int _generation;
 
+    /// <param name="webSocketFactory">Creates the underlying socket (default <see cref="ClientWebSocketFactory"/>; Unity WebGL injects its own).</param>
+    /// <param name="endpoint">The absolute ws(s):// URL of one area's GraphQL endpoint.</param>
+    /// <param name="tokenProvider">Resolves the Bearer token for connection_init; null = anonymous.</param>
+    public GraphQlWsClient(IWebSocketFactory webSocketFactory, Uri endpoint, TokenProvider? tokenProvider = null)
+    {
+        _webSocketFactory = webSocketFactory ?? throw new ArgumentNullException(nameof(webSocketFactory));
+        _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
+        _tokenProvider = tokenProvider;
+    }
+
+    /// <summary>Convenience overload for the plain-.NET path: uses the default <see cref="ClientWebSocketFactory"/>.</summary>
     /// <param name="endpoint">The absolute ws(s):// URL of one area's GraphQL endpoint.</param>
     /// <param name="tokenProvider">Resolves the Bearer token for connection_init; null = anonymous.</param>
     public GraphQlWsClient(Uri endpoint, TokenProvider? tokenProvider = null)
+        : this(new ClientWebSocketFactory(), endpoint, tokenProvider)
     {
-        _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
-        _tokenProvider = tokenProvider;
     }
 
     /// <summary>
@@ -118,11 +129,10 @@ public sealed class GraphQlWsClient : IAsyncDisposable
                 return existing!;
             }
 
-            var socket = new ClientWebSocket();
-            socket.Options.AddSubProtocol(SubProtocol);
+            IWebSocketConnection socket = _webSocketFactory.Create();
             try
             {
-                await socket.ConnectAsync(_endpoint, cancellationToken).ConfigureAwait(false);
+                await socket.ConnectAsync(_endpoint, SubProtocol, cancellationToken).ConfigureAwait(false);
                 await SendConnectionInitAsync(socket, cancellationToken).ConfigureAwait(false);
                 await AwaitConnectionAckAsync(socket, cancellationToken).ConfigureAwait(false);
             }
@@ -147,9 +157,9 @@ public sealed class GraphQlWsClient : IAsyncDisposable
     // a loop that exited (a bad frame, a server close) with the socket not yet observably closed
     // must not be reused, or a subscribe would send into a socket nobody reads (a silent hang).
     private static bool IsLive(Connection? conn) =>
-        conn is { Socket.State: WebSocketState.Open } && !conn.ReadLoop.IsCompleted;
+        conn is { Socket.IsOpen: true } && !conn.ReadLoop.IsCompleted;
 
-    private async Task SendConnectionInitAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    private async Task SendConnectionInitAsync(IWebSocketConnection socket, CancellationToken cancellationToken)
     {
         string? token = _tokenProvider is null ? null : await _tokenProvider(cancellationToken).ConfigureAwait(false);
         using var ms = new MemoryStream();
@@ -167,14 +177,14 @@ public sealed class GraphQlWsClient : IAsyncDisposable
             w.WriteEndObject();
         }
         // No read loop yet + single caller under _connectLock, so a lock-free send is safe here.
-        await RawSendAsync(socket, ms.ToArray(), cancellationToken).ConfigureAwait(false);
+        await socket.SendTextAsync(ms.ToArray(), cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task AwaitConnectionAckAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    private async Task AwaitConnectionAckAsync(IWebSocketConnection socket, CancellationToken cancellationToken)
     {
         while (true)
         {
-            string message = await ReceiveMessageAsync(socket, cancellationToken).ConfigureAwait(false);
+            string message = await ReceiveTextAsync(socket, cancellationToken).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(message);
             string type = TypeOf(doc.RootElement);
             switch (type)
@@ -182,7 +192,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
                 case "connection_ack":
                     return;
                 case "ping":
-                    await RawSendAsync(socket, PongFrame, cancellationToken).ConfigureAwait(false);
+                    await socket.SendTextAsync(PongFrame, cancellationToken).ConfigureAwait(false);
                     break;
                 default:
                     throw new GraphQlRequestException($"expected connection_ack, got '{type}'");
@@ -215,9 +225,9 @@ public sealed class GraphQlWsClient : IAsyncDisposable
         Exception failure = new GraphQlRequestException("subscription socket closed");
         try
         {
-            while (conn.Socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
+            while (conn.Socket.IsOpen && !cancellationToken.IsCancellationRequested)
             {
-                string message = await ReceiveMessageAsync(conn.Socket, cancellationToken).ConfigureAwait(false);
+                string message = await ReceiveTextAsync(conn.Socket, cancellationToken).ConfigureAwait(false);
                 Dispatch(conn, message, cancellationToken);
             }
         }
@@ -324,7 +334,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
 
     private async Task TryCompleteAsync(Connection conn, string id)
     {
-        if (conn.Socket.State != WebSocketState.Open)
+        if (!conn.Socket.IsOpen)
         {
             return;
         }
@@ -356,7 +366,7 @@ public sealed class GraphQlWsClient : IAsyncDisposable
         await conn.SendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await RawSendAsync(conn.Socket, payload, cancellationToken).ConfigureAwait(false);
+            await conn.Socket.SendTextAsync(payload, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -364,28 +374,17 @@ public sealed class GraphQlWsClient : IAsyncDisposable
         }
     }
 
-    private static Task RawSendAsync(ClientWebSocket socket, byte[] payload, CancellationToken cancellationToken) =>
-        socket.SendAsync(new ArraySegment<byte>(payload), WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
-
-    private static async Task<string> ReceiveMessageAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    private static async Task<string> ReceiveTextAsync(IWebSocketConnection socket, CancellationToken cancellationToken)
     {
-        var buffer = new byte[8192];
-        using var ms = new MemoryStream();
-        WebSocketReceiveResult result;
-        do
+        WebSocketMessage message = await socket.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+        if (message.Kind == WebSocketMessageKind.Closed)
         {
-            result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken).ConfigureAwait(false);
-            if (result.MessageType == WebSocketMessageType.Close)
-            {
-                // Carry the spec close code (4401 invalid token, 4429 rate-limited, …) so a
-                // consumer can tell "re-auth needed" from a transient drop.
-                throw new GraphQlRequestException(
-                    $"subscription socket closed by server ({(int?)result.CloseStatus}): {result.CloseStatusDescription}");
-            }
-            ms.Write(buffer, 0, result.Count);
+            // Carry the spec close code (4401 invalid token, 4429 rate-limited, …) so a
+            // consumer can tell "re-auth needed" from a transient drop.
+            throw new GraphQlRequestException(
+                $"subscription socket closed by server ({message.CloseCode}): {message.CloseReason}");
         }
-        while (!result.EndOfMessage);
-        return Encoding.UTF8.GetString(ms.ToArray());
+        return message.Text!;
     }
 
     private static readonly byte[] PongFrame = Encoding.UTF8.GetBytes("{\"type\":\"pong\"}");
@@ -447,13 +446,13 @@ public sealed class GraphQlWsClient : IAsyncDisposable
 
     private sealed class Connection
     {
-        public Connection(ClientWebSocket socket, int generation)
+        public Connection(IWebSocketConnection socket, int generation)
         {
             Socket = socket;
             Generation = generation;
         }
 
-        public ClientWebSocket Socket { get; }
+        public IWebSocketConnection Socket { get; }
         public int Generation { get; }
         public Task ReadLoop { get; set; } = Task.CompletedTask;
         public SemaphoreSlim SendLock { get; } = new(1, 1);

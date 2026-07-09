@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using DeviceChain.Sdk.Auth;
 using DeviceChain.Sdk.Ingest;
 using DeviceChain.Sdk.Subscriptions;
+using DeviceChain.Sdk.Transport;
 
 namespace DeviceChain.Sdk;
 
@@ -20,8 +21,9 @@ namespace DeviceChain.Sdk;
 /// </summary>
 public sealed class DeviceChainClient : IAsyncDisposable
 {
-    private readonly HttpClient _http;
-    private readonly bool _ownsHttp;
+    private readonly IHttpTransport _httpTransport;
+    private readonly IWebSocketFactory _webSocketFactory;
+    private readonly IDisposable? _ownedHttp;
     private readonly ConcurrentDictionary<Area, GraphQlWsClient> _subscriptions = new();
     private volatile bool _disposed;
 
@@ -29,10 +31,10 @@ public sealed class DeviceChainClient : IAsyncDisposable
     public Uri Origin { get; }
 
     /// <summary>The two-tier auth state machine (login → selectTenant → refresh).</summary>
-    public AuthSession Auth { get; }
+    public AuthSession Auth { get; private set; } = null!;
 
     /// <summary>An authenticated GraphQL client (attaches the session's access token per request).</summary>
-    public GraphQlClient Gql { get; }
+    public GraphQlClient Gql { get; private set; } = null!;
 
     /// <param name="origin">The platform origin the ingress serves (/api/... and the device-plane ingress).</param>
     /// <param name="httpClient">An HttpClient to reuse; when null the client owns a new one (disposed with it).</param>
@@ -41,22 +43,45 @@ public sealed class DeviceChainClient : IAsyncDisposable
         Origin = origin ?? throw new ArgumentNullException(nameof(origin));
         // The SDK builds absolute URIs from Origin, so a caller-supplied HttpClient is used as-is
         // (its BaseAddress is neither read nor mutated). Own one only when none is supplied.
+        HttpClient http;
         if (httpClient is null)
         {
-            _http = new HttpClient();
-            _ownsHttp = true;
+            http = new HttpClient();
+            _ownedHttp = http;
         }
         else
         {
-            _http = httpClient;
-            _ownsHttp = false;
+            http = httpClient;
         }
+        _httpTransport = new HttpClientTransport(http);
+        _webSocketFactory = new ClientWebSocketFactory();
+        InitClients();
+    }
 
+    /// <summary>
+    /// Transport-injecting constructor — the Unity WebGL path. A host supplies transports backed by
+    /// <c>UnityWebRequest</c> and a browser <c>WebSocket</c> (via <c>.jslib</c>), since
+    /// <see cref="HttpClient"/>/<c>ClientWebSocket</c> do not work under WebGL/IL2CPP. The SDK owns
+    /// neither transport (the host's to dispose).
+    /// </summary>
+    /// <param name="origin">The platform origin the ingress serves (/api/... and the device-plane ingress).</param>
+    /// <param name="httpTransport">The HTTP transport to use for GraphQL + device-plane emit.</param>
+    /// <param name="webSocketFactory">The factory for live-subscription sockets.</param>
+    public DeviceChainClient(Uri origin, IHttpTransport httpTransport, IWebSocketFactory webSocketFactory)
+    {
+        Origin = origin ?? throw new ArgumentNullException(nameof(origin));
+        _httpTransport = httpTransport ?? throw new ArgumentNullException(nameof(httpTransport));
+        _webSocketFactory = webSocketFactory ?? throw new ArgumentNullException(nameof(webSocketFactory));
+        InitClients();
+    }
+
+    private void InitClients()
+    {
         // The auth mutations run anonymously, so this inner client needs no token provider; the
         // outer Gql attaches the session's token (no construction cycle).
-        var authGql = new GraphQlClient(_http, Origin);
+        var authGql = new GraphQlClient(_httpTransport, Origin);
         Auth = new AuthSession(authGql);
-        Gql = new GraphQlClient(_http, Origin, Auth.GetAccessTokenAsync);
+        Gql = new GraphQlClient(_httpTransport, Origin, Auth.GetAccessTokenAsync);
     }
 
     /// <summary>Authenticates an identity (step 1). Convenience over <see cref="AuthSession.LoginAsync"/>.</summary>
@@ -74,7 +99,7 @@ public sealed class DeviceChainClient : IAsyncDisposable
     public GraphQlWsClient Subscriptions(Area area)
     {
         ThrowIfDisposed();
-        return _subscriptions.GetOrAdd(area, a => new GraphQlWsClient(WebSocketUri(a), Auth.GetAccessTokenAsync));
+        return _subscriptions.GetOrAdd(area, a => new GraphQlWsClient(_webSocketFactory, WebSocketUri(a), Auth.GetAccessTokenAsync));
     }
 
     /// <summary>
@@ -85,7 +110,7 @@ public sealed class DeviceChainClient : IAsyncDisposable
     public DeviceEventPublisher DevicePublisher(Uri ingressOrigin, string instanceId, string tenant)
     {
         ThrowIfDisposed();
-        return new DeviceEventPublisher(_http, ingressOrigin, instanceId, tenant);
+        return new DeviceEventPublisher(_httpTransport, ingressOrigin, instanceId, tenant);
     }
 
     private void ThrowIfDisposed()
@@ -120,9 +145,6 @@ public sealed class DeviceChainClient : IAsyncDisposable
             await client.DisposeAsync().ConfigureAwait(false);
         }
         _subscriptions.Clear();
-        if (_ownsHttp)
-        {
-            _http.Dispose();
-        }
+        _ownedHttp?.Dispose();
     }
 }

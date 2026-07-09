@@ -4,14 +4,13 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
-using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using DeviceChain.Sdk.Json;
+using DeviceChain.Sdk.Transport;
 
 namespace DeviceChain.Sdk.Ingest;
 
@@ -27,12 +26,12 @@ public sealed class DeviceEventPublisher
     /// <summary>The device-credential type a token-authenticated device presents (matches the sim + event-sources).</summary>
     public const string AccessTokenCredential = "ACCESS_TOKEN";
 
-    private readonly HttpClient _http;
+    private readonly IHttpTransport _transport;
     private readonly Uri _ingressOrigin;
     private readonly string _instanceId;
     private readonly string _tenant;
 
-    /// <param name="http">A shared HttpClient (BaseAddress not read/mutated — absolute URIs are built).</param>
+    /// <param name="transport">The HTTP transport (default <see cref="HttpClientTransport"/>; Unity WebGL injects its own).</param>
     /// <param name="ingressOrigin">
     /// The device-plane ingress origin. This is a SEPARATE listener from the GraphQL/`/api` ingress
     /// (event-sources' HTTP port) — the cluster ingress does not route `/{instanceId}/{tenant}/events`,
@@ -40,12 +39,22 @@ public sealed class DeviceEventPublisher
     /// </param>
     /// <param name="instanceId">The instance segment (ADR-048).</param>
     /// <param name="tenant">The tenant segment.</param>
-    public DeviceEventPublisher(HttpClient http, Uri ingressOrigin, string instanceId, string tenant)
+    public DeviceEventPublisher(IHttpTransport transport, Uri ingressOrigin, string instanceId, string tenant)
     {
-        _http = http ?? throw new ArgumentNullException(nameof(http));
+        _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _ingressOrigin = ingressOrigin ?? throw new ArgumentNullException(nameof(ingressOrigin));
         _instanceId = instanceId ?? throw new ArgumentNullException(nameof(instanceId));
         _tenant = tenant ?? throw new ArgumentNullException(nameof(tenant));
+    }
+
+    /// <summary>Convenience overload for the plain-.NET path: wraps a shared <see cref="HttpClient"/>.</summary>
+    /// <param name="http">A shared HttpClient (BaseAddress not read/mutated — absolute URIs are built).</param>
+    /// <param name="ingressOrigin">The device-plane ingress origin (see the transport overload).</param>
+    /// <param name="instanceId">The instance segment (ADR-048).</param>
+    /// <param name="tenant">The tenant segment.</param>
+    public DeviceEventPublisher(HttpClient http, Uri ingressOrigin, string instanceId, string tenant)
+        : this(new HttpClientTransport(http), ingressOrigin, instanceId, tenant)
+    {
     }
 
     /// <summary>
@@ -90,43 +99,33 @@ public sealed class DeviceEventPublisher
     {
         byte[] body = JsonSerializer.SerializeToUtf8Bytes(evt, SdkJson.Default.MeasurementEvent);
         string path = $"/{_instanceId}/{_tenant}/events";
-        var uri = new Uri(_ingressOrigin, path);
 
         // No Authorization header — a device authenticates by presenting its credential IN the body
         // (credentialType + credentialId), not a Bearer (ADR-014).
-        using var request = new HttpRequestMessage(HttpMethod.Post, uri)
+        var request = new HttpTransportRequest
         {
-            Content = new ByteArrayContent(body),
+            Uri = new Uri(_ingressOrigin, path),
+            Body = body,
+            ContentType = "application/json",
         };
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
 
-        HttpResponseMessage response;
+        HttpTransportResponse response;
         try
         {
-            response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            response = await _transport.SendAsync(request, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             throw new GraphQlRequestException(ex.Message, 0);
         }
 
-        using (response)
+        const int accepted = 202;
+        if (response.Status != accepted)
         {
-            if (response.StatusCode != HttpStatusCode.Accepted)
-            {
-                string detail;
-                try
-                {
-                    detail = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                }
-                catch (IOException)
-                {
-                    detail = "";
-                }
-                throw new GraphQlRequestException(
-                    $"ingress {path} returned {(int)response.StatusCode}: {detail.Trim()}",
-                    (int)response.StatusCode);
-            }
+            string detail = response.Body.Length == 0 ? "" : Encoding.UTF8.GetString(response.Body);
+            throw new GraphQlRequestException(
+                $"ingress {path} returned {response.Status}: {detail.Trim()}",
+                response.Status);
         }
     }
 

@@ -4,12 +4,12 @@
 using System;
 using System.IO;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
 using DeviceChain.Sdk.Json;
+using DeviceChain.Sdk.Transport;
 
 namespace DeviceChain.Sdk;
 
@@ -37,18 +37,27 @@ public sealed class RequestOptions
 /// </summary>
 public sealed class GraphQlClient
 {
-    private readonly HttpClient _http;
+    private readonly IHttpTransport _transport;
     private readonly Uri _origin;
     private readonly TokenProvider? _tokenProvider;
 
+    /// <param name="transport">The HTTP transport (default <see cref="HttpClientTransport"/>; Unity WebGL injects its own).</param>
+    /// <param name="origin">The platform origin (https://host) the /api/{area}/graphql paths hang off.</param>
+    /// <param name="tokenProvider">Resolves the Bearer token per request; null = always anonymous.</param>
+    public GraphQlClient(IHttpTransport transport, Uri origin, TokenProvider? tokenProvider = null)
+    {
+        _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _origin = origin ?? throw new ArgumentNullException(nameof(origin));
+        _tokenProvider = tokenProvider;
+    }
+
+    /// <summary>Convenience overload for the plain-.NET path: wraps a shared <see cref="HttpClient"/>.</summary>
     /// <param name="http">A shared HttpClient (its BaseAddress is not read or mutated — the SDK builds absolute URIs).</param>
     /// <param name="origin">The platform origin (https://host) the /api/{area}/graphql paths hang off.</param>
     /// <param name="tokenProvider">Resolves the Bearer token per request; null = always anonymous.</param>
     public GraphQlClient(HttpClient http, Uri origin, TokenProvider? tokenProvider = null)
+        : this(new HttpClientTransport(http), origin, tokenProvider)
     {
-        _http = http ?? throw new ArgumentNullException(nameof(http));
-        _origin = origin ?? throw new ArgumentNullException(nameof(origin));
-        _tokenProvider = tokenProvider;
     }
 
     /// <summary>
@@ -67,25 +76,24 @@ public sealed class GraphQlClient
     {
         byte[] body = BuildRequestBody(query, variables, variablesInfo);
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(_origin, Areas.Path(area)))
-        {
-            Content = new ByteArrayContent(body),
-        };
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-
+        string? token = null;
         if (options?.Anonymous != true && _tokenProvider is not null)
         {
-            string? token = await _tokenProvider(cancellationToken).ConfigureAwait(false);
-            if (!string.IsNullOrEmpty(token))
-            {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            }
+            token = await _tokenProvider(cancellationToken).ConfigureAwait(false);
         }
 
-        HttpResponseMessage response;
+        var request = new HttpTransportRequest
+        {
+            Uri = new Uri(_origin, Areas.Path(area)),
+            Body = body,
+            ContentType = "application/json",
+            BearerToken = string.IsNullOrEmpty(token) ? null : token,
+        };
+
+        HttpTransportResponse response;
         try
         {
-            response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            response = await _transport.SendAsync(request, cancellationToken).ConfigureAwait(false);
         }
         // Wrap every transport failure EXCEPT genuine caller cancellation. An HttpClient timeout
         // also throws OperationCanceledException but with the caller's token NOT signalled, so it
@@ -95,16 +103,12 @@ public sealed class GraphQlClient
             throw new GraphQlRequestException(ex.Message, 0);
         }
 
-        using (response)
+        int status = response.Status;
+        if (status is < 200 or >= 300)
         {
-            byte[] bytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-            int status = (int)response.StatusCode;
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new GraphQlRequestException($"Request failed ({status})", status, TryReadErrors(bytes));
-            }
-            return ParseData(bytes, dataInfo, status);
+            throw new GraphQlRequestException($"Request failed ({status})", status, TryReadErrors(response.Body));
         }
+        return ParseData(response.Body, dataInfo, status);
     }
 
     private static byte[] BuildRequestBody<TVars>(string query, TVars variables, JsonTypeInfo<TVars> variablesInfo)
