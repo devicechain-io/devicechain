@@ -34,7 +34,7 @@ DeviceChain is a set of cooperating microservices over a shared core library:
 - **user-management** — global identities, per-tenant memberships, the role catalog, and JWT issuance/validation.
 - **operator (k8s)** — reconciles CRDs into the running platform.
 
-See [Architecture](./concepts/architecture.md) for how these fit together, and the [Domain Model](./concepts/domain-model.md) for the core concepts.
+See [Architecture](./concepts/architecture.md) for how these fit together, the [Domain Model](./concepts/domain-model.md) for the core concepts, and [Event Processing & Alarms](./concepts/event-processing.md) for how telemetry becomes actionable signals.
 
 ## Trying it with simulated data
 
