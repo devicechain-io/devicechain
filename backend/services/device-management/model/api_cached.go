@@ -224,6 +224,7 @@ func (capi *CachedApi) UpdateDeviceType(ctx context.Context, token string,
 	if updated != nil {
 		if tenant, ok := core.TenantFromContext(ctx); ok {
 			_ = capi.caches.MetricDefsByType.Delete(ctx, metricDefsByTypeKey(tenant, updated.ID))
+			_ = capi.caches.ProfileScopeByType.Delete(ctx, profileScopeByTypeKey(tenant, updated.ID))
 		}
 	}
 	return updated, nil
@@ -259,6 +260,36 @@ func (capi *CachedApi) MetricDefinitionsByDeviceType(ctx context.Context, device
 	return defs, nil
 }
 
+// profileScopeByTypeKey builds the tenant-scoped cache key for a device type's
+// denormalized rule-scoping identity (ADR-051), keyed by the device type row id.
+func profileScopeByTypeKey(tenant string, deviceTypeId uint) string {
+	return fmt.Sprintf("%s|%d", tenant, deviceTypeId)
+}
+
+// ProfileScopeByDeviceType serves the resolve path's per-device-type scope lookup
+// (ADR-051) from cache, including empty scopes (an untyped or unpublished device
+// type is common and must not query on every event). A lookup without a tenant in
+// context bypasses the cache and goes straight to the DB.
+func (capi *CachedApi) ProfileScopeByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileScope, error) {
+	tenant, hasTenant := core.TenantFromContext(ctx)
+	if !hasTenant {
+		return capi.Api.ProfileScopeByDeviceType(ctx, deviceTypeId)
+	}
+
+	key := profileScopeByTypeKey(tenant, deviceTypeId)
+	var cached ProfileScope
+	if found, err := capi.caches.ProfileScopeByType.Get(ctx, key, &cached); err == nil && found {
+		return &cached, nil
+	}
+
+	scope, err := capi.Api.ProfileScopeByDeviceType(ctx, deviceTypeId)
+	if err != nil {
+		return nil, err
+	}
+	_ = capi.caches.ProfileScopeByType.Set(ctx, key, scope)
+	return scope, nil
+}
+
 // PublishDeviceProfile forwards to the DB then evicts the cached definitions of
 // every device type adopting the profile: resolution serves the active PUBLISHED
 // version (ADR-045 slice c), so a publish is exactly when the cached set changes and
@@ -288,6 +319,25 @@ func (capi *CachedApi) RollbackDeviceProfile(ctx context.Context, token string, 
 	return profile, nil
 }
 
+// UpdateDeviceProfile forwards to the DB then, on a profile-TOKEN rename, evicts
+// the cached scope of every device type adopting the profile. The denormalized
+// ProfileVersionToken is "{profileToken}@{version}" (ADR-051), so a rename changes
+// what resolution stamps onto events even though the version and the metric/command/
+// alarm definitions are unchanged — a dependency the metric-def cache does not have.
+// evictProfileResolution drops both caches; the metric-def eviction is a harmless
+// over-eviction (it simply repopulates). Bounded further by the cache TTL.
+func (capi *CachedApi) UpdateDeviceProfile(ctx context.Context, token string,
+	request *DeviceProfileCreateRequest) (*DeviceProfile, error) {
+	updated, err := capi.Api.UpdateDeviceProfile(ctx, token, request)
+	if err != nil {
+		return nil, err
+	}
+	if updated != nil && token != request.Token {
+		capi.evictProfileResolution(ctx, updated.ID)
+	}
+	return updated, nil
+}
+
 // evictProfileResolution drops the cached definitions of every device type adopting
 // the profile whose active version changed. The ingest cache is keyed by device
 // type (what the hot path has), but versioning lives on the profile (ADR-045), so
@@ -304,5 +354,6 @@ func (capi *CachedApi) evictProfileResolution(ctx context.Context, profileId uin
 	}
 	for _, typeId := range typeIds {
 		_ = capi.caches.MetricDefsByType.Delete(ctx, metricDefsByTypeKey(tenant, typeId))
+		_ = capi.caches.ProfileScopeByType.Delete(ctx, profileScopeByTypeKey(tenant, typeId))
 	}
 }

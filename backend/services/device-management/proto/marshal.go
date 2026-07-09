@@ -13,6 +13,17 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// optionalString maps a model string to a proto3 optional field: an empty value
+// is encoded as absent (nil) rather than a present empty string, so a device with
+// no resolvable profile version reads back as the empty token via the generated
+// Get* accessor.
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 // Marshal a failed event to protobuf bytes.
 func MarshalFailedEvent(event *model.FailedEvent) ([]byte, error) {
 	// Encode protobuf event.
@@ -392,14 +403,16 @@ func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 		})
 	}
 	pbevent := &PResolvedEvent{
-		Source:            event.Source,
-		AltId:             event.AltId,
-		SourceDeviceToken: event.SourceDeviceToken,
-		Anchors:           anchors,
-		OccurredTime:      event.OccurredTime.Format(time.RFC3339),
-		ProcessedTime:     event.ProcessedTime.Format(time.RFC3339),
-		EventType:         int64(event.EventType),
-		Payload:           pybytes,
+		Source:              event.Source,
+		AltId:               event.AltId,
+		SourceDeviceToken:   event.SourceDeviceToken,
+		Anchors:             anchors,
+		DeviceTypeToken:     optionalString(event.DeviceTypeToken),
+		ProfileVersionToken: optionalString(event.ProfileVersionToken),
+		OccurredTime:        event.OccurredTime.Format(time.RFC3339),
+		ProcessedTime:       event.ProcessedTime.Format(time.RFC3339),
+		EventType:           int64(event.EventType),
+		Payload:             pybytes,
 	}
 
 	// Marshal event to bytes.
@@ -445,14 +458,16 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 	}
 
 	event := &model.ResolvedEvent{
-		Source:            pbevent.Source,
-		AltId:             pbevent.AltId,
-		SourceDeviceToken: pbevent.SourceDeviceToken,
-		Anchors:           anchors,
-		OccurredTime:      occurred,
-		ProcessedTime:     processed,
-		EventType:         esmodel.EventType(pbevent.EventType),
-		Payload:           payload,
+		Source:              pbevent.Source,
+		AltId:               pbevent.AltId,
+		SourceDeviceToken:   pbevent.SourceDeviceToken,
+		Anchors:             anchors,
+		DeviceTypeToken:     pbevent.GetDeviceTypeToken(),
+		ProfileVersionToken: pbevent.GetProfileVersionToken(),
+		OccurredTime:        occurred,
+		ProcessedTime:       processed,
+		EventType:           esmodel.EventType(pbevent.EventType),
+		Payload:             payload,
 	}
 
 	return event, nil

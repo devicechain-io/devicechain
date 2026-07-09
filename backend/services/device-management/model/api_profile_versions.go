@@ -240,3 +240,45 @@ func (api *Api) activeProfileSnapshot(ctx context.Context, profileId uint) (*Pro
 	}
 	return parseProfileSnapshot(version.Snapshot)
 }
+
+// ProfileScope is a device's denormalized rule-scoping identity (ADR-051): the
+// device-type token plus a "{profileToken}@{version}" token naming the active
+// published profile version (ADR-045) whose rules apply. It is stamped onto every
+// resolved event so event-processing's DETECT engine can select the applicable
+// rules without a graph read back into device-management. ProfileVersionToken is
+// empty when the type has no profile or the profile is unpublished — the device
+// has no resolvable rules, the same limiting case as an empty active snapshot.
+type ProfileScope struct {
+	DeviceTypeToken     string
+	ProfileVersionToken string
+}
+
+// ProfileScopeByDeviceType resolves a device type to its ProfileScope (ADR-051).
+// It walks the same device→type→profile→active-version chain the ingest path
+// already uses for metric resolution, so it is cheap and cache-friendly (the
+// cached decorator keys it by device type, evicted on the same publish/rollback/
+// reprofile events as the metric-definition cache). A missing type or an
+// unpublished/absent profile yields an empty ProfileVersionToken rather than an
+// error: the device simply has no resolvable rules.
+func (api *Api) ProfileScopeByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileScope, error) {
+	types, err := api.DeviceTypesById(ctx, []uint{deviceTypeId})
+	if err != nil {
+		return nil, err
+	}
+	if len(types) == 0 {
+		return &ProfileScope{}, nil
+	}
+	scope := &ProfileScope{DeviceTypeToken: types[0].Token}
+	if types[0].ProfileId == nil {
+		return scope, nil
+	}
+	profiles, err := api.DeviceProfilesById(ctx, []uint{*types[0].ProfileId})
+	if err != nil {
+		return nil, err
+	}
+	if len(profiles) == 0 || !profiles[0].ActiveVersion.Valid {
+		return scope, nil
+	}
+	scope.ProfileVersionToken = fmt.Sprintf("%s@%d", profiles[0].Token, profiles[0].ActiveVersion.Int32)
+	return scope, nil
+}

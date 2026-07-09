@@ -292,3 +292,10 @@ functionalAreas:
     config: {}
   notification-management:
     config: {}
+  event-processing:
+    config: {}
+    # ADR-051: the DETECT engine must run as ONE active instance per deployment
+    # (no two engines splitting the resolved-events durable, or windowed/absence
+    # detection breaks on restart). Today this only drops events, so replicas are
+    # harmless — but do NOT scale this area past 1 once DETECT lands, and the future
+    # singleton cutover needs a per-area Recreate strategy or leader election.

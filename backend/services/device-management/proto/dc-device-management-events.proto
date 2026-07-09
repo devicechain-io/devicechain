@@ -47,8 +47,22 @@ message PResolvedAnchor {
  * tracked-relationship anchors (empty when the device is unassigned). The source
  * device is addressed by its token (ADR-044): the numeric row id never crosses the
  * seam to event-management / device-state.
+ *
+ * device_type_token and profile_version_token denormalize the device's rule-scoping
+ * identity at resolve time (ADR-051): the device-type token and a
+ * "{profileToken}@{version}" token naming the active PUBLISHED profile version
+ * (ADR-045) whose rules apply. event-processing's DETECT engine selects which
+ * rules apply to an event from these tokens without a graph read back into
+ * device-management. profile_version_token is empty when the type has no profile
+ * or the profile is unpublished (no active version) — the device has no resolvable
+ * rules, the same limiting case as an unclassified measurement.
  */
  message PResolvedEvent {
+	// Field numbers 5 and 6 previously held target_type/target_id (removed in #134
+	// when the anchor set replaced the single target); reserved so they are never
+	// re-decoded from a retained/replayed pre-#134 message on this durable stream.
+	reserved 5, 6;
+	reserved "target_type", "target_id";
 	string source = 1;
 	optional string alt_id = 2;
 	string source_device_token = 3;
@@ -57,6 +71,8 @@ message PResolvedAnchor {
     string processed_time = 8;
     int64 event_type = 9;
     bytes payload = 10;
+	optional string device_type_token = 11;
+	optional string profile_version_token = 12;
 }
 
 /**

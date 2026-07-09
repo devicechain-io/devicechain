@@ -22,7 +22,8 @@
           "device-state",
           "dashboard-management",
           "command-delivery",
-          "notification-management"
+          "notification-management",
+          "event-processing"
         ]
       },
       "uniqueItems": true,

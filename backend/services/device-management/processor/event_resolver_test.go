@@ -158,6 +158,51 @@ func measurementEvent(key, value string) *esmodel.UnresolvedEvent {
 	}
 }
 
+// The device's rule-scoping identity (device-type + active-published-profile-version
+// tokens) is denormalized onto every resolved event so event-processing's DETECT
+// engine can select the applicable rules without a graph read (ADR-051).
+func (suite *EventResolverTestSuite) TestResolvedEventCarriesProfileScope() {
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
+	suite.API.Mock.On("EntityRelationships").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
+	suite.API.ProfileScopeResult = &dmodel.ProfileScope{DeviceTypeToken: "sensor-type", ProfileVersionToken: "temp-profile@3"}
+
+	device := deviceWithToken("TEST-123")
+	device.DeviceTypeId = 77
+	results, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
+		context.Background(), device, measurementEvent("temp", "42"))
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint(0), reason)
+	assert.Len(suite.T(), results, 1)
+	assert.Equal(suite.T(), "sensor-type", results[0].Resolved.DeviceTypeToken)
+	assert.Equal(suite.T(), "temp-profile@3", results[0].Resolved.ProfileVersionToken)
+	// The resolver keys the scope on the device's TYPE id, not its row id.
+	assert.Equal(suite.T(), uint(77), suite.API.ProfileScopeArg)
+}
+
+// A scope-resolution failure on a new-relationship event aborts BEFORE the
+// relationship is created — so a transient lookup blip cannot leave a committed
+// relationship that a redelivery would duplicate (a fresh token per attempt is not
+// idempotent). It also maps to the retryable ApiCallFailed reason (ADR-051 review).
+func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnScopeError() {
+	suite.API.ProfileScopeErr = errors.New("transient scope lookup failure")
+
+	event := &esmodel.UnresolvedEvent{
+		Device:    "TEST-123",
+		EventType: esmodel.NewRelationship,
+		Payload: &esmodel.UnresolvedNewRelationshipPayload{
+			RelationshipType: "located-in", TargetType: "area", Target: "warehouse-3",
+		},
+	}
+	_, reason, err := suite.resolver(config.AuthModeOptional).HandleNewRelationshipEvent(
+		context.Background(), deviceWithToken("TEST-123"), event)
+
+	assert.Error(suite.T(), err)
+	assert.Equal(suite.T(), uint(dmproto.FailureReason_ApiCallFailed), reason)
+	suite.API.AssertNotCalled(suite.T(), "CreateEntityRelationship")
+}
+
 // A measurement violating a declared metric definition routes to the dead-letter
 // path (FailureReason_Invalid) before any relationship fan-out is attempted.
 func (suite *EventResolverTestSuite) TestMeasurementValidationRejects() {

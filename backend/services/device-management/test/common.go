@@ -32,6 +32,19 @@ var DeviceManagementMicroservice = &core.Microservice{
 
 type MockApi struct {
 	mock.Mock
+	// ProfileScopeResult is returned by ProfileScopeByDeviceType (ADR-051). A nil
+	// value (the default) yields an empty scope, so the many resolver tests that
+	// predate the denormalization need not set it; a test asserting scope stamping
+	// sets it. A plain field (not a testify expectation) keeps it lock-free and
+	// deterministic — the suite news a fresh MockApi per test, so it never leaks.
+	ProfileScopeResult *model.ProfileScope
+	// ProfileScopeArg captures the deviceTypeId last passed to
+	// ProfileScopeByDeviceType, so a test can assert the resolver keys on the
+	// device's TYPE id (not, say, its row id).
+	ProfileScopeArg uint
+	// ProfileScopeErr, when set, makes ProfileScopeByDeviceType fail — so a test can
+	// assert scope resolution runs (and aborts) before any state mutation.
+	ProfileScopeErr error
 }
 
 func (api *MockApi) DeviceTypesById(ctx context.Context, ids []uint) ([]*model.DeviceType, error) {
@@ -153,6 +166,19 @@ func (api *MockApi) MetricDefinitions(ctx context.Context, criteria model.Metric
 func (api *MockApi) MetricDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*model.MetricDefinition, error) {
 	args := api.Mock.Called()
 	return args.Get(0).([]*model.MetricDefinition), args.Error(1)
+}
+
+// ProfileScopeByDeviceType (ADR-051) returns the suite-set ProfileScopeResult, or
+// an empty scope when unset (the default for tests that don't care about it).
+func (api *MockApi) ProfileScopeByDeviceType(ctx context.Context, deviceTypeId uint) (*model.ProfileScope, error) {
+	api.ProfileScopeArg = deviceTypeId
+	if api.ProfileScopeErr != nil {
+		return nil, api.ProfileScopeErr
+	}
+	if api.ProfileScopeResult != nil {
+		return api.ProfileScopeResult, nil
+	}
+	return &model.ProfileScope{}, nil
 }
 
 func (api *MockApi) CreateCommandDefinition(ctx context.Context, request *model.CommandDefinitionCreateRequest) (*model.CommandDefinition, error) {
