@@ -1,0 +1,170 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package core
+
+import (
+	"container/heap"
+	"sort"
+	"time"
+)
+
+// SeriesKey identifies a single (rule, series) stream of state. "series" is the device
+// or anchor token the rule is keyed on. Tenant is carried on the rule id (tenant-token
+// prefixed, ADR-051 §7) so this stays compact.
+type SeriesKey struct {
+	Rule   string
+	Series string
+}
+
+// timer is one scheduled deadline for a SeriesKey. gen is a generation stamp: a timer
+// is stale (and silently discarded when popped) if its gen != the wheel's live gen for
+// that key. This gives O(1) logical reset/cancel — the survey's acid-test primitive:
+// reset-per-event, fire-off-watermark, survive-restart-via-snapshot.
+type timer struct {
+	deadline time.Time
+	key      SeriesKey
+	gen      uint64
+	index    int
+}
+
+type timerPQ []*timer
+
+func (p timerPQ) Len() int { return len(p) }
+func (p timerPQ) Less(i, j int) bool {
+	// Deterministic total order: earliest deadline first, then key — so firings are
+	// reproducible across a replay regardless of insertion order.
+	if !p[i].deadline.Equal(p[j].deadline) {
+		return p[i].deadline.Before(p[j].deadline)
+	}
+	if p[i].key.Rule != p[j].key.Rule {
+		return p[i].key.Rule < p[j].key.Rule
+	}
+	return p[i].key.Series < p[j].key.Series
+}
+func (p timerPQ) Swap(i, j int) {
+	p[i], p[j] = p[j], p[i]
+	p[i].index = i
+	p[j].index = j
+}
+func (p *timerPQ) Push(x any) {
+	t := x.(*timer)
+	t.index = len(*p)
+	*p = append(*p, t)
+}
+func (p *timerPQ) Pop() any {
+	old := *p
+	n := len(old)
+	t := old[n-1]
+	old[n-1] = nil
+	*p = old[:n-1]
+	return t
+}
+
+// timerWheel is a heap-ordered timer index with lazy, generation-stamped cancellation.
+type timerWheel struct {
+	pq   timerPQ
+	gens map[SeriesKey]uint64 // live generation per key
+}
+
+func newTimerWheel() *timerWheel {
+	return &timerWheel{gens: map[SeriesKey]uint64{}}
+}
+
+// schedule sets (or resets) the deadline for key. Any previously-scheduled timer for the
+// same key is invalidated by the generation bump.
+func (w *timerWheel) schedule(key SeriesKey, deadline time.Time) {
+	w.gens[key]++
+	heap.Push(&w.pq, &timer{deadline: deadline, key: key, gen: w.gens[key]})
+}
+
+// cancel invalidates any pending timer for key without scheduling a new one.
+func (w *timerWheel) cancel(key SeriesKey) {
+	if _, ok := w.gens[key]; ok {
+		w.gens[key]++
+	}
+}
+
+// firedTimer is a due timer: the key plus the deadline it was scheduled for (so the
+// detection is stamped at the moment the condition elapsed, not the watermark overshoot).
+type firedTimer struct {
+	key      SeriesKey
+	deadline time.Time
+}
+
+// popDue returns the live timers whose deadline is <= wm, in deterministic deadline
+// order, removing them from the wheel. Stale timers (superseded by reset/cancel) are
+// discarded silently.
+func (w *timerWheel) popDue(wm time.Time) []firedTimer {
+	var fired []firedTimer
+	for w.pq.Len() > 0 {
+		top := w.pq[0]
+		if top.deadline.After(wm) {
+			break
+		}
+		heap.Pop(&w.pq)
+		if top.gen != w.gens[top.key] {
+			continue // stale: superseded by a later reset/cancel
+		}
+		fired = append(fired, firedTimer{key: top.key, deadline: top.deadline})
+		delete(w.gens, top.key) // one-shot: firing consumes the live timer
+	}
+	return fired
+}
+
+// --- snapshot support (serialized as part of the Engine snapshot) ---
+
+type snapTimer struct {
+	Deadline time.Time `json:"deadline"`
+	Rule     string    `json:"rule"`
+	Series   string    `json:"series"`
+	Gen      uint64    `json:"gen"`
+}
+
+type snapGen struct {
+	Rule   string `json:"rule"`
+	Series string `json:"series"`
+	Gen    uint64 `json:"gen"`
+}
+
+// snapshot captures only LIVE timers (gen == live gen) plus the generation table, in a
+// stable order so the serialized bytes are deterministic.
+func (w *timerWheel) snapshot() ([]snapTimer, []snapGen) {
+	timers := make([]snapTimer, 0, w.pq.Len())
+	for _, t := range w.pq {
+		if t.gen == w.gens[t.key] {
+			timers = append(timers, snapTimer{Deadline: t.deadline, Rule: t.key.Rule, Series: t.key.Series, Gen: t.gen})
+		}
+	}
+	sort.Slice(timers, func(i, j int) bool {
+		if !timers[i].Deadline.Equal(timers[j].Deadline) {
+			return timers[i].Deadline.Before(timers[j].Deadline)
+		}
+		if timers[i].Rule != timers[j].Rule {
+			return timers[i].Rule < timers[j].Rule
+		}
+		return timers[i].Series < timers[j].Series
+	})
+	gens := make([]snapGen, 0, len(w.gens))
+	for k, g := range w.gens {
+		gens = append(gens, snapGen{Rule: k.Rule, Series: k.Series, Gen: g})
+	}
+	sort.Slice(gens, func(i, j int) bool {
+		if gens[i].Rule != gens[j].Rule {
+			return gens[i].Rule < gens[j].Rule
+		}
+		return gens[i].Series < gens[j].Series
+	})
+	return timers, gens
+}
+
+func restoreTimerWheel(timers []snapTimer, gens []snapGen) *timerWheel {
+	w := newTimerWheel()
+	for _, g := range gens {
+		w.gens[SeriesKey{Rule: g.Rule, Series: g.Series}] = g.Gen
+	}
+	for _, t := range timers {
+		heap.Push(&w.pq, &timer{deadline: t.Deadline, key: SeriesKey{Rule: t.Rule, Series: t.Series}, gen: t.Gen})
+	}
+	return w
+}
