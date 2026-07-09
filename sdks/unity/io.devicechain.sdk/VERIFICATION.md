@@ -5,68 +5,75 @@ SPDX-License-Identifier: Apache-2.0
 
 # Verification checklist
 
+**Status (2026-07-09):** items 0–3 **VERIFIED live on Unity 6000.5.3f1 + URP** (the whole non-WebGL
+stack — compile, smoke test, and auth/query/subscribe against a live cluster with real telemetry).
+Item 4 (**WebGL**) is the one **open follow-up** — see it for the known blocker.
+
 **Tier-1 (automated, no Editor):** the Runtime + Sample C# is compiled against real UnityEngine 2021.3
-reference assemblies in BOTH platform branches by `sdks/unity/tools/UnityCompileCheck` (run locally
-with `tools/UnityCompileCheck/compile-check.sh`; enforced in CI as the `unity-compile-check` job). That
-covers wrong-API calls and `#if UNITY_WEBGL` branch typos — but it does **not** run the code, compile
-the `.jslib` (it's JavaScript), or produce a WebGL build.
+reference assemblies in BOTH platform branches by `sdks/unity/tools/UnityCompileCheck` (locally via
+`tools/UnityCompileCheck/compile-check.sh`; enforced in CI as `unity-compile-check`). Covers wrong-API
+calls and `#if UNITY_WEBGL` branch typos — but does **not** run the code, compile the `.jslib` (it's
+JavaScript), or produce a WebGL build.
 
-The rest of this checklist is what tier-1 can't reach — run it on a machine with Unity **2021.3 LTS+**
-before relying on the package. Items are ordered cheapest → riskiest.
-
-## 0. Stage the SDK assemblies
+## 0. Stage the SDK assemblies ✅
 
 ```bash
 sdks/unity/stage-sdk.sh
 ```
-Confirm `Runtime/Plugins/` now contains `DeviceChain.Sdk.dll` plus `System.Text.Json.dll`,
-`System.Threading.Channels.dll`, and their transitive deps.
+Produces 10 assemblies in `Runtime/Plugins/`: `DeviceChain.Sdk.dll`, `System.Text.Json.dll`,
+`System.Text.Encodings.Web.dll`, `System.Threading.Channels.dll`, `Microsoft.Bcl.AsyncInterfaces.dll`,
+plus the 5 netstandard2.1 facades below.
 
-## 1. Package imports & compiles
+## 1. Package imports & compiles ✅ (Unity 6/URP)
 
-- Add the package from disk (`package.json`). It should resolve with no manifest errors.
-- The `DeviceChain.Sdk.Unity` assembly should compile. **Most likely failure: duplicate/among
-  assemblies Unity already ships** (e.g. `System.Buffers`, `System.Memory`,
-  `System.Runtime.CompilerServices.Unsafe`). If so, delete the offending DLL(s) from `Runtime/Plugins/`
-  — Unity provides them — until it compiles. Note which ones, and extend the `skip_re` denylist in
-  `stage-sdk.sh` accordingly.
-- Check `Marshal.PtrToStringUTF8` resolves under the project's API compatibility level (.NET Standard
-  2.1). If not, replace it in `WebGlWebSocketFactory.cs` with a manual UTF-8 decode.
+- Add the package (embed under `Packages/` or Add-from-disk). Resolves with no manifest errors.
+- **Prune the DLLs Unity already ships**, or you get duplicate-assembly errors. On **Unity 6** the
+  clean set is: **delete** `System.Buffers`, `System.Memory`, `System.Numerics.Vectors`,
+  `System.Runtime.CompilerServices.Unsafe`, `System.Threading.Tasks.Extensions` (all part of Unity's
+  netstandard2.1 profile); **keep** the other 5 (`DeviceChain.Sdk`, `System.Text.Json`,
+  `System.Text.Encodings.Web`, `System.Threading.Channels`, `Microsoft.Bcl.AsyncInterfaces`). This is
+  the classic System.Text.Json-in-Unity conflict set. With that prune the package compiles clean.
+- `Marshal.PtrToStringUTF8` was replaced by a portable manual decode, so no .NET-profile pin remains.
 
-## 2. Spinning-logo smoke test (the slice-4 acceptance gate)
+## 2. Spinning-logo smoke test (the slice-4 acceptance gate) ✅ (Unity 6/URP)
 
-- Import the **Spinning Logo (smoke test)** sample; create an empty scene, add an empty GameObject,
-  attach `SpinningLogo`, press Play.
-- **PASS = a blue cube rotates (and gently pulses) on a dark background.** This proves the package
-  loaded, the component ran, and the render loop is alive. No backend involved.
+- Import the **Spinning Logo (smoke test)** sample; empty scene → empty GameObject → `SpinningLogo` →
+  Play.
+- **PASS = a blue cube rotates and gently pulses.** Confirmed on URP — the pipeline-aware material
+  resolves `Universal Render Pipeline/Lit` (blue, not magenta), and the runtime-spawned camera/light
+  work.
 
-## 3. Editor / standalone full stack (proven transports)
+## 3. Editor / standalone full stack ✅ (Unity 6/URP, live telemetry)
 
-Against a reachable cluster (e.g. local kind, superuser `superuser@devicechain.local`/`devicechain`,
-tenant `sim-bp`):
+Verified with a small Editor MonoBehaviour (`sdks/unity/tools/live-smoke/DeviceChainLiveSmoke.cs` —
+copy into a project's `Assets/`; it uses **reflection-based** System.Text.Json, which is Editor-only
+and deliberately NOT in the AOT-safe package). Against local kind (`superuser@devicechain.local` /
+`devicechain`, tenant `sim-bp`, origin `http://localhost`):
 
-- `DeviceChainRuntime.CreateClient(origin)` → `LoginAsync` → `SelectTenantAsync` → a `Gql.SendAsync`
-  device query returns data. (Exercises `UnityWebRequestHttpTransport`.)
-- `Subscriptions(Area.EventManagement).SubscribeAsync(measurementStream …)` yields live measurements.
-  In the Editor this uses the SDK's `ClientWebSocketFactory` and should behave exactly like the C# SDK
-  live-smoke. Marshal `next` payloads to the main thread before touching Unity objects.
-- `DevicePublisher(ingressOrigin, instanceId, tenant).EmitMeasurementsAsync(…)` returns without
-  error (202). Remember the device-plane ingress is a **separate** listener from `/api`.
+- `CreateClient` → `LoginAsync` → `SelectTenantAsync` → `Gql.SendAsync` device query returned the
+  `bp-therm-*` devices. (`UnityWebRequestHttpTransport` ✓)
+- `Subscriptions(Area.EventManagement).SubscribeAsync(measurementStream …)` streamed **live
+  temperature/co2/humidity/setpoint with self-describing units** into the Console once the buildingpulse
+  sim was emitting. (`ClientWebSocketFactory` ✓) — call the SDK from the main thread (no
+  `ConfigureAwait(false)` in your driver).
+- **Not yet exercised:** `DevicePublisher(...).EmitMeasurementsAsync(...)` (device-plane emit *from*
+  Unity) — the transports it rides on are already proven above; it needs a device credential in the
+  scene.
 
-## 4. WebGL build (HIGH RISK — the known-fragile path)
+## 4. WebGL build — OPEN FOLLOW-UP (not proven)
+
+The one unverified path; deferred to its own slice increment.
 
 - **HTTP:** a WebGL build should still auth + query via `UnityWebRequestHttpTransport` (browser
-  `fetch`). Expect this to work.
-- **WebSocket:** the `DeviceChainWebSocket.jslib` + `WebGlWebSocketFactory` poll-based path is
-  entirely untested. Validate a live `SubscribeAsync` in a WebGL player. Two known risks:
-  1. **`.jslib` linkage / marshalling** — string params, `_malloc`/`_free`, `UTF8ToString`/
-     `stringToUTF8` names can drift across Emscripten versions.
-  2. **The SDK read loop uses `Task.Run`** (`GraphQlWsClient`), which has no real thread pool under
-     WebGL. If subscribe hangs, the fix is likely an SDK follow-up: make the read loop pump-based
-     (driven from a MonoBehaviour `Update`) instead of `Task.Run`. Capture findings — this may become
-     a small slice-4.1 SDK amendment.
+  `fetch`). Expected to work; unverified.
+- **WebSocket:** the `DeviceChainWebSocket.jslib` + `WebGlWebSocketFactory` poll path is untested, and
+  there is a **known blocker in the SDK**: `GraphQlWsClient` starts its read loop with `Task.Run`,
+  which has no thread pool under WebGL — so a live subscribe yields nothing and `DisposeAsync` (which
+  awaits that never-run loop) hangs. **Fix = make the read loop pump-based** (driven from a
+  MonoBehaviour `Update`) — a small slice-4.1 SDK amendment — then validate the `.jslib` in a real
+  WebGL player against a live cluster.
 
-## 5. Report back
+## 5. Next
 
-Record what passed, what needed pruning/edits, and any SDK change WebGL forced — that becomes the next
-slice-4 increment (reconcile-by-`externalId` + twin scaffolding rides on a working transport base).
+With the non-WebGL base proven, the next increments are: (a) the WebGL read-loop pump + build, and
+(b) reconcile-by-`externalId` + MonoBehaviour twin scaffolding ("expand from there").

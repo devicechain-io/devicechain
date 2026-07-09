@@ -12,12 +12,12 @@ seam (slice 4.1) and a platform-selecting bootstrap, so a scene can authenticate
 live telemetry, and emit device-plane telemetry — as an **untrusted external client**, never the
 admin surface.
 
-> **Status: early / partially verified.** The Runtime + Sample C# is compile-checked against real
-> UnityEngine reference assemblies in both platform branches (tier-1, enforced in CI — see
-> [`VERIFICATION.md`](./VERIFICATION.md)), but has not been *run* in a Unity Editor. The
-> **spinning-logo smoke test** and the **Editor/standalone** stack are expected to work; the **WebGL
-> WebSocket** path (`.jslib` + `Task.Run` read-loop) is the known high-risk item. Work
-> `VERIFICATION.md` on a Unity machine before relying on it.
+> **Status: early — non-WebGL stack verified live.** On **Unity 6000.5.3f1 + URP** the package
+> compiles, the spinning-logo smoke test renders, and the full SDK stack (auth + `UnityWebRequest`
+> query + live `graphql-transport-ws` subscription) runs against a real cluster with live telemetry
+> (VERIFICATION.md items 0–3). The **WebGL** path is the one open follow-up — it has a known SDK
+> blocker (the `Task.Run` read loop; see VERIFICATION.md item 4). Also compile-checked against real
+> UnityEngine reference assemblies in both platform branches (tier-1, enforced in CI).
 
 ## What's here
 
