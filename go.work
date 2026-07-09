@@ -9,6 +9,7 @@ use (
 	./backend/services/device-management
 	./backend/services/device-state
 	./backend/services/event-management
+	./backend/services/event-processing
 	./backend/services/event-sources
 	./backend/services/notification-management
 	./backend/services/user-management
