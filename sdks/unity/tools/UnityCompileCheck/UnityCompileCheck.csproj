@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Tier-1 reference-assembly compile check (no Unity Editor, no license, no GUI): compile the Unity
+    package's Runtime + Sample sources against real UnityEngine reference assemblies to catch wrong-API
+    calls and #if UNITY_WEBGL branch typos. It does NOT run — that's the Editor/WebGL job (game-ci in
+    CI, a browser vs a live cluster for the final smoke). Build BOTH configs to check both platform
+    branches:
+      dotnet build -c Desktop   # the #else (ClientWebSocket) branch
+      dotnet build -c WebGL     # the UNITY_WEBGL P/Invoke branch
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Configurations>Desktop;WebGL</Configurations>
+    <!-- Reference assemblies only; never emit a usable binary. -->
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'WebGL'">
+    <DefineConstants>$(DefineConstants);UNITY_WEBGL</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="UnityEngine.Modules" Version="2021.3.33" />
+    <ProjectReference Include="../../../csharp/src/DeviceChain.Sdk/DeviceChain.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../io.devicechain.sdk/Runtime/**/*.cs" />
+    <Compile Include="../../io.devicechain.sdk/Samples~/**/*.cs" />
+  </ItemGroup>
+
+</Project>

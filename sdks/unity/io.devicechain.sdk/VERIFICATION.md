@@ -3,11 +3,16 @@ Copyright The DeviceChain Authors
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# In-Editor verification checklist
+# Verification checklist
 
-This package was authored **without a Unity Editor** in the loop, so nothing here has been compiled or
-run against Unity. Work this checklist on a machine with Unity **2021.3 LTS+** before relying on the
-package. Items are ordered cheapest → riskiest.
+**Tier-1 (automated, no Editor):** the Runtime + Sample C# is compiled against real UnityEngine 2021.3
+reference assemblies in BOTH platform branches by `sdks/unity/tools/UnityCompileCheck` (run locally
+with `tools/UnityCompileCheck/compile-check.sh`; enforced in CI as the `unity-compile-check` job). That
+covers wrong-API calls and `#if UNITY_WEBGL` branch typos — but it does **not** run the code, compile
+the `.jslib` (it's JavaScript), or produce a WebGL build.
+
+The rest of this checklist is what tier-1 can't reach — run it on a machine with Unity **2021.3 LTS+**
+before relying on the package. Items are ordered cheapest → riskiest.
 
 ## 0. Stage the SDK assemblies
 

@@ -12,10 +12,12 @@ seam (slice 4.1) and a platform-selecting bootstrap, so a scene can authenticate
 live telemetry, and emit device-plane telemetry — as an **untrusted external client**, never the
 admin surface.
 
-> **Status: early / partially unverified.** This package was authored without a Unity Editor in the
-> loop. The **spinning-logo smoke test** and the **Editor/standalone** stack are expected to work as
-> written; the **WebGL WebSocket** path (`.jslib` + `Task.Run` read-loop) is the known high-risk item.
-> Follow [`VERIFICATION.md`](./VERIFICATION.md) on a Unity machine before relying on it.
+> **Status: early / partially verified.** The Runtime + Sample C# is compile-checked against real
+> UnityEngine reference assemblies in both platform branches (tier-1, enforced in CI — see
+> [`VERIFICATION.md`](./VERIFICATION.md)), but has not been *run* in a Unity Editor. The
+> **spinning-logo smoke test** and the **Editor/standalone** stack are expected to work; the **WebGL
+> WebSocket** path (`.jslib` + `Task.Run` read-loop) is the known high-risk item. Work
+> `VERIFICATION.md` on a Unity machine before relying on it.
 
 ## What's here
 
