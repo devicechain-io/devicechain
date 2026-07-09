@@ -1,0 +1,498 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package rules
+
+import (
+	"fmt"
+
+	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
+	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
+)
+
+// Limits are the per-tenant compile-time ceilings. The caller resolves them BEFORE Compile
+// from the tenant's overrides falling back to the platform default — a missing or zero
+// override must resolve here to the platform default, NEVER to "unlimited" (the ADR-023
+// fail-safe posture). Compile treats a zero field as "unset" and substitutes the built-in
+// floor so it can never accidentally run uncapped.
+type Limits struct {
+	// PredicateCostCeiling is the maximum static worst-case CEL cost a leaf may estimate
+	// to at publish (and the runtime CostLimit on the compiled program).
+	PredicateCostCeiling uint64
+	// DefaultCorrelationMemberCap is the retained-member backstop applied to a correlation
+	// rule that does not set its own MemberCap.
+	DefaultCorrelationMemberCap int
+}
+
+// Built-in floors used when a Limits field is left zero, so Compile is never uncapped.
+const (
+	defaultPredicateCostCeiling      uint64 = 100
+	defaultCorrelationMemberCapFloor        = 1024
+)
+
+func (l Limits) withDefaults() Limits {
+	if l.PredicateCostCeiling == 0 {
+		l.PredicateCostCeiling = defaultPredicateCostCeiling
+	}
+	if l.DefaultCorrelationMemberCap <= 0 {
+		// <= 0, not == 0: a negative caller misconfig must also floor, else every
+		// default-cap correlation rule is rejected downstream with a confusing message.
+		l.DefaultCorrelationMemberCap = defaultCorrelationMemberCapFloor
+	}
+	return l
+}
+
+// CompiledRule is a rule lowered to its runnable form: the keyed-streaming core config
+// plus the compiled leaf predicate. It is produced once at publish (compile-once) and
+// reused for every event — the runtime evaluates Predicate to set the core Event's Match
+// (and reads ValueMetric for its Value), then feeds the event to the engine keyed by Core.
+//
+// THE METRIC-SCOPED FEED CONTRACT (the runtime, slice 4, MUST honor this). Match is
+// binary, but "condition false" and "condition not measurable" are different facts, and
+// exactly one kind — Duration — acts on false (a non-matching event CANCELS the running
+// hold, engine.go). So a Duration/Threshold/Repeating rule keyed on a metric must be fed
+// ONLY events that carry that metric; otherwise a device interleaving other telemetry
+// (a battery reading between temperature readings) evaluates the leaf to false and, for
+// Duration, resets the hold forever. The compiler surfaces the relevance metric so the
+// runtime can scope the feed without re-parsing:
+//
+//   - GateMetric set  → feed only events carrying GateMetric (structured threshold/
+//     duration/repeating). The presence guard in the predicate is defense-in-depth.
+//   - ValueMetric set → feed only events carrying ValueMetric (deltaRate, non-count
+//     aggregate); the predicate's presence guard also enforces it.
+//   - both empty      → feed every in-scope event. Absence is deliberately here (every
+//     event is a heartbeat, device-scoped not metric-scoped); so are match-every leaves,
+//     count aggregates, and correlation. A RAW-CEL leaf is also here — the author owns
+//     totality and must guard metric presence for a Duration rule to behave.
+type CompiledRule struct {
+	ID   string
+	Type RuleType
+
+	// Core is the keyed-streaming engine rule (Kind + temporal params). Its ID equals ID,
+	// so the engine keys this rule's series state by the same id.
+	Core core.Rule
+
+	// Predicate is the compiled leaf. It is never nil: a match-every-event leaf compiles
+	// to the constant `true`. For value-consuming kinds it also AND-guards the presence of
+	// ValueMetric, so a folded Value is always a real reading, never a missing-key zero.
+	Predicate *predicate.Predicate
+
+	// ValueMetric is the measurement whose numeric value feeds core Event.Value (deltaRate,
+	// and aggregate with a non-count Agg). Empty when the core folds no value.
+	ValueMetric string
+
+	// GateMetric is the measurement whose PRESENCE makes an event relevant to a
+	// structured-leaf rule that folds no value (threshold, duration, repeating). It is the
+	// hook for the runtime's metric-scoped feed contract (see below); empty for a raw-CEL
+	// or match-every leaf, and for value-consuming kinds (where ValueMetric plays the same
+	// role).
+	GateMetric string
+
+	// AnchorType is the anchor a correlation rule keys its series on; the runtime resolves
+	// the event's anchor of this type to the series token and uses the device as the
+	// distinct member. Empty for every non-correlation rule (series = the device token).
+	AnchorType string
+}
+
+// KeyedByAnchor reports whether the rule's series is an anchor token (correlation) rather
+// than the source device token (every other kind).
+func (cr *CompiledRule) KeyedByAnchor() bool { return cr.AnchorType != "" }
+
+// Compile validates a structured rule, lowers it to a keyed-streaming core rule, and
+// compiles + cost-gates its leaf predicate — the publish-time gate. It fails closed:
+// any structural error, an unsupported field for the rule's type, a predicate that does
+// not type-check, or a predicate whose worst-case cost exceeds the ceiling rejects the
+// rule with a console-surfaceable message. On success the returned CompiledRule is
+// immutable and reusable for every event.
+func Compile(r Rule, limits Limits) (*CompiledRule, error) {
+	limits = limits.withDefaults()
+	if r.ID == "" {
+		return nil, invalid(r.ID, "id", "a rule id is required")
+	}
+	if r.Name == "" {
+		return nil, invalid(r.ID, "name", "a rule name is required")
+	}
+
+	cr := &CompiledRule{ID: r.ID, Type: r.Type}
+	cr.Core.ID = r.ID
+
+	var leafSrc string
+	var err error
+	switch r.Type {
+	case TypeThreshold:
+		leafSrc, err = compileThreshold(r, cr)
+	case TypeDeltaRate:
+		leafSrc, err = compileDeltaRate(r, cr)
+	case TypeRepeating:
+		leafSrc, err = compileRepeating(r, cr)
+	case TypeDuration:
+		leafSrc, err = compileDuration(r, cr)
+	case TypeAbsence:
+		leafSrc, err = compileAbsence(r, cr)
+	case TypeAggregate:
+		leafSrc, err = compileAggregate(r, cr)
+	case TypeCorrelation:
+		leafSrc, err = compileCorrelation(r, cr, limits)
+	default:
+		return nil, invalid(r.ID, "type", "unknown rule type %q", r.Type)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	pred, err := predicate.Compile(leafSrc, limits.PredicateCostCeiling)
+	if err != nil {
+		// Anchor the leaf error to the rule + its `when` input for the console, while
+		// preserving the underlying predicate.CompileError/CostError for errors.As.
+		return nil, &ValidationError{RuleID: r.ID, Field: "when", Msg: err.Error(), Err: err}
+	}
+	cr.Predicate = pred
+	return cr, nil
+}
+
+// --- per-type lowering. Each validates the fields it uses, rejects fields it does not,
+//     writes the core config into cr.Core, and returns the leaf CEL source. ---
+
+func compileThreshold(r Rule, cr *CompiledRule) (string, error) {
+	if err := forbid(r, "threshold", forbidden{value: true, window: true, hold: true, timeout: true, gap: true, count: true, rate: true, mode: true, agg: true, op: true, threshold: true, anchor: true, memberCap: true}); err != nil {
+		return "", err
+	}
+	cr.Core.Kind = core.Threshold
+	cr.GateMetric = structuredGate(r)
+	return requireLeaf(r) // the comparison IS the rule
+}
+
+func compileDeltaRate(r Rule, cr *CompiledRule) (string, error) {
+	if err := forbid(r, "deltaRate", forbidden{window: true, hold: true, timeout: true, gap: true, count: true, mode: true, agg: true, anchor: true, memberCap: true}); err != nil {
+		return "", err
+	}
+	metric, err := requireValueMetric(r)
+	if err != nil {
+		return "", err
+	}
+	kop, err := orderedOp(r, "op")
+	if err != nil {
+		return "", err
+	}
+	thresh, err := requireThreshold(r)
+	if err != nil {
+		return "", err
+	}
+	cr.Core.Kind = core.DeltaRate
+	cr.Core.Op = kop
+	cr.Core.Thresh = thresh
+	cr.Core.Rate = r.Rate
+	cr.ValueMetric = metric
+	return valueGuardedLeaf(r, metric)
+}
+
+func compileRepeating(r Rule, cr *CompiledRule) (string, error) {
+	if err := forbid(r, "repeating", forbidden{value: true, hold: true, timeout: true, gap: true, rate: true, mode: true, agg: true, op: true, threshold: true, anchor: true, memberCap: true}); err != nil {
+		return "", err
+	}
+	if r.Count < 1 {
+		return "", invalid(r.ID, "count", "repeating requires a positive count")
+	}
+	if r.Window.D() <= 0 {
+		return "", invalid(r.ID, "window", "repeating requires a positive window")
+	}
+	cr.Core.Kind = core.Repeating
+	cr.Core.Count = r.Count
+	cr.Core.Window = r.Window.D()
+	cr.GateMetric = structuredGate(r)
+	return optionalLeaf(r) // the per-event condition (empty ⇒ count every event)
+}
+
+func compileDuration(r Rule, cr *CompiledRule) (string, error) {
+	if err := forbid(r, "duration", forbidden{value: true, window: true, timeout: true, gap: true, count: true, rate: true, mode: true, agg: true, op: true, threshold: true, anchor: true, memberCap: true}); err != nil {
+		return "", err
+	}
+	if r.Hold.D() <= 0 {
+		return "", invalid(r.ID, "hold", "duration requires a positive hold")
+	}
+	cr.Core.Kind = core.Duration
+	cr.Core.Hold = r.Hold.D()
+	cr.GateMetric = structuredGate(r)
+	return requireLeaf(r) // the sustained condition
+}
+
+func compileAbsence(r Rule, cr *CompiledRule) (string, error) {
+	// A leaf gate is deliberately disallowed: the core treats every event as a heartbeat
+	// (Match is ignored for Absence), so accepting a `when` would silently do nothing.
+	if err := forbid(r, "absence", forbidden{leaf: true, value: true, window: true, hold: true, gap: true, count: true, rate: true, mode: true, agg: true, op: true, threshold: true, anchor: true, memberCap: true}); err != nil {
+		return "", err
+	}
+	if r.Ttl.D() <= 0 {
+		return "", invalid(r.ID, "timeout", "absence requires a positive timeout")
+	}
+	cr.Core.Kind = core.Absence
+	cr.Core.Timeout = r.Ttl.D()
+	return matchAll, nil // heartbeats: every event counts
+}
+
+func compileAggregate(r Rule, cr *CompiledRule) (string, error) {
+	if err := forbid(r, "aggregate", forbidden{hold: true, timeout: true, rate: true, anchor: true, memberCap: true}); err != nil {
+		return "", err
+	}
+	aggOp, err := aggFunc(r)
+	if err != nil {
+		return "", err
+	}
+	kop, err := orderedOp(r, "op")
+	if err != nil {
+		return "", err
+	}
+	thresh, err := requireThreshold(r)
+	if err != nil {
+		return "", err
+	}
+	cr.Core.Agg = aggOp
+	cr.Core.Op = kop
+	cr.Core.Thresh = thresh
+
+	// The value metric is required unless the aggregate is a pure event count. Note: an
+	// event-count aggregate with an lt/le op cannot observe its most interesting case — the
+	// empty (zero-event) window — because a window with no matching events produces no pane
+	// (tumbling) and never satisfies (sliding). Such a rule still fires for a window with
+	// 1..N-1 events, so it is not rejected, but "traffic dropped to zero" is an Absence rule,
+	// not a count aggregate; the console should steer authors accordingly (slice 7).
+	var metric string
+	if aggOp != core.AggCount {
+		if metric, err = requireValueMetric(r); err != nil {
+			return "", err
+		}
+		cr.ValueMetric = metric
+	} else if r.Metric != "" {
+		return "", invalid(r.ID, "metric", "a count aggregate takes no value metric")
+	}
+
+	switch r.Mode {
+	case ModeTumbling:
+		if err := onlyWindow(r, "tumbling"); err != nil {
+			return "", err
+		}
+		cr.Core.Kind = core.Aggregate
+		cr.Core.Window = r.Window.D()
+	case ModeSliding:
+		if err := onlyWindow(r, "sliding"); err != nil {
+			return "", err
+		}
+		cr.Core.Kind = core.SlidingAgg
+		cr.Core.Window = r.Window.D()
+	case ModeSession:
+		if r.Gap.D() <= 0 {
+			return "", invalid(r.ID, "gap", "a session aggregate requires a positive gap")
+		}
+		if r.Window.D() != 0 || r.Count != 0 {
+			return "", invalid(r.ID, "windowMode", "a session aggregate uses gap, not window/count")
+		}
+		cr.Core.Kind = core.Session
+		cr.Core.Gap = r.Gap.D()
+	case ModeCount:
+		if r.Count < 1 {
+			return "", invalid(r.ID, "count", "a count-window aggregate requires a positive count")
+		}
+		if r.Window.D() != 0 || r.Gap.D() != 0 {
+			return "", invalid(r.ID, "windowMode", "a count-window aggregate uses count, not window/gap")
+		}
+		if aggOp == core.AggCount {
+			// A count aggregate over a count window is a constant: the window is evaluated
+			// exactly when its event count reaches Count, so `count <op> thresh` is decidable
+			// at publish (dead, or fires unconditionally every Count events) — never a
+			// detection. Reject it rather than ship a silently-dead or always-firing rule.
+			return "", invalid(r.ID, "agg", "counting events over a count window is a constant; use a time window or a value aggregate")
+		}
+		cr.Core.Kind = core.CountWindow
+		cr.Core.Count = r.Count
+	case "":
+		return "", invalid(r.ID, "windowMode", "an aggregate requires a window mode (tumbling/sliding/session/count)")
+	default:
+		return "", invalid(r.ID, "windowMode", "unknown window mode %q", r.Mode)
+	}
+
+	if metric != "" {
+		return valueGuardedLeaf(r, metric) // only fold events carrying the value metric
+	}
+	return optionalLeaf(r)
+}
+
+func compileCorrelation(r Rule, cr *CompiledRule, limits Limits) (string, error) {
+	if err := forbid(r, "correlation", forbidden{value: true, hold: true, timeout: true, gap: true, rate: true, mode: true, agg: true, op: true, threshold: true}); err != nil {
+		return "", err
+	}
+	if r.AnchorType == "" {
+		return "", invalid(r.ID, "anchorType", "correlation requires an anchor type")
+	}
+	if err := validateMetric(r.AnchorType); err != nil {
+		return "", invalid(r.ID, "anchorType", "%v", err)
+	}
+	if r.Count < 1 {
+		return "", invalid(r.ID, "count", "correlation requires a positive distinct-member count")
+	}
+	if r.Window.D() <= 0 {
+		return "", invalid(r.ID, "window", "correlation requires a positive window")
+	}
+	memberCap := r.MemberCap
+	if memberCap == 0 {
+		memberCap = limits.DefaultCorrelationMemberCap
+	}
+	if memberCap < r.Count {
+		return "", invalid(r.ID, "memberCap", "member cap %d is below the distinct-member count %d", memberCap, r.Count)
+	}
+	cr.Core.Kind = core.Correlation
+	cr.Core.Count = r.Count
+	cr.Core.Window = r.Window.D()
+	cr.Core.MemberCap = memberCap
+	cr.AnchorType = r.AnchorType
+	return optionalLeaf(r) // the per-member gate
+}
+
+// matchAll is the leaf every event passes; it is what a zero Condition lowers to.
+const matchAll = "true"
+
+// requireLeaf returns the leaf source for a rule whose condition is mandatory (the
+// comparison defines the rule: threshold, duration).
+func requireLeaf(r Rule) (string, error) {
+	if r.When.isZero() {
+		return "", invalid(r.ID, "when", "this rule type requires a condition")
+	}
+	return leafSource(r)
+}
+
+// optionalLeaf returns the leaf source for a rule whose condition is an optional gate; a
+// zero condition matches every event.
+func optionalLeaf(r Rule) (string, error) {
+	if r.When.isZero() {
+		return matchAll, nil
+	}
+	return leafSource(r)
+}
+
+// valueGuardedLeaf AND-guards the optional leaf with the presence of the value metric, so
+// only events actually carrying the folded measurement participate — a missing-metric
+// event becomes a clean non-match rather than folding a spurious zero into the aggregate.
+func valueGuardedLeaf(r Rule, metric string) (string, error) {
+	guard, err := presenceGuard(metric)
+	if err != nil {
+		return "", err
+	}
+	leaf, err := optionalLeaf(r)
+	if err != nil {
+		return "", err
+	}
+	if leaf == matchAll {
+		return guard, nil
+	}
+	return fmt.Sprintf("(%s) && (%s)", guard, leaf), nil
+}
+
+// leafSource renders the leaf (structured comparison or raw CEL) to CEL source. A rule may
+// set exactly one form.
+func leafSource(r Rule) (string, error) {
+	c := r.When
+	if c.isRaw() && c.isStructured() {
+		return "", invalid(r.ID, "when", "a condition sets either a structured comparison or raw CEL, not both")
+	}
+	if c.isRaw() {
+		return c.CEL, nil
+	}
+	// structured
+	if c.Metric == "" || c.Op == "" || c.Threshold == nil {
+		return "", invalid(r.ID, "when", "a structured comparison needs metric, op, and threshold")
+	}
+	src, err := generateComparison(c.Metric, c.Op, *c.Threshold)
+	if err != nil {
+		return "", invalid(r.ID, "when", "%v", err)
+	}
+	return src, nil
+}
+
+// presenceGuard renders `"<metric>" in m` for a grammar-validated metric.
+func presenceGuard(metric string) (string, error) {
+	if err := validateMetric(metric); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%q in %s", metric, predicate.VarM), nil
+}
+
+// requireThreshold returns the engine-side comparison threshold, requiring it to be set.
+// Threshold is a pointer precisely so a value of exactly 0 is distinguishable from unset —
+// a missing threshold is a fail-closed rejection, not a silent comparison against 0.
+func requireThreshold(r Rule) (float64, error) {
+	if r.Threshold == nil {
+		return 0, invalid(r.ID, "threshold", "a threshold is required")
+	}
+	return *r.Threshold, nil
+}
+
+// structuredGate returns the metric a structured leaf gates on — its presence is what makes
+// an event relevant to the rule (the runtime's metric-scoped feed hook). Empty for a
+// raw-CEL or match-every leaf, where the runtime feeds every in-scope event.
+func structuredGate(r Rule) string {
+	if r.When.isStructured() {
+		return r.When.Metric
+	}
+	return ""
+}
+
+// requireValueMetric validates and returns the value-selector metric.
+func requireValueMetric(r Rule) (string, error) {
+	if r.Metric == "" {
+		return "", invalid(r.ID, "metric", "this rule type requires a value metric")
+	}
+	if err := validateMetric(r.Metric); err != nil {
+		return "", invalid(r.ID, "metric", "%v", err)
+	}
+	return r.Metric, nil
+}
+
+// orderedOp maps a schema operator to a core CmpOp, rejecting the unordered eq/ne (the
+// core's aggregate/delta comparison is defined only for the four ordered operators).
+func orderedOp(r Rule, field string) (core.CmpOp, error) {
+	switch r.Op {
+	case OpGt:
+		return core.GT, nil
+	case OpGe:
+		return core.GE, nil
+	case OpLt:
+		return core.LT, nil
+	case OpLe:
+		return core.LE, nil
+	case "":
+		return 0, invalid(r.ID, field, "an operator is required")
+	default:
+		return 0, invalid(r.ID, field, "operator %q is not valid here (use gt/ge/lt/le)", r.Op)
+	}
+}
+
+// aggFunc maps a schema aggregate function to a core AggOp.
+func aggFunc(r Rule) (core.AggOp, error) {
+	switch r.Agg {
+	case AggCount:
+		return core.AggCount, nil
+	case AggSum:
+		return core.AggSum, nil
+	case AggAvg:
+		return core.AggAvg, nil
+	case AggMin:
+		return core.AggMin, nil
+	case AggMax:
+		return core.AggMax, nil
+	case "":
+		return 0, invalid(r.ID, "agg", "an aggregate function is required")
+	default:
+		return 0, invalid(r.ID, "agg", "unknown aggregate function %q", r.Agg)
+	}
+}
+
+// onlyWindow requires a positive Window and rejects the other window-shaping fields for a
+// time-windowed aggregate mode.
+func onlyWindow(r Rule, mode string) error {
+	if r.Window.D() <= 0 {
+		return invalid(r.ID, "window", "a %s aggregate requires a positive window", mode)
+	}
+	if r.Gap.D() != 0 || r.Count != 0 {
+		return invalid(r.ID, "windowMode", "a %s aggregate uses window, not gap/count", mode)
+	}
+	return nil
+}
