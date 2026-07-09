@@ -1,0 +1,6 @@
+# Staged SDK assemblies are build artifacts — produced by ../../stage-sdk.sh, never committed.
+*.dll
+*.pdb
+*.xml
+!.gitignore
+!README.md

@@ -1,0 +1,26 @@
+{
+  "name": "io.devicechain.sdk",
+  "version": "0.1.0",
+  "displayName": "DeviceChain SDK",
+  "description": "The Unity client plugin for the DeviceChain platform — a digital-twin enabler built on the AOT/IL2CPP-safe C# SDK. Authenticate, query, subscribe to live telemetry, and emit device-plane telemetry as an untrusted external client, in the Editor, standalone players, and WebGL.",
+  "unity": "2021.3",
+  "keywords": [
+    "devicechain",
+    "iot",
+    "digital-twin",
+    "telemetry"
+  ],
+  "author": {
+    "name": "The DeviceChain Authors",
+    "url": "https://devicechain.io"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {},
+  "samples": [
+    {
+      "displayName": "Spinning Logo (smoke test)",
+      "description": "A runtime-spawned rotating cube that proves the package loads and the render loop runs — the slice-4 acceptance smoke test. Needs no backend.",
+      "path": "Samples~/SpinningLogo"
+    }
+  ]
+}

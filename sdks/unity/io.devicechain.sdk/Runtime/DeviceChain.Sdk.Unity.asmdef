@@ -1,0 +1,16 @@
+{
+  "name": "DeviceChain.Sdk.Unity",
+  "rootNamespace": "DeviceChain.Sdk.Unity",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "DeviceChain.Sdk.dll"
+  ],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

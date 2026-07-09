@@ -73,6 +73,10 @@ cd frontend && npm ci && npm run codegen && npm run typecheck && npm run build
 # C# SDK (public .NET/Unity client SDK — sdks/csharp, ADR-035 slice 3; AOT/IL2CPP-safe)
 cd sdks/csharp && dotnet build -c Release && dotnet test -c Release
 
+# Unity package tier-1 check (sdks/unity, ADR-035 slice 4): compile the package C# against real
+# UnityEngine reference assemblies in both platform branches — no Editor/license needed.
+sdks/unity/tools/UnityCompileCheck/compile-check.sh
+
 # helm
 helm lint deploy/helm/devicechain && helm template deploy/helm/devicechain >/dev/null
 

@@ -220,6 +220,24 @@ jobs:
         run: dotnet test --no-build -c Release
 
   # ---------------------------------------------------------------------------
+  # Unity package (sdks/unity) tier-1 verification: compile the Runtime + Sample C# against real
+  # UnityEngine reference assemblies (UnityEngine.Modules, reference-only) in BOTH platform branches
+  # — desktop (#else) and WebGL (#if UNITY_WEBGL). Catches wrong-API / branch typos with no Editor,
+  # license, or GUI. Editor/WebGL runtime behavior is out of scope here (game-ci + a browser smoke).
+  # ---------------------------------------------------------------------------
+  unity-compile-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Tier-1 compile check (both platform branches)
+        run: ./sdks/unity/tools/UnityCompileCheck/compile-check.sh
+
+  # ---------------------------------------------------------------------------
   # Helm chart: lint and template render.
   # ---------------------------------------------------------------------------
   helm:
