@@ -137,6 +137,11 @@ type DeviceManagementApi interface {
 	MetricDefinitions(ctx context.Context, criteria MetricDefinitionSearchCriteria) (*MetricDefinitionSearchResults, error)
 	MetricDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*MetricDefinition, error)
 
+	// ProfileScopeByDeviceType resolves a device type's denormalized rule-scoping
+	// identity (device-type + active-published-profile-version tokens) for stamping
+	// onto resolved events (ADR-051).
+	ProfileScopeByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileScope, error)
+
 	// Command definitions (ADR-043).
 	CreateCommandDefinition(ctx context.Context, request *CommandDefinitionCreateRequest) (*CommandDefinition, error)
 	UpdateCommandDefinition(ctx context.Context, token string, request *CommandDefinitionCreateRequest) (*CommandDefinition, error)

@@ -21,6 +21,9 @@ backend/
                               versioned tenant resources stored as opaque JSON (ADR-039)
     notification-management/  alarm→human last mile: per-tenant policy, SMTP + webhook adapters,
                               HA-safe escalation scheduler (ADR-017)
+    event-processing/         DETECT + REACT pipeline extracted from device-management (ADR-051);
+                              resolved-events tap → keyed-streaming detection core (owned, cel-go
+                              predicates) → actions. Scaffold stage: consumes + drops (DETECT WIP)
   k8s/                        controller-runtime operator (Instance CRD; tenants are control-plane DB rows, ADR-033)
   cli/                        dcctl — bootstrap/destroy + admin tooling
 deploy/                       Helm chart (deploy/helm) + OpenTofu modules (deploy/opentofu)

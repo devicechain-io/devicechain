@@ -1,0 +1,22 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+#
+# Event Processing GraphQL Schema
+#
+# Minimal for the service scaffold (ADR-051): the rule-authoring and rule-health
+# surfaces arrive in a later slice. This root exists so the service has a parseable
+# schema and the shared health/metrics server (/healthz, /readyz, /metrics) comes
+# up, matching every other DeviceChain microservice.
+#
+
+type Query {
+    # Identity/liveness probe for the event-processing service.
+    eventProcessingInfo: EventProcessingInfo!
+}
+
+# Service identity returned by the scaffold query.
+type EventProcessingInfo {
+    # The functional area this service serves ("event-processing").
+    functionalArea: String!
+}

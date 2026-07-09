@@ -26,8 +26,10 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 	unit := "Cel"
 	dataType := "DOUBLE"
 	event := &model.ResolvedEvent{
-		Source:            "http1",
-		SourceDeviceToken: "device-001",
+		Source:              "http1",
+		SourceDeviceToken:   "device-001",
+		DeviceTypeToken:     "sensor-type",
+		ProfileVersionToken: "temp-profile@3",
 		Anchors: []model.ResolvedAnchor{
 			{AnchorType: "customer", AnchorToken: "acme", RelationshipId: 5},
 			{AnchorType: "area", AnchorToken: "warehouse-3", RelationshipId: 8},
@@ -52,8 +54,33 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 	assert.True(t, got.ProcessedTime.Equal(processed), "processed time round-trip: got %s want %s", got.ProcessedTime, processed)
 	// The full anchor set survives the round-trip.
 	assert.Equal(t, event.Anchors, got.Anchors)
+	// The denormalized rule-scoping tokens survive intact (ADR-051).
+	assert.Equal(t, "sensor-type", got.DeviceTypeToken)
+	assert.Equal(t, "temp-profile@3", got.ProfileVersionToken)
 	// The bound classifier + denormalized unit/data type survive intact (ADR-016).
 	assert.Equal(t, event.Payload, got.Payload)
+}
+
+// A resolved event with no rule-scoping tokens (the common unprofiled/unpublished
+// device case) round-trips with empty strings: empty encodes as an absent optional
+// proto field and decodes back to "" via the generated accessor (ADR-051).
+func TestMarshalResolvedEventEmptyProfileScope(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	event := &model.ResolvedEvent{
+		Source:            "http1",
+		SourceDeviceToken: "device-001",
+		OccurredTime:      now,
+		ProcessedTime:     now,
+		EventType:         esmodel.Measurement,
+		Payload:           &model.ResolvedMeasurementsPayload{},
+	}
+
+	bytes, err := MarshalResolvedEvent(event)
+	assert.NoError(t, err)
+	got, err := UnmarshalResolvedEvent(bytes)
+	assert.NoError(t, err)
+	assert.Equal(t, "", got.DeviceTypeToken)
+	assert.Equal(t, "", got.ProfileVersionToken)
 }
 
 // An alarm state-change event (ADR-041) must survive the marshal/unmarshal round-trip

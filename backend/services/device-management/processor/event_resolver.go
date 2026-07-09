@@ -79,18 +79,35 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 // device travels as its token (ADR-044): the numeric row id stays inside
 // device-management and never reaches event-management / device-state.
 func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []model.ResolvedAnchor,
-	event *esmodel.UnresolvedEvent, rezPayload interface{}) (*EventResolutionResults, error) {
+	event *esmodel.UnresolvedEvent, rezPayload interface{}, scope *model.ProfileScope) *EventResolutionResults {
 	resolved := &model.ResolvedEvent{
-		Source:            event.Source,
-		AltId:             event.AltId,
-		SourceDeviceToken: device.Token,
-		Anchors:           anchors,
-		OccurredTime:      event.OccurredTime,
-		ProcessedTime:     event.ProcessedTime,
-		EventType:         event.EventType,
-		Payload:           rezPayload,
+		Source:              event.Source,
+		AltId:               event.AltId,
+		SourceDeviceToken:   device.Token,
+		DeviceTypeToken:     scope.DeviceTypeToken,
+		ProfileVersionToken: scope.ProfileVersionToken,
+		Anchors:             anchors,
+		OccurredTime:        event.OccurredTime,
+		ProcessedTime:       event.ProcessedTime,
+		EventType:           event.EventType,
+		Payload:             rezPayload,
 	}
-	return &EventResolutionResults{Device: device, Resolved: resolved}, nil
+	return &EventResolutionResults{Device: device, Resolved: resolved}
+}
+
+// resolveScope denormalizes the device's rule-scoping identity (ADR-051) so
+// event-processing's DETECT engine can select the applicable rules from the wire
+// without a graph read. It is resolved through the same cached device→type→
+// profile→active-version chain the metric resolution already uses (cheap). Callers
+// resolve it BEFORE any state mutation so a transient lookup failure can never
+// leave a committed side effect (e.g. a created relationship) that a redelivery
+// would then duplicate.
+func (rez *EventResolver) resolveScope(ctx context.Context, device *model.Device) (*model.ProfileScope, uint, error) {
+	scope, err := rez.Api.ProfileScopeByDeviceType(ctx, device.DeviceTypeId)
+	if err != nil {
+		return nil, uint(dmproto.FailureReason_ApiCallFailed), fmt.Errorf("could not resolve profile scope: %w", err)
+	}
+	return scope, 0, nil
 }
 
 // Create a new relationship based on an inbound event. The source is the
@@ -121,6 +138,15 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 		return nil, uint(dmproto.FailureReason_Invalid), errors.New("new relationship payload was not of expected type")
 	}
 
+	// Resolve the rule-scoping identity BEFORE creating the relationship: it depends
+	// only on the device's type, and resolving it first means a transient lookup
+	// failure aborts cleanly instead of leaving a committed relationship that a
+	// redelivery would create a second time (fresh token per attempt is not idempotent).
+	scope, reason, err := rez.resolveScope(ctx, device)
+	if err != nil {
+		return nil, reason, err
+	}
+
 	// Create new relationship from the event payload.
 	created, reason, err := rez.CreateNewEntityRelationship(ctx, device, *relcreate)
 	if err != nil {
@@ -139,10 +165,7 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	anchors := []model.ResolvedAnchor{
 		{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID},
 	}
-	resolved, err := rez.MergeToResolveEvent(device, anchors, event, payload)
-	if err != nil {
-		return nil, uint(dmproto.FailureReason_Unknown), errors.New("unable to merge info to resolve event")
-	}
+	resolved := rez.MergeToResolveEvent(device, anchors, event, payload, scope)
 
 	return []EventResolutionResults{*resolved}, 0, nil
 }
@@ -354,10 +377,13 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 			Msg("Resolving event with no anchors (device has no tracked relationship)")
 	}
 
-	result, err := rez.MergeToResolveEvent(device, anchors, event, resolved)
+	// Denormalize the rule-scoping identity (ADR-051) onto the event.
+	scope, reason, err := rez.resolveScope(ctx, device)
 	if err != nil {
-		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
+		return nil, reason, err
 	}
+
+	result := rez.MergeToResolveEvent(device, anchors, event, resolved, scope)
 	return []EventResolutionResults{*result}, 0, nil
 }
 

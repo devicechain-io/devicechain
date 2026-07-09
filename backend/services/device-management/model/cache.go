@@ -14,6 +14,7 @@ const (
 	CACHE_NAME_DEVICE_BY_TOKEN         = "device-by-token"
 	CACHE_NAME_RELATIONSHIPS_BY_SOURCE = "relationships-by-source"
 	CACHE_NAME_METRIC_DEFS_BY_TYPE     = "metric-defs-by-type"
+	CACHE_NAME_PROFILE_SCOPE_BY_TYPE   = "profile-scope-by-type"
 )
 
 // Caches bundles the caches the cached API decorator reads from and evicts. The
@@ -32,6 +33,15 @@ type Caches struct {
 	// (ADR-016). Empty results are cached too — an untyped device type is the common
 	// case and should not query on every event.
 	MetricDefsByType *messaging.Cache
+	// ProfileScopeByType caches the device-type + active-published-profile-version
+	// tokens denormalized onto every resolved event (ADR-051), keyed by tenant+device
+	// type id. It shares MetricDefsByType's invalidation triggers — a type's profile
+	// pointer changing (UpdateDeviceType) or the profile being published/rolled back
+	// (evictProfileResolution) — PLUS one the metric-def cache lacks: a profile-TOKEN
+	// rename, since the version token embeds the profile token (UpdateDeviceProfile).
+	// Empty scopes (untyped/unpublished) are cached too so a device with no rules does
+	// not query on every event.
+	ProfileScopeByType *messaging.Cache
 }
 
 // InitializeCaches builds the caches used by the cached API, TTL'd from the
@@ -54,9 +64,17 @@ func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementC
 	if err != nil {
 		return nil, err
 	}
+	// The scope cache shares the metric-def cache's invalidation profile (ADR-051),
+	// so it is TTL'd from the same configuration knob.
+	profileScopeByType, err := nmgr.NewCache(CACHE_NAME_PROFILE_SCOPE_BY_TYPE,
+		time.Duration(cfg.MetricDefCacheTtlSeconds)*time.Second)
+	if err != nil {
+		return nil, err
+	}
 	return &Caches{
 		DeviceByToken:         deviceByToken,
 		RelationshipsBySource: relationshipsBySource,
 		MetricDefsByType:      metricDefsByType,
+		ProfileScopeByType:    profileScopeByType,
 	}, nil
 }

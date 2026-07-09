@@ -41,8 +41,8 @@ list (not both). An empty selection defaults to `full`.
 
 | Profile | Functional areas |
 |---|---|
-| `full` | user-management, device-management, event-sources, event-management, device-state, command-delivery |
-| `telemetry` | user-management, device-management, event-sources, event-management, device-state |
+| `full` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing |
+| `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 
 ```bash

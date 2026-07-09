@@ -79,10 +79,19 @@ type ResolvedEvent struct {
 	AltId             *string
 	SourceDeviceToken string
 	Anchors           []ResolvedAnchor
-	OccurredTime      time.Time
-	ProcessedTime     time.Time
-	EventType         esmodel.EventType
-	Payload           interface{}
+	// DeviceTypeToken and ProfileVersionToken denormalize the device's rule-scoping
+	// identity at resolve time (ADR-051): the device-type token and a
+	// "{profileToken}@{version}" token naming the active published profile version
+	// (ADR-045) whose rules apply. event-processing's DETECT engine selects the
+	// applicable rules from these without a graph read back into device-management.
+	// ProfileVersionToken is empty when the type has no profile or the profile is
+	// unpublished (no active version) — the device has no resolvable rules.
+	DeviceTypeToken     string
+	ProfileVersionToken string
+	OccurredTime        time.Time
+	ProcessedTime       time.Time
+	EventType           esmodel.EventType
+	Payload             interface{}
 }
 
 // ResolvedAnchor is one of a resolved event's anchors — a tracked relationship's

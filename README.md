@@ -102,6 +102,7 @@ per tenant.
 | **command-delivery** | Persistent, two-way command dispatch to devices. |
 | **dashboard-management** | Stores tenant dashboard definitions; the embeddable widget packages render live telemetry over them. |
 | **notification-management** | Routes triggered alarms to humans — per-tenant policy over email (SMTP) and webhook, with per-severity escalation. |
+| **event-processing** | The DETECT + REACT pipeline: taps the resolved-events stream, detects conditions over a keyed-streaming core, and dispatches actions (raise-alarm, send-command). |
 | **operator** | A controller-runtime operator reconciling the `Instance` custom resource (an instance's deployment shape). |
 
 ### The backbone
@@ -237,7 +238,7 @@ backend/    Go monorepo (Go Workspaces)
   core/       shared library — entity, auth, messaging, config, rdb, graphql
   services/   microservices — device-management, user-management, event-management,
               event-sources, device-state, command-delivery, dashboard-management,
-              notification-management
+              notification-management, event-processing
   k8s/        Kubernetes operator (controller-runtime)
   cli/        dcctl — instance bootstrap / destroy and admin tooling
 frontend/   npm workspace — apps/console (React + TypeScript management console)

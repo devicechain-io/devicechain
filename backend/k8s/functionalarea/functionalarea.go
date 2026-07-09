@@ -35,6 +35,7 @@ const (
 	DashboardMgmt    FunctionalArea = "dashboard-management"
 	CommandDelivery  FunctionalArea = "command-delivery"
 	NotificationMgmt FunctionalArea = "notification-management"
+	EventProcessing  FunctionalArea = "event-processing"
 )
 
 // Manifest is a functional area's deployment contract (ADR-022 decision 2): the
@@ -114,6 +115,16 @@ var catalog = map[FunctionalArea]Manifest{
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
+	EventProcessing: {
+		// The DETECT + REACT pipeline (ADR-051): a durable consumer of the
+		// resolved-events stream (produced by device-management) that detects
+		// conditions and dispatches actions. Functionally dead without the area
+		// producing what it consumes, so device-management is a Hard dep.
+		Area:     EventProcessing,
+		Consumes: []string{"resolved-events"},
+		HardDeps: []FunctionalArea{DeviceManagement},
+		SoftDeps: []FunctionalArea{UserManagement},
+	},
 }
 
 // Profile names a curated, valid enabled set (ADR-022 decision 2). Every profile
@@ -135,7 +146,7 @@ var profiles = map[Profile][]FunctionalArea{
 	ProfileFull: {
 		UserManagement, DeviceManagement, EventSources,
 		EventManagement, DeviceState, DashboardMgmt, CommandDelivery,
-		NotificationMgmt,
+		NotificationMgmt, EventProcessing,
 	},
 	ProfileTelemetry: {
 		UserManagement, DeviceManagement, EventSources, EventManagement, DeviceState, DashboardMgmt,
