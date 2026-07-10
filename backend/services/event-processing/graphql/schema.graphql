@@ -4,19 +4,60 @@
 #
 # Event Processing GraphQL Schema
 #
-# Minimal for the service scaffold (ADR-051): the rule-authoring and rule-health
-# surfaces arrive in a later slice. This root exists so the service has a parseable
-# schema and the shared health/metrics server (/healthz, /readyz, /metrics) comes
-# up, matching every other DeviceChain microservice.
+# The rule-authoring home is device-management (rules are PROFILE-homed, ADR-053 §5 /
+# ADR-045); event-processing owns the DETECT schema and its cel-go compiler. The one
+# surface here is the ADR-044 SYNCHRONOUS validation gate device-management calls at
+# profile publish so a profile carrying an uncompilable rule fails closed.
 #
 
 type Query {
     # Identity/liveness probe for the event-processing service.
     eventProcessingInfo: EventProcessingInfo!
+
+    # Validate a batch of detection-rule definitions (opaque rules.Rule JSON) by
+    # decoding, compiling, and cost-gating each through the DETECT compiler — the
+    # single-homed authority for rule structure, type coherence, CEL type-checking, and
+    # the ADR-023 predicate-cost ceiling. This is the ADR-044 validate-invariants-sync
+    # gate: device-management invokes it at profile publish (over the service-token
+    # svcclient), submitting the profile's ENABLED draft rules, and refuses to publish
+    # if any of them does not compile (a disabled rule is inert and is not submitted).
+    # Pure validation — no state is read or written, so it is safe to call repeatedly.
+    validateDetectionRules(rules: [DetectionRuleInput!]!): DetectionRuleValidationResult!
 }
 
 # Service identity returned by the scaffold query.
 type EventProcessingInfo {
     # The functional area this service serves ("event-processing").
     functionalArea: String!
+}
+
+# A single detection rule handed to the validation gate: the authoring token (used to
+# anchor error messages and as the compile-time rule-id placeholder — the authoritative
+# runtime id is composed when the published-rule fact is emitted) plus the opaque
+# rules.Rule JSON definition to compile.
+input DetectionRuleInput {
+    # The rule's device-management token, for error anchoring.
+    token: String!
+    # The opaque rules.Rule JSON definition to compile.
+    definition: String!
+}
+
+# The outcome of validating a batch of detection-rule definitions.
+type DetectionRuleValidationResult {
+    # True only if every submitted definition decoded, compiled, and passed the cost
+    # gate. A publish proceeds only when this is true.
+    valid: Boolean!
+    # One entry per rejected definition (empty when valid), each naming the offending
+    # rule and a console-surfaceable reason.
+    errors: [DetectionRuleValidationError!]!
+}
+
+# A single rejected detection rule.
+type DetectionRuleValidationError {
+    # Zero-based index of the offending definition in the submitted list.
+    index: Int!
+    # The rejected rule's token (echoed from the input), for the console to name it.
+    token: String!
+    # Human-readable, console-surfaceable reason the rule did not compile.
+    message: String!
 }

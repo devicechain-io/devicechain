@@ -30,7 +30,8 @@ func validateDetectionRuleToken(token string) error {
 // authoritative type/cost/injection validation is the synchronous compile event-processing
 // performs at publish (ADR-044). Checking JSON shape here gives the author an immediate,
 // event-processing-independent error for the common mistake (malformed blob) while keeping
-// cel-go single-homed. A blob that is valid JSON but not a real rule is caught at publish.
+// cel-go single-homed. A blob that is valid JSON but not a real rule is caught at publish —
+// when the rule is enabled (a disabled rule is inert and not gated).
 func validateDetectionRuleDefinition(definition string) error {
 	if definition == "" {
 		return fmt.Errorf("a detection rule definition is required")

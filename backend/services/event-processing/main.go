@@ -150,9 +150,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// The scaffold GraphQL surface exists only to stand up the shared health/metrics
-	// server (/healthz, /readyz, /metrics); the rule surface arrives later. No
-	// context providers are needed yet (the resolver is state-free).
+	// The GraphQL surface carries the scaffold health/metrics server (/healthz, /readyz,
+	// /metrics) plus the ADR-044 detection-rule validation gate (validateDetectionRules).
+	// The gate compiles rules through the stateless DETECT compiler, so the resolver is
+	// state-free and needs no context providers.
 	providers := map[gqlcore.ContextKey]interface{}{}
 	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{})
 

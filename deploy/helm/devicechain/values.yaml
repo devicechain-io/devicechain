@@ -84,6 +84,13 @@ instance:
         # delivery verifies a target device exists before enqueue (W1.1b).
         hostname: device-management
         port: 8080
+      eventProcessing:
+        # event-processing is reached in-cluster by its instance-namespace Service name
+        # for the reverse-direction sync call (ADR-044 amendment): device-management
+        # compiles a profile's draft detection rules against it at publish so an
+        # uncompilable rule fails closed (ADR-051 slice 4b).
+        hostname: event-processing
+        port: 8080
       serviceAuth:
         # Shared secret backing the synchronous cross-service call primitive
         # (ADR-044 amendment): a caller presents it to user-management's mint
