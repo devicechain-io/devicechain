@@ -222,13 +222,20 @@ func (e *Engine) applyCountWindow(ev Event, r Rule) {
 }
 
 // closePanes fires every tumbling window whose end has been crossed by the watermark.
-func (e *Engine) closePanes(wm time.Time) {
+// closePanes closes every tumbling pane whose end is at or before the watermark, emitting a
+// detection for each that satisfies its comparison. It reports whether it consumed any pane —
+// including a pane that closed WITHOUT emitting (its aggregate failed the comparison): that is
+// still a serializable-state change the caller must persist, so a wall-clock idle advance that
+// silently closes a pane is checkpointed and cannot diverge on replay (ADR-051 slice 4c).
+func (e *Engine) closePanes(wm time.Time) bool {
+	consumed := false
 	for e.closes.Len() > 0 {
 		top := e.closes[0]
 		if top.end.After(wm) {
 			break
 		}
 		heap.Pop(&e.closes)
+		consumed = true
 		pa, ok := e.panes[top.pk]
 		if !ok {
 			continue
@@ -239,6 +246,7 @@ func (e *Engine) closePanes(wm time.Time) {
 		}
 		delete(e.panes, top.pk)
 	}
+	return consumed
 }
 
 // --- snapshot / restore for the window state ---

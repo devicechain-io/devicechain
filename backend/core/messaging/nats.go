@@ -869,6 +869,28 @@ func (r *natsReader) HandleResponse(err error) {
 	}
 }
 
+// Backlog reports this reader's durable consumer's UNDELIVERED count (pending) and
+// DELIVERED-BUT-UNACKED count (ackPending) from the broker's ConsumerInfo — the authoritative
+// "is anyone still working the tail?" signal. Both zero means the durable is fully drained:
+// nothing waits on the stream AND nothing is in flight at any consumer instance. It is the
+// positive "caught up to the live tail" evidence a wall-clock idle-advance requires before it
+// may fire a silent-series timer (ADR-051 slice 4c) — inferring caught-up from a quiet read
+// loop is unsound, because the loop is ALSO quiet during a broker outage or a consumer re-bind
+// while a backlog piles up. ackPending additionally exposes messages a PEER consumer took
+// during a rolling-update overlap (invisible to pending), narrowing the split-brain window
+// before the Slice-6 singleton deploy closes it. An error (broker unreachable, consumer gone)
+// is surfaced so the caller fails safe. It queries ConsumerInfo directly and touches none of
+// the read-loop goroutine's mutable state (stream and durable are immutable after creation),
+// so it is safe to call concurrently with the read loop's Fetch. (pending also backs the
+// Slice-8 consumer-lag operations gauge.)
+func (r *natsReader) Backlog(ctx context.Context) (pending, ackPending uint64, err error) {
+	ci, err := r.nmgr.js.ConsumerInfo(r.stream, r.durable, nats.Context(ctx))
+	if err != nil {
+		return 0, 0, err
+	}
+	return ci.NumPending, uint64(ci.NumAckPending), nil
+}
+
 // ----------------
 // Lifecycle
 // ----------------

@@ -121,6 +121,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if lateness < 0 {
 		lateness = 0
 	}
+	// A negative guard (operator opt-out) disables idle-advance; the processor treats any
+	// non-positive value as disabled, so a negative seconds value maps straight through.
+	idleGuard := time.Duration(Configuration.IdleAdvanceGuardSeconds) * time.Second
 	cfg := processor.Config{
 		PartitionId:        singletonPartition,
 		Suffix:             dmconfig.SUBJECT_RESOLVED_EVENTS,
@@ -128,6 +131,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		CheckpointInterval: time.Duration(Configuration.CheckpointIntervalSeconds) * time.Second,
 		MaxFutureSkew:      time.Duration(Configuration.MaxEventFutureSkewSeconds) * time.Second,
 		Lateness:           lateness,
+		IdleAdvanceGuard:   idleGuard,
 	}
 	ResolvedEventsProcessor = processor.NewResolvedEventsProcessor(Microservice, ResolvedEventsReader,
 		nmgr, SnapshotStore, RuleRegistry, derivedWriter, cfg, core.NewNoOpLifecycleCallbacks())
