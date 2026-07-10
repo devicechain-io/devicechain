@@ -37,6 +37,14 @@ const (
 	// at-most-once; the consumer persists each delivered fact into a durable projection
 	// it rebuilds from on restart. Tenant on the subject.
 	SUBJECT_DEVICE_ROSTER = "device-roster"
+	// SUBJECT_DEVICE_ATTRIBUTE carries device-attribute events (ADR-051 slice 4c-3):
+	// emitted post-commit when a numeric, platform-set attribute (ADR-012 scope SHARED or
+	// SERVER, value type DOUBLE or LONG) of a device is upserted or deleted, so
+	// event-processing can resolve a DYNAMIC detection threshold from it (a rule reads the
+	// device's own attribute instead of a compile-time literal). The emit is at-most-once;
+	// the consumer persists each delivered fact into a durable projection it rebuilds from
+	// on restart. Tenant on the subject.
+	SUBJECT_DEVICE_ATTRIBUTE = "device-attribute"
 )
 
 // Device authentication policy applied to inbound events (transport security,

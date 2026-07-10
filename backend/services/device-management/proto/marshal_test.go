@@ -198,6 +198,55 @@ func TestMarshalDeviceRosterEventRoundTrips(t *testing.T) {
 	assert.True(t, got.ExpectedSince.Equal(since), "expected-since round-trip (nanos): got %s want %s", got.ExpectedSince, since)
 }
 
+func TestMarshalDeviceAttributeEventRoundTrips(t *testing.T) {
+	at := time.Date(2026, 7, 10, 9, 30, 0, 123456789, time.UTC)
+	event := &model.DeviceAttributeEvent{
+		DeviceToken: "device-001",
+		AttrKey:     "maxTemp",
+		Scope:       "SERVER",
+		Value:       72.5,
+		Removed:     false,
+		UpdatedAt:   at,
+	}
+	bytes, err := MarshalDeviceAttributeEvent(event)
+	assert.NoError(t, err)
+
+	got, err := UnmarshalDeviceAttributeEvent(bytes)
+	assert.NoError(t, err)
+	assert.Equal(t, "device-001", got.DeviceToken)
+	assert.Equal(t, "maxTemp", got.AttrKey)
+	assert.Equal(t, "SERVER", got.Scope)
+	assert.Equal(t, 72.5, got.Value)
+	assert.False(t, got.Removed)
+	assert.True(t, got.UpdatedAt.Equal(at), "updated-at round-trip (nanos): got %s want %s", got.UpdatedAt, at)
+}
+
+// A genuine upsert of the value 0.0 (Removed=false) round-trips unambiguously: proto3
+// elides both the zero double and the false bool on the wire, but Removed stays false so
+// the consumer reads a real zero threshold, not a removal.
+func TestMarshalDeviceAttributeZeroValueIsNotRemoval(t *testing.T) {
+	event := &model.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "floor", Scope: "SHARED", Value: 0.0, Removed: false}
+	bytes, err := MarshalDeviceAttributeEvent(event)
+	assert.NoError(t, err)
+	got, err := UnmarshalDeviceAttributeEvent(bytes)
+	assert.NoError(t, err)
+	assert.Equal(t, 0.0, got.Value)
+	assert.False(t, got.Removed, "a genuine zero value is not a removal")
+}
+
+// A removal event round-trips: removed=true, no value, and the write time preserved.
+func TestMarshalDeviceAttributeRemovalRoundTrips(t *testing.T) {
+	at := time.Date(2026, 7, 10, 9, 31, 0, 0, time.UTC)
+	event := &model.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "maxTemp", Removed: true, UpdatedAt: at}
+	bytes, err := MarshalDeviceAttributeEvent(event)
+	assert.NoError(t, err)
+	got, err := UnmarshalDeviceAttributeEvent(bytes)
+	assert.NoError(t, err)
+	assert.True(t, got.Removed)
+	assert.Equal(t, 0.0, got.Value)
+	assert.True(t, got.UpdatedAt.Equal(at))
+}
+
 // A roster event for a device whose type has no profile (empty profile token) and a
 // detection-rules event with no publish time both round-trip: the empty/zero optional
 // fields encode as absent and decode back to their zero values, not to a spurious
