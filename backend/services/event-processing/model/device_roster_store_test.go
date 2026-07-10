@@ -57,6 +57,36 @@ func TestDeviceRosterStore_UpsertIsIdempotentAndLoads(t *testing.T) {
 	}
 }
 
+// Load returns a live device (present, not tombstoned), reports live=false for a tombstoned one,
+// and live=false with no error for an absent one — the authoritative post-merge read the arming
+// loop reflects onto the engine (slice 4c-2b-2b).
+func TestDeviceRosterStore_Load(t *testing.T) {
+	s := newTestRosterStore(t)
+	ctx := context.Background()
+
+	if err := s.Upsert(ctx, &DeviceRoster{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "prof", ExpectedSince: rosterBase}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	row, live, err := s.Load(ctx, "acme", "dev1")
+	if err != nil || !live {
+		t.Fatalf("live device: got live=%v err=%v", live, err)
+	}
+	if row.ProfileToken != "prof" || !row.ExpectedSince.Equal(rosterBase) {
+		t.Fatalf("live row fields wrong: %+v", row)
+	}
+	// Absent device: not found, no error, disarm.
+	if _, live, err := s.Load(ctx, "acme", "nope"); err != nil || live {
+		t.Fatalf("absent device: got live=%v err=%v", live, err)
+	}
+	// Tombstoned device: found but not live.
+	if err := s.Delete(ctx, "acme", "dev1", rosterBase.Add(time.Hour)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, live, err := s.Load(ctx, "acme", "dev1"); err != nil || live {
+		t.Fatalf("tombstoned device: got live=%v err=%v", live, err)
+	}
+}
+
 // The composite (tenant, deviceToken) key keeps a device token that repeats across tenants
 // distinct, and Delete only removes the matching tenant's row.
 func TestDeviceRosterStore_CompositeKeyAndScopedDelete(t *testing.T) {

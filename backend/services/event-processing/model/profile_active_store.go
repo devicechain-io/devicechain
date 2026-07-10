@@ -42,6 +42,24 @@ func (s *ProfileActiveStore) Upsert(ctx context.Context, active *ProfileActive) 
 	}).Create(active).Error
 }
 
+// Load returns one profile token's active-version row and whether it was found. It is the
+// authoritative post-merge read the published-rule consumer uses after upserting the active
+// version (ADR-051 slice 4c-2b-2b): the upsert is monotonic on published_at, so a stale rule
+// fact does not regress the active version, and the consumer re-reads to arm against the CURRENT
+// active version + its grace base rather than the (possibly superseded) version the fact itself
+// named. found is false when no publish has been recorded for the profile yet.
+func (s *ProfileActiveStore) Load(ctx context.Context, tenant, profileToken string) (active ProfileActive, found bool, err error) {
+	var row ProfileActive
+	tx := s.rdb.DB(ctx).Where("tenant = ? AND profile_token = ?", tenant, profileToken).Limit(1).Find(&row)
+	if tx.Error != nil {
+		return ProfileActive{}, false, tx.Error
+	}
+	if tx.RowsAffected == 0 {
+		return ProfileActive{}, false, nil
+	}
+	return row, true, nil
+}
+
 // LoadAll returns every profile's active-version row — the set the engine's arming cross-
 // references at startup. Not tenant-scoped (tenant on the row), so it reads the whole table.
 func (s *ProfileActiveStore) LoadAll(ctx context.Context) ([]ProfileActive, error) {
