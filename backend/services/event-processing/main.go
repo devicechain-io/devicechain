@@ -154,8 +154,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	ResolvedEventsProcessor.RuleUpdatesReader = ruleReader
 	ResolvedEventsProcessor.RuleStore = DetectRuleStore
 	// Dead-man read-model wiring (ADR-051 slice 4c-2b): the consumers persist the roster and
-	// active-version projections before acking. Engine-inert in this slice — nothing arms off them
-	// yet (slice 4c-2b-2 does).
+	// active-version projections before acking, then feed the engine's dead-man armer — built and
+	// reconciled from these projections in ExecuteStart (slice 4c-2b-2b) — so a never-reported
+	// device's absence still fires.
 	ResolvedEventsProcessor.RosterReader = rosterReader
 	ResolvedEventsProcessor.EntityDeletedReader = entityDeletedReader
 	ResolvedEventsProcessor.RosterStore = DeviceRosterStore
