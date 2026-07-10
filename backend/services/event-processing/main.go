@@ -36,6 +36,7 @@ var (
 	DetectRuleStore         *model.DetectRuleStore
 	DeviceRosterStore       *model.DeviceRosterStore
 	ProfileActiveStore      *model.ProfileActiveStore
+	DeviceAttributeStore    *model.DeviceAttributeStore
 	RuleRegistry            *runtime.RuleRegistry
 	ResolvedEventsReader    messaging.MessageReader
 	ResolvedEventsProcessor *processor.ResolvedEventsProcessor
@@ -121,6 +122,13 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
+	// Dynamic-threshold fact reader (ADR-051 slice 4c-3): the numeric, platform-set device
+	// attributes a detection rule can read a threshold from. Its consumer persists each into the
+	// DeviceAttribute projection before acking; the eval that reads it is slice 4c-3b-2.
+	attributeReader, err := nmgr.NewReader(dmconfig.SUBJECT_DEVICE_ATTRIBUTE)
+	if err != nil {
+		return err
+	}
 	scoped, err := processor.NewStoreRuleSource(DetectRuleStore).Load(context.Background())
 	if err != nil {
 		return err
@@ -161,6 +169,11 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	ResolvedEventsProcessor.EntityDeletedReader = entityDeletedReader
 	ResolvedEventsProcessor.RosterStore = DeviceRosterStore
 	ResolvedEventsProcessor.ProfileActiveStore = ProfileActiveStore
+	// Dynamic-threshold projection wiring (ADR-051 slice 4c-3): the attribute consumer persists each
+	// device-attribute fact before acking; the entity-deleted consumer also purges a deleted device's
+	// attributes via this store. Engine-inert until slice 4c-3b-2 wires the CEL "attr" eval.
+	ResolvedEventsProcessor.AttributeReader = attributeReader
+	ResolvedEventsProcessor.AttributeStore = DeviceAttributeStore
 	return ResolvedEventsProcessor.Initialize(context.Background())
 }
 
@@ -190,6 +203,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// rebuilt from them at startup, so a never-reported device's absence arming survives a restart.
 	DeviceRosterStore = model.NewDeviceRosterStore(RdbManager)
 	ProfileActiveStore = model.NewProfileActiveStore(RdbManager)
+	// The dynamic-threshold read-model (ADR-051 slice 4c-3): the current numeric value of each
+	// platform-set device attribute, so a rule can resolve a per-device threshold from it. The
+	// attribute/entity-deleted consumers maintain it before acking; slice 4c-3b-2's eval reads it.
+	DeviceAttributeStore = model.NewDeviceAttributeStore(RdbManager)
 
 	// Create and initialize nats manager (builds the readers + checkpoint processor). The
 	// DETECT rule set is rebuilt from the durable rule projection inside createNatsComponents

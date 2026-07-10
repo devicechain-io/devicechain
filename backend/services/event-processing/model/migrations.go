@@ -14,5 +14,6 @@ var (
 		NewInitialSchema(),
 		NewDetectRulesSchema(),
 		NewRosterSchema(),
+		NewDeviceAttributeSchema(),
 	}
 )
