@@ -98,20 +98,41 @@ type Detection struct {
 // event timestamps and idle wall-clock advance. All firing decisions are a function of
 // the watermark and the snapshotted state — never wall-clock in the replay path.
 type Engine struct {
-	rules   map[string]Rule
-	wheel   *timerWheel
-	wm      watermark                      // logical clock: bounded-out-of-order event-time frontier
-	lastSeq uint64                         // seq of the last event whose effect is in the state
-	active  map[SeriesKey]time.Time        // Duration: when the current matched run began
-	sliding map[SeriesKey][]time.Time      // Repeating: trailing matching-event times
-	panes   map[paneKey]*paneAgg           // Aggregate: open tumbling window panes
-	closes  closeHeap                      // Aggregate: pending pane closes, ordered by end
-	lastVal map[SeriesKey]deltaState       // DeltaRate: last sample per series
-	counts  map[SeriesKey]*paneAgg         // CountWindow: open event-count accumulator per series
-	session map[SeriesKey]*paneAgg         // Session: open session accumulator per series
-	slides  map[SeriesKey]*slidingState    // SlidingAgg: trailing sliding-window state per series
-	corr    map[SeriesKey]map[string]int64 // Correlation: anchor → member → last unix-nanos seen
-	out     []Detection
+	rules    map[string]Rule
+	wheel    *timerWheel
+	wm       watermark                      // logical clock: bounded-out-of-order event-time frontier
+	lastSeq  uint64                         // seq of the last event whose effect is in the state
+	active   map[SeriesKey]time.Time        // Duration: when the current matched run began
+	sliding  map[SeriesKey][]time.Time      // Repeating: trailing matching-event times
+	panes    map[paneKey]*paneAgg           // Aggregate: open tumbling window panes
+	closes   closeHeap                      // Aggregate: pending pane closes, ordered by end
+	lastVal  map[SeriesKey]deltaState       // DeltaRate: last sample per series
+	counts   map[SeriesKey]*paneAgg         // CountWindow: open event-count accumulator per series
+	session  map[SeriesKey]*paneAgg         // Session: open session accumulator per series
+	slides   map[SeriesKey]*slidingState    // SlidingAgg: trailing sliding-window state per series
+	corr     map[SeriesKey]map[string]int64 // Correlation: anchor → member → last unix-nanos seen
+	expected map[SeriesKey]expectedState    // Absence: dead-man arming for never-seen devices (ADR-051 slice 4c-2b)
+	out      []Detection
+}
+
+// expectedState is the dead-man arming record for one rostered device under one Absence rule
+// (ADR-051 slice 4c-2b): the resolved grace base the dead-man timer was armed from, plus a
+// once-fired latch. It exists so a device that has NEVER reported still gets an absence timer
+// — a heartbeat-armed timer (apply, Absence) only ever covers a device that reported at least
+// once and then went silent, so a device that never reports at all would otherwise never fire
+// absence, the exact case absence detection exists for.
+//
+// since doubles as the epoch marker, and it is FORWARD-ONLY. Done makes the dead-man fire AT
+// MOST ONCE PER EPOCH: restart reconciliation (slice 4c-2b-2b) re-arms every still-expected
+// series with its recomputed base, and without the latch a series whose dead-man already fired
+// — its wheel timer consumed, its live deadline gone — would be re-armed at the SAME base and
+// fire a second time. A STRICTLY-later base is a different epoch (a re-publish or rollback, which
+// device-management stamps with a fresh publishedAt precisely to grant a fresh grace window):
+// it clears the latch and re-arms. So the latch suppresses a re-arm at the same-or-earlier base
+// only — the once-across-restart guarantee — while honoring a genuinely advanced grace base.
+type expectedState struct {
+	since time.Time // grace base = max(device.expectedSince, rule.publishedAt); also the forward-only epoch marker
+	done  bool      // fired at `since`; suppresses a re-arm at the same-or-earlier base, a later base re-arms
 }
 
 // NewEngine builds an empty engine. allowedLateness bounds how far event time is held
@@ -122,17 +143,18 @@ func NewEngine(rules []Rule, allowedLateness time.Duration) *Engine {
 		m[r.ID] = r
 	}
 	return &Engine{
-		rules:   m,
-		wheel:   newTimerWheel(),
-		wm:      watermark{lateness: allowedLateness},
-		active:  map[SeriesKey]time.Time{},
-		sliding: map[SeriesKey][]time.Time{},
-		panes:   map[paneKey]*paneAgg{},
-		lastVal: map[SeriesKey]deltaState{},
-		counts:  map[SeriesKey]*paneAgg{},
-		session: map[SeriesKey]*paneAgg{},
-		slides:  map[SeriesKey]*slidingState{},
-		corr:    map[SeriesKey]map[string]int64{},
+		rules:    m,
+		wheel:    newTimerWheel(),
+		wm:       watermark{lateness: allowedLateness},
+		active:   map[SeriesKey]time.Time{},
+		sliding:  map[SeriesKey][]time.Time{},
+		panes:    map[paneKey]*paneAgg{},
+		lastVal:  map[SeriesKey]deltaState{},
+		counts:   map[SeriesKey]*paneAgg{},
+		session:  map[SeriesKey]*paneAgg{},
+		slides:   map[SeriesKey]*slidingState{},
+		corr:     map[SeriesKey]map[string]int64{},
+		expected: map[SeriesKey]expectedState{},
 	}
 }
 
@@ -175,6 +197,7 @@ func (e *Engine) RemoveRule(id string) {
 	deleteSeriesKeys(e.session, id)
 	deleteSeriesKeys(e.slides, id)
 	deleteSeriesKeys(e.corr, id)
+	deleteSeriesKeys(e.expected, id)
 	for pk := range e.panes {
 		if pk.Rule == id {
 			delete(e.panes, pk)
@@ -206,6 +229,67 @@ func deleteSeriesKeys[V any](m map[SeriesKey]V, rule string) {
 			delete(m, k)
 		}
 	}
+}
+
+// SetExpected arms (or refreshes) the dead-man absence timer for a series the runtime resolved
+// from the roster + active-version read-models — the (Absence rule, device) pair a rostered
+// device that has never reported should still be watched on (ADR-051 slice 4c-2b). It is driven
+// off device/rule facts and restart reconciliation on the single-writer loop, NOT the resolved-
+// event stream, so it is made durable through the snapshot rather than replayed. since is the
+// already-resolved grace base (max(device.expectedSince, rule.publishedAt), F1-clamped by the
+// caller in slice 4c-2b-2b); the deadline is since+Timeout, exactly symmetric with a heartbeat's
+// ev.Time+Timeout in apply.
+//
+// It is a no-op unless key.Rule is a KNOWN Absence rule — only absence has a dead-man, and
+// guarding on the live rule keeps a stale/misrouted key from fabricating an entry with no timeout
+// to arm against.
+//
+// It is FORWARD-ONLY on the grace base, which is both the armed deadline's origin and the epoch
+// marker. A base that does not STRICTLY advance is either a restart-reconciliation duplicate of
+// the current epoch or a stale/earlier arming: the recorded base and the forward-only wheel
+// deadline are left untouched. When the current epoch already fired (done), that same guard IS
+// the once-semantics — a reconcile must not re-arm and re-fire a dead-man at the elapsed base. A
+// STRICTLY-later base is a NEW epoch (a re-publish/rollback fresh grace window): it clears any
+// fired latch and re-arms forward (scheduleForward, so a device that later reports still
+// supersedes it with a heartbeat's later deadline and neither ever shrinks a live deadline).
+func (e *Engine) SetExpected(key SeriesKey, since time.Time) {
+	r, ok := e.rules[key.Rule]
+	if !ok || r.Kind != Absence {
+		return
+	}
+	if st, armed := e.expected[key]; armed && !since.After(st.since) {
+		return // same-or-earlier base: reconcile duplicate / stale arming (and the once-semantics latch)
+	}
+	e.expected[key] = expectedState{since: since}
+	e.wheel.scheduleForward(key, since.Add(r.Timeout))
+}
+
+// RemoveExpected disarms a series' dead-man entirely — dropping its expected entry AND cancelling
+// its absence timer in the wheel — when the device leaves the rule's scope (deleted, or re-typed
+// off the profile; ADR-051 slice 4c-2b). Cancelling the wheel timer (not merely the entry) also
+// silences a heartbeat-armed absence timer for a now-departed device, so a deleted device cannot
+// fire one last false absence. A key with neither an entry nor a live timer is a clean no-op.
+func (e *Engine) RemoveExpected(key SeriesKey) {
+	delete(e.expected, key)
+	e.wheel.cancel(key)
+}
+
+// ExpectedKeys returns every series currently dead-man-armed (fired or not), so the runtime's
+// restart reconciliation (slice 4c-2b-2b) can diff the engine's armed set against the roster +
+// active-version read-models and RemoveExpected the entries whose membership is gone (a device
+// deleted, or a profile version superseded, while the process was down) — INCLUDING an entry for
+// a rule the restored rule set no longer holds (Restore reloads expected unconditionally), which
+// the reconciliation must treat as membership-gone or it persists in every future snapshot. It
+// returns a point-in-time copy of the keys, so mutating the engine while iterating it is safe.
+// The armed set is bounded by (absence rules × rostered devices) — the same key-cardinality class
+// as the wheel's gens map (see timerWheel), governed by the ADR-023 state budget, not event volume.
+// Order is unspecified.
+func (e *Engine) ExpectedKeys() []SeriesKey {
+	keys := make([]SeriesKey, 0, len(e.expected))
+	for k := range e.expected {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // HasPendingWork reports whether any timer or pane close is scheduled — i.e. whether a
@@ -353,6 +437,17 @@ func (e *Engine) fire(key SeriesKey, deadline time.Time) {
 	switch r.Kind {
 	case Absence:
 		e.emit(r, key, deadline) // stamped at the deadline the silence elapsed
+		// Latch this epoch as fired so restart reconciliation (slice 4c-2b-2b) does not re-arm and
+		// re-fire it: the wheel already consumed this timer, so a reconcile-driven SetExpected at
+		// the same, now-elapsed grace base would schedule a fresh timer that fires immediately on
+		// the next advance. The latch is scoped to `since` (the epoch), so a later re-publish base
+		// still clears it and re-arms. done gates ONLY the dead-man arming (SetExpected) path, so
+		// latching a heartbeat-armed absence's entry (if one lingers from before the device first
+		// reported) is harmless — heartbeat re-arming (apply) never consults it.
+		if st, ok := e.expected[key]; ok {
+			st.done = true
+			e.expected[key] = st
+		}
 		// one-shot: the wheel already consumed the timer; next heartbeat re-arms.
 	case Duration:
 		if _, held := e.active[key]; held {
@@ -383,19 +478,27 @@ type snapActive struct {
 	Since  time.Time `json:"since"`
 }
 
+type snapExpected struct {
+	Rule   string    `json:"rule"`
+	Series string    `json:"series"`
+	Since  time.Time `json:"since"`
+	Done   bool      `json:"done"`
+}
+
 type snapshot struct {
-	Watermark time.Time     `json:"watermark"`
-	LastSeq   uint64        `json:"lastSeq"`
-	Active    []snapActive  `json:"active"`
-	Timers    []snapTimer   `json:"timers"`
-	Gens      []snapGen     `json:"gens"`
-	Sliding   []snapSliding `json:"sliding"`
-	Panes     []snapPane    `json:"panes"`
-	Deltas    []snapDelta   `json:"deltas"`
-	Counts    []snapCount   `json:"counts"`
-	Sessions  []snapSession `json:"sessions"`
-	Slides    []snapSlide   `json:"slides"`
-	Corr      []snapCorr    `json:"corr"`
+	Watermark time.Time      `json:"watermark"`
+	LastSeq   uint64         `json:"lastSeq"`
+	Active    []snapActive   `json:"active"`
+	Timers    []snapTimer    `json:"timers"`
+	Gens      []snapGen      `json:"gens"`
+	Sliding   []snapSliding  `json:"sliding"`
+	Panes     []snapPane     `json:"panes"`
+	Deltas    []snapDelta    `json:"deltas"`
+	Counts    []snapCount    `json:"counts"`
+	Sessions  []snapSession  `json:"sessions"`
+	Slides    []snapSlide    `json:"slides"`
+	Corr      []snapCorr     `json:"corr"`
+	Expected  []snapExpected `json:"expected"`
 }
 
 // Snapshot serializes the full engine state. In the service this is committed to Postgres
@@ -420,6 +523,16 @@ func (e *Engine) Snapshot() ([]byte, error) {
 		return active[i].Series < active[j].Series
 	})
 	sliding, panes := e.snapshotWindows()
+	expected := make([]snapExpected, 0, len(e.expected))
+	for k, st := range e.expected {
+		expected = append(expected, snapExpected{Rule: k.Rule, Series: k.Series, Since: st.since, Done: st.done})
+	}
+	sort.Slice(expected, func(i, j int) bool {
+		if expected[i].Rule != expected[j].Rule {
+			return expected[i].Rule < expected[j].Rule
+		}
+		return expected[i].Series < expected[j].Series
+	})
 	return json.Marshal(snapshot{
 		Watermark: e.wm.now,
 		LastSeq:   e.lastSeq,
@@ -433,6 +546,7 @@ func (e *Engine) Snapshot() ([]byte, error) {
 		Sessions:  e.snapshotSessions(),
 		Slides:    e.snapshotSlides(),
 		Corr:      e.snapshotCorr(),
+		Expected:  expected,
 	})
 }
 
@@ -457,5 +571,8 @@ func Restore(rules []Rule, allowedLateness time.Duration, data []byte) (*Engine,
 	e.restoreSessions(s.Sessions)
 	e.restoreSlides(s.Slides)
 	e.restoreCorr(s.Corr)
+	for _, x := range s.Expected {
+		e.expected[SeriesKey{Rule: x.Rule, Series: x.Series}] = expectedState{since: x.Since, done: x.Done}
+	}
 	return e, nil
 }
