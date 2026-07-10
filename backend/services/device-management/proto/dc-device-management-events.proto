@@ -218,4 +218,24 @@ message PPublishedDetectionRule {
 message PDetectionRulesPublishedEvent {
     string profile_version_token = 1;
     repeated PPublishedDetectionRule rules = 2;
+    string published_at = 3;
+}
+
+/**
+ * Device-roster event (ADR-051 slice 4c-2): emitted post-commit when a device is
+ * created or re-typed, naming the device and the STABLE profile token its type
+ * adopts (ADR-045) — deliberately the profile token, not the "{profileToken}@{version}"
+ * token, so a re-publish that mints a new version never staleness-orphans the roster
+ * entry (event-processing cross-references the latest published version at arming
+ * time). expected_since is the device's creation time: the base of the dead-man clock
+ * for a device that has NEVER reported, so event-processing can arm absence for it
+ * (the reported-once-then-silent case is already covered by the heartbeat-armed timer).
+ * profile_token is empty when the type has no profile — a roster entry with no
+ * resolvable rules, retained so a later re-type re-homes it. The tenant travels on the
+ * per-tenant subject, not in the payload.
+ */
+message PDeviceRosterEvent {
+    string device_token = 1;
+    string profile_token = 2;
+    string expected_since = 3;
 }

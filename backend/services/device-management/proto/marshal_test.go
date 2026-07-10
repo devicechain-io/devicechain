@@ -155,12 +155,17 @@ func TestMarshalAlarmStateChangeEventRoundTrips(t *testing.T) {
 // deleted time are carried for logging/future reshape, so a dropped field would
 // misfire or lose the cleanup.
 func TestMarshalDetectionRulesPublishedEventRoundTrips(t *testing.T) {
+	// The publish time must survive with sub-second precision: it is the rule-activation
+	// half of the dead-man grace-period base (ADR-051 slice 4c-2), and a dropped or
+	// rounded value would shift when a never-reported device's absence deadline elapses.
+	publishedAt := time.Date(2026, 7, 10, 9, 15, 0, 123456789, time.UTC)
 	event := &model.DetectionRulesPublishedEvent{
 		ProfileVersionToken: "sensor-profile@3",
 		Rules: []model.PublishedDetectionRule{
 			{Token: "overheat", Definition: `{"name":"overheat","type":"threshold","when":{"metric":"t","op":"gt","threshold":80}}`},
 			{Token: "flatline", Definition: `{"name":"flatline","type":"absence","timeout":"5m"}`},
 		},
+		PublishedAt: publishedAt,
 	}
 	bytes, err := MarshalDetectionRulesPublishedEvent(event)
 	assert.NoError(t, err)
@@ -169,6 +174,49 @@ func TestMarshalDetectionRulesPublishedEventRoundTrips(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "sensor-profile@3", got.ProfileVersionToken)
 	assert.Equal(t, event.Rules, got.Rules, "every rule's token + opaque definition must round-trip in order")
+	assert.True(t, got.PublishedAt.Equal(publishedAt), "published-at round-trip (nanos): got %s want %s", got.PublishedAt, publishedAt)
+}
+
+// The device-roster envelope must survive the marshal/unmarshal round trip (ADR-051
+// slice 4c-2): the device + stable profile token drive which absence rules an unseen
+// device is armed under, and expected-since is the dead-man clock base — a dropped
+// field would arm the wrong rule set or shift the deadline.
+func TestMarshalDeviceRosterEventRoundTrips(t *testing.T) {
+	since := time.Date(2026, 7, 10, 8, 0, 0, 987654321, time.UTC)
+	event := &model.DeviceRosterEvent{
+		DeviceToken:   "device-001",
+		ProfileToken:  "sensor-profile",
+		ExpectedSince: since,
+	}
+	bytes, err := MarshalDeviceRosterEvent(event)
+	assert.NoError(t, err)
+
+	got, err := UnmarshalDeviceRosterEvent(bytes)
+	assert.NoError(t, err)
+	assert.Equal(t, "device-001", got.DeviceToken)
+	assert.Equal(t, "sensor-profile", got.ProfileToken)
+	assert.True(t, got.ExpectedSince.Equal(since), "expected-since round-trip (nanos): got %s want %s", got.ExpectedSince, since)
+}
+
+// A roster event for a device whose type has no profile (empty profile token) and a
+// detection-rules event with no publish time both round-trip: the empty/zero optional
+// fields encode as absent and decode back to their zero values, not to a spurious
+// year-1 instant or a decode error.
+func TestMarshalOptionalTimeAndProfileAbsent(t *testing.T) {
+	roster := &model.DeviceRosterEvent{DeviceToken: "d1", ProfileToken: "", ExpectedSince: time.Time{}}
+	bytes, err := MarshalDeviceRosterEvent(roster)
+	assert.NoError(t, err)
+	got, err := UnmarshalDeviceRosterEvent(bytes)
+	assert.NoError(t, err)
+	assert.Equal(t, "", got.ProfileToken)
+	assert.True(t, got.ExpectedSince.IsZero(), "absent expected-since must decode to the zero time, got %s", got.ExpectedSince)
+
+	rules := &model.DetectionRulesPublishedEvent{ProfileVersionToken: "p@1"}
+	bytes, err = MarshalDetectionRulesPublishedEvent(rules)
+	assert.NoError(t, err)
+	gotRules, err := UnmarshalDetectionRulesPublishedEvent(bytes)
+	assert.NoError(t, err)
+	assert.True(t, gotRules.PublishedAt.IsZero(), "absent published-at must decode to the zero time, got %s", gotRules.PublishedAt)
 }
 
 // An empty rule set (a profile published with no enabled detection rules) round-trips to an

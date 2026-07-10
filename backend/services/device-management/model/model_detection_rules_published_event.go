@@ -3,7 +3,10 @@
 
 package model
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // PublishedDetectionRule is one detection rule carried in a
 // DetectionRulesPublishedEvent: its authoring token (unique per profile, ADR-042)
@@ -26,6 +29,14 @@ type PublishedDetectionRule struct {
 type DetectionRulesPublishedEvent struct {
 	ProfileVersionToken string
 	Rules               []PublishedDetectionRule
+	// PublishedAt is the version's commit time (ADR-051 slice 4c-2): the moment this
+	// rule set became active. event-processing uses it as the rule-activation half of
+	// the dead-man grace-period base — a never-reported device's absence deadline is
+	// max(device-created, rule-published) + timeout, so publishing an absence rule
+	// gives an already-existing quiet device one timeout of grace before firing rather
+	// than an instant fleet-wide burst. Zero (absent) means "treat as immemorial": the
+	// grace base falls back to the device's creation time alone.
+	PublishedAt time.Time
 }
 
 // DetectionRulesPublishedPublisher publishes detection-rules-published events
