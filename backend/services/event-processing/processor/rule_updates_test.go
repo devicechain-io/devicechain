@@ -97,6 +97,83 @@ func TestStoreRuleSourceSkipsUncompilable(t *testing.T) {
 	}
 }
 
+// TestReconcileRegistryClosesRollingOverlap proves the post-replay registry reconcile (the Finding-1
+// fix): a rule the registry MISSED — because a peer pod acked its publish fact during a rolling-update
+// overlap and the registry was loaded once at Initialize — is installed from the durable projection,
+// and a rule the projection no longer holds is evicted. So the dead-man armer that reconciles against
+// this registry immediately after sees the true active rule set, not the stale Initialize-time one.
+func TestReconcileRegistryClosesRollingOverlap(t *testing.T) {
+	store := newTestRuleStore(t)
+	ctx := context.Background()
+	// The durable projection holds the CURRENT rule set (as if a peer pod persisted it during overlap).
+	// An ABSENCE rule so the assertion below can prove the ENGINE — not just the registry — received it
+	// (a threshold rule would need a driven event; an absence rule fires from SetExpected + advance).
+	const absDef = `{"name":"dead","type":"absence","timeout":"10s"}`
+	if err := store.Upsert(ctx, []model.DetectRule{
+		{RuleId: "acme/prof@1/r1", Tenant: "acme", ProfileVersionToken: "prof@1", RuleToken: "r1", Definition: absDef},
+	}); err != nil {
+		t.Fatalf("seed projection: %v", err)
+	}
+	// A STALE registry: it MISSED prof@1/r1 and still holds a rule the projection no longer has.
+	reg := runtime.NewRuleRegistry([]runtime.ScopedRule{absScopedProc("acme", "gone@1", "acme/gone@1/x")})
+	eng := detectcore.NewEngine(reg.Cores(), 0)
+	rp := newTestProcessor(newTestStore(t), nil, 1)
+	rp.engine = eng
+	rp.registry = reg
+	rp.RuleStore = store
+
+	if err := rp.reconcileRegistry(ctx); err != nil {
+		t.Fatalf("reconcileRegistry: %v", err)
+	}
+	if _, ok := reg.Lookup("acme/prof@1/r1"); !ok {
+		t.Fatal("reconcile did not install the rule the registry missed during the overlap")
+	}
+	if _, ok := reg.Lookup("acme/gone@1/x"); ok {
+		t.Fatal("reconcile did not evict a rule the projection no longer holds")
+	}
+	if reg.Count() != 1 {
+		t.Fatalf("registry should hold exactly the projection's rules; count = %d", reg.Count())
+	}
+	// Engine half: prove the diff-apply reached the ENGINE, not just the registry (guards a future
+	// edit that dropped the paired engine.UpsertRule / RemoveRule). fire() only emits when the rule's
+	// core is present in the engine, so arming both series and advancing past the deadline fires ONLY
+	// the reconciled-in rule and NOT the reconciled-out one.
+	eng.SetExpected(detectcore.SeriesKey{Rule: "acme/prof@1/r1", Series: "d"}, testBase)
+	eng.SetExpected(detectcore.SeriesKey{Rule: "acme/gone@1/x", Series: "d"}, testBase)
+	eng.Advance(testBase.Add(11 * time.Second))
+	var newFired, goneFired bool
+	for _, d := range eng.Drain() {
+		switch d.RuleID {
+		case "acme/prof@1/r1":
+			newFired = true
+		case "acme/gone@1/x":
+			goneFired = true
+		}
+	}
+	if !newFired {
+		t.Fatal("reconcile installed the rule in the registry but not the engine (its core did not fire)")
+	}
+	if goneFired {
+		t.Fatal("reconcile evicted the rule from the registry but left its core running in the engine")
+	}
+}
+
+// TestReconcileRegistryNoStoreIsNoOp: without a RuleStore (scaffold/test path) the reconcile is a
+// no-op and leaves the registry untouched.
+func TestReconcileRegistryNoStoreIsNoOp(t *testing.T) {
+	reg := runtime.NewRuleRegistry([]runtime.ScopedRule{absScopedProc("acme", "p1@v1", "acme/p1@v1/r1")})
+	rp := newTestProcessor(newTestStore(t), nil, 1)
+	rp.registry = reg
+	rp.engine = detectcore.NewEngine(reg.Cores(), 0)
+	rp.RuleStore = nil
+	if err := rp.reconcileRegistry(context.Background()); err != nil {
+		t.Fatalf("reconcileRegistry: %v", err)
+	}
+	if reg.Count() != 1 {
+		t.Fatalf("a nil store must leave the registry untouched; count = %d", reg.Count())
+	}
+}
+
 // A fact whose subject carries no tenant, or whose payload is unparseable, is dropped by the
 // live consumer's decode — not fatal.
 func TestDecodePublishedRuleFactDropsUnusable(t *testing.T) {
