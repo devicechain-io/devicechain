@@ -17,6 +17,28 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// signalArmRecheck marshals a device-membership RECHECK onto the single-writer loop for the dead-man
+// armer (ADR-051 slice 4c-2b-2b). It sends only the device identity — the loop re-reads the
+// authoritative roster projection and arms/disarms from that (applyArmRecheck). Deferring the read to
+// the loop is deliberate: it is what keeps the roster and entity-deleted consumers (separate
+// goroutines over reorderable streams) from applying their observations out of lifecycle order, since
+// each consumer's own read+send is not atomic. It is a no-op when arming is disabled (nil armer, the
+// scaffold path; the armer is built only when the read-model stores are wired). Returns false ONLY on
+// shutdown mid-send (the caller then leaves the fact unacked; the durable projection + restart
+// reconcile rebuild arming). The persist already committed the row, so a recheck is never lost to a
+// dropped in-memory signal — at worst it is re-derived by reconcile.
+func (rp *ResolvedEventsProcessor) signalArmRecheck(tenant, deviceToken string) bool {
+	if rp.armer == nil {
+		return true
+	}
+	select {
+	case rp.armUpdates <- armUpdate{tenant: tenant, deviceToken: deviceToken}:
+		return true
+	case <-rp.procCtx.Done():
+		return false
+	}
+}
+
 // validRosterToken bounds a token decoded from a fact before it becomes a durable projection
 // column. A well-formed producer only ever emits ADR-042 tokens (<= core.MaxTokenLen), but the
 // proto imposes no length, so a forged or buggy-producer fact could carry an over-long token that
@@ -100,6 +122,9 @@ func (rp *ResolvedEventsProcessor) runRosterConsumer() {
 				func() error { return rp.RosterStore.Upsert(rp.procCtx, roster) }) {
 				return // shutdown mid-retry: leave unacked; the row redelivers next start
 			}
+			if !rp.signalArmRecheck(tenant, ev.DeviceToken) {
+				return // shutdown mid-send: leave unacked; reconcile rebuilds arming next start
+			}
 		}
 		rp.ackFact(msg, "device-roster")
 	}
@@ -149,6 +174,12 @@ func (rp *ResolvedEventsProcessor) runEntityDeletedConsumer() {
 				if !rp.persistBeforeAck("roster-delete "+tenant+"/"+ev.EntityToken,
 					func() error { return rp.RosterStore.Delete(rp.procCtx, tenant, ev.EntityToken, deletedTime) }) {
 					return // shutdown mid-retry: leave unacked; the deletion redelivers next start
+				}
+				// Signal the loop to re-check membership: it re-reads the projection (a tombstone
+				// disarms; a stale delete the monotonic guard rejected leaves the row live, so the
+				// re-read arms — no spurious disarm) in lifecycle order regardless of consumer races.
+				if !rp.signalArmRecheck(tenant, ev.EntityToken) {
+					return // shutdown mid-send: leave unacked; reconcile rebuilds arming next start
 				}
 			}
 		}

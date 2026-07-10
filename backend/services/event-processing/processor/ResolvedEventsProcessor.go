@@ -130,11 +130,10 @@ type ResolvedEventsProcessor struct {
 	RuleStore *model.DetectRuleStore
 
 	// RosterReader is the durable consumer of device-management's device-roster fact stream
-	// (ADR-051 slice 4c-2). When set, a goroutine drains it and persists each fact to the
-	// DeviceRoster projection (RosterStore) before acking, so the set of devices expected to
-	// report survives a restart. Nil disables it (the scaffold/test path). In this slice the
-	// projection is landed but not yet read — the engine dead-man arming that consumes it is
-	// slice 4c-2b-2.
+	// (ADR-051 slice 4c-2b). When set, a goroutine drains it, persists each fact to the DeviceRoster
+	// projection (RosterStore) before acking, and marshals the device's authoritative membership onto
+	// the single-writer loop so the armer arms its dead-man (slice 4c-2b-2b). Nil disables it (the
+	// scaffold/test path).
 	RosterReader messaging.MessageReader
 
 	// EntityDeletedReader is the durable consumer of device-management's entity-deleted fact
@@ -153,6 +152,18 @@ type ResolvedEventsProcessor struct {
 	// projection (last-fact-wins), so the arming path can resolve a roster entry's stable profile
 	// token to the active version's absence rules and their grace base. Nil disables it.
 	ProfileActiveStore *model.ProfileActiveStore
+
+	// armer arms dead-man absence timers for never-seen devices, cross-referencing the roster +
+	// active-version read-models (ADR-051 slice 4c-2b-2b). It is built in ExecuteStart once the
+	// engine is final (after replay), reconciled from the durable projections, then driven live on
+	// the single-writer loop by the fact consumers (armUpdates / applyRuleUpdate). Nil on the
+	// scaffold/test path (no stores), where all arming is skipped.
+	armer *runtime.DeadmanArmer
+	// armUpdates carries one device's authoritative post-merge membership (from the roster /
+	// entity-deleted consumers, after they re-read the projection) to the single-writer loop, where
+	// the armer arms or disarms the device. Buffered so a burst of device facts does not block the
+	// consumers on the loop between resolved-event batches.
+	armUpdates chan armUpdate
 
 	cfg       Config
 	registry  *runtime.RuleRegistry
@@ -220,6 +231,27 @@ type readItem struct {
 type ruleUpdate struct {
 	upserts  []runtime.ScopedRule
 	removals []string
+	// active, when set, is the authoritative active-version of the fact's profile (re-read from the
+	// ProfileActive projection after persist). applyRuleUpdate hands it to the dead-man armer AFTER
+	// installing the fact's rule cores in the engine — the engine-first wiring contract SetExpected
+	// depends on (a rule must be in the engine before a dead-man referencing it is armed). Nil for a
+	// rule fact with no resolvable active version (malformed token) or the scaffold path.
+	active *runtime.ActiveEntry
+}
+
+// armUpdate is a signal to RE-CHECK one device's dead-man arming on the single-writer loop (ADR-051
+// slice 4c-2b-2b). It carries only the device identity, NOT a membership snapshot: the loop re-reads
+// the authoritative roster projection and arms/disarms from THAT (applyArmRecheck). Doing the read on
+// the loop — not in the fact consumers — is what keeps the roster and entity-deleted consumers (two
+// goroutines over reorderable streams) from applying their observations out of lifecycle order. Each
+// consumer's read of the row and its channel send are not atomic, so their sends can reach the loop
+// in the reverse of commit order; but because the loop re-reads the monotonically-converged
+// projection on every recheck, whichever recheck it processes last installs the converged truth, and
+// a stale fact can never corrupt the projection (the store's monotonic guard), so no in-memory
+// ordering guard is needed.
+type armUpdate struct {
+	tenant      string
+	deviceToken string
 }
 
 // NewResolvedEventsProcessor creates a checkpointing resolved-events processor. The
@@ -253,6 +285,9 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		// Buffered so a burst of published-rule facts does not block the fact consumer on the
 		// loop between resolved-event batches; the loop drains it promptly (rule updates are rare).
 		ruleUpdates: make(chan ruleUpdate, 64),
+		// Buffered generously: device create/delete/re-type facts can arrive in bursts (a fleet
+		// provisioning run), and the loop drains one per resolved-event-batch iteration.
+		armUpdates: make(chan armUpdate, 256),
 	}
 	rp.publisher = runtime.NewPublisher(derivedWriter, registry, rp.metrics)
 	rp.metrics.setRulesActive(registry.Count())
@@ -312,6 +347,13 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 			return fmt.Errorf("event-processing: idle-advance is enabled but the resolved-events reader does not report Backlog; cannot gate absence-on-silence safely")
 		}
 	}
+	// Build the dead-man armer over the FINAL (post-replay) engine and reconcile it from the durable
+	// read-models BEFORE any live consumption (ADR-051 slice 4c-2b-2b): the restored snapshot is
+	// authoritative for FIRED state, the projections for MEMBERSHIP. It runs on this startup
+	// goroutine (single-writer) so it never races the loop or the fact consumers launched below.
+	if err := rp.startDeadmanArmer(ctx); err != nil {
+		return err
+	}
 	rp.readerWG.Add(1)
 	go rp.run()
 	// Launch the live rule-update consumer after the loop is running (so the ruleUpdates
@@ -322,9 +364,11 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 		go rp.runRuleConsumer()
 	}
 	// The roster and entity-deleted consumers maintain the dead-man read-models (ADR-051 slice
-	// 4c-2b). They persist and ack independently of the single-writer loop — this slice does not
-	// yet feed the engine off them — so they need no ordering against the resolved stream; each
-	// stops on procCancel and is joined by readerWG.
+	// 4c-2b) and, after persisting, marshal each device's authoritative membership onto the single-
+	// writer loop (armUpdates) so the armer arms/disarms it (slice 4c-2b-2b). They persist and ack
+	// independently of the resolved stream (the roster projection's monotonic ordering resolves
+	// cross-fact races, not the stream order), so they need no ordering against it; each stops on
+	// procCancel and is joined by readerWG.
 	if rp.RosterReader != nil {
 		rp.readerWG.Add(1)
 		go rp.runRosterConsumer()
@@ -334,6 +378,54 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 		go rp.runEntityDeletedConsumer()
 	}
 	return nil
+}
+
+// startDeadmanArmer builds the dead-man armer over the final engine and reconciles it from the
+// durable roster + active-version projections (ADR-051 slice 4c-2b-2b). It is a no-op unless BOTH
+// read-model stores are wired (the scaffold/test path leaves the armer nil, and every arming site
+// guards on it). Reconcile arms every still-rostered device under its active version — the engine's
+// once-per-epoch SetExpected suppresses re-firing an already-fired dead-man — and sweeps engine
+// dead-man entries whose membership is gone (a device deleted / a version superseded while down).
+//
+// It deliberately does NOT force a checkpoint: the reconciled arming is fully re-derivable from the
+// (durable) projections on every restart, and the once-fired latches live in the restored snapshot,
+// so the output need not be persisted here. It becomes durable at the first natural checkpoint (a
+// live event, or the idle-advance that fires a never-seen device's dead-man). This also sidesteps
+// committing an equal-sequence snapshot against the monotonic Save guard.
+func (rp *ResolvedEventsProcessor) startDeadmanArmer(ctx context.Context) error {
+	if rp.RosterStore == nil || rp.ProfileActiveStore == nil {
+		return nil
+	}
+	rp.armer = runtime.NewDeadmanArmer(rp.registry, rp.engine)
+	rosters, err := rp.RosterStore.LoadAll(ctx)
+	if err != nil {
+		return fmt.Errorf("load roster projection for dead-man reconcile: %w", err)
+	}
+	actives, err := rp.ProfileActiveStore.LoadAll(ctx)
+	if err != nil {
+		return fmt.Errorf("load active-version projection for dead-man reconcile: %w", err)
+	}
+	rp.armer.Reconcile(toRosterEntries(rosters), toActiveEntries(actives))
+	log.Info().Int("rostered", len(rosters)).Int("profiles", len(actives)).
+		Msg("Reconciled DETECT dead-man arming from the roster + active-version projections.")
+	return nil
+}
+
+// toRosterEntries / toActiveEntries map the persistence rows to the armer's model-free input shapes.
+func toRosterEntries(rows []model.DeviceRoster) []runtime.RosterEntry {
+	out := make([]runtime.RosterEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, runtime.RosterEntry{Tenant: r.Tenant, DeviceToken: r.DeviceToken, ProfileToken: r.ProfileToken, ExpectedSince: r.ExpectedSince})
+	}
+	return out
+}
+
+func toActiveEntries(rows []model.ProfileActive) []runtime.ActiveEntry {
+	out := make([]runtime.ActiveEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, runtime.ActiveEntry{Tenant: r.Tenant, ProfileToken: r.ProfileToken, ActiveVersionToken: r.ActiveVersionToken, PublishedAt: r.PublishedAt})
+	}
+	return out
 }
 
 // restore loads the durable checkpoint and rebuilds the engine from it, or builds a
@@ -455,6 +547,13 @@ func (rp *ResolvedEventsProcessor) run() {
 			// engine's serializable state (rules are not in the snapshot — they are rebuilt from
 			// the durable rule projection on restart), so it needs no checkpoint of its own.
 			rp.applyRuleUpdate(upd)
+		case au := <-rp.armUpdates:
+			// Device membership recheck on the single writer: re-read the authoritative roster
+			// projection and arm/disarm. Like a rule update it mutates engine timer state but not the
+			// checkpoint sequence; it is made durable by the next checkpoint (or re-derived by
+			// reconcile on restart), so it needs no checkpoint of its own. A nil armUpdates channel
+			// (scaffold path) never selects here.
+			rp.applyArmRecheck(au)
 		case item := <-liveItems:
 			// Stamp the read time on ANY pump delivery — a message or a read error. For a
 			// message it means the reader had work; for an error it is the fail-safe posture:
@@ -776,6 +875,41 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 		}
 	}
 	rp.metrics.setRulesActive(rp.registry.Count())
+	// Dead-man arming for the fact's profile, AFTER the rule cores are installed above (engine-first,
+	// the contract SetExpected depends on): record the active version, disarm a superseded version's
+	// dead-men across the fleet, and arm every rostered device of the profile. Nil active (malformed
+	// token / scaffold) or nil armer skips it.
+	if rp.armer != nil && upd.active != nil {
+		rp.armer.ApplyActiveVersion(*upd.active)
+	}
+}
+
+// applyArmRecheck re-reads a device's authoritative roster membership and arms or disarms its
+// dead-man on the single-writer loop (ADR-051 slice 4c-2b-2b). The read runs HERE, not in the fact
+// consumer that signaled the recheck, so the roster and entity-deleted consumers — separate
+// goroutines over reorderable streams — cannot apply their observations out of lifecycle order: the
+// loop always reads the current, monotonically-converged projection, so whichever recheck it
+// processes last installs the converged truth, and a stale fact (which the store's monotonic guard
+// prevents from mutating the row) can never be observed as current. A transient store error skips
+// the recheck — the projection is durable, and the next fact for the device or the restart reconcile
+// re-arms — rather than blocking the single-writer loop on a retry. A device with no row (never
+// happens post-persist) or a tombstone reads as not-live and disarms.
+func (rp *ResolvedEventsProcessor) applyArmRecheck(au armUpdate) {
+	if rp.armer == nil || rp.RosterStore == nil {
+		return
+	}
+	row, live, err := rp.RosterStore.Load(rp.procCtx, au.tenant, au.deviceToken)
+	if err != nil {
+		log.Warn().Err(err).Str("tenant", au.tenant).Str("device", au.deviceToken).
+			Msg("Dead-man arming recheck failed to read the roster projection; skipping (durable, reconcile heals).")
+		return
+	}
+	entry := runtime.RosterEntry{Tenant: au.tenant, DeviceToken: au.deviceToken}
+	if live {
+		entry.ProfileToken = row.ProfileToken
+		entry.ExpectedSince = row.ExpectedSince
+	}
+	rp.armer.ApplyDeviceMembership(entry, live)
 }
 
 // runRuleConsumer drains the published-rule fact stream (ADR-051 slice 4b-3). For each fact
@@ -826,18 +960,43 @@ func (rp *ResolvedEventsProcessor) runRuleConsumer() {
 		// row (profileActiveFromFact returns ok=false) — the well-formed producer always mints the
 		// "@"-joined form, so this only skips a forged/malformed fact; its rules (keyed by the whole
 		// version token) may still install, they simply get no arming entry, which is inert.
+		var activeEntry *runtime.ActiveEntry
 		if rp.ProfileActiveStore != nil {
 			if active, ok := profileActiveFromFact(tenant, ev); ok {
 				if !rp.persistBeforeAck("profile-active "+active.Tenant+"/"+active.ProfileToken,
 					func() error { return rp.ProfileActiveStore.Upsert(rp.procCtx, active) }) {
 					return // shutdown mid-retry: leave unacked; redelivers next start
 				}
+				// Re-read the AUTHORITATIVE active version for the armer: the upsert is monotonic on
+				// publishedAt, so a stale rule fact does not regress the active version — the dead-man
+				// must arm against the CURRENT active version (which the earlier fact's rules already
+				// installed), not necessarily this fact's. Same persist-before-ack retry discipline;
+				// only when arming is enabled.
+				if rp.armer != nil {
+					var row model.ProfileActive
+					var found bool
+					if !rp.persistBeforeAck("profile-active-load "+active.Tenant+"/"+active.ProfileToken,
+						func() (err error) {
+							row, found, err = rp.ProfileActiveStore.Load(rp.procCtx, active.Tenant, active.ProfileToken)
+							return err
+						}) {
+						return // shutdown mid-retry: leave unacked; reconcile rebuilds arming next start
+					}
+					if found {
+						activeEntry = &runtime.ActiveEntry{Tenant: row.Tenant, ProfileToken: row.ProfileToken,
+							ActiveVersionToken: row.ActiveVersionToken, PublishedAt: row.PublishedAt}
+					}
+				}
 			}
 		}
-		// Apply live to the running engine on the single-writer loop.
-		if rules, _ := runtime.CompilePublishedRules(tenant, ev.ProfileVersionToken, ev.Rules); len(rules) > 0 {
+		// Apply live to the single-writer loop: the compiled rules AND (engine-first, in the SAME
+		// ruleUpdate so applyRuleUpdate installs before it arms) the active-version arming trigger.
+		// Send when there is either work — an empty batch with an active version still triggers a
+		// version-transition disarm.
+		rules, _ := runtime.CompilePublishedRules(tenant, ev.ProfileVersionToken, ev.Rules)
+		if len(rules) > 0 || activeEntry != nil {
 			select {
-			case rp.ruleUpdates <- ruleUpdate{upserts: rules}:
+			case rp.ruleUpdates <- ruleUpdate{upserts: rules, active: activeEntry}:
 			case <-rp.procCtx.Done():
 				return // shutdown before hand-off: leave unacked; the persisted rows rebuild it
 			}
