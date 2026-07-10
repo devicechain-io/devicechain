@@ -10,6 +10,7 @@ import (
 	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-event-processing/graphql"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-event-processing/processor"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -32,6 +33,7 @@ var (
 	NatsManager    *messaging.NatsManager
 
 	SnapshotStore           *model.SnapshotStore
+	RuleRegistry            *runtime.RuleRegistry
 	ResolvedEventsReader    messaging.MessageReader
 	ResolvedEventsProcessor *processor.ResolvedEventsProcessor
 )
@@ -81,6 +83,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	ResolvedEventsReader = revents
 
+	// Derived-event writer: DETECT publishes each detection on the per-tenant
+	// "{instanceId}.{tenant}.derived-events" subject as a subscribe-able product
+	// (ADR-037); the writer scopes the subject to the tenant supplied in context, which
+	// the publisher's tenant backstop validates against the rule's owning tenant.
+	derivedWriter, err := nmgr.NewWriter(config.SUBJECT_DERIVED_EVENTS)
+	if err != nil {
+		return err
+	}
+
 	// The checkpointing DETECT processor: feeds each resolved event into the owned
 	// keyed-streaming engine, commits engine state to the snapshot store, and acks
 	// only after the commit (ADR-051 correctness spine). On startup it replays the
@@ -88,14 +99,20 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// up to the head before consuming live. It runs with an empty rule set in this
 	// slice — multi-tenant rule CRUD arrives later — so it advances the watermark and
 	// checkpoints its position without emitting detections yet.
+	lateness := time.Duration(Configuration.WatermarkLatenessSeconds) * time.Second
+	if lateness < 0 {
+		lateness = 0
+	}
 	cfg := processor.Config{
 		PartitionId:        singletonPartition,
 		Suffix:             dmconfig.SUBJECT_RESOLVED_EVENTS,
 		CheckpointEvents:   Configuration.CheckpointEvents,
 		CheckpointInterval: time.Duration(Configuration.CheckpointIntervalSeconds) * time.Second,
+		MaxFutureSkew:      time.Duration(Configuration.MaxEventFutureSkewSeconds) * time.Second,
+		Lateness:           lateness,
 	}
 	ResolvedEventsProcessor = processor.NewResolvedEventsProcessor(Microservice, ResolvedEventsReader,
-		nmgr, SnapshotStore, nil, cfg, core.NewNoOpLifecycleCallbacks())
+		nmgr, SnapshotStore, RuleRegistry, derivedWriter, cfg, core.NewNoOpLifecycleCallbacks())
 	return ResolvedEventsProcessor.Initialize(context.Background())
 }
 
@@ -115,6 +132,17 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 	SnapshotStore = model.NewSnapshotStore(RdbManager)
+
+	// Build the rule registry from the rule source. Slice 4a is backed by an empty static
+	// source — the runtime fan-out, derived-event publisher, and tenant backstop are wired
+	// and exercised by tests, but no rules are authored yet. Slice 4b replaces the source
+	// with one fed by device-management's published-rule fact events (profile-homed rules,
+	// ADR-045), scoped by profile-version token.
+	scoped, err := runtime.StaticRuleSource{}.Load(ctx)
+	if err != nil {
+		return err
+	}
+	RuleRegistry = runtime.NewRuleRegistry(scoped)
 
 	// Create and initialize nats manager (builds the reader + checkpoint processor).
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)

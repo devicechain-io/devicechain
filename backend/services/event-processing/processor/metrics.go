@@ -4,6 +4,7 @@
 package processor
 
 import (
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -31,6 +32,16 @@ type detectMetrics struct {
 	snapshotBytes       prometheus.Gauge
 	watermarkLagSeconds prometheus.Gauge
 	restoreSeconds      prometheus.Gauge
+
+	// Slice-4 fan-out / derived-event gauges (ADR-051 observability thread). Cardinality is
+	// bounded: no per-tenant labels (the ADR-023 G.3 lesson) — the per-tenant state budget is
+	// an ADR-023 governance concern (slice 6), where the label set is budgeted. The one
+	// labelled series is rejected-detection reason, a fixed two-value enum.
+	rulesActive       prometheus.Gauge
+	fanoutEventsTotal prometheus.Counter
+	fanoutEvalErrors  prometheus.Counter
+	derivedPublished  prometheus.Counter
+	derivedRejected   *prometheus.CounterVec
 }
 
 // newDetectMetrics registers the checkpoint-loop metrics under the service's
@@ -44,7 +55,50 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 		snapshotBytes:       ms.NewGauge("detect_snapshot_bytes", "Serialized size of the last DETECT snapshot payload.", nil),
 		watermarkLagSeconds: ms.NewGauge("detect_watermark_lag_seconds", "Wall-clock time minus the engine watermark at the last checkpoint.", nil),
 		restoreSeconds:      ms.NewGauge("detect_restore_seconds", "Time to restore engine state from the snapshot store at startup.", nil),
+
+		rulesActive:       ms.NewGauge("detect_rules_active", "Rules loaded into the DETECT engine.", nil),
+		fanoutEventsTotal: ms.NewCounter("detect_fanout_events_total", "Per-rule core events produced by the resolved-event fan-out.", nil),
+		fanoutEvalErrors:  ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (rule treated as non-match).", nil),
+		derivedPublished:  ms.NewCounter("detect_derived_events_published_total", "Derived signal events published (ADR-037).", nil),
+		derivedRejected:   ms.NewCounterVec("detect_derived_events_rejected_total", "Detections dropped before publish, by reason (bounded enum).", []string{"reason"}),
 	}
+}
+
+// setRulesActive publishes the loaded rule count (called once at startup wiring).
+func (m *detectMetrics) setRulesActive(n int) {
+	if m == nil {
+		return
+	}
+	m.rulesActive.Set(float64(n))
+}
+
+// RecordFanout records one message's fan-out breadth and any leaf-eval errors (runtime.Metrics).
+func (m *detectMetrics) RecordFanout(events, evalErrors int) {
+	if m == nil {
+		return
+	}
+	if events > 0 {
+		m.fanoutEventsTotal.Add(float64(events))
+	}
+	if evalErrors > 0 {
+		m.fanoutEvalErrors.Add(float64(evalErrors))
+	}
+}
+
+// RecordDerivedPublished records one published derived event (runtime.Metrics).
+func (m *detectMetrics) RecordDerivedPublished() {
+	if m == nil {
+		return
+	}
+	m.derivedPublished.Inc()
+}
+
+// RecordDerivedRejected records one detection dropped before publish, by reason (runtime.Metrics).
+func (m *detectMetrics) RecordDerivedRejected(reason runtime.RejectReason) {
+	if m == nil {
+		return
+	}
+	m.derivedRejected.WithLabelValues(string(reason)).Inc()
 }
 
 // recordRestore records startup restore cost and the restored applied sequence.

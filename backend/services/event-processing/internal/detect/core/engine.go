@@ -164,6 +164,31 @@ func (e *Engine) ProcessEvent(ev Event) {
 	e.lastSeq = ev.Seq
 }
 
+// ProcessResolved applies one resolved MESSAGE that fans out to zero or more per-rule
+// events. The runtime evaluates each applicable rule's leaf predicate for the message and
+// builds one core Event per rule (all sharing the message's stream sequence and event
+// time); it hands the batch here. The engine advances the watermark exactly ONCE — every
+// event shares the message's occurred time, and the timers/pane-closes the advance fires
+// must be evaluated against the pre-message frontier a single time, not once per rule —
+// then applies each per-rule event, then records the message sequence.
+//
+// The single per-MESSAGE sequence, not the per-rule event, is the idempotency and
+// checkpoint unit: a redelivered or replayed message at or below the recorded sequence is
+// dropped whole (so N same-seq rule events cannot each trip — or worse, partially trip —
+// the guard), and replay from lastSeq+1 re-derives the identical fan-out. evs may be empty
+// (a message that matches no rule, or carries no metric any rule gates on): the watermark
+// and sequence still advance so the checkpoint position tracks the live stream.
+func (e *Engine) ProcessResolved(seq uint64, t time.Time, evs []Event) {
+	if seq <= e.lastSeq {
+		return // already applied (idempotent re-feed guard, at the message level)
+	}
+	e.advance(t)
+	for i := range evs {
+		e.apply(evs[i])
+	}
+	e.lastSeq = seq
+}
+
 // Advance moves logical time forward to wall time w without an event — the live
 // idle-advance path that lets absence/duration fire when the stream is quiet. It carries
 // no sequence (it is derived from the clock, not the log), so it is re-generated

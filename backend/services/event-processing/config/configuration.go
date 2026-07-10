@@ -19,6 +19,28 @@ import (
 const (
 	DefaultCheckpointEvents          = 1000
 	DefaultCheckpointIntervalSeconds = 10
+	// DefaultMaxEventFutureSkewSeconds bounds how far a device-reported occurred time may
+	// lead the server-stamped processed time before DETECT clamps it (so one bad device clock
+	// cannot advance the shared, snapshotted watermark far into the future and fire every
+	// tenant's timers). Generous enough for legitimate device/server clock drift.
+	DefaultMaxEventFutureSkewSeconds = 300
+	// DefaultWatermarkLatenessSeconds is how far the event-time watermark is held back from
+	// the newest event before windows close and timers fire — the out-of-orderness tolerance.
+	// The resolved stream is largely ordered, but network/ingest reordering is real; a small
+	// buffer trades a little detection latency for not closing a window before a slightly-late
+	// event lands. Zero would close windows on the newest timestamp seen, dropping any reorder.
+	DefaultWatermarkLatenessSeconds = 5
+)
+
+// Messaging subjects this service PRODUCES (ADR-051). Consumed subjects
+// (resolved-events) are owned by device-management's config; these are
+// event-processing's own emitted products, so the suffix constants live here.
+const (
+	// SUBJECT_DERIVED_EVENTS carries DETECT's first-class derived signal events —
+	// one per detection — as a subscribe-able product (ADR-037). Published on the
+	// per-tenant scoped subject "{instanceId}.{tenant}.derived-events"; the client
+	// live-subscribes by tenant like any other event feed.
+	SUBJECT_DERIVED_EVENTS = "derived-events"
 )
 
 // EventProcessingConfiguration is the typed configuration for the event-processing
@@ -38,6 +60,16 @@ type EventProcessingConfiguration struct {
 	// CheckpointIntervalSeconds is the maximum wall-clock time between snapshot
 	// commits, so a quiet stream still checkpoints. Unset (0) defaults to 10s.
 	CheckpointIntervalSeconds int
+
+	// MaxEventFutureSkewSeconds bounds device-reported future clock skew against the
+	// server-stamped processed time (ADR-051 watermark integrity). Unset (0) defaults to
+	// 300s; a negative value disables the clamp.
+	MaxEventFutureSkewSeconds int
+
+	// WatermarkLatenessSeconds is the event-time out-of-orderness tolerance: how far the
+	// watermark lags the newest event before windows close and timers fire. Unset (0)
+	// defaults to 5s; a negative value is treated as zero (no tolerance).
+	WatermarkLatenessSeconds int
 }
 
 // NewEventProcessingConfiguration creates the default configuration.
@@ -55,6 +87,12 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	}
 	if c.CheckpointIntervalSeconds == 0 {
 		c.CheckpointIntervalSeconds = DefaultCheckpointIntervalSeconds
+	}
+	if c.MaxEventFutureSkewSeconds == 0 {
+		c.MaxEventFutureSkewSeconds = DefaultMaxEventFutureSkewSeconds
+	}
+	if c.WatermarkLatenessSeconds == 0 {
+		c.WatermarkLatenessSeconds = DefaultWatermarkLatenessSeconds
 	}
 }
 

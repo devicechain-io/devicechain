@@ -62,8 +62,15 @@ func (l Limits) withDefaults() Limits {
 //     aggregate); the predicate's presence guard also enforces it.
 //   - both empty      → feed every in-scope event. Absence is deliberately here (every
 //     event is a heartbeat, device-scoped not metric-scoped); so are match-every leaves,
-//     count aggregates, and correlation. A RAW-CEL leaf is also here — the author owns
-//     totality and must guard metric presence for a Duration rule to behave.
+//     count aggregates, and correlation. A RAW-CEL leaf is also here, and a raw-CEL DURATION
+//     rule on a mixed-telemetry device is a genuine trap: there is no expressible total leaf
+//     that metric-scopes it. A presence-guarded leaf (`"m" in metrics && …`) evaluates to a
+//     clean FALSE on an off-metric event — which for Duration CANCELS the hold. An unguarded
+//     leaf ERRORS on the missing key, and the runtime treats an eval error as a SKIP (no
+//     event, hold preserved) — so the "sloppy" leaf accidentally behaves while spamming the
+//     eval-error counter. Neither is a metric scope. A structured leaf (which gets GateMetric)
+//     is the only correct way to metric-scope a Duration rule; the publish gate should steer
+//     authors off raw-CEL Duration (slice 7/console).
 type CompiledRule struct {
 	ID   string
 	Type RuleType
