@@ -82,6 +82,26 @@ func (s *DeviceRosterStore) Delete(ctx context.Context, tenant, deviceToken stri
 	}).Create(tombstone).Error
 }
 
+// Load returns one device's roster row and whether it is currently LIVE (present AND not a
+// tombstone). It is the authoritative post-merge read the roster/entity-deleted consumers use
+// after persisting a fact (ADR-051 slice 4c-2b-2b): because the upsert is monotonic, a stale or
+// racing fact is a no-op, so the consumer re-reads the resolved row to marshal the CURRENT
+// membership onto the arming loop — the live path then matches exactly what startup reconciliation
+// (LoadAll) would arm, with no second, divergent ordering guard. live is false for a tombstoned or
+// absent device (both mean "disarm"). A tombstone still returns the row so a caller could inspect
+// it; the returned row's ProfileToken/ExpectedSince are meaningful only when live is true.
+func (s *DeviceRosterStore) Load(ctx context.Context, tenant, deviceToken string) (roster DeviceRoster, live bool, err error) {
+	var row DeviceRoster
+	tx := s.rdb.DB(ctx).Where("tenant = ? AND device_token = ?", tenant, deviceToken).Limit(1).Find(&row)
+	if tx.Error != nil {
+		return DeviceRoster{}, false, tx.Error
+	}
+	if tx.RowsAffected == 0 {
+		return DeviceRoster{}, false, nil // no row at all: nothing to arm
+	}
+	return row, !row.Deleted, nil
+}
+
 // LoadAll returns every LIVE rostered device (tombstones excluded) — the full set the engine's
 // dead-man arming is rebuilt from at startup. Like the rule projection it is not tenant-scoped
 // (the projection spans every tenant, tenant on the row), so it reads the whole table.

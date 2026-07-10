@@ -180,6 +180,21 @@ func (reg *RuleRegistry) Lookup(id string) (*ScopedRule, bool) {
 	return sr, ok
 }
 
+// AbsenceRulesFor returns the ABSENCE rules a resolved event in (tenant, profileVersion) would
+// feed — the subset of RulesFor whose core kind is Absence. The dead-man armer (ADR-051 slice
+// 4c-2b-2b) uses it to resolve a rostered device's active profile version to the absence rules
+// it must arm a never-seen device against; only absence has a dead-man timer, so the other kinds
+// are irrelevant to arming. Returns nil (never an empty non-nil slice) when the scope has none.
+func (reg *RuleRegistry) AbsenceRulesFor(tenant, profileVersion string) []*ScopedRule {
+	var out []*ScopedRule
+	for _, sr := range reg.byScope[scopeKey{tenant: tenant, profileVersion: profileVersion}] {
+		if sr.Compiled != nil && sr.Compiled.Core.Kind == core.Absence {
+			out = append(out, sr)
+		}
+	}
+	return out
+}
+
 // Cores is the full core.Rule set the engine is constructed with at startup — every
 // registered rule's keyed-streaming config. It is computed on demand (rather than cached)
 // because it is read once, at engine build/restore; live mutation goes straight to the

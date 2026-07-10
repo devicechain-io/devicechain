@@ -28,6 +28,28 @@ func newTestActiveStore(t *testing.T) *ProfileActiveStore {
 	return NewProfileActiveStore(&rdb.RdbManager{Database: db})
 }
 
+// Load returns one profile token's active-version row and found=false when no publish is recorded
+// yet — the authoritative post-merge read the rule consumer arms against (slice 4c-2b-2b).
+func TestProfileActiveStore_Load(t *testing.T) {
+	s := newTestActiveStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+
+	if _, found, err := s.Load(ctx, "acme", "prof"); err != nil || found {
+		t.Fatalf("absent profile: got found=%v err=%v", found, err)
+	}
+	if err := s.Upsert(ctx, &ProfileActive{Tenant: "acme", ProfileToken: "prof", ActiveVersionToken: "prof@v1", PublishedAt: base}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	row, found, err := s.Load(ctx, "acme", "prof")
+	if err != nil || !found {
+		t.Fatalf("present profile: got found=%v err=%v", found, err)
+	}
+	if row.ActiveVersionToken != "prof@v1" || !row.PublishedAt.Equal(base) {
+		t.Fatalf("loaded row wrong: %+v", row)
+	}
+}
+
 // Upsert is last-fact-wins per (tenant, profileToken): a later publish (and a rollback re-emit
 // with a fresh publish time) overwrites the active version + publish time in place.
 func TestProfileActiveStore_LastFactWins(t *testing.T) {
