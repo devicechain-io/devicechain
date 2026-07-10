@@ -4,7 +4,10 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -97,6 +100,146 @@ func TestValidateDetectionRuleDefinition(t *testing.T) {
 		if !c.valid && err == nil {
 			t.Errorf("%s: expected error, got nil", c.name)
 		}
+	}
+}
+
+// The publish gate (ADR-044 slice 4b) compiles only ENABLED draft rules: a disabled rule
+// is inert (the runtime skips it), so it must not be submitted for validation and thus
+// cannot block a publish. The projection also carries the token + definition verbatim.
+func TestEnabledRulesToValidate(t *testing.T) {
+	rules := []*DetectionRule{
+		{TokenReference: rdb.TokenReference{Token: "on1"}, Definition: datatypes.JSON([]byte(`{"a":1}`)), Enabled: true},
+		{TokenReference: rdb.TokenReference{Token: "off"}, Definition: datatypes.JSON([]byte(`{"b":2}`)), Enabled: false},
+		{TokenReference: rdb.TokenReference{Token: "on2"}, Definition: datatypes.JSON([]byte(`{"c":3}`)), Enabled: true},
+	}
+	got := enabledRulesToValidate(rules)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 enabled rules, got %d: %+v", len(got), got)
+	}
+	if got[0].Token != "on1" || got[0].Definition != `{"a":1}` {
+		t.Errorf("first enabled rule wrong: %+v", got[0])
+	}
+	if got[1].Token != "on2" || got[1].Definition != `{"c":3}` {
+		t.Errorf("second enabled rule wrong: %+v", got[1])
+	}
+}
+
+// An all-disabled (or empty) set yields nothing to validate, so the publish gate is a
+// no-op rather than a spurious empty service call.
+func TestEnabledRulesToValidate_NoneEnabled(t *testing.T) {
+	if got := enabledRulesToValidate(nil); len(got) != 0 {
+		t.Errorf("nil rules: expected empty, got %+v", got)
+	}
+	disabled := []*DetectionRule{{TokenReference: rdb.TokenReference{Token: "x"}, Enabled: false}}
+	if got := enabledRulesToValidate(disabled); len(got) != 0 {
+		t.Errorf("all-disabled: expected empty, got %+v", got)
+	}
+}
+
+// fakeRuleValidator records the rules it was handed and returns canned results, so the
+// publish gate (validateSnapshotDetectionRules) can be exercised without a live
+// event-processing or a database.
+type fakeRuleValidator struct {
+	called   bool
+	seen     []RuleToValidate
+	failures []DetectionRuleValidationFailure
+	err      error
+}
+
+func (f *fakeRuleValidator) ValidateDetectionRules(_ context.Context, rules []RuleToValidate) ([]DetectionRuleValidationFailure, error) {
+	f.called = true
+	f.seen = rules
+	return f.failures, f.err
+}
+
+// snapshotOf marshals a set of detection rules into a profile snapshot blob the same way
+// buildProfileSnapshot does, so the gate validates the exact bytes a publish would freeze.
+func snapshotOf(rules ...*DetectionRule) datatypes.JSON {
+	raw, err := json.Marshal(ProfileSnapshot{Rules: rules})
+	if err != nil {
+		panic(err)
+	}
+	return datatypes.JSON(raw)
+}
+
+func enabledRule(token string) *DetectionRule {
+	return &DetectionRule{
+		TokenReference: rdb.TokenReference{Token: token},
+		Definition:     datatypes.JSON([]byte(`{"name":"n","type":"threshold"}`)),
+		Enabled:        true,
+	}
+}
+
+// A nil validator (service secret unset) skips the gate: publish must not depend on
+// event-processing being wired.
+func TestValidateSnapshotDetectionRules_NilValidatorSkips(t *testing.T) {
+	api := &Api{}
+	if err := api.validateSnapshotDetectionRules(context.Background(), snapshotOf(enabledRule("x"))); err != nil {
+		t.Fatalf("nil validator should skip, got: %v", err)
+	}
+}
+
+// The gate submits only ENABLED rules from the snapshot and passes when all compile.
+func TestValidateSnapshotDetectionRules_EnabledOnlyAndPasses(t *testing.T) {
+	disabled := enabledRule("off")
+	disabled.Enabled = false
+	fake := &fakeRuleValidator{}
+	api := &Api{DetectionRuleValidator: fake}
+
+	err := api.validateSnapshotDetectionRules(context.Background(), snapshotOf(enabledRule("on"), disabled))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fake.called || len(fake.seen) != 1 || fake.seen[0].Token != "on" {
+		t.Fatalf("gate did not submit exactly the enabled rule: called=%v seen=%+v", fake.called, fake.seen)
+	}
+}
+
+// A snapshot with no enabled rules short-circuits without calling the validator.
+func TestValidateSnapshotDetectionRules_NoEnabledSkipsCall(t *testing.T) {
+	disabled := enabledRule("off")
+	disabled.Enabled = false
+	fake := &fakeRuleValidator{}
+	api := &Api{DetectionRuleValidator: fake}
+
+	if err := api.validateSnapshotDetectionRules(context.Background(), snapshotOf(disabled)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fake.called {
+		t.Fatal("validator called for an all-disabled snapshot")
+	}
+}
+
+// A rejected rule fails the publish closed, and the author-facing error names the rule and
+// carries the compiler's reason.
+func TestValidateSnapshotDetectionRules_RejectionFailsClosed(t *testing.T) {
+	fake := &fakeRuleValidator{failures: []DetectionRuleValidationFailure{{Token: "bad", Message: "no hold"}}}
+	api := &Api{DetectionRuleValidator: fake}
+
+	err := api.validateSnapshotDetectionRules(context.Background(), snapshotOf(enabledRule("bad")))
+	if err == nil {
+		t.Fatal("expected a fail-closed error for a rejected rule")
+	}
+	if got := err.Error(); !strings.Contains(got, "bad") || !strings.Contains(got, "no hold") {
+		t.Errorf("error should name the rule and reason, got: %q", got)
+	}
+}
+
+// A transport/availability failure fails the publish closed with a SANITIZED message — the
+// raw error (which may name in-cluster hosts) must not reach the API client.
+func TestValidateSnapshotDetectionRules_TransportFailsClosedSanitized(t *testing.T) {
+	fake := &fakeRuleValidator{err: fmt.Errorf("dial tcp 10.1.2.3:8080: connection refused")}
+	api := &Api{DetectionRuleValidator: fake}
+
+	err := api.validateSnapshotDetectionRules(context.Background(), snapshotOf(enabledRule("x")))
+	if err == nil {
+		t.Fatal("expected a fail-closed error on a transport failure")
+	}
+	if strings.Contains(err.Error(), "10.1.2.3") || strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("transport detail leaked to the caller: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "unavailable") {
+		t.Errorf("expected a sanitized 'unavailable' message, got: %q", err.Error())
 	}
 }
 

@@ -5,17 +5,22 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/graphql"
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/processor"
+	"github.com/devicechain-io/dc-device-management/ruleverify"
 	"github.com/devicechain-io/dc-device-management/schema"
 	esconfig "github.com/devicechain-io/dc-event-sources/config"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/svcclient"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -154,6 +159,28 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	return nil
 }
 
+// wireDetectionRuleValidator injects the ADR-044 sync-validation gate onto the shared
+// Api when the shared service secret AND event-processing's coordinate are both
+// configured, so profile publish compiles its draft detection rules against
+// event-processing (ADR-051 slice 4b). It logs the enabled/disabled mode at startup so a
+// misconfigured deploy (empty secret, or a config predating this feature) is visible
+// rather than silently skipping validation — mirroring command-delivery's device check.
+func wireDetectionRuleValidator() {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" {
+		log.Warn().Msg("Service secret not configured — device profile publish will NOT validate detection rules against event-processing (ADR-051 slice 4b disabled).")
+		return
+	}
+	if infra.EventProcessing.Hostname == "" || infra.EventProcessing.Port == 0 {
+		log.Warn().Msg("event-processing endpoint not configured (infrastructure.eventProcessing) — device profile publish will NOT validate detection rules (ADR-051 slice 4b disabled).")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", []string{string(auth.DeviceRead)})
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.EventProcessing.Hostname, infra.EventProcessing.Port)
+	Api.DetectionRuleValidator = ruleverify.NewValidator(client, url)
+	log.Info().Str("eventProcessing", url).Msg("Device profile publish will validate detection rules against event-processing (ADR-051 slice 4b).")
+}
+
 // Called after microservice has been initialized.
 func afterMicroserviceInitialized(ctx context.Context) error {
 	// Parse configuration.
@@ -193,6 +220,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// not leave ingest re-creating the removed entity's anchors (ADR-044 F2). The
 	// GraphQL deletes run on the plain *Api, so the evictor is wired onto it.
 	Api.CacheEvictor = CachedApi
+
+	// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
+	// its draft rules against event-processing and fails closed on an uncompilable one.
+	wireDetectionRuleValidator()
 
 	// Map of providers that will be injected into graphql http context. The NATS
 	// manager backs the live alarm subscription resolver (SubscribeLive, ADR-037); it

@@ -33,6 +33,13 @@ type Api struct {
 	// re-creating the very event_anchors the reconciler just removed. Injected at
 	// wiring time (it holds the cache layer); nil in tests disables eviction.
 	CacheEvictor CacheEvictor
+
+	// DetectionRuleValidator compiles a profile's draft detection rules against
+	// event-processing at publish (ADR-044 sync gate / ADR-051 slice 4b); a rule that
+	// does not compile fails the publish closed. Injected at wiring time (it holds the
+	// svcclient); nil in tests / before wiring / with the service secret unset, in which
+	// case the publish gate is skipped.
+	DetectionRuleValidator DetectionRuleValidator
 }
 
 // CacheEvictor drops the hot-path caches (ADR-022 B2) that a mutation makes stale.

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
@@ -93,6 +94,62 @@ func parseProfileSnapshot(raw datatypes.JSON) (*ProfileSnapshot, error) {
 	return snap, nil
 }
 
+// validateSnapshotDetectionRules compiles the ENABLED detection rules carried in a
+// just-built profile snapshot against event-processing (ADR-044 sync gate), returning a
+// fail-closed error if any rule is rejected or the check cannot be performed. It parses the
+// exact snapshot bytes the publish is about to freeze, so what is validated is precisely
+// what is frozen (no TOCTOU with a separate draft read). Only enabled rules are gated: a
+// disabled rule is inert (the runtime skips it at the fact-emit boundary) and a parked,
+// still-WIP rule must not block publishing the rest — it is re-validated when a later draft
+// enables it. With no validator wired (service secret unset) the gate is skipped.
+func (api *Api) validateSnapshotDetectionRules(ctx context.Context, snapshot datatypes.JSON) error {
+	if api.DetectionRuleValidator == nil {
+		return nil
+	}
+	snap, err := parseProfileSnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	toValidate := enabledRulesToValidate(snap.Rules)
+	if len(toValidate) == 0 {
+		return nil
+	}
+
+	failures, err := api.DetectionRuleValidator.ValidateDetectionRules(ctx, toValidate)
+	if err != nil {
+		// A transport/availability failure: fail the publish closed, but log the detail
+		// and return a sanitized message so the tenant API client learns nothing of the
+		// in-cluster topology (mirrors command-delivery's device check).
+		log.Error().Err(err).
+			Msg("Detection-rule validation failed; refusing profile publish.")
+		return fmt.Errorf("cannot publish device profile: detection-rule validation is unavailable")
+	}
+	if len(failures) > 0 {
+		msgs := make([]string, 0, len(failures))
+		for _, f := range failures {
+			msgs = append(msgs, fmt.Sprintf("%q: %s", f.Token, f.Message))
+		}
+		return fmt.Errorf("cannot publish device profile: %d detection rule(s) invalid: %s",
+			len(failures), strings.Join(msgs, "; "))
+	}
+	return nil
+}
+
+// enabledRulesToValidate projects the ENABLED detection rules to the (token, definition)
+// pairs the validation gate compiles. Disabled rules are dropped: they are inert (the
+// runtime skips them at the fact-emit boundary), so gating a publish on a parked, still-WIP
+// rule would only block shipping the rest — it is re-validated if a later draft enables it.
+func enabledRulesToValidate(rules []*DetectionRule) []RuleToValidate {
+	out := make([]RuleToValidate, 0, len(rules))
+	for _, dr := range rules {
+		if !dr.Enabled {
+			continue
+		}
+		out = append(out, RuleToValidate{Token: dr.Token, Definition: string(dr.Definition)})
+	}
+	return out
+}
+
 // deviceProfileByToken loads the single profile addressed by token, returning
 // gorm.ErrRecordNotFound when absent so the versioning entry points fail closed.
 func (api *Api) deviceProfileByToken(ctx context.Context, token string) (*DeviceProfile, error) {
@@ -124,6 +181,16 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 	// rare pre-GA edge (the publish simply captures the draft as of this read).
 	snapshot, err := api.buildProfileSnapshot(ctx, profile.ID)
 	if err != nil {
+		return nil, err
+	}
+
+	// ADR-044 sync gate (ADR-051 slice 4b): compile the snapshot's detection rules against
+	// event-processing BEFORE freezing this version, so a profile can never publish a rule
+	// the DETECT engine cannot run. It validates the EXACT bytes just serialized — not a
+	// second, independently-read (and thus race-able) view of the draft — so validated ≡
+	// frozen with no TOCTOU window. A rejected rule fails the publish closed with the
+	// author-facing reason; an unavailable validator fails closed too, sanitized.
+	if err := api.validateSnapshotDetectionRules(ctx, snapshot); err != nil {
 		return nil, err
 	}
 

@@ -26,7 +26,8 @@ import (
 // lives in that module's internal package). Device-management validates only that the
 // blob is well-formed JSON on write; the authoritative type/cost/injection validation is
 // the SYNCHRONOUS compile event-processing performs at publish (ADR-044 validate-
-// invariants-sync), which fails a publish closed if any draft rule does not compile. The
+// invariants-sync), which fails a publish closed if any ENABLED draft rule does not compile
+// (a disabled rule is inert and rides the version un-gated; see Enabled below). The
 // runtime rule id ("{tenant}/{profileVersionToken}/{token}") is composed when the
 // published-rule fact is emitted (ADR-051 slice 4b), so it is NOT part of the stored blob.
 type DetectionRule struct {
