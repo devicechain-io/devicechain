@@ -150,6 +150,16 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	Api.DeviceRosterPublisher = processor.NewDeviceRosterWriter(rosterpub)
 
+	// Add the device-attribute writer and inject a publisher into the shared Api (ADR-051
+	// slice 4c-3): a numeric, platform-set device attribute upsert/delete emits a fact so
+	// event-processing can resolve a dynamic detection threshold from the device's own
+	// attribute instead of a compile-time literal.
+	attrpub, err := nmgr.NewWriter(config.SUBJECT_DEVICE_ATTRIBUTE)
+	if err != nil {
+		return err
+	}
+	Api.DeviceAttributePublisher = processor.NewDeviceAttributeWriter(attrpub)
+
 	// Add and initialize inbound events processor.
 	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,
 		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode)

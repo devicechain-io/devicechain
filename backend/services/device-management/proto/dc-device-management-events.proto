@@ -239,3 +239,39 @@ message PDeviceRosterEvent {
     string profile_token = 2;
     string expected_since = 3;
 }
+
+/**
+ * Device-attribute event (ADR-051 slice 4c-3): emitted post-commit when a numeric,
+ * platform-set attribute of a DEVICE is upserted or deleted, so event-processing can
+ * resolve a DYNAMIC detection threshold from it — a rule of the form
+ * "m[metric] <op> attr[key]" reads the device's own attribute instead of a
+ * compile-time literal, so one published rule enforces a per-device limit. Only
+ * numeric device attributes (ADR-012 value type DOUBLE or LONG) in the two
+ * platform-set scopes (SHARED or SERVER) are emitted: CLIENT (device-reported) is
+ * excluded so a device cannot set the limit it is checked against. A non-numeric
+ * value or type emits a removal (removed=true) so a previously-projected numeric value
+ * never goes stale, as does an attribute delete. value is the parsed number (unset
+ * when removed). updated_at is the write time — the monotonic clock event-processing
+ * orders upsert-vs-delete on.
+ *
+ * scope is part of the identity: an attribute's natural key is (entity, scope, key), so
+ * a device may hold the SAME key in both eligible scopes at once. The fact therefore
+ * carries scope, and event-processing keys its projection on (device, scope, key) so a
+ * write/delete in one scope never annihilates the other. The rule language stays
+ * scope-less (attr["key"]); event-processing flattens the two scopes at eval time with a
+ * fixed precedence — SERVER over SHARED (a platform-only override beats the
+ * device-readable value). The tenant travels on the per-tenant subject, not in the
+ * payload.
+ *
+ * A device DELETE emits NO attribute fact (its attributes are hard-deleted in the delete
+ * cascade); event-processing drops the device's whole attribute projection off the
+ * entity-deleted fact instead, exactly as the device roster does.
+ */
+message PDeviceAttributeEvent {
+    string device_token = 1;
+    string attr_key = 2;
+    string scope = 3;
+    double value = 4;
+    bool removed = 5;
+    string updated_at = 6;
+}

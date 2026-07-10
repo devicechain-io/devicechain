@@ -56,6 +56,14 @@ type Api struct {
 	// a NATS writer) and may be nil — in tests, or before wiring — disabling emission.
 	// Emission is post-commit and best-effort (at-most-once), like the other fact publishers.
 	DeviceRosterPublisher DeviceRosterPublisher
+
+	// DeviceAttributePublisher emits device-attribute events (ADR-051 slice 4c-3) when a
+	// numeric, platform-set attribute of a device is upserted or deleted, so
+	// event-processing can resolve a dynamic detection threshold from it. Injected at
+	// wiring time (the concrete publisher owns a NATS writer) and may be nil — in tests, or
+	// before wiring — disabling emission. Emission is post-commit and best-effort
+	// (at-most-once), like the other fact publishers.
+	DeviceAttributePublisher DeviceAttributePublisher
 }
 
 // CacheEvictor drops the hot-path caches (ADR-022 B2) that a mutation makes stale.
@@ -124,6 +132,17 @@ func (api *Api) emitDetectionRulesPublished(ctx context.Context, event *Detectio
 func (api *Api) emitDeviceRoster(ctx context.Context, event *DeviceRosterEvent) {
 	if api.DeviceRosterPublisher != nil {
 		api.DeviceRosterPublisher.PublishDeviceRoster(ctx, event)
+	}
+}
+
+// emitDeviceAttribute publishes a device-attribute event when a publisher is wired, and
+// is a no-op otherwise (ADR-051 slice 4c-3). Like the other emit helpers it is
+// best-effort and must be called AFTER the attribute write has committed: the attribute
+// set/delete paths run on the autocommit connection, so the emit is post-commit and
+// never fires for a rolled-back write.
+func (api *Api) emitDeviceAttribute(ctx context.Context, event *DeviceAttributeEvent) {
+	if api.DeviceAttributePublisher != nil {
+		api.DeviceAttributePublisher.PublishDeviceAttribute(ctx, event)
 	}
 }
 

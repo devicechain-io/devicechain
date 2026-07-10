@@ -7,8 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -49,6 +52,7 @@ func (api *Api) SetEntityAttribute(ctx context.Context,
 		if err := api.RDB.DB(ctx).Save(existing).Error; err != nil {
 			return nil, err
 		}
+		api.emitDeviceAttributeForSet(ctx, request, existing.LastUpdated)
 		return existing, nil
 	}
 	if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -67,7 +71,71 @@ func (api *Api) SetEntityAttribute(ctx context.Context,
 	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
 		return nil, err
 	}
+	api.emitDeviceAttributeForSet(ctx, request, created.LastUpdated)
 	return created, nil
+}
+
+// emitDeviceAttributeForSet emits a device-attribute fact for a just-committed attribute
+// upsert (ADR-051 slice 4c-3), when the attribute is a numeric, platform-set attribute
+// of a device that event-processing tracks as a dynamic-threshold source. A numeric,
+// parseable value emits an upsert carrying that value; a non-numeric value/type emits a
+// removal so a previously-projected numeric value never goes stale. Non-device entities
+// and CLIENT-scope attributes are ignored (a device must not set the limit it is checked
+// against). Best-effort, post-commit; a nil publisher (tests / pre-wiring) is a no-op.
+func (api *Api) emitDeviceAttributeForSet(ctx context.Context, request *EntityAttributeSetRequest, updatedAt time.Time) {
+	if api.DeviceAttributePublisher == nil || !dynamicThresholdEligible(request.EntityType, request.Scope) {
+		return
+	}
+	event := &DeviceAttributeEvent{
+		DeviceToken: request.Entity, // the owner token, event-processing's device series key
+		AttrKey:     request.AttrKey,
+		Scope:       request.Scope, // part of the projection key: (device, scope, key)
+		UpdatedAt:   updatedAt,
+	}
+	if v, ok := numericAttributeValue(request.ValueType, request.Value); ok {
+		event.Value = v
+	} else {
+		// A non-numeric value/type overwriting a (possibly) numeric one: drop it from the
+		// projection rather than leave a stale number behind.
+		event.Removed = true
+	}
+	api.emitDeviceAttribute(ctx, event)
+}
+
+// dynamicThresholdEligible reports whether an attribute write is one event-processing
+// tracks as a dynamic-threshold source (ADR-051 slice 4c-3): a DEVICE attribute in a
+// platform-set scope (SHARED or SERVER). CLIENT (device-reported) is excluded so a
+// device cannot define the threshold it is evaluated against.
+func dynamicThresholdEligible(entityType, scope string) bool {
+	if entity.Type(entityType) != entity.TypeDevice {
+		return false
+	}
+	switch AttributeScope(scope) {
+	case AttributeScopeShared, AttributeScopeServer:
+		return true
+	default:
+		return false
+	}
+}
+
+// numericAttributeValue parses an attribute value into a float64 when its declared type
+// is numeric (DOUBLE or LONG) and the value is present and finite. A BOOLEAN, STRING, or
+// JSON attribute, a nil value, or an unparseable/non-finite number yields ok=false — the
+// caller then emits a removal so no stale numeric value survives in the projection.
+func numericAttributeValue(valueType string, value *string) (float64, bool) {
+	switch AttributeValueType(valueType) {
+	case AttributeValueDouble, AttributeValueLong:
+	default:
+		return 0, false
+	}
+	if value == nil {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(*value, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	return v, true
 }
 
 // EntityAttributes searches attributes. The owner is matched by the resolved
@@ -124,9 +192,30 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 	if err != nil {
 		return false, err
 	}
+	// Stamp the removal time BEFORE the delete statement (not after), so a concurrent
+	// re-create that commits later carries a strictly-later set-stamp and wins in the
+	// projection's monotonic ordering rather than losing to a removal stamped after the
+	// fact. This is a narrowing, not a linearization: single-process set/delete interleaves
+	// on the same key can still stamp out of commit order (they self-heal on the next write
+	// — the accepted monotonic-clock posture, as for the roster/profile-active projections).
+	removedAt := time.Now().UTC()
 	result := api.RDB.DB(ctx).Where(
 		"entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
 		entityType, entityId, scope, attrKey).Delete(&EntityAttribute{})
+	if result.Error == nil && result.RowsAffected > 0 && dynamicThresholdEligible(entityType, scope) {
+		// A tracked device attribute was actually removed: drop it from event-processing's
+		// dynamic-threshold projection (ADR-051 slice 4c-3), scoped to the (device, scope, key)
+		// this delete targeted so the sibling scope's value is untouched. The old value type is
+		// not loaded (the delete is by natural key); a removal for a never-numeric key is a
+		// harmless projection no-op.
+		api.emitDeviceAttribute(ctx, &DeviceAttributeEvent{
+			DeviceToken: entity,
+			AttrKey:     attrKey,
+			Scope:       scope,
+			Removed:     true,
+			UpdatedAt:   removedAt,
+		})
+	}
 	return result.RowsAffected > 0, result.Error
 }
 

@@ -445,6 +445,38 @@ func UnmarshalDeviceRosterEvent(encoded []byte) (*model.DeviceRosterEvent, error
 	}, nil
 }
 
+// Marshal a device-attribute event to protobuf bytes (ADR-051 slice 4c-3).
+func MarshalDeviceAttributeEvent(event *model.DeviceAttributeEvent) ([]byte, error) {
+	return proto.Marshal(&PDeviceAttributeEvent{
+		DeviceToken: event.DeviceToken,
+		AttrKey:     event.AttrKey,
+		Scope:       event.Scope,
+		Value:       event.Value,
+		Removed:     event.Removed,
+		UpdatedAt:   formatOptionalTime(event.UpdatedAt),
+	})
+}
+
+// Unmarshal an encoded device-attribute event (consumed by event-processing).
+func UnmarshalDeviceAttributeEvent(encoded []byte) (*model.DeviceAttributeEvent, error) {
+	pbevent := &PDeviceAttributeEvent{}
+	if err := proto.Unmarshal(encoded, pbevent); err != nil {
+		return nil, err
+	}
+	updatedAt, err := parseOptionalTime(pbevent.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &model.DeviceAttributeEvent{
+		DeviceToken: pbevent.DeviceToken,
+		AttrKey:     pbevent.AttrKey,
+		Scope:       pbevent.Scope,
+		Value:       pbevent.Value,
+		Removed:     pbevent.Removed,
+		UpdatedAt:   updatedAt,
+	}, nil
+}
+
 // formatOptionalTime renders a timestamp as RFC3339Nano, mapping the zero time to
 // the empty string so an unset optional time round-trips as absent rather than as a
 // spurious year-1 instant.
