@@ -12,6 +12,8 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
+	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -119,8 +121,15 @@ func newTestStore(t *testing.T) *model.SnapshotStore {
 
 // newTestProcessor builds a processor via struct literal (no Microservice, so
 // metrics stay nil and the nil-safe recorders no-op) with the ticker/interval
-// pushed far out so only explicit count/method calls drive checkpoints.
+// pushed far out so only explicit count/method calls drive checkpoints. The rule
+// set is empty (this file exercises the checkpoint spine, not the fan-out); the
+// registry-driven fan-out and derived publisher are covered in runtime_test.go.
 func newTestProcessor(store *model.SnapshotStore, rules []detectcore.Rule, checkpointEvents int) *ResolvedEventsProcessor {
+	scoped := make([]runtime.ScopedRule, 0, len(rules))
+	for i := range rules {
+		scoped = append(scoped, runtime.ScopedRule{Compiled: &rules0.CompiledRule{ID: rules[i].ID, Core: rules[i]}})
+	}
+	reg := runtime.NewRuleRegistry(scoped)
 	return &ResolvedEventsProcessor{
 		Store: store,
 		cfg: Config{
@@ -130,9 +139,10 @@ func newTestProcessor(store *model.SnapshotStore, rules []detectcore.Rule, check
 			TickInterval:       time.Hour,
 			Clock:              detectcore.RealClock{},
 		},
-		rules:   rules,
-		clock:   detectcore.RealClock{},
-		procCtx: context.Background(),
+		registry:  reg,
+		publisher: runtime.NewPublisher(&captureWriter{}, reg, (*detectMetrics)(nil)),
+		clock:     detectcore.RealClock{},
+		procCtx:   context.Background(),
 	}
 }
 
@@ -319,6 +329,7 @@ func TestRunLoopCheckpointsAndAcksOnEOF(t *testing.T) {
 		{msg: msgAt(t, 2, a2)},
 		{err: io.EOF},
 	}}
+	emptyReg := runtime.NewRuleRegistry(nil)
 	rp := &ResolvedEventsProcessor{
 		ResolvedEventsReader: reader,
 		Replay:               &fakeReplayOpener{head: 0}, // fresh: nothing to replay
@@ -331,7 +342,9 @@ func TestRunLoopCheckpointsAndAcksOnEOF(t *testing.T) {
 			TickInterval:       time.Hour,
 			Clock:              detectcore.RealClock{},
 		},
-		clock: detectcore.RealClock{},
+		registry:  emptyReg,
+		publisher: runtime.NewPublisher(&captureWriter{}, emptyReg, (*detectMetrics)(nil)),
+		clock:     detectcore.RealClock{},
 	}
 	ctx := context.Background()
 	if err := rp.ExecuteInitialize(ctx); err != nil {
@@ -442,6 +455,17 @@ func TestCheckpointDoesNotAckOnStaleRefusal(t *testing.T) {
 	}
 	if got, _, _ := store.Load(ctx, "singleton"); got.StreamSeq != 100 {
 		t.Fatalf("leading row was clobbered: seq=%d, want 100", got.StreamSeq)
+	}
+	// The stale refusal latches: this writer lost the split brain and halts, so a subsequent
+	// checkpoint is a no-op (no further derived-event emission, no ack).
+	if !rp.stale {
+		t.Fatalf("a stale refusal must latch the writer as stale")
+	}
+	rp.checkpoint(ctx)
+	for i, a := range acks {
+		if a.acks != 0 {
+			t.Fatalf("message %d acked after the writer went stale (acks=%d)", i+1, a.acks)
+		}
 	}
 }
 

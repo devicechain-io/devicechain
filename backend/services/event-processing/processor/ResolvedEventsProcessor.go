@@ -13,6 +13,7 @@ import (
 
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -49,6 +50,10 @@ type Config struct {
 	// Lateness bounds how far event time is held back before advancing the watermark
 	// (out-of-orderness tolerance).
 	Lateness time.Duration
+	// MaxFutureSkew bounds how far a device-reported occurred time may lead the server's
+	// processed time before it is clamped, so one bad device clock cannot advance the shared
+	// watermark far into the future. Non-positive disables the clamp.
+	MaxFutureSkew time.Duration
 	// Clock is the wall clock used for checkpoint-interval timing; defaults to the
 	// real clock.
 	Clock detectcore.Clock
@@ -79,32 +84,43 @@ type Config struct {
 // goroutine (replay runs on the startup goroutine before the live loop launches;
 // thereafter only the live loop touches the engine), so the engine needs no lock.
 //
-// This slice wires the durable spine with the rule set the loop is constructed with
-// (empty in the scaffold; multi-tenant rule CRUD is a later slice), so with no rules
-// the loop advances the watermark by event time and checkpoints its position without
-// emitting detections. Wall-clock idle advance (firing absence/duration timers
-// during a quiet stream) is deliberately NOT done here: it is only meaningful once
-// rules exist and requires caught-up-to-live-tail detection to avoid firing restored
-// timers prematurely — both land with the rule runtime in a later slice. The
-// REACT/emit path is likewise later; detections drained here are dropped.
+// The loop feeds each resolved event through the rule fan-out (runtime.Plan): it selects
+// the rules the event applies to (by tenant + profile version), builds the metric-scoped
+// per-rule events, and hands them to the engine as one message-sequenced batch. Emitted
+// detections are drained onto a buffer that the next checkpoint DELIVERS as subscribe-able
+// derived events BEFORE it commits/acks past the producing message (deliver-before-
+// checkpoint), enforcing the runtime tenant backstop at the publish boundary. With no rules
+// (the scaffold path) the loop still advances the watermark and checkpoints its position,
+// emitting nothing. Wall-clock idle advance (firing absence/duration timers during a quiet
+// stream) is deliberately NOT done here: it requires caught-up-to-live-tail detection to
+// avoid firing restored timers prematurely, and lands with the ADR-044 roster read-model in
+// slice 4c.
 type ResolvedEventsProcessor struct {
 	Microservice         *core.Microservice
 	ResolvedEventsReader messaging.MessageReader
 	Replay               ReplayOpener
 	Store                *model.SnapshotStore
 
-	cfg     Config
-	rules   []detectcore.Rule
-	clock   detectcore.Clock
-	metrics *detectMetrics
+	cfg       Config
+	registry  *runtime.RuleRegistry
+	publisher *runtime.Publisher
+	clock     detectcore.Clock
+	metrics   *detectMetrics
 
 	// engine and the checkpoint bookkeeping below are owned exclusively by the
 	// startup goroutine (restore/replay) and then the live loop goroutine; nothing
 	// else reads or writes them.
 	engine         *detectcore.Engine
 	pendingAcks    []messaging.Message
+	pendingDets    []detectcore.Detection
 	lastCheckpoint time.Time
 	dirty          bool
+	// stale latches when Save refuses a backward checkpoint (ErrStaleCheckpoint) — proof that
+	// another writer owns this partition (split-brain: a rolling-update overlap or operator
+	// error). A stale writer has no legitimate future, so the loop halts: this bounds its
+	// derived-event emissions (which now precede the Save, unlike the fully-contained Slice-2a
+	// path) to the single detecting cycle instead of one per checkpoint forever.
+	stale bool
 
 	// Shutdown coordination (A5): procCancel stops the loop and the pump; readerWG
 	// lets ExecuteStop wait for the loop to exit before the reader is torn down.
@@ -122,10 +138,14 @@ type readItem struct {
 }
 
 // NewResolvedEventsProcessor creates a checkpointing resolved-events processor. The
-// engine is built (or restored) from rules at ExecuteStart; the scaffold slice
-// passes an empty set.
+// engine is built (or restored) from the registry's core rule set at ExecuteStart; the
+// registry (built from a RuleSource) and the derived-event writer are supplied by the
+// caller. A nil registry is treated as the empty set (the scaffold path — no rules, no
+// detections). The publisher is built over the writer + registry so it and the loop share
+// this processor's bounded-cardinality metrics.
 func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageReader,
-	replay ReplayOpener, store *model.SnapshotStore, rules []detectcore.Rule, cfg Config,
+	replay ReplayOpener, store *model.SnapshotStore, registry *runtime.RuleRegistry,
+	derivedWriter messaging.MessageWriter, cfg Config,
 	callbacks core.LifecycleCallbacks) *ResolvedEventsProcessor {
 	if cfg.Clock == nil {
 		cfg.Clock = detectcore.RealClock{}
@@ -133,16 +153,21 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 	if cfg.TickInterval <= 0 {
 		cfg.TickInterval = time.Second
 	}
+	if registry == nil {
+		registry = runtime.NewRuleRegistry(nil)
+	}
 	rp := &ResolvedEventsProcessor{
 		Microservice:         ms,
 		ResolvedEventsReader: reader,
 		Replay:               replay,
 		Store:                store,
 		cfg:                  cfg,
-		rules:                rules,
+		registry:             registry,
 		clock:                cfg.Clock,
 		metrics:              newDetectMetrics(ms),
 	}
+	rp.publisher = runtime.NewPublisher(derivedWriter, registry, rp.metrics)
+	rp.metrics.setRulesActive(registry.Count())
 	rpname := fmt.Sprintf("%s-%s", ms.FunctionalArea, "resolved-events-proc")
 	rp.lifecycle = core.NewLifecycleManager(rpname, rp, callbacks)
 	return rp
@@ -175,6 +200,13 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if err := rp.replayToHead(); err != nil {
 		return err
 	}
+	if rp.stale {
+		// A stale refusal on replay's final checkpoint means another writer already owns a
+		// higher checkpoint: fail startup rather than launch a pod whose DETECT loop is halted
+		// but whose health endpoints read green (a silently-dead singleton). The leader keeps
+		// consuming; this pod backs off and retries into a clean single-writer replay.
+		return fmt.Errorf("event-processing: DETECT checkpoint is stale at startup for partition %q (another writer owns it); not starting", rp.cfg.PartitionId)
+	}
 	rp.lastCheckpoint = rp.clock.Now()
 	rp.readerWG.Add(1)
 	go rp.run()
@@ -191,12 +223,12 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 		return fmt.Errorf("load snapshot for partition %q: %w", rp.cfg.PartitionId, err)
 	}
 	if !ok {
-		rp.engine = detectcore.NewEngine(rp.rules, rp.cfg.Lateness)
+		rp.engine = detectcore.NewEngine(rp.registry.Cores(), rp.cfg.Lateness)
 		rp.metrics.recordRestore(0, 0)
 		log.Info().Str("partition", rp.cfg.PartitionId).Msg("No prior DETECT snapshot; starting from empty engine.")
 		return nil
 	}
-	engine, err := detectcore.Restore(rp.rules, rp.cfg.Lateness, snap.Payload)
+	engine, err := detectcore.Restore(rp.registry.Cores(), rp.cfg.Lateness, snap.Payload)
 	if err != nil {
 		return fmt.Errorf("restore engine from snapshot for partition %q: %w", rp.cfg.PartitionId, err)
 	}
@@ -225,7 +257,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 	if head < rp.engine.LastSeq() {
 		log.Warn().Uint64("snapshotSeq", rp.engine.LastSeq()).Uint64("streamHead", head).
 			Msg("Snapshot is ahead of the stream head (re-created/truncated stream); resetting DETECT engine to empty.")
-		rp.engine = detectcore.NewEngine(rp.rules, rp.cfg.Lateness)
+		rp.engine = detectcore.NewEngine(rp.registry.Cores(), rp.cfg.Lateness)
 		rp.dirty = false
 		// Clear the stale row (the deliberate backward move Save's monotonic guard
 		// refuses); live consumption then writes a fresh checkpoint from sequence 1.
@@ -302,7 +334,7 @@ func (rp *ResolvedEventsProcessor) run() {
 		case now := <-ticker.C:
 			// Checkpoint on the interval when there is new state to persist OR buffered
 			// acks to release (e.g. a quiet stream of duplicates after restart).
-			if (rp.dirty || len(rp.pendingAcks) > 0) && now.Sub(rp.lastCheckpoint) >= rp.cfg.CheckpointInterval {
+			if (rp.dirty || len(rp.pendingAcks) > 0 || len(rp.pendingDets) > 0) && now.Sub(rp.lastCheckpoint) >= rp.cfg.CheckpointInterval {
 				rp.checkpoint(rp.procCtx)
 			}
 		}
@@ -347,11 +379,14 @@ func (rp *ResolvedEventsProcessor) handle(msg messaging.Message) {
 	rp.applyResolved(msg)
 }
 
-// applyResolved parses a resolved-event message and feeds it to the engine in
-// stream-sequence order, returning true iff it advanced the engine. A message with
-// no stream sequence (metadata-less, StreamSeq==0), no parseable tenant, or an
-// unparseable payload is unprocessable and dropped — redelivery/replay cannot make
-// it processable, and this tap has no dead-letter path.
+// applyResolved parses a resolved-event message, fans it out across the applicable rules
+// (metric-scoped feed, runtime.Plan), and feeds the resulting per-rule events to the engine
+// as ONE message-sequenced batch. It returns true iff the message advanced the engine. A
+// message with no stream sequence (StreamSeq==0), no parseable tenant, or an unparseable
+// payload is unprocessable and dropped — redelivery/replay cannot make it processable. A
+// redelivered/replayed message at or below the engine's sequence is skipped before fan-out
+// (the engine's message-level guard would drop it anyway; skipping early avoids the wasted
+// predicate evaluations) — still acked upstream, but not counted or marked dirty.
 func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	if msg.StreamSeq == 0 {
 		// A JetStream-delivered message always carries a sequence; a 0 means the
@@ -360,7 +395,8 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 		log.Warn().Str("subject", msg.Subject).Msg("Dropping resolved event with no stream sequence (unreadable metadata).")
 		return false
 	}
-	if _, _, ok := messaging.TenantContextFromSubject(rp.procCtx, msg.Subject); !ok {
+	_, tenant, ok := messaging.TenantContextFromSubject(rp.procCtx, msg.Subject)
+	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping resolved event with no parseable tenant in subject %q", msg.Subject)
 		return false
@@ -371,14 +407,25 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 			Msgf("Dropping resolved event that could not be parsed from subject %q", msg.Subject)
 		return false
 	}
-	// Feed the engine. In this slice the engine carries no rules, so this advances
-	// the watermark and applied sequence (the checkpoint position) without emitting;
-	// the rule fan-out (one resolved event → N (rule, series) evaluations) lands with
-	// the predicate layer in a later slice. A redelivered message at or below the
-	// engine's sequence is dropped by the idempotent guard (no advance) — still acked
-	// upstream, but not counted or marked dirty.
+	if msg.StreamSeq <= rp.engine.LastSeq() {
+		return false // duplicate/replayed message — acked, but no re-fan-out
+	}
+
+	// Bound device-reported future skew against the server-stamped processed time before it
+	// drives the shared watermark: an unclamped far-future occurred time would advance the one
+	// frontier decades forward and fire every tenant's timers at once (persistently — the
+	// watermark is snapshotted). The clamp is deterministic under replay (both times are
+	// immutable in the payload).
+	occurred := runtime.EffectiveEventTime(event.OccurredTime, event.ProcessedTime, rp.cfg.MaxFutureSkew)
+
+	// Fan out: select the rules this event feeds (by tenant + profile version) and build one
+	// core event per applicable rule per sample it carries. The batch shares the message
+	// sequence — the single idempotency + checkpoint unit — so N same-seq events cannot each
+	// trip the guard; all events share the clamped event time.
+	plan := rp.registry.Plan(msg.StreamSeq, tenant, event, occurred)
+	rp.metrics.RecordFanout(len(plan.Events), plan.EvalErrors)
 	prev := rp.engine.LastSeq()
-	rp.engine.ProcessEvent(detectcore.Event{Seq: msg.StreamSeq, Time: event.OccurredTime})
+	rp.engine.ProcessResolved(msg.StreamSeq, occurred, plan.Events)
 	rp.drainDetections()
 	if rp.engine.LastSeq() > prev {
 		rp.dirty = true
@@ -388,25 +435,42 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	return false
 }
 
-// drainDetections empties the engine's emitted detections. The REACT/emit path is a
-// later slice; for now detections are dropped, but they are drained on the same
-// goroutine so a future emit sits BEFORE the checkpoint that makes them durable.
+// drainDetections moves the engine's emitted detections into the pending-detections buffer,
+// which the next checkpoint publishes BEFORE it commits/acks past the producing message
+// (deliver-before-checkpoint, see checkpoint). Draining marks the loop dirty so a checkpoint
+// is guaranteed to fire and flush them even if the engine's serializable state did not
+// otherwise change (e.g. a pure Threshold rule that emits without retaining state).
 func (rp *ResolvedEventsProcessor) drainDetections() {
 	if dets := rp.engine.Drain(); len(dets) > 0 {
+		rp.pendingDets = append(rp.pendingDets, dets...)
 		rp.dirty = true
 	}
 }
 
-// checkpoint commits any new engine state to the snapshot store and then acks every
-// buffered message. The commit runs only when the state changed since the last
-// checkpoint (dirty); when it did not — the buffer holds only redelivered duplicates
-// or poison — the acks are released against the already-durable prior snapshot with
-// no redundant write. Because a committed snapshot captures engine.LastSeq(), every
-// buffered valid event is at or below the durable sequence (durable) and every
-// poison message carries no state, so acking the whole buffer is safe. A commit
-// failure leaves the messages unacked (they redeliver / are re-read on replay) and
-// the loop continues.
+// checkpoint durably delivers buffered detections, commits any new engine state to the
+// snapshot store, and then acks every buffered message — IN THAT ORDER (deliver-before-
+// checkpoint). Publishing the detections first is the correctness contract: a detection is
+// re-derivable by replaying from the last checkpoint, so as long as the acked/committed
+// sequence never advances PAST a message whose detections are not yet published, a crash
+// re-emits them (at-least-once, dedup-collapsible downstream). A publish failure therefore
+// aborts the whole checkpoint — nothing committed, nothing acked, retried next cycle.
+//
+// The snapshot commit runs only when engine state changed since the last checkpoint (dirty);
+// when it did not — the buffer holds only redelivered duplicates or poison — the acks are
+// released against the already-durable prior snapshot with no redundant write. Because a
+// committed snapshot captures engine.LastSeq(), every buffered valid event is at or below the
+// durable sequence and every poison message carries no state, so acking the whole buffer is
+// safe. A commit failure leaves the messages unacked (they redeliver / are re-read on replay).
 func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) {
+	if rp.stale {
+		return // a split-brain-losing writer: no publish, no commit, no ack (see stale)
+	}
+	// Deliver-before-checkpoint: hand off every buffered detection first. If any fails
+	// (retryable broker error), defer the entire checkpoint so the producing messages stay
+	// unacked and a replay re-derives/re-emits.
+	if !rp.publishPending(ctx) {
+		return
+	}
 	if rp.dirty {
 		start := rp.clock.Now()
 		payload, err := rp.engine.Snapshot()
@@ -422,6 +486,21 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) {
 			Payload:     payload,
 		}
 		if err := rp.Store.Save(ctx, snap); err != nil {
+			if errors.Is(err, model.ErrStaleCheckpoint) {
+				// Another writer advanced the checkpoint past ours: we are the losing side of a
+				// split brain and must stop — no ack, no further publish. Halt the loop so this
+				// writer emits no more derived events (bounding the containment regression to this
+				// one cycle). Our unacked messages redeliver to the leader on the shared durable,
+				// so detection continues there; the durable single-writer guarantee is Slice-6's
+				// singleton deploy, of which this is the runtime safety net.
+				log.Error().Err(err).Str("partition", rp.cfg.PartitionId).
+					Msg("DETECT checkpoint refused as stale (split-brain); halting this writer.")
+				rp.stale = true
+				if rp.procCancel != nil {
+					rp.procCancel()
+				}
+				return
+			}
 			log.Error().Err(err).Msg("Failed to commit DETECT snapshot; messages remain unacked and will redeliver")
 			return
 		}
@@ -443,14 +522,35 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) {
 	rp.lastCheckpoint = rp.clock.Now()
 }
 
-// finalCheckpoint flushes on a NORMAL shutdown so a clean stop commits the latest
-// state and releases buffered acks. It is called only from the loop's normal exit
-// paths — never from a deferred/panic-unwind path, so a mid-mutation panic can never
-// commit a half-updated engine or ack the message that triggered it (the unacked
-// message redelivers/replays instead). It uses a fresh, bounded context because the
-// loop context is already cancelled by the time this runs.
+// publishPending durably delivers every buffered detection, in order, on its owning tenant's
+// derived-event subject. It returns true when the buffer is fully flushed (empty on entry
+// counts). A Publish that returns an error is a retryable broker failure: the successfully-
+// published prefix is dropped so a retry does not re-emit it, the unpublished tail is
+// retained, and false is returned so the caller defers the checkpoint. Terminal drops
+// (tenant-backstop rejects, orphan rules) return nil from Publish and advance past the
+// detection — they must never wedge the loop.
+func (rp *ResolvedEventsProcessor) publishPending(ctx context.Context) bool {
+	i := 0
+	for i < len(rp.pendingDets) {
+		if err := rp.publisher.Publish(ctx, rp.pendingDets[i]); err != nil {
+			log.Error().Err(err).Msg("Failed to publish a derived event; deferring checkpoint (will retry).")
+			rp.pendingDets = rp.pendingDets[i:]
+			return false
+		}
+		i++
+	}
+	rp.pendingDets = rp.pendingDets[:0]
+	return true
+}
+
+// finalCheckpoint flushes on a NORMAL shutdown so a clean stop delivers buffered detections,
+// commits the latest state, and releases buffered acks. It is called only from the loop's
+// normal exit paths — never from a deferred/panic-unwind path, so a mid-mutation panic can
+// never commit a half-updated engine or ack the message that triggered it (the unacked
+// message redelivers/replays instead). It uses a fresh, bounded context because the loop
+// context is already cancelled by the time this runs.
 func (rp *ResolvedEventsProcessor) finalCheckpoint() {
-	if !rp.dirty && len(rp.pendingAcks) == 0 {
+	if !rp.dirty && len(rp.pendingAcks) == 0 && len(rp.pendingDets) == 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -40,8 +40,9 @@ func NewSnapshotStore(r *rdb.RdbManager) *SnapshotStore {
 // rolling update can create before the Slice-6 singleton deploy lands — cannot let a
 // lagging writer's lower-sequence checkpoint clobber a higher one (which would strand
 // acked events whose effects are then in neither the surviving snapshot nor
-// redeliverable). A stale write is dropped (logged, no error) so the caller proceeds.
-// State, watermark, and sequence live in one row, so the write is atomic.
+// redeliverable). A stale write is refused with ErrStaleCheckpoint (the caller then leaves
+// its messages unacked and halts the losing writer). State, watermark, and sequence live in
+// one row, so the write is atomic.
 func (s *SnapshotStore) Save(ctx context.Context, snap *DetectSnapshot) error {
 	return s.rdb.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing DetectSnapshot
