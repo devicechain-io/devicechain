@@ -91,3 +91,103 @@ type DetectRule struct {
 // mirror of device-management's authored rules, re-materialized from published-rule facts,
 // not a control-plane entity mutation of its own.
 func (DetectRule) AuditExempt() bool { return true }
+
+// DeviceRoster is the durable projection of device-management's device-roster facts (ADR-051
+// slice 4c-2): the set of devices EXPECTED to report. It is what lets DETECT arm a dead-man
+// absence timer for a device that has NEVER reported — the reported-once-then-silent case is
+// already covered by the heartbeat-armed timer, but a never-seen device produces no event to
+// arm one, so without this roster its absence rule is inert. The roster consumer upserts each
+// fact here BEFORE acking it (at-least-once persistence), and the engine's dead-man arming is
+// rebuilt from this table at startup — so a never-reported device survives a restart
+// independent of the finite-retention fact stream, exactly like the rule projection.
+//
+// Unlike DetectRule this projection IS live-mutable: a device delete TOMBSTONES its row (Deleted
+// = true) so the arming for a decommissioned device is cancelled rather than firing a false
+// absence forever. ProfileToken is the STABLE profile token (not the "{profileToken}@{version}"
+// token) so a re-publish never staleness-orphans the entry; the arming path cross-references the
+// active version at arming time (ProfileActive). It is empty when the device's type has no
+// profile (a roster entry with no resolvable rules, retained so a later re-type re-homes it).
+//
+// ORDERING / TOMBSTONE (ADR-051 slice 4c-2b-1, hardened after review). Roster upserts arrive on
+// one stream and deletes on another (entity-deleted), through two independent durable consumers
+// with no relative ordering, and either can be redelivered (a fact stays pending until its
+// persist-before-ack commits, and a failed ack is tolerated). Two hazards follow: a stale
+// redelivered upsert could RESURRECT a deleted device, and a stale redelivered delete could ERASE
+// a legitimately re-created (token-reused) device — both permanent, since neither self-heals. The
+// row is therefore never hard-deleted: a delete flips Deleted and every mutation is gated on a
+// single monotonic lifecycle clock, LastEventAt. A device's real lifecycle (create < re-type <
+// delete < re-create) increases in wall time, so applying a fact only when it is strictly newer
+// than LastEventAt makes the row converge to the latest lifecycle event regardless of delivery
+// order. LoadAll returns only live (Deleted=false) rows. Tombstones are retained (bounding their
+// growth is the deferred governance concern, ADR-023/052, like the rule projection's).
+//
+// Like the other event-processing projections it is NOT tenant-scoped (the engine is a
+// per-Instance singleton; tenant is a plain column, keyed into the composite primary key so a
+// device token that repeats across tenants stays distinct) and it is audit-exempt (a derived
+// mirror, not a control-plane mutation).
+type DeviceRoster struct {
+	// Tenant + DeviceToken are the composite primary key: a device token is unique only per
+	// tenant (ADR-042), so both are needed to identify a row, and a re-type fact for the same
+	// device upserts in place.
+	Tenant      string `gorm:"primaryKey;size:256;not null"`
+	DeviceToken string `gorm:"primaryKey;size:256;not null"`
+	// ProfileToken is the stable profile token the device's type adopts (ADR-045), or empty
+	// when the type has no profile. Indexed so the arming path can fan out to every device on a
+	// profile when that profile's rules change (ADR-051 slice 4c-2b's publish trigger). Frozen at
+	// its last live value on a tombstone (irrelevant there — tombstones are excluded from LoadAll).
+	ProfileToken string `gorm:"size:256;not null;index"`
+	// ExpectedSince is the base of the dead-man clock for a never-reported device — the device's
+	// creation time (or the moment it began its current type membership on a re-type).
+	ExpectedSince time.Time `gorm:"not null"`
+	// Deleted tombstones a removed device. The row is retained rather than dropped so a stale
+	// redelivered upsert cannot resurrect it (the tombstone's LastEventAt fences it out) and a
+	// stale redelivered delete cannot erase a newer re-creation. LoadAll filters it out.
+	Deleted bool `gorm:"not null"`
+	// LastEventAt is the device-lifecycle time of the most recent APPLIED fact: ExpectedSince for
+	// a create/re-type, the entity-deleted fact's DeletedTime for a delete. It is the single
+	// monotonic axis every mutation is gated on (apply iff strictly newer), so redelivery, cross-
+	// stream reordering, or consumer lag can never regress the row or flip it against real order.
+	LastEventAt time.Time `gorm:"not null"`
+	// UpdatedAt is gorm-managed; it records when this roster entry was last (re)emitted.
+	UpdatedAt time.Time
+}
+
+// AuditExempt opts the roster projection out of the audit journal (ADR-019): it is a derived
+// mirror of device-management's device lifecycle, not a control-plane mutation of its own.
+func (DeviceRoster) AuditExempt() bool { return true }
+
+// ProfileActive is the durable projection of which published version is ACTIVE for a stable
+// profile token, plus when that version was published (ADR-051 slice 4c-2). It is maintained
+// last-fact-wins from the SAME detection-rules-published facts that feed the rule projection:
+// every publish (and every rollback re-emit) names the now-active "{profileToken}@{version}"
+// token and its publish time, so the latest fact for a profile token names its active version.
+// Delivery is single-consumer and in commit order (one durable reader on a per-tenant subject),
+// so last-received is last-published; a redelivery cannot reorder past an acked predecessor.
+//
+// 4c-2b's dead-man arming cross-references it to turn a roster entry's STABLE profile token into
+// the active version's absence rules (the roster deliberately does not pin a version), and uses
+// PublishedAt as the grace-period base: the never-reported deadline is max(ExpectedSince,
+// PublishedAt)+Timeout, so a newly published absence rule gives existing quiet devices one
+// timeout of grace instead of firing a fleet-wide burst the instant it lands.
+//
+// Like the other event-processing projections it is NOT tenant-scoped (tenant is a plain column
+// in the composite key) and audit-exempt.
+type ProfileActive struct {
+	// Tenant + ProfileToken are the composite primary key: a profile token is unique per tenant
+	// (ADR-042), and each publish for a profile upserts its single active-version row in place.
+	Tenant       string `gorm:"primaryKey;size:256;not null"`
+	ProfileToken string `gorm:"primaryKey;size:256;not null"`
+	// ActiveVersionToken is the "{profileToken}@{version}" token of the currently active
+	// published version — the scope key the rule registry files that version's rules under.
+	ActiveVersionToken string `gorm:"size:256;not null"`
+	// PublishedAt is when that version was published (the grace-period base). A rollback
+	// re-emits with a fresh publish time, so last-fact-wins keeps this pointing at the version
+	// that is active NOW, not the highest version number ever published.
+	PublishedAt time.Time `gorm:"not null"`
+	// UpdatedAt is gorm-managed; it records when this profile last published.
+	UpdatedAt time.Time
+}
+
+// AuditExempt opts the profile-active projection out of the audit journal (ADR-019): it is a
+// derived mirror of device-management's publish lifecycle, not a control-plane mutation.
+func (ProfileActive) AuditExempt() bool { return true }

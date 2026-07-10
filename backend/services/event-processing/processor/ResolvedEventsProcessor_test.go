@@ -70,9 +70,21 @@ func (r *fakeReader) Backlog(context.Context) (uint64, uint64, error) {
 type fakeAck struct {
 	acks int
 	naks int
+	// acked, when non-nil, receives once per Ack so a test that drives a consumer with no other
+	// sync point (the roster/entity-deleted consumers hand nothing to the loop) can wait for the
+	// ack BEFORE cancelling — cancelling first would fail the persist against a cancelled context.
+	// The send is non-blocking, so a nil or full channel never stalls Ack.
+	acked chan struct{}
 }
 
-func (a *fakeAck) Ack() error { a.acks++; return nil }
+func (a *fakeAck) Ack() error {
+	a.acks++
+	select {
+	case a.acked <- struct{}{}:
+	default:
+	}
+	return nil
+}
 func (a *fakeAck) Nak() error { a.naks++; return nil }
 
 // fakeReplayOpener yields a preset, ordered set of messages as a bounded replay from
