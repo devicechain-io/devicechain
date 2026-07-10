@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
@@ -243,6 +244,11 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 	api.emitDetectionRulesPublished(ctx, &DetectionRulesPublishedEvent{
 		ProfileVersionToken: fmt.Sprintf("%s@%d", token, version.Version),
 		Rules:               api.enabledSnapshotRules(snapshot),
+		// The version row's gorm-stamped creation time (app-clock at insert, ~ms before the
+		// commit) is the rule-activation instant (ADR-051 slice 4c-2): event-processing uses
+		// it as the grace-period base so publishing an absence rule gives an already-existing
+		// quiet device one timeout of grace, not an instant burst.
+		PublishedAt: version.CreatedAt,
 	})
 	return version, nil
 }
@@ -302,9 +308,43 @@ func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version
 	if res.RowsAffected == 0 {
 		return nil, fmt.Errorf("%w: device profile %q", gorm.ErrRecordNotFound, token)
 	}
+	// Re-propagate the rolled-back-to version's rules POST-COMMIT (ADR-051 slice 4c-2):
+	// a rollback re-points ActiveVersion WITHOUT publishing, so without this emit
+	// event-processing has no signal that the active version changed — its rule facts only
+	// ever advance, and it would keep the dead-man roster armed under the wrong (later)
+	// version's absence rules. Re-emitting the target version's fact restores the "the most
+	// recent rule fact for a profile names its active version" invariant the roster relies
+	// on. The bodies are identical to the version's original publish, so the DETECT engine's
+	// upsert preserves running state (no reset); PublishedAt = reactivation time gives any
+	// re-activated absence rule a fresh grace window. Best-effort, like every other fact emit.
+	api.emitRolledBackRules(ctx, token, profile.ID, version)
+
 	// Reload so the returned profile carries the freshly-bumped updated_at (the
 	// column-scoped Update advanced it in the DB) rather than the pre-update value.
 	return api.deviceProfileByToken(ctx, token)
+}
+
+// emitRolledBackRules loads the rolled-back-to version's frozen snapshot and re-emits its
+// enabled detection rules as a detection-rules-published fact (ADR-051 slice 4c-2), so a
+// rollback looks to event-processing like a (re)publish of that version. Best-effort: a
+// load failure is logged and swallowed — the rollback itself is durable, and the reconcile
+// sweep backstops a missed re-propagation.
+func (api *Api) emitRolledBackRules(ctx context.Context, token string, profileId uint, version int32) {
+	if api.DetectionRulesPublishedPublisher == nil {
+		return
+	}
+	var v DeviceProfileVersion
+	if err := api.RDB.DB(ctx).Where("device_profile_id = ? AND version = ?", profileId, version).
+		First(&v).Error; err != nil {
+		log.Error().Err(err).Str("profile", token).Int32("version", version).
+			Msg("Unable to load rolled-back version for rule re-propagation; skipping emit")
+		return
+	}
+	api.emitDetectionRulesPublished(ctx, &DetectionRulesPublishedEvent{
+		ProfileVersionToken: fmt.Sprintf("%s@%d", token, version),
+		Rules:               api.enabledSnapshotRules(v.Snapshot),
+		PublishedAt:         time.Now().UTC(),
+	})
 }
 
 // DeviceProfileVersions lists a profile's published versions, newest first. Returns

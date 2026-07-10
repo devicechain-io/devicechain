@@ -7,8 +7,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -48,6 +50,28 @@ func (api *Api) profileIdForDeviceType(ctx context.Context, deviceTypeId uint) (
 		return 0, false, nil
 	}
 	return *types[0].ProfileId, true, nil
+}
+
+// profileTokenForDeviceType resolves a device type's adopted profile's STABLE token
+// (ADR-051 slice 4c-2) — the profile identity, not the "{profileToken}@{version}"
+// published-version token. Unlike ProfileScopeByDeviceType it does NOT require the
+// profile to be published: a device is rostered under its profile the moment its type
+// adopts one, so a later first-publish can arm absence for it. Returns "" when the type
+// is unknown or has no profile — a roster entry with no resolvable rules, retained so a
+// later re-type re-homes it.
+func (api *Api) profileTokenForDeviceType(ctx context.Context, deviceTypeId uint) (string, error) {
+	profileId, ok, err := api.profileIdForDeviceType(ctx, deviceTypeId)
+	if err != nil || !ok {
+		return "", err
+	}
+	profiles, err := api.DeviceProfilesById(ctx, []uint{profileId})
+	if err != nil {
+		return "", err
+	}
+	if len(profiles) == 0 {
+		return "", nil
+	}
+	return profiles[0].Token, nil
 }
 
 // deviceTypeIdsForProfile returns the ids of every device type that adopts the
@@ -119,6 +143,7 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 	}
 
 	found := matches[0]
+	oldProfileId := found.ProfileId
 	found.Token = request.Token
 	found.Name = rdb.NullStrOf(request.Name)
 	found.Description = rdb.NullStrOf(request.Description)
@@ -136,7 +161,26 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 	if result.Error != nil {
 		return nil, result.Error
 	}
+	// Re-roster POST-COMMIT when the type's adopted profile changed (ADR-051 slice 4c-2):
+	// re-pointing a type's profile silently re-binds EVERY device of that type, so the
+	// per-device roster rows event-processing armed absence from must follow — otherwise a
+	// tenant that adopts a profile onto an existing type (the feature's own migration path)
+	// gets zero rostered devices, and a re-point leaves dead-men armed under the old profile.
+	// A fan-out over the type's devices is right here: this is a rare admin mutation, the fact
+	// is tiny and best-effort, and the ADR-044 reconcile sweep backstops a huge-fleet miss.
+	if !uintPtrEqual(oldProfileId, profileId) {
+		api.emitDeviceRosterForType(ctx, found.ID)
+	}
 	return found, nil
+}
+
+// uintPtrEqual reports whether two optional foreign keys name the same profile (both
+// nil, or both non-nil and equal) — the "did the adopted profile change" test.
+func uintPtrEqual(a, b *uint) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // Get device types by id.
@@ -205,7 +249,73 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 	if result.Error != nil {
 		return nil, result.Error
 	}
+	// Roster the new device with event-processing (ADR-051 slice 4c-2), POST-COMMIT and
+	// best-effort, so the DETECT engine can arm absence for it even if it never reports.
+	// The profile token is resolved from the just-bound type; expected-since is the row's
+	// creation time (the dead-man clock base). A resolution/emit failure never fails the
+	// create — the device is durable; a missed roster fact is recovered by a later re-type
+	// or the planned reconcile (ADR-044), exactly like a missed entity-deleted event.
+	api.emitDeviceRosterForDevice(ctx, created, created.CreatedAt)
 	return created, nil
+}
+
+// emitDeviceRosterForDevice resolves a device's stable profile token and emits a
+// device-roster fact for it (ADR-051 slice 4c-2). expectedSince is the base of the
+// never-reported dead-man clock: the device's creation time on the create path, but the
+// moment membership BEGAN (now) on a re-type — an old device re-typed into a profile
+// whose absence rule was published long ago must get a fresh timeout of grace, not an
+// instant fire (the fleet-burst the grace-period base exists to prevent). Best-effort: a
+// profile-resolution error is logged and swallowed rather than failing the caller's
+// already-committed write — the roster is a convenience projection, never the source of truth.
+func (api *Api) emitDeviceRosterForDevice(ctx context.Context, device *Device, expectedSince time.Time) {
+	if api.DeviceRosterPublisher == nil {
+		return // no publisher wired: skip the profile-token read entirely
+	}
+	profileToken, err := api.profileTokenForDeviceType(ctx, device.DeviceTypeId)
+	if err != nil {
+		log.Error().Err(err).Str("device", device.Token).
+			Msg("Unable to resolve profile token for device roster; skipping roster emit")
+		return
+	}
+	api.emitDeviceRoster(ctx, &DeviceRosterEvent{
+		DeviceToken:   device.Token,
+		ProfileToken:  profileToken,
+		ExpectedSince: expectedSince,
+	})
+}
+
+// emitDeviceRosterForType fans a device-roster fact out to every device of a type after
+// the type's adopted profile changed (ADR-051 slice 4c-2), so the roster's device→profile
+// binding follows a type re-point. The devices are re-rostered under the type's NEW profile
+// token with expectedSince = now: the membership under that profile begins at the re-point,
+// so each device gets a fresh timeout of grace before absence can fire. Best-effort like the
+// per-device path — a resolution/query error is logged and skipped, and the reconcile sweep
+// (ADR-044) backstops any device missed here.
+func (api *Api) emitDeviceRosterForType(ctx context.Context, deviceTypeId uint) {
+	if api.DeviceRosterPublisher == nil {
+		return
+	}
+	profileToken, err := api.profileTokenForDeviceType(ctx, deviceTypeId)
+	if err != nil {
+		log.Error().Err(err).Uint("deviceType", deviceTypeId).
+			Msg("Unable to resolve profile token for type re-roster; skipping roster fan-out")
+		return
+	}
+	var tokens []string
+	if err := api.RDB.DB(ctx).Model(&Device{}).
+		Where("device_type_id = ?", deviceTypeId).Pluck("token", &tokens).Error; err != nil {
+		log.Error().Err(err).Uint("deviceType", deviceTypeId).
+			Msg("Unable to list devices for type re-roster; skipping roster fan-out")
+		return
+	}
+	since := time.Now().UTC()
+	for _, tok := range tokens {
+		api.emitDeviceRoster(ctx, &DeviceRosterEvent{
+			DeviceToken:   tok,
+			ProfileToken:  profileToken,
+			ExpectedSince: since,
+		})
+	}
 }
 
 // Update an existing device.
@@ -227,7 +337,8 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceC
 	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
 
 	// Update device type if changed.
-	if request.DeviceTypeToken != updated.DeviceType.Token {
+	retyped := request.DeviceTypeToken != updated.DeviceType.Token
+	if retyped {
 		matches, err := api.DeviceTypesByToken(ctx, []string{request.DeviceTypeToken})
 		if err != nil {
 			return nil, err
@@ -236,11 +347,27 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceC
 			return nil, gorm.ErrRecordNotFound
 		}
 		updated.DeviceType = matches[0]
+		updated.DeviceTypeId = matches[0].ID // keep the FK in lockstep for the post-commit roster resolve
 	}
 
 	result := api.RDB.DB(ctx).Save(updated)
 	if result.Error != nil {
 		return nil, result.Error
+	}
+	// Re-roster POST-COMMIT only when the device was re-typed (ADR-051 slice 4c-2): a
+	// re-type may change the adopted profile, so the roster's device→profile binding must
+	// follow. Metadata-only updates leave the binding unchanged, so they emit nothing. The
+	// dead-man clock base is the membership-began instant (now), not the device's creation
+	// time — a device moved to a new profile gets a fresh grace window, and re-using the old
+	// creation time would instantly fire absence under a long-standing rule. (A re-type between
+	// two types that adopt the SAME profile also emits and refreshes the window; that is a
+	// benign fresh grace, never a false fire, and not worth a second profile resolve to suppress.)
+	// Best-effort,
+	// exactly like the create path. (Device token rename is unreachable through this method —
+	// it locates by request.Token, ignoring the token argument — so the roster's device-token
+	// key is stable here; a future rename path would need its own re-roster/removal.)
+	if retyped {
+		api.emitDeviceRosterForDevice(ctx, updated, time.Now().UTC())
 	}
 	return updated, nil
 }

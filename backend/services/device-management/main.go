@@ -141,6 +141,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	Api.DetectionRulesPublishedPublisher = processor.NewDetectionRulesPublishedWriter(drpub)
 
+	// Add the device-roster writer and inject a publisher into the shared Api (ADR-051
+	// slice 4c-2): device create/re-type emit a roster fact so event-processing's DETECT
+	// engine can arm absence for a device that has never reported (the dead-man roster).
+	rosterpub, err := nmgr.NewWriter(config.SUBJECT_DEVICE_ROSTER)
+	if err != nil {
+		return err
+	}
+	Api.DeviceRosterPublisher = processor.NewDeviceRosterWriter(rosterpub)
+
 	// Add and initialize inbound events processor.
 	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,
 		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode)

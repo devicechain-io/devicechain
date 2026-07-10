@@ -49,6 +49,13 @@ type Api struct {
 	// event-processing, but a fact that never reaches the stream is recovered by a later
 	// publish or the planned reconcile, not by replay.
 	DetectionRulesPublishedPublisher DetectionRulesPublishedPublisher
+
+	// DeviceRosterPublisher emits device-roster events (ADR-051 slice 4c-2) when a device
+	// is created or re-typed, so event-processing's DETECT engine can arm absence for a
+	// device that has never reported. Injected at wiring time (the concrete publisher owns
+	// a NATS writer) and may be nil — in tests, or before wiring — disabling emission.
+	// Emission is post-commit and best-effort (at-most-once), like the other fact publishers.
+	DeviceRosterPublisher DeviceRosterPublisher
 }
 
 // CacheEvictor drops the hot-path caches (ADR-022 B2) that a mutation makes stale.
@@ -107,6 +114,16 @@ func (api *Api) emitEntityDeleted(ctx context.Context, event *EntityDeletedEvent
 func (api *Api) emitDetectionRulesPublished(ctx context.Context, event *DetectionRulesPublishedEvent) {
 	if api.DetectionRulesPublishedPublisher != nil {
 		api.DetectionRulesPublishedPublisher.PublishDetectionRulesPublished(ctx, event)
+	}
+}
+
+// emitDeviceRoster publishes a device-roster event when a publisher is wired, and is a
+// no-op otherwise (ADR-051 slice 4c-2). Like the other emit helpers it is best-effort
+// and must be called AFTER the device write has committed: the create/update paths emit
+// only once their write returns nil, so the fact never fires for a rolled-back write.
+func (api *Api) emitDeviceRoster(ctx context.Context, event *DeviceRosterEvent) {
+	if api.DeviceRosterPublisher != nil {
+		api.DeviceRosterPublisher.PublishDeviceRoster(ctx, event)
 	}
 }
 

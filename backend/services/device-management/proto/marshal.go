@@ -394,6 +394,7 @@ func MarshalDetectionRulesPublishedEvent(event *model.DetectionRulesPublishedEve
 	return proto.Marshal(&PDetectionRulesPublishedEvent{
 		ProfileVersionToken: event.ProfileVersionToken,
 		Rules:               rules,
+		PublishedAt:         formatOptionalTime(event.PublishedAt),
 	})
 }
 
@@ -407,10 +408,61 @@ func UnmarshalDetectionRulesPublishedEvent(encoded []byte) (*model.DetectionRule
 	for _, r := range pbevent.Rules {
 		rules = append(rules, model.PublishedDetectionRule{Token: r.Token, Definition: r.Definition})
 	}
+	publishedAt, err := parseOptionalTime(pbevent.PublishedAt)
+	if err != nil {
+		return nil, err
+	}
 	return &model.DetectionRulesPublishedEvent{
 		ProfileVersionToken: pbevent.ProfileVersionToken,
 		Rules:               rules,
+		PublishedAt:         publishedAt,
 	}, nil
+}
+
+// Marshal a device-roster event to protobuf bytes (ADR-051 slice 4c-2).
+func MarshalDeviceRosterEvent(event *model.DeviceRosterEvent) ([]byte, error) {
+	return proto.Marshal(&PDeviceRosterEvent{
+		DeviceToken:   event.DeviceToken,
+		ProfileToken:  event.ProfileToken,
+		ExpectedSince: formatOptionalTime(event.ExpectedSince),
+	})
+}
+
+// Unmarshal an encoded device-roster event (consumed by event-processing).
+func UnmarshalDeviceRosterEvent(encoded []byte) (*model.DeviceRosterEvent, error) {
+	pbevent := &PDeviceRosterEvent{}
+	if err := proto.Unmarshal(encoded, pbevent); err != nil {
+		return nil, err
+	}
+	expectedSince, err := parseOptionalTime(pbevent.ExpectedSince)
+	if err != nil {
+		return nil, err
+	}
+	return &model.DeviceRosterEvent{
+		DeviceToken:   pbevent.DeviceToken,
+		ProfileToken:  pbevent.ProfileToken,
+		ExpectedSince: expectedSince,
+	}, nil
+}
+
+// formatOptionalTime renders a timestamp as RFC3339Nano, mapping the zero time to
+// the empty string so an unset optional time round-trips as absent rather than as a
+// spurious year-1 instant.
+func formatOptionalTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339Nano)
+}
+
+// parseOptionalTime is the inverse of formatOptionalTime: an empty string is the
+// zero time (the field was absent), any other value must parse or the decode fails
+// closed rather than silently dropping a malformed timestamp.
+func parseOptionalTime(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339Nano, s)
 }
 
 // Marshal a resolved event to protobuf bytes.

@@ -49,22 +49,29 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 
 	found := matches[0]
 
-	// A profile token is IMMUTABLE once the profile has published versions (ADR-051 slice
-	// 4b-3). The published-version token "{profileToken}@{version}" (ADR-045) is the key the
-	// DETECT engine files a version's detection rules under and the scope resolved events are
-	// stamped with; renaming the profile would leave every already-published rule filed under
-	// the OLD token while events carry the new one — detections silently stop and armed
-	// absence dead-men false-fire. Pre-GA decisive cutover: reject the rename rather than
-	// re-key or orphan rules.
+	// A profile token is IMMUTABLE once the profile is IN USE — published, or adopted by any
+	// device type (ADR-051 slices 4b-3 / 4c-2). The published-version token
+	// "{profileToken}@{version}" (ADR-045) is the key the DETECT engine files a version's
+	// detection rules under and the scope resolved events are stamped with; renaming would
+	// leave every already-published rule filed under the OLD token while events carry the new
+	// one — detections silently stop. And the dead-man roster keys a device's entry on the
+	// STABLE profile token captured at emit time (even for an unpublished-but-adopted profile),
+	// so a rename orphans those entries and armed absence dead-men false-fire. Pre-GA decisive
+	// cutover: reject the rename rather than re-key or orphan rules.
 	if request.Token != token {
 		var published int64
 		if err := api.RDB.DB(ctx).Model(&DeviceProfileVersion{}).
 			Where("device_profile_id = ?", found.ID).Count(&published).Error; err != nil {
 			return nil, err
 		}
-		if published > 0 {
-			return nil, fmt.Errorf("cannot rename device profile %q to %q: it has %d published version(s); the token is immutable once published",
-				token, request.Token, published)
+		var adopters int64
+		if err := api.RDB.DB(ctx).Model(&DeviceType{}).
+			Where("profile_id = ?", found.ID).Count(&adopters).Error; err != nil {
+			return nil, err
+		}
+		if published > 0 || adopters > 0 {
+			return nil, fmt.Errorf("cannot rename device profile %q to %q: it is in use (%d published version(s), %d adopting type(s)); the token is immutable once published or adopted",
+				token, request.Token, published, adopters)
 		}
 	}
 
