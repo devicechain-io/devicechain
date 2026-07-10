@@ -414,11 +414,26 @@ func leafSource(r Rule) (string, error) {
 	if c.isRaw() {
 		return c.CEL, nil
 	}
-	// structured
-	if c.Metric == "" || c.Op == "" || c.Threshold == nil {
-		return "", invalid(r.ID, "when", "a structured comparison needs metric, op, and threshold")
+	// Structured: `<metric> <op> <bound>`, where the bound is EITHER a literal threshold OR a
+	// device-attribute reference (a dynamic, per-device threshold) — exactly one.
+	if c.Metric == "" || c.Op == "" {
+		return "", invalid(r.ID, "when", "a structured comparison needs a metric and an operator")
 	}
-	src, err := generateComparison(c.Metric, c.Op, *c.Threshold)
+	hasLit, hasAttr := c.Threshold != nil, c.ThresholdAttr != ""
+	var (
+		src string
+		err error
+	)
+	switch {
+	case hasLit && hasAttr:
+		return "", invalid(r.ID, "when", "a comparison sets either a literal threshold or a threshold attribute, not both")
+	case hasLit:
+		src, err = generateComparison(c.Metric, c.Op, *c.Threshold)
+	case hasAttr:
+		src, err = generateDynamicComparison(c.Metric, c.Op, c.ThresholdAttr)
+	default:
+		return "", invalid(r.ID, "when", "a structured comparison needs a threshold or a threshold attribute")
+	}
 	if err != nil {
 		return "", invalid(r.ID, "when", "%v", err)
 	}

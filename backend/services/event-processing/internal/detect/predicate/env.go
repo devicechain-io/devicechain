@@ -34,13 +34,33 @@ const (
 	// design (ADR-016); non-numeric or unbound measurements are not keys, so a predicate
 	// must guard presence (`"temp" in m`) — the structured generator always does.
 	VarM = "m"
+	// VarAttr maps a device-attribute key to its numeric value — the device's OWN durable
+	// state (SERVER/SHARED scope, ADR-012), NOT the current event's readings. It is the source
+	// of a dynamic per-device threshold (ADR-051 slice 4c-3b): `m["temp"] > attr["tempLimit"]`.
+	// Numeric-only and absent-like `m` — a device that has not set the attribute is simply not a
+	// key, so a dynamic comparison must guard presence (`"tempLimit" in attr`), which the
+	// structured generator always does. The runtime populates it from the device-attribute
+	// projection (slice 4c-3b-2-ii); until then it is always empty.
+	//
+	// SCOPE OF THE "empty until 2-ii" GUARANTEE. Because the STRUCTURED generator only ever emits
+	// a POSITIVE presence guard (`"k" in attr && …`), every structured dynamic rule cleanly does
+	// NOT fire while attr is empty — it cannot mis-fire on absent state. A RAW-CEL leaf is not
+	// bound by that: an author who writes a NEGATED presence (`!("k" in attr) && …`) gets an
+	// always-true guard while attr is empty, so such a raw rule fires as if no device has the
+	// attribute, then changes behavior once 2-ii populates the map. This is the same "raw-CEL
+	// author owns totality" contract the Duration trap documents (compile.go): the structured
+	// path is the safe one; a raw leaf referencing attr owns its own correctness across the go-live.
+	VarAttr = "attr"
 )
 
-// SchemaVersion is the version of the declared event shape. It keys the compiled-program
-// cache (a rule recompiles when the schema version it was checked against changes) and is
-// the seam a future additive field (a new declared variable) bumps. Bump on any change to
-// the declarations below.
-const SchemaVersion = 1
+// SchemaVersion is the version of the declared event shape. Nothing consumes it yet: it is
+// the seam a future compiled-program cache would key on (recompiling a rule when the schema
+// version it was checked against changes), and the marker a future additive field (a new
+// declared variable) bumps. Bump on any change to the declarations below.
+//
+//   - v1: device, anchors, occurred, m.
+//   - v2: + attr (device-attribute map, dynamic thresholds, ADR-051 slice 4c-3b).
+const SchemaVersion = 2
 
 var (
 	sharedEnv     *cel.Env
@@ -60,6 +80,7 @@ func Env() (*cel.Env, error) {
 			cel.Variable(VarAnchors, cel.MapType(cel.StringType, cel.StringType)),
 			cel.Variable(VarOccurred, cel.TimestampType),
 			cel.Variable(VarM, cel.MapType(cel.StringType, cel.DoubleType)),
+			cel.Variable(VarAttr, cel.MapType(cel.StringType, cel.DoubleType)),
 		)
 	})
 	if sharedEnvErr != nil {

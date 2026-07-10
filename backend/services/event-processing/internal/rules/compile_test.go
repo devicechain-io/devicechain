@@ -94,6 +94,50 @@ func TestThresholdRawCEL(t *testing.T) {
 	d.assertFires(core.Threshold, at(1))
 }
 
+// sendAttr feeds one event carrying the device's own attribute map (the dynamic-threshold
+// source) — the same drive as send, with Attr populated (as the runtime will do in slice
+// 4c-3b-2-ii). A nil attr models a device that has not set the attribute.
+func (d *driver) sendAttr(sec int, series, member string, m, attr map[string]float64) {
+	d.t.Helper()
+	d.seq++
+	in := predicate.Input{Device: member, Occurred: at(sec), M: m, Attr: attr, Anchors: map[string]string{"site": series}}
+	ev, err := d.cr.BuildEvent(d.seq, series, member, in)
+	if err != nil {
+		d.t.Fatalf("build event: %v", err)
+	}
+	d.e.ProcessEvent(ev)
+	d.got = append(d.got, d.e.Drain()...)
+}
+
+// TestThresholdDynamicAttr proves a dynamic (attribute-sourced) threshold fires end to end
+// through the REAL core: the same metric value fires or not depending on the device's own
+// attribute, and a device that has not set the attribute cleanly never fires. GateMetric is
+// still the metric, so the runtime's metric-scoped feed is unchanged by the dynamic bound.
+func TestThresholdDynamicAttr(t *testing.T) {
+	d := newDriver(t, Rule{ID: "t", Name: "hot", Type: TypeThreshold,
+		When: Condition{Metric: "temp", Op: OpGt, ThresholdAttr: "tempLimit"}})
+	if d.cr.GateMetric != "temp" {
+		t.Fatalf("dynamic threshold should still gate on the metric; GateMetric = %q", d.cr.GateMetric)
+	}
+	// 35 does not exceed a limit of 40: no fire.
+	d.sendAttr(0, "dev1", "dev1", map[string]float64{"temp": 35}, map[string]float64{"tempLimit": 40})
+	d.assertQuiet()
+	// 45 exceeds the same device's limit of 40: fire.
+	d.sendAttr(1, "dev1", "dev1", map[string]float64{"temp": 45}, map[string]float64{"tempLimit": 40})
+	d.assertFires(core.Threshold, at(1))
+}
+
+// TestThresholdDynamicAttrUnsetNeverFires proves a device that has not set its limit
+// attribute is a clean non-match (never an eval error), so BuildEvent returns a false Match,
+// not an error — the property that keeps a Duration hold from being frozen by a SKIP.
+func TestThresholdDynamicAttrUnsetNeverFires(t *testing.T) {
+	d := newDriver(t, Rule{ID: "t", Name: "hot", Type: TypeThreshold,
+		When: Condition{Metric: "temp", Op: OpGt, ThresholdAttr: "tempLimit"}})
+	// A large reading but NO attribute set: must not fire and must not error.
+	d.sendAttr(1, "dev1", "dev1", map[string]float64{"temp": 9999}, nil)
+	d.assertQuiet()
+}
+
 func TestDeltaRate(t *testing.T) {
 	d := newDriver(t, Rule{ID: "d", Name: "spike", Type: TypeDeltaRate,
 		Metric: "count", Op: OpGt, Threshold: ptr(10)})
@@ -280,6 +324,14 @@ func TestCompileRejections(t *testing.T) {
 		{"deltaRate no threshold", Rule{ID: "r", Name: "x", Type: TypeDeltaRate, Metric: "t", Op: OpGt}},
 		{"count over count window", Rule{ID: "r", Name: "x", Type: TypeAggregate, Mode: ModeCount,
 			Count: 5, Agg: AggCount, Op: OpGt, Threshold: ptr(10)}},
+		{"literal and attr threshold", Rule{ID: "r", Name: "x", Type: TypeThreshold,
+			When: Condition{Metric: "t", Op: OpGt, Threshold: ptr(1), ThresholdAttr: "lim"}}},
+		{"structured no bound", Rule{ID: "r", Name: "x", Type: TypeThreshold,
+			When: Condition{Metric: "t", Op: OpGt}}},
+		{"attr threshold no metric", Rule{ID: "r", Name: "x", Type: TypeThreshold,
+			When: Condition{Op: OpGt, ThresholdAttr: "lim"}}},
+		{"attr key injection", Rule{ID: "r", Name: "x", Type: TypeThreshold,
+			When: Condition{Metric: "t", Op: OpGt, ThresholdAttr: `lim"] || size(m) > 0 || attr["x`}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

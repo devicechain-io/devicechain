@@ -35,6 +35,15 @@ func TestDecodeRejectsUnknownFields(t *testing.T) {
 	if _, err := Decode([]byte(good + `{}`)); err == nil {
 		t.Fatal("Decode must reject trailing content")
 	}
+	// thresholdAttr is a KNOWN field (schema v2): a dynamic-threshold rule must decode and compile.
+	dyn := `{"id":"r","name":"hot","type":"threshold","when":{"metric":"temp","op":"gt","thresholdAttr":"tempLimit"}}`
+	dr, err := Decode([]byte(dyn))
+	if err != nil {
+		t.Fatalf("Decode of a dynamic-threshold rule: %v", err)
+	}
+	if _, err := Compile(dr, testLimits); err != nil {
+		t.Fatalf("decoded dynamic-threshold rule should compile: %v", err)
+	}
 }
 
 // TestGateMetricExposesFeedScope proves the compiler surfaces the relevance metric the
@@ -52,6 +61,8 @@ func TestGateMetricExposesFeedScope(t *testing.T) {
 			When: Condition{Metric: "temp", Op: OpGt, Threshold: ptr(30)}}, "temp", ""},
 		{"structured duration", Rule{ID: "r", Name: "n", Type: TypeDuration, Hold: Duration(time.Minute),
 			When: Condition{Metric: "temp", Op: OpGt, Threshold: ptr(30)}}, "temp", ""},
+		{"dynamic threshold gates on metric", Rule{ID: "r", Name: "n", Type: TypeThreshold,
+			When: Condition{Metric: "temp", Op: OpGt, ThresholdAttr: "tempLimit"}}, "temp", ""},
 		{"raw threshold has no gate", Rule{ID: "r", Name: "n", Type: TypeThreshold,
 			When: Condition{CEL: `"temp" in m && m["temp"] > 30.0`}}, "", ""},
 		{"deltaRate uses value metric", Rule{ID: "r", Name: "n", Type: TypeDeltaRate,
