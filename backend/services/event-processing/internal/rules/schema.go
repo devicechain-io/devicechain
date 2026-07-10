@@ -111,11 +111,24 @@ const (
 // raw CEL string (advanced escape hatch) — or neither, which means "match every event"
 // (valid where the temporal shape carries the logic: absence, aggregate, correlation).
 type Condition struct {
-	// Structured comparison `<Metric> <Op> <Threshold>`. Metric must satisfy the ADR-042
-	// token grammar; it is rendered into CEL as a validated identifier, never raw-spliced.
+	// Structured comparison `<Metric> <Op> <bound>`, where the bound is EITHER a literal
+	// Threshold OR a device-attribute reference ThresholdAttr (mutually exclusive). Metric
+	// must satisfy the ADR-042 token grammar; it is rendered into CEL as a validated
+	// identifier, never raw-spliced.
 	Metric    string    `json:"metric,omitempty"`
 	Op        CompareOp `json:"op,omitempty"`
 	Threshold *float64  `json:"threshold,omitempty"`
+
+	// ThresholdAttr names a device attribute whose numeric value is the comparison bound — a
+	// DYNAMIC, per-device threshold (ADR-051 slice 4c-3b): "temperature > the device's own
+	// tempLimit attribute". It is mutually exclusive with the literal Threshold. The key must
+	// satisfy the ADR-042 token grammar (letters/digits/-/_ , <= core.MaxTokenLen), which makes
+	// it injection-safe as a CEL map key AND matches the durable projection's key column. When
+	// set, the leaf lowers to a presence-guarded dynamic comparison (see generateDynamicComparison)
+	// that reads the value from the `attr` CEL var the runtime populates from the device's durable
+	// attribute projection (SERVER/SHARED scope, ADR-012); a device with no such attribute is a
+	// clean non-match, never an evaluation error.
+	ThresholdAttr string `json:"thresholdAttr,omitempty"`
 
 	// CEL is the raw escape hatch, mutually exclusive with the structured fields. It is
 	// type-checked and cost-gated like any predicate; it references only the declared
@@ -125,7 +138,7 @@ type Condition struct {
 
 // isZero reports the match-every-event leaf (no structured comparison, no raw CEL).
 func (c Condition) isZero() bool {
-	return c.Metric == "" && c.Op == "" && c.Threshold == nil && c.CEL == ""
+	return c.Metric == "" && c.Op == "" && c.Threshold == nil && c.ThresholdAttr == "" && c.CEL == ""
 }
 
 // isRaw reports the raw-CEL escape hatch.
@@ -133,7 +146,7 @@ func (c Condition) isRaw() bool { return c.CEL != "" }
 
 // isStructured reports a structured comparison.
 func (c Condition) isStructured() bool {
-	return c.Metric != "" || c.Op != "" || c.Threshold != nil
+	return c.Metric != "" || c.Op != "" || c.Threshold != nil || c.ThresholdAttr != ""
 }
 
 // Rule is the structured detection rule. Only the fields relevant to Type are used; the

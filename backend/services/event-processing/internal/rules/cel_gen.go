@@ -49,6 +49,38 @@ func generateComparison(metric string, op CompareOp, threshold float64) (string,
 	return fmt.Sprintf("%s in %s && %s[%s] %s %s", key, predicate.VarM, predicate.VarM, key, celOp, lit), nil
 }
 
+// generateDynamicComparison renders a structured `<metric> <op> attr[<key>]` leaf whose
+// comparison bound is a DEVICE ATTRIBUTE value rather than a literal (ADR-051 slice 4c-3b) — a
+// per-device DYNAMIC threshold ("temperature > the device's own tempLimit"). It is the same
+// injection-safe construction as generateComparison, extended to a second grammar-validated,
+// quoted map key: both the metric and the attribute key are validated against the ADR-042 token
+// grammar (letters/digits/-/_ only — no quote, bracket, dot, or operator can appear) and emitted
+// as quoted string literals; nothing an author supplies is spliced into source as raw text.
+//
+// BOTH sides are presence-guarded so evaluation is TOTAL: an event missing the metric OR a device
+// missing the attribute yields a clean non-match, never a no-such-key evaluation error. This is
+// load-bearing, not cosmetic — an unguarded index on a missing key ERRORS, and the runtime treats
+// a leaf eval error as a SKIP (no event); for a Duration rule a skip silently preserves the hold,
+// so a device that simply has not set its limit attribute would freeze the rule's state rather
+// than cleanly not-match. The attr guard is emitted FIRST so the common "device never set the
+// attribute" case short-circuits before the metric is even examined.
+func generateDynamicComparison(metric string, op CompareOp, attrKey string) (string, error) {
+	if err := validateMetric(metric); err != nil {
+		return "", err
+	}
+	if err := validateMetric(attrKey); err != nil {
+		return "", err
+	}
+	celOp, ok := celOps[op]
+	if !ok {
+		return "", fmt.Errorf("unsupported comparison operator %q", op)
+	}
+	mk := strconv.Quote(metric) // grammar-validated, so these need no escaping — belt-and-braces
+	ak := strconv.Quote(attrKey)
+	return fmt.Sprintf("%s in %s && %s in %s && %s[%s] %s %s[%s]",
+		ak, predicate.VarAttr, mk, predicate.VarM, predicate.VarM, mk, celOp, predicate.VarAttr, ak), nil
+}
+
 // validateMetric enforces the ADR-042 token grammar on a metric name — the injection
 // whitelist. It is the single guard shared by the leaf comparison, the value selector, and
 // the correlation anchor type, so every author-supplied identifier that reaches generated

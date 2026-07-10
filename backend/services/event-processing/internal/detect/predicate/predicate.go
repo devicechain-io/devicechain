@@ -12,16 +12,19 @@ import (
 
 // Input is one resolved event as seen by a predicate: the neutral view the runtime builds
 // from a device-management ResolvedEvent (kept free of that dependency so this leaf layer
-// stays importable everywhere). M holds only the numeric, bound measurements of the event.
+// stays importable everywhere). M holds only the numeric, bound measurements of the event;
+// Attr holds the device's OWN durable numeric attributes (dynamic-threshold source), which
+// come from the device-attribute projection, NOT the event.
 type Input struct {
 	Device   string
 	Anchors  map[string]string
 	Occurred time.Time
 	M        map[string]float64
+	Attr     map[string]float64
 }
 
 // activation renders the input as the CEL variable bindings. A nil map is passed as an
-// empty map so `"x" in m` is a clean false rather than an evaluation error.
+// empty map so `"x" in m` (or `"x" in attr`) is a clean false rather than an evaluation error.
 func (in Input) activation() map[string]any {
 	anchors := in.Anchors
 	if anchors == nil {
@@ -31,11 +34,16 @@ func (in Input) activation() map[string]any {
 	if m == nil {
 		m = map[string]float64{}
 	}
+	attr := in.Attr
+	if attr == nil {
+		attr = map[string]float64{}
+	}
 	return map[string]any{
 		VarDevice:   in.Device,
 		VarAnchors:  anchors,
 		VarOccurred: in.Occurred,
 		VarM:        m,
+		VarAttr:     attr,
 	}
 }
 
