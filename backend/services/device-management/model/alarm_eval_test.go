@@ -108,6 +108,57 @@ func TestHighestSatisfiedSeveritySkips(t *testing.T) {
 	}
 }
 
+// resolveThreshold's eligibility is TYPE-DRIVEN and identical to the DETECT fact producer:
+// only a DOUBLE/LONG attribute is a numeric threshold; a STRING that merely parses as a number
+// is ineligible (the regression this closes), and a non-eligible SERVER value falls through to a
+// SHARED value exactly as DETECT's flatten does.
+func TestResolveThresholdTypeEligibility(t *testing.T) {
+	api, _, ctx := newAttrEmitTestApi(t)
+	devs, err := api.DevicesByToken(ctx, []string{"d1"})
+	if err != nil || len(devs) != 1 {
+		t.Fatalf("resolve device: %v", err)
+	}
+	devId := devs[0].ID
+	ruleFor := func(key string) *AlarmDefinition {
+		return &AlarmDefinition{ThresholdAttr: sql.NullString{String: key, Valid: true}}
+	}
+
+	// Static threshold short-circuits, no attribute read.
+	if v, ok, err := api.resolveThreshold(ctx, devId, &AlarmDefinition{Threshold: sql.NullFloat64{Float64: 7, Valid: true}}); err != nil || !ok || v != 7 {
+		t.Fatalf("static threshold: got (%v,%v,%v), want (7,true,nil)", v, ok, err)
+	}
+
+	// DOUBLE and LONG are eligible.
+	setAttr(t, api, ctx, string(AttributeScopeServer), "d", string(AttributeValueDouble), "50")
+	if v, ok, err := api.resolveThreshold(ctx, devId, ruleFor("d")); err != nil || !ok || v != 50 {
+		t.Fatalf("DOUBLE threshold: got (%v,%v,%v), want (50,true,nil)", v, ok, err)
+	}
+	setAttr(t, api, ctx, string(AttributeScopeServer), "l", string(AttributeValueLong), "3000")
+	if v, ok, err := api.resolveThreshold(ctx, devId, ruleFor("l")); err != nil || !ok || v != 3000 {
+		t.Fatalf("LONG threshold: got (%v,%v,%v), want (3000,true,nil)", v, ok, err)
+	}
+
+	// STRING "50" parses as a number but is NOT type-eligible — the regression this fix closes.
+	setAttr(t, api, ctx, string(AttributeScopeServer), "s", string(AttributeValueString), "50")
+	if v, ok, err := api.resolveThreshold(ctx, devId, ruleFor("s")); err != nil || ok {
+		t.Fatalf("STRING threshold must be ineligible: got (%v,%v,%v), want (_,false,nil)", v, ok, err)
+	}
+
+	// A non-numeric SERVER value falls through to a numeric SHARED value (matches DETECT flatten).
+	setAttr(t, api, ctx, string(AttributeScopeServer), "f", string(AttributeValueString), "10")
+	setAttr(t, api, ctx, string(AttributeScopeShared), "f", string(AttributeValueDouble), "80")
+	if v, ok, err := api.resolveThreshold(ctx, devId, ruleFor("f")); err != nil || !ok || v != 80 {
+		t.Fatalf("SERVER-string falls through to SHARED-double: got (%v,%v,%v), want (80,true,nil)", v, ok, err)
+	}
+
+	// A numeric SERVER value shadows a numeric SHARED value.
+	setAttr(t, api, ctx, string(AttributeScopeServer), "p", string(AttributeValueDouble), "50")
+	setAttr(t, api, ctx, string(AttributeScopeShared), "p", string(AttributeValueDouble), "80")
+	if v, ok, err := api.resolveThreshold(ctx, devId, ruleFor("p")); err != nil || !ok || v != 50 {
+		t.Fatalf("SERVER-double shadows SHARED-double: got (%v,%v,%v), want (50,true,nil)", v, ok, err)
+	}
+}
+
 // A threshold-resolution error is propagated (not swallowed as "no threshold"), so
 // the caller retries instead of spuriously clearing a live alarm.
 func TestHighestSatisfiedSeverityPropagatesError(t *testing.T) {
