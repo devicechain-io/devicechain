@@ -191,3 +191,95 @@ type ProfileActive struct {
 // AuditExempt opts the profile-active projection out of the audit journal (ADR-019): it is a
 // derived mirror of device-management's publish lifecycle, not a control-plane mutation.
 func (ProfileActive) AuditExempt() bool { return true }
+
+// DeviceAttribute is the durable projection of a numeric, platform-set device attribute (ADR-051
+// slice 4c-3): the current value of one device attribute, so a detection rule can resolve a
+// DYNAMIC threshold from it ("m[metric] <op> attr[key]" reads the device's own attribute instead
+// of a compile-time literal, so ONE published rule enforces a per-device limit). It is maintained
+// from device-management's device-attribute facts (ADR-051 slice 4c-3a), which are emitted only
+// for numeric (DOUBLE/LONG) attributes in the two platform-set scopes (SHARED/SERVER) — CLIENT
+// (device-reported) is excluded so a device cannot set the limit it is checked against. The
+// consumer upserts each fact here BEFORE acking (at-least-once persistence), so the value survives
+// a restart independent of the finite-retention fact stream, exactly like the rule/roster
+// projections. This slice lands and maintains the projection; the engine eval that reads it (the
+// CEL "attr" var) is slice 4c-3b-2, so it is engine-inert here.
+//
+// SCOPE IS PART OF THE KEY. An attribute's natural key in device-management is (entity, scope,
+// key), so a device may hold the same key in BOTH eligible scopes at once; the projection keys on
+// (tenant, device, scope, key) so a write/delete in one scope never annihilates the other's value.
+// The rule language stays scope-less (attr["key"]); slice 4c-3b-2's eval flattens the two scopes
+// with a fixed precedence (SERVER over SHARED) when it builds the CEL input.
+//
+// ORDERING / TOMBSTONE (the DeviceRoster precedent, ADR-051 slice 4c-2b-1). Value upserts and
+// per-attribute removals arrive on one stream (device-attribute) and DEVICE deletions on another
+// (entity-deleted), through independent durable consumers with no relative ordering, and either can
+// be redelivered. So every per-row mutation is gated on a single monotonic clock, LastEventAt (the
+// fact's write time): a mutation applies only when STRICTLY newer, so a redelivered or lagging
+// older fact is a no-op and can neither regress a value nor resurrect a removed one. A per-attribute
+// REMOVAL (the attribute was deleted, or overwritten with a non-numeric value/type) tombstones the
+// row (Deleted=true) rather than dropping it, so a stale older set cannot resurrect the value.
+// LoadAll returns only live (Deleted=false) rows.
+//
+// A DEVICE deletion is handled out-of-band, because the fact carries no attribute keys: the
+// entity-deleted consumer PURGES every one of the device's attribute rows AND records a
+// device-level deletion fence (DeviceAttributeDeletion) so a straggler set/removal fact for the
+// dead device — reordered after the deletion, for a key that had no row to tombstone — cannot
+// resurrect a phantom value a reused token would then inherit. See DeviceAttributeStore.
+//
+// Like the other event-processing projections it is NOT tenant-scoped (the engine is a per-Instance
+// singleton; tenant is a plain column keyed into the composite primary key so a device token that
+// repeats across tenants stays distinct) and it is audit-exempt (a derived mirror).
+type DeviceAttribute struct {
+	// Tenant + DeviceToken + Scope + AttrKey are the composite primary key: a device token is
+	// unique only per tenant (ADR-042), and a device holds an attribute per (scope, key), so all
+	// four identify a row and a re-set of the same (device, scope, key) upserts in place.
+	Tenant      string `gorm:"primaryKey;size:256;not null"`
+	DeviceToken string `gorm:"primaryKey;size:256;not null"`
+	Scope       string `gorm:"primaryKey;size:64;not null"`
+	AttrKey     string `gorm:"primaryKey;size:256;not null"`
+	// Value is the current numeric value (parsed from a DOUBLE/LONG attribute). Meaningful only on a
+	// live row; frozen at its last live value on a tombstone (never read there — tombstones are
+	// excluded from LoadAll).
+	Value float64 `gorm:"not null"`
+	// Deleted tombstones a REMOVED attribute (the row is retained rather than dropped so a stale
+	// older set cannot resurrect the value). LoadAll filters it out. A device deletion does not
+	// tombstone — it hard-purges the rows and fences the device (DeviceAttributeDeletion).
+	Deleted bool `gorm:"not null"`
+	// LastEventAt is the fact write time of the most recent APPLIED mutation — the single monotonic
+	// axis every mutation is gated on (apply iff strictly newer), so redelivery or cross-stream
+	// reordering can never regress the value or flip a set/removal against real order.
+	LastEventAt time.Time `gorm:"not null"`
+	// UpdatedAt is gorm-managed; it records when this attribute was last (re)projected.
+	UpdatedAt time.Time
+}
+
+// AuditExempt opts the device-attribute projection out of the audit journal (ADR-019): it is a
+// derived mirror of device-management's attributes, not a control-plane mutation of its own.
+func (DeviceAttribute) AuditExempt() bool { return true }
+
+// DeviceAttributeDeletion is the per-device resurrection fence for the attribute projection (ADR-051
+// slice 4c-3). A DEVICE deletion arrives on the entity-deleted stream carrying no attribute keys, so
+// the consumer cannot pre-tombstone the individual attribute rows that a not-yet-projected straggler
+// set fact would later create. This row records "device D was deleted at T": the attribute store
+// consults it on every set/removal and DROPS any fact whose write time is at or before DeletedAt, so
+// a stale fact reordered after the deletion cannot insert a phantom row that a reused token would
+// inherit. It is monotonic (DeletedAt only advances) so a redelivered deletion is idempotent and a
+// re-deletion after token reuse advances the fence; a genuine post-reuse fact (write time strictly
+// after DeletedAt) is not fenced and applies normally. Rows accumulate one per deleted device and
+// are never pruned — the same unbounded-tombstone posture the roster projection accepts, with
+// bounding deferred to the governance concern (ADR-023/052).
+//
+// Not tenant-scoped (tenant in the composite key) and audit-exempt, like the projection it guards.
+type DeviceAttributeDeletion struct {
+	// Tenant + DeviceToken are the composite primary key: the fence is per device, per tenant.
+	Tenant      string `gorm:"primaryKey;size:256;not null"`
+	DeviceToken string `gorm:"primaryKey;size:256;not null"`
+	// DeletedAt is the device's deletion time (the entity-deleted fact's DeletedTime). It only
+	// advances; a set/removal fact at or before it is fenced out.
+	DeletedAt time.Time `gorm:"not null"`
+	// UpdatedAt is gorm-managed.
+	UpdatedAt time.Time
+}
+
+// AuditExempt opts the device-attribute deletion fence out of the audit journal (ADR-019).
+func (DeviceAttributeDeletion) AuditExempt() bool { return true }

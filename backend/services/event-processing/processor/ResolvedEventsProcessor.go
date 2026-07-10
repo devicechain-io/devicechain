@@ -153,6 +153,20 @@ type ResolvedEventsProcessor struct {
 	// token to the active version's absence rules and their grace base. Nil disables it.
 	ProfileActiveStore *model.ProfileActiveStore
 
+	// AttributeReader is the durable consumer of device-management's device-attribute fact stream
+	// (ADR-051 slice 4c-3). When set, a goroutine drains it and persists each numeric, platform-set
+	// attribute (or its removal) to the DeviceAttribute projection (AttributeStore) before acking, so
+	// a detection rule can resolve a dynamic threshold from a device's own attribute (the CEL "attr"
+	// var, wired in slice 4c-3b-2). Nil disables it (the scaffold/test path).
+	AttributeReader messaging.MessageReader
+
+	// AttributeStore is the durable device-attribute projection the attribute/entity-deleted
+	// consumers maintain before acking (ADR-051 slice 4c-3), so a dynamic threshold's source value
+	// survives a restart independent of the finite-retention fact stream. The entity-deleted consumer
+	// also purges a deleted device's attributes and drops its resurrection fence here. Nil disables
+	// persistence (the scaffold/test path). Engine-inert in this slice — nothing reads it yet.
+	AttributeStore *model.DeviceAttributeStore
+
 	// armer arms dead-man absence timers for never-seen devices, cross-referencing the roster +
 	// active-version read-models (ADR-051 slice 4c-2b-2b). It is built in ExecuteStart once the
 	// engine is final (after replay), reconciled from the durable projections, then driven live on
@@ -376,6 +390,13 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if rp.EntityDeletedReader != nil {
 		rp.readerWG.Add(1)
 		go rp.runEntityDeletedConsumer()
+	}
+	// The device-attribute consumer maintains the dynamic-threshold projection (ADR-051 slice 4c-3),
+	// persisting each fact before acking. It is engine-inert in this slice (nothing marshals onto the
+	// loop); the eval that reads it is slice 4c-3b-2. It stops on procCancel and is joined by readerWG.
+	if rp.AttributeReader != nil {
+		rp.readerWG.Add(1)
+		go rp.runAttributeConsumer()
 	}
 	return nil
 }

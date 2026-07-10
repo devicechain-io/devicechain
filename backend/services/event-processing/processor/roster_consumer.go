@@ -131,10 +131,12 @@ func (rp *ResolvedEventsProcessor) runRosterConsumer() {
 }
 
 // runEntityDeletedConsumer drains device-management's entity-deleted fact stream (ADR-044) as an
-// independent consumer, removing a DELETED DEVICE's roster row so its dead-man arming is cancelled
-// rather than firing a false absence forever (ADR-051 slice 4c-2b). The stream carries every edge
-// entity's deletion; a non-device deletion is nothing this projection tracks, so it is acked and
-// ignored. The delete is idempotent (removing an absent row is a no-op), persisted before ack.
+// independent consumer, tearing down a DELETED DEVICE's derived state: it tombstones the device's
+// roster row so its dead-man arming is cancelled rather than firing a false absence forever (ADR-051
+// slice 4c-2b), AND purges the device's dynamic-threshold attribute projection so a reused token
+// cannot inherit its thresholds (slice 4c-3). The stream carries every edge entity's deletion; a
+// non-device deletion is nothing these projections track, so it is acked and ignored. Both teardowns
+// are idempotent (removing/purging absent rows is a no-op), persisted before ack.
 func (rp *ResolvedEventsProcessor) runEntityDeletedConsumer() {
 	defer rp.readerWG.Done()
 	for {
@@ -156,30 +158,43 @@ func (rp *ResolvedEventsProcessor) runEntityDeletedConsumer() {
 			rp.ackFact(msg, "entity-deleted")
 			continue
 		}
-		// Only a device deletion touches the roster; every other entity type (groups, assets,
+		// Only a device deletion touches these projections; every other entity type (groups, assets,
 		// relationships, anchors) is consumed elsewhere (event-management) and ignored here.
-		// DeletedTime is the lifecycle clock the tombstone is ordered on, so a stale redelivered
-		// delete cannot erase a device whose newer create already advanced the clock.
-		if ev.EntityType == entity.TypeDevice && rp.RosterStore != nil {
+		// DeletedTime is the lifecycle clock both teardowns are ordered on, so a stale redelivered
+		// delete cannot erase a device whose newer create/re-set already advanced the clock.
+		if ev.EntityType == entity.TypeDevice && (rp.RosterStore != nil || rp.AttributeStore != nil) {
 			// A malformed device fact is skipped rather than applied — symmetric with the roster
-			// consumer's drop: an over-long token would overflow the tombstone insert, and a zero
-			// DeletedTime would defeat the monotonic guard (silently no-op'ing against a live row).
-			// The well-formed producer always stamps a real token and time, so this only guards a
-			// forged/buggy-producer fact.
+			// consumer's drop: an over-long token would overflow the tombstone/fence insert, and a
+			// zero DeletedTime would defeat the monotonic guard (silently no-op'ing against a live
+			// row). The well-formed producer always stamps a real token and time, so this only guards
+			// a forged/buggy-producer fact.
 			if ev.EntityToken == "" || !validRosterToken(ev.EntityToken) || ev.DeletedTime.IsZero() {
 				log.Warn().Str("device", ev.EntityToken).Str("subject", msg.Subject).
 					Msg("Dropping malformed device entity-deleted fact (empty/over-long token or zero deleted-time).")
 			} else {
 				deletedTime := ev.DeletedTime
-				if !rp.persistBeforeAck("roster-delete "+tenant+"/"+ev.EntityToken,
-					func() error { return rp.RosterStore.Delete(rp.procCtx, tenant, ev.EntityToken, deletedTime) }) {
-					return // shutdown mid-retry: leave unacked; the deletion redelivers next start
+				if rp.RosterStore != nil {
+					if !rp.persistBeforeAck("roster-delete "+tenant+"/"+ev.EntityToken,
+						func() error { return rp.RosterStore.Delete(rp.procCtx, tenant, ev.EntityToken, deletedTime) }) {
+						return // shutdown mid-retry: leave unacked; the deletion redelivers next start
+					}
+					// Signal the loop to re-check membership: it re-reads the projection (a tombstone
+					// disarms; a stale delete the monotonic guard rejected leaves the row live, so the
+					// re-read arms — no spurious disarm) in lifecycle order regardless of consumer races.
+					if !rp.signalArmRecheck(tenant, ev.EntityToken) {
+						return // shutdown mid-send: leave unacked; reconcile rebuilds arming next start
+					}
 				}
-				// Signal the loop to re-check membership: it re-reads the projection (a tombstone
-				// disarms; a stale delete the monotonic guard rejected leaves the row live, so the
-				// re-read arms — no spurious disarm) in lifecycle order regardless of consumer races.
-				if !rp.signalArmRecheck(tenant, ev.EntityToken) {
-					return // shutdown mid-send: leave unacked; reconcile rebuilds arming next start
+				// Purge the device's dynamic-threshold attributes and drop its resurrection fence
+				// (ADR-051 slice 4c-3), so a straggler set reordered after the deletion cannot leave a
+				// phantom value a reused token would inherit. Idempotent and monotonic on deletedTime,
+				// so a redelivered deletion is a no-op and cannot erase a token-reused device's newer
+				// attributes. Engine-inert (nothing marshals onto the loop for it in this slice).
+				if rp.AttributeStore != nil {
+					if !rp.persistBeforeAck("attribute-purge "+tenant+"/"+ev.EntityToken,
+						func() error { return rp.AttributeStore.PurgeDevice(rp.procCtx, tenant, ev.EntityToken, deletedTime) }) {
+						return // shutdown mid-retry: leave unacked; the purge redelivers next start
+					}
 				}
 			}
 		}
