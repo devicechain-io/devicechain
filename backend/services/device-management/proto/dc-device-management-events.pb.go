@@ -1117,6 +1117,132 @@ func (x *PEntityDeletedEvent) GetDeletedTime() string {
 	return ""
 }
 
+// *
+// One published detection rule inside a PDetectionRulesPublishedEvent: its
+// authoring token (unique per profile, ADR-042) plus the opaque rules.Rule JSON
+// document (ADR-051 slice 4b-1). device-management never parses the definition
+// taxonomy — it is compiled by event-processing's single-homed DETECT compiler on
+// consume, the same compiler the ADR-044 publish gate ran (slice 4b-2).
+type PPublishedDetectionRule struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Token      string `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	Definition string `protobuf:"bytes,2,opt,name=definition,proto3" json:"definition,omitempty"`
+}
+
+func (x *PPublishedDetectionRule) Reset() {
+	*x = PPublishedDetectionRule{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_dc_device_management_events_proto_msgTypes[13]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *PPublishedDetectionRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PPublishedDetectionRule) ProtoMessage() {}
+
+func (x *PPublishedDetectionRule) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_dc_device_management_events_proto_msgTypes[13]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PPublishedDetectionRule.ProtoReflect.Descriptor instead.
+func (*PPublishedDetectionRule) Descriptor() ([]byte, []int) {
+	return file_proto_dc_device_management_events_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *PPublishedDetectionRule) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+func (x *PPublishedDetectionRule) GetDefinition() string {
+	if x != nil {
+		return x.Definition
+	}
+	return ""
+}
+
+// *
+// Detection-rules-published event (ADR-051 slice 4b-3): emitted post-commit when a
+// device profile is published, carrying the ENABLED detection rules frozen into the
+// new immutable version so event-processing's DETECT engine can run them. The rules
+// are keyed on the immutable profile_version_token ("{profileToken}@{version}",
+// ADR-045) — the same token a resolved event denormalizes (PResolvedEvent field 12) —
+// so the engine scopes them read-free and a rollback needs no new fact (the target
+// version's rules are already loaded). Disabled rules are omitted: they ride the
+// frozen snapshot but are inert until a later publish enables them. The tenant travels
+// on the per-tenant subject, not in the payload.
+type PDetectionRulesPublishedEvent struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	ProfileVersionToken string                     `protobuf:"bytes,1,opt,name=profile_version_token,json=profileVersionToken,proto3" json:"profile_version_token,omitempty"`
+	Rules               []*PPublishedDetectionRule `protobuf:"bytes,2,rep,name=rules,proto3" json:"rules,omitempty"`
+}
+
+func (x *PDetectionRulesPublishedEvent) Reset() {
+	*x = PDetectionRulesPublishedEvent{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_dc_device_management_events_proto_msgTypes[14]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *PDetectionRulesPublishedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PDetectionRulesPublishedEvent) ProtoMessage() {}
+
+func (x *PDetectionRulesPublishedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_dc_device_management_events_proto_msgTypes[14]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PDetectionRulesPublishedEvent.ProtoReflect.Descriptor instead.
+func (*PDetectionRulesPublishedEvent) Descriptor() ([]byte, []int) {
+	return file_proto_dc_device_management_events_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *PDetectionRulesPublishedEvent) GetProfileVersionToken() string {
+	if x != nil {
+		return x.ProfileVersionToken
+	}
+	return ""
+}
+
+func (x *PDetectionRulesPublishedEvent) GetRules() []*PPublishedDetectionRule {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
 var File_proto_dc_device_management_events_proto protoreflect.FileDescriptor
 
 var file_proto_dc_device_management_events_proto_rawDesc = []byte{
@@ -1308,15 +1434,30 @@ var file_proto_dc_device_management_events_proto_rawDesc = []byte{
 	0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x65, 0x6e, 0x74, 0x69,
 	0x74, 0x79, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x21, 0x0a, 0x0c, 0x64, 0x65, 0x6c, 0x65, 0x74,
 	0x65, 0x64, 0x5f, 0x74, 0x69, 0x6d, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x64,
-	0x65, 0x6c, 0x65, 0x74, 0x65, 0x64, 0x54, 0x69, 0x6d, 0x65, 0x2a, 0x65, 0x0a, 0x0d, 0x46, 0x61,
-	0x69, 0x6c, 0x75, 0x72, 0x65, 0x52, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x12, 0x0b, 0x0a, 0x07, 0x55,
-	0x6e, 0x6b, 0x6e, 0x6f, 0x77, 0x6e, 0x10, 0x00, 0x12, 0x0b, 0x0a, 0x07, 0x49, 0x6e, 0x76, 0x61,
-	0x6c, 0x69, 0x64, 0x10, 0x01, 0x12, 0x11, 0x0a, 0x0d, 0x41, 0x70, 0x69, 0x43, 0x61, 0x6c, 0x6c,
-	0x46, 0x61, 0x69, 0x6c, 0x65, 0x64, 0x10, 0x02, 0x12, 0x12, 0x0a, 0x0e, 0x44, 0x65, 0x76, 0x69,
-	0x63, 0x65, 0x4e, 0x6f, 0x74, 0x46, 0x6f, 0x75, 0x6e, 0x64, 0x10, 0x03, 0x12, 0x13, 0x0a, 0x0f,
-	0x55, 0x6e, 0x61, 0x75, 0x74, 0x68, 0x65, 0x6e, 0x74, 0x69, 0x63, 0x61, 0x74, 0x65, 0x64, 0x10,
-	0x04, 0x42, 0x08, 0x5a, 0x06, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f,
-	0x74, 0x6f, 0x33,
+	0x65, 0x6c, 0x65, 0x74, 0x65, 0x64, 0x54, 0x69, 0x6d, 0x65, 0x22, 0x4f, 0x0a, 0x17, 0x50, 0x50,
+	0x75, 0x62, 0x6c, 0x69, 0x73, 0x68, 0x65, 0x64, 0x44, 0x65, 0x74, 0x65, 0x63, 0x74, 0x69, 0x6f,
+	0x6e, 0x52, 0x75, 0x6c, 0x65, 0x12, 0x14, 0x0a, 0x05, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x01,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x1e, 0x0a, 0x0a, 0x64,
+	0x65, 0x66, 0x69, 0x6e, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x0a, 0x64, 0x65, 0x66, 0x69, 0x6e, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x22, 0xa3, 0x01, 0x0a, 0x1d,
+	0x50, 0x44, 0x65, 0x74, 0x65, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x52, 0x75, 0x6c, 0x65, 0x73, 0x50,
+	0x75, 0x62, 0x6c, 0x69, 0x73, 0x68, 0x65, 0x64, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x12, 0x32, 0x0a,
+	0x15, 0x70, 0x72, 0x6f, 0x66, 0x69, 0x6c, 0x65, 0x5f, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e,
+	0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x13, 0x70, 0x72,
+	0x6f, 0x66, 0x69, 0x6c, 0x65, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x54, 0x6f, 0x6b, 0x65,
+	0x6e, 0x12, 0x4e, 0x0a, 0x05, 0x72, 0x75, 0x6c, 0x65, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x0b,
+	0x32, 0x38, 0x2e, 0x69, 0x6f, 0x2e, 0x64, 0x65, 0x76, 0x69, 0x63, 0x65, 0x63, 0x68, 0x61, 0x69,
+	0x6e, 0x2e, 0x64, 0x65, 0x76, 0x69, 0x63, 0x65, 0x6d, 0x61, 0x6e, 0x61, 0x67, 0x65, 0x6d, 0x65,
+	0x6e, 0x74, 0x2e, 0x50, 0x50, 0x75, 0x62, 0x6c, 0x69, 0x73, 0x68, 0x65, 0x64, 0x44, 0x65, 0x74,
+	0x65, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x52, 0x75, 0x6c, 0x65, 0x52, 0x05, 0x72, 0x75, 0x6c, 0x65,
+	0x73, 0x2a, 0x65, 0x0a, 0x0d, 0x46, 0x61, 0x69, 0x6c, 0x75, 0x72, 0x65, 0x52, 0x65, 0x61, 0x73,
+	0x6f, 0x6e, 0x12, 0x0b, 0x0a, 0x07, 0x55, 0x6e, 0x6b, 0x6e, 0x6f, 0x77, 0x6e, 0x10, 0x00, 0x12,
+	0x0b, 0x0a, 0x07, 0x49, 0x6e, 0x76, 0x61, 0x6c, 0x69, 0x64, 0x10, 0x01, 0x12, 0x11, 0x0a, 0x0d,
+	0x41, 0x70, 0x69, 0x43, 0x61, 0x6c, 0x6c, 0x46, 0x61, 0x69, 0x6c, 0x65, 0x64, 0x10, 0x02, 0x12,
+	0x12, 0x0a, 0x0e, 0x44, 0x65, 0x76, 0x69, 0x63, 0x65, 0x4e, 0x6f, 0x74, 0x46, 0x6f, 0x75, 0x6e,
+	0x64, 0x10, 0x03, 0x12, 0x13, 0x0a, 0x0f, 0x55, 0x6e, 0x61, 0x75, 0x74, 0x68, 0x65, 0x6e, 0x74,
+	0x69, 0x63, 0x61, 0x74, 0x65, 0x64, 0x10, 0x04, 0x42, 0x08, 0x5a, 0x06, 0x2f, 0x70, 0x72, 0x6f,
+	0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -1332,7 +1473,7 @@ func file_proto_dc_device_management_events_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_dc_device_management_events_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_dc_device_management_events_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_proto_dc_device_management_events_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_proto_dc_device_management_events_proto_goTypes = []interface{}{
 	(FailureReason)(0),                      // 0: io.devicechain.devicemanagement.FailureReason
 	(*PFailedEvent)(nil),                    // 1: io.devicechain.devicemanagement.PFailedEvent
@@ -1348,6 +1489,8 @@ var file_proto_dc_device_management_events_proto_goTypes = []interface{}{
 	(*PResolvedAlertsPayload)(nil),          // 11: io.devicechain.devicemanagement.PResolvedAlertsPayload
 	(*PAlarmStateChangeEvent)(nil),          // 12: io.devicechain.devicemanagement.PAlarmStateChangeEvent
 	(*PEntityDeletedEvent)(nil),             // 13: io.devicechain.devicemanagement.PEntityDeletedEvent
+	(*PPublishedDetectionRule)(nil),         // 14: io.devicechain.devicemanagement.PPublishedDetectionRule
+	(*PDetectionRulesPublishedEvent)(nil),   // 15: io.devicechain.devicemanagement.PDetectionRulesPublishedEvent
 }
 var file_proto_dc_device_management_events_proto_depIdxs = []int32{
 	0,  // 0: io.devicechain.devicemanagement.PFailedEvent.reason:type_name -> io.devicechain.devicemanagement.FailureReason
@@ -1356,11 +1499,12 @@ var file_proto_dc_device_management_events_proto_depIdxs = []int32{
 	7,  // 3: io.devicechain.devicemanagement.PResolvedMeasurementsEntry.measurements:type_name -> io.devicechain.devicemanagement.PResolvedMeasurementEntry
 	8,  // 4: io.devicechain.devicemanagement.PResolvedMeasurementsPayload.entries:type_name -> io.devicechain.devicemanagement.PResolvedMeasurementsEntry
 	10, // 5: io.devicechain.devicemanagement.PResolvedAlertsPayload.entries:type_name -> io.devicechain.devicemanagement.PResolvedAlertEntry
-	6,  // [6:6] is the sub-list for method output_type
-	6,  // [6:6] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	14, // 6: io.devicechain.devicemanagement.PDetectionRulesPublishedEvent.rules:type_name -> io.devicechain.devicemanagement.PPublishedDetectionRule
+	7,  // [7:7] is the sub-list for method output_type
+	7,  // [7:7] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_proto_dc_device_management_events_proto_init() }
@@ -1525,6 +1669,30 @@ func file_proto_dc_device_management_events_proto_init() {
 				return nil
 			}
 		}
+		file_proto_dc_device_management_events_proto_msgTypes[13].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*PPublishedDetectionRule); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_dc_device_management_events_proto_msgTypes[14].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*PDetectionRulesPublishedEvent); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	file_proto_dc_device_management_events_proto_msgTypes[2].OneofWrappers = []interface{}{}
 	file_proto_dc_device_management_events_proto_msgTypes[3].OneofWrappers = []interface{}{}
@@ -1539,7 +1707,7 @@ func file_proto_dc_device_management_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_proto_dc_device_management_events_proto_rawDesc,
 			NumEnums:      1,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

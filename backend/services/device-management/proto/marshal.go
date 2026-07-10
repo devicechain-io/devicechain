@@ -385,6 +385,34 @@ func UnmarshalEntityDeletedEvent(encoded []byte) (*model.EntityDeletedEvent, err
 	}, nil
 }
 
+// Marshal a detection-rules-published event to protobuf bytes (ADR-051 slice 4b-3).
+func MarshalDetectionRulesPublishedEvent(event *model.DetectionRulesPublishedEvent) ([]byte, error) {
+	rules := make([]*PPublishedDetectionRule, 0, len(event.Rules))
+	for _, r := range event.Rules {
+		rules = append(rules, &PPublishedDetectionRule{Token: r.Token, Definition: r.Definition})
+	}
+	return proto.Marshal(&PDetectionRulesPublishedEvent{
+		ProfileVersionToken: event.ProfileVersionToken,
+		Rules:               rules,
+	})
+}
+
+// Unmarshal an encoded detection-rules-published event (consumed by event-processing).
+func UnmarshalDetectionRulesPublishedEvent(encoded []byte) (*model.DetectionRulesPublishedEvent, error) {
+	pbevent := &PDetectionRulesPublishedEvent{}
+	if err := proto.Unmarshal(encoded, pbevent); err != nil {
+		return nil, err
+	}
+	rules := make([]model.PublishedDetectionRule, 0, len(pbevent.Rules))
+	for _, r := range pbevent.Rules {
+		rules = append(rules, model.PublishedDetectionRule{Token: r.Token, Definition: r.Definition})
+	}
+	return &model.DetectionRulesPublishedEvent{
+		ProfileVersionToken: pbevent.ProfileVersionToken,
+		Rules:               rules,
+	}, nil
+}
+
 // Marshal a resolved event to protobuf bytes.
 func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 	// Encode payload.

@@ -24,6 +24,13 @@ import (
 // self-heal does not resolve, so a persistent instant error cannot hot-spin.
 const readErrorBackoff = 200 * time.Millisecond
 
+// maxRulePersistBackoff caps the backoff of the in-process retry that persists a published
+// rule to the durable projection. The retry runs until the write succeeds (or shutdown), so a
+// DB outage does not lose the rule to the broker's finite redelivery (MaxDeliver) — rule facts
+// are rare and cross-fact ordering is irrelevant (unique version tokens), so blocking this
+// goroutine while the store recovers is safe.
+const maxRulePersistBackoff = 30 * time.Second
+
 // ReplayOpener opens a bounded, ordered replay of a stream from a start sequence
 // (satisfied by *messaging.NatsManager). Narrowed to an interface so the checkpoint
 // loop can be tested without a broker.
@@ -101,11 +108,27 @@ type ResolvedEventsProcessor struct {
 	Replay               ReplayOpener
 	Store                *model.SnapshotStore
 
+	// RuleUpdatesReader is the durable consumer of device-management's published-rule fact
+	// stream (ADR-051 slice 4b-3). When set, a goroutine drains it, persists each fact's rules
+	// to the durable projection (RuleStore) and marshals the compiled rules onto the
+	// single-writer loop as a ruleUpdate, so live rule changes are durable AND never race the
+	// fan-out. Nil disables live rule updates (the scaffold/test path); the startup rule set
+	// still comes from the registry.
+	RuleUpdatesReader messaging.MessageReader
+
+	// RuleStore is the durable rule projection the fact consumer persists to before acking a
+	// fact (ADR-051 slice 4b-3), so the rule set survives a restart independent of the
+	// finite-retention fact stream. Nil disables persistence (the scaffold/test path).
+	RuleStore *model.DetectRuleStore
+
 	cfg       Config
 	registry  *runtime.RuleRegistry
 	publisher *runtime.Publisher
 	clock     detectcore.Clock
 	metrics   *detectMetrics
+	// ruleUpdates carries compiled rule changes from the fact consumer goroutine to the
+	// single-writer loop, where applyRuleUpdate mutates the registry and engine together.
+	ruleUpdates chan ruleUpdate
 
 	// engine and the checkpoint bookkeeping below are owned exclusively by the
 	// startup goroutine (restore/replay) and then the live loop goroutine; nothing
@@ -137,6 +160,18 @@ type readItem struct {
 	err error
 }
 
+// ruleUpdate is one live change to the rule set, applied on the single-writer loop
+// (ADR-051 slice 4b-3). upserts are the compiled rules of one published-rule fact
+// (add-or-replace; a redelivered fact is an idempotent no-op that preserves running state).
+// removals evict rules by id. The published-rule path only ever produces upserts — versions
+// are immutable and superseded ones are retained — so removals stay empty in this slice; the
+// field exists so the removal primitive is reachable on the loop for the deferred governance/
+// teardown path (ADR-023/052) without an engine change.
+type ruleUpdate struct {
+	upserts  []runtime.ScopedRule
+	removals []string
+}
+
 // NewResolvedEventsProcessor creates a checkpointing resolved-events processor. The
 // engine is built (or restored) from the registry's core rule set at ExecuteStart; the
 // registry (built from a RuleSource) and the derived-event writer are supplied by the
@@ -165,6 +200,9 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		registry:             registry,
 		clock:                cfg.Clock,
 		metrics:              newDetectMetrics(ms),
+		// Buffered so a burst of published-rule facts does not block the fact consumer on the
+		// loop between resolved-event batches; the loop drains it promptly (rule updates are rare).
+		ruleUpdates: make(chan ruleUpdate, 64),
 	}
 	rp.publisher = runtime.NewPublisher(derivedWriter, registry, rp.metrics)
 	rp.metrics.setRulesActive(registry.Count())
@@ -210,6 +248,13 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	rp.lastCheckpoint = rp.clock.Now()
 	rp.readerWG.Add(1)
 	go rp.run()
+	// Launch the live rule-update consumer after the loop is running (so the ruleUpdates
+	// channel has a receiver) and after replay is complete (so the startup rule set is
+	// already in place). Both goroutines stop on procCancel and are joined by readerWG.
+	if rp.RuleUpdatesReader != nil {
+		rp.readerWG.Add(1)
+		go rp.runRuleConsumer()
+	}
 	return nil
 }
 
@@ -315,6 +360,11 @@ func (rp *ResolvedEventsProcessor) run() {
 		case <-rp.procCtx.Done():
 			rp.finalCheckpoint()
 			return
+		case upd := <-rp.ruleUpdates:
+			// Rule-set mutation on the single writer: it changes which rules run, not the
+			// engine's serializable state (rules are not in the snapshot — they are rebuilt from
+			// the durable rule projection on restart), so it needs no checkpoint of its own.
+			rp.applyRuleUpdate(upd)
 		case item := <-items:
 			if item.err != nil {
 				if errors.Is(item.err, io.EOF) {
@@ -444,6 +494,114 @@ func (rp *ResolvedEventsProcessor) drainDetections() {
 	if dets := rp.engine.Drain(); len(dets) > 0 {
 		rp.pendingDets = append(rp.pendingDets, dets...)
 		rp.dirty = true
+	}
+}
+
+// applyRuleUpdate mutates the registry and engine together on the single-writer loop
+// (ADR-051 slice 4b-3), keeping the two consistent — the publisher's Lookup and the fan-out's
+// RulesFor both read the registry, so a rule present in one but not the other would
+// mis-attribute or orphan detections. An upsert installs the rule and preserves any running
+// state for a re-seen id (engine.UpsertRule); a removal GCs the rule's keyed state
+// (engine.RemoveRule). Both are gated on the registry admitting/holding the rule so a rejected
+// upsert (nil compiled / empty tenant) or an absent removal touches no engine state.
+//
+// NOTE on removal durability: a removal sweeps engine state that IS snapshotted, but rule
+// updates do not checkpoint (see the loop), so a removal is durable only once a later
+// checkpoint commits — and it is re-derivable only if the driving fact is re-applied on
+// restart. In this slice nothing drives a removal (the publish path only upserts), so the
+// concern is inert; the deferred teardown path (ADR-023/052) that adds removal-driving facts
+// owns making them replay-durable.
+func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
+	for i := range upd.upserts {
+		sr := upd.upserts[i]
+		// A reused profile token can re-mint an existing rule id with a DIFFERENT body whose
+		// change lives only in the predicate — invisible to the engine's core.Rule comparison.
+		// Compare the raw definitions here (the authoritative, complete change test) and GC the
+		// stale rule's keyed state before installing the replacement, so a Duration hold or a
+		// window accumulator is never grafted onto a rule that now means something else. An
+		// unchanged redelivery leaves state intact (the whole point of preserve-on-reupsert).
+		if old, ok := rp.registry.Lookup(sr.Compiled.ID); ok && old.Definition != sr.Definition {
+			rp.engine.RemoveRule(sr.Compiled.ID)
+		}
+		if rp.registry.Upsert(sr) {
+			rp.engine.UpsertRule(sr.Compiled.Core)
+		}
+	}
+	for _, id := range upd.removals {
+		if rp.registry.Remove(id) {
+			rp.engine.RemoveRule(id)
+		}
+	}
+	rp.metrics.setRulesActive(rp.registry.Count())
+}
+
+// runRuleConsumer drains the published-rule fact stream (ADR-051 slice 4b-3). For each fact
+// it (1) PERSISTS the rules to the durable projection, (2) compiles them (off the loop — pure,
+// reads no engine state) and marshals them onto the single-writer loop as a ruleUpdate, then
+// (3) acks. Persist-before-ack is the durability spine: the fact stream has finite retention,
+// so the projection — not the stream — is what a restart rebuilds from; acking only after the
+// rows are committed makes delivery at-least-once into the projection. A persist failure leaves
+// the fact unacked to redeliver (idempotent upsert). Compilation drops uncompilable rules but
+// still persists them, so the startup rebuild and the live path stay symmetric.
+func (rp *ResolvedEventsProcessor) runRuleConsumer() {
+	defer rp.readerWG.Done()
+	for {
+		msg, err := rp.RuleUpdatesReader.ReadMessage(rp.procCtx)
+		if errors.Is(err, io.EOF) {
+			return
+		}
+		if err != nil {
+			rp.RuleUpdatesReader.HandleResponse(err)
+			select {
+			case <-time.After(readErrorBackoff):
+			case <-rp.procCtx.Done():
+				return
+			}
+			continue
+		}
+		tenant, ev, ok := decodePublishedRuleFact(rp.procCtx, msg)
+		if !ok {
+			// Unparseable/poison: redelivery cannot fix it. Ack to stop it redelivering forever.
+			rp.ackRuleFact(msg)
+			continue
+		}
+		// Persist BEFORE ack (durability): the projection — not the finite-retention stream —
+		// is the restart source of truth. Retry in-process until it commits (or shutdown) so a
+		// DB outage cannot lose the rule to the broker's finite redelivery (MaxDeliver); the
+		// fact stays unacked throughout, and a redelivery mid-retry re-persists idempotently.
+		if rp.RuleStore != nil {
+			rows := factRuleRows(tenant, ev)
+			backoff := readErrorBackoff
+			for rp.RuleStore.Upsert(rp.procCtx, rows) != nil {
+				log.Error().Str("tenant", tenant).Str("profileVersion", ev.ProfileVersionToken).
+					Msg("Failed to persist published rules; retrying (fact stays unacked).")
+				select {
+				case <-time.After(backoff):
+				case <-rp.procCtx.Done():
+					return // shutdown mid-retry: leave unacked; the rows redeliver next start
+				}
+				if backoff *= 2; backoff > maxRulePersistBackoff {
+					backoff = maxRulePersistBackoff
+				}
+			}
+		}
+		// Apply live to the running engine on the single-writer loop.
+		if rules, _ := runtime.CompilePublishedRules(tenant, ev.ProfileVersionToken, ev.Rules); len(rules) > 0 {
+			select {
+			case rp.ruleUpdates <- ruleUpdate{upserts: rules}:
+			case <-rp.procCtx.Done():
+				return // shutdown before hand-off: leave unacked; the persisted rows rebuild it
+			}
+		}
+		rp.ackRuleFact(msg)
+	}
+}
+
+// ackRuleFact acks a published-rule fact, logging a failed ack (harmless: a redelivered fact
+// re-persists and re-applies idempotently).
+func (rp *ResolvedEventsProcessor) ackRuleFact(msg messaging.Message) {
+	if err := msg.Ack(); err != nil {
+		log.Warn().Err(err).Msg("Failed to ack a published-rule fact; it will redeliver (idempotent).")
 	}
 }
 

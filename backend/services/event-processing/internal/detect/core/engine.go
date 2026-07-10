@@ -136,6 +136,78 @@ func NewEngine(rules []Rule, allowedLateness time.Duration) *Engine {
 	}
 }
 
+// UpsertRule adds or replaces a rule in the engine's live rule set — the mutable
+// counterpart to NewEngine's construction-time set (ADR-051 slice 4b-3), applied on the
+// single-writer loop so it never races the fan-out. A rule id embeds its profile-version
+// token ("{tenant}/{profileToken}@{version}/{ruleKey}"), so an upsert of an existing id
+// normally installs an IDENTICAL rule: its live window/timer state is deliberately PRESERVED
+// — a redelivered published-rule fact must not reset a running rule. A brand-new id starts
+// with empty state, which is correct: the engine detects forward from activation.
+//
+// If, however, an existing id arrives with a DIFFERENT body — reachable when a profile token
+// is deleted and reused so a new profile re-mints an old rule id with different semantics —
+// preserving the old rule's keyed state would graft a Duration hold or a window accumulator
+// onto a rule that means something else (false or missed detections). So a changed body first
+// GCs the old rule's state (RemoveRule); the replacement then starts clean. Rule is all
+// comparable fields, so struct inequality is the exact "did the semantics change" test.
+func (e *Engine) UpsertRule(r Rule) {
+	if existing, ok := e.rules[r.ID]; ok && existing != r {
+		e.RemoveRule(r.ID) // reused id, different rule: drop the stale rule's keyed state
+	}
+	e.rules[r.ID] = r
+}
+
+// RemoveRule evicts a rule and garbage-collects ALL of its keyed state in place, so the
+// engine keeps running every OTHER rule's live windows and timers untouched. A full
+// NewEngine rebuild would be far simpler but would discard every rule's state — the
+// exact corruption this exists to avoid. A rule's state is scattered across the nine
+// per-key structures below plus the timer wheel, the pane close-heap, and the pending-
+// detection buffer; each is swept for entries whose rule component equals id. Removal is
+// rare (a governance/teardown path, ADR-023/052 — the publish path only ever upserts,
+// since versions are immutable and retained), so an O(live-state) linear sweep, with no
+// reverse index to maintain on the hot path, is the right trade.
+func (e *Engine) RemoveRule(id string) {
+	delete(e.rules, id)
+	deleteSeriesKeys(e.active, id)
+	deleteSeriesKeys(e.sliding, id)
+	deleteSeriesKeys(e.lastVal, id)
+	deleteSeriesKeys(e.counts, id)
+	deleteSeriesKeys(e.session, id)
+	deleteSeriesKeys(e.slides, id)
+	deleteSeriesKeys(e.corr, id)
+	for pk := range e.panes {
+		if pk.Rule == id {
+			delete(e.panes, pk)
+		}
+	}
+	e.closes.purgeRule(id)
+	e.wheel.purgeRule(id)
+	// Drop any buffered detections for the removed rule: deliver-before-checkpoint drains
+	// e.out each message, so these have not been handed off yet, and once the rule is gone
+	// the publisher's registry Lookup would treat them as orphans. Dropping keeps removal
+	// atomic with respect to what the next checkpoint delivers. In-place filter: writes
+	// never outrun reads.
+	if len(e.out) > 0 {
+		kept := e.out[:0]
+		for _, d := range e.out {
+			if d.RuleID != id {
+				kept = append(kept, d)
+			}
+		}
+		e.out = kept
+	}
+}
+
+// deleteSeriesKeys removes every entry of a SeriesKey-keyed state map whose rule
+// component equals rule — the per-map primitive RemoveRule's GC sweep is built from.
+func deleteSeriesKeys[V any](m map[SeriesKey]V, rule string) {
+	for k := range m {
+		if k.Rule == rule {
+			delete(m, k)
+		}
+	}
+}
+
 // Drain returns and clears the detections emitted since the last Drain.
 func (e *Engine) Drain() []Detection {
 	out := e.out

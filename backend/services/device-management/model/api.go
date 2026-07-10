@@ -40,6 +40,15 @@ type Api struct {
 	// svcclient); nil in tests / before wiring / with the service secret unset, in which
 	// case the publish gate is skipped.
 	DetectionRuleValidator DetectionRuleValidator
+
+	// DetectionRulesPublishedPublisher emits the enabled detection rules frozen into a
+	// newly-published profile version (ADR-051 slice 4b-3) so event-processing's DETECT
+	// engine can run them. Injected at wiring time (the concrete publisher owns a NATS
+	// writer) and may be nil — in tests, or before wiring — disabling emission. Emission is
+	// post-commit and best-effort (at-most-once): a DELIVERED fact is durably persisted by
+	// event-processing, but a fact that never reaches the stream is recovered by a later
+	// publish or the planned reconcile, not by replay.
+	DetectionRulesPublishedPublisher DetectionRulesPublishedPublisher
 }
 
 // CacheEvictor drops the hot-path caches (ADR-022 B2) that a mutation makes stale.
@@ -87,6 +96,17 @@ func (api *Api) emitAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent
 func (api *Api) emitEntityDeleted(ctx context.Context, event *EntityDeletedEvent) {
 	if api.EntityDeletedPublisher != nil {
 		api.EntityDeletedPublisher.PublishEntityDeleted(ctx, event)
+	}
+}
+
+// emitDetectionRulesPublished publishes a detection-rules-published event when a
+// publisher is wired, and is a no-op otherwise (ADR-051 slice 4b-3). Like the other
+// emit helpers it is best-effort and must be called AFTER the publish transaction has
+// committed: PublishDeviceProfile emits only once its version-insert transaction
+// returns nil, so the fact never fires for a rolled-back publish.
+func (api *Api) emitDetectionRulesPublished(ctx context.Context, event *DetectionRulesPublishedEvent) {
+	if api.DetectionRulesPublishedPublisher != nil {
+		api.DetectionRulesPublishedPublisher.PublishDetectionRulesPublished(ctx, event)
 	}
 }
 

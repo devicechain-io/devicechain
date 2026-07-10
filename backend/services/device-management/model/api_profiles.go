@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -47,6 +48,26 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	}
 
 	found := matches[0]
+
+	// A profile token is IMMUTABLE once the profile has published versions (ADR-051 slice
+	// 4b-3). The published-version token "{profileToken}@{version}" (ADR-045) is the key the
+	// DETECT engine files a version's detection rules under and the scope resolved events are
+	// stamped with; renaming the profile would leave every already-published rule filed under
+	// the OLD token while events carry the new one — detections silently stop and armed
+	// absence dead-men false-fire. Pre-GA decisive cutover: reject the rename rather than
+	// re-key or orphan rules.
+	if request.Token != token {
+		var published int64
+		if err := api.RDB.DB(ctx).Model(&DeviceProfileVersion{}).
+			Where("device_profile_id = ?", found.ID).Count(&published).Error; err != nil {
+			return nil, err
+		}
+		if published > 0 {
+			return nil, fmt.Errorf("cannot rename device profile %q to %q: it has %d published version(s); the token is immutable once published",
+				token, request.Token, published)
+		}
+	}
+
 	found.Token = request.Token
 	found.Name = rdb.NullStrOf(request.Name)
 	found.Description = rdb.NullStrOf(request.Description)

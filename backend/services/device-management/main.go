@@ -132,6 +132,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	Api.EntityDeletedPublisher = processor.NewEntityDeletedWriter(devents)
 
+	// Add the detection-rules-published writer and inject a publisher into the shared
+	// Api (ADR-051 slice 4b-3): PublishDeviceProfile emits the enabled detection rules
+	// frozen into a new version so event-processing's DETECT engine runs them.
+	drpub, err := nmgr.NewWriter(config.SUBJECT_DETECTION_RULES_PUBLISHED)
+	if err != nil {
+		return err
+	}
+	Api.DetectionRulesPublishedPublisher = processor.NewDetectionRulesPublishedWriter(drpub)
+
 	// Add and initialize inbound events processor.
 	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,
 		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode)

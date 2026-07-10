@@ -33,6 +33,7 @@ var (
 	NatsManager    *messaging.NatsManager
 
 	SnapshotStore           *model.SnapshotStore
+	DetectRuleStore         *model.DetectRuleStore
 	RuleRegistry            *runtime.RuleRegistry
 	ResolvedEventsReader    messaging.MessageReader
 	ResolvedEventsProcessor *processor.ResolvedEventsProcessor
@@ -92,13 +93,30 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 
+	// Published-rule fact propagation (ADR-051 slice 4b-3): DETECT rules are profile-homed
+	// (ADR-045) and reach the engine as facts device-management emits at profile publish,
+	// keyed on the profile-version token. The live durable reader feeds ongoing publishes onto
+	// the processor's single-writer loop, which persists each into the durable rule projection
+	// (RuleStore) before acking. The startup rule set is rebuilt from that DURABLE PROJECTION —
+	// not the finite-retention fact stream — so a rule survives a restart however long ago it
+	// was published; the fact stream is only the live delta transport. A re-seen fact is an
+	// idempotent upsert, so any replay/live overlap is harmless.
+	ruleReader, err := nmgr.NewReader(dmconfig.SUBJECT_DETECTION_RULES_PUBLISHED)
+	if err != nil {
+		return err
+	}
+	scoped, err := processor.NewStoreRuleSource(DetectRuleStore).Load(context.Background())
+	if err != nil {
+		return err
+	}
+	RuleRegistry = runtime.NewRuleRegistry(scoped)
+
 	// The checkpointing DETECT processor: feeds each resolved event into the owned
 	// keyed-streaming engine, commits engine state to the snapshot store, and acks
 	// only after the commit (ADR-051 correctness spine). On startup it replays the
-	// stream in order from its snapshot sequence (via the NatsManager's replay reader)
-	// up to the head before consuming live. It runs with an empty rule set in this
-	// slice — multi-tenant rule CRUD arrives later — so it advances the watermark and
-	// checkpoints its position without emitting detections yet.
+	// resolved stream in order from its snapshot sequence (via the NatsManager's replay
+	// reader) up to the head before consuming live, and applies live rule updates from the
+	// published-rule fact reader on the same loop.
 	lateness := time.Duration(Configuration.WatermarkLatenessSeconds) * time.Second
 	if lateness < 0 {
 		lateness = 0
@@ -113,6 +131,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	ResolvedEventsProcessor = processor.NewResolvedEventsProcessor(Microservice, ResolvedEventsReader,
 		nmgr, SnapshotStore, RuleRegistry, derivedWriter, cfg, core.NewNoOpLifecycleCallbacks())
+	ResolvedEventsProcessor.RuleUpdatesReader = ruleReader
+	ResolvedEventsProcessor.RuleStore = DetectRuleStore
 	return ResolvedEventsProcessor.Initialize(context.Background())
 }
 
@@ -132,19 +152,14 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 	SnapshotStore = model.NewSnapshotStore(RdbManager)
+	// The durable rule projection (ADR-051 slice 4b-3): the fact consumer persists published
+	// rules here and the engine's rule set is rebuilt from it at startup, so rules survive a
+	// restart independent of the finite-retention fact stream.
+	DetectRuleStore = model.NewDetectRuleStore(RdbManager)
 
-	// Build the rule registry from the rule source. Slice 4a is backed by an empty static
-	// source — the runtime fan-out, derived-event publisher, and tenant backstop are wired
-	// and exercised by tests, but no rules are authored yet. Slice 4b replaces the source
-	// with one fed by device-management's published-rule fact events (profile-homed rules,
-	// ADR-045), scoped by profile-version token.
-	scoped, err := runtime.StaticRuleSource{}.Load(ctx)
-	if err != nil {
-		return err
-	}
-	RuleRegistry = runtime.NewRuleRegistry(scoped)
-
-	// Create and initialize nats manager (builds the reader + checkpoint processor).
+	// Create and initialize nats manager (builds the readers + checkpoint processor). The
+	// DETECT rule set is rebuilt from the durable rule projection inside createNatsComponents
+	// (ADR-051 slice 4b-3); the published-rule fact reader created there feeds live updates.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
 	if err := NatsManager.Initialize(ctx); err != nil {
 		return err

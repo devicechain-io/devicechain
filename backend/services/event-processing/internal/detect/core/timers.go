@@ -109,6 +109,29 @@ func (w *timerWheel) cancel(key SeriesKey) {
 	}
 }
 
+// purgeRule sweeps rule id out of the wheel entirely — its generation bookkeeping
+// (gens/live) and any of its timers still in the pq heap (ADR-051 slice 4b-3 rule
+// removal). fire/apply already early-return on a missing rule, so a leftover timer would
+// only fire into a no-op; this is GC, not correctness, but a removed rule must leave the
+// wheel clean. Indices are reset before heap.Init to keep the heap consistent.
+func (w *timerWheel) purgeRule(id string) {
+	deleteSeriesKeys(w.gens, id)
+	deleteSeriesKeys(w.live, id)
+	old := w.pq
+	kept := old[:0]
+	for _, t := range old {
+		if t.key.Rule != id {
+			t.index = len(kept)
+			kept = append(kept, t)
+		}
+	}
+	for i := len(kept); i < len(old); i++ {
+		old[i] = nil // release the dropped *timer for GC
+	}
+	w.pq = kept
+	heap.Init(&w.pq)
+}
+
 // firedTimer is a due timer: the key plus the deadline it was scheduled for (so the
 // detection is stamped at the moment the condition elapsed, not the watermark overshoot).
 type firedTimer struct {

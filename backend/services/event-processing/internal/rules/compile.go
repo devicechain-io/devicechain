@@ -30,6 +30,17 @@ const (
 	defaultCorrelationMemberCapFloor        = 1024
 )
 
+// DefaultLimits is the platform-default compile budget applied to a published detection
+// rule. It is the SINGLE source both compile sites must share: the ADR-044 publish gate
+// (graphql.ValidateDetectionRules, slice 4b-2) and the runtime fact consumer that loads a
+// published rule into the engine (runtime.CompilePublishedRules, slice 4b-3). If the two
+// diverged, a rule could pass the publish gate and then be rejected when the engine
+// consumes it (or the reverse). Zero fields floor to the built-in caps inside Compile, so
+// this is never uncapped (ADR-023 never-unlimited). When per-tenant governance overrides
+// land (ADR-023, slice 6) BOTH sites resolve the caller's tenant limits from one source,
+// replacing this.
+func DefaultLimits() Limits { return Limits{} }
+
 func (l Limits) withDefaults() Limits {
 	if l.PredicateCostCeiling == 0 {
 		l.PredicateCostCeiling = defaultPredicateCostCeiling
