@@ -179,6 +179,16 @@ type ResolvedEventsProcessor struct {
 	// the armer arms or disarms the device. Buffered so a burst of device facts does not block the
 	// consumers on the loop between resolved-event batches.
 	armUpdates chan armUpdate
+	// armRetries holds device arming rechecks whose RosterStore.Load failed transiently
+	// (applyArmRecheck), to be re-attempted on the ticker (retryArmRechecks) — the exact mirror of
+	// attrRetries. It closes the one-DB-blip window in which the driving fact is already
+	// persisted-and-acked but the armer kept stale membership: the argument is STRICTER than the
+	// attribute case, because the fact that drove the recheck is often the device's LAST fact ever
+	// (an entity-deleted tombstone), so there is no "next fact" to heal it — an un-retried drop leaves
+	// a deleted device dead-man-armed (a published FALSE absence) or a created device never armed (a
+	// missed absence) until the next restart. Loop-owned (only applyArmRecheck / retryArmRechecks
+	// touch it); bounded by distinct devices, so an outage cannot grow it with event volume.
+	armRetries map[armUpdate]struct{}
 
 	// attrView is the loop-owned in-memory dynamic-threshold projection (ADR-051 slice 4c-3b-2): each
 	// device's flattened SERVER-over-SHARED attribute map, which the fan-out binds as predicate.Input.
@@ -434,6 +444,18 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if err := rp.reconcileAttributeView(ctx); err != nil {
 		return err
 	}
+	// Reconcile the rule registry from the freshest rule projection now replay is done, BEFORE the
+	// dead-man armer reconciles against it. The registry was loaded once at Initialize; across the
+	// RDB/NATS start + the whole replay a peer pod (rolling-update overlap, pre-Slice-6 singleton) can
+	// commit-and-ack a published-rule fact this pod never receives — leaving the registry blind to a
+	// whole profile version. That is the SAME rolling-overlap staleness reconcileAttributeView closes
+	// for attributes, but with a strictly worse blast radius here: the armer's Reconcile below resolves
+	// absence rules through this registry, so a stale registry makes it sweep away restored dead-man
+	// timers for the fleet (a version it can't see has no absence rules) AND live events for the new
+	// version match no rules at all. Runs on this startup goroutine, before the loop launches.
+	if err := rp.reconcileRegistry(ctx); err != nil {
+		return err
+	}
 	// Build the dead-man armer over the FINAL (post-replay) engine and reconcile it from the durable
 	// read-models BEFORE any live consumption (ADR-051 slice 4c-2b-2b): the restored snapshot is
 	// authoritative for FIRED state, the projections for MEMBERSHIP. It runs on this startup
@@ -503,6 +525,73 @@ func (rp *ResolvedEventsProcessor) startDeadmanArmer(ctx context.Context) error 
 	rp.armer.Reconcile(toRosterEntries(rosters), toActiveEntries(actives))
 	log.Info().Int("rostered", len(rosters)).Int("profiles", len(actives)).
 		Msg("Reconciled DETECT dead-man arming from the roster + active-version projections.")
+	return nil
+}
+
+// reconcileRegistry re-reads the whole durable rule projection and diff-applies it into the live
+// registry + engine on the startup goroutine (single-writer), AFTER replay and BEFORE the dead-man
+// armer reconciles. It closes the rolling-update overlap in which a peer pod acked a published-rule
+// fact this pod never received (the fact readers are shared durables — exactly-once across pods — and
+// the registry was loaded once at Initialize, so a fact in that window never reaches this registry).
+// It uses the SAME projection + compile path as the boot load and the live consumer (StoreRuleSource
+// → CompilePublishedRules), so a rule reconciled here is byte-identical to one that arrived live.
+//
+// The diff mirrors applyRuleUpdate: an unchanged id is left intact (preserving the running rule's
+// snapshot-restored engine state), a changed body GCs the stale keyed state before re-installing (the
+// reused-token reset-on-change), and an id the projection no longer holds is removed. It forces no
+// checkpoint: the ADD / unchanged / remove paths are fully re-derivable — the reconcile re-runs from
+// the durable projection on every restart (the same reasoning as startDeadmanArmer /
+// reconcileAttributeView). The changed-def GC branch is the lone exception — like the live
+// applyRuleUpdate GC it is not self-re-derivable (a restart rebuilds the registry from the same
+// projection, so the def then matches and the branch no-ops while the old snapshot state resurrects) —
+// but that is the SAME pre-existing restore-path exposure a reused-token def change carries with or
+// without this reconcile, only narrowed here; closing it belongs to the separate def-change-durability
+// hardening (persist the GC / a snapshot def-fingerprint), not this fix. A rule ADDED here missed its
+// share of the replay window (replay ran under the pre-reconcile registry), which is acceptable: it
+// starts fresh from live consumption, the same current-value posture the attribute view accepts. No-op
+// on the scaffold/test path (no RuleStore).
+func (rp *ResolvedEventsProcessor) reconcileRegistry(ctx context.Context) error {
+	if rp.RuleStore == nil {
+		return nil
+	}
+	scoped, err := NewStoreRuleSource(rp.RuleStore).Load(ctx)
+	if err != nil {
+		return fmt.Errorf("reload rule projection for post-replay registry reconcile: %w", err)
+	}
+	fresh := make(map[string]struct{}, len(scoped))
+	upserted, changed, removed := 0, 0, 0
+	for i := range scoped {
+		sr := scoped[i]
+		if sr.Compiled == nil {
+			continue
+		}
+		fresh[sr.Compiled.ID] = struct{}{}
+		// A reused profile token can re-mint an existing id with a DIFFERENT body; GC the stale keyed
+		// state before re-installing so a hold/accumulator is never grafted onto a rule that changed
+		// meaning (the same comparison applyRuleUpdate makes on the live path).
+		if old, ok := rp.registry.Lookup(sr.Compiled.ID); ok && old.Definition != sr.Definition {
+			rp.engine.RemoveRule(sr.Compiled.ID)
+			changed++
+		}
+		if rp.registry.Upsert(sr) {
+			rp.engine.UpsertRule(sr.Compiled.Core)
+			upserted++
+		}
+	}
+	// Evict any rule the projection no longer holds (a teardown that acked on a peer pod during the
+	// overlap). Snapshot the ids first so Remove does not mutate the map being ranged (registry.IDs).
+	for _, id := range rp.registry.IDs() {
+		if _, ok := fresh[id]; ok {
+			continue
+		}
+		if rp.registry.Remove(id) {
+			rp.engine.RemoveRule(id)
+			removed++
+		}
+	}
+	rp.metrics.setRulesActive(rp.registry.Count())
+	log.Info().Int("upserted", upserted).Int("changed", changed).Int("removed", removed).Int("active", rp.registry.Count()).
+		Msg("Reconciled DETECT rule registry from the durable rule projection (post-replay).")
 	return nil
 }
 
@@ -733,8 +822,10 @@ func (rp *ResolvedEventsProcessor) run() {
 			if (rp.dirty || len(rp.pendingAcks) > 0 || len(rp.pendingDets) > 0) && now.Sub(rp.lastCheckpoint) >= rp.cfg.CheckpointInterval {
 				rp.checkpoint(rp.procCtx)
 			}
-			// Retry any dynamic-threshold recheck a transient store error deferred (bounded, idempotent).
+			// Retry any recheck a transient store error deferred (bounded, idempotent) — dynamic-threshold
+			// attribute rechecks and dead-man arming rechecks alike.
 			rp.retryAttrRechecks()
+			rp.retryArmRechecks()
 		}
 	}
 }
@@ -1054,16 +1145,47 @@ func (rp *ResolvedEventsProcessor) applyArmRecheck(au armUpdate) {
 	}
 	row, live, err := rp.RosterStore.Load(rp.procCtx, au.tenant, au.deviceToken)
 	if err != nil {
+		// A transient read error: the driving fact was already persisted-AND-acked, so a silently
+		// dropped recheck would strand stale membership — and unlike a stale threshold the fact is
+		// frequently the device's LAST fact ever (an entity-deleted tombstone), so "the next fact
+		// heals it" is false: a deleted device would stay dead-man-armed and fire a FALSE absence, or
+		// a created device would never arm (a missed absence), until a restart. Remember it and retry
+		// on the ticker (retryArmRechecks) — the exact mirror of applyAttrRecheck.
 		log.Warn().Err(err).Str("tenant", au.tenant).Str("device", au.deviceToken).
-			Msg("Dead-man arming recheck failed to read the roster projection; skipping (durable, reconcile heals).")
+			Msg("Dead-man arming recheck failed to read the roster projection; will retry on the ticker.")
+		if rp.armRetries == nil {
+			rp.armRetries = map[armUpdate]struct{}{}
+		}
+		rp.armRetries[au] = struct{}{}
 		return
 	}
+	// Clear any pending retry for this device: the load succeeded, so the membership below is current.
+	delete(rp.armRetries, au)
 	entry := runtime.RosterEntry{Tenant: au.tenant, DeviceToken: au.deviceToken}
 	if live {
 		entry.ProfileToken = row.ProfileToken
 		entry.ExpectedSince = row.ExpectedSince
 	}
 	rp.armer.ApplyDeviceMembership(entry, live)
+}
+
+// retryArmRechecks re-attempts every arming recheck a prior RosterStore.Load error deferred, on the
+// ticker so the retry rate is bounded to the tick cadence rather than hot-spinning the DB — the exact
+// mirror of retryAttrRechecks. Each success clears the entry (applyArmRecheck); a continued failure
+// re-adds it for the next tick. The pending set is bounded by distinct devices (an ADR-023 state-budget
+// class, like the roster), so even a total DB outage cannot grow it with event volume. It runs only on
+// the single-writer loop.
+func (rp *ResolvedEventsProcessor) retryArmRechecks() {
+	if len(rp.armRetries) == 0 {
+		return
+	}
+	pending := make([]armUpdate, 0, len(rp.armRetries))
+	for au := range rp.armRetries {
+		pending = append(pending, au)
+	}
+	for _, au := range pending {
+		rp.applyArmRecheck(au)
+	}
 }
 
 // applyAttrRecheck re-reads a device's authoritative live attributes and REPLACES its dynamic-

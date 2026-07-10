@@ -208,6 +208,19 @@ func (reg *RuleRegistry) Cores() []core.Rule {
 	return cores
 }
 
+// IDs returns a snapshot of every admitted rule's compiled id. It exists for the post-replay
+// registry reconcile (ResolvedEventsProcessor.reconcileRegistry), which diffs the live registry
+// against a freshly-reloaded projection to remove rules the projection no longer holds — the caller
+// ranges this snapshot rather than byID directly so it can Remove during the walk without mutating
+// the map it is iterating.
+func (reg *RuleRegistry) IDs() []string {
+	ids := make([]string, 0, len(reg.byID))
+	for id := range reg.byID {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // Count is the number of admitted rules (bounded, tenant-label-free — the aggregate the
 // Slice-4 rule-count gauge reports; a per-tenant breakdown is an ADR-023 governance concern
 // where the cardinality is budgeted, not a hot-path metric).

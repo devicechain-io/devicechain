@@ -254,6 +254,42 @@ func TestArmRecheckConvergesToProjectionTruth(t *testing.T) {
 	}
 }
 
+// TestArmRecheckRetriesOnError proves the arm-side mirror of the attribute retry (attrRetries): a
+// transient RosterStore.Load failure does NOT silently strand stale membership — which for a deleted
+// device is a published FALSE absence and for a created device a missed one, since the driving fact
+// (an entity-deleted tombstone) is frequently the device's LAST fact ever. The recheck is queued and
+// the ticker retry arms it once the store recovers. A cancelled context stands in for the DB blip.
+func TestArmRecheckRetriesOnError(t *testing.T) {
+	id := runtime.ComposeRuleID("acme", "p1@v1/r1")
+	rp, eng := armedProcessor(t, id)
+	rp.RosterStore = newProcRosterStore(t)
+	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase})
+	ctx := context.Background()
+	if err := rp.RosterStore.Upsert(ctx, &model.DeviceRoster{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}); err != nil {
+		t.Fatalf("seed roster: %v", err)
+	}
+	au := armUpdate{tenant: "acme", deviceToken: "dev1"}
+
+	// First recheck under a CANCELLED context: RosterStore.Load errors → queued for retry, not dropped.
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	rp.procCtx = cctx
+	rp.applyArmRecheck(au)
+	if _, pending := rp.armRetries[au]; !pending {
+		t.Fatal("a failed arm recheck must be queued for retry, not silently dropped")
+	}
+
+	// Ticker retry under a LIVE context heals it: the device arms and the retry set clears.
+	rp.procCtx = ctx
+	rp.retryArmRechecks()
+	if len(rp.armRetries) != 0 {
+		t.Fatalf("a healed retry must clear the set, got %d entries", len(rp.armRetries))
+	}
+	if !deadmanFires(eng, id, "dev1", testBase.Add(11*time.Second)) {
+		t.Fatal("retry did not arm the device's dead-man after the store recovered")
+	}
+}
+
 // applyOneArmUpdate receives one buffered recheck signal and applies it exactly as the single-writer
 // loop's armUpdates case does — via applyArmRecheck, which re-reads the authoritative roster
 // projection. The consumer sends the signal BEFORE it acks, so after waitForAck the value is already
