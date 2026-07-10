@@ -226,6 +226,9 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&AlarmDefinition{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&DetectionRule{}).Error; err != nil {
+			return err
+		}
 		// The profile's published version history (ADR-045 slice c) goes with it.
 		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&DeviceProfileVersion{}).Error; err != nil {
 			return err
@@ -352,6 +355,11 @@ func (api *Api) DeleteCommandDefinition(ctx context.Context, token string) (bool
 // DeleteAlarmDefinition deletes a single alarm definition by token (ADR-041).
 func (api *Api) DeleteAlarmDefinition(ctx context.Context, token string) (bool, error) {
 	return api.hardDeleteByToken(ctx, &AlarmDefinition{}, token)
+}
+
+// DeleteDetectionRule deletes a single detection rule by token (ADR-051 slice 4b).
+func (api *Api) DeleteDetectionRule(ctx context.Context, token string) (bool, error) {
+	return api.hardDeleteByToken(ctx, &DetectionRule{}, token)
 }
 
 // DeleteProvisioningProfile deletes a single provisioning profile by token (ADR-012).

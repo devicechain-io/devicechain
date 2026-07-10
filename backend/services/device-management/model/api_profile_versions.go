@@ -24,8 +24,9 @@ import (
 // ActiveVersion at an earlier version (non-destructive; the draft is untouched).
 
 // buildProfileSnapshot serializes a profile's current draft — its metric, command,
-// and alarm definitions — into a ProfileSnapshot document. The back-reference to
-// the profile is cleared on each definition so the blob stays tight and acyclic.
+// alarm, and detection-rule definitions — into a ProfileSnapshot document. The
+// back-reference to the profile is cleared on each definition so the blob stays tight
+// and acyclic. Disabled definitions are captured too (the flag travels with the version).
 func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datatypes.JSON, error) {
 	metrics, err := api.MetricDefinitionsByDeviceProfile(ctx, profileId)
 	if err != nil {
@@ -39,6 +40,10 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 	if err != nil {
 		return nil, err
 	}
+	rules, err := api.DetectionRulesByDeviceProfile(ctx, profileId)
+	if err != nil {
+		return nil, err
+	}
 	for _, m := range metrics {
 		m.DeviceProfile = nil
 	}
@@ -48,7 +53,10 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 	for _, a := range alarms {
 		a.DeviceProfile = nil
 	}
-	raw, err := json.Marshal(ProfileSnapshot{Metrics: metrics, Commands: commands, Alarms: alarms})
+	for _, dr := range rules {
+		dr.DeviceProfile = nil
+	}
+	raw, err := json.Marshal(ProfileSnapshot{Metrics: metrics, Commands: commands, Alarms: alarms, Rules: rules})
 	if err != nil {
 		return nil, err
 	}
@@ -62,6 +70,7 @@ func parseProfileSnapshot(raw datatypes.JSON) (*ProfileSnapshot, error) {
 		Metrics:  []*MetricDefinition{},
 		Commands: []*CommandDefinition{},
 		Alarms:   []*AlarmDefinition{},
+		Rules:    []*DetectionRule{},
 	}
 	if len(raw) == 0 {
 		return snap, nil
@@ -77,6 +86,9 @@ func parseProfileSnapshot(raw datatypes.JSON) (*ProfileSnapshot, error) {
 	}
 	if snap.Alarms == nil {
 		snap.Alarms = []*AlarmDefinition{}
+	}
+	if snap.Rules == nil {
+		snap.Rules = []*DetectionRule{}
 	}
 	return snap, nil
 }
@@ -94,7 +106,7 @@ func (api *Api) deviceProfileByToken(ctx context.Context, token string) (*Device
 	return matches[0], nil
 }
 
-// PublishDeviceProfile freezes the profile's current draft (all three definition
+// PublishDeviceProfile freezes the profile's current draft (all its definition
 // lists) into a new immutable version — the next monotonic integer for that
 // profile — and points the profile's ActiveVersion at it, so devices immediately
 // resolve the just-published capability set. label/description are optional
