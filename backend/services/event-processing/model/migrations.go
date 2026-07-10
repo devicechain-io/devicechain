@@ -13,5 +13,6 @@ var (
 	Migrations = []*gormigrate.Migration{
 		NewInitialSchema(),
 		NewDetectRulesSchema(),
+		NewRosterSchema(),
 	}
 )

@@ -34,6 +34,8 @@ var (
 
 	SnapshotStore           *model.SnapshotStore
 	DetectRuleStore         *model.DetectRuleStore
+	DeviceRosterStore       *model.DeviceRosterStore
+	ProfileActiveStore      *model.ProfileActiveStore
 	RuleRegistry            *runtime.RuleRegistry
 	ResolvedEventsReader    messaging.MessageReader
 	ResolvedEventsProcessor *processor.ResolvedEventsProcessor
@@ -105,6 +107,20 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
+
+	// Dead-man read-model fact readers (ADR-051 slice 4c-2b). The roster reader feeds the set of
+	// devices expected to report; the entity-deleted reader (an independent consumer alongside
+	// event-management's) removes a deleted device's roster entry. Each consumer persists to its
+	// durable projection before acking, so the arming survives a restart independent of the
+	// finite-retention fact streams. This slice lands the projections; slice 4c-2b-2 arms off them.
+	rosterReader, err := nmgr.NewReader(dmconfig.SUBJECT_DEVICE_ROSTER)
+	if err != nil {
+		return err
+	}
+	entityDeletedReader, err := nmgr.NewReader(dmconfig.SUBJECT_ENTITY_DELETED)
+	if err != nil {
+		return err
+	}
 	scoped, err := processor.NewStoreRuleSource(DetectRuleStore).Load(context.Background())
 	if err != nil {
 		return err
@@ -137,6 +153,13 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		nmgr, SnapshotStore, RuleRegistry, derivedWriter, cfg, core.NewNoOpLifecycleCallbacks())
 	ResolvedEventsProcessor.RuleUpdatesReader = ruleReader
 	ResolvedEventsProcessor.RuleStore = DetectRuleStore
+	// Dead-man read-model wiring (ADR-051 slice 4c-2b): the consumers persist the roster and
+	// active-version projections before acking. Engine-inert in this slice — nothing arms off them
+	// yet (slice 4c-2b-2 does).
+	ResolvedEventsProcessor.RosterReader = rosterReader
+	ResolvedEventsProcessor.EntityDeletedReader = entityDeletedReader
+	ResolvedEventsProcessor.RosterStore = DeviceRosterStore
+	ResolvedEventsProcessor.ProfileActiveStore = ProfileActiveStore
 	return ResolvedEventsProcessor.Initialize(context.Background())
 }
 
@@ -160,6 +183,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// rules here and the engine's rule set is rebuilt from it at startup, so rules survive a
 	// restart independent of the finite-retention fact stream.
 	DetectRuleStore = model.NewDetectRuleStore(RdbManager)
+	// The dead-man read-models (ADR-051 slice 4c-2b): the devices expected to report and which
+	// version is active per profile token (with its publish time, the grace base). The roster/
+	// entity-deleted/rule consumers maintain them before acking; slice 4c-2b-2's engine arming is
+	// rebuilt from them at startup, so a never-reported device's absence arming survives a restart.
+	DeviceRosterStore = model.NewDeviceRosterStore(RdbManager)
+	ProfileActiveStore = model.NewProfileActiveStore(RdbManager)
 
 	// Create and initialize nats manager (builds the readers + checkpoint processor). The
 	// DETECT rule set is rebuilt from the durable rule projection inside createNatsComponents

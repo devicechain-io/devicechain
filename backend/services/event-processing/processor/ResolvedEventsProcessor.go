@@ -129,6 +129,31 @@ type ResolvedEventsProcessor struct {
 	// finite-retention fact stream. Nil disables persistence (the scaffold/test path).
 	RuleStore *model.DetectRuleStore
 
+	// RosterReader is the durable consumer of device-management's device-roster fact stream
+	// (ADR-051 slice 4c-2). When set, a goroutine drains it and persists each fact to the
+	// DeviceRoster projection (RosterStore) before acking, so the set of devices expected to
+	// report survives a restart. Nil disables it (the scaffold/test path). In this slice the
+	// projection is landed but not yet read — the engine dead-man arming that consumes it is
+	// slice 4c-2b-2.
+	RosterReader messaging.MessageReader
+
+	// EntityDeletedReader is the durable consumer of device-management's entity-deleted fact
+	// stream (ADR-044). When set, a goroutine drains it and, for a DELETED DEVICE, removes the
+	// device's roster row (RosterStore.Delete) so its dead-man arming is cancelled rather than
+	// firing a false absence forever. Non-device deletions are acked and ignored. Nil disables it.
+	EntityDeletedReader messaging.MessageReader
+
+	// RosterStore is the durable roster projection the roster/entity-deleted consumers maintain
+	// before acking (ADR-051 slice 4c-2b), so the dead-man arming survives a restart independent
+	// of the finite-retention fact streams. Nil disables persistence (the scaffold/test path).
+	RosterStore *model.DeviceRosterStore
+
+	// ProfileActiveStore is the durable "active published version per profile token" projection
+	// (ADR-051 slice 4c-2b). The published-rule fact consumer maintains it alongside the rule
+	// projection (last-fact-wins), so the arming path can resolve a roster entry's stable profile
+	// token to the active version's absence rules and their grace base. Nil disables it.
+	ProfileActiveStore *model.ProfileActiveStore
+
 	cfg       Config
 	registry  *runtime.RuleRegistry
 	publisher *runtime.Publisher
@@ -295,6 +320,18 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if rp.RuleUpdatesReader != nil {
 		rp.readerWG.Add(1)
 		go rp.runRuleConsumer()
+	}
+	// The roster and entity-deleted consumers maintain the dead-man read-models (ADR-051 slice
+	// 4c-2b). They persist and ack independently of the single-writer loop — this slice does not
+	// yet feed the engine off them — so they need no ordering against the resolved stream; each
+	// stops on procCancel and is joined by readerWG.
+	if rp.RosterReader != nil {
+		rp.readerWG.Add(1)
+		go rp.runRosterConsumer()
+	}
+	if rp.EntityDeletedReader != nil {
+		rp.readerWG.Add(1)
+		go rp.runEntityDeletedConsumer()
 	}
 	return nil
 }
@@ -777,17 +814,21 @@ func (rp *ResolvedEventsProcessor) runRuleConsumer() {
 		// fact stays unacked throughout, and a redelivery mid-retry re-persists idempotently.
 		if rp.RuleStore != nil {
 			rows := factRuleRows(tenant, ev)
-			backoff := readErrorBackoff
-			for rp.RuleStore.Upsert(rp.procCtx, rows) != nil {
-				log.Error().Str("tenant", tenant).Str("profileVersion", ev.ProfileVersionToken).
-					Msg("Failed to persist published rules; retrying (fact stays unacked).")
-				select {
-				case <-time.After(backoff):
-				case <-rp.procCtx.Done():
-					return // shutdown mid-retry: leave unacked; the rows redeliver next start
-				}
-				if backoff *= 2; backoff > maxRulePersistBackoff {
-					backoff = maxRulePersistBackoff
+			if !rp.persistBeforeAck("published rules "+tenant+"/"+ev.ProfileVersionToken,
+				func() error { return rp.RuleStore.Upsert(rp.procCtx, rows) }) {
+				return // shutdown mid-retry: leave unacked; the rows redeliver next start
+			}
+		}
+		// Maintain the active-version projection off the SAME fact (ADR-051 slice 4c-2b), before
+		// ack and with the same retry discipline: it is where the grace-period base (PublishedAt)
+		// lands durably, so a publish-then-restart does not lose it and re-burst the fleet. A fact
+		// whose version token does not split into a profile token is skipped (the rule persist
+		// above drops such rules too), so the two projections stay symmetric.
+		if rp.ProfileActiveStore != nil {
+			if active, ok := profileActiveFromFact(tenant, ev); ok {
+				if !rp.persistBeforeAck("profile-active "+active.Tenant+"/"+active.ProfileToken,
+					func() error { return rp.ProfileActiveStore.Upsert(rp.procCtx, active) }) {
+					return // shutdown mid-retry: leave unacked; redelivers next start
 				}
 			}
 		}

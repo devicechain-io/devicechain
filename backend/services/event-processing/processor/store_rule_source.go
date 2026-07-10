@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"strings"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
@@ -109,4 +110,24 @@ func factRuleRows(tenant string, ev *dmmodel.DetectionRulesPublishedEvent) []mod
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// profileActiveFromFact maps a published-rule fact to its active-version projection row (ADR-051
+// slice 4c-2b): it splits the immutable "{profileToken}@{version}" token into its STABLE profile
+// token and records that token as active, carrying the version token and the publish time (the
+// dead-man grace base). ok is false for a token that does not split into a non-empty profile
+// token (an empty or "@"-less version token — a malformed/forged fact; factRuleRows drops such
+// rules too, so the two projections stay symmetric). The profile-token grammar excludes "@"
+// (ADR-042), so a single Cut is unambiguous.
+func profileActiveFromFact(tenant string, ev *dmmodel.DetectionRulesPublishedEvent) (*model.ProfileActive, bool) {
+	profileToken, version, ok := strings.Cut(ev.ProfileVersionToken, "@")
+	if !ok || profileToken == "" || version == "" {
+		return nil, false
+	}
+	return &model.ProfileActive{
+		Tenant:             tenant,
+		ProfileToken:       profileToken,
+		ActiveVersionToken: ev.ProfileVersionToken,
+		PublishedAt:        ev.PublishedAt,
+	}, true
 }
