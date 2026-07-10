@@ -135,8 +135,17 @@ func (api *Api) EvaluateMeasurementAlarms(ctx context.Context, deviceToken strin
 // ThresholdAttr. Dynamic resolution uses SERVER-then-SHARED scope precedence: an
 // alarm threshold is platform-set configuration, so a server-scope value (hidden
 // from the device) wins, with a shared-scope value (device-readable config) as
-// fallback. A missing or non-numeric attribute yields no threshold, so the tier is
-// skipped rather than firing on a bogus bound.
+// fallback. A missing attribute yields no threshold, so the tier is skipped rather
+// than firing on a bogus bound.
+//
+// ELIGIBILITY IS TYPE-DRIVEN, identical to the DETECT fact producer (numericAttributeValue,
+// ADR-051 slice 4c-3): only a DOUBLE- or LONG-typed attribute is a numeric threshold. A
+// STRING attribute that merely parses as a number ("50") is NOT eligible — the attribute's
+// declared type, not the accident of its bytes, decides. This keeps the alarm engine and the
+// DETECT engine in lockstep: DETECT never projects a non-numeric-typed attribute (the producer
+// emits a removal), so a STRING threshold that the old value-only parse honored here would fire
+// an alarm while the equivalent DETECT rule stayed inert. A non-eligible SERVER value therefore
+// falls through to the SHARED scope exactly as it does in DETECT's flatten.
 func (api *Api) resolveThreshold(ctx context.Context, deviceId uint, rule *AlarmDefinition) (float64, bool, error) {
 	if rule.Threshold.Valid {
 		return rule.Threshold.Float64, true, nil
@@ -153,10 +162,18 @@ func (api *Api) resolveThreshold(ctx context.Context, deviceId uint, rule *Alarm
 			return 0, false, err
 		}
 		for _, a := range attrs {
-			if a.AttrKey == rule.ThresholdAttr.String && a.Value.Valid {
-				if v, ok := parseFiniteFloat(a.Value.String); ok {
-					return v, true, nil
-				}
+			if a.AttrKey != rule.ThresholdAttr.String {
+				continue
+			}
+			var val *string
+			if a.Value.Valid {
+				val = &a.Value.String
+			}
+			// numericAttributeValue is the single source of truth for "is this a numeric
+			// threshold" (DOUBLE/LONG, present, finite) — the same gate the DETECT producer
+			// applies, so the two engines agree on which attributes are dynamic thresholds.
+			if v, ok := numericAttributeValue(a.ValueType, val); ok {
+				return v, true, nil
 			}
 		}
 	}
