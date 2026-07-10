@@ -29,7 +29,28 @@ const (
 	// The resolved stream is largely ordered, but network/ingest reordering is real; a small
 	// buffer trades a little detection latency for not closing a window before a slightly-late
 	// event lands. Zero would close windows on the newest timestamp seen, dropping any reorder.
+	//
+	// Lateness is ALSO the end-to-end pipeline-latency budget for wall-clock idle-advance
+	// (ADR-051 slice 4c): idle-advance can confirm the DETECT consumer is drained (NumPending),
+	// but it cannot see an event still in flight UPSTREAM of the resolved stream (device → MQTT
+	// → event-sources decode → device-management resolution → publish). If that upstream path
+	// stalls longer than Lateness during a quiet tail, idle-advance can fire an absence for a
+	// device that did report — the report simply had not reached the stream yet. This is inherent
+	// to absence-on-silence (the platform genuinely received nothing); size Lateness above the
+	// worst tolerable upstream-outage window if such false absences must be avoided.
 	DefaultWatermarkLatenessSeconds = 5
+	// DefaultIdleAdvanceGuardSeconds is how long the read loop must be quiet — nothing delivered —
+	// before DETECT tests broker emptiness and, if caught up, advances its logical clock off the
+	// wall clock so a silent series' absence/duration/session timer fires (ADR-051 slice 4c). The
+	// guard drains the reader's local fetch buffer; the AUTHORITATIVE caught-up signal is the
+	// broker's zero pending + ack-pending backlog, because read-loop silence alone is also what an
+	// outage or a consumer re-bind looks like. A few seconds is ample. A negative value disables
+	// idle-advance (absence then fires only when a later event advances the watermark — pre-4c).
+	//
+	// Absence-detection latency floor (worst case) is therefore: the rule's timeout + Lateness +
+	// max(this guard, the checkpoint interval) + one tick — a device that stops reporting is
+	// flagged that long after its last event, not instantly.
+	DefaultIdleAdvanceGuardSeconds = 5
 )
 
 // Messaging subjects this service PRODUCES (ADR-051). Consumed subjects
@@ -70,6 +91,12 @@ type EventProcessingConfiguration struct {
 	// watermark lags the newest event before windows close and timers fire. Unset (0)
 	// defaults to 5s; a negative value is treated as zero (no tolerance).
 	WatermarkLatenessSeconds int
+
+	// IdleAdvanceGuardSeconds is how long the resolved stream must be quiet before DETECT
+	// advances its logical clock off the wall clock so a silent series' absence/duration
+	// timer fires (ADR-051 slice 4c). Unset (0) defaults to 5s; a negative value disables
+	// idle-advance entirely.
+	IdleAdvanceGuardSeconds int
 }
 
 // NewEventProcessingConfiguration creates the default configuration.
@@ -93,6 +120,9 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	}
 	if c.WatermarkLatenessSeconds == 0 {
 		c.WatermarkLatenessSeconds = DefaultWatermarkLatenessSeconds
+	}
+	if c.IdleAdvanceGuardSeconds == 0 {
+		c.IdleAdvanceGuardSeconds = DefaultIdleAdvanceGuardSeconds
 	}
 }
 

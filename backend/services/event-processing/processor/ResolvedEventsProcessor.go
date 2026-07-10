@@ -61,6 +61,13 @@ type Config struct {
 	// processed time before it is clamped, so one bad device clock cannot advance the shared
 	// watermark far into the future. Non-positive disables the clamp.
 	MaxFutureSkew time.Duration
+	// IdleAdvanceGuard is how long the read loop must be quiet (no delivery) before the loop
+	// tests broker emptiness and, if caught up, advances the watermark off the wall clock so a
+	// silent series' absence/duration/session timer fires (ADR-051 slice 4c). It is one of
+	// several gates — quiet-for-guard drains the reader's local fetch buffer; the durable's zero
+	// pending + ack-pending backlog is the authoritative caught-up signal. Non-positive disables
+	// idle-advance. See idleAdvance.
+	IdleAdvanceGuard time.Duration
 	// Clock is the wall clock used for checkpoint-interval timing; defaults to the
 	// real clock.
 	Clock detectcore.Clock
@@ -98,10 +105,11 @@ type Config struct {
 // derived events BEFORE it commits/acks past the producing message (deliver-before-
 // checkpoint), enforcing the runtime tenant backstop at the publish boundary. With no rules
 // (the scaffold path) the loop still advances the watermark and checkpoints its position,
-// emitting nothing. Wall-clock idle advance (firing absence/duration timers during a quiet
-// stream) is deliberately NOT done here: it requires caught-up-to-live-tail detection to
-// avoid firing restored timers prematurely, and lands with the ADR-044 roster read-model in
-// slice 4c.
+// emitting nothing. When the consumer is caught up to the live tail the ticker also drives
+// wall-clock idle advance (idleAdvance), which fires a silent series' absence/duration/session
+// timer that no later event would otherwise trigger — gated on BROKER-CONFIRMED emptiness (the
+// durable's pending + ack-pending backlog is zero), not read-loop silence, so a restored timer
+// never fires ahead of an unconsumed backlog during an outage, re-bind, or rolling-update overlap.
 type ResolvedEventsProcessor struct {
 	Microservice         *core.Microservice
 	ResolvedEventsReader messaging.MessageReader
@@ -126,6 +134,11 @@ type ResolvedEventsProcessor struct {
 	publisher *runtime.Publisher
 	clock     detectcore.Clock
 	metrics   *detectMetrics
+	// backlogProbe reports the broker-confirmed pending + ack-pending backlog on the resolved-
+	// events consumer, gating idle-advance on positive caught-up evidence (see consumerBacklog).
+	// It is resolved from ResolvedEventsReader in ExecuteStart (a test may pre-set it); a nil
+	// probe fails idle-advance safe (it never advances).
+	backlogProbe consumerBacklog
 	// ruleUpdates carries compiled rule changes from the fact consumer goroutine to the
 	// single-writer loop, where applyRuleUpdate mutates the registry and engine together.
 	ruleUpdates chan ruleUpdate
@@ -137,7 +150,19 @@ type ResolvedEventsProcessor struct {
 	pendingAcks    []messaging.Message
 	pendingDets    []detectcore.Detection
 	lastCheckpoint time.Time
-	dirty          bool
+	// lastLiveRead is the wall-clock time of the most recent live read-pump delivery (a
+	// message or a read error). It drains the reader's local fetch buffer before idle-advance
+	// (the authoritative caught-up signal is the broker backlog, not this timer): idle-advance
+	// waits until the loop has been quiet for cfg.IdleAdvanceGuard so a message the pump already
+	// fetched but the loop has not yet received is not missed by the backlog check.
+	lastLiveRead time.Time
+	dirty        bool
+	// idleUncommitted latches when idleAdvance moved the watermark off the wall clock but its
+	// checkpoint could NOT commit (broker/store outage). The wall-clock advance is not
+	// replayable, so a live event applied against the uncommitted inflated frontier would
+	// diverge on replay — while it is set, the loop refuses to apply further live events until a
+	// checkpoint commits (see the items branch and checkpoint).
+	idleUncommitted bool
 	// stale latches when Save refuses a backward checkpoint (ErrStaleCheckpoint) — proof that
 	// another writer owns this partition (split-brain: a rolling-update overlap or operator
 	// error). A stale writer has no legitimate future, so the loop halts: this bounds its
@@ -246,6 +271,22 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 		return fmt.Errorf("event-processing: DETECT checkpoint is stale at startup for partition %q (another writer owns it); not starting", rp.cfg.PartitionId)
 	}
 	rp.lastCheckpoint = rp.clock.Now()
+	// Seed the idle-advance clock at startup so the first guard interval of live consumption
+	// (which may still be draining a live backlog past the replay head) suppresses idle-advance
+	// until the stream genuinely goes quiet.
+	rp.lastLiveRead = rp.clock.Now()
+	// Resolve the broker-backlog probe that gates idle-advance. A test may pre-set it; the
+	// production reader (*messaging.NatsManager's durable reader) satisfies it. If idle-advance
+	// is enabled but the reader cannot report the backlog, FAIL startup (fail-closed) rather than
+	// silently disable absence-on-silence — the production reader always satisfies it, so this
+	// only trips if a future change wraps the reader without forwarding Backlog.
+	if rp.backlogProbe == nil {
+		if cb, ok := rp.ResolvedEventsReader.(consumerBacklog); ok {
+			rp.backlogProbe = cb
+		} else if rp.cfg.IdleAdvanceGuard > 0 {
+			return fmt.Errorf("event-processing: idle-advance is enabled but the resolved-events reader does not report Backlog; cannot gate absence-on-silence safely")
+		}
+	}
 	rp.readerWG.Add(1)
 	go rp.run()
 	// Launch the live rule-update consumer after the loop is running (so the ruleUpdates
@@ -356,6 +397,18 @@ func (rp *ResolvedEventsProcessor) run() {
 	defer ticker.Stop()
 
 	for {
+		// While parked on an uncommitted idle advance, STOP receiving live messages by disabling
+		// the items case (a nil channel blocks forever in select). Applying a live event against
+		// the uncommitted inflated frontier would diverge on replay — and receive-and-skip would
+		// be worse: a skipped, unacked message redelivers only at AckWait, by which time fresh
+		// traffic has advanced the engine past its sequence, so it is then guard-dropped as a
+		// duplicate AND acked — silently lost. Not receiving instead makes the pump HOLD the next
+		// message in delivery order; the ticker retries the commit and, once it succeeds and
+		// clears the park, the held message is delivered and applied in order, nothing skipped.
+		liveItems := items
+		if rp.idleUncommitted {
+			liveItems = nil
+		}
 		select {
 		case <-rp.procCtx.Done():
 			rp.finalCheckpoint()
@@ -365,7 +418,13 @@ func (rp *ResolvedEventsProcessor) run() {
 			// engine's serializable state (rules are not in the snapshot — they are rebuilt from
 			// the durable rule projection on restart), so it needs no checkpoint of its own.
 			rp.applyRuleUpdate(upd)
-		case item := <-items:
+		case item := <-liveItems:
+			// Stamp the read time on ANY pump delivery — a message or a read error. For a
+			// message it means the reader had work; for an error it is the fail-safe posture:
+			// an error (outage / re-bind) is no evidence of an empty tail, so treat it as
+			// activity and let the backlog gate — not this timer — decide caught-up. Either
+			// way idle-advance holds off until the loop has been quiet for the full guard.
+			rp.lastLiveRead = rp.clock.Now()
 			if item.err != nil {
 				if errors.Is(item.err, io.EOF) {
 					log.Info().Msg("Detected EOF on resolved events stream")
@@ -381,9 +440,16 @@ func (rp *ResolvedEventsProcessor) run() {
 			if len(rp.pendingAcks) >= rp.cfg.CheckpointEvents {
 				rp.checkpoint(rp.procCtx)
 			}
-		case now := <-ticker.C:
-			// Checkpoint on the interval when there is new state to persist OR buffered
-			// acks to release (e.g. a quiet stream of duplicates after restart).
+		case <-ticker.C:
+			// Read the clock through cfg.Clock (not the ticker's wall-clock value) so every
+			// time comparison in the loop — the guard, the interval, the idle-advance target —
+			// shares one injectable clock; a ManualClock test then drives the loop coherently.
+			now := rp.clock.Now()
+			// Fire silent-series timers off the wall clock when the stream is caught up, then
+			// checkpoint. idleAdvance itself commits (and delivers) whenever it moved state, so
+			// the interval checkpoint below only handles the case idle-advance did not: buffered
+			// acks/detections from live messages, or a suppressed (not-caught-up) advance.
+			rp.idleAdvance(rp.procCtx, now)
 			if (rp.dirty || len(rp.pendingAcks) > 0 || len(rp.pendingDets) > 0) && now.Sub(rp.lastCheckpoint) >= rp.cfg.CheckpointInterval {
 				rp.checkpoint(rp.procCtx)
 			}
@@ -495,6 +561,146 @@ func (rp *ResolvedEventsProcessor) drainDetections() {
 		rp.pendingDets = append(rp.pendingDets, dets...)
 		rp.dirty = true
 	}
+}
+
+// consumerBacklog reports the resolved-events durable consumer's UNDELIVERED (pending) and
+// DELIVERED-BUT-UNACKED (ackPending) message counts from the broker — the authoritative "is
+// anyone still working the tail?" signal. *messaging.NatsManager's reader satisfies it (via a
+// ConsumerInfo call). It is the crux of a SOUND idle-advance: a quiet read loop is NOT proof of
+// caught-up (the loop is equally quiet during a broker outage or a consumer re-bind while
+// messages pile up), so idle-advance gates on these broker counts, not on read-loop silence.
+// ackPending additionally surfaces messages a PEER consumer took during a rolling-update
+// overlap (invisible to pending), narrowing the split-brain window.
+type consumerBacklog interface {
+	Backlog(ctx context.Context) (pending, ackPending uint64, err error)
+}
+
+// backlogProbeTimeout bounds the ConsumerInfo call so a broker black-hole (a request parked in
+// the reconnect buffer awaiting a reply) cannot wedge the single-writer loop indefinitely.
+const backlogProbeTimeout = 2 * time.Second
+
+// idleAdvance moves the engine's logical clock forward off the wall clock when the resolved
+// stream is genuinely caught up, so a silent series' absence/duration/session timer fires — the
+// timer that no later event would otherwise trigger (a device that STOPS reporting produces no
+// event to advance the event-time watermark past its deadline). It runs on the single-writer
+// loop (the ticker branch), so it never races message processing.
+//
+// THE CAUGHT-UP GATE IS THE CORRECTNESS CRUX (and the naive form is unsound). Idle-advance is
+// wall-clock-derived; if it advanced the frontier past a deadline whose re-arming heartbeat sat
+// unconsumed, it would fire a FALSE absence and then durably commit the inflated watermark
+// (late-dropping the heartbeat on recovery). Read-loop silence cannot distinguish "caught up"
+// from "broker outage / consumer re-bind with a growing backlog," so the gate is layered:
+//   - not already parked on an uncommitted advance (idleUncommitted), and there is pending work
+//     to fire (HasPendingWork) — otherwise a bare watermark move would checkpoint every interval
+//     forever on an idle engine with nothing to fire;
+//   - quiet for cfg.IdleAdvanceGuard — drains the reader's local fetch buffer, so a message the
+//     pump already fetched but the loop has not yet received is not missed by the backlog check
+//     below (that check counts only what the broker has NOT delivered);
+//   - the checkpoint interval has elapsed — rate-limit, AND the discipline that the frontier only
+//     ever moves at a commit point (see below); the interval also lets our own prior acks settle
+//     so the ackPending count reflects a PEER, not us;
+//   - Backlog reports pending == 0 AND ackPending == 0 — the BROKER confirms nothing is undelivered
+//     and nothing is in flight at any consumer (a rolling-update peer's delivered-unacked message
+//     shows as ackPending). This is the positive evidence read-loop silence cannot provide; an
+//     unavailable/erroring probe fails safe (no advance). It still cannot see an event in flight
+//     UPSTREAM of the stream (device → ingest → resolution): that latency budget is cfg.Lateness,
+//     documented on WatermarkLatenessSeconds.
+//
+// Passing `now` advances the frontier to now-lateness (symmetric with an event arriving at now).
+//
+// COMMIT-BEFORE-EVENT. The wall-clock advance is not replayable (it carries no stream sequence).
+// If a later event were applied against an idle-inflated frontier that was never committed, a
+// crash would replay that event against the LOWER event-derived frontier and diverge (different
+// window eviction / session merge). So idle-advance runs only at a commit point and checkpoints
+// immediately: on success the committed snapshot carries the inflated watermark and replay's
+// monotonic watermark reproduces it exactly. If that checkpoint CANNOT commit (broker/store
+// outage), it latches idleUncommitted, and the loop refuses to apply further live events until a
+// checkpoint commits — so an event is never applied against an uncommitted inflated frontier.
+// Fired detections publish before the commit (deliver-before-checkpoint), so a crash re-derives
+// rather than drops them.
+func (rp *ResolvedEventsProcessor) idleAdvance(ctx context.Context, now time.Time) {
+	if rp.stale || rp.cfg.IdleAdvanceGuard <= 0 || rp.idleUncommitted {
+		return // halted / disabled / already parked on an uncommitted advance (a checkpoint owes)
+	}
+	if !rp.engine.HasPendingWork() {
+		return // nothing armed to fire: leave the frontier at rest (no perpetual idle checkpoint)
+	}
+	if now.Sub(rp.lastLiveRead) < rp.cfg.IdleAdvanceGuard {
+		return // recent read-loop activity: the reader's fetch buffer may still hold messages
+	}
+	if now.Sub(rp.lastCheckpoint) < rp.cfg.CheckpointInterval {
+		return // hold to the commit cadence: the frontier moves only at commit points
+	}
+	if rp.backlogProbe == nil {
+		return // no way to confirm the broker tail is empty: fail safe, never advance blind
+	}
+	pctx, cancel := context.WithTimeout(ctx, backlogProbeTimeout)
+	pending, ackPending, err := rp.backlogProbe.Backlog(pctx)
+	cancel()
+	if err != nil || pending > 0 || ackPending > 0 {
+		// A backlog remains (a pause/outage let messages pile up), a peer holds delivered-unacked
+		// messages, or the broker/consumer is unreachable: we are NOT caught up. Suppress.
+		if err != nil {
+			log.Debug().Err(err).Msg("Idle-advance suppressed: cannot confirm the resolved-events tail is empty.")
+		}
+		return
+	}
+	// Broker-confirmed caught up. Fence a split brain BEFORE emitting: idle detections are
+	// wall-clock-fabricated (not replay-duplicates of real events), so a stale co-writer emitting
+	// one injects a false, non-collapsible signal. detectStaleOwner halts this writer if another
+	// owns a higher checkpoint — the pre-publish fence Save's post-hoc guard cannot provide.
+	if rp.detectStaleOwner(ctx) {
+		return
+	}
+	changed := rp.engine.Advance(now)
+	if dets := rp.engine.Drain(); len(dets) > 0 {
+		rp.pendingDets = append(rp.pendingDets, dets...)
+		rp.metrics.recordIdleAdvance(len(dets))
+	}
+	if changed {
+		rp.dirty = true
+		rp.checkpoint(ctx) // commit the inflated frontier (and deliver any fired detections first)
+		if rp.dirty {
+			// The checkpoint deferred (broker/store outage): the frontier moved in-memory but is
+			// NOT durable. Park live-event application until a later checkpoint commits it, so no
+			// event is applied against an uncommitted, non-replayable frontier.
+			rp.idleUncommitted = true
+		}
+	}
+}
+
+// detectStaleOwner reports whether another writer has committed a checkpoint AHEAD of this
+// engine's applied sequence — proof this pod lost a split brain (a rolling-update overlap where
+// the peer consumes the heartbeats and commits past us). It reads only the committed SEQUENCE
+// (not the state payload) and does not mutate it, so it fences an idle firing BEFORE it publishes
+// a fabricated detection, which checkpoint's post-hoc Save guard (publish-then-Save) cannot. On
+// detection it latches stale and halts the loop (matching checkpoint's split-brain handling). A
+// read error returns false — a transient store blip must not halt a healthy writer; the checkpoint
+// Save guard remains the hard backstop.
+//
+// Residual: this catches only a peer that has already COMMITTED past us. A peer that has consumed
+// heartbeats but not yet committed its first post-overlap checkpoint is invisible here (committed
+// seq still equals ours) — the ackPending gate in idleAdvance covers the common case (the peer's
+// delivered-unacked messages), but a peer that fetched then crashed leaves a sub-AckWait window
+// where one fabricated detection can still escape. It is bounded to one cycle (stale latches on
+// the next fence/Save), and the definitive fix is the Slice-6 singleton deploy (one writer, no
+// overlap); this fence + the Save equal-seq/watermark guards are the pre-Slice-6 runtime backstop.
+func (rp *ResolvedEventsProcessor) detectStaleOwner(ctx context.Context) bool {
+	seq, ok, err := rp.Store.LoadCommittedSeq(ctx, rp.cfg.PartitionId)
+	if err != nil || !ok {
+		return false
+	}
+	if uint64(seq) > rp.engine.LastSeq() {
+		log.Error().Str("partition", rp.cfg.PartitionId).Int64("committedSeq", seq).
+			Uint64("appliedSeq", rp.engine.LastSeq()).
+			Msg("Idle-advance fenced: another writer owns a higher checkpoint (split brain); halting this writer.")
+		rp.stale = true
+		if rp.procCancel != nil {
+			rp.procCancel()
+		}
+		return true
+	}
+	return false
 }
 
 // applyRuleUpdate mutates the registry and engine together on the single-writer loop
@@ -663,6 +869,9 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) {
 			return
 		}
 		rp.dirty = false
+		// A committed snapshot makes any idle-advanced frontier durable, so the loop may resume
+		// applying live events (see the items-branch park).
+		rp.idleUncommitted = false
 
 		// Observability (owned by this loop, ADR-051 thread).
 		now := rp.clock.Now()

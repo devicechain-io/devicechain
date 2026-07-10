@@ -29,10 +29,13 @@ var testBase = time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
 // fakeReader replays a fixed sequence of (message, error) results, then blocks on
 // ctx so the read pump parks instead of spinning past the end of the script.
 type fakeReader struct {
-	results []readResult
-	idx     int
-	handled int
-	lastErr error
+	results    []readResult
+	idx        int
+	handled    int
+	lastErr    error
+	numPending uint64
+	ackPending uint64
+	pendingErr error
 }
 
 type readResult struct {
@@ -53,6 +56,13 @@ func (r *fakeReader) ReadMessage(ctx context.Context) (messaging.Message, error)
 func (r *fakeReader) HandleResponse(err error) {
 	r.handled++
 	r.lastErr = err
+}
+
+// Backlog makes fakeReader a complete resolved-events reader (satisfying consumerBacklog).
+// It reports a caught-up tail by default; a test that drives the live loop with idle-advance
+// enabled can set numPending/ackPending/pendingErr to exercise the broker-emptiness gate.
+func (r *fakeReader) Backlog(context.Context) (uint64, uint64, error) {
+	return r.numPending, r.ackPending, r.pendingErr
 }
 
 // fakeAck records how a message was dispositioned so a test can assert the drop or

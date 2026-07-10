@@ -80,6 +80,12 @@ func newTimerWheel() *timerWheel {
 	return &timerWheel{gens: map[SeriesKey]uint64{}, live: map[SeriesKey]time.Time{}}
 }
 
+// hasTimers reports whether any timer is scheduled (heap non-empty). The heap may hold
+// stale (superseded) entries, so this can be conservatively true when the only remaining
+// timers are stale — a harmless over-report for the idle-advance HasPendingWork gate (at
+// worst one extra bare-move advance, which popDue then cleans up).
+func (w *timerWheel) hasTimers() bool { return w.pq.Len() > 0 }
+
 // schedule sets (or resets) the deadline for key unconditionally. Any previously-scheduled
 // timer for the same key is invalidated by the generation bump. Used by Duration, where a
 // fresh matched run may legitimately set an earlier deadline than a stale, already-cancelled

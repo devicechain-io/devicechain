@@ -42,6 +42,15 @@ type detectMetrics struct {
 	fanoutEvalErrors  prometheus.Counter
 	derivedPublished  prometheus.Counter
 	derivedRejected   *prometheus.CounterVec
+
+	// Slice-4c idle-advance counters (ADR-051 observability thread). Bounded cardinality
+	// (no labels). idleAdvancesTotal counts wall-clock idle advances that PRODUCED at least one
+	// detection; idleDetectionsTotal counts the detections those advances produced — a
+	// silent-series signal (absence/duration/session firing off the clock, not off an event)
+	// distinct from event-driven detections, so the operator can tell "device went quiet"
+	// firings from "device reported a bad value" firings.
+	idleAdvancesTotal   prometheus.Counter
+	idleDetectionsTotal prometheus.Counter
 }
 
 // newDetectMetrics registers the checkpoint-loop metrics under the service's
@@ -61,6 +70,9 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 		fanoutEvalErrors:  ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (rule treated as non-match).", nil),
 		derivedPublished:  ms.NewCounter("detect_derived_events_published_total", "Derived signal events published (ADR-037).", nil),
 		derivedRejected:   ms.NewCounterVec("detect_derived_events_rejected_total", "Detections dropped before publish, by reason (bounded enum).", []string{"reason"}),
+
+		idleAdvancesTotal:   ms.NewCounter("detect_idle_advances_total", "Wall-clock idle advances that produced at least one detection.", nil),
+		idleDetectionsTotal: ms.NewCounter("detect_idle_detections_total", "Detections produced by wall-clock idle advance (absence/duration/session firing on silence).", nil),
 	}
 }
 
@@ -108,6 +120,15 @@ func (m *detectMetrics) recordRestore(seconds float64, appliedSeq uint64) {
 	}
 	m.restoreSeconds.Set(seconds)
 	m.appliedStreamSeq.Set(float64(appliedSeq))
+}
+
+// recordIdleAdvance records one wall-clock idle advance that fired dets detections.
+func (m *detectMetrics) recordIdleAdvance(dets int) {
+	if m == nil {
+		return
+	}
+	m.idleAdvancesTotal.Inc()
+	m.idleDetectionsTotal.Add(float64(dets))
 }
 
 // recordApplied records one resolved event that advanced the engine.

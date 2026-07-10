@@ -208,6 +208,18 @@ func deleteSeriesKeys[V any](m map[SeriesKey]V, rule string) {
 	}
 }
 
+// HasPendingWork reports whether any timer or pane close is scheduled — i.e. whether a
+// wall-clock advance could fire ANYTHING. Every frontier-triggered firing goes through the
+// timer wheel (Absence/Duration/Session) or the pane close-heap (Aggregate); the other kinds
+// are event-triggered and never fire on a bare advance. So when this is false, an idle advance
+// would only move the watermark with nothing to fire — and with no timer/window state, a later
+// event re-derives the frontier itself, so leaving it at rest is replay-safe. Idle-advance
+// consults this to stay quiet on an engine with no pending work instead of checkpointing a
+// bare watermark move every interval forever (ADR-051 slice 4c).
+func (e *Engine) HasPendingWork() bool {
+	return e.wheel.hasTimers() || e.closes.Len() > 0
+}
+
 // Drain returns and clears the detections emitted since the last Drain.
 func (e *Engine) Drain() []Detection {
 	out := e.out
@@ -264,15 +276,22 @@ func (e *Engine) ProcessResolved(seq uint64, t time.Time, evs []Event) {
 // Advance moves logical time forward to wall time w without an event — the live
 // idle-advance path that lets absence/duration fire when the stream is quiet. It carries
 // no sequence (it is derived from the clock, not the log), so it is re-generated
-// post-restart rather than replayed.
-func (e *Engine) Advance(w time.Time) { e.advance(w) }
+// post-restart rather than replayed. It reports whether it changed any serializable state
+// (the watermark moved, a timer fired, or a pane closed — INCLUDING a timer/pane that
+// consumed state without emitting), so the caller can persist a wall-clock advance whose
+// effect must survive a restart to keep replay identical (ADR-051 slice 4c).
+func (e *Engine) Advance(w time.Time) bool { return e.advance(w) }
 
-func (e *Engine) advance(t time.Time) {
-	e.wm.observe(t)
-	for _, ft := range e.wheel.popDue(e.wm.now) {
+// advance folds a timestamp into the watermark, fires every timer the new frontier made
+// due, and closes every pane it made due, reporting whether any of those mutated state.
+func (e *Engine) advance(t time.Time) bool {
+	moved := e.wm.observe(t)
+	due := e.wheel.popDue(e.wm.now)
+	for _, ft := range due {
 		e.fire(ft.key, ft.deadline)
 	}
-	e.closePanes(e.wm.now)
+	closed := e.closePanes(e.wm.now)
+	return moved || len(due) > 0 || closed
 }
 
 func (e *Engine) apply(ev Event) {
