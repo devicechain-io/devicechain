@@ -169,9 +169,11 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	ResolvedEventsProcessor.EntityDeletedReader = entityDeletedReader
 	ResolvedEventsProcessor.RosterStore = DeviceRosterStore
 	ResolvedEventsProcessor.ProfileActiveStore = ProfileActiveStore
-	// Dynamic-threshold projection wiring (ADR-051 slice 4c-3): the attribute consumer persists each
-	// device-attribute fact before acking; the entity-deleted consumer also purges a deleted device's
-	// attributes via this store. Engine-inert until slice 4c-3b-2 wires the CEL "attr" eval.
+	// Dynamic-threshold wiring (ADR-051 slice 4c-3): the attribute consumer persists each device-
+	// attribute fact before acking, and the entity-deleted consumer purges a deleted device's
+	// attributes, both via this store. The loop-owned attrView is reconciled from it at startup and
+	// kept live by rechecks the consumers signal, so a rule's dynamic threshold (the CEL "attr" var)
+	// resolves from the device's own attribute (slice 4c-3b-2).
 	ResolvedEventsProcessor.AttributeReader = attributeReader
 	ResolvedEventsProcessor.AttributeStore = DeviceAttributeStore
 	return ResolvedEventsProcessor.Initialize(context.Background())

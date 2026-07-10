@@ -57,13 +57,35 @@ func validAttributeScope(scope string) bool {
 	return scope == string(dmmodel.AttributeScopeShared) || scope == string(dmmodel.AttributeScopeServer)
 }
 
+// signalAttrRecheck marshals a device dynamic-threshold RECHECK onto the single-writer loop (ADR-051
+// slice 4c-3b-2). It sends only the device identity — the loop re-reads the authoritative attribute
+// projection and replaces the device's view entry (applyAttrRecheck). Deferring the read to the loop
+// is what keeps the attribute and entity-deleted consumers (separate goroutines over reorderable
+// streams) from installing an observation out of lifecycle order, since each consumer's own read+send
+// is not atomic. It is a no-op when the dynamic-threshold view is disabled (nil attrView, the
+// scaffold path; the view is built only when AttributeStore is wired). Returns false ONLY on shutdown
+// mid-send (the caller then leaves the fact unacked; the durable projection + restart reconcile
+// rebuild the view). The persist already committed, so a recheck is never lost to a dropped signal —
+// at worst it is re-derived by reconcile.
+func (rp *ResolvedEventsProcessor) signalAttrRecheck(tenant, deviceToken string) bool {
+	if rp.attrView == nil {
+		return true
+	}
+	select {
+	case rp.attrUpdates <- attrUpdate{tenant: tenant, deviceToken: deviceToken}:
+		return true
+	case <-rp.procCtx.Done():
+		return false
+	}
+}
+
 // runAttributeConsumer drains device-management's device-attribute fact stream (ADR-051 slice 4c-3):
 // the numeric, platform-set attributes a detection rule can read a DYNAMIC threshold from. For each
 // fact it persists the value (or a removal tombstone) to the durable DeviceAttribute projection
 // BEFORE acking, so the value survives a restart independent of the finite-retention stream — the
-// same persist-before-ack spine the rule/roster consumers use. This slice only lands the projection;
-// the engine eval that reads it (the CEL "attr" var, slice 4c-3b-2) is not wired here, so nothing is
-// marshaled onto the single-writer loop — the consumer is engine-inert.
+// same persist-before-ack spine the rule/roster consumers use. After persisting it signals the single-
+// writer loop to re-read the device's attributes into the live dynamic-threshold view (slice 4c-3b-2),
+// so a rule's dynamic bound tracks the current value.
 func (rp *ResolvedEventsProcessor) runAttributeConsumer() {
 	defer rp.readerWG.Done()
 	for {
@@ -114,6 +136,12 @@ func (rp *ResolvedEventsProcessor) runAttributeConsumer() {
 			}
 			if !rp.persistBeforeAck(desc, op) {
 				return // shutdown mid-retry: leave unacked; the fact redelivers next start
+			}
+			// Refresh the live view for this device (a no-op when the view is disabled). Signal AFTER
+			// the persist so the loop's re-read sees this fact's row; on shutdown mid-send leave the
+			// fact unacked so it redelivers and the restart reconcile rebuilds the view.
+			if !rp.signalAttrRecheck(tenant, ev.DeviceToken) {
+				return
 			}
 		}
 		rp.ackFact(msg, "device-attribute")

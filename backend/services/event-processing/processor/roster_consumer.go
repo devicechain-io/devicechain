@@ -189,11 +189,17 @@ func (rp *ResolvedEventsProcessor) runEntityDeletedConsumer() {
 				// (ADR-051 slice 4c-3), so a straggler set reordered after the deletion cannot leave a
 				// phantom value a reused token would inherit. Idempotent and monotonic on deletedTime,
 				// so a redelivered deletion is a no-op and cannot erase a token-reused device's newer
-				// attributes. Engine-inert (nothing marshals onto the loop for it in this slice).
+				// attributes. After purging, signal the loop to re-read the (now-empty) attribute set
+				// into the live dynamic-threshold view (slice 4c-3b-2) so the deleted device's bound
+				// stops resolving; the loop re-reads the converged projection, so a stale delete the
+				// monotonic guard rejected leaves live rows and the re-read keeps the value.
 				if rp.AttributeStore != nil {
 					if !rp.persistBeforeAck("attribute-purge "+tenant+"/"+ev.EntityToken,
 						func() error { return rp.AttributeStore.PurgeDevice(rp.procCtx, tenant, ev.EntityToken, deletedTime) }) {
 						return // shutdown mid-retry: leave unacked; the purge redelivers next start
+					}
+					if !rp.signalAttrRecheck(tenant, ev.EntityToken) {
+						return // shutdown mid-send: leave unacked; reconcile rebuilds the view next start
 					}
 				}
 			}
