@@ -232,7 +232,43 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
+
+	// Propagate the frozen rule set to event-processing (ADR-051 slice 4b-3): emit the
+	// ENABLED detection rules keyed on this version's token, POST-COMMIT and best-effort. It
+	// runs after the version is durable so the fact never advertises a version that was rolled
+	// back. Emission is at-most-once (ADR-044): a delivered fact is durably persisted by
+	// event-processing's consumer, but a dropped emit is recovered by a later publish or the
+	// planned reconcile, not by replay. Disabled rules ride the frozen snapshot but are omitted
+	// here — inert until a later publish enables them, exactly the set the gate compiled above.
+	api.emitDetectionRulesPublished(ctx, &DetectionRulesPublishedEvent{
+		ProfileVersionToken: fmt.Sprintf("%s@%d", token, version.Version),
+		Rules:               api.enabledSnapshotRules(snapshot),
+	})
 	return version, nil
+}
+
+// enabledSnapshotRules projects the ENABLED detection rules carried in a just-frozen
+// profile snapshot to the (token, definition) pairs the published-rule fact carries
+// (ADR-051 slice 4b-3). It parses the exact snapshot bytes the version froze, so the
+// propagated rule set is precisely the one published. A parse failure yields no rules
+// (logged, not fatal): emission is best-effort side-band to the already-committed
+// publish, so a corrupt snapshot cannot roll back a durable version — but it is loud,
+// because it should be impossible (the same bytes were just built and, when the gate
+// is wired, validated).
+func (api *Api) enabledSnapshotRules(snapshot datatypes.JSON) []PublishedDetectionRule {
+	snap, err := parseProfileSnapshot(snapshot)
+	if err != nil {
+		log.Error().Err(err).Msg("Unable to parse just-frozen profile snapshot for rule propagation; emitting no rules.")
+		return nil
+	}
+	out := make([]PublishedDetectionRule, 0, len(snap.Rules))
+	for _, dr := range snap.Rules {
+		if !dr.Enabled {
+			continue
+		}
+		out = append(out, PublishedDetectionRule{Token: dr.Token, Definition: string(dr.Definition)})
+	}
+	return out
 }
 
 // RollbackDeviceProfile re-points the profile's active published version at an

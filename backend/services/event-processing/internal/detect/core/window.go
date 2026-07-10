@@ -135,6 +135,27 @@ func (h *closeHeap) Pop() any {
 	return c
 }
 
+// purgeRule drops every pending pane close belonging to rule id and re-establishes the
+// heap invariant (ADR-051 slice 4b-3 rule removal). closePanes already tolerates a
+// missing pane, so a leaked close item is only wasted memory rather than a wrong firing —
+// but a removed rule must leave nothing behind. Indices are reset before heap.Init so the
+// heap bookkeeping stays consistent.
+func (h *closeHeap) purgeRule(id string) {
+	old := *h
+	kept := old[:0]
+	for _, c := range old {
+		if c.pk.Rule != id {
+			c.index = len(kept)
+			kept = append(kept, c)
+		}
+	}
+	for i := len(kept); i < len(old); i++ {
+		old[i] = nil // release the dropped *closeItem for GC
+	}
+	*h = kept
+	heap.Init(h)
+}
+
 // applyRepeating handles a Repeating rule: keep a sliding buffer of matching-event times
 // within Window, and fire on the rising edge where the trailing count reaches Count.
 func (e *Engine) applyRepeating(ev Event, r Rule) {

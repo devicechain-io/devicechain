@@ -154,6 +154,34 @@ func TestMarshalAlarmStateChangeEventRoundTrips(t *testing.T) {
 // (ADR-044): event-management keys anchor cleanup on the entity id, and the token +
 // deleted time are carried for logging/future reshape, so a dropped field would
 // misfire or lose the cleanup.
+func TestMarshalDetectionRulesPublishedEventRoundTrips(t *testing.T) {
+	event := &model.DetectionRulesPublishedEvent{
+		ProfileVersionToken: "sensor-profile@3",
+		Rules: []model.PublishedDetectionRule{
+			{Token: "overheat", Definition: `{"name":"overheat","type":"threshold","when":{"metric":"t","op":"gt","threshold":80}}`},
+			{Token: "flatline", Definition: `{"name":"flatline","type":"absence","timeout":"5m"}`},
+		},
+	}
+	bytes, err := MarshalDetectionRulesPublishedEvent(event)
+	assert.NoError(t, err)
+
+	got, err := UnmarshalDetectionRulesPublishedEvent(bytes)
+	assert.NoError(t, err)
+	assert.Equal(t, "sensor-profile@3", got.ProfileVersionToken)
+	assert.Equal(t, event.Rules, got.Rules, "every rule's token + opaque definition must round-trip in order")
+}
+
+// An empty rule set (a profile published with no enabled detection rules) round-trips to an
+// empty, non-panicking slice.
+func TestMarshalDetectionRulesPublishedEventEmpty(t *testing.T) {
+	bytes, err := MarshalDetectionRulesPublishedEvent(&model.DetectionRulesPublishedEvent{ProfileVersionToken: "p@1"})
+	assert.NoError(t, err)
+	got, err := UnmarshalDetectionRulesPublishedEvent(bytes)
+	assert.NoError(t, err)
+	assert.Equal(t, "p@1", got.ProfileVersionToken)
+	assert.Empty(t, got.Rules)
+}
+
 func TestMarshalEntityDeletedEventRoundTrips(t *testing.T) {
 	when := time.Date(2026, 7, 6, 8, 30, 0, 123456789, time.UTC)
 	event := &model.EntityDeletedEvent{

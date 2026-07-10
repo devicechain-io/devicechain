@@ -191,3 +191,31 @@ message PEntityDeletedEvent {
     string entity_token = 3;
     string deleted_time = 4;
 }
+
+/**
+ * One published detection rule inside a PDetectionRulesPublishedEvent: its
+ * authoring token (unique per profile, ADR-042) plus the opaque rules.Rule JSON
+ * document (ADR-051 slice 4b-1). device-management never parses the definition
+ * taxonomy — it is compiled by event-processing's single-homed DETECT compiler on
+ * consume, the same compiler the ADR-044 publish gate ran (slice 4b-2).
+ */
+message PPublishedDetectionRule {
+    string token = 1;
+    string definition = 2;
+}
+
+/**
+ * Detection-rules-published event (ADR-051 slice 4b-3): emitted post-commit when a
+ * device profile is published, carrying the ENABLED detection rules frozen into the
+ * new immutable version so event-processing's DETECT engine can run them. The rules
+ * are keyed on the immutable profile_version_token ("{profileToken}@{version}",
+ * ADR-045) — the same token a resolved event denormalizes (PResolvedEvent field 12) —
+ * so the engine scopes them read-free and a rollback needs no new fact (the target
+ * version's rules are already loaded). Disabled rules are omitted: they ride the
+ * frozen snapshot but are inert until a later publish enables them. The tenant travels
+ * on the per-tenant subject, not in the payload.
+ */
+message PDetectionRulesPublishedEvent {
+    string profile_version_token = 1;
+    repeated PPublishedDetectionRule rules = 2;
+}

@@ -25,6 +25,13 @@ type ScopedRule struct {
 	ProfileVersionToken string
 	// Compiled is the slice-3 lowered rule (core config + leaf predicate + feed metrics).
 	Compiled *rules.CompiledRule
+	// Definition is the raw opaque rule JSON the Compiled came from. It is retained purely as
+	// a change-detector: a reused profile token can re-mint an existing rule id with a
+	// DIFFERENT body whose difference lives only in the predicate (not the lowered core.Rule),
+	// so comparing definitions is the reliable "did the rule change" test used to GC stale
+	// engine state on such a replacement (applyRuleUpdate). Empty in tests that build a
+	// ScopedRule directly.
+	Definition string
 }
 
 // scopeKey indexes rules by the (tenant, profile-version) pair a resolved event selects on.
@@ -33,15 +40,15 @@ type scopeKey struct {
 	profileVersion string
 }
 
-// RuleRegistry is the immutable, read-only snapshot of the rule set the engine runs. It is
-// built once from a RuleSource at startup (dynamic CRUD-driven updates arrive in slice 4b,
-// where a rebuild is marshaled onto the single-writer loop) and is safe for concurrent
-// reads. It answers two questions on the hot path: which rules a resolved event feeds
-// (RulesFor, by scope) and which rule owns a drained detection (Lookup, by id).
+// RuleRegistry is the rule set the engine runs. It is built from a RuleSource at startup
+// and then mutated LIVE by published-rule facts (ADR-051 slice 4b-3): Upsert/Remove are
+// marshaled onto the processor's single-writer loop, the same goroutine that reads it on
+// the hot path (RulesFor, Lookup), so it needs no lock — all mutation and all reads share
+// one goroutine. It answers two questions on the hot path: which rules a resolved event
+// feeds (RulesFor, by scope) and which rule owns a drained detection (Lookup, by id).
 type RuleRegistry struct {
 	byID    map[string]*ScopedRule
 	byScope map[scopeKey][]*ScopedRule
-	cores   []core.Rule
 }
 
 // NewRuleRegistry builds the registry from a rule set, filing each rule under the scope its
@@ -62,29 +69,100 @@ func NewRuleRegistry(scoped []ScopedRule) *RuleRegistry {
 	reg := &RuleRegistry{
 		byID:    make(map[string]*ScopedRule, len(scoped)),
 		byScope: make(map[scopeKey][]*ScopedRule),
-		cores:   make([]core.Rule, 0, len(scoped)),
 	}
 	for i := range scoped {
-		sr := scoped[i]
-		if sr.Compiled == nil {
-			continue
-		}
-		if sr.Tenant == "" {
-			log.Warn().Str("rule", sr.Compiled.ID).Msg("Dropping rule with no owning tenant (fail-closed).")
-			continue
-		}
-		if _, dup := reg.byID[sr.Compiled.ID]; dup {
-			log.Error().Str("rule", sr.Compiled.ID).
+		if _, dup := reg.byID[scoped[i].id()]; dup && scoped[i].Compiled != nil {
+			// The startup rule set is rebuilt from the durable projection, whose primary key is
+			// the rule id, so it is already deduped (a re-published id overwrote in place,
+			// last-wins) — a duplicate here is not the normal restart/live divergence (that is
+			// gone: both paths see the projection's single row per id) but a genuine generator
+			// bug, dropped loudly so Lookup-based tenant attribution can never bind to the wrong
+			// rule.
+			log.Error().Str("rule", scoped[i].Compiled.ID).
 				Msg("Dropping rule with a duplicate id (generator bug; id uniqueness is required for tenant attribution).")
 			continue
 		}
-		p := &sr
-		reg.byID[sr.Compiled.ID] = p
-		k := scopeKey{tenant: sr.Tenant, profileVersion: sr.ProfileVersionToken}
-		reg.byScope[k] = append(reg.byScope[k], p)
-		reg.cores = append(reg.cores, sr.Compiled.Core)
+		reg.Upsert(scoped[i])
 	}
 	return reg
+}
+
+// id is the rule's compiled id, or "" when there is nothing to file (a nil compiled rule).
+func (sr ScopedRule) id() string {
+	if sr.Compiled == nil {
+		return ""
+	}
+	return sr.Compiled.ID
+}
+
+// Upsert adds or replaces a rule, filing it under its (tenant, profile-version) scope, and
+// reports whether it was admitted. It is the live mutation the published-rule fact consumer
+// applies on the single-writer loop (ADR-051 slice 4b-3). It enforces the invariants the
+// tenant backstop's Lookup-based attribution depends on, refusing (fail-closed, and for the
+// admission-time cases loudly) anything that would break them: a nil compiled rule (nothing
+// to run) and an empty owning Tenant (a rule no tenant subject could attribute). A repeated
+// id is NOT a bug here (unlike NewRuleRegistry's batch): a rule id embeds its immutable
+// profile-version token, so a re-published/redelivered fact carries a byte-identical rule —
+// it replaces the entry in place (byID and byScope share one *ScopedRule, so the update is
+// seen through both) while the engine's UpsertRule preserves the running rule's state.
+func (reg *RuleRegistry) Upsert(sr ScopedRule) bool {
+	if sr.Compiled == nil {
+		return false
+	}
+	if sr.Tenant == "" {
+		log.Warn().Str("rule", sr.Compiled.ID).Msg("Dropping rule with no owning tenant (fail-closed).")
+		return false
+	}
+	k := scopeKey{tenant: sr.Tenant, profileVersion: sr.ProfileVersionToken}
+	if existing, ok := reg.byID[sr.Compiled.ID]; ok {
+		oldK := scopeKey{tenant: existing.Tenant, profileVersion: existing.ProfileVersionToken}
+		*existing = sr // mutate through the shared pointer so byScope sees the update too
+		if oldK != k {
+			// Defensive: an id's scope is immutable in practice (the version token is part of
+			// the id), but re-file if it ever diverges rather than leave a stale scope entry.
+			reg.detachFromScope(oldK, existing)
+			reg.byScope[k] = append(reg.byScope[k], existing)
+		}
+		return true
+	}
+	p := &sr
+	reg.byID[sr.Compiled.ID] = p
+	reg.byScope[k] = append(reg.byScope[k], p)
+	return true
+}
+
+// Remove evicts a rule from the registry — dropping it from byID and its scope bucket — and
+// reports whether it was present. It is the registry half of a rule removal (ADR-051 slice
+// 4b-3); the engine's RemoveRule GCs the matching keyed state. The publish path never
+// removes (versions are immutable and superseded ones are retained so in-flight events still
+// match, and a rollback re-selects an already-loaded version); removal is a governance/
+// teardown path (ADR-023/052), reachable on the single-writer loop so that path is a wiring
+// change, not an engine change.
+func (reg *RuleRegistry) Remove(id string) bool {
+	sr, ok := reg.byID[id]
+	if !ok {
+		return false
+	}
+	delete(reg.byID, id)
+	reg.detachFromScope(scopeKey{tenant: sr.Tenant, profileVersion: sr.ProfileVersionToken}, sr)
+	return true
+}
+
+// detachFromScope removes one rule pointer from its scope bucket, deleting the bucket when it
+// empties so RulesFor never returns an empty non-nil slice and stale scopes do not accumulate.
+func (reg *RuleRegistry) detachFromScope(k scopeKey, sr *ScopedRule) {
+	bucket := reg.byScope[k]
+	for i, p := range bucket {
+		if p == sr {
+			bucket = append(bucket[:i], bucket[i+1:]...)
+			break
+		}
+	}
+	if len(bucket) == 0 {
+		delete(reg.byScope, k)
+	} else {
+		reg.byScope[k] = bucket
+	}
 }
 
 // RulesFor returns the rules a resolved event in (tenant, profileVersion) feeds. The empty
@@ -102,9 +180,18 @@ func (reg *RuleRegistry) Lookup(id string) (*ScopedRule, bool) {
 	return sr, ok
 }
 
-// Cores is the full core.Rule set the engine is constructed with — every registered rule's
-// keyed-streaming config, keyed by the same tenant-prefixed id the fan-out feeds it under.
-func (reg *RuleRegistry) Cores() []core.Rule { return reg.cores }
+// Cores is the full core.Rule set the engine is constructed with at startup — every
+// registered rule's keyed-streaming config. It is computed on demand (rather than cached)
+// because it is read once, at engine build/restore; live mutation goes straight to the
+// engine via UpsertRule/RemoveRule, so there is no cache to keep in sync. Order is
+// unspecified (NewEngine files them into an id-keyed map), so it need not be deterministic.
+func (reg *RuleRegistry) Cores() []core.Rule {
+	cores := make([]core.Rule, 0, len(reg.byID))
+	for _, sr := range reg.byID {
+		cores = append(cores, sr.Compiled.Core)
+	}
+	return cores
+}
 
 // Count is the number of admitted rules (bounded, tenant-label-free — the aggregate the
 // Slice-4 rule-count gauge reports; a per-tenant breakdown is an ADR-023 governance concern

@@ -21,6 +21,14 @@ const (
 	// cross-service reference holders (event-management's event_anchors) can reconcile
 	// dangling references. At-least-once, idempotent, tenant on the subject.
 	SUBJECT_ENTITY_DELETED = "entity-deleted"
+	// SUBJECT_DETECTION_RULES_PUBLISHED carries detection-rules-published events (ADR-051
+	// slice 4b-3): emitted post-commit when a device profile is published, carrying the
+	// ENABLED detection rules frozen into the new version so event-processing's DETECT engine
+	// can run them (keyed on the profile-version token). The emit is at-most-once; the
+	// consumer persists each delivered fact into a durable projection it rebuilds from on
+	// restart (the finite-retention stream is only the live delta transport). Tenant on the
+	// subject.
+	SUBJECT_DETECTION_RULES_PUBLISHED = "detection-rules-published"
 )
 
 // Device authentication policy applied to inbound events (transport security,

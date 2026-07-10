@@ -35,12 +35,11 @@ func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct
 		return nil, err
 	}
 
-	// Platform-default compile limits (rules.Limits{}.withDefaults()). The runtime
-	// fact-consumer (slice 4b-3) MUST compile each published rule with the identical limits
-	// resolution, or a rule could pass this publish gate and then be rejected when the engine
-	// consumes it (or the reverse). When per-tenant governance overrides land (ADR-023, slice
-	// 6) both sites must resolve the caller's tenant limits from the same source.
-	limits := rules.Limits{}
+	// Platform-default compile limits, shared verbatim with the runtime fact-consumer
+	// (runtime.CompilePublishedRules, slice 4b-3) via rules.DefaultLimits so a rule that
+	// passes this publish gate compiles identically when the engine consumes it — see the
+	// doc on DefaultLimits.
+	limits := rules.DefaultLimits()
 
 	errs := make([]*DetectionRuleValidationErrorResolver, 0)
 	for i, in := range args.Rules {
