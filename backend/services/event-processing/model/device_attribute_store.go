@@ -193,3 +193,19 @@ func (s *DeviceAttributeStore) LoadAll(ctx context.Context) ([]DeviceAttribute, 
 	}
 	return attrs, nil
 }
+
+// LoadDevice returns one device's LIVE attributes (tombstones excluded) across every scope — the
+// authoritative set the single-writer loop re-reads to REPLACE that device's in-memory view entry
+// on a recheck (slice 4c-3b-2). Reading here on the loop (not carrying a delta from the consumer)
+// is what makes the view converge in lifecycle order despite the attribute and entity-deleted
+// consumers racing on separate streams: whichever recheck the loop runs last sees the monotonically-
+// converged projection. Keyed by (tenant, device) so a token reused across tenants is not conflated.
+func (s *DeviceAttributeStore) LoadDevice(ctx context.Context, tenant, deviceToken string) ([]DeviceAttribute, error) {
+	var attrs []DeviceAttribute
+	if err := s.rdb.DB(ctx).Where(
+		"tenant = ? AND device_token = ? AND deleted = ?", tenant, deviceToken, false).
+		Find(&attrs).Error; err != nil {
+		return nil, err
+	}
+	return attrs, nil
+}

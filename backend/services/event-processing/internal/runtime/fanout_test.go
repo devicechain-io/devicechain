@@ -13,9 +13,15 @@ import (
 
 func fptr(f float64) *float64 { return &f }
 
-// planEv fans an event out using its own occurred time as the (already-clamped) event time.
+// planEv fans an event out using its own occurred time as the (already-clamped) event time, with no
+// dynamic-threshold attributes bound (the common no-attr path).
 func planEv(reg *RuleRegistry, seq uint64, tenant string, ev *dmmodel.ResolvedEvent) PlanResult {
-	return reg.Plan(seq, tenant, ev, ev.OccurredTime)
+	return reg.Plan(seq, tenant, ev, ev.OccurredTime, nil)
+}
+
+// planEvAttr is planEv with the source device's flattened attribute map bound (dynamic-threshold path).
+func planEvAttr(reg *RuleRegistry, seq uint64, tenant string, ev *dmmodel.ResolvedEvent, attr map[string]float64) PlanResult {
+	return reg.Plan(seq, tenant, ev, ev.OccurredTime, attr)
 }
 
 // measured builds a resolved measurement event for a device under a profile version,
@@ -122,6 +128,42 @@ func TestPlanThresholdFansByDevice(t *testing.T) {
 	}
 	if res.Events[0].Key.Series != "d1" {
 		t.Fatalf("threshold series should be the device token; got %q", res.Events[0].Key.Series)
+	}
+}
+
+// A DYNAMIC-threshold rule fans out and resolves its bound from the device's OWN attribute (the
+// CEL "attr" var Plan binds from the flattened view): it matches when the metric breaches the
+// device's attribute value, does not when it doesn't, and — the load-bearing totality property —
+// cleanly does NOT match (rather than erroring) when the device has no such attribute.
+func TestPlanDynamicThresholdResolvesPerDevice(t *testing.T) {
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	dyn := rules.Rule{
+		ID:   ComposeRuleID("acme", "dyn1"),
+		Name: "over own limit",
+		Type: rules.TypeThreshold,
+		When: rules.Condition{Metric: "temperature", Op: rules.OpGt, ThresholdAttr: "tempLimit"},
+	}
+	reg := NewRuleRegistry([]ScopedRule{compileScoped(t, "acme", "p@1", dyn)})
+	ev := measured("acme", "d1", "p@1", base, map[string]string{"temperature": "55"})
+
+	// Device's own limit is 50: 55 > 50 → match.
+	over := planEvAttr(reg, 1, "acme", ev, map[string]float64{"tempLimit": 50})
+	if len(over.Events) != 1 || !over.Events[0].Match {
+		t.Fatalf("55 > own limit 50 should fan one matching event; got %+v", over.Events)
+	}
+	// Same reading, but this device's limit is 60: 55 > 60 is false → fanned but not matching.
+	under := planEvAttr(reg, 2, "acme", ev, map[string]float64{"tempLimit": 60})
+	if len(under.Events) != 1 || under.Events[0].Match {
+		t.Fatalf("55 vs own limit 60 should fan one NON-matching event; got %+v", under.Events)
+	}
+	// No attribute for the device (nil map): the presence guard makes this a clean non-match, not an
+	// eval error — so the event still fans (metric present) but does not match, and EvalErrors is 0.
+	none := planEvAttr(reg, 3, "acme", ev, nil)
+	if len(none.Events) != 1 || none.Events[0].Match {
+		t.Fatalf("no attribute should fan one NON-matching event; got %+v", none.Events)
+	}
+	if none.EvalErrors != 0 {
+		t.Fatalf("a missing dynamic-threshold attribute must be a clean non-match, not an eval error; got %d errors", none.EvalErrors)
 	}
 }
 

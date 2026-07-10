@@ -163,8 +163,9 @@ type ResolvedEventsProcessor struct {
 	// AttributeStore is the durable device-attribute projection the attribute/entity-deleted
 	// consumers maintain before acking (ADR-051 slice 4c-3), so a dynamic threshold's source value
 	// survives a restart independent of the finite-retention fact stream. The entity-deleted consumer
-	// also purges a deleted device's attributes and drops its resurrection fence here. Nil disables
-	// persistence (the scaffold/test path). Engine-inert in this slice — nothing reads it yet.
+	// also purges a deleted device's attributes and drops its resurrection fence here. When set, the
+	// loop-owned attrView is reconciled from it at startup and re-reads it per-device on a recheck
+	// (slice 4c-3b-2). Nil disables persistence + the dynamic-threshold view (the scaffold/test path).
 	AttributeStore *model.DeviceAttributeStore
 
 	// armer arms dead-man absence timers for never-seen devices, cross-referencing the roster +
@@ -178,6 +179,29 @@ type ResolvedEventsProcessor struct {
 	// the armer arms or disarms the device. Buffered so a burst of device facts does not block the
 	// consumers on the loop between resolved-event batches.
 	armUpdates chan armUpdate
+
+	// attrView is the loop-owned in-memory dynamic-threshold projection (ADR-051 slice 4c-3b-2): each
+	// device's flattened SERVER-over-SHARED attribute map, which the fan-out binds as predicate.Input.
+	// Attr so a rule's dynamic threshold resolves from the device's own attribute. Built + reconciled
+	// from AttributeStore in ExecuteStart (parallel to the dead-man armer), then kept live on the
+	// single-writer loop by rechecks the attribute + entity-deleted consumers signal. Nil on the
+	// scaffold/test path (no AttributeStore), where every dynamic threshold reads an empty map (a
+	// presence-guarded clean non-match).
+	attrView *runtime.DeviceAttributeView
+	// attrUpdates carries a device-identity RECHECK (NOT a value delta) from the attribute /
+	// entity-deleted consumers to the single-writer loop, where applyAttrRecheck re-reads the
+	// authoritative projection for that device and REPLACES its view entry. Same convergence
+	// discipline as armUpdates: the loop reads the monotonically-converged projection, so the two
+	// consumers cannot install a stale value out of lifecycle order. Buffered generously (attribute
+	// facts can burst on a fleet config push); the loop drains one per resolved-event-batch iteration.
+	attrUpdates chan attrUpdate
+	// attrRetries holds device rechecks whose LoadDevice failed transiently (applyAttrRecheck), to be
+	// re-attempted on the ticker (retryAttrRechecks). It closes the one-DB-blip window in which the
+	// driving fact is already persisted-and-acked but the view kept a stale bound: without a retry the
+	// staleness would last until the device's NEXT fact (which may never come) or a restart. Loop-owned
+	// (only applyAttrRecheck / retryAttrRechecks touch it); bounded by distinct devices, so an outage
+	// cannot grow it with event volume.
+	attrRetries map[attrUpdate]struct{}
 
 	cfg       Config
 	registry  *runtime.RuleRegistry
@@ -268,6 +292,20 @@ type armUpdate struct {
 	deviceToken string
 }
 
+// attrUpdate is a signal to RE-CHECK one device's dynamic-threshold attributes on the single-writer
+// loop (ADR-051 slice 4c-3b-2). Like armUpdate it carries only the device identity, NOT the changed
+// value: the loop re-reads the authoritative DeviceAttribute projection for the device and replaces
+// its attrView entry (applyAttrRecheck). Doing the read on the loop — not in the consumer that
+// signaled it — keeps the attribute and entity-deleted consumers (separate goroutines over
+// reorderable streams) from installing an observation out of lifecycle order: the loop always reads
+// the monotonically-converged projection, so whichever recheck it runs last reflects the settled
+// truth, and a stale fact (which the store's monotonic guard bars from mutating the row) is never
+// seen as current.
+type attrUpdate struct {
+	tenant      string
+	deviceToken string
+}
+
 // NewResolvedEventsProcessor creates a checkpointing resolved-events processor. The
 // engine is built (or restored) from the registry's core rule set at ExecuteStart; the
 // registry (built from a RuleSource) and the derived-event writer are supplied by the
@@ -302,6 +340,9 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		// Buffered generously: device create/delete/re-type facts can arrive in bursts (a fleet
 		// provisioning run), and the loop drains one per resolved-event-batch iteration.
 		armUpdates: make(chan armUpdate, 256),
+		// Buffered generously for the same reason as armUpdates: an attribute config push across a
+		// fleet bursts, and the loop drains one recheck per resolved-event-batch iteration.
+		attrUpdates: make(chan attrUpdate, 256),
 	}
 	rp.publisher = runtime.NewPublisher(derivedWriter, registry, rp.metrics)
 	rp.metrics.setRulesActive(registry.Count())
@@ -334,6 +375,31 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if err := rp.restore(ctx); err != nil {
 		return err
 	}
+	// Build the dynamic-threshold view BEFORE replay (ADR-051 slice 4c-3b-2): replayToHead re-feeds
+	// events through applyResolved, which reads attrView to resolve a rule's dynamic bound. If the
+	// view were built after replay, every replayed dynamic-threshold evaluation would see an empty
+	// map and never match — worse than a miss: a Match=false on a dynamic Duration rule DELETES a
+	// snapshot-restored hold and cancels its timer (engine.go), so an in-flight hold that should fire
+	// AFTER the replay window would be destroyed. Building first avoids that.
+	//
+	// REPLAY IS NON-DETERMINISTIC FOR DYNAMIC THRESHOLDS, by accepted design. The view holds CURRENT
+	// projection values (LoadAll), so a replayed evaluation resolves against the attribute's value NOW,
+	// not its value when the event first processed — because attributes are external mutable state, not
+	// part of the replayable event stream (embedding the resolved bound into the ResolvedEvent upstream
+	// at resolution time is the known determinism fix, deferred). Consequences to be honest about:
+	//   - a detection that fired at event time but was still buffered (unpublished) when the process
+	//     crashed is SILENTLY LOST if the attribute changed across the crash, since replay now resolves
+	//     the new value and does not re-fire;
+	//   - conversely a detection that did NOT fire originally can be re-derived and PHANTOM-published at
+	//     the old event time (downstream dedup keys on rule+series+kind+time, so it does not collapse);
+	//   - the window is "small" only on the healthy path; under a checkpoint outage (broker/store down,
+	//     which the loop is designed to ride out) it spans the whole outage.
+	// This is device/rule-scoped divergence (unlike a watermark divergence, which corrupts every
+	// tenant's windows), and it mirrors the dead-man armer's reconcile-from-current-projection stance.
+	// See the checkpoint() re-derivability note, which is qualified for this reason.
+	if err := rp.startAttributeView(ctx); err != nil {
+		return err
+	}
 	if err := rp.replayToHead(); err != nil {
 		return err
 	}
@@ -360,6 +426,13 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 		} else if rp.cfg.IdleAdvanceGuard > 0 {
 			return fmt.Errorf("event-processing: idle-advance is enabled but the resolved-events reader does not report Backlog; cannot gate absence-on-silence safely")
 		}
+	}
+	// Refresh the dynamic-threshold view from the freshest projection now replay is done: the pre-
+	// replay snapshot drove replay, but the live path should start from CURRENT values so a peer pod's
+	// attribute committed during our replay (a rolling-update overlap) is not served stale for a full
+	// window (see reconcileAttributeView). Runs on this startup goroutine, before the loop launches.
+	if err := rp.reconcileAttributeView(ctx); err != nil {
+		return err
 	}
 	// Build the dead-man armer over the FINAL (post-replay) engine and reconcile it from the durable
 	// read-models BEFORE any live consumption (ADR-051 slice 4c-2b-2b): the restored snapshot is
@@ -392,8 +465,9 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 		go rp.runEntityDeletedConsumer()
 	}
 	// The device-attribute consumer maintains the dynamic-threshold projection (ADR-051 slice 4c-3),
-	// persisting each fact before acking. It is engine-inert in this slice (nothing marshals onto the
-	// loop); the eval that reads it is slice 4c-3b-2. It stops on procCancel and is joined by readerWG.
+	// persisting each fact before acking and then signaling the loop to re-read the device into the
+	// live attrView (slice 4c-3b-2), so a rule's dynamic bound tracks the current value. It stops on
+	// procCancel and is joined by readerWG.
 	if rp.AttributeReader != nil {
 		rp.readerWG.Add(1)
 		go rp.runAttributeConsumer()
@@ -445,6 +519,49 @@ func toActiveEntries(rows []model.ProfileActive) []runtime.ActiveEntry {
 	out := make([]runtime.ActiveEntry, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, runtime.ActiveEntry{Tenant: r.Tenant, ProfileToken: r.ProfileToken, ActiveVersionToken: r.ActiveVersionToken, PublishedAt: r.PublishedAt})
+	}
+	return out
+}
+
+// startAttributeView builds the loop-owned dynamic-threshold view and reconciles it from the durable
+// DeviceAttribute projection (ADR-051 slice 4c-3b-2), parallel to startDeadmanArmer. It is a no-op
+// unless AttributeStore is wired (the scaffold/test path leaves attrView nil, and every read/recheck
+// site guards on it). Like the armer's reconcile it does NOT force a checkpoint: the view is fully
+// re-derivable from the (durable) projection on every restart, so nothing here need be persisted.
+func (rp *ResolvedEventsProcessor) startAttributeView(ctx context.Context) error {
+	if rp.AttributeStore == nil {
+		return nil
+	}
+	rp.attrView = runtime.NewDeviceAttributeView()
+	return rp.reconcileAttributeView(ctx)
+}
+
+// reconcileAttributeView (re)loads the whole device-attribute projection and rebuilds the view from
+// it. It runs TWICE at startup: once before replay (startAttributeView, so replayed dynamic-threshold
+// evaluations resolve against real values) and once AFTER replay (so the live path starts from the
+// FRESHEST projection). The second read narrows the rolling-update window in which a peer pod could
+// commit-and-ack an attribute AFTER this pod's pre-replay LoadAll — a fact that never redelivers here,
+// so the pre-replay snapshot alone would serve a stale bound across the whole replay and beyond.
+// No-op when the view is disabled (scaffold/test path).
+func (rp *ResolvedEventsProcessor) reconcileAttributeView(ctx context.Context) error {
+	if rp.attrView == nil {
+		return nil
+	}
+	rows, err := rp.AttributeStore.LoadAll(ctx)
+	if err != nil {
+		return fmt.Errorf("load device-attribute projection for dynamic-threshold view: %w", err)
+	}
+	rp.attrView.Reconcile(toAttrEntries(rows))
+	log.Info().Int("attributes", len(rows)).Msg("Reconciled DETECT dynamic-threshold view from the device-attribute projection.")
+	return nil
+}
+
+// toAttrEntries maps the persistence rows to the view's model-free input shape. LoadAll/LoadDevice
+// return only LIVE rows (tombstones excluded), so every entry is a value to weigh.
+func toAttrEntries(rows []model.DeviceAttribute) []runtime.AttrEntry {
+	out := make([]runtime.AttrEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, runtime.AttrEntry{Tenant: r.Tenant, DeviceToken: r.DeviceToken, Scope: r.Scope, Key: r.AttrKey, Value: r.Value})
 	}
 	return out
 }
@@ -575,6 +692,12 @@ func (rp *ResolvedEventsProcessor) run() {
 			// reconcile on restart), so it needs no checkpoint of its own. A nil armUpdates channel
 			// (scaffold path) never selects here.
 			rp.applyArmRecheck(au)
+		case at := <-rp.attrUpdates:
+			// Dynamic-threshold recheck on the single writer: re-read the authoritative attribute
+			// projection for the device and replace its view entry (applyAttrRecheck). It mutates only
+			// the in-memory view — NOT engine state or the checkpoint sequence (the view is re-derived
+			// from the durable projection on restart, never snapshotted) — so it needs no checkpoint.
+			rp.applyAttrRecheck(at)
 		case item := <-liveItems:
 			// Stamp the read time on ANY pump delivery — a message or a read error. For a
 			// message it means the reader had work; for an error it is the fail-safe posture:
@@ -610,6 +733,8 @@ func (rp *ResolvedEventsProcessor) run() {
 			if (rp.dirty || len(rp.pendingAcks) > 0 || len(rp.pendingDets) > 0) && now.Sub(rp.lastCheckpoint) >= rp.cfg.CheckpointInterval {
 				rp.checkpoint(rp.procCtx)
 			}
+			// Retry any dynamic-threshold recheck a transient store error deferred (bounded, idempotent).
+			rp.retryAttrRechecks()
 		}
 	}
 }
@@ -691,11 +816,19 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	// immutable in the payload).
 	occurred := runtime.EffectiveEventTime(event.OccurredTime, event.ProcessedTime, rp.cfg.MaxFutureSkew)
 
+	// Resolve the source device's dynamic-threshold attributes (SERVER-over-SHARED, slice 4c-3b-2)
+	// once for the whole fan-out: the flattened map the loop-owned view holds, bound onto every
+	// sample's Input so a dynamic comparison reads the device's own bound. Nil on the scaffold path
+	// (no view) or for a device with no attributes — a presence-guarded clean non-match either way.
+	var attr map[string]float64
+	if rp.attrView != nil {
+		attr = rp.attrView.For(tenant, event.SourceDeviceToken)
+	}
 	// Fan out: select the rules this event feeds (by tenant + profile version) and build one
 	// core event per applicable rule per sample it carries. The batch shares the message
 	// sequence — the single idempotency + checkpoint unit — so N same-seq events cannot each
 	// trip the guard; all events share the clamped event time.
-	plan := rp.registry.Plan(msg.StreamSeq, tenant, event, occurred)
+	plan := rp.registry.Plan(msg.StreamSeq, tenant, event, occurred, attr)
 	rp.metrics.RecordFanout(len(plan.Events), plan.EvalErrors)
 	prev := rp.engine.LastSeq()
 	rp.engine.ProcessResolved(msg.StreamSeq, occurred, plan.Events)
@@ -933,6 +1066,59 @@ func (rp *ResolvedEventsProcessor) applyArmRecheck(au armUpdate) {
 	rp.armer.ApplyDeviceMembership(entry, live)
 }
 
+// applyAttrRecheck re-reads a device's authoritative live attributes and REPLACES its dynamic-
+// threshold view entry on the single-writer loop (ADR-051 slice 4c-3b-2). Like applyArmRecheck the
+// read runs HERE, not in the consumer that signaled it, so the attribute and entity-deleted consumers
+// — separate goroutines over reorderable streams — cannot install a value out of lifecycle order: the
+// loop reads the monotonically-converged projection, replacing (never merging) the entry, so a
+// removed/purged attribute disappears and a stale straggler the store's guard rejected is never seen.
+// A transient store error skips the recheck — the projection is durable, and the next fact for the
+// device or the restart reconcile re-reads it — rather than blocking the single-writer loop on a retry.
+func (rp *ResolvedEventsProcessor) applyAttrRecheck(at attrUpdate) {
+	if rp.attrView == nil || rp.AttributeStore == nil {
+		return
+	}
+	rows, err := rp.AttributeStore.LoadDevice(rp.procCtx, at.tenant, at.deviceToken)
+	if err != nil {
+		// A transient read error: the driving fact was already persisted-AND-acked, so a silently
+		// dropped recheck would leave the view serving the PRE-fact bound until the device's next fact
+		// (which may never come) or a restart. Remember it and retry on the ticker (retryAttrRechecks),
+		// so one DB blip cannot strand a stale threshold.
+		log.Warn().Err(err).Str("tenant", at.tenant).Str("device", at.deviceToken).
+			Msg("Dynamic-threshold recheck failed to read the attribute projection; will retry on the ticker.")
+		if rp.attrRetries == nil {
+			rp.attrRetries = map[attrUpdate]struct{}{}
+		}
+		rp.attrRetries[at] = struct{}{}
+		return
+	}
+	// Install the converged set and clear any pending retry for this device. This REPLACES the view
+	// entry but deliberately GCs NO engine keyed state (a dynamic Duration hold, a windowed accumulator)
+	// that used the old bound: like a live attribute change, the new bound takes effect at the device's
+	// NEXT event, not retroactively — softer than applyRuleUpdate's GC-on-rule-definition-change, and
+	// live-consistent (a live attr change and a replayed one behave identically).
+	delete(rp.attrRetries, at)
+	rp.attrView.ReplaceDevice(at.tenant, at.deviceToken, toAttrEntries(rows))
+}
+
+// retryAttrRechecks re-attempts every device recheck a prior LoadDevice error deferred, on the ticker
+// so the retry rate is bounded to the tick cadence rather than hot-spinning the DB. Each success clears
+// the entry (applyAttrRecheck); a continued failure re-adds it for the next tick. The pending set is
+// bounded by distinct devices (an ADR-023 state-budget class, like the roster), so even a total DB
+// outage cannot grow it with event volume. It runs only on the single-writer loop.
+func (rp *ResolvedEventsProcessor) retryAttrRechecks() {
+	if len(rp.attrRetries) == 0 {
+		return
+	}
+	pending := make([]attrUpdate, 0, len(rp.attrRetries))
+	for at := range rp.attrRetries {
+		pending = append(pending, at)
+	}
+	for _, at := range pending {
+		rp.applyAttrRecheck(at)
+	}
+}
+
 // runRuleConsumer drains the published-rule fact stream (ADR-051 slice 4b-3). For each fact
 // it (1) PERSISTS the rules to the durable projection, (2) compiles them (off the loop — pure,
 // reads no engine state) and marshals them onto the single-writer loop as a ruleUpdate, then
@@ -1041,6 +1227,14 @@ func (rp *ResolvedEventsProcessor) ackRuleFact(msg messaging.Message) {
 // sequence never advances PAST a message whose detections are not yet published, a crash
 // re-emits them (at-least-once, dedup-collapsible downstream). A publish failure therefore
 // aborts the whole checkpoint — nothing committed, nothing acked, retried next cycle.
+//
+// CAVEAT for dynamic-threshold detections (ADR-051 slice 4c-3b-2): re-derivability holds only
+// when a rule's leaf is a pure function of the replayed event. A dynamic threshold resolves its
+// bound from the device-attribute view, which holds CURRENT (not event-time) values, so if the
+// attribute changed across the crash a buffered-but-unpublished dynamic detection is NOT re-emitted
+// (silently lost) and a non-detection can be re-derived as a phantom — so those are at-least-once
+// only under attribute stability across the replay window. See the ExecuteStart startAttributeView
+// note for the full accounting and the deferred determinism fix.
 //
 // The snapshot commit runs only when engine state changed since the last checkpoint (dirty);
 // when it did not — the buffer holds only redelivered duplicates or poison — the acks are

@@ -44,13 +44,23 @@ type PlanResult struct {
 // token with the source device as the distinct member, and the per-fan Input's anchor map is
 // pinned to THAT anchor's token so an anchor-referencing member gate evaluates against the
 // correct anchor.
-func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEvent, occurred time.Time) PlanResult {
+//
+// attr is the source device's flattened dynamic-threshold attribute map (DeviceAttributeView.For,
+// SERVER-over-SHARED), bound onto every sample's Input so a dynamic comparison ("m[k] > attr[k]",
+// slice 4c-3b-2) resolves the bound from the device's own attribute. It is the SAME per-device map
+// for every sample (attributes are device-, not sample-scoped); nil when the device has none, which
+// the presence-guarded comparison reads as a clean non-match. The predicate never mutates it.
+func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEvent, occurred time.Time, attr map[string]float64) PlanResult {
 	scoped := reg.RulesFor(tenant, ev.ProfileVersionToken)
 	if len(scoped) == 0 {
 		return PlanResult{}
 	}
 	res := PlanResult{}
-	for _, in := range BuildInputs(ev, occurred) {
+	inputs := BuildInputs(ev, occurred)
+	for i := range inputs {
+		inputs[i].Attr = attr
+	}
+	for _, in := range inputs {
 		for _, sr := range scoped {
 			cr := sr.Compiled
 			// Metric-scoped feed. GateMetric and ValueMetric are mutually exclusive per the
