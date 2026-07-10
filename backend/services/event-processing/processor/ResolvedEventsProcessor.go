@@ -821,9 +821,11 @@ func (rp *ResolvedEventsProcessor) runRuleConsumer() {
 		}
 		// Maintain the active-version projection off the SAME fact (ADR-051 slice 4c-2b), before
 		// ack and with the same retry discipline: it is where the grace-period base (PublishedAt)
-		// lands durably, so a publish-then-restart does not lose it and re-burst the fleet. A fact
-		// whose version token does not split into a profile token is skipped (the rule persist
-		// above drops such rules too), so the two projections stay symmetric.
+		// lands durably, so a publish-then-restart does not lose it and re-burst the fleet. A
+		// version token that does not split into "{profileToken}@{version}" yields no active-version
+		// row (profileActiveFromFact returns ok=false) — the well-formed producer always mints the
+		// "@"-joined form, so this only skips a forged/malformed fact; its rules (keyed by the whole
+		// version token) may still install, they simply get no arming entry, which is inert.
 		if rp.ProfileActiveStore != nil {
 			if active, ok := profileActiveFromFact(tenant, ev); ok {
 				if !rp.persistBeforeAck("profile-active "+active.Tenant+"/"+active.ProfileToken,

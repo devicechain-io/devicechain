@@ -73,11 +73,13 @@ func rosterMsg(t *testing.T, tenant, device, profile string, since time.Time, ac
 	return m
 }
 
-// entityDeletedMsg builds a consumed entity-deleted fact on tenant's scoped subject.
+// entityDeletedMsg builds a consumed entity-deleted fact on tenant's scoped subject. DeletedTime
+// is stamped AFTER testBase (a device is always deleted after it was created), so the tombstone's
+// lifecycle clock is newer than a create seeded at testBase and the monotonic guard applies it.
 func entityDeletedMsg(t *testing.T, tenant string, etype entity.Type, token string, ack *fakeAck) messaging.Message {
 	t.Helper()
 	b, err := dmproto.MarshalEntityDeletedEvent(&dmmodel.EntityDeletedEvent{
-		EntityType: etype, EntityId: 1, EntityToken: token, DeletedTime: testBase,
+		EntityType: etype, EntityId: 1, EntityToken: token, DeletedTime: testBase.Add(time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("marshal entity-deleted: %v", err)
@@ -149,6 +151,31 @@ func TestEntityDeletedConsumerRemovesDeviceOnly(t *testing.T) {
 	rows, _ := store.LoadAll(ctx)
 	if len(rows) != 1 || rows[0].DeviceToken != "dev2" {
 		t.Fatalf("only the deleted device's roster entry should be removed, got %+v", rows)
+	}
+}
+
+// A roster fact with an empty device token (a forged/malformed fact) is dropped-and-acked, never
+// persisted as a phantom row.
+func TestRosterConsumerDropsEmptyDeviceToken(t *testing.T) {
+	ack := &fakeAck{acked: make(chan struct{}, 1)}
+	store := newProcRosterStore(t)
+	rp := newTestProcessor(newTestStore(t), nil, 1)
+	rp.RosterStore = store
+	rp.RosterReader = &fakeReader{results: []readResult{
+		{msg: rosterMsg(t, "acme", "", "prof", testBase, ack)},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rp.procCtx = ctx
+	rp.readerWG.Add(1)
+	go rp.runRosterConsumer()
+
+	waitForAck(t, ack)
+	cancel()
+	rp.readerWG.Wait()
+
+	if rows, _ := store.LoadAll(context.Background()); len(rows) != 0 {
+		t.Fatalf("an empty-device-token fact must not be persisted, got %+v", rows)
 	}
 }
 

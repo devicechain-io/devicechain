@@ -11,10 +11,20 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-processing/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
 )
+
+// validRosterToken bounds a token decoded from a fact before it becomes a durable projection
+// column. A well-formed producer only ever emits ADR-042 tokens (<= core.MaxTokenLen), but the
+// proto imposes no length, so a forged or buggy-producer fact could carry an over-long token that
+// overflows the varchar(256) column on postgres — a PERMANENT insert error that would wedge the
+// persist-before-ack retry forever and head-of-line-block the whole projection. Bounds-checking at
+// consume turns that poison into a drop-and-ack, mirroring the decode-poison path. Empty is allowed
+// for a profile token (a device whose type has no profile) but not where noted (a device token).
+func validRosterToken(tok string) bool { return len(tok) <= core.MaxTokenLen }
 
 // persistBeforeAck retries op until it commits or the loop shuts down, capping the backoff at
 // maxRulePersistBackoff. It is the durability primitive the fact consumers share (ADR-051): the
@@ -69,6 +79,16 @@ func (rp *ResolvedEventsProcessor) runRosterConsumer() {
 			rp.ackFact(msg, "device-roster")
 			continue
 		}
+		// A device token is the row's identity and its dead-man series key, so an empty or over-long
+		// one is unusable poison (a forged/buggy-producer fact): drop-and-ack rather than persist a
+		// phantom row or wedge on a varchar overflow. A zero ExpectedSince would also defeat the
+		// monotonic guard, so it is dropped too.
+		if ev.DeviceToken == "" || !validRosterToken(ev.DeviceToken) || !validRosterToken(ev.ProfileToken) || ev.ExpectedSince.IsZero() {
+			log.Warn().Str("device", ev.DeviceToken).Str("subject", msg.Subject).
+				Msg("Dropping malformed device-roster fact (empty/over-long token or zero expected-since).")
+			rp.ackFact(msg, "device-roster")
+			continue
+		}
 		if rp.RosterStore != nil {
 			roster := &model.DeviceRoster{
 				Tenant:        tenant,
@@ -113,10 +133,23 @@ func (rp *ResolvedEventsProcessor) runEntityDeletedConsumer() {
 		}
 		// Only a device deletion touches the roster; every other entity type (groups, assets,
 		// relationships, anchors) is consumed elsewhere (event-management) and ignored here.
+		// DeletedTime is the lifecycle clock the tombstone is ordered on, so a stale redelivered
+		// delete cannot erase a device whose newer create already advanced the clock.
 		if ev.EntityType == entity.TypeDevice && rp.RosterStore != nil {
-			if !rp.persistBeforeAck("roster-delete "+tenant+"/"+ev.EntityToken,
-				func() error { return rp.RosterStore.Delete(rp.procCtx, tenant, ev.EntityToken) }) {
-				return // shutdown mid-retry: leave unacked; the deletion redelivers next start
+			// A malformed device fact is skipped rather than applied — symmetric with the roster
+			// consumer's drop: an over-long token would overflow the tombstone insert, and a zero
+			// DeletedTime would defeat the monotonic guard (silently no-op'ing against a live row).
+			// The well-formed producer always stamps a real token and time, so this only guards a
+			// forged/buggy-producer fact.
+			if ev.EntityToken == "" || !validRosterToken(ev.EntityToken) || ev.DeletedTime.IsZero() {
+				log.Warn().Str("device", ev.EntityToken).Str("subject", msg.Subject).
+					Msg("Dropping malformed device entity-deleted fact (empty/over-long token or zero deleted-time).")
+			} else {
+				deletedTime := ev.DeletedTime
+				if !rp.persistBeforeAck("roster-delete "+tenant+"/"+ev.EntityToken,
+					func() error { return rp.RosterStore.Delete(rp.procCtx, tenant, ev.EntityToken, deletedTime) }) {
+					return // shutdown mid-retry: leave unacked; the deletion redelivers next start
+				}
 			}
 		}
 		rp.ackFact(msg, "entity-deleted")

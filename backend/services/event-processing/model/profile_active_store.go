@@ -24,15 +24,21 @@ func NewProfileActiveStore(r *rdb.RdbManager) *ProfileActiveStore {
 	return &ProfileActiveStore{rdb: r}
 }
 
-// Upsert records the active published version for a profile token, overwriting any existing row
-// for the same (tenant, profileToken). It is last-fact-wins: delivery is single-consumer and in
-// commit order, so the latest fact for a profile token is its current active version — a publish
-// supersedes the prior version and a rollback re-emit (with a fresh publish time) supersedes the
-// rolled-back-from one. Idempotent for a redelivered fact (it re-writes identical values).
+// Upsert records the active published version for a profile token. It is MONOTONIC on the publish
+// time: it overwrites the row only when the incoming fact's PublishedAt is at least as new as the
+// recorded one (the DO UPDATE WHERE guard). A newer publish and a rollback re-emit (which carries a
+// FRESH, later publish time) both win; a stale fact redelivered after its successor — reachable
+// because an unacked fact does not block newer ones and a failed ack is tolerated — is a no-op
+// rather than a durable regression to an older active version. Idempotent for an exact redelivery
+// (equal PublishedAt rewrites identical values). A zero PublishedAt (a pre-4c-2a fact without the
+// field) can insert but never overwrites a real publish time, and is clamped downstream at arming.
 func (s *ProfileActiveStore) Upsert(ctx context.Context, active *ProfileActive) error {
 	return s.rdb.DB(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "tenant"}, {Name: "profile_token"}},
 		DoUpdates: clause.AssignmentColumns([]string{"active_version_token", "published_at", "updated_at"}),
+		Where: clause.Where{Exprs: []clause.Expression{
+			clause.Expr{SQL: "profile_actives.published_at <= excluded.published_at"},
+		}},
 	}).Create(active).Error
 }
 

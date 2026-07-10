@@ -101,13 +101,25 @@ func (DetectRule) AuditExempt() bool { return true }
 // rebuilt from this table at startup — so a never-reported device survives a restart
 // independent of the finite-retention fact stream, exactly like the rule projection.
 //
-// Unlike DetectRule this projection IS live-mutable: a device delete removes its row (via the
-// entity-deleted fact), so the arming for a decommissioned device is cancelled rather than
-// firing a false absence forever. ProfileToken is the STABLE profile token (not the
-// "{profileToken}@{version}" token) so a re-publish never staleness-orphans the entry; the
-// arming path cross-references the active version at arming time (ProfileActive). It is empty
-// when the device's type has no profile (a roster entry with no resolvable rules, retained so
-// a later re-type re-homes it).
+// Unlike DetectRule this projection IS live-mutable: a device delete TOMBSTONES its row (Deleted
+// = true) so the arming for a decommissioned device is cancelled rather than firing a false
+// absence forever. ProfileToken is the STABLE profile token (not the "{profileToken}@{version}"
+// token) so a re-publish never staleness-orphans the entry; the arming path cross-references the
+// active version at arming time (ProfileActive). It is empty when the device's type has no
+// profile (a roster entry with no resolvable rules, retained so a later re-type re-homes it).
+//
+// ORDERING / TOMBSTONE (ADR-051 slice 4c-2b-1, hardened after review). Roster upserts arrive on
+// one stream and deletes on another (entity-deleted), through two independent durable consumers
+// with no relative ordering, and either can be redelivered (a fact stays pending until its
+// persist-before-ack commits, and a failed ack is tolerated). Two hazards follow: a stale
+// redelivered upsert could RESURRECT a deleted device, and a stale redelivered delete could ERASE
+// a legitimately re-created (token-reused) device — both permanent, since neither self-heals. The
+// row is therefore never hard-deleted: a delete flips Deleted and every mutation is gated on a
+// single monotonic lifecycle clock, LastEventAt. A device's real lifecycle (create < re-type <
+// delete < re-create) increases in wall time, so applying a fact only when it is strictly newer
+// than LastEventAt makes the row converge to the latest lifecycle event regardless of delivery
+// order. LoadAll returns only live (Deleted=false) rows. Tombstones are retained (bounding their
+// growth is the deferred governance concern, ADR-023/052, like the rule projection's).
 //
 // Like the other event-processing projections it is NOT tenant-scoped (the engine is a
 // per-Instance singleton; tenant is a plain column, keyed into the composite primary key so a
@@ -121,11 +133,21 @@ type DeviceRoster struct {
 	DeviceToken string `gorm:"primaryKey;size:256;not null"`
 	// ProfileToken is the stable profile token the device's type adopts (ADR-045), or empty
 	// when the type has no profile. Indexed so the arming path can fan out to every device on a
-	// profile when that profile's rules change (ADR-051 slice 4c-2b's publish trigger).
+	// profile when that profile's rules change (ADR-051 slice 4c-2b's publish trigger). Frozen at
+	// its last live value on a tombstone (irrelevant there — tombstones are excluded from LoadAll).
 	ProfileToken string `gorm:"size:256;not null;index"`
 	// ExpectedSince is the base of the dead-man clock for a never-reported device — the device's
 	// creation time (or the moment it began its current type membership on a re-type).
 	ExpectedSince time.Time `gorm:"not null"`
+	// Deleted tombstones a removed device. The row is retained rather than dropped so a stale
+	// redelivered upsert cannot resurrect it (the tombstone's LastEventAt fences it out) and a
+	// stale redelivered delete cannot erase a newer re-creation. LoadAll filters it out.
+	Deleted bool `gorm:"not null"`
+	// LastEventAt is the device-lifecycle time of the most recent APPLIED fact: ExpectedSince for
+	// a create/re-type, the entity-deleted fact's DeletedTime for a delete. It is the single
+	// monotonic axis every mutation is gated on (apply iff strictly newer), so redelivery, cross-
+	// stream reordering, or consumer lag can never regress the row or flip it against real order.
+	LastEventAt time.Time `gorm:"not null"`
 	// UpdatedAt is gorm-managed; it records when this roster entry was last (re)emitted.
 	UpdatedAt time.Time
 }

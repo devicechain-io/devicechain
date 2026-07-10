@@ -26,6 +26,8 @@ func NewRosterSchema() *gormigrate.Migration {
 				DeviceToken   string    `gorm:"primaryKey;size:256;not null"`
 				ProfileToken  string    `gorm:"size:256;not null;index"`
 				ExpectedSince time.Time `gorm:"not null"`
+				Deleted       bool      `gorm:"not null"`
+				LastEventAt   time.Time `gorm:"not null"`
 				UpdatedAt     time.Time
 			}
 			type ProfileActive struct {

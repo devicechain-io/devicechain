@@ -57,6 +57,46 @@ func TestProfileActiveStore_LastFactWins(t *testing.T) {
 	}
 }
 
+// A stale fact redelivered after its successor (failed-ack window) must NOT regress the active
+// version — the monotonic published_at guard closes it.
+func TestProfileActiveStore_StaleFactDoesNotRegress(t *testing.T) {
+	s := newTestActiveStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+
+	// v4 is active (published later).
+	if err := s.Upsert(ctx, &ProfileActive{Tenant: "acme", ProfileToken: "p", ActiveVersionToken: "p@4", PublishedAt: base.Add(time.Hour)}); err != nil {
+		t.Fatalf("publish v4: %v", err)
+	}
+	// A redelivered older v3 fact must be ignored.
+	if err := s.Upsert(ctx, &ProfileActive{Tenant: "acme", ProfileToken: "p", ActiveVersionToken: "p@3", PublishedAt: base}); err != nil {
+		t.Fatalf("stale v3: %v", err)
+	}
+	all, _ := s.LoadAll(ctx)
+	if len(all) != 1 || all[0].ActiveVersionToken != "p@4" {
+		t.Fatalf("stale fact must not regress the active version, got %+v", all)
+	}
+}
+
+// A zero PublishedAt (a pre-4c-2a fact without the field) can seed a fresh row but must never
+// overwrite a real publish time.
+func TestProfileActiveStore_ZeroPublishedAtDoesNotClobber(t *testing.T) {
+	s := newTestActiveStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+
+	if err := s.Upsert(ctx, &ProfileActive{Tenant: "acme", ProfileToken: "p", ActiveVersionToken: "p@2", PublishedAt: base}); err != nil {
+		t.Fatalf("real publish: %v", err)
+	}
+	if err := s.Upsert(ctx, &ProfileActive{Tenant: "acme", ProfileToken: "p", ActiveVersionToken: "p@1"}); err != nil {
+		t.Fatalf("zero-published fact: %v", err)
+	}
+	all, _ := s.LoadAll(ctx)
+	if len(all) != 1 || all[0].ActiveVersionToken != "p@2" {
+		t.Fatalf("a zero-PublishedAt fact must not clobber a real one, got %+v", all)
+	}
+}
+
 // Distinct profiles and tenants keep distinct rows.
 func TestProfileActiveStore_MultiScope(t *testing.T) {
 	s := newTestActiveStore(t)
