@@ -102,10 +102,12 @@ type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEnt
     metricDefinitions: [MetricDefinition!]!
     commandDefinitions: [CommandDefinition!]!
     alarmDefinitions: [AlarmDefinition!]!
+    detectionRules: [DetectionRule!]!
 }
 
 # An immutable published snapshot of a device profile's whole capability set
-# (ADR-045 versioning): its metric, command, and alarm definitions frozen together.
+# (ADR-045 versioning): its metric, command, alarm, and detection-rule definitions
+# frozen together.
 # The snapshot blob is deliberately omitted here — the list stays light; a device
 # resolves the active version server-side, and rollback re-points it by version.
 type DeviceProfileVersion {
@@ -277,6 +279,52 @@ input AlarmDefinitionSearchCriteria {
 # Search results returned from alarm definition query.
 type AlarmDefinitionSearchResults {
     results: [AlarmDefinition!]!
+    pagination: SearchResultsPagination!
+}
+
+# A DETECT rule declared on a device profile (ADR-051 / ADR-053 §5 / ADR-045). The rule
+# body — definition — is an opaque JSON document (the event-processing rules.Rule schema);
+# device-management versions it with the profile but does not parse the detection taxonomy
+# (that stays single-homed in event-processing, which compiles and cost-gates it at
+# publish). Distinct from AlarmDefinition, which the legacy in-service evaluator still owns.
+type DetectionRule implements Model & TokenReference & NamedEntity & MetadataEntity {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    token: String!
+    name: String
+    description: String
+    deviceProfile: DeviceProfile!
+    # The authored rule as a JSON document (the rules.Rule schema).
+    definition: String!
+    enabled: Boolean!
+    metadata: String
+}
+
+# Data required to create a detection rule. definition is the rules.Rule JSON document as a
+# string; device-management checks it is well-formed JSON on write, and event-processing
+# performs the authoritative type/cost validation when the profile is published.
+input DetectionRuleCreateRequest {
+    token: String!
+    deviceProfileToken: String!
+    name: String
+    description: String
+    definition: String!
+    enabled: Boolean!
+    metadata: String
+}
+
+# Criteria used when searching for detection rules.
+input DetectionRuleSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    deviceProfile: String
+}
+
+# Search results returned from detection rule query.
+type DetectionRuleSearchResults {
+    results: [DetectionRule!]!
     pagination: SearchResultsPagination!
 }
 
@@ -1172,6 +1220,12 @@ type Query {
     alarmDefinitionsByToken(tokens: [String!]!): [AlarmDefinition!]!
     # List alarm definitions that meet criteria.
     alarmDefinitions(criteria: AlarmDefinitionSearchCriteria!): AlarmDefinitionSearchResults!
+    # Find detection rules by unique id.
+    detectionRulesById(ids: [ID!]!): [DetectionRule!]!
+    # Find detection rules by unique token.
+    detectionRulesByToken(tokens: [String!]!): [DetectionRule!]!
+    # List detection rules that meet criteria.
+    detectionRules(criteria: DetectionRuleSearchCriteria!): DetectionRuleSearchResults!
     # Find raised alarms by unique id.
     alarmsById(ids: [ID!]!): [Alarm!]!
     # Find raised alarms by unique token.
@@ -1329,6 +1383,12 @@ type Mutation {
     updateAlarmDefinition(token: String!, request: AlarmDefinitionCreateRequest!): AlarmDefinition!
     # Delete a single alarm definition.
     deleteAlarmDefinition(token: String!): Boolean!
+    # Create a new detection rule.
+    createDetectionRule(request: DetectionRuleCreateRequest!): DetectionRule!
+    # Update an existing detection rule.
+    updateDetectionRule(token: String!, request: DetectionRuleCreateRequest!): DetectionRule!
+    # Delete a single detection rule.
+    deleteDetectionRule(token: String!): Boolean!
     # Acknowledge a raised alarm (operator action). The acknowledging identity is the
     # authenticated subject, recorded server-side — not a client-supplied value.
     acknowledgeAlarm(token: String!): Alarm!

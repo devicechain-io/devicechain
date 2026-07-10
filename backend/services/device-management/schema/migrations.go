@@ -23,5 +23,6 @@ var (
 		NewFacetIndexSchema(),
 		NewRelationshipTargetTokenSchema(),
 		NewExternalIdSchema(),
+		NewDetectionRuleSchema(),
 	}
 )

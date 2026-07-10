@@ -113,6 +113,18 @@ func (r *DeviceProfileResolver) AlarmDefinitions() ([]*AlarmDefinitionResolver, 
 	return result, nil
 }
 
+func (r *DeviceProfileResolver) DetectionRules() ([]*DetectionRuleResolver, error) {
+	found, err := r.S.GetApi(r.C).DetectionRulesByDeviceProfile(r.C, r.M.ID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*DetectionRuleResolver, 0)
+	for _, dr := range found {
+		result = append(result, &DetectionRuleResolver{M: *dr, S: r.S, C: r.C})
+	}
+	return result, nil
+}
+
 // --------------------------------------
 // Device profile search results resolver
 // --------------------------------------

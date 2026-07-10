@@ -57,6 +57,11 @@ type DeviceProfile struct {
 	MetricDefinitions  []MetricDefinition
 	CommandDefinitions []CommandDefinition
 	AlarmDefinitions   []AlarmDefinition
+	// DetectionRules are the profile's DETECT rules (ADR-051 / ADR-053 §5): opaque
+	// authored rule documents versioned with the profile and propagated to
+	// event-processing at publish (slice 4b). Distinct from AlarmDefinitions, which
+	// the legacy in-device-management evaluator (ADR-041) still owns until slice 6.
+	DetectionRules []DetectionRule
 }
 
 // Search criteria for locating device profiles. Pagination-only for now; the
