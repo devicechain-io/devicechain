@@ -4,6 +4,7 @@
 package rules
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
@@ -86,6 +87,13 @@ type CompiledRule struct {
 	ID   string
 	Type RuleType
 
+	// Severity is the detection's significance tier (ADR-041), carried through from the authored
+	// rule so the publisher can stamp it onto the derived event without re-decoding. Empty for a
+	// rule that declares none. The REACT action chain itself is NOT carried here — the dispatcher
+	// (slice 5b) resolves it from the durable rule projection by id, keeping the engine's compiled
+	// form about detection only.
+	Severity Severity
+
 	// Core is the keyed-streaming engine rule (Kind + temporal params). Its ID equals ID,
 	// so the engine keys this rule's series state by the same id.
 	Core core.Rule
@@ -165,7 +173,112 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 		return nil, &ValidationError{RuleID: r.ID, Field: "when", Msg: err.Error(), Err: err}
 	}
 	cr.Predicate = pred
+
+	// Validate the REACT layer (severity + action chain) and carry the severity through. This is
+	// the same publish-time gate the detection fields pass: a malformed action or an alarm without
+	// a tier is rejected here (fail-closed) so it can never reach the dispatcher.
+	if err := validateReact(r); err != nil {
+		return nil, err
+	}
+	cr.Severity = r.Severity
 	return cr, nil
+}
+
+// validateReact enforces the REACT contract on an authored rule (ADR-051 REACT stage): a bounded
+// action chain, each action well-formed for its type, and a severity that is present when an alarm
+// is raised and always within the known set. It is separate from the per-type detection lowering
+// because actions are orthogonal to the detection shape — any rule type may carry any action.
+func validateReact(r Rule) error {
+	if r.Severity != "" && !r.Severity.Valid() {
+		return invalid(r.ID, "severity", "unknown severity %q", r.Severity)
+	}
+	if len(r.Actions) > MaxActionsPerRule {
+		return invalid(r.ID, "actions", "a rule may declare at most %d actions, got %d", MaxActionsPerRule, len(r.Actions))
+	}
+	seen := make(map[string]struct{}, len(r.Actions))
+	for i, a := range r.Actions {
+		if err := validateAction(r.ID, i, a); err != nil {
+			return err
+		}
+		if a.Type == ActionRaiseAlarm && !r.Severity.Valid() {
+			// A raiseAlarm action needs a tier to raise at; the tier lives on the rule (one rule,
+			// one severity), so an alarm action without a valid rule severity is rejected.
+			return invalid(r.ID, "severity", "a raiseAlarm action requires a valid rule severity")
+		}
+		// Reject an exact-duplicate action (fail-closed). The dispatcher keys idempotency on the
+		// detection identity PLUS the action index, so two identical actions are distinct keys and
+		// BOTH fire — a double alarm-raise (harmless: an in-place upsert) but a genuine DOUBLE
+		// command send. An author never means to send the same command twice per detection, so a
+		// textual duplicate is treated as a mistake here rather than dispatched twice downstream.
+		key := actionDedupKey(a)
+		if _, dup := seen[key]; dup {
+			return invalid(r.ID, "actions", "action %d duplicates an earlier action", i)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+// isJSONObject reports whether s is a syntactically valid JSON object (`{...}`), not a bare
+// scalar, array, or null. A command payload is an argument map, so only an object is well-formed.
+func isJSONObject(s string) bool {
+	if !json.Valid([]byte(s)) {
+		return false
+	}
+	// `null` unmarshals into a map without error but leaves it nil, and an array/scalar errors;
+	// only a real object yields a non-nil map — so a nil map after a clean unmarshal rejects `null`.
+	var m map[string]json.RawMessage
+	return json.Unmarshal([]byte(s), &m) == nil && m != nil
+}
+
+// actionDedupKey is a textual identity for exact-duplicate detection. Two sendCommand actions with
+// the same command but different payloads are legitimately distinct (send two different commands),
+// so the payload is part of the key; the payload is compared verbatim (it is not canonicalized —
+// see SendCommandAction.Payload), so this catches identical authored bytes, the mistake case.
+func actionDedupKey(a Action) string {
+	switch a.Type {
+	case ActionRaiseAlarm:
+		return "raiseAlarm|" + a.RaiseAlarm.AlarmKey
+	case ActionSendCommand:
+		return "sendCommand|" + a.SendCommand.Command + "|" + a.SendCommand.Payload
+	default:
+		return string(a.Type)
+	}
+}
+
+// validateAction checks one action: its type is known, exactly the matching variant is populated,
+// and that variant's fields are well-formed. The index anchors the error to the offending action
+// for the console.
+func validateAction(ruleID string, i int, a Action) error {
+	switch a.Type {
+	case ActionRaiseAlarm:
+		if a.RaiseAlarm == nil || a.SendCommand != nil {
+			return invalid(ruleID, "actions", "action %d is type %q but its raiseAlarm payload is missing or a foreign payload is set", i, a.Type)
+		}
+		if a.RaiseAlarm.AlarmKey != "" {
+			if err := validateMetric(a.RaiseAlarm.AlarmKey); err != nil {
+				return invalid(ruleID, "actions", "action %d alarmKey: %v", i, err)
+			}
+		}
+	case ActionSendCommand:
+		if a.SendCommand == nil || a.RaiseAlarm != nil {
+			return invalid(ruleID, "actions", "action %d is type %q but its sendCommand payload is missing or a foreign payload is set", i, a.Type)
+		}
+		if err := validateMetric(a.SendCommand.Command); err != nil {
+			return invalid(ruleID, "actions", "action %d command: %v", i, err)
+		}
+		if a.SendCommand.Payload != "" && !isJSONObject(a.SendCommand.Payload) {
+			// A command payload is an argument MAP, so it must be a JSON object — not a bare
+			// scalar or array. Rejecting `42`/`[1,2]`/`"x"` here closes the one statically-
+			// checkable payload defect at the publish gate (the command-key existence and the
+			// payload-vs-parameter-schema cross-check are NOT done here — see the note on
+			// SendCommandAction — so this is the only payload guard until that lands).
+			return invalid(ruleID, "actions", "action %d command payload must be a JSON object", i)
+		}
+	default:
+		return invalid(ruleID, "actions", "action %d has unknown type %q", i, a.Type)
+	}
+	return nil
 }
 
 // --- per-type lowering. Each validates the fields it uses, rejects fields it does not,

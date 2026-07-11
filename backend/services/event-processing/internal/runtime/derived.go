@@ -35,6 +35,15 @@ type DerivedEvent struct {
 	// OccurredTime is the logical (event) time the detection is stamped at — the same value
 	// that anchors its dedup identity.
 	OccurredTime time.Time `json:"occurredTime"`
+	// Severity is the detection's significance tier (ADR-041 vocabulary, lowercase) — an
+	// INFORMATIONAL fire-time snapshot for ADR-037 subscribers, empty when the rule declares none.
+	// It is NOT authoritative for what a raiseAlarm action raises at: the REACT dispatcher resolves
+	// the tier from the rule as read from the durable projection at dispatch (RaiseAlarmAction), so
+	// a reused-id def change between fire and dispatch raises at the projection's current tier, not
+	// this snapshot. Like Kind, it is stamped here from the CURRENT registry rule at publish (the
+	// same vanishingly-rare straggler skew documented for Kind), and it is excluded from the dedup
+	// identity below.
+	Severity string `json:"severity,omitempty"`
 	// CAVEAT (dynamic thresholds): the dedup identity does NOT include the resolved threshold. For a
 	// rule whose bound comes from a device attribute (slice 4c-3), replay resolves against the CURRENT
 	// attribute value, not the value at original event time (see startAttributeView's non-determinism
@@ -164,6 +173,7 @@ func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
 		Kind:         string(sr.Compiled.Type),
 		Series:       det.Series,
 		OccurredTime: det.At,
+		Severity:     string(sr.Compiled.Severity),
 	}
 	payload, err := json.Marshal(de)
 	if err != nil {

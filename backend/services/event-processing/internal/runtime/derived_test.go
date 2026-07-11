@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,6 +57,38 @@ func (m *fakeMetrics) RecordDerivedRejected(r RejectReason) { m.rejected[r]++ }
 
 func thresholdRule(id string) *rules.CompiledRule {
 	return &rules.CompiledRule{ID: id, Type: rules.TypeThreshold}
+}
+
+// TestPublishStampsSeverity proves the derived event carries the rule's severity (the ADR-037
+// subscriber field), stamped from the CURRENT registry rule like Kind. A rule with no severity
+// omits it (omitempty), keeping the wire lean.
+func TestPublishStampsSeverity(t *testing.T) {
+	withSev := &rules.CompiledRule{ID: "acme/r1", Type: rules.TypeThreshold, Severity: rules.SeverityMajor}
+	reg := NewRuleRegistry([]ScopedRule{{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: withSev}})
+	w := &fakeWriter{}
+	p := NewPublisher(w, reg, newFakeMetrics())
+	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now()}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	var de DerivedEvent
+	if err := json.Unmarshal(w.writes[0].payload, &de); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if de.Severity != "major" {
+		t.Fatalf("severity = %q, want major", de.Severity)
+	}
+
+	// A rule with no severity omits the field entirely (omitempty), keeping the wire lean.
+	noSev := &rules.CompiledRule{ID: "acme/r2", Type: rules.TypeThreshold}
+	reg2 := NewRuleRegistry([]ScopedRule{{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: noSev}})
+	w2 := &fakeWriter{}
+	p2 := NewPublisher(w2, reg2, newFakeMetrics())
+	if err := p2.Publish(context.Background(), core.Detection{RuleID: "acme/r2", Series: "d1", Kind: core.Threshold, At: time.Now()}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if strings.Contains(string(w2.writes[0].payload), "severity") {
+		t.Fatalf("payload should omit severity when unset: %s", w2.writes[0].payload)
+	}
 }
 
 // A well-formed detection publishes one derived event, scoped to the rule's owning tenant,
