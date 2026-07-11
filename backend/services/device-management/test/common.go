@@ -271,6 +271,11 @@ func (api *MockApi) EvaluateMeasurementAlarms(ctx context.Context, deviceToken s
 	return args.Error(0)
 }
 
+func (api *MockApi) RaiseAlarm(ctx context.Context, deviceId uint, alarmKey, metricKey, severity string, value float64, occurredTime time.Time) error {
+	args := api.Mock.Called()
+	return args.Error(0)
+}
+
 func (api *MockApi) SetEntityAttribute(ctx context.Context, request *model.EntityAttributeSetRequest) (*model.EntityAttribute, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.EntityAttribute), args.Error(1)

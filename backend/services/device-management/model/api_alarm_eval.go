@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"time"
@@ -197,6 +198,25 @@ func (api *Api) alarmByOriginatorKey(ctx context.Context, originatorType string,
 		return nil, result.Error
 	}
 	return &found, nil
+}
+
+// RaiseAlarm is the exported REACT raise-alarm entry (ADR-051 slice 5c / ADR-054): it raises or
+// escalates an alarm for a device row id through the SAME engine the measurement evaluator uses
+// (raiseOrEscalateAlarm), so a REACT-raised alarm is indistinguishable downstream from a
+// measurement-raised one — same Alarm object, ack/clear, graph rollup, and alarm-events→notification
+// flow (ADR-041/017). It takes the already-resolved device id (the consumer resolves the token
+// through the cached accessor, and distinguishes a deleted device from a store error) so this method
+// does not re-resolve. Severity must be a valid AlarmSeverity; it is re-checked fail-closed here even
+// though the consumer validates, so no caller can drive a malformed tier into the alarm row.
+func (api *Api) RaiseAlarm(ctx context.Context, deviceId uint,
+	alarmKey, metricKey, severity string, value float64, occurredTime time.Time) error {
+	if alarmKey == "" {
+		return fmt.Errorf("raise-alarm requires a non-empty alarm key")
+	}
+	if !AlarmSeverity(severity).Valid() {
+		return fmt.Errorf("raise-alarm: invalid alarm severity %q", severity)
+	}
+	return api.raiseOrEscalateAlarm(ctx, deviceId, alarmKey, metricKey, severity, value, occurredTime)
 }
 
 // raiseOrEscalateAlarm brings the alarm for (device, alarmKey) to ACTIVE at severity,

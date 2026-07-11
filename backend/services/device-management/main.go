@@ -50,6 +50,13 @@ var (
 	ResolvedEventsReader messaging.MessageReader
 	AlarmEvaluator       *processor.AlarmEvaluator
 
+	// RaiseAlarmConsumer consumes REACT raise-alarm requests (ADR-051 slice 5c) from
+	// event-processing's dispatcher and raises/escalates the alarm through the same engine
+	// the measurement evaluator uses — so a rule-driven alarm shares the Alarm object,
+	// ack/clear, rollup, and notification flow.
+	RaiseAlarmReader   messaging.MessageReader
+	RaiseAlarmConsumer *processor.RaiseAlarmConsumer
+
 	// CalloutResponder answers NATS auth-callout requests for device connections
 	// (ADR-025). Non-nil only when the broker is configured for auth callout (the
 	// issuer seed is present in the instance config).
@@ -181,6 +188,20 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		core.NewNoOpLifecycleCallbacks(), CachedApi)
 	err = AlarmEvaluator.Initialize(context.Background())
 	if err != nil {
+		return err
+	}
+
+	// Reader + consumer for REACT raise-alarm requests (ADR-051 slice 5c): a dedicated durable
+	// consumer so raise-alarm never shares a failure fate with measurement evaluation. It uses the
+	// cached Api so device-token resolution hits the by-token cache.
+	rareader, err := nmgr.NewReader(config.SUBJECT_RAISE_ALARM)
+	if err != nil {
+		return err
+	}
+	RaiseAlarmReader = rareader
+	RaiseAlarmConsumer = processor.NewRaiseAlarmConsumer(Microservice, RaiseAlarmReader,
+		core.NewNoOpLifecycleCallbacks(), CachedApi)
+	if err = RaiseAlarmConsumer.Initialize(context.Background()); err != nil {
 		return err
 	}
 
@@ -321,6 +342,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start the REACT raise-alarm consumer (ADR-051 slice 5c).
+	err = RaiseAlarmConsumer.Start(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Start the device auth-callout responder once the broker is configured for it
 	// (ADR-025): it delegates every device connect at the broker back to
 	// AuthenticateDevice. Absent an issuer seed the broker isn't running callout,
@@ -353,6 +380,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 	// Stop the alarm evaluator before the NATS connection drains.
 	err = AlarmEvaluator.Stop(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Stop the REACT raise-alarm consumer before the NATS connection drains.
+	err = RaiseAlarmConsumer.Stop(ctx)
 	if err != nil {
 		return err
 	}
@@ -390,6 +423,12 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 
 	// Terminate the alarm evaluator.
 	err = AlarmEvaluator.Terminate(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Terminate the REACT raise-alarm consumer.
+	err = RaiseAlarmConsumer.Terminate(ctx)
 	if err != nil {
 		return err
 	}
