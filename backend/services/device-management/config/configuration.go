@@ -45,6 +45,16 @@ const (
 	// the consumer persists each delivered fact into a durable projection it rebuilds from
 	// on restart. Tenant on the subject.
 	SUBJECT_DEVICE_ATTRIBUTE = "device-attribute"
+	// SUBJECT_RAISE_ALARM carries raise-alarm requests (ADR-051 slice 5c / ADR-054): emitted by
+	// event-processing's REACT dispatcher when a detection rule's raiseAlarm action fires, so
+	// device-management raises/escalates the alarm through its existing alarm engine (the Alarm
+	// object, ack/clear, graph rollup, and alarm-events→notification last mile all stay here,
+	// ADR-041/017). The message is a JSON RaiseAlarmRequest (device token + alarm key + metric +
+	// severity + value + occurred time). At-least-once: raiseOrEscalateAlarm is an idempotent
+	// upsert keyed on (device, alarmKey) with occurred-time out-of-order guards, so a redelivery
+	// is safe. Tenant on the subject. The dispatch side is gated default-off until slice 6 retires
+	// the measurement-driven evaluator, so the two paths never double-raise.
+	SUBJECT_RAISE_ALARM = "raise-alarm"
 )
 
 // Device authentication policy applied to inbound events (transport security,

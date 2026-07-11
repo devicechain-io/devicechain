@@ -233,6 +233,10 @@ type DeviceManagementApi interface {
 	// The source device is named by its token (ADR-044); the evaluator resolves it to
 	// the local row id for its id-keyed alarm state.
 	EvaluateMeasurementAlarms(ctx context.Context, deviceToken string, payload *ResolvedMeasurementsPayload, occurredTime time.Time) error
+	// RaiseAlarm is the REACT raise-alarm entry (ADR-051 slice 5c): it raises/escalates an alarm
+	// for an already-resolved device id through the same engine the measurement evaluator uses, so
+	// a rule-driven alarm shares the Alarm object, ack/clear, rollup, and notification flow.
+	RaiseAlarm(ctx context.Context, deviceId uint, alarmKey, metricKey, severity string, value float64, occurredTime time.Time) error
 
 	// Entity attributes (ADR-012).
 	SetEntityAttribute(ctx context.Context, request *EntityAttributeSetRequest) (*EntityAttribute, error)
