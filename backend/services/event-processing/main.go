@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	dmconfig "github.com/devicechain-io/dc-device-management/config"
@@ -13,10 +14,13 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-event-processing/processor"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/svcclient"
+	"github.com/rs/zerolog/log"
 )
 
 // singletonPartition is the single-writer partition id for the GA deployment: one
@@ -40,6 +44,10 @@ var (
 	RuleRegistry            *runtime.RuleRegistry
 	ResolvedEventsReader    messaging.MessageReader
 	ResolvedEventsProcessor *processor.ResolvedEventsProcessor
+	// ReactDispatcher is the REACT stage's derived-event consumer (ADR-051 slice 5b). It is nil
+	// when send-command dispatch is not configured (no service secret or no command-delivery
+	// coordinate) — REACT is then disabled rather than a startup failure.
+	ReactDispatcher *processor.ReactDispatcher
 )
 
 func main() {
@@ -176,7 +184,52 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// resolves from the device's own attribute (slice 4c-3b-2).
 	ResolvedEventsProcessor.AttributeReader = attributeReader
 	ResolvedEventsProcessor.AttributeStore = DeviceAttributeStore
-	return ResolvedEventsProcessor.Initialize(context.Background())
+	if err := ResolvedEventsProcessor.Initialize(context.Background()); err != nil {
+		return err
+	}
+
+	// The REACT dispatcher (ADR-051 slice 5b): an INDEPENDENT durable consumer of the derived-event
+	// stream this service also produces, dispatching each detection's authored actions (send-command
+	// live in 5b; raise-alarm lands gated in 5c). It resolves each rule's action chain from the
+	// durable rule projection by id — the same projection DETECT rebuilds from — so an action edit
+	// takes effect without re-publishing events. It is wired (and its derived-event consumer created)
+	// only when send-command dispatch is configured; see wireReactDispatcher.
+	return wireReactDispatcher(nmgr)
+}
+
+// wireReactDispatcher builds the REACT dispatcher when BOTH the shared service secret and
+// command-delivery's coordinate are configured, so a send-command action can reach command-delivery
+// over the ADR-044 service-token client (least-privilege command:write). It logs the enabled/disabled
+// mode at startup — mirroring device-management's rule-validator wiring — so a misconfigured deploy
+// is visible rather than silently dropping every send-command.
+//
+// When disabled, ReactDispatcher stays nil AND no derived-event durable consumer is created at all:
+// the reader is built here, inside the enabled branch, precisely so a disabled deploy does not pin a
+// durable cursor that would replay a days-long backlog the moment REACT is later enabled. When
+// enabled, the reader is created DeliverNew so a FIRST enable on a running cluster starts at the
+// stream head — DETECT has been publishing derived events since slice 4a into a 7-day-retention
+// stream, and consuming that history would enqueue a flood of stale commands to real devices (the
+// same first-enable hazard notification-management's alarm-events reader opts out of).
+func wireReactDispatcher(nmgr *messaging.NatsManager) error {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" {
+		log.Warn().Msg("Service secret not configured — REACT send-command dispatch is DISABLED, no derived-event consumer created (ADR-051 slice 5b).")
+		return nil
+	}
+	if infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
+		log.Warn().Msg("command-delivery endpoint not configured (infrastructure.commandDelivery) — REACT send-command dispatch is DISABLED, no derived-event consumer created (ADR-051 slice 5b).")
+		return nil
+	}
+	reader, err := nmgr.NewReader(config.SUBJECT_DERIVED_EVENTS, messaging.ReaderWithDeliverNew())
+	if err != nil {
+		return err
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.CommandWrite)})
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port)
+	ReactDispatcher = processor.NewReactDispatcher(Microservice, reader,
+		processor.NewStoreRuleResolver(DetectRuleStore), processor.NewCommandClient(client, url))
+	log.Info().Str("commandDelivery", url).Msg("REACT send-command dispatch ENABLED (ADR-051 slice 5b).")
+	return nil
 }
 
 // Called after microservice has been initialized.
@@ -247,11 +300,25 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := NatsManager.Start(ctx); err != nil {
 		return err
 	}
-	return ResolvedEventsProcessor.Start(ctx)
+	if err := ResolvedEventsProcessor.Start(ctx); err != nil {
+		return err
+	}
+	// Start the REACT dispatcher last (after its reader is live) — independent of the DETECT
+	// processor. Nil when send-command dispatch is not configured (wireReactDispatcher).
+	if ReactDispatcher != nil {
+		return ReactDispatcher.Start(ctx)
+	}
+	return nil
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// Stop REACT first (before its reader is torn down with the NATS manager), symmetric with start.
+	if ReactDispatcher != nil {
+		if err := ReactDispatcher.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	if err := ResolvedEventsProcessor.Stop(ctx); err != nil {
 		return err
 	}

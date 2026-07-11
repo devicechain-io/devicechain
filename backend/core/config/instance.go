@@ -138,6 +138,19 @@ type EventProcessingConfiguration struct {
 	Port     uint32
 }
 
+// CommandDeliveryConfiguration locates the command-delivery GraphQL endpoint for
+// synchronous cross-service calls (ADR-044 amendment) — event-processing's REACT
+// dispatcher enqueuing a command when a detection rule's sendCommand action fires
+// (ADR-051 slice 5b). Only that caller consumes it, and only when the service secret
+// is also set, so it is neither required by Validate nor filled by ApplyDefaults;
+// event-processing guards on it at startup (warn-and-skip if unset, so REACT
+// send-command is inert rather than a startup failure). The Helm chart supplies the
+// in-cluster coordinate for a normal deploy.
+type CommandDeliveryConfiguration struct {
+	Hostname string
+	Port     uint32
+}
+
 // ServiceAuthConfiguration carries the shared secret backing the synchronous
 // cross-service call primitive (ADR-044 amendment). A caller presents Secret to
 // user-management's mint endpoint to obtain a short-lived service token; the mint
@@ -157,6 +170,7 @@ type InfrastructureConfiguration struct {
 	UserManagement   UserManagementConfiguration
 	DeviceManagement DeviceManagementConfiguration
 	EventProcessing  EventProcessingConfiguration
+	CommandDelivery  CommandDeliveryConfiguration
 	ServiceAuth      ServiceAuthConfiguration
 }
 

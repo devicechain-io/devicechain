@@ -192,6 +192,15 @@ func validateReact(r Rule) error {
 	if r.Severity != "" && !r.Severity.Valid() {
 		return invalid(r.ID, "severity", "unknown severity %q", r.Severity)
 	}
+	if len(r.Actions) > 0 && r.Type == TypeCorrelation {
+		// Every REACT action targets the detection's DEVICE (raiseAlarm keys a device-originated
+		// alarm; sendCommand enqueues to a device). For every rule kind the detection series IS the
+		// device token — except correlation, whose series is the ANCHOR (area) token. Dispatching a
+		// device action against an anchor is nonsensical, so an action chain on a correlation rule is
+		// rejected at the gate rather than mis-targeted at dispatch. Area-level reactions are a future
+		// concern with their own originator model (ADR-041).
+		return invalid(r.ID, "actions", "a correlation rule cannot carry actions (its series is an area anchor, not a device)")
+	}
 	if len(r.Actions) > MaxActionsPerRule {
 		return invalid(r.ID, "actions", "a rule may declare at most %d actions, got %d", MaxActionsPerRule, len(r.Actions))
 	}

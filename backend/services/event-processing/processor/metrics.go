@@ -92,6 +92,64 @@ func (m *detectMetrics) recordStaleAbsenceDropped() {
 	m.staleAbsenceDropped.Inc()
 }
 
+// reactMetrics are the Slice-5 REACT-dispatcher observability counters (ADR-051 REACT stage). Like
+// detectMetrics they are bounded-cardinality: the one label is "action", a fixed two-value enum
+// (sendCommand/raiseAlarm), never a tenant or rule value (the ADR-023 G.3 lesson). Every recorder is
+// nil-safe so a dispatcher built without a Microservice (unit tests) runs unmeasured.
+type reactMetrics struct {
+	dispatched    *prometheus.CounterVec
+	notEnabled    *prometheus.CounterVec
+	orphan        prometheus.Counter
+	poisonDropped prometheus.Counter
+}
+
+// newReactMetrics registers the REACT counters under the service's Prometheus namespace. A nil
+// Microservice (unit tests) yields nil metrics; every recorder is nil-safe, so the dispatcher runs
+// unmeasured rather than panicking on a global-registry double-registration.
+func newReactMetrics(ms *core.Microservice) *reactMetrics {
+	if ms == nil {
+		return nil
+	}
+	return &reactMetrics{
+		dispatched:    ms.NewCounterVec("react_actions_dispatched_total", "REACT actions handed to their sink, by action type (includes idempotent replays).", []string{"action"}),
+		notEnabled:    ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but not yet wired, by action type (raiseAlarm before slice 5c/6).", []string{"action"}),
+		orphan:        ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched).", nil),
+		poisonDropped: ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch).", nil),
+	}
+}
+
+// RecordDispatched records one action successfully handed to its sink (react.Metrics).
+func (m *reactMetrics) RecordDispatched(action string) {
+	if m == nil {
+		return
+	}
+	m.dispatched.WithLabelValues(action).Inc()
+}
+
+// RecordNotEnabled records one recognized-but-inert action (react.Metrics).
+func (m *reactMetrics) RecordNotEnabled(action string) {
+	if m == nil {
+		return
+	}
+	m.notEnabled.WithLabelValues(action).Inc()
+}
+
+// RecordOrphan records one derived event whose rule was gone (react.Metrics).
+func (m *reactMetrics) RecordOrphan() {
+	if m == nil {
+		return
+	}
+	m.orphan.Inc()
+}
+
+// recordPoisonDropped records one derived event dropped after exhausting the redelivery cap.
+func (m *reactMetrics) recordPoisonDropped() {
+	if m == nil {
+		return
+	}
+	m.poisonDropped.Inc()
+}
+
 // setRulesActive publishes the loaded rule count (called once at startup wiring).
 func (m *detectMetrics) setRulesActive(n int) {
 	if m == nil {
