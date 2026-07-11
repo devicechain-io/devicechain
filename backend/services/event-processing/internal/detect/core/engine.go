@@ -71,12 +71,18 @@ type Rule struct {
 // CEL predicate (set by the predicate layer in the real service; set directly in tests).
 // For Absence, any event is a heartbeat and Match is ignored.
 type Event struct {
-	Seq    uint64
-	Key    SeriesKey
-	Time   time.Time
-	Value  float64
-	Match  bool
-	Member string // Correlation: the distinct contributor (device token) under the anchor key; ignored otherwise
+	Seq   uint64
+	Key   SeriesKey
+	Time  time.Time
+	Value float64
+	// HasValue reports whether Value is a real reading rather than a zero default: true when the
+	// event was built from a designated value/gate metric, false for a metric-less shape (a raw-CEL
+	// leaf with no single metric). It is what a gate-kind fire (Threshold/Repeating) propagates to
+	// its detection so a metric-less rule carries no value instead of a fabricated 0. Value-consuming
+	// kinds (DeltaRate, aggregates) fold Value regardless and stamp their own computed value.
+	HasValue bool
+	Match    bool
+	Member   string // Correlation: the distinct contributor (device token) under the anchor key; ignored otherwise
 }
 
 // Detection is an emitted signal. Its identity (RuleID, Series, Kind, At) is stable and
@@ -91,6 +97,17 @@ type Detection struct {
 	// and Correlation; the elapsed deadline for Absence, Duration, and Session; the window end
 	// for Aggregate.
 	At time.Time
+	// Value is the scalar the detection is ABOUT, when one is meaningful: the crossing sample for
+	// Threshold/Repeating (the event's own gate-metric reading, via emitSample), the computed
+	// delta/rate for DeltaRate, and the window/session aggregate for CountWindow/SlidingAgg/Aggregate/
+	// Session. It is an informational payload the raise-alarm REACT action stamps on the alarm (so a
+	// re-raise carries the real triggering value, not a zero), NOT part of the dedup identity above —
+	// a downstream at-least-once collapse keys only on (RuleID, Series, Kind, At). HasValue
+	// distinguishes "value is 0.0" from "no value": timer-driven silence fires (Absence, Duration),
+	// Correlation, and a metric-less Threshold/Repeating leaf (a raw-CEL gate that reads no single
+	// sample) all carry none (HasValue=false).
+	Value    float64
+	HasValue bool
 }
 
 // Engine is the single-writer detection core for one partition. It is fed Events (and
@@ -418,7 +435,7 @@ func (e *Engine) apply(ev Event) {
 	switch r.Kind {
 	case Threshold:
 		if ev.Match {
-			e.emit(r, ev.Key, ev.Time)
+			e.emitSample(r, ev)
 		}
 	case Absence:
 		// Any event is a heartbeat: (re)arm the dead-man timer, but only ever FORWARD — a
@@ -481,7 +498,7 @@ func (e *Engine) fire(key SeriesKey, deadline time.Time) {
 		// the next event for this key opens a fresh session (re-arms the wheel).
 		if pa, ok := e.session[key]; ok {
 			if cmp(r.Op, pa.value(r.Agg), r.Thresh) {
-				e.emit(r, key, deadline)
+				e.emitValue(r, key, deadline, pa.value(r.Agg))
 			}
 			delete(e.session, key)
 		}
@@ -490,6 +507,21 @@ func (e *Engine) fire(key SeriesKey, deadline time.Time) {
 
 func (e *Engine) emit(r Rule, key SeriesKey, at time.Time) {
 	e.out = append(e.out, Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at})
+}
+
+// emitValue emits a detection carrying a COMPUTED scalar the fire is about (the delta/rate, or a
+// window/session aggregate) — always present, so HasValue is true. Value-less fires (Absence,
+// Duration, Correlation) use emit instead.
+func (e *Engine) emitValue(r Rule, key SeriesKey, at time.Time, value float64) {
+	e.out = append(e.out, Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at, Value: value, HasValue: true})
+}
+
+// emitSample emits a detection carrying the triggering EVENT's own sample value (Threshold,
+// Repeating). It propagates the event's HasValue, so a metric-less raw-CEL leaf (which reads no
+// sample) carries no value rather than a fabricated 0 — the distinction a raiseAlarm action needs
+// to avoid stamping a fake last value.
+func (e *Engine) emitSample(r Rule, ev Event) {
+	e.out = append(e.out, Detection{RuleID: r.ID, Series: ev.Key.Series, Kind: r.Kind, At: ev.Time, Value: ev.Value, HasValue: ev.HasValue})
 }
 
 // --- snapshot / restore (atomic-with-sequence in the real store; bytes here) ---

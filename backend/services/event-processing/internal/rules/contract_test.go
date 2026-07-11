@@ -120,6 +120,53 @@ func TestDurationCancelledByMetricAbsentEvent(t *testing.T) {
 	}
 }
 
+// TestBuildEventCarriesGateSampleForThreshold proves slice 6a end-to-end at the real seam
+// (compile → BuildEvent → engine → detection): a structured threshold/repeating rule carries the
+// GATE metric's crossing sample as the detection's value, even though those kinds set no ValueMetric.
+// This is the seam the flagship raiseAlarm case rides; a regression here re-introduces the "stamp a
+// fabricated 0 as the alarm's real value" defect. A metric-less raw-CEL leaf carries NO value.
+func TestBuildEventCarriesGateSampleForThreshold(t *testing.T) {
+	// Structured threshold: the gate metric's value flows through as a real detection value.
+	cr, err := Compile(Rule{ID: "r", Name: "hot", Type: TypeThreshold,
+		When: Condition{Metric: "temp", Op: OpGt, Threshold: ptr(90)}}, testLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := core.NewEngine([]core.Rule{cr.Core}, 0)
+	ev, err := cr.BuildEvent(1, "dev1", "dev1", predicate.Input{Occurred: at(1), M: map[string]float64{"temp": 95}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ev.HasValue || ev.Value != 95 {
+		t.Fatalf("threshold event must carry the gate sample; got HasValue=%v Value=%v", ev.HasValue, ev.Value)
+	}
+	e.ProcessEvent(ev)
+	d := e.Drain()
+	if len(d) != 1 || !d[0].HasValue || d[0].Value != 95 {
+		t.Fatalf("threshold detection must carry the crossing sample 95; got %+v", d)
+	}
+
+	// A raw-CEL threshold leaf has no single gate metric — it must carry no value, not a bogus 0.
+	craw, err := Compile(Rule{ID: "r2", Name: "raw", Type: TypeThreshold,
+		When: Condition{CEL: `"temp" in m && m["temp"] > 90.0`}}, testLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evRaw, err := craw.BuildEvent(1, "dev1", "dev1", predicate.Input{Occurred: at(1), M: map[string]float64{"temp": 95}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evRaw.HasValue {
+		t.Fatalf("a metric-less raw-CEL leaf must carry no value; got Value=%v", evRaw.Value)
+	}
+	e2 := core.NewEngine([]core.Rule{craw.Core}, 0)
+	e2.ProcessEvent(evRaw)
+	d2 := e2.Drain()
+	if len(d2) != 1 || d2[0].HasValue {
+		t.Fatalf("raw-CEL threshold detection must carry no value; got %+v", d2)
+	}
+}
+
 // TestCompileErrorAnchoring proves a leaf failure is wrapped so the console gets the rule
 // id + `when` field anchor, while errors.As still reaches the underlying predicate error
 // (a caller can distinguish a cost rejection from a type error).

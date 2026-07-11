@@ -174,7 +174,7 @@ func (e *Engine) applyRepeating(ev Event, r Rule) {
 	kept = append(kept, ev.Time)
 	e.sliding[ev.Key] = kept
 	if prev < r.Count && len(kept) >= r.Count {
-		e.emit(r, ev.Key, ev.Time)
+		e.emitSample(r, ev) // the sample that completed the N-in-window run (none for a metric-less leaf)
 	}
 }
 
@@ -215,7 +215,7 @@ func (e *Engine) applyCountWindow(ev Event, r Rule) {
 	pa.add(ev.Value)
 	if pa.count >= r.Count {
 		if cmp(r.Op, pa.value(r.Agg), r.Thresh) {
-			e.emit(r, ev.Key, ev.Time)
+			e.emitValue(r, ev.Key, ev.Time, pa.value(r.Agg))
 		}
 		delete(e.counts, ev.Key)
 	}
@@ -242,7 +242,8 @@ func (e *Engine) closePanes(wm time.Time) bool {
 		}
 		r, ok := e.rules[top.pk.Rule]
 		if ok && cmp(r.Op, pa.value(r.Agg), r.Thresh) {
-			e.out = append(e.out, Detection{RuleID: r.ID, Series: top.pk.Series, Kind: Aggregate, At: top.end})
+			e.out = append(e.out, Detection{RuleID: r.ID, Series: top.pk.Series, Kind: Aggregate,
+				At: top.end, Value: pa.value(r.Agg), HasValue: true})
 		}
 		delete(e.panes, top.pk)
 	}

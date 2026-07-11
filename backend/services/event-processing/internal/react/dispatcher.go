@@ -82,6 +82,12 @@ type AlarmRequest struct {
 	MetricKey    string
 	Severity     string
 	OccurredTime time.Time
+	// Value is the triggering scalar the detection carried, stamped on the alarm so a re-raise
+	// annotates the real last value rather than a zero. It is nil when the rule shape has none — a
+	// silence-driven absence/duration fire, or a metric-less raw-CEL leaf — and device-management then
+	// leaves the alarm's last value NULL rather than writing a fabricated 0. A value-bearing rule
+	// (threshold/repeating crossing sample, deltaRate/aggregate computed scalar) carries a real value.
+	Value *float64
 }
 
 // AlarmSink raises/escalates an alarm for a device (ADR-041), implemented by publishing a raise-alarm
@@ -193,6 +199,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			MetricKey:    ruleMetric(rule),
 			Severity:     string(rule.Severity),
 			OccurredTime: ev.OccurredTime,
+			Value:        ev.Value,
 		}
 		if err := d.alarms.Raise(ctx, req); err != nil {
 			return Retry

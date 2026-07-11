@@ -34,12 +34,15 @@ type RaiseAlarmRequest struct {
 	// the consumer maps it to the AlarmSeverity tier (ADR-041) and drops a request whose severity
 	// is unknown.
 	Severity string `json:"severity"`
-	// Value is the reading that drove the detection, stored as the alarm's last value. Zero when the
-	// derived event carries no value yet (the Value/MetricKey enrichment is a later slice). NOTE: a
-	// zero is stamped as a REAL last value (the engine has no "absent" representation), so raise-alarm
-	// dispatch must not be ENABLED (slice 6) before the derived event carries a real value — else a
-	// REACT re-raise would clobber a measurement-era alarm's last value with 0.
-	Value float64 `json:"value,omitempty"`
+	// Value is the reading that drove the detection, stored as the alarm's last value. As of slice 6a
+	// a value-bearing rule (threshold/repeating carry the crossing sample; deltaRate/aggregate carry
+	// their computed scalar) stamps its real value here — unblocking the raise-alarm dispatch enable
+	// (slice 6d). It is a POINTER so a silence-driven fire (absence/duration) or a metric-less raw-CEL
+	// leaf, which has no natural value, is NULL rather than a fabricated 0 written as a real reading:
+	// nil → the alarm's last_value column is left NULL. This matters when two rules share an authored
+	// alarm key on one device — a value-less raise then leaves the row's last value NULL rather than
+	// clobbering a co-keyed rule's real reading with 0. omitempty keeps the wire lean when absent.
+	Value *float64 `json:"value,omitempty"`
 	// OccurredTime is the detection's event time — the alarm's raised time AND the ordering key the
 	// engine's CROSS-CYCLE guards use (a raise older than a clear cannot reactivate; older than the
 	// current raise cannot rewrite on the reactivation path). It does NOT protect against WITHIN-cycle

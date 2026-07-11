@@ -34,15 +34,18 @@ func NewAlarmClient(writer messaging.MessageWriter) react.AlarmSink {
 // Raise publishes one raise-alarm request on its tenant's subject. The writer derives the subject
 // from the tenant in context (fail-closed on none), so the request lands on exactly
 // "{instance}.{tenant}.raise-alarm". A marshal or write failure is returned so the dispatcher
-// retries (the event redelivers; the downstream upsert makes the re-raise idempotent). Value is
-// omitted (0) until the derived event carries the triggering value — a later slice; per slice 5c-1,
-// raise-alarm must not be enabled before then.
+// retries (the event redelivers; the downstream upsert makes the re-raise idempotent). The triggering
+// value is carried through as a nullable pointer (slice 6a): a value-bearing detection (threshold/
+// repeating crossing sample, deltaRate/aggregate computed scalar) stamps its real value, while a
+// silence-driven absence/duration fire carries nil — device-management then leaves the alarm's last
+// value NULL rather than writing a fabricated 0.
 func (c *alarmClient) Raise(ctx context.Context, req react.AlarmRequest) error {
 	payload, err := dmmodel.MarshalRaiseAlarmRequest(&dmmodel.RaiseAlarmRequest{
 		DeviceToken:  req.DeviceToken,
 		AlarmKey:     req.AlarmKey,
 		MetricKey:    req.MetricKey,
 		Severity:     req.Severity,
+		Value:        req.Value,
 		OccurredTime: req.OccurredTime,
 	})
 	if err != nil {

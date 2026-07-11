@@ -45,7 +45,7 @@ func (e *Engine) applyDeltaRate(ev Event, r Rule) {
 		q /= ev.Time.Sub(prev.time).Seconds() // dt > 0, guaranteed by the advance guard above
 	}
 	if cmp(r.Op, q, r.Thresh) {
-		e.emit(r, ev.Key, ev.Time)
+		e.emitValue(r, ev.Key, ev.Time, q) // q = the delta (raw) or rate the detection is about
 	}
 }
 
@@ -188,7 +188,7 @@ func (e *Engine) applySlidingAgg(ev Event, r Rule) {
 	switch {
 	case st.satisfies(r) && !st.armed:
 		st.armed = true
-		e.emit(r, ev.Key, ev.Time)
+		e.emitValue(r, ev.Key, ev.Time, st.value(r.Agg))
 	case !st.satisfies(r):
 		st.armed = false
 	}

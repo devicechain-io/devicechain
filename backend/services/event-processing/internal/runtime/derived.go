@@ -44,6 +44,13 @@ type DerivedEvent struct {
 	// same vanishingly-rare straggler skew documented for Kind), and it is excluded from the dedup
 	// identity below.
 	Severity string `json:"severity,omitempty"`
+	// Value is the scalar the detection is about (the crossing sample, computed rate, or window
+	// aggregate — see core.Detection.Value), carried so a raiseAlarm REACT action stamps the alarm
+	// with the real triggering value instead of a zero (the slice-5c blocker for enabling raise-alarm
+	// dispatch). It is a pointer so "no value" (silence-driven Absence/Duration, Correlation) is
+	// distinct from "value is 0.0", and omitted from the wire when absent. Like Severity it is an
+	// informational payload, NOT part of the dedup identity below.
+	Value *float64 `json:"value,omitempty"`
 	// CAVEAT (dynamic thresholds): the dedup identity does NOT include the resolved threshold. For a
 	// rule whose bound comes from a device attribute (slice 4c-3), replay resolves against the CURRENT
 	// attribute value, not the value at original event time (see startAttributeView's non-determinism
@@ -174,6 +181,10 @@ func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
 		Series:       det.Series,
 		OccurredTime: det.At,
 		Severity:     string(sr.Compiled.Severity),
+	}
+	if det.HasValue {
+		v := det.Value // copy the loop-local before taking its address
+		de.Value = &v
 	}
 	payload, err := json.Marshal(de)
 	if err != nil {
