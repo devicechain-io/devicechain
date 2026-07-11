@@ -29,3 +29,29 @@ func RuleTenant(id string) (string, bool) {
 	}
 	return tenant, true
 }
+
+// StableRuleKey returns a rule's VERSION-FREE, tenant-free identity "{profileToken}/{ruleToken}"
+// from a minted id "{tenant}/{profileToken}@{version}/{ruleToken}". The profile version token rotates
+// on EVERY profile publish (every enabled rule is re-emitted under the new version), but the profile
+// token and rule token do not (ADR-045 / slice 4b-1 rename-blocked). It backs the REACT default alarm
+// key so a rule's repeated firings escalate ONE alarm even across routine re-publishes, rather than
+// forking a fresh alarm per version and orphaning the prior one ACTIVE (ADR-041 dec 3). It returns
+// ok=false for an id that does not parse into that minted shape. The "/" separators make it a system
+// key, not an ADR-042 authored token — intentional, so it stays both stable and per-rule unique.
+func StableRuleKey(id string) (string, bool) {
+	_, rest, ok := strings.Cut(id, tenantSep) // drop the tenant prefix
+	if !ok {
+		return "", false
+	}
+	// rest is "{profileToken}@{version}/{ruleToken}"; profile/rule/version tokens exclude "/" and "@"
+	// (ADR-042), so the single remaining "/" splits the version token from the rule token unambiguously.
+	pvt, ruleToken, ok := strings.Cut(rest, tenantSep)
+	if !ok || ruleToken == "" {
+		return "", false
+	}
+	profileToken, _, ok := strings.Cut(pvt, "@")
+	if !ok || profileToken == "" {
+		return "", false
+	}
+	return profileToken + tenantSep + ruleToken, true
+}

@@ -40,6 +40,20 @@ func (s *fakeSink) Send(_ context.Context, req CommandRequest) error {
 	return nil
 }
 
+// fakeAlarmSink records raise-alarm requests and can fail.
+type fakeAlarmSink struct {
+	raised []AlarmRequest
+	fail   bool
+}
+
+func (s *fakeAlarmSink) Raise(_ context.Context, req AlarmRequest) error {
+	if s.fail {
+		return errors.New("raise-alarm publish failed")
+	}
+	s.raised = append(s.raised, req)
+	return nil
+}
+
 // fakeMetrics counts dispatcher outcomes.
 type fakeMetrics struct {
 	dispatched map[string]int
@@ -72,7 +86,7 @@ func sendCmdRule(cmd, payload string) rules.Rule {
 func TestDispatchSendCommand(t *testing.T) {
 	sink := &fakeSink{}
 	m := newFakeMetrics()
-	d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", `{"mode":"eco"}`), found: true}, sink, m)
+	d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", `{"mode":"eco"}`), found: true}, sink, nil, m)
 
 	if out := d.Dispatch(context.Background(), evt()); out != Done {
 		t.Fatalf("want Done, got %v", out)
@@ -129,7 +143,7 @@ func TestIdempotencyTokenStableUnderReorder(t *testing.T) {
 func TestDispatchOrphanRule(t *testing.T) {
 	sink := &fakeSink{}
 	m := newFakeMetrics()
-	d := NewDispatcher(fakeResolver{found: false}, sink, m)
+	d := NewDispatcher(fakeResolver{found: false}, sink, nil, m)
 	if out := d.Dispatch(context.Background(), evt()); out != Done {
 		t.Fatalf("orphan must be Done, got %v", out)
 	}
@@ -140,7 +154,7 @@ func TestDispatchOrphanRule(t *testing.T) {
 
 // TestDispatchResolverErrorRetries proves a transient store failure is a Retry (no drop).
 func TestDispatchResolverErrorRetries(t *testing.T) {
-	d := NewDispatcher(fakeResolver{err: errors.New("db down")}, &fakeSink{}, newFakeMetrics())
+	d := NewDispatcher(fakeResolver{err: errors.New("db down")}, &fakeSink{}, nil, newFakeMetrics())
 	if out := d.Dispatch(context.Background(), evt()); out != Retry {
 		t.Fatalf("a resolver error must Retry, got %v", out)
 	}
@@ -150,7 +164,7 @@ func TestDispatchResolverErrorRetries(t *testing.T) {
 func TestDispatchSinkErrorRetries(t *testing.T) {
 	sink := &fakeSink{failFirst: 1}
 	m := newFakeMetrics()
-	d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", ""), found: true}, sink, m)
+	d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", ""), found: true}, sink, nil, m)
 	if out := d.Dispatch(context.Background(), evt()); out != Retry {
 		t.Fatalf("a sink error must Retry, got %v", out)
 	}
@@ -169,19 +183,82 @@ func TestDispatchSinkErrorRetries(t *testing.T) {
 	}
 }
 
-// TestDispatchRaiseAlarmNotEnabled proves a raiseAlarm action is recognized-but-inert in 5b (no
-// dispatch), counted as not-enabled, and does not block the (Done) event.
+// raiseAlarmRule builds a threshold rule with a single raiseAlarm action and the given authored key.
+func raiseAlarmRule(alarmKey string) rules.Rule {
+	return rules.Rule{ID: "acme/p@1/r1", Name: "r", Type: rules.TypeThreshold, Severity: rules.SeverityMajor,
+		When:    rules.Condition{Metric: "temperature", Op: rules.OpGt, Threshold: ptrF(30)},
+		Actions: []rules.Action{{Type: rules.ActionRaiseAlarm, RaiseAlarm: &rules.RaiseAlarmAction{AlarmKey: alarmKey}}}}
+}
+
+func ptrF(v float64) *float64 { return &v }
+
+// TestDispatchRaiseAlarmNotEnabled proves a raiseAlarm action with a NIL alarm sink is
+// recognized-but-inert (no dispatch), counted as not-enabled, and does not block the (Done) event.
 func TestDispatchRaiseAlarmNotEnabled(t *testing.T) {
-	rule := rules.Rule{ID: "acme/p@1/r1", Name: "r", Type: rules.TypeThreshold, Severity: rules.SeverityMajor,
-		Actions: []rules.Action{{Type: rules.ActionRaiseAlarm, RaiseAlarm: &rules.RaiseAlarmAction{}}}}
 	sink := &fakeSink{}
 	m := newFakeMetrics()
-	d := NewDispatcher(fakeResolver{rule: rule, found: true}, sink, m)
+	d := NewDispatcher(fakeResolver{rule: raiseAlarmRule(""), found: true}, sink, nil, m)
 	if out := d.Dispatch(context.Background(), evt()); out != Done {
 		t.Fatalf("raiseAlarm-only rule must be Done, got %v", out)
 	}
 	if len(sink.sent) != 0 || m.notEnabled["raiseAlarm"] != 1 {
 		t.Fatalf("raiseAlarm must be inert+counted: sent=%d notEnabled=%+v", len(sink.sent), m.notEnabled)
+	}
+}
+
+// TestDispatchRaiseAlarmEnabled proves that with an alarm sink wired, a raiseAlarm action raises with
+// the rule's severity, the rule's watched metric, and the detection's series+time; and an empty
+// authored key defaults to the rule id.
+func TestDispatchRaiseAlarmEnabled(t *testing.T) {
+	alarms := &fakeAlarmSink{}
+	m := newFakeMetrics()
+	d := NewDispatcher(fakeResolver{rule: raiseAlarmRule(""), found: true}, nil, alarms, m)
+	if out := d.Dispatch(context.Background(), evt()); out != Done {
+		t.Fatalf("want Done, got %v", out)
+	}
+	if len(alarms.raised) != 1 {
+		t.Fatalf("want 1 raise, got %d", len(alarms.raised))
+	}
+	r := alarms.raised[0]
+	// The default alarm key is the VERSION-FREE stable identity "{profileToken}/{ruleToken}" derived
+	// from the rule id "acme/p@1/r1", so it survives a profile re-publish (p@2, …).
+	if r.DeviceToken != "device-1" || r.Severity != "major" || r.MetricKey != "temperature" || r.AlarmKey != "p/r1" || r.Tenant != "acme" {
+		t.Fatalf("raise request wrong: %+v", r)
+	}
+	if !r.OccurredTime.Equal(evt().OccurredTime) {
+		t.Fatalf("raise occurred time wrong: %v", r.OccurredTime)
+	}
+	if m.dispatched["raiseAlarm"] != 1 {
+		t.Fatalf("raiseAlarm dispatched metric not recorded: %+v", m.dispatched)
+	}
+
+	// An authored alarm key is used verbatim.
+	alarms2 := &fakeAlarmSink{}
+	d2 := NewDispatcher(fakeResolver{rule: raiseAlarmRule("over-temp"), found: true}, nil, alarms2, newFakeMetrics())
+	d2.Dispatch(context.Background(), evt())
+	if alarms2.raised[0].AlarmKey != "over-temp" {
+		t.Fatalf("authored alarm key must be used verbatim, got %q", alarms2.raised[0].AlarmKey)
+	}
+}
+
+// TestDispatchRaiseAlarmSinkErrorRetries proves a raise-alarm publish failure is a Retry.
+func TestDispatchRaiseAlarmSinkErrorRetries(t *testing.T) {
+	d := NewDispatcher(fakeResolver{rule: raiseAlarmRule(""), found: true}, nil, &fakeAlarmSink{fail: true}, newFakeMetrics())
+	if out := d.Dispatch(context.Background(), evt()); out != Retry {
+		t.Fatalf("a raise-alarm failure must Retry, got %v", out)
+	}
+}
+
+// TestDispatchSendCommandDisabled proves a sendCommand action with a NIL command sink is inert
+// (counted not-enabled), not a panic.
+func TestDispatchSendCommandDisabled(t *testing.T) {
+	m := newFakeMetrics()
+	d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", ""), found: true}, nil, nil, m)
+	if out := d.Dispatch(context.Background(), evt()); out != Done {
+		t.Fatalf("want Done, got %v", out)
+	}
+	if m.notEnabled["sendCommand"] != 1 || m.dispatched["sendCommand"] != 0 {
+		t.Fatalf("sendCommand with nil sink must be inert+counted: %+v", m.notEnabled)
 	}
 }
 
@@ -199,7 +276,7 @@ func TestDispatchMultiActionPartialRetry(t *testing.T) {
 	// Custom failure: fail only call #2.
 	failing := &failOnCallSink{failCall: 2}
 	m := newFakeMetrics()
-	d := NewDispatcher(fakeResolver{rule: rule, found: true}, failing, m)
+	d := NewDispatcher(fakeResolver{rule: rule, found: true}, failing, nil, m)
 	if out := d.Dispatch(context.Background(), evt()); out != Retry {
 		t.Fatalf("a failed 2nd action must Retry the whole event, got %v", out)
 	}

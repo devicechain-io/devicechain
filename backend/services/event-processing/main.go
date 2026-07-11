@@ -11,6 +11,7 @@ import (
 	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-event-processing/graphql"
+	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-event-processing/processor"
@@ -197,38 +198,63 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	return wireReactDispatcher(nmgr)
 }
 
-// wireReactDispatcher builds the REACT dispatcher when BOTH the shared service secret and
-// command-delivery's coordinate are configured, so a send-command action can reach command-delivery
-// over the ADR-044 service-token client (least-privilege command:write). It logs the enabled/disabled
-// mode at startup — mirroring device-management's rule-validator wiring — so a misconfigured deploy
-// is visible rather than silently dropping every send-command.
+// wireReactDispatcher builds the REACT dispatcher over whichever action sinks are configured. The two
+// action kinds are independently gated:
+//   - send-command is enabled when the shared service secret AND command-delivery's coordinate are
+//     set, so a sendCommand action reaches command-delivery over the ADR-044 service-token client
+//     (least-privilege command:write).
+//   - raise-alarm is enabled by the RaiseAlarmDispatchEnabled flag (default off until slice 6 retires
+//     the measurement-driven evaluator), publishing to device-management's raise-alarm subject.
 //
-// When disabled, ReactDispatcher stays nil AND no derived-event durable consumer is created at all:
-// the reader is built here, inside the enabled branch, precisely so a disabled deploy does not pin a
-// durable cursor that would replay a days-long backlog the moment REACT is later enabled. When
-// enabled, the reader is created DeliverNew so a FIRST enable on a running cluster starts at the
-// stream head — DETECT has been publishing derived events since slice 4a into a 7-day-retention
-// stream, and consuming that history would enqueue a flood of stale commands to real devices (the
-// same first-enable hazard notification-management's alarm-events reader opts out of).
+// It logs the enabled/disabled mode at startup so a misconfigured deploy is visible. When NEITHER
+// sink is enabled, ReactDispatcher stays nil AND no derived-event durable consumer is created — the
+// reader is built here, inside the enabled path, precisely so a disabled deploy does not pin a durable
+// cursor that would replay a days-long backlog the moment REACT is later enabled. When enabled, the
+// reader is DeliverNew so a FIRST enable on a running cluster starts at the stream head — DETECT has
+// published derived events since slice 4a into a 7-day-retention stream, and consuming that history
+// would flood stale side effects (the first-enable hazard notification-management's reader opts out
+// of).
 func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
+
+	// send-command sink (nil ⇒ send-command disabled).
+	var commands react.CommandSink
 	if infra.ServiceAuth.Secret == "" {
-		log.Warn().Msg("Service secret not configured — REACT send-command dispatch is DISABLED, no derived-event consumer created (ADR-051 slice 5b).")
+		log.Warn().Msg("Service secret not configured — REACT send-command dispatch is DISABLED (ADR-051 slice 5b).")
+	} else if infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
+		log.Warn().Msg("command-delivery endpoint not configured (infrastructure.commandDelivery) — REACT send-command dispatch is DISABLED (ADR-051 slice 5b).")
+	} else {
+		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.CommandWrite)})
+		url := fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port)
+		commands = processor.NewCommandClient(client, url)
+		log.Info().Str("commandDelivery", url).Msg("REACT send-command dispatch ENABLED (ADR-051 slice 5b).")
+	}
+
+	// raise-alarm sink (nil ⇒ raise-alarm disabled). A dedicated tenant-scoped writer on
+	// device-management's raise-alarm subject; the thin device-management consumer applies it.
+	var alarms react.AlarmSink
+	if Configuration.RaiseAlarmDispatchEnabled {
+		writer, err := nmgr.NewWriter(dmconfig.SUBJECT_RAISE_ALARM)
+		if err != nil {
+			return err
+		}
+		alarms = processor.NewAlarmClient(writer)
+		log.Warn().Msg("REACT raise-alarm dispatch ENABLED (ADR-051 slice 5c) — ensure the measurement-driven alarm evaluator is retired for these tenants to avoid double-raise (slice 6).")
+	} else {
+		log.Info().Msg("REACT raise-alarm dispatch is DISABLED (default; ADR-051 slice 5c gated off until slice 6).")
+	}
+
+	if commands == nil && alarms == nil {
+		log.Warn().Msg("No REACT action sink enabled — the REACT dispatcher and its derived-event consumer are NOT started.")
 		return nil
 	}
-	if infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
-		log.Warn().Msg("command-delivery endpoint not configured (infrastructure.commandDelivery) — REACT send-command dispatch is DISABLED, no derived-event consumer created (ADR-051 slice 5b).")
-		return nil
-	}
+
 	reader, err := nmgr.NewReader(config.SUBJECT_DERIVED_EVENTS, messaging.ReaderWithDeliverNew())
 	if err != nil {
 		return err
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.CommandWrite)})
-	url := fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port)
 	ReactDispatcher = processor.NewReactDispatcher(Microservice, reader,
-		processor.NewStoreRuleResolver(DetectRuleStore), processor.NewCommandClient(client, url))
-	log.Info().Str("commandDelivery", url).Msg("REACT send-command dispatch ENABLED (ADR-051 slice 5b).")
+		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms)
 	return nil
 }
 

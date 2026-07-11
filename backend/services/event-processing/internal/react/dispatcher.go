@@ -22,6 +22,7 @@ package react
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -70,6 +71,28 @@ type CommandSink interface {
 	Send(ctx context.Context, req CommandRequest) error
 }
 
+// AlarmRequest is one raise-alarm dispatch (ADR-041 / slice 5c): raise or escalate an alarm for a
+// device. Unlike a command it carries no idempotency token — device-management's raiseOrEscalateAlarm
+// is an upsert keyed on (device, alarmKey) with occurred-time cross-cycle guards, so an at-least-once
+// redelivery is idempotent without one.
+type AlarmRequest struct {
+	Tenant       string
+	DeviceToken  string
+	AlarmKey     string
+	MetricKey    string
+	Severity     string
+	OccurredTime time.Time
+}
+
+// AlarmSink raises/escalates an alarm for a device (ADR-041), implemented by publishing a raise-alarm
+// request to device-management (slice 5c). Raise returns a non-nil error on any failure; the
+// dispatcher retries every error (the event redelivers, the upsert makes the re-raise safe). A nil
+// AlarmSink means raise-alarm dispatch is DISABLED (the default until slice 6), and the dispatcher
+// treats a raiseAlarm action as recognized-but-inert.
+type AlarmSink interface {
+	Raise(ctx context.Context, req AlarmRequest) error
+}
+
 // Metrics is the REACT observability sink (bounded cardinality — no per-tenant labels, the ADR-023
 // G.3 lesson). action is a fixed, small enum ("sendCommand"/"raiseAlarm"), never a tenant/rule value.
 type Metrics interface {
@@ -78,30 +101,36 @@ type Metrics interface {
 	RecordDispatched(action string)
 	// RecordOrphan: one derived event whose rule was gone from the projection (nothing dispatched).
 	RecordOrphan()
-	// RecordNotEnabled: one action recognized but not yet wired (raiseAlarm before slice 5c/6).
+	// RecordNotEnabled: one action recognized but whose sink is disabled (nil) — raiseAlarm before
+	// slice 6, or send-command on a deploy without command-delivery configured.
 	RecordNotEnabled(action string)
 }
 
 // Dispatcher turns a derived event into its authored actions. It holds no per-detection state —
-// idempotency lives entirely in the deterministic token the sink dedups on — so it is safe to run
-// as a queue group once the DETECT singleton constraint is lifted (slice 6).
+// idempotency lives entirely in the deterministic token the command sink dedups on (and the
+// upsert-keyed alarm) — so it is safe to run as a queue group once the DETECT singleton constraint
+// is lifted (slice 6). Each action kind has its own sink; a nil sink means that kind is DISABLED and
+// its actions are recognized-but-inert (RecordNotEnabled), so send-command and raise-alarm are
+// independently gateable.
 type Dispatcher struct {
 	resolver RuleResolver
 	commands CommandSink
+	alarms   AlarmSink
 	metrics  Metrics
 }
 
-// NewDispatcher builds a REACT dispatcher over a rule resolver and a command sink.
-func NewDispatcher(resolver RuleResolver, commands CommandSink, metrics Metrics) *Dispatcher {
-	return &Dispatcher{resolver: resolver, commands: commands, metrics: metrics}
+// NewDispatcher builds a REACT dispatcher over a rule resolver and its action sinks. Either sink may
+// be nil: a nil commands sink disables send-command, a nil alarms sink disables raise-alarm (the
+// default until slice 6). A dispatcher with both nil dispatches nothing (every action inert).
+func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink, metrics Metrics) *Dispatcher {
+	return &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, metrics: metrics}
 }
 
 // Dispatch handles one derived event, returning whether the consumer may ack it (Done) or must let
 // it redeliver (Retry). It resolves the rule that fired and dispatches each action in order. A
-// failure at ANY action returns Retry immediately, leaving the event unacked; because every
-// action's idempotency token is deterministic in (detection identity, action index), the redelivery
-// re-runs the already-dispatched prefix as idempotent no-ops (command-delivery collapses them) and
-// reaches the failed action again. An orphan rule never wedges the loop.
+// failure at ANY action returns Retry immediately, leaving the event unacked; the redelivery re-runs
+// the already-dispatched prefix idempotently (the command token collapses re-sends; the alarm upsert
+// collapses re-raises) and reaches the failed action again. An orphan rule never wedges the loop.
 func (d *Dispatcher) Dispatch(ctx context.Context, ev runtime.DerivedEvent) Outcome {
 	rule, found, err := d.resolver.Resolve(ctx, ev.RuleID)
 	if err != nil {
@@ -115,20 +144,25 @@ func (d *Dispatcher) Dispatch(ctx context.Context, ev runtime.DerivedEvent) Outc
 		d.metrics.RecordOrphan()
 		return Done
 	}
-	for i, a := range rule.Actions {
-		if out := d.dispatchAction(ctx, ev, i, a); out == Retry {
+	for _, a := range rule.Actions {
+		if out := d.dispatchAction(ctx, ev, rule, a); out == Retry {
 			return Retry
 		}
 	}
 	return Done
 }
 
-// dispatchAction dispatches one action. A send failure is a Retry (the whole event redelivers); a
-// successful send, a not-yet-enabled action, and an unknown action (unreachable for a gate-validated
-// rule) are all Done so the loop moves on.
-func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent, i int, a rules.Action) Outcome {
+// dispatchAction dispatches one action. A sink failure is a Retry (the whole event redelivers); a
+// success, a disabled action kind (nil sink → inert, counted), and an unknown action (unreachable
+// for a gate-validated rule) are all Done so the loop moves on. The rule is passed so a raiseAlarm
+// action can read the rule-level severity + watched metric it raises with.
+func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent, rule rules.Rule, a rules.Action) Outcome {
 	switch a.Type {
 	case rules.ActionSendCommand:
+		if d.commands == nil {
+			d.metrics.RecordNotEnabled("sendCommand")
+			return Done
+		}
 		req := CommandRequest{
 			Tenant:      ev.Tenant,
 			Token:       idempotencyToken(ev, a),
@@ -142,9 +176,28 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		d.metrics.RecordDispatched("sendCommand")
 		return Done
 	case rules.ActionRaiseAlarm:
-		// Recognized but not yet wired: the raise-alarm subject + device-mgmt consumer land in slice
-		// 5c (gated off until slice 6). Count it so its inertness is observable rather than silent.
-		d.metrics.RecordNotEnabled("raiseAlarm")
+		if d.alarms == nil {
+			// Raise-alarm dispatch is disabled (the default until slice 6 retires the measurement
+			// evaluator). Count it so its inertness is observable rather than silent.
+			d.metrics.RecordNotEnabled("raiseAlarm")
+			return Done
+		}
+		req := AlarmRequest{
+			Tenant:      ev.Tenant,
+			DeviceToken: ev.Series,
+			// Default an empty authored key to the rule's VERSION-FREE stable identity so a rule's
+			// repeated firings escalate ONE alarm in place (ADR-041 dec 3) even across routine profile
+			// re-publishes — the composed rule id embeds the profile VERSION token, which rotates every
+			// publish, so keying on it would fork a fresh alarm per version and orphan the prior one.
+			AlarmKey:     defaultAlarmKey(a.RaiseAlarm.AlarmKey, ev.RuleID),
+			MetricKey:    ruleMetric(rule),
+			Severity:     string(rule.Severity),
+			OccurredTime: ev.OccurredTime,
+		}
+		if err := d.alarms.Raise(ctx, req); err != nil {
+			return Retry
+		}
+		d.metrics.RecordDispatched("raiseAlarm")
 		return Done
 	default:
 		// The publish gate (rules.Compile) rejects unknown action types, so this is unreachable for
@@ -152,6 +205,33 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		// wedge). No metric — it cannot happen through the supported authoring path.
 		return Done
 	}
+}
+
+// defaultAlarmKey returns the authored alarm key, or the rule's version-free stable identity when
+// none was authored. It falls back to the raw rule id only if the id does not parse into the minted
+// shape (which the publish path guarantees, so the fallback is defensive) — an empty key would be
+// dropped downstream as poison.
+func defaultAlarmKey(authored, ruleID string) string {
+	if authored != "" {
+		return authored
+	}
+	if stable, ok := runtime.StableRuleKey(ruleID); ok {
+		return stable
+	}
+	return ruleID
+}
+
+// ruleMetric is the best-effort metric a raise-alarm action stamps on the alarm for context: the
+// VALUE metric the rule folds (deltaRate / non-count aggregate) when present, else the leaf's gate
+// metric (threshold/duration/repeating). Value-first so a deltaRate/aggregate rule gated on a
+// DIFFERENT metric annotates the alarm with the metric the detection is actually about, not the gate.
+// Empty for a raw-CEL, count-aggregate, or metric-less shape — the alarm is still raised, just
+// without a metric annotation.
+func ruleMetric(rule rules.Rule) string {
+	if rule.Metric != "" {
+		return rule.Metric
+	}
+	return rule.When.Metric
 }
 
 // idempotencyToken derives the stable, deterministic command token for one detection + action. It
