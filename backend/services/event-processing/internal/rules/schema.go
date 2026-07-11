@@ -106,6 +106,105 @@ const (
 	AggMax   AggFunc = "max"
 )
 
+// Severity labels how significant a detection is (ADR-041 vocabulary): the alarm tier a
+// raiseAlarm action raises at, and a first-class field on the derived event for ADR-037
+// subscribers. It reuses the alarm severity levels so a rule and the alarm it raises speak
+// one set of tiers; the values are lowercase to match the schema's JSON-value style, and the
+// REACT dispatcher (slice 5c) maps them to the alarm wire form. Empty is a valid "unclassified
+// signal" — allowed on a rule with no raiseAlarm action, rejected on one that has (an alarm
+// cannot be raised without a tier).
+type Severity string
+
+const (
+	SeverityCritical      Severity = "critical"
+	SeverityMajor         Severity = "major"
+	SeverityMinor         Severity = "minor"
+	SeverityWarning       Severity = "warning"
+	SeverityIndeterminate Severity = "indeterminate"
+)
+
+// Valid reports whether the severity names one of the known levels.
+func (s Severity) Valid() bool {
+	switch s {
+	case SeverityCritical, SeverityMajor, SeverityMinor, SeverityWarning, SeverityIndeterminate:
+		return true
+	default:
+		return false
+	}
+}
+
+// ActionType discriminates a REACT action (ADR-051 REACT stage / ADR-054). The set is
+// deliberately small and closed: REACT is a bounded, non-Turing action chain, not a
+// scripting surface.
+type ActionType string
+
+const (
+	// ActionRaiseAlarm raises/escalates an alarm for the detection's device (ADR-041). The
+	// alarm object, ack/clear, graph rollup, and notify last-mile all stay in device-management;
+	// REACT only signals the raise (slice 5c, gated off until slice 6).
+	ActionRaiseAlarm ActionType = "raiseAlarm"
+	// ActionSendCommand enqueues a command to the detection's device via command-delivery
+	// (ADR-043). It has no legacy twin, so it goes live in slice 5b.
+	ActionSendCommand ActionType = "sendCommand"
+)
+
+// MaxActionsPerRule bounds a rule's action chain. REACT is declarative and finite (ADR-054):
+// a fixed, capped list of typed actions with no control flow. The cap is a fail-closed backstop
+// against a forged/buggy definition, generous for any real authored rule.
+const MaxActionsPerRule = 8
+
+// Action is one bounded REACT action a detection dispatches. Type selects exactly one populated
+// variant (the compiler rejects a mismatch or a multiply-populated action); the variant carries
+// that action's declarative parameters. There is no ordering dependency beyond list index and no
+// data flow between actions — each is dispatched independently and idempotently by the REACT
+// dispatcher (slice 5b), keyed on the detection's dedup identity (RuleID, Series, Kind,
+// OccurredTime) plus the action's list index.
+type Action struct {
+	Type        ActionType         `json:"type"`
+	RaiseAlarm  *RaiseAlarmAction  `json:"raiseAlarm,omitempty"`
+	SendCommand *SendCommandAction `json:"sendCommand,omitempty"`
+}
+
+// RaiseAlarmAction raises or escalates an alarm for the detection's device at the rule's
+// Severity (ADR-041). It carries no severity of its own: the rule's Severity is the single
+// tier, so a rule and its alarm never disagree. The tier the dispatcher raises at is read from
+// the rule as resolved from the durable projection AT DISPATCH (authoritative), not from the
+// derived event's snapshot severity — see DerivedEvent.Severity.
+type RaiseAlarmAction struct {
+	// AlarmKey is the (originator, key) the alarm is keyed on (ADR-041 dec 3): repeated firings
+	// of the same rule escalate ONE alarm in place rather than spawning duplicates. Empty ⇒ the
+	// dispatcher defaults it to the rule's token, so a rule that omits it still keys stably. When
+	// set it must satisfy the ADR-042 token grammar.
+	AlarmKey string `json:"alarmKey,omitempty"`
+}
+
+// SendCommandAction enqueues a command to the detection's device (ADR-043). The device is the
+// detection's series (device token).
+//
+// KNOWN VALIDATION GAP (deferred): the compiler validates only that Command is a grammar-valid
+// token and Payload is a JSON object. It does NOT check that Command names a command actually
+// declared on the profile being published, nor that Payload satisfies that command's parameter
+// schema — both are static facts device-management owns on the same profile aggregate at publish,
+// but the DETECT compiler is deliberately state-free (it never reads device state). command-delivery
+// verifies the device EXISTS at enqueue but likewise does not validate the payload against the
+// command's parameter schema. So a typo'd Command or a schema-invalid Payload passes the publish
+// gate today and fails (silently, post-detection) at dispatch. Closing it is a device-mgmt-side
+// publish cross-check against the profile's command definitions — a follow-up, not this slice.
+type SendCommandAction struct {
+	// Command names the command to send — the command definition's CommandKey on the device's
+	// active profile (ADR-043), NOT its free-form display name. Required; must satisfy the ADR-042
+	// token grammar.
+	Command string `json:"command"`
+	// Payload is the static invocation payload — a JSON object of arguments. Non-Turing: no
+	// templating and no expressions, a fixed argument set frozen at authoring time. Must be a
+	// JSON OBJECT when present (a bare scalar/array/null is rejected); empty ⇒ a no-argument
+	// command. NOTE: the payload bytes are stored verbatim and NOT canonicalized, so two authoring
+	// surfaces emitting the same arguments with different whitespace/key-order produce different
+	// rule bytes — the ADR-053 byte-identity contract holds only if the surfaces emit canonical
+	// JSON (a console/canvas concern, since no code compares rule bytes yet).
+	Payload string `json:"payload,omitempty"`
+}
+
 // Condition is a rule's leaf: the boolean test one event must pass. Exactly one form is
 // populated — a structured comparison (the no-CEL default the form builder emits) or a
 // raw CEL string (advanced escape hatch) — or neither, which means "match every event"
@@ -161,6 +260,17 @@ type Rule struct {
 	Description string `json:"description,omitempty"`
 
 	Type RuleType `json:"type"`
+
+	// Severity labels the significance of a detection this rule produces (ADR-041 tiers). It is
+	// stamped onto the derived event for ADR-037 subscribers and is the tier a raiseAlarm action
+	// raises at. Optional in general; the compiler requires it when the rule has a raiseAlarm
+	// action (an alarm needs a tier) and rejects any non-empty value outside the known set.
+	Severity Severity `json:"severity,omitempty"`
+
+	// Actions is the bounded, declarative REACT action chain the detection dispatches (ADR-051
+	// REACT stage / ADR-054). Empty ⇒ a pure signal (published as a derived event, no side
+	// effect). The compiler validates each action and caps the list at MaxActionsPerRule.
+	Actions []Action `json:"actions,omitempty"`
 
 	// When is the per-event leaf. For threshold/duration it is the fire comparison; for
 	// repeating it is an optional per-event condition (empty ⇒ count every event); for
