@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // DeviceVerifier confirms a target device exists (in the request's tenant) before
@@ -137,11 +138,37 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		ExpiresAt:   expiresAt,
 	}
 
-	result := api.RDB.DB(ctx).Create(created)
+	// Idempotent on the client-supplied token (ADR-042 per-tenant unique). ON CONFLICT DO NOTHING
+	// (no target ⇒ any unique violation, so it matches the partial (tenant_id, token) index) turns a
+	// repeat with an already-live token into a no-op instead of a unique-violation error; the caller
+	// then reads back and receives the ORIGINAL command unchanged. This makes createCommand a safe
+	// idempotency-key operation: a client — or the REACT dispatcher's at-least-once redelivery
+	// (ADR-051 slice 5b), which derives a deterministic token per (detection, action) — can retry
+	// with the same token without ever enqueuing a second physical command.
+	result := api.RDB.DB(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
+	if result.RowsAffected == 0 {
+		// The token already names a live command in this tenant: return the existing row (idempotent
+		// replay), not a fresh one. The request's other fields are intentionally ignored on replay —
+		// the token IS the identity, so the first write wins and a differing re-request does not
+		// mutate or duplicate it.
+		return api.commandByToken(ctx, request.Token)
+	}
 	return created, nil
+}
+
+// commandByToken loads the single live command with the given token in the request's tenant (tenant
+// scoping is applied transparently by the tenant-scoped DB callback). It backs the idempotent
+// createCommand replay path; a missing row after an ON CONFLICT DO NOTHING no-op would mean the
+// conflicting row was concurrently soft-deleted, which surfaces as a not-found error to the caller.
+func (api *Api) commandByToken(ctx context.Context, token string) (*Command, error) {
+	found := &Command{}
+	if err := api.RDB.DB(ctx).Where("token = ?", token).First(found).Error; err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 // loadCommand loads a single command by id.
