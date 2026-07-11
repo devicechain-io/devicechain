@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"testing"
+	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -125,7 +126,7 @@ func TestApplyAttrRecheckRetriesOnError(t *testing.T) {
 
 	// Ticker retry under a LIVE context heals it: the value installs and the retry set clears.
 	rp.procCtx = context.Background()
-	rp.retryAttrRechecks()
+	rp.retryAttrRechecks(rp.clock.Now().Add(time.Hour))
 	if got := rp.attrView.For("acme", "d1")["lim"]; got != 50 {
 		t.Fatalf("retry must install the value: got %v, want 50", got)
 	}

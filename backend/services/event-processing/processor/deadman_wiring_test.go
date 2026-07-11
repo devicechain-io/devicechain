@@ -55,13 +55,14 @@ func armedProcessor(t *testing.T, id string) (*ResolvedEventsProcessor, *detectc
 	return rp, eng
 }
 
-// TestStartDeadmanArmerReconcilesFromStores: startDeadmanArmer builds the armer and arms every
-// rostered device from the projections, AND sweeps a stale engine key whose device is not rostered
-// (deleted while down). The whole reconcile wiring — LoadAll, the model→runtime mappers, Reconcile.
+// TestStartDeadmanArmerReconcilesFromStores: the startup pair — startDeadmanGate builds the armer +
+// loads membership, reconcileDeadmanArming arms every rostered device from the projections AND sweeps
+// a stale engine key whose device is not rostered (deleted while down). The whole reconcile wiring —
+// LoadAll, the model→runtime mappers, Reconcile.
 func TestStartDeadmanArmerReconcilesFromStores(t *testing.T) {
 	id := runtime.ComposeRuleID("acme", "p1@v1/r1")
 	rp, eng := armedProcessor(t, id)
-	rp.armer = nil // startDeadmanArmer builds it
+	rp.armer = nil // startDeadmanGate builds it
 	ctx := context.Background()
 	rp.RosterStore = newProcRosterStore(t)
 	rp.ProfileActiveStore = newProcActiveStore(t)
@@ -76,11 +77,14 @@ func TestStartDeadmanArmerReconcilesFromStores(t *testing.T) {
 		t.Fatalf("seed active: %v", err)
 	}
 
-	if err := rp.startDeadmanArmer(ctx); err != nil {
-		t.Fatalf("startDeadmanArmer: %v", err)
+	if err := rp.startDeadmanGate(ctx); err != nil {
+		t.Fatalf("startDeadmanGate: %v", err)
 	}
 	if rp.armer == nil {
 		t.Fatal("armer not built")
+	}
+	if err := rp.reconcileDeadmanArming(ctx); err != nil {
+		t.Fatalf("reconcileDeadmanArming: %v", err)
 	}
 	// One advance past both deadlines (testBase+10): dev1 fires, goneDev was swept so it does not.
 	eng.Advance(testBase.Add(11 * time.Second))
@@ -102,17 +106,105 @@ func TestStartDeadmanArmerReconcilesFromStores(t *testing.T) {
 }
 
 // TestStartDeadmanArmerNoStoresIsNoOp: with the read-model stores unwired (scaffold path),
-// startDeadmanArmer leaves the armer nil and arms nothing.
+// startDeadmanGate leaves the armer nil and reconcileDeadmanArming arms nothing.
 func TestStartDeadmanArmerNoStoresIsNoOp(t *testing.T) {
 	rp, _ := armedProcessor(t, runtime.ComposeRuleID("acme", "p1@v1/r1"))
 	rp.armer = nil
 	rp.RosterStore = nil
 	rp.ProfileActiveStore = nil
-	if err := rp.startDeadmanArmer(context.Background()); err != nil {
-		t.Fatalf("startDeadmanArmer: %v", err)
+	if err := rp.startDeadmanGate(context.Background()); err != nil {
+		t.Fatalf("startDeadmanGate: %v", err)
 	}
 	if rp.armer != nil {
 		t.Fatal("armer should stay nil without the read-model stores")
+	}
+	if err := rp.reconcileDeadmanArming(context.Background()); err != nil {
+		t.Fatalf("reconcileDeadmanArming: %v", err)
+	}
+}
+
+// TestDropStaleAbsences: the publish-time membership gate drops a buffered ABSENCE detection whose
+// device left the rule's scope (unrostered) while keeping one for a live rostered device; non-absence
+// detections always pass through.
+func TestDropStaleAbsences(t *testing.T) {
+	id := runtime.ComposeRuleID("acme", "p1@v1/r1")
+	rp, _ := armedProcessor(t, id)
+	rp.armer.LoadMembership(
+		[]runtime.RosterEntry{{Tenant: "acme", DeviceToken: "live", ProfileToken: "p1", ExpectedSince: testBase}},
+		[]runtime.ActiveEntry{{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase}},
+	)
+	rp.pendingDets = []detectcore.Detection{
+		{RuleID: id, Series: "live", Kind: detectcore.Absence},
+		{RuleID: id, Series: "gone", Kind: detectcore.Absence},
+		{RuleID: id, Series: "gone", Kind: detectcore.Threshold}, // non-absence: always kept
+	}
+	rp.dropStaleAbsences()
+
+	var liveAbs, thr, goneAbs bool
+	for _, d := range rp.pendingDets {
+		switch {
+		case d.Kind == detectcore.Absence && d.Series == "live":
+			liveAbs = true
+		case d.Kind == detectcore.Absence && d.Series == "gone":
+			goneAbs = true
+		case d.Kind == detectcore.Threshold:
+			thr = true
+		}
+	}
+	if goneAbs {
+		t.Fatal("stale absence for a departed device was not dropped")
+	}
+	if !liveAbs || !thr {
+		t.Fatalf("gate dropped a detection it should keep: %+v", rp.pendingDets)
+	}
+}
+
+// TestCatchUpDrainsRosterFactsToHead: catchUpFactProjections persists a backlog of roster facts to the
+// durable projection BEFORE replay (making the gate's membership current for a device deleted/created
+// while down), acks them, and does NOT signal the loop (signal=false — the loop is not running yet).
+func TestCatchUpDrainsRosterFactsToHead(t *testing.T) {
+	rp, _ := armedProcessor(t, runtime.ComposeRuleID("acme", "p1@v1/r1"))
+	rp.RosterStore = newProcRosterStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rp.procCtx = ctx
+	ack1, ack2 := &fakeAck{}, &fakeAck{}
+	rp.RosterReader = &fakeReader{drainable: true, results: []readResult{
+		{msg: rosterMsg(t, "acme", "dev1", "p1", testBase, ack1)},
+		{msg: rosterMsg(t, "acme", "dev2", "p1", testBase, ack2)},
+	}}
+
+	if err := rp.catchUpFactProjections(); err != nil {
+		t.Fatalf("catchUpFactProjections: %v", err)
+	}
+	if _, live, err := rp.RosterStore.Load(ctx, "acme", "dev1"); err != nil || !live {
+		t.Fatalf("dev1 not persisted by catch-up: live=%v err=%v", live, err)
+	}
+	if _, live, err := rp.RosterStore.Load(ctx, "acme", "dev2"); err != nil || !live {
+		t.Fatalf("dev2 not persisted by catch-up: live=%v err=%v", live, err)
+	}
+	if ack1.acks == 0 || ack2.acks == 0 {
+		t.Fatal("catch-up must ack the facts it drained")
+	}
+	if len(rp.armUpdates) != 0 {
+		t.Fatalf("catch-up must NOT signal the loop (signal=false), got %d armUpdates", len(rp.armUpdates))
+	}
+}
+
+// TestCatchUpFailsClosedOnDegradedBroker: when the broker reports UNDELIVERED facts (pending>0) but a
+// bounded read cannot fetch any (a degraded broker that answers ConsumerInfo but not Fetch), catch-up
+// fails startup rather than proceed with a knowingly-stale gate (MEDIUM-1 fix).
+func TestCatchUpFailsClosedOnDegradedBroker(t *testing.T) {
+	rp, _ := armedProcessor(t, runtime.ComposeRuleID("acme", "p1@v1/r1"))
+	rp.RosterStore = newProcRosterStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rp.procCtx = ctx
+	// Backlog says 3 undelivered, but ReadMessage never yields one (EOF immediately).
+	rp.RosterReader = &fakeReader{readEOFImmediately: true, numPending: 3}
+
+	if err := rp.catchUpFactProjections(); err == nil {
+		t.Fatal("catch-up must fail closed when undelivered facts cannot be fetched")
 	}
 }
 
@@ -281,7 +373,7 @@ func TestArmRecheckRetriesOnError(t *testing.T) {
 
 	// Ticker retry under a LIVE context heals it: the device arms and the retry set clears.
 	rp.procCtx = ctx
-	rp.retryArmRechecks()
+	rp.retryArmRechecks(rp.clock.Now().Add(time.Hour))
 	if len(rp.armRetries) != 0 {
 		t.Fatalf("a healed retry must clear the set, got %d entries", len(rp.armRetries))
 	}

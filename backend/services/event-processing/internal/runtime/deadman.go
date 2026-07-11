@@ -16,6 +16,7 @@ type expectedArmer interface {
 	SetExpected(key core.SeriesKey, since time.Time)
 	RemoveExpected(key core.SeriesKey)
 	ExpectedKeys() []core.SeriesKey
+	HeartbeatAbsenceKeys() []core.SeriesKey
 }
 
 // RosterEntry is one rostered device's membership — the tenant/token identity plus its STABLE
@@ -183,22 +184,86 @@ func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry) {
 	}
 }
 
-// Reconcile rebuilds the armer's views and the engine's dead-man arming from the durable roster +
-// active-version projections at startup (slice 4c-2b-2b), diffing against the snapshot the engine
-// restored: the SNAPSHOT is authoritative for FIRED state (its once-per-epoch latches survive), the
-// PROJECTIONS are authoritative for MEMBERSHIP. Every still-rostered device is re-armed under its
-// active version (SetExpected no-ops an already-fired epoch, so nothing double-fires); then every
-// dead-man entry the engine holds that is NOT in the rebuilt desired set is removed — a device
-// deleted or a version superseded while the process was down, or an orphaned key for a rule the
-// restored rule set no longer holds. It runs once, on the startup goroutine, before the live loop.
-func (d *DeadmanArmer) Reconcile(rosters []RosterEntry, actives []ActiveEntry) {
+// loadMembership (re)populates the armer's three membership views (active / roster / byProfile) from
+// the authoritative projections WITHOUT arming — the read-only half of a reconcile, shared by the
+// pre-replay gate load (LoadMembership) and the post-replay Reconcile. It does not reset first;
+// callers that need a clean rebuild (Reconcile) reset() beforehand.
+func (d *DeadmanArmer) loadMembership(rosters []RosterEntry, actives []ActiveEntry) {
 	for _, a := range actives {
 		d.active[profKey{a.Tenant, a.ProfileToken}] = activeState{version: a.ActiveVersionToken, publishedAt: a.PublishedAt}
 	}
-	desired := make(map[core.SeriesKey]struct{})
 	for _, e := range rosters {
 		d.roster[devKey{e.Tenant, e.DeviceToken}] = rosterMember{profileToken: e.ProfileToken, expectedSince: e.ExpectedSince}
 		d.addToProfile(profKey{e.Tenant, e.ProfileToken}, e.DeviceToken)
+	}
+}
+
+// LoadMembership populates the membership views for the publish-time absence gate (AbsenceLive)
+// BEFORE replay, without arming any dead-man — arming needs the final post-replay engine and happens
+// in Reconcile. It mirrors the dynamic-threshold view's build-before-replay (startAttributeView): the
+// gate, like that view, must be live DURING replay so a replayed watermark advance that fires a stale
+// heartbeat absence timer (a device deleted or superseded while the process was down) is dropped
+// rather than published. Idempotent with the Reconcile that follows, which resets and reloads.
+func (d *DeadmanArmer) LoadMembership(rosters []RosterEntry, actives []ActiveEntry) {
+	d.loadMembership(rosters, actives)
+}
+
+// BindEngine points the armer at the engine it arms. It is called after replay (which may have
+// REPLACED the engine on a snapshot-ahead-of-head reset) and before Reconcile, so arming always
+// targets the final engine even though the armer was constructed pre-replay for the gate.
+func (d *DeadmanArmer) BindEngine(e expectedArmer) { d.engine = e }
+
+// AbsenceLive reports whether an ABSENCE detection's (rule, device) key is still a live membership:
+// the device is rostered AND its profile's active version is the exact one that owns the rule. It is
+// the publish-time belt (processor.dropStaleAbsences) and the reconcile heartbeat-sweep predicate that
+// stop a stale wheel timer emitting a false absence after the device left the rule's scope — deleted
+// (roster row gone), re-typed (roster profile token differs), or version superseded (active version
+// moved past the rule's). It resolves entirely from the loop-owned roster + active views + the
+// registry with NO engine read, so it is valid during replay (before the engine is final) as well as
+// live. A rule the registry no longer holds, an unrostered device, or a profile with no known active
+// version all read as NOT live — fail-safe: a false drop is a missed absence, strictly better than a
+// published false one, and the intended direction against a stale/frozen projection.
+func (d *DeadmanArmer) AbsenceLive(key core.SeriesKey) bool {
+	sr, ok := d.reg.Lookup(key.Rule)
+	if !ok {
+		return false
+	}
+	m, ok := d.roster[devKey{sr.Tenant, key.Series}]
+	if !ok {
+		return false
+	}
+	a, ok := d.active[profKey{sr.Tenant, m.profileToken}]
+	if !ok {
+		return false
+	}
+	return a.version == sr.ProfileVersionToken
+}
+
+// reset clears the three membership views so Reconcile is a full rebuild even when LoadMembership
+// pre-populated them for the gate (a device deleted/superseded during replay must not linger as a
+// stale roster entry the gate would read as live).
+func (d *DeadmanArmer) reset() {
+	d.active = map[profKey]activeState{}
+	d.roster = map[devKey]rosterMember{}
+	d.byProfile = map[profKey]map[string]struct{}{}
+}
+
+// Reconcile rebuilds the armer's views and the engine's dead-man arming from the durable roster +
+// active-version projections at startup (slice 4c-2b-2b), diffing against the snapshot the engine
+// restored: the SNAPSHOT is authoritative for FIRED state (its once-per-epoch latches survive), the
+// PROJECTIONS are authoritative for MEMBERSHIP. It first resets the views (they may hold the gate's
+// pre-replay LoadMembership state) then reloads. Every still-rostered device is re-armed under its
+// active version (SetExpected no-ops an already-fired epoch, so nothing double-fires); then every
+// dead-man entry the engine holds that is NOT in the rebuilt desired set is removed — a device
+// deleted or a version superseded while the process was down, or an orphaned key for a rule the
+// restored rule set no longer holds — AND every heartbeat-armed absence timer whose device left the
+// rule's scope is swept (HeartbeatAbsenceKeys, which the ExpectedKeys sweep above cannot see). It runs
+// once, on the startup goroutine, before the live loop.
+func (d *DeadmanArmer) Reconcile(rosters []RosterEntry, actives []ActiveEntry) {
+	d.reset()
+	d.loadMembership(rosters, actives)
+	desired := make(map[core.SeriesKey]struct{})
+	for _, e := range rosters {
 		a, ok := d.active[profKey{e.Tenant, e.ProfileToken}]
 		if !ok {
 			continue
@@ -215,6 +280,17 @@ func (d *DeadmanArmer) Reconcile(rosters []RosterEntry, actives []ActiveEntry) {
 	}
 	for _, key := range d.engine.ExpectedKeys() {
 		if _, want := desired[key]; !want {
+			d.engine.RemoveExpected(key)
+		}
+	}
+	// Sweep heartbeat-armed absence timers whose device left the rule's scope while the process was
+	// down (deleted / re-typed / version superseded). The dead-man sweep above only sees e.expected
+	// (SetExpected) keys; a timer armed by a device's own heartbeat (apply, Absence) lives in the wheel
+	// only — invisible there — so a departed device's last heartbeat timer would otherwise fire one
+	// false absence off the watermark post-restart. AbsenceLive resolves each against the freshly
+	// reconciled membership (a still-live current device's heartbeat timer stays untouched).
+	for _, key := range d.engine.HeartbeatAbsenceKeys() {
+		if !d.AbsenceLive(key) {
 			d.engine.RemoveExpected(key)
 		}
 	}

@@ -35,6 +35,15 @@ type DerivedEvent struct {
 	// OccurredTime is the logical (event) time the detection is stamped at — the same value
 	// that anchors its dedup identity.
 	OccurredTime time.Time `json:"occurredTime"`
+	// CAVEAT (dynamic thresholds): the dedup identity does NOT include the resolved threshold. For a
+	// rule whose bound comes from a device attribute (slice 4c-3), replay resolves against the CURRENT
+	// attribute value, not the value at original event time (see startAttributeView's non-determinism
+	// note), so replay is not detection-identical: a detection that fired originally but was still
+	// buffered at a crash can be SILENTLY LOST (replay's new value no longer matches), and conversely a
+	// detection that did NOT fire originally can be re-derived and PHANTOM-published at the old event
+	// time — its (RuleID, Series, Kind, OccurredTime) has no prior counterpart downstream, so it is NOT
+	// collapsed. This is the accepted, device/rule-scoped divergence the upstream-embedded-bound fix
+	// (deferred) closes; static-threshold rules are unaffected.
 }
 
 // RejectReason is a bounded label for a dropped detection (bounded cardinality per the
@@ -142,6 +151,13 @@ func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
 		return nil
 	}
 
+	// Kind is stamped from the CURRENT registry rule's Type, not re-derived from det.Kind (the
+	// core enum at fire time). On the healthy path they agree. A reused-id def change between fire
+	// and publish is the one skew case: a detection already buffered (pendingDets) when the rule's
+	// body changed is stamped with the NEW type here. It is a pre-GA, vanishingly-rare edge (RemoveRule
+	// drops the engine's UNdrained e.out on a def change, so only detections already drained into the
+	// processor's buffer are exposed), and downstream dedups on (rule, series, kind, time) — so the
+	// skew is a mis-typed straggler, not a correctness break. Accepted; noted for honesty.
 	de := DerivedEvent{
 		RuleID:       det.RuleID,
 		Tenant:       sr.Tenant,

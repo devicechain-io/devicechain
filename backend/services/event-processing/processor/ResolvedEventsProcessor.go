@@ -385,6 +385,20 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if err := rp.restore(ctx); err != nil {
 		return err
 	}
+	// Catch the MEMBERSHIP fact projections (roster, entity-deleted, published-rule) up to head FIRST,
+	// before the views build and replay runs, so the absence gate reads CURRENT membership. A device
+	// deleted / re-typed / superseded (or created) while this deployment was DOWN has its fact still
+	// unconsumed; without draining it first, the gate reads a frozen projection during replay — it would
+	// publish a false absence for a departed device, or drop a real one for a created-while-down device.
+	// This persists the backlog to the projections without arming or signaling (the loop is not running);
+	// startDeadmanGate + the reconciles below then see it, and the live consumers (launched after replay)
+	// resume from the advanced durable position. NOTE it drains the entity-deleted stream (which also
+	// purges attributes), so a deleted device's dynamic bound is current too; it does NOT drain the
+	// attribute-SET stream, so a bound CHANGED (not purged) while down still replays against its pre-down
+	// value — the accepted dynamic-threshold non-determinism documented at startAttributeView, unchanged.
+	if err := rp.catchUpFactProjections(); err != nil {
+		return err
+	}
 	// Build the dynamic-threshold view BEFORE replay (ADR-051 slice 4c-3b-2): replayToHead re-feeds
 	// events through applyResolved, which reads attrView to resolve a rule's dynamic bound. If the
 	// view were built after replay, every replayed dynamic-threshold evaluation would see an empty
@@ -408,6 +422,17 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	// tenant's windows), and it mirrors the dead-man armer's reconcile-from-current-projection stance.
 	// See the checkpoint() re-derivability note, which is qualified for this reason.
 	if err := rp.startAttributeView(ctx); err != nil {
+		return err
+	}
+	// Build the dead-man armer and load its membership views BEFORE replay (ADR-051 slice 4c-2b; the
+	// whole-Slice-4 hardening), symmetric with startAttributeView. The publish-time absence gate
+	// (dropStaleAbsences → AbsenceLive) must be live DURING replay: a replayed watermark advance can
+	// fire a stale heartbeat absence timer for a device deleted or superseded while the process was
+	// down, and replay publishes its detections through checkpoint — so without the gate active here
+	// that false absence escapes before the post-replay reconcile could sweep the timer. This only
+	// loads the membership maps (no arming — arming needs the final post-replay engine, done in
+	// reconcileDeadmanArming).
+	if err := rp.startDeadmanGate(ctx); err != nil {
 		return err
 	}
 	if err := rp.replayToHead(); err != nil {
@@ -456,11 +481,12 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if err := rp.reconcileRegistry(ctx); err != nil {
 		return err
 	}
-	// Build the dead-man armer over the FINAL (post-replay) engine and reconcile it from the durable
+	// Arm the dead-man over the FINAL (post-replay) engine and reconcile it from the durable
 	// read-models BEFORE any live consumption (ADR-051 slice 4c-2b-2b): the restored snapshot is
-	// authoritative for FIRED state, the projections for MEMBERSHIP. It runs on this startup
+	// authoritative for FIRED state, the projections for MEMBERSHIP. The armer was already built for
+	// the gate (startDeadmanGate); this binds it to the final engine and arms. It runs on this startup
 	// goroutine (single-writer) so it never races the loop or the fact consumers launched below.
-	if err := rp.startDeadmanArmer(ctx); err != nil {
+	if err := rp.reconcileDeadmanArming(ctx); err != nil {
 		return err
 	}
 	rp.readerWG.Add(1)
@@ -497,23 +523,177 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	return nil
 }
 
-// startDeadmanArmer builds the dead-man armer over the final engine and reconciles it from the
-// durable roster + active-version projections (ADR-051 slice 4c-2b-2b). It is a no-op unless BOTH
-// read-model stores are wired (the scaffold/test path leaves the armer nil, and every arming site
-// guards on it). Reconcile arms every still-rostered device under its active version — the engine's
-// once-per-epoch SetExpected suppresses re-firing an already-fired dead-man — and sweeps engine
-// dead-man entries whose membership is gone (a device deleted / a version superseded while down).
+// catchUpFactProjections drains the membership fact streams (roster, entity-deleted, published-rule) to
+// head and persists each fact to its durable projection BEFORE the dead-man gate loads and replay runs.
+// It closes the down-window staleness the publish-time absence gate (dropStaleAbsences) would otherwise
+// hit: a device deleted / re-typed / superseded while THIS deployment was DOWN has its fact sitting
+// unconsumed in the stream, so a projection loaded without draining it is frozen — the gate would then
+// publish a false absence for a departed device (or drop a real one for a created-while-down device)
+// during replay, before the post-replay reconcile could correct it. Draining here makes the projection
+// current so startDeadmanGate's membership load and the post-replay reconciles reflect the down-window
+// departures. It persists WITHOUT signaling the loop (handleXFact with signal=false; the loop is not
+// running yet); the live consumers, launched after replay, resume from the advanced durable position for
+// incremental updates. Runs on the startup goroutine, before startDeadmanGate + replay.
+func (rp *ResolvedEventsProcessor) catchUpFactProjections() error {
+	if rp.RosterReader != nil {
+		if err := rp.drainFactToHead(rp.RosterReader, "device-roster",
+			func(m messaging.Message) bool { return rp.handleRosterFact(m, false) }); err != nil {
+			return err
+		}
+	}
+	if rp.EntityDeletedReader != nil {
+		if err := rp.drainFactToHead(rp.EntityDeletedReader, "entity-deleted",
+			func(m messaging.Message) bool { return rp.handleEntityDeletedFact(m, false) }); err != nil {
+			return err
+		}
+	}
+	if rp.RuleUpdatesReader != nil {
+		if err := rp.drainFactToHead(rp.RuleUpdatesReader, "published-rule",
+			func(m messaging.Message) bool { return rp.handleRuleFact(m, false) }); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// drainFactToHead reads a durable fact reader forward until it is caught up to the broker's live tail,
+// applying handle (persist-before-ack, no loop signal) to each message. Each outer pass probes the
+// broker (Backlog): when NOTHING is undelivered AND nothing is in flight (pending==0 && ackPending==0)
+// it is fully caught up. Otherwise it drains every currently-available message in a tight inner loop —
+// undelivered ones (a Fetch pulls them) and any already in the local fetch buffer — bounding each read
+// so it cannot block forever, then re-probes. It concludes early ONLY when a read yields nothing AND
+// the last probe reported pending==0: the remaining backlog is then delivered-unacked, which is not
+// redelivered here — a PEER's during a rolling-update overlap, OR (see the ackWait caveat below) this
+// pod's OWN dead incarnation's. Either way it lands in the shared projection later (the peer persists
+// it; a dead-incarnation fact redelivers after ackWait and the live consumer processes it).
+//
+// FAIL-CLOSED on trouble, matching the Backlog-probe error: a genuine read error, or a bounded read
+// that yields nothing while the probe still reports UNDELIVERED work (pending>0) — a degraded broker
+// that can answer ConsumerInfo but not serve a Fetch, a re-bind that outran the read budget — fails
+// startup rather than proceed with a knowingly-stale gate.
+//
+// ackWait CAVEAT (residual, narrows toward zero at Slice-6): a restart WITHIN the durable's ackWait
+// leaves this pod's previous incarnation's delivered-unacked facts (one mid-persist, or a whole
+// prefetched batch) in ackPending, indistinguishable pre-Slice-6 from a live peer's — so those specific
+// in-flight facts are NOT reflected in the projection this catch-up produces. They redeliver after
+// ackWait and the live consumer applies them then, so the exposure is a false/dropped absence only for
+// a device whose departure/creation fact was in flight at the exact moment of death, and only until the
+// redelivery heals it. The Slice-6 singleton makes ackPending self-attributable and closes it.
+//
+// A reader that cannot report its backlog (the scaffold/test fake) is skipped — catch-up is a
+// production durability concern and those paths wire no store to persist into anyway.
+func (rp *ResolvedEventsProcessor) drainFactToHead(reader messaging.MessageReader, kind string, handle func(messaging.Message) bool) error {
+	bl, ok := reader.(consumerBacklog)
+	if !ok {
+		return nil // reader cannot report backlog (scaffold/test): no durable projection to catch up
+	}
+	applied := 0
+	for {
+		if rp.procCtx.Err() != nil {
+			return rp.procCtx.Err() // shutdown during catch-up
+		}
+		pctx, cancel := context.WithTimeout(rp.procCtx, backlogProbeTimeout)
+		pending, ackPending, err := bl.Backlog(pctx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("catch-up backlog probe for %s facts: %w", kind, err)
+		}
+		if pending == 0 && ackPending == 0 {
+			// Fully drained AND acked: nothing undelivered, nothing in our fetch buffer or in flight.
+			log.Info().Str("kind", kind).Int("applied", applied).Msg("Caught up fact projection to head before replay.")
+			return nil
+		}
+		// Work remains — undelivered messages, or ones already fetched into our local buffer. Drain
+		// everything currently available in one inner pass (re-probing per message would cost an RPC
+		// each), bounding each read so it cannot block forever.
+		read := 0
+		for {
+			rctx, rcancel := context.WithTimeout(rp.procCtx, factCatchUpReadTimeout)
+			msg, rerr := reader.ReadMessage(rctx)
+			rcancel()
+			if rerr != nil {
+				if rp.procCtx.Err() != nil {
+					return rp.procCtx.Err() // real shutdown, not the bounded read timeout
+				}
+				if !errors.Is(rerr, io.EOF) {
+					// A genuine read error (not the bounded-read deadline): fail closed.
+					return fmt.Errorf("catch-up read of %s facts: %w", kind, rerr)
+				}
+				break // bounded read yielded nothing available right now
+			}
+			if !handle(msg) {
+				return rp.procCtx.Err() // shutdown mid-persist
+			}
+			applied++
+			read++
+		}
+		if read == 0 {
+			// Nothing was available to read this pass. If the probe reported UNDELIVERED work we could
+			// not fetch, the broker is degraded — fail closed rather than proceed stale. Otherwise the
+			// only remaining backlog is delivered-unacked (a peer's, or our dead incarnation's within
+			// ackWait); conclude caught up as far as this consumer can get.
+			if pending > 0 {
+				return fmt.Errorf("catch-up of %s facts stalled with %d undelivered pending (broker degraded)", kind, pending)
+			}
+			log.Info().Str("kind", kind).Int("applied", applied).
+				Msg("Caught up fact projection to head before replay (remaining backlog is delivered-unacked; peer or in-flight).")
+			return nil
+		}
+		// Made progress this pass; re-probe to catch anything that arrived or newly delivered.
+	}
+}
+
+// startDeadmanGate builds the dead-man armer and loads its membership views from the durable roster +
+// active-version projections BEFORE replay, so the publish-time absence gate (dropStaleAbsences →
+// AbsenceLive) is live DURING replay (ADR-051 slice 4c-2b; the whole-Slice-4 hardening). It is a no-op
+// unless BOTH read-model stores are wired (the scaffold/test path leaves the armer nil, and every
+// arming and gate site guards on it). It does NOT arm any dead-man — arming needs the final post-replay
+// engine and is done in reconcileDeadmanArming; this only populates the maps AbsenceLive reads. The
+// armer is constructed over the current (restored) engine, which reconcileDeadmanArming rebinds to the
+// final engine (BindEngine) in case replay reset it on a snapshot-ahead-of-head truncation.
+func (rp *ResolvedEventsProcessor) startDeadmanGate(ctx context.Context) error {
+	if rp.RosterStore == nil || rp.ProfileActiveStore == nil {
+		return nil
+	}
+	rp.armer = runtime.NewDeadmanArmer(rp.registry, rp.engine)
+	rosters, err := rp.RosterStore.LoadAll(ctx)
+	if err != nil {
+		return fmt.Errorf("load roster projection for dead-man gate: %w", err)
+	}
+	actives, err := rp.ProfileActiveStore.LoadAll(ctx)
+	if err != nil {
+		return fmt.Errorf("load active-version projection for dead-man gate: %w", err)
+	}
+	rp.armer.LoadMembership(toRosterEntries(rosters), toActiveEntries(actives))
+	return nil
+}
+
+// reconcileDeadmanArming arms the dead-man over the FINAL (post-replay) engine and reconciles it from
+// the durable roster + active-version projections (ADR-051 slice 4c-2b-2b). The armer itself was built
+// pre-replay (startDeadmanGate) for the gate; here it is bound to the final engine (replay may have
+// reset it on a snapshot-ahead-of-head truncation) and its arming is reconciled. It is a no-op unless
+// the armer was built (both stores wired). Reconcile arms every still-rostered device under its active
+// version — the engine's once-per-epoch SetExpected suppresses re-firing an already-fired dead-man —
+// and sweeps engine dead-man AND heartbeat-armed absence timers whose membership is gone (a device
+// deleted / a version superseded while down).
+//
+// It RELOADS the projections rather than reusing the gate's pre-replay load so a peer pod's roster or
+// active-version fact committed DURING our replay (a rolling-update overlap) is armed from the freshest
+// membership — the same freshness reconcileAttributeView / reconcileRegistry take.
 //
 // It deliberately does NOT force a checkpoint: the reconciled arming is fully re-derivable from the
 // (durable) projections on every restart, and the once-fired latches live in the restored snapshot,
 // so the output need not be persisted here. It becomes durable at the first natural checkpoint (a
 // live event, or the idle-advance that fires a never-seen device's dead-man). This also sidesteps
 // committing an equal-sequence snapshot against the monotonic Save guard.
-func (rp *ResolvedEventsProcessor) startDeadmanArmer(ctx context.Context) error {
-	if rp.RosterStore == nil || rp.ProfileActiveStore == nil {
+func (rp *ResolvedEventsProcessor) reconcileDeadmanArming(ctx context.Context) error {
+	// The armer is built (and non-nil) only when both stores are wired, so armer!=nil is the normal
+	// gate; the store checks are a defensive backstop so this never derefs a nil store even if a future
+	// wiring/test leaves the armer set without them (it LoadAlls both below).
+	if rp.armer == nil || rp.RosterStore == nil || rp.ProfileActiveStore == nil {
 		return nil
 	}
-	rp.armer = runtime.NewDeadmanArmer(rp.registry, rp.engine)
+	rp.armer.BindEngine(rp.engine)
 	rosters, err := rp.RosterStore.LoadAll(ctx)
 	if err != nil {
 		return fmt.Errorf("load roster projection for dead-man reconcile: %w", err)
@@ -538,18 +718,17 @@ func (rp *ResolvedEventsProcessor) startDeadmanArmer(ctx context.Context) error 
 //
 // The diff mirrors applyRuleUpdate: an unchanged id is left intact (preserving the running rule's
 // snapshot-restored engine state), a changed body GCs the stale keyed state before re-installing (the
-// reused-token reset-on-change), and an id the projection no longer holds is removed. It forces no
-// checkpoint: the ADD / unchanged / remove paths are fully re-derivable — the reconcile re-runs from
-// the durable projection on every restart (the same reasoning as startDeadmanArmer /
-// reconcileAttributeView). The changed-def GC branch is the lone exception — like the live
-// applyRuleUpdate GC it is not self-re-derivable (a restart rebuilds the registry from the same
-// projection, so the def then matches and the branch no-ops while the old snapshot state resurrects) —
-// but that is the SAME pre-existing restore-path exposure a reused-token def change carries with or
-// without this reconcile, only narrowed here; closing it belongs to the separate def-change-durability
-// hardening (persist the GC / a snapshot def-fingerprint), not this fix. A rule ADDED here missed its
-// share of the replay window (replay ran under the pre-reconcile registry), which is acceptable: it
-// starts fresh from live consumption, the same current-value posture the attribute view accepts. No-op
-// on the scaffold/test path (no RuleStore).
+// reused-token reset-on-change), and an id the projection no longer holds is removed. The ADD /
+// unchanged paths force no checkpoint: they are fully re-derivable — the reconcile re-runs from the
+// durable projection on every restart (the same reasoning as reconcileAttributeView). The GC paths (a
+// changed body, or a removal) are NOT self-re-derivable — a restart rebuilds the registry from the same
+// projection, so the def then matches / the id is already gone and the branch no-ops while the old
+// snapshot state would resurrect — so, exactly as applyRuleUpdate does on the live path, a GC here
+// marks the loop dirty (below) to force the first natural checkpoint to persist the drop (finding E; the
+// def-change-durability hardening, now closed on both paths). A rule ADDED here missed its share of the
+// replay window (replay ran under the pre-reconcile registry), which is acceptable: it starts fresh from
+// live consumption, the same current-value posture the attribute view accepts. No-op on the scaffold/
+// test path (no RuleStore).
 func (rp *ResolvedEventsProcessor) reconcileRegistry(ctx context.Context) error {
 	if rp.RuleStore == nil {
 		return nil
@@ -588,6 +767,14 @@ func (rp *ResolvedEventsProcessor) reconcileRegistry(ctx context.Context) error 
 			rp.engine.RemoveRule(id)
 			removed++
 		}
+	}
+	if changed > 0 || removed > 0 {
+		// A GC above dropped serializable keyed state that a restart would otherwise resurrect (the def
+		// then matches / the id is gone, so the rebuild no-ops). Mark dirty so the first loop checkpoint
+		// persists the drop — the same durability the live applyRuleUpdate GC gets. Safe here: this runs
+		// pre-loop on the startup goroutine; the equal-seq/equal-watermark Save the ticker then issues is
+		// accepted by the monotonic guard (it refuses only a backward move).
+		rp.dirty = true
 	}
 	rp.metrics.setRulesActive(rp.registry.Count())
 	log.Info().Int("upserted", upserted).Int("changed", changed).Int("removed", removed).Int("active", rp.registry.Count()).
@@ -770,9 +957,12 @@ func (rp *ResolvedEventsProcessor) run() {
 			rp.finalCheckpoint()
 			return
 		case upd := <-rp.ruleUpdates:
-			// Rule-set mutation on the single writer: it changes which rules run, not the
-			// engine's serializable state (rules are not in the snapshot — they are rebuilt from
-			// the durable rule projection on restart), so it needs no checkpoint of its own.
+			// Rule-set mutation on the single writer: a plain add/replace changes only which rules
+			// run, not the engine's serializable state (the rule set is not in the snapshot — it is
+			// rebuilt from the durable rule projection on restart), so it needs no checkpoint of its
+			// own. The ONE exception is a RemoveRule (a reused-id def change, or a removal): it GCs
+			// serializable keyed state, so applyRuleUpdate marks the loop dirty in that case to force
+			// a checkpoint (otherwise a restart would replay the GC'd state back to life).
 			rp.applyRuleUpdate(upd)
 		case au := <-rp.armUpdates:
 			// Device membership recheck on the single writer: re-read the authoritative roster
@@ -823,9 +1013,12 @@ func (rp *ResolvedEventsProcessor) run() {
 				rp.checkpoint(rp.procCtx)
 			}
 			// Retry any recheck a transient store error deferred (bounded, idempotent) — dynamic-threshold
-			// attribute rechecks and dead-man arming rechecks alike.
-			rp.retryAttrRechecks()
-			rp.retryArmRechecks()
+			// attribute rechecks and dead-man arming rechecks alike. Both share ONE per-tick wall-clock
+			// budget so that even a black-holed DB (every read burning loopReadTimeout) cannot stall the
+			// single-writer loop for cap×timeout: whatever does not fit carries to the next tick.
+			recheckDeadline := now.Add(loopRecheckBudget)
+			rp.retryAttrRechecks(recheckDeadline)
+			rp.retryArmRechecks(recheckDeadline)
 		}
 	}
 }
@@ -959,6 +1152,33 @@ type consumerBacklog interface {
 // backlogProbeTimeout bounds the ConsumerInfo call so a broker black-hole (a request parked in
 // the reconnect buffer awaiting a reply) cannot wedge the single-writer loop indefinitely.
 const backlogProbeTimeout = 2 * time.Second
+
+// loopReadTimeout bounds a per-device projection read issued ON the single-writer loop (an arming or
+// dynamic-threshold recheck) so a slow / black-holed DB call cannot wedge the loop — the same posture
+// as backlogProbeTimeout for the idle-advance probe. On timeout the recheck defers to the ticker retry
+// set exactly as any other transient store error does, so nothing is lost.
+const loopReadTimeout = 2 * time.Second
+
+// loopRecheckDrainCap bounds how many deferred rechecks the ticker re-attempts per tick, so a large
+// backlog (a long DB outage spanning many devices) is worked down at a steady rate instead of firing
+// hundreds of loop-blocking reads in a single tick. The remainder carries to the next tick; map
+// iteration order varies, so successive ticks cover different entries until the set drains.
+const loopRecheckDrainCap = 64
+
+// factCatchUpReadTimeout bounds each catch-up read so the drain cannot block forever when the only
+// remaining backlog is a PEER's delivered-unacked messages (a rolling-update overlap) that are never
+// redelivered to this consumer. A buffered/undelivered message returns well within it; on timeout the
+// drain concludes caught up as far as this consumer can get (drainFactToHead).
+const factCatchUpReadTimeout = 2 * time.Second
+
+// loopRecheckBudget bounds the TOTAL wall-clock a single tick spends re-attempting deferred rechecks
+// (arming + dynamic-threshold combined). The count cap alone bounds reads to 2×cap, but under a
+// black-holed DB each read burns the full loopReadTimeout, so cap×timeout could stall the single-writer
+// loop for minutes; this deadline caps the per-tick stall regardless of set size. It only bites while
+// the DB is already degraded (healthy reads are far under it and drain the whole cap), and the loop
+// cannot checkpoint against a dead DB anyway, so throttling recovery here loses nothing (unacked
+// messages redeliver). The remainder retries next tick.
+const loopRecheckBudget = 2 * time.Second
 
 // idleAdvance moves the engine's logical clock forward off the wall clock when the resolved
 // stream is genuinely caught up, so a silent series' absence/duration/session timer fires — the
@@ -1099,6 +1319,7 @@ func (rp *ResolvedEventsProcessor) detectStaleOwner(ctx context.Context) bool {
 // concern is inert; the deferred teardown path (ADR-023/052) that adds removal-driving facts
 // owns making them replay-durable.
 func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
+	gcd := false
 	for i := range upd.upserts {
 		sr := upd.upserts[i]
 		// A reused profile token can re-mint an existing rule id with a DIFFERENT body whose
@@ -1109,6 +1330,7 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 		// unchanged redelivery leaves state intact (the whole point of preserve-on-reupsert).
 		if old, ok := rp.registry.Lookup(sr.Compiled.ID); ok && old.Definition != sr.Definition {
 			rp.engine.RemoveRule(sr.Compiled.ID)
+			gcd = true
 		}
 		if rp.registry.Upsert(sr) {
 			rp.engine.UpsertRule(sr.Compiled.Core)
@@ -1117,7 +1339,17 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 	for _, id := range upd.removals {
 		if rp.registry.Remove(id) {
 			rp.engine.RemoveRule(id)
+			gcd = true
 		}
+	}
+	if gcd {
+		// A RemoveRule above GC'd serializable keyed state (a reused-id def change, or a removal).
+		// Unlike a plain upsert — the rule SET is not snapshotted; it is rebuilt from the durable rule
+		// projection on restart — dropping a rule's keyed windows/timers DOES change the snapshot. Mark
+		// the loop dirty so the GC is captured by the next checkpoint; otherwise a checkpoint might not
+		// fire before a restart, and replay would resurrect the GC'd state under the (reused) id — e.g.
+		// a stale Duration hold firing a false detection (finding E).
+		rp.dirty = true
 	}
 	rp.metrics.setRulesActive(rp.registry.Count())
 	// Dead-man arming for the fact's profile, AFTER the rule cores are installed above (engine-first,
@@ -1143,7 +1375,9 @@ func (rp *ResolvedEventsProcessor) applyArmRecheck(au armUpdate) {
 	if rp.armer == nil || rp.RosterStore == nil {
 		return
 	}
-	row, live, err := rp.RosterStore.Load(rp.procCtx, au.tenant, au.deviceToken)
+	rctx, cancel := context.WithTimeout(rp.procCtx, loopReadTimeout)
+	row, live, err := rp.RosterStore.Load(rctx, au.tenant, au.deviceToken)
+	cancel()
 	if err != nil {
 		// A transient read error: the driving fact was already persisted-AND-acked, so a silently
 		// dropped recheck would strand stale membership — and unlike a stale threshold the fact is
@@ -1175,15 +1409,21 @@ func (rp *ResolvedEventsProcessor) applyArmRecheck(au armUpdate) {
 // re-adds it for the next tick. The pending set is bounded by distinct devices (an ADR-023 state-budget
 // class, like the roster), so even a total DB outage cannot grow it with event volume. It runs only on
 // the single-writer loop.
-func (rp *ResolvedEventsProcessor) retryArmRechecks() {
+func (rp *ResolvedEventsProcessor) retryArmRechecks(deadline time.Time) {
 	if len(rp.armRetries) == 0 {
 		return
 	}
-	pending := make([]armUpdate, 0, len(rp.armRetries))
+	pending := make([]armUpdate, 0, min(len(rp.armRetries), loopRecheckDrainCap))
 	for au := range rp.armRetries {
 		pending = append(pending, au)
+		if len(pending) >= loopRecheckDrainCap {
+			break // cap per-tick loop-blocking reads; the remainder retries next tick
+		}
 	}
 	for _, au := range pending {
+		if rp.clock.Now().After(deadline) {
+			break // per-tick wall-clock budget spent (shared with retryAttrRechecks); rest carries over
+		}
 		rp.applyArmRecheck(au)
 	}
 }
@@ -1200,7 +1440,9 @@ func (rp *ResolvedEventsProcessor) applyAttrRecheck(at attrUpdate) {
 	if rp.attrView == nil || rp.AttributeStore == nil {
 		return
 	}
-	rows, err := rp.AttributeStore.LoadDevice(rp.procCtx, at.tenant, at.deviceToken)
+	rctx, cancel := context.WithTimeout(rp.procCtx, loopReadTimeout)
+	rows, err := rp.AttributeStore.LoadDevice(rctx, at.tenant, at.deviceToken)
+	cancel()
 	if err != nil {
 		// A transient read error: the driving fact was already persisted-AND-acked, so a silently
 		// dropped recheck would leave the view serving the PRE-fact bound until the device's next fact
@@ -1216,9 +1458,12 @@ func (rp *ResolvedEventsProcessor) applyAttrRecheck(at attrUpdate) {
 	}
 	// Install the converged set and clear any pending retry for this device. This REPLACES the view
 	// entry but deliberately GCs NO engine keyed state (a dynamic Duration hold, a windowed accumulator)
-	// that used the old bound: like a live attribute change, the new bound takes effect at the device's
-	// NEXT event, not retroactively — softer than applyRuleUpdate's GC-on-rule-definition-change, and
-	// live-consistent (a live attr change and a replayed one behave identically).
+	// that used the old bound: the new bound takes effect at the device's NEXT event, not retroactively —
+	// softer than applyRuleUpdate's GC-on-rule-definition-change. Note this is NOT replay-deterministic:
+	// the view holds CURRENT projection values (attributes are external mutable state, not part of the
+	// replayable event stream), so a replayed evaluation resolves against the value NOW, not at original
+	// event time — the accepted divergence documented at startAttributeView (the determinism fix,
+	// embedding the resolved bound into the ResolvedEvent upstream, is deferred).
 	delete(rp.attrRetries, at)
 	rp.attrView.ReplaceDevice(at.tenant, at.deviceToken, toAttrEntries(rows))
 }
@@ -1228,15 +1473,21 @@ func (rp *ResolvedEventsProcessor) applyAttrRecheck(at attrUpdate) {
 // the entry (applyAttrRecheck); a continued failure re-adds it for the next tick. The pending set is
 // bounded by distinct devices (an ADR-023 state-budget class, like the roster), so even a total DB
 // outage cannot grow it with event volume. It runs only on the single-writer loop.
-func (rp *ResolvedEventsProcessor) retryAttrRechecks() {
+func (rp *ResolvedEventsProcessor) retryAttrRechecks(deadline time.Time) {
 	if len(rp.attrRetries) == 0 {
 		return
 	}
-	pending := make([]attrUpdate, 0, len(rp.attrRetries))
+	pending := make([]attrUpdate, 0, min(len(rp.attrRetries), loopRecheckDrainCap))
 	for at := range rp.attrRetries {
 		pending = append(pending, at)
+		if len(pending) >= loopRecheckDrainCap {
+			break // cap per-tick loop-blocking reads; the remainder retries next tick
+		}
 	}
 	for _, at := range pending {
+		if rp.clock.Now().After(deadline) {
+			break // per-tick wall-clock budget spent (shared with retryArmRechecks); rest carries over
+		}
 		rp.applyAttrRecheck(at)
 	}
 }
@@ -1265,73 +1516,89 @@ func (rp *ResolvedEventsProcessor) runRuleConsumer() {
 			}
 			continue
 		}
-		tenant, ev, ok := decodePublishedRuleFact(rp.procCtx, msg)
-		if !ok {
-			// Unparseable/poison: redelivery cannot fix it. Ack to stop it redelivering forever.
-			rp.ackRuleFact(msg)
-			continue
+		if !rp.handleRuleFact(msg, true) {
+			return // shutdown mid-persist/-send: leave unacked; the rows rebuild it next start
 		}
-		// Persist BEFORE ack (durability): the projection — not the finite-retention stream —
-		// is the restart source of truth. Retry in-process until it commits (or shutdown) so a
-		// DB outage cannot lose the rule to the broker's finite redelivery (MaxDeliver); the
-		// fact stays unacked throughout, and a redelivery mid-retry re-persists idempotently.
-		if rp.RuleStore != nil {
-			rows := factRuleRows(tenant, ev)
-			if !rp.persistBeforeAck("published rules "+tenant+"/"+ev.ProfileVersionToken,
-				func() error { return rp.RuleStore.Upsert(rp.procCtx, rows) }) {
-				return // shutdown mid-retry: leave unacked; the rows redeliver next start
+	}
+}
+
+// handleRuleFact persists one published-rule fact's rules (DetectRule projection) and its active-version
+// row (ProfileActive projection), both persist-before-ack, then acks. When signal is true (the live
+// consumer) it also compiles the rules and marshals them + the active-version arming trigger onto the
+// single-writer loop (engine-first, in one ruleUpdate); the pre-replay catch-up (catchUpFactProjections)
+// passes false — reconcileRegistry + reconcileDeadmanArming rebuild the registry and arming from the
+// persisted projections afterward, so the loop signal (and its active-version re-read) is unneeded and
+// the loop is not running yet. It returns false only on a shutdown mid-persist/-send.
+func (rp *ResolvedEventsProcessor) handleRuleFact(msg messaging.Message, signal bool) bool {
+	tenant, ev, ok := decodePublishedRuleFact(rp.procCtx, msg)
+	if !ok {
+		// Unparseable/poison: redelivery cannot fix it. Ack to stop it redelivering forever.
+		rp.ackRuleFact(msg)
+		return true
+	}
+	// Persist BEFORE ack (durability): the projection — not the finite-retention stream —
+	// is the restart source of truth. Retry in-process until it commits (or shutdown) so a
+	// DB outage cannot lose the rule to the broker's finite redelivery (MaxDeliver); the
+	// fact stays unacked throughout, and a redelivery mid-retry re-persists idempotently.
+	if rp.RuleStore != nil {
+		rows := factRuleRows(tenant, ev)
+		if !rp.persistBeforeAck("published rules "+tenant+"/"+ev.ProfileVersionToken,
+			func() error { return rp.RuleStore.Upsert(rp.procCtx, rows) }) {
+			return false // shutdown mid-retry: leave unacked; the rows redeliver next start
+		}
+	}
+	// Maintain the active-version projection off the SAME fact (ADR-051 slice 4c-2b), before
+	// ack and with the same retry discipline: it is where the grace-period base (PublishedAt)
+	// lands durably, so a publish-then-restart does not lose it and re-burst the fleet. A
+	// version token that does not split into "{profileToken}@{version}" yields no active-version
+	// row (profileActiveFromFact returns ok=false) — the well-formed producer always mints the
+	// "@"-joined form, so this only skips a forged/malformed fact; its rules (keyed by the whole
+	// version token) may still install, they simply get no arming entry, which is inert.
+	var activeEntry *runtime.ActiveEntry
+	if rp.ProfileActiveStore != nil {
+		if active, ok := profileActiveFromFact(tenant, ev); ok {
+			if !rp.persistBeforeAck("profile-active "+active.Tenant+"/"+active.ProfileToken,
+				func() error { return rp.ProfileActiveStore.Upsert(rp.procCtx, active) }) {
+				return false // shutdown mid-retry: leave unacked; redelivers next start
+			}
+			// Re-read the AUTHORITATIVE active version for the armer: the upsert is monotonic on
+			// publishedAt, so a stale rule fact does not regress the active version — the dead-man
+			// must arm against the CURRENT active version (which the earlier fact's rules already
+			// installed), not necessarily this fact's. Same persist-before-ack retry discipline;
+			// only when arming is enabled and we intend to signal the loop.
+			if signal && rp.armer != nil {
+				var row model.ProfileActive
+				var found bool
+				if !rp.persistBeforeAck("profile-active-load "+active.Tenant+"/"+active.ProfileToken,
+					func() (err error) {
+						row, found, err = rp.ProfileActiveStore.Load(rp.procCtx, active.Tenant, active.ProfileToken)
+						return err
+					}) {
+					return false // shutdown mid-retry: leave unacked; reconcile rebuilds arming next start
+				}
+				if found {
+					activeEntry = &runtime.ActiveEntry{Tenant: row.Tenant, ProfileToken: row.ProfileToken,
+						ActiveVersionToken: row.ActiveVersionToken, PublishedAt: row.PublishedAt}
+				}
 			}
 		}
-		// Maintain the active-version projection off the SAME fact (ADR-051 slice 4c-2b), before
-		// ack and with the same retry discipline: it is where the grace-period base (PublishedAt)
-		// lands durably, so a publish-then-restart does not lose it and re-burst the fleet. A
-		// version token that does not split into "{profileToken}@{version}" yields no active-version
-		// row (profileActiveFromFact returns ok=false) — the well-formed producer always mints the
-		// "@"-joined form, so this only skips a forged/malformed fact; its rules (keyed by the whole
-		// version token) may still install, they simply get no arming entry, which is inert.
-		var activeEntry *runtime.ActiveEntry
-		if rp.ProfileActiveStore != nil {
-			if active, ok := profileActiveFromFact(tenant, ev); ok {
-				if !rp.persistBeforeAck("profile-active "+active.Tenant+"/"+active.ProfileToken,
-					func() error { return rp.ProfileActiveStore.Upsert(rp.procCtx, active) }) {
-					return // shutdown mid-retry: leave unacked; redelivers next start
-				}
-				// Re-read the AUTHORITATIVE active version for the armer: the upsert is monotonic on
-				// publishedAt, so a stale rule fact does not regress the active version — the dead-man
-				// must arm against the CURRENT active version (which the earlier fact's rules already
-				// installed), not necessarily this fact's. Same persist-before-ack retry discipline;
-				// only when arming is enabled.
-				if rp.armer != nil {
-					var row model.ProfileActive
-					var found bool
-					if !rp.persistBeforeAck("profile-active-load "+active.Tenant+"/"+active.ProfileToken,
-						func() (err error) {
-							row, found, err = rp.ProfileActiveStore.Load(rp.procCtx, active.Tenant, active.ProfileToken)
-							return err
-						}) {
-						return // shutdown mid-retry: leave unacked; reconcile rebuilds arming next start
-					}
-					if found {
-						activeEntry = &runtime.ActiveEntry{Tenant: row.Tenant, ProfileToken: row.ProfileToken,
-							ActiveVersionToken: row.ActiveVersionToken, PublishedAt: row.PublishedAt}
-					}
-				}
-			}
-		}
-		// Apply live to the single-writer loop: the compiled rules AND (engine-first, in the SAME
-		// ruleUpdate so applyRuleUpdate installs before it arms) the active-version arming trigger.
-		// Send when there is either work — an empty batch with an active version still triggers a
-		// version-transition disarm.
+	}
+	// Apply live to the single-writer loop: the compiled rules AND (engine-first, in the SAME
+	// ruleUpdate so applyRuleUpdate installs before it arms) the active-version arming trigger.
+	// Send when there is either work — an empty batch with an active version still triggers a
+	// version-transition disarm. Skipped during catch-up (signal=false): the reconciles rebuild it.
+	if signal {
 		rules, _ := runtime.CompilePublishedRules(tenant, ev.ProfileVersionToken, ev.Rules)
 		if len(rules) > 0 || activeEntry != nil {
 			select {
 			case rp.ruleUpdates <- ruleUpdate{upserts: rules, active: activeEntry}:
 			case <-rp.procCtx.Done():
-				return // shutdown before hand-off: leave unacked; the persisted rows rebuild it
+				return false // shutdown before hand-off: leave unacked; the persisted rows rebuild it
 			}
 		}
-		rp.ackRuleFact(msg)
 	}
+	rp.ackRuleFact(msg)
+	return true
 }
 
 // ackRuleFact acks a published-rule fact, logging a failed ack (harmless: a redelivered fact
@@ -1428,6 +1695,35 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) {
 	rp.lastCheckpoint = rp.clock.Now()
 }
 
+// dropStaleAbsences removes buffered ABSENCE detections whose device left the rule's scope after the
+// timer was armed — deleted (roster row gone), re-typed (roster profile differs), or version superseded
+// (active version moved past the rule's). It is the publish-time membership gate (whole-Slice-4
+// hardening, finding C/D) that stops a stale wheel timer emitting a false absence: a heartbeat-armed
+// timer a straggler re-armed after disarm, or one a replayed watermark advance fired for a device
+// removed while the process was down. It runs at the single publish choke point (every event-driven,
+// idle-advance, and replay fire flows through publishPending), so one check covers them all, evaluated
+// against the loop-owned roster + active views at publish time — so a membership change since arming is
+// honored. Other detection kinds and the scaffold path (no armer, no read-models wired) pass through
+// untouched. A dropped stale absence is a TERMINAL drop (like the tenant backstop), so it never wedges
+// the loop. Fail-safe: AbsenceLive treats an unknown device/rule as NOT live, so at worst a genuinely
+// live but not-yet-known device's absence is missed (a delayed roster fact) rather than a false one
+// published.
+func (rp *ResolvedEventsProcessor) dropStaleAbsences() {
+	if rp.armer == nil {
+		return
+	}
+	kept := rp.pendingDets[:0]
+	for _, d := range rp.pendingDets {
+		if d.Kind == detectcore.Absence &&
+			!rp.armer.AbsenceLive(detectcore.SeriesKey{Rule: d.RuleID, Series: d.Series}) {
+			rp.metrics.recordStaleAbsenceDropped()
+			continue
+		}
+		kept = append(kept, d)
+	}
+	rp.pendingDets = kept
+}
+
 // publishPending durably delivers every buffered detection, in order, on its owning tenant's
 // derived-event subject. It returns true when the buffer is fully flushed (empty on entry
 // counts). A Publish that returns an error is a retryable broker failure: the successfully-
@@ -1436,6 +1732,7 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) {
 // (tenant-backstop rejects, orphan rules) return nil from Publish and advance past the
 // detection — they must never wedge the loop.
 func (rp *ResolvedEventsProcessor) publishPending(ctx context.Context) bool {
+	rp.dropStaleAbsences()
 	i := 0
 	for i < len(rp.pendingDets) {
 		if err := rp.publisher.Publish(ctx, rp.pendingDets[i]); err != nil {
