@@ -241,6 +241,29 @@ func TestDispatchRaiseAlarmEnabled(t *testing.T) {
 	}
 }
 
+// TestDispatchRaiseAlarmCarriesValue proves slice 6a's value passes through to the alarm request:
+// a value-bearing derived event stamps its triggering scalar (so the alarm's last value is real),
+// while a value-less event (silence-driven absence/duration) leaves it nil for the sink to collapse.
+func TestDispatchRaiseAlarmCarriesValue(t *testing.T) {
+	v := 42.5
+	ev := evt()
+	ev.Value = &v
+	alarms := &fakeAlarmSink{}
+	d := NewDispatcher(fakeResolver{rule: raiseAlarmRule(""), found: true}, nil, alarms, newFakeMetrics())
+	d.Dispatch(context.Background(), ev)
+	if alarms.raised[0].Value == nil || *alarms.raised[0].Value != 42.5 {
+		t.Fatalf("value must flow to the alarm request; got %v", alarms.raised[0].Value)
+	}
+
+	// A value-less event carries a nil value through (an absence/duration fire has none).
+	alarms2 := &fakeAlarmSink{}
+	d2 := NewDispatcher(fakeResolver{rule: raiseAlarmRule(""), found: true}, nil, alarms2, newFakeMetrics())
+	d2.Dispatch(context.Background(), evt())
+	if alarms2.raised[0].Value != nil {
+		t.Fatalf("a value-less event must carry a nil value; got %v", *alarms2.raised[0].Value)
+	}
+}
+
 // TestDispatchRaiseAlarmSinkErrorRetries proves a raise-alarm publish failure is a Retry.
 func TestDispatchRaiseAlarmSinkErrorRetries(t *testing.T) {
 	d := NewDispatcher(fakeResolver{rule: raiseAlarmRule(""), found: true}, nil, &fakeAlarmSink{fail: true}, newFakeMetrics())

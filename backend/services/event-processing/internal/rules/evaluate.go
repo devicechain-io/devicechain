@@ -24,16 +24,27 @@ func (cr *CompiledRule) BuildEvent(seq uint64, series, member string, in predica
 	if err != nil {
 		return core.Event{}, err
 	}
+	// The scalar this event carries: the value metric for a value-consuming kind (deltaRate,
+	// non-count aggregate), else the GATE metric for a structured threshold/repeating leaf — the
+	// crossing sample the comparison tested, which is what a raiseAlarm action stamps on the alarm.
+	// The metric-scoped feed gate (fanout) guarantees the chosen metric is present, so read via the
+	// comma-ok form and only claim HasValue when it truly is: a metric-less shape (raw-CEL leaf,
+	// count aggregate, absence, correlation) then carries no value rather than a fabricated 0.
 	var value float64
-	if cr.ValueMetric != "" {
-		value = in.M[cr.ValueMetric]
+	var hasValue bool
+	switch {
+	case cr.ValueMetric != "":
+		value, hasValue = in.M[cr.ValueMetric]
+	case cr.GateMetric != "":
+		value, hasValue = in.M[cr.GateMetric]
 	}
 	return core.Event{
-		Seq:    seq,
-		Key:    core.SeriesKey{Rule: cr.ID, Series: series},
-		Time:   in.Occurred,
-		Value:  value,
-		Match:  match,
-		Member: member,
+		Seq:      seq,
+		Key:      core.SeriesKey{Rule: cr.ID, Series: series},
+		Time:     in.Occurred,
+		Value:    value,
+		HasValue: hasValue,
+		Match:    match,
+		Member:   member,
 	}, nil
 }

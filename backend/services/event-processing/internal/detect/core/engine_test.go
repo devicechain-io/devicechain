@@ -25,7 +25,7 @@ func evStep(seq uint64, rule, series string, sec int, match bool) step {
 }
 
 func evValStep(seq uint64, rule, series string, sec int, val float64) step {
-	return step{ev: &Event{Seq: seq, Key: SeriesKey{Rule: rule, Series: series}, Time: at(sec), Value: val, Match: true}}
+	return step{ev: &Event{Seq: seq, Key: SeriesKey{Rule: rule, Series: series}, Time: at(sec), Value: val, HasValue: true, Match: true}}
 }
 
 func evCorrStep(seq uint64, rule, anchor, member string, sec int) step {
@@ -182,12 +182,99 @@ func runClean(rules []Rule, steps []step) []Detection {
 	return all
 }
 
+// identity strips the informational Value payload (slice 6a), leaving the dedup identity
+// (RuleID, Series, Kind, At) — the exact key a downstream at-least-once collapse uses. Value is
+// deterministic too (TestDeterministic compares full structs), but it is not part of identity, so
+// the replay/expected set comparison must not depend on it.
+func identity(d Detection) Detection {
+	d.Value, d.HasValue = 0, false
+	return d
+}
+
 func dedup(ds []Detection) map[Detection]bool {
 	set := map[Detection]bool{}
 	for _, d := range ds {
-		set[d] = true
+		set[identity(d)] = true
 	}
 	return set
+}
+
+// TestDetectionValueCarried proves slice 6a's value carriage: a value-bearing fire stamps the
+// scalar it is about (the crossing sample for Threshold, the computed delta for DeltaRate, the
+// window aggregate for Aggregate), while a silence-driven fire (Absence, Duration) carries none
+// (HasValue=false). Value is what a raiseAlarm REACT action stamps on the alarm, so a wrong or
+// missing value here is the slice-5c "re-raise clobbers with 0" blocker regressing.
+func TestDetectionValueCarried(t *testing.T) {
+	rules := []Rule{
+		{ID: "rThr", Kind: Threshold},
+		{ID: "rDelta", Kind: DeltaRate, Op: GT, Thresh: 50},
+		{ID: "rAgg", Kind: Aggregate, Window: 10 * time.Second, Agg: AggAvg, Op: GT, Thresh: 100},
+		{ID: "rAbs", Kind: Absence, Timeout: 10 * time.Second},
+		{ID: "rDur", Kind: Duration, Hold: 5 * time.Second},
+	}
+	steps := []step{
+		evValStep(1, "rThr", "d", 1, 42.5),  // Threshold: crossing sample 42.5
+		evValStep(2, "rDelta", "d", 2, 100), // prime
+		evValStep(3, "rDelta", "d", 4, 200), // +100 delta -> value 100
+		evValStep(4, "rAgg", "d", 5, 90),    // pane [0,10)
+		evValStep(5, "rAgg", "d", 6, 120),   // pane avg (90+120)/2 = 105
+		advStep(12),                         // close pane -> Aggregate value 105
+		evStep(6, "rAbs", "d", 1, true),     // arm dead-man
+		evStep(7, "rDur", "d", 1, true),     // arm duration
+		advStep(30),                         // fire Absence + Duration (silence-driven, no value)
+	}
+	got := map[Detection]Detection{} // identity -> full
+	e := NewEngine(rules, 0)
+	for _, s := range steps {
+		applyStep(e, s)
+		for _, d := range e.Drain() {
+			got[identity(d)] = d
+		}
+	}
+	check := func(rule string, kind RuleKind, at time.Time, wantHas bool, wantVal float64) {
+		t.Helper()
+		d, ok := got[Detection{RuleID: rule, Series: "d", Kind: kind, At: at}]
+		if !ok {
+			t.Fatalf("%s: no detection at %v", rule, at)
+		}
+		if d.HasValue != wantHas || (wantHas && d.Value != wantVal) {
+			t.Errorf("%s: HasValue=%v Value=%v; want HasValue=%v Value=%v", rule, d.HasValue, d.Value, wantHas, wantVal)
+		}
+	}
+	check("rThr", Threshold, at(1), true, 42.5)
+	check("rDelta", DeltaRate, at(4), true, 100)
+	check("rAgg", Aggregate, at(10), true, 105)
+	check("rAbs", Absence, at(11), false, 0) // deadline: armed at 1 + 10s timeout
+	check("rDur", Duration, at(6), false, 0) // deadline: held from 1 + 5s hold
+}
+
+// TestReplayRestoresValue guards the value payload across a snapshot/restore, coverage the
+// identity-projected dedup deliberately drops. A DeltaRate's emitted value is the delta between the
+// current sample and the PRIOR sample held in snapshotted state — so if restore lost or corrupted
+// that prior sample, the delta (and thus the alarm's stamped value) would be wrong while the
+// detection identity stayed correct. Feed a priming sample, snapshot, kill, restore, then feed the
+// next sample and assert the delta value is exact.
+func TestReplayRestoresValue(t *testing.T) {
+	rules := []Rule{{ID: "rd", Kind: DeltaRate, Op: GT, Thresh: 50}}
+	e := NewEngine(rules, 0)
+	e.ProcessEvent(Event{Seq: 1, Key: SeriesKey{Rule: "rd", Series: "d"}, Time: at(1), Value: 100, HasValue: true, Match: true})
+	if len(e.Drain()) != 0 {
+		t.Fatal("priming sample must not fire (needs two samples for a delta)")
+	}
+	snap, err := e.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	// kill -9 -> restore from the checkpoint that holds the prior sample (100).
+	e2, err := Restore(rules, 0, snap)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	e2.ProcessEvent(Event{Seq: 2, Key: SeriesKey{Rule: "rd", Series: "d"}, Time: at(3), Value: 160, HasValue: true, Match: true})
+	d := e2.Drain()
+	if len(d) != 1 || !d[0].HasValue || d[0].Value != 60 {
+		t.Fatalf("delta value after restore must be 160-100=60 (proving the prior sample restored); got %+v", d)
+	}
 }
 
 func TestCleanRunMatchesExpected(t *testing.T) {

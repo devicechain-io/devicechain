@@ -91,6 +91,52 @@ func TestPublishStampsSeverity(t *testing.T) {
 	}
 }
 
+// TestPublishStampsValue proves slice 6a's value carriage: a value-bearing detection stamps its
+// scalar as a pointer (so a raiseAlarm action carries the real triggering value), and a value-less
+// detection (silence-driven absence/duration) omits it entirely (nil pointer + omitempty). A stamped
+// 0.0 is distinct from absent — the whole reason Value is a pointer.
+func TestPublishStampsValue(t *testing.T) {
+	reg := NewRuleRegistry([]ScopedRule{{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: thresholdRule("acme/r1")}})
+
+	// Value-bearing: HasValue detection -> pointer set to the exact value.
+	w := &fakeWriter{}
+	p := NewPublisher(w, reg, newFakeMetrics())
+	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now(), Value: 42.5, HasValue: true}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	var de DerivedEvent
+	if err := json.Unmarshal(w.writes[0].payload, &de); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if de.Value == nil || *de.Value != 42.5 {
+		t.Fatalf("value = %v, want *42.5", de.Value)
+	}
+
+	// A stamped 0.0 is still present (pointer non-nil) — distinct from a value-less fire.
+	w0 := &fakeWriter{}
+	p0 := NewPublisher(w0, reg, newFakeMetrics())
+	if err := p0.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now(), Value: 0, HasValue: true}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	var de0 DerivedEvent
+	if err := json.Unmarshal(w0.writes[0].payload, &de0); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if de0.Value == nil || *de0.Value != 0 {
+		t.Fatalf("a stamped zero must be present, not absent; got %v", de0.Value)
+	}
+
+	// Value-less: HasValue=false -> omitted from the wire entirely.
+	w2 := &fakeWriter{}
+	p2 := NewPublisher(w2, reg, newFakeMetrics())
+	if err := p2.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now()}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if strings.Contains(string(w2.writes[0].payload), "value") {
+		t.Fatalf("payload should omit value when the detection carries none: %s", w2.writes[0].payload)
+	}
+}
+
 // A well-formed detection publishes one derived event, scoped to the rule's owning tenant,
 // carrying the stable dedup identity (rule id, series, kind, event time).
 func TestPublishScopesToOwningTenant(t *testing.T) {

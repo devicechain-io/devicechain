@@ -236,7 +236,7 @@ type DeviceManagementApi interface {
 	// RaiseAlarm is the REACT raise-alarm entry (ADR-051 slice 5c): it raises/escalates an alarm
 	// for an already-resolved device id through the same engine the measurement evaluator uses, so
 	// a rule-driven alarm shares the Alarm object, ack/clear, rollup, and notification flow.
-	RaiseAlarm(ctx context.Context, deviceId uint, alarmKey, metricKey, severity string, value float64, occurredTime time.Time) error
+	RaiseAlarm(ctx context.Context, deviceId uint, alarmKey, metricKey, severity string, value *float64, occurredTime time.Time) error
 
 	// Entity attributes (ADR-012).
 	SetEntityAttribute(ctx context.Context, request *EntityAttributeSetRequest) (*EntityAttribute, error)

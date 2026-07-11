@@ -30,15 +30,17 @@ type raiseArgs struct {
 	deviceId            uint
 	alarmKey, metricKey string
 	severity            string
-	value               float64
+	value               *float64
 	occurredTime        time.Time
 }
+
+func fptr(v float64) *float64 { return &v }
 
 func (f *fakeAlarmApi) DevicesByToken(_ context.Context, _ []string) ([]*model.Device, error) {
 	return f.devices, f.devErr
 }
 
-func (f *fakeAlarmApi) RaiseAlarm(_ context.Context, deviceId uint, alarmKey, metricKey, severity string, value float64, occurredTime time.Time) error {
+func (f *fakeAlarmApi) RaiseAlarm(_ context.Context, deviceId uint, alarmKey, metricKey, severity string, value *float64, occurredTime time.Time) error {
 	f.raiseCalls++
 	f.lastRaise = raiseArgs{deviceId, alarmKey, metricKey, severity, value, occurredTime}
 	return f.raiseErr
@@ -70,7 +72,7 @@ func raiseMsg(t *testing.T, tenant string, req model.RaiseAlarmRequest, numDeliv
 func validReq() model.RaiseAlarmRequest {
 	return model.RaiseAlarmRequest{
 		DeviceToken: "device-1", AlarmKey: "acme/p@1/r1", MetricKey: "temperature",
-		Severity: "critical", Value: 91, OccurredTime: time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC),
+		Severity: "critical", Value: fptr(91), OccurredTime: time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -89,8 +91,22 @@ func TestRaiseAlarmConsumerApplies(t *testing.T) {
 	if api.lastRaise.deviceId != 42 || api.lastRaise.severity != "CRITICAL" || api.lastRaise.alarmKey != "acme/p@1/r1" {
 		t.Fatalf("RaiseAlarm args wrong: %+v", api.lastRaise)
 	}
+	if api.lastRaise.value == nil || *api.lastRaise.value != 91 {
+		t.Fatalf("the triggering value must flow through to RaiseAlarm; got %v", api.lastRaise.value)
+	}
 	if ack.acks != 1 || ack.naks != 0 {
 		t.Fatalf("a successful raise must ack once: acks=%d naks=%d", ack.acks, ack.naks)
+	}
+
+	// A value-less request (a silence-driven fire) carries a nil value through unchanged, so
+	// device-management leaves the alarm's last value NULL rather than fabricating a 0.
+	apiNil := &fakeAlarmApi{devices: []*model.Device{{}}}
+	rcNil := newTestConsumer(apiNil)
+	req := validReq()
+	req.Value = nil
+	rcNil.handle(context.Background(), raiseMsg(t, "acme", req, 0, &fakeAck{}))
+	if apiNil.raiseCalls != 1 || apiNil.lastRaise.value != nil {
+		t.Fatalf("a value-less request must raise with a nil value; got calls=%d value=%v", apiNil.raiseCalls, apiNil.lastRaise.value)
 	}
 }
 

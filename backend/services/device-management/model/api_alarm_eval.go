@@ -118,8 +118,10 @@ func (api *Api) EvaluateMeasurementAlarms(ctx context.Context, deviceToken strin
 			return err
 		}
 		if satisfied {
+			// The measurement evaluator always has a real reading (a raise is condition-satisfied on a
+			// present sample), so it always stamps a value (never NULL).
 			if err := api.raiseOrEscalateAlarm(ctx, deviceId, alarmKey, metricKey,
-				severity, value, occurredTime); err != nil {
+				severity, &value, occurredTime); err != nil {
 				return err
 			}
 		} else {
@@ -209,7 +211,7 @@ func (api *Api) alarmByOriginatorKey(ctx context.Context, originatorType string,
 // does not re-resolve. Severity must be a valid AlarmSeverity; it is re-checked fail-closed here even
 // though the consumer validates, so no caller can drive a malformed tier into the alarm row.
 func (api *Api) RaiseAlarm(ctx context.Context, deviceId uint,
-	alarmKey, metricKey, severity string, value float64, occurredTime time.Time) error {
+	alarmKey, metricKey, severity string, value *float64, occurredTime time.Time) error {
 	if alarmKey == "" {
 		return fmt.Errorf("raise-alarm requires a non-empty alarm key")
 	}
@@ -228,12 +230,18 @@ func (api *Api) RaiseAlarm(ctx context.Context, deviceId uint,
 // it. A reactivation resets the acknowledgment: a fresh alarm cycle has not been seen
 // yet. Writes are column-limited so a concurrent operator ack/clear isn't clobbered.
 func (api *Api) raiseOrEscalateAlarm(ctx context.Context, deviceId uint,
-	alarmKey, metricKey, severity string, value float64, occurredTime time.Time) error {
+	alarmKey, metricKey, severity string, value *float64, occurredTime time.Time) error {
 	existing, err := api.alarmByOriginatorKey(ctx, string(entity.TypeDevice), deviceId, alarmKey)
 	if err != nil {
 		return err
 	}
-	lastValue := sql.NullFloat64{Float64: value, Valid: true}
+	// A nil value (a silence-driven absence/duration fire, or a metric-less raw-CEL leaf) leaves the
+	// alarm's last_value NULL rather than writing a fabricated 0 as a real reading — honest, and it
+	// avoids a value-less raise clobbering a co-keyed rule's real reading with 0.
+	var lastValue sql.NullFloat64
+	if value != nil {
+		lastValue = sql.NullFloat64{Float64: *value, Valid: true}
+	}
 
 	if existing == nil {
 		created := &Alarm{
