@@ -91,6 +91,13 @@ instance:
         # uncompilable rule fails closed (ADR-051 slice 4b).
         hostname: event-processing
         port: 8080
+      commandDelivery:
+        # command-delivery is reached in-cluster by its instance-namespace Service name
+        # for event-processing's REACT dispatcher to enqueue a command when a detection
+        # rule's sendCommand action fires (ADR-044 amendment / ADR-051 slice 5b). Unset
+        # (or empty hostname) disables REACT send-command dispatch, fail-closed.
+        hostname: command-delivery
+        port: 8080
       serviceAuth:
         # Shared secret backing the synchronous cross-service call primitive
         # (ADR-044 amendment): a caller presents it to user-management's mint

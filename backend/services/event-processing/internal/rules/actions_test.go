@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // thresholdWith is a minimal, always-valid threshold rule the action tests hang severity/actions
@@ -132,6 +133,23 @@ func TestCompileRejectsDuplicateActions(t *testing.T) {
 	r2 := Action{Type: ActionRaiseAlarm, RaiseAlarm: &RaiseAlarmAction{AlarmKey: "over-pressure"}}
 	if _, err := Compile(thresholdWith(SeverityMajor, r1, r2), testLimits); err != nil {
 		t.Fatalf("distinct alarm keys should both compile: %v", err)
+	}
+}
+
+// TestCompileRejectsActionsOnCorrelation proves a correlation rule cannot carry actions: its series
+// is an area anchor, not a device, so a device-targeted action would be mis-dispatched. A
+// correlation rule with NO actions still compiles.
+func TestCompileRejectsActionsOnCorrelation(t *testing.T) {
+	base := func(actions ...Action) Rule {
+		return Rule{ID: "acme/p@1/area", Name: "busy-area", Type: TypeCorrelation,
+			AnchorType: "area", Count: 3, Window: Duration(5 * time.Minute), Actions: actions}
+	}
+	if _, err := Compile(base(), testLimits); err != nil {
+		t.Fatalf("a correlation rule with no actions must compile: %v", err)
+	}
+	_, err := Compile(base(Action{Type: ActionSendCommand, SendCommand: &SendCommandAction{Command: "c"}}), testLimits)
+	if err == nil || !strings.Contains(err.Error(), "correlation") {
+		t.Fatalf("actions on a correlation rule must be rejected, got %v", err)
 	}
 }
 

@@ -55,6 +55,31 @@ func TestDetectRuleStore_UpsertIsIdempotentAndLoads(t *testing.T) {
 	}
 }
 
+// LoadByID returns the single row for a composed id (the REACT resolution path) and reports
+// found=false for an unknown id, never an error.
+func TestDetectRuleStore_LoadByID(t *testing.T) {
+	s := newTestRuleStore(t)
+	ctx := context.Background()
+	rule := DetectRule{RuleId: "acme/p@1/hot", Tenant: "acme", ProfileVersionToken: "p@1", RuleToken: "hot", Definition: `{"actions":[]}`}
+	if err := s.Upsert(ctx, []DetectRule{rule}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, found, err := s.LoadByID(ctx, "acme/p@1/hot")
+	if err != nil || !found {
+		t.Fatalf("LoadByID present: found=%v err=%v", found, err)
+	}
+	if got.Definition != `{"actions":[]}` {
+		t.Fatalf("wrong definition: %q", got.Definition)
+	}
+	_, found, err = s.LoadByID(ctx, "acme/p@1/missing")
+	if err != nil {
+		t.Fatalf("LoadByID of an unknown id must not error: %v", err)
+	}
+	if found {
+		t.Fatal("LoadByID must report found=false for an unknown id")
+	}
+}
+
 // An empty batch is a no-op, and rules across tenants/versions all load (retain-superseded).
 func TestDetectRuleStore_EmptyAndMultiScope(t *testing.T) {
 	s := newTestRuleStore(t)

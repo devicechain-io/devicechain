@@ -5,8 +5,10 @@ package model
 
 import (
 	"context"
+	"errors"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -49,4 +51,23 @@ func (s *DetectRuleStore) LoadAll(ctx context.Context) ([]DetectRule, error) {
 		return nil, err
 	}
 	return rules, nil
+}
+
+// LoadByID returns the single rule row for a composed runtime rule id, or ok=false when no such
+// rule is persisted. It is the REACT dispatcher's resolution path (ADR-051 slice 5b): a derived
+// event carries the rule id that fired, and the dispatcher reads the authoritative rule Definition
+// (its action chain + severity) from this durable projection — the same source of truth the engine
+// rebuilds from — rather than from the wire event, so an action-chain edit takes effect without
+// re-publishing events. The id is the primary key, so this is a point read. A store error is
+// returned (the caller must NOT treat a transient read failure as "rule gone" and drop the action).
+func (s *DetectRuleStore) LoadByID(ctx context.Context, ruleID string) (*DetectRule, bool, error) {
+	var rule DetectRule
+	err := s.rdb.DB(ctx).Where("rule_id = ?", ruleID).Take(&rule).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return &rule, true, nil
 }
