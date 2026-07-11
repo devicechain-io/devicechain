@@ -308,19 +308,31 @@ functionalAreas:
     config: {}
   event-processing:
     config: {}
+    # ADR-051: the DETECT engine must run as ONE active instance per deployment (no two
+    # engines splitting the resolved-events durable, or windowed/absence detection breaks
+    # on restart). It holds durable window/timer state in the Postgres snapshot store; two
+    # concurrent engines would each see only HALF the events and diverge. The store's Save
+    # is MONOTONIC (it refuses to move the checkpoint sequence backward), which blocks the
+    # worst outcome — a lagging writer clobbering a newer checkpoint — but does NOT by
+    # itself make split-brain safe.
+    #
+    # So this area deploys with strategy Recreate (during a ROLLOUT all old pods stop before
+    # any new pod starts — no old+new overlap that a rolling update would otherwise cause) and
+    # stays at replicas:1. Recreate covers rollouts only; an eviction / node drain still briefly
+    # runs two engines (the ReplicaSet replaces a deleted pod immediately), which the app-level
+    # fence handles (monotonic snapshot Save + detectStaleOwner). Do NOT raise replicas past 1
+    # (a Recreate with 2 replicas runs 2 permanent writers; the template fails the render) until
+    # the intra-Instance tenant-sharded DETECT fleet lands (post-GA, ADR-052).
+    #
+    # Operational note: during a Recreate rollout the event-processing Service has no ready
+    # endpoint (old-pod stop + new-pod snapshot replay + startupProbe). Publishing a device
+    # profile that has ENABLED detection rules calls event-processing's validateDetectionRules
+    # synchronously and fails CLOSED on transport error (ADR-044 sync gate), so such publishes
+    # error for the rollout window — expected; retry after the new pod is Ready.
+    replicas: 1
+    strategy: Recreate
     # checkpointEvents: 1000          # ADR-051: max applied events between snapshot
     # checkpointIntervalSeconds: 10   # commits (whichever comes first). The engine
     # acks the resolved-events durable only after the snapshot containing an event's
     # effect commits (ack-on-checkpoint), so these bound write-amplification vs the
     # ack/redelivery latency on a crash.
-    #
-    # ADR-051: the DETECT engine must run as ONE active instance per deployment (no
-    # two engines splitting the resolved-events durable, or windowed/absence detection
-    # breaks on restart). It holds durable window/timer state in the Postgres snapshot
-    # store; two concurrent engines would each see only HALF the events and diverge.
-    # The store's Save is MONOTONIC (it refuses to move the checkpoint sequence
-    # backward), which blocks the worst outcome — a lagging writer clobbering a newer
-    # checkpoint — but does NOT make split-brain safe. So do NOT scale this area past
-    # 1, and note that even a default rolling update briefly runs old+new pods
-    # together: the GA singleton cutover (a per-area Recreate strategy or leader
-    # election) lands with the DETECT deploy work, not here.

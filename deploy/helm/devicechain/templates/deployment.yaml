@@ -27,17 +27,42 @@ metadata:
 spec:
   replicas: {{ get $areaCfg "replicas" | default $root.Values.replicas }}
   {{/*
-  Zero-downtime rollouts (methodology §10.1): maxUnavailable:0 keeps full capacity
-  during an upgrade — a new pod must go Ready (/readyz) before an old one is
-  removed — and maxSurge:1 brings the replacement up first. Pair with replicas >= 2
-  for true zero-downtime (a single replica still has a brief gap while its one pod
-  is replaced).
+  Rollout strategy. Default RollingUpdate for zero-downtime rollouts (methodology §10.1):
+  maxUnavailable:0 keeps full capacity during an upgrade — a new pod must go Ready
+  (/readyz) before an old one is removed — and maxSurge:1 brings the replacement up
+  first. Pair with replicas >= 2 for true zero-downtime (a single replica still has a
+  brief gap while its one pod is replaced).
+
+  A per-area "strategy: Recreate" override (functionalAreas.<area>.strategy) switches to
+  Recreate: during a ROLLOUT all old pods terminate before any new pod starts, so a deploy
+  never overlaps old+new. This is REQUIRED for the DETECT engine (event-processing, ADR-051):
+  a single-writer stream processor whose correctness depends on exactly one instance binding
+  the resolved-events durable + owning the Postgres snapshot at a time. A rolling update
+  briefly runs old+new together, which splits the durable and diverges windowed/absence state
+  on restart; Recreate trades a brief detection gap (acceptable — the durable redelivers from
+  the last checkpoint on the new pod) for that split-brain safety at deploy time.
+
+  Recreate governs ROLLOUTS ONLY. An eviction / node drain / manual pod delete is handled by
+  the ReplicaSet, which schedules the replacement IMMEDIATELY while the old pod is still
+  Terminating — so those paths CAN briefly run two engines. That residual overlap is covered
+  at the app layer, not here: the engine's snapshot Save is monotonic and detectStaleOwner
+  halts a writer whose checkpoint another has passed (ResolvedEventsProcessor). Both fences
+  are load-bearing — do not remove them assuming Recreate makes single-writer airtight.
+
+  Such an area MUST also stay at replicas:1 (a Recreate with 2 replicas runs 2 PERMANENT
+  writers — strictly worse than a rolling overlap); the guard below fails the render if not.
   */}}
+  {{- $strategy := get $areaCfg "strategy" | default "RollingUpdate" }}
+  {{- if and (eq $strategy "Recreate") (gt (int (get $areaCfg "replicas" | default $root.Values.replicas)) 1) }}
+  {{- fail (printf "functionalAreas.%s: strategy Recreate is a single-writer guarantee and requires replicas:1 (got %v)" $area (get $areaCfg "replicas" | default $root.Values.replicas)) }}
+  {{- end }}
   strategy:
-    type: RollingUpdate
+    type: {{ $strategy }}
+    {{- if eq $strategy "RollingUpdate" }}
     rollingUpdate:
       maxUnavailable: {{ $root.Values.rollingUpdate.maxUnavailable }}
       maxSurge: {{ $root.Values.rollingUpdate.maxSurge }}
+    {{- end }}
   selector:
     matchLabels:
       {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 6 }}

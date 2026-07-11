@@ -176,6 +176,11 @@
         "properties": {
           "image": { "type": "string" },
           "replicas": { "type": "integer", "minimum": 0 },
+          "strategy": {
+            "type": "string",
+            "enum": ["RollingUpdate", "Recreate"],
+            "description": "Deployment rollout strategy for this area. Default RollingUpdate. Recreate stops all old pods before starting new ones (no old+new overlap) — required for a single-writer stream processor like event-processing (ADR-051 DETECT), which must also stay at replicas:1."
+          },
           "resources": { "type": "object" },
           "config": { "type": "object" },
           "extraPorts": {
