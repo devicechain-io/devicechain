@@ -248,6 +248,53 @@ func deleteSeriesKeys[V any](m map[SeriesKey]V, rule string) {
 	}
 }
 
+func countSeriesKeys[V any](counts map[string]int, m map[SeriesKey]V) {
+	for k := range m {
+		counts[k.Rule]++
+	}
+}
+
+// LiveKeyCounts returns, per rule id, the number of live keyed-state ENTRIES the rule holds — its
+// open windows, running timers, and accumulators. This is the rule's contribution to the engine's
+// memory footprint, which the per-tenant runtime state budget (ADR-023 amendment, ADR-051 slice 6c)
+// is measured against; the caller rolls rule ids up to tenants via the id's tenant prefix.
+//
+// It counts ENTRIES (a memory proxy), NOT distinct series: a timer-bearing key is counted BOTH in
+// its state map AND in the timer wheel's LIVE set, because each is a real, separately-allocated entry
+// — a Duration or Session key holds an active/session accumulator plus a wheel timer (two entries,
+// ~two units of memory). Crucially, counting the wheel is what captures an ABSENCE rule armed by a
+// device REPORTING: that heartbeat timer lives ONLY in the wheel (no state-map entry — see apply's
+// Absence case), so a state-maps-only count would report 0 live keys for the common absence case and
+// blind the budget to the flagship feature's memory. A Correlation series is counted as its anchor
+// key PLUS its live distinct-member set (each member is a retained entry), so a correlation rule is
+// not under-measured by up to MemberCap the way an anchor-only count would be.
+//
+// It counts the wheel's LIVE deadlines (wheel.live), not its gens ledger: gens retains one generation
+// counter per (rule, series) that ever held a timer and is swept only on rule removal (the anti-gen-
+// recycle invariant), so it is a separate, slowly-accumulating overhead under device churn — real but
+// distinct from current live load, which is what a suppression budget should target; it is bounded
+// per rule by distinct-series-ever-timed and reclaimed on RemoveRule. Computed on demand on the
+// single-writer loop (no lock, no hot-path cost).
+func (e *Engine) LiveKeyCounts() map[string]int {
+	counts := make(map[string]int)
+	countSeriesKeys(counts, e.active)
+	countSeriesKeys(counts, e.sliding)
+	countSeriesKeys(counts, e.lastVal)
+	countSeriesKeys(counts, e.counts)
+	countSeriesKeys(counts, e.session)
+	countSeriesKeys(counts, e.slides)
+	countSeriesKeys(counts, e.expected)
+	countSeriesKeys(counts, e.wheel.live) // heartbeat-armed absence timers live ONLY here
+	// Correlation: the anchor key plus each retained distinct member (the real memory).
+	for k, members := range e.corr {
+		counts[k.Rule] += 1 + len(members)
+	}
+	for pk := range e.panes {
+		counts[pk.Rule]++
+	}
+	return counts
+}
+
 // SetExpected arms (or refreshes) the dead-man absence timer for a series the runtime resolved
 // from the roster + active-version read-models — the (Absence rule, device) pair a rostered
 // device that has never reported should still be watched on (ADR-051 slice 4c-2b). It is driven
@@ -298,9 +345,10 @@ func (e *Engine) RemoveExpected(key SeriesKey) {
 // a rule the restored rule set no longer holds (Restore reloads expected unconditionally), which
 // the reconciliation must treat as membership-gone or it persists in every future snapshot. It
 // returns a point-in-time copy of the keys, so mutating the engine while iterating it is safe.
-// The armed set is bounded by (absence rules × rostered devices) — the same key-cardinality class
-// as the wheel's gens map (see timerWheel), governed by the ADR-023 state budget, not event volume.
-// Order is unspecified.
+// The armed set is bounded by (absence rules × rostered devices) — a key-cardinality class (not event
+// volume) that LiveKeyCounts measures against the ADR-023 state budget (the expected map is counted).
+// The wheel's gens ledger is a related but separate per-ever-timed-series overhead that LiveKeyCounts
+// does NOT count (see its note). Order is unspecified.
 func (e *Engine) ExpectedKeys() []SeriesKey {
 	keys := make([]SeriesKey, 0, len(e.expected))
 	for k := range e.expected {

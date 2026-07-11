@@ -29,3 +29,21 @@ func TestRegistryDropsEmptyTenant(t *testing.T) {
 		t.Fatalf("empty-tenant rule should be dropped; got %d", reg.Count())
 	}
 }
+
+// RuleCountsByTenant tallies admitted rules per owning tenant — the rule dimension of the ADR-023
+// state budget (slice 6c) — and a Remove drops the tenant's count.
+func TestRuleCountsByTenant(t *testing.T) {
+	reg := NewRuleRegistry([]ScopedRule{
+		{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: thresholdRule("acme/p@1/r1")},
+		{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: thresholdRule("acme/p@1/r2")},
+		{Tenant: "beta", ProfileVersionToken: "p@1", Compiled: thresholdRule("beta/p@1/r1")},
+	})
+	counts := reg.RuleCountsByTenant()
+	if counts["acme"] != 2 || counts["beta"] != 1 {
+		t.Fatalf("per-tenant counts wrong: %+v", counts)
+	}
+	reg.Remove("acme/p@1/r1")
+	if c := reg.RuleCountsByTenant()["acme"]; c != 1 {
+		t.Fatalf("Remove should drop the tenant's count to 1; got %d", c)
+	}
+}

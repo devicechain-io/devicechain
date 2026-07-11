@@ -51,6 +51,17 @@ const (
 	// max(this guard, the checkpoint interval) + one tick — a device that stops reporting is
 	// flagged that long after its last event, not instantly.
 	DefaultIdleAdvanceGuardSeconds = 5
+	// DefaultMaxRulesPerTenant and DefaultMaxLiveKeysPerTenant are the per-tenant runtime state
+	// budget ceilings (ADR-023 amendment, ADR-051 slice 6c). DETECT is a shared singleton: all
+	// tenants' rules and keyed window/timer state live in one process, so one tenant's runaway
+	// cardinality (rules × devices/anchors) could OOM the engine and take detection down for EVERY
+	// tenant. The budget bounds each tenant so the offender is contained, not the whole process.
+	// Fail-safe per ADR-023: an unset (0) budget defaults to these platform ceilings — NEVER
+	// unlimited; a negative value is rejected at Validate. Slice 6c-1 measures + exposes usage
+	// against these; slice 6c-2 enforces (reject over-budget rules / disable an offender's rules).
+	// They are platform-operator tunable (raise for a genuinely large tenant).
+	DefaultMaxRulesPerTenant    = 500
+	DefaultMaxLiveKeysPerTenant = 1_000_000
 )
 
 // Messaging subjects this service PRODUCES (ADR-051). Consumed subjects
@@ -98,6 +109,15 @@ type EventProcessingConfiguration struct {
 	// idle-advance entirely.
 	IdleAdvanceGuardSeconds int
 
+	// MaxRulesPerTenant and MaxLiveKeysPerTenant are the per-tenant runtime state budget (ADR-023
+	// amendment, ADR-051 slice 6c): the max detection rules a tenant may run, and the max live keyed
+	// windows/timers (rules × devices/anchors) its rules may hold, in the shared DETECT engine. Unset
+	// (0) defaults to the platform ceilings (DefaultMaxRulesPerTenant / DefaultMaxLiveKeysPerTenant) —
+	// fail-safe: never unlimited; a negative value is rejected. Slice 6c-1 measures usage against
+	// these and exposes it (bounded gauges); slice 6c-2 enforces them.
+	MaxRulesPerTenant    int
+	MaxLiveKeysPerTenant int
+
 	// RaiseAlarmDispatchEnabled turns on REACT raise-alarm dispatch (ADR-051 slice 5c): when a
 	// detection rule's raiseAlarm action fires, event-processing publishes a raise-alarm request to
 	// device-management. It defaults to FALSE and MUST stay false until slice 6 retires the
@@ -133,6 +153,12 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	if c.IdleAdvanceGuardSeconds == 0 {
 		c.IdleAdvanceGuardSeconds = DefaultIdleAdvanceGuardSeconds
 	}
+	if c.MaxRulesPerTenant == 0 {
+		c.MaxRulesPerTenant = DefaultMaxRulesPerTenant
+	}
+	if c.MaxLiveKeysPerTenant == 0 {
+		c.MaxLiveKeysPerTenant = DefaultMaxLiveKeysPerTenant
+	}
 }
 
 // Validate is the ADR-022 decision-1 validation hook. It rejects a non-positive
@@ -145,6 +171,15 @@ func (c *EventProcessingConfiguration) Validate() error {
 	}
 	if c.CheckpointIntervalSeconds <= 0 {
 		return fmt.Errorf("checkpointIntervalSeconds must be positive, got %d", c.CheckpointIntervalSeconds)
+	}
+	// The per-tenant budgets fail closed: a negative ceiling is rejected rather than silently treated
+	// as unlimited (ADR-023 — an unset budget defaults to the platform ceiling in ApplyDefaults, never
+	// unlimited; a negative value is an operator error, not an "unlimited" escape hatch).
+	if c.MaxRulesPerTenant < 0 {
+		return fmt.Errorf("maxRulesPerTenant must not be negative, got %d", c.MaxRulesPerTenant)
+	}
+	if c.MaxLiveKeysPerTenant < 0 {
+		return fmt.Errorf("maxLiveKeysPerTenant must not be negative, got %d", c.MaxLiveKeysPerTenant)
 	}
 	return nil
 }
