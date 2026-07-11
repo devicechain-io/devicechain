@@ -267,3 +267,24 @@ func TestExpectedKeysReportsArmedSet(t *testing.T) {
 		t.Fatalf("ExpectedKeys = %v, want %v", got, want)
 	}
 }
+
+// TestHeartbeatAbsenceKeysExcludesDeadManAndNonAbsence: HeartbeatAbsenceKeys returns a series with a
+// heartbeat-armed absence timer (apply, Absence) but NOT one that also has a dead-man expected entry
+// (that is the ExpectedKeys sweep's job) NOR a non-absence rule's timer.
+func TestHeartbeatAbsenceKeysExcludesDeadManAndNonAbsence(t *testing.T) {
+	e := NewEngine([]Rule{
+		{ID: "rAbs", Kind: Absence, Timeout: 10 * time.Second},
+		{ID: "rDur", Kind: Duration, Hold: 10 * time.Second},
+	}, 0)
+	// heartbeat-only absence timer (reported then silent, no dead-man entry)
+	e.ProcessEvent(Event{Seq: 1, Key: absKey("rAbs", "hb"), Time: at(1), Match: true})
+	// dead-man-armed absence timer (in e.expected — owned by the ExpectedKeys sweep)
+	e.SetExpected(absKey("rAbs", "dm"), at(0))
+	// a Duration timer — a wheel timer that is NOT an absence
+	e.ProcessEvent(Event{Seq: 2, Key: absKey("rDur", "dur"), Time: at(1), Match: true})
+
+	got := e.HeartbeatAbsenceKeys()
+	if len(got) != 1 || got[0] != absKey("rAbs", "hb") {
+		t.Fatalf("HeartbeatAbsenceKeys = %v, want exactly [rAbs/hb]", got)
+	}
+}

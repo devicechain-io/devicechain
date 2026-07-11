@@ -77,8 +77,10 @@ func (rp *ResolvedEventsProcessor) persistBeforeAck(desc string, op func() error
 // For each fact it persists the device's roster row to the durable projection BEFORE acking, so
 // the set of devices expected to report survives a restart independent of the finite-retention
 // stream — the same persist-before-ack durability spine the rule consumer uses. A re-typed device
-// upserts its row in place (last-wins). This slice only lands the projection; the engine dead-man
-// arming that reads it is slice 4c-2b-2, so nothing is marshaled onto the single-writer loop here.
+// upserts its row in place (last-wins). After persisting, it signals the single-writer loop to
+// re-read the device's authoritative membership (signalArmRecheck → applyArmRecheck), so the dead-man
+// armer arms/disarms it from the converged projection (slice 4c-2b-2b) — never applying this fact's
+// observation off the reorderable stream directly.
 func (rp *ResolvedEventsProcessor) runRosterConsumer() {
 	defer rp.readerWG.Done()
 	for {
@@ -95,39 +97,52 @@ func (rp *ResolvedEventsProcessor) runRosterConsumer() {
 			}
 			continue
 		}
-		tenant, ev, ok := decodeRosterFact(rp, msg)
-		if !ok {
-			// Unparseable/poison: redelivery cannot fix it. Ack so it stops redelivering forever.
-			rp.ackFact(msg, "device-roster")
-			continue
+		if !rp.handleRosterFact(msg, true) {
+			return // shutdown mid-persist/-send: leave unacked; the row redelivers next start
 		}
-		// A device token is the row's identity and its dead-man series key, so an empty or over-long
-		// one is unusable poison (a forged/buggy-producer fact): drop-and-ack rather than persist a
-		// phantom row or wedge on a varchar overflow. A zero ExpectedSince would also defeat the
-		// monotonic guard, so it is dropped too.
-		if ev.DeviceToken == "" || !validRosterToken(ev.DeviceToken) || !validRosterToken(ev.ProfileToken) || ev.ExpectedSince.IsZero() {
-			log.Warn().Str("device", ev.DeviceToken).Str("subject", msg.Subject).
-				Msg("Dropping malformed device-roster fact (empty/over-long token or zero expected-since).")
-			rp.ackFact(msg, "device-roster")
-			continue
-		}
-		if rp.RosterStore != nil {
-			roster := &model.DeviceRoster{
-				Tenant:        tenant,
-				DeviceToken:   ev.DeviceToken,
-				ProfileToken:  ev.ProfileToken,
-				ExpectedSince: ev.ExpectedSince,
-			}
-			if !rp.persistBeforeAck("device-roster "+tenant+"/"+ev.DeviceToken,
-				func() error { return rp.RosterStore.Upsert(rp.procCtx, roster) }) {
-				return // shutdown mid-retry: leave unacked; the row redelivers next start
-			}
-			if !rp.signalArmRecheck(tenant, ev.DeviceToken) {
-				return // shutdown mid-send: leave unacked; reconcile rebuilds arming next start
-			}
-		}
-		rp.ackFact(msg, "device-roster")
 	}
+}
+
+// handleRosterFact persists one device-roster fact to the durable projection and acks it. When signal
+// is true (the live consumer) it also marshals a membership recheck onto the single-writer loop so the
+// armer arms/disarms the device; the pre-replay catch-up drain (catchUpFactProjections) passes false —
+// it only needs the projection current for the gate + reconcile, and the loop is not running yet. It
+// returns false ONLY on a shutdown mid-persist/-send (the fact is left unacked to redeliver); a poison
+// or malformed fact is dropped-and-acked and returns true.
+func (rp *ResolvedEventsProcessor) handleRosterFact(msg messaging.Message, signal bool) bool {
+	tenant, ev, ok := decodeRosterFact(rp, msg)
+	if !ok {
+		// Unparseable/poison: redelivery cannot fix it. Ack so it stops redelivering forever.
+		rp.ackFact(msg, "device-roster")
+		return true
+	}
+	// A device token is the row's identity and its dead-man series key, so an empty or over-long
+	// one is unusable poison (a forged/buggy-producer fact): drop-and-ack rather than persist a
+	// phantom row or wedge on a varchar overflow. A zero ExpectedSince would also defeat the
+	// monotonic guard, so it is dropped too.
+	if ev.DeviceToken == "" || !validRosterToken(ev.DeviceToken) || !validRosterToken(ev.ProfileToken) || ev.ExpectedSince.IsZero() {
+		log.Warn().Str("device", ev.DeviceToken).Str("subject", msg.Subject).
+			Msg("Dropping malformed device-roster fact (empty/over-long token or zero expected-since).")
+		rp.ackFact(msg, "device-roster")
+		return true
+	}
+	if rp.RosterStore != nil {
+		roster := &model.DeviceRoster{
+			Tenant:        tenant,
+			DeviceToken:   ev.DeviceToken,
+			ProfileToken:  ev.ProfileToken,
+			ExpectedSince: ev.ExpectedSince,
+		}
+		if !rp.persistBeforeAck("device-roster "+tenant+"/"+ev.DeviceToken,
+			func() error { return rp.RosterStore.Upsert(rp.procCtx, roster) }) {
+			return false // shutdown mid-retry: leave unacked; the row redelivers next start
+		}
+		if signal && !rp.signalArmRecheck(tenant, ev.DeviceToken) {
+			return false // shutdown mid-send: leave unacked; reconcile rebuilds arming next start
+		}
+	}
+	rp.ackFact(msg, "device-roster")
+	return true
 }
 
 // runEntityDeletedConsumer drains device-management's entity-deleted fact stream (ADR-044) as an
@@ -153,59 +168,70 @@ func (rp *ResolvedEventsProcessor) runEntityDeletedConsumer() {
 			}
 			continue
 		}
-		tenant, ev, ok := decodeEntityDeletedFact(rp, msg)
-		if !ok {
-			rp.ackFact(msg, "entity-deleted")
-			continue
+		if !rp.handleEntityDeletedFact(msg, true) {
+			return // shutdown mid-persist/-send: leave unacked; the deletion redelivers next start
 		}
-		// Only a device deletion touches these projections; every other entity type (groups, assets,
-		// relationships, anchors) is consumed elsewhere (event-management) and ignored here.
-		// DeletedTime is the lifecycle clock both teardowns are ordered on, so a stale redelivered
-		// delete cannot erase a device whose newer create/re-set already advanced the clock.
-		if ev.EntityType == entity.TypeDevice && (rp.RosterStore != nil || rp.AttributeStore != nil) {
-			// A malformed device fact is skipped rather than applied — symmetric with the roster
-			// consumer's drop: an over-long token would overflow the tombstone/fence insert, and a
-			// zero DeletedTime would defeat the monotonic guard (silently no-op'ing against a live
-			// row). The well-formed producer always stamps a real token and time, so this only guards
-			// a forged/buggy-producer fact.
-			if ev.EntityToken == "" || !validRosterToken(ev.EntityToken) || ev.DeletedTime.IsZero() {
-				log.Warn().Str("device", ev.EntityToken).Str("subject", msg.Subject).
-					Msg("Dropping malformed device entity-deleted fact (empty/over-long token or zero deleted-time).")
-			} else {
-				deletedTime := ev.DeletedTime
-				if rp.RosterStore != nil {
-					if !rp.persistBeforeAck("roster-delete "+tenant+"/"+ev.EntityToken,
-						func() error { return rp.RosterStore.Delete(rp.procCtx, tenant, ev.EntityToken, deletedTime) }) {
-						return // shutdown mid-retry: leave unacked; the deletion redelivers next start
-					}
-					// Signal the loop to re-check membership: it re-reads the projection (a tombstone
-					// disarms; a stale delete the monotonic guard rejected leaves the row live, so the
-					// re-read arms — no spurious disarm) in lifecycle order regardless of consumer races.
-					if !rp.signalArmRecheck(tenant, ev.EntityToken) {
-						return // shutdown mid-send: leave unacked; reconcile rebuilds arming next start
-					}
+	}
+}
+
+// handleEntityDeletedFact tombstones a deleted device's roster row and purges its dynamic-threshold
+// attributes (both durable, persist-before-ack), then acks. When signal is true (the live consumer) it
+// also marshals the membership + attribute rechecks onto the single-writer loop; the pre-replay catch-up
+// (catchUpFactProjections) passes false. It returns false only on a shutdown mid-persist/-send.
+func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message, signal bool) bool {
+	tenant, ev, ok := decodeEntityDeletedFact(rp, msg)
+	if !ok {
+		rp.ackFact(msg, "entity-deleted")
+		return true
+	}
+	// Only a device deletion touches these projections; every other entity type (groups, assets,
+	// relationships, anchors) is consumed elsewhere (event-management) and ignored here.
+	// DeletedTime is the lifecycle clock both teardowns are ordered on, so a stale redelivered
+	// delete cannot erase a device whose newer create/re-set already advanced the clock.
+	if ev.EntityType == entity.TypeDevice && (rp.RosterStore != nil || rp.AttributeStore != nil) {
+		// A malformed device fact is skipped rather than applied — symmetric with the roster
+		// consumer's drop: an over-long token would overflow the tombstone/fence insert, and a
+		// zero DeletedTime would defeat the monotonic guard (silently no-op'ing against a live
+		// row). The well-formed producer always stamps a real token and time, so this only guards
+		// a forged/buggy-producer fact.
+		if ev.EntityToken == "" || !validRosterToken(ev.EntityToken) || ev.DeletedTime.IsZero() {
+			log.Warn().Str("device", ev.EntityToken).Str("subject", msg.Subject).
+				Msg("Dropping malformed device entity-deleted fact (empty/over-long token or zero deleted-time).")
+		} else {
+			deletedTime := ev.DeletedTime
+			if rp.RosterStore != nil {
+				if !rp.persistBeforeAck("roster-delete "+tenant+"/"+ev.EntityToken,
+					func() error { return rp.RosterStore.Delete(rp.procCtx, tenant, ev.EntityToken, deletedTime) }) {
+					return false // shutdown mid-retry: leave unacked; the deletion redelivers next start
 				}
-				// Purge the device's dynamic-threshold attributes and drop its resurrection fence
-				// (ADR-051 slice 4c-3), so a straggler set reordered after the deletion cannot leave a
-				// phantom value a reused token would inherit. Idempotent and monotonic on deletedTime,
-				// so a redelivered deletion is a no-op and cannot erase a token-reused device's newer
-				// attributes. After purging, signal the loop to re-read the (now-empty) attribute set
-				// into the live dynamic-threshold view (slice 4c-3b-2) so the deleted device's bound
-				// stops resolving; the loop re-reads the converged projection, so a stale delete the
-				// monotonic guard rejected leaves live rows and the re-read keeps the value.
-				if rp.AttributeStore != nil {
-					if !rp.persistBeforeAck("attribute-purge "+tenant+"/"+ev.EntityToken,
-						func() error { return rp.AttributeStore.PurgeDevice(rp.procCtx, tenant, ev.EntityToken, deletedTime) }) {
-						return // shutdown mid-retry: leave unacked; the purge redelivers next start
-					}
-					if !rp.signalAttrRecheck(tenant, ev.EntityToken) {
-						return // shutdown mid-send: leave unacked; reconcile rebuilds the view next start
-					}
+				// Signal the loop to re-check membership: it re-reads the projection (a tombstone
+				// disarms; a stale delete the monotonic guard rejected leaves the row live, so the
+				// re-read arms — no spurious disarm) in lifecycle order regardless of consumer races.
+				if signal && !rp.signalArmRecheck(tenant, ev.EntityToken) {
+					return false // shutdown mid-send: leave unacked; reconcile rebuilds arming next start
+				}
+			}
+			// Purge the device's dynamic-threshold attributes and drop its resurrection fence
+			// (ADR-051 slice 4c-3), so a straggler set reordered after the deletion cannot leave a
+			// phantom value a reused token would inherit. Idempotent and monotonic on deletedTime,
+			// so a redelivered deletion is a no-op and cannot erase a token-reused device's newer
+			// attributes. After purging, signal the loop to re-read the (now-empty) attribute set
+			// into the live dynamic-threshold view (slice 4c-3b-2) so the deleted device's bound
+			// stops resolving; the loop re-reads the converged projection, so a stale delete the
+			// monotonic guard rejected leaves live rows and the re-read keeps the value.
+			if rp.AttributeStore != nil {
+				if !rp.persistBeforeAck("attribute-purge "+tenant+"/"+ev.EntityToken,
+					func() error { return rp.AttributeStore.PurgeDevice(rp.procCtx, tenant, ev.EntityToken, deletedTime) }) {
+					return false // shutdown mid-retry: leave unacked; the purge redelivers next start
+				}
+				if signal && !rp.signalAttrRecheck(tenant, ev.EntityToken) {
+					return false // shutdown mid-send: leave unacked; reconcile rebuilds the view next start
 				}
 			}
 		}
-		rp.ackFact(msg, "entity-deleted")
 	}
+	rp.ackFact(msg, "entity-deleted")
+	return true
 }
 
 // ackFact acks a best-effort fact, logging a failed ack (harmless: a redelivered fact re-persists

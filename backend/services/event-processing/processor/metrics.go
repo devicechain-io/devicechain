@@ -51,6 +51,12 @@ type detectMetrics struct {
 	// firings from "device reported a bad value" firings.
 	idleAdvancesTotal   prometheus.Counter
 	idleDetectionsTotal prometheus.Counter
+
+	// Slice-4 hardening: absence detections dropped at publish because the device left the rule's
+	// scope after the timer was armed (deleted / re-typed / version superseded) — the stale-timer
+	// membership gate (dropStaleAbsences). Bounded cardinality (no labels). A persistently rising
+	// value signals stale wheel timers surviving a rolling-update overlap (pre-Slice-6).
+	staleAbsenceDropped prometheus.Counter
 }
 
 // newDetectMetrics registers the checkpoint-loop metrics under the service's
@@ -73,7 +79,17 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 
 		idleAdvancesTotal:   ms.NewCounter("detect_idle_advances_total", "Wall-clock idle advances that produced at least one detection.", nil),
 		idleDetectionsTotal: ms.NewCounter("detect_idle_detections_total", "Detections produced by wall-clock idle advance (absence/duration/session firing on silence).", nil),
+
+		staleAbsenceDropped: ms.NewCounter("detect_stale_absence_dropped_total", "Absence detections dropped at publish because the device left the rule's scope (deleted/re-typed/version superseded).", nil),
 	}
+}
+
+// recordStaleAbsenceDropped records one absence detection dropped by the publish-time membership gate.
+func (m *detectMetrics) recordStaleAbsenceDropped() {
+	if m == nil {
+		return
+	}
+	m.staleAbsenceDropped.Inc()
 }
 
 // setRulesActive publishes the loaded rule count (called once at startup wiring).

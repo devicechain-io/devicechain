@@ -259,6 +259,38 @@ func TestApplyRuleUpdate_DefinitionChangeResetsState(t *testing.T) {
 	}
 }
 
+// A RemoveRule GC (a changed-definition upsert, or a removal) marks the loop dirty so the dropped
+// keyed state is checkpointed — otherwise a restart would replay it back to life (finding E). A plain
+// unchanged upsert does NOT dirty (the rule set is rebuilt from the projection, not snapshotted).
+func TestApplyRuleUpdate_GCMarksDirty(t *testing.T) {
+	id := "acme/p@1/r"
+
+	// Changed definition → GC → dirty.
+	rp := newTestProcessor(newTestStore(t), nil, 1)
+	rp.engine = detectcore.NewEngine(rp.registry.Cores(), 0)
+	rp.applyRuleUpdate(ruleUpdate{upserts: []runtime.ScopedRule{durScoped(id, `{"v":"A"}`)}})
+	rp.dirty = false
+	rp.applyRuleUpdate(ruleUpdate{upserts: []runtime.ScopedRule{durScoped(id, `{"v":"B"}`)}})
+	if !rp.dirty {
+		t.Fatal("a changed-definition GC must mark the loop dirty so the drop is checkpointed")
+	}
+
+	// Removal → GC → dirty.
+	rp.dirty = false
+	rp.applyRuleUpdate(ruleUpdate{removals: []string{id}})
+	if !rp.dirty {
+		t.Fatal("a removal GC must mark the loop dirty")
+	}
+
+	// Unchanged redelivery → no GC → not dirty.
+	rp.applyRuleUpdate(ruleUpdate{upserts: []runtime.ScopedRule{durScoped(id, `{"v":"A"}`)}})
+	rp.dirty = false
+	rp.applyRuleUpdate(ruleUpdate{upserts: []runtime.ScopedRule{durScoped(id, `{"v":"A"}`)}})
+	if rp.dirty {
+		t.Fatal("an unchanged redelivery must not dirty the loop (rule set is not snapshotted)")
+	}
+}
+
 // An unchanged redelivery (identical definition) must PRESERVE running state — the whole point
 // of preserve-on-reupsert.
 func TestApplyRuleUpdate_UnchangedDefinitionPreservesState(t *testing.T) {

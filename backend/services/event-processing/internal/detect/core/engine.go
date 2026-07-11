@@ -292,6 +292,28 @@ func (e *Engine) ExpectedKeys() []SeriesKey {
 	return keys
 }
 
+// HeartbeatAbsenceKeys returns every series that holds a LIVE absence timer armed by its own
+// heartbeat (apply, Absence) but has NO dead-man expected entry — precisely the timers the dead-man
+// reconcile's ExpectedKeys sweep is blind to (ExpectedKeys enumerates only SetExpected entries, not
+// the wheel). The restart reconcile uses it to cancel a departed/superseded device's lingering
+// heartbeat absence timer, which would otherwise fire one false absence off the watermark. A key
+// present in BOTH the wheel and e.expected is already covered by the dead-man sweep, so it is
+// excluded here. The wheel's live map holds one deadline per key, so this reads current arming
+// directly. Bounded by (absence rules × reporting devices) — the same state-budget class as the
+// wheel; order unspecified; returns a point-in-time copy safe to mutate the engine while iterating.
+func (e *Engine) HeartbeatAbsenceKeys() []SeriesKey {
+	var keys []SeriesKey
+	for k := range e.wheel.live {
+		if _, dead := e.expected[k]; dead {
+			continue // a dead-man entry: the ExpectedKeys sweep owns it
+		}
+		if r, ok := e.rules[k.Rule]; ok && r.Kind == Absence {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
 // HasPendingWork reports whether any timer or pane close is scheduled — i.e. whether a
 // wall-clock advance could fire ANYTHING. Every frontier-triggered firing goes through the
 // timer wheel (Absence/Duration/Session) or the pane close-heap (Aggregate); the other kinds

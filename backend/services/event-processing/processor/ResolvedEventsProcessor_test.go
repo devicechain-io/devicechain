@@ -36,6 +36,14 @@ type fakeReader struct {
 	numPending uint64
 	ackPending uint64
 	pendingErr error
+	// drainable makes the reader model a bounded backlog for catch-up tests: Backlog reports the
+	// remaining unread results, and ReadMessage returns io.EOF (rather than blocking) once drained, so
+	// drainFactToHead's caught-up detection terminates without waiting the real read timeout.
+	drainable bool
+	// readEOFImmediately makes ReadMessage return io.EOF at once once results are exhausted (instead of
+	// blocking on ctx). Paired with a static numPending, it models a degraded broker that answers
+	// ConsumerInfo (backlog) but cannot serve a Fetch — the catch-up fail-closed path.
+	readEOFImmediately bool
 }
 
 type readResult struct {
@@ -48,6 +56,9 @@ func (r *fakeReader) ReadMessage(ctx context.Context) (messaging.Message, error)
 		res := r.results[r.idx]
 		r.idx++
 		return res.msg, res.err
+	}
+	if r.drainable || r.readEOFImmediately {
+		return messaging.Message{}, io.EOF // no more results; do not block
 	}
 	<-ctx.Done()
 	return messaging.Message{}, io.EOF
@@ -62,6 +73,9 @@ func (r *fakeReader) HandleResponse(err error) {
 // It reports a caught-up tail by default; a test that drives the live loop with idle-advance
 // enabled can set numPending/ackPending/pendingErr to exercise the broker-emptiness gate.
 func (r *fakeReader) Backlog(context.Context) (uint64, uint64, error) {
+	if r.drainable {
+		return uint64(len(r.results) - r.idx), 0, r.pendingErr
+	}
 	return r.numPending, r.ackPending, r.pendingErr
 }
 

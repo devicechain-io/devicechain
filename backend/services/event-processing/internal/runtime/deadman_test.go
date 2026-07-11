@@ -17,9 +17,10 @@ import (
 // mimics the engine's forward-only, once-per-epoch SetExpected just enough for ExpectedKeys to
 // return the live armed set the reconcile sweep diffs against.
 type fakeArmer struct {
-	armed map[core.SeriesKey]time.Time // key → grace base currently armed (removed on RemoveExpected)
-	sets  []armCall
-	rms   []core.SeriesKey
+	armed     map[core.SeriesKey]time.Time // key → grace base currently armed (removed on RemoveExpected)
+	heartbeat []core.SeriesKey             // heartbeat-armed absence timers NOT in `armed` (finding-6 sweep input)
+	sets      []armCall
+	rms       []core.SeriesKey
 }
 
 type armCall struct {
@@ -49,6 +50,10 @@ func (f *fakeArmer) ExpectedKeys() []core.SeriesKey {
 	}
 	return out
 }
+
+// HeartbeatAbsenceKeys returns the injected heartbeat-armed absence timers (those NOT modeled by the
+// dead-man `armed` set) so the Reconcile heartbeat sweep (finding 6) can be exercised against a fake.
+func (f *fakeArmer) HeartbeatAbsenceKeys() []core.SeriesKey { return f.heartbeat }
 
 func (f *fakeArmer) armedKeys() []core.SeriesKey {
 	out := f.ExpectedKeys()
@@ -344,5 +349,82 @@ func TestArmerUnknownActiveDefers(t *testing.T) {
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(50)}, true)
 	if len(fe.sets) != 0 {
 		t.Fatalf("armed against an unknown active version: %v", fe.sets)
+	}
+}
+
+// TestArmerAbsenceLive covers the publish-time / reconcile membership gate: an absence detection's
+// (rule, device) is live only when the device is rostered AND its profile's active version owns the
+// rule. Everything else — unrostered, re-typed, superseded version, unknown rule — reads NOT live.
+func TestArmerAbsenceLive(t *testing.T) {
+	reg := NewRuleRegistry([]ScopedRule{absScoped("t1", "p1@v1", "r1"), absScoped("t1", "p1@v2", "r1"), absScoped("t1", "p2@v1", "rX")})
+	fe := newFakeArmer()
+	d := NewDeadmanArmer(reg, fe)
+	d.LoadMembership(
+		[]RosterEntry{{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(50)}},
+		[]ActiveEntry{{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}},
+	)
+	v1 := ComposeRuleID("t1", "p1@v1/r1")
+	v2 := ComposeRuleID("t1", "p1@v2/r1")
+	other := ComposeRuleID("t1", "p2@v1/rX")
+	live := func(rule, dev string) bool { return d.AbsenceLive(core.SeriesKey{Rule: rule, Series: dev}) }
+
+	if !live(v1, "dev") {
+		t.Fatal("rostered device under the active version should be live")
+	}
+	if live(v2, "dev") {
+		t.Fatal("superseded version should not be live")
+	}
+	if live(v1, "ghost") {
+		t.Fatal("unrostered device should not be live")
+	}
+	if live(other, "dev") {
+		t.Fatal("rule for a profile the device is not on should not be live")
+	}
+	if live("t1/nope@v1/r1", "dev") {
+		t.Fatal("unknown rule should not be live")
+	}
+
+	// Re-type the device onto p2 (different active version): the p1 rule is no longer live, the p2 one is.
+	d.LoadMembership(
+		[]RosterEntry{{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p2", ExpectedSince: ts(50)}},
+		[]ActiveEntry{{Tenant: "t1", ProfileToken: "p2", ActiveVersionToken: "p2@v1", PublishedAt: ts(100)}},
+	)
+	if live(v1, "dev") {
+		t.Fatal("after re-type, the old profile's rule should not be live")
+	}
+	if !live(other, "dev") {
+		t.Fatal("after re-type, the new profile's rule should be live")
+	}
+}
+
+// TestReconcileSweepsHeartbeatAbsenceTimers: Reconcile cancels a heartbeat-armed absence timer whose
+// device left the rule's scope (finding 6 — invisible to the ExpectedKeys/dead-man sweep), while
+// leaving a still-live device's heartbeat timer untouched.
+func TestReconcileSweepsHeartbeatAbsenceTimers(t *testing.T) {
+	reg := NewRuleRegistry([]ScopedRule{absScoped("t1", "p1@v1", "r1")})
+	fe := newFakeArmer()
+	id := ComposeRuleID("t1", "p1@v1/r1")
+	// A live device (rostered, active version matches) and a departed device (not rostered), each
+	// holding a heartbeat-armed absence timer the ExpectedKeys/dead-man sweep cannot see.
+	fe.heartbeat = []core.SeriesKey{{Rule: id, Series: "live"}, {Rule: id, Series: "gone"}}
+	d := NewDeadmanArmer(reg, fe)
+	d.Reconcile(
+		[]RosterEntry{{Tenant: "t1", DeviceToken: "live", ProfileToken: "p1", ExpectedSince: ts(50)}},
+		[]ActiveEntry{{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}},
+	)
+	var goneSwept, liveSwept bool
+	for _, k := range fe.rms {
+		switch k.Series {
+		case "gone":
+			goneSwept = true
+		case "live":
+			liveSwept = true
+		}
+	}
+	if !goneSwept {
+		t.Fatal("departed device's heartbeat absence timer was not swept")
+	}
+	if liveSwept {
+		t.Fatal("live device's heartbeat absence timer was wrongly swept")
 	}
 }
