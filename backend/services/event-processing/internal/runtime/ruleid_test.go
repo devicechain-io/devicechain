@@ -20,3 +20,26 @@ func TestRuleTenantRejectsUnprefixed(t *testing.T) {
 		}
 	}
 }
+
+// TestStableRuleKey proves the version-free identity: two ids differing only in the profile VERSION
+// yield the SAME stable key (so a re-publish does not fork a rule's alarm), and a malformed id fails.
+func TestStableRuleKey(t *testing.T) {
+	k1, ok1 := StableRuleKey(ComposeRuleID("acme", "prof@1/over-temp"))
+	k2, ok2 := StableRuleKey(ComposeRuleID("acme", "prof@2/over-temp"))
+	if !ok1 || !ok2 {
+		t.Fatalf("well-formed ids must parse: %v %v", ok1, ok2)
+	}
+	if k1 != "prof/over-temp" || k1 != k2 {
+		t.Fatalf("stable key must be version-free and equal across versions: %q vs %q", k1, k2)
+	}
+	// A different profile or rule token yields a different key (no cross-rule collision).
+	other, _ := StableRuleKey(ComposeRuleID("acme", "prof@1/over-pressure"))
+	if other == k1 {
+		t.Fatalf("distinct rule tokens must not collide")
+	}
+	for _, bad := range []string{"", "acme", "acme/norule", "acme/prof/rule", "acme/@1/rule", "acme/prof@1/"} {
+		if key, ok := StableRuleKey(bad); ok {
+			t.Fatalf("StableRuleKey(%q) = %q,true; want _,false", bad, key)
+		}
+	}
+}

@@ -41,15 +41,17 @@ type ReactDispatcher struct {
 	wg         sync.WaitGroup
 }
 
-// NewReactDispatcher builds the REACT consumer over a derived-event reader, a rule resolver, and a
-// command sink. A nil sink/resolver is a programming error (main wires them); the dispatcher is
-// constructed here so the whole REACT wiring lives behind one type.
+// NewReactDispatcher builds the REACT consumer over a derived-event reader, a rule resolver, and the
+// action sinks. Either sink may be nil to disable that action kind (a nil commands sink disables
+// send-command; a nil alarms sink disables raise-alarm — the default until slice 6); main decides
+// which are configured. The dispatcher is constructed here so the whole REACT wiring lives behind
+// one type.
 func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
-	resolver react.RuleResolver, commands react.CommandSink) *ReactDispatcher {
+	resolver react.RuleResolver, commands react.CommandSink, alarms react.AlarmSink) *ReactDispatcher {
 	m := newReactMetrics(ms)
 	return &ReactDispatcher{
 		reader:     reader,
-		dispatcher: react.NewDispatcher(resolver, commands, m),
+		dispatcher: react.NewDispatcher(resolver, commands, alarms, m),
 		metrics:    m,
 	}
 }
