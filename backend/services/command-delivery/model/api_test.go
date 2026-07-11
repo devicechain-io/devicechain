@@ -100,6 +100,12 @@ func newTestApi(t *testing.T) *Api {
 	if err := db.AutoMigrate(&Command{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
+	// Create the per-tenant partial unique index on token exactly as the real migration does
+	// (ADR-042 P1), so the CRUD path — including createCommand's ON CONFLICT idempotency — is
+	// exercised as production.
+	if err := rdb.CreateTenantTokenIndex(db, &Command{}); err != nil {
+		t.Fatalf("failed to create tenant token index: %v", err)
+	}
 	return NewApi(&rdb.RdbManager{Database: db})
 }
 
@@ -144,6 +150,48 @@ func TestCreateSentResponseLifecycle(t *testing.T) {
 	}
 	if again.Status != CommandSuccessful.String() {
 		t.Fatalf("late response mutated terminal command to %s", again.Status)
+	}
+}
+
+// TestCreateCommandIdempotentOnToken proves a repeat createCommand with a token that already names a
+// live command returns the ORIGINAL command (not a second row, not an error) — the safe-retry
+// property the REACT dispatcher's at-least-once redelivery depends on.
+func TestCreateCommandIdempotentOnToken(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+
+	first, err := api.CreateCommand(ctx, &CommandCreateRequest{Token: "cmd-dup", DeviceToken: "device-1", Name: "reboot"})
+	if err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	// A second create with the same token but a DIFFERENT body must not mutate or duplicate — the
+	// token is the identity, first write wins.
+	second, err := api.CreateCommand(ctx, &CommandCreateRequest{Token: "cmd-dup", DeviceToken: "device-9", Name: "shutdown"})
+	if err != nil {
+		t.Fatalf("idempotent replay must not error: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("replay returned a different command: first id=%d second id=%d", first.ID, second.ID)
+	}
+	if second.DeviceToken != "device-1" || second.Name != "reboot" {
+		t.Fatalf("replay must return the ORIGINAL command unchanged, got device=%s name=%s", second.DeviceToken, second.Name)
+	}
+	// Exactly one row exists for the token.
+	rows, err := api.CommandsByToken(ctx, []string{"cmd-dup"})
+	if err != nil {
+		t.Fatalf("CommandsByToken: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 command for the token, got %d", len(rows))
+	}
+
+	// The same token in a DIFFERENT tenant is a distinct command (per-tenant uniqueness).
+	other, err := api.CreateCommand(core.WithTenant(context.Background(), "B"), &CommandCreateRequest{Token: "cmd-dup", DeviceToken: "device-1", Name: "reboot"})
+	if err != nil {
+		t.Fatalf("same token other tenant: %v", err)
+	}
+	if other.ID == first.ID {
+		t.Fatalf("a token must not collide across tenants")
 	}
 }
 
