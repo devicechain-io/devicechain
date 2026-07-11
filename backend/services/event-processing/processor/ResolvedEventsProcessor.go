@@ -71,6 +71,13 @@ type Config struct {
 	// Clock is the wall clock used for checkpoint-interval timing; defaults to the
 	// real clock.
 	Clock detectcore.Clock
+	// MaxRulesPerTenant and MaxLiveKeysPerTenant are the per-tenant runtime state budget ceilings
+	// (ADR-023 amendment, ADR-051 slice 6c). Slice 6c-1 measures usage against them at each checkpoint
+	// and exposes bounded gauges (a count of over-budget tenants, not a per-tenant label); slice 6c-2
+	// enforces them. Non-positive means unmeasured (the tests' default); the service always supplies
+	// the fail-safe platform ceiling from config.
+	MaxRulesPerTenant    int
+	MaxLiveKeysPerTenant int
 }
 
 // ResolvedEventsProcessor is event-processing's single-writer tap on the
@@ -234,6 +241,11 @@ type ResolvedEventsProcessor struct {
 	pendingAcks    []messaging.Message
 	pendingDets    []detectcore.Detection
 	lastCheckpoint time.Time
+	// lastBudgetSample is the wall-clock time of the most recent per-tenant state-budget
+	// measurement (slice 6c). The budget is sampled from the ticker on its OWN cadence, decoupled
+	// from checkpoint() — which every call site activity-gates, so a rule-budget breach that changes
+	// no snapshot state would otherwise never be measured on a quiet stream.
+	lastBudgetSample time.Time
 	// lastLiveRead is the wall-clock time of the most recent live read-pump delivery (a
 	// message or a read error). It drains the reader's local fetch buffer before idle-advance
 	// (the authoritative caught-up signal is the broker backlog, not this timer): idle-advance
@@ -1012,6 +1024,16 @@ func (rp *ResolvedEventsProcessor) run() {
 			if (rp.dirty || len(rp.pendingAcks) > 0 || len(rp.pendingDets) > 0) && now.Sub(rp.lastCheckpoint) >= rp.cfg.CheckpointInterval {
 				rp.checkpoint(rp.procCtx)
 			}
+			// Per-tenant state-budget accounting (ADR-023 amendment, slice 6c), sampled on the ticker
+			// on its own cadence — NOT from checkpoint(), whose every call site is activity-gated
+			// (dirty / buffered acks / idle-advance-moved-state). A plain rule upsert changes the rule
+			// count but dirties nothing and buffers nothing, so on a quiet stream a rule-budget breach
+			// would never be measured or logged if this rode checkpoint(). It is a governance read on
+			// the single-writer loop; gating to the checkpoint interval bounds its O(state) cost.
+			if now.Sub(rp.lastBudgetSample) >= rp.cfg.CheckpointInterval {
+				rp.recordStateBudget()
+				rp.lastBudgetSample = now
+			}
 			// Retry any recheck a transient store error deferred (bounded, idempotent) — dynamic-threshold
 			// attribute rechecks and dead-man arming rechecks alike. Both share ONE per-tick wall-clock
 			// budget so that even a black-holed DB (every read burning loopReadTimeout) cannot stall the
@@ -1693,6 +1715,63 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) {
 	}
 	rp.pendingAcks = rp.pendingAcks[:0]
 	rp.lastCheckpoint = rp.clock.Now()
+}
+
+// stateBudgetStats is the bounded, tenant-label-free result of a per-tenant state-budget sample: the
+// aggregate live-key total plus the COUNTS of tenants over each ceiling (never a per-tenant series —
+// the ADR-023 G.3 DoS lesson). It is what the gauges publish.
+type stateBudgetStats struct {
+	totalLiveKeys    int
+	tenantsOverRules int
+	tenantsOverKeys  int
+}
+
+// recordStateBudget samples the per-tenant state budget and publishes the bounded gauges. Slice 6c-1
+// measures only; slice 6c-2 acts on these same breaches.
+func (rp *ResolvedEventsProcessor) recordStateBudget() {
+	s := rp.computeStateBudget()
+	rp.metrics.recordStateBudget(s.totalLiveKeys, s.tenantsOverRules, s.tenantsOverKeys)
+}
+
+// computeStateBudget rolls the engine's per-rule live-key counts and the registry's per-tenant rule
+// counts up to per-tenant totals and returns the bounded stats, logging each over-budget tenant
+// (rule-count and live-key breaches are distinct signals) so an operator can find the offender
+// without a high-cardinality metric. It is split from the metric emission so the rollup + over-budget
+// logic is unit-testable without a Prometheus registry (metrics are nil in tests).
+func (rp *ResolvedEventsProcessor) computeStateBudget() stateBudgetStats {
+	liveByRule := rp.engine.LiveKeyCounts()
+	liveByTenant := make(map[string]int, len(liveByRule))
+	total := 0
+	for ruleID, n := range liveByRule {
+		total += n
+		// A rule id with no parseable tenant prefix is a mis-minted rule the backstop already
+		// contains at publish; attribute its keys to the aggregate total but not to any tenant.
+		if tenant, ok := runtime.RuleTenant(ruleID); ok {
+			liveByTenant[tenant] += n
+		}
+	}
+	rulesByTenant := rp.registry.RuleCountsByTenant()
+
+	stats := stateBudgetStats{totalLiveKeys: total}
+	if rp.cfg.MaxRulesPerTenant > 0 {
+		for tenant, n := range rulesByTenant {
+			if n > rp.cfg.MaxRulesPerTenant {
+				stats.tenantsOverRules++
+				log.Warn().Str("tenant", tenant).Int("rules", n).Int("budget", rp.cfg.MaxRulesPerTenant).
+					Msg("Tenant is over its DETECT rule-count budget (ADR-023); enforcement lands in slice 6c-2.")
+			}
+		}
+	}
+	if rp.cfg.MaxLiveKeysPerTenant > 0 {
+		for tenant, n := range liveByTenant {
+			if n > rp.cfg.MaxLiveKeysPerTenant {
+				stats.tenantsOverKeys++
+				log.Warn().Str("tenant", tenant).Int("liveKeys", n).Int("budget", rp.cfg.MaxLiveKeysPerTenant).
+					Msg("Tenant is over its DETECT live-key budget (ADR-023); enforcement lands in slice 6c-2.")
+			}
+		}
+	}
+	return stats
 }
 
 // dropStaleAbsences removes buffered ABSENCE detections whose device left the rule's scope after the

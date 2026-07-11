@@ -57,6 +57,15 @@ type detectMetrics struct {
 	// membership gate (dropStaleAbsences). Bounded cardinality (no labels). A persistently rising
 	// value signals stale wheel timers surviving a rolling-update overlap (pre-Slice-6).
 	staleAbsenceDropped prometheus.Counter
+
+	// Slice-6c per-tenant state-budget gauges (ADR-023 amendment). Bounded cardinality — NO
+	// per-tenant labels (the G.3 DoS lesson): liveKeys is the AGGREGATE live keyed-state count across
+	// all tenants, and the two "over budget" gauges are COUNTS of tenants breaching each ceiling, not
+	// a per-tenant series. The offending tenant is found via the loop's warn log, not a metric label.
+	// Recomputed each checkpoint on the single-writer loop.
+	liveKeys                 prometheus.Gauge
+	tenantsOverRuleBudget    prometheus.Gauge
+	tenantsOverLiveKeyBudget prometheus.Gauge
 }
 
 // newDetectMetrics registers the checkpoint-loop metrics under the service's
@@ -81,7 +90,23 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 		idleDetectionsTotal: ms.NewCounter("detect_idle_detections_total", "Detections produced by wall-clock idle advance (absence/duration/session firing on silence).", nil),
 
 		staleAbsenceDropped: ms.NewCounter("detect_stale_absence_dropped_total", "Absence detections dropped at publish because the device left the rule's scope (deleted/re-typed/version superseded).", nil),
+
+		liveKeys:                 ms.NewGauge("detect_live_keys", "Total live keyed window/timer state entries across all tenants (the per-tenant state-budget aggregate).", nil),
+		tenantsOverRuleBudget:    ms.NewGauge("detect_tenants_over_rule_budget", "Tenants currently exceeding the per-tenant rule-count budget (ADR-023).", nil),
+		tenantsOverLiveKeyBudget: ms.NewGauge("detect_tenants_over_live_key_budget", "Tenants currently exceeding the per-tenant live-key budget (ADR-023).", nil),
 	}
+}
+
+// recordStateBudget publishes the per-tenant state-budget gauges at a checkpoint (slice 6c): the
+// aggregate live-key total and the counts of tenants over each ceiling. Nil-safe (unit-test loops
+// run unmeasured).
+func (m *detectMetrics) recordStateBudget(totalLiveKeys, tenantsOverRules, tenantsOverKeys int) {
+	if m == nil {
+		return
+	}
+	m.liveKeys.Set(float64(totalLiveKeys))
+	m.tenantsOverRuleBudget.Set(float64(tenantsOverRules))
+	m.tenantsOverLiveKeyBudget.Set(float64(tenantsOverKeys))
 }
 
 // recordStaleAbsenceDropped records one absence detection dropped by the publish-time membership gate.

@@ -277,6 +277,51 @@ func TestReplayRestoresValue(t *testing.T) {
 	}
 }
 
+// TestLiveKeyCounts proves the per-rule live-key ENTRY accounting the ADR-023 state budget measures
+// (slice 6c): every live map/wheel/pane entry is counted (a memory proxy), a timer-bearing key
+// counts in BOTH its state map and the wheel, and — critically — a heartbeat-armed ABSENCE rule
+// (whose timer lives ONLY in the wheel) is counted, not silently zero. Removing a rule zeroes it.
+func TestLiveKeyCounts(t *testing.T) {
+	rules := []Rule{
+		{ID: "acme/p@1/dur", Kind: Duration, Hold: 10 * time.Second},
+		{ID: "acme/p@1/delta", Kind: DeltaRate, Op: GT, Thresh: 1},
+		{ID: "acme/p@1/agg", Kind: Aggregate, Window: 10 * time.Second, Agg: AggAvg, Op: GT, Thresh: 0},
+		{ID: "acme/p@1/abs", Kind: Absence, Timeout: 10 * time.Second},
+		{ID: "acme/p@1/corr", Kind: Correlation, Window: 10 * time.Second, Count: 5, MemberCap: 100},
+	}
+	e := NewEngine(rules, 0)
+	// dur: two devices holding -> 2 active + 2 wheel timers = 4 entries.
+	// delta: one device primed -> 1 lastVal, no timer -> 1. agg: one open pane -> 1.
+	// abs: one device reporting arms a wheel-ONLY dead-man timer -> 1 (the regression guard).
+	// corr: one anchor with 3 distinct members -> 1 anchor + 3 members = 4 (not anchor-only 1).
+	e.ProcessEvent(Event{Seq: 1, Key: SeriesKey{Rule: "acme/p@1/dur", Series: "d1"}, Time: at(1), Match: true})
+	e.ProcessEvent(Event{Seq: 2, Key: SeriesKey{Rule: "acme/p@1/dur", Series: "d2"}, Time: at(1), Match: true})
+	e.ProcessEvent(Event{Seq: 3, Key: SeriesKey{Rule: "acme/p@1/delta", Series: "d1"}, Time: at(1), Value: 5, HasValue: true, Match: true})
+	e.ProcessEvent(Event{Seq: 4, Key: SeriesKey{Rule: "acme/p@1/agg", Series: "d1"}, Time: at(1), Value: 5, HasValue: true, Match: true})
+	e.ProcessEvent(Event{Seq: 5, Key: SeriesKey{Rule: "acme/p@1/abs", Series: "d1"}, Time: at(1), Match: true})
+	e.ProcessEvent(Event{Seq: 6, Key: SeriesKey{Rule: "acme/p@1/corr", Series: "area1"}, Member: "mA", Time: at(1), Match: true})
+	e.ProcessEvent(Event{Seq: 7, Key: SeriesKey{Rule: "acme/p@1/corr", Series: "area1"}, Member: "mB", Time: at(1), Match: true})
+	e.ProcessEvent(Event{Seq: 8, Key: SeriesKey{Rule: "acme/p@1/corr", Series: "area1"}, Member: "mC", Time: at(1), Match: true})
+	e.Drain()
+
+	counts := e.LiveKeyCounts()
+	if counts["acme/p@1/dur"] != 4 || counts["acme/p@1/delta"] != 1 || counts["acme/p@1/agg"] != 1 {
+		t.Fatalf("live-key counts wrong: %+v", counts)
+	}
+	if counts["acme/p@1/abs"] != 1 {
+		t.Fatalf("a heartbeat-armed absence timer (wheel-only) must be counted, not 0; got %d", counts["acme/p@1/abs"])
+	}
+	if counts["acme/p@1/corr"] != 4 {
+		t.Fatalf("correlation must count anchor + members (1+3=4), not anchor-only; got %d", counts["acme/p@1/corr"])
+	}
+
+	// Removing a rule GCs its keyed state (maps + wheel), so it no longer contributes.
+	e.RemoveRule("acme/p@1/dur")
+	if c := e.LiveKeyCounts()["acme/p@1/dur"]; c != 0 {
+		t.Fatalf("removed rule must contribute 0 live keys; got %d", c)
+	}
+}
+
 func TestCleanRunMatchesExpected(t *testing.T) {
 	rules, steps := scenario()
 	got := dedup(runClean(rules, steps))

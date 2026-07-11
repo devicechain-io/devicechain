@@ -158,13 +158,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// non-positive value as disabled, so a negative seconds value maps straight through.
 	idleGuard := time.Duration(Configuration.IdleAdvanceGuardSeconds) * time.Second
 	cfg := processor.Config{
-		PartitionId:        singletonPartition,
-		Suffix:             dmconfig.SUBJECT_RESOLVED_EVENTS,
-		CheckpointEvents:   Configuration.CheckpointEvents,
-		CheckpointInterval: time.Duration(Configuration.CheckpointIntervalSeconds) * time.Second,
-		MaxFutureSkew:      time.Duration(Configuration.MaxEventFutureSkewSeconds) * time.Second,
-		Lateness:           lateness,
-		IdleAdvanceGuard:   idleGuard,
+		PartitionId:          singletonPartition,
+		Suffix:               dmconfig.SUBJECT_RESOLVED_EVENTS,
+		CheckpointEvents:     Configuration.CheckpointEvents,
+		CheckpointInterval:   time.Duration(Configuration.CheckpointIntervalSeconds) * time.Second,
+		MaxFutureSkew:        time.Duration(Configuration.MaxEventFutureSkewSeconds) * time.Second,
+		Lateness:             lateness,
+		IdleAdvanceGuard:     idleGuard,
+		MaxRulesPerTenant:    Configuration.MaxRulesPerTenant,
+		MaxLiveKeysPerTenant: Configuration.MaxLiveKeysPerTenant,
 	}
 	ResolvedEventsProcessor = processor.NewResolvedEventsProcessor(Microservice, ResolvedEventsReader,
 		nmgr, SnapshotStore, RuleRegistry, derivedWriter, cfg, core.NewNoOpLifecycleCallbacks())

@@ -226,6 +226,19 @@ func (reg *RuleRegistry) IDs() []string {
 // where the cardinality is budgeted, not a hot-path metric).
 func (reg *RuleRegistry) Count() int { return len(reg.byID) }
 
+// RuleCountsByTenant returns the number of admitted rules per owning tenant — the per-tenant rule
+// dimension of the ADR-023 runtime state budget (ADR-051 slice 6c). It is computed on demand from
+// byID on the single-writer loop (a governance read, not a hot-path metric), so it does not itself
+// become a per-tenant labelled series; the caller reduces it to bounded aggregates (a count of
+// over-budget tenants) before emitting any metric.
+func (reg *RuleRegistry) RuleCountsByTenant() map[string]int {
+	counts := make(map[string]int)
+	for _, sr := range reg.byID {
+		counts[sr.Tenant]++
+	}
+	return counts
+}
+
 // RuleSource yields the rule set the registry is built from. Slice 4a is backed by a static
 // source (bootstrapped/tested set); slice 4b replaces it with one fed by device-management's
 // published-rule fact events, scoped by profile-version token.
