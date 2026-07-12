@@ -8,6 +8,18 @@ import (
 	"time"
 )
 
+// AlarmEdgeRaised / AlarmEdgeResolved are the canonical RaiseAlarmRequest.Edge tokens (ADR-057) —
+// the SHARED wire vocabulary both the producer (event-processing's alarmClient) and this consumer bind
+// to. They live here, in the wire struct's own package, because it is the one package both modules
+// import (event-processing imports dc-device-management/model; it cannot import event-processing's
+// internal/runtime across the module boundary). A hardcoded literal on either side would drift
+// FAIL-OPEN — a mis-spelled resolved token falls through to the raise path — so both sides reference
+// these constants and the producer maps its internal edge onto them explicitly.
+const (
+	AlarmEdgeRaised   = "raised"
+	AlarmEdgeResolved = "resolved"
+)
+
 // RaiseAlarmRequest is the raise-alarm message event-processing's REACT dispatcher sends to
 // device-management (ADR-051 slice 5c / ADR-054) when a detection rule's raiseAlarm action fires.
 // device-management raises/escalates the alarm through its existing engine (raiseOrEscalateAlarm),
@@ -32,9 +44,10 @@ type RaiseAlarmRequest struct {
 	// adds/updates this rule's tier in the alarm's contributor set, a resolved edge removes it, and the
 	// alarm clears when the set empties (ADR-057). Carried on every edge.
 	RuleID string `json:"ruleId"`
-	// Edge is "raised" (rising) or "resolved" (falling), per ADR-057. A raised request raises/escalates
-	// this rule's contribution; a resolved request removes it (clearing the alarm if it was the last).
-	// The consumer routes on it. Absent decodes as raised (the producer always sets it explicitly).
+	// Edge is AlarmEdgeRaised (rising) or AlarmEdgeResolved (falling), per ADR-057. A raised request
+	// raises/escalates this rule's contribution; a resolved request removes it (clearing the alarm if
+	// it was the last). The consumer routes on it (comparing the shared constant, never a literal).
+	// Absent decodes as raised (the producer always sets it explicitly).
 	Edge string `json:"edge,omitempty"`
 	// MetricKey is the metric the rule watched, stamped onto the alarm row for context. May be
 	// empty for a rule whose shape carries no single metric (e.g. a raw-CEL leaf).
@@ -52,12 +65,18 @@ type RaiseAlarmRequest struct {
 	// alarm key on one device — a value-less raise then leaves the row's last value NULL rather than
 	// clobbering a co-keyed rule's real reading with 0. omitempty keeps the wire lean when absent.
 	Value *float64 `json:"value,omitempty"`
-	// OccurredTime is the detection's event time — the alarm's raised time AND the ordering key the
-	// engine's CROSS-CYCLE guards use (a raise older than a clear cannot reactivate; older than the
-	// current raise cannot rewrite on the reactivation path). It does NOT protect against WITHIN-cycle
-	// reordering: like the measurement evaluator, an active alarm is latest-processed-wins, so a
-	// delayed redelivery can transiently rewrite severity/value (the evaluator's documented
-	// per-alarm-watermark gap, api_alarm_eval.go). An exact-duplicate redelivery is idempotent.
+	// OccurredTime is the detection's event time — the alarm's raised time AND the per-contributor
+	// ordering key the alarm-object integrator (slice 6d-pre-2c) uses. ORDERING CONTRACT for the
+	// contributor set: an incoming edge for a rule is applied iff its OccurredTime is >= that rule's
+	// stored contributor decision time; an OLDER edge (a stale redelivery/replay) is ignored. At an
+	// EQUAL OccurredTime a RESOLVE WINS a RAISE — a rising and falling edge for one rule can share an
+	// event time (two events stamped identically: one matches, the next does not, ADR-057 dedup note),
+	// and resolve-wins makes that zero-duration blip net to CLEARED deterministically regardless of
+	// delivery order (the integrator keeps a per-contributor resolved tombstone with its ts so a
+	// later-arriving equal-ts raise does not re-add). This tiebreak needs only (OccurredTime, Edge),
+	// both already on the wire — no sequence field — so the contract is order-independent by
+	// construction. Legacy note: the retired measurement evaluator was latest-processed-wins with no
+	// equal-ts rule (api_alarm_eval.go); the integrator replaces that with this deterministic order.
 	OccurredTime time.Time `json:"occurredTime"`
 }
 

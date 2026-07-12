@@ -138,7 +138,7 @@ func newReactMetrics(ms *core.Microservice) *reactMetrics {
 	}
 	return &reactMetrics{
 		dispatched:    ms.NewCounterVec("react_actions_dispatched_total", "REACT actions handed to their sink, by action type (includes idempotent replays).", []string{"action"}),
-		notEnabled:    ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but not yet wired, by action type (raiseAlarm before slice 5c/6).", []string{"action"}),
+		notEnabled:    ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but not yet wired, by action type (raiseAlarm/clearAlarm before slice 6).", []string{"action"}),
 		orphan:        ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched).", nil),
 		poisonDropped: ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch).", nil),
 	}

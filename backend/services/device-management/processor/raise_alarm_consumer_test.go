@@ -140,6 +140,36 @@ func TestRaiseAlarmConsumerPoison(t *testing.T) {
 	}
 }
 
+// TestRaiseAlarmConsumerDropsResolvedEdge proves the 6d-pre-2b staging guard: a request carrying the
+// RESOLVED edge is dropped WITHOUT reaching the raise path (the contributor-resolve integrator lands
+// in 6d-pre-2c), and acked. It marshals the real wire bytes and compares the shared AlarmEdgeResolved
+// constant — so it also pins the producer/consumer edge spelling against fail-open drift. A raised edge
+// (and the default empty edge) still raises.
+func TestRaiseAlarmConsumerDropsResolvedEdge(t *testing.T) {
+	api := &fakeAlarmApi{devices: []*model.Device{{}}}
+	rc := newTestConsumer(api)
+	ack := &fakeAck{}
+	req := validReq()
+	req.Edge = model.AlarmEdgeResolved
+	rc.handle(context.Background(), raiseMsg(t, "acme", req, 0, ack))
+	if api.raiseCalls != 0 {
+		t.Fatalf("a resolved edge must NOT reach the raise path (integrator is 6d-pre-2c); got %d calls", api.raiseCalls)
+	}
+	if ack.acks != 1 || ack.naks != 0 {
+		t.Fatalf("a dropped resolved edge must ack: acks=%d naks=%d", ack.acks, ack.naks)
+	}
+
+	// A raised edge (explicit) still raises through the existing path.
+	apiR := &fakeAlarmApi{devices: []*model.Device{{}}}
+	rcR := newTestConsumer(apiR)
+	reqR := validReq()
+	reqR.Edge = model.AlarmEdgeRaised
+	rcR.handle(context.Background(), raiseMsg(t, "acme", reqR, 0, &fakeAck{}))
+	if apiR.raiseCalls != 1 {
+		t.Fatalf("a raised edge must still raise; got %d calls", apiR.raiseCalls)
+	}
+}
+
 // TestRaiseAlarmConsumerUndecodable proves a non-JSON body is dropped-and-acked.
 func TestRaiseAlarmConsumerUndecodable(t *testing.T) {
 	api := &fakeAlarmApi{}

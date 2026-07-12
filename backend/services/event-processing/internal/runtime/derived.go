@@ -50,9 +50,10 @@ type DerivedEvent struct {
 	// Edge is the transition this detection reports (ADR-057): "raised" on the rising edge, "resolved"
 	// on the falling edge. It IS part of the dedup identity — a Raised and a Resolved that share an
 	// OccurredTime (a gap-driven falling edge coinciding with a fresh rising edge on adjacent events)
-	// must not collapse into one downstream. omitempty keeps a raise lean on the wire; an absent value
-	// decodes as the EdgeRaised default, so a pre-edge event still reads as a raise (the REACT dispatcher
-	// keys off an explicit "resolved", not off empty).
+	// must not collapse into one downstream. The Publisher always stamps it EXPLICITLY (wireEdge is
+	// total), so omitempty never fires on the produce path; it is the DECODE contract for a pre-edge
+	// rollout-backlog event — an absent value decodes as the EdgeRaised default, matching the old
+	// Raised-only stream (the REACT dispatcher keys off an explicit "resolved", not off empty).
 	Edge string `json:"edge,omitempty"`
 	// Series is the keyed series the detection is for — the device token, or the anchor
 	// token for a correlation rule.
@@ -213,7 +214,10 @@ func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
 		Severity:     string(sr.Compiled.Severity),
 		Edge:         wireEdge(det.Edge),
 	}
-	if det.HasValue {
+	// A value rides only on a RAISED edge: a Resolved reports the condition ceased, not a reading. The
+	// core never stamps a value on a falling edge today (resolve() emits none), but pinning it here
+	// keeps the wire contract true by construction if a future kind's falling edge ever carries one.
+	if det.HasValue && det.Edge == core.EdgeRaised {
 		v := det.Value // copy the loop-local before taking its address
 		de.Value = &v
 	}

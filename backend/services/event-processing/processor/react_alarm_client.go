@@ -9,9 +9,22 @@ import (
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	dccore "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
+
+// wireAlarmEdge maps the dispatcher's internal edge token (runtime vocabulary) onto the SHARED wire
+// vocabulary (dmmodel), so the device-management wire binds only to dmmodel's constants on BOTH ends —
+// the producer here and the consumer's `req.Edge == model.AlarmEdgeResolved`. Making the translation
+// explicit (rather than passing the string through) means a change to either module's edge spelling is
+// a compile-visible mapping edit, not a silent fail-open drift into the raise path.
+func wireAlarmEdge(edge string) string {
+	if edge == runtime.EdgeResolved {
+		return dmmodel.AlarmEdgeResolved
+	}
+	return dmmodel.AlarmEdgeRaised
+}
 
 // alarmClient is the REACT dispatcher's raise-alarm sink (ADR-051 slice 5c): it publishes a
 // raise-alarm request onto device-management's dedicated raise-alarm subject, which a thin
@@ -44,7 +57,7 @@ func (c *alarmClient) Dispatch(ctx context.Context, req react.AlarmRequest) erro
 		DeviceToken:  req.DeviceToken,
 		AlarmKey:     req.AlarmKey,
 		RuleID:       req.RuleID,
-		Edge:         req.Edge,
+		Edge:         wireAlarmEdge(req.Edge),
 		MetricKey:    req.MetricKey,
 		Severity:     req.Severity,
 		Value:        req.Value,

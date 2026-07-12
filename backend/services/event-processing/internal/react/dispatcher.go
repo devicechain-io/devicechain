@@ -74,8 +74,9 @@ type CommandSink interface {
 // AlarmRequest is one alarm-contributor dispatch (ADR-041 / ADR-057): raise/escalate (Edge=raised) or
 // clear/de-escalate (Edge=resolved) this rule's contribution to a device's alarm. It carries no
 // idempotency token — device-management's alarm integrator is an upsert keyed on (device, alarmKey)
-// whose contributor-set mutations are idempotent and monotonic-decision-ts-guarded (slice 6d-pre-2c),
-// so an at-least-once redelivery re-derives the same state without one.
+// whose contributor-set mutations are idempotent and ordered by (OccurredTime, Edge): an older edge is
+// ignored and at an equal OccurredTime a resolve wins a raise (RaiseAlarmRequest.OccurredTime), so an
+// at-least-once redelivery in ANY order re-derives the same state without a sequence field.
 type AlarmRequest struct {
 	Tenant      string
 	DeviceToken string
@@ -111,15 +112,16 @@ type AlarmSink interface {
 }
 
 // Metrics is the REACT observability sink (bounded cardinality — no per-tenant labels, the ADR-023
-// G.3 lesson). action is a fixed, small enum ("sendCommand"/"raiseAlarm"), never a tenant/rule value.
+// G.3 lesson). action is a fixed, small enum ("sendCommand"/"raiseAlarm"/"clearAlarm" — the last is
+// the structural falling-edge clear, ADR-057), never a tenant/rule value.
 type Metrics interface {
 	// RecordDispatched: one action successfully handed to its sink (includes idempotent replays,
 	// which command-delivery collapses — so on a redelivery this counts the accepted attempt).
 	RecordDispatched(action string)
 	// RecordOrphan: one derived event whose rule was gone from the projection (nothing dispatched).
 	RecordOrphan()
-	// RecordNotEnabled: one action recognized but whose sink is disabled (nil) — raiseAlarm before
-	// slice 6, or send-command on a deploy without command-delivery configured.
+	// RecordNotEnabled: one action recognized but whose sink is disabled (nil) — raiseAlarm/clearAlarm
+	// before slice 6, or send-command on a deploy without command-delivery configured.
 	RecordNotEnabled(action string)
 }
 
