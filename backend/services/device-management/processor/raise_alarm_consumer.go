@@ -202,8 +202,12 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 // redelivery cap is reached so one persistently-failing request cannot redeliver forever.
 func (rc *RaiseAlarmConsumer) retryOrDrop(msg messaging.Message, done func(string), err error, what string) {
 	if msg.NumDelivered >= messaging.MaxDeliver {
+		// Dropping an edge past the cap is a genuine loss for an edge-triggered producer: a dropped
+		// RAISE will not re-emit until the condition falls and re-breaches, and a dropped RESOLVE
+		// strands the alarm until its next cycle. It is a loud error precisely because it should never
+		// happen — the integrator's in-process CAS retry keeps a conflict from consuming attempts.
 		log.Error().Err(err).Str("what", what).Int("attempts", msg.NumDelivered).
-			Msg("Raise-alarm failed past redelivery cap; dropping (re-raises on the rule's next firing)")
+			Msg("Raise-alarm edge failed past redelivery cap; dropping (edge-triggered: it will not re-emit until the condition next changes)")
 		msg.Ack()
 		done(core.ResultFailed)
 		return

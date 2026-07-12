@@ -63,6 +63,26 @@ func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
 	// the serialized set is then byte-stable, and .Equal-based ordering is unaffected either way.
 	occurredTime = occurredTime.UTC()
 
+	// Retry the read-modify-write IN PROCESS on a CAS conflict so a lost race does not consume a
+	// delivery attempt: re-reading picks up the winner's version, and the fold is idempotent +
+	// order-independent so it converges. A persistent conflict past this cap still surfaces the
+	// conflict error, which naks to the consumer's redelivery cap as the outer backstop — but under
+	// the realistic "one message per rule edge" volume a single in-process retry almost always wins.
+	const maxCASAttempts = 5
+	var err error
+	for attempt := 0; attempt < maxCASAttempts; attempt++ {
+		if err = api.applyContributorEdgeOnce(ctx, deviceId, alarmKey, metricKey, ruleID, raised, severity, value, occurredTime); !errors.Is(err, errAlarmContributorConflict) {
+			return err // success (nil), an idempotent no-op (nil), or a non-conflict error
+		}
+	}
+	return err // exhausted in-process retries under sustained contention: nak for redelivery
+}
+
+// applyContributorEdgeOnce is one read-modify-write attempt of the contributor fold; it returns
+// errAlarmContributorConflict when its optimistic CAS loses to a concurrent write, which the caller
+// retries. Split out so the CAS retry re-reads the row (and its fresh version) each attempt.
+func (api *Api) applyContributorEdgeOnce(ctx context.Context, deviceId uint,
+	alarmKey, metricKey, ruleID string, raised bool, severity string, value *float64, occurredTime time.Time) error {
 	existing, err := api.alarmByOriginatorKey(ctx, string(entity.TypeDevice), deviceId, alarmKey)
 	if err != nil {
 		return err
