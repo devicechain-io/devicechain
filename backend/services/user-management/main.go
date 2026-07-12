@@ -242,6 +242,11 @@ func registerOAuthHandlers() {
 		IdentityManager.RefreshOAuth,
 	))
 
+	// The authorization endpoint (ADR-047 slice C): the server-rendered
+	// login → tenant-select → consent flow that issues the codes the token endpoint
+	// redeems.
+	http.Handle(identity.AuthorizePath, identity.AuthorizeHandler(IdentityManager))
+
 	// Public JWKS mirror for external OAuth token validators (see OAuthJwksPath).
 	// Serves the same retained key set as /auth/jwks.
 	http.HandleFunc(identity.OAuthJwksPath, func(w http.ResponseWriter, r *http.Request) {

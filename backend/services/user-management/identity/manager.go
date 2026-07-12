@@ -347,6 +347,17 @@ func (m *Manager) Memberships(ctx context.Context, identityToken string) ([]Memb
 	return membershipInfos(id.Memberships), nil
 }
 
+// IdentityEmail validates an identity-tier token and returns its subject email.
+// Used by the OAuth authorize consent step (ADR-047) to recover the authenticated
+// subject from the identity token carried across the login → consent POSTs.
+func (m *Manager) IdentityEmail(identityToken string) (string, error) {
+	claims, err := m.validator.ValidateIdentity(identityToken)
+	if err != nil {
+		return "", ErrInvalidToken
+	}
+	return claims.Email, nil
+}
+
 // CurrentTenant resolves the control-plane tenant record the caller is acting
 // within, keyed by the tenant token carried in their access token. It reads the
 // tenant-unscoped control-plane table (iam.Store uses the system context), so it
