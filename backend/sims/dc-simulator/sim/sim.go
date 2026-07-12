@@ -250,8 +250,9 @@ func (s *buildingpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
 // spacing away from it. With 12 evenly-spaced thermostats that worst case is
 // 15 degrees from the peak: sin(90-15 degrees) = sin(75 degrees) is about
 // 0.966, giving temperature = 24 + 8*0.966 is about 31.7 degrees C —
-// comfortably over the >30 degrees C alarm threshold every cycle, regardless
-// of n, without ever needing every device in phase at once.
+// comfortably over 30 C every cycle (the level a DETECT rule will alarm on
+// once rule seeding lands), regardless of n, without ever needing every
+// device in phase at once.
 func (s *buildingpulse) Tick(ctx context.Context, rt *Runtime) error {
 	n := s.ticks.Add(1)
 	if len(rt.Devices) == 0 {
