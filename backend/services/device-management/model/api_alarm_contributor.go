@@ -41,10 +41,15 @@ import (
 // id. A routine profile republish rotates the versioned id but not the stable key, so one logical rule
 // maps to ONE contributor across versions: the new version's edges update and clear the SAME
 // contributor rather than forking (and stranding) a fresh one per version. This closes the primary
-// stranding case. RESIDUALS for the future explicit-teardown path (removals are empty today): a rule
-// DELETED outright, or a reused-id def change whose new body never matches, leaves a stale active
-// contributor until the condition next cycles — closing those needs a Resolved emitted on rule teardown
-// (DETECT RemoveRule + a Publisher orphan-publish exception), tracked for that slice.
+// stranding case. RESIDUALS (all bounded, and all the same family — a raised contributor whose logical
+// rule stops producing edges until the NEXT full raise→resolve cycle re-derives it; strictly better
+// than the pre-fix PERMANENT strand, and closed by the same future explicit-teardown Resolved):
+//   - a rule DELETED outright, or a reused-id def change whose new body never matches, until the
+//     condition next cycles (needs a Resolved on DETECT RemoveRule + a Publisher orphan-publish exception);
+//   - a condition that ceases in the WINDOW between a profile republish and the new version's first own
+//     raise: the old version's frontier resolve is correctly dropped by the supersession gate
+//     (event-processing dropSupersededDetections), and the new version never raised so it emits no
+//     resolve, so the alarm holds ACTIVE until the new version's next full cycle.
 //
 // OPERATOR CLEAR vs the reference count (slice-6 product call, inert while the gate is off): an operator
 // ClearAlarm sets state=CLEARED without touching the contributor set, so the next edge for that key
