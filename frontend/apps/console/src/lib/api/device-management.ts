@@ -19,6 +19,8 @@ import type {
   MetricDefinitionCreateRequest,
   CommandDefinitionsQuery,
   CommandDefinitionCreateRequest,
+  DetectionRulesQuery,
+  DetectionRuleCreateRequest,
   DeviceFacet,
 } from '@/gql/device-management/graphql';
 
@@ -40,6 +42,7 @@ export type DeviceProfileDetail = NonNullable<DeviceProfileByTokenQuery['deviceP
 export type DeviceProfileVersion = DeviceProfileVersionsQuery['deviceProfileVersions'][number];
 export type MetricDefinition = MetricDefinitionsQuery['metricDefinitions']['results'][number];
 export type CommandDefinition = CommandDefinitionsQuery['commandDefinitions']['results'][number];
+export type DetectionRule = DetectionRulesQuery['detectionRules']['results'][number];
 
 // Re-export the generated request inputs so forms can type their request objects
 // without reaching into the generated module directly.
@@ -50,6 +53,7 @@ export type {
   DeviceProfileCreateRequest,
   MetricDefinitionCreateRequest,
   CommandDefinitionCreateRequest,
+  DetectionRuleCreateRequest,
 };
 
 // ── Devices ─────────────────────────────────────────────────────────────
@@ -821,4 +825,82 @@ const DELETE_COMMAND_DEFINITION = graphql(`
 export async function deleteCommandDefinition(token: string): Promise<boolean> {
   const data = await gql('device-management', DELETE_COMMAND_DEFINITION, { token });
   return data.deleteCommandDefinition;
+}
+
+// ── Detection rules (ADR-051 / ADR-057) ───────────────────────────────────
+//
+// A DETECT rule authored on a profile — the single alarm-authoring path since the
+// 6d cutover (the retired AlarmDefinition's replacement). `definition` is the opaque
+// rules.Rule JSON document; device-management stores it whole and checks only JSON
+// well-formedness on write, while event-processing performs the authoritative
+// type/cost/injection validation when the profile is published. Like the metric and
+// command definitions these are DRAFT edits that take effect only on publish.
+
+const DETECTION_RULES = graphql(`
+  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {
+    detectionRules(criteria: $criteria) {
+      results {
+        id
+        token
+        name
+        description
+        definition
+        enabled
+        metadata
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
+// A profile's rule set is small and rendered whole in a tab, so load one large page.
+export async function listDetectionRules(profileToken: string): Promise<DetectionRule[]> {
+  const data = await gql('device-management', DETECTION_RULES, {
+    criteria: { pageNumber: 1, pageSize: 1000, deviceProfile: profileToken },
+  });
+  return data.detectionRules.results;
+}
+
+const CREATE_DETECTION_RULE = graphql(`
+  mutation CreateDetectionRule($request: DetectionRuleCreateRequest!) {
+    createDetectionRule(request: $request) {
+      id
+      token
+    }
+  }
+`);
+
+export async function createDetectionRule(request: DetectionRuleCreateRequest): Promise<void> {
+  await gql('device-management', CREATE_DETECTION_RULE, { request });
+}
+
+const UPDATE_DETECTION_RULE = graphql(`
+  mutation UpdateDetectionRule($token: String!, $request: DetectionRuleCreateRequest!) {
+    updateDetectionRule(token: $token, request: $request) {
+      id
+      token
+    }
+  }
+`);
+
+export async function updateDetectionRule(
+  token: string,
+  request: DetectionRuleCreateRequest,
+): Promise<void> {
+  await gql('device-management', UPDATE_DETECTION_RULE, { token, request });
+}
+
+const DELETE_DETECTION_RULE = graphql(`
+  mutation DeleteDetectionRule($token: String!) {
+    deleteDetectionRule(token: $token)
+  }
+`);
+
+export async function deleteDetectionRule(token: string): Promise<boolean> {
+  const data = await gql('device-management', DELETE_DETECTION_RULE, { token });
+  return data.deleteDetectionRule;
 }
