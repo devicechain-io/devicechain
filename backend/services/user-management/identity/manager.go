@@ -96,20 +96,24 @@ func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.Dis
 	return &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, accessTTL: accessTTL, refreshTTL: refreshTTL, issuerUrl: issuerUrl, bootstrap: bootstrap}
 }
 
+// resolveIssuerName picks the JWT "iss" value. A configured OAuth issuer URL
+// (ADR-047) wins and becomes the "iss" of every token — a decisive platform-wide
+// cutover, safe because nothing pins "iss" (the validator selects keys by "kid").
+// Absent an issuer URL, OAuth is off and tokens keep the legacy per-instance
+// internal identifier.
+func resolveIssuerName(issuerUrl, instanceId string) string {
+	if issuerUrl != "" {
+		return issuerUrl
+	}
+	return fmt.Sprintf("dc-user-management:%s", instanceId)
+}
+
 // Initialize loads (or creates) the signing key, builds the issuer/validator,
 // wires the refresh-token store, and seeds the bootstrap admin. Must run after
 // the RdbManager is initialized (tables exist) and the refresh KV bucket is
 // created.
 func (m *Manager) Initialize(ctx context.Context, refreshKV nats.KeyValue) error {
-	// The OAuth 2.1 issuer identifier (ADR-047), when configured, is the "iss" of
-	// every token (a decisive platform-wide cutover — nothing pins "iss", keys are
-	// selected by "kid"). Absent an issuer URL, OAuth is off and tokens keep the
-	// legacy per-instance internal identifier.
-	if m.issuerUrl != "" {
-		m.issuerName = m.issuerUrl
-	} else {
-		m.issuerName = fmt.Sprintf("dc-user-management:%s", m.ms.InstanceId)
-	}
+	m.issuerName = resolveIssuerName(m.issuerUrl, m.ms.InstanceId)
 	set, err := m.loadSigningKeys(ctx)
 	if err != nil {
 		return err
@@ -392,6 +396,15 @@ func (m *Manager) recordAuth(ctx context.Context, operation, actor, tenant strin
 func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
 	claims, err := m.validator.ValidateRefresh(refreshToken)
 	if err != nil {
+		return nil, ErrInvalidToken
+	}
+	// An OAuth 2.1 refresh token (ADR-047) carries a scope: it must be redeemed at
+	// the /oauth/token endpoint, which re-caps authorities to that scope and
+	// preserves the scope/audience binding. This ordinary refresh path re-resolves
+	// the identity's *full* authorities and mints an unscoped, unbound pair — so
+	// accepting a scoped token here would let a read-only, audience-bound session
+	// escalate to a full-authority one in a single hop. Reject it, fail-closed.
+	if claims.Scope != "" {
 		return nil, ErrInvalidToken
 	}
 	entry, err := m.refreshKV.Get(claims.ID)

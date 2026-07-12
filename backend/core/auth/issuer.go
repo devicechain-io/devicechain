@@ -112,9 +112,10 @@ func (i *Issuer) IssueTenantAccess(tenant, email string, roles, authorities []st
 // (so every existing JWKS validator accepts it unchanged) that additionally
 // carries the granted OAuth scope and — when a resource indicator was supplied
 // (RFC 8707) — an audience binding. authorities MUST already be capped to the
-// scope by the caller (the AS intersects the subject's authorities with the
-// scope's allowance before minting), so the scope cannot be exceeded even for a
-// subject holding AuthorityAll.
+// scope by the caller via IntersectAuthorities (which caps even AuthorityAll to
+// the scope's allowance), so the scope cannot be exceeded even for a subject
+// holding "*". This mint does not re-derive the cap — it trusts the caller — so
+// the authorization endpoint is the single place the intersection is applied.
 func (i *Issuer) IssueOAuthAccess(tenant, email string, roles, authorities []string, scope string, audience []string, actingAsSuperuser bool, jti string) (IssuedToken, error) {
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeAccess, tenant: tenant, username: email, email: email,

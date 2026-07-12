@@ -207,10 +207,39 @@ func registerKeyHandlers() {
 // registerOAuthHandlers serves the OAuth 2.1 Authorization-Server surface (ADR-047)
 // on the shared http server. Called only when an issuer URL is configured, so the
 // issuer is a validated absolute origin. Slice A1 registers discovery only (RFC
-// 8414 metadata); the /oauth/authorize and /oauth/token endpoints it advertises
-// land in the following slices.
+// 8414 metadata + a public JWKS mirror); the /oauth/authorize and /oauth/token
+// endpoints it advertises land in the following slices.
+//
+// Deployment companion (tracked for the slice that enables OAuth in a cluster):
+// external discovery needs two ingress adjustments this in-code slice does not
+// make. (1) The advertised jwks_uri is /oauth/jwks precisely so it is NOT caught
+// by the ingress rule that 404s external /api/<area>/auth/* — no ingress change
+// needed for it. (2) A strict RFC 8414 client of an issuer WITH a path
+// (https://host/api/user-management) fetches the metadata at the path-INSERTED
+// location (https://host/.well-known/oauth-authorization-server/api/user-management),
+// which the current /api/<area> ingress rule does not route; the widely-used
+// path-APPENDED form (<issuer>/.well-known/...) does route through it. Supporting
+// strict clients needs an added ingress rule (or a dedicated path-less issuer
+// host). Inert until an operator sets IssuerUrl.
 func registerOAuthHandlers() {
 	http.Handle(identity.MetadataPath, identity.AuthorizationServerMetadataHandler(Configuration.Auth.IssuerUrl))
+
+	// Public JWKS mirror for external OAuth token validators (see OAuthJwksPath).
+	// Serves the same retained key set as /auth/jwks.
+	http.HandleFunc(identity.OAuthJwksPath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		jwks, err := IdentityManager.JWKS()
+		if err != nil {
+			http.Error(w, "failed to build JWKS", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(jwks)
+	})
 }
 
 // registerServiceTokenHandler serves the service-token mint endpoint (ADR-044

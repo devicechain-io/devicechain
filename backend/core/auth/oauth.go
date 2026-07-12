@@ -44,3 +44,42 @@ func ScopeSupported(requested string) bool {
 	}
 	return true
 }
+
+// IntersectAuthorities caps a subject's held authorities to those an OAuth scope
+// permits (ADR-047 D-SCOPE) — the load-bearing primitive the authorization-code
+// flow uses so a minted token carries only what its scope allows. It returns the
+// members of allowed that held actually grants, deterministically ordered by
+// allowed. Crucially the super-authority "*" in held is *capped* to the allowed
+// set, never expanded: a subject holding "*" granted a limited scope receives
+// exactly the scope's authorities and never "*" itself — so an OAuth session
+// cannot exceed its scope even for a superuser. allowed is expected to be a curated
+// scope allowance (never containing "*"); any "*" in allowed is dropped so a scope
+// definition can never smuggle the super-authority into a token.
+func IntersectAuthorities(held, allowed []string) []string {
+	if len(allowed) == 0 {
+		return nil
+	}
+	hasAll := false
+	heldSet := make(map[string]struct{}, len(held))
+	for _, h := range held {
+		if h == string(AuthorityAll) {
+			hasAll = true
+		}
+		heldSet[h] = struct{}{}
+	}
+	out := make([]string, 0, len(allowed))
+	seen := make(map[string]struct{}, len(allowed))
+	for _, a := range allowed {
+		if a == string(AuthorityAll) {
+			continue // a scope allowance must never grant the super-authority
+		}
+		if _, dup := seen[a]; dup {
+			continue
+		}
+		if _, ok := heldSet[a]; ok || hasAll {
+			out = append(out, a)
+			seen[a] = struct{}{}
+		}
+	}
+	return out
+}

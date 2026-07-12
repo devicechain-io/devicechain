@@ -21,8 +21,14 @@ const (
 	MetadataPath  = "/.well-known/oauth-authorization-server"
 	AuthorizePath = "/oauth/authorize"
 	TokenPath     = "/oauth/token"
-	// jwksPath is the existing JWK Set endpoint (ADR-008), advertised as jwks_uri.
-	jwksPath = "/auth/jwks"
+	// OAuthJwksPath is the JWK Set endpoint advertised to *external* OAuth clients
+	// as jwks_uri. It deliberately sits under /oauth/ rather than reusing the
+	// internal /auth/jwks (ADR-008): the cluster ingress 404s all external
+	// /api/<area>/auth/* requests (so the service-token mint is not a public
+	// oracle), which would also blackhole /auth/jwks. Serving an identical key set
+	// here keeps external token validators working without punching a hole in that
+	// edge rule. In-cluster peers keep fetching /auth/jwks directly, unaffected.
+	OAuthJwksPath = "/oauth/jwks"
 )
 
 // AuthorizationServerMetadata is the subset of RFC 8414 Authorization-Server
@@ -51,11 +57,13 @@ type AuthorizationServerMetadata struct {
 // scopes this AS actually grants.
 func BuildAuthorizationServerMetadata(issuer string) AuthorizationServerMetadata {
 	return AuthorizationServerMetadata{
-		Issuer:                            issuer,
-		AuthorizationEndpoint:             issuer + AuthorizePath,
-		TokenEndpoint:                     issuer + TokenPath,
-		JwksURI:                           issuer + jwksPath,
-		ScopesSupported:                   auth.SupportedScopes,
+		Issuer:                issuer,
+		AuthorizationEndpoint: issuer + AuthorizePath,
+		TokenEndpoint:         issuer + TokenPath,
+		JwksURI:               issuer + OAuthJwksPath,
+		// Copy the exported scope slice so the served document can't be skewed by a
+		// later mutation of the package-global.
+		ScopesSupported:                   append([]string(nil), auth.SupportedScopes...),
 		ResponseTypesSupported:            []string{"code"},
 		ResponseModesSupported:            []string{"query"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
@@ -69,7 +77,12 @@ func BuildAuthorizationServerMetadata(issuer string) AuthorizationServerMetadata
 // always a validated absolute origin here. The document is public (unauthenticated
 // discovery) and cacheable.
 func AuthorizationServerMetadataHandler(issuer string) http.Handler {
-	body, _ := json.Marshal(BuildAuthorizationServerMetadata(issuer))
+	body, err := json.Marshal(BuildAuthorizationServerMetadata(issuer))
+	if err != nil {
+		// The struct has no marshaler-bearing fields, so this is unreachable today;
+		// panic rather than silently serve an empty 200 if a future field breaks it.
+		panic("identity: marshaling authorization-server metadata: " + err.Error())
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
