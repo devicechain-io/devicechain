@@ -67,6 +67,7 @@ type Manager struct {
 	dummyHash  []byte
 	refreshTTL time.Duration
 	bootstrap  BootstrapConfig
+	issuerUrl  string
 	issuerName string
 
 	// mu guards the signing-key material, which a rotation replaces while the
@@ -88,9 +89,11 @@ type TokenPair struct {
 
 // NewManager constructs a Manager. accessTTL/refreshTTL of 0 fall back to the
 // auth package defaults. locker serializes signing-key generation/rotation and
-// bootstrap seeding across replicas (ADR-007).
-func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.DistributedLock, accessTTL, refreshTTL time.Duration, bootstrap BootstrapConfig) *Manager {
-	return &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, accessTTL: accessTTL, refreshTTL: refreshTTL, bootstrap: bootstrap}
+// bootstrap seeding across replicas (ADR-007). issuerUrl, when non-empty, is the
+// OAuth 2.1 issuer identifier (ADR-047) stamped as every token's "iss"; empty
+// keeps the legacy per-instance internal identifier.
+func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.DistributedLock, accessTTL, refreshTTL time.Duration, issuerUrl string, bootstrap BootstrapConfig) *Manager {
+	return &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, accessTTL: accessTTL, refreshTTL: refreshTTL, issuerUrl: issuerUrl, bootstrap: bootstrap}
 }
 
 // Initialize loads (or creates) the signing key, builds the issuer/validator,
@@ -98,7 +101,15 @@ func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.Dis
 // the RdbManager is initialized (tables exist) and the refresh KV bucket is
 // created.
 func (m *Manager) Initialize(ctx context.Context, refreshKV nats.KeyValue) error {
-	m.issuerName = fmt.Sprintf("dc-user-management:%s", m.ms.InstanceId)
+	// The OAuth 2.1 issuer identifier (ADR-047), when configured, is the "iss" of
+	// every token (a decisive platform-wide cutover — nothing pins "iss", keys are
+	// selected by "kid"). Absent an issuer URL, OAuth is off and tokens keep the
+	// legacy per-instance internal identifier.
+	if m.issuerUrl != "" {
+		m.issuerName = m.issuerUrl
+	} else {
+		m.issuerName = fmt.Sprintf("dc-user-management:%s", m.ms.InstanceId)
+	}
 	set, err := m.loadSigningKeys(ctx)
 	if err != nil {
 		return err

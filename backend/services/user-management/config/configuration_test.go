@@ -47,3 +47,54 @@ func TestValidateRejectsNonPositiveRefreshTtl(t *testing.T) {
 	}
 	assert.Error(t, cfg.Validate())
 }
+
+// OAuth is off by default (no issuer configured) — the AS surface stays
+// fail-closed until an operator sets an issuer URL (ADR-047).
+func TestOAuthDisabledByDefault(t *testing.T) {
+	cfg := NewUserManagementConfiguration()
+	assert.False(t, cfg.OAuthEnabled())
+	assert.NoError(t, cfg.Validate())
+}
+
+// A configured issuer URL turns OAuth on and passes validation.
+func TestOAuthEnabledWithIssuer(t *testing.T) {
+	cfg := NewUserManagementConfiguration()
+	cfg.Auth.IssuerUrl = "https://devicechain.example.com/user-management"
+	assert.True(t, cfg.OAuthEnabled())
+	assert.NoError(t, cfg.Validate())
+}
+
+// The issuer URL must be a well-formed absolute https origin (http tolerated only
+// for localhost), with no query/fragment/trailing slash, so it compares
+// byte-for-byte with what clients derive from RFC 8414 discovery.
+func TestValidateIssuerUrl(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		ok   bool
+	}{
+		{"https ok", "https://devicechain.example.com", true},
+		{"https with path ok", "https://devicechain.example.com/user-management", true},
+		{"http localhost ok", "http://localhost:8080", true},
+		{"http 127.0.0.1 ok", "http://127.0.0.1:8080", true},
+		{"http non-localhost rejected", "http://devicechain.example.com", false},
+		{"trailing slash rejected", "https://devicechain.example.com/", false},
+		{"query rejected", "https://devicechain.example.com?x=1", false},
+		{"fragment rejected", "https://devicechain.example.com#f", false},
+		{"relative rejected", "/user-management", false},
+		{"no host rejected", "https://", false},
+		{"garbage rejected", "://nope", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := NewUserManagementConfiguration()
+			cfg.Auth.IssuerUrl = tc.url
+			err := cfg.Validate()
+			if tc.ok {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+			}
+		})
+	}
+}

@@ -100,7 +100,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	IdentityManager = identity.NewManager(Microservice, RdbManager, lock, accessTTL, refreshTTL, identity.BootstrapConfig{
+	IdentityManager = identity.NewManager(Microservice, RdbManager, lock, accessTTL, refreshTTL, Configuration.Auth.IssuerUrl, identity.BootstrapConfig{
 		SuperuserEmail:    Configuration.Auth.SuperuserEmail,
 		SuperuserPassword: Configuration.Auth.SuperuserPassword,
 	})
@@ -123,6 +123,13 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Serve the service-token mint endpoint (ADR-044 amendment) so a caller can
 	// exchange the shared service secret for a short-lived machine token.
 	registerServiceTokenHandler()
+
+	// Serve the OAuth 2.1 Authorization-Server Metadata (RFC 8414) when an issuer
+	// URL is configured (ADR-047). Absent an issuer the OAuth surface stays off,
+	// fail-closed — mirroring the service-token secret gate above.
+	if Configuration.OAuthEnabled() {
+		registerOAuthHandlers()
+	}
 
 	// Map of providers injected into the graphql http context.
 	providers := map[gqlcore.ContextKey]interface{}{
@@ -195,6 +202,15 @@ func registerKeyHandlers() {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(jwks)
 	})
+}
+
+// registerOAuthHandlers serves the OAuth 2.1 Authorization-Server surface (ADR-047)
+// on the shared http server. Called only when an issuer URL is configured, so the
+// issuer is a validated absolute origin. Slice A1 registers discovery only (RFC
+// 8414 metadata); the /oauth/authorize and /oauth/token endpoints it advertises
+// land in the following slices.
+func registerOAuthHandlers() {
+	http.Handle(identity.MetadataPath, identity.AuthorizationServerMetadataHandler(Configuration.Auth.IssuerUrl))
 }
 
 // registerServiceTokenHandler serves the service-token mint endpoint (ADR-044

@@ -5,6 +5,8 @@ package config
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/config"
 )
@@ -12,6 +14,18 @@ import (
 // AuthConfiguration controls JWT issuance, signing-key rotation, and the
 // one-time bootstrap admin.
 type AuthConfiguration struct {
+	// IssuerUrl is the external https origin of this Authorization Server (ADR-047).
+	// When set it becomes the "iss" claim of *every* minted token (a decisive
+	// platform-wide cutover from the legacy internal identifier — the validator
+	// selects keys by "kid", never pins "iss", so cross-service verification is
+	// unaffected) AND turns on the OAuth 2.1 AS surface: the token's issuer must
+	// equal the base URL where the RFC 8414 metadata is served. Empty (the default)
+	// keeps the legacy derived issuer and leaves the entire OAuth surface OFF,
+	// fail-closed — mirroring how an empty service-auth secret disables service-token
+	// minting. Must be an absolute http/https URL with no query or fragment (http is
+	// tolerated only for a localhost issuer, for local development).
+	IssuerUrl string
+
 	// Token lifetimes in seconds (0 falls back to the auth package defaults).
 	AccessTokenTtlSeconds  int
 	RefreshTokenTtlSeconds int
@@ -83,6 +97,45 @@ func (c *UserManagementConfiguration) Validate() error {
 	}
 	if c.Auth.RefreshTokenTtlSeconds <= 0 {
 		return fmt.Errorf("auth.refreshTokenTtlSeconds must be positive (got %d)", c.Auth.RefreshTokenTtlSeconds)
+	}
+	if c.Auth.IssuerUrl != "" {
+		if err := validateIssuerUrl(c.Auth.IssuerUrl); err != nil {
+			return fmt.Errorf("auth.issuerUrl: %w", err)
+		}
+	}
+	return nil
+}
+
+// OAuthEnabled reports whether the OAuth 2.1 Authorization-Server surface is
+// turned on — it is exactly when an issuer URL is configured (fail-closed: no
+// issuer, no OAuth). The metadata/authorize/token handlers register only when
+// this is true, and the same URL is stamped as every token's "iss".
+func (c *UserManagementConfiguration) OAuthEnabled() bool {
+	return c.Auth.IssuerUrl != ""
+}
+
+// validateIssuerUrl enforces the RFC 8414 issuer-identifier shape: an absolute
+// URL, https (http tolerated only for a localhost issuer during local dev), with
+// no query or fragment. A trailing slash is rejected so the stored issuer and the
+// "iss" claim compare byte-for-byte against what clients derive from discovery.
+func validateIssuerUrl(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("not a valid URL: %w", err)
+	}
+	if !u.IsAbs() || u.Host == "" {
+		return fmt.Errorf("must be an absolute URL with a host (got %q)", raw)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("must have no query or fragment (got %q)", raw)
+	}
+	if strings.HasSuffix(u.Path, "/") {
+		return fmt.Errorf("must not end with a trailing slash (got %q)", raw)
+	}
+	host := u.Hostname()
+	isLocalhost := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	if u.Scheme != "https" && !(u.Scheme == "http" && isLocalhost) {
+		return fmt.Errorf("must use https (http allowed only for a localhost issuer; got scheme %q host %q)", u.Scheme, host)
 	}
 	return nil
 }

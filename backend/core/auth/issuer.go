@@ -76,8 +76,14 @@ type tokenSpec struct {
 	roles             []string
 	authorities       []string
 	actingAsSuperuser bool
-	jti               string
-	ttl               time.Duration
+	// scope and audience are set only on OAuth 2.1 authorization-code tokens
+	// (ADR-047): scope is the space-delimited granted scope (carried for audit;
+	// authorities are already capped to it), audience is the RFC 8707 resource the
+	// token is bound to. Empty on every other token type.
+	scope    string
+	audience []string
+	jti      string
+	ttl      time.Duration
 }
 
 // IssueAccess mints a short-lived tenant-scoped access token (the data-plane
@@ -98,6 +104,34 @@ func (i *Issuer) IssueTenantAccess(tenant, email string, roles, authorities []st
 		tokenType: TokenTypeAccess, tenant: tenant, username: email, email: email,
 		roles: roles, authorities: authorities, actingAsSuperuser: actingAsSuperuser,
 		jti: jti, ttl: i.accessTTL,
+	})
+}
+
+// IssueOAuthAccess mints a tenant-scoped access token for the OAuth 2.1
+// authorization-code flow (ADR-047). It is an ordinary data-plane access token
+// (so every existing JWKS validator accepts it unchanged) that additionally
+// carries the granted OAuth scope and — when a resource indicator was supplied
+// (RFC 8707) — an audience binding. authorities MUST already be capped to the
+// scope by the caller (the AS intersects the subject's authorities with the
+// scope's allowance before minting), so the scope cannot be exceeded even for a
+// subject holding AuthorityAll.
+func (i *Issuer) IssueOAuthAccess(tenant, email string, roles, authorities []string, scope string, audience []string, actingAsSuperuser bool, jti string) (IssuedToken, error) {
+	return i.sign(tokenSpec{
+		tokenType: TokenTypeAccess, tenant: tenant, username: email, email: email,
+		roles: roles, authorities: authorities, actingAsSuperuser: actingAsSuperuser,
+		scope: scope, audience: audience, jti: jti, ttl: i.accessTTL,
+	})
+}
+
+// IssueOAuthRefresh mints an OAuth 2.1 refresh token carrying the granted scope
+// and audience so a refresh grant re-mints an access token with the same
+// scope/audience binding without re-consulting the authorize step. Like every
+// refresh token its jti is persisted server-side (NATS KV) for revocation.
+func (i *Issuer) IssueOAuthRefresh(tenant, email string, roles, authorities []string, scope string, audience []string, jti string) (IssuedToken, error) {
+	return i.sign(tokenSpec{
+		tokenType: TokenTypeRefresh, tenant: tenant, username: email, email: email,
+		roles: roles, authorities: authorities,
+		scope: scope, audience: audience, jti: jti, ttl: i.refreshTTL,
 	})
 }
 
@@ -143,10 +177,12 @@ func (i *Issuer) sign(spec tokenSpec) (IssuedToken, error) {
 		Roles:             spec.roles,
 		Authorities:       spec.authorities,
 		ActingAsSuperuser: spec.actingAsSuperuser,
+		Scope:             spec.scope,
 		TokenType:         spec.tokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    i.issuer,
 			Subject:   spec.username,
+			Audience:  jwt.ClaimStrings(spec.audience),
 			ID:        spec.jti,
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
