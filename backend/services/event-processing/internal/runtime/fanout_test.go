@@ -233,3 +233,46 @@ func TestPlanCorrelationFansPerAnchor(t *testing.T) {
 		t.Fatalf("no matching anchor should contribute no events; got %d", len(res.Events))
 	}
 }
+
+// A RAW-CEL threshold rule is metric-scoped from the metrics its leaf references (review D4): an
+// event carrying only an unrelated metric is SKIPPED entirely, so it never evaluates the leaf to a
+// false that would resolve the alarm. An event carrying the referenced metric is fed as before.
+func TestPlanRawCELThresholdMetricScopedFeed(t *testing.T) {
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	raw := rules.Rule{
+		ID:   ComposeRuleID("acme", "raw1"),
+		Name: "raw hot",
+		Type: rules.TypeThreshold,
+		When: rules.Condition{CEL: `"temperature" in m && m["temperature"] > 80.0`},
+	}
+	reg := NewRuleRegistry([]ScopedRule{compileScoped(t, "acme", "p@1", raw)})
+
+	// An off-metric sample (battery only) carries none of the leaf's metrics → skipped, no event.
+	off := planEv(reg, 1, "acme", measured("acme", "d1", "p@1", base, map[string]string{"battery": "40"}))
+	if len(off.Events) != 0 {
+		t.Fatalf("off-metric event must be skipped, not resolve the alarm; got %d events", len(off.Events))
+	}
+	// A temperature sample IS in scope and fed (and matches at 90).
+	hot := planEv(reg, 2, "acme", measured("acme", "d1", "p@1", base, map[string]string{"temperature": "90"}))
+	if len(hot.Events) != 1 || !hot.Events[0].Match {
+		t.Fatalf("temperature event should fan one matching event; got %+v", hot.Events)
+	}
+}
+
+// A raw-CEL threshold leaf that touches m opaquely (size(m)) cannot be scoped, so it falls back to
+// feed-everything — the documented raw-CEL-owns-totality trap, not a regression.
+func TestPlanRawCELUnscopeableFeedsEverything(t *testing.T) {
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	raw := rules.Rule{
+		ID:   ComposeRuleID("acme", "raw2"),
+		Name: "raw opaque",
+		Type: rules.TypeThreshold,
+		When: rules.Condition{CEL: `size(m) > 3`},
+	}
+	reg := NewRuleRegistry([]ScopedRule{compileScoped(t, "acme", "p@1", raw)})
+
+	off := planEv(reg, 1, "acme", measured("acme", "d1", "p@1", base, map[string]string{"battery": "40"}))
+	if len(off.Events) != 1 {
+		t.Fatalf("an unscopeable raw leaf feeds every event; got %d", len(off.Events))
+	}
+}

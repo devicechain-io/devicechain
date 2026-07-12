@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/cel-go/cel"
+	celast "github.com/google/cel-go/common/ast"
 )
 
 // Input is one resolved event as seen by a predicate: the neutral view the runtime builds
@@ -53,6 +54,9 @@ func (in Input) activation() map[string]any {
 type Predicate struct {
 	source  string
 	program cel.Program
+	// ast is the type-checked expression tree, retained so the compiler can statically derive
+	// the leaf's metric references for the metric-scoped feed (MetricRefs, review D4).
+	ast *celast.AST
 	// costMax is the static worst-case cost estimate that passed the publish-time gate,
 	// retained so the runtime can surface it (rule-health, operator budget view).
 	costMax uint64
@@ -100,7 +104,7 @@ func Compile(source string, costCeiling uint64) (*Predicate, error) {
 	if err != nil {
 		return nil, &CompileError{Source: source, Err: fmt.Errorf("build program: %w", err)}
 	}
-	return &Predicate{source: source, program: program, costMax: est.Max}, nil
+	return &Predicate{source: source, program: program, ast: ast.NativeRep(), costMax: est.Max}, nil
 }
 
 // Eval evaluates the predicate against one event. An evaluation error (e.g. the runtime
