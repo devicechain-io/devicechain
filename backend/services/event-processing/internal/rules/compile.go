@@ -122,15 +122,20 @@ type CompiledRule struct {
 	GateMetric string
 
 	// FeedMetrics is the metric-scoped feed set derived from a RAW-CEL threshold/duration leaf
-	// that the structured lowering could not scope (GateMetric would be empty). It is the set of
-	// measurement keys the leaf references via constant string keys; the runtime feeds the rule
-	// only events carrying AT LEAST ONE of them, so off-metric telemetry never evaluates the leaf
-	// to the FALSE that resolves the threshold alarm / cancels the duration hold (review D4). It
-	// is empty (feed every event) when the leaf references no measurement (it applies to every
-	// event) or references `m` opaquely (the set is not statically knowable — the raw-CEL trap).
+	// that the structured lowering could not scope (GateMetric would be empty). The runtime feeds
+	// the rule only events carrying AT LEAST ONE of these measurements, so off-metric telemetry
+	// never evaluates the leaf to the FALSE that resolves the threshold alarm / cancels the
+	// duration hold (review D4). It is set from predicate.ScopableMetrics, which returns a set
+	// ONLY when the leaf is PROVABLY FALSE without those metrics — so skipping a carrying-none
+	// event drops no raise. It is empty (feed every event) when the leaf references no measurement,
+	// references `m` opaquely (not statically knowable), or can be true without a measurement (via
+	// attr/device/a disjunction) — the raw-CEL-author-owns-totality fallback.
+	//
 	// It is set ONLY for threshold and duration: those are the kinds where a single non-matching
 	// event immediately flips a per-series latch, so an off-metric false is acutely wrong. The
-	// windowed/counting kinds observe their falling edge by aging, not by an immediate non-match.
+	// windowed/counting kinds (repeating/aggregate/correlation) are left feed-everything: their
+	// falling edge is window-granular, driven by off-metric traffic advancing eviction rather than
+	// by an immediate non-match — a milder residual accepted here, steered by the console (slice 7).
 	FeedMetrics []string
 
 	// AnchorType is the anchor a correlation rule keys its series on; the runtime resolves
@@ -194,13 +199,14 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 	cr.Predicate = pred
 
 	// Metric-scope a RAW-CEL threshold/duration leaf the structured lowering left unscoped
-	// (GateMetric empty). Deriving the referenced metrics from the compiled leaf lets the runtime
-	// feed the rule only events carrying one of them, so off-metric telemetry no longer evaluates
-	// the leaf to a false that resolves/cancels it (review D4). A structured leaf already carries
-	// GateMetric; every other kind (repeating/aggregate/correlation/absence) observes its falling
-	// edge by aging, not by an immediate non-match, so it is deliberately left feed-everything.
+	// (GateMetric empty). ScopableMetrics returns the metrics the runtime may safely gate the feed
+	// on — the leaf's referenced measurements, but ONLY when the leaf is provably false without
+	// them, so an off-metric event that would otherwise evaluate the leaf to the false that
+	// resolves/cancels it (review D4) is skipped, and a leaf that could raise via attr/device/a
+	// disjunction is left feed-everything (no dropped raise). A structured leaf already carries
+	// GateMetric; every other kind observes its falling edge by aging, not an immediate non-match.
 	if (cr.Type == TypeThreshold || cr.Type == TypeDuration) && cr.GateMetric == "" {
-		if metrics, complete := pred.MetricRefs(); complete && len(metrics) > 0 {
+		if metrics, ok := pred.ScopableMetrics(); ok {
 			cr.FeedMetrics = metrics
 		}
 	}

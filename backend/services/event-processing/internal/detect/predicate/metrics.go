@@ -6,6 +6,7 @@ package predicate
 import (
 	"sort"
 
+	"github.com/google/cel-go/cel"
 	celast "github.com/google/cel-go/common/ast"
 	"github.com/google/cel-go/common/operators"
 )
@@ -17,16 +18,65 @@ import (
 // operation like `size(m)`, or a comprehension `m.exists(k, …)`), because then the metrics the
 // rule actually depends on cannot be determined statically.
 //
-// The runtime uses this to metric-scope the feed for a raw-CEL leaf the structured lowering could
-// not scope (review D4): a raw-CEL threshold/duration rule is fed only events carrying a metric it
-// references, so unrelated telemetry (a battery reading between temperature readings) never
-// evaluates its leaf to the FALSE that resolves the alarm / cancels the hold. When Complete is
-// false the caller must fall back to feeding every event — the "raw-CEL author owns totality" trap
-// documented on rules.CompiledRule; scoping an incompletely-understood leaf could drop a real raise.
-//
-// The set is returned sorted and de-duplicated so a compiled rule's feed scope is deterministic.
+// This answers only "which measurements does the leaf reference?" — NOT "is the leaf false when
+// they are absent?". Those differ: `("temp" in m && m["temp"] > 80) || attr["x"] > 0` references
+// only `temp` yet is true on a temp-less event when `attr["x"]` is set. ScopableMetrics is the
+// safe basis for the feed scope; MetricRefs is exposed for diagnostics and tests.
 func (p *Predicate) MetricRefs() (metrics []string, complete bool) {
-	return metricRefs(p.ast)
+	return p.metrics, p.metricsComplete
+}
+
+// ScopableMetrics returns the measurement keys the runtime may safely scope this leaf's feed on,
+// and whether scoping is sound at all (review D4). It is sound ONLY when the reference set is
+// complete AND non-empty AND the leaf is provably FALSE when none of those measurements are
+// present — so an event carrying none of them cannot raise, and skipping it drops nothing. When
+// ok is false the caller must feed every event (the "raw-CEL author owns totality" fallback).
+//
+// The soundness proof is the falseWhenMetricsAbsent partial evaluation done at compile: with a
+// complete reference set the leaf reads `m` only through those keys, so an event lacking them is
+// observationally `m={}`; if the leaf is definitely false under `m={}` for EVERY value of the
+// other variables, no such event can raise. A leaf that can be true without its metrics (via
+// `attr`, `device`, a negated presence, or a disjunction) fails this and is not scoped.
+func (p *Predicate) ScopableMetrics() (metrics []string, ok bool) {
+	if p.metricsComplete && len(p.metrics) > 0 && p.scopeSafe {
+		return p.metrics, true
+	}
+	return nil, false
+}
+
+// falseWhenMetricsAbsent reports whether the leaf is DEFINITELY false when the measurement map is
+// empty, evaluated over ALL values of the other variables (device, anchors, occurred, attr held
+// unknown via partial evaluation). Only a definite `false` is safe to scope on: `true` means the
+// leaf can raise without any measurement; `unknown` means it might; an evaluation ERROR (an
+// unguarded `m["k"]` on empty `m`) is also not scoped — but such a leaf already error-SKIPS every
+// off-metric event at runtime (PlanResult.EvalErrors), so feeding it everything is already safe and
+// no raise is dropped. Restricting to definite-false keeps this sound without relying on cel-go's
+// error-vs-unknown precedence in a mixed disjunction.
+func falseWhenMetricsAbsent(env *cel.Env, ast *cel.Ast) (bool, error) {
+	prg, err := env.Program(ast, cel.EvalOptions(cel.OptPartialEval))
+	if err != nil {
+		return false, err
+	}
+	act, err := cel.PartialVars(
+		map[string]any{VarM: map[string]float64{}},
+		cel.AttributePattern(VarDevice),
+		cel.AttributePattern(VarAnchors),
+		cel.AttributePattern(VarOccurred),
+		cel.AttributePattern(VarAttr),
+	)
+	if err != nil {
+		return false, err
+	}
+	out, _, err := prg.Eval(act)
+	if err != nil {
+		// The leaf errors with m empty for every assignment of the unknown vars; the runtime
+		// treats an eval error as a skip, so not scoping (feed-everything + error-skip) is safe.
+		return false, nil
+	}
+	// Definite false is the only safe-to-scope outcome. A CEL unknown result yields a non-bool
+	// Value(), so the comma-ok check rejects true/unknown/non-bool alike.
+	b, ok := out.Value().(bool)
+	return ok && !b, nil
 }
 
 // metricRefs walks a type-checked predicate AST for constant-keyed reads of the `m` variable.

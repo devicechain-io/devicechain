@@ -70,3 +70,50 @@ func TestMetricRefsMixedOpaque(t *testing.T) {
 		t.Fatalf("mixed constant + opaque use must report complete=false")
 	}
 }
+
+// TestScopableMetricsSound is the review-D4 soundness guard: a leaf's feed may be metric-scoped
+// ONLY when the leaf is provably false without those metrics, so scoping never drops a raise. The
+// guarded-conjunction forms (the intended D4 target) are scopable; every shape that can be TRUE on
+// a measurement-less event — via attr, device, a negated presence, or a disjunction — is NOT.
+func TestScopableMetricsSound(t *testing.T) {
+	scopable := []struct {
+		src  string
+		want []string
+	}{
+		{`"temp" in m && m["temp"] > 80.0`, []string{"temp"}},
+		{`has(m.temp) && m.temp > 80.0`, []string{"temp"}},
+		{`"temp" in m && m["temp"] > attr["lim"]`, []string{"temp"}}, // dynamic bound, still false w/o temp
+		{`("t" in m && m["t"] > 80.0) || ("h" in m && m["h"] < 10.0)`, []string{"h", "t"}},
+		{`("temp" in m && m["temp"] > 80.0) && attr["x"] > 0.0`, []string{"temp"}}, // AND: false absorbs
+	}
+	for _, tc := range scopable {
+		p := mustCompile(t, tc.src)
+		got, ok := p.ScopableMetrics()
+		if !ok {
+			t.Errorf("%q: ScopableMetrics ok=false, want scopable %v", tc.src, tc.want)
+			continue
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%q: scopable metrics=%v, want %v", tc.src, got, tc.want)
+		}
+	}
+
+	// Each of these references a metric yet can be TRUE on a metric-less event — scoping would drop
+	// a raise. They must NOT be scopable (the exact HIGH the D4 review reproduced).
+	notScopable := []string{
+		`("temp" in m && m["temp"] > 80.0) || attr["override"] > 0.0`, // true via attr on a metric-less event
+		`!("temp" in m)`, // "raise when telemetry lacks temp"
+		`device == "d1" ? true : m["temp"] > 80.0`,   // m only in the else branch
+		`m["temp"] > 80.0 || attr["override"] > 0.0`, // OR absorbs the missing-key error
+		`("temp" in m) == false`,                     // negation as equality
+		`m["temp"] > 80.0`,                           // unguarded: errors→skips, needs no scope
+		`size(m) > 3`,                                // opaque m use (incomplete refs)
+		`device == "d1"`,                             // references no measurement at all
+	}
+	for _, src := range notScopable {
+		p := mustCompile(t, src)
+		if metrics, ok := p.ScopableMetrics(); ok {
+			t.Errorf("%q: ScopableMetrics ok=true (metrics=%v) — MUST NOT scope (can raise without its metrics)", src, metrics)
+		}
+	}
+}

@@ -68,8 +68,10 @@ func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEve
 			// Metric-scoped feed. GateMetric (structured), ValueMetric (value kinds), and
 			// FeedMetrics (a raw-CEL threshold/duration leaf, review D4) are mutually exclusive per
 			// the compiler, so at most one gate is active; whichever is set must be present to feed.
-			// FeedMetrics is a SET — any one referenced metric present makes the event relevant (a
-			// raise reading metric k requires k present, so scoping on the set never drops a raise).
+			// FeedMetrics is a SET — feed when the event carries at least one member. Scoping is
+			// safe because the compiler sets FeedMetrics ONLY for a leaf it proved is false when
+			// none of those metrics are present (predicate.ScopableMetrics), so a skipped event
+			// could not have raised — no dropped alarm.
 			if gate := cr.GateMetric; gate != "" {
 				if _, ok := in.M[gate]; !ok {
 					continue
@@ -122,9 +124,10 @@ func (res *PlanResult) fanCorrelation(seq uint64, cr *rules.CompiledRule, ev *dm
 }
 
 // anyMetricPresent reports whether the sample carries at least one of the given metric keys.
-// It backs the raw-CEL threshold/duration feed scope (CompiledRule.FeedMetrics): a sample
-// carrying none of the leaf's referenced metrics cannot make the leaf true (a raise reads one
-// of them) and would only evaluate it to a false that spuriously resolves — so it is skipped.
+// It backs the raw-CEL threshold/duration feed scope (CompiledRule.FeedMetrics): the compiler
+// only populates that set for a leaf it proved is false when none of the metrics are present, so
+// a sample carrying none of them cannot raise — it would only evaluate the leaf to the false that
+// spuriously resolves the alarm / cancels the hold, and is skipped.
 func anyMetricPresent(m map[string]float64, metrics []string) bool {
 	for _, k := range metrics {
 		if _, ok := m[k]; ok {
