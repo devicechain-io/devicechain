@@ -62,6 +62,10 @@ type Manager struct {
 	accessTTL time.Duration
 
 	refreshKV nats.KeyValue
+	// codesKV backs the OAuth 2.1 authorization-code store (ADR-047); nil when OAuth
+	// is disabled (no issuer configured), in which case the token endpoint is not
+	// registered and the code methods are never reached.
+	codesKV nats.KeyValue
 	// dummyHash equalizes login timing on the user-not-found path so response
 	// time does not reveal whether a username exists.
 	dummyHash  []byte
@@ -112,7 +116,9 @@ func resolveIssuerName(issuerUrl, instanceId string) string {
 // wires the refresh-token store, and seeds the bootstrap admin. Must run after
 // the RdbManager is initialized (tables exist) and the refresh KV bucket is
 // created.
-func (m *Manager) Initialize(ctx context.Context, refreshKV nats.KeyValue) error {
+// codesKV is the OAuth authorization-code store (ADR-047); nil disables the OAuth
+// token endpoint's code path (OAuth off).
+func (m *Manager) Initialize(ctx context.Context, refreshKV, codesKV nats.KeyValue) error {
 	m.issuerName = resolveIssuerName(m.issuerUrl, m.ms.InstanceId)
 	set, err := m.loadSigningKeys(ctx)
 	if err != nil {
@@ -120,6 +126,7 @@ func (m *Manager) Initialize(ctx context.Context, refreshKV nats.KeyValue) error
 	}
 	m.applyKeys(set)
 	m.refreshKV = refreshKV
+	m.codesKV = codesKV
 
 	dummy, err := bcrypt.GenerateFromPassword([]byte("dc-login-timing-equalizer"), bcrypt.DefaultCost)
 	if err != nil {
