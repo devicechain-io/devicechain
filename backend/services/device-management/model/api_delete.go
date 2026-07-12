@@ -223,9 +223,6 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&CommandDefinition{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&AlarmDefinition{}).Error; err != nil {
-			return err
-		}
 		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&DetectionRule{}).Error; err != nil {
 			return err
 		}

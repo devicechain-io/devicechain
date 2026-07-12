@@ -38,10 +38,6 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 	if err != nil {
 		return nil, err
 	}
-	alarms, err := api.AlarmDefinitionsByDeviceProfile(ctx, profileId)
-	if err != nil {
-		return nil, err
-	}
 	rules, err := api.DetectionRulesByDeviceProfile(ctx, profileId)
 	if err != nil {
 		return nil, err
@@ -52,13 +48,10 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 	for _, c := range commands {
 		c.DeviceProfile = nil
 	}
-	for _, a := range alarms {
-		a.DeviceProfile = nil
-	}
 	for _, dr := range rules {
 		dr.DeviceProfile = nil
 	}
-	raw, err := json.Marshal(ProfileSnapshot{Metrics: metrics, Commands: commands, Alarms: alarms, Rules: rules})
+	raw, err := json.Marshal(ProfileSnapshot{Metrics: metrics, Commands: commands, Rules: rules})
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +64,6 @@ func parseProfileSnapshot(raw datatypes.JSON) (*ProfileSnapshot, error) {
 	snap := &ProfileSnapshot{
 		Metrics:  []*MetricDefinition{},
 		Commands: []*CommandDefinition{},
-		Alarms:   []*AlarmDefinition{},
 		Rules:    []*DetectionRule{},
 	}
 	if len(raw) == 0 {
@@ -85,9 +77,6 @@ func parseProfileSnapshot(raw datatypes.JSON) (*ProfileSnapshot, error) {
 	}
 	if snap.Commands == nil {
 		snap.Commands = []*CommandDefinition{}
-	}
-	if snap.Alarms == nil {
-		snap.Alarms = []*AlarmDefinition{}
 	}
 	if snap.Rules == nil {
 		snap.Rules = []*DetectionRule{}

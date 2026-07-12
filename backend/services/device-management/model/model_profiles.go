@@ -52,15 +52,13 @@ type DeviceProfile struct {
 
 	// The typed capability definitions the profile owns (ADR-045 slice b): the
 	// inbound metric vocabulary (ADR-016), the outbound command vocabulary
-	// (ADR-043), and the alarm rules (ADR-041). A device resolves these through
-	// its type's profile.
+	// (ADR-043). A device resolves these through its type's profile.
 	MetricDefinitions  []MetricDefinition
 	CommandDefinitions []CommandDefinition
-	AlarmDefinitions   []AlarmDefinition
 	// DetectionRules are the profile's DETECT rules (ADR-051 / ADR-053 §5): opaque
 	// authored rule documents versioned with the profile and propagated to
-	// event-processing at publish (slice 4b). DetectionRule is the one alarm-authoring
-	// path (ADR-057); AlarmDefinitions is dead legacy, retained only until its teardown.
+	// event-processing at publish (slice 4b). They are the one alarm-authoring path
+	// (ADR-057) — the legacy AlarmDefinition model was torn down after the 6d cutover.
 	DetectionRules []DetectionRule
 }
 
