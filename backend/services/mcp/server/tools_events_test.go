@@ -66,11 +66,12 @@ func TestAggregateMeasurements(t *testing.T) {
 }
 
 func TestListAlarms_FilterMapping(t *testing.T) {
-	tools, captured, done := toolsCapturing(t, `{"data":{"alarms":{"results":[{"token":"a1","alarmKey":"overheat","state":"RAISED","severity":"CRITICAL","acknowledged":false}],"pagination":{"totalRecords":1}}}}`)
+	// ACTIVE is the real alarm state (not RAISED — that's an event type).
+	tools, captured, done := toolsCapturing(t, `{"data":{"alarms":{"results":[{"token":"a1","alarmKey":"overheat","state":"ACTIVE","severity":"CRITICAL","acknowledged":false}],"pagination":{"totalRecords":1}}}}`)
 	defer done()
 	ack := true
 	_, out, err := tools.ListAlarms(context.Background(), authedReq("tok"),
-		ListAlarmsInput{Originator: "d1", State: "RAISED", Acknowledged: &ack})
+		ListAlarmsInput{Originator: "d1", State: "ACTIVE", Acknowledged: &ack})
 	if err != nil {
 		t.Fatalf("ListAlarms: %v", err)
 	}
@@ -79,8 +80,29 @@ func TestListAlarms_FilterMapping(t *testing.T) {
 	}
 	crit := (*captured)["variables"].(map[string]any)["criteria"].(map[string]any)
 	// An originator device token expands to originatorType=device + originator.
-	if crit["originatorType"] != "device" || crit["originator"] != "d1" || crit["state"] != "RAISED" || crit["acknowledged"] != true {
+	if crit["originatorType"] != "device" || crit["originator"] != "d1" || crit["state"] != "ACTIVE" || crit["acknowledged"] != true {
 		t.Errorf("alarm criteria not mapped: %v", crit)
+	}
+}
+
+// An unset optional filter must be ABSENT from the criteria, not sent as "" — a
+// blank filter would match nothing and silently empty every result. This pins the
+// putIfSet behavior so a regression to always-send fails a test.
+func TestListAlarms_NoFiltersOmitsOptionalCriteria(t *testing.T) {
+	tools, captured, done := toolsCapturing(t, `{"data":{"alarms":{"results":[],"pagination":{"totalRecords":0}}}}`)
+	defer done()
+	if _, _, err := tools.ListAlarms(context.Background(), authedReq("tok"), ListAlarmsInput{}); err != nil {
+		t.Fatalf("ListAlarms: %v", err)
+	}
+	crit := (*captured)["variables"].(map[string]any)["criteria"].(map[string]any)
+	for _, k := range []string{"state", "severity", "alarmKey", "originator", "originatorType", "acknowledged"} {
+		if _, present := crit[k]; present {
+			t.Errorf("unset filter %q must be absent from criteria, got %v", k, crit[k])
+		}
+	}
+	// Only the required pagination fields are sent.
+	if _, ok := crit["pageNumber"]; !ok {
+		t.Errorf("pageNumber must always be sent")
 	}
 }
 

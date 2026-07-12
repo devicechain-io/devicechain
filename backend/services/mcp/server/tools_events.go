@@ -81,9 +81,9 @@ func (t *Tools) QueryMeasurements(ctx context.Context, req *mcp.CallToolRequest,
 type AggregateMeasurementsInput struct {
 	DeviceToken     string `json:"deviceToken" jsonschema:"the device whose measurements to aggregate"`
 	Name            string `json:"name,omitempty" jsonschema:"optional metric name to aggregate (omit for all)"`
-	StartTime       string `json:"startTime,omitempty" jsonschema:"inclusive RFC3339 start time (optional)"`
-	EndTime         string `json:"endTime,omitempty" jsonschema:"exclusive RFC3339 end time (optional)"`
-	IntervalSeconds int    `json:"intervalSeconds" jsonschema:"time-bucket width in seconds (required, e.g. 3600 for hourly)"`
+	StartTime       string `json:"startTime,omitempty" jsonschema:"inclusive RFC3339 start time — ALWAYS provide a window: an unbounded aggregate returns every bucket over all history"`
+	EndTime         string `json:"endTime,omitempty" jsonschema:"exclusive RFC3339 end time — provide together with startTime to bound the result"`
+	IntervalSeconds int    `json:"intervalSeconds" jsonschema:"time-bucket width in seconds (required, e.g. 3600 for hourly). Buckets returned = window / interval, so keep the window and interval proportionate"`
 }
 
 type MeasurementBucket struct {
@@ -139,25 +139,27 @@ func (t *Tools) AggregateMeasurements(ctx context.Context, req *mcp.CallToolRequ
 // ---- alarms ----
 
 type AlarmSummary struct {
-	Token           string   `json:"token"`
-	OriginatorToken string   `json:"originatorToken,omitempty"`
-	AlarmKey        string   `json:"alarmKey"`
-	MetricKey       string   `json:"metricKey,omitempty"`
-	State           string   `json:"state"`
-	Severity        string   `json:"severity"`
-	Acknowledged    bool     `json:"acknowledged"`
-	RaisedTime      string   `json:"raisedTime,omitempty"`
-	ClearedTime     string   `json:"clearedTime,omitempty"`
-	LastValue       *float64 `json:"lastValue,omitempty"`
-	Message         string   `json:"message,omitempty"`
+	Token            string   `json:"token"`
+	OriginatorToken  string   `json:"originatorToken,omitempty"`
+	AlarmKey         string   `json:"alarmKey"`
+	MetricKey        string   `json:"metricKey,omitempty"`
+	State            string   `json:"state"`
+	Severity         string   `json:"severity"`
+	Acknowledged     bool     `json:"acknowledged"`
+	RaisedTime       string   `json:"raisedTime,omitempty"`
+	ClearedTime      string   `json:"clearedTime,omitempty"`
+	AcknowledgedTime string   `json:"acknowledgedTime,omitempty"`
+	AcknowledgedBy   string   `json:"acknowledgedBy,omitempty"`
+	LastValue        *float64 `json:"lastValue,omitempty"`
+	Message          string   `json:"message,omitempty"`
 }
 
-const alarmFields = `token originatorToken alarmKey metricKey state severity acknowledged raisedTime clearedTime lastValue message`
+const alarmFields = `token originatorToken alarmKey metricKey state severity acknowledged raisedTime clearedTime acknowledgedTime acknowledgedBy lastValue message`
 
 type ListAlarmsInput struct {
 	Originator   string `json:"originator,omitempty" jsonschema:"optional device token to filter alarms to one device"`
-	State        string `json:"state,omitempty" jsonschema:"optional alarm state filter (e.g. RAISED, CLEARED)"`
-	Severity     string `json:"severity,omitempty" jsonschema:"optional severity filter"`
+	State        string `json:"state,omitempty" jsonschema:"optional alarm state filter: one of ACTIVE, CLEARED (an active alarm is 'ACTIVE', not 'RAISED')"`
+	Severity     string `json:"severity,omitempty" jsonschema:"optional severity filter: one of CRITICAL, MAJOR, MINOR, WARNING, INDETERMINATE"`
 	AlarmKey     string `json:"alarmKey,omitempty" jsonschema:"optional alarm-key filter"`
 	Acknowledged *bool  `json:"acknowledged,omitempty" jsonschema:"optional acknowledged filter"`
 	PageNumber   int    `json:"pageNumber,omitempty" jsonschema:"1-based page number (default 1)"`
@@ -245,7 +247,7 @@ func (t *Tools) GetAlarm(ctx context.Context, req *mcp.CallToolRequest, in GetAl
 
 type ListCommandsInput struct {
 	DeviceToken string `json:"deviceToken,omitempty" jsonschema:"optional device token to filter commands to one device"`
-	Status      string `json:"status,omitempty" jsonschema:"optional command status filter"`
+	Status      string `json:"status,omitempty" jsonschema:"optional command status filter: one of QUEUED, SENT, DELIVERED, SUCCESSFUL, TIMEOUT, EXPIRED, FAILED"`
 	PageNumber  int    `json:"pageNumber,omitempty" jsonschema:"1-based page number (default 1)"`
 	PageSize    int    `json:"pageSize,omitempty" jsonschema:"commands per page (default 25, max 100)"`
 }

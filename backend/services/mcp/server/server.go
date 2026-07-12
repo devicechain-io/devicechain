@@ -87,7 +87,7 @@ func registerTools(s *mcp.Server, t *Tools) {
 	}, t.QueryMeasurements)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "aggregate_measurements",
-		Description: "Return time-bucketed avg/min/max/sum/count of a device's measurements over a window (intervalSeconds sets the bucket width, e.g. 3600 for hourly). The token-efficient way to read trends — prefer this over query_measurements for anything but a small exact-value lookup.",
+		Description: "Return time-bucketed avg/min/max/sum/count of a device's measurements over a window (intervalSeconds sets the bucket width, e.g. 3600 for hourly). The token-efficient way to read trends — prefer this over query_measurements for anything but a small exact-value lookup. Always bound the query with startTime/endTime: without a window it returns a bucket for the entire history.",
 	}, t.AggregateMeasurements)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_alarms",
