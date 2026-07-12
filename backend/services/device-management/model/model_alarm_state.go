@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -70,6 +71,13 @@ type Alarm struct {
 	AcknowledgedBy   sql.NullString  // identity that acknowledged (opaque operator reference)
 	LastValue        sql.NullFloat64 // the measurement value at the most recent evaluation
 	Message          sql.NullString  // human-readable summary (rule-provided or generated)
+
+	// Contributors is the ADR-057 contributor set: the JSON-encoded {ruleID → AlarmContributor} map
+	// the DETECT+REACT integrator reference-counts to derive State + Severity (raise adds/updates a
+	// contributor, resolve tombstones it, the alarm clears when no contributor is active). NULL/empty
+	// for a legacy measurement-evaluator-raised alarm (the evaluator is retired at slice 6); the
+	// integrator populates it. See alarm_contributor.go for the reduction.
+	Contributors datatypes.JSON `gorm:"type:jsonb"`
 }
 
 // Search criteria for locating alarms. All facets are optional and AND together;

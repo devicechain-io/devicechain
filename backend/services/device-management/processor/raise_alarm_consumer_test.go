@@ -19,19 +19,19 @@ import (
 // behavior — so the test needs no testify expectation plumbing for the unused methods.
 type fakeAlarmApi struct {
 	*dmtest.MockApi
-	devices    []*model.Device
-	devErr     error
-	raiseErr   error
-	raiseCalls int
-	lastRaise  raiseArgs
+	devices   []*model.Device
+	devErr    error
+	edgeErr   error
+	edgeCalls int
+	lastEdge  edgeArgs
 }
 
-type raiseArgs struct {
-	deviceId            uint
-	alarmKey, metricKey string
-	severity            string
-	value               *float64
-	occurredTime        time.Time
+type edgeArgs struct {
+	deviceId                    uint
+	alarmKey, metricKey, ruleID string
+	edge, severity              string
+	value                       *float64
+	occurredTime                time.Time
 }
 
 func fptr(v float64) *float64 { return &v }
@@ -40,10 +40,16 @@ func (f *fakeAlarmApi) DevicesByToken(_ context.Context, _ []string) ([]*model.D
 	return f.devices, f.devErr
 }
 
-func (f *fakeAlarmApi) RaiseAlarm(_ context.Context, deviceId uint, alarmKey, metricKey, severity string, value *float64, occurredTime time.Time) error {
-	f.raiseCalls++
-	f.lastRaise = raiseArgs{deviceId, alarmKey, metricKey, severity, value, occurredTime}
-	return f.raiseErr
+// RaiseAlarm is unused by the consumer post-6d-pre-2c (it routes to ApplyAlarmContributorEdge), kept
+// only to satisfy the interface.
+func (f *fakeAlarmApi) RaiseAlarm(context.Context, uint, string, string, string, *float64, time.Time) error {
+	return nil
+}
+
+func (f *fakeAlarmApi) ApplyAlarmContributorEdge(_ context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time) error {
+	f.edgeCalls++
+	f.lastEdge = edgeArgs{deviceId, alarmKey, metricKey, ruleID, edge, severity, value, occurredTime}
+	return f.edgeErr
 }
 
 // fakeAck records ack/nak counts.
@@ -71,13 +77,14 @@ func raiseMsg(t *testing.T, tenant string, req model.RaiseAlarmRequest, numDeliv
 
 func validReq() model.RaiseAlarmRequest {
 	return model.RaiseAlarmRequest{
-		DeviceToken: "device-1", AlarmKey: "acme/p@1/r1", MetricKey: "temperature",
-		Severity: "critical", Value: fptr(91), OccurredTime: time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC),
+		DeviceToken: "device-1", AlarmKey: "acme/p@1/r1", RuleID: "acme/p@1/r1", MetricKey: "temperature",
+		Edge: model.AlarmEdgeRaised, Severity: "critical", Value: fptr(91),
+		OccurredTime: time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC),
 	}
 }
 
-// TestRaiseAlarmConsumerApplies proves a valid request resolves the device, maps severity to the
-// UPPERCASE tier, calls RaiseAlarm, and acks.
+// TestRaiseAlarmConsumerApplies proves a valid raised request resolves the device, maps severity to
+// the UPPERCASE tier, applies the RAISED contributor edge with the rule id, and acks.
 func TestRaiseAlarmConsumerApplies(t *testing.T) {
 	api := &fakeAlarmApi{devices: []*model.Device{{}}}
 	api.devices[0].ID = 42
@@ -85,33 +92,54 @@ func TestRaiseAlarmConsumerApplies(t *testing.T) {
 	ack := &fakeAck{}
 	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), 0, ack))
 
-	if api.raiseCalls != 1 {
-		t.Fatalf("expected one RaiseAlarm call, got %d", api.raiseCalls)
+	if api.edgeCalls != 1 {
+		t.Fatalf("expected one ApplyAlarmContributorEdge call, got %d", api.edgeCalls)
 	}
-	if api.lastRaise.deviceId != 42 || api.lastRaise.severity != "CRITICAL" || api.lastRaise.alarmKey != "acme/p@1/r1" {
-		t.Fatalf("RaiseAlarm args wrong: %+v", api.lastRaise)
+	e := api.lastEdge
+	if e.deviceId != 42 || e.severity != "CRITICAL" || e.alarmKey != "acme/p@1/r1" || e.ruleID != "acme/p@1/r1" || e.edge != model.AlarmEdgeRaised {
+		t.Fatalf("edge args wrong: %+v", e)
 	}
-	if api.lastRaise.value == nil || *api.lastRaise.value != 91 {
-		t.Fatalf("the triggering value must flow through to RaiseAlarm; got %v", api.lastRaise.value)
+	if e.value == nil || *e.value != 91 {
+		t.Fatalf("the triggering value must flow through; got %v", e.value)
 	}
 	if ack.acks != 1 || ack.naks != 0 {
-		t.Fatalf("a successful raise must ack once: acks=%d naks=%d", ack.acks, ack.naks)
+		t.Fatalf("a successful apply must ack once: acks=%d naks=%d", ack.acks, ack.naks)
 	}
 
-	// A value-less request (a silence-driven fire) carries a nil value through unchanged, so
-	// device-management leaves the alarm's last value NULL rather than fabricating a 0.
+	// A value-less request (a silence-driven fire) carries a nil value through unchanged.
 	apiNil := &fakeAlarmApi{devices: []*model.Device{{}}}
 	rcNil := newTestConsumer(apiNil)
 	req := validReq()
 	req.Value = nil
 	rcNil.handle(context.Background(), raiseMsg(t, "acme", req, 0, &fakeAck{}))
-	if apiNil.raiseCalls != 1 || apiNil.lastRaise.value != nil {
-		t.Fatalf("a value-less request must raise with a nil value; got calls=%d value=%v", apiNil.raiseCalls, apiNil.lastRaise.value)
+	if apiNil.edgeCalls != 1 || apiNil.lastEdge.value != nil {
+		t.Fatalf("a value-less request must apply with a nil value; got calls=%d value=%v", apiNil.edgeCalls, apiNil.lastEdge.value)
 	}
 }
 
-// TestRaiseAlarmConsumerPoison sweeps the drop-and-ack cases: unparseable, empty device/key,
-// unknown severity, and a device that no longer exists — none call RaiseAlarm, all ack.
+// TestRaiseAlarmConsumerRoutesResolvedEdge proves a RESOLVED edge now reaches the integrator carrying
+// edge=resolved (6d-pre-2c) — where the contributor is removed — rather than being dropped. It
+// marshals the real wire bytes and compares the shared AlarmEdgeResolved constant, pinning the
+// producer/consumer edge spelling against fail-open drift. A resolve needs no severity.
+func TestRaiseAlarmConsumerRoutesResolvedEdge(t *testing.T) {
+	api := &fakeAlarmApi{devices: []*model.Device{{}}}
+	rc := newTestConsumer(api)
+	ack := &fakeAck{}
+	req := validReq()
+	req.Edge = model.AlarmEdgeResolved
+	req.Severity = "" // a resolve does not require a tier
+	req.Value = nil
+	rc.handle(context.Background(), raiseMsg(t, "acme", req, 0, ack))
+	if api.edgeCalls != 1 || api.lastEdge.edge != model.AlarmEdgeResolved {
+		t.Fatalf("a resolved edge must reach the integrator with edge=resolved; got calls=%d edge=%q", api.edgeCalls, api.lastEdge.edge)
+	}
+	if ack.acks != 1 || ack.naks != 0 {
+		t.Fatalf("a successful resolve must ack: acks=%d naks=%d", ack.acks, ack.naks)
+	}
+}
+
+// TestRaiseAlarmConsumerPoison sweeps the drop-and-ack cases: empty device/key/rule, unknown RAISE
+// severity, an unknown edge token, and a device that no longer exists — none apply an edge, all ack.
 func TestRaiseAlarmConsumerPoison(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -120,8 +148,10 @@ func TestRaiseAlarmConsumerPoison(t *testing.T) {
 	}{
 		{"empty device", func() model.RaiseAlarmRequest { r := validReq(); r.DeviceToken = ""; return r }(), []*model.Device{{}}},
 		{"empty alarm key", func() model.RaiseAlarmRequest { r := validReq(); r.AlarmKey = ""; return r }(), []*model.Device{{}}},
-		{"unknown severity", func() model.RaiseAlarmRequest { r := validReq(); r.Severity = "catastrophic"; return r }(), []*model.Device{{}}},
+		{"empty rule id", func() model.RaiseAlarmRequest { r := validReq(); r.RuleID = ""; return r }(), []*model.Device{{}}},
+		{"unknown raise severity", func() model.RaiseAlarmRequest { r := validReq(); r.Severity = "catastrophic"; return r }(), []*model.Device{{}}},
 		{"zero time", func() model.RaiseAlarmRequest { r := validReq(); r.OccurredTime = time.Time{}; return r }(), []*model.Device{{}}},
+		{"unknown edge", func() model.RaiseAlarmRequest { r := validReq(); r.Edge = "sideways"; return r }(), []*model.Device{{}}},
 		{"device gone", validReq(), nil},
 	}
 	for _, tc := range cases {
@@ -130,8 +160,8 @@ func TestRaiseAlarmConsumerPoison(t *testing.T) {
 			rc := newTestConsumer(api)
 			ack := &fakeAck{}
 			rc.handle(context.Background(), raiseMsg(t, "acme", tc.req, 0, ack))
-			if api.raiseCalls != 0 {
-				t.Fatalf("poison request must not raise an alarm")
+			if api.edgeCalls != 0 {
+				t.Fatalf("poison request must not apply an edge")
 			}
 			if ack.acks != 1 || ack.naks != 0 {
 				t.Fatalf("poison must ack-drop: acks=%d naks=%d", ack.acks, ack.naks)
@@ -140,33 +170,16 @@ func TestRaiseAlarmConsumerPoison(t *testing.T) {
 	}
 }
 
-// TestRaiseAlarmConsumerDropsResolvedEdge proves the 6d-pre-2b staging guard: a request carrying the
-// RESOLVED edge is dropped WITHOUT reaching the raise path (the contributor-resolve integrator lands
-// in 6d-pre-2c), and acked. It marshals the real wire bytes and compares the shared AlarmEdgeResolved
-// constant — so it also pins the producer/consumer edge spelling against fail-open drift. A raised edge
-// (and the default empty edge) still raises.
-func TestRaiseAlarmConsumerDropsResolvedEdge(t *testing.T) {
+// TestRaiseAlarmConsumerLegacyEmptyEdgeRaises proves an empty edge (a legacy/pre-edge request) is
+// treated as a RAISE, never a resolve — so an unstamped request can't be mis-routed to a clear.
+func TestRaiseAlarmConsumerLegacyEmptyEdgeRaises(t *testing.T) {
 	api := &fakeAlarmApi{devices: []*model.Device{{}}}
 	rc := newTestConsumer(api)
-	ack := &fakeAck{}
 	req := validReq()
-	req.Edge = model.AlarmEdgeResolved
-	rc.handle(context.Background(), raiseMsg(t, "acme", req, 0, ack))
-	if api.raiseCalls != 0 {
-		t.Fatalf("a resolved edge must NOT reach the raise path (integrator is 6d-pre-2c); got %d calls", api.raiseCalls)
-	}
-	if ack.acks != 1 || ack.naks != 0 {
-		t.Fatalf("a dropped resolved edge must ack: acks=%d naks=%d", ack.acks, ack.naks)
-	}
-
-	// A raised edge (explicit) still raises through the existing path.
-	apiR := &fakeAlarmApi{devices: []*model.Device{{}}}
-	rcR := newTestConsumer(apiR)
-	reqR := validReq()
-	reqR.Edge = model.AlarmEdgeRaised
-	rcR.handle(context.Background(), raiseMsg(t, "acme", reqR, 0, &fakeAck{}))
-	if apiR.raiseCalls != 1 {
-		t.Fatalf("a raised edge must still raise; got %d calls", apiR.raiseCalls)
+	req.Edge = ""
+	rc.handle(context.Background(), raiseMsg(t, "acme", req, 0, &fakeAck{}))
+	if api.edgeCalls != 1 || api.lastEdge.edge != model.AlarmEdgeRaised {
+		t.Fatalf("an empty edge must apply as raised; got calls=%d edge=%q", api.edgeCalls, api.lastEdge.edge)
 	}
 }
 
@@ -176,15 +189,15 @@ func TestRaiseAlarmConsumerUndecodable(t *testing.T) {
 	rc := newTestConsumer(api)
 	ack := &fakeAck{}
 	rc.handle(context.Background(), messaging.NewConsumedMessage("dc.acme.raise-alarm", []byte("not json"), 0, nil, ack))
-	if api.raiseCalls != 0 || ack.acks != 1 {
-		t.Fatalf("undecodable must ack-drop without raising: raiseCalls=%d acks=%d", api.raiseCalls, ack.acks)
+	if api.edgeCalls != 0 || ack.acks != 1 {
+		t.Fatalf("undecodable must ack-drop without applying: edgeCalls=%d acks=%d", api.edgeCalls, ack.acks)
 	}
 }
 
 // TestRaiseAlarmConsumerTransientRetry proves a store failure below the cap naks (retry), and at the
 // cap acks (drops).
 func TestRaiseAlarmConsumerTransientRetry(t *testing.T) {
-	api := &fakeAlarmApi{devices: []*model.Device{{}}, raiseErr: errors.New("db down")}
+	api := &fakeAlarmApi{devices: []*model.Device{{}}, edgeErr: errors.New("db down")}
 	rc := newTestConsumer(api)
 
 	below := &fakeAck{}
@@ -207,7 +220,7 @@ func TestRaiseAlarmConsumerResolveErrorRetries(t *testing.T) {
 	rc := newTestConsumer(api)
 	ack := &fakeAck{}
 	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), 0, ack))
-	if ack.naks != 1 || ack.acks != 0 || api.raiseCalls != 0 {
-		t.Fatalf("a resolve error must nak (retry): acks=%d naks=%d raiseCalls=%d", ack.acks, ack.naks, api.raiseCalls)
+	if ack.naks != 1 || ack.acks != 0 || api.edgeCalls != 0 {
+		t.Fatalf("a resolve error must nak (retry): acks=%d naks=%d edgeCalls=%d", ack.acks, ack.naks, api.edgeCalls)
 	}
 }

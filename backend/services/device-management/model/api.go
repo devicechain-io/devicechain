@@ -237,6 +237,11 @@ type DeviceManagementApi interface {
 	// for an already-resolved device id through the same engine the measurement evaluator uses, so
 	// a rule-driven alarm shares the Alarm object, ack/clear, rollup, and notification flow.
 	RaiseAlarm(ctx context.Context, deviceId uint, alarmKey, metricKey, severity string, value *float64, occurredTime time.Time) error
+	// ApplyAlarmContributorEdge is the ADR-057 REACT alarm entry: it folds one rule's edge (raise or
+	// resolve, per edge) into the (device, alarmKey) alarm's contributor set and re-derives its state
+	// (max-tier severity over the active set; cleared when the set empties). It supersedes RaiseAlarm
+	// for the edge-integrated lifecycle; the raise-alarm consumer routes both edges here.
+	ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time) error
 
 	// Entity attributes (ADR-012).
 	SetEntityAttribute(ctx context.Context, request *EntityAttributeSetRequest) (*EntityAttribute, error)
