@@ -1774,40 +1774,79 @@ func (rp *ResolvedEventsProcessor) computeStateBudget() stateBudgetStats {
 	return stats
 }
 
-// dropStaleAbsences removes buffered ABSENCE detections whose device left the rule's scope after the
-// timer was armed — deleted (roster row gone), re-typed (roster profile differs), or version superseded
-// (active version moved past the rule's). It is the publish-time membership gate (whole-Slice-4
-// hardening, finding C/D) that stops a stale wheel timer emitting a false absence: a heartbeat-armed
-// timer a straggler re-armed after disarm, or one a replayed watermark advance fired for a device
-// removed while the process was down. It runs at the single publish choke point (every event-driven,
-// idle-advance, and replay fire flows through publishPending), so one check covers them all, evaluated
-// against the loop-owned roster + active views at publish time — so a membership change since arming is
-// honored. Other detection kinds and the scaffold path (no armer, no read-models wired) pass through
-// untouched. A dropped stale absence is a TERMINAL drop (like the tenant backstop), so it never wedges
-// the loop. Fail-safe: AbsenceLive treats an unknown device/rule as NOT live, so at worst a genuinely
-// live but not-yet-known device's absence is missed (a delayed roster fact) rather than a false one
-// published.
-func (rp *ResolvedEventsProcessor) dropStaleAbsences() {
+// dropSupersededDetections is the publish-time version/membership gate for FRONTIER-triggered
+// detections — the kinds that fire off the shared event-time watermark (a timer or a window/pane close)
+// rather than only on an arriving event, so the fan-out's per-version event scoping does NOT silence a
+// superseded version's retained rule. It runs at the single publish choke point (every event-driven,
+// idle-advance, and replay fire flows through publishPending), evaluated against the loop-owned roster +
+// active views so a membership/version change since arming is honored. Two gates:
+//   - ABSENCE (always frontier-triggered, membership-gated): dropped whenever it is not AbsenceLive —
+//     the device left the rule's scope (deleted / re-typed / version superseded). Fail-safe toward a
+//     missed absence: AbsenceLive treats an unknown device/rule as NOT live.
+//   - DURATION / SESSION / AGGREGATE (frontier-triggered, ADR-057 D6): dropped only on a CONFIRMED
+//     version supersession (VersionSuperseded) — otherwise a superseded pane-close/timer would contribute
+//     a false edge to the alarm object under the stable contributor id (a stale unsatisfied pane-close
+//     resolving the ACTIVE version's raise at the same epoch-aligned timestamp = a fail-open false clear).
+//     Fails the OTHER way (keep on uncertainty) so a real alarm is never dropped for an incomplete projection.
+//
+// Event-driven kinds and the scaffold path (no armer / no read-models) pass through untouched. A drop is
+// TERMINAL (like the tenant backstop), so it never wedges the loop; a dropped Raised clears the engine's
+// two-edge latch so a later legitimate fire is not suppressed.
+func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 	if rp.armer == nil {
 		return
 	}
 	kept := rp.pendingDets[:0]
 	for _, d := range rp.pendingDets {
 		key := detectcore.SeriesKey{Rule: d.RuleID, Series: d.Series}
-		if d.Kind == detectcore.Absence && !rp.armer.AbsenceLive(key) {
-			// Terminal drop of a stale-roster absence. If it is a Raised, clear the engine's two-edge
-			// latch so a later legitimate fire (once the roster catches up and re-arms) is not
-			// suppressed by a latch set for a raise nothing downstream ever saw (ADR-057, review
-			// H2/F5). A Resolved drop needs no clear — resolve already cleared the latch on emit.
-			if d.Edge == detectcore.EdgeRaised {
-				rp.engine.ClearRaised(key)
-			}
-			rp.metrics.recordStaleAbsenceDropped()
+		var drop bool
+		switch {
+		case d.Kind == detectcore.Absence:
+			// Absence is always frontier-triggered AND membership-gated: drop on ANY non-liveness
+			// (deleted / re-typed / version superseded), fail-safe toward a missed absence.
+			drop = !rp.armer.AbsenceLive(key)
+		case frontierTriggeredKind(d.Kind):
+			// The OTHER frontier kinds (Duration/Session timers, Aggregate pane closes) ride the shared
+			// watermark, so a SUPERSEDED version's retained rule still fires them even though the fan-out
+			// starves it of events (ADR-057 D6). Left unchecked, a stale unsatisfied pane-close resolves
+			// the ACTIVE version's genuine raise at the same epoch-aligned timestamp under the stable
+			// contributor id — a fail-open false clear. Drop ONLY on a CONFIRMED version mismatch, so a
+			// real alarm is never dropped for a momentarily-incomplete projection.
+			drop = rp.armer.VersionSuperseded(key)
+		}
+		if !drop {
+			kept = append(kept, d)
 			continue
 		}
-		kept = append(kept, d)
+		// Terminal drop. If it is a Raised, clear the engine's two-edge latch so a later legitimate fire
+		// is not suppressed by a latch set for a raise nothing downstream ever saw (ADR-057 H2/F5); a
+		// Resolved drop needs no clear (resolve already cleared the latch on emit).
+		if d.Edge == detectcore.EdgeRaised {
+			rp.engine.ClearRaised(key)
+		}
+		if d.Kind == detectcore.Absence {
+			rp.metrics.recordStaleAbsenceDropped()
+		} else {
+			rp.metrics.recordSupersededFrontierDropped()
+		}
 	}
 	rp.pendingDets = kept
+}
+
+// frontierTriggeredKind reports whether a NON-absence detection kind fires off the shared event-time
+// watermark (a timer or a window/pane close) rather than only on an arriving event: Duration (hold
+// timer), Session (gap timer), and Aggregate (tumbling pane close). These are the kinds whose superseded
+// firings starvation does NOT silence, so they need the publish-time version gate (D6). The purely
+// event-driven kinds (Threshold/DeltaRate/Repeating/SlidingAgg/CountWindow/Correlation) are already
+// version-scoped by the fan-out and pass through as legitimate late contributions. Absence is handled
+// separately (stricter AbsenceLive membership gate).
+func frontierTriggeredKind(k detectcore.RuleKind) bool {
+	switch k {
+	case detectcore.Duration, detectcore.Session, detectcore.Aggregate:
+		return true
+	default:
+		return false
+	}
 }
 
 // publishPending durably delivers every buffered detection, in order, on its owning tenant's
@@ -1818,7 +1857,7 @@ func (rp *ResolvedEventsProcessor) dropStaleAbsences() {
 // (tenant-backstop rejects, orphan rules) return nil from Publish and advance past the
 // detection — they must never wedge the loop.
 func (rp *ResolvedEventsProcessor) publishPending(ctx context.Context) bool {
-	rp.dropStaleAbsences()
+	rp.dropSupersededDetections()
 	i := 0
 	for i < len(rp.pendingDets) {
 		if err := rp.publisher.Publish(ctx, rp.pendingDets[i]); err != nil {

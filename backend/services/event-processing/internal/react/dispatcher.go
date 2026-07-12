@@ -228,14 +228,17 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			return Done
 		}
 		// The VERSION-FREE stable rule identity keys BOTH the default alarm key AND the contributor: the
-		// composed rule id embeds the profile VERSION token, which rotates on EVERY publish, so keying
-		// on it would fork a fresh alarm-object CONTRIBUTOR per version — and because a superseded
-		// version's rules are RETAINED but STARVED (the fan-out routes a device's events only to its
-		// ACTIVE version), the old versioned contributor would never receive its Resolved and would
-		// strand the alarm ACTIVE forever (the D6 contributor-stranding blocker). A device runs one
-		// active version at a time, so two versions never contribute concurrently — the stable identity
-		// is the correct one-logical-rule-across-versions key: the new version's edges update the SAME
-		// contributor and clear it, exactly as StableRuleKey already does for the alarm key (ADR-041 dec 3).
+		// composed rule id embeds the profile VERSION token, which rotates on EVERY publish, so keying on
+		// it would fork a fresh alarm-object CONTRIBUTOR per version and strand the old one ACTIVE forever
+		// (the D6 blocker). The stable identity is the correct one-logical-rule-across-versions key — the
+		// new version's edges update the SAME contributor and clear it, exactly as StableRuleKey does for
+		// the alarm key (ADR-041 dec 3). This is safe because a device's EVENT-driven kinds only fire for
+		// its active version (the fan-out scopes by ProfileVersionToken), so old and new never race a
+		// genuine event edge. The one exception is FRONTIER-triggered firings (Duration/Session timers,
+		// Aggregate pane-closes) of a superseded-but-retained version, which ride the shared watermark
+		// even while starved of events — those are dropped upstream at publish by the version gate
+		// (processor.dropSupersededDetections / VersionSuperseded) so they can't contribute a false edge
+		// (e.g. a stale unsatisfied pane-close resolving the active version's raise at the same timestamp).
 		contributorID := stableContributorID(ev.RuleID)
 		req := AlarmRequest{
 			Tenant:       ev.Tenant,

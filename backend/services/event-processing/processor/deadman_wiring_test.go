@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -138,7 +139,7 @@ func TestDropStaleAbsences(t *testing.T) {
 		{RuleID: id, Series: "gone", Kind: detectcore.Absence},
 		{RuleID: id, Series: "gone", Kind: detectcore.Threshold}, // non-absence: always kept
 	}
-	rp.dropStaleAbsences()
+	rp.dropSupersededDetections()
 
 	var liveAbs, thr, goneAbs bool
 	for _, d := range rp.pendingDets {
@@ -156,6 +157,60 @@ func TestDropStaleAbsences(t *testing.T) {
 	}
 	if !liveAbs || !thr {
 		t.Fatalf("gate dropped a detection it should keep: %+v", rp.pendingDets)
+	}
+}
+
+// TestDropSupersededFrontierDetections is the ADR-057 D6 gate: a superseded profile version's retained
+// rule still fires its FRONTIER-triggered detections (Duration/Session/Aggregate timers + pane closes)
+// off the shared watermark even though the fan-out starves it of events, so those must be dropped at
+// publish lest they contribute a false edge to the alarm object under the stable contributor id. It
+// drops ONLY on a CONFIRMED version mismatch: the active version's detection, an unrostered device's,
+// and a superseded EVENT-driven kind all pass through.
+func TestDropSupersededFrontierDetections(t *testing.T) {
+	v1 := runtime.ComposeRuleID("acme", "p1@v1/rDur")
+	v2 := runtime.ComposeRuleID("acme", "p1@v2/rDur")
+	durScoped := func(pvt, id string) runtime.ScopedRule {
+		return runtime.ScopedRule{Tenant: "acme", ProfileVersionToken: pvt,
+			Compiled: &rules0.CompiledRule{ID: id, Type: rules0.TypeDuration,
+				Core: detectcore.Rule{ID: id, Kind: detectcore.Duration, Hold: 5 * time.Second}}}
+	}
+	reg := runtime.NewRuleRegistry([]runtime.ScopedRule{durScoped("p1@v1", v1), durScoped("p1@v2", v2)})
+	eng := detectcore.NewEngine(reg.Cores(), 0)
+	rp := newTestProcessor(newTestStore(t), nil, 1)
+	rp.engine = eng
+	rp.registry = reg
+	rp.armer = runtime.NewDeadmanArmer(reg, eng)
+	// Device dev is on p1 whose ACTIVE version is p1@v2 → p1@v1 is superseded.
+	rp.armer.LoadMembership(
+		[]runtime.RosterEntry{{Tenant: "acme", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: testBase}},
+		[]runtime.ActiveEntry{{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: testBase}},
+	)
+	rp.pendingDets = []detectcore.Detection{
+		{RuleID: v1, Series: "dev", Kind: detectcore.Duration},        // superseded frontier → DROP
+		{RuleID: v2, Series: "dev", Kind: detectcore.Duration},        // active version → keep
+		{RuleID: v1, Series: "dev", Kind: detectcore.Threshold},       // superseded but event-driven → keep
+		{RuleID: v1, Series: "unrostered", Kind: detectcore.Duration}, // unrostered → keep (fail toward not-dropping)
+	}
+	rp.dropSupersededDetections()
+
+	key := func(kind detectcore.RuleKind, rule, series string) string {
+		return fmt.Sprintf("%d|%s|%s", kind, rule, series)
+	}
+	kept := map[string]bool{}
+	for _, d := range rp.pendingDets {
+		kept[key(d.Kind, d.RuleID, d.Series)] = true
+	}
+	if kept[key(detectcore.Duration, v1, "dev")] {
+		t.Fatal("a superseded version's Duration (frontier) detection must be dropped")
+	}
+	for _, want := range []string{
+		key(detectcore.Duration, v2, "dev"),        // active version kept
+		key(detectcore.Threshold, v1, "dev"),       // event-driven superseded kept
+		key(detectcore.Duration, v1, "unrostered"), // uncertain membership kept
+	} {
+		if !kept[want] {
+			t.Fatalf("the gate dropped a detection it should keep: %s (kept=%v)", want, kept)
+		}
 	}
 }
 
