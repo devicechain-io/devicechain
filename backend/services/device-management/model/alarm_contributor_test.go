@@ -93,6 +93,30 @@ func TestContributorResolveWinsAtEqualTs(t *testing.T) {
 	}
 }
 
+// TestContributorEqualTsHigherTierWins proves that among RAISES for one rule at an equal event time,
+// the higher tier wins regardless of arrival order (a deterministic tiebreak so even a buggy producer
+// emitting two tiers at one instant yields order-independent state). A lower/equal tier is a no-op.
+func TestContributorEqualTsHigherTierWins(t *testing.T) {
+	// MAJOR then CRITICAL @10 → CRITICAL (higher wins).
+	a := contributorSet{}
+	a.apply("r", true, "MAJOR", ts(10))
+	if !a.apply("r", true, "CRITICAL", ts(10)) {
+		t.Fatal("a strictly-higher equal-ts tier must update")
+	}
+	if sev, _ := a.activeSeverity(); sev != "CRITICAL" {
+		t.Fatalf("MAJOR then CRITICAL@eq must be CRITICAL, got %q", sev)
+	}
+	// CRITICAL then MAJOR @10 → CRITICAL (lower is a no-op).
+	b := contributorSet{}
+	b.apply("r", true, "CRITICAL", ts(10))
+	if b.apply("r", true, "MAJOR", ts(10)) {
+		t.Fatal("a lower equal-ts tier must be a no-op")
+	}
+	if sev, _ := b.activeSeverity(); sev != "CRITICAL" {
+		t.Fatalf("CRITICAL then MAJOR@eq must stay CRITICAL, got %q", sev)
+	}
+}
+
 // TestContributorStaleEdgeIgnored proves an edge older than the stored decision time is ignored, so an
 // out-of-order redelivery/replay can neither un-raise a newer raise nor re-raise a newer resolve.
 func TestContributorStaleEdgeIgnored(t *testing.T) {

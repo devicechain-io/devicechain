@@ -5,6 +5,8 @@ package model
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -199,6 +201,68 @@ func TestIntegratorResolveBeforeRaiseStaysCleared(t *testing.T) {
 	}
 	if len(cap.events) != 0 {
 		t.Fatalf("a raise/resolve that never nets active must emit nothing; got %v", eventTypes(cap.events))
+	}
+}
+
+// TestIntegratorCASConflictRetries proves the optimistic-concurrency guard: an update whose read
+// snapshot's contributor_version is stale (a concurrent fold bumped the row in between) LOSES the CAS
+// and returns the retryable conflict error rather than clobbering the concurrent write.
+func TestIntegratorCASConflictRetries(t *testing.T) {
+	api, _ := newContributorTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	raiseEdge(t, api, ctx, "k", "r1", "MAJOR", 10) // creates the row at contributor_version 1
+	stale := loadAlarm(t, api, ctx, "k")           // snapshot at version 1
+	// A concurrent fold bumps the row to version 2 after our snapshot was read.
+	if err := api.RDB.DB(ctx).Model(&Alarm{}).Where("id = ?", stale.ID).Update("contributor_version", 2).Error; err != nil {
+		t.Fatalf("simulate concurrent fold: %v", err)
+	}
+	// Folding another edge onto the STALE snapshot must lose the CAS and signal retry.
+	cs := contributorSet{"r1": {Tier: "MAJOR", DecisionTs: tsec(10), Active: true}, "r2": {Tier: "CRITICAL", DecisionTs: tsec(15), Active: true}}
+	enc, _ := cs.encode()
+	err := api.updateAlarmFromContributors(ctx, stale, "CRITICAL", true, sql.NullFloat64{}, enc, tsec(15))
+	if !errors.Is(err, errAlarmContributorConflict) {
+		t.Fatalf("a stale-version write must return the retryable conflict error; got %v", err)
+	}
+}
+
+// TestIntegratorResolvePreservesLastValue proves a resolve (which carries no value) does NOT null the
+// row's last reading when other contributors remain active — a de-escalation must keep the real value.
+func TestIntegratorResolvePreservesLastValue(t *testing.T) {
+	api, _ := newContributorTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	// MAJOR (no value), then CRITICAL carrying value 91 → row last_value 91, severity CRITICAL.
+	raiseEdge(t, api, ctx, "k", "major", "MAJOR", 10)
+	v := 91.0
+	if err := api.ApplyAlarmContributorEdge(ctx, dev, "k", "temperature", "crit", AlarmEdgeRaised, "CRITICAL", &v, tsec(11)); err != nil {
+		t.Fatalf("raise crit: %v", err)
+	}
+	if a := loadAlarm(t, api, ctx, "k"); !a.LastValue.Valid || a.LastValue.Float64 != 91 {
+		t.Fatalf("row must carry the CRITICAL reading 91; got %+v", a.LastValue)
+	}
+	// CRITICAL resolves (no value) → de-escalate to MAJOR; last_value must STAY 91, not become NULL.
+	resolveEdge(t, api, ctx, "k", "crit", 12)
+	a := loadAlarm(t, api, ctx, "k")
+	if a.Severity != "MAJOR" {
+		t.Fatalf("must de-escalate to MAJOR; got %q", a.Severity)
+	}
+	if !a.LastValue.Valid || a.LastValue.Float64 != 91 {
+		t.Fatalf("a value-less resolve must preserve the last reading (91), not NULL it; got %+v", a.LastValue)
+	}
+}
+
+// TestIntegratorLoneResolveSeverityIndeterminate proves the lone-resolve tombstone CLEARED row carries
+// a valid AlarmSeverity (INDETERMINATE) rather than an empty string, so the `severity: String!` API and
+// severity filters always see a known tier.
+func TestIntegratorLoneResolveSeverityIndeterminate(t *testing.T) {
+	api, _ := newContributorTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	resolveEdge(t, api, ctx, "k", "r1", 25) // lone resolve → CLEARED tombstone row
+	a := loadAlarm(t, api, ctx, "k")
+	if a == nil || a.State != string(AlarmStateCleared) || a.Severity != string(AlarmSeverityIndeterminate) {
+		t.Fatalf("a lone-resolve CLEARED row must carry INDETERMINATE severity; got %+v", a)
 	}
 }
 

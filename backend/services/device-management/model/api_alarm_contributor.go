@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -34,6 +35,19 @@ import (
 // re-checked fail-closed even though the consumer validates, so no caller can drive a malformed tier
 // into the row. deviceId is already resolved (the consumer resolves the token through the cached
 // accessor and distinguishes a deleted device from a store error), so this does not re-resolve.
+//
+// TWO GATE-OPEN DEPENDENCIES this method does NOT own, tracked for slice 6 (the dispatch gate stays
+// off until then, so both are inert here):
+//   - CONTRIBUTOR STRANDING (D6): a contributor's identity is the VERSIONED composed rule id, so a
+//     routine profile republish rotates it and DETECT's RemoveRule drops the raised latch WITHOUT
+//     emitting a Resolved — the old contributor never resolves and clear-on-empty never fires. D6
+//     (RemoveRule/rotation emits a Resolved for a raised, torn-down rule) MUST land before the gate
+//     opens, or a republish permanently strands an alarm. Same for a deleted rule.
+//   - OPERATOR CLEAR vs the reference count: an operator ClearAlarm sets state=CLEARED without
+//     touching the contributor set, so the next edge for that key re-derives ACTIVE from the still-raising
+//     contributors and REACTIVATES — a manual clear of a still-breaching alarm is transient by design
+//     (pure reference counting: the condition still holds). A RESOLVE edge can therefore emit a RAISED
+//     reactivation; whether operator clear should instead tombstone the set is a slice-6 product call.
 func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
 	alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time) error {
 	if alarmKey == "" || ruleID == "" {
@@ -45,6 +59,9 @@ func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
 	if raised && !AlarmSeverity(severity).Valid() {
 		return fmt.Errorf("alarm-edge: invalid raise severity %q", severity)
 	}
+	// Normalize the decision time to UTC so every stored contributor DecisionTs has one canonical zone:
+	// the serialized set is then byte-stable, and .Equal-based ordering is unaffected either way.
+	occurredTime = occurredTime.UTC()
 
 	existing, err := api.alarmByOriginatorKey(ctx, string(entity.TypeDevice), deviceId, alarmKey)
 	if err != nil {
@@ -61,6 +78,12 @@ func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
 		return nil // stale or duplicate edge: nothing changed, nothing to persist (idempotent)
 	}
 	newSeverity, anyActive := cs.activeSeverity()
+	// A CLEARED (all-tombstone) set, or an active set of only unknown-rank contributors (corrupt JSON),
+	// has no derivable tier. Stamp INDETERMINATE rather than an empty string so the row always carries a
+	// valid AlarmSeverity for the `severity: String!` API and severity filters/badges.
+	if newSeverity == "" {
+		newSeverity = string(AlarmSeverityIndeterminate)
+	}
 	encoded, err := cs.encode()
 	if err != nil {
 		return err
@@ -90,15 +113,16 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 	alarmKey, metricKey, severity string, anyActive bool, lastValue sql.NullFloat64,
 	contributors []byte, occurredTime time.Time) error {
 	created := &Alarm{
-		TokenReference: rdb.TokenReference{Token: uuid.New().String()},
-		OriginatorType: string(entity.TypeDevice),
-		OriginatorId:   deviceId,
-		AlarmKey:       alarmKey,
-		MetricKey:      metricKey,
-		Severity:       severity,
-		RaisedTime:     occurredTime,
-		LastValue:      lastValue,
-		Contributors:   contributors,
+		TokenReference:     rdb.TokenReference{Token: uuid.New().String()},
+		OriginatorType:     string(entity.TypeDevice),
+		OriginatorId:       deviceId,
+		AlarmKey:           alarmKey,
+		MetricKey:          metricKey,
+		Severity:           severity,
+		RaisedTime:         occurredTime,
+		LastValue:          lastValue,
+		Contributors:       contributors,
+		ContributorVersion: 1,
 	}
 	if anyActive {
 		created.State = string(AlarmStateActive)
@@ -106,6 +130,9 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 		created.State = string(AlarmStateCleared)
 		created.ClearedTime = sql.NullTime{Time: occurredTime, Valid: true}
 	}
+	// A concurrent create loses the per-(originator, alarmKey) partial unique index → a duplicate-key
+	// error → the consumer naks and the redelivery folds into the winner's row. So a create race
+	// self-heals; it is the fold-into-an-existing-row race that needs the version CAS below.
 	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
 		return err
 	}
@@ -115,24 +142,47 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 	return nil
 }
 
-// updateAlarmFromContributors folds the re-derived state into an existing row under the ADR-041 2.D
-// from-state-predicated UPDATE (exactly-once: a concurrent operator ack/clear that moved the row
-// between the read and this write yields RowsAffected 0, so we neither claim a state that did not
-// happen nor emit a phantom event). It handles all four transitions from the row's current state to
-// {ACTIVE, CLEARED}: reactivate (CLEARED→ACTIVE, resets ack), escalate/de-escalate or value-update
-// (ACTIVE→ACTIVE), clear (ACTIVE→CLEARED), and a tombstone-only contributor update that leaves the row
-// CLEARED (CLEARED→CLEARED, no event).
+// errAlarmContributorConflict is returned when the CAS write loses to a concurrent modification (a
+// racing fold on another replica, or an operator ack/clear) — a RETRYABLE signal: the consumer naks
+// and the redelivery re-reads the moved row and re-folds. The fold (contributorSet.apply) is
+// idempotent and order-independent, so the retry re-derives the correct state by construction.
+var errAlarmContributorConflict = errors.New("alarm-edge: concurrent contributor modification, retry")
+
+// updateAlarmFromContributors folds the re-derived state into an existing row under an OPTIMISTIC CAS
+// on (state, contributor_version): the contributor set is an ACCUMULATOR, not the evaluator's
+// self-healing scalar columns, so a lost write is permanent state divergence (an edge is delivered
+// once and DETECT never re-emits it). The predicate therefore guards BOTH the state (a concurrent
+// operator ack/clear) AND the version this fold read (a concurrent fold on another HA replica that
+// shares the raise-alarm durable consumer). A RowsAffected 0 is a CONFLICT → errAlarmContributorConflict
+// → nak-retry, NOT a silent drop. It handles the four transitions to {ACTIVE, CLEARED}: reactivate
+// (CLEARED→ACTIVE, resets ack), escalate/de-escalate or value-update (ACTIVE→ACTIVE), clear
+// (ACTIVE→CLEARED), and a tombstone-only contributor update that leaves the row CLEARED.
 func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm,
 	severity string, anyActive bool, lastValue sql.NullFloat64, contributors []byte, occurredTime time.Time) error {
 	prevState := existing.State
 	prevSeverity := existing.Severity
+	prevVersion := existing.ContributorVersion
 
-	updates := map[string]interface{}{"contributors": contributors}
+	updates := map[string]interface{}{
+		"contributors":        contributors,
+		"contributor_version": prevVersion + 1,
+	}
+	// A value rides only on an edge that HAS one (a raise carrying a reading). When the edge carries
+	// none (every resolve, and a silence-driven raise), keep the row's existing last value rather than
+	// NULLing it — a resolve of one contributor must not erase a co-contributor's real reading.
+	setLastValue := func() {
+		if lastValue.Valid {
+			updates["last_value"] = lastValue
+		}
+	}
+	applyLastValue := func() {
+		if lastValue.Valid {
+			existing.LastValue = lastValue
+		}
+	}
 
-	// pending defers the alarm state-change event until AFTER the from-state-predicated UPDATE confirms
-	// a row actually changed: the event reads the alarm's POST-transition fields, which a map-based
-	// Updates does not write back into the struct, so `mutate` reflects the new state onto the
-	// in-memory row just before the event is built — but only on a write that won the race.
+	// mutate reflects the POST-transition fields onto the in-memory row just before the event is built
+	// (a map-based Updates does not write them back), but only on a write that won the CAS.
 	var etype AlarmEventType
 	var mutate func()
 	switch {
@@ -145,31 +195,33 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 		updates["acknowledged"] = false
 		updates["acknowledged_time"] = sql.NullTime{}
 		updates["acknowledged_by"] = sql.NullString{}
-		updates["last_value"] = lastValue
+		setLastValue()
 		etype = AlarmEventRaised
 		mutate = func() {
 			existing.State, existing.Severity, existing.RaisedTime = string(AlarmStateActive), severity, occurredTime
 			existing.ClearedTime, existing.Acknowledged = sql.NullTime{}, false
-			existing.AcknowledgedTime, existing.AcknowledgedBy, existing.LastValue = sql.NullTime{}, sql.NullString{}, lastValue
+			existing.AcknowledgedTime, existing.AcknowledgedBy = sql.NullTime{}, sql.NullString{}
+			applyLastValue()
 		}
 	case anyActive:
 		// Stayed ACTIVE: track the current max-tier severity and latest value. Emit only on a severity
 		// move — a value-only update is not a state change a subscriber needs.
 		updates["severity"] = severity
-		updates["last_value"] = lastValue
+		setLastValue()
 		if t, changed := severityTransition(prevSeverity, severity); changed {
 			etype = t
-			mutate = func() { existing.Severity, existing.LastValue = severity, lastValue }
+			mutate = func() { existing.Severity = severity; applyLastValue() }
 		}
 	case prevState == string(AlarmStateActive):
 		// The last active contributor resolved: clear the alarm.
 		updates["state"] = string(AlarmStateCleared)
 		updates["cleared_time"] = sql.NullTime{Time: occurredTime, Valid: true}
-		updates["last_value"] = lastValue
+		setLastValue()
 		etype = AlarmEventCleared
 		mutate = func() {
 			existing.State = string(AlarmStateCleared)
-			existing.ClearedTime, existing.LastValue = sql.NullTime{Time: occurredTime, Valid: true}, lastValue
+			existing.ClearedTime = sql.NullTime{Time: occurredTime, Valid: true}
+			applyLastValue()
 		}
 	default:
 		// CLEARED→CLEARED: only the contributor set changed (a tombstone update — e.g. an out-of-order
@@ -177,14 +229,15 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 		// emit no event; the row's visible state is unchanged.
 	}
 
-	res := api.RDB.DB(ctx).Model(existing).Where("state = ?", prevState).Updates(updates)
+	res := api.RDB.DB(ctx).Model(existing).
+		Where("state = ? AND contributor_version = ?", prevState, prevVersion).Updates(updates)
 	if res.Error != nil {
 		return res.Error
 	}
-	// A concurrent operator ack/clear (or delete cascade) moved the row between the read and this
-	// write: don't claim the transition or emit its event.
 	if res.RowsAffected == 0 {
-		return nil
+		// The CAS lost: a concurrent fold or operator transition changed (state, contributor_version)
+		// since the read. Retry — do NOT drop the edge (the accumulator would lose it forever).
+		return errAlarmContributorConflict
 	}
 	if mutate != nil {
 		mutate()

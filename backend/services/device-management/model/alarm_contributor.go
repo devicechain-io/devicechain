@@ -65,12 +65,15 @@ func (cs contributorSet) encode() (datatypes.JSON, error) {
 
 // apply folds one rule's edge into the set and reports whether the set changed. It is idempotent and
 // ORDER-INDEPENDENT: for each rule the final state is a pure function of the edge with the maximum
-// DecisionTs, with a RESOLVE winning a RAISE at an equal ts — so processing any permutation (or a
-// redelivered duplicate) of a rule's edges yields the same result (ADR-057 / RaiseAlarmRequest
-// ordering contract). raised selects the edge kind; tier is the raise tier (ignored for a resolve).
+// DecisionTs, with a RESOLVE winning a RAISE at an equal ts and, among equal-ts RAISES, the HIGHER tier
+// winning — so processing any permutation (or a redelivered duplicate) of a rule's edges yields the
+// same result regardless of arrival order (ADR-057 / RaiseAlarmRequest ordering contract). raised
+// selects the edge kind; tier is the raise tier (ignored for a resolve).
 //
 //   - A stale edge (ts strictly before the stored decision time) is ignored.
 //   - A RAISE at a ts EQUAL to a stored resolved tombstone is ignored — resolve wins the tie.
+//   - Among equal-ts RAISES the higher tier (lower Rank) wins — deterministic even if a buggy producer
+//     emits two tiers for one rule at one instant (a well-formed versioned rule has a single tier).
 //   - Otherwise the contributor is set: a raise makes it active at its tier; a resolve tombstones it.
 func (cs contributorSet) apply(ruleID string, raised bool, tier string, ts time.Time) (changed bool) {
 	cur, exists := cs[ruleID]
@@ -81,11 +84,17 @@ func (cs contributorSet) apply(ruleID string, raised bool, tier string, ts time.
 		if exists && cur.DecisionTs.Equal(ts) && !cur.Active {
 			return false // equal-ts tombstone: resolve wins, the raise does not re-add
 		}
-		next := AlarmContributor{Tier: tier, DecisionTs: ts, Active: true}
-		if exists && cur == next {
-			return false // idempotent re-raise (same tier, same ts)
+		if exists && cur.Active && cur.DecisionTs.Equal(ts) {
+			// Equal-ts re-raise of an active contributor: keep the HIGHER tier (lower Rank) so the
+			// outcome is order-independent. An equal tier (an idempotent redelivery, dedup'd by
+			// .Equal so a non-UTC-offset duplicate still matches), a lower tier, or an unknown-rank
+			// tier is a no-op. Only a strictly-higher tier updates.
+			ir, cr := AlarmSeverity(tier).Rank(), AlarmSeverity(cur.Tier).Rank()
+			if ir < 0 || cr <= ir {
+				return false
+			}
 		}
-		cs[ruleID] = next
+		cs[ruleID] = AlarmContributor{Tier: tier, DecisionTs: ts, Active: true}
 		return true
 	}
 	// Resolve → tombstone. Retain the (now inactive) contributor with the resolve's ts so an equal-ts
