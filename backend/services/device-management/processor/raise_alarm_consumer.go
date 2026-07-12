@@ -134,6 +134,19 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 		return
 	}
 
+	// ADR-057 staging (6d-pre-2b): the contributor-set integrator that resolves a rule's contribution
+	// on a RESOLVED edge lands in 6d-pre-2c. Until then a resolved request must NOT reach the raise
+	// path (which would wrongly raise/escalate); drop it fail-closed. In practice the alarm dispatch
+	// gate is off until slice 6 (after 2c), so this is a defensive net for the 2b→2c window, not a
+	// live path. A raised edge (or a legacy empty edge) falls through to the raise below.
+	if req.Edge == "resolved" {
+		log.Debug().Str("device", req.DeviceToken).Str("alarmKey", req.AlarmKey).
+			Msg("Raise-alarm dropping a resolved edge (contributor-resolve integrator lands in 6d-pre-2c)")
+		msg.Ack()
+		done(core.ResultOK)
+		return
+	}
+
 	// Map the rule's authoring-vocabulary severity (lowercase) to the AlarmSeverity tier (ADR-041).
 	// An empty device token/alarm key or an unknown severity is a malformed request (a forged or
 	// buggy producer) — poison, dropped.

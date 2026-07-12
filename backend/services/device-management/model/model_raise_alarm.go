@@ -27,6 +27,15 @@ type RaiseAlarmRequest struct {
 	// the same rule escalate ONE alarm in place. The dispatcher defaults an empty authored key to
 	// the rule id, so this is always non-empty on the wire.
 	AlarmKey string `json:"alarmKey"`
+	// RuleID is the CONTRIBUTOR identity: the composed runtime rule id whose edge this request carries.
+	// The alarm-object integrator (slice 6d-pre-2c) reference-counts contributors by it — a raised edge
+	// adds/updates this rule's tier in the alarm's contributor set, a resolved edge removes it, and the
+	// alarm clears when the set empties (ADR-057). Carried on every edge.
+	RuleID string `json:"ruleId"`
+	// Edge is "raised" (rising) or "resolved" (falling), per ADR-057. A raised request raises/escalates
+	// this rule's contribution; a resolved request removes it (clearing the alarm if it was the last).
+	// The consumer routes on it. Absent decodes as raised (the producer always sets it explicitly).
+	Edge string `json:"edge,omitempty"`
 	// MetricKey is the metric the rule watched, stamped onto the alarm row for context. May be
 	// empty for a rule whose shape carries no single metric (e.g. a raw-CEL leaf).
 	MetricKey string `json:"metricKey,omitempty"`

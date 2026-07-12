@@ -118,9 +118,10 @@ func (m *detectMetrics) recordStaleAbsenceDropped() {
 }
 
 // reactMetrics are the Slice-5 REACT-dispatcher observability counters (ADR-051 REACT stage). Like
-// detectMetrics they are bounded-cardinality: the one label is "action", a fixed two-value enum
-// (sendCommand/raiseAlarm), never a tenant or rule value (the ADR-023 G.3 lesson). Every recorder is
-// nil-safe so a dispatcher built without a Microservice (unit tests) runs unmeasured.
+// detectMetrics they are bounded-cardinality: the one label is "action", a fixed small enum
+// (sendCommand/raiseAlarm/clearAlarm — the last is the structural falling-edge clear, ADR-057), never
+// a tenant or rule value (the ADR-023 G.3 lesson). Every recorder is nil-safe so a dispatcher built
+// without a Microservice (unit tests) runs unmeasured.
 type reactMetrics struct {
 	dispatched    *prometheus.CounterVec
 	notEnabled    *prometheus.CounterVec

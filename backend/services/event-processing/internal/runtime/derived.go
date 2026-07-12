@@ -16,11 +16,29 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Edge discriminates the two edges of an alarm-bearing detection ON THE WIRE (ADR-057): a rising
+// edge (the condition became true) and a falling edge (it ceased). It is the string projection of
+// core.EdgeKind so an ADR-037 subscriber and the REACT dispatcher read it without importing the core
+// enum. EdgeRaised is the DEFAULT (a bare/legacy event with no edge field, or one carrying "raised",
+// is a raise) so only an explicit "resolved" is a falling edge — see wireEdge / DerivedEvent.Edge.
+const (
+	EdgeRaised   = "raised"
+	EdgeResolved = "resolved"
+)
+
+// wireEdge projects a core edge onto its wire token.
+func wireEdge(e core.EdgeKind) string {
+	if e == core.EdgeResolved {
+		return EdgeResolved
+	}
+	return EdgeRaised
+}
+
 // DerivedEvent is DETECT's emitted signal on the wire — a first-class, subscribe-able
 // product (ADR-037). Its fields are the stable, deterministic identity of a detection, so
 // an at-least-once re-emission across a replay collapses downstream via
-// (RuleID, Series, Kind, OccurredTime) as the idempotency key (ADR-051 §8). It is a JSON
-// envelope for slice 4a; the wire may harden to protobuf when the client subscription lands
+// (RuleID, Series, Kind, OccurredTime, Edge) as the idempotency key (ADR-051 §8 / ADR-057). It is a
+// JSON envelope for slice 4a; the wire may harden to protobuf when the client subscription lands
 // (slice 7) — pre-GA, changeable.
 type DerivedEvent struct {
 	// RuleID is the tenant-prefixed id of the rule that fired.
@@ -29,6 +47,13 @@ type DerivedEvent struct {
 	Tenant string `json:"tenant"`
 	// Kind is the user-facing rule type (rules.RuleType: "threshold", "absence", …).
 	Kind string `json:"kind"`
+	// Edge is the transition this detection reports (ADR-057): "raised" on the rising edge, "resolved"
+	// on the falling edge. It IS part of the dedup identity — a Raised and a Resolved that share an
+	// OccurredTime (a gap-driven falling edge coinciding with a fresh rising edge on adjacent events)
+	// must not collapse into one downstream. omitempty keeps a raise lean on the wire; an absent value
+	// decodes as the EdgeRaised default, so a pre-edge event still reads as a raise (the REACT dispatcher
+	// keys off an explicit "resolved", not off empty).
+	Edge string `json:"edge,omitempty"`
 	// Series is the keyed series the detection is for — the device token, or the anchor
 	// token for a correlation rule.
 	Series string `json:"series"`
@@ -129,22 +154,11 @@ func NewPublisher(writer messaging.MessageWriter, reg *RuleRegistry, metrics Met
 // and re-emits the detection. A terminal drop (backstop reject, orphan rule, marshal
 // failure) returns nil: it is intentional and must not wedge the checkpoint loop.
 func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
-	// ADR-057 two-edge model, staged rollout: the DETECT core now emits a Resolved detection on
-	// every falling edge, but the DerivedEvent wire has no Edge field yet and the ADR-037 subscriber
-	// contract + the clearAlarm REACT action that consume it land in slice 6d-pre-2. Until then a
-	// Resolved carries no edge marker on the wire and would read as a duplicate Raised to a
-	// subscriber, so it is dropped HERE as a delivered no-op (the raised-latch state change is still
-	// checkpointed — the message loop marks dirty on the sequence advance). Only Raised edges are
-	// published. NOTE this is NOT a byte-identical no-op: the two-edge latch also changes the RAISED
-	// cadence this slice — a rule now raises ONCE on the rising edge instead of on every matching
-	// sample/window (Threshold per-sample, Duration per-hold, Aggregate per-window re-fires are all
-	// gone). That is a deliberate ADR-057 change and it reaches the LIVE send-command REACT path
-	// (slice 5b): a send-command now dispatches once per breach, not once per sample. Removing this
-	// guard + adding Edge to the wire is the first step of 6d-pre-2.
-	if det.Edge != core.EdgeRaised {
-		return nil
-	}
-
+	// ADR-057 two-edge model (6d-pre-2b): BOTH edges are now published — a Raised on the rising edge
+	// and a Resolved on the falling edge, discriminated by DerivedEvent.Edge and dedup-distinct even at
+	// a shared OccurredTime. The REACT dispatcher routes a Resolved to a clear (skipping send-command,
+	// which has no falling-edge twin), and the ADR-037 subscriber sees the full lifecycle. A Resolved
+	// carries no value (the condition ceased, not a reading).
 	sr, ok := p.reg.Lookup(det.RuleID)
 	if !ok {
 		log.Warn().Str("rule", det.RuleID).Str("series", det.Series).
@@ -197,6 +211,7 @@ func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
 		Series:       det.Series,
 		OccurredTime: det.At,
 		Severity:     string(sr.Compiled.Severity),
+		Edge:         wireEdge(det.Edge),
 	}
 	if det.HasValue {
 		v := det.Value // copy the loop-local before taking its address

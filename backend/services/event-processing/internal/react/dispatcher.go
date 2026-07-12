@@ -71,32 +71,43 @@ type CommandSink interface {
 	Send(ctx context.Context, req CommandRequest) error
 }
 
-// AlarmRequest is one raise-alarm dispatch (ADR-041 / slice 5c): raise or escalate an alarm for a
-// device. Unlike a command it carries no idempotency token — device-management's raiseOrEscalateAlarm
-// is an upsert keyed on (device, alarmKey) with occurred-time cross-cycle guards, so an at-least-once
-// redelivery is idempotent without one.
+// AlarmRequest is one alarm-contributor dispatch (ADR-041 / ADR-057): raise/escalate (Edge=raised) or
+// clear/de-escalate (Edge=resolved) this rule's contribution to a device's alarm. It carries no
+// idempotency token — device-management's alarm integrator is an upsert keyed on (device, alarmKey)
+// whose contributor-set mutations are idempotent and monotonic-decision-ts-guarded (slice 6d-pre-2c),
+// so an at-least-once redelivery re-derives the same state without one.
 type AlarmRequest struct {
-	Tenant       string
-	DeviceToken  string
-	AlarmKey     string
-	MetricKey    string
-	Severity     string
+	Tenant      string
+	DeviceToken string
+	AlarmKey    string
+	MetricKey   string
+	Severity    string
+	// RuleID is the CONTRIBUTOR identity: the composed runtime rule id whose edge this is. The alarm
+	// object reference-counts contributors by it — a Raised adds/updates this rule's tier, a Resolved
+	// removes it, and the alarm clears when the set empties (ADR-057). Carried on every edge.
+	RuleID string
+	// Edge is "raised" (rising) or "resolved" (falling) — runtime.EdgeRaised / EdgeResolved. A raised
+	// request raises/escalates; a resolved request removes this rule's contribution (and clears the
+	// alarm if it was the last contributor).
+	Edge         string
 	OccurredTime time.Time
 	// Value is the triggering scalar the detection carried, stamped on the alarm so a re-raise
 	// annotates the real last value rather than a zero. It is nil when the rule shape has none — a
 	// silence-driven absence/duration fire, or a metric-less raw-CEL leaf — and device-management then
 	// leaves the alarm's last value NULL rather than writing a fabricated 0. A value-bearing rule
 	// (threshold/repeating crossing sample, deltaRate/aggregate computed scalar) carries a real value.
+	// A resolved edge carries no value (the condition ceased, not a reading).
 	Value *float64
 }
 
-// AlarmSink raises/escalates an alarm for a device (ADR-041), implemented by publishing a raise-alarm
-// request to device-management (slice 5c). Raise returns a non-nil error on any failure; the
-// dispatcher retries every error (the event redelivers, the upsert makes the re-raise safe). A nil
-// AlarmSink means raise-alarm dispatch is DISABLED (the default until slice 6), and the dispatcher
-// treats a raiseAlarm action as recognized-but-inert.
+// AlarmSink raises/escalates or clears/de-escalates an alarm contributor for a device (ADR-041 /
+// ADR-057), implemented by publishing an alarm request to device-management (slice 5c / 6d-pre-2c).
+// Dispatch returns a non-nil error on any failure; the dispatcher retries every error (the event
+// redelivers, the idempotent contributor upsert makes the re-run safe). A nil AlarmSink means alarm
+// dispatch is DISABLED (the default until slice 6), and the dispatcher treats a raiseAlarm action
+// (and its paired resolve) as recognized-but-inert.
 type AlarmSink interface {
-	Raise(ctx context.Context, req AlarmRequest) error
+	Dispatch(ctx context.Context, req AlarmRequest) error
 }
 
 // Metrics is the REACT observability sink (bounded cardinality — no per-tenant labels, the ADR-023
@@ -135,8 +146,18 @@ func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink
 // Dispatch handles one derived event, returning whether the consumer may ack it (Done) or must let
 // it redeliver (Retry). It resolves the rule that fired and dispatches each action in order. A
 // failure at ANY action returns Retry immediately, leaving the event unacked; the redelivery re-runs
-// the already-dispatched prefix idempotently (the command token collapses re-sends; the alarm upsert
-// collapses re-raises) and reaches the failed action again. An orphan rule never wedges the loop.
+// the already-dispatched prefix idempotently (the command token collapses re-sends; the alarm
+// contributor upsert collapses re-raises/re-clears) and reaches the failed action again. An orphan
+// rule never wedges the loop.
+//
+// EDGE ROUTING (ADR-057). The detection's edge selects which side effects fire:
+//   - a RAISED (rising) edge dispatches every action — raiseAlarm raises/escalates, sendCommand sends.
+//   - a RESOLVED (falling) edge dispatches ONLY the paired clear for each raiseAlarm action (the
+//     clearAlarm is structural, not a materialized action: a rule that declares raiseAlarm implicitly
+//     clears the SAME alarm key on its falling edge). sendCommand has NO falling-edge twin — a command
+//     is a one-shot side effect, so a Resolved must not re-send it (which would double-fire the LIVE
+//     send-command path, slice 5b). This is the load-bearing correctness point of enabling Resolved on
+//     the wire.
 func (d *Dispatcher) Dispatch(ctx context.Context, ev runtime.DerivedEvent) Outcome {
 	rule, found, err := d.resolver.Resolve(ctx, ev.RuleID)
 	if err != nil {
@@ -158,13 +179,20 @@ func (d *Dispatcher) Dispatch(ctx context.Context, ev runtime.DerivedEvent) Outc
 	return Done
 }
 
-// dispatchAction dispatches one action. A sink failure is a Retry (the whole event redelivers); a
-// success, a disabled action kind (nil sink → inert, counted), and an unknown action (unreachable
+// dispatchAction dispatches one action for the event's edge (see Dispatch). A sink failure is a Retry
+// (the whole event redelivers); a success, a disabled action kind (nil sink → inert, counted), an
+// action with no effect on this edge (sendCommand on a Resolved), and an unknown action (unreachable
 // for a gate-validated rule) are all Done so the loop moves on. The rule is passed so a raiseAlarm
 // action can read the rule-level severity + watched metric it raises with.
 func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent, rule rules.Rule, a rules.Action) Outcome {
+	resolved := ev.Edge == runtime.EdgeResolved
 	switch a.Type {
 	case rules.ActionSendCommand:
+		if resolved {
+			// A command has no falling-edge twin: the Resolved reports the condition ceased, which is
+			// not a fresh trigger to re-send. Skip (no metric — it is a routine non-effect, not a drop).
+			return Done
+		}
 		if d.commands == nil {
 			d.metrics.RecordNotEnabled("sendCommand")
 			return Done
@@ -182,10 +210,17 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		d.metrics.RecordDispatched("sendCommand")
 		return Done
 	case rules.ActionRaiseAlarm:
+		// A raiseAlarm action is dispatched on BOTH edges: a Raised raises/escalates this rule's
+		// contribution, a Resolved (the structural clearAlarm pairing) removes it. The alarm object
+		// integrates the per-rule edges into the (device, alarmKey) lifecycle (slice 6d-pre-2c).
+		action := "raiseAlarm"
+		if resolved {
+			action = "clearAlarm"
+		}
 		if d.alarms == nil {
-			// Raise-alarm dispatch is disabled (the default until slice 6 retires the measurement
-			// evaluator). Count it so its inertness is observable rather than silent.
-			d.metrics.RecordNotEnabled("raiseAlarm")
+			// Alarm dispatch is disabled (the default until slice 6 retires the measurement evaluator).
+			// Count it so its inertness is observable rather than silent.
+			d.metrics.RecordNotEnabled(action)
 			return Done
 		}
 		req := AlarmRequest{
@@ -198,13 +233,15 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			AlarmKey:     defaultAlarmKey(a.RaiseAlarm.AlarmKey, ev.RuleID),
 			MetricKey:    ruleMetric(rule),
 			Severity:     string(rule.Severity),
+			RuleID:       ev.RuleID,
+			Edge:         edgeOrRaised(ev.Edge),
 			OccurredTime: ev.OccurredTime,
 			Value:        ev.Value,
 		}
-		if err := d.alarms.Raise(ctx, req); err != nil {
+		if err := d.alarms.Dispatch(ctx, req); err != nil {
 			return Retry
 		}
-		d.metrics.RecordDispatched("raiseAlarm")
+		d.metrics.RecordDispatched(action)
 		return Done
 	default:
 		// The publish gate (rules.Compile) rejects unknown action types, so this is unreachable for
@@ -212,6 +249,16 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		// wedge). No metric — it cannot happen through the supported authoring path.
 		return Done
 	}
+}
+
+// edgeOrRaised normalizes a wire edge to an explicit token: an empty (legacy/pre-edge) value decodes
+// as the EdgeRaised default, matching the DerivedEvent.Edge contract, so the alarm request always
+// carries a definite "raised"/"resolved" rather than propagating an ambiguous empty downstream.
+func edgeOrRaised(edge string) string {
+	if edge == runtime.EdgeResolved {
+		return runtime.EdgeResolved
+	}
+	return runtime.EdgeRaised
 }
 
 // defaultAlarmKey returns the authored alarm key, or the rule's version-free stable identity when
