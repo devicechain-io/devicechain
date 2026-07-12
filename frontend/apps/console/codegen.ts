@@ -58,6 +58,17 @@ const config: CodegenConfig = {
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },
     },
+    // The DETECT rule compiler validation gate (ADR-051 / ADR-044), served by
+    // event-processing. The console calls validateDetectionRules to show a rule's
+    // compile/cost diagnostics inline while authoring, before the profile publish
+    // re-validates authoritatively (slice 7a-2).
+    './src/gql/event-processing/': {
+      schema: '../../../backend/services/event-processing/graphql/schema.graphql',
+      documents: ['src/lib/api/event-processing.ts'],
+      preset: 'client',
+      presetConfig: { fragmentMasking: false },
+      config: { documentMode: 'string' },
+    },
     // The instance-scoped admin API (ADR-033), served by user-management at
     // /admin/graphql. Its own schema + client so the admin console's typed
     // operations never mix with the tenant-scoped user-management ones.
