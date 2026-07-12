@@ -55,45 +55,48 @@ func TestSetExpectedOnceSemantics(t *testing.T) {
 	}
 }
 
-// TestSetExpectedLaterBaseReArmsAfterFire is the epoch case: after a dead-man fires, a re-publish
-// or rollback (device-management stamps a fresh, LATER publishedAt to grant a fresh grace window)
-// re-arms the dead-man rather than being swallowed by the fired latch. A same-or-earlier base
-// after firing stays suppressed (the once-semantics that keeps restart reconciliation from
-// double-firing at the elapsed base).
+// TestSetExpectedLaterBaseReArmsAfterFire is the epoch case under the two-edge model (ADR-057):
+// after a dead-man RAISES, a re-publish/rollback (device-management stamps a fresh, LATER
+// publishedAt) re-arms the TIMER, but the raised latch suppresses a duplicate Raised while the
+// device is still absent — the absence is one continuous alarm, not one per re-publish. Only after
+// the device recovers (a heartbeat RESOLVES the absence, clearing the latch) does a fresh silence
+// raise again.
 func TestSetExpectedLaterBaseReArmsAfterFire(t *testing.T) {
 	e := deadmanEngine()
 	key := absKey("rAbs", "dev")
 	e.SetExpected(key, at(0)) // deadline 10
 	e.Advance(at(11))
-	if got := e.Drain(); len(got) != 1 || !got[0].At.Equal(at(10)) {
-		t.Fatalf("setup: dead-man did not fire at 10: %+v", got)
+	if got := e.Drain(); len(got) != 1 || got[0].Edge != EdgeRaised || !got[0].At.Equal(at(10)) {
+		t.Fatalf("setup: dead-man did not raise at 10: %+v", got)
 	}
-	// Same base again (a reconcile duplicate of the fired epoch): suppressed.
-	e.SetExpected(key, at(0))
-	e.Advance(at(50))
-	if got := e.Drain(); len(got) != 0 {
-		t.Fatalf("a same-base re-arm after firing double-fired: %v", got)
-	}
-	// A strictly-later base (re-publish/rollback fresh grace window): re-arms at 100+10=110.
+	// A strictly-later base (re-publish/rollback) re-arms the timer to 110 and fires it there — but
+	// the alarm is still raised (the device never reported), so the fire emits NO duplicate Raised.
 	e.SetExpected(key, at(100))
-	e.Advance(at(109))
-	if got := e.Drain(); len(got) != 0 {
-		t.Fatalf("re-armed dead-man fired before its fresh deadline 110: %v", got)
-	}
 	e.Advance(at(111))
-	if got := e.Drain(); len(got) != 1 || !got[0].At.Equal(at(110)) {
-		t.Fatalf("a re-publish with a later grace base did not re-arm the dead-man: %+v", got)
+	if got := e.Drain(); len(got) != 0 {
+		t.Fatalf("a re-publish must not duplicate-raise an already-active absence: %v", got)
+	}
+	// The device finally reports: the heartbeat resolves the absence and re-arms forward to 130.
+	e.ProcessEvent(Event{Seq: 1, Key: key, Time: at(120), Match: true})
+	if got := e.Drain(); len(got) != 1 || got[0].Edge != EdgeResolved || !got[0].At.Equal(at(120)) {
+		t.Fatalf("recovery heartbeat did not resolve the absence: %+v", got)
+	}
+	// It goes silent again: with the latch cleared, the fresh silence raises anew at 130.
+	e.Advance(at(131))
+	if got := e.Drain(); len(got) != 1 || got[0].Edge != EdgeRaised || !got[0].At.Equal(at(130)) {
+		t.Fatalf("a fresh absence after recovery did not raise: %+v", got)
 	}
 }
 
-// TestSetExpectedLaterBaseReArmsAcrossRestart proves the epoch re-arm survives a snapshot: a fired
-// dead-man is latched in the snapshot, and after Restore a re-publish with a later base re-arms it
-// while a same-base reconcile does not.
+// TestSetExpectedLaterBaseReArmsAcrossRestart proves the two-edge raised latch survives a snapshot:
+// a fired-and-still-active dead-man restores as raised, so a post-restart re-publish (later base)
+// re-arms the timer but does NOT duplicate-raise — the restored alarm is the same active absence
+// (ADR-057). A recovery heartbeat then resolves it, proving the restored latch was real.
 func TestSetExpectedLaterBaseReArmsAcrossRestart(t *testing.T) {
 	e := deadmanEngine()
 	key := absKey("rAbs", "dev")
 	e.SetExpected(key, at(0))
-	e.Advance(at(11)) // fires at 10, latches done at since=0
+	e.Advance(at(11)) // raises at 10, latches raised + done at since=0
 	e.Drain()
 
 	rules := []Rule{{ID: "rAbs", Kind: Absence, Timeout: 10 * time.Second}}
@@ -101,15 +104,17 @@ func TestSetExpectedLaterBaseReArmsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	re.SetExpected(key, at(0)) // reconcile at the fired base: suppressed
-	re.Advance(at(50))
-	if got := re.Drain(); len(got) != 0 {
-		t.Fatalf("post-restart same-base reconcile double-fired: %v", got)
-	}
-	re.SetExpected(key, at(100)) // re-publish after restart: re-arms
+	// Post-restart re-publish while still absent: re-arms the timer to 110 but the restored raised
+	// latch suppresses a duplicate raise.
+	re.SetExpected(key, at(100))
 	re.Advance(at(111))
-	if got := re.Drain(); len(got) != 1 || !got[0].At.Equal(at(110)) {
-		t.Fatalf("post-restart re-publish did not re-arm the dead-man: %+v", got)
+	if got := re.Drain(); len(got) != 0 {
+		t.Fatalf("a post-restart re-publish duplicate-raised a restored active absence: %v", got)
+	}
+	// Recovery after restart resolves it — the restored latch was a real active alarm.
+	re.ProcessEvent(Event{Seq: 1, Key: key, Time: at(120), Match: true})
+	if got := re.Drain(); len(got) != 1 || got[0].Edge != EdgeResolved || !got[0].At.Equal(at(120)) {
+		t.Fatalf("recovery after restart did not resolve the restored absence: %+v", got)
 	}
 }
 

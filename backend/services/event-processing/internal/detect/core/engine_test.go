@@ -124,9 +124,12 @@ func scenario() ([]Rule, []step) {
 		evStep(46, "rAbs2", "dev10", 148, true), // LATE heartbeat: forward-only keeps deadline 160
 		advStep(159),                            // wm=159: 160 > 159 -> NO fire
 		advStep(165),                            // wm=165: FIRE absence dev10 @160
-		// SlidingAgg re-arm across a SILENT gap: the window empties by time alone (no low sample),
-		// so the next breach must be a fresh crossing, not a swallowed one.
-		evValStep(47, "rSlide", "dev9", 200, 170), // cutoff 190 evicts all -> re-arm -> FIRE slide @200
+		// SlidingAgg across a SILENT gap (ADR-057 two-edge): dev9 was raised at 114 and never
+		// resolved; the window emptied by time alone during the 114->200 gap, but that lapse is
+		// unobserved (no event to re-evaluate it — see the package silence note), so the alarm stays
+		// raised and 200's fresh breach emits NOTHING. Contrast the pre-two-edge engine, which
+		// re-armed on the silent gap and re-fired here.
+		evValStep(47, "rSlide", "dev9", 200, 170), // still raised from 114 -> no emission
 		// SlidingAgg over a fractional SUM with eviction residue: exercises verbatim-sum restore.
 		evValStep(48, "rSlideSum", "dev11", 210, 0.4), // sum 0.4, no
 		evValStep(49, "rSlideSum", "dev11", 211, 0.4), // sum 0.8, no
@@ -140,9 +143,11 @@ func scenario() ([]Rule, []step) {
 
 func expected() map[Detection]bool {
 	return map[Detection]bool{
+		// Raised edges (ADR-057). Note rThr dev3 raises ONCE at 3: the match at 17 is the SAME
+		// ongoing over-threshold condition (no non-match cleared it in between), so the raised latch
+		// suppresses a duplicate — the level-triggered evaluator's per-sample re-fire is gone.
 		{RuleID: "rThr", Series: "dev3", Kind: Threshold, At: at(3)}:  true,
 		{RuleID: "rAbs", Series: "dev1", Kind: Absence, At: at(15)}:   true,
-		{RuleID: "rThr", Series: "dev3", Kind: Threshold, At: at(17)}: true,
 		{RuleID: "rDur", Series: "dev2", Kind: Duration, At: at(19)}:  true,
 		{RuleID: "rAbs", Series: "dev1", Kind: Absence, At: at(31)}:   true,
 		{RuleID: "rRep", Series: "dev4", Kind: Repeating, At: at(42)}: true,
@@ -157,9 +162,19 @@ func expected() map[Detection]bool {
 		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, At: at(114)}:     true,
 		{RuleID: "rCorr", Series: "area1", Kind: Correlation, At: at(122)}:    true,
 		{RuleID: "rAbs2", Series: "dev10", Kind: Absence, At: at(160)}:        true,
-		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, At: at(200)}:     true,
 		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, At: at(212)}: true,
 		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, At: at(222)}: true,
+
+		// Resolved edges (ADR-057 falling edges), each balancing an earlier raise when the series'
+		// condition ceased:
+		{RuleID: "rAbs", Series: "dev1", Kind: Absence, Edge: EdgeResolved, At: at(21)}:           true, // dev1 heartbeats again after the 15 absence
+		{RuleID: "rRep", Series: "dev4", Kind: Repeating, Edge: EdgeResolved, At: at(60)}:         true, // burst aged out of the window
+		{RuleID: "rAgg", Series: "dev5", Kind: Aggregate, Edge: EdgeResolved, At: at(60)}:         true, // window [50,60) avg 85 closes unsatisfied
+		{RuleID: "rDelta", Series: "dev6", Kind: DeltaRate, Edge: EdgeResolved, At: at(74)}:       true, // +20 delta back within threshold
+		{RuleID: "rCount", Series: "dev7", Kind: CountWindow, Edge: EdgeResolved, At: at(85)}:     true, // next 3-event window sums 3, unsatisfied
+		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, Edge: EdgeResolved, At: at(113)}:     true, // max fell to 95 as 100,101 evicted
+		{RuleID: "rCorr", Series: "area1", Kind: Correlation, Edge: EdgeResolved, At: at(135)}:    true, // cohort dispersed to 1 distinct
+		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, Edge: EdgeResolved, At: at(220)}: true, // sum fell to 0.4 as 210-212 evicted
 	}
 }
 

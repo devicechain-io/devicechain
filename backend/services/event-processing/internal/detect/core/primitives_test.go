@@ -77,11 +77,13 @@ func TestDeltaRateMode(t *testing.T) {
 	if d := feed(1, 0, 0); len(d) != 0 {
 		t.Fatalf("prime should not fire, got %+v", d)
 	}
-	if d := feed(2, 4, 100); len(d) != 1 || d[0].At != at(4) { // 100/4s = 25/s > 10
-		t.Fatalf("fast rate should fire @4, got %+v", d)
+	if d := feed(2, 4, 100); len(d) != 1 || d[0].Edge != EdgeRaised || d[0].At != at(4) { // 100/4s = 25/s > 10
+		t.Fatalf("fast rate should raise @4, got %+v", d)
 	}
-	if d := feed(3, 14, 120); len(d) != 0 { // 20/10s = 2/s < 10
-		t.Fatalf("slow rate should not fire, got %+v", d)
+	// The rate falls back below the threshold: the two-edge model resolves the raised alarm
+	// (ADR-057) rather than emitting nothing.
+	if d := feed(3, 14, 120); len(d) != 1 || d[0].Edge != EdgeResolved || d[0].At != at(14) { // 20/10s = 2/s < 10
+		t.Fatalf("slow rate should resolve the prior raise @14, got %+v", d)
 	}
 }
 

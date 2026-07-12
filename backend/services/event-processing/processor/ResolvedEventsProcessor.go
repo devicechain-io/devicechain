@@ -1793,8 +1793,15 @@ func (rp *ResolvedEventsProcessor) dropStaleAbsences() {
 	}
 	kept := rp.pendingDets[:0]
 	for _, d := range rp.pendingDets {
-		if d.Kind == detectcore.Absence &&
-			!rp.armer.AbsenceLive(detectcore.SeriesKey{Rule: d.RuleID, Series: d.Series}) {
+		key := detectcore.SeriesKey{Rule: d.RuleID, Series: d.Series}
+		if d.Kind == detectcore.Absence && !rp.armer.AbsenceLive(key) {
+			// Terminal drop of a stale-roster absence. If it is a Raised, clear the engine's two-edge
+			// latch so a later legitimate fire (once the roster catches up and re-arms) is not
+			// suppressed by a latch set for a raise nothing downstream ever saw (ADR-057, review
+			// H2/F5). A Resolved drop needs no clear — resolve already cleared the latch on emit.
+			if d.Edge == detectcore.EdgeRaised {
+				rp.engine.ClearRaised(key)
+			}
 			rp.metrics.recordStaleAbsenceDropped()
 			continue
 		}
