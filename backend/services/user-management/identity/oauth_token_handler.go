@@ -6,6 +6,7 @@ package identity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 )
 
@@ -79,10 +80,15 @@ func TokenHandler(
 		}
 
 		if err != nil {
-			if oerr, ok := err.(*oauthError); ok {
+			var oerr *oauthError
+			if errors.As(err, &oerr) {
 				writeTokenError(w, oerr)
 				return
 			}
+			writeTokenError(w, errServer("internal error"))
+			return
+		}
+		if tokens == nil {
 			writeTokenError(w, errServer("internal error"))
 			return
 		}
@@ -105,8 +111,8 @@ func writeTokenSuccess(w http.ResponseWriter, t *OAuthTokens) {
 	})
 }
 
-// writeTokenError renders the §5.2 error body with the mapped status. A 401
-// invalid_client additionally advertises the (absent) auth scheme per §5.2.
+// writeTokenError renders the §5.2 error body with the mapped status. Like the
+// success response it is marked no-store (§5.1).
 func writeTokenError(w http.ResponseWriter, e *oauthError) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

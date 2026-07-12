@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
+	"gorm.io/gorm"
 )
 
 // AuthCodeBucket is the NATS KV bucket backing the OAuth 2.1 authorization-code
@@ -70,9 +72,10 @@ type oauthError struct {
 func (e *oauthError) Error() string { return e.Code + ": " + e.Desc }
 
 // RFC 6749 §5.2 / §4.1.2.1 error constructors used across the token endpoint.
+// (invalid_client is intentionally absent: v1 clients are public and never
+// authenticate at the token endpoint, so no failure maps to it.)
 func errInvalidRequest(desc string) *oauthError { return &oauthError{"invalid_request", desc, 400} }
 func errInvalidGrant(desc string) *oauthError   { return &oauthError{"invalid_grant", desc, 400} }
-func errInvalidClient(desc string) *oauthError  { return &oauthError{"invalid_client", desc, 401} }
 func errInvalidScope(desc string) *oauthError   { return &oauthError{"invalid_scope", desc, 400} }
 func errServer(desc string) *oauthError         { return &oauthError{"server_error", desc, 500} }
 
@@ -119,8 +122,12 @@ func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, r
 	// The token request's client must match the one the code was issued to, and the
 	// redirect_uri must match exactly (RFC 6749 §4.1.3) — both bind the code so a
 	// leaked code cannot be redeemed by another client or to another destination.
+	// A client mismatch is invalid_grant (RFC 6749 §5.2: "the authorization code …
+	// was issued to another client"), NOT invalid_client — public clients never
+	// authenticate — and keeping it invalid_grant also denies an attacker a
+	// distinguishable response that would confirm a live code / name its owner.
 	if clientId != rec.ClientId {
-		return nil, errInvalidClient("client mismatch")
+		return nil, errInvalidGrant("authorization code was issued to another client")
 	}
 	if redirectURI != rec.RedirectURI {
 		return nil, errInvalidGrant("redirect_uri mismatch")
@@ -129,7 +136,7 @@ func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, r
 		return nil, errInvalidGrant("PKCE verification failed")
 	}
 
-	tokens, err := m.mintScopedGrant(ctx, rec.Email, rec.Tenant, rec.Scope, rec.Audience)
+	tokens, err := m.mintScopedGrant(ctx, rec.Email, rec.Tenant, rec.Scope, rec.Scope, rec.Audience)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +175,11 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 		return nil, errInvalidGrant("refresh token is invalid or expired")
 	}
 
-	tokens, err := m.mintScopedGrant(ctx, claims.Username, claims.Tenant, scope, []string(claims.Audience))
+	// The access token carries the (possibly narrowed) scope; the rotated refresh
+	// token keeps the ORIGINAL grant scope (RFC 6749 §6 — a per-request narrowing
+	// bounds the access token, it does not permanently downgrade the grant), so a
+	// client that narrows once does not irreversibly lose the rest of its grant.
+	tokens, err := m.mintScopedGrant(ctx, claims.Username, claims.Tenant, scope, claims.Scope, []string(claims.Audience))
 	if err != nil {
 		return nil, err
 	}
@@ -178,17 +189,39 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 
 // mintScopedGrant re-resolves the identity's current grant in a tenant, caps the
 // effective authorities to the granted scope, and mints an OAuth access + refresh
-// pair carrying the scope and audience. Shared by both OAuth grant types so the
-// scope cap is applied in exactly one place. The identity/tenant checks mirror
-// Refresh: a disabled identity, lost membership, or denied tenant fails the grant.
-func (m *Manager) mintScopedGrant(ctx context.Context, email, tenant, scope string, audience []string) (*OAuthTokens, error) {
-	allowance, err := scopeAllowance(scope)
+// pair. accessScope governs the access token (and the response); refreshScope
+// governs the rotated refresh token — they differ only when a refresh request
+// narrows scope, where the access token narrows but the refresh keeps the original
+// grant scope. Shared by both grant types so the scope cap is applied in exactly
+// one place. The identity/tenant checks mirror Refresh: a disabled identity, lost
+// membership, or denied tenant fails the grant.
+func (m *Manager) mintScopedGrant(ctx context.Context, email, tenant, accessScope, refreshScope string, audience []string) (*OAuthTokens, error) {
+	accessAllow, err := scopeAllowance(accessScope)
 	if err != nil {
 		return nil, errInvalidScope(err.Error())
 	}
+	refreshAllow, err := scopeAllowance(refreshScope)
+	if err != nil {
+		return nil, errInvalidScope(err.Error())
+	}
+	// Defence in depth: the tenant reaches the superuser branch of
+	// resolveTenantGrant with no DB lookup, so grammar-check it here (as SelectTenant
+	// does) rather than trust the value carried on the code / refresh token.
+	if err := core.ValidateToken(tenant); err != nil {
+		return nil, errInvalidGrant("invalid tenant")
+	}
 
 	id, err := m.iam.IdentityByEmail(ctx, email)
-	if err != nil || !id.Enabled {
+	if err != nil {
+		// A vanished identity denies the grant (invalid_grant); a transient DB error
+		// is a server_error, not a policy denial — else an infra blip is reported to
+		// the client as grant-revoked, killing an otherwise-valid session.
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errInvalidGrant("subject is no longer valid")
+		}
+		return nil, errServer(err.Error())
+	}
+	if !id.Enabled {
 		return nil, errInvalidGrant("subject is no longer valid")
 	}
 	su := isSuperuser(id)
@@ -205,21 +238,23 @@ func (m *Manager) mintScopedGrant(ctx context.Context, email, tenant, scope stri
 	}
 
 	// Cap the identity's *effective* authorities (the same set the console token
-	// would carry, viewer baseline included) to the scope allowance. Intersect
-	// caps even the superuser "*" to the allowance, so an OAuth session can never
-	// exceed its scope.
-	capped := auth.IntersectAuthorities(effectiveAuthorities(authorities, su), allowance)
+	// would carry, viewer baseline included) to each token's scope allowance.
+	// Intersect caps even the superuser "*" to the allowance, so an OAuth session
+	// can never exceed its scope.
+	effective := effectiveAuthorities(authorities, su)
+	accessCapped := auth.IntersectAuthorities(effective, accessAllow)
+	refreshCapped := auth.IntersectAuthorities(effective, refreshAllow)
 
 	m.mu.RLock()
 	issuer := m.issuer
 	m.mu.RUnlock()
 
-	access, err := issuer.IssueOAuthAccess(tenant, email, roles, capped, scope, audience, su, uuid.NewString())
+	access, err := issuer.IssueOAuthAccess(tenant, email, roles, accessCapped, accessScope, audience, su, uuid.NewString())
 	if err != nil {
 		return nil, errServer(err.Error())
 	}
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueOAuthRefresh(tenant, email, roles, capped, scope, audience, refreshJti)
+	refresh, err := issuer.IssueOAuthRefresh(tenant, email, roles, refreshCapped, refreshScope, audience, refreshJti)
 	if err != nil {
 		return nil, errServer(err.Error())
 	}
@@ -229,7 +264,7 @@ func (m *Manager) mintScopedGrant(ctx context.Context, email, tenant, scope stri
 	return &OAuthTokens{
 		AccessToken:  access.Token,
 		RefreshToken: refresh.Token,
-		Scope:        scope,
+		Scope:        accessScope,
 		ExpiresIn:    int(m.accessTTL.Seconds()),
 	}, nil
 }
