@@ -40,15 +40,15 @@ func (s *fakeSink) Send(_ context.Context, req CommandRequest) error {
 	return nil
 }
 
-// fakeAlarmSink records raise-alarm requests and can fail.
+// fakeAlarmSink records alarm requests (raise and clear) and can fail.
 type fakeAlarmSink struct {
-	raised []AlarmRequest
+	raised []AlarmRequest // every dispatched request, both edges — the name is historical
 	fail   bool
 }
 
-func (s *fakeAlarmSink) Raise(_ context.Context, req AlarmRequest) error {
+func (s *fakeAlarmSink) Dispatch(_ context.Context, req AlarmRequest) error {
 	if s.fail {
-		return errors.New("raise-alarm publish failed")
+		return errors.New("alarm dispatch failed")
 	}
 	s.raised = append(s.raised, req)
 	return nil
@@ -225,6 +225,11 @@ func TestDispatchRaiseAlarmEnabled(t *testing.T) {
 	if r.DeviceToken != "device-1" || r.Severity != "major" || r.MetricKey != "temperature" || r.AlarmKey != "p/r1" || r.Tenant != "acme" {
 		t.Fatalf("raise request wrong: %+v", r)
 	}
+	// The contributor identity (the composed rule id) and an explicit raised edge are carried for the
+	// alarm-object integrator (slice 6d-pre-2c).
+	if r.RuleID != "acme/p@1/r1" || r.Edge != runtime.EdgeRaised {
+		t.Fatalf("raise must carry the contributor rule id + raised edge: ruleID=%q edge=%q", r.RuleID, r.Edge)
+	}
 	if !r.OccurredTime.Equal(evt().OccurredTime) {
 		t.Fatalf("raise occurred time wrong: %v", r.OccurredTime)
 	}
@@ -261,6 +266,66 @@ func TestDispatchRaiseAlarmCarriesValue(t *testing.T) {
 	d2.Dispatch(context.Background(), evt())
 	if alarms2.raised[0].Value != nil {
 		t.Fatalf("a value-less event must carry a nil value; got %v", *alarms2.raised[0].Value)
+	}
+}
+
+// resolvedEvt returns a derived event carrying a RESOLVED (falling) edge.
+func resolvedEvt() runtime.DerivedEvent {
+	ev := evt()
+	ev.Edge = runtime.EdgeResolved
+	return ev
+}
+
+// TestDispatchResolvedEdgeClearsAlarm proves a raiseAlarm action on a RESOLVED edge dispatches the
+// structural clearAlarm: the SAME alarm request but carrying the resolved edge + contributor rule id,
+// counted as "clearAlarm" (ADR-057). The alarm object removes this rule's contribution.
+func TestDispatchResolvedEdgeClearsAlarm(t *testing.T) {
+	alarms := &fakeAlarmSink{}
+	m := newFakeMetrics()
+	d := NewDispatcher(fakeResolver{rule: raiseAlarmRule("over-temp"), found: true}, nil, alarms, m)
+	if out := d.Dispatch(context.Background(), resolvedEvt()); out != Done {
+		t.Fatalf("want Done, got %v", out)
+	}
+	if len(alarms.raised) != 1 {
+		t.Fatalf("a resolved raiseAlarm must dispatch one clear, got %d", len(alarms.raised))
+	}
+	r := alarms.raised[0]
+	if r.Edge != runtime.EdgeResolved || r.RuleID != "acme/p@1/r1" || r.AlarmKey != "over-temp" {
+		t.Fatalf("clear request wrong: %+v", r)
+	}
+	if m.dispatched["clearAlarm"] != 1 || m.dispatched["raiseAlarm"] != 0 {
+		t.Fatalf("a resolved edge must count clearAlarm, not raiseAlarm: %+v", m.dispatched)
+	}
+}
+
+// TestDispatchResolvedEdgeSkipsSendCommand is the load-bearing correctness test for enabling Resolved
+// on the wire: a command is a one-shot side effect with no falling-edge twin, so a RESOLVED edge must
+// NOT re-send it (which would double-fire the live send-command path). The event is still Done.
+func TestDispatchResolvedEdgeSkipsSendCommand(t *testing.T) {
+	sink := &fakeSink{}
+	m := newFakeMetrics()
+	d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", `{"mode":"eco"}`), found: true}, sink, nil, m)
+	if out := d.Dispatch(context.Background(), resolvedEvt()); out != Done {
+		t.Fatalf("want Done, got %v", out)
+	}
+	if len(sink.sent) != 0 {
+		t.Fatalf("a resolved edge must NOT send a command, got %d", len(sink.sent))
+	}
+	if m.dispatched["sendCommand"] != 0 {
+		t.Fatalf("no sendCommand should be dispatched on a resolved edge: %+v", m.dispatched)
+	}
+}
+
+// TestDispatchResolvedRaiseAlarmNotEnabled proves a resolved raiseAlarm with a NIL alarm sink is inert
+// and counted as clearAlarm-not-enabled (symmetric with the raised not-enabled path).
+func TestDispatchResolvedRaiseAlarmNotEnabled(t *testing.T) {
+	m := newFakeMetrics()
+	d := NewDispatcher(fakeResolver{rule: raiseAlarmRule(""), found: true}, nil, nil, m)
+	if out := d.Dispatch(context.Background(), resolvedEvt()); out != Done {
+		t.Fatalf("want Done, got %v", out)
+	}
+	if m.notEnabled["clearAlarm"] != 1 {
+		t.Fatalf("a resolved raiseAlarm with nil sink must count clearAlarm-not-enabled: %+v", m.notEnabled)
 	}
 }
 

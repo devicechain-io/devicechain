@@ -118,9 +118,10 @@ func (m *detectMetrics) recordStaleAbsenceDropped() {
 }
 
 // reactMetrics are the Slice-5 REACT-dispatcher observability counters (ADR-051 REACT stage). Like
-// detectMetrics they are bounded-cardinality: the one label is "action", a fixed two-value enum
-// (sendCommand/raiseAlarm), never a tenant or rule value (the ADR-023 G.3 lesson). Every recorder is
-// nil-safe so a dispatcher built without a Microservice (unit tests) runs unmeasured.
+// detectMetrics they are bounded-cardinality: the one label is "action", a fixed small enum
+// (sendCommand/raiseAlarm/clearAlarm — the last is the structural falling-edge clear, ADR-057), never
+// a tenant or rule value (the ADR-023 G.3 lesson). Every recorder is nil-safe so a dispatcher built
+// without a Microservice (unit tests) runs unmeasured.
 type reactMetrics struct {
 	dispatched    *prometheus.CounterVec
 	notEnabled    *prometheus.CounterVec
@@ -137,7 +138,7 @@ func newReactMetrics(ms *core.Microservice) *reactMetrics {
 	}
 	return &reactMetrics{
 		dispatched:    ms.NewCounterVec("react_actions_dispatched_total", "REACT actions handed to their sink, by action type (includes idempotent replays).", []string{"action"}),
-		notEnabled:    ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but not yet wired, by action type (raiseAlarm before slice 5c/6).", []string{"action"}),
+		notEnabled:    ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but not yet wired, by action type (raiseAlarm/clearAlarm before slice 6).", []string{"action"}),
 		orphan:        ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched).", nil),
 		poisonDropped: ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch).", nil),
 	}

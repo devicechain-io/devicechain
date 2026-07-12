@@ -137,26 +137,46 @@ func TestPublishStampsValue(t *testing.T) {
 	}
 }
 
-// TestPublishDropsResolvedEdge pins the 6d-pre-1 staged rollout: the DETECT core emits a Resolved
-// detection on every falling edge (ADR-057), but the wire/subscriber/clearAlarm consumers land in
-// 6d-pre-2, so a Resolved is dropped as a delivered no-op (nil error, nothing written) until then.
-// A Raised for the same rule still publishes normally.
-func TestPublishDropsResolvedEdge(t *testing.T) {
+// TestPublishStampsEdge pins the 6d-pre-2b wire contract: BOTH edges publish, each stamped with its
+// DerivedEvent.Edge token so a downstream subscriber and the REACT dispatcher can route a Resolved to
+// a clear and a Raised to a raise — and a Raised and Resolved sharing an OccurredTime stay
+// dedup-distinct. A Resolved carries no value.
+func TestPublishStampsEdge(t *testing.T) {
 	reg := NewRuleRegistry([]ScopedRule{{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: thresholdRule("acme/r1")}})
 	w := &fakeWriter{}
 	p := NewPublisher(w, reg, newFakeMetrics())
-	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, Edge: core.EdgeResolved, At: time.Now()}); err != nil {
-		t.Fatalf("a dropped Resolved must succeed as a no-op: %v", err)
-	}
-	if len(w.writes) != 0 {
-		t.Fatalf("a Resolved edge must not be written to the derived-event stream yet (6d-pre-2); got %d writes", len(w.writes))
-	}
-	// The Raised edge for the same rule still publishes.
-	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now()}); err != nil {
+	now := time.Now()
+
+	// A Raised stamps edge "raised".
+	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: now}); err != nil {
 		t.Fatalf("publish raised: %v", err)
 	}
-	if len(w.writes) != 1 {
-		t.Fatalf("the Raised edge must publish; got %d writes", len(w.writes))
+	// A Resolved for the same (rule, series, time) publishes too — stamped "resolved", value omitted.
+	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, Edge: core.EdgeResolved, At: now}); err != nil {
+		t.Fatalf("publish resolved: %v", err)
+	}
+	if len(w.writes) != 2 {
+		t.Fatalf("both edges must publish; got %d writes", len(w.writes))
+	}
+	var raised, resolved DerivedEvent
+	if err := json.Unmarshal(w.writes[0].payload, &raised); err != nil {
+		t.Fatalf("decode raised: %v", err)
+	}
+	if err := json.Unmarshal(w.writes[1].payload, &resolved); err != nil {
+		t.Fatalf("decode resolved: %v", err)
+	}
+	if raised.Edge != EdgeRaised {
+		t.Fatalf("rising edge must stamp %q, got %q", EdgeRaised, raised.Edge)
+	}
+	if resolved.Edge != EdgeResolved {
+		t.Fatalf("falling edge must stamp %q, got %q", EdgeResolved, resolved.Edge)
+	}
+	// The two share every other identity field but differ on Edge — so they cannot dedup-collapse.
+	if raised.RuleID != resolved.RuleID || raised.Series != resolved.Series || !raised.OccurredTime.Equal(resolved.OccurredTime) {
+		t.Fatalf("the two edges must share their non-edge identity: raised=%+v resolved=%+v", raised, resolved)
+	}
+	if strings.Contains(string(w.writes[1].payload), "value") {
+		t.Fatalf("a resolved edge must carry no value: %s", w.writes[1].payload)
 	}
 }
 
