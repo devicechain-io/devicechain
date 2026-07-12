@@ -33,6 +33,12 @@ func TestRedirectURIMatches(t *testing.T) {
 		{"loopback cannot match non-loopback", "http://127.0.0.1/cb", "http://evil.com/cb", false},
 		{"non-loopback cannot be port-varied", "https://c.example.com/cb", "https://c.example.com./cb", false},
 		{"registered loopback, requested loopback-lookalike rejected", "http://127.0.0.1/cb", "http://127.0.0.1.evil.com/cb", false},
+		{"userinfo in requested loopback rejected", "http://127.0.0.1/cb", "http://evil.com@127.0.0.1:5000/cb", false},
+		{"userinfo creds in requested loopback rejected", "http://127.0.0.1/cb", "http://u:p@127.0.0.1:5000/cb", false},
+		{"fragment in requested loopback rejected", "http://127.0.0.1/cb", "http://127.0.0.1:5000/cb#frag", false},
+		{"bare hash in requested loopback rejected", "http://127.0.0.1/cb", "http://127.0.0.1:5000/cb#", false},
+		{"empty registered path matches requested root", "http://127.0.0.1", "http://127.0.0.1:5000/", true},
+		{"empty registered path matches requested empty", "http://127.0.0.1", "http://127.0.0.1:5000", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -109,6 +115,7 @@ func TestValidateAuthorizeRequest(t *testing.T) {
 	assertRedirectErr(t, bad(func(p *AuthorizeParams) { p.CodeChallengeMethod = "plain" }), "invalid_request")
 	assertRedirectErr(t, bad(func(p *AuthorizeParams) { p.CodeChallengeMethod = "" }), "invalid_request")
 	assertRedirectErr(t, bad(func(p *AuthorizeParams) { p.Scope = "" }), "invalid_scope")
+	assertRedirectErr(t, bad(func(p *AuthorizeParams) { p.Scope = "   " }), "invalid_scope")
 	assertRedirectErr(t, bad(func(p *AuthorizeParams) { p.Scope = "write" }), "invalid_scope")
 }
 

@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"gorm.io/gorm"
 )
@@ -106,7 +108,10 @@ func ValidateAuthorizeRequest(client *iam.OAuthClient, p AuthorizeParams) error 
 	if p.CodeChallengeMethod != "S256" {
 		return &authorizeRedirectError{"invalid_request", "code_challenge_method must be S256"}
 	}
-	if p.Scope == "" {
+	// Guard on the parsed token count, not the raw string, so a whitespace-only
+	// scope ("   ") is rejected here rather than passing to a code that can't be
+	// redeemed (its scope resolves to empty at the token endpoint).
+	if len(auth.ParseScope(p.Scope)) == 0 {
 		return &authorizeRedirectError{"invalid_scope", "scope is required"}
 	}
 	if !auth.ScopeSupported(p.Scope) {
@@ -123,7 +128,15 @@ func ValidateAuthorizeRequest(client *iam.OAuthClient, p AuthorizeParams) error 
 // (a code is never issued for a tenant the subject cannot access — that would only
 // fail later at redemption), then stores the code binding for the token endpoint to
 // redeem. The resource indicator (RFC 8707), if present, becomes the token audience.
-func (m *Manager) IssueAuthorizationCode(ctx context.Context, p AuthorizeParams, email, tenant string) (string, error) {
+func (m *Manager) IssueAuthorizationCode(ctx context.Context, client *iam.OAuthClient, p AuthorizeParams, email, tenant string) (string, error) {
+	// Belt-and-suspenders: re-assert the redirect_uri belongs to this resolved
+	// client, so a code can never be minted for an unvalidated destination even if a
+	// caller reordered the resolve/validate/issue steps. This is the single most
+	// sensitive OAuth invariant, so it is enforced at the mint point, not only in
+	// the (separate) resolve step.
+	if client == nil || !redirectURIRegistered(client.RedirectURIs, p.RedirectURI) {
+		return "", ErrAuthorizeRedirectUnregistered
+	}
 	if err := m.assertTenantAccess(ctx, email, tenant); err != nil {
 		return "", err
 	}
@@ -152,6 +165,14 @@ func (m *Manager) IssueAuthorizationCode(ctx context.Context, p AuthorizeParams,
 // or a superuser (who may break glass into any tenant). Mirrors the SelectTenant
 // gate so the authorize step never issues a code the token step would reject.
 func (m *Manager) assertTenantAccess(ctx context.Context, email, tenant string) error {
+	// Grammar-check the tenant before any branch (mirrors SelectTenant): the
+	// superuser branch below does no DB lookup, so without this a superuser + a
+	// malformed tenant would yield an issued-but-unredeemable code (the token step
+	// rejects a malformed tenant), breaking the "never issue a code the token step
+	// rejects" invariant.
+	if err := core.ValidateToken(tenant); err != nil {
+		return errTenantAccessDenied
+	}
 	id, err := m.iam.IdentityByEmail(ctx, email)
 	if err != nil || !id.Enabled {
 		return ErrInvalidCredentials
@@ -202,15 +223,37 @@ func redirectURIMatches(registered, requested string) bool {
 	if err1 != nil || err2 != nil {
 		return false
 	}
+	// Reject userinfo and fragments on either side (the registration validator
+	// already forbids both, so this closes the request-vs-registration asymmetry):
+	// userinfo can obscure the true host, and a fragment must never ride a redirect
+	// URI. url.Parse peels a fragment into Fragment (and a bare "#" leaves it empty),
+	// so also check the raw string.
+	if ru.User != nil || qu.User != nil {
+		return false
+	}
+	if ru.Fragment != "" || qu.Fragment != "" || strings.Contains(registered, "#") || strings.Contains(requested, "#") {
+		return false
+	}
 	// The port-free exception applies only when BOTH sides are loopback, so a
 	// non-loopback registration can never be matched by varying a port.
 	if !isLoopbackHost(ru.Hostname()) || !isLoopbackHost(qu.Hostname()) {
 		return false
 	}
+	// Normalize an empty path to "/" so a client registered as "http://127.0.0.1"
+	// matches a requested "http://127.0.0.1:5000/" (a common native-app shape) —
+	// both denote the root. Everything else stays byte-exact.
 	return ru.Scheme == qu.Scheme &&
 		ru.Hostname() == qu.Hostname() &&
-		ru.Path == qu.Path &&
+		normalizePath(ru.Path) == normalizePath(qu.Path) &&
 		ru.RawQuery == qu.RawQuery
+}
+
+// normalizePath treats an empty path as the root "/".
+func normalizePath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	return p
 }
 
 // isLoopbackHost matches the loopback host set ValidateRedirectURI permits for http.
