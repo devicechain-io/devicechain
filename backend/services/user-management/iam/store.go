@@ -291,6 +291,46 @@ func (s *Store) DeleteTenant(ctx context.Context, t *Tenant) error {
 	return s.sys(ctx).Unscoped().Delete(t).Error
 }
 
+// ListOAuthClients returns the OAuth client registry, ordered by client_id for a
+// stable listing (ADR-047).
+func (s *Store) ListOAuthClients(ctx context.Context) ([]OAuthClient, error) {
+	var clients []OAuthClient
+	err := s.sys(ctx).Order("client_id").Find(&clients).Error
+	return clients, err
+}
+
+// OAuthClientByClientId resolves a single registered client by its client_id.
+func (s *Store) OAuthClientByClientId(ctx context.Context, clientId string) (*OAuthClient, error) {
+	var c OAuthClient
+	if err := s.sys(ctx).Where("client_id = ?", clientId).First(&c).Error; err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// CreateOAuthClient inserts a new client; a duplicate client_id violates the
+// unique index and surfaces as an error.
+func (s *Store) CreateOAuthClient(ctx context.Context, c *OAuthClient) error {
+	return s.sys(ctx).Create(c).Error
+}
+
+// UpdateOAuthClient persists the mutable fields of an already-loaded client
+// (name/description, redirect URIs, scopes) by primary key. Save writes every
+// column, so the caller loads-then-mutates to avoid clobbering client_id.
+func (s *Store) UpdateOAuthClient(ctx context.Context, c *OAuthClient) error {
+	return s.sys(ctx).Save(c).Error
+}
+
+// SetOAuthClientEnabled flips a client's enabled flag in place.
+func (s *Store) SetOAuthClientEnabled(ctx context.Context, c *OAuthClient, enabled bool) error {
+	return s.sys(ctx).Model(c).Update("enabled", enabled).Error
+}
+
+// DeleteOAuthClient hard-deletes a client row.
+func (s *Store) DeleteOAuthClient(ctx context.Context, c *OAuthClient) error {
+	return s.sys(ctx).Unscoped().Delete(c).Error
+}
+
 // CountMembershipsInTenant returns how many memberships reference a tenant — the
 // guard the admin uses before deleting a tenant so it cannot orphan a person's
 // access.

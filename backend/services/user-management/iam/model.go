@@ -142,13 +142,36 @@ type Tenant struct {
 
 func (Tenant) TableName() string { return "iam_tenants" }
 
+// OAuthClient is a registered OAuth 2.1 client the Authorization Server validates
+// the authorization-code flow against (ADR-047). Instance-global control-plane
+// data (like the role/tenant catalog), reached through the system context — an
+// OAuth client is a platform-level registration, not tenant-scoped; the tenant is
+// chosen per-grant at the authorize step. Every v1 client is a PUBLIC client
+// (token_endpoint_auth_method=none) that proves possession via PKCE, so there is
+// deliberately no client secret to store. RedirectURIs is the exact-match
+// allowlist the authorize endpoint checks; Scopes is the set of scopes this client
+// may request (each a member of auth.SupportedScopes).
+type OAuthClient struct {
+	gorm.Model
+	rdb.NamedEntity
+
+	ClientId     string   `gorm:"uniqueIndex;not null;size:128"`
+	RedirectURIs []string `gorm:"serializer:json"`
+	Scopes       []string `gorm:"serializer:json"`
+	Enabled      bool     `gorm:"not null;default:true"`
+}
+
+func (OAuthClient) TableName() string { return "iam_oauth_clients" }
+
 // AuditLabel implements rdb.AuditLabeler: label an audited iam row with its
-// human-facing, non-sensitive identifier — a role/tenant token or an identity's
-// email — so an audit view can show "iam_roles operator" rather than "#3".
-// (Membership has no single natural label and is left to fall back to its pk.)
-func (r Role) AuditLabel() string     { return r.Token }
-func (t Tenant) AuditLabel() string   { return t.Token }
-func (i Identity) AuditLabel() string { return i.Email }
+// human-facing, non-sensitive identifier — a role/tenant token, a client_id, or
+// an identity's email — so an audit view can show "iam_roles operator" rather than
+// "#3". (Membership has no single natural label and is left to fall back to its
+// pk.)
+func (r Role) AuditLabel() string        { return r.Token }
+func (t Tenant) AuditLabel() string      { return t.Token }
+func (c OAuthClient) AuditLabel() string { return c.ClientId }
+func (i Identity) AuditLabel() string    { return i.Email }
 
 // SystemAuthorities is the deduped union of the identity's system roles'
 // authorities — the authorities carried on its identity token. Pure: it reads

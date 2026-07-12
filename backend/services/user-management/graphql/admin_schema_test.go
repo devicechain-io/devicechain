@@ -37,6 +37,9 @@ func TestAdminQueriesFailClosed(t *testing.T) {
 
 	_, err = r.Tenants(ctx)
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	_, err = r.OauthClients(ctx)
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 }
 
 // TestAdminQueriesForbidWithoutAuthority confirms an authenticated identity that
@@ -50,6 +53,32 @@ func TestAdminQueriesForbidWithoutAuthority(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 
 	_, err = r.Tenants(ctx)
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+
+	// An identity with unrelated authorities still lacks client:read.
+	_, err = r.OauthClients(ctx)
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+}
+
+// TestAdminOAuthClientMutationsFailClosed confirms the OAuth client registry
+// mutations reject an unauthenticated request before touching the service — the
+// client:write gate runs first (ADR-047).
+func TestAdminOAuthClientMutationsFailClosed(t *testing.T) {
+	r := &AdminResolver{}
+	ctx := context.Background()
+
+	_, err := r.CreateOauthClient(ctx, struct{ Request adminOAuthClientCreateInput }{})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	_, err = r.DeleteOauthClient(ctx, struct{ ClientId string }{ClientId: "x"})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	// Authenticated but without client:write → forbidden.
+	ctx = auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{"user:read"}})
+	_, err = r.SetOauthClientEnabled(ctx, struct {
+		ClientId string
+		Enabled  bool
+	}{ClientId: "x"})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 }
 

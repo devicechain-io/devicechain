@@ -76,6 +76,13 @@ const (
 	// carries these — they are not tenant-scoped.
 	SettingsRead  Authority = "settings:read"
 	SettingsWrite Authority = "settings:write"
+
+	// OAuth client registry (user-management admin API, ADR-047). Instance-global:
+	// gate the read/write of the OAuth 2.1 client allowlist (client_id, redirect
+	// URIs, permitted scopes) that the Authorization Server validates the
+	// authorization-code flow against. System-scoped, like the role/tenant catalog.
+	ClientRead  Authority = "client:read"
+	ClientWrite Authority = "client:write"
 )
 
 // vocabulary is the set of every known authority. A Role may only grant
@@ -105,6 +112,8 @@ var vocabulary = map[Authority]struct{}{
 	AuditRead:         {},
 	SettingsRead:      {},
 	SettingsWrite:     {},
+	ClientRead:        {},
+	ClientWrite:       {},
 }
 
 // ValidAuthority reports whether s names a known authority (including the

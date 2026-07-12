@@ -3,7 +3,11 @@
 
 package auth
 
-import "strings"
+import (
+	"fmt"
+	"net/url"
+	"strings"
+)
 
 // OAuth 2.1 scope vocabulary (ADR-047). Scopes are a *cap* on the authorities a
 // token minted through the authorization-code flow may carry: the AS intersects
@@ -43,6 +47,63 @@ func ScopeSupported(requested string) bool {
 		}
 	}
 	return true
+}
+
+// IsSupportedScope reports whether s is a single scope this AS grants.
+func IsSupportedScope(s string) bool {
+	for _, sup := range SupportedScopes {
+		if sup == s {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateRedirectURI enforces the OAuth 2.1 redirect-URI rules for a registered
+// client (ADR-047). A redirect URI must be an absolute URL with no fragment
+// (RFC 6749 §3.1.2). The scheme must be https, EXCEPT that http is permitted for a
+// loopback host (127.0.0.1, ::1, or localhost) — the OAuth 2.1 / RFC 8252 §7.3
+// carve-out for native apps that receive the redirect on a loopback listener,
+// which is exactly how the v1 MCP desktop clients authenticate. Plaintext http to
+// any non-loopback host is rejected, fail-closed.
+func ValidateRedirectURI(raw string) error {
+	if raw == "" {
+		return fmt.Errorf("redirect URI must not be empty")
+	}
+	if raw != strings.TrimSpace(raw) {
+		return fmt.Errorf("must not have leading or trailing whitespace (got %q)", raw)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("not a valid URL: %w", err)
+	}
+	if !u.IsAbs() || u.Host == "" {
+		return fmt.Errorf("must be an absolute URL with a host (got %q)", raw)
+	}
+	// Reject userinfo: "https://good.com@evil.com/cb" has host evil.com and would
+	// exfiltrate the authorization code there — the canonical open-redirect-via-
+	// userinfo bypass. Redirect URIs carry no credentials (RFC 6749 §3.1.2).
+	if u.User != nil {
+		return fmt.Errorf("must not contain userinfo/credentials (got %q)", raw)
+	}
+	// Reject any fragment, including a bare "#" (url.Parse records that as an empty
+	// Fragment, so also check the raw string).
+	if u.Fragment != "" || strings.Contains(raw, "#") {
+		return fmt.Errorf("must not contain a fragment (got %q)", raw)
+	}
+	host := u.Hostname()
+	isLoopback := host == "127.0.0.1" || host == "::1" || host == "localhost"
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if !isLoopback {
+			return fmt.Errorf("http redirect URI is allowed only for a loopback host (got %q)", raw)
+		}
+		return nil
+	default:
+		return fmt.Errorf("redirect URI scheme must be https (or http for loopback); got %q", u.Scheme)
+	}
 }
 
 // IntersectAuthorities caps a subject's held authorities to those an OAuth scope
