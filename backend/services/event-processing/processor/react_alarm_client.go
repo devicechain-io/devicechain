@@ -28,13 +28,12 @@ func wireAlarmEdge(edge string) string {
 
 // alarmClient is the REACT dispatcher's raise-alarm sink (ADR-051 slice 5c): it publishes a
 // raise-alarm request onto device-management's dedicated raise-alarm subject, which a thin
-// device-management consumer applies through the existing alarm engine (slice 5c-1). It is
+// device-management consumer folds into the alarm's contributor set (slice 5c-1 / ADR-057). It is
 // dependency-inverted behind react.AlarmSink so the dispatcher never depends on the transport.
 //
-// It carries no idempotency token: raise-alarm is an upsert keyed on (device, alarmKey) downstream,
-// so an at-least-once redelivery is safe without one. It is wired ONLY when raise-alarm dispatch is
-// enabled (a default-off flag until slice 6 retires the measurement-driven evaluator), so a nil sink
-// leaves raiseAlarm actions inert.
+// It carries no idempotency token: the downstream contributor-set fold is keyed on (device, alarmKey)
+// with a per-contributor monotonic decision-ts, so an at-least-once redelivery is safe without one.
+// Since the 6d cutover it is always wired (the sole alarm path).
 type alarmClient struct {
 	writer messaging.MessageWriter
 }

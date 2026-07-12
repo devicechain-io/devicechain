@@ -45,9 +45,9 @@ var (
 	RuleRegistry            *runtime.RuleRegistry
 	ResolvedEventsReader    messaging.MessageReader
 	ResolvedEventsProcessor *processor.ResolvedEventsProcessor
-	// ReactDispatcher is the REACT stage's derived-event consumer (ADR-051 slice 5b). It is nil
-	// when send-command dispatch is not configured (no service secret or no command-delivery
-	// coordinate) — REACT is then disabled rather than a startup failure.
+	// ReactDispatcher is the REACT stage's derived-event consumer (ADR-051 slice 5b/5c). Since the
+	// 6d cutover made raise-alarm the sole alarm path, its raise-alarm sink is always wired, so the
+	// dispatcher is always started; send-command is the optional sink (nil when unconfigured).
 	ReactDispatcher *processor.ReactDispatcher
 )
 
@@ -191,12 +191,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 
-	// The REACT dispatcher (ADR-051 slice 5b): an INDEPENDENT durable consumer of the derived-event
-	// stream this service also produces, dispatching each detection's authored actions (send-command
-	// live in 5b; raise-alarm lands gated in 5c). It resolves each rule's action chain from the
-	// durable rule projection by id — the same projection DETECT rebuilds from — so an action edit
-	// takes effect without re-publishing events. It is wired (and its derived-event consumer created)
-	// only when send-command dispatch is configured; see wireReactDispatcher.
+	// The REACT dispatcher (ADR-051 slice 5b/5c): an INDEPENDENT durable consumer of the derived-event
+	// stream this service also produces, dispatching each detection's authored actions (raise-alarm and
+	// send-command). It resolves each rule's action chain from the durable rule projection by id — the
+	// same projection DETECT rebuilds from — so an action edit takes effect without re-publishing events.
+	// Its raise-alarm sink is always wired (the sole alarm path since 6d), so it always starts; see
+	// wireReactDispatcher.
 	return wireReactDispatcher(nmgr)
 }
 
@@ -321,7 +321,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 	// Start the REACT dispatcher last (after its reader is live) — independent of the DETECT
-	// processor. Nil when send-command dispatch is not configured (wireReactDispatcher).
+	// processor. Always non-nil since 6d (raise-alarm is always wired); the nil guard is defensive.
 	if ReactDispatcher != nil {
 		return ReactDispatcher.Start(ctx)
 	}

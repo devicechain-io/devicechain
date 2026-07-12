@@ -90,9 +90,9 @@ type AlarmStateChangeEvent struct {
 	// line.
 	RaisedTime time.Time
 
-	// OccurredTime is the event time that drove the transition — the measurement's
-	// occurred time for an evaluator transition, or the operation time for an operator
-	// ack/clear — so the emitted timeline matches the alarm's own timestamps.
+	// OccurredTime is the event time that drove the transition — the detection's
+	// occurred time for a rule-driven (integrator) transition, or the operation time for an
+	// operator ack/clear — so the emitted timeline matches the alarm's own timestamps.
 	OccurredTime time.Time
 }
 
@@ -109,7 +109,7 @@ type AlarmEventPublisher interface {
 // Severity ranks run 0 (CRITICAL, most severe) .. 4 (INDETERMINATE, least): a
 // numerically lower rank is an escalation. It reports changed=false when the severity
 // is unchanged — a value-only update emits no event — or when either severity is
-// unknown (rank < 0), which the evaluator never produces but is guarded against so a
+// unknown (rank < 0), which the integrator never produces but is guarded against so a
 // bogus value can't manufacture a spurious escalation event.
 func severityTransition(prev, next string) (AlarmEventType, bool) {
 	pr, nr := AlarmSeverity(prev).Rank(), AlarmSeverity(next).Rank()

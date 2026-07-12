@@ -62,7 +62,7 @@ func (o AlarmOperator) Valid() bool {
 // String returns the underlying string value.
 func (o AlarmOperator) String() string { return string(o) }
 
-// AlarmSeverity is the severity of an alarm (ADR-041). Ordered so the evaluator can
+// AlarmSeverity is the severity of an alarm (ADR-041). Ordered so the integrator can
 // escalate an active alarm in place when a higher-severity rule fires, rather than
 // spawning a second alarm.
 type AlarmSeverity string

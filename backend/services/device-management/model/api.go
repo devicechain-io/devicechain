@@ -17,8 +17,8 @@ type Api struct {
 	// AlarmPublisher emits alarm state-change events (ADR-041). It is injected at
 	// wiring time (the concrete publisher owns a NATS writer, so it cannot be built
 	// until the messaging layer exists) and may be nil — in tests, or before wiring —
-	// in which case emission is disabled. Both the evaluator and the operator API
-	// mutate alarms through this shared *Api, so setting it here gives one uniform
+	// in which case emission is disabled. Both the DETECT edge integrator and the operator
+	// API mutate alarms through this shared *Api, so setting it here gives one uniform
 	// event stream for every transition.
 	AlarmPublisher AlarmEventPublisher
 
