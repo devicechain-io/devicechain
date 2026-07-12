@@ -70,12 +70,21 @@ func ValidateRedirectURI(raw string) error {
 	if raw == "" {
 		return fmt.Errorf("redirect URI must not be empty")
 	}
+	if raw != strings.TrimSpace(raw) {
+		return fmt.Errorf("must not have leading or trailing whitespace (got %q)", raw)
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("not a valid URL: %w", err)
 	}
 	if !u.IsAbs() || u.Host == "" {
 		return fmt.Errorf("must be an absolute URL with a host (got %q)", raw)
+	}
+	// Reject userinfo: "https://good.com@evil.com/cb" has host evil.com and would
+	// exfiltrate the authorization code there — the canonical open-redirect-via-
+	// userinfo bypass. Redirect URIs carry no credentials (RFC 6749 §3.1.2).
+	if u.User != nil {
+		return fmt.Errorf("must not contain userinfo/credentials (got %q)", raw)
 	}
 	// Reject any fragment, including a bare "#" (url.Parse records that as an empty
 	// Fragment, so also check the raw string).

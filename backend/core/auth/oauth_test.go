@@ -173,6 +173,10 @@ func TestValidateRedirectURI(t *testing.T) {
 		{"relative rejected", "/callback", false},
 		{"empty rejected", "", false},
 		{"no host rejected", "https:///cb", false},
+		{"userinfo host-spoof rejected", "https://good.com@evil.com/cb", false},
+		{"userinfo on loopback rejected", "http://evil.com@127.0.0.1/cb", false},
+		{"loopback-lookalike rejected", "http://127.0.0.1.evil.com/cb", false},
+		{"trailing whitespace rejected", "https://client.example.com/cb ", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
