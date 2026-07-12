@@ -4,7 +4,6 @@
 package model
 
 import (
-	"context"
 	"testing"
 	"time"
 )
@@ -47,21 +46,5 @@ func TestRaiseAlarmRequestRoundTrip(t *testing.T) {
 	}
 	if ngot.Value != nil {
 		t.Fatalf("a value-less request must round-trip with a nil value; got %v", *ngot.Value)
-	}
-}
-
-// TestRaiseAlarmRejectsInvalidInput proves the exported wrapper fails closed on an empty alarm key
-// or an out-of-set severity BEFORE touching the store (so these paths need no DB).
-func TestRaiseAlarmRejectsInvalidInput(t *testing.T) {
-	api := &Api{} // no RDB: the validation returns before any DB access
-	at := time.Now()
-	if err := api.RaiseAlarm(context.Background(), 1, "", "m", "CRITICAL", nil, at); err == nil {
-		t.Fatal("empty alarm key must be rejected")
-	}
-	if err := api.RaiseAlarm(context.Background(), 1, "key", "m", "catastrophic", nil, at); err == nil {
-		t.Fatal("unknown severity must be rejected")
-	}
-	if err := api.RaiseAlarm(context.Background(), 1, "key", "m", "critical", nil, at); err == nil {
-		t.Fatal("a lowercase severity is not a valid AlarmSeverity and must be rejected (the consumer uppercases)")
 	}
 }

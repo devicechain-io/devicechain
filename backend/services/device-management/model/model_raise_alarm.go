@@ -21,10 +21,10 @@ const (
 )
 
 // RaiseAlarmRequest is the raise-alarm message event-processing's REACT dispatcher sends to
-// device-management (ADR-051 slice 5c / ADR-054) when a detection rule's raiseAlarm action fires.
-// device-management raises/escalates the alarm through its existing engine (raiseOrEscalateAlarm),
-// keeping the Alarm object, ack/clear, graph rollup, and alarm-events→notification last mile all in
-// one place (ADR-041/017).
+// device-management (ADR-051 slice 5c / ADR-054 / ADR-057) when a detection rule's raiseAlarm action
+// fires. device-management folds each edge into the (device, alarmKey) alarm's contributor set
+// (ApplyAlarmContributorEdge), keeping the Alarm object, ack/clear, graph rollup, and
+// alarm-events→notification last mile all in one place (ADR-041/017).
 //
 // It is a JSON message — like event-processing's derived events (ADR-037), and unlike
 // device-management's protobuf FACT streams — because it is an event-processing-produced request
@@ -33,7 +33,7 @@ const (
 // MarshalRaiseAlarmRequest; this service's consumer decodes it via UnmarshalRaiseAlarmRequest.
 type RaiseAlarmRequest struct {
 	// DeviceToken is the target device (the detection's series). The consumer resolves it to the
-	// device row id raiseOrEscalateAlarm needs.
+	// device row id ApplyAlarmContributorEdge needs.
 	DeviceToken string `json:"deviceToken"`
 	// AlarmKey is the (originator, key) the alarm is keyed on (ADR-041 dec 3): repeated firings of
 	// the same rule escalate ONE alarm in place. The dispatcher defaults an empty authored key to
@@ -77,7 +77,7 @@ type RaiseAlarmRequest struct {
 	// later-arriving equal-ts raise does not re-add). This tiebreak needs only (OccurredTime, Edge),
 	// both already on the wire — no sequence field — so the contract is order-independent by
 	// construction. Legacy note: the retired measurement evaluator was latest-processed-wins with no
-	// equal-ts rule (api_alarm_eval.go); the integrator replaces that with this deterministic order.
+	// equal-ts rule; the contributor-set integrator replaces that with this deterministic order.
 	OccurredTime time.Time `json:"occurredTime"`
 }
 

@@ -39,10 +39,10 @@ type AttrEntry struct {
 // the same goroutine that reads it on the hot path (For, in Plan) — so it needs no lock.
 //
 // FLATTENING is SERVER-over-SHARED (ADR-012): a server-scoped value (hidden from the device) shadows
-// a shared-scoped one for the same key, matching device-management's alarm-engine resolveThreshold
-// precedence — an attribute threshold is platform-set config, so the device-readable shared value is
-// only a fallback. A device with no attributes has no entry (For returns nil), which the presence-
-// guarded dynamic comparison reads as a clean non-match.
+// a shared-scoped one for the same key, matching device-management's attribute-scope precedence — an
+// attribute threshold is platform-set config, so the device-readable shared value is only a fallback.
+// A device with no attributes has no entry (For returns nil), which the presence-guarded dynamic
+// comparison reads as a clean non-match.
 type DeviceAttributeView struct {
 	byDevice map[devKey]map[string]float64
 }

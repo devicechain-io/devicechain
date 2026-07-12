@@ -14,7 +14,7 @@ import (
 )
 
 // This file holds the read + operator API for raised Alarms (ADR-041). Alarms are
-// created and mutated toward their terminal states by the evaluator (a later slice),
+// created and mutated toward their terminal states by the DETECT edge integrator (ADR-057),
 // not by a create mutation — an alarm exists because a condition fired, never because
 // a user asked for one. The operations here are the human-facing half: reading alarms
 // and the two operator transitions (acknowledge, clear).
@@ -102,9 +102,9 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 // authenticated subject. Returns ErrRecordNotFound when the token names no alarm.
 //
 // The write is column-limited (only the three ack columns) rather than a full-row
-// Save: the evaluator (a later slice) mutates other columns of the same row in place
-// (severity escalation, LastValue, re-raise), so writing back a stale full row would
-// clobber a concurrent evaluation.
+// Save: the DETECT edge integrator mutates other columns of the same row in place
+// (severity re-derivation, LastValue, contributor set), so writing back a stale full
+// row would clobber a concurrent edge apply.
 func (api *Api) AcknowledgeAlarm(ctx context.Context, token string, by *string) (*Alarm, error) {
 	matches, err := api.AlarmsByToken(ctx, []string{token})
 	if err != nil {
@@ -140,8 +140,8 @@ func (api *Api) AcknowledgeAlarm(ctx context.Context, token string, by *string) 
 }
 
 // ClearAlarm records a manual operator clear of the alarm named by token, moving it
-// to CLEARED and stamping ClearedTime. This is the human override; the evaluator also
-// auto-clears when a condition resolves (a later slice). Idempotent — clearing an
+// to CLEARED and stamping ClearedTime. This is the human override; the DETECT edge
+// integrator also clears when a rule's condition resolves (ADR-057). Idempotent — clearing an
 // already-CLEARED alarm returns the current row. Returns ErrRecordNotFound when the
 // token names no alarm. Column-limited for the same concurrency reason as
 // AcknowledgeAlarm.
@@ -156,7 +156,7 @@ func (api *Api) ClearAlarm(ctx context.Context, token string) (*Alarm, error) {
 	alarm := matches[0]
 	if alarm.State != string(AlarmStateCleared) {
 		clearedTime := sql.NullTime{Time: time.Now().UTC(), Valid: true}
-		// Predicate on not-already-cleared so a concurrent auto-clear (evaluator) and
+		// Predicate on not-already-cleared so a concurrent clear (the integrator) and
 		// this manual clear don't both emit CLEARED; gate the emit on RowsAffected.
 		res := api.RDB.DB(ctx).Model(alarm).Where("state <> ?", string(AlarmStateCleared)).
 			Updates(map[string]interface{}{

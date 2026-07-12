@@ -10,9 +10,9 @@ import (
 
 // This file defines the alarm state-change event (ADR-041): the envelope re-emitted
 // whenever a raised Alarm transitions, plus the small publisher interface the model
-// layer emits through. The evaluator and the operator API both mutate alarms via the
-// same *Api, so emitting here — through an injected interface — gives one uniform
-// event stream for every transition (evaluator raise/escalate/clear and operator
+// layer emits through. The DETECT edge integrator and the operator API both mutate alarms
+// via the same *Api, so emitting here — through an injected interface — gives one uniform
+// event stream for every transition (integrator raise/escalate/clear and operator
 // ack/clear). It is the substrate for graphql-ws subscriptions (2.E, ADR-037) and
 // notifications (ADR-017).
 //
@@ -37,8 +37,8 @@ const (
 	// AlarmEventDeescalated is emitted when an ACTIVE alarm's severity decreases in
 	// place (it still fires, but at a lower tier).
 	AlarmEventDeescalated AlarmEventType = "DEESCALATED"
-	// AlarmEventCleared is emitted when an alarm goes CLEARED — whether auto-cleared
-	// by the evaluator or manually cleared by an operator.
+	// AlarmEventCleared is emitted when an alarm goes CLEARED — whether cleared by the
+	// DETECT edge integrator (its contributor set emptied) or manually by an operator.
 	AlarmEventCleared AlarmEventType = "CLEARED"
 	// AlarmEventAcknowledged is emitted when an operator acknowledges an alarm.
 	AlarmEventAcknowledged AlarmEventType = "ACKNOWLEDGED"
@@ -90,9 +90,9 @@ type AlarmStateChangeEvent struct {
 	// line.
 	RaisedTime time.Time
 
-	// OccurredTime is the event time that drove the transition — the measurement's
-	// occurred time for an evaluator transition, or the operation time for an operator
-	// ack/clear — so the emitted timeline matches the alarm's own timestamps.
+	// OccurredTime is the event time that drove the transition — the detection's
+	// occurred time for a rule-driven (integrator) transition, or the operation time for an
+	// operator ack/clear — so the emitted timeline matches the alarm's own timestamps.
 	OccurredTime time.Time
 }
 
@@ -109,7 +109,7 @@ type AlarmEventPublisher interface {
 // Severity ranks run 0 (CRITICAL, most severe) .. 4 (INDETERMINATE, least): a
 // numerically lower rank is an escalation. It reports changed=false when the severity
 // is unchanged — a value-only update emits no event — or when either severity is
-// unknown (rank < 0), which the evaluator never produces but is guarded against so a
+// unknown (rank < 0), which the integrator never produces but is guarded against so a
 // bogus value can't manufacture a spurious escalation event.
 func severityTransition(prev, next string) (AlarmEventType, bool) {
 	pr, nr := AlarmSeverity(prev).Rank(), AlarmSeverity(next).Rank()

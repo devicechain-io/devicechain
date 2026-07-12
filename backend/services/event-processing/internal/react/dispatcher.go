@@ -141,8 +141,9 @@ type Dispatcher struct {
 }
 
 // NewDispatcher builds a REACT dispatcher over a rule resolver and its action sinks. Either sink may
-// be nil: a nil commands sink disables send-command, a nil alarms sink disables raise-alarm (the
-// default until slice 6). A dispatcher with both nil dispatches nothing (every action inert).
+// be nil: a nil commands sink disables send-command, a nil alarms sink disables raise-alarm. In
+// production since 6d the alarms sink is always wired (the sole alarm path); a nil alarms sink is a
+// test-only configuration. A dispatcher with both nil dispatches nothing (every action inert).
 func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink, metrics Metrics) *Dispatcher {
 	return &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, metrics: metrics}
 }
@@ -222,7 +223,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			action = "clearAlarm"
 		}
 		if d.alarms == nil {
-			// Alarm dispatch is disabled (the default until slice 6 retires the measurement evaluator).
+			// No alarm sink (a test-only configuration; production always wires it since 6d).
 			// Count it so its inertness is observable rather than silent.
 			d.metrics.RecordNotEnabled(action)
 			return Done

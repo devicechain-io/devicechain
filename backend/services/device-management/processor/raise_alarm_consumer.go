@@ -28,18 +28,15 @@ import (
 // alarm-events→notification flow (ADR-041/017) as before, now cleared by edge integration rather than
 // the retired measurement evaluator's per-sample re-evaluation.
 //
-// It is a separate consumer from the measurement-driven alarm evaluator by design (alarm edges must
-// not share a failure fate with measurement evaluation), and it needs no dead-letter path: a request
-// that repeatedly fails to apply is dropped after the redelivery cap. Volume is low (one per rule
-// edge), so it processes inline in the read loop rather than behind a worker pool. An at-least-once,
-// out-of-order redelivery is safe: the contributor reduction ignores a stale edge and lets a resolve
-// win a raise at an equal event time (RaiseAlarmRequest.OccurredTime), so any order re-derives one
-// deterministic alarm state.
+// It is a dedicated consumer (alarm edges must not share a failure fate with any other pipeline) and
+// needs no dead-letter path: a request that repeatedly fails to apply is dropped after the redelivery
+// cap. Volume is low (one per rule edge), so it processes inline in the read loop rather than behind a
+// worker pool. An at-least-once, out-of-order redelivery is safe: the contributor reduction ignores a
+// stale edge and lets a resolve win a raise at an equal event time (RaiseAlarmRequest.OccurredTime), so
+// any order re-derives one deterministic alarm state.
 //
-// SLICE-6 CO-EXISTENCE: this consumer and the measurement evaluator write the SAME (device, alarmKey)
-// row; while both run, the evaluator's auto-clear/tier-rederivation can clear or clobber a
-// REACT-integrated alarm. That is why the DISPATCH side is gated default-off until slice 6 retires the
-// measurement-driven evaluator (per tenant, atomically) — the two paths must not both write.
+// SOLE ALARM PATH: since the 6d cutover (ADR-057) deleted the measurement-driven evaluator, this is the
+// only writer of the (device, alarmKey) alarm row — there is no peer to double-raise or auto-clear against.
 type RaiseAlarmConsumer struct {
 	Microservice *core.Microservice
 	Reader       messaging.MessageReader

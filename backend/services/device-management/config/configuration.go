@@ -50,10 +50,10 @@ const (
 	// device-management raises/escalates the alarm through its existing alarm engine (the Alarm
 	// object, ack/clear, graph rollup, and alarm-events→notification last mile all stay here,
 	// ADR-041/017). The message is a JSON RaiseAlarmRequest (device token + alarm key + metric +
-	// severity + value + occurred time). At-least-once: raiseOrEscalateAlarm is an idempotent
-	// upsert keyed on (device, alarmKey) with occurred-time out-of-order guards, so a redelivery
-	// is safe. Tenant on the subject. The dispatch side is gated default-off until slice 6 retires
-	// the measurement-driven evaluator, so the two paths never double-raise.
+	// severity + value + occurred time). At-least-once: ApplyAlarmContributorEdge (ADR-057) is an
+	// idempotent contributor-set fold keyed on (device, alarmKey) with a per-contributor monotonic
+	// decision-ts, so a redelivery is safe. Tenant on the subject. Since the 6d cutover retired the
+	// measurement evaluator, this is the sole alarm-raise path — there is no peer to double-raise against.
 	SUBJECT_RAISE_ALARM = "raise-alarm"
 )
 

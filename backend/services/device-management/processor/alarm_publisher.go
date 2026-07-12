@@ -19,8 +19,8 @@ import (
 // the model layer stays free of a messaging dependency (dependency inversion).
 //
 // Publishing is best-effort: the tenant-scoped writer derives the subject from the
-// tenant already present in the caller's context (the evaluator runs each evaluation
-// under the event's tenant; an operator mutation runs under the request's tenant), so
+// tenant already present in the caller's context (the raise-alarm consumer applies each
+// edge under the event's tenant; an operator mutation runs under the request's tenant), so
 // no tenant plumbing is needed here. A marshal or publish failure is logged and
 // swallowed — the alarm row is the source of truth and a subscriber can re-query, so
 // a dropped notification must never fail or retry the DB transition that produced it.

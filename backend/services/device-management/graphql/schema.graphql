@@ -220,8 +220,8 @@ type CommandDefinitionSearchResults {
 # body — definition — is an opaque JSON document (the event-processing rules.Rule schema);
 # device-management versions it with the profile but does not parse the detection taxonomy
 # (that stays single-homed in event-processing, which compiles and cost-gates it at
-# publish). DetectionRule is the going-forward alarm-authoring path (ADR-057); the legacy
-# measurement evaluator still runs on rules frozen into published profile snapshots.
+# publish). DetectionRule is the one alarm-authoring path (ADR-057); its edge-triggered rules
+# raise/resolve alarms through the contributor-set integrator, the sole alarm path since the 6d cutover.
 type DetectionRule implements Model & TokenReference & NamedEntity & MetadataEntity {
     id: ID!
     createdAt: String
@@ -263,8 +263,8 @@ type DetectionRuleSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# A raised alarm (ADR-041) — the operational alarm object. Raised when a device
-# measurement meets a configured rule (today by the legacy measurement evaluator), keyed by (originator,
+# A raised alarm (ADR-041) — the operational alarm object. Raised when a DETECT rule's
+# condition fires (ADR-057, via the contributor-set integrator), keyed by (originator,
 # alarmKey): there is at most one live alarm per key, so re-crossings dedup into the
 # same row and severity escalates in place. The four-state model is state (ACTIVE |
 # CLEARED) crossed with acknowledged. The originator is addressed uniformly by
@@ -1430,7 +1430,7 @@ type Mutation {
 }
 
 # A single alarm state-change, pushed live to a subscriber (ADR-041 / ADR-037). It
-# is the transition envelope re-emitted by the evaluator and the operator API — not
+# is the transition envelope re-emitted by the alarm integrator and the operator API — not
 # the stored Alarm row — so it carries the transition kind (eventType) and, for a
 # severity move, the prior severity, alongside a snapshot of the alarm after the
 # change. Address the alarm by token to re-query it; the originator is the uniform

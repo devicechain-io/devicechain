@@ -37,16 +37,16 @@ func (s AlarmState) Valid() bool {
 // String returns the underlying string value.
 func (s AlarmState) String() string { return string(s) }
 
-// Alarm is a first-class, raised alarm (ADR-041) — the operational counterpart to
-// AlarmDefinition (the rule). The evaluator raises one when a device's measurement
-// meets a rule's condition, keyed by (originator, AlarmKey): there is at most one
+// Alarm is a first-class, raised alarm (ADR-041) — the operational alarm object. A
+// DETECT rule raises one (ADR-057, via the contributor-set integrator) when its
+// condition fires, keyed by (originator, AlarmKey): there is at most one
 // live Alarm per that key, so re-crossings dedup into the same row and severity
 // escalates in place (ADR-041 dec 3/4). Alarm history is the re-emitted state-change
 // event stream (a later slice), NOT one row per occurrence.
 //
 // The originator is addressed uniformly by (OriginatorType, OriginatorId) — the same
 // ADR-013 entity addressing used by EntityAttribute and EntityRelationship — so an
-// alarm can in principle be raised on any entity (today the evaluator raises on the
+// alarm can in principle be raised on any entity (today alarms are raised on the
 // device); referential integrity for that reference is app-layer (the delete cascade
 // removes an entity's alarms).
 type Alarm struct {

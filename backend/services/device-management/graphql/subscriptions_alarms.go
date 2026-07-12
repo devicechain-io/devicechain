@@ -55,7 +55,7 @@ func (f alarmEventFilter) matches(ev *model.AlarmStateChangeEvent) bool {
 
 // AlarmStream streams alarm state-change events to the subscriber as transitions
 // happen (ADR-041 / ADR-037). It taps the live alarm-events feed for the caller's
-// tenant and pushes each event — the same envelope the evaluator and operator API
+// tenant and pushes each event — the same envelope the alarm integrator and operator API
 // emit (2.D) — optionally narrowed to one originator/state/severity/alarm key. The
 // feed is torn down when the client unsubscribes or disconnects (ctx cancelled).
 // Named distinctly from the alarm queries because both resolve off the one root
@@ -155,7 +155,7 @@ func (r *AlarmEventResolver) OriginatorType() string { return r.E.OriginatorType
 func (r *AlarmEventResolver) OriginatorId() gql.ID { return gql.ID(fmt.Sprint(r.E.OriginatorId)) }
 
 // OriginatorToken resolves the originator's token on demand — a device lookup by id,
-// since the evaluator raises alarms on devices today. It returns nil when the
+// since alarms are raised on devices today. It returns nil when the
 // originator is not a device or no longer exists, and surfaces a lookup failure as a
 // field error (rather than an indistinguishable null). Lazy by design: the lookup
 // runs only when the client selects this field, keeping it off the per-event fan-out
