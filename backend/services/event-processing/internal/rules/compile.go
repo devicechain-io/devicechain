@@ -74,20 +74,22 @@ func (l Limits) withDefaults() Limits {
 //     duration/repeating). The presence guard in the predicate is defense-in-depth.
 //   - ValueMetric set → feed only events carrying ValueMetric (deltaRate, non-count
 //     aggregate); the predicate's presence guard also enforces it.
-//   - both empty      → feed every in-scope event. Absence is deliberately here (every
-//     event is a heartbeat, device-scoped not metric-scoped); so are match-every leaves,
-//     count aggregates, and correlation. A RAW-CEL leaf is also here, and a raw-CEL DURATION
-//     or THRESHOLD rule on a mixed-telemetry device is a genuine trap: there is no expressible
-//     total leaf that metric-scopes it. A presence-guarded leaf (`"m" in metrics && …`)
-//     evaluates to a clean FALSE on an off-metric event — which for Duration CANCELS the hold
-//     and for Threshold RESOLVES the alarm (ADR-057), so off-metric telemetry spuriously clears
-//     it. An unguarded leaf ERRORS on the missing key, and the runtime treats an eval error as a
-//     SKIP (no event, hold/level preserved) — so the "sloppy" leaf accidentally behaves while
-//     spamming the eval-error counter. Neither is a metric scope. A structured leaf (which gets
-//     GateMetric) is the only correct way to metric-scope a Duration OR Threshold rule; the
-//     publish gate should steer authors off raw-CEL Duration and Threshold (slice 7/console).
-//     A cleaner future fix distinguishes false-vs-inapplicable so a raw-CEL leaf need not resolve
-//     on off-metric events (6d-pre-2, review D4).
+//   - FeedMetrics set → feed only events carrying at least one referenced metric. This is the
+//     review-D4 fix for a RAW-CEL threshold/duration leaf, which the structured lowering could
+//     not scope (GateMetric would be empty). Without it a presence-guarded raw leaf
+//     (`"temp" in m && …`) evaluates to a clean FALSE on an off-metric event — which for Duration
+//     CANCELS the hold and for Threshold RESOLVES the alarm (ADR-057), so unrelated telemetry (a
+//     battery reading between temperature readings) spuriously clears it. Deriving the leaf's
+//     metric references from its compiled AST (predicate.MetricRefs) lets the runtime skip the
+//     off-metric event entirely, preserving the level. It is set only for threshold/duration —
+//     the kinds where one non-matching event immediately flips a per-series latch.
+//   - all empty       → feed every in-scope event. Absence is deliberately here (every event is a
+//     heartbeat, device-scoped not metric-scoped); so are match-every leaves, count aggregates,
+//     and correlation. A raw-CEL threshold/duration leaf whose reference set is NOT statically
+//     knowable (a dynamic key `m[expr]`, or a whole-map op like `size(m)`) also lands here — the
+//     scope cannot be derived, so it falls back to feed-everything and the author owns totality;
+//     the publish gate steering authors off raw-CEL threshold/duration remains a console concern
+//     (slice 7).
 type CompiledRule struct {
 	ID   string
 	Type RuleType
@@ -118,6 +120,23 @@ type CompiledRule struct {
 	// or match-every leaf, and for value-consuming kinds (where ValueMetric plays the same
 	// role).
 	GateMetric string
+
+	// FeedMetrics is the metric-scoped feed set derived from a RAW-CEL threshold/duration leaf
+	// that the structured lowering could not scope (GateMetric would be empty). The runtime feeds
+	// the rule only events carrying AT LEAST ONE of these measurements, so off-metric telemetry
+	// never evaluates the leaf to the FALSE that resolves the threshold alarm / cancels the
+	// duration hold (review D4). It is set from predicate.ScopableMetrics, which returns a set
+	// ONLY when the leaf is PROVABLY FALSE without those metrics — so skipping a carrying-none
+	// event drops no raise. It is empty (feed every event) when the leaf references no measurement,
+	// references `m` opaquely (not statically knowable), or can be true without a measurement (via
+	// attr/device/a disjunction) — the raw-CEL-author-owns-totality fallback.
+	//
+	// It is set ONLY for threshold and duration: those are the kinds where a single non-matching
+	// event immediately flips a per-series latch, so an off-metric false is acutely wrong. The
+	// windowed/counting kinds (repeating/aggregate/correlation) are left feed-everything: their
+	// falling edge is window-granular, driven by off-metric traffic advancing eviction rather than
+	// by an immediate non-match — a milder residual accepted here, steered by the console (slice 7).
+	FeedMetrics []string
 
 	// AnchorType is the anchor a correlation rule keys its series on; the runtime resolves
 	// the event's anchor of this type to the series token and uses the device as the
@@ -178,6 +197,19 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 		return nil, &ValidationError{RuleID: r.ID, Field: "when", Msg: err.Error(), Err: err}
 	}
 	cr.Predicate = pred
+
+	// Metric-scope a RAW-CEL threshold/duration leaf the structured lowering left unscoped
+	// (GateMetric empty). ScopableMetrics returns the metrics the runtime may safely gate the feed
+	// on — the leaf's referenced measurements, but ONLY when the leaf is provably false without
+	// them, so an off-metric event that would otherwise evaluate the leaf to the false that
+	// resolves/cancels it (review D4) is skipped, and a leaf that could raise via attr/device/a
+	// disjunction is left feed-everything (no dropped raise). A structured leaf already carries
+	// GateMetric; every other kind observes its falling edge by aging, not an immediate non-match.
+	if (cr.Type == TypeThreshold || cr.Type == TypeDuration) && cr.GateMetric == "" {
+		if metrics, ok := pred.ScopableMetrics(); ok {
+			cr.FeedMetrics = metrics
+		}
+	}
 
 	// Validate the REACT layer (severity + action chain) and carry the severity through. This is
 	// the same publish-time gate the detection fields pass: a malformed action or an alarm without

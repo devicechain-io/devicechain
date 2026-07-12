@@ -34,9 +34,11 @@ type PlanResult struct {
 //
 //   - GateMetric set (structured threshold/duration/repeating): feed only samples carrying it.
 //   - ValueMetric set (deltaRate, non-count aggregate): feed only samples carrying it.
-//   - both empty (absence, match-every, count aggregate, correlation, raw-CEL): feed every
-//     in-scope sample. Absence is deliberately device-scoped (every event a heartbeat); a
-//     raw-CEL author owns totality.
+//   - FeedMetrics set (a raw-CEL threshold/duration leaf, review D4): feed only samples carrying
+//     at least one referenced metric — so unrelated telemetry does not resolve/cancel it.
+//   - all empty (absence, match-every, count aggregate, correlation, an unscopeable raw-CEL leaf):
+//     feed every in-scope sample. Absence is deliberately device-scoped (every event a
+//     heartbeat); a raw-CEL author whose leaf touches m opaquely owns totality.
 //
 // occurred is the message's clamped event time; every built event is stamped with it (all of a
 // message's samples share the message time, matching event-management's persistence). A
@@ -63,8 +65,13 @@ func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEve
 	for _, in := range inputs {
 		for _, sr := range scoped {
 			cr := sr.Compiled
-			// Metric-scoped feed. GateMetric and ValueMetric are mutually exclusive per the
-			// compiler, so at most one is set; either, when set, must be present to feed.
+			// Metric-scoped feed. GateMetric (structured), ValueMetric (value kinds), and
+			// FeedMetrics (a raw-CEL threshold/duration leaf, review D4) are mutually exclusive per
+			// the compiler, so at most one gate is active; whichever is set must be present to feed.
+			// FeedMetrics is a SET — feed when the event carries at least one member. Scoping is
+			// safe because the compiler sets FeedMetrics ONLY for a leaf it proved is false when
+			// none of those metrics are present (predicate.ScopableMetrics), so a skipped event
+			// could not have raised — no dropped alarm.
 			if gate := cr.GateMetric; gate != "" {
 				if _, ok := in.M[gate]; !ok {
 					continue
@@ -74,6 +81,9 @@ func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEve
 				if _, ok := in.M[vm]; !ok {
 					continue
 				}
+			}
+			if feed := cr.FeedMetrics; len(feed) > 0 && !anyMetricPresent(in.M, feed) {
+				continue
 			}
 
 			if cr.KeyedByAnchor() {
@@ -111,6 +121,20 @@ func (res *PlanResult) fanCorrelation(seq uint64, cr *rules.CompiledRule, ev *dm
 		}
 		res.Events = append(res.Events, e)
 	}
+}
+
+// anyMetricPresent reports whether the sample carries at least one of the given metric keys.
+// It backs the raw-CEL threshold/duration feed scope (CompiledRule.FeedMetrics): the compiler
+// only populates that set for a leaf it proved is false when none of the metrics are present, so
+// a sample carrying none of them cannot raise — it would only evaluate the leaf to the false that
+// spuriously resolves the alarm / cancels the hold, and is skipped.
+func anyMetricPresent(m map[string]float64, metrics []string) bool {
+	for _, k := range metrics {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // pinAnchor returns a copy of the anchor map with anchorType set to token (the specific anchor

@@ -56,6 +56,14 @@ type Predicate struct {
 	// costMax is the static worst-case cost estimate that passed the publish-time gate,
 	// retained so the runtime can surface it (rule-health, operator budget view).
 	costMax uint64
+
+	// metrics / metricsComplete / scopeSafe back the metric-scoped feed for a raw-CEL leaf
+	// (review D4), computed once at compile from the type-checked AST. See MetricRefs and
+	// ScopableMetrics for their exact meaning; they are stored rather than the AST so a compiled
+	// predicate does not pin an expression tree for the process lifetime.
+	metrics         []string
+	metricsComplete bool
+	scopeSafe       bool
 }
 
 // Source is the CEL text the predicate compiled from (generated or raw). Useful for
@@ -100,7 +108,21 @@ func Compile(source string, costCeiling uint64) (*Predicate, error) {
 	if err != nil {
 		return nil, &CompileError{Source: source, Err: fmt.Errorf("build program: %w", err)}
 	}
-	return &Predicate{source: source, program: program, costMax: est.Max}, nil
+	p := &Predicate{source: source, program: program, costMax: est.Max}
+
+	// Metric-scoped-feed analysis (review D4), computed once here where the AST and env are in
+	// hand. First derive which measurements the leaf reads via constant keys; then, only if that
+	// set is exhaustive, prove the leaf is FALSE whenever those measurements are absent, so the
+	// runtime can safely skip an off-metric event without dropping a raise (see ScopableMetrics).
+	p.metrics, p.metricsComplete = metricRefs(ast.NativeRep())
+	if p.metricsComplete && len(p.metrics) > 0 {
+		safe, err := falseWhenMetricsAbsent(env, ast)
+		if err != nil {
+			return nil, &CompileError{Source: source, Err: fmt.Errorf("analyze metric scope: %w", err)}
+		}
+		p.scopeSafe = safe
+	}
+	return p, nil
 }
 
 // Eval evaluates the predicate against one event. An evaluation error (e.g. the runtime
