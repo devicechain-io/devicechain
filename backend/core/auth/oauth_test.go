@@ -155,6 +155,50 @@ func assertStrSlice(t *testing.T, name string, got, want []string) {
 	}
 }
 
+func TestValidateRedirectURI(t *testing.T) {
+	cases := []struct {
+		name string
+		uri  string
+		ok   bool
+	}{
+		{"https ok", "https://client.example.com/callback", true},
+		{"https with query ok", "https://client.example.com/cb?x=1", true},
+		{"http loopback ok", "http://127.0.0.1:52100/callback", true},
+		{"http localhost ok", "http://localhost:8080/cb", true},
+		{"http ipv6 loopback ok", "http://[::1]:9000/cb", true},
+		{"http non-loopback rejected", "http://client.example.com/cb", false},
+		{"fragment rejected", "https://client.example.com/cb#frag", false},
+		{"bare hash rejected", "https://client.example.com/cb#", false},
+		{"custom scheme rejected", "com.example.app:/callback", false},
+		{"relative rejected", "/callback", false},
+		{"empty rejected", "", false},
+		{"no host rejected", "https:///cb", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateRedirectURI(tc.uri)
+			if tc.ok && err != nil {
+				t.Errorf("ValidateRedirectURI(%q) = %v, want nil", tc.uri, err)
+			}
+			if !tc.ok && err == nil {
+				t.Errorf("ValidateRedirectURI(%q) = nil, want error", tc.uri)
+			}
+		})
+	}
+}
+
+func TestIsSupportedScope(t *testing.T) {
+	if !IsSupportedScope(ScopeReadOnly) {
+		t.Errorf("read-only should be supported")
+	}
+	if IsSupportedScope("write") {
+		t.Errorf("write should not be supported")
+	}
+	if IsSupportedScope("") {
+		t.Errorf("empty should not be a supported scope")
+	}
+}
+
 func TestParseScope(t *testing.T) {
 	got := ParseScope("  read-only   foo ")
 	if len(got) != 2 || got[0] != "read-only" || got[1] != "foo" {

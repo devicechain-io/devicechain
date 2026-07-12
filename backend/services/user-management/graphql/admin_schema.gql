@@ -162,6 +162,41 @@ type AdminAuditEventSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# A registered OAuth 2.1 client (ADR-047): the allowlist entry the Authorization
+# Server validates the authorization-code flow against. Every client is a public
+# client (PKCE, no secret), so none is exposed here. redirectUris is the
+# exact-match allowlist; scopes is the set the client may request.
+type AdminOAuthClient {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    clientId: String!
+    name: String
+    description: String
+    enabled: Boolean!
+    redirectUris: [String!]!
+    scopes: [String!]!
+}
+
+# Data to register an OAuth client. clientId is its stable public identifier; each
+# redirectUri must be https (or http for a loopback host) with no fragment; each
+# scope must name a scope the AS grants (e.g. "read-only").
+input AdminOAuthClientCreateRequest {
+    clientId: String!
+    name: String
+    description: String
+    redirectUris: [String!]!
+    scopes: [String!]!
+}
+
+# Data to update a client (its clientId is fixed).
+input AdminOAuthClientUpdateRequest {
+    name: String
+    description: String
+    redirectUris: [String!]!
+    scopes: [String!]!
+}
+
 # Admin queries. Each requires a system authority (superusers hold "*").
 type Query {
     # Liveness placeholder.
@@ -178,6 +213,8 @@ type Query {
     # Query the instance audit journal for user-management — auth events plus
     # identity/role/tenant administration, newest first (requires audit:read).
     auditEvents(criteria: AdminAuditEventSearchCriteria!): AdminAuditEventSearchResults!
+    # List the OAuth 2.1 client registry (requires client:read).
+    oauthClients: [AdminOAuthClient!]!
 }
 
 # Admin mutations. Identity + membership administration requires user:write
@@ -221,6 +258,18 @@ type Mutation {
     # Delete a tenant by token; returns whether one was removed. Rejected if the
     # tenant still has memberships (requires tenant:write).
     deleteTenant(token: String!): Boolean!
+
+    # Register an OAuth client, enabled by default (requires client:write).
+    createOauthClient(request: AdminOAuthClientCreateRequest!): AdminOAuthClient!
+    # Replace a client's name, redirect URIs, and scopes by clientId (requires
+    # client:write).
+    updateOauthClient(clientId: String!, request: AdminOAuthClientUpdateRequest!): AdminOAuthClient!
+    # Enable or disable a client; a disabled client is rejected at the authorize /
+    # token endpoints (requires client:write).
+    setOauthClientEnabled(clientId: String!, enabled: Boolean!): AdminOAuthClient!
+    # Delete a client by clientId; returns whether one was removed (requires
+    # client:write).
+    deleteOauthClient(clientId: String!): Boolean!
 }
 
 schema {

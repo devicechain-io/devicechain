@@ -23,5 +23,6 @@ var (
 		NewDropLegacyUserRole(),
 		NewSettingsSchema(),
 		NewTenantGovernance(),
+		NewOAuthClientSchema(),
 	}
 )
