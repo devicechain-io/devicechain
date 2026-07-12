@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The device-profile registry resource (ADR-045). A profile is the reusable
-// capability contract a device type adopts: it owns the metric, command, and alarm
+// capability contract a device type adopts: it owns the metric and command
 // definitions, versioned as one unit. The Basic tab edits the profile header; the
-// Metrics / Commands / Alarm Rules tabs author its draft definitions; the Versions
-// tab publishes/rolls back what devices actually resolve.
+// Metrics / Commands tabs author its draft definitions; the Versions tab
+// publishes/rolls back what devices actually resolve. Alarm authoring moved off the
+// profile-owned AlarmDefinition to the DETECT DetectionRule path (ADR-057); its
+// console form lands with the detection-rule authoring UI (slice 7).
 
 import { useState } from 'react';
 import { normalizeToken } from '@devicechain/client';
@@ -24,7 +26,7 @@ import {
 } from '@/components/registry';
 import { DefinitionsPanel } from './DefinitionsPanel';
 import { VersionsPanel } from './VersionsPanel';
-import { MetricDefinitionForm, CommandDefinitionForm, AlarmDefinitionForm } from './DefinitionForms';
+import { MetricDefinitionForm, CommandDefinitionForm } from './DefinitionForms';
 import {
   listDeviceProfiles,
   getDeviceProfile,
@@ -35,8 +37,6 @@ import {
   deleteMetricDefinition,
   listCommandDefinitions,
   deleteCommandDefinition,
-  listAlarmDefinitions,
-  deleteAlarmDefinition,
   type DeviceProfile,
   type DeviceProfileCreateRequest,
 } from '@/lib/api/device-management';
@@ -197,35 +197,6 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
             { header: 'Parameters', cell: (d) => (d.parameterSchema ? 'declared' : <Dash />) },
           ]}
           renderForm={(e, onDone) => <CommandDefinitionForm profileToken={p.token} entity={e} onDone={onDone} />}
-        />
-      ),
-    },
-    {
-      value: 'alarms',
-      label: 'Alarm Rules',
-      render: (p) => (
-        <DefinitionsPanel
-          profileToken={p.token}
-          singular="alarm rule"
-          description="Threshold rules that raise alarms from a watched metric."
-          load={listAlarmDefinitions}
-          remove={deleteAlarmDefinition}
-          removeConfirm={(d) => `Delete alarm rule “${d.alarmKey}” (${d.severity})?`}
-          columns={[
-            { header: 'Key', cell: (d) => <span className="font-medium">{d.alarmKey}</span> },
-            { header: 'Metric', cell: (d) => d.metricKey },
-            {
-              header: 'Condition',
-              cell: (d) => (
-                <span className="tabular-nums">
-                  {d.operator} {d.threshold ?? d.thresholdAttr}
-                </span>
-              ),
-            },
-            { header: 'Severity', cell: (d) => d.severity },
-            { header: 'Enabled', cell: (d) => (d.enabled ? 'Yes' : <span className="text-muted-foreground">No</span>) },
-          ]}
-          renderForm={(e, onDone) => <AlarmDefinitionForm profileToken={p.token} entity={e} onDone={onDone} />}
         />
       ),
     },

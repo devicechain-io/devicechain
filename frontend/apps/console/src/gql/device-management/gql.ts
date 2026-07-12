@@ -100,10 +100,6 @@ type Documents = {
     "\n  mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {\n    createCommandDefinition(request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.CreateCommandDefinitionDocument,
     "\n  mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {\n    updateCommandDefinition(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.UpdateCommandDefinitionDocument,
     "\n  mutation DeleteCommandDefinition($token: String!) {\n    deleteCommandDefinition(token: $token)\n  }\n": typeof types.DeleteCommandDefinitionDocument,
-    "\n  query AlarmDefinitions($criteria: AlarmDefinitionSearchCriteria!) {\n    alarmDefinitions(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        alarmKey\n        metricKey\n        conditionType\n        operator\n        severity\n        threshold\n        thresholdAttr\n        durationSeconds\n        repeatCount\n        repeatWindowSeconds\n        enabled\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.AlarmDefinitionsDocument,
-    "\n  mutation CreateAlarmDefinition($request: AlarmDefinitionCreateRequest!) {\n    createAlarmDefinition(request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.CreateAlarmDefinitionDocument,
-    "\n  mutation UpdateAlarmDefinition($token: String!, $request: AlarmDefinitionCreateRequest!) {\n    updateAlarmDefinition(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.UpdateAlarmDefinitionDocument,
-    "\n  mutation DeleteAlarmDefinition($token: String!) {\n    deleteAlarmDefinition(token: $token)\n  }\n": typeof types.DeleteAlarmDefinitionDocument,
     "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.EntityRelationshipsDocument,
     "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n": typeof types.CreateEntityRelationshipsDocument,
     "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": typeof types.RemoveEntityRelationshipsDocument,
@@ -194,10 +190,6 @@ const documents: Documents = {
     "\n  mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {\n    createCommandDefinition(request: $request) {\n      id\n      token\n    }\n  }\n": types.CreateCommandDefinitionDocument,
     "\n  mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {\n    updateCommandDefinition(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": types.UpdateCommandDefinitionDocument,
     "\n  mutation DeleteCommandDefinition($token: String!) {\n    deleteCommandDefinition(token: $token)\n  }\n": types.DeleteCommandDefinitionDocument,
-    "\n  query AlarmDefinitions($criteria: AlarmDefinitionSearchCriteria!) {\n    alarmDefinitions(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        alarmKey\n        metricKey\n        conditionType\n        operator\n        severity\n        threshold\n        thresholdAttr\n        durationSeconds\n        repeatCount\n        repeatWindowSeconds\n        enabled\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AlarmDefinitionsDocument,
-    "\n  mutation CreateAlarmDefinition($request: AlarmDefinitionCreateRequest!) {\n    createAlarmDefinition(request: $request) {\n      id\n      token\n    }\n  }\n": types.CreateAlarmDefinitionDocument,
-    "\n  mutation UpdateAlarmDefinition($token: String!, $request: AlarmDefinitionCreateRequest!) {\n    updateAlarmDefinition(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": types.UpdateAlarmDefinitionDocument,
-    "\n  mutation DeleteAlarmDefinition($token: String!) {\n    deleteAlarmDefinition(token: $token)\n  }\n": types.DeleteAlarmDefinitionDocument,
     "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.EntityRelationshipsDocument,
     "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n": types.CreateEntityRelationshipsDocument,
     "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": types.RemoveEntityRelationshipsDocument,
@@ -543,22 +535,6 @@ export function graphql(source: "\n  mutation UpdateCommandDefinition($token: St
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteCommandDefinition($token: String!) {\n    deleteCommandDefinition(token: $token)\n  }\n"): typeof import('./graphql').DeleteCommandDefinitionDocument;
-/**
- * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
- */
-export function graphql(source: "\n  query AlarmDefinitions($criteria: AlarmDefinitionSearchCriteria!) {\n    alarmDefinitions(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        alarmKey\n        metricKey\n        conditionType\n        operator\n        severity\n        threshold\n        thresholdAttr\n        durationSeconds\n        repeatCount\n        repeatWindowSeconds\n        enabled\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').AlarmDefinitionsDocument;
-/**
- * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
- */
-export function graphql(source: "\n  mutation CreateAlarmDefinition($request: AlarmDefinitionCreateRequest!) {\n    createAlarmDefinition(request: $request) {\n      id\n      token\n    }\n  }\n"): typeof import('./graphql').CreateAlarmDefinitionDocument;
-/**
- * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
- */
-export function graphql(source: "\n  mutation UpdateAlarmDefinition($token: String!, $request: AlarmDefinitionCreateRequest!) {\n    updateAlarmDefinition(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n"): typeof import('./graphql').UpdateAlarmDefinitionDocument;
-/**
- * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
- */
-export function graphql(source: "\n  mutation DeleteAlarmDefinition($token: String!) {\n    deleteAlarmDefinition(token: $token)\n  }\n"): typeof import('./graphql').DeleteAlarmDefinitionDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

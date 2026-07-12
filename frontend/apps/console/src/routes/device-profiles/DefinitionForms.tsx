@@ -1,12 +1,13 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Create/edit forms for the three device-profile definition kinds (ADR-045 slice
-// d): metric (ADR-016), command (ADR-043), and alarm rule (ADR-041). Each binds its
-// owning profile by token and adapts its fields to the typed create/update request.
-// Updates are full-replace, so fields a form does not surface (enum/descriptor,
-// parameter schema, duration/repeat tiers, metadata) are carried forward from the
-// edited entity rather than nulled — the data-loss trap ADR-045 slice a hit.
+// Create/edit forms for the device-profile definition kinds (ADR-045 slice d):
+// metric (ADR-016) and command (ADR-043). Each binds its owning profile by token and
+// adapts its fields to the typed create/update request. Updates are full-replace, so
+// fields a form does not surface (enum/descriptor, parameter schema, metadata) are
+// carried forward from the edited entity rather than nulled — the data-loss trap
+// ADR-045 slice a hit. Alarm authoring is no longer a profile definition form: it
+// moved to the DETECT DetectionRule path (ADR-057), whose console form is slice 7.
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -16,22 +17,16 @@ import { TokenField } from '@/components/ui/token-field';
 import { Combobox } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Textarea, errMessage } from '@/routes/common';
-import { useQuery } from '@/lib/hooks/use-query';
-import { METRIC_DATA_TYPES, ALARM_OPERATORS, ALARM_SEVERITIES, ALARM_CONDITION_SIMPLE } from '@/lib/vocab';
+import { METRIC_DATA_TYPES } from '@/lib/vocab';
 import {
   createMetricDefinition,
   updateMetricDefinition,
   createCommandDefinition,
   updateCommandDefinition,
-  createAlarmDefinition,
-  updateAlarmDefinition,
-  listMetricDefinitions,
   type MetricDefinition,
   type CommandDefinition,
-  type AlarmDefinition,
   type MetricDefinitionCreateRequest,
   type CommandDefinitionCreateRequest,
-  type AlarmDefinitionCreateRequest,
 } from '@/lib/api/device-management';
 
 // Optional trimmed string → undefined when empty (so the request omits it).
@@ -247,163 +242,6 @@ export function CommandDefinitionForm({
         singular="command"
         busy={busy}
         disabled={busy || !commandKey.trim() || (!editing && !token.trim())}
-        onClick={submit}
-      />
-    </div>
-  );
-}
-
-// ── Alarm rule ────────────────────────────────────────────────────────────
-
-// The console authors SIMPLE static-threshold rules (the common case). Dynamic
-// thresholds (thresholdAttr) and DURATION/REPEATING tiers are modeled but not
-// offered here yet; on edit their values are carried forward untouched.
-export function AlarmDefinitionForm({
-  profileToken,
-  entity,
-  onDone,
-}: {
-  profileToken: string;
-  entity?: AlarmDefinition;
-  onDone: (message: string) => void;
-}) {
-  const editing = entity != null;
-  // An "advanced" rule uses a non-SIMPLE condition (DURATION/REPEATING) or a dynamic
-  // threshold (thresholdAttr) — shapes this static-threshold form doesn't author.
-  // When editing one we preserve its condition/threshold/tier fields verbatim (so we
-  // never null them or send a conflicting static threshold) and let the operator edit
-  // only the parts this form does own (metric, operator, severity, name, enabled).
-  const advanced = editing && (entity.conditionType !== ALARM_CONDITION_SIMPLE || !!entity.thresholdAttr);
-  const [alarmKey, setAlarmKey] = useState(entity?.alarmKey ?? '');
-  const [token, setToken] = useState(entity?.token ?? '');
-  const [name, setName] = useState(entity?.name ?? '');
-  const [metricKey, setMetricKey] = useState(entity?.metricKey ?? '');
-  const [operator, setOperator] = useState(entity?.operator ?? 'GT');
-  const [severity, setSeverity] = useState(entity?.severity ?? 'CRITICAL');
-  const [threshold, setThreshold] = useState(entity?.threshold?.toString() ?? '');
-  const [enabled, setEnabled] = useState(entity?.enabled ?? true);
-  const [description, setDescription] = useState(entity?.description ?? '');
-  const [formError, setFormError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  // Watched metric options come from the profile's declared metrics.
-  const { data: metrics } = useQuery(() => listMetricDefinitions(profileToken), [profileToken]);
-  const metricOptions = (metrics ?? []).map((m) => ({ value: m.metricKey, label: m.metricKey, description: m.name ?? undefined }));
-  const noMetrics = metrics != null && metricOptions.length === 0;
-
-  const submit = async () => {
-    setFormError(null);
-    setBusy(true);
-    try {
-      const request: AlarmDefinitionCreateRequest = {
-        token: editing ? entity.token : token.trim(),
-        deviceProfileToken: profileToken,
-        alarmKey: alarmKey.trim(),
-        metricKey: metricKey.trim(),
-        name: opt(name),
-        description: opt(description),
-        // Preserve the condition/threshold shape of an advanced rule; author SIMPLE
-        // static for new/basic rules. Exactly one of threshold/thresholdAttr is sent,
-        // so the two never conflict.
-        conditionType: entity?.conditionType ?? ALARM_CONDITION_SIMPLE,
-        operator,
-        severity,
-        threshold: advanced ? (entity?.threshold ?? undefined) : optNum(threshold),
-        thresholdAttr: advanced ? (entity?.thresholdAttr ?? undefined) : undefined,
-        enabled,
-        // Carry forward the DURATION/REPEATING tiers this form doesn't edit.
-        durationSeconds: entity?.durationSeconds ?? undefined,
-        repeatCount: entity?.repeatCount ?? undefined,
-        repeatWindowSeconds: entity?.repeatWindowSeconds ?? undefined,
-        metadata: entity?.metadata ?? undefined,
-      };
-      if (editing) {
-        await updateAlarmDefinition(entity.token, request);
-        onDone(`Alarm rule “${request.alarmKey}” updated`);
-      } else {
-        await createAlarmDefinition(request);
-        onDone(`Alarm rule “${request.alarmKey}” created`);
-      }
-    } catch (err) {
-      setFormError(errMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="space-y-4">
-      {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      {advanced && (
-        <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-          This rule uses advanced settings (a dynamic threshold or duration/repeat tiers) authored
-          via the API. Those are preserved as-is; you can edit the metric, operator, severity, name,
-          and enabled state here.
-        </p>
-      )}
-      <FormField label="Alarm key" htmlFor="a-key" description="Stable id for this alarm, e.g. overheat.">
-        <Input id="a-key" value={alarmKey} onChange={(e) => setAlarmKey(e.target.value)} placeholder="overheat" />
-      </FormField>
-      <FormField label="Token" htmlFor="a-token" description={editing ? 'The id; it cannot change.' : undefined}>
-        {editing ? (
-          <Input id="a-token" value={token} disabled />
-        ) : (
-          <TokenField id="a-token" entityType="alarm-definition" value={token} onChange={setToken} seed={alarmKey} placeholder="alarm-overheat" />
-        )}
-      </FormField>
-      <FormField
-        label="Watched metric"
-        htmlFor="a-metric"
-        description={noMetrics ? 'Declare a metric on this profile first.' : 'The metric this rule evaluates.'}
-      >
-        <Combobox
-          id="a-metric"
-          value={metricKey}
-          onChange={setMetricKey}
-          options={metricOptions}
-          placeholder="Select a metric…"
-          disabled={noMetrics}
-        />
-      </FormField>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <FormField label="Operator" htmlFor="a-op">
-          <Combobox id="a-op" value={operator} onChange={setOperator} options={ALARM_OPERATORS} allowClear={false} />
-        </FormField>
-        <FormField label="Threshold" htmlFor="a-thr">
-          {advanced ? (
-            <Input
-              id="a-thr"
-              value={entity?.thresholdAttr ? `attr: ${entity.thresholdAttr}` : (entity?.threshold?.toString() ?? '—')}
-              disabled
-            />
-          ) : (
-            <Input id="a-thr" type="number" value={threshold} onChange={(e) => setThreshold(e.target.value)} placeholder="85" />
-          )}
-        </FormField>
-        <FormField label="Severity" htmlFor="a-sev">
-          <Combobox id="a-sev" value={severity} onChange={setSeverity} options={ALARM_SEVERITIES} allowClear={false} />
-        </FormField>
-      </div>
-      <FormField label="Name" htmlFor="a-name">
-        <Input id="a-name" value={name} onChange={(e) => setName(e.target.value)} />
-      </FormField>
-      <FormField label="Description" htmlFor="a-desc">
-        <Textarea id="a-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
-      </FormField>
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          className="h-4 w-4 rounded border-input"
-          checked={enabled}
-          onChange={(e) => setEnabled(e.target.checked)}
-        />
-        Enabled (a disabled rule is kept but not evaluated)
-      </label>
-      <SubmitRow
-        editing={editing}
-        singular="alarm rule"
-        busy={busy}
-        disabled={busy || !alarmKey.trim() || !metricKey.trim() || (!advanced && threshold.trim() === '') || (!editing && !token.trim())}
         onClick={submit}
       />
     </div>

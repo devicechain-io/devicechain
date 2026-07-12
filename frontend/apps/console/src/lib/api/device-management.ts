@@ -19,8 +19,6 @@ import type {
   MetricDefinitionCreateRequest,
   CommandDefinitionsQuery,
   CommandDefinitionCreateRequest,
-  AlarmDefinitionsQuery,
-  AlarmDefinitionCreateRequest,
   DeviceFacet,
 } from '@/gql/device-management/graphql';
 
@@ -42,7 +40,6 @@ export type DeviceProfileDetail = NonNullable<DeviceProfileByTokenQuery['deviceP
 export type DeviceProfileVersion = DeviceProfileVersionsQuery['deviceProfileVersions'][number];
 export type MetricDefinition = MetricDefinitionsQuery['metricDefinitions']['results'][number];
 export type CommandDefinition = CommandDefinitionsQuery['commandDefinitions']['results'][number];
-export type AlarmDefinition = AlarmDefinitionsQuery['alarmDefinitions']['results'][number];
 
 // Re-export the generated request inputs so forms can type their request objects
 // without reaching into the generated module directly.
@@ -53,7 +50,6 @@ export type {
   DeviceProfileCreateRequest,
   MetricDefinitionCreateRequest,
   CommandDefinitionCreateRequest,
-  AlarmDefinitionCreateRequest,
 };
 
 // ── Devices ─────────────────────────────────────────────────────────────
@@ -825,83 +821,4 @@ const DELETE_COMMAND_DEFINITION = graphql(`
 export async function deleteCommandDefinition(token: string): Promise<boolean> {
   const data = await gql('device-management', DELETE_COMMAND_DEFINITION, { token });
   return data.deleteCommandDefinition;
-}
-
-// ── Alarm definitions (ADR-041) ───────────────────────────────────────────
-
-const ALARM_DEFINITIONS = graphql(`
-  query AlarmDefinitions($criteria: AlarmDefinitionSearchCriteria!) {
-    alarmDefinitions(criteria: $criteria) {
-      results {
-        id
-        token
-        name
-        description
-        alarmKey
-        metricKey
-        conditionType
-        operator
-        severity
-        threshold
-        thresholdAttr
-        durationSeconds
-        repeatCount
-        repeatWindowSeconds
-        enabled
-        metadata
-      }
-      pagination {
-        pageStart
-        pageEnd
-        totalRecords
-      }
-    }
-  }
-`);
-
-export async function listAlarmDefinitions(profileToken: string): Promise<AlarmDefinition[]> {
-  const data = await gql('device-management', ALARM_DEFINITIONS, {
-    criteria: { pageNumber: 1, pageSize: 1000, deviceProfile: profileToken },
-  });
-  return data.alarmDefinitions.results;
-}
-
-const CREATE_ALARM_DEFINITION = graphql(`
-  mutation CreateAlarmDefinition($request: AlarmDefinitionCreateRequest!) {
-    createAlarmDefinition(request: $request) {
-      id
-      token
-    }
-  }
-`);
-
-export async function createAlarmDefinition(request: AlarmDefinitionCreateRequest): Promise<void> {
-  await gql('device-management', CREATE_ALARM_DEFINITION, { request });
-}
-
-const UPDATE_ALARM_DEFINITION = graphql(`
-  mutation UpdateAlarmDefinition($token: String!, $request: AlarmDefinitionCreateRequest!) {
-    updateAlarmDefinition(token: $token, request: $request) {
-      id
-      token
-    }
-  }
-`);
-
-export async function updateAlarmDefinition(
-  token: string,
-  request: AlarmDefinitionCreateRequest,
-): Promise<void> {
-  await gql('device-management', UPDATE_ALARM_DEFINITION, { token, request });
-}
-
-const DELETE_ALARM_DEFINITION = graphql(`
-  mutation DeleteAlarmDefinition($token: String!) {
-    deleteAlarmDefinition(token: $token)
-  }
-`);
-
-export async function deleteAlarmDefinition(token: string): Promise<boolean> {
-  const data = await gql('device-management', DELETE_ALARM_DEFINITION, { token });
-  return data.deleteAlarmDefinition;
 }

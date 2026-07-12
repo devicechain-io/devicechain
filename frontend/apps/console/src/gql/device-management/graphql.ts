@@ -4,32 +4,6 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
-export type AlarmDefinitionCreateRequest = {
-  alarmKey: string;
-  conditionType: string;
-  description?: string | null | undefined;
-  deviceProfileToken: string;
-  durationSeconds?: number | null | undefined;
-  enabled: boolean;
-  metadata?: string | null | undefined;
-  metricKey: string;
-  name?: string | null | undefined;
-  operator: string;
-  repeatCount?: number | null | undefined;
-  repeatWindowSeconds?: number | null | undefined;
-  severity: string;
-  threshold?: number | null | undefined;
-  thresholdAttr?: string | null | undefined;
-  token: string;
-};
-
-export type AlarmDefinitionSearchCriteria = {
-  deviceProfile?: string | null | undefined;
-  metricKey?: string | null | undefined;
-  pageNumber: number;
-  pageSize: number;
-};
-
 export type AlarmSearchCriteria = {
   acknowledged?: boolean | null | undefined;
   alarmKey?: string | null | undefined;
@@ -963,35 +937,6 @@ export type DeleteCommandDefinitionMutationVariables = Exact<{
 
 
 export type DeleteCommandDefinitionMutation = { deleteCommandDefinition: boolean };
-
-export type AlarmDefinitionsQueryVariables = Exact<{
-  criteria: AlarmDefinitionSearchCriteria;
-}>;
-
-
-export type AlarmDefinitionsQuery = { alarmDefinitions: { results: Array<{ id: string, token: string, name: string | null, description: string | null, alarmKey: string, metricKey: string, conditionType: string, operator: string, severity: string, threshold: number | null, thresholdAttr: string | null, durationSeconds: number | null, repeatCount: number | null, repeatWindowSeconds: number | null, enabled: boolean, metadata: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
-
-export type CreateAlarmDefinitionMutationVariables = Exact<{
-  request: AlarmDefinitionCreateRequest;
-}>;
-
-
-export type CreateAlarmDefinitionMutation = { createAlarmDefinition: { id: string, token: string } };
-
-export type UpdateAlarmDefinitionMutationVariables = Exact<{
-  token: string;
-  request: AlarmDefinitionCreateRequest;
-}>;
-
-
-export type UpdateAlarmDefinitionMutation = { updateAlarmDefinition: { id: string, token: string } };
-
-export type DeleteAlarmDefinitionMutationVariables = Exact<{
-  token: string;
-}>;
-
-
-export type DeleteAlarmDefinitionMutation = { deleteAlarmDefinition: boolean };
 
 export type EntityRelationshipsQueryVariables = Exact<{
   criteria: EntityRelationshipSearchCriteria;
@@ -2275,56 +2220,6 @@ export const DeleteCommandDefinitionDocument = new TypedDocumentString(`
   deleteCommandDefinition(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteCommandDefinitionMutation, DeleteCommandDefinitionMutationVariables>;
-export const AlarmDefinitionsDocument = new TypedDocumentString(`
-    query AlarmDefinitions($criteria: AlarmDefinitionSearchCriteria!) {
-  alarmDefinitions(criteria: $criteria) {
-    results {
-      id
-      token
-      name
-      description
-      alarmKey
-      metricKey
-      conditionType
-      operator
-      severity
-      threshold
-      thresholdAttr
-      durationSeconds
-      repeatCount
-      repeatWindowSeconds
-      enabled
-      metadata
-    }
-    pagination {
-      pageStart
-      pageEnd
-      totalRecords
-    }
-  }
-}
-    `) as unknown as TypedDocumentString<AlarmDefinitionsQuery, AlarmDefinitionsQueryVariables>;
-export const CreateAlarmDefinitionDocument = new TypedDocumentString(`
-    mutation CreateAlarmDefinition($request: AlarmDefinitionCreateRequest!) {
-  createAlarmDefinition(request: $request) {
-    id
-    token
-  }
-}
-    `) as unknown as TypedDocumentString<CreateAlarmDefinitionMutation, CreateAlarmDefinitionMutationVariables>;
-export const UpdateAlarmDefinitionDocument = new TypedDocumentString(`
-    mutation UpdateAlarmDefinition($token: String!, $request: AlarmDefinitionCreateRequest!) {
-  updateAlarmDefinition(token: $token, request: $request) {
-    id
-    token
-  }
-}
-    `) as unknown as TypedDocumentString<UpdateAlarmDefinitionMutation, UpdateAlarmDefinitionMutationVariables>;
-export const DeleteAlarmDefinitionDocument = new TypedDocumentString(`
-    mutation DeleteAlarmDefinition($token: String!) {
-  deleteAlarmDefinition(token: $token)
-}
-    `) as unknown as TypedDocumentString<DeleteAlarmDefinitionMutation, DeleteAlarmDefinitionMutationVariables>;
 export const EntityRelationshipsDocument = new TypedDocumentString(`
     query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {
   entityRelationships(criteria: $criteria) {
