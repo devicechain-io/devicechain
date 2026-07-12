@@ -198,8 +198,8 @@ func (api *Api) DeleteDeviceType(ctx context.Context, token string) (bool, error
 // DeleteDeviceProfile deletes a device profile (ADR-045). Refused while any device
 // type references it — a shared capability contract must not vanish out from under
 // the types that adopt it (fail closed). Its owned metric (ADR-016), command
-// (ADR-043), and alarm (ADR-041) definitions are cascade-removed — the cascade the
-// device type used to own before the definitions moved onto the profile (slice b).
+// (ADR-043), and detection-rule (ADR-051) definitions are cascade-removed — the cascade
+// the device type used to own before the definitions moved onto the profile (slice b).
 func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, error) {
 	matches, err := api.DeviceProfilesByToken(ctx, []string{token})
 	if err != nil {
@@ -221,9 +221,6 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 			return err
 		}
 		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&CommandDefinition{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&AlarmDefinition{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&DetectionRule{}).Error; err != nil {

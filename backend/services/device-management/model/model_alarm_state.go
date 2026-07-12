@@ -58,7 +58,7 @@ type Alarm struct {
 	OriginatorType string // entity.Type of the originator (today: "device")
 	OriginatorId   uint   // resolved id of the originator within the tenant
 
-	AlarmKey  string // the AlarmDefinition key that raised this alarm
+	AlarmKey  string // the alarm key the raising rule targets (ADR-041 dec 3)
 	MetricKey string // the watched measurement, denormalized for display
 
 	State        string // one of AlarmState (ACTIVE | CLEARED)

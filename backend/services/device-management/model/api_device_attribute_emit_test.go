@@ -37,7 +37,7 @@ func newAttrEmitTestApi(t *testing.T) (*Api, *captureAttr, context.Context) {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
 	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
-		&MetricDefinition{}, &CommandDefinition{}, &AlarmDefinition{}, &DetectionRule{},
+		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{},
 		&EntityAttribute{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

@@ -25,5 +25,6 @@ var (
 		NewExternalIdSchema(),
 		NewDetectionRuleSchema(),
 		NewAlarmContributorsSchema(),
+		NewDropAlarmDefinitionsSchema(),
 	}
 )

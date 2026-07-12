@@ -105,7 +105,7 @@ type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEnt
 }
 
 # An immutable published snapshot of a device profile's whole capability set
-# (ADR-045 versioning): its metric, command, alarm, and detection-rule definitions
+# (ADR-045 versioning): its metric, command, and detection-rule definitions
 # frozen together.
 # The snapshot blob is deliberately omitted here — the list stays light; a device
 # resolves the active version server-side, and rollback re-points it by version.
@@ -1285,7 +1285,7 @@ type Mutation {
     # Update an existing device profile, located by the token argument (ADR-045).
     updateDeviceProfile(token: String!, request: DeviceProfileCreateRequest): DeviceProfile!
     # Delete a device profile (ADR-045). Refused while any device type references
-    # it; its owned metric, command, and alarm definitions are cascade-removed.
+    # it; its owned metric, command, and detection-rule definitions are cascade-removed.
     # Returns whether a row was deleted.
     deleteDeviceProfile(token: String!): Boolean!
     # Publish the profile's current draft as a new immutable version and make it the

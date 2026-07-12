@@ -54,7 +54,6 @@ type DeviceProfileVersion struct {
 type ProfileSnapshot struct {
 	Metrics  []*MetricDefinition  `json:"metrics"`
 	Commands []*CommandDefinition `json:"commands"`
-	Alarms   []*AlarmDefinition   `json:"alarms"`
 	// Rules are the DETECT rules (ADR-051 slice 4b) frozen into the version. Like the
 	// other lists they are captured whole; event-processing compiles them when it
 	// consumes the published-rule fact.

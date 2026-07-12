@@ -10,8 +10,8 @@ import (
 )
 
 // DetectionRule is a DETECT rule declared on a DeviceProfile (ADR-051 / ADR-053 §5 /
-// ADR-045), structurally parallel to MetricDefinition, CommandDefinition, and
-// AlarmDefinition. Hanging the rule off the profile keeps detection config travelling
+// ADR-045), structurally parallel to MetricDefinition and CommandDefinition. Hanging
+// the rule off the profile keeps detection config travelling
 // with the versioned fleet definition (draft/publish/rollback) rather than living as a
 // free-floating tenant resource: a device resolves its rules through its type's profile,
 // read-free, because a resolved event already carries the device's active

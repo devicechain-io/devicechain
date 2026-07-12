@@ -43,25 +43,9 @@ func TestProfileSnapshotRoundTrip(t *testing.T) {
 		CommandKey:      "set_point",
 		ParameterSchema: &schema,
 	}
-	alarm := &AlarmDefinition{
-		Model:           gorm.Model{ID: 44},
-		TokenReference:  rdb.TokenReference{Token: "overheat"},
-		DeviceProfileId: 7,
-		AlarmKey:        "overheat",
-		MetricKey:       "temperature",
-		ConditionType:   string(AlarmConditionSimple),
-		Operator:        string(AlarmOpGreater),
-		Severity:        string(AlarmSeverityCritical),
-		Threshold:       sql.NullFloat64{Float64: 85, Valid: true},
-		ThresholdAttr:   sql.NullString{}, // static threshold, no attr
-		DurationSeconds: sql.NullInt64{Int64: 30, Valid: true},
-		Enabled:         true,
-	}
-
 	raw, err := json.Marshal(ProfileSnapshot{
 		Metrics:  []*MetricDefinition{metric},
 		Commands: []*CommandDefinition{command},
-		Alarms:   []*AlarmDefinition{alarm},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -72,9 +56,8 @@ func TestProfileSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	if len(got.Metrics) != 1 || len(got.Commands) != 1 || len(got.Alarms) != 1 {
-		t.Fatalf("lengths = %d/%d/%d, want 1/1/1",
-			len(got.Metrics), len(got.Commands), len(got.Alarms))
+	if len(got.Metrics) != 1 || len(got.Commands) != 1 {
+		t.Fatalf("lengths = %d/%d, want 1/1", len(got.Metrics), len(got.Commands))
 	}
 
 	gm := got.Metrics[0]
@@ -96,16 +79,6 @@ func TestProfileSnapshotRoundTrip(t *testing.T) {
 		string(*gc.ParameterSchema) != `[{"key":"level","type":"INT"}]` {
 		t.Errorf("command fields lost: key=%q schema=%v", gc.CommandKey, gc.ParameterSchema)
 	}
-
-	ga := got.Alarms[0]
-	if ga.AlarmKey != "overheat" || ga.MetricKey != "temperature" || !ga.Enabled {
-		t.Errorf("alarm identity lost: key=%q metric=%q enabled=%v", ga.AlarmKey, ga.MetricKey, ga.Enabled)
-	}
-	if !ga.Threshold.Valid || ga.Threshold.Float64 != 85 || !ga.DurationSeconds.Valid ||
-		ga.DurationSeconds.Int64 != 30 || ga.ThresholdAttr.Valid {
-		t.Errorf("alarm thresholds lost: thr=%+v dur=%+v attr=%+v",
-			ga.Threshold, ga.DurationSeconds, ga.ThresholdAttr)
-	}
 }
 
 // parseProfileSnapshot normalizes nil/empty input to non-nil empty slices so the
@@ -120,10 +93,10 @@ func TestParseProfileSnapshotEmpty(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: parse: %v", name, err)
 		}
-		if got.Metrics == nil || got.Commands == nil || got.Alarms == nil {
+		if got.Metrics == nil || got.Commands == nil {
 			t.Errorf("%s: nil slice(s): %+v", name, got)
 		}
-		if len(got.Metrics) != 0 || len(got.Commands) != 0 || len(got.Alarms) != 0 {
+		if len(got.Metrics) != 0 || len(got.Commands) != 0 {
 			t.Errorf("%s: non-empty: %+v", name, got)
 		}
 	}
