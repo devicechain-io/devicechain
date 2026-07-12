@@ -26,6 +26,7 @@ DeviceChain is a set of cooperating microservices over a shared core library:
 
 - **event-sources** — pluggable inbound transports (MQTT today; HTTP, CoAP, WebSocket planned) that decode raw device messages onto the pipeline.
 - **device-management** — devices, device types + versioned device profiles, the relationship graph, the alarm engine, and event resolution.
+- **event-processing** *(in progress)* — the detection + action pipeline over resolved events: streaming rules (thresholds, rate-of-change, absence, windowed aggregates, correlation) and automated responses. Extracted from device-management, into which the alarm engine is being unified.
 - **event-management** — persists resolved events to TimescaleDB and serves time-series queries (including live subscriptions over a graphql-ws bridge).
 - **device-state** — the live last-known-state projection per device (current reading per measurement).
 - **command-delivery** — persistent two-way command dispatch to devices.

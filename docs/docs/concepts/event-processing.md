@@ -10,7 +10,9 @@ DeviceChain turns raw device telemetry into meaningful signals. As events flow t
 :::note Status
 **Available today:** profile-defined alarm rules (threshold, held-for-duration, and repeating-occurrence conditions; static or attribute-driven thresholds), the four-state alarm lifecycle with severity tiers and in-place escalation, propagation across the relationship graph, live alarm subscriptions (the console **Alarms** view and the dashboard alarm widgets), and notification delivery over email and webhook with per-severity escalation.
 
-**Planned:** a dedicated event-processing pipeline that broadens detection (rate-of-change, silence/absence, windowed aggregates, and area/group correlation) and adds automated actions beyond raising an alarm, together with visual rule authoring. These build on the same rule model described below.
+**In progress:** a dedicated **event-processing** service is taking over detection, broadening it beyond thresholds to rate-of-change, silence/absence, windowed aggregates, and area/group correlation, and adding **automated actions** beyond raising an alarm (for example, issuing a command in response). It runs the same rule model described below over a replay-correct streaming core — persisted state and event-time evaluation mean a restart re-derives identical results, with none missed or duplicated.
+
+**Planned:** visual rule authoring over the same rule schema.
 :::
 
 ## Where rules live
