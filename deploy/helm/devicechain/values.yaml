@@ -336,3 +336,14 @@ functionalAreas:
     # acks the resolved-events durable only after the snapshot containing an event's
     # effect commits (ack-on-checkpoint), so these bound write-amplification vs the
     # ack/redelivery latency on a crash.
+  mcp:
+    # The MCP server (ADR-047): an OAuth 2.1 Resource Server fronting the per-area
+    # GraphQL over the Model Context Protocol. It is an OPT-IN area — not in any
+    # profile — enabled explicitly (enabledFunctionalAreas: [..., mcp]). It REQUIRES
+    # both URLs below (it fails startup without them): resourceUrl is this server's
+    # identifier that access tokens must be audience-bound to (RFC 8707/9728);
+    # issuerUrl is the OAuth AS (this instance's user-management) that issues them.
+    # Both are external https origins (http only for a localhost value).
+    config: {}
+      # resourceUrl: https://<host>/mcp
+      # issuerUrl: https://<host>/user-management

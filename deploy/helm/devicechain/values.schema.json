@@ -23,7 +23,8 @@
           "dashboard-management",
           "command-delivery",
           "notification-management",
-          "event-processing"
+          "event-processing",
+          "mcp"
         ]
       },
       "uniqueItems": true,

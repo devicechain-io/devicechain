@@ -36,6 +36,7 @@ const (
 	CommandDelivery  FunctionalArea = "command-delivery"
 	NotificationMgmt FunctionalArea = "notification-management"
 	EventProcessing  FunctionalArea = "event-processing"
+	Mcp              FunctionalArea = "mcp"
 )
 
 // Manifest is a functional area's deployment contract (ADR-022 decision 2): the
@@ -125,6 +126,19 @@ var catalog = map[FunctionalArea]Manifest{
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
+	Mcp: {
+		// The MCP server (ADR-047): an OAuth 2.1 Resource Server fronting the per-area
+		// GraphQL over the Model Context Protocol. It is synchronous (no messaging), so
+		// it produces/consumes nothing on NATS. Its read tools resolve devices, alarms,
+		// and capabilities, so it is functionally dead without device-management (Hard);
+		// the telemetry/state/command tools degrade per-tool without their areas (Soft).
+		// Auth is a Soft dep (the token validator degrades, ADR-022 decision 3). It is
+		// NOT in any profile — it requires explicit configuration (its resource + issuer
+		// URLs) and is enabled on demand, like the OAuth AS it fronts.
+		Area:     Mcp,
+		HardDeps: []FunctionalArea{DeviceManagement},
+		SoftDeps: []FunctionalArea{UserManagement, EventManagement, DeviceState, CommandDelivery},
+	},
 }
 
 // Profile names a curated, valid enabled set (ADR-022 decision 2). Every profile
@@ -132,7 +146,8 @@ var catalog = map[FunctionalArea]Manifest{
 type Profile string
 
 const (
-	// ProfileFull enables every functional area.
+	// ProfileFull enables every functional area except opt-in areas that require
+	// explicit configuration (mcp), which are enabled on demand via an explicit set.
 	ProfileFull Profile = "full"
 	// ProfileTelemetry is ingest → resolve → persist + live state, without the
 	// command path.

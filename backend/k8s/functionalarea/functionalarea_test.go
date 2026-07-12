@@ -88,6 +88,22 @@ func TestValidateRejectsUnknownArea(t *testing.T) {
 	assert.ErrorContains(t, err, "made-up")
 }
 
+// The MCP area is a known, opt-in area (ADR-047): not in any profile, hard-depends
+// on device-management, and validates as an explicit set alongside the core areas.
+func TestMcpIsOptInArea(t *testing.T) {
+	assert.True(t, Known(Mcp))
+	for p, areas := range profiles {
+		assert.NotContains(t, areas, Mcp, "mcp must not be in profile %s (it requires explicit config)", p)
+	}
+	m, ok := ManifestFor(Mcp)
+	assert.True(t, ok)
+	assert.Contains(t, m.HardDeps, DeviceManagement)
+	// Explicitly enabling mcp with its hard dep (+ core) is valid.
+	assert.NoError(t, Validate([]FunctionalArea{UserManagement, DeviceManagement, Mcp}))
+	// Enabling mcp WITHOUT device-management is rejected.
+	assert.ErrorContains(t, Validate([]FunctionalArea{UserManagement, Mcp}), string(DeviceManagement))
+}
+
 // The minimal valid explicit set is just the two core areas.
 func TestValidateAcceptsCoreOnly(t *testing.T) {
 	err := Validate([]FunctionalArea{UserManagement, DeviceManagement})
