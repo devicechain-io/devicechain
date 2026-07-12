@@ -101,7 +101,6 @@ type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEnt
     # effect only when published.
     metricDefinitions: [MetricDefinition!]!
     commandDefinitions: [CommandDefinition!]!
-    alarmDefinitions: [AlarmDefinition!]!
     detectionRules: [DetectionRule!]!
 }
 
@@ -217,76 +216,12 @@ type CommandDefinitionSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents an alarm rule declared on a device profile (ADR-041/ADR-045). It watches a
-# metric (metricKey) and raises an alarm of the given severity when the condition
-# is met. conditionType is SIMPLE | DURATION | REPEATING; operator is the
-# comparison (GT/GTE/LT/LTE/EQ/NEQ) against a static threshold or a dynamic
-# threshold sourced from the entity attribute named by thresholdAttr (exactly one
-# is set). duration/repeat fields apply to the DURATION/REPEATING condition types.
-type AlarmDefinition implements Model & TokenReference & NamedEntity & MetadataEntity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    name: String
-    description: String
-    deviceProfile: DeviceProfile!
-    alarmKey: String!
-    metricKey: String!
-    conditionType: String!
-    operator: String!
-    severity: String!
-    threshold: Float
-    thresholdAttr: String
-    durationSeconds: Int
-    repeatCount: Int
-    repeatWindowSeconds: Int
-    enabled: Boolean!
-    metadata: String
-}
-
-# Data required to create an alarm definition. Exactly one of threshold /
-# thresholdAttr must be set; the condition type dictates which duration/repeat
-# fields are required (validated on create).
-input AlarmDefinitionCreateRequest {
-    token: String!
-    deviceProfileToken: String!
-    alarmKey: String!
-    metricKey: String!
-    name: String
-    description: String
-    conditionType: String!
-    operator: String!
-    severity: String!
-    threshold: Float
-    thresholdAttr: String
-    durationSeconds: Int
-    repeatCount: Int
-    repeatWindowSeconds: Int
-    enabled: Boolean!
-    metadata: String
-}
-
-# Criteria used when searching for alarm definitions.
-input AlarmDefinitionSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-    deviceProfile: String
-    metricKey: String
-}
-
-# Search results returned from alarm definition query.
-type AlarmDefinitionSearchResults {
-    results: [AlarmDefinition!]!
-    pagination: SearchResultsPagination!
-}
-
 # A DETECT rule declared on a device profile (ADR-051 / ADR-053 §5 / ADR-045). The rule
 # body — definition — is an opaque JSON document (the event-processing rules.Rule schema);
 # device-management versions it with the profile but does not parse the detection taxonomy
 # (that stays single-homed in event-processing, which compiles and cost-gates it at
-# publish). Distinct from AlarmDefinition, which the legacy in-service evaluator still owns.
+# publish). DetectionRule is the going-forward alarm-authoring path (ADR-057); the legacy
+# measurement evaluator still runs on rules frozen into published profile snapshots.
 type DetectionRule implements Model & TokenReference & NamedEntity & MetadataEntity {
     id: ID!
     createdAt: String
@@ -328,8 +263,8 @@ type DetectionRuleSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# A raised alarm (ADR-041) — the operational counterpart to AlarmDefinition. Raised
-# by the evaluator when a device measurement meets a rule, keyed by (originator,
+# A raised alarm (ADR-041) — the operational alarm object. Raised when a device
+# measurement meets a configured rule (today by the legacy measurement evaluator), keyed by (originator,
 # alarmKey): there is at most one live alarm per key, so re-crossings dedup into the
 # same row and severity escalates in place. The four-state model is state (ACTIVE |
 # CLEARED) crossed with acknowledged. The originator is addressed uniformly by
@@ -1214,12 +1149,6 @@ type Query {
     commandDefinitionsByToken(tokens: [String!]!): [CommandDefinition!]!
     # List command definitions that meet criteria.
     commandDefinitions(criteria: CommandDefinitionSearchCriteria!): CommandDefinitionSearchResults!
-    # Find alarm definitions by unique id.
-    alarmDefinitionsById(ids: [ID!]!): [AlarmDefinition!]!
-    # Find alarm definitions by unique token.
-    alarmDefinitionsByToken(tokens: [String!]!): [AlarmDefinition!]!
-    # List alarm definitions that meet criteria.
-    alarmDefinitions(criteria: AlarmDefinitionSearchCriteria!): AlarmDefinitionSearchResults!
     # Find detection rules by unique id.
     detectionRulesById(ids: [ID!]!): [DetectionRule!]!
     # Find detection rules by unique token.
@@ -1377,12 +1306,6 @@ type Mutation {
     updateCommandDefinition(token: String!, request: CommandDefinitionCreateRequest): CommandDefinition!
     # Delete a single command definition.
     deleteCommandDefinition(token: String!): Boolean!
-    # Create a new alarm definition.
-    createAlarmDefinition(request: AlarmDefinitionCreateRequest!): AlarmDefinition!
-    # Update an existing alarm definition.
-    updateAlarmDefinition(token: String!, request: AlarmDefinitionCreateRequest!): AlarmDefinition!
-    # Delete a single alarm definition.
-    deleteAlarmDefinition(token: String!): Boolean!
     # Create a new detection rule.
     createDetectionRule(request: DetectionRuleCreateRequest!): DetectionRule!
     # Update an existing detection rule.

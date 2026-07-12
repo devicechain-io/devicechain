@@ -25,49 +25,16 @@ type MetricSpec struct {
 	Unit     string
 }
 
-// AlarmDefSpec is one alarm definition a ProfileSpec declares, evaluated live
-// against measurements against devices of that profile once published. Only
-// ConditionType "SIMPLE" is evaluated by the live evaluator today — DURATION
-// and REPEATING are accepted by the schema but not yet acted on, so scenarios
-// should stick to SIMPLE. The definition's own token is derived the same way
-// ensureMetricDefinition derives a metric's (profileToken + "-" + key), here
-// keyed by AlarmKey rather than metric Key — see ensureAlarmDefinition.
-type AlarmDefSpec struct {
-	AlarmKey    string
-	MetricKey   string
-	Name        string
-	Description string
-	// ConditionType is one of SIMPLE/DURATION/REPEATING; Operator one of
-	// GT/GTE/LT/LTE/EQ/NEQ; Severity one of CRITICAL/MAJOR/MINOR/WARNING/
-	// INDETERMINATE (device-management's AlarmDefinitionCreateRequest vocabulary,
-	// mirrored here verbatim since the sim only speaks the wire).
-	ConditionType string
-	Operator      string
-	Severity      string
-	// Exactly one of Threshold/ThresholdAttr is set, mirroring the schema's own
-	// "exactly one of threshold / thresholdAttr" invariant (server-validated on
-	// create). Pointers so an unset Threshold marshals as GraphQL null rather
-	// than a misleading 0.
-	Threshold           *float64
-	ThresholdAttr       string
-	DurationSeconds     *int
-	RepeatCount         *int
-	RepeatWindowSeconds *int
-	Enabled             bool
-}
-
-// ProfileSpec is a static-singleton device profile (+ its metric and alarm
-// definitions) a manifest provisions once and publishes. Profiles are shared
-// capability contracts (ADR-045) — a manifest declares few of them even when it
-// fans out many devices. Alarms must exist before publish (ADR-045: draft is
-// inert until publish, so the active version's snapshot must already include
-// them) — Provision enforces that ordering, not this struct.
+// ProfileSpec is a static-singleton device profile (+ its metric definitions) a
+// manifest provisions once and publishes. Profiles are shared capability contracts
+// (ADR-045) — a manifest declares few of them even when it fans out many devices.
+// Alarm authoring moved off AlarmDefinition to the DETECT DetectionRule path
+// (ADR-057), which the sim does not seed yet.
 type ProfileSpec struct {
 	Token    string
 	Name     string
 	Category string
 	Metrics  []MetricSpec
-	Alarms   []AlarmDefSpec
 }
 
 // DeviceTypeSpec is a static-singleton device type referencing a profile.
@@ -392,19 +359,6 @@ func (m SimManifest) Validate() error {
 			// fails here rather than deep inside a GraphQL round-trip.
 			if err := core.ValidateToken(p.Token + "-" + mx.Key); err != nil {
 				return fmt.Errorf("metric definition token: %w", err)
-			}
-		}
-		for _, ax := range p.Alarms {
-			// Mirrors bootstrap.go's ensureAlarmDefinition token derivation
-			// (profileToken + "-" + alarmKey).
-			if err := core.ValidateToken(p.Token + "-" + ax.AlarmKey); err != nil {
-				return fmt.Errorf("alarm definition token: %w", err)
-			}
-			if ax.Threshold == nil && strings.TrimSpace(ax.ThresholdAttr) == "" {
-				return fmt.Errorf("alarm %q on profile %q sets neither threshold nor thresholdAttr", ax.AlarmKey, p.Token)
-			}
-			if ax.Threshold != nil && strings.TrimSpace(ax.ThresholdAttr) != "" {
-				return fmt.Errorf("alarm %q on profile %q sets both threshold and thresholdAttr", ax.AlarmKey, p.Token)
 			}
 		}
 		profileTokens[p.Token] = true

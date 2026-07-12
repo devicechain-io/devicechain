@@ -151,15 +151,6 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 			return err
 		}
 	}
-	for _, a := range p.Alarms {
-		// Alarm defs must exist before publishDeviceProfile below — ADR-045's
-		// draft is inert until publish, so the active version's snapshot has to
-		// already include them, exactly like the metrics loop just above.
-		if err := ensureAlarmDefinition(ctx, rt, p.Token, a); err != nil {
-			return err
-		}
-	}
-
 	if profile.ActiveVersion == nil {
 		var published struct {
 			PublishDeviceProfile struct {
@@ -229,61 +220,6 @@ func ensureMetricDefinition(ctx context.Context, rt *Runtime, profileToken strin
 		return fmt.Errorf("createMetricDefinition: %w", err)
 	}
 	log.Info().Str("token", metricToken).Str("profile", profileToken).Msg("created metric definition")
-	return nil
-}
-
-const queryAlarmDefinitionsByToken = `query($tokens:[String!]!){` +
-	`alarmDefinitionsByToken(tokens:$tokens){token}}`
-
-const mutationCreateAlarmDefinition = `mutation($request:AlarmDefinitionCreateRequest!){` +
-	`createAlarmDefinition(request:$request){token}}`
-
-// ensureAlarmDefinition create-or-gets one alarm definition on profileToken.
-// Its token is derived the same way ensureMetricDefinition derives a metric's
-// (profileToken + "-" + a stable key), here keyed by AlarmKey — Validate checks
-// this exact derivation so a grammar-unsafe alarm key fails fast.
-func ensureAlarmDefinition(ctx context.Context, rt *Runtime, profileToken string, a AlarmDefSpec) error {
-	alarmToken := profileToken + "-" + a.AlarmKey
-	var existing struct {
-		AlarmDefinitionsByToken []struct {
-			Token string `json:"token"`
-		} `json:"alarmDefinitionsByToken"`
-	}
-	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, queryAlarmDefinitionsByToken,
-		map[string]any{"tokens": []string{alarmToken}}, &existing); err != nil {
-		return fmt.Errorf("alarmDefinitionsByToken: %w", err)
-	}
-	if len(existing.AlarmDefinitionsByToken) > 0 {
-		return nil
-	}
-
-	req := map[string]any{
-		"token":               alarmToken,
-		"deviceProfileToken":  profileToken,
-		"alarmKey":            a.AlarmKey,
-		"metricKey":           a.MetricKey,
-		"name":                a.Name,
-		"description":         a.Description,
-		"conditionType":       a.ConditionType,
-		"operator":            a.Operator,
-		"severity":            a.Severity,
-		"threshold":           a.Threshold,
-		"thresholdAttr":       a.ThresholdAttr,
-		"durationSeconds":     a.DurationSeconds,
-		"repeatCount":         a.RepeatCount,
-		"repeatWindowSeconds": a.RepeatWindowSeconds,
-		"enabled":             a.Enabled,
-	}
-	var created struct {
-		CreateAlarmDefinition struct {
-			Token string `json:"token"`
-		} `json:"createAlarmDefinition"`
-	}
-	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationCreateAlarmDefinition,
-		map[string]any{"request": req}, &created); err != nil {
-		return fmt.Errorf("createAlarmDefinition: %w", err)
-	}
-	log.Info().Str("token", alarmToken).Str("profile", profileToken).Msg("created alarm definition")
 	return nil
 }
 

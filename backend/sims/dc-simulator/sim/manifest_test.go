@@ -289,8 +289,8 @@ func TestValidateRejectsUnsupportedAssignmentTargetType(t *testing.T) {
 
 // TestBuildingpulseManifestShape checks the slice-2 built-in scenario matches
 // the spec table: 12 thermostats (3 buildings x 4/building), 3 areas, 3
-// assets, one customer, one profile with 4 metrics + 1 alarm def, one
-// dashboard — and that it passes Validate end to end.
+// assets, one customer, one profile with 4 metrics, one dashboard — and that it
+// passes Validate end to end.
 func TestBuildingpulseManifestShape(t *testing.T) {
 	m := NewBuildingpulse(1).Manifest()
 
@@ -308,9 +308,6 @@ func TestBuildingpulseManifestShape(t *testing.T) {
 	}
 	if len(m.Profiles) != 1 || len(m.Profiles[0].Metrics) != 4 {
 		t.Fatalf("expected exactly one profile with 4 metrics, got %+v", m.Profiles)
-	}
-	if len(m.Profiles[0].Alarms) != 1 {
-		t.Fatalf("expected exactly one alarm def, got %+v", m.Profiles[0].Alarms)
 	}
 	if len(m.Dashboards) != 1 {
 		t.Fatalf("expected exactly one dashboard, got %+v", m.Dashboards)
