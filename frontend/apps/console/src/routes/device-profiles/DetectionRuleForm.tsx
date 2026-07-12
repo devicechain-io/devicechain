@@ -9,8 +9,10 @@
 // rule's `definition`; device-management stores it whole, and event-processing performs
 // the authoritative type/cost/injection validation when the profile is PUBLISHED (this
 // draft save only checks JSON well-formedness) — so a mistyped rule that saves as a draft
-// is rejected at publish with the compiler's message. Inline validation against the
-// compiler is slice 7a-2.
+// is rejected at publish with the compiler's message. As an authoring aid the form also
+// debounce-compiles the rule through event-processing's validateDetectionRules gate
+// (slice 7a-2), surfacing the compiler's diagnostics inline before publish; that check is
+// advisory and never blocks the draft save.
 //
 // The per-type field set mirrors the event-processing compiler's per-type contract
 // (internal/rules/compile.go): each rule type allows exactly the fields its lowering reads
@@ -18,7 +20,7 @@
 // chosen type — a clean rebuild per type, never a merge that could leave a stale field the
 // compiler then rejects.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { normalizeToken } from '@devicechain/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -33,6 +35,7 @@ import {
   type DetectionRule,
   type DetectionRuleCreateRequest,
 } from '@/lib/api/device-management';
+import { validateDetectionRule } from '@/lib/api/event-processing';
 
 // ── The rule taxonomy (mirrors rules.RuleType) ─────────────────────────────
 
@@ -326,8 +329,9 @@ export function DetectionRuleForm({
   // clobbering the original (Fable L2).
   const unparseable = editing && initial == null;
 
-  // Client-side guard for the obvious omissions, so the button hints before the publish
-  // gate (or the coming inline validator) rejects. The compiler remains authoritative.
+  // Client-side guard for the obvious omissions, so the button hints instantly (no round
+  // trip) before the inline compiler check or the publish gate rejects. It mirrors only the
+  // cheap required-field rules; the compiler remains authoritative.
   const hint = validationHint({
     editing,
     token,
@@ -354,37 +358,83 @@ export function DetectionRuleForm({
     actions,
   });
 
+  // The emitted rules.Rule JSON, computed only when the form passes the local hint (so an
+  // incomplete rule is never sent for validation or save). buildDefinition is a pure
+  // object-build + JSON.stringify, so recomputing per render is cheap and the string VALUE
+  // is stable across renders when inputs are — which keeps the validation effect below from
+  // firing on every render.
+  const definition =
+    hint == null
+      ? buildDefinition({
+          definitionName,
+          description,
+          severity,
+          ruleType,
+          condMode,
+          condMetric,
+          condOp,
+          boundKind,
+          condThreshold,
+          condAttr,
+          cel,
+          valueMetric,
+          aggFunc,
+          windowMode,
+          windowStr,
+          holdStr,
+          timeoutStr,
+          gapStr,
+          countStr,
+          rate,
+          aggOp,
+          aggThreshold,
+          anchorType,
+          memberCapStr,
+          actions,
+        })
+      : null;
+
+  // Inline server-authoritative validation: debounce-compile the emitted rule through
+  // event-processing's gate so a type error or cost-over-ceiling the local hint can't see
+  // (CEL type-checking, the predicate cost ceiling, semantic constraints like a constant
+  // count-over-count aggregate) shows BEFORE publish. Advisory only — it never blocks the
+  // draft save (a draft may be a work in progress; publish is the enforcing gate), and a
+  // transport/permission error is swallowed rather than surfaced as a rule problem.
+  const validateToken = editing ? entity.token : token.trim();
+  const [validation, setValidation] = useState<{ status: 'checking' | 'ok' | 'error'; message?: string } | null>(null);
+  useEffect(() => {
+    if (definition == null) {
+      setValidation(null);
+      return;
+    }
+    let cancelled = false;
+    setValidation({ status: 'checking' });
+    const timer = setTimeout(async () => {
+      try {
+        // Bound the wait: a hung (accepting-but-not-responding) pod would otherwise leave
+        // "Checking…" up until the browser's own network timeout. Racing a 10s timeout clears
+        // the advisory feedback instead (Fable LOW); the stray loser timer is a harmless no-op.
+        const res = await Promise.race([
+          validateDetectionRule(validateToken, definition),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('validate timeout')), 10_000)),
+        ]);
+        if (cancelled) return;
+        setValidation(res.ok ? { status: 'ok' } : { status: 'error', message: res.message ?? undefined });
+      } catch {
+        if (!cancelled) setValidation(null);
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [definition, validateToken]);
+
   const submit = async () => {
+    if (definition == null) return; // guarded by the disabled button; satisfies the type narrowing
     setFormError(null);
     setBusy(true);
     try {
-      const definition = buildDefinition({
-        definitionName,
-        description,
-        severity,
-        ruleType,
-        condMode,
-        condMetric,
-        condOp,
-        boundKind,
-        condThreshold,
-        condAttr,
-        cel,
-        valueMetric,
-        aggFunc,
-        windowMode,
-        windowStr,
-        holdStr,
-        timeoutStr,
-        gapStr,
-        countStr,
-        rate,
-        aggOp,
-        aggThreshold,
-        anchorType,
-        memberCapStr,
-        actions,
-      });
       const request: DetectionRuleCreateRequest = {
         token: editing ? entity.token : token.trim(),
         deviceProfileToken: profileToken,
@@ -725,6 +775,17 @@ export function DetectionRuleForm({
       )}
 
       {hint && <p className="text-sm text-amber-600 dark:text-amber-500">{hint}</p>}
+
+      {/* Inline compiler feedback (advisory — does not block the draft save). */}
+      {!hint && validation?.status === 'checking' && (
+        <p className="text-sm text-muted-foreground">Checking the rule compiles…</p>
+      )}
+      {!hint && validation?.status === 'error' && (
+        <p className="text-sm text-red-600 dark:text-red-500">Compiler: {validation.message}</p>
+      )}
+      {!hint && validation?.status === 'ok' && (
+        <p className="text-sm text-emerald-600 dark:text-emerald-500">The rule compiles. ✓</p>
+      )}
 
       <div className="flex gap-2 pt-1">
         <Button onClick={submit} loading={busy} disabled={busy || hint != null}>

@@ -19,6 +19,7 @@ export type Area =
   | 'user-management/settings'
   | 'device-management'
   | 'event-management'
+  | 'event-processing'
   | 'device-state'
   | 'command-delivery'
   | 'dashboard-management';
