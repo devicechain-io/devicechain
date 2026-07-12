@@ -67,6 +67,7 @@ type Manager struct {
 	dummyHash  []byte
 	refreshTTL time.Duration
 	bootstrap  BootstrapConfig
+	issuerUrl  string
 	issuerName string
 
 	// mu guards the signing-key material, which a rotation replaces while the
@@ -88,9 +89,23 @@ type TokenPair struct {
 
 // NewManager constructs a Manager. accessTTL/refreshTTL of 0 fall back to the
 // auth package defaults. locker serializes signing-key generation/rotation and
-// bootstrap seeding across replicas (ADR-007).
-func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.DistributedLock, accessTTL, refreshTTL time.Duration, bootstrap BootstrapConfig) *Manager {
-	return &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, accessTTL: accessTTL, refreshTTL: refreshTTL, bootstrap: bootstrap}
+// bootstrap seeding across replicas (ADR-007). issuerUrl, when non-empty, is the
+// OAuth 2.1 issuer identifier (ADR-047) stamped as every token's "iss"; empty
+// keeps the legacy per-instance internal identifier.
+func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.DistributedLock, accessTTL, refreshTTL time.Duration, issuerUrl string, bootstrap BootstrapConfig) *Manager {
+	return &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, accessTTL: accessTTL, refreshTTL: refreshTTL, issuerUrl: issuerUrl, bootstrap: bootstrap}
+}
+
+// resolveIssuerName picks the JWT "iss" value. A configured OAuth issuer URL
+// (ADR-047) wins and becomes the "iss" of every token — a decisive platform-wide
+// cutover, safe because nothing pins "iss" (the validator selects keys by "kid").
+// Absent an issuer URL, OAuth is off and tokens keep the legacy per-instance
+// internal identifier.
+func resolveIssuerName(issuerUrl, instanceId string) string {
+	if issuerUrl != "" {
+		return issuerUrl
+	}
+	return fmt.Sprintf("dc-user-management:%s", instanceId)
 }
 
 // Initialize loads (or creates) the signing key, builds the issuer/validator,
@@ -98,7 +113,7 @@ func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.Dis
 // the RdbManager is initialized (tables exist) and the refresh KV bucket is
 // created.
 func (m *Manager) Initialize(ctx context.Context, refreshKV nats.KeyValue) error {
-	m.issuerName = fmt.Sprintf("dc-user-management:%s", m.ms.InstanceId)
+	m.issuerName = resolveIssuerName(m.issuerUrl, m.ms.InstanceId)
 	set, err := m.loadSigningKeys(ctx)
 	if err != nil {
 		return err
@@ -381,6 +396,15 @@ func (m *Manager) recordAuth(ctx context.Context, operation, actor, tenant strin
 func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
 	claims, err := m.validator.ValidateRefresh(refreshToken)
 	if err != nil {
+		return nil, ErrInvalidToken
+	}
+	// An OAuth 2.1 refresh token (ADR-047) carries a scope: it must be redeemed at
+	// the /oauth/token endpoint, which re-caps authorities to that scope and
+	// preserves the scope/audience binding. This ordinary refresh path re-resolves
+	// the identity's *full* authorities and mints an unscoped, unbound pair — so
+	// accepting a scoped token here would let a read-only, audience-bound session
+	// escalate to a full-authority one in a single hop. Reject it, fail-closed.
+	if claims.Scope != "" {
 		return nil, ErrInvalidToken
 	}
 	entry, err := m.refreshKV.Get(claims.ID)

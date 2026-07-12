@@ -49,7 +49,17 @@ type Claims struct {
 	// Authorities are the subject's effective capabilities — the union of their
 	// roles' granted authorities, expanded at token-issue time. Resolvers gate on
 	// these (see Authorize); a holder of AuthorityAll ("*") passes every check.
+	// A token minted through the OAuth 2.1 authorization-code flow (ADR-047) carries
+	// the *intersection* of the subject's authorities with what the granted Scope
+	// permits — never a superset — so an OAuth session cannot exceed its scope even
+	// for a subject who holds "*".
 	Authorities []string `json:"authorities,omitempty"`
+	// Scope is the space-delimited OAuth 2.1 scope set granted to a token minted via
+	// the authorization-code flow (ADR-047); empty on every non-OAuth token. It is
+	// carried for audit/introspection — enforcement is on Authorities, which are
+	// already capped to the scope at issue time. The audience a scoped token is
+	// bound to (RFC 8707) rides the standard "aud" registered claim.
+	Scope string `json:"scope,omitempty"`
 	// TokenType distinguishes access from refresh tokens (see TokenType*).
 	TokenType string `json:"typ"`
 
