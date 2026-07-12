@@ -65,6 +65,22 @@ func registerTools(s *mcp.Server, t *Tools) {
 		Name:        "list_devices",
 		Description: "List the devices in the caller's tenant (paged). Returns each device's token, name, description, external id, and device-type token. Address devices by token in follow-up tools.",
 	}, t.ListDevices)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_device",
+		Description: "Look up one or more devices by token. Returns each device's token, name, description, external id, and device-type token. Unknown tokens are simply omitted from the result (not an error), so compare the returned tokens against the ones requested.",
+	}, t.GetDevice)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_device_state",
+		Description: "Read the live last-known connectivity state of one or more devices by token: whether active, last connect/disconnect/activity times (RFC3339), and the inactivity timeout in seconds. A device with no state yet (never reported) is omitted from the result.",
+	}, t.GetDeviceState)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_latest_measurements",
+		Description: "Read the latest (last-known) value of every metric for a device, with its unit, data type, and time. Prefer this over querying raw history for a current snapshot.",
+	}, t.GetLatestMeasurements)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_device_capabilities",
+		Description: "Report the metric and command definitions declared on a device's profile — its DRAFT definitions (key, name, unit/data type). These are the editable working copy; a device resolves the active PUBLISHED profile version, which may differ from these drafts. `activeVersion` is the published version the device currently resolves; when it is null the profile has never been published, so the device currently resolves NONE of these capabilities. Do not assume a listed capability is active unless activeVersion is set.",
+	}, t.GetDeviceCapabilities)
 }
 
 // metadataURL is the absolute URL of the RFC 9728 protected-resource metadata: the
