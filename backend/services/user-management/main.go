@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-user-management/identity"
 	"github.com/devicechain-io/dc-user-management/schema"
 	"github.com/devicechain-io/dc-user-management/settings"
+	"github.com/nats-io/nats.go"
 )
 
 var (
@@ -94,6 +95,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// The OAuth authorization-code store is created only when OAuth is enabled
+	// (ADR-047); nil otherwise, leaving the token endpoint's code path off.
+	var codesKV nats.KeyValue
+	if Configuration.OAuthEnabled() {
+		codesKV, err = NatsManager.KeyValueStore(identity.AuthCodeBucket, identity.AuthCodeTTL)
+		if err != nil {
+			return err
+		}
+	}
 	// Distributed lock (ADR-007, NATS KV) serializing signing-key work and
 	// bootstrap seeding across replicas.
 	lock, err := NatsManager.NewDistributedLock(5 * time.Second)
@@ -104,7 +114,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		SuperuserEmail:    Configuration.Auth.SuperuserEmail,
 		SuperuserPassword: Configuration.Auth.SuperuserPassword,
 	})
-	if err := IdentityManager.Initialize(ctx, refreshKV); err != nil {
+	if err := IdentityManager.Initialize(ctx, refreshKV, codesKV); err != nil {
 		return err
 	}
 
@@ -223,6 +233,14 @@ func registerKeyHandlers() {
 // host). Inert until an operator sets IssuerUrl.
 func registerOAuthHandlers() {
 	http.Handle(identity.MetadataPath, identity.AuthorizationServerMetadataHandler(Configuration.Auth.IssuerUrl))
+
+	// The token endpoint (ADR-047 slice B): authorization_code (+ PKCE) and
+	// refresh_token grants for public clients. The authorize endpoint that issues
+	// codes lands in slice C.
+	http.Handle(identity.TokenPath, identity.TokenHandler(
+		IdentityManager.RedeemAuthorizationCode,
+		IdentityManager.RefreshOAuth,
+	))
 
 	// Public JWKS mirror for external OAuth token validators (see OAuthJwksPath).
 	// Serves the same retained key set as /auth/jwks.
