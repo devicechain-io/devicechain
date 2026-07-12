@@ -17,26 +17,29 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// RaiseAlarmConsumer is the discrete NATS consumer for REACT raise-alarm requests (ADR-051 slice 5c
-// / ADR-054): event-processing's REACT dispatcher emits a raise-alarm request when a detection rule's
-// raiseAlarm action fires, and this consumer raises/escalates the alarm through device-management's
-// existing engine (Api.RaiseAlarm → raiseOrEscalateAlarm), so a rule-driven alarm is indistinguishable
-// downstream from a measurement-driven one — same Alarm object, ack/clear, graph rollup, and
-// alarm-events→notification flow (ADR-041/017).
+// RaiseAlarmConsumer is the discrete NATS consumer for REACT alarm-edge requests (ADR-051 slice 5c /
+// ADR-054 / ADR-057): event-processing's REACT dispatcher emits an alarm request for each edge of a
+// detection rule's raiseAlarm action — a RAISED edge on the rising edge, a RESOLVED edge on the
+// falling one — and this consumer routes both to the alarm-object integrator
+// (Api.ApplyAlarmContributorEdge). The integrator reference-counts the rules currently raising the
+// (device, alarmKey) alarm: a raise adds/updates the rule's contribution (max-tier severity over the
+// active set), a resolve removes it, and the alarm clears when the set empties — so a rule-driven
+// alarm is the same first-class Alarm object with the same ack/clear, graph rollup, and
+// alarm-events→notification flow (ADR-041/017) as before, now cleared by edge integration rather than
+// the retired measurement evaluator's per-sample re-evaluation.
 //
-// It is a separate consumer from the measurement-driven alarm evaluator by design (raise-alarm must
+// It is a separate consumer from the measurement-driven alarm evaluator by design (alarm edges must
 // not share a failure fate with measurement evaluation), and it needs no dead-letter path: a request
-// that repeatedly fails to apply is dropped after the redelivery cap. Raise-alarm volume is low (one
-// per firing rule with a raiseAlarm action), so it processes inline in the read loop rather than
-// behind a worker pool. An at-least-once redelivery is safe: Api.RaiseAlarm is an upsert keyed on
-// (device, alarmKey), so an exact-duplicate is idempotent and the engine's cross-cycle occurred-time
-// guards stop a stale raise from reactivating a cleared alarm. (It does NOT guard within-cycle
-// reordering — see RaiseAlarmRequest.OccurredTime — the same latest-wins gap the evaluator has.)
+// that repeatedly fails to apply is dropped after the redelivery cap. Volume is low (one per rule
+// edge), so it processes inline in the read loop rather than behind a worker pool. An at-least-once,
+// out-of-order redelivery is safe: the contributor reduction ignores a stale edge and lets a resolve
+// win a raise at an equal event time (RaiseAlarmRequest.OccurredTime), so any order re-derives one
+// deterministic alarm state.
 //
 // SLICE-6 CO-EXISTENCE: this consumer and the measurement evaluator write the SAME (device, alarmKey)
 // row; while both run, the evaluator's auto-clear/tier-rederivation can clear or clobber a
-// REACT-raised alarm. That is why the DISPATCH side is gated default-off until slice 6 retires the
-// measurement-driven evaluator (per tenant, atomically) — the two paths must not both raise.
+// REACT-integrated alarm. That is why the DISPATCH side is gated default-off until slice 6 retires the
+// measurement-driven evaluator (per tenant, atomically) — the two paths must not both write.
 type RaiseAlarmConsumer struct {
 	Microservice *core.Microservice
 	Reader       messaging.MessageReader
@@ -134,33 +137,37 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 		return
 	}
 
-	// ADR-057 staging (6d-pre-2b): the contributor-set integrator that resolves a rule's contribution
-	// on a RESOLVED edge lands in 6d-pre-2c. Until then a resolved request must NOT reach the raise
-	// path (which would wrongly raise/escalate); drop it fail-closed, comparing the SHARED wire constant
-	// (never a literal — a spelling drift here fails OPEN into the raise path). In practice the alarm
-	// dispatch gate is off until slice 6 (after 2c), so a resolved request reaching this consumer at all
-	// means the gate was flipped early in the 2b→2c window — a MISCONFIGURATION, hence Warn not Debug:
-	// these resolves are acked-and-lost and the alarms will not rule-clear until 2c ships. A raised edge
-	// (or a legacy empty edge) falls through to the raise below.
-	if req.Edge == model.AlarmEdgeResolved {
-		log.Warn().Str("device", req.DeviceToken).Str("alarmKey", req.AlarmKey).
-			Msg("Raise-alarm dropping a resolved edge before the 6d-pre-2c integrator — is the alarm dispatch gate enabled early?")
+	// Route on the edge (ADR-057, 6d-pre-2c): a raised edge raises/escalates the rule's contribution,
+	// a resolved edge removes it. Compare the SHARED wire constants (never a literal — a drift fails
+	// OPEN); an empty edge is a legacy raise. Any other token is a malformed/forged producer — poison.
+	var edge string
+	switch req.Edge {
+	case model.AlarmEdgeResolved:
+		edge = model.AlarmEdgeResolved
+	case model.AlarmEdgeRaised, "":
+		edge = model.AlarmEdgeRaised
+	default:
+		log.Warn().Str("device", req.DeviceToken).Str("edge", req.Edge).Msg("Raise-alarm dropping request with an unknown edge")
 		msg.Ack()
 		done(core.ResultInvalid)
 		return
 	}
+	raised := edge == model.AlarmEdgeRaised
 
 	// Map the rule's authoring-vocabulary severity (lowercase) to the AlarmSeverity tier (ADR-041).
-	// An empty device token/alarm key or an unknown severity is a malformed request (a forged or
-	// buggy producer) — poison, dropped.
+	// device token, alarm key, and rule id (the contributor identity) are required on BOTH edges; the
+	// severity/tier is required only on a RAISE (a resolve removes a contributor regardless of tier).
+	// An empty required field or an unknown raise severity is a malformed request (forged/buggy
+	// producer) — poison, dropped.
 	severity := strings.ToUpper(req.Severity)
-	// A zero occurred time is dropped too: it becomes the alarm's raised time AND the ordering key
-	// the engine's cross-cycle guards use, so a zero would stamp a 0001-01-01 alarm and defeat the
-	// ordering. A well-formed producer always stamps the detection's event time, so this only guards
-	// a forged/buggy producer — symmetric with the roster consumer's zero-time drop.
-	if req.DeviceToken == "" || req.AlarmKey == "" || req.OccurredTime.IsZero() || !model.AlarmSeverity(severity).Valid() {
-		log.Warn().Str("device", req.DeviceToken).Str("alarmKey", req.AlarmKey).Str("severity", req.Severity).
-			Msg("Raise-alarm dropping malformed request (empty device/alarm key, zero time, or unknown severity)")
+	// A zero occurred time is dropped: it is the per-contributor decision/ordering key the integrator
+	// uses, so a zero would stamp a 0001-01-01 decision time and defeat the ordering. A well-formed
+	// producer always stamps the detection's event time — symmetric with the roster consumer's drop.
+	badRaise := raised && !model.AlarmSeverity(severity).Valid()
+	if req.DeviceToken == "" || req.AlarmKey == "" || req.RuleID == "" || req.OccurredTime.IsZero() || badRaise {
+		log.Warn().Str("device", req.DeviceToken).Str("alarmKey", req.AlarmKey).Str("rule", req.RuleID).
+			Str("edge", edge).Str("severity", req.Severity).
+			Msg("Raise-alarm dropping malformed request (empty device/alarm key/rule, zero time, or unknown raise severity)")
 		msg.Ack()
 		done(core.ResultInvalid)
 		return
@@ -181,8 +188,9 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 		return
 	}
 
-	if err := rc.Api.RaiseAlarm(msgctx, devices[0].ID, req.AlarmKey, req.MetricKey, severity, req.Value, req.OccurredTime); err != nil {
-		rc.retryOrDrop(msg, done, err, "apply raise-alarm")
+	if err := rc.Api.ApplyAlarmContributorEdge(msgctx, devices[0].ID, req.AlarmKey, req.MetricKey,
+		req.RuleID, edge, severity, req.Value, req.OccurredTime); err != nil {
+		rc.retryOrDrop(msg, done, err, "apply alarm edge")
 		return
 	}
 
@@ -194,8 +202,12 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 // redelivery cap is reached so one persistently-failing request cannot redeliver forever.
 func (rc *RaiseAlarmConsumer) retryOrDrop(msg messaging.Message, done func(string), err error, what string) {
 	if msg.NumDelivered >= messaging.MaxDeliver {
+		// Dropping an edge past the cap is a genuine loss for an edge-triggered producer: a dropped
+		// RAISE will not re-emit until the condition falls and re-breaches, and a dropped RESOLVE
+		// strands the alarm until its next cycle. It is a loud error precisely because it should never
+		// happen — the integrator's in-process CAS retry keeps a conflict from consuming attempts.
 		log.Error().Err(err).Str("what", what).Int("attempts", msg.NumDelivered).
-			Msg("Raise-alarm failed past redelivery cap; dropping (re-raises on the rule's next firing)")
+			Msg("Raise-alarm edge failed past redelivery cap; dropping (edge-triggered: it will not re-emit until the condition next changes)")
 		msg.Ack()
 		done(core.ResultFailed)
 		return

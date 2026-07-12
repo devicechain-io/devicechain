@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -70,6 +71,21 @@ type Alarm struct {
 	AcknowledgedBy   sql.NullString  // identity that acknowledged (opaque operator reference)
 	LastValue        sql.NullFloat64 // the measurement value at the most recent evaluation
 	Message          sql.NullString  // human-readable summary (rule-provided or generated)
+
+	// Contributors is the ADR-057 contributor set: the JSON-encoded {ruleID → AlarmContributor} map
+	// the DETECT+REACT integrator reference-counts to derive State + Severity (raise adds/updates a
+	// contributor, resolve tombstones it, the alarm clears when no contributor is active). NULL/empty
+	// for a legacy measurement-evaluator-raised alarm (the evaluator is retired at slice 6); the
+	// integrator populates it. See alarm_contributor.go for the reduction.
+	Contributors datatypes.JSON `gorm:"type:jsonb"`
+	// ContributorVersion is the optimistic-concurrency guard for the contributor set: the integrator
+	// bumps it on every fold and CAS-writes on the value it read, so a concurrent fold (two HA replicas
+	// share the raise-alarm durable consumer) that raced in between fails the predicate and the edge is
+	// re-read + re-folded rather than clobbered. Unlike the retired evaluator's self-healing scalar
+	// columns, the contributor set is an ACCUMULATOR — a lost write is permanent state divergence, not
+	// a transient skew — so it needs a real CAS. Untouched by the operator ack/clear paths (a state
+	// change there is caught by the co-predicated `state`).
+	ContributorVersion uint `gorm:"not null;default:0"`
 }
 
 // Search criteria for locating alarms. All facets are optional and AND together;

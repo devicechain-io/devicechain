@@ -24,5 +24,6 @@ var (
 		NewRelationshipTargetTokenSchema(),
 		NewExternalIdSchema(),
 		NewDetectionRuleSchema(),
+		NewAlarmContributorsSchema(),
 	}
 )
