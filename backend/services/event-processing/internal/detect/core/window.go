@@ -158,10 +158,15 @@ func (h *closeHeap) purgeRule(id string) {
 
 // applyRepeating handles a Repeating rule: keep a sliding buffer of matching-event times
 // within Window, and fire on the rising edge where the trailing count reaches Count.
+//
+// Eviction advances on EVERY delivered event (matching or not, ADR-057 review D2/D5); only a
+// matching event is appended to the buffer. A rule with a filtering `when` leaf therefore
+// observes its falling edge while the device keeps reporting NON-matching gate-metric values —
+// the burst ages out of the window and the count drops below N — rather than staying raised until
+// some future matching event. For a match-every rule (the common case) every event matches, so
+// this is byte-identical to always-append. A fully silent series still stays raised until it
+// reports again (the window kinds are event-driven; see the package silence note).
 func (e *Engine) applyRepeating(ev Event, r Rule) {
-	if !ev.Match {
-		return
-	}
 	cutoff := ev.Time.Add(-r.Window)
 	buf := e.sliding[ev.Key]
 	kept := make([]time.Time, 0, len(buf)+1)
@@ -171,24 +176,40 @@ func (e *Engine) applyRepeating(ev Event, r Rule) {
 		}
 	}
 	prev := len(kept)
-	kept = append(kept, ev.Time)
-	e.sliding[ev.Key] = kept
+	if ev.Match {
+		kept = append(kept, ev.Time)
+	}
+	if len(kept) == 0 {
+		delete(e.sliding, ev.Key) // an emptied window leaks no state entry against the budget
+	} else {
+		e.sliding[ev.Key] = kept
+	}
 	switch {
 	case prev < r.Count && len(kept) >= r.Count:
 		e.emitSample(r, ev) // rising edge: the sample that completed the N-in-window run (none for a metric-less leaf)
 	case len(kept) < r.Count:
-		// Falling edge (ADR-057): enough prior matches aged out of the window that even with this
-		// one the count is back below N — the burst has passed, so resolve a raised alarm. A no-op
-		// when never raised. Observed only on the next matching event (an all-silent series stays
-		// raised — see the package note on window-kind silence).
+		// Falling edge (ADR-057): enough prior matches aged out of the window that the count is back
+		// below N — the burst has passed, so resolve a raised alarm. A no-op when never raised. The
+		// rising case can only fire on a matching event (a non-match never grows kept), so a
+		// non-matching event only ever ages the window down toward this falling edge.
 		e.resolve(r, ev.Key, ev.Time)
 	}
 }
 
 // applyAggregate handles an Aggregate rule: fold each matching value into its tumbling
 // window pane; the pane fires (or not) when it closes on the watermark (closePanes).
+//
+// A matching event always opens (or finds) its window's pane and folds its value. A NON-matching
+// event opens the pane too — but ONLY while an alarm is currently raised for this series, and folds
+// no value (ADR-057 review D2/D5). Without this, an all-non-matching window never opens a pane, so it
+// never closes, so a raised alarm stays raised forever under active non-matching traffic — the exact
+// stuck-raise the sliding kinds close. Gating the empty-pane open on `raised` bounds the extra state
+// to series that actually need the falling edge (a raise implies a prior match); an empty pane
+// never satisfies (closePanes), so it resolves. A non-matching event for a NON-raised series opens
+// nothing (no alarm to resolve, no value to fold).
 func (e *Engine) applyAggregate(ev Event, r Rule) {
-	if !ev.Match {
+	_, raised := e.raised[ev.Key]
+	if !ev.Match && !raised {
 		return
 	}
 	start := ev.Time.Truncate(r.Window)
@@ -203,13 +224,23 @@ func (e *Engine) applyAggregate(ev Event, r Rule) {
 		e.panes[pk] = pa
 		heap.Push(&e.closes, &closeItem{end: end, pk: pk})
 	}
-	pa.add(ev.Value)
+	if ev.Match {
+		pa.add(ev.Value)
+	}
 }
 
 // applyCountWindow handles a CountWindow rule: fold each matching value into an event-count
 // accumulator; when the Count-th event lands, evaluate Agg vs Thresh, emit on satisfaction,
 // and reset. It is a tumbling window measured in events rather than time — no watermark, no
 // timer — so replay just re-counts from the snapshotted partial accumulator.
+//
+// KNOWN RESIDUAL (ADR-057 review D2/D5, inherent — not the sliding-kind gap): the window is counted
+// in MATCHING events, and there is no time axis, so a filtering rule that stops matching never
+// completes another window — a raised alarm then stays raised until Count more matching events arrive
+// (which may be never). Unlike the sliding/tumbling-TIME kinds, there is no eviction or watermark that
+// could observe the falling edge from non-matching traffic: "closed" is definitionally Count matches.
+// Operators pair such a rule with an Absence rule when "stopped producing matches" must also clear the
+// alarm — the same mitigation the package silence note gives for a fully-silent series.
 func (e *Engine) applyCountWindow(ev Event, r Rule) {
 	if !ev.Match || r.Count <= 0 {
 		return
@@ -253,12 +284,13 @@ func (e *Engine) closePanes(wm time.Time) bool {
 			continue
 		}
 		// A satisfied close raises (latched across successive tumbling windows for this series), an
-		// unsatisfied close resolves a prior raise (ADR-057 falling edge). A window with no matching
-		// events has no pane and so never closes here — an intervening empty window cannot resolve;
-		// the alarm resolves on the next window that closes unsatisfied (see the package silence note).
+		// unsatisfied close resolves a prior raise (ADR-057 falling edge). An EMPTY pane (count 0) never
+		// satisfies — mirroring slidingState.satisfies, so an all-non-matching window opened only to
+		// carry the falling edge (applyAggregate, while raised) resolves rather than reading the zero-
+		// value aggregate as a real breach (e.g. an LT rule would otherwise fire on 0 < thresh).
 		if r, ok := e.rules[top.pk.Rule]; ok {
 			key := SeriesKey{Rule: r.ID, Series: top.pk.Series}
-			if cmp(r.Op, pa.value(r.Agg), r.Thresh) {
+			if pa.count > 0 && cmp(r.Op, pa.value(r.Agg), r.Thresh) {
 				e.emitValue(r, key, top.end, pa.value(r.Agg))
 			} else {
 				e.resolve(r, key, top.end)

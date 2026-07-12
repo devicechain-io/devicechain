@@ -15,13 +15,20 @@ type deltaState struct {
 	time  time.Time
 }
 
-// applyDeltaRate evaluates a DeltaRate rule against one matching sample: the change since
-// the previous sample (Rate ⇒ divided by the elapsed seconds) compared to the threshold.
-// Level-triggered — it fires on every qualifying sample. The first sample for a series only
-// primes the state; a non-advancing time gap suppresses a rate (division by ≤0) but still
-// updates the last-sample so the series recovers on the next in-order event.
+// applyDeltaRate evaluates a DeltaRate rule against one sample: the change since the previous
+// MATCHING sample (Rate ⇒ divided by the elapsed seconds) compared to the threshold. Edge-triggered
+// (ADR-057): a qualifying delta/rate raises (latched), a subsequent qualifying sample back within
+// threshold resolves, and a NON-matching sample (a filtering `when` leaf gone false) also resolves a
+// raised alarm — so a filtering rule doesn't stay raised under active non-matching traffic. The first
+// matching sample for a series only primes the state; a non-advancing time gap suppresses a rate
+// (division by ≤0) but still updates the last-sample so the series recovers on the next in-order event.
 func (e *Engine) applyDeltaRate(ev Event, r Rule) {
 	if !ev.Match {
+		// Falling edge (ADR-057 review D2/D5): a rule with a filtering `when` leaf that stops matching
+		// resolves a raised alarm, instead of staying raised while the device actively reports
+		// non-qualifying samples. Do NOT touch lastVal — the delta chain pairs consecutive MATCHING
+		// samples, so a non-matching reading is not a base for the next delta. A no-op when never raised.
+		e.resolve(r, ev.Key, ev.Time)
 		return
 	}
 	prev, ok := e.lastVal[ev.Key]
@@ -172,30 +179,48 @@ func (s *slidingState) value(op AggOp) float64 {
 
 // applySlidingAgg evaluates a SlidingAgg rule: fold the sample into the trailing window,
 // then edge-trigger on the running aggregate crossing Op vs Thresh.
+//
+// Eviction advances on EVERY delivered event (ADR-057 review D2/D5); only a matching sample is
+// folded in. A rule with a filtering `when` leaf therefore observes its falling edge while the
+// device keeps reporting NON-matching samples — the qualifying samples age out and the aggregate
+// stops satisfying — rather than staying raised until the next match. For a match-every rule (the
+// common case) every sample folds in, so this is byte-identical to always-insert.
 func (e *Engine) applySlidingAgg(ev Event, r Rule) {
-	if !ev.Match {
-		return
-	}
 	st := e.slides[ev.Key]
 	if st == nil {
+		if !ev.Match {
+			return // no window and a non-matching sample opens none — nothing to evict or resolve
+		}
 		st = &slidingState{}
 		e.slides[ev.Key] = st
 	}
 	st.evict(ev.Time.Add(-r.Window))
-	st.insert(sample{t: ev.Time, v: ev.Value})
+	if ev.Match {
+		st.insert(sample{t: ev.Time, v: ev.Value})
+	}
 	// Evaluate the level ONCE, on the fully-updated trailing window (evicted + this sample folded
-	// in). The rising edge raises (latched); a window that no longer satisfies resolves a prior
-	// raise (ADR-057). Evaluating only the post-insert window is deliberate: a pre-insert check
-	// reads a phantom dip at exactly the moment the left-edge sample expires as the new one arrives
-	// — for a device reporting on a regular cadence that divides the window, that dip exists at no
-	// real instant and would clear-and-re-raise the alarm on EVERY sample (review D1). A breach that
-	// ends purely because the window emptied during a silent GAP is not observed until the next
-	// event, exactly like every other event-driven kind (see the package silence note) — the alarm
-	// stays raised across the gap rather than flapping.
-	if st.satisfies(r) {
-		e.emitValue(r, ev.Key, ev.Time, st.value(r.Agg))
-	} else {
+	// in when matching). The RISING edge is gated on ev.Match — symmetric with Repeating/Correlation,
+	// whose rising edge is structurally match-only: eviction can push a SlidingAgg aggregate EITHER
+	// direction (e.g. an AggMax/GT or AggAvg/LT window can cross INTO satisfaction as an old sample
+	// expires), so without this gate a non-matching sample could RAISE purely by aging the window —
+	// which is both surprising and ragged (unreachable once the window empties and the entry is
+	// deleted, review by both 6d-pre-2a lenses). A non-match therefore only ever ages the window
+	// toward its FALLING edge; a rise that eviction alone would produce is deferred to the next
+	// matching sample. Evaluating only the post-insert window (not a pre-insert check) is the review-D1
+	// fix: a pre-insert dip at the instant the left-edge sample expires as the new one arrives exists
+	// at no real instant and would flap the alarm on every regular-cadence sample. A breach that ends
+	// purely because the window emptied during a silent GAP is not observed until the next event, like
+	// every other event-driven kind (see the package silence note) — raised across the gap, not flapping.
+	switch {
+	case st.satisfies(r):
+		if ev.Match {
+			e.emitValue(r, ev.Key, ev.Time, st.value(r.Agg))
+		}
+	default:
 		e.resolve(r, ev.Key, ev.Time)
+	}
+	if len(st.buf) == 0 {
+		delete(e.slides, ev.Key) // a fully-aged-out window leaks no state entry against the budget
 	}
 }
 

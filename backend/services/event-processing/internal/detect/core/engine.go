@@ -103,6 +103,13 @@ type Event struct {
 // one At); that residual same-At-same-edge collapse is a documented 6d-pre-2 concern — the alarm
 // object's monotonic decision-time guard resolves it, and it requires multiple events at a byte-
 // identical event time, which real per-device telemetry does not produce.
+//
+// The edges of one series are also NOT globally time-ordered: with the D2/D5 falling edge (6d-pre-2a),
+// a bounded-late matching event can open a fresh window and stamp a Raised at an event time EARLIER
+// than an already-emitted Resolved for the same key (resolve@12 then a late match@9 → raise@9). Both
+// survive dedup (distinct At), but they reach the alarm object out of At order — so the 6d-pre-2 alarm
+// integrator's per-contributor monotonic decision-time guard (not arrival order) is what must decide
+// the final raised/cleared state; this is explicitly on the hook, not just the same-At case above.
 type EdgeKind uint8
 
 const (
@@ -120,15 +127,25 @@ const (
 // Absence rule's job to catch, not a threshold's. Operators pair a level rule with an Absence rule
 // when "stopped reporting" must also clear (or escalate) the alarm.
 //
-// KNOWN GAP deferred to 6d-pre-2 (the resolve path is inert here — Resolved edges are dropped at
-// the publisher until then): the match-gated kinds — Repeating, SlidingAgg, Aggregate, CountWindow,
-// Correlation — return before their eviction/resolve logic on a NON-matching event (applyRepeating
-// et al. `if !ev.Match { return }`), so a rule whose `when` leaf FILTERS samples (e.g. count of
-// readings where mode==heating) can stay raised even while the device actively reports non-matching
-// values, resolving only on a future matching event. Threshold/DeltaRate already resolve on a
-// non-match. Closing this — running eviction + the falling-edge check on non-matching gate-metric
-// events — is 6d-pre-2 work, built and swept together with the alarm-object integrator that makes
-// the Resolved edge live (reviews D2/D5). A match-every-leaf rule (the common case) is unaffected.
+// Non-matching gate-metric events and the falling edge (ADR-057 reviews D2/D5, 6d-pre-2a). A rule with
+// a filtering `when` leaf (e.g. count of readings where mode==heating) receives NON-matching samples
+// that carry its metric, and must resolve a raised alarm as the condition ceases rather than staying
+// raised while the device actively reports non-matching values. Coverage per kind:
+//   - Threshold / DeltaRate: resolve directly on a non-matching sample (apply / applyDeltaRate).
+//   - Repeating / SlidingAgg / Correlation (sliding, time-eviction): advance eviction on EVERY delivered
+//     event and record only the matching sample, so the falling edge is observed as qualifying samples
+//     age out of the trailing window. Their RISING edge is match-only (a non-match never grows the
+//     window), so a non-match can only age toward the falling edge.
+//   - Aggregate (tumbling TIME window): a raised series opens an empty pane on a non-matching event so
+//     an all-non-matching window still closes on the watermark and resolves (an empty pane never
+//     satisfies, closePanes).
+//   - CountWindow / Session: INHERENT residual — a window counted in matching events (no time axis) and
+//     a session opened only by a matching event cannot observe a falling edge from pure non-matching
+//     traffic. A raised alarm persists until the next completed window/session; operators pair with an
+//     Absence rule (see each function's KNOWN RESIDUAL note).
+// A match-every-leaf rule (the common case) is byte-identical to the pre-D2/D5 behavior — every event
+// matches, so nothing is ever skipped and no falling edge is reachable from non-matching traffic. This
+// is the NON-matching-traffic falling edge; the FULLY-silent case is the note directly above.
 
 // Detection is an emitted signal. Its identity (RuleID, Series, Kind, At, Edge) is stable and
 // deterministic, so at-least-once re-emission across a restart is dedup-collapsible
