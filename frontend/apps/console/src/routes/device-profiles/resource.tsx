@@ -4,10 +4,10 @@
 // The device-profile registry resource (ADR-045). A profile is the reusable
 // capability contract a device type adopts: it owns the metric and command
 // definitions, versioned as one unit. The Basic tab edits the profile header; the
-// Metrics / Commands tabs author its draft definitions; the Versions tab
-// publishes/rolls back what devices actually resolve. Alarm authoring moved off the
-// profile-owned AlarmDefinition to the DETECT DetectionRule path (ADR-057); its
-// console form lands with the detection-rule authoring UI (slice 7).
+// Metrics / Commands / Detection Rules tabs author its draft definitions; the Versions
+// tab publishes/rolls back what devices actually resolve. Alarm authoring moved off the
+// profile-owned AlarmDefinition to the DETECT DetectionRule path (ADR-057); the
+// Detection Rules tab is that path's console form (slice 7a).
 
 import { useState } from 'react';
 import { normalizeToken } from '@devicechain/client';
@@ -17,7 +17,7 @@ import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
 import { SuggestField } from '@/components/ui/suggest-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { Textarea, errMessage, typeCountLabel } from '@/routes/common';
+import { Textarea, errMessage, typeCountLabel, StatusBadge } from '@/routes/common';
 import {
   tokenColumn,
   descriptionColumn,
@@ -27,6 +27,7 @@ import {
 import { DefinitionsPanel } from './DefinitionsPanel';
 import { VersionsPanel } from './VersionsPanel';
 import { MetricDefinitionForm, CommandDefinitionForm } from './DefinitionForms';
+import { DetectionRuleForm } from './DetectionRuleForm';
 import {
   listDeviceProfiles,
   getDeviceProfile,
@@ -37,9 +38,22 @@ import {
   deleteMetricDefinition,
   listCommandDefinitions,
   deleteCommandDefinition,
+  listDetectionRules,
+  deleteDetectionRule,
   type DeviceProfile,
   type DeviceProfileCreateRequest,
 } from '@/lib/api/device-management';
+
+// The rule type is inside the opaque definition JSON; read it defensively for the
+// list column (event-processing owns the taxonomy — the console only labels it).
+const ruleTypeLabel = (definition: string): string => {
+  try {
+    const t = (JSON.parse(definition) as { type?: unknown }).type;
+    return typeof t === 'string' ? t : '—';
+  } catch {
+    return '—';
+  }
+};
 
 const Dash = () => <span className="text-muted-foreground">—</span>;
 
@@ -124,7 +138,8 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
   titlePlural: 'Device Profiles',
   singular: 'device profile',
   banner: 'devices',
-  listDescription: 'Reusable capability contracts — metrics, commands, and alarm rules — that device types adopt',
+  listDescription:
+    'Reusable capability contracts — metrics, commands, and detection rules — that device types adopt',
   list: listDeviceProfiles,
   load: getDeviceProfile,
   remove: deleteDeviceProfile,
@@ -147,7 +162,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
   ],
   renderForm: (p, onDone) => <ProfileForm entity={p} onDone={onDone} />,
   removeConfirm: (p) =>
-    `Delete device profile “${p.token}”? Its metrics, commands, alarm rules, and version history are removed. This is refused while any device type still uses it.`,
+    `Delete device profile “${p.token}”? Its metrics, commands, detection rules, and version history are removed. This is refused while any device type still uses it.`,
   detailTabs: [
     {
       value: 'metrics',
@@ -197,6 +212,26 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
             { header: 'Parameters', cell: (d) => (d.parameterSchema ? 'declared' : <Dash />) },
           ]}
           renderForm={(e, onDone) => <CommandDefinitionForm profileToken={p.token} entity={e} onDone={onDone} />}
+        />
+      ),
+    },
+    {
+      value: 'detection-rules',
+      label: 'Detection Rules',
+      render: (p) => (
+        <DefinitionsPanel
+          profileToken={p.token}
+          singular="detection rule"
+          description="The DETECT rules that raise alarms and send commands off this profile's telemetry (ADR-057)."
+          load={listDetectionRules}
+          remove={deleteDetectionRule}
+          removeConfirm={(d) => `Delete detection rule “${d.token}”?`}
+          columns={[
+            { header: 'Name', cell: (d) => <span className="font-medium">{d.name || d.token}</span> },
+            { header: 'Type', cell: (d) => ruleTypeLabel(d.definition) },
+            { header: 'Enabled', cell: (d) => <StatusBadge enabled={d.enabled} /> },
+          ]}
+          renderForm={(e, onDone) => <DetectionRuleForm profileToken={p.token} entity={e} onDone={onDone} />}
         />
       ),
     },

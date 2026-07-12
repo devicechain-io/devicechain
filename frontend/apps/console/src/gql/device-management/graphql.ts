@@ -188,6 +188,22 @@ export type CustomerTypeSearchCriteria = {
   pageSize: number;
 };
 
+export type DetectionRuleCreateRequest = {
+  definition: string;
+  description?: string | null | undefined;
+  deviceProfileToken: string;
+  enabled: boolean;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  token: string;
+};
+
+export type DetectionRuleSearchCriteria = {
+  deviceProfile?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+};
+
 export type DeviceCreateRequest = {
   description?: string | null | undefined;
   deviceTypeToken: string;
@@ -937,6 +953,35 @@ export type DeleteCommandDefinitionMutationVariables = Exact<{
 
 
 export type DeleteCommandDefinitionMutation = { deleteCommandDefinition: boolean };
+
+export type DetectionRulesQueryVariables = Exact<{
+  criteria: DetectionRuleSearchCriteria;
+}>;
+
+
+export type DetectionRulesQuery = { detectionRules: { results: Array<{ id: string, token: string, name: string | null, description: string | null, definition: string, enabled: boolean, metadata: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type CreateDetectionRuleMutationVariables = Exact<{
+  request: DetectionRuleCreateRequest;
+}>;
+
+
+export type CreateDetectionRuleMutation = { createDetectionRule: { id: string, token: string } };
+
+export type UpdateDetectionRuleMutationVariables = Exact<{
+  token: string;
+  request: DetectionRuleCreateRequest;
+}>;
+
+
+export type UpdateDetectionRuleMutation = { updateDetectionRule: { id: string, token: string } };
+
+export type DeleteDetectionRuleMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteDetectionRuleMutation = { deleteDetectionRule: boolean };
 
 export type EntityRelationshipsQueryVariables = Exact<{
   criteria: EntityRelationshipSearchCriteria;
@@ -2220,6 +2265,47 @@ export const DeleteCommandDefinitionDocument = new TypedDocumentString(`
   deleteCommandDefinition(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteCommandDefinitionMutation, DeleteCommandDefinitionMutationVariables>;
+export const DetectionRulesDocument = new TypedDocumentString(`
+    query DetectionRules($criteria: DetectionRuleSearchCriteria!) {
+  detectionRules(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      definition
+      enabled
+      metadata
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DetectionRulesQuery, DetectionRulesQueryVariables>;
+export const CreateDetectionRuleDocument = new TypedDocumentString(`
+    mutation CreateDetectionRule($request: DetectionRuleCreateRequest!) {
+  createDetectionRule(request: $request) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<CreateDetectionRuleMutation, CreateDetectionRuleMutationVariables>;
+export const UpdateDetectionRuleDocument = new TypedDocumentString(`
+    mutation UpdateDetectionRule($token: String!, $request: DetectionRuleCreateRequest!) {
+  updateDetectionRule(token: $token, request: $request) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateDetectionRuleMutation, UpdateDetectionRuleMutationVariables>;
+export const DeleteDetectionRuleDocument = new TypedDocumentString(`
+    mutation DeleteDetectionRule($token: String!) {
+  deleteDetectionRule(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteDetectionRuleMutation, DeleteDetectionRuleMutationVariables>;
 export const EntityRelationshipsDocument = new TypedDocumentString(`
     query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {
   entityRelationships(criteria: $criteria) {
