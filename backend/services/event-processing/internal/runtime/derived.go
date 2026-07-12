@@ -129,6 +129,17 @@ func NewPublisher(writer messaging.MessageWriter, reg *RuleRegistry, metrics Met
 // and re-emits the detection. A terminal drop (backstop reject, orphan rule, marshal
 // failure) returns nil: it is intentional and must not wedge the checkpoint loop.
 func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
+	// ADR-057 two-edge model, staged rollout: the DETECT core now emits a Resolved detection on
+	// every falling edge, but the DerivedEvent wire, the ADR-037 subscriber contract, and the
+	// clearAlarm REACT action that consume it land in slice 6d-pre-2. Until then a Resolved carries
+	// no edge marker on the wire and would read as a duplicate Raised to a subscriber, so it is
+	// dropped HERE as a delivered no-op: the raised-latch state change is still checkpointed (the
+	// message loop marks dirty on the sequence advance), and the published stream stays exactly the
+	// Raised-only stream shipped today. Removing this guard is the first step of 6d-pre-2.
+	if det.Edge != core.EdgeRaised {
+		return nil
+	}
+
 	sr, ok := p.reg.Lookup(det.RuleID)
 	if !ok {
 		log.Warn().Str("rule", det.RuleID).Str("series", det.Series).

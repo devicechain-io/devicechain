@@ -140,9 +140,11 @@ func scenario() ([]Rule, []step) {
 
 func expected() map[Detection]bool {
 	return map[Detection]bool{
+		// Raised edges (ADR-057). Note rThr dev3 raises ONCE at 3: the match at 17 is the SAME
+		// ongoing over-threshold condition (no non-match cleared it in between), so the raised latch
+		// suppresses a duplicate — the level-triggered evaluator's per-sample re-fire is gone.
 		{RuleID: "rThr", Series: "dev3", Kind: Threshold, At: at(3)}:  true,
 		{RuleID: "rAbs", Series: "dev1", Kind: Absence, At: at(15)}:   true,
-		{RuleID: "rThr", Series: "dev3", Kind: Threshold, At: at(17)}: true,
 		{RuleID: "rDur", Series: "dev2", Kind: Duration, At: at(19)}:  true,
 		{RuleID: "rAbs", Series: "dev1", Kind: Absence, At: at(31)}:   true,
 		{RuleID: "rRep", Series: "dev4", Kind: Repeating, At: at(42)}: true,
@@ -160,6 +162,18 @@ func expected() map[Detection]bool {
 		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, At: at(200)}:     true,
 		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, At: at(212)}: true,
 		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, At: at(222)}: true,
+
+		// Resolved edges (ADR-057 falling edges), each balancing an earlier raise when the series'
+		// condition ceased:
+		{RuleID: "rAbs", Series: "dev1", Kind: Absence, Edge: EdgeResolved, At: at(21)}:           true, // dev1 heartbeats again after the 15 absence
+		{RuleID: "rRep", Series: "dev4", Kind: Repeating, Edge: EdgeResolved, At: at(60)}:         true, // burst aged out of the window
+		{RuleID: "rAgg", Series: "dev5", Kind: Aggregate, Edge: EdgeResolved, At: at(60)}:         true, // window [50,60) avg 85 closes unsatisfied
+		{RuleID: "rDelta", Series: "dev6", Kind: DeltaRate, Edge: EdgeResolved, At: at(74)}:       true, // +20 delta back within threshold
+		{RuleID: "rCount", Series: "dev7", Kind: CountWindow, Edge: EdgeResolved, At: at(85)}:     true, // next 3-event window sums 3, unsatisfied
+		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, Edge: EdgeResolved, At: at(113)}:     true, // max fell to 95 as 100,101 evicted
+		{RuleID: "rCorr", Series: "area1", Kind: Correlation, Edge: EdgeResolved, At: at(135)}:    true, // cohort dispersed to 1 distinct
+		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, Edge: EdgeResolved, At: at(200)}:     true, // silent gap emptied the window before 200's fresh breach
+		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, Edge: EdgeResolved, At: at(220)}: true, // sum fell to 0.4 as 210-212 evicted
 	}
 }
 

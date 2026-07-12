@@ -44,8 +44,13 @@ func (e *Engine) applyDeltaRate(ev Event, r Rule) {
 	if r.Rate {
 		q /= ev.Time.Sub(prev.time).Seconds() // dt > 0, guaranteed by the advance guard above
 	}
+	// Level over time (ADR-057): the rising edge (a qualifying delta/rate) raises, a subsequent
+	// qualifying sample whose delta/rate is back within threshold resolves. Observed per sample —
+	// a series that stops reporting stays raised (Absence covers the went-dark case).
 	if cmp(r.Op, q, r.Thresh) {
 		e.emitValue(r, ev.Key, ev.Time, q) // q = the delta (raw) or rate the detection is about
+	} else {
+		e.resolve(r, ev.Key, ev.Time)
 	}
 }
 
@@ -60,15 +65,15 @@ type sample struct {
 // event time (input is near-sorted under bounded lateness, so inserts are cheap) and used
 // for eviction, sum/avg/count, and the snapshot. minDq/maxDq are derived acceleration
 // (front = window min/max); they are rebuilt from buf whenever an out-of-order sample lands
-// mid-buffer, so correctness never depends on the input being perfectly ordered. armed
-// carries the edge-trigger: the rule fires once when the aggregate crosses into satisfaction
-// and re-arms only after it falls back, so a sustained breach is one detection, not a flood.
+// mid-buffer, so correctness never depends on the input being perfectly ordered. The
+// edge-trigger latch is NOT held here: SlidingAgg raises and resolves through the engine's
+// shared raised latch (ADR-057), the same one every alarm-bearing kind uses, so its rising
+// edge is one detection and its falling edge emits a balancing Resolved.
 type slidingState struct {
 	buf   []sample
 	sum   float64
 	minDq []sample
 	maxDq []sample
-	armed bool
 }
 
 // insert adds a sample, keeping buf time-sorted. The common in-order case appends and
@@ -177,20 +182,19 @@ func (e *Engine) applySlidingAgg(ev Event, r Rule) {
 		e.slides[ev.Key] = st
 	}
 	st.evict(ev.Time.Add(-r.Window))
-	// Re-arm off the post-eviction window BEFORE folding in the new sample: the aggregate can
-	// fall back to un-satisfied purely by samples aging out during a quiet gap (no low sample
-	// ever arrives to clear the latch), so this is what makes the next breach a fresh crossing
-	// instead of a swallowed one. Mirrors applyRepeating computing its count after eviction.
+	// Resolve off the post-eviction window BEFORE folding in the new sample: the aggregate can
+	// fall back to un-satisfied purely by samples aging out during a quiet gap (no low sample ever
+	// arrives), so this emits the falling edge (ADR-057) for a breach that ended by expiry and lets
+	// the next breach be a fresh crossing. Mirrors applyRepeating computing its count after eviction.
 	if !st.satisfies(r) {
-		st.armed = false
+		e.resolve(r, ev.Key, ev.Time)
 	}
 	st.insert(sample{t: ev.Time, v: ev.Value})
-	switch {
-	case st.satisfies(r) && !st.armed:
-		st.armed = true
+	// Rising edge raises (latched); still-or-newly unsatisfied resolves a prior raise.
+	if st.satisfies(r) {
 		e.emitValue(r, ev.Key, ev.Time, st.value(r.Agg))
-	case !st.satisfies(r):
-		st.armed = false
+	} else {
+		e.resolve(r, ev.Key, ev.Time)
 	}
 }
 
@@ -209,7 +213,6 @@ type snapSlide struct {
 	Times  []time.Time `json:"times"`
 	Values []float64   `json:"values"`
 	Sum    float64     `json:"sum"`
-	Armed  bool        `json:"armed"`
 }
 
 // sortByRuleSeries orders a snapshot slice by (rule, series) so the serialized bytes are
@@ -249,7 +252,7 @@ func (e *Engine) snapshotSlides() []snapSlide {
 		for i, s := range st.buf {
 			times[i], values[i] = s.t, s.v
 		}
-		out = append(out, snapSlide{Rule: k.Rule, Series: k.Series, Times: times, Values: values, Sum: st.sum, Armed: st.armed})
+		out = append(out, snapSlide{Rule: k.Rule, Series: k.Series, Times: times, Values: values, Sum: st.sum})
 	}
 	sortByRuleSeries(out, func(i int) (string, string) { return out[i].Rule, out[i].Series })
 	return out
@@ -261,7 +264,7 @@ func (e *Engine) restoreSlides(in []snapSlide) {
 		// accumulation in arrival order (with subtract-on-evict residue), and float addition is
 		// non-associative — re-deriving it in time order could differ in the last ulp and flip a
 		// threshold sitting exactly on the aggregate, diverging the restored run from the clean one.
-		st := &slidingState{armed: s.Armed, sum: s.Sum}
+		st := &slidingState{sum: s.Sum}
 		for i := range s.Times {
 			st.buf = append(st.buf, sample{t: s.Times[i], v: s.Values[i]})
 		}

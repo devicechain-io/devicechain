@@ -42,8 +42,14 @@ func (e *Engine) applyCorrelation(ev Event, r Rule) {
 	if r.MemberCap > 0 && len(members) > r.MemberCap {
 		capMembers(members, r.MemberCap)
 	}
-	if prev < r.Count && len(members) >= r.Count {
-		e.emit(r, ev.Key, ev.Time)
+	switch {
+	case prev < r.Count && len(members) >= r.Count:
+		e.emit(r, ev.Key, ev.Time) // rising edge: a newly-seen member pushed the distinct count over the line
+	case len(members) < r.Count:
+		// Falling edge (ADR-057): enough members aged out that the distinct count is back below N —
+		// the cohort dispersed, so resolve a raised alarm. A no-op when never raised. Observed only
+		// on the next reporting event for the anchor (a fully silent area stays raised).
+		e.resolve(r, ev.Key, ev.Time)
 	}
 }
 

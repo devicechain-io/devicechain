@@ -173,8 +173,15 @@ func (e *Engine) applyRepeating(ev Event, r Rule) {
 	prev := len(kept)
 	kept = append(kept, ev.Time)
 	e.sliding[ev.Key] = kept
-	if prev < r.Count && len(kept) >= r.Count {
-		e.emitSample(r, ev) // the sample that completed the N-in-window run (none for a metric-less leaf)
+	switch {
+	case prev < r.Count && len(kept) >= r.Count:
+		e.emitSample(r, ev) // rising edge: the sample that completed the N-in-window run (none for a metric-less leaf)
+	case len(kept) < r.Count:
+		// Falling edge (ADR-057): enough prior matches aged out of the window that even with this
+		// one the count is back below N — the burst has passed, so resolve a raised alarm. A no-op
+		// when never raised. Observed only on the next matching event (an all-silent series stays
+		// raised — see the package note on window-kind silence).
+		e.resolve(r, ev.Key, ev.Time)
 	}
 }
 
@@ -214,8 +221,13 @@ func (e *Engine) applyCountWindow(ev Event, r Rule) {
 	}
 	pa.add(ev.Value)
 	if pa.count >= r.Count {
+		// The count-window closed: a satisfied close raises (latched across successive windows), an
+		// unsatisfied close resolves a prior raise (ADR-057 — the latest N-event window no longer
+		// breaches). Reset either way.
 		if cmp(r.Op, pa.value(r.Agg), r.Thresh) {
 			e.emitValue(r, ev.Key, ev.Time, pa.value(r.Agg))
+		} else {
+			e.resolve(r, ev.Key, ev.Time)
 		}
 		delete(e.counts, ev.Key)
 	}
@@ -240,10 +252,17 @@ func (e *Engine) closePanes(wm time.Time) bool {
 		if !ok {
 			continue
 		}
-		r, ok := e.rules[top.pk.Rule]
-		if ok && cmp(r.Op, pa.value(r.Agg), r.Thresh) {
-			e.out = append(e.out, Detection{RuleID: r.ID, Series: top.pk.Series, Kind: Aggregate,
-				At: top.end, Value: pa.value(r.Agg), HasValue: true})
+		// A satisfied close raises (latched across successive tumbling windows for this series), an
+		// unsatisfied close resolves a prior raise (ADR-057 falling edge). A window with no matching
+		// events has no pane and so never closes here — an intervening empty window cannot resolve;
+		// the alarm resolves on the next window that closes unsatisfied (see the package silence note).
+		if r, ok := e.rules[top.pk.Rule]; ok {
+			key := SeriesKey{Rule: r.ID, Series: top.pk.Series}
+			if cmp(r.Op, pa.value(r.Agg), r.Thresh) {
+				e.emitValue(r, key, top.end, pa.value(r.Agg))
+			} else {
+				e.resolve(r, key, top.end)
+			}
 		}
 		delete(e.panes, top.pk)
 	}
