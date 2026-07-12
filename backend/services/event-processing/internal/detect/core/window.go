@@ -158,10 +158,15 @@ func (h *closeHeap) purgeRule(id string) {
 
 // applyRepeating handles a Repeating rule: keep a sliding buffer of matching-event times
 // within Window, and fire on the rising edge where the trailing count reaches Count.
+//
+// Eviction advances on EVERY delivered event (matching or not, ADR-057 review D2/D5); only a
+// matching event is appended to the buffer. A rule with a filtering `when` leaf therefore
+// observes its falling edge while the device keeps reporting NON-matching gate-metric values —
+// the burst ages out of the window and the count drops below N — rather than staying raised until
+// some future matching event. For a match-every rule (the common case) every event matches, so
+// this is byte-identical to always-append. A fully silent series still stays raised until it
+// reports again (the window kinds are event-driven; see the package silence note).
 func (e *Engine) applyRepeating(ev Event, r Rule) {
-	if !ev.Match {
-		return
-	}
 	cutoff := ev.Time.Add(-r.Window)
 	buf := e.sliding[ev.Key]
 	kept := make([]time.Time, 0, len(buf)+1)
@@ -171,16 +176,22 @@ func (e *Engine) applyRepeating(ev Event, r Rule) {
 		}
 	}
 	prev := len(kept)
-	kept = append(kept, ev.Time)
-	e.sliding[ev.Key] = kept
+	if ev.Match {
+		kept = append(kept, ev.Time)
+	}
+	if len(kept) == 0 {
+		delete(e.sliding, ev.Key) // an emptied window leaks no state entry against the budget
+	} else {
+		e.sliding[ev.Key] = kept
+	}
 	switch {
 	case prev < r.Count && len(kept) >= r.Count:
 		e.emitSample(r, ev) // rising edge: the sample that completed the N-in-window run (none for a metric-less leaf)
 	case len(kept) < r.Count:
-		// Falling edge (ADR-057): enough prior matches aged out of the window that even with this
-		// one the count is back below N — the burst has passed, so resolve a raised alarm. A no-op
-		// when never raised. Observed only on the next matching event (an all-silent series stays
-		// raised — see the package note on window-kind silence).
+		// Falling edge (ADR-057): enough prior matches aged out of the window that the count is back
+		// below N — the burst has passed, so resolve a raised alarm. A no-op when never raised. The
+		// rising case can only fire on a matching event (a non-match never grows kept), so a
+		// non-matching event only ever ages the window down toward this falling edge.
 		e.resolve(r, ev.Key, ev.Time)
 	}
 }

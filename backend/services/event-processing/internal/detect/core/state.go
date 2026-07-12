@@ -172,20 +172,28 @@ func (s *slidingState) value(op AggOp) float64 {
 
 // applySlidingAgg evaluates a SlidingAgg rule: fold the sample into the trailing window,
 // then edge-trigger on the running aggregate crossing Op vs Thresh.
+//
+// Eviction advances on EVERY delivered event (ADR-057 review D2/D5); only a matching sample is
+// folded in. A rule with a filtering `when` leaf therefore observes its falling edge while the
+// device keeps reporting NON-matching samples — the qualifying samples age out and the aggregate
+// stops satisfying — rather than staying raised until the next match. For a match-every rule (the
+// common case) every sample folds in, so this is byte-identical to always-insert.
 func (e *Engine) applySlidingAgg(ev Event, r Rule) {
-	if !ev.Match {
-		return
-	}
 	st := e.slides[ev.Key]
 	if st == nil {
+		if !ev.Match {
+			return // no window and a non-matching sample opens none — nothing to evict or resolve
+		}
 		st = &slidingState{}
 		e.slides[ev.Key] = st
 	}
 	st.evict(ev.Time.Add(-r.Window))
-	st.insert(sample{t: ev.Time, v: ev.Value})
+	if ev.Match {
+		st.insert(sample{t: ev.Time, v: ev.Value})
+	}
 	// Evaluate the level ONCE, on the fully-updated trailing window (evicted + this sample folded
-	// in). The rising edge raises (latched); a window that no longer satisfies resolves a prior
-	// raise (ADR-057). Evaluating only the post-insert window is deliberate: a pre-insert check
+	// in when matching). The rising edge raises (latched); a window that no longer satisfies resolves
+	// a prior raise (ADR-057). Evaluating only the post-insert window is deliberate: a pre-insert check
 	// reads a phantom dip at exactly the moment the left-edge sample expires as the new one arrives
 	// — for a device reporting on a regular cadence that divides the window, that dip exists at no
 	// real instant and would clear-and-re-raise the alarm on EVERY sample (review D1). A breach that
@@ -196,6 +204,9 @@ func (e *Engine) applySlidingAgg(ev Event, r Rule) {
 		e.emitValue(r, ev.Key, ev.Time, st.value(r.Agg))
 	} else {
 		e.resolve(r, ev.Key, ev.Time)
+	}
+	if len(st.buf) == 0 {
+		delete(e.slides, ev.Key) // a fully-aged-out window leaks no state entry against the budget
 	}
 }
 

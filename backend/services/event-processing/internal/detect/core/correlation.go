@@ -11,45 +11,59 @@ import "sort"
 // reaches Count. Edge-triggered like Repeating: it fires once when a newly-seen member pushes
 // the count over the line, and re-arms only after members age out below Count. Eviction is by
 // event time, so replay re-derives the identical crossings from the snapshotted member set.
+// Eviction advances on EVERY delivered event (matching or not, ADR-057 review D2/D5); only a
+// matching member sighting is recorded. A rule with a filtering member gate therefore observes its
+// falling edge while the anchor keeps reporting NON-qualifying members — the cohort ages out and the
+// distinct count drops below N — rather than staying raised until the next qualifying member. For a
+// match-every rule (the common case) every member qualifies, so this is byte-identical to
+// always-record. A fully silent anchor still stays raised until it reports again.
 func (e *Engine) applyCorrelation(ev Event, r Rule) {
-	if !ev.Match || r.Count <= 0 || ev.Member == "" {
+	if r.Count <= 0 || ev.Member == "" {
 		return
 	}
-	cutoff := ev.Time.Add(-r.Window).UnixNano()
 	members := e.corr[ev.Key]
 	if members == nil {
+		if !ev.Match {
+			return // no cohort and a non-matching sighting opens none — nothing to evict or resolve
+		}
 		members = map[string]int64{}
 		e.corr[ev.Key] = members
 	}
+	cutoff := ev.Time.Add(-r.Window).UnixNano()
 	for m, ts := range members {
 		if ts <= cutoff {
 			delete(members, m)
 		}
 	}
 	prev := len(members)
-	// Keep the member's MOST RECENT sighting: a bounded-late out-of-order refresh must not
-	// regress the timestamp, or the member evicts early and a later event re-crosses the
-	// threshold — a spurious second fire for a cohort that was continuously present. Test
-	// existence explicitly so a first sighting is recorded regardless of its unix-nanos sign.
-	ts := ev.Time.UnixNano()
-	if cur, exists := members[ev.Member]; !exists || ts > cur {
-		members[ev.Member] = ts
-	}
-	// Memory backstop: bound the distinct members retained per anchor. The real per-tenant
-	// state budget is enforced upstream (ADR-023, Slice 4/6); this is a local guard so a
-	// single hot anchor can't grow unbounded between checkpoints. Count must be ≤ MemberCap
-	// to ever fire, which the compiler validates at publish.
-	if r.MemberCap > 0 && len(members) > r.MemberCap {
-		capMembers(members, r.MemberCap)
+	if ev.Match {
+		// Keep the member's MOST RECENT sighting: a bounded-late out-of-order refresh must not
+		// regress the timestamp, or the member evicts early and a later event re-crosses the
+		// threshold — a spurious second fire for a cohort that was continuously present. Test
+		// existence explicitly so a first sighting is recorded regardless of its unix-nanos sign.
+		ts := ev.Time.UnixNano()
+		if cur, exists := members[ev.Member]; !exists || ts > cur {
+			members[ev.Member] = ts
+		}
+		// Memory backstop: bound the distinct members retained per anchor. The real per-tenant
+		// state budget is enforced upstream (ADR-023, Slice 4/6); this is a local guard so a
+		// single hot anchor can't grow unbounded between checkpoints. Count must be ≤ MemberCap
+		// to ever fire, which the compiler validates at publish.
+		if r.MemberCap > 0 && len(members) > r.MemberCap {
+			capMembers(members, r.MemberCap)
+		}
 	}
 	switch {
 	case prev < r.Count && len(members) >= r.Count:
 		e.emit(r, ev.Key, ev.Time) // rising edge: a newly-seen member pushed the distinct count over the line
 	case len(members) < r.Count:
 		// Falling edge (ADR-057): enough members aged out that the distinct count is back below N —
-		// the cohort dispersed, so resolve a raised alarm. A no-op when never raised. Observed only
-		// on the next reporting event for the anchor (a fully silent area stays raised).
+		// the cohort dispersed, so resolve a raised alarm. A no-op when never raised. The rising case
+		// can only fire on a matching event (a non-match never grows the cohort).
 		e.resolve(r, ev.Key, ev.Time)
+	}
+	if len(members) == 0 {
+		delete(e.corr, ev.Key) // an emptied cohort leaks no state entry against the budget
 	}
 }
 

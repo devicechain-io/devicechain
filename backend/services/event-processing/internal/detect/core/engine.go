@@ -120,15 +120,17 @@ const (
 // Absence rule's job to catch, not a threshold's. Operators pair a level rule with an Absence rule
 // when "stopped reporting" must also clear (or escalate) the alarm.
 //
-// KNOWN GAP deferred to 6d-pre-2 (the resolve path is inert here — Resolved edges are dropped at
-// the publisher until then): the match-gated kinds — Repeating, SlidingAgg, Aggregate, CountWindow,
-// Correlation — return before their eviction/resolve logic on a NON-matching event (applyRepeating
-// et al. `if !ev.Match { return }`), so a rule whose `when` leaf FILTERS samples (e.g. count of
-// readings where mode==heating) can stay raised even while the device actively reports non-matching
-// values, resolving only on a future matching event. Threshold/DeltaRate already resolve on a
-// non-match. Closing this — running eviction + the falling-edge check on non-matching gate-metric
-// events — is 6d-pre-2 work, built and swept together with the alarm-object integrator that makes
-// the Resolved edge live (reviews D2/D5). A match-every-leaf rule (the common case) is unaffected.
+// Non-matching gate-metric events and the falling edge (ADR-057 reviews D2/D5, closed in 6d-pre-2a).
+// The SLIDING/eviction kinds — Repeating, SlidingAgg, Correlation — advance their time eviction on
+// EVERY delivered event (matching or not) and record only the matching sample, so a rule whose `when`
+// leaf FILTERS samples (e.g. count of readings where mode==heating) observes its falling edge while
+// the device keeps reporting non-matching values — the qualifying samples age out of the window and
+// the level drops — rather than staying raised until a future matching event. The tumbling/close-driven
+// kinds — Aggregate, CountWindow, Session — are unaffected by a non-match: their falling edge is a
+// window/session CLOSING unsatisfied (closePanes / fire), not a per-event re-evaluation, so a
+// non-matching event legitimately just doesn't contribute to the open pane. Threshold/DeltaRate resolve
+// directly on a non-matching sample (apply). A match-every-leaf rule (the common case) is byte-identical
+// to the pre-D2/D5 behavior — every event matches, so nothing is ever skipped.
 
 // Detection is an emitted signal. Its identity (RuleID, Series, Kind, At, Edge) is stable and
 // deterministic, so at-least-once re-emission across a restart is dedup-collapsible
