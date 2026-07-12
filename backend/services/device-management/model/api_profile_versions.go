@@ -26,7 +26,7 @@ import (
 // ActiveVersion at an earlier version (non-destructive; the draft is untouched).
 
 // buildProfileSnapshot serializes a profile's current draft — its metric, command,
-// alarm, and detection-rule definitions — into a ProfileSnapshot document. The
+// and detection-rule definitions — into a ProfileSnapshot document. The
 // back-reference to the profile is cleared on each definition so the blob stays tight
 // and acyclic. Disabled definitions are captured too (the flag travels with the version).
 func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datatypes.JSON, error) {
