@@ -213,12 +213,8 @@ type DeviceManagementApi interface {
 	CommandDefinitions(ctx context.Context, criteria CommandDefinitionSearchCriteria) (*CommandDefinitionSearchResults, error)
 	CommandDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*CommandDefinition, error)
 
-	// Alarm definitions (ADR-041).
-	CreateAlarmDefinition(ctx context.Context, request *AlarmDefinitionCreateRequest) (*AlarmDefinition, error)
-	UpdateAlarmDefinition(ctx context.Context, token string, request *AlarmDefinitionCreateRequest) (*AlarmDefinition, error)
-	AlarmDefinitionsById(ctx context.Context, ids []uint) ([]*AlarmDefinition, error)
-	AlarmDefinitionsByToken(ctx context.Context, tokens []string) ([]*AlarmDefinition, error)
-	AlarmDefinitions(ctx context.Context, criteria AlarmDefinitionSearchCriteria) (*AlarmDefinitionSearchResults, error)
+	// Alarm definitions (ADR-041). Authoring was retired (ADR-057, DetectionRule is the one
+	// path); only the evaluator's snapshot loader survives until the 6d cutover deletes it.
 	AlarmDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*AlarmDefinition, error)
 
 	// Alarms (raised, ADR-041). Raised by the evaluator (a later slice); the API here

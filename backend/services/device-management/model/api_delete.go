@@ -352,11 +352,6 @@ func (api *Api) DeleteCommandDefinition(ctx context.Context, token string) (bool
 	return api.hardDeleteByToken(ctx, &CommandDefinition{}, token)
 }
 
-// DeleteAlarmDefinition deletes a single alarm definition by token (ADR-041).
-func (api *Api) DeleteAlarmDefinition(ctx context.Context, token string) (bool, error) {
-	return api.hardDeleteByToken(ctx, &AlarmDefinition{}, token)
-}
-
 // DeleteDetectionRule deletes a single detection rule by token (ADR-051 slice 4b).
 func (api *Api) DeleteDetectionRule(ctx context.Context, token string) (bool, error) {
 	return api.hardDeleteByToken(ctx, &DetectionRule{}, token)

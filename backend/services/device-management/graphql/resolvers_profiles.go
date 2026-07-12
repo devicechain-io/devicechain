@@ -101,18 +101,6 @@ func (r *DeviceProfileResolver) CommandDefinitions() ([]*CommandDefinitionResolv
 	return result, nil
 }
 
-func (r *DeviceProfileResolver) AlarmDefinitions() ([]*AlarmDefinitionResolver, error) {
-	found, err := r.S.GetApi(r.C).AlarmDefinitionsByDeviceProfile(r.C, r.M.ID)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]*AlarmDefinitionResolver, 0)
-	for _, ad := range found {
-		result = append(result, &AlarmDefinitionResolver{M: *ad, S: r.S, C: r.C})
-	}
-	return result, nil
-}
-
 func (r *DeviceProfileResolver) DetectionRules() ([]*DetectionRuleResolver, error) {
 	found, err := r.S.GetApi(r.C).DetectionRulesByDeviceProfile(r.C, r.M.ID)
 	if err != nil {

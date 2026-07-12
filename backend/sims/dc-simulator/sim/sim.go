@@ -131,19 +131,15 @@ const (
 	BuildingpulseCO2Key          = "co2"
 )
 
-// buildingpulseAlarmThreshold is the "assign it, then reuse it" pointer target
-// for AlarmDefSpec.Threshold — a local var rather than a package-level literal
-// because Go has no way to take the address of a float64 constant inline.
-var buildingpulseAlarmThreshold = 30.0
-
 // buildingpulse is the slice-2 reference scenario
 // (sim-slice2-buildingpulse-spec.md): a building-automation topology — one
 // customer, three buildings, one HVAC asset per building, and 12 thermostats
 // distributed round-robin across the buildings and all assigned to both their
 // building and the customer, so every measurement they emit carries an area
 // anchor and a customer anchor (ADR-013/044). Each tick emits all four metrics
-// in one Measurement; the temperature curve deterministically crosses the
-// alarm threshold, raising a live MAJOR alarm every cycle.
+// in one Measurement; the temperature curve deterministically crosses 30 C,
+// which the DETECT DetectionRule path will alarm on once rule seeding lands
+// (alarm authoring moved off AlarmDefinition, ADR-057).
 type buildingpulse struct {
 	// seed drives all deterministic generation, threaded from the handshake —
 	// see devicepulse's identical field for the reset/idempotency rationale.
@@ -202,19 +198,6 @@ func (s *buildingpulse) Manifest() SimManifest {
 					{Key: BuildingpulseHumidityKey, Name: "Humidity", DataType: "DOUBLE", Unit: "%"},
 					{Key: BuildingpulseSetpointKey, Name: "Setpoint", DataType: "DOUBLE", Unit: "C"},
 					{Key: BuildingpulseCO2Key, Name: "CO2", DataType: "DOUBLE", Unit: "ppm"},
-				},
-				Alarms: []AlarmDefSpec{
-					{
-						AlarmKey:      "temp-high",
-						MetricKey:     BuildingpulseTemperatureKey,
-						Name:          "High Temperature",
-						Description:   "Temperature has exceeded the comfortable operating range.",
-						ConditionType: "SIMPLE",
-						Operator:      "GT",
-						Severity:      "MAJOR",
-						Threshold:     &buildingpulseAlarmThreshold,
-						Enabled:       true,
-					},
 				},
 			},
 		},

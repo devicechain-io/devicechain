@@ -147,36 +147,3 @@ type AlarmDefinition struct {
 
 	Enabled bool // a disabled rule is retained but not evaluated
 }
-
-// Data required to create an alarm definition.
-type AlarmDefinitionCreateRequest struct {
-	Token               string
-	DeviceProfileToken  string
-	AlarmKey            string
-	MetricKey           string
-	Name                *string
-	Description         *string
-	ConditionType       string
-	Operator            string
-	Severity            string
-	Threshold           *float64
-	ThresholdAttr       *string
-	DurationSeconds     *int32
-	RepeatCount         *int32
-	RepeatWindowSeconds *int32
-	Enabled             bool
-	Metadata            *string
-}
-
-// Search criteria for locating alarm definitions.
-type AlarmDefinitionSearchCriteria struct {
-	rdb.Pagination
-	DeviceProfile *string // device profile token
-	MetricKey     *string
-}
-
-// Results for alarm definition search.
-type AlarmDefinitionSearchResults struct {
-	Results    []AlarmDefinition
-	Pagination rdb.SearchResultsPagination
-}

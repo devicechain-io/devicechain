@@ -168,14 +168,6 @@ func (r *SchemaResolver) DeleteCommandDefinition(ctx context.Context, args struc
 	return r.GetApi(ctx).DeleteCommandDefinition(ctx, args.Token)
 }
 
-// Delete a single alarm definition.
-func (r *SchemaResolver) DeleteAlarmDefinition(ctx context.Context, args struct{ Token string }) (bool, error) {
-	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
-		return false, err
-	}
-	return r.GetApi(ctx).DeleteAlarmDefinition(ctx, args.Token)
-}
-
 // Delete a single detection rule.
 func (r *SchemaResolver) DeleteDetectionRule(ctx context.Context, args struct{ Token string }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
