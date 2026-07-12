@@ -411,7 +411,13 @@ export function DetectionRuleForm({
     setValidation({ status: 'checking' });
     const timer = setTimeout(async () => {
       try {
-        const res = await validateDetectionRule(validateToken, definition);
+        // Bound the wait: a hung (accepting-but-not-responding) pod would otherwise leave
+        // "Checking…" up until the browser's own network timeout. Racing a 10s timeout clears
+        // the advisory feedback instead (Fable LOW); the stray loser timer is a harmless no-op.
+        const res = await Promise.race([
+          validateDetectionRule(validateToken, definition),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('validate timeout')), 10_000)),
+        ]);
         if (cancelled) return;
         setValidation(res.ok ? { status: 'ok' } : { status: 'error', message: res.message ?? undefined });
       } catch {
