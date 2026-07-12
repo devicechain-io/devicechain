@@ -6,6 +6,7 @@ package server
 import (
 	"net/http"
 	"net/url"
+	"time"
 
 	coreauth "github.com/devicechain-io/dc-microservice/auth"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -17,6 +18,12 @@ const (
 	serverName    = "devicechain"
 	serverVersion = "0.1.0"
 )
+
+// sessionTimeout bounds idle MCP sessions. The SDK never reaps sessions when this
+// is zero, so an authenticated client that repeatedly re-initializes (exactly what
+// long-lived LLM agents do) would grow the in-memory session map without bound and
+// OOM the pod. Reaping idle sessions caps that.
+const sessionTimeout = 30 * time.Minute
 
 // New builds the MCP server's HTTP surface (ADR-047): the MCP endpoint over
 // Streamable HTTP, wrapped in the OAuth 2.1 Resource Server bearer-token
@@ -32,7 +39,10 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator) (mcpHa
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
 	registerTools(mcpServer, NewTools(NewGraphQLClient()))
 
-	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, nil)
+	streamable := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return mcpServer },
+		&mcp.StreamableHTTPOptions{SessionTimeout: sessionTimeout},
+	)
 
 	// The RS middleware verifies the bearer (signature + audience, via the verifier)
 	// AND enforces the read-only scope, and on failure emits the RFC 9728

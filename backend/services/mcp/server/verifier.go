@@ -50,7 +50,11 @@ func NewTokenVerifier(validator func() *coreauth.Validator, resourceID string) s
 
 		info := &sdkauth.TokenInfo{
 			Scopes: coreauth.ParseScope(claims.Scope),
-			UserID: claims.Email,
+			// UserID drives the SDK's session-hijack protection (a session is bound to
+			// the UserID that created it). Qualify it by tenant so the same human's
+			// tokens in different tenants can't share a session — the grant is
+			// per-tenant, so the session identity must be too.
+			UserID: claims.Tenant + "/" + claims.Email,
 			Extra: map[string]any{
 				extraTokenKey:  token,
 				extraTenantKey: claims.Tenant,

@@ -41,8 +41,8 @@ func TestVerifier_AudienceBoundTokenAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if info.UserID != "a@b.c" {
-		t.Errorf("UserID = %q, want a@b.c", info.UserID)
+	if info.UserID != "acme/a@b.c" {
+		t.Errorf("UserID = %q, want acme/a@b.c (tenant-qualified)", info.UserID)
 	}
 	if len(info.Scopes) != 1 || info.Scopes[0] != coreauth.ScopeReadOnly {
 		t.Errorf("Scopes = %v, want [read-only]", info.Scopes)

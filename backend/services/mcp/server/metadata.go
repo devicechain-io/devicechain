@@ -41,8 +41,16 @@ func ProtectedResourceMetadataHandler(resourceID, issuer string) http.Handler {
 		panic("mcp: marshaling protected-resource metadata: " + err.Error())
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Browser-based MCP clients fetch this cross-origin, so it must be
+		// CORS-open (it is public discovery data — no credentials, no secrets).
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
+			w.Header().Set("Allow", "GET, OPTIONS")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
