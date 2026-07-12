@@ -10,9 +10,9 @@ import (
 
 // This file defines the alarm state-change event (ADR-041): the envelope re-emitted
 // whenever a raised Alarm transitions, plus the small publisher interface the model
-// layer emits through. The evaluator and the operator API both mutate alarms via the
-// same *Api, so emitting here — through an injected interface — gives one uniform
-// event stream for every transition (evaluator raise/escalate/clear and operator
+// layer emits through. The DETECT edge integrator and the operator API both mutate alarms
+// via the same *Api, so emitting here — through an injected interface — gives one uniform
+// event stream for every transition (integrator raise/escalate/clear and operator
 // ack/clear). It is the substrate for graphql-ws subscriptions (2.E, ADR-037) and
 // notifications (ADR-017).
 //
@@ -37,8 +37,8 @@ const (
 	// AlarmEventDeescalated is emitted when an ACTIVE alarm's severity decreases in
 	// place (it still fires, but at a lower tier).
 	AlarmEventDeescalated AlarmEventType = "DEESCALATED"
-	// AlarmEventCleared is emitted when an alarm goes CLEARED — whether auto-cleared
-	// by the evaluator or manually cleared by an operator.
+	// AlarmEventCleared is emitted when an alarm goes CLEARED — whether cleared by the
+	// DETECT edge integrator (its contributor set emptied) or manually by an operator.
 	AlarmEventCleared AlarmEventType = "CLEARED"
 	// AlarmEventAcknowledged is emitted when an operator acknowledges an alarm.
 	AlarmEventAcknowledged AlarmEventType = "ACKNOWLEDGED"

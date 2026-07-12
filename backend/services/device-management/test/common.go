@@ -211,11 +211,6 @@ func (api *MockApi) CommandDefinitionsByDeviceType(ctx context.Context, deviceTy
 	return args.Get(0).([]*model.CommandDefinition), args.Error(1)
 }
 
-func (api *MockApi) AlarmDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*model.AlarmDefinition, error) {
-	args := api.Mock.Called()
-	return args.Get(0).([]*model.AlarmDefinition), args.Error(1)
-}
-
 func (api *MockApi) AlarmsById(ctx context.Context, ids []uint) ([]*model.Alarm, error) {
 	args := api.Mock.Called()
 	return args.Get(0).([]*model.Alarm), args.Error(1)
@@ -239,16 +234,6 @@ func (api *MockApi) AcknowledgeAlarm(ctx context.Context, token string, by *stri
 func (api *MockApi) ClearAlarm(ctx context.Context, token string) (*model.Alarm, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.Alarm), args.Error(1)
-}
-
-func (api *MockApi) EvaluateMeasurementAlarms(ctx context.Context, deviceToken string, payload *model.ResolvedMeasurementsPayload, occurredTime time.Time) error {
-	args := api.Mock.Called()
-	return args.Error(0)
-}
-
-func (api *MockApi) RaiseAlarm(ctx context.Context, deviceId uint, alarmKey, metricKey, severity string, value *float64, occurredTime time.Time) error {
-	args := api.Mock.Called()
-	return args.Error(0)
 }
 
 func (api *MockApi) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time) error {

@@ -33,8 +33,8 @@ func (r *SchemaResolver) AcknowledgeAlarm(ctx context.Context, args struct {
 	return &AlarmResolver{M: *updated, S: r, C: ctx}, nil
 }
 
-// Clear an alarm. A manual operator override that moves the alarm to CLEARED; the
-// evaluator also auto-clears when a condition resolves (a later slice).
+// Clear an alarm. A manual operator override that moves the alarm to CLEARED; the DETECT
+// edge integrator also clears when a rule's condition resolves (ADR-057).
 func (r *SchemaResolver) ClearAlarm(ctx context.Context, args struct {
 	Token string
 }) (*AlarmResolver, error) {

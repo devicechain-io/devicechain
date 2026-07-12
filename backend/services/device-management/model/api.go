@@ -213,30 +213,18 @@ type DeviceManagementApi interface {
 	CommandDefinitions(ctx context.Context, criteria CommandDefinitionSearchCriteria) (*CommandDefinitionSearchResults, error)
 	CommandDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*CommandDefinition, error)
 
-	// Alarm definitions (ADR-041). Authoring was retired (ADR-057, DetectionRule is the one
-	// path); only the evaluator's snapshot loader survives until the 6d cutover deletes it.
-	AlarmDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*AlarmDefinition, error)
-
-	// Alarms (raised, ADR-041). Raised by the evaluator (a later slice); the API here
-	// is read + the operator transitions.
+	// Alarms (raised, ADR-041). Raised by DETECT's edge-triggered rules through the
+	// contributor-set integrator (ADR-057); the API here is read + the operator transitions.
 	AlarmsById(ctx context.Context, ids []uint) ([]*Alarm, error)
 	AlarmsByToken(ctx context.Context, tokens []string) ([]*Alarm, error)
 	Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*AlarmSearchResults, error)
 	AcknowledgeAlarm(ctx context.Context, token string, by *string) (*Alarm, error)
 	ClearAlarm(ctx context.Context, token string) (*Alarm, error)
-	// EvaluateMeasurementAlarms is the SIMPLE alarm evaluator (ADR-041): it upserts
-	// alarm state from a resolved measurements payload (raise/escalate/auto-clear).
-	// The source device is named by its token (ADR-044); the evaluator resolves it to
-	// the local row id for its id-keyed alarm state.
-	EvaluateMeasurementAlarms(ctx context.Context, deviceToken string, payload *ResolvedMeasurementsPayload, occurredTime time.Time) error
-	// RaiseAlarm is the REACT raise-alarm entry (ADR-051 slice 5c): it raises/escalates an alarm
-	// for an already-resolved device id through the same engine the measurement evaluator uses, so
-	// a rule-driven alarm shares the Alarm object, ack/clear, rollup, and notification flow.
-	RaiseAlarm(ctx context.Context, deviceId uint, alarmKey, metricKey, severity string, value *float64, occurredTime time.Time) error
-	// ApplyAlarmContributorEdge is the ADR-057 REACT alarm entry: it folds one rule's edge (raise or
-	// resolve, per edge) into the (device, alarmKey) alarm's contributor set and re-derives its state
-	// (max-tier severity over the active set; cleared when the set empties). It supersedes RaiseAlarm
-	// for the edge-integrated lifecycle; the raise-alarm consumer routes both edges here.
+	// ApplyAlarmContributorEdge is the ADR-057 REACT alarm entry — the sole alarm-raise path since
+	// the 6d cutover retired the measurement evaluator. It folds one rule's edge (raise or resolve,
+	// per edge) into the (device, alarmKey) alarm's contributor set and re-derives its state
+	// (max-tier severity over the active set; cleared when the set empties). The raise-alarm consumer
+	// routes both edges here.
 	ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time) error
 
 	// Entity attributes (ADR-012).

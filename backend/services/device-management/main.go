@@ -40,20 +40,14 @@ var (
 	FailedEventsWriter     messaging.MessageWriter
 
 	// AlarmEventsWriter publishes alarm state-change events (ADR-041). It backs the
-	// publisher injected into the shared Api so every alarm transition — evaluator or
-	// operator — emits onto the alarm-events stream.
+	// publisher injected into the shared Api so every alarm transition — the DETECT edge
+	// integrator or an operator — emits onto the alarm-events stream.
 	AlarmEventsWriter messaging.MessageWriter
 
-	// AlarmEvaluator consumes the resolved-events stream this service produces and
-	// runs the SIMPLE alarm evaluator over resolved measurements (ADR-041). It is a
-	// distinct durable consumer from the persistence/state pipelines.
-	ResolvedEventsReader messaging.MessageReader
-	AlarmEvaluator       *processor.AlarmEvaluator
-
-	// RaiseAlarmConsumer consumes REACT raise-alarm requests (ADR-051 slice 5c) from
-	// event-processing's dispatcher and raises/escalates the alarm through the same engine
-	// the measurement evaluator uses — so a rule-driven alarm shares the Alarm object,
-	// ack/clear, rollup, and notification flow.
+	// RaiseAlarmConsumer consumes REACT raise-alarm requests (ADR-051 slice 5c / ADR-057) from
+	// event-processing's dispatcher and folds each edge into the (device, alarmKey) alarm's
+	// contributor set — the sole alarm-raise path since the 6d cutover retired the measurement
+	// evaluator; a rule-driven alarm shares the Alarm object, ack/clear, rollup, and notification flow.
 	RaiseAlarmReader   messaging.MessageReader
 	RaiseAlarmConsumer *processor.RaiseAlarmConsumer
 
@@ -121,8 +115,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	FailedEventsWriter = fevents
 
 	// Add the alarm-events writer and inject a publisher over it into the shared Api
-	// (ADR-041). CachedApi embeds this same *Api, so both the evaluator and the
-	// GraphQL operator mutations emit alarm state-change events through it.
+	// (ADR-041). CachedApi embeds this same *Api, so both the DETECT edge integrator and
+	// the GraphQL operator mutations emit alarm state-change events through it.
 	aevents, err := nmgr.NewWriter(config.SUBJECT_ALARM_EVENTS)
 	if err != nil {
 		return err
@@ -175,25 +169,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 
-	// Reader for the resolved-events stream (this service's own output, consumed
-	// back as a distinct durable) that feeds the alarm evaluator.
-	revreader, err := nmgr.NewReader(config.SUBJECT_RESOLVED_EVENTS)
-	if err != nil {
-		return err
-	}
-	ResolvedEventsReader = revreader
-
-	// Add and initialize the alarm evaluator (ADR-041).
-	AlarmEvaluator = processor.NewAlarmEvaluator(Microservice, ResolvedEventsReader,
-		core.NewNoOpLifecycleCallbacks(), CachedApi)
-	err = AlarmEvaluator.Initialize(context.Background())
-	if err != nil {
-		return err
-	}
-
-	// Reader + consumer for REACT raise-alarm requests (ADR-051 slice 5c): a dedicated durable
-	// consumer so raise-alarm never shares a failure fate with measurement evaluation. It uses the
-	// cached Api so device-token resolution hits the by-token cache.
+	// Reader + consumer for REACT raise-alarm requests (ADR-051 slice 5c / ADR-057): the raise-alarm
+	// subject is the sole alarm-raise path since the 6d cutover retired the measurement evaluator. It
+	// uses the cached Api so device-token resolution hits the by-token cache.
 	rareader, err := nmgr.NewReader(config.SUBJECT_RAISE_ALARM)
 	if err != nil {
 		return err
@@ -336,12 +314,6 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
-	// Start the alarm evaluator.
-	err = AlarmEvaluator.Start(ctx)
-	if err != nil {
-		return err
-	}
-
 	// Start the REACT raise-alarm consumer (ADR-051 slice 5c).
 	err = RaiseAlarmConsumer.Start(ctx)
 	if err != nil {
@@ -374,12 +346,6 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Stop the alarm evaluator before the NATS connection drains.
-	err = AlarmEvaluator.Stop(ctx)
 	if err != nil {
 		return err
 	}
@@ -417,12 +383,6 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 func beforeMicroserviceTerminated(ctx context.Context) error {
 	// Terminate inbound events processor.
 	err := InboundEventsProcessor.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Terminate the alarm evaluator.
-	err = AlarmEvaluator.Terminate(ctx)
 	if err != nil {
 		return err
 	}

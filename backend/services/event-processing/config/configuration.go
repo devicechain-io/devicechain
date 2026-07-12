@@ -117,15 +117,6 @@ type EventProcessingConfiguration struct {
 	// these and exposes it (bounded gauges); slice 6c-2 enforces them.
 	MaxRulesPerTenant    int
 	MaxLiveKeysPerTenant int
-
-	// RaiseAlarmDispatchEnabled turns on REACT raise-alarm dispatch (ADR-051 slice 5c): when a
-	// detection rule's raiseAlarm action fires, event-processing publishes a raise-alarm request to
-	// device-management. It defaults to FALSE and MUST stay false until slice 6 retires the
-	// measurement-driven alarm evaluator per tenant — while both run they write the same
-	// (device, alarmKey) alarm and would fight (double-raise / auto-clear). It is a plain bool
-	// (zero value = disabled), so no ApplyDefaults entry is needed. send-command dispatch is
-	// independent of this flag (it is enabled by configuring command-delivery's coordinate).
-	RaiseAlarmDispatchEnabled bool
 }
 
 // NewEventProcessingConfiguration creates the default configuration.
