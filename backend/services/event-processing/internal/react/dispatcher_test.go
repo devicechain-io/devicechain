@@ -225,10 +225,11 @@ func TestDispatchRaiseAlarmEnabled(t *testing.T) {
 	if r.DeviceToken != "device-1" || r.Severity != "major" || r.MetricKey != "temperature" || r.AlarmKey != "p/r1" || r.Tenant != "acme" {
 		t.Fatalf("raise request wrong: %+v", r)
 	}
-	// The contributor identity (the composed rule id) and an explicit raised edge are carried for the
-	// alarm-object integrator (slice 6d-pre-2c).
-	if r.RuleID != "acme/p@1/r1" || r.Edge != runtime.EdgeRaised {
-		t.Fatalf("raise must carry the contributor rule id + raised edge: ruleID=%q edge=%q", r.RuleID, r.Edge)
+	// The contributor identity is the VERSION-FREE stable rule key ("{profileToken}/{ruleToken}" from
+	// the composed "acme/p@1/r1"), NOT the versioned id — so a republish updates ONE contributor rather
+	// than stranding one per version (D6). An explicit raised edge is carried for the integrator.
+	if r.RuleID != "p/r1" || r.Edge != runtime.EdgeRaised {
+		t.Fatalf("raise must carry the STABLE contributor id + raised edge: ruleID=%q edge=%q", r.RuleID, r.Edge)
 	}
 	if !r.OccurredTime.Equal(evt().OccurredTime) {
 		t.Fatalf("raise occurred time wrong: %v", r.OccurredTime)
@@ -290,11 +291,40 @@ func TestDispatchResolvedEdgeClearsAlarm(t *testing.T) {
 		t.Fatalf("a resolved raiseAlarm must dispatch one clear, got %d", len(alarms.raised))
 	}
 	r := alarms.raised[0]
-	if r.Edge != runtime.EdgeResolved || r.RuleID != "acme/p@1/r1" || r.AlarmKey != "over-temp" {
+	// The clear carries the SAME stable contributor id as the raise ("p/r1"), so the resolve removes
+	// exactly the contributor the raise added — across versions.
+	if r.Edge != runtime.EdgeResolved || r.RuleID != "p/r1" || r.AlarmKey != "over-temp" {
 		t.Fatalf("clear request wrong: %+v", r)
 	}
 	if m.dispatched["clearAlarm"] != 1 || m.dispatched["raiseAlarm"] != 0 {
 		t.Fatalf("a resolved edge must count clearAlarm, not raiseAlarm: %+v", m.dispatched)
+	}
+}
+
+// TestDispatchContributorStableAcrossVersions is the D6 regression: a raise under profile version v1
+// and a resolve under v2 (DIFFERENT composed rule ids, SAME version-free stable key) must map to the
+// SAME contributor id — so a routine republish updates one contributor and its resolve clears it,
+// rather than the versioned key stranding the v1 contributor ACTIVE forever.
+func TestDispatchContributorStableAcrossVersions(t *testing.T) {
+	dispatch := func(composedID string, edge string) AlarmRequest {
+		alarms := &fakeAlarmSink{}
+		rule := raiseAlarmRule("over-temp")
+		rule.ID = composedID
+		ev := runtime.DerivedEvent{RuleID: composedID, Tenant: "acme", Kind: "threshold", Series: "device-1",
+			Edge: edge, OccurredTime: time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)}
+		d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, alarms, newFakeMetrics())
+		if out := d.Dispatch(context.Background(), ev); out != Done {
+			t.Fatalf("want Done, got %v", out)
+		}
+		return alarms.raised[0]
+	}
+	raise := dispatch("acme/prof@1/r1", runtime.EdgeRaised)   // version 1
+	clear := dispatch("acme/prof@2/r1", runtime.EdgeResolved) // version 2 — same rule, republished
+	if raise.RuleID != clear.RuleID {
+		t.Fatalf("a raise@v1 and resolve@v2 of one rule must share the contributor id; got raise=%q clear=%q", raise.RuleID, clear.RuleID)
+	}
+	if raise.RuleID != "prof/r1" {
+		t.Fatalf("the contributor id must be the version-free stable key; got %q", raise.RuleID)
 	}
 }
 

@@ -397,6 +397,36 @@ func TestArmerAbsenceLive(t *testing.T) {
 	}
 }
 
+// TestArmerVersionSuperseded covers the D6 frontier gate predicate, which fails the OPPOSITE way from
+// AbsenceLive: it returns true (drop) ONLY on a CONFIRMED version mismatch, and false (keep) on any
+// uncertainty — an unrostered device, an unknown rule, or a profile with no known active version — so a
+// real alarm is never dropped for a momentarily-incomplete projection.
+func TestArmerVersionSuperseded(t *testing.T) {
+	reg := NewRuleRegistry([]ScopedRule{absScoped("t1", "p1@v1", "r1"), absScoped("t1", "p1@v2", "r1")})
+	d := NewDeadmanArmer(reg, newFakeArmer())
+	d.LoadMembership(
+		[]RosterEntry{{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(50)}},
+		[]ActiveEntry{{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: ts(100)}},
+	)
+	superseded := func(rule, dev string) bool { return d.VersionSuperseded(core.SeriesKey{Rule: rule, Series: dev}) }
+	v1 := ComposeRuleID("t1", "p1@v1/r1") // active is p1@v2, so v1 is superseded
+	v2 := ComposeRuleID("t1", "p1@v2/r1")
+
+	if !superseded(v1, "dev") {
+		t.Fatal("a rostered device whose active version differs from the rule's is superseded (drop)")
+	}
+	if superseded(v2, "dev") {
+		t.Fatal("the active version must NOT be superseded (keep)")
+	}
+	// Fail-safe direction: uncertainty keeps the detection (opposite of AbsenceLive).
+	if superseded(v1, "ghost") {
+		t.Fatal("an unrostered device must NOT be treated as superseded (keep, avoid dropping a real alarm)")
+	}
+	if superseded("t1/nope@v1/r1", "dev") {
+		t.Fatal("an unknown rule must NOT be treated as superseded (keep)")
+	}
+}
+
 // TestReconcileSweepsHeartbeatAbsenceTimers: Reconcile cancels a heartbeat-armed absence timer whose
 // device left the rule's scope (finding 6 — invisible to the ExpectedKeys/dead-man sweep), while
 // leaving a still-live device's heartbeat timer untouched.

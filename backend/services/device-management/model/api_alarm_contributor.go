@@ -36,18 +36,27 @@ import (
 // into the row. deviceId is already resolved (the consumer resolves the token through the cached
 // accessor and distinguishes a deleted device from a store error), so this does not re-resolve.
 //
-// TWO GATE-OPEN DEPENDENCIES this method does NOT own, tracked for slice 6 (the dispatch gate stays
-// off until then, so both are inert here):
-//   - CONTRIBUTOR STRANDING (D6): a contributor's identity is the VERSIONED composed rule id, so a
-//     routine profile republish rotates it and DETECT's RemoveRule drops the raised latch WITHOUT
-//     emitting a Resolved — the old contributor never resolves and clear-on-empty never fires. D6
-//     (RemoveRule/rotation emits a Resolved for a raised, torn-down rule) MUST land before the gate
-//     opens, or a republish permanently strands an alarm. Same for a deleted rule.
-//   - OPERATOR CLEAR vs the reference count: an operator ClearAlarm sets state=CLEARED without
-//     touching the contributor set, so the next edge for that key re-derives ACTIVE from the still-raising
-//     contributors and REACTIVATES — a manual clear of a still-breaching alarm is transient by design
-//     (pure reference counting: the condition still holds). A RESOLVE edge can therefore emit a RAISED
-//     reactivation; whether operator clear should instead tombstone the set is a slice-6 product call.
+// CONTRIBUTOR STRANDING (D6): the contributor identity (the ruleID passed here) is the VERSION-FREE
+// stable rule key, minted by the REACT dispatcher (stableContributorID) — NOT the versioned composed
+// id. A routine profile republish rotates the versioned id but not the stable key, so one logical rule
+// maps to ONE contributor across versions: the new version's edges update and clear the SAME
+// contributor rather than forking (and stranding) a fresh one per version. This closes the primary
+// stranding case. RESIDUALS (all bounded, and all the same family — a raised contributor whose logical
+// rule stops producing edges until the NEXT full raise→resolve cycle re-derives it; strictly better
+// than the pre-fix PERMANENT strand, and closed by the same future explicit-teardown Resolved):
+//   - a rule DELETED outright, or a reused-id def change whose new body never matches, until the
+//     condition next cycles (needs a Resolved on DETECT RemoveRule + a Publisher orphan-publish exception);
+//   - a condition that ceases in the WINDOW between a profile republish and the new version's first own
+//     raise: the old version's frontier resolve is correctly dropped by the supersession gate
+//     (event-processing dropSupersededDetections), and the new version never raised so it emits no
+//     resolve, so the alarm holds ACTIVE until the new version's next full cycle.
+//
+// OPERATOR CLEAR vs the reference count (slice-6 product call, inert while the gate is off): an operator
+// ClearAlarm sets state=CLEARED without touching the contributor set, so the next edge for that key
+// re-derives ACTIVE from the still-raising contributors and REACTIVATES — a manual clear of a
+// still-breaching alarm is transient by design (pure reference counting: the condition still holds). A
+// RESOLVE edge can therefore emit a RAISED reactivation; whether operator clear should instead tombstone
+// the set is a slice-6 product call.
 func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
 	alarmKey, metricKey, ruleID, edge, severity string, value *float64, occurredTime time.Time) error {
 	if alarmKey == "" || ruleID == "" {

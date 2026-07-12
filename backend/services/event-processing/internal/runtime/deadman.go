@@ -239,6 +239,33 @@ func (d *DeadmanArmer) AbsenceLive(key core.SeriesKey) bool {
 	return a.version == sr.ProfileVersionToken
 }
 
+// VersionSuperseded reports whether a detection's (rule, device) belongs to a CONFIRMED-superseded
+// profile version: the device is rostered, its profile HAS a known active version, and that active
+// version is NOT the one owning the rule. It is the publish-time gate that stops a superseded version's
+// FRONTIER-triggered firing (a Duration/Session timer or an Aggregate pane-close riding the shared
+// watermark — starvation silences event-driven kinds but not these) from contributing a false edge to
+// the alarm object under the stable contributor id (ADR-057 D6): a stale unsatisfied pane-close would
+// otherwise resolve the ACTIVE version's genuine raise at the same epoch-aligned timestamp (a fail-open
+// false clear). Unlike AbsenceLive (which drops on ANY uncertainty — correct for absence, a
+// membership-gated kind), this fails the OTHER way: an unknown rule, an unrostered device, or a profile
+// with no known active version returns FALSE (keep the detection), so a real alarm is never dropped
+// merely because a projection is momentarily incomplete — it drops ONLY on a confirmed version mismatch.
+func (d *DeadmanArmer) VersionSuperseded(key core.SeriesKey) bool {
+	sr, ok := d.reg.Lookup(key.Rule)
+	if !ok {
+		return false
+	}
+	m, ok := d.roster[devKey{sr.Tenant, key.Series}]
+	if !ok {
+		return false
+	}
+	a, ok := d.active[profKey{sr.Tenant, m.profileToken}]
+	if !ok {
+		return false
+	}
+	return a.version != sr.ProfileVersionToken
+}
+
 // reset clears the three membership views so Reconcile is a full rebuild even when LoadMembership
 // pre-populated them for the gate (a device deleted/superseded during replay must not linger as a
 // stale roster entry the gate would read as live).

@@ -58,6 +58,13 @@ type detectMetrics struct {
 	// value signals stale wheel timers surviving a rolling-update overlap (pre-Slice-6).
 	staleAbsenceDropped prometheus.Counter
 
+	// supersededFrontierDropped counts non-absence FRONTIER-triggered detections (Duration/Session
+	// hold/gap timers, Aggregate pane closes) dropped at publish because their profile version is no
+	// longer the device's ACTIVE version (ADR-057 D6). Starvation silences a superseded version's
+	// event-driven kinds but not its watermark-fired timers/panes, which would otherwise contribute a
+	// false edge under the stable contributor id. Bounded cardinality (no labels).
+	supersededFrontierDropped prometheus.Counter
+
 	// Slice-6c per-tenant state-budget gauges (ADR-023 amendment). Bounded cardinality — NO
 	// per-tenant labels (the G.3 DoS lesson): liveKeys is the AGGREGATE live keyed-state count across
 	// all tenants, and the two "over budget" gauges are COUNTS of tenants breaching each ceiling, not
@@ -89,7 +96,8 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 		idleAdvancesTotal:   ms.NewCounter("detect_idle_advances_total", "Wall-clock idle advances that produced at least one detection.", nil),
 		idleDetectionsTotal: ms.NewCounter("detect_idle_detections_total", "Detections produced by wall-clock idle advance (absence/duration/session firing on silence).", nil),
 
-		staleAbsenceDropped: ms.NewCounter("detect_stale_absence_dropped_total", "Absence detections dropped at publish because the device left the rule's scope (deleted/re-typed/version superseded).", nil),
+		staleAbsenceDropped:       ms.NewCounter("detect_stale_absence_dropped_total", "Absence detections dropped at publish because the device left the rule's scope (deleted/re-typed/version superseded).", nil),
+		supersededFrontierDropped: ms.NewCounter("detect_superseded_frontier_dropped_total", "Non-absence frontier-triggered detections (Duration/Session/Aggregate) dropped at publish because their profile version is superseded (ADR-057 D6).", nil),
 
 		liveKeys:                 ms.NewGauge("detect_live_keys", "Total live keyed window/timer state entries across all tenants (the per-tenant state-budget aggregate).", nil),
 		tenantsOverRuleBudget:    ms.NewGauge("detect_tenants_over_rule_budget", "Tenants currently exceeding the per-tenant rule-count budget (ADR-023).", nil),
@@ -115,6 +123,15 @@ func (m *detectMetrics) recordStaleAbsenceDropped() {
 		return
 	}
 	m.staleAbsenceDropped.Inc()
+}
+
+// recordSupersededFrontierDropped records one non-absence frontier detection dropped at publish
+// because its profile version is superseded (ADR-057 D6).
+func (m *detectMetrics) recordSupersededFrontierDropped() {
+	if m == nil {
+		return
+	}
+	m.supersededFrontierDropped.Inc()
 }
 
 // reactMetrics are the Slice-5 REACT-dispatcher observability counters (ADR-051 REACT stage). Like

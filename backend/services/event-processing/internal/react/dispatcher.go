@@ -83,9 +83,11 @@ type AlarmRequest struct {
 	AlarmKey    string
 	MetricKey   string
 	Severity    string
-	// RuleID is the CONTRIBUTOR identity: the composed runtime rule id whose edge this is. The alarm
-	// object reference-counts contributors by it — a Raised adds/updates this rule's tier, a Resolved
-	// removes it, and the alarm clears when the set empties (ADR-057). Carried on every edge.
+	// RuleID is the CONTRIBUTOR identity the alarm object reference-counts by — a Raised adds/updates
+	// this rule's tier, a Resolved removes it, the alarm clears when the set empties (ADR-057). It is
+	// the VERSION-FREE stable rule identity (stableContributorID), NOT the composed runtime id: the
+	// composed id embeds the profile version token, which rotates every publish, so keying on it would
+	// fork a stranded contributor per version (D6). Carried on every edge.
 	RuleID string
 	// Edge is "raised" (rising) or "resolved" (falling) — runtime.EdgeRaised / EdgeResolved. A raised
 	// request raises/escalates; a resolved request removes this rule's contribution (and clears the
@@ -225,17 +227,26 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			d.metrics.RecordNotEnabled(action)
 			return Done
 		}
+		// The VERSION-FREE stable rule identity keys BOTH the default alarm key AND the contributor: the
+		// composed rule id embeds the profile VERSION token, which rotates on EVERY publish, so keying on
+		// it would fork a fresh alarm-object CONTRIBUTOR per version and strand the old one ACTIVE forever
+		// (the D6 blocker). The stable identity is the correct one-logical-rule-across-versions key — the
+		// new version's edges update the SAME contributor and clear it, exactly as StableRuleKey does for
+		// the alarm key (ADR-041 dec 3). This is safe because a device's EVENT-driven kinds only fire for
+		// its active version (the fan-out scopes by ProfileVersionToken), so old and new never race a
+		// genuine event edge. The one exception is FRONTIER-triggered firings (Duration/Session timers,
+		// Aggregate pane-closes) of a superseded-but-retained version, which ride the shared watermark
+		// even while starved of events — those are dropped upstream at publish by the version gate
+		// (processor.dropSupersededDetections / VersionSuperseded) so they can't contribute a false edge
+		// (e.g. a stale unsatisfied pane-close resolving the active version's raise at the same timestamp).
+		contributorID := stableContributorID(ev.RuleID)
 		req := AlarmRequest{
-			Tenant:      ev.Tenant,
-			DeviceToken: ev.Series,
-			// Default an empty authored key to the rule's VERSION-FREE stable identity so a rule's
-			// repeated firings escalate ONE alarm in place (ADR-041 dec 3) even across routine profile
-			// re-publishes — the composed rule id embeds the profile VERSION token, which rotates every
-			// publish, so keying on it would fork a fresh alarm per version and orphan the prior one.
+			Tenant:       ev.Tenant,
+			DeviceToken:  ev.Series,
 			AlarmKey:     defaultAlarmKey(a.RaiseAlarm.AlarmKey, ev.RuleID),
 			MetricKey:    ruleMetric(rule),
 			Severity:     string(rule.Severity),
-			RuleID:       ev.RuleID,
+			RuleID:       contributorID,
 			Edge:         edgeOrRaised(ev.Edge),
 			OccurredTime: ev.OccurredTime,
 			Value:        ev.Value,
@@ -261,6 +272,19 @@ func edgeOrRaised(edge string) string {
 		return runtime.EdgeResolved
 	}
 	return runtime.EdgeRaised
+}
+
+// stableContributorID returns the version-free stable identity the alarm object reference-counts a
+// rule by (ADR-057 / D6): "{profileToken}/{ruleToken}", which does NOT rotate on a profile republish,
+// so one logical rule maps to ONE contributor across versions rather than forking (and stranding) a
+// fresh one per version. It falls back to the raw composed id only if the id does not parse into the
+// minted shape (defensive — the publish path guarantees it does); an unparseable id is at least
+// self-consistent, keeping the raise and its resolve on the same contributor key.
+func stableContributorID(ruleID string) string {
+	if stable, ok := runtime.StableRuleKey(ruleID); ok {
+		return stable
+	}
+	return ruleID
 }
 
 // defaultAlarmKey returns the authored alarm key, or the rule's version-free stable identity when
