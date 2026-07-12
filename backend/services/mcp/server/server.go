@@ -65,6 +65,22 @@ func registerTools(s *mcp.Server, t *Tools) {
 		Name:        "list_devices",
 		Description: "List the devices in the caller's tenant (paged). Returns each device's token, name, description, external id, and device-type token. Address devices by token in follow-up tools.",
 	}, t.ListDevices)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_device",
+		Description: "Look up one or more devices by token. Returns each device's token, name, description, external id, and device-type token.",
+	}, t.GetDevice)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_device_state",
+		Description: "Read the live last-known connectivity state of one or more devices by token: whether active, last connect/disconnect/activity times, and the inactivity timeout.",
+	}, t.GetDeviceState)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_latest_measurements",
+		Description: "Read the latest (last-known) value of every metric for a device, with its unit, data type, and time. Prefer this over querying raw history for a current snapshot.",
+	}, t.GetLatestMeasurements)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_device_capabilities",
+		Description: "Report what a device can measure and be commanded to do: the metric definitions (key, name, unit, data type) and command definitions (key, name) its profile declares, plus the active published profile version.",
+	}, t.GetDeviceCapabilities)
 }
 
 // metadataURL is the absolute URL of the RFC 9728 protected-resource metadata: the
