@@ -81,6 +81,26 @@ func registerTools(s *mcp.Server, t *Tools) {
 		Name:        "get_device_capabilities",
 		Description: "Report the metric and command definitions declared on a device's profile — its DRAFT definitions (key, name, unit/data type). These are the editable working copy; a device resolves the active PUBLISHED profile version, which may differ from these drafts. `activeVersion` is the published version the device currently resolves; when it is null the profile has never been published, so the device currently resolves NONE of these capabilities. Do not assume a listed capability is active unless activeVersion is set.",
 	}, t.GetDeviceCapabilities)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "query_measurements",
+		Description: "Query raw measurement history for a device over an optional time window (paged). For trends over a window prefer aggregate_measurements — it returns far fewer rows for the same insight.",
+	}, t.QueryMeasurements)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "aggregate_measurements",
+		Description: "Return time-bucketed avg/min/max/sum/count of a device's measurements over a window (intervalSeconds sets the bucket width, e.g. 3600 for hourly). The token-efficient way to read trends — prefer this over query_measurements for anything but a small exact-value lookup.",
+	}, t.AggregateMeasurements)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "list_alarms",
+		Description: "List alarms in the caller's tenant (paged), optionally filtered by originating device token, state, severity, alarm key, or acknowledged flag. Returns each alarm's token, key, metric, state, severity, acknowledged flag, raised/cleared times, last value, and message.",
+	}, t.ListAlarms)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_alarm",
+		Description: "Look up one or more alarms by token, returning full alarm detail.",
+	}, t.GetAlarm)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "list_commands",
+		Description: "List dispatched commands in the caller's tenant (paged), optionally filtered by device token or status. Returns each command's token, device, name, status, and delivery-lifecycle timestamps (payloads are omitted).",
+	}, t.ListCommands)
 }
 
 // metadataURL is the absolute URL of the RFC 9728 protected-resource metadata: the
