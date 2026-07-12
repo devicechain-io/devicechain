@@ -28,8 +28,9 @@ encoded — pub/sub (ADR-003) makes an absent peer safe, so only hard edges gate
       "command-delivery"     (list "device-management")
       "notification-management" (list "device-management")
       "event-processing"     (list "device-management")
+      "mcp"                  (list "device-management")
   -}}
-  {{- $known := list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" "notification-management" "event-processing" -}}
+  {{- $known := list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" "notification-management" "event-processing" "mcp" -}}
 
   {{- $profile := .Values.profile | default "" -}}
   {{- $explicit := .Values.enabledFunctionalAreas | default (list) -}}
