@@ -11,6 +11,15 @@ package core
 // close. Reset-per-event shares the wheel with Absence/Duration, keyed on the rule id so keys
 // never collide. A crash mid-session re-derives the identical close: both the accumulator and
 // the timer are in the snapshot.
+//
+// KNOWN RESIDUAL (ADR-057 review D2/D5, inherent — not the sliding-kind gap): a session is DEFINED by
+// matching events (a non-match opens none and arms no gap timer). An OPEN session always closes via
+// its gap timer even under non-matching traffic (the watermark still advances), so an in-flight breach
+// is always evaluated; but once a session has closed satisfied and raised, only a NEW session that
+// closes unsatisfied resolves it — and a device reporting only non-matching values opens no new
+// session, so the raised alarm persists. There is no time-based expiry to bridge the gap without
+// changing the kind's nature. Operators pair such a rule with an Absence rule when "stopped producing
+// matching sessions" must also clear the alarm.
 func (e *Engine) applySession(ev Event, r Rule) {
 	if !ev.Match {
 		return

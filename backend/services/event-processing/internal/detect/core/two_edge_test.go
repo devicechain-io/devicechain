@@ -4,6 +4,7 @@
 package core
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"testing"
@@ -181,6 +182,82 @@ func TestCorrelationFallingEdgeOnNonMatch(t *testing.T) {
 	}
 }
 
+// TestDeltaRateFallingEdgeOnNonMatch is the regression for review D2/D5 (DeltaRate): a filtering
+// rule resolves on a non-matching sample rather than staying raised, and the non-match must NOT
+// poison the delta base (which pairs consecutive MATCHING samples).
+func TestDeltaRateFallingEdgeOnNonMatch(t *testing.T) {
+	rules := []Rule{{ID: "r", Kind: DeltaRate, Op: GT, Thresh: 10}} // raw delta
+	e := NewEngine(rules, 0)
+	if d := feedEvent(e, 1, "r", "d", 0, 0, true); len(d) != 0 {
+		t.Fatalf("prime must not fire: %+v", d)
+	}
+	if d := feedEvent(e, 2, "r", "d", 2, 100, true); len(d) != 1 || d[0].Edge != EdgeRaised { // +100 > 10
+		t.Fatalf("a +100 delta must raise: %+v", d)
+	}
+	// A non-matching sample (the filtering leaf went false) resolves the raised alarm.
+	if d := feedEvent(e, 3, "r", "d", 5, 999, false); len(d) != 1 || d[0].Edge != EdgeResolved || !d[0].At.Equal(at(5)) {
+		t.Fatalf("a non-matching sample must resolve the raise: %+v", d)
+	}
+	// The non-match did NOT become the delta base: a following match pairs against the last MATCHING
+	// value (100@t2), so +5 (=105-100) does NOT re-raise; a base poisoned to 999 would (105-999<0).
+	if d := feedEvent(e, 4, "r", "d", 8, 105, true); len(d) != 0 {
+		t.Fatalf("delta base must stay on the last matching sample (100), so +5 must not re-raise: %+v", d)
+	}
+}
+
+// TestAggregateFallingEdgeOnNonMatch is the regression for review D2/D5 (Aggregate): a raised
+// Aggregate alarm resolves under active non-matching traffic — a non-matching event opens an empty
+// pane for the current window, which closes on the watermark and (empty-never-satisfies) resolves.
+func TestAggregateFallingEdgeOnNonMatch(t *testing.T) {
+	rules := []Rule{{ID: "r", Kind: Aggregate, Window: 10 * time.Second, Agg: AggCount, Op: GT, Thresh: 1}}
+	e := NewEngine(rules, 0)
+	drain := func() []Detection { return e.Drain() }
+	feed := func(seq uint64, sec int, match bool) []Detection {
+		e.ProcessEvent(Event{Seq: seq, Key: SeriesKey{Rule: "r", Series: "d"}, Time: at(sec), Value: 1, HasValue: true, Match: match})
+		return drain()
+	}
+	feed(1, 1, true) // pane [0,10): count 1
+	feed(2, 2, true) // pane [0,10): count 2
+	e.Advance(at(12))
+	if d := drain(); len(d) != 1 || d[0].Edge != EdgeRaised || !d[0].At.Equal(at(10)) { // count 2 > 1
+		t.Fatalf("a satisfied pane close must raise@10: %+v", d)
+	}
+	// Device now reports only non-matching values. A non-match@15 (while raised) opens an EMPTY pane
+	// for [10,20); it must fold no value (count stays 0).
+	if d := feed(3, 15, false); len(d) != 0 {
+		t.Fatalf("a non-matching event must not itself emit: %+v", d)
+	}
+	e.Advance(at(22))
+	if d := drain(); len(d) != 1 || d[0].Edge != EdgeResolved || !d[0].At.Equal(at(20)) {
+		t.Fatalf("the empty pane closing must resolve the raised alarm@20: %+v", d)
+	}
+}
+
+// TestSlidingAggNonMatchDoesNotRaise pins the option-a decision from the 6d-pre-2a review: a
+// SlidingAgg rising edge is match-only. Eviction on a non-matching sample can push the aggregate INTO
+// satisfaction, but that raise is DEFERRED to the next matching sample (symmetric with
+// Repeating/Correlation, whose rising edge is structurally match-only) rather than raising on the
+// non-match — which would be ragged (unreachable once the window empties and the entry is deleted).
+func TestSlidingAggNonMatchDoesNotRaise(t *testing.T) {
+	rules := []Rule{{ID: "r", Kind: SlidingAgg, Window: 10 * time.Second, Agg: AggAvg, Op: GT, Thresh: 100}}
+	e := NewEngine(rules, 0)
+	if d := feedEvent(e, 1, "r", "d", 0, 20, true); len(d) != 0 { // avg 20, not > 100
+		t.Fatalf("first low sample must not raise: %+v", d)
+	}
+	if d := feedEvent(e, 2, "r", "d", 7, 150, true); len(d) != 0 { // avg (20+150)/2 = 85, still not > 100
+		t.Fatalf("avg 85 must not raise: %+v", d)
+	}
+	// A non-match@12 evicts 20@t0: window {150@t7}, avg 150 > 100 satisfies — but the rising edge is
+	// match-only, so NO raise is emitted (deferred).
+	if d := feedEvent(e, 3, "r", "d", 12, 999, false); len(d) != 0 {
+		t.Fatalf("eviction into satisfaction on a NON-match must not raise (deferred to next match): %+v", d)
+	}
+	// The next matching sample observes the satisfied window and raises.
+	if d := feedEvent(e, 4, "r", "d", 13, 150, true); len(d) != 1 || d[0].Edge != EdgeRaised {
+		t.Fatalf("the next matching sample must raise the (now satisfied) window: %+v", d)
+	}
+}
+
 // TestMatchEveryUnaffectedByD2D5 pins the invariant that a match-every rule (the common case) is
 // byte-identical to the pre-D2/D5 behavior: with no non-matching event, exactly one Raised, no
 // Resolved, across the three sliding kinds.
@@ -208,25 +285,55 @@ func TestMatchEveryUnaffectedByD2D5(t *testing.T) {
 }
 
 // TestMatchGatedFallingEdgeReplayCorrect is the replay spine for the D2/D5 falling edges: it sweeps
-// every (checkpoint, crash) pair over a filtering-`when` scenario whose eviction-driven falling edges
-// arrive on NON-matching events, and proves the dedup-collapsed union of the crashed+replayed run
-// exactly equals the clean run — no missed and no spurious Resolved. The raised latch, sliding buffer,
-// and sliding-window state are all snapshotted, so the new resolve edges survive checkpoint/crash.
+// every (checkpoint, crash) pair over a filtering-`when` scenario whose falling edges arrive on
+// NON-matching events across all five affected kinds (Repeating, SlidingAgg, Correlation, DeltaRate,
+// Aggregate), and proves BOTH (a) the dedup-collapsed union of the crashed+replayed run exactly equals
+// the clean run — no missed and no spurious edge — and (b) the replayed engine's FINAL snapshot is
+// byte-identical to the clean run's, so no silent state divergence hides inside the trace. The raised
+// latch, sliding buffers, cohort maps, delta state, and tumbling panes are all snapshotted, so every
+// new resolve edge survives checkpoint/crash.
 func TestMatchGatedFallingEdgeReplayCorrect(t *testing.T) {
 	rules := []Rule{
 		{ID: "rRep", Kind: Repeating, Window: 10 * time.Second, Count: 2},
 		{ID: "rSlide", Kind: SlidingAgg, Window: 10 * time.Second, Agg: AggSum, Op: GT, Thresh: 100},
+		{ID: "rCorr", Kind: Correlation, Window: 10 * time.Second, Count: 2, MemberCap: 10},
+		{ID: "rDelta", Kind: DeltaRate, Op: GT, Thresh: 10},
+		{ID: "rAgg", Kind: Aggregate, Window: 10 * time.Second, Agg: AggCount, Op: GT, Thresh: 1},
+	}
+	corrStep := func(seq uint64, member string, sec int, match bool) step {
+		return step{ev: &Event{Seq: seq, Key: SeriesKey{Rule: "rCorr", Series: "area"}, Member: member, Time: at(sec), Match: match}}
 	}
 	steps := []step{
-		evValStep(1, "rRep", "d", 0, 1),     // match
-		evValStep(2, "rRep", "d", 1, 1),     // match -> Repeating raise
-		evValStep(3, "rSlide", "d", 1, 150), // match -> SlidingAgg raise (sum 150 > 100)
-		evStep(4, "rRep", "d", 12, false),   // non-match ages the burst out -> Repeating resolve
-		evStep(5, "rSlide", "d", 13, false), // non-match ages the window out -> SlidingAgg resolve
-		evValStep(6, "rRep", "d", 20, 1),    // match again (fresh window)
-		evValStep(7, "rRep", "d", 21, 1),    // match -> Repeating raise again
+		evValStep(1, "rRep", "d", 0, 1),      // match
+		evValStep(2, "rRep", "d", 1, 1),      // match -> Repeating raise
+		evValStep(3, "rSlide", "s", 1, 150),  // match -> SlidingAgg raise (sum 150 > 100)
+		evValStep(4, "rDelta", "e", 0, 0),    // prime
+		evValStep(5, "rDelta", "e", 2, 100),  // match -> DeltaRate raise (+100 > 10)
+		corrStep(6, "m0", 0, true),           // first distinct member
+		corrStep(7, "m1", 1, true),           // second distinct member -> Correlation raise
+		evValStep(8, "rAgg", "f", 1, 1),      // pane [0,10) count 1
+		evValStep(9, "rAgg", "f", 2, 1),      // pane [0,10) count 2
+		advStep(12),                          // close pane -> Aggregate raise@10 (2 > 1)
+		evStep(11, "rRep", "d", 13, false),   // non-match ages the burst out -> Repeating resolve
+		evStep(12, "rSlide", "s", 14, false), // non-match ages the window out -> SlidingAgg resolve
+		evStep(13, "rDelta", "e", 15, false), // non-match -> DeltaRate resolve
+		corrStep(14, "m2", 16, false),        // non-match ages the cohort out -> Correlation resolve
+		evStep(15, "rAgg", "f", 17, false),   // non-match while raised opens an empty pane [10,20)
+		advStep(22),                          // close empty pane -> Aggregate resolve@20
 	}
 	want := dedup(runClean(rules, steps))
+
+	// The clean run's final state — the byte target every replayed run must land on.
+	clean := NewEngine(rules, 0)
+	for _, s := range steps {
+		applyStep(clean, s)
+		clean.Drain()
+	}
+	cleanSnap, err := clean.Snapshot()
+	if err != nil {
+		t.Fatalf("clean snapshot: %v", err)
+	}
+
 	n := len(steps)
 	for checkpoint := 0; checkpoint < n; checkpoint++ {
 		for crash := checkpoint; crash < n; crash++ {
@@ -254,8 +361,74 @@ func TestMatchGatedFallingEdgeReplayCorrect(t *testing.T) {
 					all = append(all, e.Drain()...)
 				}
 				assertSetEqual(t, want, dedup(all))
+
+				// No silent state divergence: the replayed engine must end byte-identical to clean.
+				got, err := e.Snapshot()
+				if err != nil {
+					t.Fatalf("final snapshot: %v", err)
+				}
+				if !bytes.Equal(got, cleanSnap) {
+					t.Errorf("final snapshot diverged from clean run:\n got: %s\nwant: %s", got, cleanSnap)
+				}
 			})
 		}
+	}
+}
+
+// TestSlidingAggAtRegressionReplay covers the out-of-order At-regression the D2/D5 falling edge makes
+// newly reachable for the sliding kinds: a Resolved is emitted, then a bounded-late matching event
+// reopens a fresh window and stamps a Raised at an EARLIER event time than the Resolved. Both edges
+// are dedup-distinct and must survive every (checkpoint, crash) pair — the alarm object's monotonic
+// decision-time guard (not arrival order) is what orders them downstream.
+func TestSlidingAggAtRegressionReplay(t *testing.T) {
+	rules := []Rule{{ID: "r", Kind: SlidingAgg, Window: 10 * time.Second, Agg: AggSum, Op: GT, Thresh: 100}}
+	steps := []step{
+		evValStep(1, "r", "d", 10, 150), // match -> raise@10 (sum 150 > 100)
+		evStep(2, "r", "d", 22, false),  // non-match ages the window out -> resolve@22
+		evValStep(3, "r", "d", 15, 150), // bounded-late match@15 (< 22) reopens window -> raise@15
+	}
+	want := dedup(runClean(rules, steps))
+	n := len(steps)
+	for checkpoint := 0; checkpoint < n; checkpoint++ {
+		for crash := checkpoint; crash < n; crash++ {
+			e := NewEngine(rules, 30*time.Second) // lateness admits the out-of-order match@15
+			var all []Detection
+			var snap []byte
+			for idx := 0; idx <= crash; idx++ {
+				applyStep(e, steps[idx])
+				all = append(all, e.Drain()...)
+				if idx == checkpoint {
+					b, err := e.Snapshot()
+					if err != nil {
+						t.Fatalf("snapshot: %v", err)
+					}
+					snap = b
+				}
+			}
+			e, err := Restore(rules, 30*time.Second, snap)
+			if err != nil {
+				t.Fatalf("restore: %v", err)
+			}
+			for idx := checkpoint + 1; idx < n; idx++ {
+				applyStep(e, steps[idx])
+				all = append(all, e.Drain()...)
+			}
+			assertSetEqual(t, want, dedup(all))
+		}
+	}
+	// Sanity: the clean run really does produce the At-regression (raise@15 after resolve@22).
+	got := runClean(rules, steps)
+	var sawResolve22, sawRaise15After bool
+	for _, d := range got {
+		if d.Edge == EdgeResolved && d.At.Equal(at(22)) {
+			sawResolve22 = true
+		}
+		if d.Edge == EdgeRaised && d.At.Equal(at(15)) && sawResolve22 {
+			sawRaise15After = true
+		}
+	}
+	if !sawRaise15After {
+		t.Fatalf("expected a raise@15 emitted AFTER resolve@22 (the At-regression): %+v", got)
 	}
 }
 
