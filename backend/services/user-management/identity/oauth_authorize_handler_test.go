@@ -207,6 +207,44 @@ func TestAuthorize_ConsentAllowRedirectsCode(t *testing.T) {
 	}
 }
 
+// A consent POST whose (attacker-tampered) tenant the subject cannot access must
+// fail closed: IssueAuthorizationCode denies it → access_denied redirect, never a
+// code. This locks the invariant at the handler layer.
+func TestAuthorize_ConsentTenantTamperFailsClosed(t *testing.T) {
+	svc := &fakeAuthorizeSvc{client: validClient(), email: "a@b.c", codeErr: errTenantAccessDenied}
+	form := validParams()
+	form.Set("step", "consent")
+	form.Set("action", "allow")
+	form.Set("identity_token", "id-tok")
+	form.Set("tenant", "a-tenant-the-user-cannot-access")
+	rec := postAuthorize(svc, form)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	loc, _ := url.Parse(rec.Header().Get("Location"))
+	if loc.Query().Has("code") {
+		t.Errorf("a code must NOT be issued for an inaccessible tenant")
+	}
+	if loc.Query().Get("error") != "access_denied" {
+		t.Errorf("error = %q, want access_denied", loc.Query().Get("error"))
+	}
+}
+
+// The rendered pages carry a live identity token + reflect an auth code, so they
+// must be non-cacheable and framing-denied.
+func TestAuthorize_PagesAreNonCacheable(t *testing.T) {
+	rec := getAuthorize(&fakeAuthorizeSvc{client: validClient()}, validParams())
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+	if xfo := rec.Header().Get("X-Frame-Options"); xfo != "DENY" {
+		t.Errorf("X-Frame-Options = %q, want DENY", xfo)
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Errorf("CSP missing frame-ancestors: %q", csp)
+	}
+}
+
 // A bad/expired identity token on consent renders an error page (does not redirect
 // with a code).
 func TestAuthorize_ConsentBadIdentityToken(t *testing.T) {

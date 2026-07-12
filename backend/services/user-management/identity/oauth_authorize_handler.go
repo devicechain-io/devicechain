@@ -188,8 +188,24 @@ type authorizeConsentData struct {
 	Scopes        []string
 }
 
+// authorizePageHeaders sets the security headers every authorize page needs. The
+// consent page embeds a live identity-tier token (and the flow reflects an
+// authorization code), so the pages MUST NOT be cached anywhere (no-store) — the
+// same rule the token endpoint follows. Framing is denied (clickjacking on a login
+// page is the textbook UI-redress target) and a tight CSP limits the blast radius
+// of any future injection (the pages are fully self-contained: inline style, form
+// posts to self, no scripts or external assets).
+func authorizePageHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Set("Pragma", "no-cache")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+}
+
 func renderAuthorizeLogin(w http.ResponseWriter, p AuthorizeParams, errMsg string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	authorizePageHeaders(w)
 	_ = authorizeLoginTmpl.Execute(w, authorizeFormData{Params: p, Error: errMsg})
 }
 
@@ -198,7 +214,7 @@ func renderAuthorizeConsent(w http.ResponseWriter, p AuthorizeParams, client *ia
 	if client.Name.Valid && client.Name.String != "" {
 		name = client.Name.String
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	authorizePageHeaders(w)
 	_ = authorizeConsentTmpl.Execute(w, authorizeConsentData{
 		Params:        p,
 		ClientName:    name,
@@ -210,7 +226,7 @@ func renderAuthorizeConsent(w http.ResponseWriter, p AuthorizeParams, client *ia
 }
 
 func renderAuthorizeError(w http.ResponseWriter, status int, title, msg string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	authorizePageHeaders(w)
 	w.WriteHeader(status)
 	_ = authorizeErrorTmpl.Execute(w, map[string]string{"Title": title, "Message": msg})
 }
