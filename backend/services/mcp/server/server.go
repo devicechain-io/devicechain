@@ -67,11 +67,11 @@ func registerTools(s *mcp.Server, t *Tools) {
 	}, t.ListDevices)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_device",
-		Description: "Look up one or more devices by token. Returns each device's token, name, description, external id, and device-type token.",
+		Description: "Look up one or more devices by token. Returns each device's token, name, description, external id, and device-type token. Unknown tokens are simply omitted from the result (not an error), so compare the returned tokens against the ones requested.",
 	}, t.GetDevice)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_device_state",
-		Description: "Read the live last-known connectivity state of one or more devices by token: whether active, last connect/disconnect/activity times, and the inactivity timeout.",
+		Description: "Read the live last-known connectivity state of one or more devices by token: whether active, last connect/disconnect/activity times (RFC3339), and the inactivity timeout in seconds. A device with no state yet (never reported) is omitted from the result.",
 	}, t.GetDeviceState)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_latest_measurements",
@@ -79,7 +79,7 @@ func registerTools(s *mcp.Server, t *Tools) {
 	}, t.GetLatestMeasurements)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_device_capabilities",
-		Description: "Report what a device can measure and be commanded to do: the metric definitions (key, name, unit, data type) and command definitions (key, name) its profile declares, plus the active published profile version.",
+		Description: "Report the metric and command definitions declared on a device's profile — its DRAFT definitions (key, name, unit/data type). These are the editable working copy; a device resolves the active PUBLISHED profile version, which may differ from these drafts. `activeVersion` is the published version the device currently resolves; when it is null the profile has never been published, so the device currently resolves NONE of these capabilities. Do not assume a listed capability is active unless activeVersion is set.",
 	}, t.GetDeviceCapabilities)
 }
 

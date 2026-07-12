@@ -117,3 +117,28 @@ func TestGetDeviceCapabilities_NotFound(t *testing.T) {
 		t.Errorf("a missing device should error")
 	}
 }
+
+// A device whose type has adopted no profile returns empty (non-nil) capability
+// lists and no active version — never a nil-deref.
+func TestGetDeviceCapabilities_NoProfile(t *testing.T) {
+	tools, done := toolsAgainst(t, `{"data":{"devicesByToken":[{"token":"d1","deviceType":{"token":"truck","profile":null}}]}}`)
+	defer done()
+	_, out, err := tools.GetDeviceCapabilities(context.Background(), authedReq("tok"), GetDeviceCapabilitiesInput{DeviceToken: "d1"})
+	if err != nil {
+		t.Fatalf("GetDeviceCapabilities: %v", err)
+	}
+	if out.Profile != "" || out.ActiveVersion != nil {
+		t.Errorf("no-profile device should have empty profile/version: %+v", out)
+	}
+	if out.Metrics == nil || out.Commands == nil || len(out.Metrics) != 0 || len(out.Commands) != 0 {
+		t.Errorf("capabilities should be empty non-nil slices: %+v", out)
+	}
+}
+
+// A blank token in a multi-token input is rejected before any downstream call.
+func TestGetDevice_RejectsBlankToken(t *testing.T) {
+	tools := NewTools(NewGraphQLClient())
+	if _, _, err := tools.GetDevice(context.Background(), authedReq("tok"), GetDeviceInput{Tokens: []string{"ok", ""}}); err == nil {
+		t.Errorf("a blank token should be rejected")
+	}
+}

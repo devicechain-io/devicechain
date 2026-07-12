@@ -188,10 +188,14 @@ const deviceCapabilitiesQuery = `query DeviceCapabilities($tokens: [String!]!) {
   }
 }`
 
-// GetDeviceCapabilities reports the metric and command definitions a device's
-// profile declares — what it can measure and be commanded to do. These are the
-// profile's definitions (the metric/command keys are stable across versions);
-// activeVersion is the published version a device currently resolves.
+// GetDeviceCapabilities reports the metric and command definitions declared on a
+// device's profile. These are the profile's DRAFT definitions (the editable
+// working copy — GraphQL does not expose the published snapshot's definitions), so
+// they may differ from what the device actually resolves: a device resolves the
+// active PUBLISHED version. activeVersion is that published version, or null when
+// the profile has never been published — in which case the device currently
+// resolves none of these capabilities. The tool description states this so the
+// caller (an LLM) does not treat a draft definition as an active capability.
 func (t *Tools) GetDeviceCapabilities(ctx context.Context, req *mcp.CallToolRequest, in GetDeviceCapabilitiesInput) (*mcp.CallToolResult, GetDeviceCapabilitiesOutput, error) {
 	token, _, err := callerToken(req)
 	if err != nil {
@@ -241,13 +245,19 @@ func (t *Tools) GetDeviceCapabilities(ctx context.Context, req *mcp.CallToolRequ
 	return nil, out, nil
 }
 
-// requireTokens validates a multi-token input: non-empty and within the fan-out cap.
+// requireTokens validates a multi-token input: non-empty, within the fan-out cap,
+// and with no blank entries (a blank token would only burn a downstream query).
 func requireTokens(tokens []string) error {
 	if len(tokens) == 0 {
 		return fmt.Errorf("at least one token is required")
 	}
 	if len(tokens) > maxTokens {
 		return fmt.Errorf("too many tokens (max %d)", maxTokens)
+	}
+	for _, tok := range tokens {
+		if tok == "" {
+			return fmt.Errorf("token must not be empty")
+		}
 	}
 	return nil
 }
