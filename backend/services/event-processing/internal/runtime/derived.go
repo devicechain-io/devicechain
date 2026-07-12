@@ -130,12 +130,17 @@ func NewPublisher(writer messaging.MessageWriter, reg *RuleRegistry, metrics Met
 // failure) returns nil: it is intentional and must not wedge the checkpoint loop.
 func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
 	// ADR-057 two-edge model, staged rollout: the DETECT core now emits a Resolved detection on
-	// every falling edge, but the DerivedEvent wire, the ADR-037 subscriber contract, and the
-	// clearAlarm REACT action that consume it land in slice 6d-pre-2. Until then a Resolved carries
-	// no edge marker on the wire and would read as a duplicate Raised to a subscriber, so it is
-	// dropped HERE as a delivered no-op: the raised-latch state change is still checkpointed (the
-	// message loop marks dirty on the sequence advance), and the published stream stays exactly the
-	// Raised-only stream shipped today. Removing this guard is the first step of 6d-pre-2.
+	// every falling edge, but the DerivedEvent wire has no Edge field yet and the ADR-037 subscriber
+	// contract + the clearAlarm REACT action that consume it land in slice 6d-pre-2. Until then a
+	// Resolved carries no edge marker on the wire and would read as a duplicate Raised to a
+	// subscriber, so it is dropped HERE as a delivered no-op (the raised-latch state change is still
+	// checkpointed — the message loop marks dirty on the sequence advance). Only Raised edges are
+	// published. NOTE this is NOT a byte-identical no-op: the two-edge latch also changes the RAISED
+	// cadence this slice — a rule now raises ONCE on the rising edge instead of on every matching
+	// sample/window (Threshold per-sample, Duration per-hold, Aggregate per-window re-fires are all
+	// gone). That is a deliberate ADR-057 change and it reaches the LIVE send-command REACT path
+	// (slice 5b): a send-command now dispatches once per breach, not once per sample. Removing this
+	// guard + adding Edge to the wire is the first step of 6d-pre-2.
 	if det.Edge != core.EdgeRaised {
 		return nil
 	}

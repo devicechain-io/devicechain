@@ -182,15 +182,16 @@ func (e *Engine) applySlidingAgg(ev Event, r Rule) {
 		e.slides[ev.Key] = st
 	}
 	st.evict(ev.Time.Add(-r.Window))
-	// Resolve off the post-eviction window BEFORE folding in the new sample: the aggregate can
-	// fall back to un-satisfied purely by samples aging out during a quiet gap (no low sample ever
-	// arrives), so this emits the falling edge (ADR-057) for a breach that ended by expiry and lets
-	// the next breach be a fresh crossing. Mirrors applyRepeating computing its count after eviction.
-	if !st.satisfies(r) {
-		e.resolve(r, ev.Key, ev.Time)
-	}
 	st.insert(sample{t: ev.Time, v: ev.Value})
-	// Rising edge raises (latched); still-or-newly unsatisfied resolves a prior raise.
+	// Evaluate the level ONCE, on the fully-updated trailing window (evicted + this sample folded
+	// in). The rising edge raises (latched); a window that no longer satisfies resolves a prior
+	// raise (ADR-057). Evaluating only the post-insert window is deliberate: a pre-insert check
+	// reads a phantom dip at exactly the moment the left-edge sample expires as the new one arrives
+	// — for a device reporting on a regular cadence that divides the window, that dip exists at no
+	// real instant and would clear-and-re-raise the alarm on EVERY sample (review D1). A breach that
+	// ends purely because the window emptied during a silent GAP is not observed until the next
+	// event, exactly like every other event-driven kind (see the package silence note) — the alarm
+	// stays raised across the gap rather than flapping.
 	if st.satisfies(r) {
 		e.emitValue(r, ev.Key, ev.Time, st.value(r.Agg))
 	} else {

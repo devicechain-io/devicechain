@@ -94,10 +94,15 @@ type Event struct {
 // measurement evaluator's clear-on-unsatisfied semantics (ADR-041 → ADR-057).
 //
 // The zero value is EdgeRaised, so every legacy fire site is a raise by default and only the
-// explicit resolve path stamps EdgeResolved. Edge is part of the detection's dedup identity
-// (it is not zeroed by the identity projection): a Raised and its later Resolved carry
-// distinct At times anyway, but keeping Edge in the key guarantees the two never collapse
-// into one another under a downstream at-least-once dedup.
+// explicit resolve path stamps EdgeResolved. Edge is part of the detection's dedup identity (it is
+// not zeroed by the identity projection), so a Raised and a Resolved that happen to share an At — a
+// single kind never emits both for one event, but a gap-driven falling edge can coincide with a
+// fresh rising edge at the same timestamp on ADJACENT events — never collapse into one another
+// under a downstream at-least-once dedup. Note that (rule, series, kind, At, edge) still cannot
+// distinguish two SEPARATE raise episodes at the identical timestamp (match/non-match/match all at
+// one At); that residual same-At-same-edge collapse is a documented 6d-pre-2 concern — the alarm
+// object's monotonic decision-time guard resolves it, and it requires multiple events at a byte-
+// identical event time, which real per-device telemetry does not produce.
 type EdgeKind uint8
 
 const (
@@ -114,6 +119,16 @@ const (
 // advance carries no reading to re-evaluate a level against, and a device that simply stops is the
 // Absence rule's job to catch, not a threshold's. Operators pair a level rule with an Absence rule
 // when "stopped reporting" must also clear (or escalate) the alarm.
+//
+// KNOWN GAP deferred to 6d-pre-2 (the resolve path is inert here — Resolved edges are dropped at
+// the publisher until then): the match-gated kinds — Repeating, SlidingAgg, Aggregate, CountWindow,
+// Correlation — return before their eviction/resolve logic on a NON-matching event (applyRepeating
+// et al. `if !ev.Match { return }`), so a rule whose `when` leaf FILTERS samples (e.g. count of
+// readings where mode==heating) can stay raised even while the device actively reports non-matching
+// values, resolving only on a future matching event. Threshold/DeltaRate already resolve on a
+// non-match. Closing this — running eviction + the falling-edge check on non-matching gate-metric
+// events — is 6d-pre-2 work, built and swept together with the alarm-object integrator that makes
+// the Resolved edge live (reviews D2/D5). A match-every-leaf rule (the common case) is unaffected.
 
 // Detection is an emitted signal. Its identity (RuleID, Series, Kind, At, Edge) is stable and
 // deterministic, so at-least-once re-emission across a restart is dedup-collapsible
@@ -136,7 +151,7 @@ type Detection struct {
 	// delta/rate for DeltaRate, and the window/session aggregate for CountWindow/SlidingAgg/Aggregate/
 	// Session. It is an informational payload the raise-alarm REACT action stamps on the alarm (so a
 	// re-raise carries the real triggering value, not a zero), NOT part of the dedup identity above —
-	// a downstream at-least-once collapse keys only on (RuleID, Series, Kind, At). HasValue
+	// a downstream at-least-once collapse keys only on (RuleID, Series, Kind, At, Edge). HasValue
 	// distinguishes "value is 0.0" from "no value": timer-driven silence fires (Absence, Duration),
 	// Correlation, and a metric-less Threshold/Repeating leaf (a raw-CEL gate that reads no single
 	// sample) all carry none (HasValue=false).
@@ -163,8 +178,13 @@ type Engine struct {
 	slides   map[SeriesKey]*slidingState    // SlidingAgg: trailing sliding-window state per series
 	corr     map[SeriesKey]map[string]int64 // Correlation: anchor → member → last unix-nanos seen
 	expected map[SeriesKey]expectedState    // Absence: dead-man arming for never-seen devices (ADR-051 slice 4c-2b)
-	raised   map[SeriesKey]bool             // ADR-057 two-edge latch: series currently in the satisfied (alarming) state
-	out      []Detection
+	// raised is the ADR-057 two-edge latch: a series currently in its satisfied (alarming) state,
+	// mapped to the EVENT TIME of its rising edge. The time is what makes a falling edge reject a
+	// STALE out-of-order event: a non-matching/dipping reading older than the raise cannot resolve
+	// an alarm the latest reading still supports (review D3/F2). It is snapshotted, so the level and
+	// its origin survive a restart.
+	raised map[SeriesKey]time.Time
+	out    []Detection
 }
 
 // expectedState is the dead-man arming record for one rostered device under one Absence rule
@@ -207,7 +227,7 @@ func NewEngine(rules []Rule, allowedLateness time.Duration) *Engine {
 		slides:   map[SeriesKey]*slidingState{},
 		corr:     map[SeriesKey]map[string]int64{},
 		expected: map[SeriesKey]expectedState{},
-		raised:   map[SeriesKey]bool{},
+		raised:   map[SeriesKey]time.Time{},
 	}
 }
 
@@ -374,6 +394,17 @@ func (e *Engine) SetExpected(key SeriesKey, since time.Time) {
 func (e *Engine) RemoveExpected(key SeriesKey) {
 	delete(e.expected, key)
 	e.wheel.cancel(key)
+	// A device leaving an absence rule's scope ends any absence currently raised for it: resolve so
+	// the latch clears (review H1/D6). Clearing is what matters for correctness — otherwise a reused/
+	// re-created token under the same rule id inherits the dead incarnation's latch and its dead-man
+	// raise is suppressed forever. A resolve (rather than a bare delete) also hands 6d-pre-2's alarm
+	// object the clear; it is stamped at the watermark, since a control-plane departure has no event
+	// time. If the rule is gone (a stale expected entry restored for a removed rule), clear directly.
+	if r, ok := e.rules[key.Rule]; ok {
+		e.resolve(r, key, e.wm.now)
+	} else {
+		delete(e.raised, key)
+	}
 }
 
 // ExpectedKeys returns every series currently dead-man-armed (fired or not), so the runtime's
@@ -543,7 +574,9 @@ func (e *Engine) apply(ev Event) {
 			// Open a matched run and arm one hold timer — but only while NOT already raised: once
 			// the hold elapses and raises the alarm (fire), further matches sustain it with no
 			// re-arm and no re-fire (the raised latch holds the alarm until the run breaks).
-			if _, held := e.active[ev.Key]; !held && !e.raised[ev.Key] {
+			_, held := e.active[ev.Key]
+			_, alreadyRaised := e.raised[ev.Key]
+			if !held && !alreadyRaised {
 				e.active[ev.Key] = ev.Time
 				e.wheel.schedule(ev.Key, ev.Time.Add(r.Hold))
 			}
@@ -622,20 +655,20 @@ func (e *Engine) fire(key SeriesKey, deadline time.Time) {
 // a sustained breach is one alarm, not a flood. The falling edge (resolve) emits the matching
 // Resolved.
 func (e *Engine) emit(r Rule, key SeriesKey, at time.Time) {
-	if e.raised[key] {
+	if _, ok := e.raised[key]; ok {
 		return
 	}
-	e.raised[key] = true
+	e.raised[key] = at
 	e.out = append(e.out, Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at})
 }
 
 // emitValue raises a detection carrying a COMPUTED scalar the fire is about (the delta/rate, or a
 // window/session aggregate) — always present, so HasValue is true. Latched exactly like emit.
 func (e *Engine) emitValue(r Rule, key SeriesKey, at time.Time, value float64) {
-	if e.raised[key] {
+	if _, ok := e.raised[key]; ok {
 		return
 	}
-	e.raised[key] = true
+	e.raised[key] = at
 	e.out = append(e.out, Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at, Value: value, HasValue: true})
 }
 
@@ -643,12 +676,23 @@ func (e *Engine) emitValue(r Rule, key SeriesKey, at time.Time, value float64) {
 // Repeating). It propagates the event's HasValue, so a metric-less raw-CEL leaf (which reads no
 // sample) carries no value rather than a fabricated 0 — the distinction a raiseAlarm action needs
 // to avoid stamping a fake last value. Latched exactly like emit.
+//
+// A non-finite sample value is neutralized to no-value (HasValue=false): a NaN/±Inf reading that
+// somehow matched the gate must never reach the detection, because the runtime publisher marshals
+// Value to JSON and a non-finite float fails to marshal — a TERMINAL publish drop that, with the
+// latch already set, would suppress every later raise for this series (review F5/H2). CEL numeric
+// comparisons are false for NaN so a structured threshold cannot match one; this guards the raw-CEL
+// gate that could match on another field while the value metric is non-finite.
 func (e *Engine) emitSample(r Rule, ev Event) {
-	if e.raised[ev.Key] {
+	if _, ok := e.raised[ev.Key]; ok {
 		return
 	}
-	e.raised[ev.Key] = true
-	e.out = append(e.out, Detection{RuleID: r.ID, Series: ev.Key.Series, Kind: r.Kind, At: ev.Time, Value: ev.Value, HasValue: ev.HasValue})
+	e.raised[ev.Key] = ev.Time
+	value, hasValue := ev.Value, ev.HasValue
+	if hasValue && (math.IsNaN(value) || math.IsInf(value, 0)) {
+		value, hasValue = 0, false
+	}
+	e.out = append(e.out, Detection{RuleID: r.ID, Series: ev.Key.Series, Kind: r.Kind, At: ev.Time, Value: value, HasValue: hasValue})
 }
 
 // resolve emits a Resolved detection (ADR-057 falling edge) for a series that is currently raised,
@@ -657,13 +701,29 @@ func (e *Engine) emitSample(r Rule, ev Event) {
 // two edges balanced (never a resolve without a preceding raise, never two in a row). A Resolved
 // carries no value: it reports that the condition ceased, not a reading. It is stamped at the
 // event time (or elapsed deadline) the falling edge was observed.
+//
+// It IGNORES a STALE falling edge — one whose event time precedes the rising edge it would clear
+// (review D3/F2). Under bounded lateness an out-of-order older reading can arrive after a newer one
+// raised the alarm; that older reading is not evidence the condition ended (the latest reading
+// still supports it), so resolving on it would spuriously clear-then-re-raise. Every value-folding
+// kind already rejects stale samples (DeltaRate, Correlation) or schedules forward-only (Absence,
+// Session); this extends the same discipline to the level kinds' falling edges.
 func (e *Engine) resolve(r Rule, key SeriesKey, at time.Time) {
-	if !e.raised[key] {
+	raisedAt, ok := e.raised[key]
+	if !ok || at.Before(raisedAt) {
 		return
 	}
 	delete(e.raised, key)
 	e.out = append(e.out, Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at, Edge: EdgeResolved})
 }
+
+// ClearRaised drops the two-edge latch for a series WITHOUT emitting a Resolved — the escape hatch
+// for the runtime when it TERMINALLY drops a Raised detection (a stale-roster absence, an orphan/
+// backstop reject, a marshal failure) after emit already latched it. Without it the latch would
+// suppress every later raise for the series even though downstream never saw the first (review
+// H2/F5). Emitting no Resolved is correct: downstream never observed a Raise, so it is owed no
+// Resolve. Called on the single-writer loop.
+func (e *Engine) ClearRaised(key SeriesKey) { delete(e.raised, key) }
 
 // --- snapshot / restore (atomic-with-sequence in the real store; bytes here) ---
 
@@ -680,13 +740,14 @@ type snapExpected struct {
 	Done   bool      `json:"done"`
 }
 
-// snapRaised persists one entry of the ADR-057 two-edge latch: a (rule, series) currently in
-// its raised (alarming) state. Without it a restart would lose the level and re-raise an
-// already-active alarm (a duplicate Raised, never balanced by the Resolved the original raise
-// still owes), breaking the balanced-edge contract the alarm object integrates.
+// snapRaised persists one entry of the ADR-057 two-edge latch: a (rule, series) currently in its
+// raised (alarming) state, with the event time of its rising edge. Without it a restart would lose
+// the level and re-raise an already-active alarm (a duplicate Raised, never balanced by the Resolved
+// the original raise still owes); losing the At would also disarm the stale-falling-edge guard.
 type snapRaised struct {
-	Rule   string `json:"rule"`
-	Series string `json:"series"`
+	Rule   string    `json:"rule"`
+	Series string    `json:"series"`
+	At     time.Time `json:"at"`
 }
 
 type snapshot struct {
@@ -739,8 +800,8 @@ func (e *Engine) Snapshot() ([]byte, error) {
 		return expected[i].Series < expected[j].Series
 	})
 	raised := make([]snapRaised, 0, len(e.raised))
-	for k := range e.raised {
-		raised = append(raised, snapRaised{Rule: k.Rule, Series: k.Series})
+	for k, at := range e.raised {
+		raised = append(raised, snapRaised{Rule: k.Rule, Series: k.Series, At: at})
 	}
 	sort.Slice(raised, func(i, j int) bool {
 		if raised[i].Rule != raised[j].Rule {
@@ -791,7 +852,7 @@ func Restore(rules []Rule, allowedLateness time.Duration, data []byte) (*Engine,
 		e.expected[SeriesKey{Rule: x.Rule, Series: x.Series}] = expectedState{since: x.Since, done: x.Done}
 	}
 	for _, x := range s.Raised {
-		e.raised[SeriesKey{Rule: x.Rule, Series: x.Series}] = true
+		e.raised[SeriesKey{Rule: x.Rule, Series: x.Series}] = x.At
 	}
 	return e, nil
 }

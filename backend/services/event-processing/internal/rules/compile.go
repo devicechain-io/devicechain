@@ -61,12 +61,14 @@ func (l Limits) withDefaults() Limits {
 //
 // THE METRIC-SCOPED FEED CONTRACT (the runtime, slice 4, MUST honor this). Match is
 // binary, but "condition false" and "condition not measurable" are different facts, and
-// exactly one kind — Duration — acts on false (a non-matching event CANCELS the running
-// hold, engine.go). So a Duration/Threshold/Repeating rule keyed on a metric must be fed
+// TWO kinds now act on false: Duration (a non-matching event CANCELS the running hold) and,
+// since ADR-057's two-edge model, Threshold (a non-matching event RESOLVES the raised alarm —
+// engine.go apply). So a Duration/Threshold/Repeating rule keyed on a metric must be fed
 // ONLY events that carry that metric; otherwise a device interleaving other telemetry
 // (a battery reading between temperature readings) evaluates the leaf to false and, for
-// Duration, resets the hold forever. The compiler surfaces the relevance metric so the
-// runtime can scope the feed without re-parsing:
+// Duration, resets the hold forever — and for Threshold, spuriously resolves the alarm
+// (review D4). The compiler surfaces the relevance metric so the runtime can scope the feed
+// without re-parsing:
 //
 //   - GateMetric set  → feed only events carrying GateMetric (structured threshold/
 //     duration/repeating). The presence guard in the predicate is defense-in-depth.
@@ -75,14 +77,17 @@ func (l Limits) withDefaults() Limits {
 //   - both empty      → feed every in-scope event. Absence is deliberately here (every
 //     event is a heartbeat, device-scoped not metric-scoped); so are match-every leaves,
 //     count aggregates, and correlation. A RAW-CEL leaf is also here, and a raw-CEL DURATION
-//     rule on a mixed-telemetry device is a genuine trap: there is no expressible total leaf
-//     that metric-scopes it. A presence-guarded leaf (`"m" in metrics && …`) evaluates to a
-//     clean FALSE on an off-metric event — which for Duration CANCELS the hold. An unguarded
-//     leaf ERRORS on the missing key, and the runtime treats an eval error as a SKIP (no
-//     event, hold preserved) — so the "sloppy" leaf accidentally behaves while spamming the
-//     eval-error counter. Neither is a metric scope. A structured leaf (which gets GateMetric)
-//     is the only correct way to metric-scope a Duration rule; the publish gate should steer
-//     authors off raw-CEL Duration (slice 7/console).
+//     or THRESHOLD rule on a mixed-telemetry device is a genuine trap: there is no expressible
+//     total leaf that metric-scopes it. A presence-guarded leaf (`"m" in metrics && …`)
+//     evaluates to a clean FALSE on an off-metric event — which for Duration CANCELS the hold
+//     and for Threshold RESOLVES the alarm (ADR-057), so off-metric telemetry spuriously clears
+//     it. An unguarded leaf ERRORS on the missing key, and the runtime treats an eval error as a
+//     SKIP (no event, hold/level preserved) — so the "sloppy" leaf accidentally behaves while
+//     spamming the eval-error counter. Neither is a metric scope. A structured leaf (which gets
+//     GateMetric) is the only correct way to metric-scope a Duration OR Threshold rule; the
+//     publish gate should steer authors off raw-CEL Duration and Threshold (slice 7/console).
+//     A cleaner future fix distinguishes false-vs-inapplicable so a raw-CEL leaf need not resolve
+//     on off-metric events (6d-pre-2, review D4).
 type CompiledRule struct {
 	ID   string
 	Type RuleType

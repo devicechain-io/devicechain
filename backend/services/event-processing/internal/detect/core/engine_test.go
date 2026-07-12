@@ -124,9 +124,12 @@ func scenario() ([]Rule, []step) {
 		evStep(46, "rAbs2", "dev10", 148, true), // LATE heartbeat: forward-only keeps deadline 160
 		advStep(159),                            // wm=159: 160 > 159 -> NO fire
 		advStep(165),                            // wm=165: FIRE absence dev10 @160
-		// SlidingAgg re-arm across a SILENT gap: the window empties by time alone (no low sample),
-		// so the next breach must be a fresh crossing, not a swallowed one.
-		evValStep(47, "rSlide", "dev9", 200, 170), // cutoff 190 evicts all -> re-arm -> FIRE slide @200
+		// SlidingAgg across a SILENT gap (ADR-057 two-edge): dev9 was raised at 114 and never
+		// resolved; the window emptied by time alone during the 114->200 gap, but that lapse is
+		// unobserved (no event to re-evaluate it — see the package silence note), so the alarm stays
+		// raised and 200's fresh breach emits NOTHING. Contrast the pre-two-edge engine, which
+		// re-armed on the silent gap and re-fired here.
+		evValStep(47, "rSlide", "dev9", 200, 170), // still raised from 114 -> no emission
 		// SlidingAgg over a fractional SUM with eviction residue: exercises verbatim-sum restore.
 		evValStep(48, "rSlideSum", "dev11", 210, 0.4), // sum 0.4, no
 		evValStep(49, "rSlideSum", "dev11", 211, 0.4), // sum 0.8, no
@@ -159,7 +162,6 @@ func expected() map[Detection]bool {
 		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, At: at(114)}:     true,
 		{RuleID: "rCorr", Series: "area1", Kind: Correlation, At: at(122)}:    true,
 		{RuleID: "rAbs2", Series: "dev10", Kind: Absence, At: at(160)}:        true,
-		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, At: at(200)}:     true,
 		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, At: at(212)}: true,
 		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, At: at(222)}: true,
 
@@ -172,7 +174,6 @@ func expected() map[Detection]bool {
 		{RuleID: "rCount", Series: "dev7", Kind: CountWindow, Edge: EdgeResolved, At: at(85)}:     true, // next 3-event window sums 3, unsatisfied
 		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, Edge: EdgeResolved, At: at(113)}:     true, // max fell to 95 as 100,101 evicted
 		{RuleID: "rCorr", Series: "area1", Kind: Correlation, Edge: EdgeResolved, At: at(135)}:    true, // cohort dispersed to 1 distinct
-		{RuleID: "rSlide", Series: "dev9", Kind: SlidingAgg, Edge: EdgeResolved, At: at(200)}:     true, // silent gap emptied the window before 200's fresh breach
 		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, Edge: EdgeResolved, At: at(220)}: true, // sum fell to 0.4 as 210-212 evicted
 	}
 }
