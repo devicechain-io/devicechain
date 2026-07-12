@@ -321,6 +321,10 @@ export function DetectionRuleForm({
 
   const definitionName = name.trim() || token.trim();
   const hasRaiseAlarm = !actionsForbidden(ruleType) && actions.some((a) => a.type === 'raiseAlarm');
+  // A stored definition the form can't parse (hand-/API-authored into a shape it doesn't
+  // model) opens as a blank threshold; warn that saving replaces it rather than silently
+  // clobbering the original (Fable L2).
+  const unparseable = editing && initial == null;
 
   // Client-side guard for the obvious omissions, so the button hints before the publish
   // gate (or the coming inline validator) rejects. The compiler remains authoritative.
@@ -410,6 +414,12 @@ export function DetectionRuleForm({
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+      {unparseable && (
+        <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+          This rule's stored definition could not be read into the form. It has been reset to a blank
+          threshold rule — saving will replace the original definition.
+        </p>
+      )}
 
       <FormField label="Name" htmlFor="dr-name" description="A human name for the rule.">
         <Input id="dr-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Overheating" />
@@ -442,7 +452,14 @@ export function DetectionRuleForm({
           <Combobox
             id="dr-type"
             value={ruleType}
-            onChange={(v) => setRuleType(v as RuleType)}
+            onChange={(v) => {
+              const t = v as RuleType;
+              setRuleType(t);
+              // A required-leaf type has no "match every event" mode; if the previous type
+              // left the condition at 'none', coerce it back to structured so the editor
+              // reappears (otherwise the leaf silently stays empty — Fable H1).
+              if (conditionRequired(t) && condMode === 'none') setCondMode('structured');
+            }}
             options={RULE_TYPES}
             allowClear={false}
           />
@@ -832,8 +849,11 @@ function numOrZero(s: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 function intOrZero(s: string): number {
-  const n = parseInt(s, 10);
-  return Number.isFinite(n) ? n : 0;
+  // Number (not parseInt) so this agrees with the hint's isPosInt check: parseInt("1e2")
+  // is 1 but Number("1e2") is 100 — a mismatch would let the hint pass a value the emit
+  // then corrupts (Fable L1). A non-integer is caught by the hint before it reaches here.
+  const n = Number(s);
+  return Number.isInteger(n) ? n : 0;
 }
 
 // ── Parsing: existing rules.Rule JSON → form state (best-effort, for edit) ──
@@ -970,15 +990,23 @@ interface HintArgs {
 // publish (structure, CEL type/cost, injection). It deliberately mirrors only the cheap,
 // unambiguous required-field rules from compile.go.
 function validationHint(a: HintArgs): string | null {
+  // A non-empty, non-negative integer / finite number, matching what the emit (intOrZero /
+  // numOrZero) will faithfully serialize — so the hint never passes a value the emit corrupts.
+  const posInt = (s: string) => Number.isInteger(Number(s)) && Number(s) > 0;
+  const finite = (s: string) => s.trim() !== '' && Number.isFinite(Number(s));
+
   if (!a.editing && !a.token.trim()) return 'A token is required.';
   if (!a.definitionName) return 'A name is required.';
 
   // Condition. Absence forbids a leaf entirely; for every other type a chosen structured or
-  // CEL condition must be complete (a blank structured gate would emit malformed CEL).
+  // CEL condition must be complete. A required-leaf type (threshold/duration) has no
+  // "match every event" mode — so 'none' there is a missing condition, not a valid choice
+  // (Fable H1: a type switch could leave the mode at 'none' with the editor hidden).
   if (!conditionForbidden(a.ruleType)) {
+    if (conditionRequired(a.ruleType) && a.condMode === 'none') return 'This rule type requires a condition.';
     if (a.condMode === 'structured') {
       if (!a.condMetric.trim()) return 'The condition needs a metric.';
-      if (a.boundKind === 'literal' && a.condThreshold.trim() === '') return 'The condition needs a threshold value.';
+      if (a.boundKind === 'literal' && !finite(a.condThreshold)) return 'The condition needs a numeric threshold value.';
       if (a.boundKind === 'attr' && !a.condAttr.trim()) return 'The condition needs a threshold attribute.';
     }
     if (a.condMode === 'cel' && !a.cel.trim()) return 'The CEL expression is empty.';
@@ -992,32 +1020,37 @@ function validationHint(a: HintArgs): string | null {
       if (!a.timeoutStr.trim()) return 'Absence needs a silence window.';
       break;
     case 'repeating':
-      if (!a.countStr.trim()) return 'Repeating needs an occurrence count.';
+      if (!posInt(a.countStr)) return 'Repeating needs a positive occurrence count.';
       if (!a.windowStr.trim()) return 'Repeating needs a window.';
       break;
     case 'deltaRate':
       if (!a.valueMetric.trim()) return 'Rate-of-change needs a value metric.';
-      if (a.aggThreshold.trim() === '') return 'Rate-of-change needs a threshold.';
+      if (!finite(a.aggThreshold)) return 'Rate-of-change needs a numeric threshold.';
       break;
     case 'aggregate':
       if (a.aggFunc !== 'count' && !a.valueMetric.trim()) return 'This aggregate needs a value metric.';
-      if (a.aggThreshold.trim() === '') return 'The aggregate needs a threshold.';
+      if (!finite(a.aggThreshold)) return 'The aggregate needs a numeric threshold.';
       if ((a.windowMode === 'tumbling' || a.windowMode === 'sliding') && !a.windowStr.trim())
         return 'The aggregate needs a window.';
       if (a.windowMode === 'session' && !a.gapStr.trim()) return 'A session aggregate needs a gap.';
-      if (a.windowMode === 'count' && !a.countStr.trim()) return 'A count-window aggregate needs a count.';
+      if (a.windowMode === 'count' && !posInt(a.countStr)) return 'A count-window aggregate needs a positive count.';
       break;
     case 'correlation':
       if (!a.anchorType.trim()) return 'Correlation needs an anchor type.';
-      if (!a.countStr.trim()) return 'Correlation needs a distinct-device count.';
+      if (!posInt(a.countStr)) return 'Correlation needs a positive distinct-device count.';
       if (!a.windowStr.trim()) return 'Correlation needs a window.';
       break;
   }
 
-  // A raiseAlarm action requires a severity tier.
-  if (a.hasRaiseAlarm && !a.severity) return 'A raise-alarm action requires a severity.';
-  for (const act of a.actions) {
-    if (act.type === 'sendCommand' && !act.command.trim()) return 'A send-command action needs a command.';
+  // Actions are neither emitted nor rendered for correlation, so don't validate the stale
+  // rows a user may have left before switching to it (Fable M1 — an unremovable hidden row
+  // would otherwise block a valid rule).
+  if (!actionsForbidden(a.ruleType)) {
+    // A raiseAlarm action requires a severity tier.
+    if (a.hasRaiseAlarm && !a.severity) return 'A raise-alarm action requires a severity.';
+    for (const act of a.actions) {
+      if (act.type === 'sendCommand' && !act.command.trim()) return 'A send-command action needs a command.';
+    }
   }
   return null;
 }
