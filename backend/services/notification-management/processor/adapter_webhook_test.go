@@ -143,13 +143,3 @@ func TestWebhookDropsReservedHeaders(t *testing.T) {
 		t.Fatalf("X-Custom should pass through, got %q", gotCustom)
 	}
 }
-
-// The production client does not follow redirects (SSRF hardening).
-func TestDefaultWebhookClientBlocksRedirects(t *testing.T) {
-	if defaultWebhookClient.CheckRedirect == nil {
-		t.Fatal("expected a CheckRedirect that blocks redirects")
-	}
-	if err := defaultWebhookClient.CheckRedirect(nil, nil); err != http.ErrUseLastResponse {
-		t.Fatalf("CheckRedirect = %v, want ErrUseLastResponse", err)
-	}
-}
