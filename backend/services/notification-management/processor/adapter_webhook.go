@@ -4,15 +4,12 @@
 package processor
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
-	"strings"
 
+	"github.com/devicechain-io/dc-microservice/httpsink"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/rs/zerolog/log"
 )
@@ -21,11 +18,13 @@ import (
 // HTTP endpoint (ADR-017). A Slack incoming-webhook URL is one such endpoint — the
 // payload carries a "text" field, which is what Slack renders — so Slack rides this
 // adapter rather than a vendor SDK. The channel's Config holds the URL/method/headers;
-// the channel's Secret (optional) is an auth token added as a header.
+// the channel's Secret (optional) is an auth token added as a header. The outbound
+// hardening (no-redirect client, reserved-header dropping, response-body suppression)
+// lives in core/httpsink, shared with the ADR-060 connector sinks.
 type webhookAdapter struct {
-	// client is the HTTP client used for delivery; nil uses http.DefaultClient. It is
-	// a field so a test can inject a client pointed at an httptest server. The context
-	// deadline (not a client Timeout) bounds each request.
+	// client is the HTTP client used for delivery; nil uses httpsink.DefaultClient. It
+	// is a field so a test can inject a client pointed at an httptest server. The
+	// context deadline (not a client Timeout) bounds each request.
 	client *http.Client
 }
 
@@ -55,65 +54,30 @@ func (a *webhookAdapter) Deliver(ctx context.Context, channel *model.Notificatio
 	if err != nil {
 		return fmt.Errorf("webhook channel %q marshal payload: %w", channel.Token, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, cfg.Method, cfg.URL, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("webhook channel %q build request: %w", channel.Token, err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+
+	// Pre-filter reserved headers with a warning so a misconfigured channel is visible;
+	// httpsink.Send drops them again defensively, so the security invariant holds even
+	// if this warning path is ever removed.
+	headers := make(map[string]string, len(cfg.Headers))
 	for k, v := range cfg.Headers {
-		// Tenant-authored headers must not forge the auth or the internal tenant
-		// identity: drop Authorization (we set it from the channel secret) and any
-		// X-DC-* header (the internal service-to-service tenant/service headers), so a
-		// webhook cannot be pointed at an internal service with a spoofed identity.
-		if isReservedHeader(k) {
+		if httpsink.IsReservedHeader(k) {
 			log.Warn().Str("channel", channel.Token).Str("header", k).Msg("Ignoring reserved webhook header from config")
 			continue
 		}
-		req.Header.Set(k, v)
-	}
-	if secret != "" {
-		name, value := authHeader(cfg, secret)
-		req.Header.Set(name, value)
+		headers[k] = v
 	}
 
-	client := a.client
-	if client == nil {
-		client = defaultWebhookClient
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("webhook channel %q POST %s: %w", channel.Token, cfg.URL, err)
-	}
-	defer resp.Body.Close()
-	// Drain a bounded amount so the connection can be reused.
-	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// A hostile endpoint could reflect the Authorization header back in its
-		// response body, so never surface the body of a channel that carries a secret
-		// (it would leak the write-only secret into logs).
-		if secret != "" {
-			return fmt.Errorf("webhook channel %q returned %d", channel.Token, resp.StatusCode)
-		}
-		return fmt.Errorf("webhook channel %q returned %d: %s", channel.Token, resp.StatusCode, strings.TrimSpace(string(snippet)))
+	if err := httpsink.Send(ctx, a.client, httpsink.Request{
+		URL:     cfg.URL,
+		Method:  cfg.Method,
+		Headers: headers,
+		Body:    body,
+		Secret:  secret,
+		Auth:    httpsink.Auth{Header: cfg.AuthHeader, Scheme: cfg.AuthScheme},
+	}); err != nil {
+		return fmt.Errorf("webhook channel %q: %w", channel.Token, err)
 	}
 	return nil
-}
-
-// defaultWebhookClient is the production HTTP client for webhook delivery. It does
-// NOT follow redirects: an external endpoint must not be able to 302 the request onto
-// an internal target (an SSRF bypass of the endpoint the tenant configured). A 3xx is
-// returned as-is and treated as a non-2xx failure. The context deadline bounds each
-// request, so no client Timeout is set.
-var defaultWebhookClient = &http.Client{
-	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-}
-
-// isReservedHeader reports whether a config-supplied header name is one the adapter
-// controls or that carries internal identity, and so must not be settable by tenant
-// config.
-func isReservedHeader(name string) bool {
-	canonical := http.CanonicalHeaderKey(name)
-	return canonical == "Authorization" || strings.HasPrefix(canonical, "X-Dc-")
 }
 
 // webhookBody adds the rule's recipients to the rendered payload without mutating the
@@ -129,24 +93,10 @@ func webhookBody(recipients []string, msg *RenderedNotification) map[string]any 
 	return body
 }
 
-// authHeader resolves the header name/value carrying the channel secret.
-func authHeader(cfg *webhookConfig, secret string) (string, string) {
-	name := cfg.AuthHeader
-	if name == "" {
-		name = "Authorization"
-	}
-	scheme := cfg.AuthScheme
-	if cfg.AuthHeader == "" && cfg.AuthScheme == "" {
-		// Default Authorization header defaults to a Bearer scheme.
-		scheme = "Bearer"
-	}
-	if scheme != "" {
-		return name, scheme + " " + secret
-	}
-	return name, secret
-}
-
 // parseWebhookConfig unmarshals and defaults/validates the channel's webhook config.
+// The http/https scheme guard is shared with the connector sinks (httpsink.ValidateURL);
+// webhook delivery is POST-only, since an unbounded method choice widens the SSRF
+// surface (a tenant-authored PUT/DELETE against an internal service) for no benefit.
 func parseWebhookConfig(channel *model.NotificationChannel) (*webhookConfig, error) {
 	cfg := &webhookConfig{}
 	if channel.Config != nil {
@@ -157,13 +107,9 @@ func parseWebhookConfig(channel *model.NotificationChannel) (*webhookConfig, err
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("webhook channel %q config is missing url", channel.Token)
 	}
-	parsed, err := url.Parse(cfg.URL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return nil, fmt.Errorf("webhook channel %q has an invalid url %q (want http/https)", channel.Token, cfg.URL)
+	if _, err := httpsink.ValidateURL(cfg.URL); err != nil {
+		return nil, fmt.Errorf("webhook channel %q has an %w", channel.Token, err)
 	}
-	// Webhook delivery is POST-only: an unbounded method choice widens the SSRF
-	// surface (a tenant-authored PUT/DELETE against an internal service) for no
-	// delivery benefit. Default and only accept POST.
 	if cfg.Method == "" {
 		cfg.Method = http.MethodPost
 	}
