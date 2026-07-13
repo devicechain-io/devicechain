@@ -102,6 +102,9 @@ type PreviewStats {
     eventsScanned: Int!
     # How many edges were produced.
     firingCount: Int!
+    # How many in-scope samples a rule's leaf could not evaluate (a predicate error). Nonzero drives
+    # a degraded note so a rule that errors is not mistaken for a quiet one.
+    evalErrors: Int!
     # Wall-clock milliseconds the replay took (server-side).
     wallMs: Int!
 }

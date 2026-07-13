@@ -122,7 +122,7 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 
 	// Per-tenant concurrency guard.
 	if !globalPreviewGate.acquire(tenant) {
-		return degradedPreview("a preview is already running for this tenant; try again in a moment"), nil
+		return degradedPreview("the maximum number of previews are already running for this tenant; try again in a moment"), nil
 	}
 	defer globalPreviewGate.release(tenant)
 
@@ -137,7 +137,7 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 
 	startedAt := time.Now()
 	res, err := preview.Run(ctx, r.GetNats(ctx), dmconfig.SUBJECT_RESOLVED_EVENTS, reg,
-		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan)
+		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan, preview.DefaultMaxRead)
 	if err != nil {
 		return nil, err
 	}
@@ -201,13 +201,14 @@ func (r *SchemaResolver) compileDraft(in previewRuleInput) (*rules.CompiledRule,
 
 // PreviewResultResolver resolves a preview outcome.
 type PreviewResultResolver struct {
-	ok       bool
-	firings  []*PreviewFiringResolver
-	scanned  int32
-	fireCnt  int32
-	wallMs   int32
-	degraded *string
-	diags    []*CanvasDiagnosticResolver
+	ok         bool
+	firings    []*PreviewFiringResolver
+	scanned    int32
+	fireCnt    int32
+	evalErrors int32
+	wallMs     int32
+	degraded   *string
+	diags      []*CanvasDiagnosticResolver
 }
 
 func newPreviewResult(res preview.Result, degraded string, wallMs int32) *PreviewResultResolver {
@@ -220,12 +221,13 @@ func newPreviewResult(res preview.Result, degraded string, wallMs int32) *Previe
 		firings = append(firings, &PreviewFiringResolver{occurredAt: f.OccurredAt.UTC().Format(time.RFC3339), series: f.Series, signal: signal})
 	}
 	out := &PreviewResultResolver{
-		ok:      true,
-		firings: firings,
-		scanned: int32(res.Stats.EventsScanned),
-		fireCnt: int32(res.Stats.FiringCount),
-		wallMs:  wallMs,
-		diags:   []*CanvasDiagnosticResolver{},
+		ok:         true,
+		firings:    firings,
+		scanned:    int32(res.Stats.EventsScanned),
+		fireCnt:    int32(res.Stats.FiringCount),
+		evalErrors: int32(res.Stats.EvalErrors),
+		wallMs:     wallMs,
+		diags:      []*CanvasDiagnosticResolver{},
 	}
 	if degraded != "" {
 		out.degraded = &degraded
@@ -251,7 +253,7 @@ func failedPreview(diags ...graph.Diagnostic) *PreviewResultResolver {
 func (r *PreviewResultResolver) Ok() bool                          { return r.ok }
 func (r *PreviewResultResolver) Firings() []*PreviewFiringResolver { return r.firings }
 func (r *PreviewResultResolver) Stats() *PreviewStatsResolver {
-	return &PreviewStatsResolver{scanned: r.scanned, fireCnt: r.fireCnt, wallMs: r.wallMs}
+	return &PreviewStatsResolver{scanned: r.scanned, fireCnt: r.fireCnt, evalErrors: r.evalErrors, wallMs: r.wallMs}
 }
 func (r *PreviewResultResolver) Degraded() *string                        { return r.degraded }
 func (r *PreviewResultResolver) Diagnostics() []*CanvasDiagnosticResolver { return r.diags }
@@ -269,11 +271,13 @@ func (r *PreviewFiringResolver) Signal() string     { return r.signal }
 
 // PreviewStatsResolver resolves the coverage counters.
 type PreviewStatsResolver struct {
-	scanned int32
-	fireCnt int32
-	wallMs  int32
+	scanned    int32
+	fireCnt    int32
+	evalErrors int32
+	wallMs     int32
 }
 
 func (r *PreviewStatsResolver) EventsScanned() int32 { return r.scanned }
 func (r *PreviewStatsResolver) FiringCount() int32   { return r.fireCnt }
+func (r *PreviewStatsResolver) EvalErrors() int32    { return r.evalErrors }
 func (r *PreviewStatsResolver) WallMs() int32        { return r.wallMs }

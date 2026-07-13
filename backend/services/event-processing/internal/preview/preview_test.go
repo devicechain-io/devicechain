@@ -100,7 +100,7 @@ func TestPreviewThresholdRaiseResolve(t *testing.T) {
 		msg(t, 1, "acme", "d1", "p@1", "temperature", "90", base),                  // rising → RAISE
 		msg(t, 2, "acme", "d1", "p@1", "temperature", "70", base.Add(time.Minute)), // falling → RESOLVE
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestPreviewFiltersTenantAndProfile(t *testing.T) {
 		msg(t, 2, "acme", "d1", "p@2", "temperature", "90", base),  // wrong profile version
 		msg(t, 3, "acme", "d1", "p@1", "temperature", "90", base),  // the only in-scope one → RAISE
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestPreviewWindowFilter(t *testing.T) {
 		msg(t, 2, "acme", "d1", "p@1", "temperature", "90", tr.End.Add(time.Minute)),    // after end
 		msg(t, 3, "acme", "d2", "p@1", "temperature", "90", base),                       // in window → RAISE
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestPreviewAgedOut(t *testing.T) {
 		firstTime: tr.Start.Add(30 * time.Minute), // earliest retained is AFTER the requested start
 		msgs:      []messaging.Message{msg(t, 1, "acme", "d1", "p@1", "temperature", "90", base)},
 	}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -185,6 +185,30 @@ func TestPreviewAgedOut(t *testing.T) {
 	}
 }
 
+// TestPreviewReadCap: a flood of OUT-OF-SCOPE messages (wrong tenant) is bounded by the total-read
+// cap even though none is in-scope — the in-scope scan cap alone would never trip (H1).
+func TestPreviewReadCap(t *testing.T) {
+	var msgs []messaging.Message
+	for i := uint64(1); i <= 5; i++ {
+		msgs = append(msgs, msg(t, i, "other", "d", "p@1", "temperature", "90", base)) // all wrong tenant
+	}
+	op := &fakeOpener{msgs: msgs}
+	// maxRead=2: the loop must stop after reading 2 messages, not drain all 5, despite zero in-scope.
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 2)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Degraded == "" {
+		t.Fatal("expected a degraded reason when the total-read cap is hit")
+	}
+	if res.Stats.EventsScanned != 0 {
+		t.Fatalf("no event is in scope; scanned should be 0, got %d", res.Stats.EventsScanned)
+	}
+	if op.reader.idx > 3 {
+		t.Fatalf("the read loop should have stopped near the read cap; read %d messages", op.reader.idx)
+	}
+}
+
 // TestPreviewScanCap: hitting the scan cap truncates and degrades rather than running unbounded.
 func TestPreviewScanCap(t *testing.T) {
 	op := &fakeOpener{msgs: []messaging.Message{
@@ -192,7 +216,7 @@ func TestPreviewScanCap(t *testing.T) {
 		msg(t, 2, "acme", "b", "p@1", "temperature", "90", base.Add(time.Second)),
 		msg(t, 3, "acme", "c", "p@1", "temperature", "90", base.Add(2*time.Second)),
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 1)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 1, 0)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
