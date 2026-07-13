@@ -115,9 +115,44 @@ type AlarmSink interface {
 	Dispatch(ctx context.Context, req AlarmRequest) error
 }
 
+// ConnectorRequest is one outbound-connector dispatch (ADR-060): a rendered httpCall/publish action
+// to hand to the outbound-connectors service over NATS. REACT does NOT execute it (no HTTP call, no
+// broker publish, no secret resolution here) — it publishes a durable connector-dispatch request that
+// the dedicated service consumes, so the heavy connector dep-tree and any credential handling stay out
+// of this replay-correct binary (ADR-060 §4). It carries the CEL payload template ALREADY RENDERED to
+// bytes (so the connectors service never imports cel — the determinism/supply-chain firewall) plus the
+// deterministic idempotency Token the connectors service dedups on under at-least-once redelivery.
+type ConnectorRequest struct {
+	Tenant       string
+	DeviceToken  string
+	RuleID       string
+	Edge         string
+	OccurredTime time.Time
+	// Token is the content-addressed idempotency key (idempotencyToken) — the SAME token family the
+	// command sink dedups on, so a redelivery/replay collapses downstream rather than re-executing.
+	Token string
+	// Payload is the rendered template output (the request body / message payload). Empty when the
+	// action declares no template — the connectors service then sends an empty body.
+	Payload string
+	// Action is the resolved connector action (httpCall or publish variant) the sink flattens onto the
+	// wire. Passing the authored action keeps all wire-shaping in the sink (one place), and the
+	// dispatcher free of transport detail.
+	Action rules.Action
+}
+
+// ConnectorSink hands a rendered connector action to the outbound-connectors service (ADR-060),
+// implemented by publishing a connector-dispatch request onto the per-tenant NATS subject the service
+// consumes. Dispatch returns a non-nil error on any failure (a marshal or broker-write failure); the
+// dispatcher retries every error (the event redelivers, the idempotency Token makes the re-run safe),
+// so the sink need not classify. A nil ConnectorSink DISABLES connector dispatch: an httpCall/publish
+// action is then recognized-but-inert (RecordNotEnabled), exactly like a nil command/alarm sink.
+type ConnectorSink interface {
+	Dispatch(ctx context.Context, req ConnectorRequest) error
+}
+
 // Metrics is the REACT observability sink (bounded cardinality — no per-tenant labels, the ADR-023
-// G.3 lesson). action is a fixed, small enum ("sendCommand"/"raiseAlarm"/"clearAlarm" — the last is
-// the structural falling-edge clear, ADR-057), never a tenant/rule value.
+// G.3 lesson). action is a fixed, small enum ("sendCommand"/"raiseAlarm"/"clearAlarm"/"httpCall"/
+// "publish" — "clearAlarm" is the structural falling-edge clear, ADR-057), never a tenant/rule value.
 type Metrics interface {
 	// RecordDispatched: one action successfully handed to its sink (includes idempotent replays,
 	// which command-delivery collapses — so on a redelivery this counts the accepted attempt).
@@ -136,10 +171,19 @@ type Metrics interface {
 // its actions are recognized-but-inert (RecordNotEnabled), so send-command and raise-alarm are
 // independently gateable.
 type Dispatcher struct {
-	resolver RuleResolver
-	commands CommandSink
-	alarms   AlarmSink
-	metrics  Metrics
+	resolver   RuleResolver
+	commands   CommandSink
+	alarms     AlarmSink
+	connectors ConnectorSink
+	metrics    Metrics
+
+	// templates caches a compiled payload-template program per distinct template source (ADR-060),
+	// mirroring the guard cache below: the dispatcher resolves rules.Rule (not a compiled form) fresh
+	// per event, so without a cache it would recompile a connector action's CEL template on every
+	// dispatch. Same monotonic, publish-gated growth bound as guards (a template string can only enter
+	// via a rule that cleared the publish cost gate — never attacker-controlled at dispatch), so no
+	// eviction. sync.Map for lock-free reads on the concurrent dispatch path.
+	templates sync.Map // template source string → *rules.CompiledTemplate
 
 	// guards caches a compiled guard program per distinct guard source (rules.Action.Guard), keyed by
 	// the source string. The dispatcher resolves rules.Rule (not a compiled form) fresh per event, so
@@ -153,12 +197,13 @@ type Dispatcher struct {
 	guards sync.Map // guard source string → *rules.CompiledGuard
 }
 
-// NewDispatcher builds a REACT dispatcher over a rule resolver and its action sinks. Either sink may
-// be nil: a nil commands sink disables send-command, a nil alarms sink disables raise-alarm. In
-// production since 6d the alarms sink is always wired (the sole alarm path); a nil alarms sink is a
-// test-only configuration. A dispatcher with both nil dispatches nothing (every action inert).
-func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink, metrics Metrics) *Dispatcher {
-	return &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, metrics: metrics}
+// NewDispatcher builds a REACT dispatcher over a rule resolver and its action sinks. Any sink may be
+// nil to disable that action kind: a nil commands sink disables send-command, a nil alarms sink
+// disables raise-alarm, a nil connectors sink disables httpCall/publish (ADR-060). In production since
+// 6d the alarms sink is always wired (the sole alarm path); a nil alarms sink is a test-only
+// configuration. A dispatcher with all sinks nil dispatches nothing (every action inert).
+func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink, connectors ConnectorSink, metrics Metrics) *Dispatcher {
+	return &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, connectors: connectors, metrics: metrics}
 }
 
 // Dispatch handles one derived event, returning whether the consumer may ack it (Done) or must let
@@ -285,6 +330,57 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		}
 		d.metrics.RecordDispatched(action)
 		return Done
+	case rules.ActionHTTPCall, rules.ActionPublish:
+		// A connector action (ADR-060) is a one-shot outbound side effect, exactly like sendCommand: it
+		// fires ONLY on the rising edge. A Resolved reports the condition ceased — not a fresh trigger to
+		// re-POST/re-publish — so it has no falling-edge twin; skip it (no metric, a routine non-effect).
+		if resolved {
+			return Done
+		}
+		// A malformed/forged resolved rule whose declared type has no matching payload variant would
+		// otherwise nil-panic when idempotencyToken dereferences the variant below — crashing the shared
+		// DETECT+REACT process into a redelivery crash-loop (there is no recover on the consumer loop).
+		// The publish gate's populatedVariants check is NOT re-run when a rule is decoded from the durable
+		// projection, so a hand-edited row can reach here; drop it fail-closed (log + ack) exactly as the
+		// default case drops an unknown action, so a forged definition never wedges the loop.
+		if (a.Type == rules.ActionHTTPCall && a.HTTPCall == nil) || (a.Type == rules.ActionPublish && a.Publish == nil) {
+			log.Error().Str("rule", ev.RuleID).Str("action", string(a.Type)).
+				Msg("REACT: dropping a connector action whose payload variant is missing (malformed/forged rule).")
+			return Done
+		}
+		kind := string(a.Type) // "httpCall" / "publish" — a fixed metric enum, never a tenant/rule value
+		if d.connectors == nil {
+			d.metrics.RecordNotEnabled(kind)
+			return Done
+		}
+		if !d.guardAllows(ev, a) {
+			// Branch guard false for this detection — a routine, deterministic non-effect. Skip and ack;
+			// a redelivery re-evaluates the same guard to the same bit.
+			return Done
+		}
+		payload, ok := d.renderPayload(ev, a)
+		if !ok {
+			// The payload template failed to build or errored at evaluation (a bug — it passed the
+			// publish cost gate). Fail CLOSED: skip rather than dispatch an empty/partial body or retry
+			// into a wedge (a render error is deterministic for this event, so a retry loops to poison).
+			// renderPayload logs the defect.
+			return Done
+		}
+		req := ConnectorRequest{
+			Tenant:       ev.Tenant,
+			DeviceToken:  ev.Series,
+			RuleID:       ev.RuleID,
+			Edge:         edgeOrRaised(ev.Edge),
+			OccurredTime: ev.OccurredTime,
+			Token:        idempotencyToken(ev, a),
+			Payload:      payload,
+			Action:       a,
+		}
+		if err := d.connectors.Dispatch(ctx, req); err != nil {
+			return Retry
+		}
+		d.metrics.RecordDispatched(kind)
+		return Done
 	default:
 		// The publish gate (rules.Compile) rejects unknown action types, so this is unreachable for
 		// a gate-validated rule; a forged/hand-edited definition's unknown action is skipped (not a
@@ -333,6 +429,65 @@ func (d *Dispatcher) guardProgram(source string) (*rules.CompiledGuard, error) {
 	// LoadOrStore so a concurrent build of the same source resolves to one shared program.
 	actual, _ := d.guards.LoadOrStore(source, g)
 	return actual.(*rules.CompiledGuard), nil
+}
+
+// renderPayload renders a connector action's CEL payload template against this detection (ADR-060),
+// returning the rendered body and ok=true. An action with NO template renders "" (ok=true) — an empty
+// body the connectors service sends as-is. It fails CLOSED (ok=false) on a build or evaluation error:
+// the template passed the publish cost gate, so a failure here is a bug (or a forged/hand-edited
+// non-string template), and the caller skips the action rather than send a partial body. Like a guard,
+// a template is a pure, stateless function of the derived event's scalars, so a redelivery renders the
+// same bytes — safe on REACT's at-least-once path.
+func (d *Dispatcher) renderPayload(ev runtime.DerivedEvent, a rules.Action) (string, bool) {
+	src := actionPayloadTemplate(a)
+	if src == "" {
+		return "", true
+	}
+	prog, err := d.templateProgram(src)
+	if err != nil {
+		log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: a published connector payload template failed to build; skipping the action (fail closed).")
+		return "", false
+	}
+	out, err := prog.Eval(rules.GuardInput{Value: ev.Value, Series: ev.Series})
+	if err != nil {
+		log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: a connector payload template errored at evaluation; skipping the action (fail closed).")
+		return "", false
+	}
+	return out, true
+}
+
+// templateProgram returns the compiled payload template for a source string, building and caching it
+// on first use (d.templates), mirroring guardProgram. The cache is bounded by the distinct template
+// strings across published rules, so it needs no eviction. A build error is a bug (the template passed
+// the publish gate); it is returned to renderPayload, which fails closed.
+func (d *Dispatcher) templateProgram(source string) (*rules.CompiledTemplate, error) {
+	if v, ok := d.templates.Load(source); ok {
+		return v.(*rules.CompiledTemplate), nil
+	}
+	t, err := rules.BuildTemplateProgram(source)
+	if err != nil {
+		return nil, err
+	}
+	// LoadOrStore so a concurrent build of the same source resolves to one shared program.
+	actual, _ := d.templates.LoadOrStore(source, t)
+	return actual.(*rules.CompiledTemplate), nil
+}
+
+// actionPayloadTemplate returns the CEL payload-template source of a connector action (empty for a
+// non-connector action, or a connector action that declares no body). It reads the exported action
+// fields directly (react imports rules), so it stays in lockstep with the schema without a rules export.
+func actionPayloadTemplate(a rules.Action) string {
+	switch a.Type {
+	case rules.ActionHTTPCall:
+		if a.HTTPCall != nil {
+			return a.HTTPCall.BodyTemplate
+		}
+	case rules.ActionPublish:
+		if a.Publish != nil {
+			return a.Publish.PayloadTemplate
+		}
+	}
+	return ""
 }
 
 // edgeOrRaised normalizes a wire edge to an explicit token: an empty (legacy/pre-edge) value decodes
@@ -405,11 +560,11 @@ func idempotencyToken(ev runtime.DerivedEvent, a rules.Action) string {
 }
 
 // actionContentKey is a stable textual identity of an action's dispatch content — the same identity
-// the authoring gate dedups on (rules.actionDedupKey), so two actions share a key iff the gate would
+// the authoring gate dedups on (rules.ActionDedupKey), so two actions share a key iff the gate would
 // reject them as duplicates. It anchors the idempotency token to WHAT is dispatched, not WHERE the
 // action sits in the chain.
 func actionContentKey(a rules.Action) string {
-	// The guard is part of the content identity, mirroring the authoring gate's actionDedupKey: two
+	// The guard is part of the content identity, mirroring the authoring gate's ActionDedupKey: two
 	// actions that differ only by guard are distinct dispatches (raise-if-hot vs raise-if-cold), so
 	// their idempotency tokens must differ or one guarded variant would collapse onto the other's token
 	// and swallow a dispatch.
@@ -429,6 +584,29 @@ func actionContentKey(a rules.Action) string {
 		return "sendCommand\x00" + a.SendCommand.Command + "\x00" + a.SendCommand.Payload + guardSeg
 	case rules.ActionRaiseAlarm:
 		return "raiseAlarm\x00" + a.RaiseAlarm.AlarmKey + guardSeg
+	case rules.ActionHTTPCall:
+		// Defensive nil-guard: a malformed action with no variant is dropped upstream (dispatchAction)
+		// before its token is minted, so this is belt-and-braces — but keeping the helper TOTAL means it
+		// can never nil-panic regardless of caller. A nil variant degenerates to the type string; that
+		// token is never used (the action was dropped), so the collision is harmless.
+		if a.HTTPCall == nil {
+			return string(a.Type)
+		}
+		// Mirror rules.ActionDedupKey's httpCall identity EXACTLY, reusing the SAME exported
+		// normalization (rules.MethodOrPost / rules.HeaderKey) so this durable token can never drift from
+		// the gate's duplicate identity — two actions that render the identical request (empty vs "POST"
+		// method, header-name case) map to one token, so a redelivery/replay after a semantics-preserving
+		// republish dedups downstream rather than double-executing. httpCall/publish never dispatched
+		// before C2b, so there is no pre-existing token format to preserve (unlike the frozen
+		// sendCommand/raiseAlarm segments above).
+		h := a.HTTPCall
+		return "httpCall\x00" + h.URL + "\x00" + rules.MethodOrPost(h.Method) + "\x00" + h.BodyTemplate + "\x00" + h.SecretRef + "\x00" + rules.HeaderKey(h.Headers) + guardSeg
+	case rules.ActionPublish:
+		if a.Publish == nil {
+			return string(a.Type)
+		}
+		p := a.Publish
+		return "publish\x00" + p.ConnectorRef + "\x00" + p.PayloadTemplate + guardSeg
 	default:
 		return string(a.Type)
 	}
