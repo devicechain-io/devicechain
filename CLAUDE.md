@@ -6,11 +6,14 @@ A Go monorepo using **Go Workspaces** (`go.work`, Go 1.26). The workspace module
 
 ```
 backend/
-  core/                       shared library — entity, auth, messaging, config, rdb, graphql
+  core/                       shared library — entity, auth, messaging, config, rdb, graphql, secrets
+                              (pluggable envelope-encrypted secret store, ADR-059)
   services/                   one module per microservice:
     device-management/        devices, device types + versioned device profiles (un-fused, ADR-045),
-                              the typed relationship graph, the alarm engine (ADR-041), event resolution
-    user-management/          identities, per-tenant memberships, roles, two-tier JWT/JWKS
+                              the typed relationship graph, alarm objects as level-state integrators
+                              (ADR-057; detection/authoring now live in event-processing), event resolution
+    user-management/          identities, per-tenant memberships, roles, two-tier JWT/JWKS; OAuth 2.1
+                              authorization server (PKCE, RFC 8414/8707) securing MCP access (ADR-047)
     event-management/         persists + queries time-series events (TimescaleDB hypertables;
                               data-lifecycle reconciler + measurement_rollups continuous aggregate, ADR-026)
     event-sources/            inbound device transports (MQTT/NATS), decode → pipeline; per-tenant
@@ -21,9 +24,14 @@ backend/
                               versioned tenant resources stored as opaque JSON (ADR-039)
     notification-management/  alarm→human last mile: per-tenant policy, SMTP + webhook adapters,
                               HA-safe escalation scheduler (ADR-017)
-    event-processing/         DETECT + REACT pipeline extracted from device-management (ADR-051);
-                              resolved-events tap → keyed-streaming detection core (owned, cel-go
-                              predicates) → actions. Scaffold stage: consumes + drops (DETECT WIP)
+    event-processing/         DETECT + REACT pipeline extracted from device-management (ADR-051); the
+                              SOLE live alarm engine (measurement evaluator retired, ADR-057 cutover).
+                              Resolved-events tap → keyed-streaming CEL detection core (owned, cel-go
+                              predicates) → REACT actions (raise-alarm, send-command). Rules authored on
+                              the profile as forms or on a visual automation canvas w/ replay preview (ADR-053)
+    mcp/                      opt-in OAuth 2.1 Resource Server exposing read-only tools (devices, state,
+                              telemetry, alarms, commands) to AI agents over MCP, fronting per-area GraphQL
+                              under the caller's own token — no service token, confused-deputy red line (ADR-047)
   k8s/                        controller-runtime operator (Instance CRD; tenants are control-plane DB rows, ADR-033)
   cli/                        dcctl — bootstrap/destroy + admin tooling
 deploy/                       Helm chart (deploy/helm) + OpenTofu modules (deploy/opentofu)
