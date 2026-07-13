@@ -38,7 +38,7 @@ spec:
             description: "The engine watermark is >5m behind wall-clock for 10m; time-based detections (absence/duration) will fire late."
         - alert: DetectCheckpointsStalledWithBacklog
           expr: |
-            increase(devicechain_eventprocessing_detect_checkpoints_total{namespace="{{ $ns }}"}[15m]) == 0
+            max(increase(devicechain_eventprocessing_detect_checkpoints_total{namespace="{{ $ns }}"}[15m])) == 0
             and max(devicechain_eventprocessing_detect_consumer_pending{namespace="{{ $ns }}"}) > 0
           for: 15m
           labels:
