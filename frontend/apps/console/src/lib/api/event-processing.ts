@@ -9,7 +9,7 @@
 // parses the taxonomy, so this is where a bad rule is actually caught.
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/event-processing';
-import type { RuleHealthQuery, DetectionStreamSubscription, CompileCanvasQuery } from '@/gql/event-processing/graphql';
+import type { RuleHealthQuery, DetectionStreamSubscription, CompileCanvasQuery, PreviewRuleQuery } from '@/gql/event-processing/graphql';
 
 const VALIDATE_DETECTION_RULES = graphql(`
   query ValidateDetectionRules($rules: [DetectionRuleInput!]!) {
@@ -75,6 +75,56 @@ export type CanvasDiagnostic = CanvasCompileResult['diagnostics'][number];
 export async function compileCanvas(graph: string, profileToken: string): Promise<CanvasCompileResult> {
   const data = await gql('event-processing', COMPILE_CANVAS, { graph, profileToken });
   return data.compileCanvas;
+}
+
+// ── Replay preview (ADR-053 slice 9d — the headline) ──────────────────────
+// Run the DRAFT rule (the current canvas graph) against replayed history and show the
+// RAISE/RESOLVE edges it WOULD have produced over a window — "what would this rule have done?".
+// The server builds a throwaway in-memory DETECT core over an ephemeral replay consumer and
+// collects edges instead of publishing, so it never perturbs the live engine. Compile failures
+// come back as ok:false + diagnostics; an unpublished profile / aged-out window / scan cap comes
+// back as a degraded (but non-error) result.
+
+const PREVIEW_RULE = graphql(`
+  query PreviewRule($input: PreviewRuleInput!) {
+    previewRule(input: $input) {
+      ok
+      firings {
+        occurredAt
+        series
+        signal
+      }
+      stats {
+        eventsScanned
+        firingCount
+        evalErrors
+        wallMs
+      }
+      degraded
+      diagnostics {
+        nodeId
+        severity
+        message
+      }
+    }
+  }
+`);
+
+export type PreviewResult = PreviewRuleQuery['previewRule'];
+export type PreviewFiring = PreviewResult['firings'][number];
+
+// previewRule runs a draft (a canvas graph OR a rules.Rule definition) against history over an
+// RFC3339 window. It throws only on transport/auth failure; a compile rejection or a degraded run
+// comes back in the result. Exactly one of graph/ruleDefinition should be set.
+export async function previewRule(input: {
+  graph?: string;
+  ruleDefinition?: string;
+  profileToken: string;
+  start: string;
+  end: string;
+}): Promise<PreviewResult> {
+  const data = await gql('event-processing', PREVIEW_RULE, { input });
+  return data.previewRule;
 }
 
 // ── Rule health (ADR-051 slice 7b/7c) ─────────────────────────────────────

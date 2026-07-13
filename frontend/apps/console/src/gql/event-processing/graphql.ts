@@ -9,6 +9,14 @@ export type DetectionRuleInput = {
   token: string;
 };
 
+export type PreviewRuleInput = {
+  end: string;
+  graph?: string | null | undefined;
+  profileToken: string;
+  ruleDefinition?: string | null | undefined;
+  start: string;
+};
+
 export type RuleStatus =
   | 'ACTIVE'
   | 'COMPILE_ERROR';
@@ -27,6 +35,13 @@ export type CompileCanvasQueryVariables = Exact<{
 
 
 export type CompileCanvasQuery = { compileCanvas: { ok: boolean, definition: string | null, estimatedCost: number | null, diagnostics: Array<{ nodeId: string | null, severity: string, message: string }> } };
+
+export type PreviewRuleQueryVariables = Exact<{
+  input: PreviewRuleInput;
+}>;
+
+
+export type PreviewRuleQuery = { previewRule: { ok: boolean, degraded: string | null, firings: Array<{ occurredAt: string, series: string, signal: string }>, stats: { eventsScanned: number, firingCount: number, evalErrors: number, wallMs: number }, diagnostics: Array<{ nodeId: string | null, severity: string, message: string }> } };
 
 export type RuleHealthQueryVariables = Exact<{
   profileToken: string;
@@ -87,6 +102,30 @@ export const CompileCanvasDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CompileCanvasQuery, CompileCanvasQueryVariables>;
+export const PreviewRuleDocument = new TypedDocumentString(`
+    query PreviewRule($input: PreviewRuleInput!) {
+  previewRule(input: $input) {
+    ok
+    firings {
+      occurredAt
+      series
+      signal
+    }
+    stats {
+      eventsScanned
+      firingCount
+      evalErrors
+      wallMs
+    }
+    degraded
+    diagnostics {
+      nodeId
+      severity
+      message
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<PreviewRuleQuery, PreviewRuleQueryVariables>;
 export const RuleHealthDocument = new TypedDocumentString(`
     query RuleHealth($profileToken: String!) {
   ruleHealth(profileToken: $profileToken) {
