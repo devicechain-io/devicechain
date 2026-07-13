@@ -99,7 +99,8 @@ type PreviewFiring {
     # "raised" (rising edge) or "resolved" (falling edge).
     signal: String!
     # The per-node trace for this firing (slice 9e) — what each canvas node did, source→condition→
-    # (branch…)→action. Empty unless the request set input.trace and the draft is a canvas graph.
+    # (branch…)→action. Empty unless the request set input.trace and the draft is a canvas graph. A
+    # branch feeding two actions appears once per action path (its disposition is identical across them).
     trace: [NodeTraceStep!]!
 }
 

@@ -151,6 +151,22 @@ func TestUncompilableGuardFailsClosed(t *testing.T) {
 	mustDisp(t, steps, "a", DispSkipped)
 }
 
+// TestUnknownActionFailsClosed: an unknown action type traces as skipped (not raised) on a rising
+// edge, mirroring the dispatcher's fail-closed default — a future third action type must never
+// silently trace as an alarm raise.
+func TestUnknownActionFailsClosed(t *testing.T) {
+	plan := graph.NodeTracePlan{
+		SourceID: "s", ConditionID: "c",
+		Actions: []graph.ActionPath{{NodeID: "a", Type: "someFutureAction", Branches: nil}},
+	}
+	b := NewBuilder(plan)
+	steps := b.Build(Firing{Raise: true, Series: "dev1", Value: 10, HasValue: true})
+	s, ok := find(steps, "a")
+	if !ok || s.Disposition != DispSkipped {
+		t.Fatalf("unknown action should fail closed to skipped, got %+v", s)
+	}
+}
+
 // TestStepOrder: steps come out source → condition → branch(es) → action.
 func TestStepOrder(t *testing.T) {
 	b := NewBuilder(planWithGuard("value > 0.0"))

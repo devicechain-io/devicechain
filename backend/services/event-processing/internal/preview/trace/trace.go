@@ -18,6 +18,13 @@
 //     invariant) and does nothing for a sendCommand (a command has no falling-edge twin).
 //
 // So the trace matches what production would actually dispatch, without touching the DETECT engine.
+//
+// TWO DEPLOYMENT CAVEATS the trace does NOT model (both authoring-surface-appropriate): it assumes
+// both REACT sinks are wired, so a "sent"/"raised" step reflects the authored intent even on a deploy
+// whose command sink is absent (where production would record the action not-enabled and skip it); and
+// a branch feeding two actions appears once PER action path (a node can recur in the step list) — its
+// disposition is identical across paths (each branch/action has exactly one signal predecessor), so
+// the duplication is presentational, not a disagreement.
 package trace
 
 import (
@@ -160,8 +167,13 @@ func (b *Builder) reactSteps(ap graph.ActionPath, f Firing) []Step {
 	switch ap.Type {
 	case string(rules.ActionSendCommand):
 		out = append(out, Step{NodeID: ap.NodeID, Kind: KindAction, Disposition: DispSent})
-	default: // raiseAlarm
+	case string(rules.ActionRaiseAlarm):
 		out = append(out, Step{NodeID: ap.NodeID, Kind: KindAction, Disposition: DispRaised})
+	default:
+		// Fail closed, mirroring the dispatcher's default (dispatcher.go: an unknown action dispatches
+		// nothing). Unreachable today — buildAction only emits the two known types — but a future third
+		// action type must not silently trace as an alarm raise.
+		out = append(out, Step{NodeID: ap.NodeID, Kind: KindAction, Disposition: DispSkipped, Detail: "unknown action type"})
 	}
 	return out
 }
