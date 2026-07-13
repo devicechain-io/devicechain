@@ -12,8 +12,8 @@ DeviceChain is a set of stateless Go microservices over a shared core library, c
 | Component | Responsibility |
 |---|---|
 | **event-sources** | Inbound device transports. Decodes raw messages (JSON today; Protobuf and custom decoders planned), applies a per-tenant ingest rate limit, and publishes them onto the pipeline. |
-| **device-management** | Devices, device types + versioned device profiles, the typed relationship graph, the alarm engine, and event resolution (attaching device + organizational context to each event). |
-| **event-processing** *(in progress)* | The DETECT + REACT pipeline: a replay-correct streaming core evaluates rules over resolved events (thresholds, rate-of-change, absence, windowed aggregates, correlation) and dispatches automated actions. Extracted from device-management; the alarm engine is being unified into it. |
+| **device-management** | Devices, device types + versioned device profiles, the typed relationship graph, the alarm object and its lifecycle, and event resolution (attaching device + organizational context to each event). |
+| **event-processing** | The DETECT + REACT pipeline: a replay-correct streaming core evaluates detection rules over resolved events (threshold, duration, repeating, rate-of-change, absence, windowed aggregate, area correlation) and dispatches automated actions (raise alarm, send command). Detection lives here; the alarm object it raises stays in device-management. |
 | **event-management** | Persists resolved events to TimescaleDB, applies the data-lifecycle policies (compression / retention / rollups), and serves time-series queries over GraphQL. |
 | **device-state** | The live last-known-state projection per device — presence, latest location, and current reading per measurement. |
 | **command-delivery** | Persistent, two-way command dispatch to devices, tracked through a per-command lifecycle. |
