@@ -100,7 +100,7 @@ type Documents = {
     "\n  mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {\n    createCommandDefinition(request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.CreateCommandDefinitionDocument,
     "\n  mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {\n    updateCommandDefinition(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.UpdateCommandDefinitionDocument,
     "\n  mutation DeleteCommandDefinition($token: String!) {\n    deleteCommandDefinition(token: $token)\n  }\n": typeof types.DeleteCommandDefinitionDocument,
-    "\n  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {\n    detectionRules(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        definition\n        enabled\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DetectionRulesDocument,
+    "\n  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {\n    detectionRules(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        definition\n        authoringGraph\n        enabled\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DetectionRulesDocument,
     "\n  mutation CreateDetectionRule($request: DetectionRuleCreateRequest!) {\n    createDetectionRule(request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.CreateDetectionRuleDocument,
     "\n  mutation UpdateDetectionRule($token: String!, $request: DetectionRuleCreateRequest!) {\n    updateDetectionRule(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.UpdateDetectionRuleDocument,
     "\n  mutation DeleteDetectionRule($token: String!) {\n    deleteDetectionRule(token: $token)\n  }\n": typeof types.DeleteDetectionRuleDocument,
@@ -194,7 +194,7 @@ const documents: Documents = {
     "\n  mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {\n    createCommandDefinition(request: $request) {\n      id\n      token\n    }\n  }\n": types.CreateCommandDefinitionDocument,
     "\n  mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {\n    updateCommandDefinition(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": types.UpdateCommandDefinitionDocument,
     "\n  mutation DeleteCommandDefinition($token: String!) {\n    deleteCommandDefinition(token: $token)\n  }\n": types.DeleteCommandDefinitionDocument,
-    "\n  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {\n    detectionRules(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        definition\n        enabled\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DetectionRulesDocument,
+    "\n  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {\n    detectionRules(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        definition\n        authoringGraph\n        enabled\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DetectionRulesDocument,
     "\n  mutation CreateDetectionRule($request: DetectionRuleCreateRequest!) {\n    createDetectionRule(request: $request) {\n      id\n      token\n    }\n  }\n": types.CreateDetectionRuleDocument,
     "\n  mutation UpdateDetectionRule($token: String!, $request: DetectionRuleCreateRequest!) {\n    updateDetectionRule(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": types.UpdateDetectionRuleDocument,
     "\n  mutation DeleteDetectionRule($token: String!) {\n    deleteDetectionRule(token: $token)\n  }\n": types.DeleteDetectionRuleDocument,
@@ -546,7 +546,7 @@ export function graphql(source: "\n  mutation DeleteCommandDefinition($token: St
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {\n    detectionRules(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        definition\n        enabled\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').DetectionRulesDocument;
+export function graphql(source: "\n  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {\n    detectionRules(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        definition\n        authoringGraph\n        enabled\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').DetectionRulesDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

@@ -103,6 +103,64 @@ func TestValidateDetectionRuleDefinition(t *testing.T) {
 	}
 }
 
+// validateAuthoringGraph guards only JSON-object shape (the taxonomy stays single-homed in
+// event-processing): nil is valid (form-authored), a JSON object is valid, everything else is
+// rejected before it is stored.
+func TestValidateAuthoringGraph(t *testing.T) {
+	str := func(s string) *string { return &s }
+	cases := []struct {
+		name  string
+		graph *string
+		valid bool
+	}{
+		{"nil", nil, true},
+		{"object", str(`{"schemaVersion":1,"nodes":[],"edges":[]}`), true},
+		{"emptyObject", str(`{}`), true},
+		{"malformed", str(`{"nodes":`), false},
+		{"array", str(`[]`), false},
+		{"scalar", str(`3`), false},
+		{"null", str(`null`), false},
+		{"emptyString", str(``), false},
+	}
+	for _, c := range cases {
+		err := validateAuthoringGraph(c.graph)
+		if c.valid && err != nil {
+			t.Errorf("%s: unexpected error: %v", c.name, err)
+		}
+		if !c.valid && err == nil {
+			t.Errorf("%s: expected error, got nil", c.name)
+		}
+	}
+}
+
+// The authoring graph is authoring metadata ONLY — it must NOT ride into the publish snapshot
+// (json:"-"), so the frozen version carries just the runtime definition. A snapshot bloated
+// with every rule's canvas would waste storage and confuse the event-processing consumer.
+func TestAuthoringGraphExcludedFromSnapshot(t *testing.T) {
+	rule := &DetectionRule{
+		Model:          gorm.Model{ID: 5},
+		TokenReference: rdb.TokenReference{Token: "hot"},
+		Definition:     datatypes.JSON([]byte(`{"name":"hot","type":"threshold"}`)),
+		AuthoringGraph: datatypes.JSON([]byte(`{"schemaVersion":1,"nodes":[{"id":"secret"}],"edges":[]}`)),
+		Enabled:        true,
+	}
+	raw, err := json.Marshal(ProfileSnapshot{Rules: []*DetectionRule{rule}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "authoringGraph") || strings.Contains(string(raw), "AuthoringGraph") || strings.Contains(string(raw), "secret") {
+		t.Fatalf("authoring graph leaked into the publish snapshot: %s", raw)
+	}
+	// The definition still survives the round-trip.
+	got, err := parseProfileSnapshot(datatypes.JSON(raw))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(got.Rules) != 1 || string(got.Rules[0].Definition) != string(rule.Definition) {
+		t.Fatalf("definition lost from snapshot: %+v", got.Rules)
+	}
+}
+
 // The publish gate (ADR-044 slice 4b) compiles only ENABLED draft rules: a disabled rule
 // is inert (the runtime skips it), so it must not be submitted for validation and thus
 // cannot block a publish. The projection also carries the token + definition verbatim.

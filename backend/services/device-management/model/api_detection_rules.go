@@ -53,6 +53,33 @@ func validateDetectionRuleDefinition(definition string) error {
 	return nil
 }
 
+// validateAuthoringGraph checks the optional canvas sidecar is a well-formed JSON object when
+// present (nil ⇒ a form-authored rule with no sidecar, always valid). Like the definition
+// check it deliberately does NOT parse the graph taxonomy — the CanvasDefinition schema is
+// single-homed in event-processing; this only guards the stored-blob shape.
+func validateAuthoringGraph(graph *string) error {
+	if graph == nil {
+		return nil
+	}
+	if !json.Valid([]byte(*graph)) {
+		return fmt.Errorf("detection rule authoring graph is not valid JSON")
+	}
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(*graph), &probe); err != nil || probe == nil {
+		return fmt.Errorf("detection rule authoring graph must be a JSON object")
+	}
+	return nil
+}
+
+// authoringGraphJSON maps the optional request string to a nullable datatypes.JSON column
+// value — nil (SQL NULL) when absent, so clearing the sidecar is a first-class state.
+func authoringGraphJSON(graph *string) datatypes.JSON {
+	if graph == nil {
+		return nil
+	}
+	return datatypes.JSON(*graph)
+}
+
 // Create a new detection rule (ADR-051 slice 4b).
 func (api *Api) CreateDetectionRule(ctx context.Context,
 	request *DetectionRuleCreateRequest) (*DetectionRule, error) {
@@ -70,6 +97,9 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 	if err := validateDetectionRuleDefinition(request.Definition); err != nil {
 		return nil, err
 	}
+	if err := validateAuthoringGraph(request.AuthoringGraph); err != nil {
+		return nil, err
+	}
 
 	created := &DetectionRule{
 		TokenReference: rdb.TokenReference{Token: request.Token},
@@ -80,6 +110,7 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 		MetadataEntity: rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
 		DeviceProfile:  matches[0],
 		Definition:     datatypes.JSON(request.Definition),
+		AuthoringGraph: authoringGraphJSON(request.AuthoringGraph),
 		Enabled:        request.Enabled,
 	}
 	result := api.RDB.DB(ctx).Create(created)
@@ -106,6 +137,9 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	if err := validateDetectionRuleDefinition(request.Definition); err != nil {
 		return nil, err
 	}
+	if err := validateAuthoringGraph(request.AuthoringGraph); err != nil {
+		return nil, err
+	}
 
 	updated := matches[0]
 	updated.Token = request.Token
@@ -113,6 +147,10 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	updated.Description = rdb.NullStrOf(request.Description)
 	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
 	updated.Definition = datatypes.JSON(request.Definition)
+	// Re-set the sidecar from the request (nil clears it): an edit is a full replace, no
+	// partial-update semantics (pre-GA decisive cutover). A form-authored edit of a
+	// canvas-authored rule thus drops the now-stale graph, which is correct.
+	updated.AuthoringGraph = authoringGraphJSON(request.AuthoringGraph)
 	updated.Enabled = request.Enabled
 
 	// Re-parent if the profile token changed.

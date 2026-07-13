@@ -26,5 +26,6 @@ var (
 		NewDetectionRuleSchema(),
 		NewAlarmContributorsSchema(),
 		NewDropAlarmDefinitionsSchema(),
+		NewDetectionRuleAuthoringGraphSchema(),
 	}
 )

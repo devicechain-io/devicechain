@@ -51,6 +51,16 @@ func (r *DetectionRuleResolver) Enabled() bool { return r.M.Enabled }
 // Definition is the opaque rules.Rule JSON document, returned as its raw JSON text.
 func (r *DetectionRuleResolver) Definition() string { return string(r.M.Definition) }
 
+// AuthoringGraph is the opaque canvas CanvasDefinition JSON (ADR-053 slice 9b), returned as
+// its raw JSON text, or null for a form-authored rule with no sidecar.
+func (r *DetectionRuleResolver) AuthoringGraph() *string {
+	if len(r.M.AuthoringGraph) == 0 {
+		return nil
+	}
+	s := string(r.M.AuthoringGraph)
+	return &s
+}
+
 func (r *DetectionRuleResolver) DeviceProfile() *DeviceProfileResolver {
 	if r.M.DeviceProfile != nil {
 		return &DeviceProfileResolver{M: *r.M.DeviceProfile, S: r.S, C: r.C}
