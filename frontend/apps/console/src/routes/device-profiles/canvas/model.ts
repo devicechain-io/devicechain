@@ -14,7 +14,8 @@ export const CANVAS_SCHEMA_VERSION = 1;
 
 // The three typed port signals. Edges may only join same-typed ports; a condition node is the
 // only node with a stream input and a signal output, which is what makes the DETECT↔REACT
-// boundary checkable. `value` is reserved for the future compute node.
+// boundary checkable. `value` carries a compute node's scalar into a condition's or branch's
+// `value` input, where the compiler folds it into that consumer's CEL (slice 9a-2).
 export type PortType = 'stream' | 'signal' | 'value';
 
 export type NodeType =
@@ -27,9 +28,10 @@ export type NodeType =
   | 'repeating'
   | 'correlation'
   | 'branch'
-  | 'action';
+  | 'action'
+  | 'compute';
 
-export type NodeCategory = 'source' | 'condition' | 'branch' | 'action';
+export type NodeCategory = 'source' | 'condition' | 'branch' | 'action' | 'compute';
 
 // A node's typed ports + its category, keyed by port name — the client-side twin of the Go
 // `catalog`. Used to validate a connection before the server re-checks it, and to render ports.
@@ -42,15 +44,16 @@ export interface NodeSpec {
 
 export const NODE_CATALOG: Record<NodeType, NodeSpec> = {
   source: { category: 'source', label: 'Source', in: {}, out: { out: 'stream' } },
-  threshold: { category: 'condition', label: 'Threshold', in: { in: 'stream' }, out: { signal: 'signal' } },
-  duration: { category: 'condition', label: 'Duration', in: { in: 'stream' }, out: { signal: 'signal' } },
-  absence: { category: 'condition', label: 'Absence', in: { in: 'stream' }, out: { signal: 'signal' } },
-  aggregate: { category: 'condition', label: 'Windowed aggregate', in: { in: 'stream' }, out: { signal: 'signal' } },
-  deltaRate: { category: 'condition', label: 'Rate of change', in: { in: 'stream' }, out: { signal: 'signal' } },
-  repeating: { category: 'condition', label: 'Repeating', in: { in: 'stream' }, out: { signal: 'signal' } },
-  correlation: { category: 'condition', label: 'Area correlation', in: { in: 'stream' }, out: { signal: 'signal' } },
-  branch: { category: 'branch', label: 'Branch', in: { in: 'signal' }, out: { out: 'signal' } },
+  threshold: { category: 'condition', label: 'Threshold', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  duration: { category: 'condition', label: 'Duration', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  absence: { category: 'condition', label: 'Absence', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  aggregate: { category: 'condition', label: 'Windowed aggregate', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  deltaRate: { category: 'condition', label: 'Rate of change', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  repeating: { category: 'condition', label: 'Repeating', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  correlation: { category: 'condition', label: 'Area correlation', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  branch: { category: 'branch', label: 'Branch', in: { in: 'signal', value: 'value' }, out: { out: 'signal' } },
   action: { category: 'action', label: 'Action', in: { in: 'signal' }, out: {} },
+  compute: { category: 'compute', label: 'Compute', in: {}, out: { value: 'value' } },
 };
 
 export const CONDITION_TYPES: NodeType[] = [
@@ -156,6 +159,14 @@ export interface ActionConfig {
 // The lowering folds it onto each downstream action's guard; the compiler cost-gates it.
 export type BranchConfig = { name?: string; when: string };
 
+// A compute node (slice 9a-2): a NAMED CEL value the compiler folds into the raw-CEL leaf or branch
+// guard it wires into (via its `value` output). `name` is the identifier the consumer references it
+// by — a simple identifier (letters/digits/underscore, not leading-digit) that can't shadow a
+// built-in; `expr` is a CEL expression over the CONSUMER's vocabulary (the resolved-event `m`/`attr`/…
+// when it feeds a condition leaf, the derived `value`/`hasValue`/`series` when it feeds a branch). The
+// compiler validates it's a single self-contained expression and re-gates the composed result.
+export type ComputeConfig = { name: string; expr: string };
+
 // The config carried on a node is opaque per-type JSON; the compiler validates it. We keep it
 // loosely typed here (Record) because the editor mutates fields incrementally, and narrow at
 // the config-panel boundary.
@@ -215,5 +226,7 @@ export function defaultConfig(type: NodeType, profileToken: string): NodeConfig 
       return { when: '' } satisfies BranchConfig as NodeConfig;
     case 'action':
       return { action: 'raiseAlarm' };
+    case 'compute':
+      return { name: '', expr: '' } satisfies ComputeConfig as NodeConfig;
   }
 }

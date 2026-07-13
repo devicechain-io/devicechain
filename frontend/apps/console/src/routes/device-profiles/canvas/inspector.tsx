@@ -387,5 +387,27 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
         </div>
       );
     }
+    case 'compute':
+      return (
+        <div className="space-y-4">
+          <FormField
+            label="Name"
+            htmlFor="cfg-compute-name"
+            description="The identifier the condition or branch references this value by. Letters, digits, underscore; not starting with a digit."
+          >
+            <Input id="cfg-compute-name" value={strVal(config.name)} onChange={(e) => set({ name: e.target.value })} placeholder="tempF" />
+          </FormField>
+          <FormField label="Value (CEL)" htmlFor="cfg-compute-expr" description="A single expression the compiler folds into the predicate it feeds. Cost-gated at compile.">
+            <Textarea id="cfg-compute-expr" value={strVal(config.expr)} onChange={(e) => set({ expr: e.target.value })} placeholder={'m["tempC"] * 1.8 + 32.0'} />
+          </FormField>
+          <p className="rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
+            Wire this into a condition&apos;s or branch&apos;s <span className="font-mono">value</span> port, then reference it by name in that node&apos;s CEL (e.g.{' '}
+            <span className="font-mono">tempF &gt; 100.0</span>). It reads the vocabulary of whatever it feeds — the event&apos;s{' '}
+            <span className="font-mono">m</span>/<span className="font-mono">attr</span> for a condition leaf, the detection&apos;s{' '}
+            <span className="font-mono">value</span>/<span className="font-mono">series</span> for a branch. Use decimal literals; a computed value can only feed a{' '}
+            <span className="font-mono">CEL</span> predicate, not a structured metric·op·threshold leaf.
+          </p>
+        </div>
+      );
   }
 }

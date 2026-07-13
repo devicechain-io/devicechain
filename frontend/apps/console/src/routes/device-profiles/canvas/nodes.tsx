@@ -111,6 +111,8 @@ export function summarize(type: NodeType, config: Record<string, unknown>): stri
       return str(c.when) ? `if ${str(c.when)}` : 'if …';
     case 'action':
       return c.action === 'sendCommand' ? `send ${str(c.command) || '…'}` : `raise alarm ${str(c.alarmKey)}`.trim();
+    case 'compute':
+      return str(c.name) ? `${str(c.name)} = ${str(c.expr) || '…'}` : 'value = …';
   }
 }
 
