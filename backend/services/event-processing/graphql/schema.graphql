@@ -23,6 +23,47 @@ type Query {
     # if any of them does not compile (a disabled rule is inert and is not submitted).
     # Pure validation — no state is read or written, so it is safe to call repeatedly.
     validateDetectionRules(rules: [DetectionRuleInput!]!): DetectionRuleValidationResult!
+
+    # Per-rule health for a device profile's ACTIVE published version (ADR-051 slice 7b):
+    # for each live DETECT rule, its status, last-fired time, and lifetime fire count. It
+    # joins the durable rule projection (the engine's live rule set) with the RuleStat firing
+    # projection, resolving the profile's active version from the ProfileActive projection.
+    # Tenant-scoped to the caller's tenant. An unpublished profile (no active version) returns
+    # an empty list. Read-only; gated on device:read.
+    ruleHealth(profileToken: String!): [RuleHealth!]!
+}
+
+# The lifecycle status of a live detection rule (ADR-051 slice 7b). DISABLED_BY_BUDGET is
+# reserved for when state-budget enforcement lands (slice 6c-2 — unbuilt today, so never
+# returned yet); until then a projected rule is ACTIVE unless it no longer compiles.
+enum RuleStatus {
+    # The rule compiles under the current limits and is running.
+    ACTIVE
+    # The projected rule no longer compiles under the current compile limits (e.g. a tightened
+    # cost ceiling) — it is surfaced so the author can see and re-author it, rather than failing
+    # silently. A rule that failed to compile at publish never reaches the projection (publish
+    # fails closed), so this only catches a rule that stopped compiling after it was published.
+    COMPILE_ERROR
+}
+
+# Health of one live detection rule.
+type RuleHealth {
+    # The composed runtime rule id "{tenant}/{profileVersionToken}/{ruleToken}".
+    ruleId: String!
+    # The rule's device-management token (its stable authoring id within the profile).
+    ruleToken: String!
+    # The rule's display name (from the authored definition), falling back to its token.
+    name: String!
+    # The composed status (ACTIVE / COMPILE_ERROR).
+    status: RuleStatus!
+    # RFC3339 logical time of the most recent fire, or null if the rule has never fired.
+    lastFiredAt: String
+    # Lifetime fire count (approximate — a replay may re-count; see RuleStat). Zero if never fired.
+    fireCount: Int!
+    # The edge of the most recent fire ("raised"/"resolved"), or null if never fired.
+    lastSignal: String
+    # A human-readable diagnostic when status is COMPILE_ERROR, else null.
+    message: String
 }
 
 # Service identity returned by the scaffold query.

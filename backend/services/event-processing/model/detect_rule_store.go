@@ -53,6 +53,21 @@ func (s *DetectRuleStore) LoadAll(ctx context.Context) ([]DetectRule, error) {
 	return rules, nil
 }
 
+// LoadByProfileVersion returns the projected (published, enabled) rules for one profile version
+// — the rules the engine currently runs for that "{profileToken}@{version}" scope. The console's
+// rule-health view resolves a profile's ACTIVE version token (via the ProfileActive projection)
+// and reads its live rule set here. Tenant-filtered explicitly (the projection spans tenants).
+func (s *DetectRuleStore) LoadByProfileVersion(ctx context.Context, tenant, profileVersionToken string) ([]DetectRule, error) {
+	var rules []DetectRule
+	err := s.rdb.DB(ctx).
+		Where("tenant = ? AND profile_version_token = ?", tenant, profileVersionToken).
+		Find(&rules).Error
+	if err != nil {
+		return nil, err
+	}
+	return rules, nil
+}
+
 // LoadByID returns the single rule row for a composed runtime rule id, or ok=false when no such
 // rule is persisted. It is the REACT dispatcher's resolution path (ADR-051 slice 5b): a derived
 // event carries the rule id that fired, and the dispatcher reads the authoritative rule Definition

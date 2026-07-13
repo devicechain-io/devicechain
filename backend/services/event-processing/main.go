@@ -39,6 +39,7 @@ var (
 
 	SnapshotStore           *model.SnapshotStore
 	DetectRuleStore         *model.DetectRuleStore
+	RuleStatStore           *model.RuleStatStore
 	DeviceRosterStore       *model.DeviceRosterStore
 	ProfileActiveStore      *model.ProfileActiveStore
 	DeviceAttributeStore    *model.DeviceAttributeStore
@@ -169,7 +170,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		MaxLiveKeysPerTenant: Configuration.MaxLiveKeysPerTenant,
 	}
 	ResolvedEventsProcessor = processor.NewResolvedEventsProcessor(Microservice, ResolvedEventsReader,
-		nmgr, SnapshotStore, RuleRegistry, derivedWriter, cfg, core.NewNoOpLifecycleCallbacks())
+		nmgr, SnapshotStore, RuleRegistry, derivedWriter, RuleStatStore, cfg, core.NewNoOpLifecycleCallbacks())
 	ResolvedEventsProcessor.RuleUpdatesReader = ruleReader
 	ResolvedEventsProcessor.RuleStore = DetectRuleStore
 	// Dead-man read-model wiring (ADR-051 slice 4c-2b): the consumers persist the roster and
@@ -269,6 +270,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// rules here and the engine's rule set is rebuilt from it at startup, so rules survive a
 	// restart independent of the finite-retention fact stream.
 	DetectRuleStore = model.NewDetectRuleStore(RdbManager)
+	RuleStatStore = model.NewRuleStatStore(RdbManager)
 	// The dead-man read-models (ADR-051 slice 4c-2b): the devices expected to report and which
 	// version is active per profile token (with its publish time, the grace base). The roster/
 	// entity-deleted/rule consumers maintain them before acking; slice 4c-2b-2's engine arming is
@@ -289,11 +291,16 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	}
 
 	// The GraphQL surface carries the scaffold health/metrics server (/healthz, /readyz,
-	// /metrics) plus the ADR-044 detection-rule validation gate (validateDetectionRules).
-	// The gate compiles rules through the stateless DETECT compiler, so the resolver is
-	// state-free and needs no context providers.
+	// /metrics), the ADR-044 detection-rule validation gate (validateDetectionRules — pure,
+	// compiles through the stateless DETECT compiler), and the slice-7b rule-health read
+	// (ruleHealth), which reads the durable rule + firing projections — so the resolver carries
+	// their stores. Auth/tenant ride the request context, so no additional providers are needed.
 	providers := map[gqlcore.ContextKey]interface{}{}
-	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{})
+	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{
+		DetectRules: DetectRuleStore,
+		RuleStats:   RuleStatStore,
+		Profiles:    ProfileActiveStore,
+	})
 
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
 	// validator in the background and gate the data plane on readiness.

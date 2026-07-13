@@ -113,6 +113,17 @@ type Metrics interface {
 	RecordDerivedRejected(reason RejectReason)
 }
 
+// FireRecorder is the durable per-rule firing sink (ADR-051 slice 7b), implemented by the
+// processor over the RuleStat projection. The Publisher calls it once per detection it
+// durably publishes so the console rule-health view can show last-fired / fire-count. It is
+// OFF the correctness path: a nil recorder disables it, and the implementation swallows write
+// errors — a failed stat write must never wedge the publish/checkpoint loop. Unlike Metrics
+// it is per-rule, so it lives in a durable table, not a Prometheus series (the ADR-023 G.3
+// cardinality guard).
+type FireRecorder interface {
+	RecordFire(ctx context.Context, ruleID, tenant string, at time.Time, edge string)
+}
+
 // dlqMax bounds the in-memory dead-letter ring. The backstop should never fire in correct
 // operation (it guards against a generator bug), so a bounded, restart-volatile record plus
 // the counter and a loud error log is proportionate; a durable DLQ stream is a Slice-8 ops
@@ -136,9 +147,10 @@ type DeadLetter struct {
 // dead-lettered and counted — never written to a tenant subject — so a mis-generated rule
 // cannot leak one tenant's detection onto another's feed.
 type Publisher struct {
-	writer  messaging.MessageWriter
-	reg     *RuleRegistry
-	metrics Metrics
+	writer   messaging.MessageWriter
+	reg      *RuleRegistry
+	metrics  Metrics
+	recorder FireRecorder
 
 	mu  sync.Mutex
 	dlq []DeadLetter
@@ -148,6 +160,11 @@ type Publisher struct {
 func NewPublisher(writer messaging.MessageWriter, reg *RuleRegistry, metrics Metrics) *Publisher {
 	return &Publisher{writer: writer, reg: reg, metrics: metrics}
 }
+
+// SetFireRecorder wires the per-rule firing sink (ADR-051 slice 7b). It is set after
+// construction (rather than a constructor param) so the many existing publisher call sites —
+// including tests — need no change; a Publisher with no recorder simply records no stats.
+func (p *Publisher) SetFireRecorder(r FireRecorder) { p.recorder = r }
 
 // Publish emits one detection as a derived event on its owning tenant's subject. It returns
 // a non-nil error ONLY on a retryable broker failure — the caller must then NOT advance the
@@ -238,6 +255,13 @@ func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
 		return fmt.Errorf("publish derived event for rule %q: %w", det.RuleID, err)
 	}
 	p.metrics.RecordDerivedPublished()
+	// Record the fire for the rule-health projection AFTER a durable publish, so a stat only
+	// ever counts a detection that actually reached the feed. It is off the correctness path
+	// (the recorder swallows its own errors), so it can never turn a published detection into a
+	// retryable failure or a wedged checkpoint.
+	if p.recorder != nil {
+		p.recorder.RecordFire(ctx, det.RuleID, sr.Tenant, det.At, wireEdge(det.Edge))
+	}
 	return nil
 }
 
