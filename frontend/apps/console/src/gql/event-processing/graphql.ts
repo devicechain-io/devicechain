@@ -15,6 +15,7 @@ export type PreviewRuleInput = {
   profileToken: string;
   ruleDefinition?: string | null | undefined;
   start: string;
+  trace?: boolean | null | undefined;
 };
 
 export type RuleStatus =
