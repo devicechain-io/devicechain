@@ -42,6 +42,12 @@ const (
 // replacing this.
 func DefaultLimits() Limits { return Limits{} }
 
+// WithDefaults returns the limits with every zero field floored to its built-in cap — the same
+// resolution Compile applies internally, exported so a caller that must cost-gate against the
+// EFFECTIVE ceiling before Compile runs (the canvas lowering gates unwired branch guards up front)
+// resolves it from one place rather than re-deriving the floor and drifting.
+func (l Limits) WithDefaults() Limits { return l.withDefaults() }
+
 func (l Limits) withDefaults() Limits {
 	if l.PredicateCostCeiling == 0 {
 		l.PredicateCostCeiling = defaultPredicateCostCeiling
@@ -214,7 +220,7 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 	// Validate the REACT layer (severity + action chain) and carry the severity through. This is
 	// the same publish-time gate the detection fields pass: a malformed action or an alarm without
 	// a tier is rejected here (fail-closed) so it can never reach the dispatcher.
-	if err := validateReact(r); err != nil {
+	if err := validateReact(r, limits); err != nil {
 		return nil, err
 	}
 	cr.Severity = r.Severity
@@ -225,7 +231,7 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 // action chain, each action well-formed for its type, and a severity that is present when an alarm
 // is raised and always within the known set. It is separate from the per-type detection lowering
 // because actions are orthogonal to the detection shape — any rule type may carry any action.
-func validateReact(r Rule) error {
+func validateReact(r Rule, limits Limits) error {
 	if r.Severity != "" && !r.Severity.Valid() {
 		return invalid(r.ID, "severity", "unknown severity %q", r.Severity)
 	}
@@ -245,6 +251,16 @@ func validateReact(r Rule) error {
 	for i, a := range r.Actions {
 		if err := validateAction(r.ID, i, a); err != nil {
 			return err
+		}
+		if a.Guard != "" {
+			// Cost-gate the per-action guard at the SAME tenant ceiling as the leaf predicate (a guard
+			// is another cost-bearing CEL expression, ADR-023). A parse/type error, non-boolean, or
+			// over-cost guard rejects the rule at publish — fail-closed, so a runaway guard never
+			// reaches the dispatcher's hot path. The guard env is the derived event's scalars, NOT the
+			// resolved event's map (guard.go).
+			if _, err := CompileGuard(a.Guard, limits.PredicateCostCeiling); err != nil {
+				return invalid(r.ID, "actions", "action %d guard: %v", i, err)
+			}
 		}
 		if a.Type == ActionRaiseAlarm && !r.Severity.Valid() {
 			// A raiseAlarm action needs a tier to raise at; the tier lives on the rule (one rule,
@@ -282,11 +298,21 @@ func isJSONObject(s string) bool {
 // so the payload is part of the key; the payload is compared verbatim (it is not canonicalized —
 // see SendCommandAction.Payload), so this catches identical authored bytes, the mistake case.
 func actionDedupKey(a Action) string {
+	// The guard is part of the identity: two actions with the same target but different guards route
+	// on different conditions (raise-if-hot vs raise-if-cold off one detection), so they are distinct,
+	// not duplicates — and the dispatcher's content-addressed idempotency token must likewise separate
+	// them (react.actionContentKey mirrors this) or one would swallow the other's dispatch. The guard
+	// segment is appended only when non-empty, so an unguarded action's key is unchanged from pre-9c
+	// (kept in lockstep with actionContentKey, whose token is durable).
+	guardSeg := ""
+	if a.Guard != "" {
+		guardSeg = "|" + a.Guard
+	}
 	switch a.Type {
 	case ActionRaiseAlarm:
-		return "raiseAlarm|" + a.RaiseAlarm.AlarmKey
+		return "raiseAlarm|" + a.RaiseAlarm.AlarmKey + guardSeg
 	case ActionSendCommand:
-		return "sendCommand|" + a.SendCommand.Command + "|" + a.SendCommand.Payload
+		return "sendCommand|" + a.SendCommand.Command + "|" + a.SendCommand.Payload + guardSeg
 	default:
 		return string(a.Type)
 	}

@@ -90,6 +90,10 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	if profileToken == "" {
 		return nil, errorf("", "a profile token is required to compile a canvas")
 	}
+	// Floor the limits once, up front, to the EFFECTIVE per-tenant ceilings — so the up-front branch
+	// guard gate below cost-gates against the real ceiling (a zero PredicateCostCeiling would reject
+	// every guard) rather than re-deriving the floor. rules.Compile floors again internally (idempotent).
+	limits = limits.WithDefaults()
 
 	// Index nodes; reject duplicate ids and unknown types up front (fail closed).
 	byID := make(map[string]Node, len(def.Nodes))
@@ -115,9 +119,18 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	// when someone later wires it. This is the counterpart to rejecting a dangling action /
 	// source-less condition, and it makes the "every Source node is profile-scoped to the
 	// canvas" contract (the doc + schema promise) actually hold.
+	// A branch node's guard is likewise cost-gated up front regardless of connectivity: an unwired
+	// branch rides along in the AuthoringGraph sidecar, and its guard is folded onto an action's Guard
+	// (and re-gated by rules.Compile) only once wired — so a poisoned/over-cost guard on an unwired
+	// branch must be caught here, not left to surface when someone later wires it.
 	for _, n := range def.Nodes {
-		if n.Type == NodeSource {
+		switch n.Type {
+		case NodeSource:
 			if cerr := validateSource(n, profileToken); cerr != nil {
+				return nil, cerr
+			}
+		case NodeBranch:
+			if cerr := validateBranch(n, limits); cerr != nil {
 				return nil, cerr
 			}
 		}
@@ -142,10 +155,10 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 		return nil, errorf("", "the canvas has no condition node — a rule needs exactly one detection")
 	}
 
-	// Global REACT-fan-in check: every action must be fed by exactly one condition's signal.
-	// An action with no upstream is a stateful node with nothing to react to; an action fed by
-	// two conditions is a cross-window join (§3.3) — both rejected before lowering.
-	actionOwner, err := resolveActionOwners(def.Nodes, byID, edges)
+	// Global REACT signal-path resolution: bind every action to its owning condition and the composed
+	// branch guard on the path between them. An action with no upstream is a stateful node with nothing
+	// to react to; an action/branch fed by two signals is a cross-window join (§3.3) — both rejected.
+	chains, err := resolveReactChains(def.Nodes, byID, edges)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +168,7 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 		diags   []Diagnostic
 	)
 	for _, cid := range conditionIDs {
-		lr, cerr := lowerCondition(byID[cid], byID, edges, actionOwner, limits)
+		lr, cerr := lowerCondition(byID[cid], byID, edges, chains, limits)
 		if cerr != nil {
 			diags = append(diags, cerr.Diagnostics...)
 			continue
@@ -165,7 +178,66 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	if len(diags) > 0 {
 		return nil, &CompileError{Diagnostics: diags}
 	}
-	return &Result{Rules: lowered}, nil
+	// Advisory (non-fatal) warnings surfaced on the canvas, once the graph is known-good. They flag
+	// authoring hazards the compiler cannot reject without also forbidding legitimate graphs: a
+	// same-target action pair whose guards may overlap (a possible double-send), and a branch that
+	// routes nothing.
+	var warnings []Diagnostic
+	warnings = append(warnings, duplicateTargetWarnings(lowered)...)
+	warnings = append(warnings, danglingBranchWarnings(def.Nodes, edges)...)
+	return &Result{Rules: lowered, Diagnostics: warnings}, nil
+}
+
+// duplicateTargetWarnings flags, per rule, two sendCommand actions with the SAME command+payload but
+// different guards. The authoring gate already rejects EXACT duplicates (same command+payload+guard);
+// this catches the remaining hazard the guard split re-opens — if the two guards overlap, the device
+// receives the identical command twice per detection. Overlap is statically undecidable, and
+// non-overlapping guards (send at two disjoint value bands) are legitimate, so this warns rather than
+// rejects. Anchored to the condition node the actions hang off.
+func duplicateTargetWarnings(lowered []LoweredRule) []Diagnostic {
+	var out []Diagnostic
+	for _, lr := range lowered {
+		seen := make(map[string]struct{})
+		for _, a := range lr.Rule.Actions {
+			if a.Type != rules.ActionSendCommand || a.SendCommand == nil {
+				continue
+			}
+			key := a.SendCommand.Command + "\x00" + a.SendCommand.Payload
+			if _, dup := seen[key]; dup {
+				out = append(out, Diagnostic{
+					NodeID:   lr.NodeID,
+					Severity: "warning",
+					Message:  fmt.Sprintf("two actions send command %q with the same payload under different branches — if their conditions overlap, the device receives it twice per detection", a.SendCommand.Command),
+				})
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+	}
+	return out
+}
+
+// danglingBranchWarnings flags a branch node with no outgoing signal edge: it has an input but gates
+// nothing, so it is authoring dead weight (a route to nowhere). Not an error — no action is lost — but
+// almost certainly a mistake, so it warns.
+func danglingBranchWarnings(nodes []Node, edges []typedEdge) []Diagnostic {
+	hasOut := make(map[string]bool)
+	for _, e := range edges {
+		if e.ptype == PortSignal {
+			hasOut[e.fromNode] = true
+		}
+	}
+	var out []Diagnostic
+	for _, n := range nodes {
+		if n.Type.isBranch() && !hasOut[n.ID] {
+			out = append(out, Diagnostic{
+				NodeID:   n.ID,
+				Severity: "warning",
+				Message:  "this branch has no downstream action — it routes nothing",
+			})
+		}
+	}
+	return out
 }
 
 // typeCheckEdges resolves each edge endpoint against the port catalog and requires the two
@@ -285,57 +357,162 @@ func detectCycle(nodes []Node, edges []typedEdge) error {
 	return nil
 }
 
-// resolveActionOwners maps each action node to the condition node whose signal feeds it,
-// enforcing exactly-one-detection-per-action: zero is a dangling stateful node, two is a
-// cross-window join (§3.3) — both rejected. Returns actionNodeID → conditionNodeID.
-func resolveActionOwners(nodes []Node, byID map[string]Node, edges []typedEdge) (map[string]string, error) {
-	// Collect the signal edges into each action node's input port.
-	feeders := make(map[string][]string) // actionNodeID → []fromNodeID
+// reactBinding is where one action node lowers: the condition whose signal ultimately feeds it, and
+// the composed guard — the conjunction of every branch predicate on the signal path from that
+// condition to the action (empty when the action wires straight to the condition, the pre-9c case).
+type reactBinding struct {
+	conditionID string
+	guard       string
+}
+
+// resolveReactChains walks the signal-downstream subgraph to bind every action node to its owning
+// condition and its composed branch guard (slice 9c). It enforces that every branch and action node
+// has EXACTLY ONE incoming signal edge: zero is a dangling node with nothing to react to; more than
+// one is a cross-signal join (two conditions/branches converging on one node), which has no
+// single-guard lowering and is the cross-window-correlation construct rejected at compile (§3.3 /
+// §3.4). A condition may fan its signal out to many branches/actions. Because each branch/action has
+// a unique signal predecessor, an action's walk back is a single chain terminating at exactly one
+// condition — so the old "fed by more than one condition" check is subsumed by the one-incoming rule.
+func resolveReactChains(nodes []Node, byID map[string]Node, edges []typedEdge) (map[string]reactBinding, error) {
+	// The signal predecessors of each branch/action node. Signal edges only ever target a branch or
+	// an action (a condition has no signal INPUT port, a source none at all — type-checked already).
+	incoming := make(map[string][]string) // toNode → []fromNode
 	for _, e := range edges {
 		if e.ptype != PortSignal {
 			continue
 		}
-		if byID[e.toNode].Type == NodeAction {
-			feeders[e.toNode] = append(feeders[e.toNode], e.fromNode)
+		if t := byID[e.toNode].Type; t == NodeBranch || t == NodeAction {
+			incoming[e.toNode] = append(incoming[e.toNode], e.fromNode)
 		}
 	}
-	owner := make(map[string]string)
-	// Iterate in node declaration order (not map order) so a graph with more than one defective
-	// action anchors its first-reported diagnostic deterministically run-to-run.
+	// Enforce exactly-one-incoming for every branch and action, in node declaration order so the
+	// first-reported diagnostic is deterministic run-to-run.
+	pred := make(map[string]string, len(incoming))
+	for _, n := range nodes {
+		if n.Type != NodeBranch && n.Type != NodeAction {
+			continue
+		}
+		fs := incoming[n.ID]
+		if len(fs) == 0 {
+			if n.Type == NodeAction {
+				return nil, errorf(n.ID, "this action has no detection feeding it — wire a condition's signal into it")
+			}
+			return nil, errorf(n.ID, "this branch has no input — wire a condition's or branch's signal into it")
+		}
+		if len(fs) > 1 {
+			return nil, errorf(n.ID, "this %s is fed by more than one signal — combine conditions within a single windowed rule, or split into two rules; cross-window correlation is post-GA (ADR-052)", nodeKind(n.Type))
+		}
+		pred[n.ID] = fs[0]
+	}
+
+	out := make(map[string]reactBinding)
 	for _, n := range nodes {
 		if n.Type != NodeAction {
 			continue
 		}
-		fs := feeders[n.ID]
-		if len(fs) == 0 {
-			return nil, errorf(n.ID, "this action has no detection feeding it — wire a condition's signal into it")
+		var guards []string // nearest-action-first; composeGuards reverses to condition→action order
+		cur := n.ID
+		// Bound the walk by the node count — a cycle was rejected upstream (detectCycle), so this is a
+		// belt-and-braces guard against a walk that never reaches a condition.
+		for steps := 0; steps <= len(nodes); steps++ {
+			f, ok := pred[cur]
+			if !ok {
+				// cur is a branch/action with no recorded predecessor — unreachable (the loop above
+				// errored on zero-incoming), but fail closed rather than bind to an empty condition.
+				return nil, errorf(n.ID, "this action's signal path does not terminate at a condition")
+			}
+			ft := byID[f].Type
+			switch {
+			case ft.isCondition():
+				out[n.ID] = reactBinding{conditionID: f, guard: composeGuards(guards)}
+				cur = "" // sentinel: done
+			case ft.isBranch():
+				when, berr := branchWhen(byID[f])
+				if berr != nil {
+					return nil, errorf(f, "%v", berr)
+				}
+				guards = append(guards, when)
+				cur = f
+			default:
+				// A signal edge can only originate at a condition or a branch (type-checked), so this
+				// is unreachable; fail closed against a future signal-emitting node type.
+				return nil, errorf(n.ID, "this action's signal path passes through a %q node that cannot emit a signal", ft)
+			}
+			if cur == "" {
+				break
+			}
 		}
-		// A signal edge's source is always a condition node (only a condition has a signal
-		// output in the 9a catalog), so distinct feeders are distinct conditions.
-		distinct := make(map[string]struct{}, len(fs))
-		for _, f := range fs {
-			distinct[f] = struct{}{}
+		if _, done := out[n.ID]; !done {
+			return nil, errorf(n.ID, "this action's signal path does not terminate at a condition")
 		}
-		if len(distinct) > 1 {
-			return nil, errorf(n.ID, "this action is fed by more than one condition — combine conditions within a single windowed rule, or split into two rules; cross-window correlation is post-GA (ADR-052)")
-		}
-		// Enforce (not merely assume) that the feeder is a condition node. It always is in the
-		// 9a catalog, but when a later slice adds a signal-passing intermediate (branch/enrich),
-		// an action wired below one would otherwise get a non-condition owner and silently drop
-		// off every rule instead of erroring — fail closed against that future.
-		if !byID[fs[0]].Type.isCondition() {
-			return nil, errorf(n.ID, "this action is not fed directly by a condition")
-		}
-		owner[n.ID] = fs[0]
 	}
-	return owner, nil
+	return out, nil
+}
+
+// nodeKind names a node type for a diagnostic ("branch"/"action"); it is the human word, not the
+// wire token, and only used where those two categories appear.
+func nodeKind(t NodeType) string {
+	if t == NodeBranch {
+		return "branch"
+	}
+	return "action"
+}
+
+// branchWhen decodes a branch node's config and returns its (validated non-empty) guard predicate.
+func branchWhen(n Node) (string, error) {
+	var c branchConfig
+	if err := decodeConfig(n.Config, &c); err != nil {
+		return "", fmt.Errorf("branch config: %v", err)
+	}
+	return c.When, nil
+}
+
+// composeGuards conjoins the branch predicates on a signal path into one guard CEL string, in
+// condition→action order (the walk collects them action→condition, so this reverses). One predicate
+// is emitted verbatim; several are parenthesized and &&-joined. The result is what a form builder
+// setting the same Action.Guard would emit, keeping the byte-identity contract (§3.2) intact for
+// guarded rules once the form grows a guard editor.
+func composeGuards(guards []string) string {
+	if len(guards) == 0 {
+		return ""
+	}
+	rev := make([]string, len(guards))
+	for i, g := range guards {
+		rev[len(guards)-1-i] = g
+	}
+	if len(rev) == 1 {
+		return rev[0]
+	}
+	parts := make([]string, len(rev))
+	for i, g := range rev {
+		parts[i] = "(" + g + ")"
+	}
+	return strings.Join(parts, " && ")
+}
+
+// validateBranch cost-gates a branch node's guard up front (regardless of connectivity), rejecting an
+// empty predicate (a branch that gates nothing) and a parse/type/over-cost guard — the same
+// fail-closed posture validateSource takes for an unwired source. limits must already be floored to
+// the effective ceiling (Compile floors before this runs).
+func validateBranch(n Node, limits rules.Limits) *CompileError {
+	var c branchConfig
+	if err := decodeConfig(n.Config, &c); err != nil {
+		return errorf(n.ID, "branch config: %v", err)
+	}
+	if strings.TrimSpace(c.When) == "" {
+		return errorf(n.ID, "a branch needs a condition — its \"when\" predicate is empty")
+	}
+	if _, err := rules.CompileGuard(c.When, limits.PredicateCostCeiling); err != nil {
+		return errorf(n.ID, "branch condition: %v", err)
+	}
+	return nil
 }
 
 // lowerCondition synthesizes one compiled rule from a condition node: its single upstream
 // source (validated against the profile scope), its own predicate/temporal config, and the
 // REACT actions its signal fans out to. It runs the assembled rule through the exact
 // rules.Compile path the form builder uses.
-func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, actionOwner map[string]string, limits rules.Limits) (*LoweredRule, *CompileError) {
+func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, chains map[string]reactBinding, limits rules.Limits) (*LoweredRule, *CompileError) {
 	// Exactly one source must feed the condition's stream input (§3.4: >1 source rejected;
 	// 0 sources means the detection has no telemetry to run against).
 	var sources []string
@@ -359,10 +536,12 @@ func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, actionOwner
 	}
 
 	// Attach the REACT actions this condition's signal fans out to, ordered by the action
-	// node's id so the chain is deterministic (byte-identity does not depend on map order).
+	// node's id so the chain is deterministic (byte-identity does not depend on map order). Each
+	// action carries the composed guard of the branch path between this condition and it (empty when
+	// wired straight through); rules.Compile cost-gates the guard as part of validateReact.
 	var actionIDs []string
-	for aid, owner := range actionOwner {
-		if owner == c.ID {
+	for aid, b := range chains {
+		if b.conditionID == c.ID {
 			actionIDs = append(actionIDs, aid)
 		}
 	}
@@ -372,6 +551,7 @@ func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, actionOwner
 		if aerr != nil {
 			return nil, errorf(aid, "%v", aerr)
 		}
+		a.Guard = chains[aid].guard
 		rule.Actions = append(rule.Actions, a)
 	}
 

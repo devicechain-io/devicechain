@@ -58,7 +58,12 @@ const (
 	NodeDeltaRate   NodeType = "deltaRate"
 	NodeRepeating   NodeType = "repeating"
 	NodeCorrelation NodeType = "correlation"
-	NodeAction      NodeType = "action"
+	// NodeBranch is a REACT-side router (ADR-053 slice 9c): a signal→signal node carrying a CEL
+	// boolean that gates the actions downstream of it. It lowers to NO runtime node — its predicate
+	// is folded onto the Guard of every action reachable through it (see lower.go), so a branch is
+	// pure authoring sugar over rules.Action.Guard, not a new engine primitive (ADR-054).
+	NodeBranch NodeType = "branch"
+	NodeAction NodeType = "action"
 )
 
 // ports describes a node type's typed input and output ports, keyed by port name. The
@@ -76,6 +81,7 @@ type category int
 const (
 	catSource category = iota
 	catCondition
+	catBranch
 	catAction
 )
 
@@ -114,6 +120,10 @@ var catalog = map[NodeType]struct {
 		in:  map[string]PortType{"in": PortStream},
 		out: map[string]PortType{"signal": PortSignal},
 	}},
+	NodeBranch: {catBranch, ports{
+		in:  map[string]PortType{"in": PortSignal},
+		out: map[string]PortType{"out": PortSignal},
+	}},
 	NodeAction: {catAction, ports{in: map[string]PortType{"in": PortSignal}}},
 }
 
@@ -121,6 +131,12 @@ var catalog = map[NodeType]struct {
 func (t NodeType) isCondition() bool {
 	c, ok := catalog[t]
 	return ok && c.cat == catCondition
+}
+
+// isBranch reports whether a node type is a branch node (signal→signal router, slice 9c).
+func (t NodeType) isBranch() bool {
+	c, ok := catalog[t]
+	return ok && c.cat == catBranch
 }
 
 // CanvasDefinition is the authored graph: a versioned set of typed nodes and the edges
