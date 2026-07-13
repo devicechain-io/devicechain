@@ -44,14 +44,17 @@ type ReactDispatcher struct {
 // NewReactDispatcher builds the REACT consumer over a derived-event reader, a rule resolver, and the
 // action sinks. Any sink may be nil to disable that action kind (a nil commands sink disables
 // send-command; a nil alarms sink disables raise-alarm; a nil connectors sink disables httpCall/publish,
-// ADR-060); main decides which are configured. The dispatcher is constructed here so the whole REACT
-// wiring lives behind one type.
+// ADR-060); main decides which are configured. connectorRate is the SOURCE-side per-tenant outbound
+// egress cost-gate (ADR-060 SD-3); a nil gate disables source-charging (connector dispatches metered
+// only by the downstream outbound-connectors egress limiter). The dispatcher is constructed here so
+// the whole REACT wiring lives behind one type.
 func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
-	resolver react.RuleResolver, commands react.CommandSink, alarms react.AlarmSink, connectors react.ConnectorSink) *ReactDispatcher {
+	resolver react.RuleResolver, commands react.CommandSink, alarms react.AlarmSink, connectors react.ConnectorSink,
+	connectorRate react.ConnectorRateGate) *ReactDispatcher {
 	m := newReactMetrics(ms)
 	return &ReactDispatcher{
 		reader:     reader,
-		dispatcher: react.NewDispatcher(resolver, commands, alarms, connectors, m),
+		dispatcher: react.NewDispatcher(resolver, commands, alarms, connectors, connectorRate, m),
 		metrics:    m,
 	}
 }

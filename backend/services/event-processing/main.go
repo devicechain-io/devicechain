@@ -10,6 +10,7 @@ import (
 
 	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-event-processing/config"
+	"github.com/devicechain-io/dc-event-processing/governance"
 	"github.com/devicechain-io/dc-event-processing/graphql"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -253,13 +254,46 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	connectors := processor.NewConnectorClient(connectorWriter)
 	log.Info().Msg("REACT connector dispatch ENABLED (ADR-060): httpCall/publish actions publish to the outbound-connectors service.")
 
+	// SOURCE-side outbound egress cost-gate (ADR-060 SD-3): REACT charges the tenant's outbound
+	// budget before publishing a connector-dispatch, dropping over-quota actions at the source so a
+	// runaway rule cannot flood the connector-dispatch stream. Always non-nil (fail-open to the
+	// platform default when per-tenant overrides are not wired) — never unlimited.
+	connectorRate := buildEgressLimiter()
+
 	reader, err := nmgr.NewReader(config.SUBJECT_DERIVED_EVENTS, messaging.ReaderWithDeliverNew())
 	if err != nil {
 		return err
 	}
 	ReactDispatcher = processor.NewReactDispatcher(Microservice, reader,
-		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors)
+		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors, connectorRate)
 	return nil
+}
+
+// buildEgressLimiter constructs the per-tenant SOURCE-side OUTBOUND egress cost-gate (ADR-060 SD-3).
+// When the shared service secret and user-management endpoint are configured, per-tenant outbound
+// overrides are fetched from user-management over a service token (least-privilege tenant:read — a
+// SEPARATE, narrower scope than the command:write token the send-command sink uses) and cached,
+// failing open to the platform default; otherwise every tenant is metered at the platform default.
+// Either way the ceiling is a real limit — never unlimited — since ApplyDefaults/Validate guarantee a
+// positive platform default. Mirrors outbound-connectors' buildEgressLimiter; the source Allow-drop
+// here and that service's bounded egress Wait charge the SAME outbound dimension at both ends.
+func buildEgressLimiter() *core.TenantRateLimiter {
+	def := governance.Limits{
+		MessagesPerSecond: Configuration.OutboundMessagesPerSecond,
+		Burst:             Configuration.OutboundBurst,
+	}
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant outbound overrides disabled; metering every tenant at the platform default (ADR-060 SD-3).")
+		return core.NewTenantRateLimiter(func(string) (float64, int) {
+			return def.MessagesPerSecond, def.Burst
+		})
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.TenantRead)})
+	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	resolver := governance.NewTenantLimitResolver(governance.NewServiceFetcher(client, umURL, def), def)
+	log.Info().Str("userManagement", umURL).Msg("REACT source-side per-tenant outbound overrides enabled (fail-open to platform default, ADR-060 SD-3).")
+	return core.NewTenantRateLimiter(resolver.Resolve)
 }
 
 // Called after microservice has been initialized.

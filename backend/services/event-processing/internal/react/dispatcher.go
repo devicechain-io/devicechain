@@ -150,6 +150,30 @@ type ConnectorSink interface {
 	Dispatch(ctx context.Context, req ConnectorRequest) error
 }
 
+// ConnectorRateGate is the per-tenant OUTBOUND egress cost-gate charged at the SOURCE (ADR-060
+// SD-3). Before REACT publishes a connector-dispatch (httpCall/publish), the dispatcher charges the
+// tenant's outbound budget; a false result means over-quota, and the action is DROPPED (shed at the
+// source), NOT retried — so a runaway rule cannot flood the connector-dispatch stream and the
+// downstream outbound-connectors service. It is an IMMEDIATE, non-blocking test (a token-bucket
+// Allow), never a wait: REACT's at-least-once derived-event consumer must not block on egress. A shed
+// drops ONLY this connector action (ack-progress) — other actions of the same detection still fire,
+// and the event is acked, so a shed connector action does NOT wedge or redeliver the event. A nil
+// gate DISABLES source-charging (every connector dispatch is admitted); the outbound-connectors
+// egress limiter (C3b.2) still meters as the defense-in-depth backstop. *core.TenantRateLimiter
+// satisfies this (its Allow), kept as a narrow interface so this replay-correct package does not
+// depend on core's limiter type.
+//
+// DETERMINISM (ADR-056 boundary): charging a wall-clock rate limiter here is safe because REACT holds
+// NO replay-correct state — it is a separate, at-least-once, DECOUPLED consumer of the derived-event
+// stream (unlike the DETECT single-writer loop). A shed is a dropped SIDE EFFECT, never a mutation of
+// engine state, so it cannot diverge a replay. One consequence of at-least-once: if ANOTHER action of
+// the same detection fails and the whole event redelivers, this connector action re-charges the gate
+// on the re-run (a bounded over-count, capped by the consumer's redelivery cap) — an accepted cost of
+// keeping the gate a pure per-attempt Allow rather than threading dispatch state.
+type ConnectorRateGate interface {
+	Allow(tenant string) bool
+}
+
 // Metrics is the REACT observability sink (bounded cardinality — no per-tenant labels, the ADR-023
 // G.3 lesson). action is a fixed, small enum ("sendCommand"/"raiseAlarm"/"clearAlarm"/"httpCall"/
 // "publish" — "clearAlarm" is the structural falling-edge clear, ADR-057), never a tenant/rule value.
@@ -162,6 +186,10 @@ type Metrics interface {
 	// RecordNotEnabled: one action recognized but whose sink is disabled (nil) — raiseAlarm/clearAlarm
 	// before slice 6, or send-command on a deploy without command-delivery configured.
 	RecordNotEnabled(action string)
+	// RecordConnectorShed: one connector action (httpCall/publish) DROPPED at the source because the
+	// tenant is over its outbound egress quota (ADR-060 SD-3). action is the same "httpCall"/"publish"
+	// enum — no per-tenant label (the ADR-023 G.3 cardinality lesson).
+	RecordConnectorShed(action string)
 }
 
 // Dispatcher turns a derived event into its authored actions. It holds no per-detection state —
@@ -175,7 +203,10 @@ type Dispatcher struct {
 	commands   CommandSink
 	alarms     AlarmSink
 	connectors ConnectorSink
-	metrics    Metrics
+	// connectorRate is the SOURCE-side per-tenant outbound egress cost-gate (ADR-060 SD-3); nil
+	// disables source-charging (every connector dispatch admitted). See ConnectorRateGate.
+	connectorRate ConnectorRateGate
+	metrics       Metrics
 
 	// templates caches a compiled payload-template program per distinct template source (ADR-060),
 	// mirroring the guard cache below: the dispatcher resolves rules.Rule (not a compiled form) fresh
@@ -201,9 +232,11 @@ type Dispatcher struct {
 // nil to disable that action kind: a nil commands sink disables send-command, a nil alarms sink
 // disables raise-alarm, a nil connectors sink disables httpCall/publish (ADR-060). In production since
 // 6d the alarms sink is always wired (the sole alarm path); a nil alarms sink is a test-only
-// configuration. A dispatcher with all sinks nil dispatches nothing (every action inert).
-func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink, connectors ConnectorSink, metrics Metrics) *Dispatcher {
-	return &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, connectors: connectors, metrics: metrics}
+// configuration. A dispatcher with all sinks nil dispatches nothing (every action inert). connectorRate
+// is the SOURCE-side outbound egress cost-gate (ADR-060 SD-3); a nil gate disables source-charging
+// (every connector dispatch admitted, metered only by the downstream outbound-connectors egress limiter).
+func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink, connectors ConnectorSink, connectorRate ConnectorRateGate, metrics Metrics) *Dispatcher {
+	return &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, connectors: connectors, connectorRate: connectorRate, metrics: metrics}
 }
 
 // Dispatch handles one derived event, returning whether the consumer may ack it (Done) or must let
@@ -356,6 +389,17 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		if !d.guardAllows(ev, a) {
 			// Branch guard false for this detection — a routine, deterministic non-effect. Skip and ack;
 			// a redelivery re-evaluates the same guard to the same bit.
+			return Done
+		}
+		// SOURCE-side egress cost-gate (ADR-060 SD-3): charge the tenant's outbound budget BEFORE the
+		// (CEL) payload render and the publish, so an over-quota tenant sheds cheaply at the source
+		// rather than flooding the connector-dispatch stream and the downstream service. A shed DROPS
+		// only this connector action (ack-progress) — it is NOT a Retry (a retry would loop the whole
+		// event and never drain under sustained overload) and NOT a dispatch (do not count it as one).
+		// Charged after the guard (a guarded-out action is a non-effect, not an emission) and only when
+		// a gate is configured; a nil gate leaves metering entirely to the downstream egress limiter.
+		if d.connectorRate != nil && !d.connectorRate.Allow(ev.Tenant) {
+			d.metrics.RecordConnectorShed(kind)
 			return Done
 		}
 		payload, ok := d.renderPayload(ev, a)

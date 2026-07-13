@@ -45,7 +45,7 @@ func (s *reactFakeSink) Send(_ context.Context, req react.CommandRequest) error 
 // (nil-safe) and a live loop context, for direct handle() testing.
 func newTestReactDispatcher(resolver react.RuleResolver, sink react.CommandSink) *ReactDispatcher {
 	rd := &ReactDispatcher{
-		dispatcher: react.NewDispatcher(resolver, sink, nil, nil, newReactMetrics(nil)),
+		dispatcher: react.NewDispatcher(resolver, sink, nil, nil, nil, newReactMetrics(nil)),
 	}
 	rd.procCtx = context.Background()
 	return rd
