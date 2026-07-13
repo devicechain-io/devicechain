@@ -75,6 +75,12 @@ func helmInstall(ctx context.Context, st *State) error {
 	if secret := st.Values["serviceAuthSecret"]; secret != "" {
 		infraVals["serviceAuth"] = map[string]interface{}{"secret": secret}
 	}
+	// The instance secret-store root key (ADR-059): the base64 256-bit KEK that
+	// wraps every per-secret DEK, threaded into every service's instance config so
+	// each seals with the same instance KEK.
+	if rootKey := st.Values["secretsRootKey"]; rootKey != "" {
+		infraVals["secrets"] = map[string]interface{}{"rootKey": rootKey}
+	}
 	instanceVals := map[string]interface{}{"id": st.Instance}
 	if len(infraVals) > 0 {
 		instanceVals["config"] = map[string]interface{}{"infrastructure": infraVals}

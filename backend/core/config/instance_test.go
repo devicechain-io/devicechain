@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"math/big"
 	"testing"
@@ -87,6 +88,75 @@ func TestApplyDefaultsStreamBounds(t *testing.T) {
 			t.Errorf("explicit bounds overwritten: %d/%d/%d", n.StreamMaxBytes, n.StreamMaxMsgs, n.StreamMaxMsgSize)
 		}
 	})
+}
+
+// ApplyDefaults selects the zero-infra secret-store default (envelope-in-Postgres,
+// instance KEK) when omitted, but never synthesizes a root key.
+func TestApplyDefaultsSecrets(t *testing.T) {
+	cfg := &InstanceConfiguration{}
+	cfg.ApplyDefaults()
+	s := cfg.Infrastructure.Secrets
+	if s.Backend != DefaultSecretsBackend || s.KEKProvider != DefaultSecretsKEKProvider {
+		t.Fatalf("secret-store defaults not applied: backend=%q kek=%q", s.Backend, s.KEKProvider)
+	}
+	if s.RootKey != "" {
+		t.Fatalf("ApplyDefaults must not synthesize a root key, got %q", s.RootKey)
+	}
+
+	// An explicit selection is honored.
+	cfg2 := &InstanceConfiguration{}
+	cfg2.Infrastructure.Secrets.Backend = "vault"
+	cfg2.Infrastructure.Secrets.KEKProvider = "gcpkms"
+	cfg2.ApplyDefaults()
+	if cfg2.Infrastructure.Secrets.Backend != "vault" || cfg2.Infrastructure.Secrets.KEKProvider != "gcpkms" {
+		t.Fatal("explicit secret-store selection overwritten by defaults")
+	}
+}
+
+// DecodedRootKey fails closed on an absent, malformed, or wrong-length key and
+// returns the 32-byte key when well-formed.
+func TestDecodedRootKey(t *testing.T) {
+	good := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	short := base64.StdEncoding.EncodeToString(make([]byte, 16))
+
+	if _, err := (SecretsConfiguration{RootKey: ""}).DecodedRootKey(); err == nil {
+		t.Fatal("absent root key must fail closed")
+	}
+	if _, err := (SecretsConfiguration{RootKey: "not*base64"}).DecodedRootKey(); err == nil {
+		t.Fatal("malformed base64 must fail closed")
+	}
+	if _, err := (SecretsConfiguration{RootKey: short}).DecodedRootKey(); err == nil {
+		t.Fatal("a 16-byte key must fail closed (want 256-bit)")
+	}
+	raw, err := (SecretsConfiguration{RootKey: good}).DecodedRootKey()
+	if err != nil {
+		t.Fatalf("well-formed root key: %v", err)
+	}
+	if len(raw) != 32 {
+		t.Fatalf("decoded key is %d bytes, want 32", len(raw))
+	}
+}
+
+// Validate rejects a present-but-malformed root key (so a misrendered key surfaces
+// at startup) while allowing an absent one (only a consuming service requires it).
+func TestValidateSecretsRootKey(t *testing.T) {
+	cfg := NewDefaultInstanceConfiguration()
+	cfg.Infrastructure.Secrets.RootKey = "not-valid-base64-!!"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a malformed root key must fail validation")
+	}
+
+	cfg2 := NewDefaultInstanceConfiguration()
+	cfg2.Infrastructure.Secrets.RootKey = "" // absent is allowed
+	if err := cfg2.Validate(); err != nil {
+		t.Fatalf("an absent root key must pass validation, got %v", err)
+	}
+
+	cfg3 := NewDefaultInstanceConfiguration()
+	cfg3.Infrastructure.Secrets.RootKey = base64.StdEncoding.EncodeToString(make([]byte, 32))
+	if err := cfg3.Validate(); err != nil {
+		t.Fatalf("a well-formed root key must pass validation, got %v", err)
+	}
 }
 
 // Validate fails closed when the NATS backbone or the user-management endpoint

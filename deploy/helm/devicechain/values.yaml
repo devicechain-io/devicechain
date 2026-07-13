@@ -105,6 +105,19 @@ instance:
         # then validates via the normal JWKS. The bring-up (dcctl) mints a random
         # value here; empty disables service-token minting (fail-closed).
         secret: ""
+      secrets:
+        # Secret-storage backend + KEK selection (ADR-059). The default is envelope
+        # encryption in each service's own Postgres, with per-secret DEKs wrapped by
+        # a single instance root key (zero new infrastructure).
+        backend: postgres
+        kekProvider: instance
+        # rootKey is the base64-encoded 256-bit instance KEK. The bring-up (dcctl)
+        # mints a random value; for production, supply it via a pre-created Secret
+        # (instance.existingSecret) rather than committing it to values. Empty means
+        # a service that uses the secret store fails closed at startup (it cannot
+        # form its KEK). DR: losing this key loses every stored secret — back up the
+        # rendered instance Secret.
+        rootKey: ""
     persistence:
       rdb:
         type: postgres95

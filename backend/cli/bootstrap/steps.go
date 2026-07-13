@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -115,6 +116,17 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		return fail("minting service auth secret", err)
 	}
 	st.Values["serviceAuthSecret"] = serviceSecret
+
+	// Mint the instance secret-store root key (ADR-059): a base64-encoded 256-bit
+	// KEK that wraps every per-secret DEK, threaded into every service's instance
+	// config (helmInstall). Generated once here so the whole instance shares one
+	// KEK; losing it loses every stored secret, so the rendered K8s Secret must be
+	// backed up (see the DR note in the deploy docs).
+	secretsRootKey, err := randomKeyBase64(32)
+	if err != nil {
+		return fail("minting secrets root key", err)
+	}
+	st.Values["secretsRootKey"] = secretsRootKey
 
 	// Resolve the image source. Default to published images at a pinned version;
 	// the developer path builds from source into a local registry instead.
@@ -484,6 +496,18 @@ func randomSecret(nbytes int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// randomKeyBase64 returns a base64-encoded random key of the given byte length.
+// Base64 (not hex) because the secret-store root key is consumed as base64 by the
+// instance config (SecretsConfiguration.DecodedRootKey), and 32 bytes → a 256-bit
+// AES key. Uses crypto/rand so the KEK is not predictable.
+func randomKeyBase64(nbytes int) (string, error) {
+	b := make([]byte, nbytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(b), nil
 }
 
 // registryPort extracts the port from an ImageRegistry like "localhost:5000".
