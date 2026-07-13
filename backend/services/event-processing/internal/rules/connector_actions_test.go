@@ -53,7 +53,13 @@ func TestCompileRejectsMalformedConnectorActions(t *testing.T) {
 		{"httpCall non-post method", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", Method: "DELETE"}}},
 		{"httpCall reserved header", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", Headers: map[string]string{"Authorization": "Bearer forged"}}}},
 		{"httpCall reserved x-dc header", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", Headers: map[string]string{"X-DC-Tenant": "victim"}}}},
+		{"httpCall crlf header value", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", Headers: map[string]string{"X-Env": "a\r\nEvil: 1"}}}},
+		{"httpCall empty header name", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", Headers: map[string]string{"": "v"}}}},
+		{"httpCall canonicalization-colliding headers", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", Headers: map[string]string{"X-Env": "a", "x-env": "b"}}}},
+		{"httpCall url with userinfo", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://user:pass@x/y"}}},
 		{"httpCall bad secret handle", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", SecretRef: "bad handle!"}}},
+		{"httpCall secret handle traversal", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", SecretRef: "../../etc/passwd"}}},
+		{"httpCall secret handle leading slash", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", SecretRef: "/abs/handle"}}},
 		{"httpCall timeout over cap", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", TimeoutMs: MaxActionTimeoutMs + 1}}},
 		{"httpCall negative timeout", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", TimeoutMs: -1}}},
 		{"httpCall boolean body template", Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", BodyTemplate: "value > 10"}}},
@@ -98,6 +104,18 @@ func TestConnectorActionDedup(t *testing.T) {
 	}
 	if _, err := Compile(thresholdWith(SeverityCritical, p("kafka-a"), p("kafka-b")), testLimits); err != nil {
 		t.Fatalf("connectorRef-distinct publishes should compile, got %v", err)
+	}
+	// Normalization: empty method vs "POST" and header-name case are the SAME identity, so a pair
+	// that renders the identical request is rejected as a duplicate (else C2b would double-dispatch).
+	implicitPost := Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y"}}
+	explicitPost := Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", Method: "POST"}}
+	if _, err := Compile(thresholdWith(SeverityCritical, implicitPost, explicitPost), testLimits); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("empty-method and POST should be one identity (duplicate), got %v", err)
+	}
+	lowerHdr := Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", Headers: map[string]string{"x-env": "a"}}}
+	upperHdr := Action{Type: ActionHTTPCall, HTTPCall: &HTTPCallAction{URL: "https://x/y", Headers: map[string]string{"X-Env": "a"}}}
+	if _, err := Compile(thresholdWith(SeverityCritical, lowerHdr, upperHdr), testLimits); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("header-name case should be one identity (duplicate), got %v", err)
 	}
 }
 

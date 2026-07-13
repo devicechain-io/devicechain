@@ -280,10 +280,10 @@ func validateReact(r Rule, limits Limits) error {
 			}
 		}
 		// Reject an exact-duplicate action (fail-closed). The dispatcher keys idempotency on the
-		// detection identity PLUS the action index, so two identical actions are distinct keys and
-		// BOTH fire — a double alarm-raise (harmless: an in-place upsert) but a genuine DOUBLE
-		// command send. An author never means to send the same command twice per detection, so a
-		// textual duplicate is treated as a mistake here rather than dispatched twice downstream.
+		// detection identity PLUS the action's CONTENT (this same key's shape), so two identical
+		// actions collapse to ONE idempotency token and only one would ever dispatch — a silent
+		// swallow. An author never means to declare the same action twice per detection, so a textual
+		// duplicate is rejected here as a mistake rather than silently deduped downstream.
 		key := actionDedupKey(a)
 		if _, dup := seen[key]; dup {
 			return invalid(r.ID, "actions", "action %d duplicates an earlier action", i)
@@ -328,10 +328,12 @@ func actionDedupKey(a Action) string {
 	case ActionHTTPCall:
 		h := a.HTTPCall
 		// URL + method + body template + secret handle + a stable header serialization identify the
-		// dispatch. Headers are folded in (sorted) so two httpCalls that differ ONLY by header are
-		// distinct — react.actionContentKey (slice C2b) mirrors this exactly, so the idempotency token
-		// separates them too and one never swallows the other's dispatch.
-		return "httpCall|" + h.URL + "|" + h.Method + "|" + h.BodyTemplate + "|" + h.SecretRef + "|" + headerKey(h.Headers) + guardSeg
+		// dispatch. Method and header names are NORMALIZED (empty method ⇒ POST, names canonicalized)
+		// so two actions that render the identical request are ONE identity — else they would pass the
+		// duplicate gate yet get distinct idempotency tokens at dispatch and double-fire. When
+		// react.actionContentKey adds its httpCall/publish cases (slice C2b) it MUST apply the same
+		// normalization, or the durable idempotency token and this key diverge.
+		return "httpCall|" + h.URL + "|" + methodOrPost(h.Method) + "|" + h.BodyTemplate + "|" + h.SecretRef + "|" + headerKey(h.Headers) + guardSeg
 	case ActionPublish:
 		p := a.Publish
 		return "publish|" + p.ConnectorRef + "|" + p.PayloadTemplate + guardSeg
@@ -341,22 +343,37 @@ func actionDedupKey(a Action) string {
 }
 
 // headerKey renders a header map into a stable, order-independent string for the action identity
-// keys. Map iteration order is non-deterministic, so the keys are sorted; the value is length-
-// prefixed under each key so no set of names/values can collide with a different set.
+// keys. Names are CANONICALIZED (http.CanonicalHeaderKey — the same form the wire uses) so a
+// case-only difference is one identity; map iteration order is non-deterministic, so the canonical
+// names are sorted; each name/value is length-prefixed so no set can collide with a different set.
+// validateHTTPCall rejects two names that canonicalize to the same header, so the canonical names
+// here are unique (no value is lost to a canonicalization clash).
 func headerKey(h map[string]string) string {
 	if len(h) == 0 {
 		return ""
 	}
 	names := make([]string, 0, len(h))
-	for k := range h {
-		names = append(names, k)
+	canon := make(map[string]string, len(h))
+	for k, v := range h {
+		c := http.CanonicalHeaderKey(k)
+		names = append(names, c)
+		canon[c] = v
 	}
 	sort.Strings(names)
 	var b strings.Builder
-	for _, k := range names {
-		fmt.Fprintf(&b, "%d:%s=%d:%s;", len(k), k, len(h[k]), h[k])
+	for _, c := range names {
+		fmt.Fprintf(&b, "%d:%s=%d:%s;", len(c), c, len(canon[c]), canon[c])
 	}
 	return b.String()
+}
+
+// methodOrPost normalizes an httpCall method for the identity key: an empty method means POST (the
+// dispatch default), so "" and "POST" resolve to one identity rather than two colliding dispatches.
+func methodOrPost(m string) string {
+	if m == "" {
+		return http.MethodPost
+	}
+	return m
 }
 
 // actionTemplate returns the CEL payload-template source of a connector action (empty for
@@ -428,10 +445,23 @@ func validateHTTPCall(ruleID string, i int, h *HTTPCallAction) error {
 	if h.Method != "" && h.Method != http.MethodPost {
 		return invalid(ruleID, "actions", "action %d httpCall method %q is not supported (POST only)", i, h.Method)
 	}
-	for k := range h.Headers {
+	// Validate headers at publish so a malformed/reserved/colliding header is rejected here rather
+	// than failing every dispatch (net/http would reject it at send time, post-detection). Two names
+	// that canonicalize to the same header would render last-write-wins in nondeterministic map order
+	// under one idempotency token, so a post-canonicalization duplicate is rejected too.
+	seenHeader := make(map[string]struct{}, len(h.Headers))
+	for k, v := range h.Headers {
 		if httpsink.IsReservedHeader(k) {
 			return invalid(ruleID, "actions", "action %d httpCall header %q is reserved (Authorization / X-DC-* are set by the sink)", i, k)
 		}
+		if err := httpsink.ValidateHeader(k, v); err != nil {
+			return invalid(ruleID, "actions", "action %d httpCall %v", i, err)
+		}
+		canonical := http.CanonicalHeaderKey(k)
+		if _, dup := seenHeader[canonical]; dup {
+			return invalid(ruleID, "actions", "action %d httpCall has two headers that canonicalize to %q", i, canonical)
+		}
+		seenHeader[canonical] = struct{}{}
 	}
 	if err := validateSecretHandle(h.SecretRef); err != nil {
 		return invalid(ruleID, "actions", "action %d httpCall secretRef: %v", i, err)
@@ -481,6 +511,17 @@ func validateSecretHandle(h string) error {
 	for _, r := range h {
 		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '/' || r == '.') {
 			return fmt.Errorf("handle contains an invalid character %q (allowed: alphanumeric - _ / .)", r)
+		}
+	}
+	// Reject path-traversal shapes so the handle is a clean key regardless of the store backend a
+	// future ADR-059 slice plugs in (filesystem/Vault paths): no leading slash, no empty '.' or '..'
+	// segment. The default Postgres store matches Name exactly, so this is defense-in-depth.
+	if strings.HasPrefix(h, "/") {
+		return fmt.Errorf("handle must not start with '/'")
+	}
+	for _, seg := range strings.Split(h, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return fmt.Errorf("handle has an empty or dot path segment")
 		}
 	}
 	return nil

@@ -91,15 +91,64 @@ func (a Auth) HeaderValue(secret string) (name, value string) {
 	return name, secret
 }
 
-// ValidateURL parses raw and requires an absolute http/https URL. Anything else (a
-// missing scheme, ftp://, file://, an unparseable URL) is rejected — a non-http(s)
-// target widens the SSRF surface for no delivery benefit.
+// ValidateURL parses raw and requires an absolute http/https URL with a host and NO embedded
+// userinfo. A missing scheme, ftp://, file://, or an unparseable URL is rejected — a non-http(s)
+// target widens the SSRF surface for no delivery benefit. A host-less URL (https://) can never
+// dispatch, so it is rejected early rather than at send time. Userinfo (https://user:pass@host)
+// is rejected because it embeds a cleartext credential in the caller's stored config — exactly
+// what an ADR-059 secret handle exists to avoid; credentials belong in Secret/Auth, never the URL.
 func ValidateURL(raw string) (*url.URL, error) {
 	parsed, err := url.Parse(raw)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return nil, fmt.Errorf("invalid url %q (want http/https)", raw)
+	if err != nil {
+		// Do not echo the raw string — an unparseable URL may still contain a credential.
+		return nil, fmt.Errorf("invalid url (unparseable)")
+	}
+	// From here the URL parsed, so Redacted() masks any userinfo password in every error text.
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("invalid url %q (want http/https)", parsed.Redacted())
+	}
+	if parsed.Host == "" {
+		return nil, fmt.Errorf("invalid url %q (missing host)", parsed.Redacted())
+	}
+	if parsed.User != nil {
+		return nil, fmt.Errorf("invalid url %q (must not embed userinfo credentials; use a secret handle)", parsed.Redacted())
 	}
 	return parsed, nil
+}
+
+// ValidateHeader reports whether a header name/value is well-formed for the wire: a non-empty
+// RFC 7230 token name and a value free of control characters (CR/LF/NUL/other C0, DEL). net/http
+// rejects a malformed header at send time, so validating it at authoring/config time turns a
+// dispatch-time failure into an early, actionable rejection — and forbidding CR/LF closes header
+// injection at the gate rather than relying on the transport.
+func ValidateHeader(name, value string) error {
+	if name == "" {
+		return fmt.Errorf("header name must not be empty")
+	}
+	for i := 0; i < len(name); i++ {
+		if !validHeaderNameByte(name[i]) {
+			return fmt.Errorf("header name %q contains an invalid character", name)
+		}
+	}
+	for i := 0; i < len(value); i++ {
+		if b := value[i]; (b < 0x20 && b != '\t') || b == 0x7f {
+			return fmt.Errorf("header %q value contains a control character", name)
+		}
+	}
+	return nil
+}
+
+// validHeaderNameByte reports whether c is an RFC 7230 token character (the header-name grammar).
+func validHeaderNameByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	}
+	switch c {
+	case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+		return true
+	}
+	return false
 }
 
 // Request is one outbound delivery. Body is sent as-is with ContentType (defaulting

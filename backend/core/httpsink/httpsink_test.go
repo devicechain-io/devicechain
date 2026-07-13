@@ -55,9 +55,35 @@ func TestValidateURL(t *testing.T) {
 			t.Errorf("ValidateURL(%q) errored: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"ftp://x", "file:///etc/passwd", "not a url", ""} {
+	for _, bad := range []string{"ftp://x", "file:///etc/passwd", "not a url", "", "https://", "https://user:pass@host/x", "http://bob@host/x"} {
 		if _, err := ValidateURL(bad); err == nil {
 			t.Errorf("ValidateURL(%q) = nil, want error", bad)
+		}
+	}
+}
+
+func TestValidateHeader(t *testing.T) {
+	ok := []struct{ name, value string }{
+		{"X-Custom", "ok"},
+		{"X-Api-Key", "abc-123"},
+		{"Content-Type", "application/json"},
+		{"X-Tab", "a\tb"}, // HTAB is allowed in a value
+	}
+	for _, h := range ok {
+		if err := ValidateHeader(h.name, h.value); err != nil {
+			t.Errorf("ValidateHeader(%q,%q) errored: %v", h.name, h.value, err)
+		}
+	}
+	bad := []struct{ name, value string }{
+		{"", "v"},               // empty name
+		{"bad name", "v"},       // space in name
+		{"X-Bad\n", "v"},        // newline in name
+		{"X-CRLF", "a\r\nEvil"}, // CRLF injection in value
+		{"X-Nul", "a\x00b"},     // NUL in value
+	}
+	for _, h := range bad {
+		if err := ValidateHeader(h.name, h.value); err == nil {
+			t.Errorf("ValidateHeader(%q,%q) = nil, want error", h.name, h.value)
 		}
 	}
 }
@@ -184,14 +210,14 @@ func TestSendForcesNoRedirectOnCallerClient(t *testing.T) {
 	}
 }
 
-// A URL-embedded credential must never appear in a transport-error string.
-func TestSendRedactsURLCredentialsInError(t *testing.T) {
-	// Port 1 / connection refused gives a deterministic transport error.
+// A URL-embedded credential is rejected outright, and the rejection error never echoes the
+// password (nor does the defense-in-depth redaction on the transport path).
+func TestSendRejectsAndRedactsURLCredentials(t *testing.T) {
 	err := Send(context.Background(), nil, Request{URL: "https://user:sup3rsecret@127.0.0.1:1/x"})
 	if err == nil {
-		t.Fatal("expected a transport error")
+		t.Fatal("expected a userinfo URL to be rejected")
 	}
 	if strings.Contains(err.Error(), "sup3rsecret") {
-		t.Fatalf("transport error leaked the URL password: %v", err)
+		t.Fatalf("error leaked the URL password: %v", err)
 	}
 }

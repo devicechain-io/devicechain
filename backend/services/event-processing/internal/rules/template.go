@@ -27,7 +27,14 @@ import (
 
 // templateCostCeilingBackstop is the runtime CostLimit stamped on a dispatch-built template
 // program — the runaway backstop, mirroring guardCostCeilingBackstop. The AUTHORITATIVE gate is the
-// publish-time EstimateCost in CompileTemplate against the tenant ceiling.
+// publish-time EstimateCost in CompileTemplate against the per-tenant ceiling.
+//
+// INVARIANT (shared with guard.go): this fixed backstop must stay >= any per-tenant
+// PredicateCostCeiling. Today PredicateCostCeiling is the hardcoded default 100 (no override wiring
+// yet), so 1000 is ample headroom. When the ADR-023 per-tenant-override slice lets an operator
+// raise a tenant's ceiling ABOVE 1000, this must become ceiling-derived (as the DETECT predicate
+// already stamps CostLimit(costCeiling)) — otherwise a template/guard that PASSES publish (estimate
+// <= a >1000 ceiling) would trip this fixed backstop and fail at every dispatch.
 const templateCostCeilingBackstop uint64 = 1_000
 
 // templateConvMaxLen bounds the estimated output length of a scalar→string conversion (string(value)
