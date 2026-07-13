@@ -19,6 +19,8 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
   const [config, setConfig] = useState(tenant?.config ?? '');
   const [ingestRate, setIngestRate] = useState(tenant?.ingestMessagesPerSecond?.toString() ?? '');
   const [ingestBurst, setIngestBurst] = useState(tenant?.ingestBurst?.toString() ?? '');
+  const [outboundRate, setOutboundRate] = useState(tenant?.outboundMessagesPerSecond?.toString() ?? '');
+  const [outboundBurst, setOutboundBurst] = useState(tenant?.outboundBurst?.toString() ?? '');
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -34,7 +36,12 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
     setBusy(true);
     try {
       const cfg = config.trim() === '' ? undefined : config;
-      const gov = { ingestMessagesPerSecond: optNum(ingestRate), ingestBurst: optNum(ingestBurst) };
+      const gov = {
+        ingestMessagesPerSecond: optNum(ingestRate),
+        ingestBurst: optNum(ingestBurst),
+        outboundMessagesPerSecond: optNum(outboundRate),
+        outboundBurst: optNum(outboundBurst),
+      };
       if (editing) {
         await updateTenant(tenant.token, { name: name.trim() || undefined, config: cfg, ...gov });
         onDone(`Tenant “${tenant.token}” updated`);
@@ -109,6 +116,35 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
             value={ingestBurst}
             placeholder="default"
             onChange={(e) => setIngestBurst(e.target.value)}
+          />
+        </FormField>
+        <FormField
+          label="Outbound rate (calls/sec)"
+          htmlFor="t-outbound-rate"
+          description="Rate ceiling for outbound connector actions. Leave blank to inherit the platform default."
+        >
+          <Input
+            id="t-outbound-rate"
+            type="number"
+            min="0"
+            value={outboundRate}
+            placeholder="default"
+            onChange={(e) => setOutboundRate(e.target.value)}
+          />
+        </FormField>
+        <FormField
+          label="Outbound burst"
+          htmlFor="t-outbound-burst"
+          description="Leave blank to inherit the platform default."
+        >
+          <Input
+            id="t-outbound-burst"
+            type="number"
+            min="0"
+            step="1"
+            value={outboundBurst}
+            placeholder="default"
+            onChange={(e) => setOutboundBurst(e.target.value)}
           />
         </FormField>
       </div>
