@@ -56,6 +56,10 @@ Every service exposes two HTTP endpoints for Kubernetes:
 
 Services start in a **not-ready** state and fetch the JWT signing keys from `user-management` in the background. While not ready, a service is pulled from Service endpoints and its message consumers stay paused — so a brief `user-management` outage degrades a service rather than crashing it, and no request or message is ever processed without verified authentication.
 
+## Secret handling
+
+Integration and provider credentials — an SMTP password, a webhook bearer token, and future outbound-connector auth — are never stored in plaintext config or a reversible column. They live in an **encrypted secret store**: each value is sealed at rest with a per-secret AES-256-GCM data key wrapped by a key-encryption key (KEK), where the default KEK is a root key on the instance's existing Kubernetes Secret — encryption-at-rest with no additional infrastructure, and cloud KMS / HashiCorp Vault are drop-in alternatives for regulated deployments. A consumer stores only an opaque **handle**; the value is **write-only over the API** and resolved server-internally at use time, never returned as cleartext. Secret mutations are audited (who, when, which handle — never the value).
+
 ## API surface
 
 All external APIs are **GraphQL** (one schema per service), which is introspectable and self-documenting. Internal service-to-service communication is asynchronous over NATS. There is no gRPC and no REST surface to maintain.

@@ -74,7 +74,7 @@ Because DeviceChain models device context as a **[typed relationship graph](./do
 
 ## Reaching a human
 
-A raised alarm can notify people through the **notification** system. A per-tenant policy routes alarms to **email (SMTP)** and **webhook** channels, with per-severity **escalation** (notify a wider audience if an alarm is not acknowledged in time) and throttling/deduplication so a noisy condition does not flood a channel. This machine-to-human path is kept distinct from the machine-to-machine **[outbound connectors](./architecture.md)** that fan events out to other systems.
+A raised alarm can notify people through the **notification** system. A per-tenant policy routes alarms to **email (SMTP)** and **webhook** channels, with per-severity **escalation** (notify a wider audience if an alarm is not acknowledged in time) and throttling/deduplication so a noisy condition does not flood a channel. Channel credentials (the SMTP password, a webhook bearer token) are held in the platform's **encrypted secret store** — sealed at rest with envelope encryption, write-only over the API, and never returned as cleartext. This machine-to-human path is kept distinct from the machine-to-machine **[outbound connectors](./architecture.md)** that fan events out to other systems.
 
 ## Seeing alarms & rule health
 
