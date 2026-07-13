@@ -21,7 +21,8 @@ const FunctionalArea = "event-processing"
 // detection-rule validation gate (resolvers_detection_rules.go) are pure/state-free; the
 // rule-health read (resolvers_rule_health.go, slice 7b) reads the durable rule + firing
 // projections, so the resolver carries their stores. The stores are nil on the pure-validation
-// path (a test constructing the bare resolver), so rule-health resolvers must nil-check.
+// path (a test constructing the bare resolver); the rule-health resolver nil-checks them and
+// fails closed rather than panicking.
 type SchemaResolver struct {
 	DetectRules *model.DetectRuleStore
 	RuleStats   *model.RuleStatStore

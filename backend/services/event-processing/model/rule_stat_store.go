@@ -25,6 +25,11 @@ import (
 // by design (the ADR-023 G.3 per-tenant/per-rule-label cardinality DoS), so per-rule stats
 // live in this small durable table instead. Keyed by the composed runtime rule id (globally
 // unique), with the tenant denormalized for the tenant-scoped ruleHealth read filter.
+//
+// Row growth: the rule id embeds "{profileToken}@{version}", so a re-publish strands the prior
+// version's stat rows (never read again once that version is superseded). This mirrors the
+// sibling DetectRule projection's deferred growth posture (bounding row count is the ADR-023/052
+// governance concern); a supersede-time or periodic sweep is a cheap follow-up, not this slice.
 type RuleStat struct {
 	// RuleId is the composed runtime id "{tenant}/{profileVersionToken}/{ruleToken}" — the
 	// same key DetectRule and the engine use, so a fire joins its rule row directly.

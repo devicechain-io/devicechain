@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"time"
 
+	"math"
+
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/core"
 )
 
 // Rule-health status values (mirror the RuleStatus enum in schema.graphql).
@@ -31,12 +34,17 @@ func (r *SchemaResolver) RuleHealth(ctx context.Context, args struct {
 	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
-	claims, ok := auth.ClaimsFromContext(ctx)
-	if !ok || claims.Tenant == "" {
-		// Fail closed: a tenant-scoped read with no tenant in context must not run.
-		return nil, fmt.Errorf("rule health: no tenant in context")
+	if r.Profiles == nil || r.DetectRules == nil || r.RuleStats == nil {
+		// The stores are wired in production (main.go); only a bare resolver on the
+		// pure-validation path lacks them. Fail closed rather than panic if that changes.
+		return nil, fmt.Errorf("rule health: not available")
 	}
-	tenant := claims.Tenant
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		// Fail closed: a tenant-scoped read with no tenant in context must not run — the
+		// same tenant source the platform's storage-scope callback uses.
+		return nil, core.ErrNoTenant
+	}
 
 	// Resolve the profile's active version; an unpublished profile has no live rules.
 	active, found, err := r.Profiles.Load(ctx, tenant, args.ProfileToken)
@@ -124,9 +132,14 @@ func (r *RuleHealthResolver) RuleToken() string { return r.ruleToken }
 func (r *RuleHealthResolver) Name() string      { return r.name }
 func (r *RuleHealthResolver) Status() string    { return r.status }
 
-// FireCount is int32 for the GraphQL Int scalar; a lifetime count cannot realistically
-// overflow it for a health view, and it is approximate regardless.
-func (r *RuleHealthResolver) FireCount() int32 { return int32(r.fireCount) }
+// FireCount is int32 for the GraphQL Int scalar; a lifetime edge-triggered count cannot
+// realistically reach 2^31, but clamp rather than wrap negative on the pathological case.
+func (r *RuleHealthResolver) FireCount() int32 {
+	if r.fireCount > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(r.fireCount)
+}
 
 // LastFiredAt returns the RFC3339 fire time, or null when the rule has never fired.
 func (r *RuleHealthResolver) LastFiredAt() *string {
