@@ -9,15 +9,19 @@ import (
 	"time"
 
 	epconfig "github.com/devicechain-io/dc-event-processing/config"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-outbound-connectors/config"
+	"github.com/devicechain-io/dc-outbound-connectors/governance"
 	"github.com/devicechain-io/dc-outbound-connectors/graphql"
 	"github.com/devicechain-io/dc-outbound-connectors/processor"
 	"github.com/devicechain-io/dc-outbound-connectors/schema"
+	"github.com/rs/zerolog/log"
 )
 
 // deadLetterSuffix is the terminal dead-letter subject suffix (ADR-060 SD-2): a connector dispatch
@@ -34,6 +38,7 @@ var (
 	NatsManager    *messaging.NatsManager
 
 	SecretStore secrets.SecretStore
+	RateLimiter *core.TenantRateLimiter
 	Consumer    *processor.DispatchConsumer
 )
 
@@ -125,8 +130,34 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	resolver := processor.NewSecretResolver(SecretStore)
 	executor := processor.NewExecutor(resolver, time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)
 	Consumer = processor.NewDispatchConsumer(Microservice, reader, dead, executor,
+		RateLimiter, time.Duration(Configuration.EgressWaitBudgetMs)*time.Millisecond,
 		Configuration.MaxConcurrentSends, Configuration.DispatchBacklog)
 	return nil
+}
+
+// buildEgressLimiter constructs the per-tenant OUTBOUND egress limiter (ADR-060 SD-3). When the
+// service secret and user-management endpoint are configured, per-tenant overrides are fetched from
+// user-management over a service token and cached, failing open to the platform default; otherwise
+// every tenant is metered at the platform default. Either way the ceiling is a real limit — never
+// unlimited — since ApplyDefaults/Validate guarantee positive platform defaults. Mirrors
+// event-sources' ingest buildRateLimiter (the ingest and outbound dimensions are independent).
+func buildEgressLimiter() *core.TenantRateLimiter {
+	def := governance.Limits{
+		MessagesPerSecond: Configuration.OutboundMessagesPerSecond,
+		Burst:             Configuration.OutboundBurst,
+	}
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant outbound overrides disabled; metering every tenant at the platform default.")
+		return core.NewTenantRateLimiter(func(string) (float64, int) {
+			return def.MessagesPerSecond, def.Burst
+		})
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors", []string{string(auth.TenantRead)})
+	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	resolver := governance.NewTenantLimitResolver(governance.NewServiceFetcher(client, umURL, def), def)
+	log.Info().Str("userManagement", umURL).Msg("Per-tenant outbound overrides enabled (fail-open to platform default).")
+	return core.NewTenantRateLimiter(resolver.Resolve)
 }
 
 // afterMicroserviceInitialized initializes components after the microservice is up.
@@ -151,6 +182,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 	SecretStore = store
+
+	// Build the per-tenant outbound egress limiter (ADR-060 SD-3) before the NATS manager, since
+	// createNatsComponents binds it into the consumer. Fail-open to the platform default when
+	// per-tenant overrides are not wired (never unlimited).
+	RateLimiter = buildEgressLimiter()
 
 	// Create and initialize the nats manager (which invokes createNatsComponents to build the
 	// consumer). The secret store must already exist so the executor's resolver can bind it.

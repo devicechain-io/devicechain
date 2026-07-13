@@ -25,6 +25,11 @@ const (
 	// outcomeUnsupported — a well-formed dispatch this build cannot execute (a publish before the
 	// Bento tier / Connector entity, slice C4); terminal, dead-lettered so an operator can see it.
 	outcomeUnsupported = "unsupported"
+	// outcomeRateLimited — the dispatch's tenant was over its outbound egress rate (ADR-060 SD-3)
+	// for longer than the smoothing wait budget, so it was shed to the dead-letter subject. A brief
+	// burst is admitted by the wait and never reaches this; a rising rate_limited count is a tenant
+	// sustained over its outbound quota.
+	outcomeRateLimited = "rate_limited"
 	// outcomeDeadWriteFailed — the terminal case where the dead-letter WRITE itself failed on the
 	// last delivery the broker will make, so the dispatch could be neither delivered nor durably
 	// dead-lettered: an explicit, alertable LOSS signal (never silently swallowed).
