@@ -89,6 +89,8 @@ export function summarize(type: NodeType, config: Record<string, unknown>): stri
       return `${num(c.count)}× ${leafSummary(c.when)} in ${ms(c.windowMs)}`;
     case 'correlation':
       return `${num(c.count)} devices in ${str(c.anchorType)} · ${ms(c.windowMs)}`;
+    case 'branch':
+      return str(c.when) ? `if ${str(c.when)}` : 'if …';
     case 'action':
       return c.action === 'sendCommand' ? `send ${str(c.command) || '…'}` : `raise alarm ${str(c.alarmKey)}`.trim();
   }

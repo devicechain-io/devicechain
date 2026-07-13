@@ -170,4 +170,28 @@ describe('graphFromDefinition', () => {
     // Distinct rows.
     expect(nodeById(g.nodes, 'action-0').ui!.y).not.toBe(nodeById(g.nodes, 'action-1').ui!.y);
   });
+
+  it('inserts a branch node between the condition and a guarded action (slice 9c)', () => {
+    const def = JSON.stringify({
+      name: 'severe-only',
+      type: 'threshold',
+      severity: 'critical',
+      when: { metric: 'tempC', op: 'gt', threshold: 30 },
+      actions: [
+        { type: 'raiseAlarm', raiseAlarm: { alarmKey: 'overheat' }, guard: 'value > 100.0' },
+        { type: 'sendCommand', sendCommand: { command: 'cool' } }, // unguarded → wired straight through
+      ],
+    });
+    const { graph } = graphFromDefinition(def, P);
+    const g = graph!;
+    // The guarded action gets a branch carrying its guard, wired condition→branch→action.
+    const branch = nodeById(g.nodes, 'branch-0');
+    expect(branch.type).toBe('branch');
+    expect(branch.config).toEqual({ when: 'value > 100.0' });
+    expect(g.edges).toContainEqual({ from: 'condition:signal', to: 'branch-0:in' });
+    expect(g.edges).toContainEqual({ from: 'branch-0:out', to: 'action-0:in' });
+    // The unguarded action stays wired straight from the condition — no branch synthesized for it.
+    expect(g.nodes.find((n) => n.id === 'branch-1')).toBeUndefined();
+    expect(g.edges).toContainEqual({ from: 'condition:signal', to: 'action-1:in' });
+  });
 });

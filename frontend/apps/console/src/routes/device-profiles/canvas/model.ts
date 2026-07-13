@@ -26,9 +26,10 @@ export type NodeType =
   | 'deltaRate'
   | 'repeating'
   | 'correlation'
+  | 'branch'
   | 'action';
 
-export type NodeCategory = 'source' | 'condition' | 'action';
+export type NodeCategory = 'source' | 'condition' | 'branch' | 'action';
 
 // A node's typed ports + its category, keyed by port name — the client-side twin of the Go
 // `catalog`. Used to validate a connection before the server re-checks it, and to render ports.
@@ -48,6 +49,7 @@ export const NODE_CATALOG: Record<NodeType, NodeSpec> = {
   deltaRate: { category: 'condition', label: 'Rate of change', in: { in: 'stream' }, out: { signal: 'signal' } },
   repeating: { category: 'condition', label: 'Repeating', in: { in: 'stream' }, out: { signal: 'signal' } },
   correlation: { category: 'condition', label: 'Area correlation', in: { in: 'stream' }, out: { signal: 'signal' } },
+  branch: { category: 'branch', label: 'Branch', in: { in: 'signal' }, out: { out: 'signal' } },
   action: { category: 'action', label: 'Action', in: { in: 'signal' }, out: {} },
 };
 
@@ -148,6 +150,12 @@ export interface ActionConfig {
   payload?: string;
 }
 
+// A REACT branch node (slice 9c): a signal→signal router carrying one CEL boolean (`when`) that
+// gates every action downstream of it. `when` is evaluated over the DERIVED-event vocabulary
+// (value / hasValue / series) — NOT the resolved-event map — because a guard runs after detection.
+// The lowering folds it onto each downstream action's guard; the compiler cost-gates it.
+export type BranchConfig = { name?: string; when: string };
+
 // The config carried on a node is opaque per-type JSON; the compiler validates it. We keep it
 // loosely typed here (Record) because the editor mutates fields incrementally, and narrow at
 // the config-panel boundary.
@@ -203,6 +211,8 @@ export function defaultConfig(type: NodeType, profileToken: string): NodeConfig 
       return { name: '', count: 3, windowMs: 60000 };
     case 'correlation':
       return { name: '', anchorType: '', count: 3, windowMs: 60000 };
+    case 'branch':
+      return { when: '' } satisfies BranchConfig as NodeConfig;
     case 'action':
       return { action: 'raiseAlarm' };
   }
