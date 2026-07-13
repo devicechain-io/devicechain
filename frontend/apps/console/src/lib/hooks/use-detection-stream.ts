@@ -66,6 +66,12 @@ export function useDetectionStream(
     };
 
     const unsubscribe = subscribe('event-processing', DETECTION_STREAM, { profileToken }, sink);
+    // A generation bump means a terminal end (error/complete) re-subscribed, possibly on a
+    // still-open socket where no fresh `connected` fires — so surface the reconnect here too,
+    // not only via connected(wasRetry). generation only ever advances via scheduleResubscribe,
+    // so this never fires on the initial mount (generation 0) or a profileToken change (the
+    // panel is keyed by token, remounting at generation 0). (Fable 7c MEDIUM 2.)
+    if (generation > 0) onReconnectRef.current?.();
     return () => {
       if (resubscribeTimer != null) window.clearTimeout(resubscribeTimer);
       unsubscribe();

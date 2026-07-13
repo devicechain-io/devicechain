@@ -9,7 +9,7 @@
 // table is the source of truth (durable counts); the feed is a best-effort live tail, so on
 // a socket reconnect we re-run the query to pick up any firing the gap advanced.
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import {
   DataTable,
@@ -62,9 +62,24 @@ export function RuleHealthPanel({ profileToken }: { profileToken: string }) {
   // stable React key (two firings can share every wire field — same rule/edge/series/time).
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const nextKey = useRef(0);
+  // A coalescing timer so the durable table (last-fired / fire counts) refreshes shortly after
+  // a burst of firings, instead of sitting frozen next to a visibly-updating feed (Fable 7c LOW).
+  // Idle when nothing fires — no blind polling.
+  const refreshTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (refreshTimer.current != null) window.clearTimeout(refreshTimer.current);
+  }, []);
   const { status } = useDetectionStream(
     profileToken,
-    (ev) => setFeed((prev) => [{ ...ev, key: nextKey.current++ }, ...prev].slice(0, FEED_CAP)),
+    (ev) => {
+      setFeed((prev) => [{ ...ev, key: nextKey.current++ }, ...prev].slice(0, FEED_CAP));
+      if (refreshTimer.current == null) {
+        refreshTimer.current = window.setTimeout(() => {
+          refreshTimer.current = null;
+          reload();
+        }, 4000);
+      }
+    },
     // A reconnect may have missed firings; refresh the durable counts.
     reload,
   );
