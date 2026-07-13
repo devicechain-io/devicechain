@@ -24,6 +24,7 @@
           "command-delivery",
           "notification-management",
           "event-processing",
+          "outbound-connectors",
           "mcp"
         ]
       },

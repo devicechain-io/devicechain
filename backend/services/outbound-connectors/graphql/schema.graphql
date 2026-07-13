@@ -1,0 +1,25 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+#
+# Outbound Connectors GraphQL Schema (ADR-060)
+#
+# This service is primarily a durable NATS consumer that executes outbound connector
+# actions (httpCall now; the versioned Connector entity + publish land in slice C4).
+# The GraphQL surface exists to carry the scaffold health/metrics server (/healthz,
+# /readyz, /metrics); the connector CRUD is added here in C4.
+
+# Static service identity — a trivial query so the schema is well-formed and the
+# health/metrics HTTP server has a surface. Replaced by connector CRUD in C4.
+type ServiceInfo {
+    area: String!
+}
+
+type Query {
+    # Non-sensitive service identity (the deployed functional area).
+    outboundConnectorsInfo: ServiceInfo!
+}
+
+schema {
+    query: Query
+}

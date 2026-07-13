@@ -104,6 +104,22 @@ func TestMcpIsOptInArea(t *testing.T) {
 	assert.ErrorContains(t, Validate([]FunctionalArea{UserManagement, Mcp}), string(DeviceManagement))
 }
 
+// The outbound-connectors area is a known, opt-in area (ADR-060): not in any profile, hard-depends
+// on event-processing (its dispatch producer), and validates only when that chain is enabled too.
+func TestOutboundConnectorsIsOptInArea(t *testing.T) {
+	assert.True(t, Known(OutboundConn))
+	for p, areas := range profiles {
+		assert.NotContains(t, areas, OutboundConn, "outbound-connectors must not be in profile %s (it is enabled on demand)", p)
+	}
+	m, ok := ManifestFor(OutboundConn)
+	assert.True(t, ok)
+	assert.Contains(t, m.HardDeps, EventProcessing)
+	// Enabling it with its hard-dep chain (event-processing → device-management) + core is valid.
+	assert.NoError(t, Validate([]FunctionalArea{UserManagement, DeviceManagement, EventProcessing, OutboundConn}))
+	// Enabling it WITHOUT event-processing is rejected.
+	assert.ErrorContains(t, Validate([]FunctionalArea{UserManagement, DeviceManagement, OutboundConn}), string(EventProcessing))
+}
+
 // The minimal valid explicit set is just the two core areas.
 func TestValidateAcceptsCoreOnly(t *testing.T) {
 	err := Validate([]FunctionalArea{UserManagement, DeviceManagement})

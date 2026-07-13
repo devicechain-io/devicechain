@@ -36,6 +36,7 @@ const (
 	CommandDelivery  FunctionalArea = "command-delivery"
 	NotificationMgmt FunctionalArea = "notification-management"
 	EventProcessing  FunctionalArea = "event-processing"
+	OutboundConn     FunctionalArea = "outbound-connectors"
 	Mcp              FunctionalArea = "mcp"
 )
 
@@ -122,8 +123,23 @@ var catalog = map[FunctionalArea]Manifest{
 		// conditions and dispatches actions. Functionally dead without the area
 		// producing what it consumes, so device-management is a Hard dep.
 		Area:     EventProcessing,
+		Produces: []string{"connector-dispatch"},
 		Consumes: []string{"resolved-events"},
 		HardDeps: []FunctionalArea{DeviceManagement},
+		SoftDeps: []FunctionalArea{UserManagement},
+	},
+	OutboundConn: {
+		// The outbound-connectors service (ADR-060): a durable consumer of the
+		// connector-dispatch stream (produced by event-processing's REACT dispatcher)
+		// that executes each fired httpCall/publish action. Functionally dead without the
+		// area producing what it consumes, so event-processing is a Hard dep (which in turn
+		// hard-deps device-management). It produces only a terminal dead-letter subject
+		// (consumed by nothing). Like mcp it is NOT in any profile — outbound connectors
+		// are an opt-in automation capability enabled on demand (post-GA fast-follow), so a
+		// deployment adds it explicitly to enabledFunctionalAreas.
+		Area:     OutboundConn,
+		Consumes: []string{"connector-dispatch"},
+		HardDeps: []FunctionalArea{EventProcessing},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
 	Mcp: {

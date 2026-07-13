@@ -13,6 +13,7 @@ package connectorwire
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -29,6 +30,19 @@ const (
 	ConnectorKindHTTPCall = "httpCall"
 	ConnectorKindPublish  = "publish"
 )
+
+// MaxTimeoutMs is the shared ceiling on a connector action's per-dispatch timeout (ADR-060). It lives
+// here, in the leaf package both the authoring side (event-processing's rules gate) and the execution
+// side (the outbound-connectors executor) import, so ONE constant bounds both — the authoring gate
+// rejects a larger value at publish and the executor re-clamps it at dispatch (defense-in-depth
+// against a forged/corrupt stored config that bypassed the gate), and the two can never disagree.
+//
+// It is kept safely BELOW the messaging layer's consumer AckWait (60s): a fetched batch of messages
+// all start their AckWait timer at fetch, so a per-send timeout at or near AckWait would let a
+// slow-but-succeeding send be redelivered underneath the worker — a duplicate outbound call plus a
+// NumDelivered climb that would spuriously dead-letter a healthy endpoint. At 20s a full fetch batch
+// clears the bounded worker pool well within AckWait, leaving margin.
+const MaxTimeoutMs = 20_000
 
 // ConnectorDispatchRequest is the message event-processing's REACT dispatcher publishes to the
 // outbound-connectors service (ADR-060 §4) when a detection rule's httpCall or publish action fires on
@@ -95,6 +109,51 @@ type HTTPCallDispatch struct {
 type PublishDispatch struct {
 	ConnectorRef string `json:"connectorRef"`
 	TimeoutMs    int    `json:"timeoutMs,omitempty"`
+}
+
+// Validate is the CONSUMER-SIDE fail-closed structural check (ADR-060 §4 / slice C3): the
+// outbound-connectors service is a SEPARATE binary that must self-enforce the contract, because a
+// message on the connector-dispatch stream did not necessarily originate from this producer — a
+// forged or corrupt message (broker write access), or a decode of a hand-edited row, could carry an
+// unknown Kind or a Kind whose matching variant is absent. The producer's own populated-variant
+// guarantee is not something the consumer may assume; it re-checks here before it does any work.
+//
+// It validates STRUCTURE only, from this stdlib-only leaf package: a known Kind, exactly the matching
+// variant populated (and the other nil), a tenant, and the minimal per-variant field an executor
+// cannot proceed without (an httpCall URL, a publish connectorRef). It deliberately does NOT
+// re-validate the URL/header grammar or the secret handle — those belong to the executor, which owns
+// core/httpsink and the secret store; keeping this package free of those imports is the CEL /
+// supply-chain firewall (see the package doc). A failing request is terminal poison for the
+// consumer (a redelivery cannot fix a malformed message), never a retry.
+func (r *ConnectorDispatchRequest) Validate() error {
+	if r.Tenant == "" {
+		return fmt.Errorf("connectorwire: dispatch request has no tenant")
+	}
+	switch r.Kind {
+	case ConnectorKindHTTPCall:
+		if r.HTTPCall == nil {
+			return fmt.Errorf("connectorwire: kind %q with no httpCall config", r.Kind)
+		}
+		if r.Publish != nil {
+			return fmt.Errorf("connectorwire: kind %q must not carry a publish config", r.Kind)
+		}
+		if r.HTTPCall.URL == "" {
+			return fmt.Errorf("connectorwire: httpCall dispatch has no url")
+		}
+	case ConnectorKindPublish:
+		if r.Publish == nil {
+			return fmt.Errorf("connectorwire: kind %q with no publish config", r.Kind)
+		}
+		if r.HTTPCall != nil {
+			return fmt.Errorf("connectorwire: kind %q must not carry an httpCall config", r.Kind)
+		}
+		if r.Publish.ConnectorRef == "" {
+			return fmt.Errorf("connectorwire: publish dispatch has no connectorRef")
+		}
+	default:
+		return fmt.Errorf("connectorwire: unknown dispatch kind %q", r.Kind)
+	}
+	return nil
 }
 
 // MarshalConnectorDispatchRequest encodes a connector-dispatch request (the producer side).
