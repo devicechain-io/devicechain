@@ -57,7 +57,10 @@ export function parseGoDuration(s: string): number | null {
     consumed = re.lastIndex;
   }
   if (consumed !== rest.length) return null; // trailing junk
-  return sign * total;
+  // Round to whole milliseconds: float accumulation yields e.g. 8000.999999999999 for "8.001s",
+  // and the Go config fields are int64 — a fractional value would fail to decode. Millisecond
+  // precision is the canvas's declared floor; genuinely sub-ms durations round to the nearest ms.
+  return sign * Math.round(total);
 }
 
 // The subset of the rules.Rule wire shape the synthesis reads.

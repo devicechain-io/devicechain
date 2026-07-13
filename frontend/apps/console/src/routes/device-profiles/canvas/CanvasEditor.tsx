@@ -103,7 +103,9 @@ function initialGraph(entity: DetectionRule | undefined, profileToken: string): 
   if (entity?.authoringGraph) {
     try {
       const parsed = JSON.parse(entity.authoringGraph) as CanvasDefinition;
-      if (parsed && Array.isArray(parsed.nodes)) return parsed;
+      // Require both arrays — an API-authored sidecar that satisfies the backend's
+      // "JSON object" guard but lacks edges would otherwise crash toReactFlow (L3).
+      if (parsed && Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) return parsed;
     } catch {
       // fall through to synthesis
     }
@@ -142,16 +144,25 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const [compile, setCompile] = useState<{ status: 'idle' | 'checking' | 'done'; result: CanvasCompileResult | null }>({
+  // forKey stamps the structural key the result was compiled FOR, so Save can require the
+  // result to match the CURRENT graph — otherwise a stale definition (from a compile that is
+  // still in flight, or a still-good previous result kept during a re-check) could be stored
+  // alongside a newer graph, the exact definition/graph divergence the design prevents (H1).
+  const [compile, setCompile] = useState<{ status: 'idle' | 'checking' | 'done'; result: CanvasCompileResult | null; forKey: string | null }>({
     status: 'idle',
     result: null,
+    forKey: null,
   });
 
   const idSeq = useRef(1);
   const newId = (type: NodeType): string => {
-    let id = `${type}-${idSeq.current++}`;
+    // Zero-pad the sequence so ids sort in creation order lexicographically — the server
+    // orders a rule's actions by sorting node ids, so `action-0012` must sort after
+    // `action-0003`, not before `action-2` (L4).
+    const mk = () => `${type}-${String(idSeq.current++).padStart(4, '0')}`;
+    let id = mk();
     const existing = new Set(nodes.map((n) => n.id));
-    while (existing.has(id)) id = `${type}-${idSeq.current++}`;
+    while (existing.has(id)) id = mk();
     return id;
   };
 
@@ -167,7 +178,7 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
   // check) rather than blocking authoring.
   useEffect(() => {
     let cancelled = false;
-    setCompile((c) => ({ status: 'checking', result: c.result }));
+    setCompile((c) => ({ status: 'checking', result: c.result, forKey: c.forKey }));
     const timer = setTimeout(async () => {
       try {
         const res = await Promise.race([
@@ -175,7 +186,7 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
           new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
         ]);
         if (cancelled) return;
-        setCompile({ status: 'done', result: res });
+        setCompile({ status: 'done', result: res, forKey: key });
         const byNode = new Map<string, string>();
         for (const d of res.diagnostics) if (d.nodeId) byNode.set(d.nodeId, d.message);
         setNodes((ns) =>
@@ -186,7 +197,7 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
           }),
         );
       } catch {
-        if (!cancelled) setCompile({ status: 'idle', result: null });
+        if (!cancelled) setCompile({ status: 'idle', result: null, forKey: key });
       }
     }, 400);
     return () => {
@@ -239,10 +250,14 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
 
   const selected = nodes.find((n) => n.id === selectedId);
   const result = compile.result;
-  const canSave = !!result?.ok && (editing || token.trim().length > 0) && !busy;
+  // The result must be the FINISHED compile of the CURRENT graph (forKey === key) — not a
+  // still-good previous result kept during a re-check, and not an in-flight one — so Save can
+  // never store a definition that doesn't match what is on the canvas (H1).
+  const fresh = compile.status === 'done' && compile.forKey === key;
+  const canSave = fresh && !!result?.ok && (editing || token.trim().length > 0) && !busy;
 
   const save = async () => {
-    if (!result?.ok || !result.definition) return;
+    if (!fresh || !result?.ok || !result.definition) return;
     setFormError(null);
     setBusy(true);
     try {

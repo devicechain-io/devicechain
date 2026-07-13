@@ -86,6 +86,14 @@ const opOptions = COMPARE_OPS.map((op) => (
   </option>
 ));
 
+// The engine-side aggregate/deltaRate comparison accepts only the four ORDERED operators — the
+// compiler rejects eq/ne there (they are valid only in a predicate leaf, which lowers to CEL).
+const orderedOpOptions = COMPARE_OPS.filter((op) => op !== 'eq' && op !== 'ne').map((op) => (
+  <option key={op} value={op}>
+    {OP_SYMBOL[op]} ({op})
+  </option>
+));
+
 // LeafEditor edits a when-leaf: none (match every) / structured (metric·op·bound) / raw CEL.
 // `allowNone` is false for threshold/duration where the comparison IS the rule.
 function LeafEditor({ leaf, allowNone, onChange }: { leaf: unknown; allowNone: boolean; onChange: (leaf: unknown) => void }) {
@@ -211,7 +219,17 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
           <MetaFields config={config} set={set} />
           <div className="grid grid-cols-2 gap-2">
             <FormField label="Aggregate" htmlFor="cfg-agg">
-              <Select id="cfg-agg" value={strVal(config.agg) || 'avg'} onChange={(v) => set({ agg: v })}>
+              <Select
+                id="cfg-agg"
+                value={strVal(config.agg) || 'avg'}
+                onChange={(v) => {
+                  // A count aggregate folds no value, so drop a stale metric the compiler would
+                  // reject ("a count aggregate takes no value metric").
+                  const next: NodeConfig = { ...config, agg: v };
+                  if (v === 'count') delete next.metric;
+                  onChange(next);
+                }}
+              >
                 {AGG_FUNCS.map((a) => (
                   <option key={a} value={a}>
                     {a}
@@ -220,7 +238,21 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
               </Select>
             </FormField>
             <FormField label="Window" htmlFor="cfg-mode">
-              <Select id="cfg-mode" value={mode} onChange={(v) => set({ windowMode: v })}>
+              <Select
+                id="cfg-mode"
+                value={mode}
+                onChange={(v) => {
+                  // Each mode uses exactly one of window/gap/count; drop the others so a stale
+                  // field from a previous mode can't trip the compiler's fail-closed forbid()
+                  // (and leave a diagnostic pinned to a field the mode no longer renders) — M2.
+                  const { windowMs, gapMs, count, ...rest } = config;
+                  const next: NodeConfig = { ...rest, windowMode: v };
+                  if (v === 'tumbling' || v === 'sliding') next.windowMs = typeof windowMs === 'number' ? windowMs : 60000;
+                  else if (v === 'session') next.gapMs = typeof gapMs === 'number' ? gapMs : 60000;
+                  else if (v === 'count') next.count = typeof count === 'number' ? count : 3;
+                  onChange(next);
+                }}
+              >
                 {WINDOW_MODES.map((m) => (
                   <option key={m} value={m}>
                     {m}
@@ -246,7 +278,7 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
           <div className="grid grid-cols-2 gap-2">
             <FormField label="Op" htmlFor="cfg-op">
               <Select id="cfg-op" value={strVal(config.op) || 'gt'} onChange={(v) => set({ op: v })}>
-                {opOptions}
+                {orderedOpOptions}
               </Select>
             </FormField>
             <FormField label="Threshold" htmlFor="cfg-threshold">
@@ -270,7 +302,7 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
           <div className="grid grid-cols-2 gap-2">
             <FormField label="Op" htmlFor="cfg-op">
               <Select id="cfg-op" value={strVal(config.op) || 'gt'} onChange={(v) => set({ op: v })}>
-                {opOptions}
+                {orderedOpOptions}
               </Select>
             </FormField>
             <FormField label="Threshold" htmlFor="cfg-threshold">

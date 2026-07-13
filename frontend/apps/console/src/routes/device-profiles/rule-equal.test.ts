@@ -30,4 +30,10 @@ describe('sameLogicalRule', () => {
     expect(sameLogicalRule('{bad', '{}')).toBe(false);
     expect(sameLogicalRule('{}', '{bad')).toBe(false);
   });
+  it('treats an empty when-object as equal to an absent when (canvas vs form for absence)', () => {
+    // The canvas stores the canonical marshal (always `"when":{}`); the form omits it.
+    const canvas = '{"name":"silent","type":"absence","severity":"major","when":{},"timeout":"5m0s"}';
+    const form = '{"name":"silent","type":"absence","severity":"major","timeout":"5m0s"}';
+    expect(sameLogicalRule(canvas, form)).toBe(true);
+  });
 });

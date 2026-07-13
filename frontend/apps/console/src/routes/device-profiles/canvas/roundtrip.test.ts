@@ -25,6 +25,11 @@ describe('parseGoDuration', () => {
     expect(parseGoDuration('2h0m0s')).toBe(7_200_000);
     expect(parseGoDuration('1.5s')).toBe(1500);
   });
+  it('returns whole milliseconds despite float accumulation', () => {
+    expect(parseGoDuration('8.001s')).toBe(8001); // not 8000.999999999999
+    expect(parseGoDuration('1m30.918273645s')).toBe(90918); // sub-ms rounds to nearest ms
+    expect(Number.isInteger(parseGoDuration('2.5m')!)).toBe(true);
+  });
   it('rejects malformed durations', () => {
     expect(parseGoDuration('abc')).toBeNull();
     expect(parseGoDuration('10x')).toBeNull();
