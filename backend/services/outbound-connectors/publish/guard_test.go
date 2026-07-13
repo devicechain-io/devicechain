@@ -12,22 +12,31 @@ import (
 	"github.com/warpstreamlabs/bento/public/service"
 )
 
-// TestGeneratedMQTTConfigAcceptedByBento is the cross-check that connectorspec's Bento
-// field mapping is actually valid: the config it generates must parse + lint as a real
-// Bento mqtt output. It needs no broker — Build() constructs the output without dialing.
-// If a field name drifts from Bento's schema, AddOutputYAML/Build fails here.
-func TestGeneratedMQTTConfigAcceptedByBento(t *testing.T) {
-	out, err := connectorspec.BuildOutput("mqtt",
-		[]byte(`{"urls":["tcp://b:1883"],"topic":"alerts","qos":1,"clientId":"dc","username":"u"}`), "p4ss")
-	require.NoError(t, err)
+// TestGeneratedConfigsAcceptedByBento is the cross-check that connectorspec's Bento field
+// mappings are actually valid: each config it generates must parse + lint + build as a real
+// Bento output. It needs no broker — Build() constructs the output without dialing. If a
+// field name drifts from Bento's schema, AddOutputYAML/Build fails here.
+func TestGeneratedConfigsAcceptedByBento(t *testing.T) {
+	cases := []struct {
+		typ, config string
+	}{
+		{"mqtt", `{"urls":["tcp://b:1883"],"topic":"alerts","qos":1,"clientId":"dc","username":"u"}`},
+		{"kafka", `{"addresses":["b:9092"],"topic":"t","clientId":"c","tls":true,"sasl":{"mechanism":"PLAIN","username":"u"}}`},
+		{"aws_sns", `{"region":"us-east-1","topicArn":"arn:aws:sns:us-east-1:1:t","accessKeyId":"AKIA"}`},
+		{"aws_sqs", `{"region":"us-east-1","url":"https://sqs.example/q","accessKeyId":"AKIA"}`},
+	}
+	for _, tc := range cases {
+		out, err := connectorspec.BuildOutput(tc.typ, []byte(tc.config), "s3cret")
+		require.NoError(t, err, "%s: build output", tc.typ)
 
-	builder := service.NewStreamBuilder()
-	builder.SetLeveledLogger(discardLogger{})
-	_, err = builder.AddProducerFunc()
-	require.NoError(t, err)
-	require.NoError(t, builder.AddOutputYAML(out), "generated mqtt config must be a valid Bento output")
-	_, err = builder.Build()
-	require.NoError(t, err, "the stream with the generated mqtt output must build")
+		builder := service.NewStreamBuilder()
+		builder.SetLeveledLogger(discardLogger{})
+		_, err = builder.AddProducerFunc()
+		require.NoError(t, err)
+		require.NoError(t, builder.AddOutputYAML(out), "%s: generated config must be a valid Bento output", tc.typ)
+		_, err = builder.Build()
+		require.NoError(t, err, "%s: the stream with the generated output must build", tc.typ)
+	}
 }
 
 // TestSelectiveRegistration is the supply-chain guard: only the shipped connector outputs

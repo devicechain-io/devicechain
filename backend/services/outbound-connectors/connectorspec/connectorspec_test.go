@@ -13,7 +13,7 @@ import (
 
 func TestSupported(t *testing.T) {
 	assert.True(t, Supported("mqtt"))
-	assert.False(t, Supported("kafka")) // not yet shipped (C4c)
+	assert.False(t, Supported("gcp_pubsub")) // deferred (no per-connector credential field)
 	assert.False(t, Supported("carrier_pigeon"))
 }
 
@@ -41,7 +41,7 @@ func TestValidateMQTT(t *testing.T) {
 }
 
 func TestValidateConfigUnsupportedType(t *testing.T) {
-	require.ErrorIs(t, ValidateConfig("kafka", []byte(`{}`)), ErrUnsupportedType)
+	require.ErrorIs(t, ValidateConfig("gcp_pubsub", []byte(`{}`)), ErrUnsupportedType)
 }
 
 // TestBuildOutputMQTT asserts the generated Bento output config maps DeviceChain fields
@@ -105,7 +105,94 @@ func TestBuildOutputSecretInjectionSafe(t *testing.T) {
 	assert.False(t, injected, "a crafted secret must not inject sibling fields")
 }
 
+func TestSupportedSet(t *testing.T) {
+	for _, ok := range []string{"mqtt", "kafka", "aws_sns", "aws_sqs"} {
+		assert.True(t, Supported(ok), "%q should have a generator", ok)
+	}
+	// gcp_pubsub is deferred (no per-connector credential field on Bento's output).
+	assert.False(t, Supported("gcp_pubsub"))
+}
+
+func TestValidateKafka(t *testing.T) {
+	good := []string{
+		`{"addresses":["b:9092"],"topic":"t"}`,
+		`{"addresses":["b:9092"],"topic":"t","clientId":"c","tls":true,"sasl":{"mechanism":"PLAIN","username":"u"}}`,
+	}
+	for _, c := range good {
+		require.NoError(t, ValidateConfig("kafka", []byte(c)), "config %s should be valid", c)
+	}
+	bad := []string{
+		`{"topic":"t"}`,                                     // no addresses
+		`{"addresses":["b:9092"],"topic":""}`,               // empty topic
+		`{"addresses":["b:9092"],"topic":"a/${! json() }"}`, // bloblang in topic
+		`{"addresses":["b:9092"],"topic":"t","sasl":{"mechanism":"WAT","username":"u"}}`, // bad mechanism
+		`{"addresses":["b:9092"],"topic":"t","sasl":{"mechanism":"PLAIN"}}`,              // sasl no username
+		`{"addresses":["b:9092"],"topic":"t","bogus":1}`,                                 // unknown field
+	}
+	for _, c := range bad {
+		require.Error(t, ValidateConfig("kafka", []byte(c)), "config %s should be rejected", c)
+	}
+}
+
+func TestBuildKafkaSASL(t *testing.T) {
+	out, err := BuildOutput("kafka",
+		[]byte(`{"addresses":["b:9092"],"topic":"t","tls":true,"sasl":{"mechanism":"PLAIN","username":"u"}}`), "kpass")
+	require.NoError(t, err)
+	var parsed map[string]map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
+	sasl := parsed["kafka"]["sasl"].(map[string]any)
+	assert.Equal(t, "PLAIN", sasl["mechanism"])
+	assert.Equal(t, "u", sasl["user"])
+	assert.Equal(t, "kpass", sasl["password"])
+	assert.Equal(t, map[string]any{"enabled": true}, parsed["kafka"]["tls"])
+}
+
+func TestValidateAWS(t *testing.T) {
+	require.NoError(t, ValidateConfig("aws_sns", []byte(`{"region":"us-east-1","topicArn":"arn:aws:sns:us-east-1:1:t","accessKeyId":"AKIA"}`)))
+	require.NoError(t, ValidateConfig("aws_sqs", []byte(`{"region":"us-east-1","url":"https://sqs.example/q","accessKeyId":"AKIA"}`)))
+	// Missing required fields / unknown fields rejected.
+	require.Error(t, ValidateConfig("aws_sns", []byte(`{"topicArn":"arn","accessKeyId":"AKIA"}`)))     // no region
+	require.Error(t, ValidateConfig("aws_sns", []byte(`{"region":"us-east-1","accessKeyId":"AKIA"}`))) // no topicArn
+	require.Error(t, ValidateConfig("aws_sns", []byte(`{"region":"r","topicArn":"a","bogus":1}`)))     // unknown field
+	require.Error(t, ValidateConfig("aws_sqs", []byte(`{"region":"us-east-1","accessKeyId":"AKIA"}`))) // no url
+	require.Error(t, ValidateConfig("aws_sqs", []byte(`{"region":"r","url":"u","x":1}`)))              // unknown field
+	// accessKeyId is REQUIRED (fail-closed — ambient AWS credentials are refused, tenant isolation).
+	require.Error(t, ValidateConfig("aws_sns", []byte(`{"region":"us-east-1","topicArn":"arn"}`)))
+	require.Error(t, ValidateConfig("aws_sqs", []byte(`{"region":"us-east-1","url":"https://sqs.example/q"}`)))
+}
+
+func TestBuildAWSCredentials(t *testing.T) {
+	// With accessKeyId + a sealed secret → static credentials {id, secret}.
+	out, err := BuildOutput("aws_sns",
+		[]byte(`{"region":"us-east-1","topicArn":"arn:aws:sns:us-east-1:1:t","accessKeyId":"AKIA"}`), "awssecret")
+	require.NoError(t, err)
+	var parsed map[string]map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
+	creds := parsed["aws_sns"]["credentials"].(map[string]any)
+	assert.Equal(t, "AKIA", creds["id"])
+	assert.Equal(t, "awssecret", creds["secret"])
+
+	// accessKeyId set but NO sealed secret → terminal build error (never a doomed send).
+	_, err = BuildOutput("aws_sqs", []byte(`{"region":"us-east-1","url":"https://sqs.example/q","accessKeyId":"AKIA"}`), "")
+	require.Error(t, err)
+}
+
+// TestBuildKafkaMissingSecret: a SASL block with no sealed secret is a terminal build error.
+func TestBuildKafkaMissingSecret(t *testing.T) {
+	_, err := BuildOutput("kafka",
+		[]byte(`{"addresses":["b:9092"],"topic":"t","sasl":{"mechanism":"PLAIN","username":"u"}}`), "")
+	require.Error(t, err)
+}
+
+// TestBuildOutputEscapesDollarBrace verifies a value containing "${x}" survives Bento's
+// config env-substitution literally (escaped as "$${x}" in the emitted config).
+func TestBuildOutputEscapesDollarBrace(t *testing.T) {
+	out, err := BuildOutput("mqtt", []byte(`{"urls":["tcp://b:1883"],"topic":"t"}`), "p${SECRET}q")
+	require.NoError(t, err)
+	assert.Contains(t, out, `$${SECRET}`, "a ${...} in a value must be escaped to $${...}")
+}
+
 func TestBuildOutputUnsupportedType(t *testing.T) {
-	_, err := BuildOutput("kafka", []byte(`{}`), "")
+	_, err := BuildOutput("gcp_pubsub", []byte(`{}`), "")
 	require.ErrorIs(t, err, ErrUnsupportedType)
 }
