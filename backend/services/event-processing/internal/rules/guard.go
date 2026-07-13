@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/checker"
+	"github.com/google/cel-go/ext"
 )
 
 // The variable names the guard environment declares — the whole vocabulary a guard may
@@ -66,6 +67,11 @@ func GuardEnv() (*cel.Env, error) {
 			cel.Variable(GuardVarValue, cel.DoubleType),
 			cel.Variable(GuardVarHasValue, cel.BoolType),
 			cel.Variable(GuardVarSeries, cel.StringType),
+			// The `cel.bind` scoping macro — the ONLY surface a compute node adds on the REACT side
+			// (ADR-053 slice 9a-2). It lets the canvas compiler fold a named compute into a branch
+			// guard as a real binding rather than by text interpolation; purely additive (a guard that
+			// never writes cel.bind compiles identically), no new data or side effects.
+			ext.Bindings(),
 		)
 	})
 	if guardEnvErr != nil {
