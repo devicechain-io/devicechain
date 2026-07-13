@@ -176,6 +176,60 @@ func TestComputeFoldDeterministic(t *testing.T) {
 	}
 }
 
+// TestComputeCommentInjectionRejected: a compute expr that uses a CEL line comment to close the
+// cel.bind scaffold early and comment out the consumer's real leaf (an always-fire hijack) is rejected
+// as not self-contained — it never reaches the fold. (Fable 9a-2-be HIGH.)
+func TestComputeCommentInjectionRejected(t *testing.T) {
+	_, err := Compile(canvas(
+		[]Node{
+			src("s"),
+			compute("cmp", "x", "1.0), true) //"), // tries to become `cel.bind(x, (1.0), true) //, <leaf>)`
+			celCond("c", `"tempC" in m && m["tempC"] > 999.0`),
+		},
+		Edge{From: "s:out", To: "c:in"},
+		Edge{From: "cmp:value", To: "c:value"},
+	), profile, rules.DefaultLimits())
+	if err == nil || !strings.Contains(err.Error(), "self-contained") {
+		t.Fatalf("expected a self-contained rejection of a comment-injection compute, got %v", err)
+	}
+}
+
+// TestConsumerBodyInjectionRejected: the CONSUMER leaf is also spliced (as the cel.bind body), so an
+// unbalanced leaf that would only balance ONCE folded (injecting a disjunction outside the bind) is
+// rejected when a compute feeds it. (Fable 9a-2-be HIGH — the body vector.)
+func TestConsumerBodyInjectionRejected(t *testing.T) {
+	_, err := Compile(canvas(
+		[]Node{
+			src("s"),
+			compute("cmp", "x", "1.0"),
+			celCond("c", `false) || (device != ""`), // balances only inside `cel.bind(x,(1.0), <this>)`
+		},
+		Edge{From: "s:out", To: "c:in"},
+		Edge{From: "cmp:value", To: "c:value"},
+	), profile, rules.DefaultLimits())
+	if err == nil || !strings.Contains(err.Error(), "self-contained") {
+		t.Fatalf("expected a self-contained rejection of an unbalanced consumer leaf, got %v", err)
+	}
+}
+
+// TestComputeStringWithSlashesAllowed: a compute (or leaf) whose CEL contains "//" INSIDE a string
+// literal (a URL) is NOT a comment and must still be allowed — the guard rejects comment tokens, not
+// substrings.
+func TestComputeStringWithSlashesAllowed(t *testing.T) {
+	lr := compileOne(t, canvas(
+		[]Node{
+			src("s"),
+			compute("cmp", "isProd", `device == "https://prod" ? 1.0 : 0.0`),
+			celCond("c", "isProd > 0.5"),
+		},
+		Edge{From: "s:out", To: "c:in"},
+		Edge{From: "cmp:value", To: "c:value"},
+	))
+	if !strings.Contains(lr.Definition, "cel.bind(isProd") {
+		t.Fatalf("expected the URL-bearing compute to fold normally; got %s", lr.Definition)
+	}
+}
+
 // TestValueEdgeIntoNonValueInputRejected: a value edge into a node with no value input port (an
 // action) is rejected by the port type check — value only flows into a condition or a branch.
 func TestValueEdgeIntoNonValueInputRejected(t *testing.T) {

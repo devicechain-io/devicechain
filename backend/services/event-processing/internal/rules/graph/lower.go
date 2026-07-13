@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/google/cel-go/cel"
 )
 
 // Diagnostic is one node-anchored compile message the console surfaces on the canvas. A
@@ -495,7 +496,7 @@ func foldedBranchWhen(n Node, computes []computeBind) (string, error) {
 	if err := decodeConfig(n.Config, &c); err != nil {
 		return "", fmt.Errorf("branch config: %v", err)
 	}
-	return foldComputes(c.When, computes), nil
+	return foldComputes(c.When, computes)
 }
 
 // reverseBranches returns the branch chain in condition→action order (the walk collects it
@@ -548,7 +549,11 @@ func validateBranch(n Node, computes []computeBind, limits rules.Limits) *Compil
 	}
 	// Cost-gate the guard WITH its compute fragments folded in (slice 9a-2): a guard that references a
 	// compute value only type-checks with the cel.bind in place, and the composed form is what runs.
-	if _, err := rules.CompileGuard(foldComputes(c.When, computes), limits.PredicateCostCeiling); err != nil {
+	folded, ferr := foldComputes(c.When, computes)
+	if ferr != nil {
+		return errorf(n.ID, "branch condition: %v", ferr)
+	}
+	if _, err := rules.CompileGuard(folded, limits.PredicateCostCeiling); err != nil {
 		return errorf(n.ID, "branch condition: %v", err)
 	}
 	return nil
@@ -570,12 +575,16 @@ type computeBind struct {
 var reservedComputeNames = map[string]struct{}{
 	"m": {}, "attr": {}, "device": {}, "anchors": {}, "occurred": {},
 	"value": {}, "hasValue": {}, "series": {},
+	// Also reserve "cel" — a compute named `cel` reads oddly against the cel.bind scaffold and buys
+	// nothing (macros pre-expand before variable resolution, so it would not even shadow the macro).
+	"cel": {},
 }
 
 // validateCompute checks a compute node's config up front, wired or not (poisoned-sidecar parity): its
-// Name must be a simple CEL identifier that cannot shadow an env variable, and its Expr must be
-// non-empty. The Expr's type/cost is NOT gated here — a compute has no standalone env (its env is
-// whichever consumer it feeds), so it is validated when folded and the composed CEL is re-gated.
+// Name must be a simple CEL identifier that cannot shadow an env variable, and its Expr must be a
+// non-empty, syntactically SELF-CONTAINED expression (the injection guard — see checkSelfContained).
+// The Expr's type/cost is NOT gated here — a compute has no standalone env (its env is whichever
+// consumer it feeds), so those are checked when folded and the composed CEL is re-gated.
 func validateCompute(n Node) *CompileError {
 	var c computeConfig
 	if err := decodeConfig(n.Config, &c); err != nil {
@@ -589,6 +598,28 @@ func validateCompute(n Node) *CompileError {
 	}
 	if strings.TrimSpace(c.Expr) == "" {
 		return errorf(n.ID, "a compute needs an expression — its \"expr\" is empty")
+	}
+	if err := checkSelfContained(c.Expr); err != nil {
+		return errorf(n.ID, "compute expression must be a single self-contained expression: %v", err)
+	}
+	return nil
+}
+
+// checkSelfContained reports whether s parses as ONE complete, self-contained CEL expression. It is
+// the injection guard for the compute fold (slice 9a-2): foldComputes splices author CEL into a
+// cel.bind scaffold, and a string that is NOT self-contained — an unbalanced delimiter (`a) || b`) or
+// a trailing line comment (`a //`) that could hide the scaffold's own delimiters — could otherwise
+// restructure the composed predicate into an always-true/false leaf that still passes the re-gate.
+// Parsing UNWRAPPED (not `(s)`) is what makes this sound: an early stray `)` or a leading `)` is a
+// syntax error here, whereas wrapping in parens would silently re-balance it. Parse is purely
+// syntactic (no identifier resolution), so a compute or leaf referencing env vars still validates.
+func checkSelfContained(s string) error {
+	env, err := cel.NewEnv()
+	if err != nil {
+		return err
+	}
+	if _, iss := env.Parse(s); iss != nil && iss.Err() != nil {
+		return iss.Err()
 	}
 	return nil
 }
@@ -647,18 +678,37 @@ func assembleComputes(byID map[string]Node, edges []typedEdge) (map[string][]com
 
 // foldComputes wraps a consumer CEL expression in a cel.bind for each compute fragment feeding it, so
 // the consumer can reference each by name as a real scoped variable. binds must be name-sorted
-// (assembleComputes guarantees it) so the composed source is deterministic. The fragment is
-// parenthesized — not raw-spliced — and the WHOLE cel.bind(...) is re-compiled through the cost gate,
-// so a malformed or over-cost fragment is rejected there, not trusted. With no binds the body is
+// (assembleComputes guarantees it) so the composed source is deterministic. With no binds the body is
 // returned unchanged (byte-identity with a compute-free rule holds).
-func foldComputes(body string, binds []computeBind) string {
-	out := body
-	// Nest so the first (name-sorted) bind is outermost. Order is immaterial to meaning — a compute
-	// reads only the consumer env, never another compute — and fixed for deterministic stored bytes.
-	for i := len(binds) - 1; i >= 0; i-- {
-		out = fmt.Sprintf("cel.bind(%s, (%s), %s)", binds[i].name, binds[i].expr, out)
+//
+// THE INJECTION BOUNDARY. The fold splices author CEL (the body and each fragment) into a cel.bind
+// scaffold, so it must guarantee no piece can break OUT of its slot and restructure the composed
+// predicate (which would otherwise still pass the re-gate — a validated-but-hijacked always-true/false
+// leaf). Two guarantees make it sound: (1) every spliced piece is checked SELF-CONTAINED
+// (checkSelfContained), so an unbalanced delimiter or a comment that would swallow the scaffold's own
+// delimiters is rejected here; (2) the body sits on its OWN line, so any residual trailing `//` in a
+// fragment can at worst comment to end-of-line and leaves the body-line's leading `)` a syntax error —
+// fail closed. So folding balanced, comment-clean pieces with compiler-emitted scaffolding is safe by
+// construction, not merely "re-gated." Returns an error (anchored by the caller) rather than trusting.
+func foldComputes(body string, binds []computeBind) (string, error) {
+	if len(binds) == 0 {
+		return body, nil
 	}
-	return out
+	if err := checkSelfContained(body); err != nil {
+		return "", fmt.Errorf("the predicate a computed value feeds must be a single self-contained expression: %v", err)
+	}
+	out := body
+	// Nest so the first (name-sorted) bind is outermost. The sort fixes the stored bytes; it also fixes
+	// scope — an inner (later-sorted) fragment can reference an earlier-sorted compute's name, the
+	// reverse fails to compile (re-gated, so fail-closed). Cross-compute references are thus order-
+	// dependent and unsupported; authors should reference only the consumer env.
+	for i := len(binds) - 1; i >= 0; i-- {
+		if err := checkSelfContained(binds[i].expr); err != nil {
+			return "", fmt.Errorf("compute %q must be a single self-contained expression: %v", binds[i].name, err)
+		}
+		out = fmt.Sprintf("cel.bind(%s, (%s),\n%s)", binds[i].name, binds[i].expr, out)
+	}
+	return out, nil
 }
 
 // computeNameList renders the compute names feeding a consumer for a diagnostic ("tempF, tempK").
@@ -705,7 +755,11 @@ func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, chains map[
 		if strings.TrimSpace(rule.When.CEL) == "" {
 			return nil, errorf(c.ID, "a computed value can only feed a CEL predicate — give this condition a raw-CEL leaf that references %s", computeNameList(conditionComputes))
 		}
-		rule.When.CEL = foldComputes(rule.When.CEL, conditionComputes)
+		folded, ferr := foldComputes(rule.When.CEL, conditionComputes)
+		if ferr != nil {
+			return nil, errorf(c.ID, "%v", ferr)
+		}
+		rule.When.CEL = folded
 	}
 
 	// Attach the REACT actions this condition's signal fans out to, ordered by the action
