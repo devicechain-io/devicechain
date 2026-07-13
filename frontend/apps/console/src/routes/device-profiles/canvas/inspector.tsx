@@ -354,8 +354,9 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
           </FormField>
           <p className="rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
             Use decimal literals (<span className="font-mono">value &gt; 100.0</span>, not <span className="font-mono">100</span>). <span className="font-mono">value</span> is the
-            triggering reading — it is absent for silence-based conditions (absence/duration), so guard those with{' '}
-            <span className="font-mono">hasValue</span> (e.g. <span className="font-mono">hasValue &amp;&amp; value &gt; 100.0</span>). The branch never blocks an alarm from clearing.
+            triggering reading — it is absent for conditions that carry no scalar (absence, duration, and metric-less or raw-CEL leaves), so guard those
+            with <span className="font-mono">hasValue</span> (e.g. <span className="font-mono">hasValue &amp;&amp; value &gt; 100.0</span>). The branch never blocks an alarm from
+            clearing.
           </p>
         </div>
       );

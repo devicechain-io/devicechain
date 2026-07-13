@@ -211,6 +211,10 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
       const src = nodes.find((n) => n.id === conn.source);
       const tgt = nodes.find((n) => n.id === conn.target);
       if (!src || !tgt || !conn.sourceHandle || !conn.targetHandle) return false;
+      // Reject a self-loop up front (the branch is the first node with same-typed in+out ports, so
+      // branch:out→branch:in would otherwise pass the port-type check). The server's detectCycle
+      // rejects any cycle authoritatively; this just spares the round-trip for the locally-obvious case.
+      if (conn.source === conn.target) return false;
       const st = portTypeOf((src.data as CanvasNodeData).nodeType, conn.sourceHandle, true);
       const tt = portTypeOf((tgt.data as CanvasNodeData).nodeType, conn.targetHandle, false);
       return st !== null && st === tt;
