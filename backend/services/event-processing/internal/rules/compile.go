@@ -6,9 +6,13 @@ package rules
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
+	"github.com/devicechain-io/dc-microservice/httpsink"
 )
 
 // Limits are the per-tenant compile-time ceilings. The caller resolves them BEFORE Compile
@@ -267,6 +271,14 @@ func validateReact(r Rule, limits Limits) error {
 			// one severity), so an alarm action without a valid rule severity is rejected.
 			return invalid(r.ID, "severity", "a raiseAlarm action requires a valid rule severity")
 		}
+		// Cost-gate a connector action's CEL payload template at the SAME tenant ceiling as the leaf
+		// predicate/guard (ADR-023): a bad or runaway template rejects the rule at publish, so REACT
+		// renders only a proven template on its hot path. Empty ⇒ no body, nothing to compile.
+		if tmpl := actionTemplate(a); tmpl != "" {
+			if _, err := CompileTemplate(tmpl, limits.PredicateCostCeiling); err != nil {
+				return invalid(r.ID, "actions", "action %d payload template: %v", i, err)
+			}
+		}
 		// Reject an exact-duplicate action (fail-closed). The dispatcher keys idempotency on the
 		// detection identity PLUS the action index, so two identical actions are distinct keys and
 		// BOTH fire — a double alarm-raise (harmless: an in-place upsert) but a genuine DOUBLE
@@ -313,29 +325,79 @@ func actionDedupKey(a Action) string {
 		return "raiseAlarm|" + a.RaiseAlarm.AlarmKey + guardSeg
 	case ActionSendCommand:
 		return "sendCommand|" + a.SendCommand.Command + "|" + a.SendCommand.Payload + guardSeg
+	case ActionHTTPCall:
+		h := a.HTTPCall
+		// URL + method + body template + secret handle + a stable header serialization identify the
+		// dispatch. Headers are folded in (sorted) so two httpCalls that differ ONLY by header are
+		// distinct — react.actionContentKey (slice C2b) mirrors this exactly, so the idempotency token
+		// separates them too and one never swallows the other's dispatch.
+		return "httpCall|" + h.URL + "|" + h.Method + "|" + h.BodyTemplate + "|" + h.SecretRef + "|" + headerKey(h.Headers) + guardSeg
+	case ActionPublish:
+		p := a.Publish
+		return "publish|" + p.ConnectorRef + "|" + p.PayloadTemplate + guardSeg
 	default:
 		return string(a.Type)
 	}
+}
+
+// headerKey renders a header map into a stable, order-independent string for the action identity
+// keys. Map iteration order is non-deterministic, so the keys are sorted; the value is length-
+// prefixed under each key so no set of names/values can collide with a different set.
+func headerKey(h map[string]string) string {
+	if len(h) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(h))
+	for k := range h {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, k := range names {
+		fmt.Fprintf(&b, "%d:%s=%d:%s;", len(k), k, len(h[k]), h[k])
+	}
+	return b.String()
+}
+
+// actionTemplate returns the CEL payload-template source of a connector action (empty for
+// non-connector actions or an action with no template), the single field validateReact cost-gates.
+func actionTemplate(a Action) string {
+	switch a.Type {
+	case ActionHTTPCall:
+		if a.HTTPCall != nil {
+			return a.HTTPCall.BodyTemplate
+		}
+	case ActionPublish:
+		if a.Publish != nil {
+			return a.Publish.PayloadTemplate
+		}
+	}
+	return ""
 }
 
 // validateAction checks one action: its type is known, exactly the matching variant is populated,
 // and that variant's fields are well-formed. The index anchors the error to the offending action
 // for the console.
 func validateAction(ruleID string, i int, a Action) error {
+	// Known type first, for a clear message on a forged/typo'd type.
+	switch a.Type {
+	case ActionRaiseAlarm, ActionSendCommand, ActionHTTPCall, ActionPublish:
+	default:
+		return invalid(ruleID, "actions", "action %d has unknown type %q", i, a.Type)
+	}
+	// Exactly the variant matching the declared type must be populated — no missing, foreign, or
+	// multiply-populated payload (fail-closed).
+	if pv := a.populatedVariants(); len(pv) != 1 || pv[0] != a.Type {
+		return invalid(ruleID, "actions", "action %d is type %q but its matching payload is missing or a foreign payload is set", i, a.Type)
+	}
 	switch a.Type {
 	case ActionRaiseAlarm:
-		if a.RaiseAlarm == nil || a.SendCommand != nil {
-			return invalid(ruleID, "actions", "action %d is type %q but its raiseAlarm payload is missing or a foreign payload is set", i, a.Type)
-		}
 		if a.RaiseAlarm.AlarmKey != "" {
 			if err := validateMetric(a.RaiseAlarm.AlarmKey); err != nil {
 				return invalid(ruleID, "actions", "action %d alarmKey: %v", i, err)
 			}
 		}
 	case ActionSendCommand:
-		if a.SendCommand == nil || a.RaiseAlarm != nil {
-			return invalid(ruleID, "actions", "action %d is type %q but its sendCommand payload is missing or a foreign payload is set", i, a.Type)
-		}
 		if err := validateMetric(a.SendCommand.Command); err != nil {
 			return invalid(ruleID, "actions", "action %d command: %v", i, err)
 		}
@@ -347,8 +409,79 @@ func validateAction(ruleID string, i int, a Action) error {
 			// SendCommandAction — so this is the only payload guard until that lands).
 			return invalid(ruleID, "actions", "action %d command payload must be a JSON object", i)
 		}
-	default:
-		return invalid(ruleID, "actions", "action %d has unknown type %q", i, a.Type)
+	case ActionHTTPCall:
+		return validateHTTPCall(ruleID, i, a.HTTPCall)
+	case ActionPublish:
+		return validatePublish(ruleID, i, a.Publish)
+	}
+	return nil
+}
+
+// validateHTTPCall checks an httpCall action's inline config (ADR-060). The CEL body template is
+// cost-gated separately in validateReact (it needs the tenant ceiling); this checks the structural
+// fields: an http/https URL, POST-only method, non-reserved headers, a well-formed secret handle,
+// and a bounded timeout.
+func validateHTTPCall(ruleID string, i int, h *HTTPCallAction) error {
+	if _, err := httpsink.ValidateURL(h.URL); err != nil {
+		return invalid(ruleID, "actions", "action %d httpCall url: %v", i, err)
+	}
+	if h.Method != "" && h.Method != http.MethodPost {
+		return invalid(ruleID, "actions", "action %d httpCall method %q is not supported (POST only)", i, h.Method)
+	}
+	for k := range h.Headers {
+		if httpsink.IsReservedHeader(k) {
+			return invalid(ruleID, "actions", "action %d httpCall header %q is reserved (Authorization / X-DC-* are set by the sink)", i, k)
+		}
+	}
+	if err := validateSecretHandle(h.SecretRef); err != nil {
+		return invalid(ruleID, "actions", "action %d httpCall secretRef: %v", i, err)
+	}
+	if err := validateTimeout(h.TimeoutMs); err != nil {
+		return invalid(ruleID, "actions", "action %d httpCall %v", i, err)
+	}
+	return nil
+}
+
+// validatePublish checks a publish action (ADR-060): a grammar-valid connector token and a bounded
+// timeout. The connector's EXISTENCE is not checked here (cross-service — deferred to slice C4, see
+// PublishAction.ConnectorRef); the payload template is cost-gated in validateReact.
+func validatePublish(ruleID string, i int, p *PublishAction) error {
+	if p.ConnectorRef == "" {
+		return invalid(ruleID, "actions", "action %d publish requires a connectorRef", i)
+	}
+	if err := validateMetric(p.ConnectorRef); err != nil {
+		return invalid(ruleID, "actions", "action %d publish connectorRef: %v", i, err)
+	}
+	if err := validateTimeout(p.TimeoutMs); err != nil {
+		return invalid(ruleID, "actions", "action %d publish %v", i, err)
+	}
+	return nil
+}
+
+// validateTimeout bounds a connector action's timeout: non-negative and at most MaxActionTimeoutMs
+// (0 ⇒ the dispatcher default). An unbounded outbound wait is a self-DoS the publish gate refuses.
+func validateTimeout(ms int) error {
+	if ms < 0 || ms > MaxActionTimeoutMs {
+		return fmt.Errorf("timeoutMs %d out of range [0,%d]", ms, MaxActionTimeoutMs)
+	}
+	return nil
+}
+
+// validateSecretHandle checks an authored secret handle (HTTPCallAction.SecretRef). Empty is
+// allowed (an unauthenticated call). A handle is a core/secrets ref Name, which may contain '/',
+// so it is not an ADR-042 token; it is validated as a bounded, safe-character path so it can never
+// carry an injection or an unbounded value into the store lookup.
+func validateSecretHandle(h string) error {
+	if h == "" {
+		return nil
+	}
+	if len(h) > maxSecretHandleLen {
+		return fmt.Errorf("handle exceeds %d bytes", maxSecretHandleLen)
+	}
+	for _, r := range h {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '/' || r == '.') {
+			return fmt.Errorf("handle contains an invalid character %q (allowed: alphanumeric - _ / .)", r)
+		}
 	}
 	return nil
 }
