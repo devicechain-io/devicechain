@@ -373,6 +373,18 @@ type branchConfig struct {
 	When string `json:"when"`
 }
 
+// computeConfig is a compute node (slice 9a-2): a NAMED CEL value expression the compiler folds into
+// a consumer's raw-CEL leaf or branch guard. Name is the CEL identifier the consumer references it by
+// (a simple identifier — letters/digits/underscore, not leading-digit — validated at compile so it is
+// a safe cel.bind variable and cannot shadow an env var); Expr is a CEL expression over the CONSUMER's
+// env (the predicate env when it feeds a condition leaf, the guard env when it feeds a branch — the
+// port typing decides which). Neither is spliced as raw text: the fold is a cel.bind binding whose
+// composed result is re-compiled through the same cost gate.
+type computeConfig struct {
+	Name string `json:"name"`
+	Expr string `json:"expr"`
+}
+
 // sourceConfig is the Source node: it sets the rule's SCOPE (the profile the canvas authors
 // against), not any rules.Rule field — a source contributes nothing to the compiled rule
 // bytes, which is what lets a canvas rule stay byte-identical to a form rule (a form rule

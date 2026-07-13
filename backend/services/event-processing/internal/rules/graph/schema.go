@@ -7,8 +7,8 @@
 // runtime — a canvas rule and a form rule (slice 7) that express the same logic compile to
 // a byte-identical rules.Rule, because the canvas is a projection onto the same schema and
 // the same rules.Compile + cost gate. Slice 9a lands the DETECT half (Source + the seven
-// condition nodes + the plain Action attachment); the conditional/enriched REACT chain
-// (branch/enrich) and the compute node are follow-ups (slices 9c / 9a-follow-up).
+// condition nodes + the plain Action attachment); the branch/guard REACT chain (9c) and the
+// compute node (9a-2) are folded in; the enrich node remains a follow-up.
 //
 // The load-bearing idea is the typed port system (§1 of the slice-9 spec): every port
 // carries exactly one of three signals and an edge may only join same-typed ports. A
@@ -38,9 +38,9 @@ const (
 	PortStream PortType = "stream"
 	// PortSignal carries an edge-triggered detection signal (the DETECT→REACT boundary).
 	PortSignal PortType = "signal"
-	// PortValue carries a CEL-typed scalar/struct from a compute node (either half). No 9a
-	// node produces or consumes it yet; it is reserved so the type system does not have to
-	// change when the compute node lands.
+	// PortValue carries a CEL-typed scalar from a compute node (either half): a compute's `value`
+	// output wires into a condition's or branch's `value` input, and the compiler folds the compute
+	// expression into that consumer's CEL (ADR-053 slice 9a-2).
 	PortValue PortType = "value"
 )
 
@@ -64,6 +64,12 @@ const (
 	// pure authoring sugar over rules.Action.Guard, not a new engine primitive (ADR-054).
 	NodeBranch NodeType = "branch"
 	NodeAction NodeType = "action"
+	// NodeCompute is a pure, stateless CEL fragment (ADR-053 slice 9a-2): a named value expression
+	// (`value` output, no runtime input) folded into a consumer's raw-CEL leaf or branch guard via
+	// the cel.bind macro. It lowers to NO runtime node — the fold happens at compile and the composed
+	// CEL is re-gated — so a compute is authoring sugar over the consumer's own predicate, adding no
+	// engine primitive and no new data access (its expression reads only the consumer's env).
+	NodeCompute NodeType = "compute"
 )
 
 // ports describes a node type's typed input and output ports, keyed by port name. The
@@ -83,6 +89,9 @@ const (
 	catCondition
 	catBranch
 	catAction
+	// catCompute is the pure CEL-fragment node — it is neither upstream DETECT nor downstream
+	// REACT structurally; it attaches to a consumer by a value edge and is inlined at compile.
+	catCompute
 )
 
 // catalog is the GA node catalog (9a subset). It is the single source of truth for a node
@@ -93,38 +102,42 @@ var catalog = map[NodeType]struct {
 }{
 	NodeSource: {catSource, ports{out: map[string]PortType{"out": PortStream}}},
 	NodeThreshold: {catCondition, ports{
-		in:  map[string]PortType{"in": PortStream},
+		in:  map[string]PortType{"in": PortStream, "value": PortValue},
 		out: map[string]PortType{"signal": PortSignal},
 	}},
 	NodeDuration: {catCondition, ports{
-		in:  map[string]PortType{"in": PortStream},
+		in:  map[string]PortType{"in": PortStream, "value": PortValue},
 		out: map[string]PortType{"signal": PortSignal},
 	}},
 	NodeAbsence: {catCondition, ports{
-		in:  map[string]PortType{"in": PortStream},
+		in:  map[string]PortType{"in": PortStream, "value": PortValue},
 		out: map[string]PortType{"signal": PortSignal},
 	}},
 	NodeAggregate: {catCondition, ports{
-		in:  map[string]PortType{"in": PortStream},
+		in:  map[string]PortType{"in": PortStream, "value": PortValue},
 		out: map[string]PortType{"signal": PortSignal},
 	}},
 	NodeDeltaRate: {catCondition, ports{
-		in:  map[string]PortType{"in": PortStream},
+		in:  map[string]PortType{"in": PortStream, "value": PortValue},
 		out: map[string]PortType{"signal": PortSignal},
 	}},
 	NodeRepeating: {catCondition, ports{
-		in:  map[string]PortType{"in": PortStream},
+		in:  map[string]PortType{"in": PortStream, "value": PortValue},
 		out: map[string]PortType{"signal": PortSignal},
 	}},
 	NodeCorrelation: {catCondition, ports{
-		in:  map[string]PortType{"in": PortStream},
+		in:  map[string]PortType{"in": PortStream, "value": PortValue},
 		out: map[string]PortType{"signal": PortSignal},
 	}},
 	NodeBranch: {catBranch, ports{
-		in:  map[string]PortType{"in": PortSignal},
+		in:  map[string]PortType{"in": PortSignal, "value": PortValue},
 		out: map[string]PortType{"out": PortSignal},
 	}},
 	NodeAction: {catAction, ports{in: map[string]PortType{"in": PortSignal}}},
+	// A compute node has ONLY a value output — no runtime input. Its expression reads the consumer's
+	// env directly (the value edge to the consumer establishes which env), and it is inlined at
+	// compile, so it needs no stream/signal input to be "in" the DETECT or REACT subgraph.
+	NodeCompute: {catCompute, ports{out: map[string]PortType{"value": PortValue}}},
 }
 
 // isCondition reports whether a node type is a condition node (stream→signal pivot).
@@ -137,6 +150,12 @@ func (t NodeType) isCondition() bool {
 func (t NodeType) isBranch() bool {
 	c, ok := catalog[t]
 	return ok && c.cat == catBranch
+}
+
+// isCompute reports whether a node type is a compute node (a folded CEL fragment, slice 9a-2).
+func (t NodeType) isCompute() bool {
+	c, ok := catalog[t]
+	return ok && c.cat == catCompute
 }
 
 // CanvasDefinition is the authored graph: a versioned set of typed nodes and the edges

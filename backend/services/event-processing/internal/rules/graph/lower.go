@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/google/cel-go/cel"
 )
 
 // Diagnostic is one node-anchored compile message the console surfaces on the canvas. A
@@ -127,14 +128,17 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	// branch rides along in the AuthoringGraph sidecar, and its guard is folded onto an action's Guard
 	// (and re-gated by rules.Compile) only once wired — so a poisoned/over-cost guard on an unwired
 	// branch must be caught here, not left to surface when someone later wires it.
+	// A branch's guard is likewise cost-gated up front regardless of connectivity — but its compute
+	// fragments (if any) must be folded in first, so branch validation waits until after the value-edge
+	// map is assembled, below. Sources and computes need no edges and are validated here.
 	for _, n := range def.Nodes {
 		switch n.Type {
 		case NodeSource:
 			if cerr := validateSource(n, profileToken); cerr != nil {
 				return nil, cerr
 			}
-		case NodeBranch:
-			if cerr := validateBranch(n, limits); cerr != nil {
+		case NodeCompute:
+			if cerr := validateCompute(n); cerr != nil {
 				return nil, cerr
 			}
 		}
@@ -146,6 +150,23 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	}
 	if err := detectCycle(def.Nodes, edges); err != nil {
 		return nil, err
+	}
+
+	// Assemble the value-edge compute map: which compute fragments feed each consumer (condition or
+	// branch), folded into that consumer's CEL below (slice 9a-2).
+	computes, cerr := assembleComputes(byID, edges)
+	if cerr != nil {
+		return nil, cerr
+	}
+
+	// Now cost-gate every branch's guard WITH its computes folded in (an unwired branch too — a
+	// compute-referencing guard would not compile without the fold).
+	for _, n := range def.Nodes {
+		if n.Type == NodeBranch {
+			if cerr := validateBranch(n, computes[n.ID], limits); cerr != nil {
+				return nil, cerr
+			}
+		}
 	}
 
 	// Partition: find condition nodes (the stream→signal pivots). Each roots exactly one rule.
@@ -162,7 +183,7 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	// Global REACT signal-path resolution: bind every action to its owning condition and the composed
 	// branch guard on the path between them. An action with no upstream is a stateful node with nothing
 	// to react to; an action/branch fed by two signals is a cross-window join (§3.3) — both rejected.
-	chains, err := resolveReactChains(def.Nodes, byID, edges)
+	chains, err := resolveReactChains(def.Nodes, byID, edges, computes)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +193,7 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 		diags   []Diagnostic
 	)
 	for _, cid := range conditionIDs {
-		lr, cerr := lowerCondition(byID[cid], byID, edges, chains, limits)
+		lr, cerr := lowerCondition(byID[cid], byID, edges, chains, computes[cid], limits)
 		if cerr != nil {
 			diags = append(diags, cerr.Diagnostics...)
 			continue
@@ -380,7 +401,7 @@ type reactBinding struct {
 // §3.4). A condition may fan its signal out to many branches/actions. Because each branch/action has
 // a unique signal predecessor, an action's walk back is a single chain terminating at exactly one
 // condition — so the old "fed by more than one condition" check is subsumed by the one-incoming rule.
-func resolveReactChains(nodes []Node, byID map[string]Node, edges []typedEdge) (map[string]reactBinding, error) {
+func resolveReactChains(nodes []Node, byID map[string]Node, edges []typedEdge, computes map[string][]computeBind) (map[string]reactBinding, error) {
 	// The signal predecessors of each branch/action node. Signal edges only ever target a branch or
 	// an action (a condition has no signal INPUT port, a source none at all — type-checked already).
 	incoming := make(map[string][]string) // toNode → []fromNode
@@ -435,7 +456,7 @@ func resolveReactChains(nodes []Node, byID map[string]Node, edges []typedEdge) (
 				out[n.ID] = reactBinding{conditionID: f, guard: composeGuards(guards), branches: reverseBranches(branches)}
 				cur = "" // sentinel: done
 			case ft.isBranch():
-				when, berr := branchWhen(byID[f])
+				when, berr := foldedBranchWhen(byID[f], computes[f])
 				if berr != nil {
 					return nil, errorf(f, "%v", berr)
 				}
@@ -467,13 +488,15 @@ func nodeKind(t NodeType) string {
 	return "action"
 }
 
-// branchWhen decodes a branch node's config and returns its (validated non-empty) guard predicate.
-func branchWhen(n Node) (string, error) {
+// foldedBranchWhen decodes a branch node's config and returns its guard predicate with any compute
+// fragments wired into the branch folded in (slice 9a-2) — so a branch guard that references a compute
+// value composes to the same cel.bind form its up-front validation cost-gated.
+func foldedBranchWhen(n Node, computes []computeBind) (string, error) {
 	var c branchConfig
 	if err := decodeConfig(n.Config, &c); err != nil {
 		return "", fmt.Errorf("branch config: %v", err)
 	}
-	return c.When, nil
+	return foldComputes(c.When, computes)
 }
 
 // reverseBranches returns the branch chain in condition→action order (the walk collects it
@@ -516,7 +539,7 @@ func composeGuards(guards []string) string {
 // empty predicate (a branch that gates nothing) and a parse/type/over-cost guard — the same
 // fail-closed posture validateSource takes for an unwired source. limits must already be floored to
 // the effective ceiling (Compile floors before this runs).
-func validateBranch(n Node, limits rules.Limits) *CompileError {
+func validateBranch(n Node, computes []computeBind, limits rules.Limits) *CompileError {
 	var c branchConfig
 	if err := decodeConfig(n.Config, &c); err != nil {
 		return errorf(n.ID, "branch config: %v", err)
@@ -524,17 +547,184 @@ func validateBranch(n Node, limits rules.Limits) *CompileError {
 	if strings.TrimSpace(c.When) == "" {
 		return errorf(n.ID, "a branch needs a condition — its \"when\" predicate is empty")
 	}
-	if _, err := rules.CompileGuard(c.When, limits.PredicateCostCeiling); err != nil {
+	// Cost-gate the guard WITH its compute fragments folded in (slice 9a-2): a guard that references a
+	// compute value only type-checks with the cel.bind in place, and the composed form is what runs.
+	folded, ferr := foldComputes(c.When, computes)
+	if ferr != nil {
+		return errorf(n.ID, "branch condition: %v", ferr)
+	}
+	if _, err := rules.CompileGuard(folded, limits.PredicateCostCeiling); err != nil {
 		return errorf(n.ID, "branch condition: %v", err)
 	}
 	return nil
+}
+
+// ── Compute nodes (slice 9a-2) ───────────────────────────────────────────────
+
+// computeBind is one compute fragment feeding a consumer: the CEL identifier the consumer references
+// it by, and the value expression it stands for.
+type computeBind struct {
+	name string
+	expr string
+}
+
+// reservedComputeNames are the env variables a compute name must not shadow — the union of the DETECT
+// predicate env (m/attr/device/anchors/occurred) and the REACT guard env (value/hasValue/series),
+// since a compute may feed either half. A cel.bind binding CAN shadow a declared variable, silently
+// changing what a hand-written reference means; reject the collision instead.
+var reservedComputeNames = map[string]struct{}{
+	"m": {}, "attr": {}, "device": {}, "anchors": {}, "occurred": {},
+	"value": {}, "hasValue": {}, "series": {},
+	// Also reserve "cel" — a compute named `cel` reads oddly against the cel.bind scaffold and buys
+	// nothing (macros pre-expand before variable resolution, so it would not even shadow the macro).
+	"cel": {},
+}
+
+// validateCompute checks a compute node's config up front, wired or not (poisoned-sidecar parity): its
+// Name must be a simple CEL identifier that cannot shadow an env variable, and its Expr must be a
+// non-empty, syntactically SELF-CONTAINED expression (the injection guard — see checkSelfContained).
+// The Expr's type/cost is NOT gated here — a compute has no standalone env (its env is whichever
+// consumer it feeds), so those are checked when folded and the composed CEL is re-gated.
+func validateCompute(n Node) *CompileError {
+	var c computeConfig
+	if err := decodeConfig(n.Config, &c); err != nil {
+		return errorf(n.ID, "compute config: %v", err)
+	}
+	if !isValidComputeName(c.Name) {
+		return errorf(n.ID, "a compute needs a name that is a simple identifier (a letter or underscore, then letters, digits, or underscores), got %q", c.Name)
+	}
+	if _, reserved := reservedComputeNames[c.Name]; reserved {
+		return errorf(n.ID, "compute name %q is reserved — it would shadow a built-in variable; choose another", c.Name)
+	}
+	if strings.TrimSpace(c.Expr) == "" {
+		return errorf(n.ID, "a compute needs an expression — its \"expr\" is empty")
+	}
+	if err := checkSelfContained(c.Expr); err != nil {
+		return errorf(n.ID, "compute expression must be a single self-contained expression: %v", err)
+	}
+	return nil
+}
+
+// checkSelfContained reports whether s parses as ONE complete, self-contained CEL expression. It is
+// the injection guard for the compute fold (slice 9a-2): foldComputes splices author CEL into a
+// cel.bind scaffold, and a string that is NOT self-contained — an unbalanced delimiter (`a) || b`) or
+// a trailing line comment (`a //`) that could hide the scaffold's own delimiters — could otherwise
+// restructure the composed predicate into an always-true/false leaf that still passes the re-gate.
+// Parsing UNWRAPPED (not `(s)`) is what makes this sound: an early stray `)` or a leading `)` is a
+// syntax error here, whereas wrapping in parens would silently re-balance it. Parse is purely
+// syntactic (no identifier resolution), so a compute or leaf referencing env vars still validates.
+func checkSelfContained(s string) error {
+	env, err := cel.NewEnv()
+	if err != nil {
+		return err
+	}
+	if _, iss := env.Parse(s); iss != nil && iss.Err() != nil {
+		return iss.Err()
+	}
+	return nil
+}
+
+// isValidComputeName reports whether s is a simple CEL identifier (the cel.bind variable grammar): a
+// leading letter or underscore, then letters/digits/underscores. STRICTER than the ADR-042 token
+// grammar (which allows '-') because the name becomes a bare CEL identifier, not a quoted map key.
+func isValidComputeName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z'):
+		case r >= '0' && r <= '9':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// assembleComputes maps each consumer node (condition or branch) to the compute fragments wired into
+// its `value` input, name-sorted (deterministic bytes). A value edge only ever originates at a
+// compute's value output and targets a condition/branch value input (type-checked already). Two
+// computes with the SAME name feeding one consumer are rejected — they would collide as one cel.bind
+// variable, silently dropping one.
+func assembleComputes(byID map[string]Node, edges []typedEdge) (map[string][]computeBind, *CompileError) {
+	out := make(map[string][]computeBind)
+	seen := make(map[string]map[string]struct{}) // consumer id → set of compute names feeding it
+	for _, e := range edges {
+		if e.ptype != PortValue {
+			continue
+		}
+		var c computeConfig
+		if err := decodeConfig(byID[e.fromNode].Config, &c); err != nil {
+			return nil, errorf(e.fromNode, "compute config: %v", err)
+		}
+		if seen[e.toNode] == nil {
+			seen[e.toNode] = map[string]struct{}{}
+		}
+		if _, dup := seen[e.toNode][c.Name]; dup {
+			return nil, errorf(e.toNode, "two compute values named %q feed this node — give each a distinct name", c.Name)
+		}
+		seen[e.toNode][c.Name] = struct{}{}
+		out[e.toNode] = append(out[e.toNode], computeBind{name: c.Name, expr: c.Expr})
+	}
+	for k := range out {
+		sort.Slice(out[k], func(i, j int) bool { return out[k][i].name < out[k][j].name })
+	}
+	return out, nil
+}
+
+// foldComputes wraps a consumer CEL expression in a cel.bind for each compute fragment feeding it, so
+// the consumer can reference each by name as a real scoped variable. binds must be name-sorted
+// (assembleComputes guarantees it) so the composed source is deterministic. With no binds the body is
+// returned unchanged (byte-identity with a compute-free rule holds).
+//
+// THE INJECTION BOUNDARY. The fold splices author CEL (the body and each fragment) into a cel.bind
+// scaffold, so it must guarantee no piece can break OUT of its slot and restructure the composed
+// predicate (which would otherwise still pass the re-gate — a validated-but-hijacked always-true/false
+// leaf). Two guarantees make it sound: (1) every spliced piece is checked SELF-CONTAINED
+// (checkSelfContained), so an unbalanced delimiter or a comment that would swallow the scaffold's own
+// delimiters is rejected here; (2) the body sits on its OWN line, so any residual trailing `//` in a
+// fragment can at worst comment to end-of-line and leaves the body-line's leading `)` a syntax error —
+// fail closed. So folding balanced, comment-clean pieces with compiler-emitted scaffolding is safe by
+// construction, not merely "re-gated." Returns an error (anchored by the caller) rather than trusting.
+func foldComputes(body string, binds []computeBind) (string, error) {
+	if len(binds) == 0 {
+		return body, nil
+	}
+	if err := checkSelfContained(body); err != nil {
+		return "", fmt.Errorf("the predicate a computed value feeds must be a single self-contained expression: %v", err)
+	}
+	out := body
+	// Nest so the first (name-sorted) bind is outermost. The sort fixes the stored bytes; it also fixes
+	// scope — an inner (later-sorted) fragment can reference an earlier-sorted compute's name, the
+	// reverse fails to compile (re-gated, so fail-closed). Cross-compute references are thus order-
+	// dependent and unsupported; authors should reference only the consumer env.
+	for i := len(binds) - 1; i >= 0; i-- {
+		if err := checkSelfContained(binds[i].expr); err != nil {
+			return "", fmt.Errorf("compute %q must be a single self-contained expression: %v", binds[i].name, err)
+		}
+		out = fmt.Sprintf("cel.bind(%s, (%s),\n%s)", binds[i].name, binds[i].expr, out)
+	}
+	return out, nil
+}
+
+// computeNameList renders the compute names feeding a consumer for a diagnostic ("tempF, tempK").
+func computeNameList(binds []computeBind) string {
+	names := make([]string, len(binds))
+	for i, b := range binds {
+		names[i] = b.name
+	}
+	return strings.Join(names, ", ")
 }
 
 // lowerCondition synthesizes one compiled rule from a condition node: its single upstream
 // source (validated against the profile scope), its own predicate/temporal config, and the
 // REACT actions its signal fans out to. It runs the assembled rule through the exact
 // rules.Compile path the form builder uses.
-func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, chains map[string]reactBinding, limits rules.Limits) (*LoweredRule, *CompileError) {
+func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, chains map[string]reactBinding, conditionComputes []computeBind, limits rules.Limits) (*LoweredRule, *CompileError) {
 	// Exactly one source must feed the condition's stream input (§3.4: >1 source rejected;
 	// 0 sources means the detection has no telemetry to run against).
 	var sources []string
@@ -555,6 +745,21 @@ func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, chains map[
 	rule, err := buildRule(c)
 	if err != nil {
 		return nil, errorf(c.ID, "%v", err)
+	}
+
+	// Fold any compute fragments wired into this condition's `value` input onto its raw-CEL leaf
+	// (slice 9a-2). A compute can only feed a CEL leaf — a structured (metric/op/threshold) or a
+	// match-every leaf has no expression to reference the computed value — so reject that combination
+	// with a clear message rather than silently dropping the compute.
+	if len(conditionComputes) > 0 {
+		if strings.TrimSpace(rule.When.CEL) == "" {
+			return nil, errorf(c.ID, "a computed value can only feed a CEL predicate — give this condition a raw-CEL leaf that references %s", computeNameList(conditionComputes))
+		}
+		folded, ferr := foldComputes(rule.When.CEL, conditionComputes)
+		if ferr != nil {
+			return nil, errorf(c.ID, "%v", ferr)
+		}
+		rule.When.CEL = folded
 	}
 
 	// Attach the REACT actions this condition's signal fans out to, ordered by the action

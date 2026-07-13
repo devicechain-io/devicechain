@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/ext"
 )
 
 // The variable names the environment declares. They are the whole vocabulary a predicate
@@ -81,6 +82,13 @@ func Env() (*cel.Env, error) {
 			cel.Variable(VarOccurred, cel.TimestampType),
 			cel.Variable(VarM, cel.MapType(cel.StringType, cel.DoubleType)),
 			cel.Variable(VarAttr, cel.MapType(cel.StringType, cel.DoubleType)),
+			// The `cel.bind(name, init, expr)` scoping macro (ADR-053 slice 9a-2): the ONLY surface
+			// a compute node adds. It lets the canvas compiler fold a named compute expression into a
+			// raw-CEL leaf as a real scoped binding rather than by text interpolation (injection-safe;
+			// the composed result is re-gated here). It is purely additive — a structured leaf or a
+			// hand-typed raw-CEL leaf that never writes `cel.bind(...)` compiles byte-identically, so
+			// the live rule set is unaffected. No new data access or side-effecting function enters.
+			ext.Bindings(),
 		)
 	})
 	if sharedEnvErr != nil {
