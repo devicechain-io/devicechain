@@ -20,6 +20,14 @@ export type ValidateDetectionRulesQueryVariables = Exact<{
 
 export type ValidateDetectionRulesQuery = { validateDetectionRules: { valid: boolean, errors: Array<{ index: number, token: string, message: string }> } };
 
+export type CompileCanvasQueryVariables = Exact<{
+  graph: string;
+  profileToken: string;
+}>;
+
+
+export type CompileCanvasQuery = { compileCanvas: { ok: boolean, definition: string | null, estimatedCost: number | null, diagnostics: Array<{ nodeId: string | null, severity: string, message: string }> } };
+
 export type RuleHealthQueryVariables = Exact<{
   profileToken: string;
 }>;
@@ -65,6 +73,20 @@ export const ValidateDetectionRulesDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<ValidateDetectionRulesQuery, ValidateDetectionRulesQueryVariables>;
+export const CompileCanvasDocument = new TypedDocumentString(`
+    query CompileCanvas($graph: String!, $profileToken: String!) {
+  compileCanvas(graph: $graph, profileToken: $profileToken) {
+    ok
+    definition
+    estimatedCost
+    diagnostics {
+      nodeId
+      severity
+      message
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CompileCanvasQuery, CompileCanvasQueryVariables>;
 export const RuleHealthDocument = new TypedDocumentString(`
     query RuleHealth($profileToken: String!) {
   ruleHealth(profileToken: $profileToken) {

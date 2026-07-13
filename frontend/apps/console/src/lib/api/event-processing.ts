@@ -9,7 +9,7 @@
 // parses the taxonomy, so this is where a bad rule is actually caught.
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/event-processing';
-import type { RuleHealthQuery, DetectionStreamSubscription } from '@/gql/event-processing/graphql';
+import type { RuleHealthQuery, DetectionStreamSubscription, CompileCanvasQuery } from '@/gql/event-processing/graphql';
 
 const VALIDATE_DETECTION_RULES = graphql(`
   query ValidateDetectionRules($rules: [DetectionRuleInput!]!) {
@@ -41,6 +41,40 @@ export async function validateDetectionRule(token: string, definition: string): 
   const result = data.validateDetectionRules;
   if (result.valid) return { ok: true, message: null };
   return { ok: false, message: result.errors[0]?.message ?? 'The rule did not compile.' };
+}
+
+// ── Canvas compile (ADR-053 slice 9b) ─────────────────────────────────────
+// The server-authoritative graph→schema pass: the console editor sends its opaque
+// CanvasDefinition JSON and gets back the compiled rules.Rule definition (byte-identical
+// to the equivalent form rule), a predicate cost estimate, and node-anchored diagnostics.
+// The browser NEVER authors the definition directly — it holds the graph and shows
+// diagnostics on nodes; this is the only place a canvas becomes a runnable rule.
+
+const COMPILE_CANVAS = graphql(`
+  query CompileCanvas($graph: String!, $profileToken: String!) {
+    compileCanvas(graph: $graph, profileToken: $profileToken) {
+      ok
+      definition
+      estimatedCost
+      diagnostics {
+        nodeId
+        severity
+        message
+      }
+    }
+  }
+`);
+
+export type CanvasCompileResult = CompileCanvasQuery['compileCanvas'];
+export type CanvasDiagnostic = CanvasCompileResult['diagnostics'][number];
+
+// compileCanvas lowers a CanvasDefinition (opaque JSON string) to its DETECT rule definition,
+// scoped to the profile. It never throws for a compile rejection — that comes back as
+// ok:false + diagnostics; it throws only on a transport/auth failure (which the caller may
+// swallow to degrade to no-feedback, like the form's inline validation).
+export async function compileCanvas(graph: string, profileToken: string): Promise<CanvasCompileResult> {
+  const data = await gql('event-processing', COMPILE_CANVAS, { graph, profileToken });
+  return data.compileCanvas;
 }
 
 // ── Rule health (ADR-051 slice 7b/7c) ─────────────────────────────────────

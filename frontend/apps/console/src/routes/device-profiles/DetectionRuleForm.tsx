@@ -36,6 +36,7 @@ import {
   type DetectionRuleCreateRequest,
 } from '@/lib/api/device-management';
 import { validateDetectionRule } from '@/lib/api/event-processing';
+import { sameLogicalRule } from './rule-equal';
 
 // ── The rule taxonomy (mirrors rules.RuleType) ─────────────────────────────
 
@@ -435,12 +436,20 @@ export function DetectionRuleForm({
     setFormError(null);
     setBusy(true);
     try {
+      // Preserve a canvas-authored rule's AuthoringGraph sidecar across an INCIDENTAL form
+      // edit (parking it via Enabled, a metadata change) — anything that leaves the rules.Rule
+      // logically unchanged. If the form changed the definition, the stored graph would no
+      // longer mirror it, so we drop it (the canvas re-synthesizes a fresh layout via the
+      // reverse round-trip). Comparison is logical (parsed, order-independent), because the
+      // form re-emits its own key order, not the canvas's canonical bytes. (Fable 9b-1 MED.)
+      const keepGraph = editing && entity.authoringGraph != null && sameLogicalRule(definition, entity.definition);
       const request: DetectionRuleCreateRequest = {
         token: editing ? entity.token : token.trim(),
         deviceProfileToken: profileToken,
         name: name.trim() || undefined,
         description: description.trim() || undefined,
         definition,
+        authoringGraph: keepGraph ? entity!.authoringGraph : undefined,
         enabled,
         metadata: entity?.metadata ?? undefined,
       };
