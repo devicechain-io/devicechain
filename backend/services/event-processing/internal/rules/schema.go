@@ -146,7 +146,29 @@ const (
 	// ActionSendCommand enqueues a command to the detection's device via command-delivery
 	// (ADR-043). It has no legacy twin, so it goes live in slice 5b.
 	ActionSendCommand ActionType = "sendCommand"
+	// ActionHTTPCall posts a CEL-shaped payload to an external HTTP endpoint (ADR-060 Tier 1:
+	// the hand-rolled webhook sink). Config + optional secret handle are inline on the action —
+	// no registered resource for a one-off webhook. Execution lives in the outbound-connectors
+	// service (ADR-060 §4); REACT only shapes the payload and publishes a connector-dispatch
+	// request (slice C2b).
+	ActionHTTPCall ActionType = "httpCall"
+	// ActionPublish sends a CEL-shaped payload to a registered, versioned Connector (ADR-060
+	// Tier 2: the embedded-Bento breadth multiplier — MQTT/Kafka/SNS/SQS/Pub-Sub). The action
+	// references the connector by token; the connector carries the transport type, target, and
+	// secret handle, so credentials never live in the rule/graph. Execution + the Connector
+	// resource are owned by outbound-connectors (ADR-060 §4).
+	ActionPublish ActionType = "publish"
 )
+
+// MaxActionTimeoutMs bounds a connector action's per-dispatch timeout (ADR-060). 0 ⇒ the
+// dispatcher applies its default; a value above this cap is rejected at publish so a rule cannot
+// author an unbounded outbound wait.
+const MaxActionTimeoutMs = 60_000
+
+// maxSecretHandleLen bounds an authored secret handle (HTTPCallAction.SecretRef). The handle is a
+// core/secrets ref Name, which legitimately contains '/', so it is not an ADR-042 token; it is
+// validated as a bounded, safe-character path (validateSecretHandle) instead.
+const maxSecretHandleLen = 256
 
 // MaxActionsPerRule bounds a rule's action chain. REACT is declarative and finite (ADR-054):
 // a fixed, capped list of typed actions with no control flow. The cap is a fail-closed backstop
@@ -158,11 +180,14 @@ const MaxActionsPerRule = 8
 // that action's declarative parameters. There is no ordering dependency beyond list index and no
 // data flow between actions — each is dispatched independently and idempotently by the REACT
 // dispatcher (slice 5b), keyed on the detection's dedup identity (RuleID, Series, Kind,
-// OccurredTime) plus the action's list index.
+// OccurredTime) plus the action's CONTENT (content-addressed, not its list index — so reordering a
+// chain is a no-op; see react.actionContentKey / actionDedupKey).
 type Action struct {
 	Type        ActionType         `json:"type"`
 	RaiseAlarm  *RaiseAlarmAction  `json:"raiseAlarm,omitempty"`
 	SendCommand *SendCommandAction `json:"sendCommand,omitempty"`
+	HTTPCall    *HTTPCallAction    `json:"httpCall,omitempty"`
+	Publish     *PublishAction     `json:"publish,omitempty"`
 
 	// Guard is an optional per-action CEL boolean the REACT dispatcher evaluates against the fired
 	// detection (the derived event) to decide whether THIS action runs — the runtime form of a
@@ -215,6 +240,72 @@ type SendCommandAction struct {
 	// rule bytes — the ADR-053 byte-identity contract holds only if the surfaces emit canonical
 	// JSON (a console/canvas concern, since no code compares rule bytes yet).
 	Payload string `json:"payload,omitempty"`
+}
+
+// HTTPCallAction posts a CEL-shaped payload to an external HTTP endpoint (ADR-060 Tier 1). The
+// config is inline — a one-off webhook needs no registered resource. Credentials are an ADR-059
+// handle (SecretRef), resolved server-side in outbound-connectors, never carried in the rule.
+type HTTPCallAction struct {
+	// URL is the target endpoint. Required; must be an http/https URL (httpsink.ValidateURL) — the
+	// same scheme guard the notification webhook uses. Post-resolution SSRF hardening (no-redirect,
+	// reserved-header drop, response suppression) is applied by outbound-connectors via core/httpsink.
+	URL string `json:"url"`
+	// Method is the HTTP method. Empty ⇒ POST. Only POST is accepted in v1 (an unbounded method
+	// widens the SSRF surface for no benefit), matching the notification webhook.
+	Method string `json:"method,omitempty"`
+	// Headers are static request headers. Reserved names (Authorization, X-DC-*) are rejected at
+	// publish (they are the sink's to set / internal identity), so an author sees the error rather
+	// than a silent drop at dispatch.
+	Headers map[string]string `json:"headers,omitempty"`
+	// BodyTemplate is a CEL expression evaluating to the request body STRING, shaped against the
+	// derived event (value / hasValue / series — the guard vocabulary). Empty ⇒ no body. It is
+	// cost-gated at publish like a guard (CompileTemplate) and rendered once in REACT at dispatch
+	// (the outbound-connectors service receives the rendered bytes, ADR-060 §3). CEL only — no JS
+	// (the ADR-053/056 determinism boundary).
+	BodyTemplate string `json:"bodyTemplate,omitempty"`
+	// SecretRef is an optional ADR-059 secret handle (a core/secrets ref Name) presented as the
+	// auth header at dispatch. Never the cleartext. Empty ⇒ an unauthenticated call.
+	SecretRef string `json:"secretRef,omitempty"`
+	// TimeoutMs bounds the outbound call. 0 ⇒ the dispatcher default; capped at MaxActionTimeoutMs.
+	TimeoutMs int `json:"timeoutMs,omitempty"`
+}
+
+// PublishAction sends a CEL-shaped payload to a registered, versioned Connector (ADR-060 Tier 2).
+// The action names the connector by token; the connector resource (owned by outbound-connectors)
+// carries the transport type, target/config, and secret handle — so one connector serves many
+// rules and credentials never live in the rule/graph.
+type PublishAction struct {
+	// ConnectorRef is the token of the Connector to publish through. Required; must satisfy the
+	// ADR-042 token grammar. Its EXISTENCE is validated best-effort at dispatch (a dangling ref
+	// drops-and-logs, the notification "missing channel" precedent); the sync publish-time
+	// cross-service existence check (ADR-044) lands with the Connector resource in slice C4.
+	ConnectorRef string `json:"connectorRef"`
+	// PayloadTemplate is a CEL expression evaluating to the message body STRING, shaped against the
+	// derived event, cost-gated at publish and rendered once in REACT (see HTTPCallAction.BodyTemplate).
+	// Empty ⇒ an empty payload. CEL only.
+	PayloadTemplate string `json:"payloadTemplate,omitempty"`
+	// TimeoutMs bounds the outbound publish. 0 ⇒ the dispatcher default; capped at MaxActionTimeoutMs.
+	TimeoutMs int `json:"timeoutMs,omitempty"`
+}
+
+// populatedVariants returns the action-type discriminants whose variant pointer is non-nil. A
+// well-formed action populates exactly the one matching its Type; validateAction rejects anything
+// else (a missing or a foreign/multiply-populated payload).
+func (a Action) populatedVariants() []ActionType {
+	var v []ActionType
+	if a.RaiseAlarm != nil {
+		v = append(v, ActionRaiseAlarm)
+	}
+	if a.SendCommand != nil {
+		v = append(v, ActionSendCommand)
+	}
+	if a.HTTPCall != nil {
+		v = append(v, ActionHTTPCall)
+	}
+	if a.Publish != nil {
+		v = append(v, ActionPublish)
+	}
+	return v
 }
 
 // Condition is a rule's leaf: the boolean test one event must pass. Exactly one form is
