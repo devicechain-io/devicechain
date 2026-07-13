@@ -66,6 +66,34 @@ type RuleHealth {
     message: String
 }
 
+type Subscription {
+    # Streams a device profile's DETECT detections as they fire (ADR-037 / ADR-057, slice 7c):
+    # every firing whose rule belongs to the profile, RAISED or RESOLVED, including a rule with
+    # no alarm action (a pure signal the alarm stream would miss). Live from subscribe time
+    # onward, no backfill; torn down on disconnect. Tenant-scoped; gated on device:read.
+    detectionStream(profileToken: String!): DetectionEvent!
+}
+
+# One DETECT detection on the live feed.
+type DetectionEvent {
+    # The composed runtime rule id that fired.
+    ruleId: String!
+    # The firing rule's device-management token (parsed from the id) — links a firing to its rule.
+    ruleToken: String!
+    # The rule type ("threshold", "absence", …).
+    kind: String!
+    # The transition ("raised" / "resolved", ADR-057).
+    edge: String!
+    # The keyed series — the device token, or the anchor token for a correlation rule.
+    series: String!
+    # RFC3339 logical (event) time the detection is stamped at.
+    occurredTime: String!
+    # The detection tier (ADR-041), null when the rule declares none.
+    severity: String
+    # The triggering scalar (raised edge only), null otherwise.
+    value: Float
+}
+
 # Service identity returned by the scaffold query.
 type EventProcessingInfo {
     # The functional area this service serves ("event-processing").

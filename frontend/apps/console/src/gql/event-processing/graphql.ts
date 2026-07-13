@@ -9,12 +9,30 @@ export type DetectionRuleInput = {
   token: string;
 };
 
+export type RuleStatus =
+  | 'ACTIVE'
+  | 'COMPILE_ERROR';
+
 export type ValidateDetectionRulesQueryVariables = Exact<{
   rules: Array<DetectionRuleInput> | DetectionRuleInput;
 }>;
 
 
 export type ValidateDetectionRulesQuery = { validateDetectionRules: { valid: boolean, errors: Array<{ index: number, token: string, message: string }> } };
+
+export type RuleHealthQueryVariables = Exact<{
+  profileToken: string;
+}>;
+
+
+export type RuleHealthQuery = { ruleHealth: Array<{ ruleId: string, ruleToken: string, name: string, status: RuleStatus, lastFiredAt: string | null, fireCount: number, lastSignal: string | null, message: string | null }> };
+
+export type DetectionStreamSubscriptionVariables = Exact<{
+  profileToken: string;
+}>;
+
+
+export type DetectionStreamSubscription = { detectionStream: { ruleId: string, ruleToken: string, kind: string, edge: string, series: string, occurredTime: string, severity: string | null, value: number | null } };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -47,3 +65,31 @@ export const ValidateDetectionRulesDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<ValidateDetectionRulesQuery, ValidateDetectionRulesQueryVariables>;
+export const RuleHealthDocument = new TypedDocumentString(`
+    query RuleHealth($profileToken: String!) {
+  ruleHealth(profileToken: $profileToken) {
+    ruleId
+    ruleToken
+    name
+    status
+    lastFiredAt
+    fireCount
+    lastSignal
+    message
+  }
+}
+    `) as unknown as TypedDocumentString<RuleHealthQuery, RuleHealthQueryVariables>;
+export const DetectionStreamDocument = new TypedDocumentString(`
+    subscription DetectionStream($profileToken: String!) {
+  detectionStream(profileToken: $profileToken) {
+    ruleId
+    ruleToken
+    kind
+    edge
+    series
+    occurredTime
+    severity
+    value
+  }
+}
+    `) as unknown as TypedDocumentString<DetectionStreamSubscription, DetectionStreamSubscriptionVariables>;

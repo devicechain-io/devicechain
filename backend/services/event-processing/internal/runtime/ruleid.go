@@ -30,6 +30,28 @@ func RuleTenant(id string) (string, bool) {
 	return tenant, true
 }
 
+// ProfileAndRuleToken extracts the profile token and rule token from a minted rule id
+// "{tenant}/{profileToken}@{version}/{ruleToken}". It backs the detection-stream filter (slice
+// 7c): a subscription scoped to a profile matches a detection whose rule carries that profile
+// token, regardless of the (per-publish rotating) version. Returns ok=false for an id that does
+// not parse into the minted shape. The token grammars exclude "/" and "@", so each Cut is
+// unambiguous.
+func ProfileAndRuleToken(id string) (profileToken, ruleToken string, ok bool) {
+	_, rest, ok := strings.Cut(id, tenantSep) // drop the tenant prefix
+	if !ok {
+		return "", "", false
+	}
+	pvt, ruleToken, ok := strings.Cut(rest, tenantSep) // pvt = "{profileToken}@{version}"
+	if !ok || ruleToken == "" {
+		return "", "", false
+	}
+	profileToken, _, ok = strings.Cut(pvt, "@")
+	if !ok || profileToken == "" {
+		return "", "", false
+	}
+	return profileToken, ruleToken, true
+}
+
 // StableRuleKey returns a rule's VERSION-FREE, tenant-free identity "{profileToken}/{ruleToken}"
 // from a minted id "{tenant}/{profileToken}@{version}/{ruleToken}". The profile version token rotates
 // on EVERY profile publish (every enabled rule is re-emitted under the new version), but the profile

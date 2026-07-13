@@ -28,6 +28,7 @@ import { DefinitionsPanel } from './DefinitionsPanel';
 import { VersionsPanel } from './VersionsPanel';
 import { MetricDefinitionForm, CommandDefinitionForm } from './DefinitionForms';
 import { DetectionRuleForm } from './DetectionRuleForm';
+import { RuleHealthPanel } from './RuleHealthPanel';
 import {
   listDeviceProfiles,
   getDeviceProfile,
@@ -234,6 +235,14 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
           renderForm={(e, onDone) => <DetectionRuleForm profileToken={p.token} entity={e} onDone={onDone} />}
         />
       ),
+    },
+    {
+      value: 'rule-health',
+      label: 'Rule Health',
+      // Key by token so switching between two profile detail URLs (which React Router does
+      // not remount on a param-only change) resets the live feed + stream status instead of
+      // leaking profile A's firings under profile B (Fable 7c MEDIUM 1).
+      render: (p) => <RuleHealthPanel key={p.token} profileToken={p.token} />,
     },
     {
       value: 'versions',
