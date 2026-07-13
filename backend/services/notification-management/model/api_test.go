@@ -12,15 +12,22 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
+// testRootKey is a fixed 32-byte instance root key for the secret store in unit
+// tests (never a real key). It only has to be 256-bit and stable across the test.
+var testRootKey = []byte("0123456789abcdef0123456789abcdef")
+
 // newTestApi spins up an in-memory sqlite database with the tenant-scope and
-// token-grammar callbacks registered and the notification tables migrated, so the
-// CRUD path is exercised exactly as production does. The Postgres partial unique
-// indexes the real migrations add are not created here (they are validated on a
-// live cluster); these tests cover CRUD behavior, not the DB constraints.
+// token-grammar callbacks registered and the notification tables + the shared
+// secrets table migrated, plus an envelope-encrypting secret store over the same DB,
+// so the CRUD path (including the channel secret round-trip) is exercised exactly as
+// production does. The Postgres partial unique indexes the real migrations add are
+// not created here (they are validated on a live cluster); these tests cover CRUD
+// behavior, not the DB constraints.
 func newTestApi(t *testing.T) *Api {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -37,7 +44,37 @@ func newTestApi(t *testing.T) *Api {
 		&NotificationRule{}, &NotificationState{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	return NewApi(&rdb.RdbManager{Database: db})
+	if err := secrets.NewSecretStoreSchema().Migrate(db); err != nil {
+		t.Fatalf("migrate secrets: %v", err)
+	}
+	kek, err := secrets.NewInstanceKeyProvider(testRootKey)
+	if err != nil {
+		t.Fatalf("kek: %v", err)
+	}
+	return NewApi(&rdb.RdbManager{Database: db}, secrets.NewStore(db, kek))
+}
+
+// channelSecretValue resolves the stored delivery secret for a channel (looked up by
+// token to get its immutable id, the secret's key) in the test's tenant context, or
+// "" when none is stored.
+func channelSecretValue(t *testing.T, api *Api, ctx context.Context, token string) string {
+	t.Helper()
+	found, err := api.NotificationChannelsByToken(ctx, []string{token})
+	if err != nil || len(found) != 1 {
+		t.Fatalf("load channel %q: got %d err=%v", token, len(found), err)
+	}
+	ref, err := ChannelSecretRef(ctx, found[0].ID)
+	if err != nil {
+		t.Fatalf("channel secret ref: %v", err)
+	}
+	value, err := api.Secrets.Resolve(ctx, ref)
+	if errors.Is(err, secrets.ErrSecretNotFound) {
+		return ""
+	}
+	if err != nil {
+		t.Fatalf("resolve channel secret: %v", err)
+	}
+	return string(value)
 }
 
 func strPtr(s string) *string { return &s }
@@ -46,24 +83,24 @@ func tenantCtx(tenant string) context.Context {
 	return core.WithTenant(context.Background(), tenant)
 }
 
-// The secret is write-only but stored reversibly: it round-trips into the column
-// (HasSecret / Secret.Valid), and an unknown channel type is rejected.
+// The secret is write-only: it is sealed into the secret store under the channel's
+// handle (round-trips via Resolve, never a column), and an unknown channel type is
+// rejected.
 func TestCreateChannelSecretAndValidation(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
 
-	created, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
+	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
 		Token:       "smtp-primary",
 		ChannelType: ChannelTypeSMTP,
 		Config:      strPtr(`{"host":"smtp.example.com","port":587}`),
 		Secret:      strPtr("hunter2"),
 		Enabled:     true,
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("CreateNotificationChannel: %v", err)
 	}
-	if !created.Secret.Valid || created.Secret.String != "hunter2" {
-		t.Fatalf("secret not stored: valid=%v value=%q", created.Secret.Valid, created.Secret.String)
+	if got := channelSecretValue(t, api, ctx, "smtp-primary"); got != "hunter2" {
+		t.Fatalf("secret not stored: %q", got)
 	}
 
 	// Unknown channel type fails closed.
@@ -107,33 +144,55 @@ func TestUpdateChannelSecretPreserveOnOmit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update (omit secret): %v", err)
 	}
-	if !updated.Secret.Valid || updated.Secret.String != "orig" {
-		t.Fatalf("secret not preserved on omit: valid=%v value=%q", updated.Secret.Valid, updated.Secret.String)
+	if got := channelSecretValue(t, api, ctx, "smtp-primary"); got != "orig" {
+		t.Fatalf("secret not preserved on omit: %q", got)
 	}
 	if updated.Enabled {
 		t.Fatal("other fields should still update when secret omitted")
 	}
 
 	// Provide a new secret: it must replace.
-	updated, err = api.UpdateNotificationChannel(ctx, "smtp-primary", &NotificationChannelCreateRequest{
+	if _, err := api.UpdateNotificationChannel(ctx, "smtp-primary", &NotificationChannelCreateRequest{
 		Token: "smtp-primary", ChannelType: ChannelTypeSMTP, Secret: strPtr("rotated"), Enabled: true,
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("update (new secret): %v", err)
 	}
-	if updated.Secret.String != "rotated" {
-		t.Fatalf("secret not replaced: %q", updated.Secret.String)
+	if got := channelSecretValue(t, api, ctx, "smtp-primary"); got != "rotated" {
+		t.Fatalf("secret not replaced: %q", got)
 	}
 
 	// Explicit empty string clears it.
-	updated, err = api.UpdateNotificationChannel(ctx, "smtp-primary", &NotificationChannelCreateRequest{
+	if _, err := api.UpdateNotificationChannel(ctx, "smtp-primary", &NotificationChannelCreateRequest{
 		Token: "smtp-primary", ChannelType: ChannelTypeSMTP, Secret: strPtr(""), Enabled: true,
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("update (clear secret): %v", err)
 	}
-	if updated.Secret.Valid {
-		t.Fatalf("secret not cleared on empty string: %q", updated.Secret.String)
+	if got := channelSecretValue(t, api, ctx, "smtp-primary"); got != "" {
+		t.Fatalf("secret not cleared on empty string: %q", got)
+	}
+}
+
+// A token rename keeps the channel's delivery secret bound to it. The secret is keyed
+// by the channel's immutable id, not its mutable token, so renaming (while omitting the
+// secret) must not orphan the credential — the pre-ADR-059 token-keyed design would have
+// silently lost it and broken SMTP/webhook auth with no config change.
+func TestUpdateChannelRenamePreservesSecret(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+
+	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
+		Token: "smtp-old", ChannelType: ChannelTypeSMTP, Secret: strPtr("keepme"), Enabled: true,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Rename the token, omitting the secret (preserve-on-omit).
+	if _, err := api.UpdateNotificationChannel(ctx, "smtp-old", &NotificationChannelCreateRequest{
+		Token: "smtp-new", ChannelType: ChannelTypeSMTP, Enabled: true,
+	}); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if got := channelSecretValue(t, api, ctx, "smtp-new"); got != "keepme" {
+		t.Fatalf("secret orphaned by rename: %q", got)
 	}
 }
 

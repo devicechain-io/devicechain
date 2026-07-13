@@ -5,12 +5,14 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-notification-management/config"
 	"github.com/devicechain-io/dc-notification-management/graphql"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -68,6 +70,41 @@ func parseConfiguration() error {
 	return nil
 }
 
+// buildSecretStore constructs the envelope-encrypted secret store (ADR-059) from the
+// instance secrets configuration. It fails closed on an unknown or not-yet-implemented
+// backend/KEK provider and on a missing/malformed instance root key, so a service that
+// cannot form its KEK does not start (encryption-at-rest is not optional once wired).
+func buildSecretStore() (secrets.SecretStore, error) {
+	cfg := Microservice.InstanceConfiguration.Infrastructure.Secrets
+	backend := cfg.Backend
+	if backend == "" {
+		backend = secrets.BackendPostgres
+	}
+	kekProvider := cfg.KEKProvider
+	if kekProvider == "" {
+		kekProvider = secrets.InstanceKEKProvider
+	}
+	// Reject an unknown identifier up front (fail-closed), then reject a known-but-
+	// unbuilt option: only the default postgres backend + instance KEK provider ship
+	// today; the external secret-manager backends and cloud-KMS providers are additive.
+	if err := (secrets.Config{Backend: backend, KEKProvider: kekProvider}).Validate(); err != nil {
+		return nil, err
+	}
+	if backend != secrets.BackendPostgres || kekProvider != secrets.InstanceKEKProvider {
+		return nil, fmt.Errorf("secrets: only backend %q with KEK provider %q is implemented (got backend=%q kekProvider=%q)",
+			secrets.BackendPostgres, secrets.InstanceKEKProvider, backend, kekProvider)
+	}
+	rootKey, err := cfg.DecodedRootKey()
+	if err != nil {
+		return nil, err
+	}
+	kek, err := secrets.NewInstanceKeyProvider(rootKey)
+	if err != nil {
+		return nil, err
+	}
+	return secrets.NewStore(RdbManager.Database, kek), nil
+}
+
 // createNatsComponents creates the messaging components used by this microservice:
 // a durable consumer of the alarm-events stream feeding the notification processor.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
@@ -111,7 +148,18 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err := RdbManager.Initialize(ctx); err != nil {
 		return err
 	}
-	Api = model.NewApi(RdbManager)
+
+	// Build the envelope-encrypted secret store (ADR-059) over the service DB: each
+	// channel's write-only delivery secret lives here, not in a column. This service is
+	// the first consumer of the secret layer (S3). Only the default postgres backend +
+	// instance KEK provider are implemented; a declared-but-unbuilt backend/provider,
+	// or a missing/short instance root key, fails startup closed so the service can
+	// never silently run without encryption-at-rest.
+	secretStore, err := buildSecretStore()
+	if err != nil {
+		return err
+	}
+	Api = model.NewApi(RdbManager, secretStore)
 
 	// The policy-driven channel dispatcher (N.C): evaluate each tenant's notification
 	// policies and deliver matching alarms through the configured SMTP/webhook channels,
@@ -119,7 +167,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// behind the Notifier seam and is shared by the consumer processor (event-driven
 	// dispatch) and the escalation scheduler (timed re-notification), so both deliver
 	// through one adapter registry and retry policy.
-	Notifier = processor.NewPolicyNotifier(Api, Configuration.DeliveryAttempts, Configuration.DeliveryTimeout())
+	Notifier = processor.NewPolicyNotifier(Api, secretStore, Configuration.DeliveryAttempts, Configuration.DeliveryTimeout())
 
 	// Retention sweep: prune cleared per-alarm state older than the retention window so
 	// the notification state stays bounded (ADR-017 N.C). A negative interval disables

@@ -23,7 +23,7 @@ type fakeAdapter struct {
 	calls     int
 }
 
-func (f *fakeAdapter) Deliver(_ context.Context, _ *model.NotificationChannel, _ []string, _ *RenderedNotification) error {
+func (f *fakeAdapter) Deliver(_ context.Context, _ *model.NotificationChannel, _ string, _ []string, _ *RenderedNotification) error {
 	f.calls++
 	if f.calls <= f.failTimes {
 		return errors.New("boom")
@@ -36,7 +36,7 @@ func testNotifier(adapters map[string]ChannelAdapter) *PolicyNotifier {
 }
 
 func enabledChannel(token, ctype string) *model.NotificationChannel {
-	c := channelWith(token, ctype, "", "")
+	c := channelWith(token, ctype, "")
 	c.Enabled = true
 	return c
 }
@@ -115,7 +115,7 @@ func TestPlanSkipsDisabledMissingAndScoped(t *testing.T) {
 	n := testNotifier(adapters)
 
 	// Disabled channel → skipped.
-	disabled := channelWith("smtp-off", model.ChannelTypeSMTP, "", "")
+	disabled := channelWith("smtp-off", model.ChannelTypeSMTP, "")
 	if got := n.plan(raisedEvent("CRITICAL"), []*model.NotificationPolicy{
 		policy("p", rule("CRITICAL", disabled, "x@x.com")),
 	}, nil); len(got) != 0 {

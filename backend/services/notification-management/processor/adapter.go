@@ -20,8 +20,13 @@ import (
 // and return a non-nil error on a failed delivery so the dispatcher can retry it. It
 // must NOT retry internally: the dispatcher owns the bounded retry loop so retry
 // budget is uniform across transports.
+//
+// secret is the channel's delivery secret (SMTP password, webhook bearer token),
+// resolved from the secret store by the dispatcher server-internal at delivery time
+// (ADR-059); it is empty when no secret is configured. It is passed per-call rather
+// than carried on the channel so cleartext never lives on the persisted model.
 type ChannelAdapter interface {
-	Deliver(ctx context.Context, channel *model.NotificationChannel, recipients []string, msg *RenderedNotification) error
+	Deliver(ctx context.Context, channel *model.NotificationChannel, secret string, recipients []string, msg *RenderedNotification) error
 }
 
 // newAdapterRegistry builds the channel-type → adapter map the dispatcher routes

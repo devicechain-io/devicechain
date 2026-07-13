@@ -42,9 +42,11 @@ const (
 	smtpSecurityNone     = "none"
 )
 
-// Deliver sends the rendered notification to each recipient as one email.
+// Deliver sends the rendered notification to each recipient as one email. secret is
+// the SMTP password (empty when unconfigured); it is required only when the channel
+// config names a username.
 func (a *smtpAdapter) Deliver(ctx context.Context, channel *model.NotificationChannel,
-	recipients []string, msg *RenderedNotification) error {
+	secret string, recipients []string, msg *RenderedNotification) error {
 	cfg, err := parseSMTPConfig(channel)
 	if err != nil {
 		return err
@@ -77,10 +79,10 @@ func (a *smtpAdapter) Deliver(ctx context.Context, channel *model.NotificationCh
 	// Authenticate only when a username is configured; an open relay / loopback test
 	// server takes no auth.
 	if cfg.Username != "" {
-		if !channel.Secret.Valid {
+		if secret == "" {
 			return fmt.Errorf("smtp channel %q has a username but no secret configured", channel.Token)
 		}
-		auth := smtp.PlainAuth("", cfg.Username, channel.Secret.String, cfg.Host)
+		auth := smtp.PlainAuth("", cfg.Username, secret, cfg.Host)
 		if err := client.Auth(auth); err != nil {
 			return fmt.Errorf("smtp auth: %w", err)
 		}

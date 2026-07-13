@@ -4,9 +4,12 @@
 package model
 
 import (
-	"database/sql"
+	"context"
+	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -15,18 +18,15 @@ import (
 // concrete instance of a ChannelType (smtp, webhook) with the connection config a
 // routing policy delivers through. Config holds the type-specific, non-secret
 // connection settings (SMTP host/port/from; webhook URL/method/headers) as opaque
-// JSON so each adapter owns its own shape without a column per setting; Secret
-// holds the one piece that must never be read back (SMTP password, webhook bearer
-// token).
+// JSON so each adapter owns its own shape without a column per setting.
 //
-// Secret is stored reversibly, not hashed: unlike a device credential (verified by
-// constant-time compare, ADR-014), the sender must present the actual secret to
-// the SMTP server / HTTP endpoint at delivery time, so it has to be recoverable.
-// It is kept out of the read API at the resolver layer (never selected away in
-// SQL, so internal dispatch can load it): the GraphQL type exposes hasSecret, not
-// the value. At-rest encryption of this column is the same future cross-cutting
-// decision as the device-credential/provision-secret stores, not a notification
-// concern to solve alone.
+// The one piece that must never be read back — the SMTP password / webhook bearer
+// token — is NOT a column here. As of ADR-059 (S3) it lives in the envelope-
+// encrypted secret store, keyed by the channel's tenant-scoped handle
+// (ChannelSecretRef): the write path Puts it, dispatch Resolves it server-internal
+// at delivery time, and the read API exposes only hasSecret (store.Exists). This
+// replaces the earlier reversible plaintext column, gaining encryption-at-rest and
+// removing the log-leak footgun, without changing what the client sees.
 type NotificationChannel struct {
 	gorm.Model
 	rdb.TenantScoped
@@ -36,10 +36,27 @@ type NotificationChannel struct {
 
 	ChannelType string
 	Config      *datatypes.JSON
-	// Secret is the write-only delivery secret; size caps it well above any realistic
-	// SMTP password or bearer token. NULL means "no secret configured".
-	Secret  sql.NullString `gorm:"size:4096"`
-	Enabled bool
+	Enabled     bool
+}
+
+// ChannelSecretName is the stable secret-store handle name for a channel's delivery
+// secret: "channel/{id}/secret". It is keyed by the channel's immutable numeric ID,
+// NOT its token: a channel's token is mutable (an update may rename it), and keying
+// the secret by a mutable token would silently orphan the secret on a rename (the
+// SMTP/webhook auth would then fail with no configuration change). The ID never
+// changes, so the handle is stable for the channel's whole life.
+func ChannelSecretName(id uint) string { return fmt.Sprintf("channel/%d/secret", id) }
+
+// ChannelSecretRef builds the tenant-scoped SecretRef for a channel's delivery
+// secret from the acting tenant in ctx and the channel's immutable id. It fails
+// closed (ErrNoTenant) when no tenant is bound, so a secret operation can never
+// cross a tenant boundary (ADR-059).
+func ChannelSecretRef(ctx context.Context, id uint) (secrets.SecretRef, error) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok || tenant == "" {
+		return secrets.SecretRef{}, core.ErrNoTenant
+	}
+	return secrets.SecretRef{Scope: secrets.ScopeTenant, Tenant: tenant, Name: ChannelSecretName(id)}, nil
 }
 
 // NotificationChannelCreateRequest is the data required to create or update a

@@ -5,7 +5,6 @@ package processor
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -16,16 +15,14 @@ import (
 	"gorm.io/datatypes"
 )
 
-// channelWith builds an in-memory channel with the given type/config/secret.
-func channelWith(token, ctype, config, secret string) *model.NotificationChannel {
+// channelWith builds an in-memory channel with the given type/config. The delivery
+// secret is no longer a channel field (ADR-059) — it is passed to Deliver directly.
+func channelWith(token, ctype, config string) *model.NotificationChannel {
 	c := &model.NotificationChannel{ChannelType: ctype}
 	c.Token = token
 	if config != "" {
 		j := datatypes.JSON([]byte(config))
 		c.Config = &j
-	}
-	if secret != "" {
-		c.Secret = sql.NullString{String: secret, Valid: true}
 	}
 	return c
 }
@@ -43,13 +40,13 @@ func TestWebhookDeliverPostsPayloadWithAuth(t *testing.T) {
 	defer srv.Close()
 
 	adapter := &webhookAdapter{client: srv.Client()}
-	channel := channelWith("hook-1", model.ChannelTypeWebhook, `{"url":"`+srv.URL+`"}`, "s3cr3t")
+	channel := channelWith("hook-1", model.ChannelTypeWebhook, `{"url":"`+srv.URL+`"}`)
 	msg := &RenderedNotification{
 		Subject: "[CRITICAL] Alarm raised",
 		Payload: map[string]any{"text": "[CRITICAL] Alarm raised", "severity": "CRITICAL"},
 	}
 
-	if err := adapter.Deliver(context.Background(), channel, []string{"ops@example.com"}, msg); err != nil {
+	if err := adapter.Deliver(context.Background(), channel, "s3cr3t", []string{"ops@example.com"}, msg); err != nil {
 		t.Fatalf("deliver: %v", err)
 	}
 	if gotContentType != "application/json" {
@@ -77,8 +74,8 @@ func TestWebhookCustomAuthHeader(t *testing.T) {
 
 	adapter := &webhookAdapter{client: srv.Client()}
 	channel := channelWith("hook-2", model.ChannelTypeWebhook,
-		`{"url":"`+srv.URL+`","authHeader":"X-API-Key","authScheme":""}`, "rawtoken")
-	if err := adapter.Deliver(context.Background(), channel, nil,
+		`{"url":"`+srv.URL+`","authHeader":"X-API-Key","authScheme":""}`)
+	if err := adapter.Deliver(context.Background(), channel, "rawtoken", nil,
 		&RenderedNotification{Payload: map[string]any{"text": "hi"}}); err != nil {
 		t.Fatalf("deliver: %v", err)
 	}
@@ -95,24 +92,24 @@ func TestWebhookNon2xxIsError(t *testing.T) {
 	defer srv.Close()
 
 	adapter := &webhookAdapter{client: srv.Client()}
-	channel := channelWith("hook-3", model.ChannelTypeWebhook, `{"url":"`+srv.URL+`"}`, "")
-	err := adapter.Deliver(context.Background(), channel, nil, &RenderedNotification{Payload: map[string]any{}})
+	channel := channelWith("hook-3", model.ChannelTypeWebhook, `{"url":"`+srv.URL+`"}`)
+	err := adapter.Deliver(context.Background(), channel, "", nil, &RenderedNotification{Payload: map[string]any{}})
 	if err == nil {
 		t.Fatalf("expected error on 500")
 	}
 }
 
 func TestWebhookConfigValidation(t *testing.T) {
-	if _, err := parseWebhookConfig(channelWith("h", model.ChannelTypeWebhook, `{}`, "")); err == nil {
+	if _, err := parseWebhookConfig(channelWith("h", model.ChannelTypeWebhook, `{}`)); err == nil {
 		t.Fatalf("expected missing-url error")
 	}
-	if _, err := parseWebhookConfig(channelWith("h", model.ChannelTypeWebhook, `{"url":"ftp://x"}`, "")); err == nil {
+	if _, err := parseWebhookConfig(channelWith("h", model.ChannelTypeWebhook, `{"url":"ftp://x"}`)); err == nil {
 		t.Fatalf("expected invalid-scheme error")
 	}
-	if _, err := parseWebhookConfig(channelWith("h", model.ChannelTypeWebhook, `{"url":"https://x/y","method":"DELETE"}`, "")); err == nil {
+	if _, err := parseWebhookConfig(channelWith("h", model.ChannelTypeWebhook, `{"url":"https://x/y","method":"DELETE"}`)); err == nil {
 		t.Fatalf("expected POST-only rejection")
 	}
-	cfg, err := parseWebhookConfig(channelWith("h", model.ChannelTypeWebhook, `{"url":"https://x/y"}`, ""))
+	cfg, err := parseWebhookConfig(channelWith("h", model.ChannelTypeWebhook, `{"url":"https://x/y"}`))
 	if err != nil || cfg.Method != http.MethodPost {
 		t.Fatalf("default method: cfg=%+v err=%v", cfg, err)
 	}
@@ -132,8 +129,8 @@ func TestWebhookDropsReservedHeaders(t *testing.T) {
 
 	adapter := &webhookAdapter{client: srv.Client()}
 	channel := channelWith("hook", model.ChannelTypeWebhook,
-		`{"url":"`+srv.URL+`","headers":{"Authorization":"Bearer forged","X-DC-Tenant":"victim","X-Custom":"ok"}}`, "realsecret")
-	if err := adapter.Deliver(context.Background(), channel, nil, &RenderedNotification{Payload: map[string]any{}}); err != nil {
+		`{"url":"`+srv.URL+`","headers":{"Authorization":"Bearer forged","X-DC-Tenant":"victim","X-Custom":"ok"}}`)
+	if err := adapter.Deliver(context.Background(), channel, "realsecret", nil, &RenderedNotification{Payload: map[string]any{}}); err != nil {
 		t.Fatalf("deliver: %v", err)
 	}
 	if gotAuth != "Bearer realsecret" {
