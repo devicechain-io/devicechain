@@ -284,7 +284,7 @@ func validateReact(r Rule, limits Limits) error {
 		// actions collapse to ONE idempotency token and only one would ever dispatch — a silent
 		// swallow. An author never means to declare the same action twice per detection, so a textual
 		// duplicate is rejected here as a mistake rather than silently deduped downstream.
-		key := actionDedupKey(a)
+		key := ActionDedupKey(a)
 		if _, dup := seen[key]; dup {
 			return invalid(r.ID, "actions", "action %d duplicates an earlier action", i)
 		}
@@ -305,11 +305,15 @@ func isJSONObject(s string) bool {
 	return json.Unmarshal([]byte(s), &m) == nil && m != nil
 }
 
-// actionDedupKey is a textual identity for exact-duplicate detection. Two sendCommand actions with
+// ActionDedupKey is a textual identity for exact-duplicate detection. Two sendCommand actions with
 // the same command but different payloads are legitimately distinct (send two different commands),
 // so the payload is part of the key; the payload is compared verbatim (it is not canonicalized —
-// see SendCommandAction.Payload), so this catches identical authored bytes, the mistake case.
-func actionDedupKey(a Action) string {
+// see SendCommandAction.Payload), so this catches identical authored bytes, the mistake case. It is
+// exported as the canonical action identity so the REACT dispatcher's content-addressed idempotency
+// token (react.actionContentKey) can be asserted to induce the SAME equivalence (the lockstep that
+// keeps a redelivery deduping rather than double-dispatching); both share rules.MethodOrPost /
+// rules.HeaderKey so the normalization cannot drift.
+func ActionDedupKey(a Action) string {
 	// The guard is part of the identity: two actions with the same target but different guards route
 	// on different conditions (raise-if-hot vs raise-if-cold off one detection), so they are distinct,
 	// not duplicates — and the dispatcher's content-addressed idempotency token must likewise separate
@@ -330,10 +334,11 @@ func actionDedupKey(a Action) string {
 		// URL + method + body template + secret handle + a stable header serialization identify the
 		// dispatch. Method and header names are NORMALIZED (empty method ⇒ POST, names canonicalized)
 		// so two actions that render the identical request are ONE identity — else they would pass the
-		// duplicate gate yet get distinct idempotency tokens at dispatch and double-fire. When
-		// react.actionContentKey adds its httpCall/publish cases (slice C2b) it MUST apply the same
-		// normalization, or the durable idempotency token and this key diverge.
-		return "httpCall|" + h.URL + "|" + methodOrPost(h.Method) + "|" + h.BodyTemplate + "|" + h.SecretRef + "|" + headerKey(h.Headers) + guardSeg
+		// duplicate gate yet get distinct idempotency tokens at dispatch and double-fire.
+		// react.actionContentKey (slice C2b) calls the SAME exported MethodOrPost / HeaderKey so the
+		// durable idempotency token can never drift from this gate's identity (one implementation, not
+		// two mirrored copies).
+		return "httpCall|" + h.URL + "|" + MethodOrPost(h.Method) + "|" + h.BodyTemplate + "|" + h.SecretRef + "|" + HeaderKey(h.Headers) + guardSeg
 	case ActionPublish:
 		p := a.Publish
 		return "publish|" + p.ConnectorRef + "|" + p.PayloadTemplate + guardSeg
@@ -342,13 +347,14 @@ func actionDedupKey(a Action) string {
 	}
 }
 
-// headerKey renders a header map into a stable, order-independent string for the action identity
+// HeaderKey renders a header map into a stable, order-independent string for the action identity
 // keys. Names are CANONICALIZED (http.CanonicalHeaderKey — the same form the wire uses) so a
 // case-only difference is one identity; map iteration order is non-deterministic, so the canonical
 // names are sorted; each name/value is length-prefixed so no set can collide with a different set.
 // validateHTTPCall rejects two names that canonicalize to the same header, so the canonical names
-// here are unique (no value is lost to a canonicalization clash).
-func headerKey(h map[string]string) string {
+// here are unique (no value is lost to a canonicalization clash). Exported so the REACT dispatcher's
+// idempotency token (react.actionContentKey) shares this ONE normalization rather than a drift-prone copy.
+func HeaderKey(h map[string]string) string {
 	if len(h) == 0 {
 		return ""
 	}
@@ -367,9 +373,10 @@ func headerKey(h map[string]string) string {
 	return b.String()
 }
 
-// methodOrPost normalizes an httpCall method for the identity key: an empty method means POST (the
+// MethodOrPost normalizes an httpCall method for the identity key: an empty method means POST (the
 // dispatch default), so "" and "POST" resolve to one identity rather than two colliding dispatches.
-func methodOrPost(m string) string {
+// Exported so react.actionContentKey normalizes identically to this gate (shared, not mirrored).
+func MethodOrPost(m string) string {
 	if m == "" {
 		return http.MethodPost
 	}

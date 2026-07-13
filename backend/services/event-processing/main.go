@@ -241,12 +241,24 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	alarms := processor.NewAlarmClient(writer)
 	log.Info().Msg("REACT raise-alarm dispatch ENABLED (ADR-051 slice 5c / ADR-057): the sole alarm path.")
 
+	// connector sink (ADR-060 §4): a dedicated tenant-scoped writer on the connector-dispatch subject;
+	// the outbound-connectors service (slice C3) consumes it and executes each httpCall/publish action.
+	// Like raise-alarm, a NATS writer is always available, so it is always wired — no external
+	// coordinate needed. Creating the writer auto-provisions the connector-dispatch stream, so it is
+	// safe to publish before the C3 consumer exists (that consumer will DeliverNew past any backlog).
+	connectorWriter, err := nmgr.NewWriter(config.SUBJECT_CONNECTOR_DISPATCH)
+	if err != nil {
+		return err
+	}
+	connectors := processor.NewConnectorClient(connectorWriter)
+	log.Info().Msg("REACT connector dispatch ENABLED (ADR-060): httpCall/publish actions publish to the outbound-connectors service.")
+
 	reader, err := nmgr.NewReader(config.SUBJECT_DERIVED_EVENTS, messaging.ReaderWithDeliverNew())
 	if err != nil {
 		return err
 	}
 	ReactDispatcher = processor.NewReactDispatcher(Microservice, reader,
-		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms)
+		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors)
 	return nil
 }
 

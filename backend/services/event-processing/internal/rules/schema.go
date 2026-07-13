@@ -181,7 +181,7 @@ const MaxActionsPerRule = 8
 // data flow between actions — each is dispatched independently and idempotently by the REACT
 // dispatcher (slice 5b), keyed on the detection's dedup identity (RuleID, Series, Kind,
 // OccurredTime) plus the action's CONTENT (content-addressed, not its list index — so reordering a
-// chain is a no-op; see react.actionContentKey / actionDedupKey).
+// chain is a no-op; see react.actionContentKey / rules.ActionDedupKey).
 type Action struct {
 	Type        ActionType         `json:"type"`
 	RaiseAlarm  *RaiseAlarmAction  `json:"raiseAlarm,omitempty"`

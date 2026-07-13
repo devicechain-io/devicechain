@@ -42,16 +42,16 @@ type ReactDispatcher struct {
 }
 
 // NewReactDispatcher builds the REACT consumer over a derived-event reader, a rule resolver, and the
-// action sinks. Either sink may be nil to disable that action kind (a nil commands sink disables
-// send-command; a nil alarms sink disables raise-alarm — the default until slice 6); main decides
-// which are configured. The dispatcher is constructed here so the whole REACT wiring lives behind
-// one type.
+// action sinks. Any sink may be nil to disable that action kind (a nil commands sink disables
+// send-command; a nil alarms sink disables raise-alarm; a nil connectors sink disables httpCall/publish,
+// ADR-060); main decides which are configured. The dispatcher is constructed here so the whole REACT
+// wiring lives behind one type.
 func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
-	resolver react.RuleResolver, commands react.CommandSink, alarms react.AlarmSink) *ReactDispatcher {
+	resolver react.RuleResolver, commands react.CommandSink, alarms react.AlarmSink, connectors react.ConnectorSink) *ReactDispatcher {
 	m := newReactMetrics(ms)
 	return &ReactDispatcher{
 		reader:     reader,
-		dispatcher: react.NewDispatcher(resolver, commands, alarms, m),
+		dispatcher: react.NewDispatcher(resolver, commands, alarms, connectors, m),
 		metrics:    m,
 	}
 }
