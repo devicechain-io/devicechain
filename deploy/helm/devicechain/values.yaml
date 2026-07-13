@@ -166,6 +166,15 @@ frontend:
 # all ServiceMonitors).
 metrics:
   enabled: true
+  # grafanaDashboards renders the event-processing operations dashboard as a ConfigMap
+  # labeled grafana_dashboard: "1" for the Grafana sidecar (kube-prometheus-stack) to
+  # auto-import. Set false on clusters that have the Prometheus Operator but no Grafana
+  # sidecar. Ignored when metrics.enabled is false.
+  grafanaDashboards: true
+  # alerts renders a PrometheusRule with the event-processing (DETECT + REACT) alerting
+  # rules. Requires the Prometheus Operator CRDs (same as enabled). Ignored when
+  # metrics.enabled is false.
+  alerts: true
 
 # E7 (ADR-022 review): default pod resource requests/limits (override per area
 # under functionalAreas.<area>.resources). These are lightweight Go services

@@ -1,0 +1,92 @@
+{{/*
+Alerting rules for the event-processing (DETECT + REACT) pipeline (Slice 8).
+A Prometheus-Operator PrometheusRule CRD, gated on metrics.enabled + metrics.alerts
+(same operator assumption as the ServiceMonitor). Every expression is scoped to THIS
+instance's namespace, so one rule object alerts only on its own instance. Thresholds are
+conservative defaults tuned for alert-quietness; operators tune per deployment.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: event-processing
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.event-processing
+      rules:
+        - alert: DetectConsumerBacklogHigh
+          expr: max(devicechain_eventprocessing_detect_consumer_pending{namespace="{{ $ns }}"}) > 50000
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "DETECT consumer is falling behind"
+            description: "The resolved-events durable consumer has >50k undelivered messages for 10m; the DETECT engine is not keeping up with ingest."
+        - alert: DetectWatermarkLagHigh
+          expr: max(devicechain_eventprocessing_detect_watermark_lag_seconds{namespace="{{ $ns }}"}) > 300
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "DETECT watermark is lagging wall-clock"
+            description: "The engine watermark is >5m behind wall-clock for 10m; time-based detections (absence/duration) will fire late."
+        - alert: DetectCheckpointsStalledWithBacklog
+          expr: |
+            increase(devicechain_eventprocessing_detect_checkpoints_total{namespace="{{ $ns }}"}[15m]) == 0
+            and max(devicechain_eventprocessing_detect_consumer_pending{namespace="{{ $ns }}"}) > 0
+          for: 15m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "DETECT is not checkpointing while a backlog exists"
+            description: "No committed checkpoint in 15m while undelivered work waits — the single-writer loop is likely stuck (broker/store outage or a halted stale writer)."
+        - alert: DetectFanoutEvalErrors
+          expr: sum(rate(devicechain_eventprocessing_detect_fanout_eval_errors_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "DETECT leaf-predicate evaluation errors"
+            description: "Rule leaf predicates are erroring during fan-out (treated as non-match), so some detections may be silently missed. Check for a bad published rule."
+        - alert: ReactPoisonDropping
+          expr: sum(rate(devicechain_eventprocessing_react_events_poison_dropped_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "REACT is dropping un-dispatchable derived events"
+            description: "Derived events are being dropped after the redelivery cap — raised alarms or dispatched commands are being lost. A REACT sink (alarm/command) is likely down."
+        - alert: DetectTenantOverStateBudget
+          expr: |
+            max(devicechain_eventprocessing_detect_tenants_over_rule_budget{namespace="{{ $ns }}"}) > 0
+            or max(devicechain_eventprocessing_detect_tenants_over_live_key_budget{namespace="{{ $ns }}"}) > 0
+          for: 30m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "A tenant is over its DETECT state budget"
+            description: "One or more tenants exceed the per-tenant rule-count or live-key budget (ADR-023) for 30m. Find the offender in the event-processing warn log."
+        - alert: EventProcessingStreamNearFull
+          expr: |
+            max by (stream) (
+              devicechain_eventprocessing_jetstream_stream_used_bytes{namespace="{{ $ns }}"}
+              / clamp_min(devicechain_eventprocessing_jetstream_stream_limit_bytes{namespace="{{ $ns }}"}, 1)
+            ) > 0.8
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "A JetStream stream is near its ceiling"
+            description: "Stream {{`{{ $labels.stream }}`}} is over 80% of its byte ceiling for 10m; the oldest messages will be evicted (DiscardOld) once full."
+{{- end }}
