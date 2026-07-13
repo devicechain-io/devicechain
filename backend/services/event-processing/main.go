@@ -294,8 +294,13 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// /metrics), the ADR-044 detection-rule validation gate (validateDetectionRules — pure,
 	// compiles through the stateless DETECT compiler), and the slice-7b rule-health read
 	// (ruleHealth), which reads the durable rule + firing projections — so the resolver carries
-	// their stores. Auth/tenant ride the request context, so no additional providers are needed.
-	providers := map[gqlcore.ContextKey]interface{}{}
+	// their stores. Auth/tenant ride the request context. The NATS manager is injected as a
+	// provider so the slice-7c detectionStream subscription can tap the tenant's derived-event
+	// feed (SubscribeLive); it is connected here (NatsManager.Initialize above), before the
+	// subscription server accepts a client.
+	providers := map[gqlcore.ContextKey]interface{}{
+		gqlcore.ContextNatsKey: NatsManager,
+	}
 	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{
 		DetectRules: DetectRuleStore,
 		RuleStats:   RuleStatStore,

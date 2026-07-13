@@ -43,3 +43,23 @@ func TestStableRuleKey(t *testing.T) {
 		}
 	}
 }
+
+// TestProfileAndRuleToken proves the detection-stream filter's id parse: it recovers the profile
+// and rule tokens from a minted id regardless of version, and rejects malformed ids (which the
+// filter treats as non-matching, so a garbled event is skipped rather than mis-attributed).
+func TestProfileAndRuleToken(t *testing.T) {
+	pt, rt, ok := ProfileAndRuleToken(PublishedRuleID("acme", "thermostat@3", "over-temp"))
+	if !ok || pt != "thermostat" || rt != "over-temp" {
+		t.Fatalf("ProfileAndRuleToken = %q,%q,%v; want thermostat,over-temp,true", pt, rt, ok)
+	}
+	// The version is stripped: a different version of the same profile parses to the same profile token.
+	pt2, _, _ := ProfileAndRuleToken(PublishedRuleID("acme", "thermostat@9", "over-temp"))
+	if pt2 != pt {
+		t.Fatalf("version leaked into profile token: %q vs %q", pt2, pt)
+	}
+	for _, bad := range []string{"", "acme", "acme/norule", "acme/prof/rule", "acme/@1/rule", "acme/prof@1/"} {
+		if p, r, ok := ProfileAndRuleToken(bad); ok {
+			t.Fatalf("ProfileAndRuleToken(%q) = %q,%q,true; want _,_,false", bad, p, r)
+		}
+	}
+}

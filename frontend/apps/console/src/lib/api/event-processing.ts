@@ -9,6 +9,7 @@
 // parses the taxonomy, so this is where a bad rule is actually caught.
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/event-processing';
+import type { RuleHealthQuery, DetectionStreamSubscription } from '@/gql/event-processing/graphql';
 
 const VALIDATE_DETECTION_RULES = graphql(`
   query ValidateDetectionRules($rules: [DetectionRuleInput!]!) {
@@ -41,3 +42,53 @@ export async function validateDetectionRule(token: string, definition: string): 
   if (result.valid) return { ok: true, message: null };
   return { ok: false, message: result.errors[0]?.message ?? 'The rule did not compile.' };
 }
+
+// ── Rule health (ADR-051 slice 7b/7c) ─────────────────────────────────────
+// Per-rule status / last-fired / fire-count for a profile's ACTIVE published version.
+
+export type RuleHealth = RuleHealthQuery['ruleHealth'][number];
+
+const RULE_HEALTH = graphql(`
+  query RuleHealth($profileToken: String!) {
+    ruleHealth(profileToken: $profileToken) {
+      ruleId
+      ruleToken
+      name
+      status
+      lastFiredAt
+      fireCount
+      lastSignal
+      message
+    }
+  }
+`);
+
+export async function listRuleHealth(profileToken: string): Promise<RuleHealth[]> {
+  const data = await gql('event-processing', RULE_HEALTH, { profileToken });
+  return data.ruleHealth;
+}
+
+// ── Live detection feed (ADR-037 / ADR-057 slice 7c) ──────────────────────
+// The stream of a profile's DETECT firings (raised/resolved), consumed by
+// useDetectionStream. Best-effort delivery: it is a live feed, not a source of
+// truth (ruleHealth's fire counts are the durable record) — a consumer treats
+// each event as an append to a capped recent-firings list and re-runs ruleHealth
+// on reconnect. Exported (unlike the query documents) because the hook passes it
+// to the SDK subscribe().
+export type DetectionStreamData = DetectionStreamSubscription;
+export type DetectionEvent = DetectionStreamSubscription['detectionStream'];
+
+export const DETECTION_STREAM = graphql(`
+  subscription DetectionStream($profileToken: String!) {
+    detectionStream(profileToken: $profileToken) {
+      ruleId
+      ruleToken
+      kind
+      edge
+      series
+      occurredTime
+      severity
+      value
+    }
+  }
+`);

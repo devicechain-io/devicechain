@@ -16,15 +16,27 @@ import * as types from './graphql';
  */
 type Documents = {
     "\n  query ValidateDetectionRules($rules: [DetectionRuleInput!]!) {\n    validateDetectionRules(rules: $rules) {\n      valid\n      errors {\n        index\n        token\n        message\n      }\n    }\n  }\n": typeof types.ValidateDetectionRulesDocument,
+    "\n  query RuleHealth($profileToken: String!) {\n    ruleHealth(profileToken: $profileToken) {\n      ruleId\n      ruleToken\n      name\n      status\n      lastFiredAt\n      fireCount\n      lastSignal\n      message\n    }\n  }\n": typeof types.RuleHealthDocument,
+    "\n  subscription DetectionStream($profileToken: String!) {\n    detectionStream(profileToken: $profileToken) {\n      ruleId\n      ruleToken\n      kind\n      edge\n      series\n      occurredTime\n      severity\n      value\n    }\n  }\n": typeof types.DetectionStreamDocument,
 };
 const documents: Documents = {
     "\n  query ValidateDetectionRules($rules: [DetectionRuleInput!]!) {\n    validateDetectionRules(rules: $rules) {\n      valid\n      errors {\n        index\n        token\n        message\n      }\n    }\n  }\n": types.ValidateDetectionRulesDocument,
+    "\n  query RuleHealth($profileToken: String!) {\n    ruleHealth(profileToken: $profileToken) {\n      ruleId\n      ruleToken\n      name\n      status\n      lastFiredAt\n      fireCount\n      lastSignal\n      message\n    }\n  }\n": types.RuleHealthDocument,
+    "\n  subscription DetectionStream($profileToken: String!) {\n    detectionStream(profileToken: $profileToken) {\n      ruleId\n      ruleToken\n      kind\n      edge\n      series\n      occurredTime\n      severity\n      value\n    }\n  }\n": types.DetectionStreamDocument,
 };
 
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query ValidateDetectionRules($rules: [DetectionRuleInput!]!) {\n    validateDetectionRules(rules: $rules) {\n      valid\n      errors {\n        index\n        token\n        message\n      }\n    }\n  }\n"): typeof import('./graphql').ValidateDetectionRulesDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query RuleHealth($profileToken: String!) {\n    ruleHealth(profileToken: $profileToken) {\n      ruleId\n      ruleToken\n      name\n      status\n      lastFiredAt\n      fireCount\n      lastSignal\n      message\n    }\n  }\n"): typeof import('./graphql').RuleHealthDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  subscription DetectionStream($profileToken: String!) {\n    detectionStream(profileToken: $profileToken) {\n      ruleId\n      ruleToken\n      kind\n      edge\n      series\n      occurredTime\n      severity\n      value\n    }\n  }\n"): typeof import('./graphql').DetectionStreamDocument;
 
 
 export function graphql(source: string) {

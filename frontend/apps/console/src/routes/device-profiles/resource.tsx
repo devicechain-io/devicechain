@@ -28,6 +28,7 @@ import { DefinitionsPanel } from './DefinitionsPanel';
 import { VersionsPanel } from './VersionsPanel';
 import { MetricDefinitionForm, CommandDefinitionForm } from './DefinitionForms';
 import { DetectionRuleForm } from './DetectionRuleForm';
+import { RuleHealthPanel } from './RuleHealthPanel';
 import {
   listDeviceProfiles,
   getDeviceProfile,
@@ -234,6 +235,11 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
           renderForm={(e, onDone) => <DetectionRuleForm profileToken={p.token} entity={e} onDone={onDone} />}
         />
       ),
+    },
+    {
+      value: 'rule-health',
+      label: 'Rule Health',
+      render: (p) => <RuleHealthPanel profileToken={p.token} />,
     },
     {
       value: 'versions',
