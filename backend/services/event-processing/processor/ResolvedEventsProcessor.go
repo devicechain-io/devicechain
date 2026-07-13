@@ -336,7 +336,7 @@ type attrUpdate struct {
 // this processor's bounded-cardinality metrics.
 func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageReader,
 	replay ReplayOpener, store *model.SnapshotStore, registry *runtime.RuleRegistry,
-	derivedWriter messaging.MessageWriter, cfg Config,
+	derivedWriter messaging.MessageWriter, ruleStats *model.RuleStatStore, cfg Config,
 	callbacks core.LifecycleCallbacks) *ResolvedEventsProcessor {
 	if cfg.Clock == nil {
 		cfg.Clock = detectcore.RealClock{}
@@ -367,6 +367,11 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		attrUpdates: make(chan attrUpdate, 256),
 	}
 	rp.publisher = runtime.NewPublisher(derivedWriter, registry, rp.metrics)
+	// Wire the rule-health fire projection (slice 7b) when a store is supplied. It is off the
+	// correctness path (best-effort writes), so the scaffold/test paths pass nil and record none.
+	if ruleStats != nil {
+		rp.publisher.SetFireRecorder(ruleStatRecorder{store: ruleStats})
+	}
 	rp.metrics.setRulesActive(registry.Count())
 	rpname := fmt.Sprintf("%s-%s", ms.FunctionalArea, "resolved-events-proc")
 	rp.lifecycle = core.NewLifecycleManager(rpname, rp, callbacks)
