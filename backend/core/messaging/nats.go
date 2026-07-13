@@ -579,6 +579,56 @@ func (nmgr *NatsManager) NewReplayReader(suffix string, startSeq uint64) (Replay
 	return &natsReplayReader{sub: sub, js: nmgr.js, stream: name, head: head}, head, nil
 }
 
+// NewReplayReaderFromTime opens an ephemeral, in-order read of the suffix's stream from the
+// first message published at/after startTime up to the current head, for the replay-preview
+// harness (ADR-053 slice 9d). It mirrors NewReplayReader's isolation exactly — an ephemeral
+// pull consumer (empty durable, InactiveThreshold-reaped) that acks only its own throwaway
+// consumer, never the production durable — but starts by JetStream publish TIME rather than a
+// sequence, since a preview names a time window, not a sequence.
+//
+// It returns the stream's earliest retained message time (FirstTime) so the caller can DETECT
+// the aged-out case: when the requested startTime predates FirstTime, JetStream silently clamps
+// the start to the first retained message, so the caller compares startTime to the returned
+// FirstTime and reports a degraded (history-evicted) preview rather than a misleadingly-empty
+// one. When the stream is absent/empty, or startTime is past the last retained message (an empty
+// window), it returns a reader that immediately reports io.EOF and creates no consumer — so a
+// future-dated or empty window degrades to zero firings cleanly instead of stalling on a
+// consumer that will never deliver.
+//
+// NB: JetStream StartTime keys on the message's PUBLISH time (≈ the event's processed/arrival
+// time), not its logical OccurredTime — so the caller must still filter delivered events to its
+// occurred-time window; this only bounds the scan's lower edge.
+func (nmgr *NatsManager) NewReplayReaderFromTime(suffix string, startTime time.Time) (ReplayReader, time.Time, error) {
+	name := StreamName(nmgr.Microservice.InstanceId, suffix)
+	info, err := nmgr.js.StreamInfo(name)
+	if err != nil {
+		if errors.Is(err, nats.ErrStreamNotFound) {
+			return &natsReplayReader{}, time.Time{}, nil // empty/absent stream: nothing to replay
+		}
+		return nil, time.Time{}, err
+	}
+	head := info.State.LastSeq
+	firstTime := info.State.FirstTime
+	// Empty stream, or a window that starts after the last retained event: nothing to replay.
+	// Returning a doneSeq==head reader makes the first Read report io.EOF without a consumer,
+	// so an empty/future window can never stall on a consumer that will never deliver.
+	if head == 0 || startTime.After(info.State.LastTime) {
+		return &natsReplayReader{head: head, doneSeq: head}, firstTime, nil
+	}
+	subject := WildcardSubject(nmgr.Microservice.InstanceId, suffix)
+	sub, err := nmgr.js.PullSubscribe(subject, "", // empty durable => ephemeral consumer
+		nats.BindStream(name),
+		nats.StartTime(startTime),
+		nats.AckExplicit(),
+		nats.InactiveThreshold(replayInactiveThreshold))
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	log.Info().Str("stream", name).Time("startTime", startTime).Uint64("head", head).
+		Msg("Opened time-started replay reader (preview)")
+	return &natsReplayReader{sub: sub, js: nmgr.js, stream: name, head: head}, firstTime, nil
+}
+
 // Read returns the next message in ascending stream order, or io.EOF once every
 // message through the head has been delivered. A message whose sequence is past the
 // head is a live publish that arrived after open; it is NOT delivered here (the
