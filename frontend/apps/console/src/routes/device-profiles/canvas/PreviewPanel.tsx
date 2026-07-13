@@ -71,7 +71,10 @@ export function PreviewPanel({
   useEffect(() => {
     runToken.current++;
     clearOverlay();
-    setState((s) => (s.status === 'done' || s.status === 'error' ? { status: 'idle' } : s));
+    // Reset to idle from ANY non-idle state — including 'running'. The bumped token already discards
+    // an in-flight run's resolve, so leaving state at 'running' would wedge the Run button on a
+    // permanent spinner after a mid-flight structural edit (its resolve never lands to clear it).
+    setState((s) => (s.status === 'idle' ? s : { status: 'idle' }));
   }, [structuralKey]);
 
   const run = async () => {
