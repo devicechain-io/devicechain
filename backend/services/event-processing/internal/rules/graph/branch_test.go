@@ -107,6 +107,56 @@ func TestBranchFanout(t *testing.T) {
 	}
 }
 
+// hasWarning reports whether the diagnostics carry a warning anchored to nodeID.
+func hasWarning(diags []Diagnostic, nodeID string) bool {
+	for _, d := range diags {
+		if d.Severity == "warning" && d.NodeID == nodeID {
+			return true
+		}
+	}
+	return false
+}
+
+// TestBranchWarnings: the two advisory (non-fatal) hazards surface as warning diagnostics on a
+// known-good graph — a branch that routes nothing, and two same-command sends under different branches.
+func TestBranchWarnings(t *testing.T) {
+	// A dangling branch (input wired, no output) → the rule compiles (a condition with no action is a
+	// valid emit-derived-event), and the branch is flagged.
+	dangling := canvas(
+		[]Node{src("s"), hotThreshold("c"), branch("b", "value > 1.0")},
+		Edge{From: "s:out", To: "c:in"},
+		Edge{From: "c:signal", To: "b:in"},
+	)
+	res, err := Compile(dangling, profile, rules.DefaultLimits())
+	if err != nil {
+		t.Fatalf("Compile(dangling): %v", err)
+	}
+	if !hasWarning(res.Diagnostics, "b") {
+		t.Fatalf("expected a dangling-branch warning on b, got %+v", res.Diagnostics)
+	}
+
+	// Two sendCommand actions with the same command+payload but different branch guards (not an exact
+	// duplicate, so the gate allows it) → possible double-send warning, anchored to the condition.
+	send := func(id string) Node {
+		return Node{ID: id, Type: NodeAction, Config: cfg(map[string]interface{}{"action": "sendCommand", "command": "cool", "payload": `{"l":1}`})}
+	}
+	dup := canvas(
+		[]Node{src("s"), hotThreshold("c"), branch("b1", "value > 1.0"), branch("b2", "value > 2.0"), send("a1"), send("a2")},
+		Edge{From: "s:out", To: "c:in"},
+		Edge{From: "c:signal", To: "b1:in"},
+		Edge{From: "c:signal", To: "b2:in"},
+		Edge{From: "b1:out", To: "a1:in"},
+		Edge{From: "b2:out", To: "a2:in"},
+	)
+	res2, err := Compile(dup, profile, rules.DefaultLimits())
+	if err != nil {
+		t.Fatalf("Compile(dup): %v", err)
+	}
+	if !hasWarning(res2.Diagnostics, "c") {
+		t.Fatalf("expected a duplicate-command warning on c, got %+v", res2.Diagnostics)
+	}
+}
+
 // TestBranchRejects covers the fail-closed branch constructs, each anchored to a surfaced node.
 func TestBranchRejects(t *testing.T) {
 	cases := []struct {

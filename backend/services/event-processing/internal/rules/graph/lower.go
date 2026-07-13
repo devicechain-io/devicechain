@@ -178,7 +178,66 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	if len(diags) > 0 {
 		return nil, &CompileError{Diagnostics: diags}
 	}
-	return &Result{Rules: lowered}, nil
+	// Advisory (non-fatal) warnings surfaced on the canvas, once the graph is known-good. They flag
+	// authoring hazards the compiler cannot reject without also forbidding legitimate graphs: a
+	// same-target action pair whose guards may overlap (a possible double-send), and a branch that
+	// routes nothing.
+	var warnings []Diagnostic
+	warnings = append(warnings, duplicateTargetWarnings(lowered)...)
+	warnings = append(warnings, danglingBranchWarnings(def.Nodes, edges)...)
+	return &Result{Rules: lowered, Diagnostics: warnings}, nil
+}
+
+// duplicateTargetWarnings flags, per rule, two sendCommand actions with the SAME command+payload but
+// different guards. The authoring gate already rejects EXACT duplicates (same command+payload+guard);
+// this catches the remaining hazard the guard split re-opens — if the two guards overlap, the device
+// receives the identical command twice per detection. Overlap is statically undecidable, and
+// non-overlapping guards (send at two disjoint value bands) are legitimate, so this warns rather than
+// rejects. Anchored to the condition node the actions hang off.
+func duplicateTargetWarnings(lowered []LoweredRule) []Diagnostic {
+	var out []Diagnostic
+	for _, lr := range lowered {
+		seen := make(map[string]struct{})
+		for _, a := range lr.Rule.Actions {
+			if a.Type != rules.ActionSendCommand || a.SendCommand == nil {
+				continue
+			}
+			key := a.SendCommand.Command + "\x00" + a.SendCommand.Payload
+			if _, dup := seen[key]; dup {
+				out = append(out, Diagnostic{
+					NodeID:   lr.NodeID,
+					Severity: "warning",
+					Message:  fmt.Sprintf("two actions send command %q with the same payload under different branches — if their conditions overlap, the device receives it twice per detection", a.SendCommand.Command),
+				})
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+	}
+	return out
+}
+
+// danglingBranchWarnings flags a branch node with no outgoing signal edge: it has an input but gates
+// nothing, so it is authoring dead weight (a route to nowhere). Not an error — no action is lost — but
+// almost certainly a mistake, so it warns.
+func danglingBranchWarnings(nodes []Node, edges []typedEdge) []Diagnostic {
+	hasOut := make(map[string]bool)
+	for _, e := range edges {
+		if e.ptype == PortSignal {
+			hasOut[e.fromNode] = true
+		}
+	}
+	var out []Diagnostic
+	for _, n := range nodes {
+		if n.Type.isBranch() && !hasOut[n.ID] {
+			out = append(out, Diagnostic{
+				NodeID:   n.ID,
+				Severity: "warning",
+				Message:  "this branch has no downstream action — it routes nothing",
+			})
+		}
+	}
+	return out
 }
 
 // typeCheckEdges resolves each edge endpoint against the port catalog and requires the two

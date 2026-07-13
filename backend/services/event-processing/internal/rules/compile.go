@@ -301,12 +301,18 @@ func actionDedupKey(a Action) string {
 	// The guard is part of the identity: two actions with the same target but different guards route
 	// on different conditions (raise-if-hot vs raise-if-cold off one detection), so they are distinct,
 	// not duplicates — and the dispatcher's content-addressed idempotency token must likewise separate
-	// them (react.actionContentKey mirrors this) or one would swallow the other's dispatch.
+	// them (react.actionContentKey mirrors this) or one would swallow the other's dispatch. The guard
+	// segment is appended only when non-empty, so an unguarded action's key is unchanged from pre-9c
+	// (kept in lockstep with actionContentKey, whose token is durable).
+	guardSeg := ""
+	if a.Guard != "" {
+		guardSeg = "|" + a.Guard
+	}
 	switch a.Type {
 	case ActionRaiseAlarm:
-		return "raiseAlarm|" + a.RaiseAlarm.AlarmKey + "|" + a.Guard
+		return "raiseAlarm|" + a.RaiseAlarm.AlarmKey + guardSeg
 	case ActionSendCommand:
-		return "sendCommand|" + a.SendCommand.Command + "|" + a.SendCommand.Payload + "|" + a.Guard
+		return "sendCommand|" + a.SendCommand.Command + "|" + a.SendCommand.Payload + guardSeg
 	default:
 		return string(a.Type)
 	}

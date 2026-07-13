@@ -109,6 +109,26 @@ func TestNoGuardIsUnconditional(t *testing.T) {
 	}
 }
 
+// TestActionContentKeyGuardOnlyWhenSet: an UNGUARDED action's content key (which anchors the durable
+// idempotency token) is unchanged from pre-9c — no trailing guard segment — so a deploy does not re-key
+// in-flight commands and double-send them; a guarded variant differs.
+func TestActionContentKeyGuardOnlyWhenSet(t *testing.T) {
+	unguarded := rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: "cool", Payload: `{"l":1}`}}
+	if got, want := actionContentKey(unguarded), "sendCommand\x00cool\x00"+`{"l":1}`; got != want {
+		t.Fatalf("unguarded content key = %q, want the pre-9c shape %q", got, want)
+	}
+	guarded := unguarded
+	guarded.Guard = "value > 100.0"
+	if actionContentKey(guarded) == actionContentKey(unguarded) {
+		t.Fatal("a guarded action must have a distinct content key")
+	}
+
+	unguardedAlarm := rules.Action{Type: rules.ActionRaiseAlarm, RaiseAlarm: &rules.RaiseAlarmAction{AlarmKey: "k"}}
+	if got, want := actionContentKey(unguardedAlarm), "raiseAlarm\x00k"; got != want {
+		t.Fatalf("unguarded raiseAlarm content key = %q, want %q", got, want)
+	}
+}
+
 // TestGuardProgramCached: repeated dispatches of the same guarded rule reuse one compiled program
 // (the cache is keyed by guard source), so the second dispatch does not recompile.
 func TestGuardProgramCached(t *testing.T) {

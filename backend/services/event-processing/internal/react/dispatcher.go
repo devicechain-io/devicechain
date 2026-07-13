@@ -144,9 +144,12 @@ type Dispatcher struct {
 	// guards caches a compiled guard program per distinct guard source (rules.Action.Guard), keyed by
 	// the source string. The dispatcher resolves rules.Rule (not a compiled form) fresh per event, so
 	// without a cache it would recompile every guard on every dispatch — instead a guard compiles once
-	// and is reused. The cache is bounded by the number of DISTINCT guard strings across PUBLISHED
-	// rules (publish-gated, not attacker-controlled at dispatch), the same order as the rule registry,
-	// so it needs no eviction. sync.Map for lock-free reads on the concurrent (queue-group) dispatch path.
+	// and is reused. It grows MONOTONICALLY: every distinct guard string ever dispatched is retained for
+	// the process lifetime (there is no eviction), so republish churn and since-deleted rules leave their
+	// programs resident. That growth is slow and publish-gated (a guard string is not attacker-controlled
+	// at dispatch — it can only enter via a rule that cleared the publish cost gate), so it is bounded in
+	// practice by the distinct guards a tenant set authors, not the event rate. sync.Map for lock-free
+	// reads on the concurrent (queue-group) dispatch path.
 	guards sync.Map // guard source string → *rules.CompiledGuard
 }
 
@@ -410,11 +413,22 @@ func actionContentKey(a rules.Action) string {
 	// actions that differ only by guard are distinct dispatches (raise-if-hot vs raise-if-cold), so
 	// their idempotency tokens must differ or one guarded variant would collapse onto the other's token
 	// and swallow a dispatch.
+	//
+	// The guard segment is appended ONLY when non-empty, so an UNGUARDED action's token is byte-for-byte
+	// what it was before 9c: the idempotency token is durable (command-delivery dedups on it), and a
+	// blanket suffix would re-key every in-flight/replayed unguarded sendCommand at the deploy boundary,
+	// minting a fresh token for an already-enqueued command and double-sending it once. This is
+	// collision-safe: a validated JSON-object payload cannot contain a raw NUL, so an unguarded key can
+	// never equal a guarded key (which has an extra \x00-delimited guard suffix the payload can't forge).
+	guardSeg := ""
+	if a.Guard != "" {
+		guardSeg = "\x00" + a.Guard
+	}
 	switch a.Type {
 	case rules.ActionSendCommand:
-		return "sendCommand\x00" + a.SendCommand.Command + "\x00" + a.SendCommand.Payload + "\x00" + a.Guard
+		return "sendCommand\x00" + a.SendCommand.Command + "\x00" + a.SendCommand.Payload + guardSeg
 	case rules.ActionRaiseAlarm:
-		return "raiseAlarm\x00" + a.RaiseAlarm.AlarmKey + "\x00" + a.Guard
+		return "raiseAlarm\x00" + a.RaiseAlarm.AlarmKey + guardSeg
 	default:
 		return string(a.Type)
 	}
