@@ -369,3 +369,17 @@ functionalAreas:
     config: {}
       # resourceUrl: https://<host>/mcp
       # issuerUrl: https://<host>/user-management
+  outbound-connectors:
+    # The outbound-connectors service (ADR-060): a durable consumer of the
+    # connector-dispatch stream that executes each fired httpCall/publish REACT action
+    # (the HTTP call / broker publish, secret resolution, dead-lettering). It is an
+    # OPT-IN area — not in any profile — enabled explicitly (enabledFunctionalAreas:
+    # [..., event-processing, outbound-connectors]); it hard-depends on event-processing
+    # (its dispatch producer). It keeps its own envelope-encrypted secret store (ADR-059)
+    # for outbound credentials, so the instance root key (infrastructure.secrets) must be
+    # configured. Scales independently of DETECT (outbound I/O vs ingest). In slice C3 it
+    # executes httpCall; the Bento publish tier + versioned Connector entity land in C4.
+    config: {}
+      # sendTimeoutMs: 10000        # fallback per-send timeout when an action specifies none
+      # maxConcurrentSends: 32      # outbound concurrency ceiling (worker-pool width / back-pressure)
+      # dispatchBacklog: 8          # reader→worker hand-off buffer (small: paces prefetch under AckWait)

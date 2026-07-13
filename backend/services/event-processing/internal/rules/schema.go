@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/devicechain-io/dc-event-processing/connectorwire"
 )
 
 // Decode parses a rule from its JSON representation, failing closed on any unknown field
@@ -162,8 +164,10 @@ const (
 
 // MaxActionTimeoutMs bounds a connector action's per-dispatch timeout (ADR-060). 0 ⇒ the
 // dispatcher applies its default; a value above this cap is rejected at publish so a rule cannot
-// author an unbounded outbound wait.
-const MaxActionTimeoutMs = 60_000
+// author an unbounded outbound wait. It is the SHARED ceiling defined in connectorwire (the leaf both
+// the authoring gate and the outbound-connectors executor import), so the value the gate enforces and
+// the value the executor re-clamps to can never drift, and both stay below the consumer AckWait.
+const MaxActionTimeoutMs = connectorwire.MaxTimeoutMs
 
 // maxSecretHandleLen bounds an authored secret handle (HTTPCallAction.SecretRef). The handle is a
 // core/secrets ref Name, which legitimately contains '/', so it is not an ADR-042 token; it is
