@@ -45,7 +45,7 @@ type webhookConfig struct {
 // is ignored for a webhook (the endpoint is the destination), but a rule may still
 // carry recipients for a downstream consumer, so they are threaded into the payload.
 func (a *webhookAdapter) Deliver(ctx context.Context, channel *model.NotificationChannel,
-	recipients []string, msg *RenderedNotification) error {
+	secret string, recipients []string, msg *RenderedNotification) error {
 	cfg, err := parseWebhookConfig(channel)
 	if err != nil {
 		return err
@@ -71,8 +71,8 @@ func (a *webhookAdapter) Deliver(ctx context.Context, channel *model.Notificatio
 		}
 		req.Header.Set(k, v)
 	}
-	if channel.Secret.Valid && channel.Secret.String != "" {
-		name, value := authHeader(cfg, channel.Secret.String)
+	if secret != "" {
+		name, value := authHeader(cfg, secret)
 		req.Header.Set(name, value)
 	}
 
@@ -91,7 +91,7 @@ func (a *webhookAdapter) Deliver(ctx context.Context, channel *model.Notificatio
 		// A hostile endpoint could reflect the Authorization header back in its
 		// response body, so never surface the body of a channel that carries a secret
 		// (it would leak the write-only secret into logs).
-		if channel.Secret.Valid && channel.Secret.String != "" {
+		if secret != "" {
 			return fmt.Errorf("webhook channel %q returned %d", channel.Token, resp.StatusCode)
 		}
 		return fmt.Errorf("webhook channel %q returned %d: %s", channel.Token, resp.StatusCode, strings.TrimSpace(string(snippet)))

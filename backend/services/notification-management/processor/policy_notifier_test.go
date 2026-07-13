@@ -12,6 +12,8 @@ import (
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"gorm.io/datatypes"
 )
@@ -23,7 +25,7 @@ type fakeAdapter struct {
 	calls     int
 }
 
-func (f *fakeAdapter) Deliver(_ context.Context, _ *model.NotificationChannel, _ []string, _ *RenderedNotification) error {
+func (f *fakeAdapter) Deliver(_ context.Context, _ *model.NotificationChannel, _ string, _ []string, _ *RenderedNotification) error {
 	f.calls++
 	if f.calls <= f.failTimes {
 		return errors.New("boom")
@@ -36,7 +38,7 @@ func testNotifier(adapters map[string]ChannelAdapter) *PolicyNotifier {
 }
 
 func enabledChannel(token, ctype string) *model.NotificationChannel {
-	c := channelWith(token, ctype, "", "")
+	c := channelWith(token, ctype, "")
 	c.Enabled = true
 	return c
 }
@@ -115,7 +117,7 @@ func TestPlanSkipsDisabledMissingAndScoped(t *testing.T) {
 	n := testNotifier(adapters)
 
 	// Disabled channel → skipped.
-	disabled := channelWith("smtp-off", model.ChannelTypeSMTP, "", "")
+	disabled := channelWith("smtp-off", model.ChannelTypeSMTP, "")
 	if got := n.plan(raisedEvent("CRITICAL"), []*model.NotificationPolicy{
 		policy("p", rule("CRITICAL", disabled, "x@x.com")),
 	}, nil); len(got) != 0 {
@@ -271,6 +273,63 @@ func TestPlanEscalation(t *testing.T) {
 	p2 := escalatingPolicy("p2", 300, 0, rule(model.SeverityAny, smtp, "ops@x.com"))
 	if got := n.planEscalation(state, []*model.NotificationPolicy{p, p2}, now, defaultMax); len(got) != 1 {
 		t.Fatalf("dedup: expected 1 delivery, got %d", len(got))
+	}
+}
+
+// fakeSecretStore is a minimal SecretStore for exercising the dispatcher's secret
+// resolution: Resolve returns value/ErrSecretNotFound/err per its fields.
+type fakeSecretStore struct {
+	value string
+	found bool
+	err   error
+}
+
+func (f *fakeSecretStore) Put(context.Context, secrets.SecretRef, []byte) error    { return nil }
+func (f *fakeSecretStore) Rotate(context.Context, secrets.SecretRef, []byte) error { return nil }
+func (f *fakeSecretStore) Delete(context.Context, secrets.SecretRef) error         { return nil }
+func (f *fakeSecretStore) Exists(context.Context, secrets.SecretRef) (bool, error) {
+	return f.found, nil
+}
+
+func (f *fakeSecretStore) Resolve(context.Context, secrets.SecretRef) ([]byte, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if !f.found {
+		return nil, secrets.ErrSecretNotFound
+	}
+	return []byte(f.value), nil
+}
+
+// resolveChannelSecret returns the stored value, maps "no secret" to an empty string
+// (so a secretless channel still delivers), propagates a real store error (so the
+// caller can treat it as a transient delivery failure), and fails closed with no
+// tenant in context.
+func TestResolveChannelSecret(t *testing.T) {
+	ctx := core.WithTenant(context.Background(), "A")
+
+	// A stored secret round-trips.
+	n := &PolicyNotifier{store: &fakeSecretStore{value: "sekret", found: true}}
+	if v, err := n.resolveChannelSecret(ctx, 7); err != nil || v != "sekret" {
+		t.Fatalf("resolve found: v=%q err=%v", v, err)
+	}
+
+	// No secret stored → empty string, not an error.
+	n = &PolicyNotifier{store: &fakeSecretStore{}}
+	if v, err := n.resolveChannelSecret(ctx, 7); err != nil || v != "" {
+		t.Fatalf("resolve not-found: v=%q err=%v", v, err)
+	}
+
+	// A genuine store error is propagated (caller treats it as transient).
+	n = &PolicyNotifier{store: &fakeSecretStore{err: errors.New("boom")}}
+	if _, err := n.resolveChannelSecret(ctx, 7); err == nil {
+		t.Fatal("expected store error to propagate")
+	}
+
+	// No tenant in context fails closed (never a cross-tenant resolve).
+	n = &PolicyNotifier{store: &fakeSecretStore{value: "x", found: true}}
+	if _, err := n.resolveChannelSecret(context.Background(), 7); err == nil {
+		t.Fatal("expected fail-closed with no tenant")
 	}
 }
 

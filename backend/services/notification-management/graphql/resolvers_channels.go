@@ -42,10 +42,17 @@ func (r *NotificationChannelResolver) ChannelType() string { return r.M.ChannelT
 func (r *NotificationChannelResolver) Config() *string { return util.MetadataStr(r.M.Config) }
 
 // HasSecret reports whether a delivery secret is configured, without exposing it.
-// The secret itself is write-only (accepted on create/update, never returned), so
-// a notification:read holder cannot exfiltrate the SMTP password / bearer token —
-// this boolean is all the read API reveals about it.
-func (r *NotificationChannelResolver) HasSecret() bool { return r.M.Secret.Valid }
+// The secret itself is write-only (accepted on create/update, never returned) and
+// now lives in the envelope-encrypted secret store (ADR-059), so this is a store
+// existence check rather than a column read — a notification:read holder still learns
+// only the boolean, never the SMTP password / bearer token.
+func (r *NotificationChannelResolver) HasSecret() (bool, error) {
+	ref, err := model.ChannelSecretRef(r.C, r.M.ID)
+	if err != nil {
+		return false, err
+	}
+	return r.S.GetApi(r.C).Secrets.Exists(r.C, ref)
+}
 
 func (r *NotificationChannelResolver) Enabled() bool { return r.M.Enabled }
 

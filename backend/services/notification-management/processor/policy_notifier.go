@@ -6,12 +6,14 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
@@ -33,19 +35,23 @@ const retryBackoffBase = 500 * time.Millisecond
 // succeeded).
 type PolicyNotifier struct {
 	api      *model.Api
+	store    secrets.SecretStore
 	adapters map[string]ChannelAdapter
 	attempts int
 	timeout  time.Duration
 }
 
-// NewPolicyNotifier builds the dispatcher over the persistence API, with attempts
-// per-channel delivery tries and timeout bounding a single attempt.
-func NewPolicyNotifier(api *model.Api, attempts int, timeout time.Duration) *PolicyNotifier {
+// NewPolicyNotifier builds the dispatcher over the persistence API and the secret
+// store (ADR-059, from which each channel's delivery secret is resolved server-
+// internal at delivery time), with attempts per-channel delivery tries and timeout
+// bounding a single attempt.
+func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, timeout time.Duration) *PolicyNotifier {
 	if attempts < 1 {
 		attempts = 1
 	}
 	return &PolicyNotifier{
 		api:      api,
+		store:    store,
 		adapters: newAdapterRegistry(),
 		attempts: attempts,
 		timeout:  timeout,
@@ -107,6 +113,19 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	rendered := renderNotification(event)
 	delivered := 0
 	for _, d := range deliveries {
+		secret, err := n.resolveChannelSecret(ctx, d.channel.ID)
+		if err != nil {
+			// A store error (not "no secret") is transient infra: skip this channel, so
+			// it counts as not-delivered. If EVERY delivery is skipped/fails the event is
+			// naked for redelivery (delivered == 0 below); if another channel already
+			// delivered, the event is acked and this channel's page is dropped — matching
+			// the Notifier at-least-once contract (a partial failure is not redelivered,
+			// to avoid double-sending the channels that succeeded).
+			log.Error().Err(err).Str("tenant", tenant).Str("channel", d.channel.Token).
+				Msg("Skipping channel: failed to resolve delivery secret")
+			continue
+		}
+		d.secret = secret
 		if n.deliverWithRetry(ctx, d, rendered) {
 			delivered++
 		}
@@ -132,10 +151,13 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 }
 
 // delivery is one deduplicated (channel, recipients) target the dispatcher will send
-// the rendered notification to.
+// the rendered notification to. secret is the channel's delivery secret, resolved
+// from the store server-internal just before delivery (empty when unconfigured); it
+// is not persisted on the channel model.
 type delivery struct {
 	channel    *model.NotificationChannel
 	recipients []string
+	secret     string
 }
 
 // plan resolves the enabled policies to the deduplicated set of channel deliveries for
@@ -224,6 +246,13 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 	rendered := renderEscalation(state, state.EscalationLevel+1)
 	delivered := 0
 	for _, d := range deliveries {
+		secret, err := n.resolveChannelSecret(ctx, d.channel.ID)
+		if err != nil {
+			log.Error().Err(err).Str("alarm", state.AlarmToken).Str("channel", d.channel.Token).
+				Msg("Skipping escalation channel: failed to resolve delivery secret")
+			continue
+		}
+		d.secret = secret
 		if n.deliverWithRetry(ctx, d, rendered) {
 			delivered++
 		}
@@ -338,7 +367,7 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 	adapter := n.adapters[d.channel.ChannelType]
 	for attempt := 1; attempt <= n.attempts; attempt++ {
 		dctx, cancel := context.WithTimeout(ctx, n.timeout)
-		err := adapter.Deliver(dctx, d.channel, d.recipients, rendered)
+		err := adapter.Deliver(dctx, d.channel, d.secret, d.recipients, rendered)
 		cancel()
 		if err == nil {
 			return true
@@ -356,6 +385,26 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 	log.Error().Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
 		Int("attempts", n.attempts).Msg("Notification permanently dropped for channel after exhausting attempts")
 	return false
+}
+
+// resolveChannelSecret returns the channel's delivery secret from the store, keyed
+// by the tenant-scoped channel handle (ADR-059). A ref for which no secret is stored
+// yields an empty string (the channel simply has no secret) rather than an error, so
+// a secretless channel delivers normally; a genuine store error is returned so the
+// caller can treat it as a transient delivery failure and let redelivery retry.
+func (n *PolicyNotifier) resolveChannelSecret(ctx context.Context, channelID uint) (string, error) {
+	ref, err := model.ChannelSecretRef(ctx, channelID)
+	if err != nil {
+		return "", err
+	}
+	value, err := n.store.Resolve(ctx, ref)
+	if errors.Is(err, secrets.ErrSecretNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return string(value), nil
 }
 
 // severityMatches reports whether a rule's severity selector matches an alarm's
