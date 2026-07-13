@@ -18,7 +18,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
+
+// rejectInterpolation guards a value bound for a Bento INTERPOLATED config field (topic,
+// key, …) against the Bloblang opener "${!", which Bento would evaluate per message. A
+// tenant-authored value must be a literal, never executable Bloblang — the interpolation
+// surface is otherwise one transitive import away from exposing functions to tenant input.
+func rejectInterpolation(field, value string) error {
+	if strings.Contains(value, "${!") {
+		return fmt.Errorf("%s must not contain the Bloblang interpolation opener \"${!\"", field)
+	}
+	return nil
+}
 
 // ErrUnsupportedType is returned for a connector type with no registered output builder
 // in this build. It is distinct from "unknown type" (model rejects those at write): a
@@ -35,11 +47,18 @@ type builder struct {
 	build    func(config []byte, secret string) (map[string]any, error)
 }
 
-// builders is the registered output-generator set. C4b ships mqtt; the config-driven
-// vocabulary (SupportedTypes) is exactly its keys, so adding a generator is the only
-// change needed to ship a new output (SD-4: one `publish` action, the type selects it).
+// builders is the registered output-generator set. Adding a generator is the only change
+// needed to ship a new output (SD-4: one `publish` action, the type selects it). C4b
+// shipped mqtt; C4c adds kafka + aws_sns + aws_sqs.
 var builders = map[string]builder{
-	"mqtt": {validate: validateMQTT, build: buildMQTT},
+	"mqtt":    {validate: validateMQTT, build: buildMQTT},
+	"kafka":   {validate: validateKafka, build: buildKafka},
+	"aws_sns": {validate: validateSNS, build: buildSNS},
+	"aws_sqs": {validate: validateSQS, build: buildSQS},
+	// gcp_pubsub is DEFERRED: Bento's gcp_pubsub output authenticates via Application Default
+	// Credentials (process-global env / workload identity), with no per-connector credential field —
+	// so a per-tenant credential cannot be injected via config without breaking tenant isolation.
+	// It needs a credential-injection follow-up before it can ship.
 }
 
 // Supported reports whether a Bento output generator is registered for connType in this
@@ -47,16 +66,6 @@ var builders = map[string]builder{
 func Supported(connType string) bool {
 	_, ok := builders[connType]
 	return ok
-}
-
-// SupportedTypes returns the connector types with a registered generator (executable in
-// this build), for diagnostics/consistency checks.
-func SupportedTypes() []string {
-	out := make([]string, 0, len(builders))
-	for t := range builders {
-		out = append(out, t)
-	}
-	return out
 }
 
 // ValidateConfig checks the per-type config shape for connType. Returns ErrUnsupportedType
@@ -93,5 +102,10 @@ func BuildOutput(connType string, config []byte, secret string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("marshal output config: %w", err)
 	}
-	return string(out), nil
+	// Escape "${" as "$${" so Bento's config env-var substitution (which runs over the raw
+	// config before parsing, and which the publish sink additionally neutralizes via an
+	// always-unset lookup) leaves every value LITERAL. Without this, a credential or a
+	// topic/url containing the literal sequence "${x}" would be silently rewritten to empty
+	// (a corrupted send). Bento un-escapes "$${" back to "${" after substitution.
+	return strings.ReplaceAll(string(out), "${", "$${"), nil
 }

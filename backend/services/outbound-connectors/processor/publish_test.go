@@ -148,21 +148,21 @@ func TestExecutePublishNotPublished(t *testing.T) {
 	assert.False(t, cap.called)
 }
 
-// TestExecutePublishUnsupportedType is terminal: a connector whose type has no generator
-// (a future vocabulary member) is recognized but dead-lettered, never silently dropped.
+// TestExecutePublishUnsupportedType is terminal: a connector whose type is in the model
+// vocabulary but has no generator shipped yet (gcp_pubsub, deferred) is recognized but
+// dead-lettered as unsupported, never silently dropped. gcp_pubsub is not connectorspec-
+// Supported, so write-time validation is JSON-object-only and the connector is creatable.
 func TestExecutePublishUnsupportedType(t *testing.T) {
 	e, api, cap := newPublishTestExecutor(t)
 	ctx := core.WithTenant(context.Background(), "acme")
-	// Create a kafka connector directly (bypassing the write-time vocabulary — model allows the
-	// 5-type vocab; only mqtt has a generator in C4b), publish it, and dispatch.
 	_, err := api.CreateConnector(ctx, &model.ConnectorCreateRequest{
-		Token: "k", Type: "kafka", Config: `{"brokers":["b:9092"],"topic":"t"}`,
+		Token: "g", Type: "gcp_pubsub", Config: `{"project":"p","topic":"t"}`,
 	})
 	require.NoError(t, err)
-	_, err = api.PublishConnector(ctx, "k", nil, nil, "alice", nil)
+	_, err = api.PublishConnector(ctx, "g", nil, nil, "alice", nil)
 	require.NoError(t, err)
 
-	res := e.Execute(ctx, publishReq("k"))
+	res := e.Execute(ctx, publishReq("g"))
 	assert.False(t, res.retryable)
 	assert.Equal(t, outcomeUnsupported, res.outcome)
 	assert.False(t, cap.called)

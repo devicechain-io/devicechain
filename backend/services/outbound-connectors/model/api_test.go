@@ -88,7 +88,7 @@ func TestConnectorCrud(t *testing.T) {
 	_, err = api.UpdateConnector(ctx, "pager", &ConnectorCreateRequest{
 		Token:  "pager",
 		Type:   string(ConnectorTypeKafka),
-		Config: `{"brokers":["k:9092"],"topic":"t"}`,
+		Config: `{"addresses":["k:9092"],"topic":"t"}`,
 	}, nil)
 	require.NoError(t, err)
 	found, err = api.ConnectorsByToken(ctx, []string{"pager"})
@@ -300,7 +300,7 @@ func TestConnectorVersioning(t *testing.T) {
 	assert.Equal(t, "alice", v1.PublishedBy)
 
 	// Edit the draft, then publish again -> version 2.
-	kafkaCfg := `{"brokers":["k:9092"],"topic":"t"}`
+	kafkaCfg := `{"addresses":["k:9092"],"topic":"t"}`
 	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
 		Token: "c", Type: string(ConnectorTypeKafka), Config: kafkaCfg,
 	}, nil)
@@ -352,7 +352,7 @@ func TestOptimisticConcurrency(t *testing.T) {
 	require.NoError(t, err)
 	current := reloaded[0].UpdatedAt.Format(time.RFC3339)
 	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
-		Token: "c", Type: string(ConnectorTypeKafka), Config: `{"brokers":["k:9092"],"topic":"t"}`,
+		Token: "c", Type: string(ConnectorTypeKafka), Config: `{"addresses":["k:9092"],"topic":"t"}`,
 	}, &current)
 	require.NoError(t, err)
 	found, err := api.ConnectorsByToken(ctx, []string{"c"})
@@ -382,7 +382,7 @@ func TestLatestPublishedConnector(t *testing.T) {
 	_, err = api.PublishConnector(ctx, "c", nil, nil, "alice", nil)
 	require.NoError(t, err)
 	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
-		Token: "c", Type: string(ConnectorTypeKafka), Config: `{"brokers":["k:9092"],"topic":"t"}`,
+		Token: "c", Type: string(ConnectorTypeKafka), Config: `{"addresses":["k:9092"],"topic":"t"}`,
 	}, nil)
 	require.NoError(t, err)
 	_, err = api.PublishConnector(ctx, "c", nil, nil, "bob", nil)

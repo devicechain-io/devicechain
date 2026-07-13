@@ -58,12 +58,9 @@ func validateMQTT(config []byte) error {
 		return fmt.Errorf("mqtt config: topic is required")
 	}
 	// The Bento mqtt `topic` is a Bloblang-INTERPOLATED field: a "${!...}" fragment is evaluated
-	// per message. Reject it so a tenant topic is a literal string, not executable Bloblang — the
-	// interpolation surface is otherwise one transitive import (a future output component) away from
-	// exposing functions like env()/file() to a tenant-authored topic. A literal MQTT topic never
-	// needs the interpolation opener.
-	if strings.Contains(c.Topic, "${!") {
-		return fmt.Errorf("mqtt config: topic must not contain the Bloblang interpolation opener \"${!\"")
+	// per message. Reject it so a tenant topic is a literal string, not executable Bloblang.
+	if err := rejectInterpolation("mqtt config: topic", c.Topic); err != nil {
+		return err
 	}
 	if c.QoS != nil && (*c.QoS < 0 || *c.QoS > 2) {
 		return fmt.Errorf("mqtt config: qos must be 0, 1, or 2, got %d", *c.QoS)

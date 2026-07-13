@@ -20,8 +20,14 @@ import (
 
 	// Selective component registration (ADR-060 §2). `pure` supplies the core plumbing
 	// (the default buffer/broker/processors the bounded single-message stream composes
-	// around); the remaining imports are exactly the shipped connector outputs — C4b
-	// ships mqtt, C4c adds kafka/aws/gcp. NEVER import public/components/all.
+	// around); the remaining imports are exactly the shipped connector output families —
+	// C4b shipped mqtt, C4c adds kafka + aws (aws_sns / aws_sqs). NEVER import
+	// public/components/all. (gcp is deferred — its output has no per-connector credential
+	// field; see connectorspec.) Importing the `aws` family registers all AWS components in
+	// Bento, but the tenant-facing surface is gated by connectorspec's generator registry +
+	// the model type vocabulary, so only aws_sns / aws_sqs connectors are creatable.
+	_ "github.com/warpstreamlabs/bento/public/components/aws"
+	_ "github.com/warpstreamlabs/bento/public/components/kafka"
 	_ "github.com/warpstreamlabs/bento/public/components/mqtt"
 	_ "github.com/warpstreamlabs/bento/public/components/pure"
 )
@@ -29,8 +35,9 @@ import (
 // stopGrace bounds the graceful teardown of the ephemeral stream. Teardown runs
 // ASYNCHRONOUSLY (off the send/ack path — see Send), so this does not count against the
 // consumer AckWait budget; it only bounds how long a reaper goroutine lingers before it
-// force-abandons a stream whose output is slow to close. The output's own connect_timeout
-// (set by the generator) bounds the one uncancellable wait a stuck output can be in.
+// force-abandons a stream whose output is slow to close. Where an output exposes a connect
+// timeout the generator bounds it (e.g. mqtt connect_timeout); combined with the caller's
+// per-send ctx deadline and this grace, a stuck output cannot pin a reaper indefinitely.
 const stopGrace = 5 * time.Second
 
 // ErrPublishConfig marks a TERMINAL publish failure that originates from the output
