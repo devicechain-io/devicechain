@@ -7,7 +7,7 @@
 // consumer (zero perturbation of the live engine); this panel just picks a window, calls previewRule
 // with the current graph, and renders the firing timeline + coverage stats + any degraded note.
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { errMessage } from '@/routes/common';
 import { previewRule, type PreviewResult } from '@/lib/api/event-processing';
@@ -22,24 +22,50 @@ const WINDOWS: { label: string; hours: number }[] = [
 type State =
   | { status: 'idle' }
   | { status: 'running' }
-  | { status: 'done'; result: PreviewResult }
+  | { status: 'done'; result: PreviewResult; hours: number }
   | { status: 'error'; message: string };
 
-// canPreview reflects whether the graph currently compiles (the parent's fresh compile result). A
-// preview of an uncompilable graph would just return the same diagnostics, so the button is gated.
-export function PreviewPanel({ graph, profileToken, canPreview }: { graph: string; profileToken: string; canPreview: boolean }) {
+// notReadyReason, when non-null, both disables the Run button and is its tooltip — so a preview is
+// gated on the parent's fresh, successful compile with an ACCURATE reason ("Waiting for the
+// compiler…" during a debounced recompile vs. "Fix the compile errors…" on a real failure). graph is
+// the current canvasDef JSON; structuralKey is the parent's compile-relevant fingerprint (excludes
+// layout) — a change to it invalidates any shown/in-flight result so a stale run is never
+// misattributed to the edited draft (Fable 9d-fe M1).
+export function PreviewPanel({
+  graph,
+  profileToken,
+  structuralKey,
+  notReadyReason,
+}: {
+  graph: string;
+  profileToken: string;
+  structuralKey: string;
+  notReadyReason: string | null;
+}) {
   const [hours, setHours] = useState(24);
   const [state, setState] = useState<State>({ status: 'idle' });
+  // Each run takes a token; a resolve applies only while its token is still current, so a run whose
+  // graph changed (structuralKey effect below bumps the token) or that was superseded never lands.
+  const runToken = useRef(0);
+
+  // Invalidate a shown/in-flight result when the graph structurally changes — the result described a
+  // prior draft, and showing it under the edited canvas would misrepresent "what would THIS do".
+  useEffect(() => {
+    runToken.current++;
+    setState((s) => (s.status === 'done' || s.status === 'error' ? { status: 'idle' } : s));
+  }, [structuralKey]);
 
   const run = async () => {
+    const myToken = ++runToken.current;
+    const ranHours = hours;
     setState({ status: 'running' });
     try {
       const end = new Date();
-      const start = new Date(end.getTime() - hours * 3_600_000);
+      const start = new Date(end.getTime() - ranHours * 3_600_000);
       const result = await previewRule({ graph, profileToken, start: start.toISOString(), end: end.toISOString() });
-      setState({ status: 'done', result });
+      if (runToken.current === myToken) setState({ status: 'done', result, hours: ranHours });
     } catch (err) {
-      setState({ status: 'error', message: errMessage(err) });
+      if (runToken.current === myToken) setState({ status: 'error', message: errMessage(err) });
     }
   };
 
@@ -69,8 +95,8 @@ export function PreviewPanel({ graph, profileToken, canPreview }: { graph: strin
           variant="outline"
           onClick={run}
           loading={state.status === 'running'}
-          disabled={!canPreview || state.status === 'running'}
-          title={canPreview ? undefined : 'Fix the compile errors before previewing'}
+          disabled={notReadyReason !== null || state.status === 'running'}
+          title={notReadyReason ?? undefined}
         >
           Run preview
         </Button>
@@ -84,22 +110,35 @@ export function PreviewPanel({ graph, profileToken, canPreview }: { graph: strin
         <p className="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">{state.message}</p>
       )}
 
-      {state.status === 'done' && <PreviewOutcome result={state.result} />}
+      {state.status === 'done' && <PreviewOutcome result={state.result} hours={state.hours} />}
     </div>
   );
 }
 
-function PreviewOutcome({ result }: { result: PreviewResult }) {
+function PreviewOutcome({ result, hours }: { result: PreviewResult; hours: number }) {
   if (!result.ok) {
-    // A compile rejection — the canvas already paints these on nodes; here just point back to them.
-    return <p className="text-xs text-muted-foreground">This draft does not compile yet — fix the errors shown on the nodes, then preview.</p>;
+    // A resolver-level rejection (not a node compile error — the panel is gated on a good compile).
+    // Surface the diagnostics directly rather than pointing at nodes that carry no error.
+    return (
+      <div className="space-y-1">
+        {result.diagnostics.length === 0 ? (
+          <p className="text-xs text-muted-foreground">The preview could not run.</p>
+        ) : (
+          result.diagnostics.map((d, i) => (
+            <p key={i} className="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
+              {d.message}
+            </p>
+          ))
+        )}
+      </div>
+    );
   }
   const { stats, firings, degraded } = result;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span>
-          <span className="font-medium text-foreground tabular-nums">{firings.length}</span> firing{firings.length === 1 ? '' : 's'}
+          <span className="font-medium text-foreground tabular-nums">{firings.length}</span> firing{firings.length === 1 ? '' : 's'} · last {hours}h
         </span>
         <span>
           <span className="tabular-nums">{stats.eventsScanned}</span> events scanned

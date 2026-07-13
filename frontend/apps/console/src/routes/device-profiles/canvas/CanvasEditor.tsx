@@ -404,8 +404,14 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
 
       {/* Replay-preview: run the current draft against history (ADR-053 slice 9d). Gated on a fresh,
           successful compile — the same forKey===key freshness Save uses, so the previewed graph is
-          exactly what is on the canvas. */}
-      <PreviewPanel graph={JSON.stringify(canvasDef)} profileToken={profileToken} canPreview={fresh && !!result?.ok} />
+          exactly what is on the canvas; structuralKey lets the panel invalidate a stale result when
+          the graph is edited. The reason string drives an accurate disabled tooltip. */}
+      <PreviewPanel
+        graph={JSON.stringify(canvasDef)}
+        profileToken={profileToken}
+        structuralKey={key}
+        notReadyReason={!fresh ? 'Waiting for the compiler…' : !result?.ok ? 'Fix the compile errors before previewing' : null}
+      />
     </div>
   );
 }
