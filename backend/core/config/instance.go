@@ -6,6 +6,7 @@ package config
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 )
 
@@ -163,6 +164,57 @@ type ServiceAuthConfiguration struct {
 	Secret string
 }
 
+// Default secret-store backend and KEK provider (ADR-059). These mirror the
+// canonical identifiers in the secrets package (secrets.BackendPostgres /
+// secrets.InstanceKEKProvider); they are duplicated here as literals rather than
+// imported because rdb→config, so a config→secrets→rdb import would cycle. The
+// secrets package's own Config.Validate is the authoritative check of the selected
+// identifiers at wiring time.
+const (
+	DefaultSecretsBackend     = "postgres"
+	DefaultSecretsKEKProvider = "instance"
+)
+
+// SecretsConfiguration selects the secret-storage backend and, for the Postgres
+// backend, the KEK provider, plus (for the default instance KEK provider) the root
+// key that wraps every per-secret DEK (ADR-059). RootKey is the one new piece of
+// instance secret material: a base64-encoded 256-bit key delivered via the instance
+// K8s Secret, the same channel as the NATS and service-auth credentials. It is not
+// required for a service that does not use the secret store; a service that DOES use
+// it forms its KEK via DecodedRootKey, which fails closed on an absent or malformed
+// key so it cannot silently run without encryption.
+type SecretsConfiguration struct {
+	// Backend selects where a value lives. Default "postgres" (envelope-encrypted
+	// in the service DB). External secret-manager backends are additive (ADR-059).
+	Backend string
+	// KEKProvider selects DEK wrapping for the Postgres backend. Default "instance"
+	// (the RootKey below). Cloud-KMS providers are additive.
+	KEKProvider string
+	// RootKey is the base64-encoded 256-bit instance root key for the instance KEK
+	// provider. Empty when the deployment does not use the secret store (or uses an
+	// external backend/KMS that owns its own keys).
+	RootKey string
+}
+
+// DecodedRootKey decodes and validates the instance root key. It fails closed on an
+// absent, malformed, or wrong-length key so a service that constructs the secret
+// store cannot start without a usable KEK (ADR-059: "a service that cannot form its
+// KEK must not start"). It is called at store construction, not by Validate, so a
+// service that does not use secrets is not forced to configure a key.
+func (c SecretsConfiguration) DecodedRootKey() ([]byte, error) {
+	if c.RootKey == "" {
+		return nil, fmt.Errorf("infrastructure.secrets.rootKey is not configured; a service using the secret store cannot form its instance KEK")
+	}
+	raw, err := base64.StdEncoding.DecodeString(c.RootKey)
+	if err != nil {
+		return nil, fmt.Errorf("infrastructure.secrets.rootKey is not valid base64: %w", err)
+	}
+	if len(raw) != 32 {
+		return nil, fmt.Errorf("infrastructure.secrets.rootKey decodes to %d bytes, want 32 (256-bit)", len(raw))
+	}
+	return raw, nil
+}
+
 // Infrastructure configuration section
 type InfrastructureConfiguration struct {
 	Nats             NatsConfiguration
@@ -172,6 +224,7 @@ type InfrastructureConfiguration struct {
 	EventProcessing  EventProcessingConfiguration
 	CommandDelivery  CommandDeliveryConfiguration
 	ServiceAuth      ServiceAuthConfiguration
+	Secrets          SecretsConfiguration
 }
 
 // Generic datastore configuration
@@ -225,6 +278,17 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	if nats.StreamMaxMsgSize <= 0 {
 		nats.StreamMaxMsgSize = DefaultStreamMaxMsgSize
 	}
+	// Default the secret-store selection so an instance document that omits it means
+	// "the zero-infra default" (envelope-in-Postgres, instance KEK), not an invalid
+	// empty selection. RootKey is deliberately NOT defaulted — key material is
+	// supplied via the K8s Secret, never synthesized here.
+	secrets := &c.Infrastructure.Secrets
+	if secrets.Backend == "" {
+		secrets.Backend = DefaultSecretsBackend
+	}
+	if secrets.KEKProvider == "" {
+		secrets.KEKProvider = DefaultSecretsKEKProvider
+	}
 }
 
 // Validate fails closed on an instance configuration missing the infrastructure
@@ -238,6 +302,15 @@ func (c *InstanceConfiguration) Validate() error {
 	}
 	if c.Infrastructure.UserManagement.Hostname == "" || c.Infrastructure.UserManagement.Port == 0 {
 		return fmt.Errorf("infrastructure.userManagement hostname and port are required")
+	}
+	// A configured secret-store root key must be well-formed so a misrendered key
+	// surfaces at startup rather than as a decrypt failure later. Absence is allowed
+	// here — only a service that actually constructs the store requires a key, and
+	// that path fails closed via DecodedRootKey.
+	if c.Infrastructure.Secrets.RootKey != "" {
+		if _, err := c.Infrastructure.Secrets.DecodedRootKey(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -268,6 +341,10 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 			EventProcessing: EventProcessingConfiguration{
 				Hostname: "dc-event-processing.dc-system",
 				Port:     8080,
+			},
+			Secrets: SecretsConfiguration{
+				Backend:     DefaultSecretsBackend,
+				KEKProvider: DefaultSecretsKEKProvider,
 			},
 		},
 		Persistence: PersistenceConfiguration{
