@@ -50,6 +50,7 @@ import {
 import { buildCanvasDefinition, graphFromDefinition } from './roundtrip';
 import { CanvasNodeView, type CanvasNodeData } from './nodes';
 import { NodeInspector } from './inspector';
+import { PreviewPanel } from './PreviewPanel';
 
 const nodeTypes = { dc: CanvasNodeView };
 
@@ -400,6 +401,11 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
           )}
         </aside>
       </div>
+
+      {/* Replay-preview: run the current draft against history (ADR-053 slice 9d). Gated on a fresh,
+          successful compile — the same forKey===key freshness Save uses, so the previewed graph is
+          exactly what is on the canvas. */}
+      <PreviewPanel graph={JSON.stringify(canvasDef)} profileToken={profileToken} canPreview={fresh && !!result?.ok} />
     </div>
   );
 }
