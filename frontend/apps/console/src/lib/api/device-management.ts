@@ -845,6 +845,7 @@ const DETECTION_RULES = graphql(`
         name
         description
         definition
+        authoringGraph
         enabled
         metadata
       }

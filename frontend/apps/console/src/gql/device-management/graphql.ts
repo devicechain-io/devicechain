@@ -189,6 +189,7 @@ export type CustomerTypeSearchCriteria = {
 };
 
 export type DetectionRuleCreateRequest = {
+  authoringGraph?: string | null | undefined;
   definition: string;
   description?: string | null | undefined;
   deviceProfileToken: string;
@@ -959,7 +960,7 @@ export type DetectionRulesQueryVariables = Exact<{
 }>;
 
 
-export type DetectionRulesQuery = { detectionRules: { results: Array<{ id: string, token: string, name: string | null, description: string | null, definition: string, enabled: boolean, metadata: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type DetectionRulesQuery = { detectionRules: { results: Array<{ id: string, token: string, name: string | null, description: string | null, definition: string, authoringGraph: string | null, enabled: boolean, metadata: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CreateDetectionRuleMutationVariables = Exact<{
   request: DetectionRuleCreateRequest;
@@ -2274,6 +2275,7 @@ export const DetectionRulesDocument = new TypedDocumentString(`
       name
       description
       definition
+      authoringGraph
       enabled
       metadata
     }

@@ -44,6 +44,17 @@ type DetectionRule struct {
 	// and never SQL-built; event-processing decodes it strictly at publish/compile.
 	Definition datatypes.JSON `gorm:"not null"`
 
+	// AuthoringGraph is the OPAQUE visual-canvas document (ADR-053 / slice 9b) — the
+	// CanvasDefinition JSON the console editor round-trips so a canvas-authored rule re-opens
+	// on the canvas. It is authoring metadata ONLY: device-management neither parses it (the
+	// graph schema is single-homed in event-processing, ADR-045 discipline) nor freezes it into
+	// the publish snapshot (json:"-" keeps it out of the snapshot marshal — the runtime consumes
+	// only Definition), and it is nullable: absent ⇒ the rule was form-authored and the canvas
+	// synthesizes a single-condition graph from Definition when opened. The console derives the
+	// authoritative Definition from this graph server-side (compileCanvas) before saving, so the
+	// two are kept coherent by the editor, not by a cross-field check here.
+	AuthoringGraph datatypes.JSON `json:"-"`
+
 	// Enabled — a disabled rule is retained so an author can park a rule without deleting
 	// it. The publish snapshot deliberately captures disabled rules too (buildProfileSnapshot
 	// does NOT filter): the flag travels frozen with the version, so a rollback restores the
@@ -64,6 +75,10 @@ type DetectionRuleCreateRequest struct {
 	Definition         string
 	Enabled            bool
 	Metadata           *string
+	// AuthoringGraph is the optional opaque CanvasDefinition JSON (ADR-053 slice 9b). Nil ⇒ a
+	// form-authored rule with no canvas sidecar; when present it must be a JSON object. It is
+	// stored verbatim and never parsed here.
+	AuthoringGraph *string
 }
 
 // Search criteria for locating detection rules.

@@ -233,6 +233,10 @@ type DetectionRule implements Model & TokenReference & NamedEntity & MetadataEnt
     deviceProfile: DeviceProfile!
     # The authored rule as a JSON document (the rules.Rule schema).
     definition: String!
+    # The optional visual-canvas document (ADR-053 CanvasDefinition JSON) this rule was
+    # authored with, so the console re-opens it on the canvas — null for a form-authored rule.
+    # Opaque authoring metadata; not parsed here and not frozen into the publish snapshot.
+    authoringGraph: String
     enabled: Boolean!
     metadata: String
 }
@@ -246,6 +250,9 @@ input DetectionRuleCreateRequest {
     name: String
     description: String
     definition: String!
+    # The optional canvas CanvasDefinition JSON sidecar (ADR-053 slice 9b). Omit for a
+    # form-authored rule; when present it must be a JSON object. Stored verbatim, not parsed.
+    authoringGraph: String
     enabled: Boolean!
     metadata: String
 }
