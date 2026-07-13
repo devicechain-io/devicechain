@@ -45,6 +45,20 @@ func (r *AdminTenantResolver) IngestBurst() *int32 {
 	return &v
 }
 
+// OutboundMessagesPerSecond / OutboundBurst resolve the per-tenant outbound
+// governance overrides (ADR-060 SD-3); null means the tenant inherits the
+// platform default.
+func (r *AdminTenantResolver) OutboundMessagesPerSecond() *float64 {
+	return r.M.OutboundMessagesPerSecond
+}
+func (r *AdminTenantResolver) OutboundBurst() *int32 {
+	if r.M.OutboundBurst == nil {
+		return nil
+	}
+	v := int32(*r.M.OutboundBurst)
+	return &v
+}
+
 // Config resolves the AdminTenant.config field: the freeform config map as a
 // JSON object string, or null when unset.
 func (r *AdminTenantResolver) Config() (*string, error) {
@@ -157,19 +171,23 @@ func (r *AdminResolver) DeleteRole(ctx context.Context, args struct {
 
 // adminTenantCreateInput mirrors AdminTenantCreateRequest.
 type adminTenantCreateInput struct {
-	Token                   string
-	Name                    *string
-	Config                  *string
-	IngestMessagesPerSecond *float64
-	IngestBurst             *int32
+	Token                     string
+	Name                      *string
+	Config                    *string
+	IngestMessagesPerSecond   *float64
+	IngestBurst               *int32
+	OutboundMessagesPerSecond *float64
+	OutboundBurst             *int32
 }
 
 // adminTenantUpdateInput mirrors AdminTenantUpdateRequest.
 type adminTenantUpdateInput struct {
-	Name                    *string
-	Config                  *string
-	IngestMessagesPerSecond *float64
-	IngestBurst             *int32
+	Name                      *string
+	Config                    *string
+	IngestMessagesPerSecond   *float64
+	IngestBurst               *int32
+	OutboundMessagesPerSecond *float64
+	OutboundBurst             *int32
 }
 
 // intPtr adapts an optional GraphQL Int (*int32) to the model's *int, preserving
@@ -195,8 +213,10 @@ func (r *AdminResolver) CreateTenant(ctx context.Context, args struct {
 	}
 	tenant, err := r.getAdminService(ctx).CreateTenant(ctx, admin.TenantInput{
 		Token: args.Request.Token, Name: strOrEmpty(args.Request.Name), Config: cfg,
-		IngestMessagesPerSecond: args.Request.IngestMessagesPerSecond,
-		IngestBurst:             intPtr(args.Request.IngestBurst),
+		IngestMessagesPerSecond:   args.Request.IngestMessagesPerSecond,
+		IngestBurst:               intPtr(args.Request.IngestBurst),
+		OutboundMessagesPerSecond: args.Request.OutboundMessagesPerSecond,
+		OutboundBurst:             intPtr(args.Request.OutboundBurst),
 	})
 	return wrapTenant(tenant, err)
 }
@@ -215,8 +235,10 @@ func (r *AdminResolver) UpdateTenant(ctx context.Context, args struct {
 	}
 	tenant, err := r.getAdminService(ctx).UpdateTenant(ctx, args.Token, admin.TenantMutableInput{
 		Name: strOrEmpty(args.Request.Name), Config: cfg,
-		IngestMessagesPerSecond: args.Request.IngestMessagesPerSecond,
-		IngestBurst:             intPtr(args.Request.IngestBurst),
+		IngestMessagesPerSecond:   args.Request.IngestMessagesPerSecond,
+		IngestBurst:               intPtr(args.Request.IngestBurst),
+		OutboundMessagesPerSecond: args.Request.OutboundMessagesPerSecond,
+		OutboundBurst:             intPtr(args.Request.OutboundBurst),
 	})
 	return wrapTenant(tenant, err)
 }

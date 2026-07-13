@@ -24,5 +24,6 @@ var (
 		NewSettingsSchema(),
 		NewTenantGovernance(),
 		NewOAuthClientSchema(),
+		NewTenantOutboundGovernance(),
 	}
 )

@@ -113,34 +113,56 @@ func (s *Service) DeleteRole(ctx context.Context, scope, token string) (bool, er
 }
 
 // TenantInput is the data to create a tenant. Config is freeform JSON (ADR-033).
-// The Ingest* governance overrides are nil to inherit the platform default.
+// The Ingest* / Outbound* governance overrides are nil to inherit the platform
+// default.
 type TenantInput struct {
-	Token                   string
-	Name                    string
-	Config                  map[string]any
-	IngestMessagesPerSecond *float64
-	IngestBurst             *int
+	Token                     string
+	Name                      string
+	Config                    map[string]any
+	IngestMessagesPerSecond   *float64
+	IngestBurst               *int
+	OutboundMessagesPerSecond *float64
+	OutboundBurst             *int
 }
 
 // TenantMutableInput is the data to update a tenant: its token is fixed.
 type TenantMutableInput struct {
-	Name                    string
-	Config                  map[string]any
-	IngestMessagesPerSecond *float64
-	IngestBurst             *int
+	Name                      string
+	Config                    map[string]any
+	IngestMessagesPerSecond   *float64
+	IngestBurst               *int
+	OutboundMessagesPerSecond *float64
+	OutboundBurst             *int
 }
 
-// validateGovernance rejects a non-positive override. A nil field means "inherit
-// the platform default"; a provided value must be positive — a zero or negative
-// ceiling is never a valid override (the platform default, itself always
-// positive, is the fail-safe floor), so callers clear an override by omitting it,
-// not by setting it to zero.
-func validateGovernance(mps *float64, burst *int) error {
-	if mps != nil && *mps <= 0 {
-		return fmt.Errorf("ingestMessagesPerSecond override must be positive (got %v); omit it to inherit the platform default", *mps)
+// validateGovernance rejects a non-positive override on any governance dimension.
+// A nil field means "inherit the platform default"; a provided value must be
+// positive — a zero or negative ceiling is never a valid override (the platform
+// default, itself always positive, is the fail-safe floor), so callers clear an
+// override by omitting it, not by setting it to zero.
+func validateGovernance(ingestMps *float64, ingestBurst *int, outboundMps *float64, outboundBurst *int) error {
+	if err := validateRateOverride("ingestMessagesPerSecond", ingestMps); err != nil {
+		return err
 	}
-	if burst != nil && *burst <= 0 {
-		return fmt.Errorf("ingestBurst override must be positive (got %d); omit it to inherit the platform default", *burst)
+	if err := validateBurstOverride("ingestBurst", ingestBurst); err != nil {
+		return err
+	}
+	if err := validateRateOverride("outboundMessagesPerSecond", outboundMps); err != nil {
+		return err
+	}
+	return validateBurstOverride("outboundBurst", outboundBurst)
+}
+
+func validateRateOverride(field string, v *float64) error {
+	if v != nil && *v <= 0 {
+		return fmt.Errorf("%s override must be positive (got %v); omit it to inherit the platform default", field, *v)
+	}
+	return nil
+}
+
+func validateBurstOverride(field string, v *int) error {
+	if v != nil && *v <= 0 {
+		return fmt.Errorf("%s override must be positive (got %d); omit it to inherit the platform default", field, *v)
 	}
 	return nil
 }
@@ -150,14 +172,16 @@ func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant
 	if in.Token == "" {
 		return nil, fmt.Errorf("token is required")
 	}
-	if err := validateGovernance(in.IngestMessagesPerSecond, in.IngestBurst); err != nil {
+	if err := validateGovernance(in.IngestMessagesPerSecond, in.IngestBurst, in.OutboundMessagesPerSecond, in.OutboundBurst); err != nil {
 		return nil, err
 	}
 	t := &iam.Tenant{
 		Token: in.Token, Enabled: true, Config: in.Config,
-		NamedEntity:             rdb.NamedEntity{Name: rdb.NullStrOf(&in.Name)},
-		IngestMessagesPerSecond: in.IngestMessagesPerSecond,
-		IngestBurst:             in.IngestBurst,
+		NamedEntity:               rdb.NamedEntity{Name: rdb.NullStrOf(&in.Name)},
+		IngestMessagesPerSecond:   in.IngestMessagesPerSecond,
+		IngestBurst:               in.IngestBurst,
+		OutboundMessagesPerSecond: in.OutboundMessagesPerSecond,
+		OutboundBurst:             in.OutboundBurst,
 	}
 	if err := s.iam.CreateTenant(ctx, t); err != nil {
 		return nil, err
@@ -169,7 +193,7 @@ func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant
 // override field clears it (reverting the tenant to the platform default), so the
 // update is a full replace of the mutable fields, not a partial patch.
 func (s *Service) UpdateTenant(ctx context.Context, token string, in TenantMutableInput) (*iam.Tenant, error) {
-	if err := validateGovernance(in.IngestMessagesPerSecond, in.IngestBurst); err != nil {
+	if err := validateGovernance(in.IngestMessagesPerSecond, in.IngestBurst, in.OutboundMessagesPerSecond, in.OutboundBurst); err != nil {
 		return nil, err
 	}
 	t, err := s.loadTenant(ctx, token)
@@ -180,6 +204,8 @@ func (s *Service) UpdateTenant(ctx context.Context, token string, in TenantMutab
 	t.Config = in.Config
 	t.IngestMessagesPerSecond = in.IngestMessagesPerSecond
 	t.IngestBurst = in.IngestBurst
+	t.OutboundMessagesPerSecond = in.OutboundMessagesPerSecond
+	t.OutboundBurst = in.OutboundBurst
 	if err := s.iam.UpdateTenant(ctx, t); err != nil {
 		return nil, err
 	}

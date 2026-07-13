@@ -44,6 +44,10 @@ type AdminTenant {
     # platform default; a set value raises or lowers its ceiling.
     ingestMessagesPerSecond: Float
     ingestBurst: Int
+    # Per-tenant outbound-connector governance overrides (ADR-060). Null means the
+    # tenant inherits the platform default; a set value raises or lowers its ceiling.
+    outboundMessagesPerSecond: Float
+    outboundBurst: Int
 }
 
 # A globally-defined, named bundle of authorities (ADR-008 RBAC / ADR-033). Scope
@@ -77,23 +81,27 @@ input AdminRoleUpdateRequest {
     authorities: [String!]!
 }
 
-# Data to create a tenant. config is an optional JSON object string. The ingest*
-# overrides are optional; omit them to inherit the platform default.
+# Data to create a tenant. config is an optional JSON object string. The ingest* /
+# outbound* overrides are optional; omit them to inherit the platform default.
 input AdminTenantCreateRequest {
     token: String!
     name: String
     config: String
     ingestMessagesPerSecond: Float
     ingestBurst: Int
+    outboundMessagesPerSecond: Float
+    outboundBurst: Int
 }
 
-# Data to update a tenant (its token is fixed). A null ingest* override clears it,
-# reverting the tenant to the platform default.
+# Data to update a tenant (its token is fixed). A null ingest* / outbound* override
+# clears it, reverting the tenant to the platform default.
 input AdminTenantUpdateRequest {
     name: String
     config: String
     ingestMessagesPerSecond: Float
     ingestBurst: Int
+    outboundMessagesPerSecond: Float
+    outboundBurst: Int
 }
 
 # Data required to create a global identity. Each system role must name an

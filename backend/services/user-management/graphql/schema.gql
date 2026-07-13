@@ -30,11 +30,15 @@ type Tenant {
     description: String
 }
 
-# The ingest governance overrides for the tenant the caller is acting within. A
-# null field means the tenant inherits the platform default (never unlimited).
+# The governance overrides for the tenant the caller is acting within. A null
+# field means the tenant inherits the platform default (never unlimited). Read by
+# the enforcing services over a service token: event-sources (ingest*) and
+# outbound-connectors (outbound*, ADR-060).
 type TenantGovernance {
     ingestMessagesPerSecond: Float
     ingestBurst: Int
+    outboundMessagesPerSecond: Float
+    outboundBurst: Int
 }
 
 # The identity the caller is signed in as (control plane), for display in the

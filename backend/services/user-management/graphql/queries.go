@@ -58,6 +58,18 @@ func (r *TenantGovernanceResolver) IngestBurst() *int32 {
 	return &v
 }
 
+func (r *TenantGovernanceResolver) OutboundMessagesPerSecond() *float64 {
+	return r.t.OutboundMessagesPerSecond
+}
+
+func (r *TenantGovernanceResolver) OutboundBurst() *int32 {
+	if r.t.OutboundBurst == nil {
+		return nil
+	}
+	v := int32(*r.t.OutboundBurst)
+	return &v
+}
+
 // TenantGovernance returns the ingest governance overrides for the tenant the
 // caller is acting within — the read side of ADR-023 per-tenant limits, consumed
 // by the enforcing service (event-sources) over a service token. Unlike the
