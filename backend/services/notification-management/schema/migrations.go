@@ -19,5 +19,8 @@ var (
 		NewNotificationPolicySchema(),
 		NewNotificationStateSchema(),
 		secrets.NewSecretStoreSchema(),
+		// ADR-059 S3: retire the reversible plaintext channel.secret column now that the
+		// delivery secret lives in the secret store above (real cutover on existing DBs).
+		NewNotificationChannelDropSecretSchema(),
 	}
 )

@@ -46,3 +46,26 @@ func NewNotificationChannelSchema() *gormigrate.Migration {
 		},
 	}
 }
+
+// NewNotificationChannelDropSecretSchema drops the legacy reversible plaintext
+// `secret` column from notification_channels (ADR-059 S3). The delivery secret now
+// lives envelope-encrypted in the secret store, so this makes the cutover real on an
+// EXISTING database: NewNotificationChannelSchema was edited so a fresh install never
+// creates the column (there the DROP COLUMN IF EXISTS is a harmless no-op), but a
+// database that already ran the frozen create keeps the column — and its plaintext —
+// until this migration removes it.
+//
+// It does NOT migrate old plaintext values into the store (pre-GA: no backfill). An
+// upgraded deployment's channel secrets are cleared with the column; an operator
+// re-enters them, which hasSecret then reports. Postgres-only, like this service's
+// other index migrations. Irreversible by design (the plaintext is gone), so Rollback
+// is a no-op rather than resurrecting a cleartext column.
+func NewNotificationChannelDropSecretSchema() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "20260713140000",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec("ALTER TABLE notification_channels DROP COLUMN IF EXISTS secret").Error
+		},
+		Rollback: func(*gorm.DB) error { return nil },
+	}
+}

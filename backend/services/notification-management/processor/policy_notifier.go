@@ -115,8 +115,12 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	for _, d := range deliveries {
 		secret, err := n.resolveChannelSecret(ctx, d.channel.ID)
 		if err != nil {
-			// A store error (not "no secret") is transient infra: skip this channel so
-			// it counts as not-delivered, so the redelivery backstop retries the event.
+			// A store error (not "no secret") is transient infra: skip this channel, so
+			// it counts as not-delivered. If EVERY delivery is skipped/fails the event is
+			// naked for redelivery (delivered == 0 below); if another channel already
+			// delivered, the event is acked and this channel's page is dropped — matching
+			// the Notifier at-least-once contract (a partial failure is not redelivered,
+			// to avoid double-sending the channels that succeeded).
 			log.Error().Err(err).Str("tenant", tenant).Str("channel", d.channel.Token).
 				Msg("Skipping channel: failed to resolve delivery secret")
 			continue

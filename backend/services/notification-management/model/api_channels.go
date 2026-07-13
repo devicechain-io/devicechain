@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -43,9 +44,16 @@ func (api *Api) CreateNotificationChannel(ctx context.Context,
 	}
 	// Seal the delivery secret under the channel's handle. The row is written first so
 	// its immutable ID (the secret's stable key) exists; the secret is a separate write
-	// to the store (same DB, not one transaction — acceptable pre-GA: a store failure
-	// leaves a channel with no secret, which hasSecret truthfully reports).
+	// to the store (same DB, not one transaction).
 	if err := api.applyChannelSecret(ctx, created.ID, request.Secret); err != nil {
+		// The row committed but sealing the secret failed. Roll the row back (best
+		// effort) so the create is atomic from the caller's view — otherwise a retry
+		// would collide on the now-existing token. A cleanup failure is logged, not
+		// masked; the original secret error is what the caller needs.
+		if delErr := api.RDB.DB(ctx).Unscoped().Delete(created).Error; delErr != nil {
+			log.Warn().Err(delErr).Str("token", request.Token).
+				Msg("Failed to roll back channel row after secret write failure; channel may exist without a secret")
+		}
 		return nil, err
 	}
 	return created, nil
@@ -182,13 +190,18 @@ func (api *Api) DeleteNotificationChannel(ctx context.Context, token string) (bo
 		return false, result.Error
 	}
 	// Remove the channel's delivery secret so a deleted channel leaves no orphaned
-	// secret (Delete is idempotent, so a channel that never had one is a no-op).
+	// secret (Delete is idempotent, so a channel that never had one is a no-op). The
+	// row is already hard-deleted at this point, so a failure to remove the (now
+	// unreachable) secret must not report the channel as undeleted: log and continue.
+	// The orphaned ciphertext is benign — ids are never recycled, so it can never be
+	// resolved by a future channel.
 	ref, err := ChannelSecretRef(ctx, matches[0].ID)
 	if err != nil {
 		return false, err
 	}
 	if err := api.Secrets.Delete(ctx, ref); err != nil {
-		return false, err
+		log.Warn().Err(err).Str("token", token).
+			Msg("Deleted channel but failed to remove its stored secret (orphaned ciphertext)")
 	}
 	return result.RowsAffected > 0, nil
 }
