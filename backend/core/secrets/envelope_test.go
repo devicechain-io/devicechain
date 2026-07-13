@@ -119,6 +119,31 @@ func TestOpenWrongKEK(t *testing.T) {
 	}
 }
 
+// TestOpenSwappedWrappedDEK proves the classic envelope attack fails: grafting
+// one envelope's wrapped DEK onto another sealed under the SAME KEK — so the
+// unwrap itself SUCCEEDS and yields a valid (but wrong) DEK — is still caught,
+// because the value-layer GCM tag rejects decryption under the mismatched DEK.
+// The two encryption layers must each authenticate for a value to open.
+func TestOpenSwappedWrappedDEK(t *testing.T) {
+	ctx := context.Background()
+	kp := newTestKP(t) // one KEK for both envelopes
+
+	a, err := Seal(ctx, kp, []byte("value-a"), nil)
+	if err != nil {
+		t.Fatalf("seal a: %v", err)
+	}
+	b, err := Seal(ctx, kp, []byte("value-b"), nil)
+	if err != nil {
+		t.Fatalf("seal b: %v", err)
+	}
+	// Swap in b's wrapped DEK: it unwraps cleanly (same KEK), but it is the wrong
+	// DEK for a's ciphertext.
+	a.WrappedDEK = b.WrappedDEK
+	if _, err := Open(ctx, kp, a, nil); err == nil {
+		t.Fatal("open must fail when the wrapped DEK is swapped for another envelope's")
+	}
+}
+
 // TestAADBinding proves the additional-authenticated-data (the secret's identity)
 // is bound into the ciphertext: opening with a different aad fails, so a
 // ciphertext cannot be relabeled onto another handle, while the matching aad
