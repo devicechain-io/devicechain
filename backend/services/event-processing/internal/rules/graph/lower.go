@@ -30,6 +30,10 @@ type LoweredRule struct {
 	Rule       rules.Rule
 	Definition string
 	Compiled   *rules.CompiledRule
+	// Trace is the authoring-only node-id map for the slice-9e per-firing node trace (source +
+	// condition + REACT branch/action node ids). It never reaches the stored Definition — it is
+	// handed to the replay preview so a firing can be attributed back to canvas nodes.
+	Trace NodeTracePlan
 }
 
 // Result is a successful compile: the lowered rules (one per condition node) and any
@@ -357,12 +361,15 @@ func detectCycle(nodes []Node, edges []typedEdge) error {
 	return nil
 }
 
-// reactBinding is where one action node lowers: the condition whose signal ultimately feeds it, and
-// the composed guard — the conjunction of every branch predicate on the signal path from that
-// condition to the action (empty when the action wires straight to the condition, the pre-9c case).
+// reactBinding is where one action node lowers: the condition whose signal ultimately feeds it, the
+// composed guard — the conjunction of every branch predicate on the signal path from that condition
+// to the action (empty when the action wires straight to the condition, the pre-9c case) — and the
+// ordered branch chain that composed it (condition→action order), retained for the slice-9e node
+// trace so the preview can attribute a blocked action to the specific branch that blocked it.
 type reactBinding struct {
 	conditionID string
 	guard       string
+	branches    []BranchStep
 }
 
 // resolveReactChains walks the signal-downstream subgraph to bind every action node to its owning
@@ -410,7 +417,8 @@ func resolveReactChains(nodes []Node, byID map[string]Node, edges []typedEdge) (
 		if n.Type != NodeAction {
 			continue
 		}
-		var guards []string // nearest-action-first; composeGuards reverses to condition→action order
+		var guards []string       // nearest-action-first; composeGuards reverses to condition→action order
+		var branches []BranchStep // nearest-action-first; reversed to condition→action order for the trace
 		cur := n.ID
 		// Bound the walk by the node count — a cycle was rejected upstream (detectCycle), so this is a
 		// belt-and-braces guard against a walk that never reaches a condition.
@@ -424,7 +432,7 @@ func resolveReactChains(nodes []Node, byID map[string]Node, edges []typedEdge) (
 			ft := byID[f].Type
 			switch {
 			case ft.isCondition():
-				out[n.ID] = reactBinding{conditionID: f, guard: composeGuards(guards)}
+				out[n.ID] = reactBinding{conditionID: f, guard: composeGuards(guards), branches: reverseBranches(branches)}
 				cur = "" // sentinel: done
 			case ft.isBranch():
 				when, berr := branchWhen(byID[f])
@@ -432,6 +440,7 @@ func resolveReactChains(nodes []Node, byID map[string]Node, edges []typedEdge) (
 					return nil, errorf(f, "%v", berr)
 				}
 				guards = append(guards, when)
+				branches = append(branches, BranchStep{NodeID: f, When: when})
 				cur = f
 			default:
 				// A signal edge can only originate at a condition or a branch (type-checked), so this
@@ -465,6 +474,19 @@ func branchWhen(n Node) (string, error) {
 		return "", fmt.Errorf("branch config: %v", err)
 	}
 	return c.When, nil
+}
+
+// reverseBranches returns the branch chain in condition→action order (the walk collects it
+// action→condition). It copies rather than reversing in place so the caller's slice is untouched.
+func reverseBranches(src []BranchStep) []BranchStep {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]BranchStep, len(src))
+	for i, b := range src {
+		out[len(src)-1-i] = b
+	}
+	return out
 }
 
 // composeGuards conjoins the branch predicates on a signal path into one guard CEL string, in
@@ -546,6 +568,9 @@ func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, chains map[
 		}
 	}
 	sort.Strings(actionIDs)
+	// Assemble the node-trace plan alongside the rule (slice 9e): the source + condition on the
+	// DETECT path, and each action's branch chain in the SAME id-sorted order as rule.Actions.
+	trace := NodeTracePlan{SourceID: sources[0], ConditionID: c.ID}
 	for _, aid := range actionIDs {
 		a, aerr := buildAction(byID[aid])
 		if aerr != nil {
@@ -553,6 +578,7 @@ func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, chains map[
 		}
 		a.Guard = chains[aid].guard
 		rule.Actions = append(rule.Actions, a)
+		trace.Actions = append(trace.Actions, ActionPath{NodeID: aid, Type: string(a.Type), Branches: chains[aid].branches})
 	}
 
 	// Compile against a copy carrying the node id as a placeholder — Compile requires a
@@ -573,7 +599,7 @@ func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, chains map[
 	if err != nil {
 		return nil, errorf(c.ID, "marshal compiled rule: %v", err)
 	}
-	return &LoweredRule{NodeID: c.ID, Rule: rule, Definition: string(defBytes), Compiled: compiled}, nil
+	return &LoweredRule{NodeID: c.ID, Rule: rule, Definition: string(defBytes), Compiled: compiled, Trace: trace}, nil
 }
 
 // validateSource requires a Source node to be profile-scoped to the canvas's profile (the GA

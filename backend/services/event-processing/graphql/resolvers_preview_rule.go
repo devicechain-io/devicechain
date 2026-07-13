@@ -12,6 +12,7 @@ import (
 
 	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-event-processing/internal/preview"
+	tracepkg "github.com/devicechain-io/dc-event-processing/internal/preview/trace"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/rules/graph"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -61,6 +62,7 @@ type previewRuleInput struct {
 	ProfileToken   string
 	Start          string // RFC3339 occurred-time window lower bound
 	End            string // RFC3339 occurred-time window upper bound
+	Trace          *bool  // when true (and a graph draft), attach a per-firing node trace (slice 9e)
 }
 
 // PreviewRule runs a DRAFT detection rule against replayed history and reports the RAISE/RESOLVE edges
@@ -86,8 +88,9 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	in := args.Input
 
 	// Compile the draft to a single compiled rule + its definition, through the SAME compiler + cost
-	// gate the live path uses — so a preview runs exactly what a publish would run.
-	compiled, definition, cerr := r.compileDraft(in)
+	// gate the live path uses — so a preview runs exactly what a publish would run. tracePlan is the
+	// canvas node-id map for the 9e node trace (nil for a ruleDefinition draft, which has no canvas).
+	compiled, definition, tracePlan, cerr := r.compileDraft(in)
 	if cerr != nil {
 		return failedPreview(cerr...), nil
 	}
@@ -151,49 +154,60 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 			degraded = clampNote
 		}
 	}
-	return newPreviewResult(res, degraded, wallMs), nil
+
+	// Reconstruct the per-firing node trace (9e) when the request asked for it and the draft is a
+	// canvas graph (a ruleDefinition draft has no node map). The builder compiles the plan's guards
+	// once and reuses them across firings; the reconstruction is off the engine (see internal/preview/
+	// trace), so it never re-runs or perturbs the replay.
+	var tb *tracepkg.Builder
+	if tracePlan != nil && in.Trace != nil && *in.Trace {
+		tb = tracepkg.NewBuilder(*tracePlan)
+	}
+	return newPreviewResult(res, degraded, wallMs, tb), nil
 }
 
 // compileDraft lowers the draft (a canvas graph OR a rules.Rule definition) to one compiled rule and
 // its canonical definition, returning node-anchored diagnostics on failure. Exactly one input source
-// must be set.
-func (r *SchemaResolver) compileDraft(in previewRuleInput) (*rules.CompiledRule, string, []graph.Diagnostic) {
+// must be set. The returned *graph.NodeTracePlan is the canvas node-id map for the 9e node trace; it
+// is nil for a ruleDefinition draft (which has no canvas nodes to attribute a firing back to).
+func (r *SchemaResolver) compileDraft(in previewRuleInput) (*rules.CompiledRule, string, *graph.NodeTracePlan, []graph.Diagnostic) {
 	hasGraph := in.Graph != nil && *in.Graph != ""
 	hasDef := in.RuleDefinition != nil && *in.RuleDefinition != ""
 	switch {
 	case hasGraph == hasDef:
-		return nil, "", []graph.Diagnostic{{Severity: "error", Message: "provide exactly one of graph or ruleDefinition"}}
+		return nil, "", nil, []graph.Diagnostic{{Severity: "error", Message: "provide exactly one of graph or ruleDefinition"}}
 	case hasGraph:
 		def, err := graph.Decode([]byte(*in.Graph))
 		if err != nil {
-			return nil, "", []graph.Diagnostic{{Severity: "error", Message: err.Error()}}
+			return nil, "", nil, []graph.Diagnostic{{Severity: "error", Message: err.Error()}}
 		}
 		res, cerr := graph.Compile(def, in.ProfileToken, rules.DefaultLimits())
 		if cerr != nil {
 			var ce *graph.CompileError
 			if errors.As(cerr, &ce) {
-				return nil, "", ce.Diagnostics
+				return nil, "", nil, ce.Diagnostics
 			}
-			return nil, "", []graph.Diagnostic{{Severity: "error", Message: cerr.Error()}}
+			return nil, "", nil, []graph.Diagnostic{{Severity: "error", Message: cerr.Error()}}
 		}
 		if len(res.Rules) != 1 {
-			return nil, "", []graph.Diagnostic{{Severity: "error", Message: "a canvas previews exactly one detection rule — this graph has more than one condition node"}}
+			return nil, "", nil, []graph.Diagnostic{{Severity: "error", Message: "a canvas previews exactly one detection rule — this graph has more than one condition node"}}
 		}
 		lr := res.Rules[0]
-		return lr.Compiled, lr.Definition, nil
+		plan := lr.Trace
+		return lr.Compiled, lr.Definition, &plan, nil
 	default: // hasDef
 		rule, err := rules.Decode([]byte(*in.RuleDefinition))
 		if err != nil {
-			return nil, "", []graph.Diagnostic{{Severity: "error", Message: err.Error()}}
+			return nil, "", nil, []graph.Diagnostic{{Severity: "error", Message: err.Error()}}
 		}
 		// Assign a stable preview id so the compiler (which requires a non-empty id) and the registry
 		// (which requires uniqueness) are satisfied; the id never leaves the ephemeral engine.
 		rule.ID = runtime.PublishedRuleID("preview", in.ProfileToken, "draft")
 		compiled, err := rules.Compile(rule, rules.DefaultLimits())
 		if err != nil {
-			return nil, "", []graph.Diagnostic{{Severity: "error", Message: err.Error()}}
+			return nil, "", nil, []graph.Diagnostic{{Severity: "error", Message: err.Error()}}
 		}
-		return compiled, *in.RuleDefinition, nil
+		return compiled, *in.RuleDefinition, nil, nil
 	}
 }
 
@@ -211,14 +225,24 @@ type PreviewResultResolver struct {
 	diags      []*CanvasDiagnosticResolver
 }
 
-func newPreviewResult(res preview.Result, degraded string, wallMs int32) *PreviewResultResolver {
+// newPreviewResult maps a completed preview to its resolver. When tb is non-nil (the request asked
+// for a trace on a canvas draft), each firing carries its reconstructed per-node trace.
+func newPreviewResult(res preview.Result, degraded string, wallMs int32, tb *tracepkg.Builder) *PreviewResultResolver {
 	firings := make([]*PreviewFiringResolver, 0, len(res.Firings))
 	for _, f := range res.Firings {
 		signal := "resolved"
 		if f.Raise {
 			signal = "raised"
 		}
-		firings = append(firings, &PreviewFiringResolver{occurredAt: f.OccurredAt.UTC().Format(time.RFC3339), series: f.Series, signal: signal})
+		fr := &PreviewFiringResolver{occurredAt: f.OccurredAt.UTC().Format(time.RFC3339), series: f.Series, signal: signal, trace: []*NodeTraceStepResolver{}}
+		if tb != nil {
+			steps := tb.Build(tracepkg.Firing{Raise: f.Raise, Series: f.Series, Value: f.Value, HasValue: f.HasValue})
+			fr.trace = make([]*NodeTraceStepResolver, 0, len(steps))
+			for _, s := range steps {
+				fr.trace = append(fr.trace, newNodeTraceStep(s))
+			}
+		}
+		firings = append(firings, fr)
 	}
 	out := &PreviewResultResolver{
 		ok:         true,
@@ -263,11 +287,35 @@ type PreviewFiringResolver struct {
 	occurredAt string
 	series     string
 	signal     string
+	trace      []*NodeTraceStepResolver // empty unless the request asked for a trace on a canvas draft
 }
 
-func (r *PreviewFiringResolver) OccurredAt() string { return r.occurredAt }
-func (r *PreviewFiringResolver) Series() string     { return r.series }
-func (r *PreviewFiringResolver) Signal() string     { return r.signal }
+func (r *PreviewFiringResolver) OccurredAt() string              { return r.occurredAt }
+func (r *PreviewFiringResolver) Series() string                  { return r.series }
+func (r *PreviewFiringResolver) Signal() string                  { return r.signal }
+func (r *PreviewFiringResolver) Trace() []*NodeTraceStepResolver { return r.trace }
+
+// NodeTraceStepResolver resolves one canvas node's disposition for a firing (slice 9e node trace).
+type NodeTraceStepResolver struct {
+	nodeID      string
+	kind        string
+	disposition string
+	detail      *string
+}
+
+func newNodeTraceStep(s tracepkg.Step) *NodeTraceStepResolver {
+	r := &NodeTraceStepResolver{nodeID: s.NodeID, kind: s.Kind, disposition: s.Disposition}
+	if s.Detail != "" {
+		d := s.Detail
+		r.detail = &d
+	}
+	return r
+}
+
+func (r *NodeTraceStepResolver) NodeId() string      { return r.nodeID }
+func (r *NodeTraceStepResolver) Kind() string        { return r.kind }
+func (r *NodeTraceStepResolver) Disposition() string { return r.disposition }
+func (r *NodeTraceStepResolver) Detail() *string     { return r.detail }
 
 // PreviewStatsResolver resolves the coverage counters.
 type PreviewStatsResolver struct {
