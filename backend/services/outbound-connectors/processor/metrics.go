@@ -19,11 +19,14 @@ const (
 	// outcomeDead — the message exhausted the redelivery cap and was written to the terminal
 	// dead-letter subject (a permanently-failing send), never retried forever.
 	outcomeDead = "dead"
-	// outcomeInvalid — a malformed/poison message (no parseable tenant, undecodable JSON, or a
-	// failed structural validation); a redelivery cannot fix it, so it was dropped (acked).
+	// outcomeInvalid — a message a redelivery cannot fix: a malformed/poison message at the consumer
+	// (no parseable tenant, undecodable JSON, failed structural validation), which is dropped (acked);
+	// or an executor-terminal dispatch (a dangling/unpublished ConnectorRef, or a malformed stored
+	// config of a supported type), which is dead-lettered so an operator can see it.
 	outcomeInvalid = "invalid"
-	// outcomeUnsupported — a well-formed dispatch this build cannot execute (a publish before the
-	// Bento tier / Connector entity, slice C4b); terminal, dead-lettered so an operator can see it.
+	// outcomeUnsupported — a well-formed dispatch this build cannot execute: a publish whose connector
+	// type has no generator shipped yet (e.g. kafka before slice C4c), or publish on an httpCall-only
+	// deployment; terminal, dead-lettered so an operator can see it.
 	outcomeUnsupported = "unsupported"
 	// outcomeRateLimited — the dispatch's tenant was over its outbound egress rate (ADR-060 SD-3)
 	// for longer than the smoothing wait budget, so it was shed to the dead-letter subject. A brief
