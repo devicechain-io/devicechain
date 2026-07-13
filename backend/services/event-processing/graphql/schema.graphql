@@ -43,6 +43,67 @@ type Query {
     # Tenant-scoped to the caller's tenant. An unpublished profile (no active version) returns
     # an empty list. Read-only; gated on device:read.
     ruleHealth(profileToken: String!): [RuleHealth!]!
+
+    # Run a DRAFT detection rule against REPLAYED history and report the RAISE/RESOLVE edges it
+    # WOULD have produced (ADR-053 slice 9d) — the "what would this rule have done?" headline. The
+    # draft is named by exactly one of `graph` (a CanvasDefinition JSON) or `ruleDefinition` (a
+    # rules.Rule JSON); `start`/`end` are the RFC3339 occurred-time window (capped to the most
+    # recent 24h). It builds a THROWAWAY in-memory DETECT core over an ephemeral replay consumer and
+    # COLLECTS edges instead of publishing, so it never perturbs the live singleton (no snapshot
+    # write, no production-durable ack, no live-state mutation). A compile failure returns ok=false
+    # with node-anchored diagnostics; an unpublished profile, an aged-out window, or the scan cap
+    # returns a degraded but non-error result. Tenant-scoped; read-only; gated on device:read.
+    previewRule(input: PreviewRuleInput!): PreviewResult!
+}
+
+# Input to previewRule. Exactly one of graph or ruleDefinition names the draft.
+input PreviewRuleInput {
+    # A CanvasDefinition JSON (the console canvas editor's graph).
+    graph: String
+    # A rules.Rule JSON (the form builder's definition).
+    ruleDefinition: String
+    # The profile whose published history the draft previews against.
+    profileToken: String!
+    # RFC3339 occurred-time window bounds.
+    start: String!
+    end: String!
+}
+
+# The outcome of a replay preview.
+type PreviewResult {
+    # True when the draft compiled and the replay ran (even if it found zero firings). False only on
+    # a compile failure, whose reasons are in diagnostics.
+    ok: Boolean!
+    # The RAISE/RESOLVE timeline the draft would have produced, ordered by time.
+    firings: [PreviewFiring!]!
+    # Coverage counters for the run.
+    stats: PreviewStats!
+    # A human-readable reason the result is PARTIAL (history aged out below the window, the scan cap
+    # was hit, the window was capped, the profile is unpublished, or a concurrent-preview refusal) —
+    # null on a complete result.
+    degraded: String
+    # Compile diagnostics when ok is false (node-anchored, reusing the canvas diagnostic shape).
+    diagnostics: [CanvasDiagnostic!]!
+}
+
+# One edge the draft would have emitted.
+type PreviewFiring {
+    # RFC3339 occurred time of the edge.
+    occurredAt: String!
+    # The series (device token, or anchor token for a correlation rule) the edge is for.
+    series: String!
+    # "raised" (rising edge) or "resolved" (falling edge).
+    signal: String!
+}
+
+# Coverage counters for a preview run.
+type PreviewStats {
+    # How many in-scope events were processed.
+    eventsScanned: Int!
+    # How many edges were produced.
+    firingCount: Int!
+    # Wall-clock milliseconds the replay took (server-side).
+    wallMs: Int!
 }
 
 # The lifecycle status of a live detection rule (ADR-051 slice 7b). DISABLED_BY_BUDGET is
