@@ -358,6 +358,13 @@ functionalAreas:
     # acks the resolved-events durable only after the snapshot containing an event's
     # effect commits (ack-on-checkpoint), so these bound write-amplification vs the
     # ack/redelivery latency on a crash.
+    # --- REACT SOURCE-side outbound egress cost-gate (ADR-060 SD-3): REACT charges the tenant's
+    # outbound budget before publishing a connector-dispatch and DROPS over-quota httpCall/publish
+    # actions at the source (an immediate Allow, never a block), so a runaway rule cannot flood the
+    # connector-dispatch stream. Defaults MATCH outbound-connectors' egress ceiling (both ends meter
+    # the same dimension); per-tenant overrides come from user-management. Never unlimited. ---
+    # outboundMessagesPerSecond: 100  # platform-default source egress rate ceiling (0/unset ⇒ this default)
+    # outboundBurst: 200              # platform-default source egress burst
   mcp:
     # The MCP server (ADR-047): an OAuth 2.1 Resource Server fronting the per-area
     # GraphQL over the Model Context Protocol. It is an OPT-IN area — not in any

@@ -48,7 +48,7 @@ func TestGuardGatesSendCommand(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sink := &fakeSink{}
-			d := NewDispatcher(fakeResolver{rule: guardedSendRule(`value > 100.0`), found: true}, sink, nil, nil, newFakeMetrics())
+			d := NewDispatcher(fakeResolver{rule: guardedSendRule(`value > 100.0`), found: true}, sink, nil, nil, nil, newFakeMetrics())
 			if out := d.Dispatch(context.Background(), raisedEvt(tc.value)); out != Done {
 				t.Fatalf("outcome = %v, want Done", out)
 			}
@@ -65,7 +65,7 @@ func TestGuardGatesSendCommand(t *testing.T) {
 func TestGuardGatesRaiseButNeverClear(t *testing.T) {
 	// Rising edge, guard false (value 50 ≤ 100): no raise.
 	alarm := &fakeAlarmSink{}
-	d := NewDispatcher(fakeResolver{rule: guardedAlarmRule(`value > 100.0`), found: true}, nil, alarm, nil, newFakeMetrics())
+	d := NewDispatcher(fakeResolver{rule: guardedAlarmRule(`value > 100.0`), found: true}, nil, alarm, nil, nil, newFakeMetrics())
 	if out := d.Dispatch(context.Background(), raisedEvt(f64(50))); out != Done {
 		t.Fatalf("rising/guard-false: outcome = %v, want Done", out)
 	}
@@ -75,7 +75,7 @@ func TestGuardGatesRaiseButNeverClear(t *testing.T) {
 
 	// Rising edge, guard true (value 150 > 100): raise.
 	alarm = &fakeAlarmSink{}
-	d = NewDispatcher(fakeResolver{rule: guardedAlarmRule(`value > 100.0`), found: true}, nil, alarm, nil, newFakeMetrics())
+	d = NewDispatcher(fakeResolver{rule: guardedAlarmRule(`value > 100.0`), found: true}, nil, alarm, nil, nil, newFakeMetrics())
 	if out := d.Dispatch(context.Background(), raisedEvt(f64(150))); out != Done {
 		t.Fatalf("rising/guard-true: outcome = %v, want Done", out)
 	}
@@ -86,7 +86,7 @@ func TestGuardGatesRaiseButNeverClear(t *testing.T) {
 	// Falling edge: the clear ALWAYS dispatches, regardless of the guard (a resolved carries no
 	// value, so the guard `value > 100.0` would be false — proving the clear does not consult it).
 	alarm = &fakeAlarmSink{}
-	d = NewDispatcher(fakeResolver{rule: guardedAlarmRule(`value > 100.0`), found: true}, nil, alarm, nil, newFakeMetrics())
+	d = NewDispatcher(fakeResolver{rule: guardedAlarmRule(`value > 100.0`), found: true}, nil, alarm, nil, nil, newFakeMetrics())
 	resolved := raisedEvt(nil)
 	resolved.Edge = runtime.EdgeResolved
 	if out := d.Dispatch(context.Background(), resolved); out != Done {
@@ -100,7 +100,7 @@ func TestGuardGatesRaiseButNeverClear(t *testing.T) {
 // TestNoGuardIsUnconditional: an action with no guard dispatches exactly as before 9c.
 func TestNoGuardIsUnconditional(t *testing.T) {
 	sink := &fakeSink{}
-	d := NewDispatcher(fakeResolver{rule: guardedSendRule(""), found: true}, sink, nil, nil, newFakeMetrics())
+	d := NewDispatcher(fakeResolver{rule: guardedSendRule(""), found: true}, sink, nil, nil, nil, newFakeMetrics())
 	if out := d.Dispatch(context.Background(), raisedEvt(f64(1))); out != Done {
 		t.Fatalf("outcome = %v, want Done", out)
 	}
@@ -132,7 +132,7 @@ func TestActionContentKeyGuardOnlyWhenSet(t *testing.T) {
 // TestGuardProgramCached: repeated dispatches of the same guarded rule reuse one compiled program
 // (the cache is keyed by guard source), so the second dispatch does not recompile.
 func TestGuardProgramCached(t *testing.T) {
-	d := NewDispatcher(fakeResolver{rule: guardedSendRule(`value > 100.0`), found: true}, &fakeSink{}, nil, nil, newFakeMetrics())
+	d := NewDispatcher(fakeResolver{rule: guardedSendRule(`value > 100.0`), found: true}, &fakeSink{}, nil, nil, nil, newFakeMetrics())
 	ev := raisedEvt(f64(150))
 	_ = d.Dispatch(context.Background(), ev)
 	first, ok := d.guards.Load(`value > 100.0`)

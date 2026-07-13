@@ -903,7 +903,7 @@
       "id": 17,
       "type": "timeseries",
       "title": "Dispatch faults",
-      "description": "Recognized-but-inert actions, derived events whose rule was gone, and events dropped after the redelivery cap (the closest thing to a dead-letter signal). Poison-dropped rising is a REACT-sink outage.",
+      "description": "Recognized-but-inert actions, derived events whose rule was gone, events dropped after the redelivery cap (the closest thing to a dead-letter signal), and connector actions shed at the source for being over a tenant's outbound egress quota (ADR-060 SD-3). Poison-dropped rising is a REACT-sink outage; egress-shed rising is a tenant over its outbound quota (a source shed destroys the action with the shed counter as its only evidence).",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -941,6 +941,15 @@
           },
           "expr": "sum(rate(devicechain_eventprocessing_react_events_poison_dropped_total{namespace=\"$namespace\"}[5m]))",
           "legendFormat": "poison-dropped /s"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (action) (rate(devicechain_eventprocessing_react_connector_egress_shed_total{namespace=\"$namespace\"}[5m]))",
+          "legendFormat": "egress-shed: {{action}}"
         }
       ],
       "fieldConfig": {

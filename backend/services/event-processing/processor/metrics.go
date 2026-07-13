@@ -158,6 +158,7 @@ func (m *detectMetrics) recordSupersededFrontierDropped() {
 type reactMetrics struct {
 	dispatched    *prometheus.CounterVec
 	notEnabled    *prometheus.CounterVec
+	connectorShed *prometheus.CounterVec
 	orphan        prometheus.Counter
 	poisonDropped prometheus.Counter
 }
@@ -172,6 +173,7 @@ func newReactMetrics(ms *core.Microservice) *reactMetrics {
 	return &reactMetrics{
 		dispatched:    ms.NewCounterVec("react_actions_dispatched_total", "REACT actions handed to their sink, by action type (includes idempotent replays).", []string{"action"}),
 		notEnabled:    ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but not yet wired, by action type (raiseAlarm/clearAlarm before slice 6).", []string{"action"}),
+		connectorShed: ms.NewCounterVec("react_connector_egress_shed_total", "Connector dispatch ATTEMPTS (httpCall/publish) shed at the source for being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt: a sibling-failure redelivery may shed then later admit the same action, so this is not a count of permanently-dropped actions.", []string{"action"}),
 		orphan:        ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched).", nil),
 		poisonDropped: ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch).", nil),
 	}
@@ -191,6 +193,15 @@ func (m *reactMetrics) RecordNotEnabled(action string) {
 		return
 	}
 	m.notEnabled.WithLabelValues(action).Inc()
+}
+
+// RecordConnectorShed records one connector action dropped at the source for being over the tenant's
+// outbound egress quota (react.Metrics, ADR-060 SD-3).
+func (m *reactMetrics) RecordConnectorShed(action string) {
+	if m == nil {
+		return
+	}
+	m.connectorShed.WithLabelValues(action).Inc()
 }
 
 // RecordOrphan records one derived event whose rule was gone (react.Metrics).

@@ -62,6 +62,21 @@ const (
 	// They are platform-operator tunable (raise for a genuinely large tenant).
 	DefaultMaxRulesPerTenant    = 500
 	DefaultMaxLiveKeysPerTenant = 1_000_000
+
+	// DefaultOutboundMessagesPerSecond and DefaultOutboundBurst are the platform-default
+	// per-tenant OUTBOUND egress ceiling REACT charges at the SOURCE (ADR-060 SD-3): before
+	// publishing a connector-dispatch (httpCall/publish), the dispatcher charges the tenant's
+	// outbound budget and DROPS the action when over quota, so a runaway rule sheds at the source
+	// rather than flooding the connector-dispatch stream and the downstream outbound-connectors
+	// service. They deliberately MATCH outbound-connectors' egress defaults, so the source Allow-drop
+	// and the sink's bounded Wait meter the same rate — the source (immediate, no smoothing) sheds a
+	// sustained flood first, leaving the sink's egress Wait as the rare defense-in-depth backstop.
+	// Fail-safe per ADR-023: an unset (0) rate/burst defaults to these platform ceilings — NEVER
+	// unlimited; a negative configured value is rejected at Validate (0 means unset and is replaced
+	// by ApplyDefaults, so it is not itself rejected). Per-tenant overrides are
+	// fetched from user-management (the outboundMessagesPerSecond / outboundBurst governance fields).
+	DefaultOutboundMessagesPerSecond = 100
+	DefaultOutboundBurst             = 200
 )
 
 // Messaging subjects this service PRODUCES (ADR-051). Consumed subjects
@@ -129,6 +144,16 @@ type EventProcessingConfiguration struct {
 	// these and exposes it (bounded gauges); slice 6c-2 enforces them.
 	MaxRulesPerTenant    int
 	MaxLiveKeysPerTenant int
+
+	// OutboundMessagesPerSecond and OutboundBurst are the platform-default per-tenant OUTBOUND
+	// egress ceiling REACT charges at the SOURCE (ADR-060 SD-3): the sustained rate and burst of
+	// connector-dispatch publishes (httpCall/publish actions) a tenant may emit before REACT drops
+	// them. Unset (0) defaults to the platform ceilings (DefaultOutboundMessagesPerSecond /
+	// DefaultOutboundBurst) — fail-safe: never unlimited; a non-positive configured value is rejected
+	// at Validate. Per-tenant overrides read from user-management take precedence at runtime; this is
+	// the floor used for every tenant when per-tenant overrides are not wired.
+	OutboundMessagesPerSecond float64
+	OutboundBurst             int
 }
 
 // NewEventProcessingConfiguration creates the default configuration.
@@ -162,6 +187,12 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	if c.MaxLiveKeysPerTenant == 0 {
 		c.MaxLiveKeysPerTenant = DefaultMaxLiveKeysPerTenant
 	}
+	if c.OutboundMessagesPerSecond == 0 {
+		c.OutboundMessagesPerSecond = DefaultOutboundMessagesPerSecond
+	}
+	if c.OutboundBurst == 0 {
+		c.OutboundBurst = DefaultOutboundBurst
+	}
 }
 
 // Validate is the ADR-022 decision-1 validation hook. It rejects a non-positive
@@ -183,6 +214,17 @@ func (c *EventProcessingConfiguration) Validate() error {
 	}
 	if c.MaxLiveKeysPerTenant < 0 {
 		return fmt.Errorf("maxLiveKeysPerTenant must not be negative, got %d", c.MaxLiveKeysPerTenant)
+	}
+	// The outbound egress ceiling fails closed on a NEGATIVE rate/burst (an operator error, not an
+	// unlimited escape hatch), matching the per-tenant-budget precedent above: an unset (0) value is
+	// replaced by the platform ceiling in ApplyDefaults — never unlimited — so 0 cannot reach a live
+	// limiter, and a 0 is not itself rejected (it is indistinguishable from unset). A negative value
+	// is a misconfiguration and rejected.
+	if c.OutboundMessagesPerSecond < 0 {
+		return fmt.Errorf("outboundMessagesPerSecond must not be negative, got %g", c.OutboundMessagesPerSecond)
+	}
+	if c.OutboundBurst < 0 {
+		return fmt.Errorf("outboundBurst must not be negative, got %d", c.OutboundBurst)
 	}
 	return nil
 }
