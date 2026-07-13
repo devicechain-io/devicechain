@@ -72,6 +72,9 @@ existing tools and off-the-shelf device clients work without a special SDK:
 - **Authentication** — native **RS256 JSON Web Tokens** (RFC 7519) with a
   standard **JWKS** endpoint and RFC 7638 key thumbprints for rotation. Device
   credentials are pluggable, including **X.509** certificates and access tokens.
+  user-management also runs a standards-based **OAuth 2.1** authorization server
+  (PKCE, RFC 8414 metadata, RFC 8707 audience-bound tokens) that secures MCP
+  access.
 - **Enterprise SSO (optional)** — an optional [Dex](https://dexidp.io) sidecar
   adds **OIDC / SAML / LDAP** without a heavyweight identity provider per tenant.
 - **Observability** — **Prometheus** metrics, and Kubernetes-standard `/healthz`
@@ -95,14 +98,15 @@ per tenant.
 | Service | Responsibility |
 |---|---|
 | **event-sources** | Inbound device transports. Decodes raw messages and publishes them onto the pipeline. |
-| **device-management** | Devices, device types + versioned device profiles, the typed relationship graph, the alarm engine, and event resolution. |
+| **device-management** | Devices, device types + versioned device profiles, the typed relationship graph, alarm objects (level-state integration), and event resolution. |
 | **event-management** | Persists resolved events to TimescaleDB and serves time-series queries over GraphQL. |
 | **user-management** | Identities, per-tenant memberships, roles, and two-tier JWT issuance / validation (JWKS). |
 | **device-state** | Live last-known-state projection per device (presence, latest location and measurements). |
 | **command-delivery** | Persistent, two-way command dispatch to devices. |
 | **dashboard-management** | Stores tenant dashboard definitions; the embeddable widget packages render live telemetry over them. |
 | **notification-management** | Routes triggered alarms to humans — per-tenant policy over email (SMTP) and webhook, with per-severity escalation. |
-| **event-processing** | The DETECT + REACT pipeline: taps the resolved-events stream, detects conditions over a keyed-streaming core, and dispatches actions (raise-alarm, send-command). |
+| **event-processing** | The DETECT + REACT pipeline and the sole alarm engine: taps the resolved-events stream, detects conditions over a keyed-streaming CEL core, and dispatches actions (raise-alarm, send-command). Rules are authored on the profile as forms or on a visual automation canvas. |
+| **mcp** | An opt-in OAuth 2.1 Resource Server exposing read-only tools (devices, state, telemetry, alarms, commands) to AI agents over the Model Context Protocol, fronting the per-area GraphQL under the caller's own token. |
 | **operator** | A controller-runtime operator reconciling the `Instance` custom resource (an instance's deployment shape). |
 
 ### The backbone
@@ -135,7 +139,10 @@ configuration — keeping cluster bootstrapping out of application code.
 
 Each service loads its configuration into a typed schema and **fails closed**: an
 unknown key, a wrong type, or an invalid value is rejected at startup rather than
-silently ignored.
+silently ignored. Secrets a service must hold (channel credentials, connector
+auth) are kept in a pluggable **secret store** — envelope-encrypted in Postgres
+under an instance root key by default, with external managers (Vault, cloud KMS)
+as drop-in backends — and are referenced by handle rather than stored in the clear.
 
 ## Running locally
 
@@ -238,7 +245,7 @@ backend/    Go monorepo (Go Workspaces)
   core/       shared library — entity, auth, messaging, config, rdb, graphql
   services/   microservices — device-management, user-management, event-management,
               event-sources, device-state, command-delivery, dashboard-management,
-              notification-management, event-processing
+              notification-management, event-processing, mcp
   k8s/        Kubernetes operator (controller-runtime)
   cli/        dcctl — instance bootstrap / destroy and admin tooling
 frontend/   npm workspace — apps/console (React + TypeScript management console)
