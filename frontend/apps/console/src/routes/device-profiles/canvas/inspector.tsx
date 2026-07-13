@@ -339,6 +339,27 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
           </div>
         </div>
       );
+    case 'branch':
+      return (
+        <div className="space-y-4">
+          <FormField label="Label" htmlFor="cfg-branch-name" description="An optional name for this route (authoring only).">
+            <Input id="cfg-branch-name" value={strVal(config.name)} onChange={(e) => set({ name: e.target.value || undefined })} placeholder="only when severe" />
+          </FormField>
+          <FormField
+            label="Only when (CEL)"
+            htmlFor="cfg-branch-when"
+            description="A boolean over the detection: value, hasValue, series. Downstream actions run only when it holds. Cost-gated at compile."
+          >
+            <Textarea id="cfg-branch-when" value={strVal(config.when)} onChange={(e) => set({ when: e.target.value })} placeholder="value > 100.0" />
+          </FormField>
+          <p className="rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
+            Use decimal literals (<span className="font-mono">value &gt; 100.0</span>, not <span className="font-mono">100</span>). <span className="font-mono">value</span> is the
+            triggering reading — it is absent for conditions that carry no scalar (absence, duration, and metric-less or raw-CEL leaves), so guard those
+            with <span className="font-mono">hasValue</span> (e.g. <span className="font-mono">hasValue &amp;&amp; value &gt; 100.0</span>). The branch never blocks an alarm from
+            clearing.
+          </p>
+        </div>
+      );
     case 'action': {
       const kind = strVal(config.action) || 'raiseAlarm';
       return (

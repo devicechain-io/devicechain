@@ -211,6 +211,10 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
       const src = nodes.find((n) => n.id === conn.source);
       const tgt = nodes.find((n) => n.id === conn.target);
       if (!src || !tgt || !conn.sourceHandle || !conn.targetHandle) return false;
+      // Reject a self-loop up front (the branch is the first node with same-typed in+out ports, so
+      // branch:out→branch:in would otherwise pass the port-type check). The server's detectCycle
+      // rejects any cycle authoritatively; this just spares the round-trip for the locally-obvious case.
+      if (conn.source === conn.target) return false;
       const st = portTypeOf((src.data as CanvasNodeData).nodeType, conn.sourceHandle, true);
       const tt = portTypeOf((tgt.data as CanvasNodeData).nodeType, conn.targetHandle, false);
       return st !== null && st === tt;
@@ -226,12 +230,16 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
   const addNode = (type: NodeType) => {
     const id = newId(type);
     const spread = nodes.length;
+    // Lay a new node in its lane by category: source · condition · branch · action, left→right,
+    // matching the DETECT→REACT flow (branch sits between the condition and the action it gates).
+    const cat = NODE_CATALOG[type].category;
+    const x = cat === 'source' ? 40 : cat === 'condition' ? 320 : cat === 'branch' ? 500 : 700;
     setNodes((ns) => [
       ...ns,
       {
         id,
         type: 'dc',
-        position: { x: 320 + (NODE_CATALOG[type].category === 'action' ? 300 : 0), y: 60 + spread * 30 },
+        position: { x, y: 60 + spread * 30 },
         data: { nodeType: type, config: defaultConfig(type, profileToken) } satisfies CanvasNodeData,
       },
     ]);
@@ -323,6 +331,9 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
             {NODE_CATALOG[t].label}
           </Button>
         ))}
+        <Button variant="outline" size="sm" onClick={() => addNode('branch')}>
+          <Plus size={14} /> Branch
+        </Button>
         <Button variant="outline" size="sm" onClick={() => addNode('action')}>
           <Plus size={14} /> Action
         </Button>

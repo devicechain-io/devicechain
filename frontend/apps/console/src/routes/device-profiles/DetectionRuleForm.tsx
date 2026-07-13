@@ -98,6 +98,11 @@ interface ActionRow {
   alarmKey: string;
   command: string;
   payload: string;
+  // The per-action REACT guard (slice 9c) — authored on the canvas (a Branch node), not here. The
+  // form carries it through UNCHANGED so opening a canvas-authored guarded rule in the form and
+  // saving does not silently strip the guard; a guarded row shows a read-only note steering the
+  // author back to the canvas to change it.
+  guard?: string;
 }
 
 // Per-type authoring shape derived from compile.go.
@@ -740,6 +745,12 @@ export function DetectionRuleForm({
                   Remove
                 </Button>
               </div>
+              {a.guard && (
+                <p className="rounded-md border border-dashed bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
+                  Runs only when <span className="font-mono">{a.guard}</span> — a branch condition authored on the Canvas. It is preserved here;
+                  switch to the Canvas to change or remove it.
+                </p>
+              )}
               {a.type === 'raiseAlarm' ? (
                 <FormField
                   label="Alarm key"
@@ -904,14 +915,16 @@ function buildWhen(a: BuildArgs): Record<string, unknown> | undefined {
 }
 
 function buildAction(a: ActionRow): Record<string, unknown> {
+  // Preserve a canvas-authored guard verbatim (the form cannot edit it, but must not drop it).
+  const withGuard = (o: Record<string, unknown>): Record<string, unknown> => (a.guard ? { ...o, guard: a.guard } : o);
   if (a.type === 'sendCommand') {
     const sc: Record<string, unknown> = { command: a.command.trim() };
     if (a.payload.trim()) sc.payload = a.payload;
-    return { type: 'sendCommand', sendCommand: sc };
+    return withGuard({ type: 'sendCommand', sendCommand: sc });
   }
   const ra: Record<string, unknown> = {};
   if (a.alarmKey.trim()) ra.alarmKey = a.alarmKey.trim();
-  return { type: 'raiseAlarm', raiseAlarm: ra };
+  return withGuard({ type: 'raiseAlarm', raiseAlarm: ra });
 }
 
 function numOrZero(s: string): number {
@@ -995,6 +1008,7 @@ function parseDefinition(raw: string): ParsedDefinition | null {
       alarmKey: str(ra.alarmKey),
       command: str(sc.command),
       payload: str(sc.payload),
+      guard: str(act.guard) || undefined,
     };
   });
 

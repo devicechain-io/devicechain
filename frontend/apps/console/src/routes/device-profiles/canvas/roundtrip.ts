@@ -75,6 +75,9 @@ interface WireAction {
   type?: string;
   raiseAlarm?: { alarmKey?: string };
   sendCommand?: { command?: string; payload?: string };
+  // The per-action REACT guard (slice 9c). When present, the synthesis inserts a branch node
+  // carrying it between the condition and this action, so a guarded rule re-opens on the canvas.
+  guard?: string;
 }
 interface WireRule {
   name?: string;
@@ -180,8 +183,9 @@ function actionConfig(a: WireAction): ActionConfig | null {
   return null;
 }
 
-// Layout constants — authoring-only coordinates (the compiler ignores `ui`).
-const COL_X = { source: 40, condition: 320, action: 620 };
+// Layout constants — authoring-only coordinates (the compiler ignores `ui`). A branch lane sits
+// between the condition and the action it gates.
+const COL_X = { source: 40, condition: 320, branch: 500, action: 700 };
 const ACTION_DY = 120;
 
 export interface SynthesisResult {
@@ -228,9 +232,26 @@ export function graphFromDefinition(definition: string, profileToken: string): S
   actions.forEach((a, i) => {
     const cfg = actionConfig(a);
     if (!cfg) return; // an unknown action type is dropped from the layout; publish still uses the stored definition
-    const id = `action-${i}`;
-    nodes.push({ id, type: 'action', config: cfg as unknown as Record<string, unknown>, ui: { x: COL_X.action, y: 120 + i * ACTION_DY } });
-    edges.push({ from: endpoint(condId, 'signal'), to: endpoint(id, 'in') });
+    // Zero-pad the index so action ids sort in list order lexicographically — the server orders a
+    // rule's actions by sorting node ids, so `action-0010` must sort after `action-0002`. Today the
+    // cap is 8 (single digit), but padding mirrors the editor's newId and removes the trap if the
+    // cap ever grows past 9.
+    const suffix = String(i).padStart(4, '0');
+    const id = `action-${suffix}`;
+    const y = 120 + i * ACTION_DY;
+    nodes.push({ id, type: 'action', config: cfg as unknown as Record<string, unknown>, ui: { x: COL_X.action, y } });
+    if (a.guard) {
+      // A guarded action re-opens as condition → branch(guard) → action. The forward lowering
+      // re-composes this exact Action.Guard from the branch predicate, so it round-trips to the
+      // same bytes (a composed `(x) && (y)` guard round-trips as one branch carrying that whole
+      // string, which is faithful — the canvas simply shows it as a single route).
+      const bid = `branch-${suffix}`;
+      nodes.push({ id: bid, type: 'branch', config: { when: a.guard }, ui: { x: COL_X.branch, y } });
+      edges.push({ from: endpoint(condId, 'signal'), to: endpoint(bid, 'in') });
+      edges.push({ from: endpoint(bid, 'out'), to: endpoint(id, 'in') });
+    } else {
+      edges.push({ from: endpoint(condId, 'signal'), to: endpoint(id, 'in') });
+    }
   });
 
   return { graph: { schemaVersion: CANVAS_SCHEMA_VERSION, nodes, edges } };
