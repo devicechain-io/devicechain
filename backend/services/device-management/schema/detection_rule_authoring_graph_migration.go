@@ -17,16 +17,24 @@ import (
 // The migration is frozen against future model changes, so the inline struct declares only the
 // columns this slice adds (AutoMigrate adds the missing column, leaving the rest untouched).
 func NewDetectionRuleAuthoringGraphSchema() *gormigrate.Migration {
+	// Frozen snapshot: gorm.Model + the new column. The name maps to the existing
+	// "detection_rules" table; a typed struct (not a string table name) is passed to the
+	// migrator so both AutoMigrate and the rollback DropColumn resolve the schema — the
+	// established additive-column pattern (see external_id_migration.go).
+	type DetectionRule struct {
+		gorm.Model
+		AuthoringGraph datatypes.JSON
+	}
 	return &gormigrate.Migration{
 		ID: "20260712200000",
 		Migrate: func(tx *gorm.DB) error {
-			type DetectionRule struct {
-				AuthoringGraph datatypes.JSON
-			}
 			return tx.AutoMigrate(&DetectionRule{})
 		},
 		Rollback: func(tx *gorm.DB) error {
-			return tx.Migrator().DropColumn("detection_rules", "authoring_graph")
+			if tx.Migrator().HasColumn(&DetectionRule{}, "AuthoringGraph") {
+				return tx.Migrator().DropColumn(&DetectionRule{}, "AuthoringGraph")
+			}
+			return nil
 		},
 	}
 }
