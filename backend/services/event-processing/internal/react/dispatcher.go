@@ -170,6 +170,14 @@ type ConnectorSink interface {
 // the same detection fails and the whole event redelivers, this connector action re-charges the gate
 // on the re-run (a bounded over-count, capped by the consumer's redelivery cap) — an accepted cost of
 // keeping the gate a pure per-attempt Allow rather than threading dispatch state.
+//
+// SCOPE: the gate (and its resolver cache) is PER-PROCESS. REACT deploys as the DETECT singleton
+// today (one process), so the configured per-tenant ceiling is the effective one. If REACT is later
+// scaled to a queue group (post-GA, ADR-052), N replicas would each hold their own bucket and the
+// effective source ceiling becomes N× the configured value — at which point this gate would need a
+// shared/among-replicas limiter (or a per-replica fraction) to keep matching the single sink-side
+// egress limiter it is sized against. Harmless at the singleton deploy; called out so the caveat is
+// not lost when scale-out lands.
 type ConnectorRateGate interface {
 	Allow(tenant string) bool
 }
@@ -186,9 +194,11 @@ type Metrics interface {
 	// RecordNotEnabled: one action recognized but whose sink is disabled (nil) — raiseAlarm/clearAlarm
 	// before slice 6, or send-command on a deploy without command-delivery configured.
 	RecordNotEnabled(action string)
-	// RecordConnectorShed: one connector action (httpCall/publish) DROPPED at the source because the
-	// tenant is over its outbound egress quota (ADR-060 SD-3). action is the same "httpCall"/"publish"
-	// enum — no per-tenant label (the ADR-023 G.3 cardinality lesson).
+	// RecordConnectorShed: one connector dispatch ATTEMPT (httpCall/publish) shed at the source for
+	// being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt, not per permanently-
+	// dropped action: a sibling-failure redelivery may shed this action on one attempt and admit it on
+	// a later one. action is the same "httpCall"/"publish" enum — no per-tenant label (the ADR-023 G.3
+	// cardinality lesson).
 	RecordConnectorShed(action string)
 }
 
@@ -391,23 +401,27 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			// a redelivery re-evaluates the same guard to the same bit.
 			return Done
 		}
-		// SOURCE-side egress cost-gate (ADR-060 SD-3): charge the tenant's outbound budget BEFORE the
-		// (CEL) payload render and the publish, so an over-quota tenant sheds cheaply at the source
-		// rather than flooding the connector-dispatch stream and the downstream service. A shed DROPS
-		// only this connector action (ack-progress) — it is NOT a Retry (a retry would loop the whole
-		// event and never drain under sustained overload) and NOT a dispatch (do not count it as one).
-		// Charged after the guard (a guarded-out action is a non-effect, not an emission) and only when
-		// a gate is configured; a nil gate leaves metering entirely to the downstream egress limiter.
-		if d.connectorRate != nil && !d.connectorRate.Allow(ev.Tenant) {
-			d.metrics.RecordConnectorShed(kind)
-			return Done
-		}
 		payload, ok := d.renderPayload(ev, a)
 		if !ok {
 			// The payload template failed to build or errored at evaluation (a bug — it passed the
 			// publish cost gate). Fail CLOSED: skip rather than dispatch an empty/partial body or retry
 			// into a wedge (a render error is deterministic for this event, so a retry loops to poison).
 			// renderPayload logs the defect.
+			return Done
+		}
+		// SOURCE-side egress cost-gate (ADR-060 SD-3): charge the tenant's outbound budget immediately
+		// before the publish, so an over-quota tenant sheds at the source rather than flooding the
+		// connector-dispatch stream and the downstream service. A shed DROPS only this connector action
+		// (ack-progress) — it is NOT a Retry (a retry would loop the whole event and never drain under
+		// sustained overload) and NOT a dispatch (do not count it as one). It is charged AFTER the guard
+		// (a guarded-out action is a non-effect, not an emission) and AFTER renderPayload (so only an
+		// action that would TRULY publish consumes a token — a deterministic render failure never burns
+		// budget, keeping the only over-count the bounded sibling-redelivery one documented on
+		// ConnectorRateGate), and only when a gate is configured (a nil gate leaves metering to the
+		// downstream egress limiter). renderPayload is a cached compile + a cost-gated CEL eval, so
+		// charging after it costs a bounded eval, not the network publish the shed actually avoids.
+		if d.connectorRate != nil && !d.connectorRate.Allow(ev.Tenant) {
+			d.metrics.RecordConnectorShed(kind)
 			return Done
 		}
 		req := ConnectorRequest{

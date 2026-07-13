@@ -72,7 +72,8 @@ const (
 	// and the sink's bounded Wait meter the same rate — the source (immediate, no smoothing) sheds a
 	// sustained flood first, leaving the sink's egress Wait as the rare defense-in-depth backstop.
 	// Fail-safe per ADR-023: an unset (0) rate/burst defaults to these platform ceilings — NEVER
-	// unlimited; a non-positive configured value is rejected at Validate. Per-tenant overrides are
+	// unlimited; a negative configured value is rejected at Validate (0 means unset and is replaced
+	// by ApplyDefaults, so it is not itself rejected). Per-tenant overrides are
 	// fetched from user-management (the outboundMessagesPerSecond / outboundBurst governance fields).
 	DefaultOutboundMessagesPerSecond = 100
 	DefaultOutboundBurst             = 200

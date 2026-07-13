@@ -50,12 +50,15 @@ const (
 	// fetchTimeout caps a single background refresh so a stuck authority cannot pin a
 	// refresh goroutine indefinitely.
 	fetchTimeout = 5 * time.Second
-	// maxConcurrentRefreshes bounds how many refreshes run at once. The tenant on a
-	// dispatch is subject-derived and only grammar-validated, not existence-validated,
-	// so a flood of distinct (possibly nonexistent) tenants would otherwise amplify
-	// into one lookup + goroutine per novel value. Capping concurrency keeps
-	// user-management load bounded regardless of that cardinality; over-cap misses
-	// just serve the default and retry later.
+	// maxConcurrentRefreshes bounds how many refreshes run at once. In this service the
+	// charged tenant is strongly validated before the gate is reached — REACT's consumer
+	// requires subject-tenant == payload-tenant == the rule-id tenant prefix, and the gate
+	// fires only after the rule resolves from the durable projection — so the tenant set is
+	// bounded by real tenants with published rules, not arbitrary subject values. The cap is
+	// retained anyway as cheap defense-in-depth (and to keep this resolver a faithful mirror
+	// of the ingest/egress copies, whose upstreams are only grammar-validated): it keeps
+	// user-management load bounded regardless of cardinality; over-cap misses just serve the
+	// default and retry later.
 	maxConcurrentRefreshes = 8
 )
 

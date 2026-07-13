@@ -65,6 +65,15 @@ spec:
           annotations:
             summary: "REACT is dropping un-dispatchable derived events"
             description: "Derived events are being dropped after the redelivery cap — raised alarms or dispatched commands are being lost. A REACT sink (alarm/command) is likely down."
+        - alert: ReactConnectorEgressShedding
+          expr: sum by (action) (rate(devicechain_eventprocessing_react_connector_egress_shed_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "Connector actions are being shed at the source for over-quota egress"
+            description: "REACT is dropping httpCall/publish actions at the source because a tenant is over its outbound egress quota (ADR-060 SD-3) for 15m — a source shed destroys the action (this counter is its only evidence). Expected governance back-pressure, but sustained shedding is likely a runaway/misconfigured rule or a per-tenant outbound limit set too low. Raise the tenant's outboundMessagesPerSecond/outboundBurst if legitimate."
         - alert: DetectTenantOverStateBudget
           expr: |
             max(devicechain_eventprocessing_detect_tenants_over_rule_budget{namespace="{{ $ns }}"}) > 0

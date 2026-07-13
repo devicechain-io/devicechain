@@ -271,6 +271,79 @@ func TestDispatchConnectorSourceGateAdmits(t *testing.T) {
 	}
 }
 
+// TestDispatchConnectorSourceGateShedsPublish proves the gate sheds a PUBLISH action too (not just
+// httpCall) and labels the shed metric with the publish enum — pinning both arms of the action enum
+// the interface promises, so a refactor scoping the gate to an httpCall-only branch is caught.
+func TestDispatchConnectorSourceGateShedsPublish(t *testing.T) {
+	sink := &fakeConnectorSink{}
+	m := newFakeMetrics()
+	gate := &fakeGate{admit: false}
+	rule := publishRule(rules.PublishAction{ConnectorRef: "kafka-main", PayloadTemplate: `'v=' + string(value)`})
+	d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, nil, sink, gate, m)
+
+	if out := d.Dispatch(context.Background(), evt()); out != Done {
+		t.Fatalf("want Done, got %v", out)
+	}
+	if len(sink.got) != 0 {
+		t.Fatalf("an over-quota publish action must not reach the sink, got %d", len(sink.got))
+	}
+	if m.connectorShed["publish"] != 1 {
+		t.Fatalf("publish shed must be counted under the publish label: %+v", m.connectorShed)
+	}
+	if m.connectorShed["httpCall"] != 0 {
+		t.Fatalf("a publish shed must not be mislabeled httpCall: %+v", m.connectorShed)
+	}
+}
+
+// TestDispatchSourceShedDoesNotBlockSiblings proves a source-shed connector action does NOT suppress
+// the OTHER actions of the same detection: a rule with [raiseAlarm, httpCall] under a denying gate
+// still raises the alarm, sheds only the connector action, and acks (Done). This pins the
+// ConnectorRateGate promise that "other actions of the same detection still fire."
+func TestDispatchSourceShedDoesNotBlockSiblings(t *testing.T) {
+	alarm := &fakeAlarmSink{}
+	sink := &fakeConnectorSink{}
+	m := newFakeMetrics()
+	gate := &fakeGate{admit: false}
+	rule := rules.Rule{ID: "acme/p@1/r1", Name: "r", Type: rules.TypeThreshold, Severity: rules.SeverityMajor,
+		When: rules.Condition{Metric: "temperature", Op: rules.OpGt, Threshold: ptrF(30)},
+		Actions: []rules.Action{
+			{Type: rules.ActionRaiseAlarm, RaiseAlarm: &rules.RaiseAlarmAction{AlarmKey: "over-temp"}},
+			{Type: rules.ActionHTTPCall, HTTPCall: &rules.HTTPCallAction{URL: "https://x/y"}},
+		}}
+	d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, alarm, sink, gate, m)
+
+	if out := d.Dispatch(context.Background(), evt()); out != Done {
+		t.Fatalf("want Done (shed sibling must not wedge the event), got %v", out)
+	}
+	if len(alarm.raised) != 1 {
+		t.Fatalf("the raiseAlarm sibling must still fire, got %d", len(alarm.raised))
+	}
+	if len(sink.got) != 0 {
+		t.Fatalf("the shed connector action must not reach the sink, got %d", len(sink.got))
+	}
+	if m.connectorShed["httpCall"] != 1 {
+		t.Fatalf("the connector action must be counted shed: %+v", m.connectorShed)
+	}
+}
+
+// TestDispatchConnectorResolvedEdgeNotCharged proves the gate is not charged on a resolved (falling)
+// edge: a connector action has no falling-edge twin, so it returns before the gate — a refactor that
+// hoisted the gate above the resolved check would wrongly burn budget for falling edges.
+func TestDispatchConnectorResolvedEdgeNotCharged(t *testing.T) {
+	sink := &fakeConnectorSink{}
+	m := newFakeMetrics()
+	gate := &fakeGate{admit: false}
+	d := NewDispatcher(fakeResolver{rule: httpCallRule(rules.HTTPCallAction{URL: "https://x/y"}), found: true}, nil, nil, sink, gate, m)
+	ev := evt()
+	ev.Edge = runtime.EdgeResolved
+	if out := d.Dispatch(context.Background(), ev); out != Done {
+		t.Fatalf("want Done, got %v", out)
+	}
+	if len(gate.charged) != 0 {
+		t.Fatalf("a resolved-edge connector action must not charge the gate, got %+v", gate.charged)
+	}
+}
+
 // TestDispatchConnectorGuardedOutNotCharged proves the gate is charged only for an action that would
 // actually emit: a branch-guarded-out connector action is a non-effect and must NOT consume a token
 // (else a guarded-false action would drain the tenant's egress budget for a dispatch it never makes).

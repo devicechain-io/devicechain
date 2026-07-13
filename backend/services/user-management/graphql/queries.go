@@ -70,9 +70,11 @@ func (r *TenantGovernanceResolver) OutboundBurst() *int32 {
 	return &v
 }
 
-// TenantGovernance returns the ingest governance overrides for the tenant the
-// caller is acting within — the read side of ADR-023 per-tenant limits, consumed
-// by the enforcing service (event-sources) over a service token. Unlike the
+// TenantGovernance returns the governance overrides for the tenant the caller is
+// acting within — the read side of ADR-023 per-tenant limits (both the ingest and
+// the ADR-060 outbound dimensions), consumed by the enforcing services over a
+// service token: event-sources (ingest rate), outbound-connectors (egress rate,
+// sink side), and event-processing (egress rate, REACT source side). Unlike the
 // self-scoped Tenant query it keys off the tenant in *context* (stamped from the
 // caller's access token or, for a service token, the X-DC-Tenant header) rather
 // than a claims field, so a tenant-less service token resolves the header tenant.
