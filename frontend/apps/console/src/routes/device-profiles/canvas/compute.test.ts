@@ -15,10 +15,14 @@ describe('compute node model', () => {
     expect(spec.in).toEqual({});
   });
 
-  it('gives every condition and the branch a value input port', () => {
-    for (const t of ['threshold', 'duration', 'absence', 'aggregate', 'deltaRate', 'repeating', 'correlation', 'branch'] as const) {
+  it('gives every CEL-leaf condition and the branch a value input port', () => {
+    for (const t of ['threshold', 'duration', 'aggregate', 'deltaRate', 'repeating', 'correlation', 'branch'] as const) {
       expect(NODE_CATALOG[t].in.value).toBe('value');
     }
+  });
+
+  it('does NOT give absence a value port — it has no leaf for a computed value to feed', () => {
+    expect(NODE_CATALOG.absence.in.value).toBeUndefined();
   });
 
   it('seeds a fresh compute config with empty name + expr', () => {

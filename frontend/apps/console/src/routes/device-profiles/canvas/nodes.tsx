@@ -47,7 +47,7 @@ const TRACE_STYLE: Record<string, { label: string; badge: string; border: string
 const PORT_COLOR: Record<PortType, string> = {
   stream: '#3b82f6', // blue — the event stream (DETECT)
   signal: '#f59e0b', // amber — a detection signal (DETECT→REACT)
-  value: '#10b981', // green — a computed value (reserved)
+  value: '#10b981', // green — a computed value (compute node → condition/branch value input)
 };
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');

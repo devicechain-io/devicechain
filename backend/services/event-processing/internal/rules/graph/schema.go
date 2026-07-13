@@ -109,8 +109,12 @@ var catalog = map[NodeType]struct {
 		in:  map[string]PortType{"in": PortStream, "value": PortValue},
 		out: map[string]PortType{"signal": PortSignal},
 	}},
+	// Absence has NO leaf predicate (it fires on silence, keyed by timeout) — there is nothing for a
+	// computed value to feed, so it deliberately exposes no `value` input (unlike every other
+	// condition, whose leaf can be raw-CEL). This keeps a compute→absence wire from type-checking into
+	// an unsatisfiable "give this a CEL leaf" diagnostic.
 	NodeAbsence: {catCondition, ports{
-		in:  map[string]PortType{"in": PortStream, "value": PortValue},
+		in:  map[string]PortType{"in": PortStream},
 		out: map[string]PortType{"signal": PortSignal},
 	}},
 	NodeAggregate: {catCondition, ports{

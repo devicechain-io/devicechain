@@ -46,7 +46,9 @@ export const NODE_CATALOG: Record<NodeType, NodeSpec> = {
   source: { category: 'source', label: 'Source', in: {}, out: { out: 'stream' } },
   threshold: { category: 'condition', label: 'Threshold', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
   duration: { category: 'condition', label: 'Duration', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
-  absence: { category: 'condition', label: 'Absence', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  // Absence has no leaf predicate (it fires on silence), so nothing for a compute value to feed — no
+  // `value` input, mirroring the Go catalog.
+  absence: { category: 'condition', label: 'Absence', in: { in: 'stream' }, out: { signal: 'signal' } },
   aggregate: { category: 'condition', label: 'Windowed aggregate', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
   deltaRate: { category: 'condition', label: 'Rate of change', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
   repeating: { category: 'condition', label: 'Repeating', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },

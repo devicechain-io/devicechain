@@ -404,7 +404,7 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
             Wire this into a condition&apos;s or branch&apos;s <span className="font-mono">value</span> port, then reference it by name in that node&apos;s CEL (e.g.{' '}
             <span className="font-mono">tempF &gt; 100.0</span>). It reads the vocabulary of whatever it feeds — the event&apos;s{' '}
             <span className="font-mono">m</span>/<span className="font-mono">attr</span> for a condition leaf, the detection&apos;s{' '}
-            <span className="font-mono">value</span>/<span className="font-mono">series</span> for a branch. Use decimal literals; a computed value can only feed a{' '}
+            <span className="font-mono">value</span>/<span className="font-mono">hasValue</span>/<span className="font-mono">series</span> for a branch. Use decimal literals; a computed value can only feed a{' '}
             <span className="font-mono">CEL</span> predicate, not a structured metric·op·threshold leaf.
           </p>
         </div>
