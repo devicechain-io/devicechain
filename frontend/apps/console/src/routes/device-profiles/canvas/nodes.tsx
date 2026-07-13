@@ -47,7 +47,7 @@ const TRACE_STYLE: Record<string, { label: string; badge: string; border: string
 const PORT_COLOR: Record<PortType, string> = {
   stream: '#3b82f6', // blue — the event stream (DETECT)
   signal: '#f59e0b', // amber — a detection signal (DETECT→REACT)
-  value: '#10b981', // green — a computed value (reserved)
+  value: '#10b981', // green — a computed value (compute node → condition/branch value input)
 };
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
@@ -111,6 +111,8 @@ export function summarize(type: NodeType, config: Record<string, unknown>): stri
       return str(c.when) ? `if ${str(c.when)}` : 'if …';
     case 'action':
       return c.action === 'sendCommand' ? `send ${str(c.command) || '…'}` : `raise alarm ${str(c.alarmKey)}`.trim();
+    case 'compute':
+      return str(c.name) ? `${str(c.name)} = ${str(c.expr) || '…'}` : 'value = …';
   }
 }
 

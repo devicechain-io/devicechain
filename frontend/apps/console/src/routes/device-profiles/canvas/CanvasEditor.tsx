@@ -253,10 +253,11 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
   const addNode = (type: NodeType) => {
     const id = newId(type);
     const spread = nodes.length;
-    // Lay a new node in its lane by category: source · condition · branch · action, left→right,
-    // matching the DETECT→REACT flow (branch sits between the condition and the action it gates).
+    // Lay a new node in its lane by category: source · compute · condition · branch · action,
+    // left→right, matching the DETECT→REACT flow (a compute feeds a condition/branch from the left;
+    // a branch sits between the condition and the action it gates).
     const cat = NODE_CATALOG[type].category;
-    const x = cat === 'source' ? 40 : cat === 'condition' ? 320 : cat === 'branch' ? 500 : 700;
+    const x = cat === 'source' ? 40 : cat === 'compute' ? 180 : cat === 'condition' ? 320 : cat === 'branch' ? 500 : 700;
     setNodes((ns) => [
       ...ns,
       {
@@ -354,6 +355,9 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
             {NODE_CATALOG[t].label}
           </Button>
         ))}
+        <Button variant="outline" size="sm" onClick={() => addNode('compute')}>
+          <Plus size={14} /> Compute
+        </Button>
         <Button variant="outline" size="sm" onClick={() => addNode('branch')}>
           <Plus size={14} /> Branch
         </Button>
