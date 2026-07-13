@@ -24,6 +24,18 @@ type Query {
     # Pure validation — no state is read or written, so it is safe to call repeatedly.
     validateDetectionRules(rules: [DetectionRuleInput!]!): DetectionRuleValidationResult!
 
+    # Compile a visual automation canvas (ADR-053) to its DETECT rule definition — the
+    # server-authoritative graph→schema pass (slice 9a). The graph is the opaque
+    # CanvasDefinition JSON the console editor emits; profileToken scopes it (every Source
+    # node must be profile-scoped to it). It partitions the graph at its condition node,
+    # lowers it through the SAME compiler + cost gate the form builder uses, and returns the
+    # compiled rules.Rule definition (byte-identical to the equivalent form rule) plus any
+    # node-anchored diagnostics. The GA profile-homed canvas authors exactly ONE rule, so a
+    # graph with zero or many condition nodes is rejected with a diagnostic. Pure validation —
+    # no state is read or written; the browser never authors the definition directly. Gated
+    # on device:read.
+    compileCanvas(graph: String!, profileToken: String!): CanvasCompileResult!
+
     # Per-rule health for a device profile's ACTIVE published version (ADR-051 slice 7b):
     # for each live DETECT rule, its status, last-fired time, and lifetime fire count. It
     # joins the durable rule projection (the engine's live rule set) with the RuleStat firing
@@ -98,6 +110,33 @@ type DetectionEvent {
 type EventProcessingInfo {
     # The functional area this service serves ("event-processing").
     functionalArea: String!
+}
+
+# The outcome of compiling one automation canvas (ADR-053 slice 9a).
+type CanvasCompileResult {
+    # True only if the graph partitioned, lowered to exactly one rule, and passed the cost
+    # gate. A save/publish proceeds only when this is true.
+    ok: Boolean!
+    # The compiled rules.Rule JSON the console stores on DetectionRule.Definition — null when
+    # !ok. It decodes to the same rules.Rule as the equivalent form-authored rule and
+    # re-marshals to identical canonical bytes (§3.2); the two surfaces' verbatim stored
+    # strings may differ in key order, since nothing compares rule bytes.
+    definition: String
+    # The compiled predicate's static worst-case cost (the ADR-023 gate cleared) — null when !ok.
+    estimatedCost: Int
+    # One entry per problem, each anchored to the offending node (null nodeId ⇒ a graph-level
+    # problem). Empty when ok.
+    diagnostics: [CanvasDiagnostic!]!
+}
+
+# A single canvas compile diagnostic the console surfaces on its node.
+type CanvasDiagnostic {
+    # The offending node's id, or null for a graph-level problem (a cycle, a dangling edge).
+    nodeId: String
+    # The severity ("error" today; "warning" reserved).
+    severity: String!
+    # Human-readable, console-surfaceable message.
+    message: String!
 }
 
 # A single detection rule handed to the validation gate: the authoring token (used to
