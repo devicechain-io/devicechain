@@ -67,6 +67,10 @@ input PreviewRuleInput {
     # RFC3339 occurred-time window bounds.
     start: String!
     end: String!
+    # When true, each firing carries a per-node trace (slice 9e) reconstructing what each canvas node
+    # did for that firing — for the console's canvas overlay. Off by default (the trace is only useful
+    # to the graph editor); ignored for a ruleDefinition draft, which has no canvas node map.
+    trace: Boolean
 }
 
 # The outcome of a replay preview.
@@ -94,6 +98,25 @@ type PreviewFiring {
     series: String!
     # "raised" (rising edge) or "resolved" (falling edge).
     signal: String!
+    # The per-node trace for this firing (slice 9e) — what each canvas node did, source→condition→
+    # (branch…)→action. Empty unless the request set input.trace and the draft is a canvas graph. A
+    # branch feeding two actions appears once per action path (its disposition is identical across them).
+    trace: [NodeTraceStep!]!
+}
+
+# One canvas node's disposition for a single firing (slice 9e node trace).
+type NodeTraceStep {
+    # The canvas node id this step is about (matches a node in the request's graph).
+    nodeId: String!
+    # The node category: "source" | "condition" | "branch" | "action".
+    kind: String!
+    # What the node did for this firing: "delivered" (source); "raised"/"resolved" (condition, and
+    # "raised" for a raiseAlarm that fired); "passed"/"blocked"/"skipped" (branch); "sent"/"cleared"/
+    # "inert"/"skipped" (action).
+    disposition: String!
+    # Optional human context (why a branch blocked, why an action was inert) — null when the
+    # disposition is self-explanatory.
+    detail: String
 }
 
 # Coverage counters for a preview run.

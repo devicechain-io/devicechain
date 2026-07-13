@@ -67,12 +67,18 @@ type TimeRange struct {
 }
 
 // Firing is one edge the draft rule would have emitted: a RAISE or a RESOLVE for a series at a time.
-// It carries no triggering-event ids — per-event provenance is the slice-9e node-trace concern; this
-// is the firing TIMELINE.
+// It carries the triggering scalar (Value/HasValue) so the slice-9e node trace can reconstruct — off
+// the engine — how each REACT branch/action would have gated on this firing (the same value/series a
+// guard sees); it carries no triggering-event id (a firing is a state edge, not always one event).
 type Firing struct {
 	OccurredAt time.Time
 	Series     string
 	Raise      bool // true = RAISE (rising edge), false = RESOLVE (falling edge)
+	// Value is the scalar the edge carried (a threshold-crossing sample, a folded deltaRate/aggregate
+	// value); HasValue is false for a value-less edge (a silence/absence fire, a resolve, a metric-less
+	// leaf), matching runtime.DerivedEvent.Value nil-ness so a guard reads it identically.
+	Value    float64
+	HasValue bool
 }
 
 // Stats are the preview's coverage counters.
@@ -238,7 +244,7 @@ func appendFirings(dst []Firing, dets []core.Detection, tr TimeRange) []Firing {
 		if d.At.Before(tr.Start) || d.At.After(tr.End) {
 			continue
 		}
-		dst = append(dst, Firing{OccurredAt: d.At, Series: d.Series, Raise: d.Edge == core.EdgeRaised})
+		dst = append(dst, Firing{OccurredAt: d.At, Series: d.Series, Raise: d.Edge == core.EdgeRaised, Value: d.Value, HasValue: d.HasValue})
 	}
 	return dst
 }
