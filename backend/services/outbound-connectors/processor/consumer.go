@@ -41,6 +41,12 @@ type DispatchConsumer struct {
 	executor *Executor
 	metrics  *dispatchMetrics
 
+	// rate is the per-tenant outbound egress limiter (ADR-060 SD-3). nil disables egress rate
+	// limiting (every dispatch admitted; the bounded worker pool + per-send timeout still bound
+	// egress). waitBudget is how long a worker blocks for a token before shedding.
+	rate       *core.TenantRateLimiter
+	waitBudget time.Duration
+
 	backlog int
 
 	procCtx    context.Context
@@ -53,17 +59,21 @@ type DispatchConsumer struct {
 }
 
 // NewDispatchConsumer builds the consumer over its dispatch reader, its dead-letter writer, and the
-// executor. workers is the outbound concurrency ceiling; backlog is the reader→worker hand-off
-// buffer. A nil Microservice (unit tests) leaves metrics nil (every recorder is nil-safe).
+// executor. rate is the per-tenant egress limiter (nil disables egress rate limiting); waitBudget is
+// how long a worker blocks for a token before shedding. workers is the outbound concurrency ceiling;
+// backlog is the reader→worker hand-off buffer. A nil Microservice (unit tests) leaves metrics nil
+// (every recorder is nil-safe).
 func NewDispatchConsumer(ms *core.Microservice, reader messaging.MessageReader, dead messaging.MessageWriter,
-	executor *Executor, workers, backlog int) *DispatchConsumer {
+	executor *Executor, rate *core.TenantRateLimiter, waitBudget time.Duration, workers, backlog int) *DispatchConsumer {
 	return &DispatchConsumer{
-		reader:   reader,
-		dead:     dead,
-		executor: executor,
-		metrics:  newDispatchMetrics(ms),
-		backlog:  backlog,
-		workers:  workers,
+		reader:     reader,
+		dead:       dead,
+		executor:   executor,
+		metrics:    newDispatchMetrics(ms),
+		rate:       rate,
+		waitBudget: waitBudget,
+		backlog:    backlog,
+		workers:    workers,
 		// A non-nil default so a shutdown-aware wait (deadLetter's retry backoff) never dereferences a
 		// nil context before Start runs; Start replaces it with the cancelable process context.
 		procCtx: context.Background(),
@@ -150,6 +160,20 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 		c.ack(msg)
 		return
 	}
+	// Grammar-validate the subject tenant (ADR-042) before it seeds a rate-limiter bucket / becomes a
+	// dead-letter subject segment. TenantContextFromSubject only checks non-emptiness; without this an
+	// oversized or malformed subject segment (reachable only with broker write access, the same threat
+	// the payload/subject backstop below defends) could seed an unbounded-cardinality set of limiter
+	// buckets keyed by multi-KB strings, or a segment the dead-letter writer would reject. A malformed
+	// tenant is poison — a redelivery cannot fix the subject — so drop it (mirrors the event-sources
+	// ingest guard).
+	if err := core.ValidateToken(tenant); err != nil {
+		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
+			Msgf("Dropping connector dispatch whose subject tenant is not a valid token (subject %q)", msg.Subject)
+		c.metrics.recordOutcome(actionUnknown, outcomeInvalid)
+		c.ack(msg)
+		return
+	}
 	req, err := connectorwire.UnmarshalConnectorDispatchRequest(msg.Value)
 	if err != nil {
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
@@ -177,8 +201,49 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 		return
 	}
 
-	res := c.executor.Execute(tctx, req)
 	action := actionLabel(req.Kind)
+
+	// Per-tenant egress rate gate (ADR-060 SD-3), applied BEFORE the expensive secret-resolve + send.
+	// The worker blocks up to waitBudget for a token: a brief burst just over the tenant's rate is
+	// smoothed into pacing and admitted; a dispatch that cannot get a token within the budget is a
+	// tenant sustained over quota (a brief burst would have been admitted) and is SHED to the
+	// dead-letter subject. It never naks for rate, so rate-limiting can never churn the redelivery
+	// (poison) cap; and because reaching the budget means sustained-over-quota, a redelivery would not
+	// help either. The wait runs on ctx (a background context, per the worker) bounded by waitBudget,
+	// so it aborts on its own deadline; a shed consumes no token, so it does not deepen the deficit.
+	//
+	// This blocks a worker, so a flooding tenant can occupy workers for up to waitBudget each, adding a
+	// bounded (≤ waitBudget) delivery latency to other tenants whose dispatches wait behind them — a
+	// deliberate, bounded trade for not churning the poison cap. It self-limits: a tenant far over quota
+	// hits the budget and sheds fast (freeing the worker) rather than blocking the full budget, and the
+	// per-tenant bounded durable stream is the real buffer. The PRIMARY throttle is at the source
+	// (REACT charges the cost-gate at publish, C3b.3), so egress sheds should be the rare exception.
+	if c.rate != nil {
+		// Derive the wait from procCtx (cancelled on Stop) so a rolling-update drain aborts an
+		// in-progress rate wait rather than blocking Stop for the budget: a wait interrupted by
+		// shutdown ABANDONS the message unacked (it redelivers after restart for a fresh admission),
+		// rather than dead-lettering a message that was only waiting on rate. A budget timeout (not a
+		// shutdown) is a genuine sustained-over-quota shed.
+		waitCtx, cancel := context.WithTimeout(c.procCtx, c.waitBudget)
+		err := c.rate.Wait(waitCtx, tenant)
+		cancel()
+		if err != nil {
+			if c.procCtx.Err() != nil {
+				log.Info().Str("rule", req.RuleID).Str("tenant", tenant).
+					Msg("Abandoning connector dispatch rate-wait on shutdown; it will redeliver on restart.")
+				return
+			}
+			// Debug, not Warn: by design a rising rate_limited COUNT (the metric) is the operator
+			// signal; a per-message warn would flood the log for exactly the sustained-over-quota
+			// tenant this fires on.
+			log.Debug().Str("rule", req.RuleID).Str("tenant", tenant).Str("action", action).
+				Msg("Connector dispatch shed: tenant over its outbound egress rate beyond the smoothing budget; dead-lettering.")
+			c.deadLetter(tctx, msg, action, outcomeRateLimited)
+			return
+		}
+	}
+
+	res := c.executor.Execute(tctx, req)
 	switch {
 	case res.err == nil:
 		c.metrics.recordOutcome(action, outcomeSent)
@@ -209,6 +274,11 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 // delivery, where a plain nak could not redeliver (see deadLetter).
 const deadLetterWriteAttempts = 3
 
+// headerDeadReason is the message-header key stamped on a dead-lettered dispatch recording WHY it was
+// dead-lettered (the outcome* value: rate_limited / dead / unsupported / invalid), so a rate-shed
+// (healthy, replayable) is distinguishable from genuine poison on the shared terminal subject.
+const headerDeadReason = "Dc-Dead-Reason"
+
 // deadLetter writes the original message verbatim to the terminal dead-letter subject
 // ({instance}.{tenant}.connector-dispatch.dead), then acks the original so it stops redelivering.
 // tctx already carries the tenant, which the writer requires to scope the subject (fail-closed on
@@ -222,7 +292,12 @@ const deadLetterWriteAttempts = 3
 // times in-process, and if it still fails we record an explicit, alertable LOSS (never the false
 // "will retry") so an operator sees a dispatch that could be neither delivered nor dead-lettered.
 func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Message, action, outcome string) {
-	dead := messaging.Message{Value: msg.Value}.WithCorrelationID(msg.CorrelationID())
+	// Stamp the disposition on the dead-lettered message (not just the metric/log) so an operator or a
+	// future replay tool can tell a healthy-but-rate-shed dispatch (replayable) apart from genuine
+	// poison (unsupported/invalid/permanently-failed) sharing this terminal subject. The header rides
+	// through the NATS writer (it propagates non-correlation headers).
+	dead := messaging.Message{Value: msg.Value, Headers: map[string]string{headerDeadReason: outcome}}.
+		WithCorrelationID(msg.CorrelationID())
 	finalDelivery := msg.NumDelivered >= messaging.MaxDeliver
 
 	var err error

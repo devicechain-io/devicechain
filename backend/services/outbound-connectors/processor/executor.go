@@ -13,6 +13,11 @@ import (
 	"github.com/devicechain-io/dc-microservice/httpsink"
 )
 
+// secretResolveTimeout bounds the credential resolve so a hung secret store cannot pin a dispatch
+// past the consumer AckWait (see the wait+resolve+send budget in config.MaxEgressWaitBudgetMs).
+// Generous, since a resolve is normally a cached/fast envelope-decrypt.
+const secretResolveTimeout = 5 * time.Second
+
 // execOutcome is the executor's classification of one dispatch, driving the consumer's
 // ack/nak/dead-letter decision and the bounded metric. err is nil only for a successful send.
 type execOutcome struct {
@@ -93,7 +98,13 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 	// dead-letters after the cap — either way, never sent without the intended auth.
 	var secret string
 	if h.SecretRef != "" {
-		resolved, err := e.secrets.Resolve(ctx, req.Tenant, h.SecretRef)
+		// Bound the resolve with its own timeout: it is the one otherwise-unbounded term inside the
+		// wait+resolve+send in-flight budget the egress limiter sizes against AckWait, so an indefinitely
+		// hung secret store (DB) must not pin the message past AckWait into a redelivery. Normally the
+		// resolve is a cached/fast envelope-decrypt, so this ceiling never trips in practice.
+		resolveCtx, cancelResolve := context.WithTimeout(ctx, secretResolveTimeout)
+		resolved, err := e.secrets.Resolve(resolveCtx, req.Tenant, h.SecretRef)
+		cancelResolve()
 		if err != nil {
 			// Never log the handle's value; the ref name is a non-sensitive handle.
 			return execOutcome{outcome: outcomeRetry, retryable: true,
@@ -102,22 +113,24 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		secret = resolved
 	}
 
-	// Clamp the authored timeout at the SHARED ceiling (connectorwire.MaxTimeoutMs), re-applying at
-	// execution the same bound the publish gate applied — defense-in-depth against a forged/corrupt
-	// stored config that bypassed the gate, exactly like the URL/method re-checks above. This also
-	// guards against an out-of-range value overflowing time.Duration into a negative (instantly-
-	// expired) deadline, which would otherwise misclassify a never-attempted send as a transient
-	// retry. Bounding below the consumer AckWait keeps a slow-but-succeeding send from being
-	// redelivered underneath the worker (a duplicate call + a spurious dead-letter).
-	timeout := e.defaultTimeout
+	// Clamp the EFFECTIVE per-send timeout at the SHARED ceiling (connectorwire.MaxTimeoutMs),
+	// whether it came from the action (h.TimeoutMs) OR the configured fallback (e.defaultTimeout).
+	// Clamping BOTH — not just the authored value — is what makes the egress wait-budget/AckWait
+	// invariant hold: the config validates `waitBudget + MaxTimeoutMs < AckWait`, so an operator's
+	// over-large sendTimeoutMs (or a forged authored value) must not put a send in flight longer than
+	// the ceiling that bound was sized against, or the message could be redelivered underneath the
+	// worker (a duplicate call + a spurious dead-letter). Working in integer ms and clamping before the
+	// time.Duration conversion also avoids an out-of-range value overflowing Duration into a negative
+	// (instantly-expired) deadline that would misclassify a never-attempted send as a transient retry.
+	maxMs := int64(connectorwire.MaxTimeoutMs)
+	effMs := e.defaultTimeout.Milliseconds()
 	if h.TimeoutMs > 0 {
-		ms := h.TimeoutMs
-		if ms > connectorwire.MaxTimeoutMs {
-			ms = connectorwire.MaxTimeoutMs
-		}
-		timeout = time.Duration(ms) * time.Millisecond
+		effMs = int64(h.TimeoutMs)
 	}
-	sendCtx, cancel := context.WithTimeout(ctx, timeout)
+	if effMs <= 0 || effMs > maxMs {
+		effMs = maxMs
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, time.Duration(effMs)*time.Millisecond)
 	defer cancel()
 
 	err := httpsink.Send(sendCtx, e.client, httpsink.Request{

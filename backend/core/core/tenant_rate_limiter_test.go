@@ -4,6 +4,7 @@
 package core
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -29,6 +30,42 @@ func TestTenantRateLimiter_BurstThenDeny(t *testing.T) {
 	assert.True(t, l.Allow("acme"), "2nd within burst")
 	assert.True(t, l.Allow("acme"), "3rd within burst")
 	assert.False(t, l.Allow("acme"), "4th exceeds burst")
+}
+
+// Wait admits the burst immediately, then — with the bucket drained and the next
+// token far in the future — sheds fast when the required delay exceeds the wait
+// budget (ctx deadline), consuming nothing. Uses the real clock (not the frozen
+// l.now) because Wait blocks against the limiter's own wall clock.
+func TestTenantRateLimiter_WaitAdmitsThenSheds(t *testing.T) {
+	l := NewTenantRateLimiter(constLimit(0.001, 1)) // 1 burst token; next token ~1000s away
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	assert.NoError(t, l.Wait(ctx, "acme"), "burst token admitted immediately")
+	cancel()
+
+	start := time.Now()
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Millisecond)
+	err := l.Wait(ctx, "acme")
+	cancel()
+	assert.Error(t, err, "over-budget wait sheds")
+	assert.Less(t, time.Since(start), time.Second, "shed fast rather than blocking to the far-off token")
+}
+
+// Wait blocks for a token that frees WITHIN the budget, then admits — the smoothing
+// behavior that lets a brief burst just over the rate pace out instead of shedding.
+func TestTenantRateLimiter_WaitBlocksThenAdmits(t *testing.T) {
+	l := NewTenantRateLimiter(constLimit(100, 1)) // one token every 10ms
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	assert.NoError(t, l.Wait(ctx, "acme"), "burst token admitted immediately")
+	cancel()
+
+	start := time.Now()
+	ctx, cancel = context.WithTimeout(context.Background(), 500*time.Millisecond)
+	err := l.Wait(ctx, "acme")
+	cancel()
+	assert.NoError(t, err, "a token refilled within the budget")
+	assert.GreaterOrEqual(t, time.Since(start), 5*time.Millisecond, "waited for the refilled token")
 }
 
 // Each tenant has an independent bucket: one tenant draining its allowance does

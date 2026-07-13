@@ -11,14 +11,23 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/connectorwire"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // newTestConsumer builds a consumer whose executor sends to an httptest server (or nil for cases
-// that never execute). ms is nil so metrics are nil-safe no-ops.
+// that never execute), with egress rate limiting OFF (nil limiter). ms is nil so metrics are
+// nil-safe no-ops.
 func newTestConsumer(dead messaging.MessageWriter, store *fakeSecretStore) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(store), 5*time.Second)
-	return NewDispatchConsumer(nil, &fakeReader{}, dead, e, 1, 1)
+	return NewDispatchConsumer(nil, &fakeReader{}, dead, e, nil, 5*time.Second, 1, 1)
+}
+
+// newTestConsumerWithRate builds a consumer with an egress rate limiter and wait budget, to exercise
+// the SD-3 rate gate.
+func newTestConsumerWithRate(dead messaging.MessageWriter, store *fakeSecretStore, rate *core.TenantRateLimiter, waitBudget time.Duration) *DispatchConsumer {
+	e := NewExecutor(NewSecretResolver(store), 5*time.Second)
+	return NewDispatchConsumer(nil, &fakeReader{}, dead, e, rate, waitBudget, 1, 1)
 }
 
 func wireMsg(t *testing.T, subject string, numDelivered int, req *connectorwire.ConnectorDispatchRequest, ack messaging.Acknowledger) messaging.Message {
@@ -189,5 +198,96 @@ func TestHandleDeadLetterWriteFailureAtCapAcksAsLoss(t *testing.T) {
 	c.handle(context.Background(), msg)
 	if !ack.acked || ack.naked {
 		t.Fatalf("at the cap a failed dead-letter write must ack-as-loss (nak would strand it), got acked=%v naked=%v", ack.acked, ack.naked)
+	}
+}
+
+// TestHandleMalformedTenantDropped drops (as poison) a dispatch whose subject tenant is present but
+// not a valid token, before it can seed a rate-limiter bucket keyed by the malformed value.
+func TestHandleMalformedTenantDropped(t *testing.T) {
+	dead := &fakeWriter{}
+	c := newTestConsumer(dead, &fakeSecretStore{})
+	ack := &fakeAck{}
+	// A subject whose tenant segment contains an illegal token character.
+	c.handle(context.Background(), messaging.NewConsumedMessage("inst.bad tenant!.connector-dispatch", []byte("{}"), 1, nil, ack))
+	if !ack.acked || ack.naked {
+		t.Fatalf("a malformed-tenant dispatch must be dropped (acked), got acked=%v naked=%v", ack.acked, ack.naked)
+	}
+	if len(dead.written()) != 0 {
+		t.Fatalf("a malformed-tenant poison drop must not dead-letter")
+	}
+}
+
+// TestHandleRateAdmitSends admits a dispatch under a generous rate ceiling and delivers it (the
+// limiter present but never the bottleneck).
+func TestHandleRateAdmitSends(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
+	defer srv.Close()
+	rl := core.NewTenantRateLimiter(func(string) (float64, int) { return 1000, 1000 })
+	dead := &fakeWriter{}
+	c := newTestConsumerWithRate(dead, &fakeSecretStore{}, rl, 5*time.Second)
+	ack := &fakeAck{}
+	msg := wireMsg(t, dispatchSubject, 1, &connectorwire.ConnectorDispatchRequest{
+		Kind: connectorwire.ConnectorKindHTTPCall, Tenant: "acme",
+		HTTPCall: &connectorwire.HTTPCallDispatch{URL: srv.URL}}, ack)
+
+	c.handle(context.Background(), msg)
+	if !ack.acked || ack.naked {
+		t.Fatalf("an admitted dispatch must send + ack, got acked=%v naked=%v", ack.acked, ack.naked)
+	}
+	if len(dead.written()) != 0 {
+		t.Fatalf("an admitted dispatch must not dead-letter")
+	}
+}
+
+// TestHandleRateShedDeadLetters sheds a dispatch whose tenant cannot get a token within the wait
+// budget: it is dead-lettered (not naked, so no poison-cap churn) and acked. The rate gate returns
+// before the executor, so no outbound send occurs (the URL is unreachable, proving it is never
+// dialed).
+func TestHandleRateShedDeadLetters(t *testing.T) {
+	// 1 burst token, next token ~1000s away; drain the burst so the dispatch under test cannot get one.
+	rl := core.NewTenantRateLimiter(func(string) (float64, int) { return 0.001, 1 })
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	_ = rl.Wait(ctx, "acme")
+	cancel()
+
+	dead := &fakeWriter{}
+	c := newTestConsumerWithRate(dead, &fakeSecretStore{}, rl, 40*time.Millisecond)
+	ack := &fakeAck{}
+	msg := wireMsg(t, dispatchSubject, 1, &connectorwire.ConnectorDispatchRequest{
+		Kind: connectorwire.ConnectorKindHTTPCall, Tenant: "acme",
+		HTTPCall: &connectorwire.HTTPCallDispatch{URL: "http://127.0.0.1:0/never-dialed"}}, ack)
+
+	start := time.Now()
+	c.handle(context.Background(), msg)
+	if time.Since(start) > time.Second {
+		t.Fatalf("shed should be fast (bounded by the wait budget), took %v", time.Since(start))
+	}
+	if !ack.acked || ack.naked {
+		t.Fatalf("a rate-shed dispatch must be acked after dead-letter (never naked, to avoid poison-cap churn), got acked=%v naked=%v", ack.acked, ack.naked)
+	}
+	if len(dead.written()) != 1 {
+		t.Fatalf("a rate-shed dispatch must be written to the dead-letter subject once, got %d", len(dead.written()))
+	}
+}
+
+// TestHandleRateShedBelowCapNaksOnDeadLetterWriteFailure confirms the shed reuses the terminal
+// dead-letter path: below the redelivery cap, a dead-letter WRITE failure naks for a later retry
+// (rather than stranding the shed message).
+func TestHandleRateShedBelowCapNaksOnDeadLetterWriteFailure(t *testing.T) {
+	rl := core.NewTenantRateLimiter(func(string) (float64, int) { return 0.001, 1 })
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	_ = rl.Wait(ctx, "acme")
+	cancel()
+
+	dead := &fakeWriter{fail: context.DeadlineExceeded}
+	c := newTestConsumerWithRate(dead, &fakeSecretStore{}, rl, 40*time.Millisecond)
+	ack := &fakeAck{}
+	msg := wireMsg(t, dispatchSubject, 1, &connectorwire.ConnectorDispatchRequest{
+		Kind: connectorwire.ConnectorKindHTTPCall, Tenant: "acme",
+		HTTPCall: &connectorwire.HTTPCallDispatch{URL: "http://127.0.0.1:0/never-dialed"}}, ack)
+
+	c.handle(context.Background(), msg)
+	if !ack.naked || ack.acked {
+		t.Fatalf("below the cap a failed dead-letter write on a shed must nak to retry, got acked=%v naked=%v", ack.acked, ack.naked)
 	}
 }

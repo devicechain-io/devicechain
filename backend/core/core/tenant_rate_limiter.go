@@ -4,6 +4,7 @@
 package core
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -79,12 +80,49 @@ func NewTenantRateLimiter(resolve func(tenant string) (ratePerSecond float64, bu
 // override applied or cleared upstream takes effect on the next event.
 func (l *TenantRateLimiter) Allow(tenant string) bool {
 	rps, burst := l.resolve(tenant)
-	limit := rate.Limit(rps)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := l.now()
+	lim := l.tuneBucketLocked(tenant, rate.Limit(rps), burst, now)
+	return lim.AllowN(now, 1)
+}
+
+// Wait blocks until a token is available for the tenant, then consumes it, or
+// returns ctx's error (consuming nothing) if one does not free before ctx is done.
+// It generalizes Allow for a caller that can afford to WAIT a bounded time for
+// admission rather than shed immediately: the outbound-connectors egress limiter
+// waits up to a small budget so a brief burst just over a tenant's rate is smoothed
+// into pacing rather than shed, while a tenant sustained over its rate exceeds the
+// budget and is shed (ctx deadline exceeded). ctx SHOULD therefore carry a deadline
+// bounding the wait — without one, Wait can block until a token frees. The tenant's
+// ceiling is (re)resolved and the bucket retuned in place exactly like Allow. A
+// denied (deadline-exceeded) call consumes no token, so a shed send does not deepen
+// the tenant's deficit.
+//
+// The bucket's limiter is looked up under the lock and the actual wait happens
+// AFTER releasing it, so one tenant's wait never blocks another tenant's admission
+// on the shared mutex. If a concurrent sweep evicts the bucket mid-wait the wait
+// still completes correctly against the extracted limiter (a detached limiter is
+// still valid); a stale retune is benign.
+func (l *TenantRateLimiter) Wait(ctx context.Context, tenant string) error {
+	rps, burst := l.resolve(tenant)
+
+	l.mu.Lock()
+	lim := l.tuneBucketLocked(tenant, rate.Limit(rps), burst, l.now())
+	l.mu.Unlock()
+
+	return lim.Wait(ctx)
+}
+
+// tuneBucketLocked returns the tenant's bucket limiter, creating it (at limit/burst)
+// or retuning an existing one in place when its resolved ceiling has changed, and
+// stamps lastSeen. It also runs the amortized idle sweep. The caller must hold l.mu.
+// Retuning with the injected clock keeps a frozen-clock test and the admission that
+// follows in agreement on "now"; the bucket keeps its accumulated tokens across a
+// retune.
+func (l *TenantRateLimiter) tuneBucketLocked(tenant string, limit rate.Limit, burst int, now time.Time) *rate.Limiter {
 	l.sweepLocked(now)
 
 	b := l.buckets[tenant]
@@ -92,13 +130,11 @@ func (l *TenantRateLimiter) Allow(tenant string) bool {
 		b = &tenantBucket{limiter: rate.NewLimiter(limit, burst)}
 		l.buckets[tenant] = b
 	} else if b.limiter.Limit() != limit || b.limiter.Burst() != burst {
-		// Retune in place using the injected clock so a frozen-clock test and the
-		// AllowN below agree on "now"; the bucket keeps its accumulated tokens.
 		b.limiter.SetLimitAt(now, limit)
 		b.limiter.SetBurstAt(now, burst)
 	}
 	b.lastSeen = now
-	return b.limiter.AllowN(now, 1)
+	return b.limiter
 }
 
 // sweepLocked evicts buckets untouched for longer than idleTTL. It runs at most
