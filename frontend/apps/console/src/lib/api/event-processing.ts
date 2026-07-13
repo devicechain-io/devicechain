@@ -85,6 +85,8 @@ export async function compileCanvas(graph: string, profileToken: string): Promis
 // come back as ok:false + diagnostics; an unpublished profile / aged-out window / scan cap comes
 // back as a degraded (but non-error) result.
 
+// The trace sub-selection (slice 9e) — what each canvas node did for a firing, for the canvas
+// overlay. Requested only when input.trace is set; empty on every firing otherwise.
 const PREVIEW_RULE = graphql(`
   query PreviewRule($input: PreviewRuleInput!) {
     previewRule(input: $input) {
@@ -93,6 +95,12 @@ const PREVIEW_RULE = graphql(`
         occurredAt
         series
         signal
+        trace {
+          nodeId
+          kind
+          disposition
+          detail
+        }
       }
       stats {
         eventsScanned
@@ -112,16 +120,19 @@ const PREVIEW_RULE = graphql(`
 
 export type PreviewResult = PreviewRuleQuery['previewRule'];
 export type PreviewFiring = PreviewResult['firings'][number];
+export type NodeTraceStep = PreviewFiring['trace'][number];
 
 // previewRule runs a draft (a canvas graph OR a rules.Rule definition) against history over an
 // RFC3339 window. It throws only on transport/auth failure; a compile rejection or a degraded run
-// comes back in the result. Exactly one of graph/ruleDefinition should be set.
+// comes back in the result. Exactly one of graph/ruleDefinition should be set. Set trace to attach a
+// per-firing node trace (canvas graph only — a ruleDefinition draft has no canvas node map).
 export async function previewRule(input: {
   graph?: string;
   ruleDefinition?: string;
   profileToken: string;
   start: string;
   end: string;
+  trace?: boolean;
 }): Promise<PreviewResult> {
   const data = await gql('event-processing', PREVIEW_RULE, { input });
   return data.previewRule;

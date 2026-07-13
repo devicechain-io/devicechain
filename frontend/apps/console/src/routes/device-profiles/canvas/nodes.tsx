@@ -17,14 +17,32 @@ import {
   type PortType,
 } from './model';
 
-// The data an editor node carries: its canvas type, opaque config, and the latest compile
-// diagnostic (an error message from compileCanvas, anchored to this node).
+// The data an editor node carries: its canvas type, opaque config, the latest compile diagnostic (an
+// error message from compileCanvas, anchored to this node), and — while a firing is selected in the
+// preview panel — that firing's trace disposition for this node (slice 9e overlay).
 export interface CanvasNodeData {
   nodeType: NodeType;
   config: Record<string, unknown>;
   diagnostic?: string;
+  traceDisposition?: string;
+  traceDetail?: string;
   [key: string]: unknown;
 }
+
+// TRACE_STYLE maps a node's per-firing disposition (slice 9e) to its overlay badge label + colors.
+// The palette reads at a glance: green = the signal flowed (passed/raised/sent/cleared/delivered),
+// muted = it stopped or was inert (blocked/skipped/inert), and a distinct emerald for a resolve.
+const TRACE_STYLE: Record<string, { label: string; badge: string; border: string }> = {
+  delivered: { label: 'delivered', badge: 'bg-blue-500/15 text-blue-700 dark:text-blue-400', border: 'border-blue-500' },
+  raised: { label: 'raised', badge: 'bg-destructive/15 text-destructive', border: 'border-destructive' },
+  resolved: { label: 'resolved', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400', border: 'border-emerald-500' },
+  passed: { label: 'passed', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400', border: 'border-emerald-500' },
+  blocked: { label: 'blocked', badge: 'bg-amber-500/15 text-amber-700 dark:text-amber-400', border: 'border-amber-500' },
+  skipped: { label: 'skipped', badge: 'bg-muted text-muted-foreground', border: 'border-muted-foreground/40' },
+  sent: { label: 'sent', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400', border: 'border-emerald-500' },
+  cleared: { label: 'cleared', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400', border: 'border-emerald-500' },
+  inert: { label: 'inert', badge: 'bg-muted text-muted-foreground', border: 'border-muted-foreground/40' },
+};
 
 const PORT_COLOR: Record<PortType, string> = {
   stream: '#3b82f6', // blue — the event stream (DETECT)
@@ -102,14 +120,18 @@ export const CanvasNodeView = memo(function CanvasNodeView({ data, selected }: N
   const spec = NODE_CATALOG[d.nodeType];
   const name = str(d.config.name);
   const hasError = !!d.diagnostic;
+  // The slice-9e trace overlay: when a firing is selected in the preview panel, this node carries its
+  // disposition for that firing. An error border still wins (a broken node is more urgent than a
+  // trace), but the trace border otherwise takes precedence over plain selection.
+  const traceStyle = d.traceDisposition ? TRACE_STYLE[d.traceDisposition] : undefined;
 
   return (
     <div
       className={[
         'min-w-44 max-w-64 rounded-md border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors',
-        hasError ? 'border-destructive' : selected ? 'border-primary' : 'border-border',
+        hasError ? 'border-destructive' : traceStyle ? traceStyle.border : selected ? 'border-primary' : 'border-border',
       ].join(' ')}
-      title={d.diagnostic ?? undefined}
+      title={d.traceDetail ?? d.diagnostic ?? undefined}
     >
       {/* Target (input) handles on the left. */}
       {Object.entries(spec.in).map(([port, ptype], i) => (
@@ -134,7 +156,11 @@ export const CanvasNodeView = memo(function CanvasNodeView({ data, selected }: N
 
       <div className="flex items-center justify-between gap-2">
         <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{spec.label}</span>
-        {hasError && <span className="h-1.5 w-1.5 rounded-full bg-destructive" />}
+        {traceStyle ? (
+          <span className={['rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide', traceStyle.badge].join(' ')}>{traceStyle.label}</span>
+        ) : (
+          hasError && <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+        )}
       </div>
       {name && <div className="truncate text-sm font-medium">{name}</div>}
       <div className="mt-0.5 truncate text-xs text-muted-foreground">{summarize(d.nodeType, d.config)}</div>

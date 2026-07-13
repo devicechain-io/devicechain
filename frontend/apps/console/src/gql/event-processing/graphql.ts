@@ -42,7 +42,7 @@ export type PreviewRuleQueryVariables = Exact<{
 }>;
 
 
-export type PreviewRuleQuery = { previewRule: { ok: boolean, degraded: string | null, firings: Array<{ occurredAt: string, series: string, signal: string }>, stats: { eventsScanned: number, firingCount: number, evalErrors: number, wallMs: number }, diagnostics: Array<{ nodeId: string | null, severity: string, message: string }> } };
+export type PreviewRuleQuery = { previewRule: { ok: boolean, degraded: string | null, firings: Array<{ occurredAt: string, series: string, signal: string, trace: Array<{ nodeId: string, kind: string, disposition: string, detail: string | null }> }>, stats: { eventsScanned: number, firingCount: number, evalErrors: number, wallMs: number }, diagnostics: Array<{ nodeId: string | null, severity: string, message: string }> } };
 
 export type RuleHealthQueryVariables = Exact<{
   profileToken: string;
@@ -111,6 +111,12 @@ export const PreviewRuleDocument = new TypedDocumentString(`
       occurredAt
       series
       signal
+      trace {
+        nodeId
+        kind
+        disposition
+        detail
+      }
     }
     stats {
       eventsScanned

@@ -37,7 +37,7 @@ import {
   type DetectionRule,
   type DetectionRuleCreateRequest,
 } from '@/lib/api/device-management';
-import { compileCanvas, type CanvasCompileResult } from '@/lib/api/event-processing';
+import { compileCanvas, type CanvasCompileResult, type NodeTraceStep } from '@/lib/api/event-processing';
 import {
   CONDITION_TYPES,
   NODE_CATALOG,
@@ -139,6 +139,9 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
   const [nodes, setNodes, onNodesChange] = useNodesState(seed.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(seed.edges);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The per-node trace of the firing an author selected in the preview panel (slice 9e); null = no
+  // overlay. Painted onto the nodes below.
+  const [trace, setTrace] = useState<NodeTraceStep[] | null>(null);
 
   const [token, setToken] = useState(entity?.token ?? '');
   const [enabled, setEnabled] = useState(entity?.enabled ?? true);
@@ -206,6 +209,25 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
       clearTimeout(timer);
     };
   }, [key, profileToken, setNodes]);
+
+  // Paint the selected firing's per-node trace (slice 9e) onto the canvas: each node carries its
+  // disposition for that firing (source delivered · condition raised/resolved · branch passed/blocked ·
+  // action raised/sent/cleared/skipped/inert), for an at-a-glance "what did THIS event do" overlay.
+  // Clears when trace is null (the panel deselected, ran again, or the graph was edited). The trace
+  // fields are excluded from structuralKey, so painting never arms a recompile — same discipline as
+  // the diagnostic paint above.
+  useEffect(() => {
+    const byNode = new Map<string, { disposition: string; detail?: string }>();
+    if (trace) for (const s of trace) byNode.set(s.nodeId, { disposition: s.disposition, detail: s.detail ?? undefined });
+    setNodes((ns) =>
+      ns.map((n) => {
+        const t = byNode.get(n.id);
+        const d = n.data as CanvasNodeData;
+        if (d.traceDisposition === t?.disposition && d.traceDetail === t?.detail) return n;
+        return { ...n, data: { ...d, traceDisposition: t?.disposition, traceDetail: t?.detail } };
+      }),
+    );
+  }, [trace, setNodes]);
 
   const isValidConnection = useCallback(
     (conn: Connection | Edge): boolean => {
@@ -411,6 +433,7 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
         profileToken={profileToken}
         structuralKey={key}
         notReadyReason={!fresh ? 'Waiting for the compiler…' : !result?.ok ? 'Fix the compile errors before previewing' : null}
+        onTrace={setTrace}
       />
     </div>
   );
