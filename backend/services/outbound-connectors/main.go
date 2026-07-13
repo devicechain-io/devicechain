@@ -130,7 +130,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 
 	resolver := processor.NewSecretResolver(SecretStore)
-	executor := processor.NewExecutor(resolver, time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)
+	executor := processor.NewExecutor(resolver, Api, time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)
 	Consumer = processor.NewDispatchConsumer(Microservice, reader, dead, executor,
 		RateLimiter, time.Duration(Configuration.EgressWaitBudgetMs)*time.Millisecond,
 		Configuration.MaxConcurrentSends, Configuration.DispatchBacklog)
@@ -190,6 +190,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// per-tenant overrides are not wired (never unlimited).
 	RateLimiter = buildEgressLimiter()
 
+	// Build the connector store (ADR-060 C4a) before the NATS manager: createNatsComponents binds it
+	// into the executor (publish resolves a ConnectorRef to its latest published version), and the
+	// GraphQL providers below reuse the same instance.
+	Api = model.NewApi(RdbManager, SecretStore)
+
 	// Create and initialize the nats manager (which invokes createNatsComponents to build the
 	// consumer). The secret store must already exist so the executor's resolver can bind it.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
@@ -198,10 +203,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	}
 
 	// The GraphQL surface carries the service identity plus the per-tenant, versioned
-	// Connector CRUD (ADR-060 slice C4). The api is injected as a provider so the resolvers
-	// resolve it (and its secret store, for hasSecret) from the request context. Auth
-	// degrades instead of failing startup (ADR-022 decision 3).
-	Api = model.NewApi(RdbManager, SecretStore)
+	// Connector CRUD (ADR-060 slice C4). The api (built above, before the NATS manager) is
+	// injected as a provider so the resolvers resolve it (and its secret store, for
+	// hasSecret) from the request context. Auth degrades instead of failing startup (ADR-022
+	// decision 3).
 	providers := map[gqlcore.ContextKey]interface{}{
 		gqlcore.ContextRdbKey: RdbManager,
 		gqlcore.ContextApiKey: Api,

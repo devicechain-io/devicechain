@@ -19,14 +19,14 @@ import (
 // that never execute), with egress rate limiting OFF (nil limiter). ms is nil so metrics are
 // nil-safe no-ops.
 func newTestConsumer(dead messaging.MessageWriter, store *fakeSecretStore) *DispatchConsumer {
-	e := NewExecutor(NewSecretResolver(store), 5*time.Second)
+	e := NewExecutor(NewSecretResolver(store), nil, 5*time.Second)
 	return NewDispatchConsumer(nil, &fakeReader{}, dead, e, nil, 5*time.Second, 1, 1)
 }
 
 // newTestConsumerWithRate builds a consumer with an egress rate limiter and wait budget, to exercise
 // the SD-3 rate gate.
 func newTestConsumerWithRate(dead messaging.MessageWriter, store *fakeSecretStore, rate *core.TenantRateLimiter, waitBudget time.Duration) *DispatchConsumer {
-	e := NewExecutor(NewSecretResolver(store), 5*time.Second)
+	e := NewExecutor(NewSecretResolver(store), nil, 5*time.Second)
 	return NewDispatchConsumer(nil, &fakeReader{}, dead, e, rate, waitBudget, 1, 1)
 }
 

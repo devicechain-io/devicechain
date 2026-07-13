@@ -5,12 +5,18 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/connectorwire"
 	"github.com/devicechain-io/dc-microservice/httpsink"
+	"github.com/devicechain-io/dc-microservice/secrets"
+	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
+	"github.com/devicechain-io/dc-outbound-connectors/model"
+	"github.com/devicechain-io/dc-outbound-connectors/publish"
+	"gorm.io/gorm"
 )
 
 // secretResolveTimeout bounds the credential resolve so a hung secret store cannot pin a dispatch
@@ -33,21 +39,29 @@ type execOutcome struct {
 
 // Executor performs the bounded outbound send for one connector-dispatch request (ADR-060 §4). It
 // owns the credential resolution (fail-closed) and the shared SSRF hardening (core/httpsink); the
-// consumer owns the ack/nak/dead-letter lifecycle around it. In this slice (C3) it executes httpCall
-// only; publish (the Bento tier + Connector entity, slice C4b) is recognized but returns a terminal
-// unsupported outcome so a publish dispatch is dead-lettered visibly, never silently dropped.
+// consumer owns the ack/nak/dead-letter lifecycle around it. It executes both httpCall (core/httpsink)
+// and publish (resolve the versioned Connector → generate the Bento output → bounded single-message
+// send via the publish sink, slice C4b).
 type Executor struct {
 	secrets *SecretResolver
+	// connectors resolves a publish action's ConnectorRef to its latest published version (the
+	// dispatch-side read of the C4a entity). nil disables publish (a publish dispatch is then terminal
+	// unsupported) — used by httpCall-only tests.
+	connectors *model.Api
 	// client is the HTTP client for delivery; nil uses httpsink.DefaultClient. A field so a test can
 	// inject a client pointed at an httptest server. The per-send context deadline bounds each call.
 	client *http.Client
+	// send performs the bounded Bento single-message publish. A field so a test can inject a fake sink
+	// (the real one dials a broker); NewExecutor always sets it to publish.Send.
+	send func(ctx context.Context, outputYAML string, payload []byte, metadata map[string]string) error
 	// defaultTimeout bounds a send whose action specified no timeout.
 	defaultTimeout time.Duration
 }
 
-// NewExecutor builds the executor over a secret resolver and the fallback send timeout.
-func NewExecutor(resolver *SecretResolver, defaultTimeout time.Duration) *Executor {
-	return &Executor{secrets: resolver, defaultTimeout: defaultTimeout}
+// NewExecutor builds the executor over a secret resolver, the connector store (for publish
+// resolution), and the fallback send timeout. A nil connectors store disables publish execution.
+func NewExecutor(resolver *SecretResolver, connectors *model.Api, defaultTimeout time.Duration) *Executor {
+	return &Executor{secrets: resolver, connectors: connectors, defaultTimeout: defaultTimeout, send: publish.Send}
 }
 
 // Execute performs the dispatch and classifies the result. The request has already passed
@@ -60,11 +74,7 @@ func (e *Executor) Execute(ctx context.Context, req *connectorwire.ConnectorDisp
 	case connectorwire.ConnectorKindHTTPCall:
 		return e.executeHTTPCall(ctx, req)
 	case connectorwire.ConnectorKindPublish:
-		// Recognized but not executable until the Bento tier + Connector entity land (slice C4b). This
-		// is terminal for this build (a redelivery cannot make it executable) — dead-letter it so an
-		// operator sees a publish dispatched at a version this service cannot run, never silently drop.
-		return execOutcome{outcome: outcomeUnsupported, retryable: false,
-			err: fmt.Errorf("publish is not executable in this build (Bento tier is slice C4b)")}
+		return e.executePublish(ctx, req)
 	default:
 		// connectorwire.Validate already rejected unknown kinds; this is unreachable defense-in-depth.
 		return execOutcome{outcome: outcomeInvalid, retryable: false,
@@ -113,24 +123,7 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		secret = resolved
 	}
 
-	// Clamp the EFFECTIVE per-send timeout at the SHARED ceiling (connectorwire.MaxTimeoutMs),
-	// whether it came from the action (h.TimeoutMs) OR the configured fallback (e.defaultTimeout).
-	// Clamping BOTH — not just the authored value — is what makes the egress wait-budget/AckWait
-	// invariant hold: the config validates `waitBudget + MaxTimeoutMs < AckWait`, so an operator's
-	// over-large sendTimeoutMs (or a forged authored value) must not put a send in flight longer than
-	// the ceiling that bound was sized against, or the message could be redelivered underneath the
-	// worker (a duplicate call + a spurious dead-letter). Working in integer ms and clamping before the
-	// time.Duration conversion also avoids an out-of-range value overflowing Duration into a negative
-	// (instantly-expired) deadline that would misclassify a never-attempted send as a transient retry.
-	maxMs := int64(connectorwire.MaxTimeoutMs)
-	effMs := e.defaultTimeout.Milliseconds()
-	if h.TimeoutMs > 0 {
-		effMs = int64(h.TimeoutMs)
-	}
-	if effMs <= 0 || effMs > maxMs {
-		effMs = maxMs
-	}
-	sendCtx, cancel := context.WithTimeout(ctx, time.Duration(effMs)*time.Millisecond)
+	sendCtx, cancel := context.WithTimeout(ctx, e.effectiveSendTimeout(h.TimeoutMs))
 	defer cancel()
 
 	err := httpsink.Send(sendCtx, e.client, httpsink.Request{
@@ -146,6 +139,113 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		// briefly down. httpsink already suppresses the response body when a secret is presented, so
 		// this error text cannot leak the credential.
 		return execOutcome{outcome: outcomeRetry, retryable: true, err: err}
+	}
+	return execOutcome{outcome: outcomeSent, retryable: false}
+}
+
+// effectiveSendTimeout clamps the EFFECTIVE per-send timeout at the SHARED ceiling
+// (connectorwire.MaxTimeoutMs), whether it came from the action (authoredMs) OR the configured
+// fallback (e.defaultTimeout). Clamping BOTH — not just the authored value — is what makes the
+// egress wait-budget/AckWait invariant hold: the config validates `waitBudget + MaxTimeoutMs <
+// AckWait`, so an operator's over-large sendTimeoutMs (or a forged authored value) must not put a
+// send in flight longer than the ceiling that bound was sized against, or the message could be
+// redelivered underneath the worker (a duplicate call + a spurious dead-letter). Working in integer
+// ms and clamping before the time.Duration conversion also avoids an out-of-range value overflowing
+// Duration into a negative (instantly-expired) deadline that would misclassify a never-attempted
+// send as a transient retry.
+func (e *Executor) effectiveSendTimeout(authoredMs int) time.Duration {
+	maxMs := int64(connectorwire.MaxTimeoutMs)
+	effMs := e.defaultTimeout.Milliseconds()
+	if authoredMs > 0 {
+		effMs = int64(authoredMs)
+	}
+	if effMs <= 0 || effMs > maxMs {
+		effMs = maxMs
+	}
+	return time.Duration(effMs) * time.Millisecond
+}
+
+// executePublish delivers a Kind==publish dispatch through the versioned Connector its ConnectorRef
+// names (ADR-060 Tier 2): resolve the connector's latest PUBLISHED version (the draft is never
+// dispatched), resolve its optional credential, generate the Bento output config, and perform a
+// bounded single-message send. A dangling/unpublished ConnectorRef, an unsupported type, or a
+// malformed stored config is TERMINAL (a redelivery cannot fix it) → dead-lettered visibly. A
+// transient secret-store or send failure is RETRYABLE (bounded by the redelivery cap).
+func (e *Executor) executePublish(ctx context.Context, req *connectorwire.ConnectorDispatchRequest) execOutcome {
+	p := req.Publish // present: connectorwire.Validate required it for this kind
+	if e.connectors == nil {
+		// No connector store wired (httpCall-only deployment/test): publish is not executable. Terminal.
+		return execOutcome{outcome: outcomeUnsupported, retryable: false,
+			err: fmt.Errorf("publish is not executable: no connector store configured")}
+	}
+
+	// Resolve the ConnectorRef to its latest published version (tenant-confined via ctx). A
+	// since-deleted connector or a draft-only (never-published) one is terminal — a redelivery cannot
+	// make it resolvable/published; the author must fix the rule or publish the connector.
+	version, err := e.connectors.LatestPublishedConnector(ctx, p.ConnectorRef)
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return execOutcome{outcome: outcomeInvalid, retryable: false,
+			err: fmt.Errorf("connector %q not found", p.ConnectorRef)}
+	case errors.Is(err, model.ErrNotPublished):
+		return execOutcome{outcome: outcomeInvalid, retryable: false,
+			err: fmt.Errorf("connector %q has no published version", p.ConnectorRef)}
+	case err != nil:
+		// An unexpected store error (DB blip) is transient — retry rather than dead-letter a connector
+		// that may resolve on redelivery.
+		return execOutcome{outcome: outcomeRetry, retryable: true,
+			err: fmt.Errorf("resolve connector %q: %w", p.ConnectorRef, err)}
+	}
+
+	// Resolve the connector's credential fail-closed. The secret is OPTIONAL (an anonymous broker has
+	// none), so a "not found" means no credential — proceed unauthenticated by design. A transient
+	// store error is retryable (never proceed on an unknown credential state). The handle is keyed by
+	// the parent connector's immutable id (rename-safe), matching the write path.
+	var secret string
+	resolveCtx, cancelResolve := context.WithTimeout(ctx, secretResolveTimeout)
+	resolved, err := e.secrets.Resolve(resolveCtx, req.Tenant, model.ConnectorSecretName(version.ConnectorID))
+	cancelResolve()
+	switch {
+	case errors.Is(err, secrets.ErrSecretNotFound):
+		secret = "" // anonymous connector — no credential configured
+	case err != nil:
+		return execOutcome{outcome: outcomeRetry, retryable: true,
+			err: fmt.Errorf("resolve connector %q credential: %w", p.ConnectorRef, err)}
+	default:
+		secret = resolved
+	}
+
+	// Generate the Bento output config from the published {type, config} + secret. connectorspec
+	// re-validates the stored config (defense in depth vs a forged/corrupt row). An unsupported type
+	// (a valid vocabulary member whose generator has not shipped) or a malformed config is terminal.
+	outputYAML, err := connectorspec.BuildOutput(version.Type, version.Config, secret)
+	if err != nil {
+		// Both are terminal, but keep the ops-board metric vocabulary honest (slice 8): an
+		// unsupported TYPE (a valid vocabulary member whose generator has not shipped) is
+		// outcomeUnsupported; a malformed/forged stored CONFIG of a supported type is outcomeInvalid.
+		outcome := outcomeInvalid
+		if errors.Is(err, connectorspec.ErrUnsupportedType) {
+			outcome = outcomeUnsupported
+		}
+		return execOutcome{outcome: outcome, retryable: false,
+			err: fmt.Errorf("build output for connector %q (type %q): %w", p.ConnectorRef, version.Type, err)}
+	}
+
+	sendCtx, cancel := context.WithTimeout(ctx, e.effectiveSendTimeout(p.TimeoutMs))
+	defer cancel()
+	// The idempotency key rides as message metadata for outputs that can dedup on it; at-least-once
+	// redelivery is otherwise the contract (content-addressed idempotency upstream).
+	if err := e.send(sendCtx, outputYAML, []byte(req.Payload), map[string]string{"idempotency_key": req.IdempotencyKey}); err != nil {
+		// A terminal config/stream error (publish.ErrPublishConfig — a config that generated but Bento
+		// cannot build/run) is dead-lettered, not retried: a redelivery cannot fix it. Any other error
+		// is a transient DELIVERY failure (broker briefly down) → retry, bounded by the redelivery cap.
+		// The error is a delivery/connection error, not the payload or config (which are never logged).
+		if errors.Is(err, publish.ErrPublishConfig) {
+			return execOutcome{outcome: outcomeInvalid, retryable: false,
+				err: fmt.Errorf("publish to connector %q: %w", p.ConnectorRef, err)}
+		}
+		return execOutcome{outcome: outcomeRetry, retryable: true,
+			err: fmt.Errorf("publish to connector %q: %w", p.ConnectorRef, err)}
 	}
 	return execOutcome{outcome: outcomeSent, retryable: false}
 }

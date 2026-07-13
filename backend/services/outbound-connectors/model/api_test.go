@@ -62,7 +62,7 @@ func secretValue(t *testing.T, api *Api, ctx context.Context, token string) stri
 	return string(value)
 }
 
-const mqttConfig = `{"url":"tcp://broker:1883","topic":"alerts"}`
+const mqttConfig = `{"urls":["tcp://broker:1883"],"topic":"alerts"}`
 
 // TestConnectorCrud exercises create -> read -> update -> delete.
 func TestConnectorCrud(t *testing.T) {
@@ -358,6 +358,40 @@ func TestOptimisticConcurrency(t *testing.T) {
 	found, err := api.ConnectorsByToken(ctx, []string{"c"})
 	require.NoError(t, err)
 	assert.Equal(t, "kafka", found[0].Type)
+}
+
+// TestLatestPublishedConnector verifies the dispatch-side read returns the MAX published
+// version (not the first/last inserted) and distinguishes not-found from not-published.
+func TestLatestPublishedConnector(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	// Nonexistent connector.
+	_, err := api.LatestPublishedConnector(ctx, "ghost")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+
+	// Draft-only connector: exists but never published.
+	_, err = api.CreateConnector(ctx, &ConnectorCreateRequest{
+		Token: "c", Type: string(ConnectorTypeMQTT), Config: mqttConfig,
+	})
+	require.NoError(t, err)
+	_, err = api.LatestPublishedConnector(ctx, "c")
+	require.ErrorIs(t, err, ErrNotPublished)
+
+	// Publish v1 (mqtt), edit to kafka, publish v2 → latest must be v2 (kafka).
+	_, err = api.PublishConnector(ctx, "c", nil, nil, "alice", nil)
+	require.NoError(t, err)
+	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
+		Token: "c", Type: string(ConnectorTypeKafka), Config: `{"brokers":["k:9092"],"topic":"t"}`,
+	}, nil)
+	require.NoError(t, err)
+	_, err = api.PublishConnector(ctx, "c", nil, nil, "bob", nil)
+	require.NoError(t, err)
+
+	latest, err := api.LatestPublishedConnector(ctx, "c")
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), latest.Version)
+	assert.Equal(t, "kafka", latest.Type)
 }
 
 // TestTenantIsolation confirms a connector in one tenant is invisible to another —

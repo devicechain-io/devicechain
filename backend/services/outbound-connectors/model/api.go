@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -69,14 +70,33 @@ func configJSON(raw string) (datatypes.JSON, error) {
 	return datatypes.JSON(b), nil
 }
 
-// CreateConnector inserts a new connector (draft). The type must be in the registered
-// vocabulary and the config a well-formed JSON object; a non-empty request.Secret is
-// sealed into the secret store under the connector's handle (never a column).
-func (api *Api) CreateConnector(ctx context.Context, request *ConnectorCreateRequest) (*Connector, error) {
+// validateRequest validates a create/update request's type + config and returns the config
+// as a column value. The type must be in the registered vocabulary and the config a
+// well-formed JSON object; additionally, for a type whose Bento generator has shipped, the
+// per-type field shape is validated here (fail early at write, not only at dispatch). A
+// vocabulary type without a shipped generator yet is accepted as JSON-object-only and
+// dead-letters at dispatch until its generator lands (slice C4c) — never silently.
+func (api *Api) validateRequest(request *ConnectorCreateRequest) (datatypes.JSON, error) {
 	if err := validateConnectorType(request.Type); err != nil {
 		return nil, err
 	}
 	cfg, err := configJSON(request.Config)
+	if err != nil {
+		return nil, err
+	}
+	if connectorspec.Supported(request.Type) {
+		if err := connectorspec.ValidateConfig(request.Type, cfg); err != nil {
+			return nil, err
+		}
+	}
+	return cfg, nil
+}
+
+// CreateConnector inserts a new connector (draft). The type must be in the registered
+// vocabulary and the config a well-formed JSON object; a non-empty request.Secret is
+// sealed into the secret store under the connector's handle (never a column).
+func (api *Api) CreateConnector(ctx context.Context, request *ConnectorCreateRequest) (*Connector, error) {
+	cfg, err := api.validateRequest(request)
 	if err != nil {
 		return nil, err
 	}
@@ -122,10 +142,7 @@ func (api *Api) CreateConnector(ctx context.Context, request *ConnectorCreateReq
 // the caller was handed by the `updatedAt` query field, so a value that round-trips
 // unchanged always matches.
 func (api *Api) UpdateConnector(ctx context.Context, token string, request *ConnectorCreateRequest, expectedUpdatedAt *string) (*Connector, error) {
-	if err := validateConnectorType(request.Type); err != nil {
-		return nil, err
-	}
-	cfg, err := configJSON(request.Config)
+	cfg, err := api.validateRequest(request)
 	if err != nil {
 		return nil, err
 	}
@@ -294,6 +311,41 @@ func (api *Api) RollbackConnector(ctx context.Context, token string, version int
 		return nil, err
 	}
 	return conn, nil
+}
+
+// ErrNotPublished is returned by LatestPublishedConnector when the connector exists but
+// has no published version yet — a rule may reference a draft-only connector. Dispatch
+// treats it as terminal (a redelivery cannot make a draft published); the author must
+// publish the connector.
+var ErrNotPublished = errors.New("connector has no published version")
+
+// LatestPublishedConnector resolves a connector by token to its most recent PUBLISHED
+// version (the draft is work-in-progress and never dispatched). It is the dispatch-side
+// read: given a rule's ConnectorRef, return the {type, config} + the parent connector id
+// (the secret's key). Returns gorm.ErrRecordNotFound if the connector does not exist, or
+// ErrNotPublished if it exists but was never published. Tenant-confined via the scope
+// callback on both reads.
+func (api *Api) LatestPublishedConnector(ctx context.Context, token string) (*ConnectorVersion, error) {
+	matches, err := api.ConnectorsByToken(ctx, []string{token})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	conn := matches[0]
+
+	var version ConnectorVersion
+	err = api.RDB.DB(ctx).
+		Where("connector_id = ?", conn.ID).
+		Order("version DESC").First(&version).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotPublished
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &version, nil
 }
 
 // ConnectorVersions lists a connector's published versions, newest first. Returns

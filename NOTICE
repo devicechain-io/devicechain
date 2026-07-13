@@ -6,3 +6,19 @@ This product includes software developed by the DeviceChain Authors
 
 Licensed under the Apache License, Version 2.0. See the LICENSE file
 in the root of this repository for the full license text.
+
+-------------------------------------------------------------------------------
+
+Third-party software
+
+The outbound-connectors service (ADR-060) embeds Bento to deliver outbound
+`publish` connector actions:
+
+  Bento — https://github.com/warpstreamlabs/bento
+  Copyright (c) WarpStream Labs, Inc. and the Bento contributors
+  Licensed under the MIT License.
+
+Bento and its transitively-registered output components are the MIT-licensed
+warpstreamlabs/bento fork (not the relicensed redpanda-data/connect). The MIT
+License is compatible with the Apache License, Version 2.0, under which
+DeviceChain is distributed.
