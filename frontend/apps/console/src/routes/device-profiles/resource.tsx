@@ -27,7 +27,7 @@ import {
 import { DefinitionsPanel } from './DefinitionsPanel';
 import { VersionsPanel } from './VersionsPanel';
 import { MetricDefinitionForm, CommandDefinitionForm } from './DefinitionForms';
-import { DetectionRuleForm } from './DetectionRuleForm';
+import { DetectionRuleAuthoring } from './DetectionRuleAuthoring';
 import { RuleHealthPanel } from './RuleHealthPanel';
 import {
   listDeviceProfiles,
@@ -223,16 +223,17 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
         <DefinitionsPanel
           profileToken={p.token}
           singular="detection rule"
-          description="The DETECT rules that raise alarms and send commands off this profile's telemetry (ADR-057)."
+          description="The DETECT rules that raise alarms and send commands off this profile's telemetry (ADR-057). Author linearly in the Form, or visually on the Canvas (ADR-053) — both compile to the same rule."
           load={listDetectionRules}
           remove={deleteDetectionRule}
           removeConfirm={(d) => `Delete detection rule “${d.token}”?`}
+          drawerClassName="sm:max-w-4xl"
           columns={[
             { header: 'Name', cell: (d) => <span className="font-medium">{d.name || d.token}</span> },
             { header: 'Type', cell: (d) => ruleTypeLabel(d.definition) },
             { header: 'Enabled', cell: (d) => <StatusBadge enabled={d.enabled} /> },
           ]}
-          renderForm={(e, onDone) => <DetectionRuleForm profileToken={p.token} entity={e} onDone={onDone} />}
+          renderForm={(e, onDone) => <DetectionRuleAuthoring profileToken={p.token} entity={e} onDone={onDone} />}
         />
       ),
     },

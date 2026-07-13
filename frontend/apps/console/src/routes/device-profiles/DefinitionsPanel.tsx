@@ -48,6 +48,7 @@ export function DefinitionsPanel<TDef extends { id: string; token: string }>({
   renderForm,
   remove,
   removeConfirm,
+  drawerClassName,
 }: {
   profileToken: string;
   /** Lowercase singular, e.g. "metric". */
@@ -59,6 +60,8 @@ export function DefinitionsPanel<TDef extends { id: string; token: string }>({
   renderForm: (entity: TDef | undefined, onDone: (message: string) => void) => ReactNode;
   remove: (token: string) => Promise<unknown>;
   removeConfirm: (d: TDef) => string;
+  /** Widens the edit drawer — e.g. for the detection-rule canvas editor. */
+  drawerClassName?: string;
 }) {
   const { claims } = useAuth();
   const canWrite = hasAuthority(claims, 'device:write');
@@ -111,6 +114,7 @@ export function DefinitionsPanel<TDef extends { id: string; token: string }>({
         open={drawer.open}
         onOpenChange={(open) => setDrawer((s) => ({ ...s, open }))}
         title={`${drawer.entity ? 'Edit' : 'New'} ${singular}`}
+        contentClassName={drawerClassName}
       >
         {/* Mount the form only while open so each open starts from fresh state. */}
         {drawer.open && renderForm(drawer.entity, onDone)}

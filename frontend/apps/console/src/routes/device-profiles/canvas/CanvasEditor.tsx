@@ -1,0 +1,401 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// The visual automation canvas editor (ADR-053 slice 9b). It authors a DetectionRule as a
+// node graph: a Source, one condition node, and its REACT actions, wired by typed ports. It is
+// the ceiling to the DetectionRuleForm's floor — both produce the SAME DetectionRule draft
+// (Definition + the AuthoringGraph sidecar) and ride the same profile draft/publish/rollback
+// host. The browser never authors the rules.Rule definition: the graph is compiled
+// server-side (compileCanvas), which returns the definition to store and the diagnostics to
+// show on nodes. A form-authored rule opens here via the pure reverse round-trip.
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ReactFlow,
+  ReactFlowProvider,
+  Background,
+  Controls,
+  addEdge,
+  useEdgesState,
+  useNodesState,
+  type Connection,
+  type Edge,
+  type Node,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import { Plus, Trash2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { FormField } from '@/components/ui/form-field';
+import { TokenField } from '@/components/ui/token-field';
+import { ErrorBanner } from '@/components/ui/error-banner';
+import { normalizeToken } from '@devicechain/client';
+import { errMessage } from '@/routes/common';
+import {
+  createDetectionRule,
+  updateDetectionRule,
+  type DetectionRule,
+  type DetectionRuleCreateRequest,
+} from '@/lib/api/device-management';
+import { compileCanvas, type CanvasCompileResult } from '@/lib/api/event-processing';
+import {
+  CONDITION_TYPES,
+  NODE_CATALOG,
+  defaultConfig,
+  portTypeOf,
+  type CanvasDefinition,
+  type NodeConfig,
+  type NodeType,
+} from './model';
+import { buildCanvasDefinition, graphFromDefinition } from './roundtrip';
+import { CanvasNodeView, type CanvasNodeData } from './nodes';
+import { NodeInspector } from './inspector';
+
+const nodeTypes = { dc: CanvasNodeView };
+
+// splitEndpoint parses a "nodeId:port" endpoint on its last colon (matches the Go/model form).
+function splitEndpoint(s: string): [string, string] {
+  const i = s.lastIndexOf(':');
+  return i < 0 ? [s, ''] : [s.slice(0, i), s.slice(i + 1)];
+}
+
+// toReactFlow maps a CanvasDefinition to the editor's node/edge state.
+function toReactFlow(def: CanvasDefinition): { nodes: Node[]; edges: Edge[] } {
+  const nodes: Node[] = def.nodes.map((n) => ({
+    id: n.id,
+    type: 'dc',
+    position: { x: n.ui?.x ?? 0, y: n.ui?.y ?? 0 },
+    data: { nodeType: n.type, config: n.config } satisfies CanvasNodeData,
+  }));
+  const edges: Edge[] = def.edges.map((e, i) => {
+    const [source, sourceHandle] = splitEndpoint(e.from);
+    const [target, targetHandle] = splitEndpoint(e.to);
+    return { id: `e-${i}-${source}-${target}`, source, sourceHandle, target, targetHandle };
+  });
+  return { nodes, edges };
+}
+
+// fromReactFlow maps the editor state back to a CanvasDefinition (with layout coords).
+function fromReactFlow(nodes: Node[], edges: Edge[]): CanvasDefinition {
+  return buildCanvasDefinition(
+    nodes.map((n) => {
+      const d = n.data as CanvasNodeData;
+      return { id: n.id, type: d.nodeType, config: d.config, ui: { x: Math.round(n.position.x), y: Math.round(n.position.y) } };
+    }),
+    edges.map((e) => ({ from: `${e.source}:${e.sourceHandle ?? ''}`, to: `${e.target}:${e.targetHandle ?? ''}` })),
+  );
+}
+
+// structuralKey is the compile-relevant fingerprint (node types + configs + wiring) — it
+// EXCLUDES layout coords and diagnostics, so dragging a node or painting a diagnostic never
+// triggers a recompile, only a real edit does.
+function structuralKey(nodes: Node[], edges: Edge[]): string {
+  return JSON.stringify({
+    n: nodes.map((n) => ({ id: n.id, t: (n.data as CanvasNodeData).nodeType, c: (n.data as CanvasNodeData).config })),
+    e: edges.map((e) => `${e.source}:${e.sourceHandle}->${e.target}:${e.targetHandle}`).sort(),
+  });
+}
+
+// initialGraph resolves the starting graph: the stored AuthoringGraph if the rule was
+// canvas-authored, else the reverse round-trip of its definition, else a lone Source for a new
+// rule.
+function initialGraph(entity: DetectionRule | undefined, profileToken: string): CanvasDefinition {
+  if (entity?.authoringGraph) {
+    try {
+      const parsed = JSON.parse(entity.authoringGraph) as CanvasDefinition;
+      if (parsed && Array.isArray(parsed.nodes)) return parsed;
+    } catch {
+      // fall through to synthesis
+    }
+  }
+  if (entity?.definition) {
+    const { graph } = graphFromDefinition(entity.definition, profileToken);
+    if (graph) return graph;
+  }
+  return {
+    schemaVersion: 1,
+    nodes: [{ id: 'source', type: 'source', config: { scope: { kind: 'profile', profileToken } }, ui: { x: 40, y: 160 } }],
+    edges: [],
+  };
+}
+
+// conditionMeta pulls the rule-level name/description off the single condition node, for the
+// DetectionRule entity fields (the definition carries its own copy; they must agree).
+function conditionMeta(nodes: Node[]): { name?: string; description?: string } {
+  const cond = nodes.find((n) => NODE_CATALOG[(n.data as CanvasNodeData).nodeType]?.category === 'condition');
+  const cfg = (cond?.data as CanvasNodeData | undefined)?.config ?? {};
+  return {
+    name: typeof cfg.name === 'string' && cfg.name.trim() ? cfg.name.trim() : undefined,
+    description: typeof cfg.description === 'string' && cfg.description.trim() ? cfg.description.trim() : undefined,
+  };
+}
+
+function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: string; entity?: DetectionRule; onDone: (message: string) => void }) {
+  const editing = entity != null;
+  const seed = useMemo(() => toReactFlow(initialGraph(entity, profileToken)), [entity, profileToken]);
+  const [nodes, setNodes, onNodesChange] = useNodesState(seed.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(seed.edges);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const [token, setToken] = useState(entity?.token ?? '');
+  const [enabled, setEnabled] = useState(entity?.enabled ?? true);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [compile, setCompile] = useState<{ status: 'idle' | 'checking' | 'done'; result: CanvasCompileResult | null }>({
+    status: 'idle',
+    result: null,
+  });
+
+  const idSeq = useRef(1);
+  const newId = (type: NodeType): string => {
+    let id = `${type}-${idSeq.current++}`;
+    const existing = new Set(nodes.map((n) => n.id));
+    while (existing.has(id)) id = `${type}-${idSeq.current++}`;
+    return id;
+  };
+
+  // The current canvas document (with layout), kept in a ref so the debounced compile reads
+  // the latest without being a dependency (only a structural change re-arms the timer).
+  const canvasDef = useMemo(() => fromReactFlow(nodes, edges), [nodes, edges]);
+  const canvasDefRef = useRef(canvasDef);
+  canvasDefRef.current = canvasDef;
+  const key = useMemo(() => structuralKey(nodes, edges), [nodes, edges]);
+
+  // Debounced server-authoritative compile: paints diagnostics on nodes and captures the
+  // compiled definition. A transport failure degrades to no-feedback (like the form's inline
+  // check) rather than blocking authoring.
+  useEffect(() => {
+    let cancelled = false;
+    setCompile((c) => ({ status: 'checking', result: c.result }));
+    const timer = setTimeout(async () => {
+      try {
+        const res = await Promise.race([
+          compileCanvas(JSON.stringify(canvasDefRef.current), profileToken),
+          new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
+        ]);
+        if (cancelled) return;
+        setCompile({ status: 'done', result: res });
+        const byNode = new Map<string, string>();
+        for (const d of res.diagnostics) if (d.nodeId) byNode.set(d.nodeId, d.message);
+        setNodes((ns) =>
+          ns.map((n) => {
+            const diagnostic = byNode.get(n.id);
+            const d = n.data as CanvasNodeData;
+            return d.diagnostic === diagnostic ? n : { ...n, data: { ...d, diagnostic } };
+          }),
+        );
+      } catch {
+        if (!cancelled) setCompile({ status: 'idle', result: null });
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [key, profileToken, setNodes]);
+
+  const isValidConnection = useCallback(
+    (conn: Connection | Edge): boolean => {
+      const src = nodes.find((n) => n.id === conn.source);
+      const tgt = nodes.find((n) => n.id === conn.target);
+      if (!src || !tgt || !conn.sourceHandle || !conn.targetHandle) return false;
+      const st = portTypeOf((src.data as CanvasNodeData).nodeType, conn.sourceHandle, true);
+      const tt = portTypeOf((tgt.data as CanvasNodeData).nodeType, conn.targetHandle, false);
+      return st !== null && st === tt;
+    },
+    [nodes],
+  );
+
+  const onConnect = useCallback(
+    (conn: Connection) => setEdges((eds) => addEdge({ ...conn, id: `e-${conn.source}-${conn.target}-${conn.sourceHandle}` }, eds)),
+    [setEdges],
+  );
+
+  const addNode = (type: NodeType) => {
+    const id = newId(type);
+    const spread = nodes.length;
+    setNodes((ns) => [
+      ...ns,
+      {
+        id,
+        type: 'dc',
+        position: { x: 320 + (NODE_CATALOG[type].category === 'action' ? 300 : 0), y: 60 + spread * 30 },
+        data: { nodeType: type, config: defaultConfig(type, profileToken) } satisfies CanvasNodeData,
+      },
+    ]);
+    setSelectedId(id);
+  };
+
+  const removeSelected = () => {
+    if (!selectedId) return;
+    setEdges((eds) => eds.filter((e) => e.source !== selectedId && e.target !== selectedId));
+    setNodes((ns) => ns.filter((n) => n.id !== selectedId));
+    setSelectedId(null);
+  };
+
+  const updateConfig = (id: string, config: NodeConfig) =>
+    setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...(n.data as CanvasNodeData), config } } : n)));
+
+  const selected = nodes.find((n) => n.id === selectedId);
+  const result = compile.result;
+  const canSave = !!result?.ok && (editing || token.trim().length > 0) && !busy;
+
+  const save = async () => {
+    if (!result?.ok || !result.definition) return;
+    setFormError(null);
+    setBusy(true);
+    try {
+      const meta = conditionMeta(nodes);
+      const request: DetectionRuleCreateRequest = {
+        token: editing ? entity.token : token.trim(),
+        deviceProfileToken: profileToken,
+        name: meta.name,
+        description: meta.description,
+        definition: result.definition,
+        authoringGraph: JSON.stringify(fromReactFlow(nodes, edges)),
+        enabled,
+        metadata: entity?.metadata ?? undefined,
+      };
+      if (editing) {
+        await updateDetectionRule(entity.token, request);
+        onDone(`Detection rule “${request.token}” updated`);
+      } else {
+        await createDetectionRule(request);
+        onDone(`Detection rule “${request.token}” created`);
+      }
+    } catch (err) {
+      setFormError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Graph-level diagnostics (no node to pin them to) surface in the side panel.
+  const graphErrors = (result?.diagnostics ?? []).filter((d) => !d.nodeId);
+
+  return (
+    <div className="flex flex-col gap-4">
+      {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <FormField label="Token" htmlFor="canvas-token" description={editing ? 'The rule id; it cannot change.' : undefined}>
+          {editing ? (
+            <Input id="canvas-token" value={token} disabled />
+          ) : (
+            <TokenField id="canvas-token" entityType={normalizeToken('detection rule')} value={token} onChange={setToken} seed={conditionMeta(nodes).name ?? ''} placeholder="freezer-warm" />
+          )}
+        </FormField>
+        <label className="flex items-center gap-2 pb-2 text-sm">
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          Enabled
+        </label>
+        <div className="flex items-center gap-3 pb-1">
+          <CompileStatus status={compile.status} result={result} />
+          <Button onClick={save} loading={busy} disabled={!canSave}>
+            {editing ? 'Save changes' : 'Create rule'}
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 p-2">
+        <span className="text-xs font-medium text-muted-foreground">Add:</span>
+        <Button variant="outline" size="sm" onClick={() => addNode('source')}>
+          <Plus size={14} /> Source
+        </Button>
+        {CONDITION_TYPES.map((t) => (
+          <Button key={t} variant="outline" size="sm" onClick={() => addNode(t)}>
+            {NODE_CATALOG[t].label}
+          </Button>
+        ))}
+        <Button variant="outline" size="sm" onClick={() => addNode('action')}>
+          <Plus size={14} /> Action
+        </Button>
+      </div>
+
+      <div className="flex gap-4" style={{ height: 520 }}>
+        <div className="flex-1 overflow-hidden rounded-md border">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            isValidConnection={isValidConnection}
+            onNodeClick={(_, n) => setSelectedId(n.id)}
+            onPaneClick={() => setSelectedId(null)}
+            onNodesDelete={(deleted) => {
+              if (deleted.some((n) => n.id === selectedId)) setSelectedId(null);
+            }}
+            fitView
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background />
+            <Controls />
+          </ReactFlow>
+        </div>
+
+        <aside className="w-80 shrink-0 overflow-y-auto rounded-md border p-3">
+          {selected ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold">{NODE_CATALOG[(selected.data as CanvasNodeData).nodeType].label}</h4>
+                {(selected.data as CanvasNodeData).nodeType !== 'source' && (
+                  <Button variant="ghost" size="sm" onClick={removeSelected} title="Remove node">
+                    <Trash2 size={14} />
+                  </Button>
+                )}
+              </div>
+              {(selected.data as CanvasNodeData).diagnostic && (
+                <p className="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
+                  {(selected.data as CanvasNodeData).diagnostic}
+                </p>
+              )}
+              <NodeInspector
+                type={(selected.data as CanvasNodeData).nodeType}
+                config={(selected.data as CanvasNodeData).config}
+                onChange={(config) => updateConfig(selected.id, config)}
+              />
+            </div>
+          ) : (
+            <div className="space-y-3 text-sm text-muted-foreground">
+              <p>Select a node to edit it, or add one from the palette. Wire a source into a condition, and the condition's signal into an action.</p>
+              {graphErrors.length > 0 && (
+                <ul className="space-y-1">
+                  {graphErrors.map((d, i) => (
+                    <li key={i} className="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
+                      {d.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function CompileStatus({ status, result }: { status: 'idle' | 'checking' | 'done'; result: CanvasCompileResult | null }) {
+  if (status === 'checking') return <span className="text-xs text-muted-foreground">Checking…</span>;
+  if (!result) return null;
+  if (result.ok) {
+    return (
+      <span className="text-xs text-success">
+        Compiles{typeof result.estimatedCost === 'number' ? ` · cost ${result.estimatedCost}` : ''}
+      </span>
+    );
+  }
+  return <span className="text-xs text-destructive">Not valid yet</span>;
+}
+
+// CanvasEditor is the exported entry — it provides the @xyflow/react context the editor needs.
+export function CanvasEditor(props: { profileToken: string; entity?: DetectionRule; onDone: (message: string) => void }) {
+  return (
+    <ReactFlowProvider>
+      <CanvasEditorInner {...props} />
+    </ReactFlowProvider>
+  );
+}

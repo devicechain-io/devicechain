@@ -7,6 +7,7 @@
 // point the opener closes the drawer and refreshes its list.
 
 import type { ReactNode } from 'react';
+import { cn } from '@/lib/utils';
 import {
   Sheet,
   SheetContent,
@@ -21,16 +22,19 @@ export function FormDrawer({
   title,
   description,
   children,
+  contentClassName,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   description?: string;
   children: ReactNode;
+  /** Overrides the default drawer width — e.g. a wide surface for the canvas editor. */
+  contentClassName?: string;
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-lg">
+      <SheetContent side="right" className={cn('w-full overflow-y-auto sm:max-w-lg', contentClassName)}>
         <SheetHeader className="mb-6">
           <SheetTitle>{title}</SheetTitle>
           {description && <SheetDescription>{description}</SheetDescription>}
