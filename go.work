@@ -1,5 +1,12 @@
 go 1.26.0
 
+// Floor the workspace build toolchain at 1.26.5 (ADR-060): the embedded Bento
+// connector library (warpstreamlabs/bento v1.19) requires Go >= 1.26.5. The `go`
+// language version stays 1.26.0 — nothing needs newer language semantics — while
+// this ensures CI and local builds use a toolchain that can compile Bento once it
+// lands in the outbound-connectors module.
+toolchain go1.26.5
+
 use (
 	./backend/cli
 	./backend/core
