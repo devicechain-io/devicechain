@@ -156,3 +156,42 @@ func TestSendRejectsNonHTTPURL(t *testing.T) {
 		t.Fatal("expected a scheme-validation error")
 	}
 }
+
+// A caller-supplied client that does NOT set a no-redirect policy must still not
+// follow a 3xx onto another target — Send forces the policy on.
+func TestSendForcesNoRedirectOnCallerClient(t *testing.T) {
+	var internalHit bool
+	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		internalHit = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer internal.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, internal.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	// A plain client follows redirects by default; Send must override that.
+	err := Send(context.Background(), &http.Client{}, Request{URL: redirector.URL})
+	if err == nil {
+		t.Fatal("expected the 302 to surface as a non-2xx error, not be followed")
+	}
+	if !strings.Contains(err.Error(), "302") {
+		t.Fatalf("error should report the 302, got %v", err)
+	}
+	if internalHit {
+		t.Fatal("Send followed the redirect onto the internal target (SSRF guard defeated)")
+	}
+}
+
+// A URL-embedded credential must never appear in a transport-error string.
+func TestSendRedactsURLCredentialsInError(t *testing.T) {
+	// Port 1 / connection refused gives a deterministic transport error.
+	err := Send(context.Background(), nil, Request{URL: "https://user:sup3rsecret@127.0.0.1:1/x"})
+	if err == nil {
+		t.Fatal("expected a transport error")
+	}
+	if strings.Contains(err.Error(), "sup3rsecret") {
+		t.Fatalf("transport error leaked the URL password: %v", err)
+	}
+}

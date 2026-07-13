@@ -7,17 +7,23 @@
 // channel (ADR-017) and the outbound-connectors httpCall action (ADR-060) enforce
 // exactly the same rules from one place, and the rules cannot drift apart:
 //
-//   - a no-redirect client, so an external endpoint cannot 3xx the request onto an
-//     internal target;
+//   - a no-redirect policy, forced onto whatever client Send uses (even a caller-
+//     supplied one), so an external endpoint cannot 3xx the request onto an internal
+//     target;
 //   - reserved-header dropping, so tenant-supplied headers cannot forge the auth
 //     header or the internal X-DC-* service identity;
-//   - http/https-only targets;
-//   - response-body suppression on any secret-bearing call, so a hostile endpoint
-//     cannot reflect the Authorization header back into our logs.
+//   - http/https-only targets, with URL-embedded credentials redacted from errors;
+//   - response-body suppression when a credential is presented via Request.Secret,
+//     so a hostile endpoint cannot reflect the Authorization header back into our
+//     logs. (Present credentials through Secret/Auth — NOT by stuffing a raw token
+//     into Headers, which is not covered by suppression.)
 //
-// It is deliberately transport-agnostic: the caller owns its own config shape,
-// payload construction, and error-context wrapping; this package owns the mechanics
-// that must be identical everywhere.
+// It is NOT a complete SSRF firewall: it does not resolve or filter destination IPs
+// (private-range / link-local / DNS-rebinding defense is the caller's job), and it
+// does not restrict the HTTP method (method policy is caller-owned). It is
+// deliberately transport-agnostic: the caller owns its own config shape, payload
+// construction, and error-context wrapping; this package owns the mechanics that must
+// be identical everywhere.
 package httpsink
 
 import (
@@ -30,14 +36,16 @@ import (
 	"strings"
 )
 
-// DefaultClient is the shared production HTTP client for outbound delivery. It does
-// NOT follow redirects: an external endpoint must not be able to 302 the request
-// onto an internal target (an SSRF bypass of the configured endpoint). A 3xx is
-// returned as-is and treated as a non-2xx failure. Callers bound each request with a
-// context deadline rather than a client Timeout, so none is set.
-var DefaultClient = &http.Client{
-	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-}
+// noRedirect is the redirect policy every httpsink request runs under: a 3xx is
+// returned as-is (and treated as a non-2xx failure) rather than followed, so an
+// external endpoint cannot 302 the request onto an internal target (an SSRF bypass of
+// the configured endpoint). Send forces this onto whatever client it uses.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// DefaultClient is the shared production HTTP client for outbound delivery, used when
+// Send is called with a nil client. Callers bound each request with a context
+// deadline rather than a client Timeout, so none is set.
+var DefaultClient = &http.Client{CheckRedirect: noRedirect}
 
 // IsReservedHeader reports whether a caller/tenant-supplied header name is one the
 // sink controls or that carries internal service identity, and so must never be
@@ -115,11 +123,13 @@ type Request struct {
 //
 // On a non-2xx or a transport error it returns an error — whose text NEVER includes
 // the response body when req.Secret is set, because a hostile endpoint could reflect
-// the Authorization header in its body and leak the write-only secret into logs. The
-// error carries no tenant/resource context; the caller wraps it with its own (e.g.
-// the channel or connector token).
+// the Authorization header in its body and leak the write-only secret into logs. Any
+// URL-embedded credential is redacted from the transport-error text. The error carries
+// no tenant/resource context; the caller wraps it with its own (e.g. the channel or
+// connector token).
 func Send(ctx context.Context, client *http.Client, req Request) error {
-	if _, err := ValidateURL(req.URL); err != nil {
+	parsed, err := ValidateURL(req.URL)
+	if err != nil {
 		return err
 	}
 	method := req.Method
@@ -152,16 +162,26 @@ func Send(ctx context.Context, client *http.Client, req Request) error {
 		httpReq.Header.Set(idempotencyHeader, req.IdempotencyKey)
 	}
 
-	c := client
-	if c == nil {
-		c = DefaultClient
+	c := DefaultClient
+	if client != nil {
+		// Force the no-redirect SSRF policy onto a caller-supplied client too: the
+		// package's guarantee must not depend on the caller remembering to set
+		// CheckRedirect. Clone (a shallow copy) so we override only the redirect policy;
+		// Transport/Jar are shared, which is safe.
+		clone := *client
+		clone.CheckRedirect = noRedirect
+		c = &clone
 	}
 	resp, err := c.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("%s %s: %w", method, req.URL, err)
+		// Redact any URL-embedded credential (https://user:pass@host) so a
+		// transport-error log can never leak it. The wrapped *url.Error is already
+		// password-stripped by net/http, but the explicit URL here would not be.
+		return fmt.Errorf("%s %s: %w", method, parsed.Redacted(), err)
 	}
 	defer resp.Body.Close()
-	// Drain a bounded amount so the connection can be reused.
+	// Read a bounded snippet for diagnostics (used only on a non-2xx, non-secret path).
+	// This is not a full drain, so it does not by itself enable keep-alive reuse.
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if req.Secret != "" {
