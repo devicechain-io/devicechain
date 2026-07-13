@@ -4,18 +4,26 @@
 package graphql
 
 import (
+	"context"
 	_ "embed"
+
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-outbound-connectors/model"
 )
 
 //go:embed schema.graphql
 var SchemaContent string
 
-// SchemaResolver is the root resolver for the outbound-connectors GraphQL surface. In slice C3 it
-// carries only the scaffold health/metrics server (a trivial service-identity query); the versioned
-// Connector CRUD is added here in slice C4.
+// SchemaResolver is the root resolver for the outbound-connectors GraphQL surface: the
+// service identity plus the per-tenant, versioned Connector CRUD (ADR-060 slice C4).
 type SchemaResolver struct {
 	// Area is the deployed functional area, returned by outboundConnectorsInfo.
 	Area string
+}
+
+// GetApi returns the connector api from context (injected as a provider in main).
+func (r *SchemaResolver) GetApi(ctx context.Context) *model.Api {
+	return ctx.Value(gqlcore.ContextApiKey).(*model.Api)
 }
 
 // serviceInfoResolver resolves the ServiceInfo type.

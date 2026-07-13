@@ -23,7 +23,7 @@ const (
 	// failed structural validation); a redelivery cannot fix it, so it was dropped (acked).
 	outcomeInvalid = "invalid"
 	// outcomeUnsupported — a well-formed dispatch this build cannot execute (a publish before the
-	// Bento tier / Connector entity, slice C4); terminal, dead-lettered so an operator can see it.
+	// Bento tier / Connector entity, slice C4b); terminal, dead-lettered so an operator can see it.
 	outcomeUnsupported = "unsupported"
 	// outcomeRateLimited — the dispatch's tenant was over its outbound egress rate (ADR-060 SD-3)
 	// for longer than the smoothing wait budget, so it was shed to the dead-letter subject. A brief

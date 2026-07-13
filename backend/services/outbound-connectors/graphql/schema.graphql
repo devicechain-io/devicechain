@@ -4,22 +4,120 @@
 #
 # Outbound Connectors GraphQL Schema (ADR-060)
 #
-# This service is primarily a durable NATS consumer that executes outbound connector
-# actions (httpCall now; the versioned Connector entity + publish land in slice C4).
-# The GraphQL surface exists to carry the scaffold health/metrics server (/healthz,
-# /readyz, /metrics); the connector CRUD is added here in C4.
+# This service is a durable NATS consumer that executes outbound connector actions
+# (httpCall, and — from slice C4b — publish). This surface is the per-tenant, versioned
+# Connector CRUD (ADR-039 draft/publish/rollback): the registered {type, config,
+# write-only credential} targets a `publish` action delivers through. Credentials are
+# write-only — a `secret` goes IN on create/update and is sealed in the ADR-059 secret
+# store; it never comes back out (the read side exposes only `hasSecret`).
 
-# Static service identity — a trivial query so the schema is well-formed and the
-# health/metrics HTTP server has a surface. Replaced by connector CRUD in C4.
+# Pagination info for search results.
+type SearchResultsPagination {
+    pageStart: Int
+    pageEnd: Int
+    totalRecords: Int
+}
+
+# Static service identity — the deployed functional area (non-sensitive).
 type ServiceInfo {
     area: String!
+}
+
+# A tenant-scoped, versioned outbound-connector definition (ADR-060 Tier 2). The
+# `config` is the per-type connection document (stored opaquely as JSON); the
+# credential is never returned — `hasSecret` reports only whether one is configured.
+type Connector {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    token: String!
+    name: String
+    description: String
+    # One of the registered connector types (see the connectorTypes query).
+    type: String!
+    # The opaque per-type connection config (a JSON object).
+    config: String!
+    # Whether an outbound credential is configured, without exposing it.
+    hasSecret: Boolean!
+}
+
+# Data required to create or update a connector. `secret` is write-only: omit it on
+# update to preserve the stored credential, send a value to replace it, or send an
+# empty string to clear it. On create, omit or empty means no credential.
+input ConnectorCreateRequest {
+    token: String!
+    name: String
+    description: String
+    type: String!
+    config: String!
+    secret: String
+}
+
+# Criteria used when searching for connectors.
+input ConnectorSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    type: String
+}
+
+# Search results returned from a connector query.
+type ConnectorSearchResults {
+    results: [Connector!]!
+    pagination: SearchResultsPagination!
+}
+
+# An immutable published snapshot of a connector's {type, config} (ADR-039 versioning).
+# The config blob is deliberately omitted here — the list stays light; rollback resolves
+# a snapshot server-side by its integer version. The credential is NOT versioned (it is
+# keyed by the connector, resolved live), so it does not appear on a version.
+type ConnectorVersion {
+    # Monotonic per-connector version number.
+    version: Int!
+    # The connector type at publish time.
+    type: String!
+    # Optional user-supplied label (may embed a semver string; not parsed).
+    label: String
+    description: String
+    # When the version was published (the row's creation time).
+    publishedAt: String!
+    # The identity that published it (username, falling back to email).
+    publishedBy: String
 }
 
 type Query {
     # Non-sensitive service identity (the deployed functional area).
     outboundConnectorsInfo: ServiceInfo!
+    # Look up a single connector by its token.
+    connector(token: String!): Connector
+    # Search connectors by criteria.
+    connectors(criteria: ConnectorSearchCriteria!): ConnectorSearchResults!
+    # List a connector's published versions, newest first.
+    connectorVersions(token: String!): [ConnectorVersion!]!
+    # The registered connector-type vocabulary (for a console picker).
+    connectorTypes: [String!]!
+}
+
+type Mutation {
+    # Create a new connector (draft).
+    createConnector(request: ConnectorCreateRequest!): Connector!
+    # Update the connector (draft) with the given (current) token. When
+    # expectedUpdatedAt is supplied it is an optimistic-concurrency precondition: the
+    # update fails (CONFLICT) if the connector's updatedAt has changed since (a
+    # concurrent edit). Pass the updatedAt the caller last read.
+    updateConnector(token: String!, request: ConnectorCreateRequest!, expectedUpdatedAt: String): Connector!
+    # Freeze the current draft {type, config} into a new immutable version (N+1).
+    # expectedUpdatedAt is the same optimistic-concurrency precondition as
+    # updateConnector: publish fails (CONFLICT) if the draft changed since.
+    publishConnector(token: String!, label: String, description: String, expectedUpdatedAt: String): ConnectorVersion!
+    # Re-draft: copy a published version's {type, config} back into the draft. Returns
+    # the updated connector. History is append-only; nothing is deleted.
+    rollbackConnector(token: String!, version: Int!): Connector!
+    # Delete the connector with the given token (and its versions + credential).
+    # Returns whether a row was deleted.
+    deleteConnector(token: String!): Boolean!
 }
 
 schema {
     query: Query
+    mutation: Mutation
 }
