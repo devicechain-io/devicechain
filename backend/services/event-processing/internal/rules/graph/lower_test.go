@@ -408,6 +408,66 @@ func TestRejects(t *testing.T) {
 			),
 			wantNodeID: "c", // rejected by rules.validateReact, anchored to the condition
 		},
+		{
+			name: "duration overflow (wraps to a small positive)",
+			def: canvas(
+				[]Node{
+					src("s"),
+					{ID: "c", Type: NodeDuration, Config: cfg(map[string]interface{}{
+						"name": "x", "holdMs": int64(1) << 62, // > maxDurationMs; would wrap without the guard
+						"when": map[string]interface{}{"metric": "tempC", "op": "gt", "threshold": map[string]interface{}{"kind": "literal", "value": 30}},
+					})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+			),
+			wantNodeID: "c",
+		},
+		{
+			name: "negative timeout rejected before the compiler sees it",
+			def: canvas(
+				[]Node{
+					src("s"),
+					{ID: "c", Type: NodeAbsence, Config: cfg(map[string]interface{}{"name": "x", "timeoutMs": -5})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+			),
+			wantNodeID: "c",
+		},
+		{
+			name: "incoherent bound (literal + attribute both set)",
+			def: canvas(
+				[]Node{
+					src("s"),
+					{ID: "c", Type: NodeThreshold, Config: cfg(map[string]interface{}{
+						"name": "x",
+						"when": map[string]interface{}{"metric": "tempC", "op": "gt", "threshold": map[string]interface{}{"kind": "literal", "value": 30, "attribute": "tempLimit"}},
+					})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+			),
+			wantNodeID: "c",
+		},
+		{
+			name: "poisoned dangling source (wrong profile, unwired) still rejected",
+			def: canvas(
+				[]Node{
+					src("s"), // the wired, good source
+					th("c", "a"),
+					{ID: "bad", Type: NodeSource, Config: cfg(map[string]interface{}{"scope": map[string]interface{}{"kind": "profile", "profileToken": "other"}})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+			),
+			wantNodeID: "bad",
+		},
+		{
+			name: "edge to a phantom node is graph-level",
+			def: canvas(
+				[]Node{src("s"), th("c", "a")},
+				Edge{From: "s:out", To: "c:in"},
+				Edge{From: "c:signal", To: "ghost:in"},
+			),
+			wantNodeID: "",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -432,10 +492,32 @@ func TestRejects(t *testing.T) {
 	}
 }
 
-// TestCycleRejected checks the DAG guard: a source→condition→(something back to source) cycle
-// is impossible via typed ports, but a cycle among nodes must still be rejected. A signal edge
-// looping a condition to itself would be a stream/signal mismatch, so the reachable cycle case
-// is exercised through the generic detector with a hand-built adjacency.
+// TestDetectCycle exercises the DAG guard directly. In the 9a catalog a cycle is
+// unconstructible through typed ports (stream flows only source→condition, signal only
+// condition→action), so the detector is defensive; a hand-built typedEdge cycle proves it
+// still fires.
+func TestDetectCycle(t *testing.T) {
+	nodes := []Node{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	// a→b→c→a is a cycle.
+	edges := []typedEdge{
+		{fromNode: "a", toNode: "b", ptype: PortStream},
+		{fromNode: "b", toNode: "c", ptype: PortStream},
+		{fromNode: "c", toNode: "a", ptype: PortStream},
+	}
+	if err := detectCycle(nodes, edges); err == nil {
+		t.Fatal("expected a cycle to be rejected")
+	}
+	// a→b→c (no back edge) is acyclic.
+	acyclic := []typedEdge{
+		{fromNode: "a", toNode: "b", ptype: PortStream},
+		{fromNode: "b", toNode: "c", ptype: PortStream},
+	}
+	if err := detectCycle(nodes, acyclic); err != nil {
+		t.Fatalf("acyclic graph rejected: %v", err)
+	}
+}
+
+// TestSchemaVersionRejected: a forward/unknown schema version fails closed.
 func TestSchemaVersionRejected(t *testing.T) {
 	def := CanvasDefinition{SchemaVersion: 999, Nodes: []Node{src("s")}}
 	_, err := Compile(def, profile, rules.DefaultLimits())

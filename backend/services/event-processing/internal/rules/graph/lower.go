@@ -22,8 +22,9 @@ type Diagnostic struct {
 
 // LoweredRule is one condition node lowered to a compiled, validated DETECT rule: the
 // assembled rules.Rule, its canonical JSON Definition (what device-management stores and
-// freezes into the snapshot — byte-identical to the equivalent form rule), and the compiled
-// form (for its cost estimate). One canvas condition node ⇒ one LoweredRule (§3.1).
+// freezes into the snapshot — it decodes to the same rules.Rule as the equivalent form rule
+// and re-marshals to identical canonical bytes, §3.2), and the compiled form (for its cost
+// estimate). One canvas condition node ⇒ one LoweredRule (§3.1).
 type LoweredRule struct {
 	NodeID     string
 	Rule       rules.Rule
@@ -86,6 +87,9 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	if def.SchemaVersion != SchemaVersion {
 		return nil, errorf("", "unsupported canvas schemaVersion %d (this build understands %d)", def.SchemaVersion, SchemaVersion)
 	}
+	if profileToken == "" {
+		return nil, errorf("", "a profile token is required to compile a canvas")
+	}
 
 	// Index nodes; reject duplicate ids and unknown types up front (fail closed).
 	byID := make(map[string]Node, len(def.Nodes))
@@ -103,6 +107,20 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	}
 	if len(byID) == 0 {
 		return nil, errorf("", "the canvas has no nodes")
+	}
+
+	// Validate EVERY source node's config up front, regardless of connectivity — an unwired
+	// source still rides along in the stored AuthoringGraph sidecar, so a poisoned one (unknown
+	// field, wrong profile, derived-subject scope) must be caught here, not left to surface only
+	// when someone later wires it. This is the counterpart to rejecting a dangling action /
+	// source-less condition, and it makes the "every Source node is profile-scoped to the
+	// canvas" contract (the doc + schema promise) actually hold.
+	for _, n := range def.Nodes {
+		if n.Type == NodeSource {
+			if cerr := validateSource(n, profileToken); cerr != nil {
+				return nil, cerr
+			}
+		}
 	}
 
 	edges, err := typeCheckEdges(def.Edges, byID)
@@ -127,7 +145,7 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	// Global REACT-fan-in check: every action must be fed by exactly one condition's signal.
 	// An action with no upstream is a stateful node with nothing to react to; an action fed by
 	// two conditions is a cross-window join (§3.3) — both rejected before lowering.
-	actionOwner, err := resolveActionOwners(byID, edges)
+	actionOwner, err := resolveActionOwners(def.Nodes, byID, edges)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +155,7 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 		diags   []Diagnostic
 	)
 	for _, cid := range conditionIDs {
-		lr, cerr := lowerCondition(byID[cid], byID, edges, actionOwner, profileToken, limits)
+		lr, cerr := lowerCondition(byID[cid], byID, edges, actionOwner, limits)
 		if cerr != nil {
 			diags = append(diags, cerr.Diagnostics...)
 			continue
@@ -167,11 +185,13 @@ func typeCheckEdges(edges []Edge, byID map[string]Node) ([]typedEdge, error) {
 		}
 		ftype, err := portType(byID, fn, fp, true)
 		if err != nil {
-			return nil, errorf(fn, "edge from %q: %v", e.From, err)
+			// Anchor to the node only if it exists; an edge to a phantom node is a graph-level
+			// problem (the console has no node to pin the diagnostic to).
+			return nil, errorf(anchorFor(byID, fn), "edge from %q: %v", e.From, err)
 		}
 		ttype, err := portType(byID, tn, tp, false)
 		if err != nil {
-			return nil, errorf(tn, "edge to %q: %v", e.To, err)
+			return nil, errorf(anchorFor(byID, tn), "edge to %q: %v", e.To, err)
 		}
 		if ftype != ttype {
 			return nil, errorf(tn, "edge %s→%s connects a %s output to a %s input (ports must carry the same type)", e.From, e.To, ftype, ttype)
@@ -184,6 +204,15 @@ func typeCheckEdges(edges []Edge, byID map[string]Node) ([]typedEdge, error) {
 		out = append(out, typedEdge{fromNode: fn, fromPort: fp, toNode: tn, toPort: tp, ptype: ftype})
 	}
 	return out, nil
+}
+
+// anchorFor returns nodeID if it names a real node, else "" (a graph-level anchor) — so a
+// diagnostic never points the console at a node id it cannot find.
+func anchorFor(byID map[string]Node, nodeID string) string {
+	if _, ok := byID[nodeID]; ok {
+		return nodeID
+	}
+	return ""
 }
 
 // parseEndpoint splits a "nodeId:port" endpoint on its last colon (a node id may contain a
@@ -259,7 +288,7 @@ func detectCycle(nodes []Node, edges []typedEdge) error {
 // resolveActionOwners maps each action node to the condition node whose signal feeds it,
 // enforcing exactly-one-detection-per-action: zero is a dangling stateful node, two is a
 // cross-window join (§3.3) — both rejected. Returns actionNodeID → conditionNodeID.
-func resolveActionOwners(byID map[string]Node, edges []typedEdge) (map[string]string, error) {
+func resolveActionOwners(nodes []Node, byID map[string]Node, edges []typedEdge) (map[string]string, error) {
 	// Collect the signal edges into each action node's input port.
 	feeders := make(map[string][]string) // actionNodeID → []fromNodeID
 	for _, e := range edges {
@@ -271,7 +300,9 @@ func resolveActionOwners(byID map[string]Node, edges []typedEdge) (map[string]st
 		}
 	}
 	owner := make(map[string]string)
-	for _, n := range byID {
+	// Iterate in node declaration order (not map order) so a graph with more than one defective
+	// action anchors its first-reported diagnostic deterministically run-to-run.
+	for _, n := range nodes {
 		if n.Type != NodeAction {
 			continue
 		}
@@ -288,6 +319,13 @@ func resolveActionOwners(byID map[string]Node, edges []typedEdge) (map[string]st
 		if len(distinct) > 1 {
 			return nil, errorf(n.ID, "this action is fed by more than one condition — combine conditions within a single windowed rule, or split into two rules; cross-window correlation is post-GA (ADR-052)")
 		}
+		// Enforce (not merely assume) that the feeder is a condition node. It always is in the
+		// 9a catalog, but when a later slice adds a signal-passing intermediate (branch/enrich),
+		// an action wired below one would otherwise get a non-condition owner and silently drop
+		// off every rule instead of erroring — fail closed against that future.
+		if !byID[fs[0]].Type.isCondition() {
+			return nil, errorf(n.ID, "this action is not fed directly by a condition")
+		}
 		owner[n.ID] = fs[0]
 	}
 	return owner, nil
@@ -297,7 +335,7 @@ func resolveActionOwners(byID map[string]Node, edges []typedEdge) (map[string]st
 // source (validated against the profile scope), its own predicate/temporal config, and the
 // REACT actions its signal fans out to. It runs the assembled rule through the exact
 // rules.Compile path the form builder uses.
-func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, actionOwner map[string]string, profileToken string, limits rules.Limits) (*LoweredRule, *CompileError) {
+func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, actionOwner map[string]string, limits rules.Limits) (*LoweredRule, *CompileError) {
 	// Exactly one source must feed the condition's stream input (§3.4: >1 source rejected;
 	// 0 sources means the detection has no telemetry to run against).
 	var sources []string
@@ -312,9 +350,8 @@ func lowerCondition(c Node, byID map[string]Node, edges []typedEdge, actionOwner
 	if len(sources) > 1 {
 		return nil, errorf(c.ID, "this condition is fed by more than one source — a rule reads from a single source")
 	}
-	if cerr := validateSource(byID[sources[0]], profileToken); cerr != nil {
-		return nil, cerr
-	}
+	// The source's config/scope was already validated up front (Compile validates every source
+	// node regardless of connectivity), so by here sources[0] is a known-good profile source.
 
 	rule, err := buildRule(c)
 	if err != nil {

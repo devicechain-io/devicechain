@@ -5,10 +5,17 @@ package graph
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 )
+
+// maxDurationMs is the largest millisecond count that fits a time.Duration (int64 ns)
+// without overflow. A larger value would wrap to a small — even positive — nanosecond
+// count, sneaking past the compiler's `<= 0` guards as a valid-looking but wrong duration,
+// so ms() rejects it (fail-closed) rather than silently mis-lowering.
+const maxDurationMs = int64(math.MaxInt64) / int64(time.Millisecond)
 
 // The canvas config vocabulary is DELIBERATELY the rules schema's own vocabulary — the same
 // operator tokens ("gt"/"ge"/…), aggregate names, and window-mode names rules.Rule uses —
@@ -60,10 +67,21 @@ type leaf struct {
 func (l leaf) toCondition() (rules.Condition, error) {
 	c := rules.Condition{Metric: l.Metric, Op: rules.CompareOp(l.Op), CEL: l.CEL}
 	if l.Threshold != nil {
+		// Reject an incoherent bound (both a literal value AND an attribute set) rather than
+		// silently keeping the kind-selected one — the lowering would otherwise turn a config
+		// the author botched into a valid rule that may invert their intent (they meant the
+		// per-device attribute; they'd get the stale literal). Fail closed, like the compiler.
+		hasLit, hasAttr := l.Threshold.Value != nil, l.Threshold.Attribute != ""
 		switch l.Threshold.Kind {
 		case "literal":
+			if hasAttr {
+				return rules.Condition{}, fmt.Errorf("a literal threshold bound must not also set an attribute")
+			}
 			c.Threshold = l.Threshold.Value
 		case "attribute":
+			if hasLit {
+				return rules.Condition{}, fmt.Errorf("an attribute threshold bound must not also set a value")
+			}
 			c.ThresholdAttr = l.Threshold.Attribute
 		default:
 			return rules.Condition{}, fmt.Errorf("threshold bound kind must be \"literal\" or \"attribute\", got %q", l.Threshold.Kind)
@@ -72,7 +90,18 @@ func (l leaf) toCondition() (rules.Condition, error) {
 	return c, nil
 }
 
-func ms(v int64) rules.Duration { return rules.Duration(time.Duration(v) * time.Millisecond) }
+// ms converts a millisecond count from the wire to a rules.Duration, rejecting a negative
+// or overflowing value (which would wrap to a small positive nanosecond count and slip past
+// the compiler's `<= 0` guards). field names the offending config field for the error.
+func ms(field string, v int64) (rules.Duration, error) {
+	if v < 0 {
+		return 0, fmt.Errorf("%s must not be negative", field)
+	}
+	if v > maxDurationMs {
+		return 0, fmt.Errorf("%s is too large", field)
+	}
+	return rules.Duration(time.Duration(v) * time.Millisecond), nil
+}
 
 // --- per-condition-node config structs. Each embeds ruleMeta and carries only the rules
 //     fields that node type uses; DisallowUnknownFields rejects a stray field at decode,
@@ -105,7 +134,11 @@ func (c durationConfig) build() (rules.Rule, error) {
 	if err != nil {
 		return rules.Rule{}, err
 	}
-	r := rules.Rule{Type: rules.TypeDuration, When: when, Hold: ms(c.HoldMs)}
+	hold, err := ms("holdMs", c.HoldMs)
+	if err != nil {
+		return rules.Rule{}, err
+	}
+	r := rules.Rule{Type: rules.TypeDuration, When: when, Hold: hold}
 	c.applyTo(&r)
 	return r, nil
 }
@@ -116,7 +149,11 @@ type absenceConfig struct {
 }
 
 func (c absenceConfig) build() (rules.Rule, error) {
-	r := rules.Rule{Type: rules.TypeAbsence, Ttl: ms(c.TimeoutMs)}
+	ttl, err := ms("timeoutMs", c.TimeoutMs)
+	if err != nil {
+		return rules.Rule{}, err
+	}
+	r := rules.Rule{Type: rules.TypeAbsence, Ttl: ttl}
 	c.applyTo(&r)
 	return r, nil
 }
@@ -152,10 +189,14 @@ func (c aggregateConfig) build() (rules.Rule, error) {
 	// Only set the temporal durations a given mode uses so a zero ms does not surface as a
 	// forbidden non-zero field to the compiler (window/gap are mode-specific).
 	if c.WindowMs != 0 {
-		r.Window = ms(c.WindowMs)
+		if r.Window, err = ms("windowMs", c.WindowMs); err != nil {
+			return rules.Rule{}, err
+		}
 	}
 	if c.GapMs != 0 {
-		r.Gap = ms(c.GapMs)
+		if r.Gap, err = ms("gapMs", c.GapMs); err != nil {
+			return rules.Rule{}, err
+		}
 	}
 	c.applyTo(&r)
 	return r, nil
@@ -202,7 +243,11 @@ func (c repeatingConfig) build() (rules.Rule, error) {
 	if err != nil {
 		return rules.Rule{}, err
 	}
-	r := rules.Rule{Type: rules.TypeRepeating, When: when, Count: c.Count, Window: ms(c.WindowMs)}
+	window, err := ms("windowMs", c.WindowMs)
+	if err != nil {
+		return rules.Rule{}, err
+	}
+	r := rules.Rule{Type: rules.TypeRepeating, When: when, Count: c.Count, Window: window}
 	c.applyTo(&r)
 	return r, nil
 }
@@ -221,11 +266,15 @@ func (c correlationConfig) build() (rules.Rule, error) {
 	if err != nil {
 		return rules.Rule{}, err
 	}
+	window, err := ms("windowMs", c.WindowMs)
+	if err != nil {
+		return rules.Rule{}, err
+	}
 	r := rules.Rule{
 		Type:       rules.TypeCorrelation,
 		AnchorType: c.AnchorType,
 		Count:      c.Count,
-		Window:     ms(c.WindowMs),
+		Window:     window,
 		MemberCap:  c.MemberCap,
 		When:       when,
 	}

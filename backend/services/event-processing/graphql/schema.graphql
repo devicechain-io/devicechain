@@ -118,7 +118,9 @@ type CanvasCompileResult {
     # gate. A save/publish proceeds only when this is true.
     ok: Boolean!
     # The compiled rules.Rule JSON the console stores on DetectionRule.Definition — null when
-    # !ok. Byte-identical to the equivalent form-authored rule's definition.
+    # !ok. It decodes to the same rules.Rule as the equivalent form-authored rule and
+    # re-marshals to identical canonical bytes (§3.2); the two surfaces' verbatim stored
+    # strings may differ in key order, since nothing compares rule bytes.
     definition: String
     # The compiled predicate's static worst-case cost (the ADR-023 gate cleared) — null when !ok.
     estimatedCost: Int

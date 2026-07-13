@@ -64,11 +64,17 @@ func (r *SchemaResolver) CompileCanvas(ctx context.Context, args struct {
 	lr := res.Rules[0]
 	def0 := lr.Definition
 	cost := clampCost(lr.Compiled.Predicate.CostMax())
+	// Carry any non-fatal warnings through (empty today; the lowering has no warning path yet,
+	// but wiring it now means a future warning surfaces on its node instead of being dropped).
+	diags := make([]*CanvasDiagnosticResolver, 0, len(res.Diagnostics))
+	for _, d := range res.Diagnostics {
+		diags = append(diags, newCanvasDiagnostic(d))
+	}
 	return &CanvasCompileResultResolver{
 		ok:         true,
 		definition: &def0,
 		cost:       &cost,
-		diags:      nil,
+		diags:      diags,
 	}, nil
 }
 
