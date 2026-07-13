@@ -83,6 +83,14 @@ const (
 	// authorization-code flow against. System-scoped, like the role/tenant catalog.
 	ClientRead  Authority = "client:read"
 	ClientWrite Authority = "client:write"
+
+	// Outbound connectors (outbound-connectors, ADR-060). Gate the per-tenant
+	// versioned Connector CRUD API — the registered {type, config, write-only
+	// SecretRef} targets a `publish` REACT action delivers through. Distinct from
+	// notification:* because a connector is an automation-egress resource (an
+	// external system a rule pushes to), not a human-notification channel.
+	ConnectorRead  Authority = "connector:read"
+	ConnectorWrite Authority = "connector:write"
 )
 
 // vocabulary is the set of every known authority. A Role may only grant
@@ -114,6 +122,8 @@ var vocabulary = map[Authority]struct{}{
 	SettingsWrite:     {},
 	ClientRead:        {},
 	ClientWrite:       {},
+	ConnectorRead:     {},
+	ConnectorWrite:    {},
 }
 
 // ValidAuthority reports whether s names a known authority (including the

@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-outbound-connectors/config"
 	"github.com/devicechain-io/dc-outbound-connectors/governance"
 	"github.com/devicechain-io/dc-outbound-connectors/graphql"
+	"github.com/devicechain-io/dc-outbound-connectors/model"
 	"github.com/devicechain-io/dc-outbound-connectors/processor"
 	"github.com/devicechain-io/dc-outbound-connectors/schema"
 	"github.com/rs/zerolog/log"
@@ -40,6 +41,7 @@ var (
 	SecretStore secrets.SecretStore
 	RateLimiter *core.TenantRateLimiter
 	Consumer    *processor.DispatchConsumer
+	Api         *model.Api
 )
 
 func main() {
@@ -195,10 +197,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// The GraphQL surface carries only the scaffold health/metrics server in this slice (a trivial
-	// service-identity query); the versioned Connector CRUD lands here in C4. Auth degrades instead
-	// of failing startup (ADR-022 decision 3).
-	providers := map[gqlcore.ContextKey]interface{}{}
+	// The GraphQL surface carries the service identity plus the per-tenant, versioned
+	// Connector CRUD (ADR-060 slice C4). The api is injected as a provider so the resolvers
+	// resolve it (and its secret store, for hasSecret) from the request context. Auth
+	// degrades instead of failing startup (ADR-022 decision 3).
+	Api = model.NewApi(RdbManager, SecretStore)
+	providers := map[gqlcore.ContextKey]interface{}{
+		gqlcore.ContextRdbKey: RdbManager,
+		gqlcore.ContextApiKey: Api,
+	}
 	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{Area: string(Microservice.FunctionalArea)})
 	Microservice.StartInstanceAuthGate(ctx)
 	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(),

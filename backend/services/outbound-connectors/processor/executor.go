@@ -34,7 +34,7 @@ type execOutcome struct {
 // Executor performs the bounded outbound send for one connector-dispatch request (ADR-060 §4). It
 // owns the credential resolution (fail-closed) and the shared SSRF hardening (core/httpsink); the
 // consumer owns the ack/nak/dead-letter lifecycle around it. In this slice (C3) it executes httpCall
-// only; publish (the Bento tier + Connector entity, slice C4) is recognized but returns a terminal
+// only; publish (the Bento tier + Connector entity, slice C4b) is recognized but returns a terminal
 // unsupported outcome so a publish dispatch is dead-lettered visibly, never silently dropped.
 type Executor struct {
 	secrets *SecretResolver
@@ -60,11 +60,11 @@ func (e *Executor) Execute(ctx context.Context, req *connectorwire.ConnectorDisp
 	case connectorwire.ConnectorKindHTTPCall:
 		return e.executeHTTPCall(ctx, req)
 	case connectorwire.ConnectorKindPublish:
-		// Recognized but not executable until the Bento tier + Connector entity land (slice C4). This
+		// Recognized but not executable until the Bento tier + Connector entity land (slice C4b). This
 		// is terminal for this build (a redelivery cannot make it executable) — dead-letter it so an
 		// operator sees a publish dispatched at a version this service cannot run, never silently drop.
 		return execOutcome{outcome: outcomeUnsupported, retryable: false,
-			err: fmt.Errorf("publish is not executable in this build (Bento tier is slice C4)")}
+			err: fmt.Errorf("publish is not executable in this build (Bento tier is slice C4b)")}
 	default:
 		// connectorwire.Validate already rejected unknown kinds; this is unreachable defense-in-depth.
 		return execOutcome{outcome: outcomeInvalid, retryable: false,
