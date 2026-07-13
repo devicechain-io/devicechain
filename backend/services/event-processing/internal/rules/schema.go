@@ -163,6 +163,18 @@ type Action struct {
 	Type        ActionType         `json:"type"`
 	RaiseAlarm  *RaiseAlarmAction  `json:"raiseAlarm,omitempty"`
 	SendCommand *SendCommandAction `json:"sendCommand,omitempty"`
+
+	// Guard is an optional per-action CEL boolean the REACT dispatcher evaluates against the fired
+	// detection (the derived event) to decide whether THIS action runs — the runtime form of a
+	// canvas "branch" node (ADR-053 slice 9c), which folds its predicate onto the guard of every
+	// action downstream of it. Empty ⇒ unconditional (the pre-9c behaviour). It is bounded and
+	// stateless (ADR-054): a pure per-message boolean over the guard vocabulary (value / hasValue /
+	// series — see guard.go), cost-gated at publish like the leaf predicate. It gates the RISING-edge
+	// raise/send only; the dispatcher NEVER consults it for a raiseAlarm action's structural
+	// falling-edge clear, so a guard can never strand an active alarm (react.Dispatcher). Two actions
+	// that differ only by guard are distinct (the guard is part of the dedup/idempotency identity),
+	// so a raise-if-hot / raise-if-cold pair off one detection is well-formed, not a duplicate.
+	Guard string `json:"guard,omitempty"`
 }
 
 // RaiseAlarmAction raises or escalates an alarm for the detection's device at the rule's

@@ -22,10 +22,12 @@ package react
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/rs/zerolog/log"
 )
 
 // Outcome is the disposition of one derived event's dispatch, telling the consumer whether to ack.
@@ -138,6 +140,14 @@ type Dispatcher struct {
 	commands CommandSink
 	alarms   AlarmSink
 	metrics  Metrics
+
+	// guards caches a compiled guard program per distinct guard source (rules.Action.Guard), keyed by
+	// the source string. The dispatcher resolves rules.Rule (not a compiled form) fresh per event, so
+	// without a cache it would recompile every guard on every dispatch — instead a guard compiles once
+	// and is reused. The cache is bounded by the number of DISTINCT guard strings across PUBLISHED
+	// rules (publish-gated, not attacker-controlled at dispatch), the same order as the rule registry,
+	// so it needs no eviction. sync.Map for lock-free reads on the concurrent (queue-group) dispatch path.
+	guards sync.Map // guard source string → *rules.CompiledGuard
 }
 
 // NewDispatcher builds a REACT dispatcher over a rule resolver and its action sinks. Either sink may
@@ -202,6 +212,12 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			d.metrics.RecordNotEnabled("sendCommand")
 			return Done
 		}
+		if !d.guardAllows(ev, a) {
+			// The action's branch guard evaluated false for this detection — a routine, deterministic
+			// non-effect (like sendCommand on a Resolved). Skip and ack; a redelivery re-evaluates the
+			// same guard to the same bit, so there is nothing a retry would change.
+			return Done
+		}
 		req := CommandRequest{
 			Tenant:      ev.Tenant,
 			Token:       idempotencyToken(ev, a),
@@ -226,6 +242,15 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			// No alarm sink (a test-only configuration; production always wires it since 6d).
 			// Count it so its inertness is observable rather than silent.
 			d.metrics.RecordNotEnabled(action)
+			return Done
+		}
+		if !resolved && !d.guardAllows(ev, a) {
+			// Guarded out on the RISING edge → do not raise this contribution. The guard is consulted
+			// ONLY here, never on the falling edge: a raiseAlarm's Resolved is the STRUCTURAL clear of
+			// the same alarm key, and gating that would strand an alarm active forever if the guard's
+			// inputs changed between the raise and the resolve. Because we did not raise, no contributor
+			// exists, so the always-dispatched falling-edge clear is a harmless idempotent no-op — the
+			// contributor upsert removes a contribution that was never added.
 			return Done
 		}
 		// The VERSION-FREE stable rule identity keys BOTH the default alarm key AND the contributor: the
@@ -263,6 +288,48 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		// wedge). No metric — it cannot happen through the supported authoring path.
 		return Done
 	}
+}
+
+// guardAllows reports whether an action's branch guard permits it to dispatch for this detection
+// (ADR-053 slice 9c). An action with no guard always dispatches (the pre-9c behaviour). A guard is a
+// pure, stateless CEL boolean over the derived event's scalars (rules guard env), so a redelivery
+// re-evaluates it to the same bit — safe on REACT's at-least-once path. It fails CLOSED: a guard that
+// cannot be built (a bug — it passed the publish gate) or errors at evaluation (e.g. the runtime cost
+// limit tripped) is treated as "do not dispatch" rather than dispatched un-gated or retried into a
+// wedge, and is logged so the defect is visible. Called only on the rising edge (see dispatchAction),
+// so it never gates a structural alarm clear.
+func (d *Dispatcher) guardAllows(ev runtime.DerivedEvent, a rules.Action) bool {
+	if a.Guard == "" {
+		return true
+	}
+	g, err := d.guardProgram(a.Guard)
+	if err != nil {
+		log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: a published action guard failed to build; skipping the action (fail closed).")
+		return false
+	}
+	ok, err := g.Eval(rules.GuardInput{Value: ev.Value, Series: ev.Series})
+	if err != nil {
+		log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: an action guard errored at evaluation; skipping the action (fail closed).")
+		return false
+	}
+	return ok
+}
+
+// guardProgram returns the compiled guard for a source string, building and caching it on first
+// use. The cache (d.guards) is bounded by the distinct guard strings across published rules, so it
+// needs no eviction. A build error is a bug (the guard passed the publish gate); it is returned to
+// guardAllows, which fails closed.
+func (d *Dispatcher) guardProgram(source string) (*rules.CompiledGuard, error) {
+	if v, ok := d.guards.Load(source); ok {
+		return v.(*rules.CompiledGuard), nil
+	}
+	g, err := rules.BuildGuardProgram(source)
+	if err != nil {
+		return nil, err
+	}
+	// LoadOrStore so a concurrent build of the same source resolves to one shared program.
+	actual, _ := d.guards.LoadOrStore(source, g)
+	return actual.(*rules.CompiledGuard), nil
 }
 
 // edgeOrRaised normalizes a wire edge to an explicit token: an empty (legacy/pre-edge) value decodes
@@ -339,11 +406,15 @@ func idempotencyToken(ev runtime.DerivedEvent, a rules.Action) string {
 // reject them as duplicates. It anchors the idempotency token to WHAT is dispatched, not WHERE the
 // action sits in the chain.
 func actionContentKey(a rules.Action) string {
+	// The guard is part of the content identity, mirroring the authoring gate's actionDedupKey: two
+	// actions that differ only by guard are distinct dispatches (raise-if-hot vs raise-if-cold), so
+	// their idempotency tokens must differ or one guarded variant would collapse onto the other's token
+	// and swallow a dispatch.
 	switch a.Type {
 	case rules.ActionSendCommand:
-		return "sendCommand\x00" + a.SendCommand.Command + "\x00" + a.SendCommand.Payload
+		return "sendCommand\x00" + a.SendCommand.Command + "\x00" + a.SendCommand.Payload + "\x00" + a.Guard
 	case rules.ActionRaiseAlarm:
-		return "raiseAlarm\x00" + a.RaiseAlarm.AlarmKey
+		return "raiseAlarm\x00" + a.RaiseAlarm.AlarmKey + "\x00" + a.Guard
 	default:
 		return string(a.Type)
 	}

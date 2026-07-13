@@ -362,6 +362,17 @@ func buildAction(n Node) (rules.Action, error) {
 	}
 }
 
+// branchConfig is a REACT branch node (slice 9c): a signal→signal router carrying one CEL boolean
+// (When) that gates the actions downstream of it. Name is authoring-only (a human label for the
+// route); it never reaches the compiled rule. When is a guard-env CEL expression (rules guard
+// vocabulary: value / hasValue / series) — the lowering folds it onto the Guard of every action
+// reachable through this branch, and rules.Compile cost-gates the composed guard. An empty When is
+// a meaningless branch (it would gate nothing), rejected up front like a poisoned source.
+type branchConfig struct {
+	Name string `json:"name,omitempty"`
+	When string `json:"when"`
+}
+
 // sourceConfig is the Source node: it sets the rule's SCOPE (the profile the canvas authors
 // against), not any rules.Rule field — a source contributes nothing to the compiled rule
 // bytes, which is what lets a canvas rule stay byte-identical to a form rule (a form rule
