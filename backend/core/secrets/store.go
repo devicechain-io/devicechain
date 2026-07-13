@@ -100,8 +100,14 @@ func (s *gormStore) ctxDB(ctx context.Context, ref SecretRef) *gorm.DB {
 // never match a tenant row that happens to share a name.
 func (s *gormStore) scoped(ctx context.Context, ref SecretRef) *gorm.DB {
 	db := s.ctxDB(ctx, ref).Model(&Secret{})
+	// The tenant_id predicate is stated explicitly in BOTH branches — for tenant
+	// scope the tenant-scope callback also injects it, but stating it here is
+	// defense-in-depth (a consumer that built the store over a *gorm.DB without the
+	// callback registered would still be tenant-isolated on Exists/Delete/Resolve),
+	// mirroring the instance branch and the store's "scoping is deliberately
+	// explicit" doctrine.
 	if ref.Scope == ScopeTenant {
-		return db.Where("scope = ? AND name = ?", string(ScopeTenant), ref.Name)
+		return db.Where("tenant_id = ? AND scope = ? AND name = ?", ref.Tenant, string(ScopeTenant), ref.Name)
 	}
 	return db.Where("tenant_id = ? AND scope = ? AND name = ?", instanceTenantSentinel, string(ScopeInstance), ref.Name)
 }
@@ -124,13 +130,19 @@ func (s *gormStore) Put(ctx context.Context, ref SecretRef, value []byte) error 
 	err = s.scoped(ctx, ref).First(&existing).Error
 	switch {
 	case err == nil:
-		return s.scoped(ctx, ref).Where("id = ?", existing.ID).Updates(map[string]any{
-			"ciphertext":  env.Ciphertext,
-			"nonce":       env.Nonce,
-			"wrapped_dek": env.WrappedDEK,
-			"kek_version": env.KEKVersion,
-			"alg":         env.Alg,
-		}).Error
+		// Replace the envelope on the loaded row and Save it. Saving the populated
+		// struct (rather than an Updates(map)) keeps gorm's Statement.ReflectValue a
+		// struct, so the audit journal captures the handle (AuditLabel) and PK for a
+		// rotation — a map/zero-struct destination would record neither (ADR-019 /
+		// ADR-059 §3). Scope/name/tenant are rewritten to their existing values (a
+		// no-op) and the update is confined to this row by PK plus the tenant-scope
+		// callback (tenant) or the instance-scoped fetch that produced existing.ID.
+		existing.Ciphertext = env.Ciphertext
+		existing.Nonce = env.Nonce
+		existing.WrappedDEK = env.WrappedDEK
+		existing.KEKVersion = env.KEKVersion
+		existing.Alg = env.Alg
+		return s.ctxDB(ctx, ref).Save(&existing).Error
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		row := &Secret{
 			Scope:      string(ref.Scope),
@@ -189,7 +201,12 @@ func (s *gormStore) Delete(ctx context.Context, ref SecretRef) error {
 	if err := ref.Valid(); err != nil {
 		return err
 	}
-	return s.scoped(ctx, ref).Delete(&Secret{}).Error
+	// Pass a handle-bearing struct so gorm's Statement.ReflectValue carries the
+	// scope/name and the audit journal records WHICH secret was deleted (AuditLabel);
+	// a zero &Secret{} would log an empty handle for the most destructive mutation.
+	// These fields are not query conditions (Delete conditions come from scoped()'s
+	// Where); they only populate the audited row.
+	return s.scoped(ctx, ref).Delete(&Secret{Scope: string(ref.Scope), Name: ref.Name}).Error
 }
 
 // Exists reports whether a secret is stored under ref, without decrypting it (it

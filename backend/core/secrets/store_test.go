@@ -296,40 +296,72 @@ func TestStoreInvalidRefRejected(t *testing.T) {
 	}
 }
 
-// TestStoreHandleBindingRejectsRelabel proves a stored envelope is bound to its
-// handle: transplanting one secret's envelope columns onto another handle's row (a
-// relabel attack an attacker with DB write could attempt) makes that row fail to
-// resolve, because the AAD derived from the target handle no longer matches.
+// TestStoreHandleBindingRejectsRelabel proves a stored envelope is bound to its full
+// handle (scope, tenant, name): transplanting one secret's envelope columns onto
+// another handle's row — a relabel attack an attacker with DB write could attempt —
+// makes that row fail to resolve, because the AAD derived from the TARGET handle no
+// longer matches. It covers all three axes AAD binds: name, tenant, and scope.
 func TestStoreHandleBindingRejectsRelabel(t *testing.T) {
 	db := newStoreDB(t)
 	s := NewStore(db, newTestKP(t))
 	ctx := context.Background()
-
-	if err := s.Put(ctx, tenantRef("acme", "n1"), []byte("v1")); err != nil {
-		t.Fatalf("put n1: %v", err)
-	}
-	if err := s.Put(ctx, tenantRef("acme", "n2"), []byte("v2")); err != nil {
-		t.Fatalf("put n2: %v", err)
-	}
-
 	sysctx := core.WithSystemContext(ctx)
-	var r1 Secret
-	if err := db.WithContext(sysctx).Where("name = ?", "n1").First(&r1).Error; err != nil {
-		t.Fatalf("read n1: %v", err)
+
+	// tenantCol maps a ref to its stored tenant_id (the empty sentinel for instance).
+	tenantCol := func(ref SecretRef) string {
+		if ref.Scope == ScopeTenant {
+			return ref.Tenant
+		}
+		return instanceTenantSentinel
 	}
-	// Graft n1's envelope onto n2's row.
-	if err := db.WithContext(sysctx).Model(&Secret{}).Where("name = ?", "n2").Updates(map[string]any{
-		"ciphertext":  r1.Ciphertext,
-		"nonce":       r1.Nonce,
-		"wrapped_dek": r1.WrappedDEK,
-		"kek_version": r1.KEKVersion,
-		"alg":         r1.Alg,
-	}).Error; err != nil {
-		t.Fatalf("graft: %v", err)
+	// Seed a value under ref.
+	seed := func(ref SecretRef, val string) {
+		if err := s.Put(ctx, ref, []byte(val)); err != nil {
+			t.Fatalf("seed %v: %v", ref, err)
+		}
 	}
-	// Resolving n2 must now fail: the ciphertext authenticates only under n1's AAD.
-	if _, err := s.Resolve(ctx, tenantRef("acme", "n2")); err == nil {
-		t.Fatal("resolve of a relabeled envelope must fail (handle-bound AAD)")
+	// Graft donor's envelope columns onto victim's row (bypassing the store).
+	graft := func(donor, victim SecretRef) {
+		var d Secret
+		if err := db.WithContext(sysctx).Where("scope = ? AND tenant_id = ? AND name = ?",
+			string(donor.Scope), tenantCol(donor), donor.Name).First(&d).Error; err != nil {
+			t.Fatalf("read donor %v: %v", donor, err)
+		}
+		if err := db.WithContext(sysctx).Model(&Secret{}).Where("scope = ? AND tenant_id = ? AND name = ?",
+			string(victim.Scope), tenantCol(victim), victim.Name).Updates(map[string]any{
+			"ciphertext":  d.Ciphertext,
+			"nonce":       d.Nonce,
+			"wrapped_dek": d.WrappedDEK,
+			"kek_version": d.KEKVersion,
+			"alg":         d.Alg,
+		}).Error; err != nil {
+			t.Fatalf("graft %v→%v: %v", donor, victim, err)
+		}
+	}
+
+	cases := []struct {
+		name          string
+		donor, victim SecretRef
+	}{
+		{"cross-name", tenantRef("acme", "n1"), tenantRef("acme", "n2")},
+		{"cross-tenant", tenantRef("acme", "shared"), tenantRef("globex", "shared")},
+		{"cross-scope", instanceRef("k"), tenantRef("acme", "k")},
+	}
+	// Seed every distinct ref first (values differ so a wrong decrypt is detectable).
+	seed(tenantRef("acme", "n1"), "acme-n1")
+	seed(tenantRef("acme", "n2"), "acme-n2")
+	seed(tenantRef("acme", "shared"), "acme-shared")
+	seed(tenantRef("globex", "shared"), "globex-shared")
+	seed(instanceRef("k"), "instance-k")
+	seed(tenantRef("acme", "k"), "acme-k")
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			graft(c.donor, c.victim)
+			if _, err := s.Resolve(ctx, c.victim); err == nil {
+				t.Fatalf("resolve of a relabeled envelope (%s) must fail (handle-bound AAD)", c.name)
+			}
+		})
 	}
 }
 
@@ -344,32 +376,49 @@ func TestAadForInjective(t *testing.T) {
 	}
 }
 
-// TestStorePutWritesAuditRow proves a Put is captured by the audit journal by
-// construction (ADR-019 / ADR-059 §3): a mutation row records the actor and the
-// non-sensitive handle, never the value.
-func TestStorePutWritesAuditRow(t *testing.T) {
+// TestStoreMutationsAuditByConstruction proves EVERY secret mutation — create,
+// rotate (update), and delete — is captured by the audit journal with the
+// non-sensitive handle and never the value (ADR-019 / ADR-059 §3). The rotate and
+// delete coverage is load-bearing: those are the most security-sensitive mutations,
+// and a naive Updates(map)/Delete(&Secret{}) would record an empty handle.
+func TestStoreMutationsAuditByConstruction(t *testing.T) {
 	db := newStoreDB(t)
 	s := NewStore(db, newTestKP(t))
 	ctx := context.Background()
+	ref := instanceRef("ai/provider/anthropic")
+	const wantLabel = "instance/ai/provider/anthropic"
 
-	if err := s.Put(ctx, instanceRef("ai/provider/anthropic"), []byte("sk-secret")); err != nil {
+	if err := s.Put(ctx, ref, []byte("sk-v1")); err != nil { // create
 		t.Fatalf("put: %v", err)
 	}
+	if err := s.Rotate(ctx, ref, []byte("sk-v2")); err != nil { // update
+		t.Fatalf("rotate: %v", err)
+	}
+	if err := s.Delete(ctx, ref); err != nil { // delete
+		t.Fatalf("delete: %v", err)
+	}
+
 	var events []rdb.AuditEvent
-	if err := db.WithContext(core.WithSystemContext(ctx)).Where("table_name = ?", "secrets").Find(&events).Error; err != nil {
+	if err := db.WithContext(core.WithSystemContext(ctx)).Where("table_name = ?", "secrets").
+		Order("id").Find(&events).Error; err != nil {
 		t.Fatalf("read audit: %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 audit row for the Put, got %d", len(events))
+	gotOps := map[string]bool{}
+	for _, e := range events {
+		gotOps[e.Operation] = true
+		if e.Actor != "system" {
+			t.Fatalf("op %q: actor should be system, got %q", e.Operation, e.Actor)
+		}
+		if e.EntityLabel != wantLabel {
+			t.Fatalf("op %q: audit label should be the handle %q, got %q", e.Operation, wantLabel, e.EntityLabel)
+		}
+		if bytes.Contains([]byte(e.EntityLabel), []byte("sk-")) {
+			t.Fatalf("op %q: audit row must never contain secret material, got %q", e.Operation, e.EntityLabel)
+		}
 	}
-	e := events[0]
-	if e.Operation != "create" || e.Actor != "system" {
-		t.Fatalf("audit row wrong: op=%q actor=%q", e.Operation, e.Actor)
-	}
-	if e.EntityLabel != "instance/ai/provider/anthropic" {
-		t.Fatalf("audit label should be the handle, got %q", e.EntityLabel)
-	}
-	if bytes.Contains([]byte(e.EntityLabel), []byte("sk-secret")) {
-		t.Fatal("audit row must never contain the secret value")
+	for _, op := range []string{"create", "update", "delete"} {
+		if !gotOps[op] {
+			t.Fatalf("expected an audited %q row for the secret; got ops %v", op, gotOps)
+		}
 	}
 }
