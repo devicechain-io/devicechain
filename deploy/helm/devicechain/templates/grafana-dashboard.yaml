@@ -1,0 +1,21 @@
+{{/*
+Grafana dashboard for the event-processing (DETECT + REACT) operations board (Slice 8).
+Delivered as a ConfigMap labeled grafana_dashboard: "1" so the Grafana sidecar
+(kube-prometheus-stack) auto-imports it — the same operator-based assumption the
+ServiceMonitor already makes. Skipped when metrics are off or dashboards are opted out
+(clusters with the Prometheus Operator but no Grafana sidecar). The JSON lives at
+dashboards/event-processing.json and is scoped per-instance by the $namespace template var.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.grafanaDashboards }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.instance.id }}-event-processing-dashboard
+  namespace: {{ .Values.instance.id }}
+  labels:
+    grafana_dashboard: "1"
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+data:
+  event-processing.json: |-
+{{ .Files.Get "dashboards/event-processing.json" | indent 4 }}
+{{- end }}

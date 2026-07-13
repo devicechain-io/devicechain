@@ -64,9 +64,11 @@
     "metrics": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" }
+        "enabled": { "type": "boolean" },
+        "grafanaDashboards": { "type": "boolean" },
+        "alerts": { "type": "boolean" }
       },
-      "description": "Prometheus scrape integration. enabled renders a ServiceMonitor per area (scraping /metrics on the graphql port); requires the Prometheus Operator CRDs."
+      "description": "Prometheus scrape integration. enabled renders a ServiceMonitor per area (scraping /metrics on the graphql port); requires the Prometheus Operator CRDs. grafanaDashboards renders the event-processing ops dashboard ConfigMap for the Grafana sidecar; alerts renders a PrometheusRule with the DETECT+REACT alerting rules."
     },
     "replicas": { "type": "integer", "minimum": 0 },
     "rollingUpdate": {

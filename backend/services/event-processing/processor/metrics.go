@@ -33,6 +33,19 @@ type detectMetrics struct {
 	watermarkLagSeconds prometheus.Gauge
 	restoreSeconds      prometheus.Gauge
 
+	// Slice-8 consumer-lag gauges (ADR-051 observability thread; the operations board's #1
+	// "falling behind" signal). The comment above earmarked this as a Slice-8 follow-up: consumer
+	// lag is NOT in fact derivable at the dashboard from the emitted series (the stream-metrics
+	// sampler exposes stream message COUNT, not the last sequence, so there is no last-seq to
+	// subtract applied_stream_seq from), so the resolved-events durable's broker-reported backlog
+	// is first-classed here instead. consumerPending is UNDELIVERED work waiting on the consumer
+	// (the primary lag signal); consumerAckPending is DELIVERED-BUT-UNACKED (in-flight, and a
+	// peer's during a rolling-update overlap). Sampled on the single-writer ticker at the
+	// checkpoint cadence off the same Backlog probe idle-advance uses (safe to call concurrently
+	// with the read loop). Bounded cardinality (no labels).
+	consumerPending    prometheus.Gauge
+	consumerAckPending prometheus.Gauge
+
 	// Slice-4 fan-out / derived-event gauges (ADR-051 observability thread). Cardinality is
 	// bounded: no per-tenant labels (the ADR-023 G.3 lesson) — the per-tenant state budget is
 	// an ADR-023 governance concern (slice 6), where the label set is budgeted. The one
@@ -86,6 +99,9 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 		snapshotBytes:       ms.NewGauge("detect_snapshot_bytes", "Serialized size of the last DETECT snapshot payload.", nil),
 		watermarkLagSeconds: ms.NewGauge("detect_watermark_lag_seconds", "Wall-clock time minus the engine watermark at the last checkpoint.", nil),
 		restoreSeconds:      ms.NewGauge("detect_restore_seconds", "Time to restore engine state from the snapshot store at startup.", nil),
+
+		consumerPending:    ms.NewGauge("detect_consumer_pending", "Undelivered messages waiting on the resolved-events durable consumer (the primary DETECT lag signal).", nil),
+		consumerAckPending: ms.NewGauge("detect_consumer_ack_pending", "Delivered-but-unacked messages on the resolved-events durable consumer (in-flight work).", nil),
 
 		rulesActive:       ms.NewGauge("detect_rules_active", "Rules loaded into the DETECT engine.", nil),
 		fanoutEventsTotal: ms.NewCounter("detect_fanout_events_total", "Per-rule core events produced by the resolved-event fan-out.", nil),
@@ -254,6 +270,16 @@ func (m *detectMetrics) recordApplied() {
 		return
 	}
 	m.eventsAppliedTotal.Inc()
+}
+
+// recordConsumerLag publishes the resolved-events durable consumer's broker-reported backlog
+// (undelivered + delivered-unacked). Nil-safe (unit-test loops run unmeasured).
+func (m *detectMetrics) recordConsumerLag(pending, ackPending uint64) {
+	if m == nil {
+		return
+	}
+	m.consumerPending.Set(float64(pending))
+	m.consumerAckPending.Set(float64(ackPending))
 }
 
 // recordCheckpoint records a committed snapshot's cost, size, position, and lag.

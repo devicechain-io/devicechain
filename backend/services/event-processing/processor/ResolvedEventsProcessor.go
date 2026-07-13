@@ -246,6 +246,11 @@ type ResolvedEventsProcessor struct {
 	// from checkpoint() — which every call site activity-gates, so a rule-budget breach that changes
 	// no snapshot state would otherwise never be measured on a quiet stream.
 	lastBudgetSample time.Time
+	// lastLagSample is the wall-clock time of the most recent consumer-lag gauge sample (slice 8).
+	// Sampled from the ticker on the checkpoint cadence — the same decoupling as lastBudgetSample —
+	// so the operations board's #1 "falling behind" signal keeps updating even while the stream is
+	// quiet and nothing checkpoints (the exact moment a backlog is most worth seeing).
+	lastLagSample time.Time
 	// lastLiveRead is the wall-clock time of the most recent live read-pump delivery (a
 	// message or a read error). It drains the reader's local fetch buffer before idle-advance
 	// (the authoritative caught-up signal is the broker backlog, not this timer): idle-advance
@@ -1039,6 +1044,14 @@ func (rp *ResolvedEventsProcessor) run() {
 				rp.recordStateBudget()
 				rp.lastBudgetSample = now
 			}
+			// Consumer-lag gauge (slice 8), sampled on the ticker at the checkpoint cadence off the
+			// same broker Backlog probe idle-advance uses. It is the operations board's primary
+			// falling-behind signal, so it must keep refreshing on a quiet-but-backlogged stream —
+			// hence its own timer, not a ride on the activity-gated checkpoint().
+			if now.Sub(rp.lastLagSample) >= rp.cfg.CheckpointInterval {
+				rp.sampleConsumerLag(rp.procCtx)
+				rp.lastLagSample = now
+			}
 			// Retry any recheck a transient store error deferred (bounded, idempotent) — dynamic-threshold
 			// attribute rechecks and dead-man arming rechecks alike. Both share ONE per-tick wall-clock
 			// budget so that even a black-holed DB (every read burning loopReadTimeout) cannot stall the
@@ -1736,6 +1749,27 @@ type stateBudgetStats struct {
 func (rp *ResolvedEventsProcessor) recordStateBudget() {
 	s := rp.computeStateBudget()
 	rp.metrics.recordStateBudget(s.totalLiveKeys, s.tenantsOverRules, s.tenantsOverKeys)
+}
+
+// sampleConsumerLag probes the resolved-events durable consumer's broker backlog and publishes it
+// as the consumer-lag gauges (slice 8). It reuses the same Backlog probe as idle-advance — safe to
+// call concurrently with the read loop — and is bounded by backlogProbeTimeout so a black-holed
+// broker cannot stall the single-writer loop. A probe error leaves the last-good gauge value in
+// place (staleness an operator reads as "no fresh sample", not a false zero) and is logged at debug,
+// matching idle-advance's fail-safe posture. A nil backlogProbe (the scaffold/test path, or a reader
+// that cannot report backlog) is skipped.
+func (rp *ResolvedEventsProcessor) sampleConsumerLag(ctx context.Context) {
+	if rp.backlogProbe == nil {
+		return
+	}
+	pctx, cancel := context.WithTimeout(ctx, backlogProbeTimeout)
+	pending, ackPending, err := rp.backlogProbe.Backlog(pctx)
+	cancel()
+	if err != nil {
+		log.Debug().Err(err).Msg("Consumer-lag sample skipped: cannot read the resolved-events backlog.")
+		return
+	}
+	rp.metrics.recordConsumerLag(pending, ackPending)
 }
 
 // computeStateBudget rolls the engine's per-rule live-key counts and the registry's per-tenant rule
