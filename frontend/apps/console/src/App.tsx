@@ -12,6 +12,8 @@ import DeviceDetailPage from '@/routes/devices/DeviceDetailPage';
 import DashboardsPage from '@/routes/dashboards/DashboardsPage';
 import DashboardDetailPage from '@/routes/dashboards/DashboardDetailPage';
 import AlarmsPage from '@/routes/alarms/AlarmsPage';
+import ConnectorsPage from '@/routes/connectors/ConnectorsPage';
+import ConnectorDetailPage from '@/routes/connectors/ConnectorDetailPage';
 import AuditPage from '@/routes/audit/AuditPage';
 import { ResourceListPage, ResourceDetailPage, type RegistryResource } from '@/components/registry';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
@@ -89,6 +91,8 @@ export default function App() {
           <Route path="dashboards" element={<DashboardsPage />} />
           <Route path="dashboards/:token" element={<DashboardDetailPage />} />
           <Route path="alarms" element={<AlarmsPage />} />
+          <Route path="connectors" element={<ConnectorsPage />} />
+          <Route path="connectors/:token" element={<ConnectorDetailPage />} />
           <Route path="audit" element={<AuditPage />} />
           {/* Every registry list/detail renders through the one generic page
               component, so React reuses the instance across routes. Key each

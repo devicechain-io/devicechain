@@ -69,6 +69,16 @@ const config: CodegenConfig = {
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },
     },
+    // The per-tenant outbound-connectors CRUD (ADR-060 C5), served by the
+    // outbound-connectors service. Its own schema + client; the console lists a
+    // tenant's connectors for the `publish` action's picker and authors them here.
+    './src/gql/outbound-connectors/': {
+      schema: '../../../backend/services/outbound-connectors/graphql/schema.graphql',
+      documents: ['src/lib/api/connectors.ts'],
+      preset: 'client',
+      presetConfig: { fragmentMasking: false },
+      config: { documentMode: 'string' },
+    },
     // The instance-scoped admin API (ADR-033), served by user-management at
     // /admin/graphql. Its own schema + client so the admin console's typed
     // operations never mix with the tenant-scoped user-management ones.
