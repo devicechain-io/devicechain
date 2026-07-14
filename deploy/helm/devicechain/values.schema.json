@@ -173,6 +173,52 @@
         "resources": { "type": "object" }
       }
     },
+    "blobStorage": {
+      "type": "object",
+      "description": "ADR-058: Kubernetes volume wiring for the filesystem object store. Creates/mounts the PVC that backs instance.config.infrastructure.blob.directory (branding logos today; firmware/OTA + exports later). Ignored for the s3 backend; the render fails on a persistence/backend mismatch.",
+      "properties": {
+        "persistence": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "existingClaim": { "type": "string" },
+            "mountPath": {
+              "type": "string",
+              "description": "Volume mount path; defaults to blob.directory (must match it). Set only when the instance config is supplied via instance.existingSecret and the chart cannot read blob.directory."
+            },
+            "accessModes": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"] },
+              "minItems": 1
+            },
+            "size": { "type": "string", "minLength": 1 },
+            "storageClass": { "type": "string" },
+            "annotations": { "type": "object" }
+          }
+        },
+        "mountAreas": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "user-management",
+              "device-management",
+              "event-sources",
+              "event-management",
+              "device-state",
+              "dashboard-management",
+              "command-delivery",
+              "notification-management",
+              "event-processing",
+              "outbound-connectors",
+              "mcp"
+            ]
+          },
+          "uniqueItems": true,
+          "description": "Functional areas that mount the blob volume at the store directory (default: user-management)."
+        }
+      }
+    },
     "functionalAreas": {
       "type": "object",
       "additionalProperties": {

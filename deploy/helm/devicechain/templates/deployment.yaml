@@ -14,8 +14,21 @@ ADR-022 review hardening:
   E8 — checksum annotations roll the pods when config (Secret/ConfigMap) changes.
 */}}
 {{- $root := . -}}
+{{- $blob := include "devicechain.blobBackendConfig" . | fromJson }}
+{{- $blobBackend := $blob.backend | default "filesystem" }}
+{{- $blobPersist := ($root.Values.blobStorage | default dict).persistence | default dict }}
+{{- $blobPath := ternary ($blobPersist.mountPath | default "") ($blob.directory | default "") (ne ($blobPersist.mountPath | default "") "") }}
+{{- $blobWantVolume := or $blobPersist.enabled (not (empty $blobPersist.existingClaim)) }}
+{{- $blobMountAreas := ($root.Values.blobStorage | default dict).mountAreas | default (list "user-management") }}
 {{- range $area := splitList "," (include "devicechain.enabledAreas" .) }}
 {{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
+{{/*
+Mount the filesystem object-store volume (ADR-058) into this area only when it consumes the
+store (blobStorage.mountAreas), the filesystem backend is selected with a resolved path, and a
+volume is provided. The read-only rootfs means the store's directory MUST be a writable mount;
+the s3 backend needs no volume, so this stays false there.
+*/}}
+{{- $mountBlob := and (has $area $blobMountAreas) (eq $blobBackend "filesystem") (ne $blobPath "") $blobWantVolume }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -148,6 +161,10 @@ spec:
             - name: microservice-config
               mountPath: /etc/dct-config
               readOnly: true
+            {{- if $mountBlob }}
+            - name: blob-store
+              mountPath: {{ $blobPath | quote }}
+            {{- end }}
       volumes:
         - name: instance-config
           secret:
@@ -155,4 +172,9 @@ spec:
         - name: microservice-config
           configMap:
             name: {{ include "devicechain.microserviceConfigMap" $root }}
+        {{- if $mountBlob }}
+        - name: blob-store
+          persistentVolumeClaim:
+            claimName: {{ include "devicechain.blobClaimName" $root }}
+        {{- end }}
 {{- end }}

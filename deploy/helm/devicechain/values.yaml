@@ -211,6 +211,48 @@ metrics:
   # metrics.enabled is false.
   alerts: true
 
+# Kubernetes volume wiring for the FILESYSTEM object store (ADR-058), i.e. when
+# instance.config.infrastructure.blob.backend is "filesystem". The filesystem backend
+# reads/writes blob.directory, and because the service pods run with a read-only root
+# filesystem (securityContext.readOnlyRootFilesystem), that directory MUST be a writable
+# mounted volume — and, for more than one replica of a consuming area, an RWX
+# (ReadWriteMany) volume SHARED across pods (a filesystem store is per-pod otherwise).
+# Ignored for the s3 backend (S3 needs no volume; enabling persistence with backend:s3
+# fails the render). Leaving persistence disabled with an empty blob.directory keeps the
+# object store "not configured" — branding-logo upload/read return 503 and Tier-0 inline/
+# URL logos still work — a safe default rather than a silent per-pod ephemeral store.
+blobStorage:
+  persistence:
+    # Create a PersistentVolumeClaim for the filesystem store and mount it into the
+    # consuming areas. Requires backend: filesystem and a resolved mount path (below).
+    enabled: false
+    # Use a pre-created PVC instead of having the chart create one (e.g. an RWX claim
+    # provisioned out-of-band). When set, size/accessModes/storageClass are ignored and
+    # no PVC is rendered — but the volume is still mounted into mountAreas.
+    existingClaim: ""
+    # The mount path. Defaults to instance.config.infrastructure.blob.directory (they MUST
+    # match — the volume mounts exactly where the store writes; the render fails if both are
+    # set and differ). Set this explicitly only when the instance config is supplied via
+    # instance.existingSecret, so the chart cannot see blob.directory itself.
+    mountPath: ""
+    # RWO suits a single replica. For multi-replica consumers (e.g. user-management
+    # replicas > 1) this MUST be ReadWriteMany with an RWX-capable storageClass (EFS /
+    # Filestore / NFS), or use the s3 backend instead.
+    accessModes:
+      - ReadWriteOnce
+    size: 5Gi
+    # Empty uses the cluster default StorageClass. Set the RWX-capable class for
+    # multi-replica. "-" (a literal dash) selects "no storage class" for a statically
+    # pre-provisioned PV.
+    storageClass: ""
+    # Extra annotations merged onto the PVC (e.g. a backup policy).
+    annotations: {}
+  # Functional areas that mount the blob volume at the store directory. Only areas that
+  # actually read/write the object store need it (today: user-management, for branding
+  # logos). An area that uses the store but is omitted here finds it "not configured".
+  mountAreas:
+    - user-management
+
 # E7 (ADR-022 review): default pod resource requests/limits (override per area
 # under functionalAreas.<area>.resources). These are lightweight Go services
 # (~50MB baseline per the mission); requests size for scheduling, limits cap the
