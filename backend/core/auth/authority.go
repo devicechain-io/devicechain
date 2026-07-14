@@ -91,6 +91,14 @@ const (
 	// external system a rule pushes to), not a human-notification channel.
 	ConnectorRead  Authority = "connector:read"
 	ConnectorWrite Authority = "connector:write"
+
+	// Tenant branding self-service (user-management, ADR-038). Gates the
+	// self-scoped setTenantBranding mutation — a tenant admin white-labeling their
+	// OWN tenant (title/palette/logo). Reads need no authority: resolved branding
+	// rides the self-scoped `tenant` query, visible to any member (it's their own
+	// brand), like tenantGovernance. Distinct from tenant:write, which is the
+	// instance-scoped operator authority over any tenant's control-plane record.
+	BrandingWrite Authority = "branding:write"
 )
 
 // vocabulary is the set of every known authority. A Role may only grant
@@ -124,6 +132,7 @@ var vocabulary = map[Authority]struct{}{
 	ClientWrite:       {},
 	ConnectorRead:     {},
 	ConnectorWrite:    {},
+	BrandingWrite:     {},
 }
 
 // ValidAuthority reports whether s names a known authority (including the

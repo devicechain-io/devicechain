@@ -13,10 +13,13 @@ import (
 )
 
 // TenantResolver resolves the Tenant GraphQL type: the control-plane tenant the
-// caller is acting within. It backs the console's tenant header today; branding
-// (logo/colors) will extend this type as it lands.
+// caller is acting within. It backs the console's tenant header and carries the
+// resolved white-labeling branding (ADR-038). It holds a back-reference to the
+// schema resolver so the branding field can reach the settings service (the
+// cascade's default tier).
 type TenantResolver struct {
-	t *iam.Tenant
+	t   *iam.Tenant
+	svc *SchemaResolver
 }
 
 func (r *TenantResolver) Token() string        { return r.t.Token }
@@ -35,7 +38,7 @@ func (r *SchemaResolver) Tenant(ctx context.Context) (*TenantResolver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TenantResolver{t: t}, nil
+	return &TenantResolver{t: t, svc: r}, nil
 }
 
 // TenantGovernanceResolver resolves the TenantGovernance type: a tenant's ingest

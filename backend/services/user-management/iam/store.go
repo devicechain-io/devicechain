@@ -280,6 +280,19 @@ func (s *Store) UpdateTenant(ctx context.Context, t *Tenant) error {
 	return s.sys(ctx).Save(t).Error
 }
 
+// UpdateTenantFields writes only the named columns of an already-loaded tenant,
+// leaving every other column untouched. Passed a map, GORM writes each key even
+// when its value is nil (a typed nil pointer sets the column to NULL) — unlike a
+// struct update, which skips zero values — so this is how a nullable-override
+// column (e.g. a branding_* field, ADR-038) is set OR cleared-to-inherit. A no-op
+// for an empty map. Mirrors UpdateIdentityFields.
+func (s *Store) UpdateTenantFields(ctx context.Context, t *Tenant, fields map[string]any) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	return s.sys(ctx).Model(t).Updates(fields).Error
+}
+
 // SetTenantEnabled flips a tenant's enabled flag in place.
 func (s *Store) SetTenantEnabled(ctx context.Context, t *Tenant, enabled bool) error {
 	return s.sys(ctx).Model(t).Update("enabled", enabled).Error

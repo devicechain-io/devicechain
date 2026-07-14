@@ -112,12 +112,35 @@ export async function refresh(refreshToken: string): Promise<AuthToken> {
 // the access token, so it takes no arguments. Backs the console's tenant header
 // (name + token); the shape will grow to carry branding.
 
+// The query and the setTenantBranding mutation select an identical Tenant shape
+// (token/name/description + the resolved branding) so the editor can write the
+// mutation result straight into the tenant cache (ADR-038 §1.2).
 const CURRENT_TENANT = graphql(`
   query CurrentTenant {
     tenant {
       token
       name
       description
+      branding {
+        title
+        logo
+        logoMaxHeight
+        primary
+        background
+        foreground
+        accent
+        updatedAt
+      }
+      brandingOverride {
+        title
+        logo
+        logoMaxHeight
+        primary
+        background
+        foreground
+        accent
+        updatedAt
+      }
     }
   }
 `);
@@ -125,6 +148,69 @@ const CURRENT_TENANT = graphql(`
 export async function getCurrentTenant(): Promise<CurrentTenant> {
   const data = await gql('user-management', CURRENT_TENANT);
   return data.tenant;
+}
+
+// The resolved white-labeling applied to the console shell (ADR-038). A null field
+// means "inherit the built-in look" for that aspect.
+export type TenantBranding = CurrentTenant['branding'];
+
+// Self-service white-labeling of the caller's OWN tenant (requires branding:write).
+// A null field CLEARS that override, re-inheriting the operator/code default.
+// Returns the tenant with freshly-resolved branding for an immediate cache write.
+const SET_TENANT_BRANDING = graphql(`
+  mutation SetTenantBranding($input: TenantBrandingInput!) {
+    setTenantBranding(input: $input) {
+      token
+      name
+      description
+      branding {
+        title
+        logo
+        logoMaxHeight
+        primary
+        background
+        foreground
+        accent
+        updatedAt
+      }
+      brandingOverride {
+        title
+        logo
+        logoMaxHeight
+        primary
+        background
+        foreground
+        accent
+        updatedAt
+      }
+    }
+  }
+`);
+
+// A branding override to submit: every field optional; null clears that override.
+export interface TenantBrandingInput {
+  title?: string | null;
+  logo?: string | null;
+  logoMaxHeight?: number | null;
+  primary?: string | null;
+  background?: string | null;
+  foreground?: string | null;
+  accent?: string | null;
+}
+
+export async function setTenantBranding(input: TenantBrandingInput): Promise<CurrentTenant> {
+  const data = await gql('user-management', SET_TENANT_BRANDING, {
+    input: {
+      title: input.title ?? null,
+      logo: input.logo ?? null,
+      logoMaxHeight: input.logoMaxHeight ?? null,
+      primary: input.primary ?? null,
+      background: input.background ?? null,
+      foreground: input.foreground ?? null,
+      accent: input.accent ?? null,
+    },
+  });
+  return data.setTenantBranding;
 }
 
 // Describes the identity the caller is signed in as — resolved server-side from

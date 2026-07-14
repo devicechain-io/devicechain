@@ -5,9 +5,13 @@ package graphql
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-user-management/branding"
 	"github.com/devicechain-io/dc-user-management/settings"
 )
 
@@ -89,6 +93,16 @@ func (r *SettingsResolver) SetSetting(ctx context.Context, args struct {
 	if err := auth.Authorize(ctx, auth.SettingsWrite); err != nil {
 		return nil, err
 	}
+	// The generic settings store treats every value as opaque JSON, but the
+	// branding.default value has a shape + rules (ADR-038): validate it at the mint
+	// point so an operator can never store a value that would be rejected on the
+	// tenant path (a non-hex color, an inline-SVG logo) and have it served to every
+	// non-overriding tenant. Other keys stay opaque.
+	if args.Key == settings.KeyBrandingDefault {
+		if err := validateBrandingDefault(args.Value); err != nil {
+			return nil, err
+		}
+	}
 	eff, err := r.getSettingsService(ctx).Set(ctx, args.Key, []byte(args.Value), actingUser(ctx))
 	if err != nil {
 		return nil, err
@@ -107,6 +121,19 @@ func (r *SettingsResolver) ClearSetting(ctx context.Context, args struct{ Key st
 		return nil, err
 	}
 	return &SettingResolver{E: *eff}, nil
+}
+
+// validateBrandingDefault rejects a branding.default value that is not a
+// shape-valid, rule-valid branding override (ADR-038). DisallowUnknownFields so a
+// typo'd key surfaces instead of silently no-op'ing.
+func validateBrandingDefault(value string) error {
+	dec := json.NewDecoder(strings.NewReader(value))
+	dec.DisallowUnknownFields()
+	var b branding.Branding
+	if err := dec.Decode(&b); err != nil {
+		return fmt.Errorf("branding.default is not a valid branding object: %w", err)
+	}
+	return branding.Validate(b)
 }
 
 // actingUser returns the authenticated caller's username for audit stamping, or

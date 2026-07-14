@@ -14,6 +14,7 @@ import {
   LayoutGrid,
   MapPin,
   Package,
+  Palette,
   ScrollText,
   SlidersHorizontal,
   Webhook,
@@ -37,6 +38,7 @@ import {
   SidebarRail,
 } from '@/components/ui/sidebar';
 import { useAuth } from '@/auth/AuthProvider';
+import { useCurrentTenant } from '@/auth/TenantProvider';
 import { hasAuthority, type DecodedClaims } from '@devicechain/client';
 import { NavUser } from '@/routes/NavUser';
 
@@ -103,6 +105,7 @@ const NAV: NavNode[] = [
     ],
   },
   { label: 'Audit', href: '/audit', icon: ScrollText, requires: 'audit:read' },
+  { label: 'Branding', href: '/branding', icon: Palette, requires: 'branding:write' },
 ];
 
 function isLeaf(node: NavNode): node is NavLeaf {
@@ -139,6 +142,9 @@ function activeGroupLabel(pathname: string): string | undefined {
 export function AppSidebar() {
   const { pathname } = useLocation();
   const { claims } = useAuth();
+  const tenant = useCurrentTenant();
+  const brandLogo = tenant?.branding?.logo ?? null;
+  const brandHeight = tenant?.branding?.logoMaxHeight ?? 24;
   const nav = visibleNav(claims);
   const activeGroup = activeGroupLabel(pathname);
   // Accordion: at most one group expanded at a time, to keep the rail uncluttered.
@@ -158,11 +164,23 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild tooltip="DeviceChain" className="justify-center">
               <Link to="/">
-                {/* Collapsed icon rail: cube mark only */}
+                {/* Collapsed icon rail: cube mark only (a tenant favicon/mark is
+                    Phase 3; the rail keeps the DeviceChain cube for now). */}
                 <Logomark className="hidden size-7 shrink-0 group-data-[collapsible=icon]:block" />
-                {/* Expanded: horizontal lockup with the console subtitle beneath */}
+                {/* Expanded: the tenant's branding logo when set (ADR-038), else
+                    the DeviceChain lockup. Rendered only in an <img> so an
+                    SVG-via-https logo cannot execute script. */}
                 <div className="flex flex-col items-center gap-1 group-data-[collapsible=icon]:hidden">
-                  <LogoHorizontal deviceColor="currentColor" className="h-[17px] w-auto" />
+                  {brandLogo ? (
+                    <img
+                      src={brandLogo}
+                      alt={tenant?.name || tenant?.token || 'Tenant'}
+                      className="w-auto max-w-full object-contain"
+                      style={{ maxHeight: brandHeight }}
+                    />
+                  ) : (
+                    <LogoHorizontal deviceColor="currentColor" className="h-[17px] w-auto" />
+                  )}
                   <span className="truncate text-xs text-muted-foreground">Management Console</span>
                 </div>
               </Link>

@@ -4,6 +4,16 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+export type TenantBrandingInput = {
+  accent?: string | null | undefined;
+  background?: string | null | undefined;
+  foreground?: string | null | undefined;
+  logo?: string | null | undefined;
+  logoMaxHeight?: number | null | undefined;
+  primary?: string | null | undefined;
+  title?: string | null | undefined;
+};
+
 export type LoginMutationVariables = Exact<{
   email: string;
   password: string;
@@ -37,7 +47,14 @@ export type RefreshMutation = { refresh: { accessToken: string, refreshToken: st
 export type CurrentTenantQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type CurrentTenantQuery = { tenant: { token: string, name: string | null, description: string | null } };
+export type CurrentTenantQuery = { tenant: { token: string, name: string | null, description: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null } } };
+
+export type SetTenantBrandingMutationVariables = Exact<{
+  input: TenantBrandingInput;
+}>;
+
+
+export type SetTenantBrandingMutation = { setTenantBranding: { token: string, name: string | null, description: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null } } };
 
 export type MeQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -116,9 +133,58 @@ export const CurrentTenantDocument = new TypedDocumentString(`
     token
     name
     description
+    branding {
+      title
+      logo
+      logoMaxHeight
+      primary
+      background
+      foreground
+      accent
+      updatedAt
+    }
+    brandingOverride {
+      title
+      logo
+      logoMaxHeight
+      primary
+      background
+      foreground
+      accent
+      updatedAt
+    }
   }
 }
     `) as unknown as TypedDocumentString<CurrentTenantQuery, CurrentTenantQueryVariables>;
+export const SetTenantBrandingDocument = new TypedDocumentString(`
+    mutation SetTenantBranding($input: TenantBrandingInput!) {
+  setTenantBranding(input: $input) {
+    token
+    name
+    description
+    branding {
+      title
+      logo
+      logoMaxHeight
+      primary
+      background
+      foreground
+      accent
+      updatedAt
+    }
+    brandingOverride {
+      title
+      logo
+      logoMaxHeight
+      primary
+      background
+      foreground
+      accent
+      updatedAt
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<SetTenantBrandingMutation, SetTenantBrandingMutationVariables>;
 export const MeDocument = new TypedDocumentString(`
     query Me {
   me {
