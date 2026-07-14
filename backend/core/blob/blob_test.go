@@ -47,6 +47,24 @@ func TestBuildKeyRejectsTraversalAndBadSegments(t *testing.T) {
 	}
 }
 
+func TestBuildKeyRejectsReservedAndLeadingDotID(t *testing.T) {
+	cases := map[string]Key{
+		"reserved dcmeta suffix": {Tenant: "t", Purpose: "p", ID: "obj.dcmeta"},
+		"leading dot id":         {Tenant: "t", Purpose: "p", ID: ".hidden"},
+		"temp-prefix id":         {Tenant: "t", Purpose: "p", ID: ".put-x"},
+		"leading dot tenant":     {Tenant: ".acme", Purpose: "p", ID: "i"},
+	}
+	for name, k := range cases {
+		if _, err := buildKey("inst1", k); err == nil {
+			t.Errorf("%s: expected error, got nil", name)
+		}
+	}
+	// A normal dotted id (uuid.png) is still fine.
+	if _, err := buildKey("inst1", Key{Tenant: "t", Purpose: "p", ID: "abc.png"}); err != nil {
+		t.Fatalf("dotted id must pass: %v", err)
+	}
+}
+
 func TestBuildKeyRejectsBadInstanceID(t *testing.T) {
 	for _, id := range []string{"", "..", "a/b", "in stance"} {
 		if _, err := buildKey(id, Key{Tenant: "t", Purpose: "p", ID: "i"}); err == nil {

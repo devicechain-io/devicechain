@@ -153,6 +153,75 @@ func TestFilesystemRejectsForeignAndTamperedRef(t *testing.T) {
 	}
 }
 
+func TestFilesystemRejectsCrossInstanceRef(t *testing.T) {
+	// A tampered ref naming ANOTHER instance's key must be refused, not served —
+	// the ADR-048 isolation invariant (matters on a shared root/bucket).
+	ctx := context.Background()
+	s := newFS(t)
+	foreign := Ref{Backend: BackendFilesystem, Key: "otherinst/acme/branding-logo/logo.png"}
+	if _, _, err := s.Open(ctx, foreign); err == nil {
+		t.Fatal("Open of a cross-instance ref must error")
+	}
+	if _, err := s.Stat(ctx, foreign); err == nil {
+		t.Fatal("Stat of a cross-instance ref must error")
+	}
+	if err := s.Delete(ctx, foreign); err == nil {
+		t.Fatal("Delete of a cross-instance ref must error")
+	}
+}
+
+func TestFilesystemContentTypeMismatchRejected(t *testing.T) {
+	ctx := context.Background()
+	s := newFS(t)
+	// A declared type that contradicts the id extension is rejected up front.
+	_, err := s.Put(ctx, Key{Tenant: "t", Purpose: "branding-logo", ID: "logo.svg"},
+		strings.NewReader("x"), PutOptions{ContentType: "image/png"})
+	if err == nil {
+		t.Fatal("Put with contradictory content-type vs extension must error")
+	}
+	// A matching declared type is fine.
+	if _, err := s.Put(ctx, Key{Tenant: "t", Purpose: "branding-logo", ID: "logo.png"},
+		strings.NewReader("x"), PutOptions{ContentType: "image/png"}); err != nil {
+		t.Fatalf("Put with matching content-type: %v", err)
+	}
+	// A declared type with no inferable extension is allowed (nothing to contradict).
+	if _, err := s.Put(ctx, Key{Tenant: "t", Purpose: "firmware", ID: "pkg"},
+		strings.NewReader("x"), PutOptions{ContentType: "application/octet-stream"}); err != nil {
+		t.Fatalf("Put with no-extension id + declared type: %v", err)
+	}
+}
+
+func TestFilesystemDirectoryRefIsNotFound(t *testing.T) {
+	ctx := context.Background()
+	s := newFS(t)
+	// Create an object so its parent directories exist.
+	if _, err := s.Put(ctx, Key{Tenant: "acme", Purpose: "branding-logo", ID: "logo.png"}, strings.NewReader("x"), PutOptions{}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	// A ref that resolves to a directory prefix must read as absent, and must not be
+	// deletable (it would remove a tenant directory).
+	dirRef := Ref{Backend: BackendFilesystem, Key: "inst1/acme/branding-logo"}
+	if _, err := s.Stat(ctx, dirRef); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Stat of a directory ref = %v, want ErrNotFound", err)
+	}
+	if _, _, err := s.Open(ctx, dirRef); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Open of a directory ref = %v, want ErrNotFound", err)
+	}
+	if err := s.Delete(ctx, dirRef); err == nil {
+		t.Fatal("Delete of a directory ref must error, not remove the directory")
+	}
+}
+
+func TestFilesystemRejectsReservedAndDotIDAtPut(t *testing.T) {
+	ctx := context.Background()
+	s := newFS(t)
+	for _, id := range []string{"logo.dcmeta", ".put-abc", ".hidden"} {
+		if _, err := s.Put(ctx, Key{Tenant: "t", Purpose: "branding-logo", ID: id}, strings.NewReader("x"), PutOptions{}); err == nil {
+			t.Errorf("Put with reserved/dot id %q must error", id)
+		}
+	}
+}
+
 func TestFilesystemPutOverwrites(t *testing.T) {
 	ctx := context.Background()
 	s := newFS(t)

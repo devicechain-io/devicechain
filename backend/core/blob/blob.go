@@ -28,6 +28,13 @@
 // This slice ships the interface + typed config + the filesystem default backend.
 // The S3-compatible and GCS backends land behind these exact signatures in later
 // slices (additive, no consumer change).
+//
+// Planned additive surface (not in this slice, called out so a later backend ships
+// it deliberately rather than discovering the need mid-migration):
+//   - a range/offset read (OpenRange or an OpenOptions offset/length) for resumable
+//     HTTP Range GETs of large firmware/OTA images (ADR-012/018). Small assets
+//     (branding logos) do not need it, so Open stays whole-object for now; the
+//     firmware/OTA consumer slice adds the range method across all backends.
 package blob
 
 import (
@@ -64,6 +71,13 @@ const maxSegmentLen = 128
 // it can never collide with a real tenant token's directory.
 const instanceScopeSegment = "~instance"
 
+// reservedIDSuffix is a reserved object-id suffix kept free across ALL backends so
+// a future metadata sidecar (or any backend-internal companion file) can never
+// collide with a live object. buildKey rejects an id ending in it, keeping key
+// validity uniform regardless of backend (a filesystem-only reservation would let
+// an S3 store accept an id the filesystem rejects).
+const reservedIDSuffix = ".dcmeta"
+
 // Key identifies an object within a tenant's namespace. The store prepends the
 // fixed instance prefix, yielding the full object key
 // {instanceId}/{tenant}/{purpose}/{id} (ADR-058 §4 / ADR-048). Every segment is
@@ -85,6 +99,18 @@ type Key struct {
 // (e.g. a branding_logo column). It names the backend that stored the object and
 // the full object key; it carries no bytes. Serialize with String (a blob:// URI)
 // and parse with ParseRef.
+//
+// Ref.Backend binds the stored data to the backend that wrote it: a Ref is only
+// dereferenceable by a Store on the same backend (each backend refuses a foreign
+// Ref). Switching an instance's backend therefore requires migrating the data (or
+// a routing Store), not just flipping config — acceptable pre-GA, but deliberate.
+//
+// SECURITY: a Ref carries the full object key and the read paths do NOT know the
+// caller's tenant, so a store cannot authorize a Ref by itself. Tenant isolation
+// lives in the CONSUMER: only ever dereference a Ref you persisted for the acting
+// tenant (e.g. look the Ref up from the tenant's own row), never one taken from
+// untrusted input. The store enforces only that a key stays within the instance
+// prefix and the store root (defense-in-depth, not authorization).
 type Ref struct {
 	Backend string // the backend identifier that stored the object (e.g. "filesystem")
 	Key     string // full object key incl. the instance prefix
@@ -206,6 +232,9 @@ func buildKey(instanceID string, k Key) (string, error) {
 	if err := validateSegment("id", k.ID); err != nil {
 		return "", err
 	}
+	if strings.HasSuffix(k.ID, reservedIDSuffix) {
+		return "", fmt.Errorf("blob: id segment uses the reserved %q suffix", reservedIDSuffix)
+	}
 	return instanceID + "/" + tenant + "/" + k.Purpose + "/" + k.ID, nil
 }
 
@@ -223,6 +252,12 @@ func validateSegment(field, seg string) error {
 	}
 	if seg == "." || seg == ".." {
 		return fmt.Errorf("blob: %s segment %q is not allowed", field, seg)
+	}
+	// Reject a leading dot: it neutralizes dotfiles and, on the filesystem backend,
+	// keeps object ids from colliding with the ".put-*" in-flight temp files — a
+	// grammar-level guarantee that holds across backends.
+	if seg[0] == '.' {
+		return fmt.Errorf("blob: %s segment %q must not start with a dot", field, seg)
 	}
 	for i := 0; i < len(seg); i++ {
 		c := seg[i]
