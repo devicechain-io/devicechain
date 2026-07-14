@@ -270,6 +270,20 @@ export type EntityRelationshipSearchCriteria = {
   tracked?: boolean | null | undefined;
 };
 
+export type FacetKeySearchCriteria = {
+  memberType?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+};
+
+export type FacetKeySetRequest = {
+  key: string;
+  label?: string | null | undefined;
+  memberType: string;
+  valueType: string;
+  values?: Array<string> | null | undefined;
+};
+
 export type MetricDefinitionCreateRequest = {
   dataType: string;
   description?: string | null | undefined;
@@ -829,6 +843,28 @@ export type DeleteDetectionRuleMutationVariables = Exact<{
 
 
 export type DeleteDetectionRuleMutation = { deleteDetectionRule: boolean };
+
+export type FacetKeysQueryVariables = Exact<{
+  criteria: FacetKeySearchCriteria;
+}>;
+
+
+export type FacetKeysQuery = { facetKeys: { results: Array<{ id: string, memberType: string, key: string, valueType: string, source: string, values: Array<string> | null, label: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type SetFacetKeyMutationVariables = Exact<{
+  request: FacetKeySetRequest;
+}>;
+
+
+export type SetFacetKeyMutation = { setFacetKey: { memberType: string, key: string } };
+
+export type DeleteFacetKeyMutationVariables = Exact<{
+  memberType: string;
+  key: string;
+}>;
+
+
+export type DeleteFacetKeyMutation = { deleteFacetKey: boolean };
 
 export type EntityRelationshipsQueryVariables = Exact<{
   criteria: EntityRelationshipSearchCriteria;
@@ -1987,6 +2023,39 @@ export const DeleteDetectionRuleDocument = new TypedDocumentString(`
   deleteDetectionRule(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteDetectionRuleMutation, DeleteDetectionRuleMutationVariables>;
+export const FacetKeysDocument = new TypedDocumentString(`
+    query FacetKeys($criteria: FacetKeySearchCriteria!) {
+  facetKeys(criteria: $criteria) {
+    results {
+      id
+      memberType
+      key
+      valueType
+      source
+      values
+      label
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<FacetKeysQuery, FacetKeysQueryVariables>;
+export const SetFacetKeyDocument = new TypedDocumentString(`
+    mutation SetFacetKey($request: FacetKeySetRequest!) {
+  setFacetKey(request: $request) {
+    memberType
+    key
+  }
+}
+    `) as unknown as TypedDocumentString<SetFacetKeyMutation, SetFacetKeyMutationVariables>;
+export const DeleteFacetKeyDocument = new TypedDocumentString(`
+    mutation DeleteFacetKey($memberType: String!, $key: String!) {
+  deleteFacetKey(memberType: $memberType, key: $key)
+}
+    `) as unknown as TypedDocumentString<DeleteFacetKeyMutation, DeleteFacetKeyMutationVariables>;
 export const EntityRelationshipsDocument = new TypedDocumentString(`
     query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {
   entityRelationships(criteria: $criteria) {

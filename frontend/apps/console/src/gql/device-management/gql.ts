@@ -89,6 +89,9 @@ type Documents = {
     "\n  mutation CreateDetectionRule($request: DetectionRuleCreateRequest!) {\n    createDetectionRule(request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.CreateDetectionRuleDocument,
     "\n  mutation UpdateDetectionRule($token: String!, $request: DetectionRuleCreateRequest!) {\n    updateDetectionRule(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.UpdateDetectionRuleDocument,
     "\n  mutation DeleteDetectionRule($token: String!) {\n    deleteDetectionRule(token: $token)\n  }\n": typeof types.DeleteDetectionRuleDocument,
+    "\n  query FacetKeys($criteria: FacetKeySearchCriteria!) {\n    facetKeys(criteria: $criteria) {\n      results {\n        id\n        memberType\n        key\n        valueType\n        source\n        values\n        label\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.FacetKeysDocument,
+    "\n  mutation SetFacetKey($request: FacetKeySetRequest!) {\n    setFacetKey(request: $request) {\n      memberType\n      key\n    }\n  }\n": typeof types.SetFacetKeyDocument,
+    "\n  mutation DeleteFacetKey($memberType: String!, $key: String!) {\n    deleteFacetKey(memberType: $memberType, key: $key)\n  }\n": typeof types.DeleteFacetKeyDocument,
     "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.EntityRelationshipsDocument,
     "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n": typeof types.CreateEntityRelationshipsDocument,
     "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": typeof types.RemoveEntityRelationshipsDocument,
@@ -168,6 +171,9 @@ const documents: Documents = {
     "\n  mutation CreateDetectionRule($request: DetectionRuleCreateRequest!) {\n    createDetectionRule(request: $request) {\n      id\n      token\n    }\n  }\n": types.CreateDetectionRuleDocument,
     "\n  mutation UpdateDetectionRule($token: String!, $request: DetectionRuleCreateRequest!) {\n    updateDetectionRule(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": types.UpdateDetectionRuleDocument,
     "\n  mutation DeleteDetectionRule($token: String!) {\n    deleteDetectionRule(token: $token)\n  }\n": types.DeleteDetectionRuleDocument,
+    "\n  query FacetKeys($criteria: FacetKeySearchCriteria!) {\n    facetKeys(criteria: $criteria) {\n      results {\n        id\n        memberType\n        key\n        valueType\n        source\n        values\n        label\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.FacetKeysDocument,
+    "\n  mutation SetFacetKey($request: FacetKeySetRequest!) {\n    setFacetKey(request: $request) {\n      memberType\n      key\n    }\n  }\n": types.SetFacetKeyDocument,
+    "\n  mutation DeleteFacetKey($memberType: String!, $key: String!) {\n    deleteFacetKey(memberType: $memberType, key: $key)\n  }\n": types.DeleteFacetKeyDocument,
     "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.EntityRelationshipsDocument,
     "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n": types.CreateEntityRelationshipsDocument,
     "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": types.RemoveEntityRelationshipsDocument,
@@ -469,6 +475,18 @@ export function graphql(source: "\n  mutation UpdateDetectionRule($token: String
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteDetectionRule($token: String!) {\n    deleteDetectionRule(token: $token)\n  }\n"): typeof import('./graphql').DeleteDetectionRuleDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query FacetKeys($criteria: FacetKeySearchCriteria!) {\n    facetKeys(criteria: $criteria) {\n      results {\n        id\n        memberType\n        key\n        valueType\n        source\n        values\n        label\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').FacetKeysDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation SetFacetKey($request: FacetKeySetRequest!) {\n    setFacetKey(request: $request) {\n      memberType\n      key\n    }\n  }\n"): typeof import('./graphql').SetFacetKeyDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation DeleteFacetKey($memberType: String!, $key: String!) {\n    deleteFacetKey(memberType: $memberType, key: $key)\n  }\n"): typeof import('./graphql').DeleteFacetKeyDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
