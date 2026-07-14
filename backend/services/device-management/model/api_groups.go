@@ -8,18 +8,28 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/devicechain-io/dc-device-management/internal/selector"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
 
-// resolveMembershipMode validates a create request's membership mode + member
-// family and returns the normalized mode. A nil mode defaults to static. Dynamic
-// mode is rejected until the selector engine (G3) lands — a dynamic group would
-// have no way to resolve its members. Static requests must carry no selector.
-func resolveMembershipMode(request *EntityGroupCreateRequest) (MembershipMode, error) {
+// resolvedMembership is the validated outcome of a create/update request's membership
+// fields. For a dynamic group Sel is the compiled, cost-gated, guaranteed-lowerable
+// selector (nil for static).
+type resolvedMembership struct {
+	Mode MembershipMode
+	Sel  *selector.Selector
+}
+
+// resolveMembershipMode validates a create request's membership mode + member family and
+// (for a dynamic group) compiles + cost-gates its selector (ADR-061 G3). A nil mode
+// defaults to static. A static request must carry no selector; a dynamic request must
+// carry one, which is compiled here so an un-lowerable or too-expensive selector fails
+// closed at write rather than at resolve.
+func resolveMembershipMode(request *EntityGroupCreateRequest) (*resolvedMembership, error) {
 	if !ValidGroupMemberType(entity.Type(request.MemberType)) {
-		return "", fmt.Errorf("invalid group member type %q (must be one of device, asset, area, customer)", request.MemberType)
+		return nil, fmt.Errorf("invalid group member type %q (must be one of device, asset, area, customer)", request.MemberType)
 	}
 	mode := MembershipStatic
 	if request.MembershipMode != nil {
@@ -28,24 +38,41 @@ func resolveMembershipMode(request *EntityGroupCreateRequest) (MembershipMode, e
 	switch mode {
 	case MembershipStatic:
 		if request.Selector != nil && *request.Selector != "" {
-			return "", fmt.Errorf("a static entity group must not carry a selector")
+			return nil, fmt.Errorf("a static entity group must not carry a selector")
 		}
-		return MembershipStatic, nil
+		return &resolvedMembership{Mode: MembershipStatic}, nil
 	case MembershipDynamic:
-		// The CEL selector engine (ADR-061 G3) is not yet wired; a dynamic group
-		// cannot be resolved, so creating one fails closed until then.
-		return "", fmt.Errorf("dynamic entity groups are not yet supported")
+		if request.Selector == nil || *request.Selector == "" {
+			return nil, fmt.Errorf("a dynamic entity group requires a selector")
+		}
+		// Compile against the platform-default cost ceiling (0 → default; a per-tenant
+		// override is a later ADR-023 wiring — never unlimited). MemberType is fixed for
+		// the group, so the selector is checked for exactly this family.
+		sel, err := selector.Compile(*request.Selector, request.MemberType, 0)
+		if err != nil {
+			return nil, err
+		}
+		return &resolvedMembership{Mode: MembershipDynamic, Sel: sel}, nil
 	default:
-		return "", fmt.Errorf("invalid membership mode %q (must be static or dynamic)", mode)
+		return nil, fmt.Errorf("invalid membership mode %q (must be static or dynamic)", mode)
 	}
 }
 
 // CreateEntityGroup creates a new uniform entity group (ADR-061). It validates the
-// member family and membership mode; v1 only admits static groups.
+// member family and membership mode; a dynamic group's selector is compiled + cost-gated
+// here (G3), and its lowerable CEL + the selector-env schema it was checked against are
+// stamped onto the row so a resolve never runs an un-vetted selector.
 func (api *Api) CreateEntityGroup(ctx context.Context, request *EntityGroupCreateRequest) (*EntityGroup, error) {
-	mode, err := resolveMembershipMode(request)
+	membership, err := resolveMembershipMode(request)
 	if err != nil {
 		return nil, err
+	}
+	mode := membership.Mode
+	selectorCol := sql.NullString{}
+	selectorSchema := 0
+	if membership.Sel != nil {
+		selectorCol = sql.NullString{String: membership.Sel.Source(), Valid: true}
+		selectorSchema = selector.SchemaVersion
 	}
 	created := &EntityGroup{
 		TokenReference: rdb.TokenReference{
@@ -67,7 +94,8 @@ func (api *Api) CreateEntityGroup(ctx context.Context, request *EntityGroupCreat
 		},
 		MemberType:     request.MemberType,
 		MembershipMode: string(mode),
-		Selector:       sql.NullString{}, // static: no selector (G3 sets this for dynamic)
+		Selector:       selectorCol,
+		SelectorSchema: selectorSchema,
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -95,16 +123,25 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 		return nil, fmt.Errorf("an entity group's member type is immutable (was %q, requested %q)",
 			updated.MemberType, request.MemberType)
 	}
-	// Membership mode + selector are identity too. Update only touches presentation
-	// fields in v1; reject a request that tries to convert the group's mode or set a
-	// selector so a caller never believes a silent no-op took effect (converting a
-	// static group to dynamic is a G3 concern, gated by the selector engine).
+	// Membership mode is identity — converting a static group to dynamic (or back)
+	// would orphan its members, so a mismatch fails closed.
 	if request.MembershipMode != nil && MembershipMode(*request.MembershipMode) != MembershipMode(updated.MembershipMode) {
 		return nil, fmt.Errorf("an entity group's membership mode is immutable (was %q, requested %q)",
 			updated.MembershipMode, *request.MembershipMode)
 	}
+	// A dynamic group's selector is live-editable (SD-4 — a browse/filter consumer needs
+	// no frozen version yet); a provided selector is re-compiled + cost-gated before it
+	// replaces the stored one. A static group must never carry a selector.
 	if request.Selector != nil && *request.Selector != "" {
-		return nil, fmt.Errorf("entity group selectors are not yet supported")
+		if MembershipMode(updated.MembershipMode) != MembershipDynamic {
+			return nil, fmt.Errorf("a static entity group must not carry a selector")
+		}
+		sel, err := selector.Compile(*request.Selector, updated.MemberType, 0)
+		if err != nil {
+			return nil, err
+		}
+		updated.Selector = sql.NullString{String: sel.Source(), Valid: true}
+		updated.SelectorSchema = selector.SchemaVersion
 	}
 	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)

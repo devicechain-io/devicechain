@@ -66,6 +66,7 @@ func TestCreateEntityGroup_Validation(t *testing.T) {
 
 	dynamic := string(MembershipDynamic)
 	sel := "attr[\"climate\"] == \"arid\""
+	badSel := "attr[\"a\"] == attr[\"b\"]" // not lowerable (two indexes)
 	garbage := "sideways"
 	cases := []struct {
 		name string
@@ -73,9 +74,10 @@ func TestCreateEntityGroup_Validation(t *testing.T) {
 	}{
 		{"unknown member family", &EntityGroupCreateRequest{Token: "b1", MemberType: "widget"}},
 		{"group member family", &EntityGroupCreateRequest{Token: "b2", MemberType: "group"}},
-		{"dynamic mode rejected in v1", &EntityGroupCreateRequest{Token: "b3", MemberType: "device", MembershipMode: &dynamic}},
+		{"dynamic mode without selector", &EntityGroupCreateRequest{Token: "b3", MemberType: "device", MembershipMode: &dynamic}},
 		{"selector on static group", &EntityGroupCreateRequest{Token: "b4", MemberType: "device", Selector: &sel}},
 		{"garbage mode", &EntityGroupCreateRequest{Token: "b5", MemberType: "device", MembershipMode: &garbage}},
+		{"dynamic with non-lowerable selector", &EntityGroupCreateRequest{Token: "b6", MemberType: "device", MembershipMode: &dynamic, Selector: &badSel}},
 	}
 	for _, tc := range cases {
 		if _, err := api.CreateEntityGroup(ctx, tc.req); err == nil {

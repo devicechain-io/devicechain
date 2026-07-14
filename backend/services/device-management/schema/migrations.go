@@ -29,5 +29,6 @@ var (
 		NewDetectionRuleAuthoringGraphSchema(),
 		NewEntityGroupFoldSchema(),
 		NewFacetKeySchema(),
+		NewEntityAttributeFacetIndexSchema(),
 	}
 )
