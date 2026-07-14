@@ -40,7 +40,7 @@ export const areaGroupResource: RegistryResource<AreaGroup> = {
   detailExtraLabel: 'Members',
   renderDetailExtra: (g) => (
     <MembershipPanel
-      groupType="areagroup"
+      groupType="group"
       groupToken={g.token}
       memberType="area"
       memberSingular="area"

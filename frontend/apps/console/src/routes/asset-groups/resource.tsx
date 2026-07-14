@@ -41,7 +41,7 @@ export const assetGroupResource: RegistryResource<AssetGroup> = {
   detailExtraLabel: 'Members',
   renderDetailExtra: (g) => (
     <MembershipPanel
-      groupType="assetgroup"
+      groupType="group"
       groupToken={g.token}
       memberType="asset"
       memberSingular="asset"
