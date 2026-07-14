@@ -161,5 +161,8 @@ func (c *DeviceManagementConfiguration) Validate() error {
 	if c.MetricDefCacheTtlSeconds <= 0 {
 		return fmt.Errorf("metricDefCacheTtlSeconds must be positive (got %d)", c.MetricDefCacheTtlSeconds)
 	}
+	if c.MembershipCacheTtlSeconds <= 0 {
+		return fmt.Errorf("membershipCacheTtlSeconds must be positive (got %d)", c.MembershipCacheTtlSeconds)
+	}
 	return nil
 }
