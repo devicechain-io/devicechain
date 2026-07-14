@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Typed GraphQL operations against the user-management service (ADR-008 RBAC).
-import { gql } from '@devicechain/client';
+import { gql, resolveAuthToken } from '@devicechain/client';
 import { graphql } from '@/gql/user-management';
 import type {
   LoginMutation,
@@ -187,10 +187,12 @@ const SET_TENANT_BRANDING = graphql(`
   }
 `);
 
-// A branding override to submit: every field optional; null clears that override.
+// A branding THEME override to submit: every field optional; null clears that
+// override. The logo is managed separately (setTenantLogo / uploadTenantLogo) — a
+// client cannot round-trip an object-store logo reference through this full replace,
+// so keeping logo here would wipe an uploaded logo on a theme save (ADR-058).
 export interface TenantBrandingInput {
   title?: string | null;
-  logo?: string | null;
   logoMaxHeight?: number | null;
   primary?: string | null;
   background?: string | null;
@@ -202,7 +204,6 @@ export async function setTenantBranding(input: TenantBrandingInput): Promise<Cur
   const data = await gql('user-management', SET_TENANT_BRANDING, {
     input: {
       title: input.title ?? null,
-      logo: input.logo ?? null,
       logoMaxHeight: input.logoMaxHeight ?? null,
       primary: input.primary ?? null,
       background: input.background ?? null,
@@ -211,6 +212,67 @@ export async function setTenantBranding(input: TenantBrandingInput): Promise<Cur
     },
   });
   return data.setTenantBranding;
+}
+
+// Set the tenant logo to an https URL (or clear it with null) — the Tier-0 path.
+// A binary upload goes through uploadTenantLogo instead. Both return the tenant with
+// freshly-resolved branding so the caller can write it straight into cache.
+const SET_TENANT_LOGO = graphql(`
+  mutation SetTenantLogo($logo: String) {
+    setTenantLogo(logo: $logo) {
+      token
+      name
+      description
+      branding {
+        title
+        logo
+        logoMaxHeight
+        primary
+        background
+        foreground
+        accent
+        updatedAt
+      }
+      brandingOverride {
+        title
+        logo
+        logoMaxHeight
+        primary
+        background
+        foreground
+        accent
+        updatedAt
+      }
+    }
+  }
+`);
+
+export async function setTenantLogo(logo: string | null): Promise<CurrentTenant> {
+  const data = await gql('user-management', SET_TENANT_LOGO, { logo });
+  return data.setTenantLogo;
+}
+
+// uploadTenantLogo uploads a raster logo file to the object store (ADR-058 Tier-1)
+// and points the tenant's branding_logo at it. It POSTs the raw bytes to the
+// authorizing endpoint with the caller's access token (the server sniffs the real
+// content type; the Content-Type header is advisory). The response carries the
+// read-proxy path for the new logo; callers should refetch the tenant to pick up
+// the freshly-resolved branding. Requires branding:write.
+export async function uploadTenantLogo(file: File): Promise<{ logo: string }> {
+  const token = await resolveAuthToken();
+  const res = await fetch('/api/user-management/branding/logo', {
+    method: 'POST',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'Content-Type': file.type || 'application/octet-stream',
+    },
+    body: file,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text.trim() || `Logo upload failed (${res.status})`);
+  }
+  return (await res.json()) as { logo: string };
 }
 
 // Describes the identity the caller is signed in as — resolved server-side from

@@ -8,7 +8,6 @@ export type TenantBrandingInput = {
   accent?: string | null | undefined;
   background?: string | null | undefined;
   foreground?: string | null | undefined;
-  logo?: string | null | undefined;
   logoMaxHeight?: number | null | undefined;
   primary?: string | null | undefined;
   title?: string | null | undefined;
@@ -55,6 +54,13 @@ export type SetTenantBrandingMutationVariables = Exact<{
 
 
 export type SetTenantBrandingMutation = { setTenantBranding: { token: string, name: string | null, description: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null } } };
+
+export type SetTenantLogoMutationVariables = Exact<{
+  logo?: string | null | undefined;
+}>;
+
+
+export type SetTenantLogoMutation = { setTenantLogo: { token: string, name: string | null, description: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null } } };
 
 export type MeQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -185,6 +191,35 @@ export const SetTenantBrandingDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<SetTenantBrandingMutation, SetTenantBrandingMutationVariables>;
+export const SetTenantLogoDocument = new TypedDocumentString(`
+    mutation SetTenantLogo($logo: String) {
+  setTenantLogo(logo: $logo) {
+    token
+    name
+    description
+    branding {
+      title
+      logo
+      logoMaxHeight
+      primary
+      background
+      foreground
+      accent
+      updatedAt
+    }
+    brandingOverride {
+      title
+      logo
+      logoMaxHeight
+      primary
+      background
+      foreground
+      accent
+      updatedAt
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<SetTenantLogoMutation, SetTenantLogoMutationVariables>;
 export const MeDocument = new TypedDocumentString(`
     query Me {
   me {

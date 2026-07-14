@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/sidebar';
 import { useAuth } from '@/auth/AuthProvider';
 import { useCurrentTenant } from '@/auth/TenantProvider';
+import { useBrandingLogoSrc } from '@/lib/useBrandingLogo';
 import { hasAuthority, type DecodedClaims } from '@devicechain/client';
 import { NavUser } from '@/routes/NavUser';
 
@@ -143,7 +144,7 @@ export function AppSidebar() {
   const { pathname } = useLocation();
   const { claims } = useAuth();
   const tenant = useCurrentTenant();
-  const brandLogo = tenant?.branding?.logo ?? null;
+  const brandLogo = useBrandingLogoSrc(tenant?.branding?.logo);
   const brandHeight = tenant?.branding?.logoMaxHeight ?? 24;
   const nav = visibleNav(claims);
   const activeGroup = activeGroupLabel(pathname);

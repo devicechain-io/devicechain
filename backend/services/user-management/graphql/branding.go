@@ -6,8 +6,10 @@ package graphql
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/blob"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-user-management/branding"
 	"github.com/devicechain-io/dc-user-management/iam"
@@ -32,7 +34,7 @@ type TenantBrandingResolver struct {
 }
 
 func (r *TenantBrandingResolver) Title() *string      { return r.b.Title }
-func (r *TenantBrandingResolver) Logo() *string       { return r.b.Logo }
+func (r *TenantBrandingResolver) Logo() *string       { return proxyLogoValue(r.b.Logo) }
 func (r *TenantBrandingResolver) Primary() *string    { return r.b.Primary }
 func (r *TenantBrandingResolver) Background() *string { return r.b.Background }
 func (r *TenantBrandingResolver) Foreground() *string { return r.b.Foreground }
@@ -110,11 +112,102 @@ func (r *SchemaResolver) SetTenantBranding(ctx context.Context, args struct {
 	return &TenantResolver{t: t, svc: r}, nil
 }
 
-// tenantBrandingInput mirrors the TenantBrandingInput GraphQL input. Optional
-// scalars arrive as pointers; a nil pointer clears that override.
+// SetTenantLogo sets the caller's OWN tenant logo to a Tier-0 value (an https URL
+// or a bounded raster data: URI) or clears it (null) — self-scoped, gated on
+// branding:write (ADR-038). A binary upload instead goes to the object store via
+// POST /branding/logo (ADR-058). A blob storage reference is never accepted here:
+// clients never hold one, and branding.Validate rejects anything that is not an
+// https/data: value. When the previous logo was an object-store blob, it is
+// garbage-collected (best-effort — a stale blob is harmless, never a correctness
+// risk).
+func (r *SchemaResolver) SetTenantLogo(ctx context.Context, args struct {
+	Logo *string
+}) (*TenantResolver, error) {
+	if err := auth.Authorize(ctx, auth.BrandingWrite); err != nil {
+		return nil, err
+	}
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok {
+		return nil, auth.ErrUnauthenticated
+	}
+	value := ""
+	if args.Logo != nil {
+		if v := strings.TrimSpace(*args.Logo); v != "" {
+			if err := branding.Validate(branding.Branding{Logo: &v}); err != nil {
+				return nil, err
+			}
+			value = v
+		}
+	}
+	mgr := r.getIdentityManager(ctx)
+	prev, err := mgr.SetTenantLogo(ctx, claims.Tenant, value)
+	if err != nil {
+		return nil, err
+	}
+	deleteReplacedLogoBlob(ctx, r.getBlobStore(ctx), prev, value)
+	t, err := mgr.TenantByToken(ctx, claims.Tenant)
+	if err != nil {
+		return nil, err
+	}
+	return &TenantResolver{t: t, svc: r}, nil
+}
+
+// getBlobStore returns the object store injected into the data-plane context, or
+// nil when the store is not configured (branding-logo upload/read then 503, and
+// orphan-blob GC is skipped — the store is required only for object-store logos).
+func (r *SchemaResolver) getBlobStore(ctx context.Context) blob.Store {
+	v := ctx.Value(ContextBlobKey)
+	if v == nil {
+		return nil
+	}
+	s, _ := v.(blob.Store)
+	return s
+}
+
+// deleteReplacedLogoBlob GCs a previous object-store logo when the logo reference
+// changes. It is a no-op when there is no previous value, the value is unchanged,
+// the previous value was a Tier-0 (non-blob) logo, or the store is unconfigured.
+func deleteReplacedLogoBlob(ctx context.Context, store blob.Store, prev *string, newValue string) {
+	if store == nil || prev == nil || *prev == newValue {
+		return
+	}
+	ref, err := blob.ParseRef(*prev)
+	if err != nil {
+		return // a Tier-0 https/data: value — nothing in the object store to remove
+	}
+	if err := store.Delete(ctx, ref); err != nil {
+		log.Warn().Err(err).Msg("failed to delete replaced branding logo blob")
+	}
+}
+
+// proxyLogoValue maps a stored logo column value to the value a client uses in an
+// <img>: an object-store (blob://) reference becomes the authorizing read-proxy
+// path with a cache-busting version taken from the object id (which changes on
+// every upload), while a Tier-0 https/data: value passes through unchanged. The raw
+// storage reference is never exposed to the client.
+func proxyLogoValue(stored *string) *string {
+	if stored == nil {
+		return nil
+	}
+	ref, err := blob.ParseRef(*stored)
+	if err != nil {
+		return stored // Tier-0 (https/data:) — usable directly
+	}
+	version := ref.Key
+	if i := strings.LastIndexByte(version, '/'); i >= 0 {
+		version = version[i+1:]
+	}
+	// The object id charset is [A-Za-z0-9._-] (blob.validateSegment), so it needs no
+	// URL escaping.
+	p := brandingLogoPath + "?v=" + version
+	return &p
+}
+
+// tenantBrandingInput mirrors the TenantBrandingInput GraphQL input — the THEME
+// fields only (logo is managed separately, see SetTenantLogo). Optional scalars
+// arrive as pointers; a nil pointer clears that override.
 type tenantBrandingInput struct {
 	Title         *string
-	Logo          *string
 	LogoMaxHeight *int32
 	Primary       *string
 	Background    *string
@@ -125,7 +218,6 @@ type tenantBrandingInput struct {
 func (in tenantBrandingInput) toBranding() branding.Branding {
 	return branding.Branding{
 		Title:         in.Title,
-		Logo:          in.Logo,
 		LogoMaxHeight: intPtr(in.LogoMaxHeight),
 		Primary:       in.Primary,
 		Background:    in.Background,

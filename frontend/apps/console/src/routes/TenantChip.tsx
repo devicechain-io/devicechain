@@ -3,17 +3,19 @@
 
 import { Building2 } from 'lucide-react';
 import { useCurrentTenant } from '@/auth/TenantProvider';
+import { useBrandingLogoSrc } from '@/lib/useBrandingLogo';
 
 // The tenant-context chip shown top-right in every tenant-app page header. Shows
 // the tenant name + token, and the tenant's branding logo in place of the generic
 // icon when set (ADR-038). The logo is rendered only in an <img> (never inlined),
-// so an SVG-via-https logo cannot execute script.
+// so an SVG-via-https logo cannot execute script; an object-store logo (ADR-058)
+// is fetched with the caller's token by useBrandingLogoSrc.
 export function TenantChip() {
   const tenant = useCurrentTenant();
+  const logo = useBrandingLogoSrc(tenant?.branding?.logo);
   if (!tenant) return null;
 
   const label = tenant.name || tenant.token;
-  const logo = tenant.branding?.logo ?? null;
   return (
     <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1">
       {logo ? (

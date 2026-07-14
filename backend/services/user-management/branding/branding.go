@@ -83,7 +83,27 @@ const (
 	// MinLogoHeight / MaxLogoHeight bound the chip/sidebar logo render height in px.
 	MinLogoHeight = 16
 	MaxLogoHeight = 200
+
+	// LogoBlobPurpose is the object-store purpose segment for an uploaded logo
+	// (ADR-058 key {instanceId}/{tenant}/branding-logo/{id}).
+	LogoBlobPurpose = "branding-logo"
+	// MaxUploadedLogoBytes caps a Tier-1 (object-store) uploaded logo. It is larger
+	// than the Tier-0 inline cap (real storage, not a Postgres row) but still a
+	// logo, not a background — larger login backgrounds are ADR-038 Phase 3.
+	MaxUploadedLogoBytes = 1 << 20 // 1 MiB
 )
+
+// UploadableLogoMIME is the raster-only allow-list for an OBJECT-STORE (Tier-1)
+// uploaded logo, mapping each accepted content type to its stored file extension.
+// It mirrors the inline allow-list's raster-only stance for the same reason: SVG is
+// a script/XSS carrier and stays https-only (rendered exclusively via <img src>).
+// The extension is what makes the filesystem backend infer the right Content-Type
+// on read, and the read proxy serves exactly these types.
+var UploadableLogoMIME = map[string]string{
+	"image/png":  ".png",
+	"image/jpeg": ".jpg",
+	"image/webp": ".webp",
+}
 
 var (
 	hexColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
