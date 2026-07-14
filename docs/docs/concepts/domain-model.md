@@ -15,9 +15,9 @@ DeviceChain models the physical world with a small set of composable concepts. T
 - **Asset** — the real-world thing a device monitors (categorized as Device / Person / Hardware).
 - **Area** — a spatial/organizational location, optionally with polygon boundaries and zones; areas nest into hierarchies.
 - **Customer** — an organizational owner; customers also nest into hierarchies.
-- **Groups** — named collections of any of the above, with role-tagged membership.
+- **Groups** — one uniform **entity group** collects any of the above. Membership is either **static** (an explicit member list) or **dynamic** — a saved selector over the members' attributes, resolved on read (see [Facets and dynamic groups](#facets-and-dynamic-groups)).
 
-Every one of these entities is addressed uniformly by an **entity type + id**, which is what lets relationships and event indexing operate generically across all of them.
+Every one of these entities is addressed uniformly by an **entity type + id**, which is what lets relationships, groups, and event indexing operate generically across all of them.
 
 ## Relationships
 
@@ -35,10 +35,16 @@ The `Tracked` flag is central. When a device reports an event, the platform reco
 DeviceChain distinguishes **current state** from **history**:
 
 - **Events** are the append-only, time-series record of everything a device reports (measurements, locations, alerts, command invocations/responses, state changes). They live in TimescaleDB hypertables.
-- **Attributes** *(planned)* are the current key-value state of an entity, in three scopes:
+- **Attributes** are the current key-value state of an entity, in three scopes:
   - `CLIENT` — reported by the device.
   - `SERVER` — platform-only metadata the device never sees.
   - `SHARED` — set by the platform and readable by the device (the channel for remote configuration and OTA targets).
+
+## Facets and dynamic groups
+
+Attributes double as **classification facets** — the axes you browse and filter entities by. A per-tenant **facet registry** declares which attribute keys (for a given entity family) are facets, giving the console browse UI its axes and value typeahead; it declares *which keys* are facets, not the values (the values stay as attributes on the entities themselves).
+
+A **dynamic group** turns a facet filter into saved, self-updating membership. Its selector is a boolean expression over the members' attributes — for example `attr["climate"] == "arid" && attr["country"] == "US"` — written in [CEL](https://github.com/google/cel-go), the same expression language the detection engine uses. The platform validates and cost-limits the selector when the group is saved, then resolves membership **on read** by lowering the expression to an indexed database query (never by scanning every entity), so a dynamic group always reflects the current attribute state without any materialized cache to keep in sync. A static group, by contrast, holds an explicit member list. The console's **Browse** screen composes a selector from facet axes, previews the matching count live, and saves it as a dynamic group; the **Facets** screen manages the registry.
 
 ## Identity and credentials
 
