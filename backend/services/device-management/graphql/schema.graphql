@@ -555,6 +555,59 @@ type EntityGroupSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# A per-tenant declaration that an EntityAttribute key, for a member family, is a
+# classification facet (ADR-061 G2 / SD-5). It declares which keys are facets for
+# the console browse/filter axes + typeahead; it does NOT store facet values (those
+# stay as EntityAttribute rows on the member entities). Addressed by its natural
+# key (memberType, key). Named FacetKey to avoid colliding with the ADR-045
+# discovery-facet concept (DeviceFacet / facetValues).
+type FacetKey implements Model {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    deletedAt: String
+    # The entity family this facet classifies: device | asset | area | customer.
+    memberType: String!
+    # The EntityAttribute key this facet declares (e.g. "climate", "country").
+    key: String!
+    # The value type the facet's attribute values carry: STRING | LONG | DOUBLE |
+    # BOOLEAN | JSON.
+    valueType: String!
+    # Where the facet's values come from: "attribute" (v1) or "system" (a
+    # predefined, non-deletable, modeled-column facet — declared seam, deferred).
+    source: String!
+    # An optional value vocabulary that powers the console typeahead; null when the
+    # facet's values are free-form.
+    values: [String!]
+    # An optional human display label for the axis; null falls back to key.
+    label: String
+}
+
+# Data required to declare (upsert) a facet key (ADR-061 G2). The natural key
+# (memberType, key) selects the row; the remaining fields are (re)written. v1 only
+# writes attribute-source facets, so there is no source field here.
+input FacetKeySetRequest {
+    memberType: String!
+    key: String!
+    valueType: String!
+    values: [String!]
+    label: String
+}
+
+# Criteria used when searching for facet keys. memberType is an optional filter
+# (the console axis picker asks per family).
+input FacetKeySearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    memberType: String
+}
+
+# Search results returned from the facet keys query.
+type FacetKeySearchResults {
+    results: [FacetKey!]!
+    pagination: SearchResultsPagination!
+}
+
 # Represents rotatable authentication material for a device (ADR-014).
 type DeviceCredential implements Model & TokenReference & MetadataEntity {
     id: ID!
@@ -1032,6 +1085,9 @@ type Query {
     # tenant's device types / profiles — the suggestions offered under the free-text
     # facet inputs (ADR-045 decision 8). Sorted; empty until values are in use.
     facetValues(facet: DeviceFacet!): [String!]!
+    # List the tenant's declared facet keys, optionally for one member family
+    # (ADR-061 G2). Powers the console browse/filter axis picker + typeahead.
+    facetKeys(criteria: FacetKeySearchCriteria!): FacetKeySearchResults!
     # Find metric definitions by unique id.
     metricDefinitionsById(ids: [ID!]!): [MetricDefinition!]!
     # Find metric definitions by unique token.
@@ -1212,6 +1268,11 @@ type Mutation {
     updateEntityGroup(token: String!, request: EntityGroupCreateRequest): EntityGroup!
     # Delete an entity group and its relationship edges.
     deleteEntityGroup(token: String!): Boolean!
+    # Declare (upsert) a facet key by its natural key (memberType, key) — ADR-061 G2.
+    setFacetKey(request: FacetKeySetRequest): FacetKey!
+    # Delete a facet key by its natural key. Returns whether a row was removed; a
+    # system facet is non-deletable and its removal is refused.
+    deleteFacetKey(memberType: String!, key: String!): Boolean!
     # Create a new device credential.
     createDeviceCredential(request: DeviceCredentialCreateRequest): DeviceCredential!
     # Update an existing device credential.

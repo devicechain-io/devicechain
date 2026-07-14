@@ -28,5 +28,6 @@ var (
 		NewDropAlarmDefinitionsSchema(),
 		NewDetectionRuleAuthoringGraphSchema(),
 		NewEntityGroupFoldSchema(),
+		NewFacetKeySchema(),
 	}
 )

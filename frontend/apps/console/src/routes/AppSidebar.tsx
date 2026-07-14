@@ -17,6 +17,7 @@ import {
   Palette,
   ScrollText,
   SlidersHorizontal,
+  Tags,
   Webhook,
   type LucideIcon,
 } from 'lucide-react';
@@ -105,6 +106,10 @@ const NAV: NavNode[] = [
       { label: 'Area Groups', href: '/area-groups', icon: Layers, requires: 'device:read' },
     ],
   },
+  // Facets classify every member family (ADR-061), so they are one cross-cutting
+  // registry rather than a leaf under each construct group. Gated by device:read
+  // like the rest of device-management.
+  { label: 'Facets', href: '/facets', icon: Tags, requires: 'device:read' },
   { label: 'Audit', href: '/audit', icon: ScrollText, requires: 'audit:read' },
   { label: 'Branding', href: '/branding', icon: Palette, requires: 'branding:write' },
 ];
