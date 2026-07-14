@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-device-management/internal/selector"
@@ -153,7 +154,12 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 	updated.BorderColor = rdb.NullStrOf(request.BorderColor)
 	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
 
-	result := api.RDB.DB(ctx).Save(updated)
+	// Omit active_version: a draft edit must never write the version pointer back.
+	// The struct was loaded before this Save, so writing it whole would let an edit
+	// racing a concurrent PublishEntityGroup/RollbackEntityGroup silently revert the
+	// active pointer to its stale value — a rule-load-bearing field once S2/S3 read it
+	// (ADR-062). The pointer is moved only by publish/rollback.
+	result := api.RDB.DB(ctx).Omit("ActiveVersion").Save(updated)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -204,9 +210,32 @@ func (api *Api) EntityGroups(ctx context.Context, criteria EntityGroupSearchCrit
 	}, nil
 }
 
-// DeleteEntityGroup deletes an entity group and its relationship (membership)
-// edges. deleteEdgeEntity tears down every edge the group participates in, so a
-// static group's "member" edges are removed with it; a dynamic group has none.
+// DeleteEntityGroup deletes an entity group, its relationship (membership) edges,
+// and its frozen versions. deleteEdgeEntity tears down every edge the group
+// participates in, so a static group's "member" edges are removed with it (a dynamic
+// group has none); the cascade removes the group's EntityGroupVersion history.
+//
+// It fails closed with ErrEntityInUse if a detection rule scopes to the group
+// (ADR-062): a rule pinning group@v needs the version's frozen selector to stamp
+// membership, so the group must outlive the rule.
 func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, error) {
-	return api.deleteEdgeEntity(ctx, entity.TypeGroup, &EntityGroup{}, token, nil)
+	group, err := api.entityGroupByToken(ctx, token)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil // deleting a nonexistent token is a no-op, mirroring deleteEdgeEntity
+		}
+		return false, err
+	}
+	inUse, err := api.entityGroupReferencedByEnabledRule(ctx, group.ID)
+	if err != nil {
+		return false, err
+	}
+	if inUse {
+		return false, fmt.Errorf("%w: entity group %q is referenced by a detection rule", ErrEntityInUse, token)
+	}
+	// Cascade the group's frozen versions with it: append-only history has no meaning
+	// once the group is gone, and the versions carry no cross-service references.
+	return api.deleteEdgeEntity(ctx, entity.TypeGroup, &EntityGroup{}, token, func(tx *gorm.DB, id uint) error {
+		return tx.Unscoped().Where("entity_group_id = ?", id).Delete(&EntityGroupVersion{}).Error
+	})
 }

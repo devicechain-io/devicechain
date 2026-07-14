@@ -533,6 +533,32 @@ type EntityGroup implements Model & TokenReference & NamedEntity & BrandedEntity
     # dynamic group's eval-on-read selector matches, transparently (a consumer does
     # not branch on mode). Always bounded + paginated (ADR-061 G4).
     members(pagination: PaginationInput!): EntityGroupMemberSearchResults!
+    # The published version whose frozen selector a rule-scoped resolve reads
+    # (ADR-062 S1). Null until a dynamic group is first published; always null for a
+    # static group (never versioned). The live `selector` above is the mutable draft.
+    activeVersion: Int
+    # The group's published versions, newest first (ADR-062 S1). Empty for a group
+    # that has never been published (and always empty for a static group).
+    versions: [EntityGroupVersion!]!
+}
+
+# An immutable published snapshot of a DYNAMIC entity group's membership selector
+# (ADR-062 S1). A rule scopes to a specific {group}@{version}, so its target set
+# cannot drift under a later selector edit. Mirrors DeviceProfileVersion.
+type EntityGroupVersion {
+    # Monotonic per-group version number.
+    version: Int!
+    # The frozen lowerable-CEL membership selector captured at publish.
+    selector: String!
+    # The entity family the group collects, frozen with the version.
+    memberType: String!
+    # Optional user-supplied label (may embed a semver string; not parsed).
+    label: String
+    description: String
+    # When the version was published (the row's creation time).
+    publishedAt: String!
+    # The identity that published it (username, falling back to email).
+    publishedBy: String
 }
 
 # A resolved member of an entity group — the lightweight identity (row id + token)
@@ -1174,6 +1200,8 @@ type Query {
     # the preview is exactly what the group would resolve. A non-lowerable / over-budget
     # / malformed selector returns valid=false with an inline error, never a hard fault.
     previewSelector(memberType: String!, selector: String!, pagination: PaginationInput!): SelectorPreview!
+    # List a dynamic entity group's published versions, newest first (ADR-062 S1).
+    entityGroupVersions(token: String!): [EntityGroupVersion!]!
     # Find device credentials by unique id.
     deviceCredentialsById(ids: [ID!]!): [DeviceCredential!]!
     # Find device credentials by unique token.
@@ -1311,8 +1339,16 @@ type Mutation {
     # Update an existing entity group's presentation fields (member family + mode
     # are immutable).
     updateEntityGroup(token: String!, request: EntityGroupCreateRequest): EntityGroup!
-    # Delete an entity group and its relationship edges.
+    # Delete an entity group, its relationship edges, and its frozen versions.
+    # Refused (ErrEntityInUse) while a detection rule scopes to the group (ADR-062).
     deleteEntityGroup(token: String!): Boolean!
+    # Publish a DYNAMIC entity group's current draft selector as a new immutable
+    # version and make it the active version a rule-scoped resolve reads (ADR-062 S1).
+    # label/description are optional. Rejected for a static group.
+    publishEntityGroup(token: String!, label: String, description: String): EntityGroupVersion!
+    # Re-point a dynamic group's active version at an existing version — a
+    # non-destructive rollback; the draft is untouched. Returns the updated group.
+    rollbackEntityGroup(token: String!, version: Int!): EntityGroup!
     # Declare (upsert) a facet key by its natural key (memberType, key) — ADR-061 G2.
     setFacetKey(request: FacetKeySetRequest): FacetKey!
     # Delete a facet key by its natural key. Returns whether a row was removed; a

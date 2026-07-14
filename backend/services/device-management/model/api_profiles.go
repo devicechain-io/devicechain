@@ -81,7 +81,13 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	found.Category = rdb.NullStrOf(request.Category)
 	found.Metadata = rdb.MetadataStrOf(request.Metadata)
 
-	result := api.RDB.DB(ctx).Save(found)
+	// Omit active_version: a draft/metadata edit must never write the version pointer
+	// back. `found` was loaded before this Save, so writing it whole would let an edit
+	// racing a concurrent PublishDeviceProfile/RollbackDeviceProfile silently revert
+	// the active pointer — the version devices resolve — to its stale value. The
+	// pointer is moved only by publish/rollback (same class of race as ADR-062's
+	// EntityGroup update; fixed here too since it is the identical latent bug).
+	result := api.RDB.DB(ctx).Omit("ActiveVersion").Save(found)
 	if result.Error != nil {
 		return nil, result.Error
 	}
