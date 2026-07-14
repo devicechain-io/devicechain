@@ -190,7 +190,11 @@ graph** rather than a fixed assignment record:
 - **Area** — a spatial/organizational location, optionally with polygon boundaries
   and zones; areas nest into hierarchies.
 - **Customer** — an organizational owner; customers also nest into hierarchies.
-- **Groups** — named collections of any of the above, with role-tagged membership.
+- **Groups** — one uniform **entity group** collects any of the above with either
+  **static** membership (an explicit list) or **dynamic** membership — a CEL
+  selector over the members' attributes (e.g. `attr["climate"] == "arid"`),
+  resolved on read as an indexed query, so the group stays current as attributes
+  change.
 
 Entities are addressed uniformly by **entity type + id**, and connected by
 **typed, directed relationships**. A relationship type carries a `Tracked` flag
@@ -201,7 +205,10 @@ and context can evolve without schema migrations.
 DeviceChain also distinguishes **current state** from **history**: append-only
 **events** in TimescaleDB hypertables, versus key-value **attributes** in three
 scopes — `CLIENT` (device-reported), `SERVER` (platform-only), and `SHARED`
-(platform-set, device-readable; the channel for remote config and OTA).
+(platform-set, device-readable; the channel for remote config and OTA). Attributes
+double as **classification facets**: a per-tenant registry declares which attribute
+keys are browse/filter axes, and those same attributes are what a dynamic group's
+selector matches on — one primitive, no separate tag store.
 
 ## Multi-tenancy
 
