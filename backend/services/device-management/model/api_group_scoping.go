@@ -164,6 +164,16 @@ func (api *Api) RegisterGroupVersionForScoping(ctx context.Context, groupToken s
 			Delete(&EntityGroupFacetRef{}).Error; err != nil {
 			return err
 		}
+		// Collect the PRIOR members before wiping them, so a re-register that drops a
+		// no-longer-matching entity evicts its (now stale-positive) cache too — not only the
+		// new member set (the wipe exists precisely to correct drift).
+		var prior []EntityGroupMembership
+		if err := tx.Where("group_id = ? AND selector_version = ?", group.ID, version).Find(&prior).Error; err != nil {
+			return err
+		}
+		for _, m := range prior {
+			evictIds = append(evictIds, m.EntityId)
+		}
 		if err := tx.Unscoped().Where("group_id = ? AND selector_version = ?", group.ID, version).
 			Delete(&EntityGroupMembership{}).Error; err != nil {
 			return err
@@ -207,8 +217,10 @@ func (api *Api) RegisterGroupVersionForScoping(ctx context.Context, groupToken s
 		return err
 	}
 	// Evict the backfilled members' membership caches post-commit so the resolver stamps
-	// the newly-materialized memberships (the ADR-062 arming visibility invariant).
+	// the newly-materialized memberships (the ADR-062 arming visibility invariant), and the
+	// tenant's scoped-groups-exist gate so the resolver stops short-circuiting.
 	api.evictMemberships(ctx, frozen.MemberType, evictIds)
+	api.evictScopedGroupsExist(ctx)
 	return nil
 }
 
@@ -245,6 +257,7 @@ func (api *Api) DeregisterGroupVersionForScoping(ctx context.Context, groupToken
 		return err
 	}
 	api.evictMemberships(ctx, evictType, evictIds)
+	api.evictScopedGroupsExist(ctx)
 	return nil
 }
 
@@ -326,6 +339,18 @@ func (api *Api) upsertMembership(db *gorm.DB, entityType string, entityId, group
 		GroupToken:      groupToken,
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(row).Error
+}
+
+// AnyScopedGroups reports whether the tenant has ANY registered rule-scoped group@v (any
+// reverse-index row). The resolver checks it once per event (cached) to short-circuit the
+// per-entity membership reads entirely for a tenant not using rule scoping — ADR-062
+// Decision 7 pay-nothing: zero scoped groups ⇒ no stamp, no per-target lookups.
+func (api *Api) AnyScopedGroups(ctx context.Context) (bool, error) {
+	rows := make([]EntityGroupFacetRef, 0, 1)
+	if err := api.RDB.DB(ctx).Select("id").Limit(1).Find(&rows).Error; err != nil {
+		return false, err
+	}
+	return len(rows) > 0, nil
 }
 
 // writeAttrThenRecompute runs an attribute write and, when the write can affect

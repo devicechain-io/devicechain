@@ -259,6 +259,7 @@ func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, erro
 	}
 	if deleted {
 		api.evictMemberships(ctx, evictType, evictIds)
+		api.evictScopedGroupsExist(ctx)
 	}
 	return deleted, nil
 }

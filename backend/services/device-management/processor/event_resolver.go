@@ -109,6 +109,15 @@ type membershipTarget struct {
 // non-member target (the common case) is a cache hit returning empty. De-dup is by
 // (group token, version): a device tracked into two arid areas is in scope once.
 func (rez *EventResolver) unionMemberships(ctx context.Context, targets []membershipTarget) ([]model.GroupRef, error) {
+	// Pay-nothing short-circuit (ADR-062 Decision 7): a tenant with no rule-scoped group
+	// does zero per-target reads — one cached EXISTS check gates the whole union.
+	any, err := rez.Api.AnyScopedGroups(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !any {
+		return nil, nil
+	}
 	type mkey struct {
 		token   string
 		version int32
@@ -175,13 +184,24 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 		return nil, uint(dmproto.FailureReason_Invalid), errors.New("new relationship payload was not of expected type")
 	}
 
-	// Resolve the rule-scoping identity BEFORE creating the relationship: it depends
-	// only on the device's type, and resolving it first means a transient lookup
-	// failure aborts cleanly instead of leaving a committed relationship that a
-	// redelivery would create a second time (fresh token per attempt is not idempotent).
+	// Resolve everything fallible BEFORE creating the relationship — the scope AND the
+	// device's dynamic-group memberships (ADR-062) — so a transient lookup failure aborts
+	// cleanly instead of leaving a committed relationship that a redelivery would create a
+	// second time (a fresh token per attempt is NOT idempotent). Only the DEVICE's
+	// memberships are stamped here: the new target's own group memberships are unknown until
+	// the relationship exists, and reading them post-create would reintroduce a fallible
+	// call after the non-idempotent create. They land on the device's subsequent standard
+	// events, which anchor the now-tracked relationship (v1 group-scoped rules are
+	// event-driven on telemetry, not on the assignment event itself).
 	scope, reason, err := rez.resolveScope(ctx, device)
 	if err != nil {
 		return nil, reason, err
+	}
+	memberships, err := rez.unionMemberships(ctx, []membershipTarget{
+		{Type: string(entity.TypeDevice), Id: device.ID},
+	})
+	if err != nil {
+		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
 	}
 
 	// Create new relationship from the event payload.
@@ -201,14 +221,6 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	// relationship is itself the event's single anchor, addressed by target token.
 	anchors := []model.ResolvedAnchor{
 		{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID},
-	}
-	// Stamp the device+new-anchor dynamic-group memberships (ADR-062).
-	memberships, err := rez.unionMemberships(ctx, []membershipTarget{
-		{Type: string(entity.TypeDevice), Id: device.ID},
-		{Type: created.TargetType, Id: created.TargetId},
-	})
-	if err != nil {
-		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
 	}
 	resolved := rez.MergeToResolveEvent(device, anchors, memberships, event, payload, scope)
 

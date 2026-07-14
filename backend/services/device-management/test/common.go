@@ -55,6 +55,22 @@ type MockApi struct {
 	MembershipsResult []model.GroupMembership
 	// MembershipsErr, when set, makes MembershipsForEntity fail.
 	MembershipsErr error
+	// AnyScopedGroupsResult forces the pay-nothing gate open; otherwise the gate is open
+	// iff the suite configured any memberships, so a membership test needn't set both.
+	AnyScopedGroupsResult bool
+	// AnyScopedGroupsErr, when set, makes AnyScopedGroups fail.
+	AnyScopedGroupsErr error
+}
+
+// AnyScopedGroups (ADR-062 Decision 7) reports whether the resolver's pay-nothing gate is
+// open: true when explicitly forced or when the suite configured any memberships (so a
+// membership-stamp test does not have to set both). Default false → the resolver
+// short-circuits and stamps nothing.
+func (api *MockApi) AnyScopedGroups(ctx context.Context) (bool, error) {
+	if api.AnyScopedGroupsErr != nil {
+		return false, api.AnyScopedGroupsErr
+	}
+	return api.AnyScopedGroupsResult || api.MembershipsFn != nil || len(api.MembershipsResult) > 0, nil
 }
 
 // MembershipsForEntity (ADR-062) returns the suite-configured memberships for the

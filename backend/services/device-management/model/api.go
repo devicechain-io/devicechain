@@ -85,6 +85,11 @@ type CacheEvictor interface {
 	// (recompute, entity delete, group register/deregister/delete). A missed eviction on
 	// the negative-cached read is a permanently stale stamp, so this fires precisely.
 	EvictMemberships(ctx context.Context, entityType string, entityIds []uint)
+	// EvictScopedGroupsExist drops the tenant's cached "any rule-scoped group exists"
+	// flag (ADR-062 Decision 7), called post-commit on register/deregister/group-delete so
+	// the resolver's pay-nothing short-circuit re-evaluates promptly (else a just-armed
+	// group is skipped, or a torn-down one still pays, until the flag's TTL).
+	EvictScopedGroupsExist(ctx context.Context)
 }
 
 // Create a new API instance.
@@ -176,6 +181,15 @@ func (api *Api) evictMemberships(ctx context.Context, entityType string, entityI
 	}
 }
 
+// evictScopedGroupsExist drops the tenant's cached scoped-groups-exist flag when an
+// evictor is wired (ADR-062 Decision 7). No-op otherwise. Called post-commit from
+// register/deregister/group-delete, where the set of scoped groups may have changed.
+func (api *Api) evictScopedGroupsExist(ctx context.Context) {
+	if api.CacheEvictor != nil {
+		api.CacheEvictor.EvictScopedGroupsExist(ctx)
+	}
+}
+
 // Interface for device management API (used for mocking)
 type DeviceManagementApi interface {
 	// Device types.
@@ -209,6 +223,9 @@ type DeviceManagementApi interface {
 	// Dynamic-group membership read (ADR-062): the group@versions an entity belongs to,
 	// stamped onto a resolved event by the resolver. Served through the cache.
 	MembershipsForEntity(ctx context.Context, entityType string, entityId uint) ([]GroupMembership, error)
+	// AnyScopedGroups (ADR-062 Decision 7): whether the tenant has any rule-scoped group,
+	// gating the resolver's per-entity membership reads. Served through the cache.
+	AnyScopedGroups(ctx context.Context) (bool, error)
 
 	// Metric definitions (ADR-016).
 	CreateMetricDefinition(ctx context.Context, request *MetricDefinitionCreateRequest) (*MetricDefinition, error)
