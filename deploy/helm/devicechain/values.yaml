@@ -127,11 +127,19 @@ instance:
         # Left EMPTY by default: the object store is then "not configured" and
         # branding-logo upload/read return 503 (Tier-0 inline/URL logos still work) —
         # a safe default rather than a silent per-pod ephemeral store. Set directory
-        # (and mount a volume there) to enable object-store logos; or use an
-        # S3-compatible backend once available. No cloud credential lives here
-        # (those resolve from the secret layer, ADR-058 §5 / ADR-059).
+        # (and mount a volume there) to enable object-store logos; or use the s3
+        # backend below (recommended for multi-replica — no RWX volume needed).
         backend: filesystem
         directory: ""
+        # S3-compatible backend (backend: s3) — AWS S3 or MinIO. Non-secret settings
+        # only: the access key / secret come from the standard AWS credential chain
+        # (env from a pre-created Secret, IRSA, or an instance profile), NEVER here
+        # (ADR-058 §5). bucket is required; region for AWS; endpoint + usePathStyle
+        # for MinIO / other S3-compatible services.
+        bucket: ""
+        region: ""
+        endpoint: ""
+        usePathStyle: false
     persistence:
       rdb:
         type: postgres95

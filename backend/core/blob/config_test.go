@@ -3,7 +3,10 @@
 
 package blob
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestDefaultConfigBackend(t *testing.T) {
 	if DefaultConfig().withDefaults().Backend != BackendFilesystem {
@@ -23,11 +26,22 @@ func TestConfigValidate(t *testing.T) {
 	if err := (Config{Directory: "/data/blob"}).Validate(); err != nil {
 		t.Fatalf("empty backend + directory must validate as filesystem: %v", err)
 	}
-	// Declared cloud backends pass identifier validation (built in a later slice).
-	for _, b := range []string{BackendS3, BackendGCS} {
-		if err := (Config{Backend: b}).Validate(); err != nil {
-			t.Fatalf("declared backend %q must validate: %v", b, err)
-		}
+	// GCS validates as an identifier (built in a later slice).
+	if err := (Config{Backend: BackendGCS}).Validate(); err != nil {
+		t.Fatalf("declared backend gcs must validate: %v", err)
+	}
+	// S3 requires a bucket, and a region OR an endpoint.
+	if err := (Config{Backend: BackendS3}).Validate(); err == nil {
+		t.Fatal("s3 backend with no bucket must be rejected")
+	}
+	if err := (Config{Backend: BackendS3, Bucket: "b"}).Validate(); err == nil {
+		t.Fatal("s3 backend with no region and no endpoint must be rejected")
+	}
+	if err := (Config{Backend: BackendS3, Bucket: "b", Region: "us-east-1"}).Validate(); err != nil {
+		t.Fatalf("s3 backend with bucket+region must validate: %v", err)
+	}
+	if err := (Config{Backend: BackendS3, Bucket: "b", Endpoint: "http://minio:9000"}).Validate(); err != nil {
+		t.Fatalf("s3 backend with bucket+endpoint must validate: %v", err)
 	}
 	// Unknown backend fails closed.
 	if err := (Config{Backend: "azure"}).Validate(); err == nil {
@@ -35,19 +49,22 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
-func TestNewFailsClosedOnUnbuiltBackend(t *testing.T) {
-	// s3/gcs validate but are not built in this binary — New must fail closed.
-	for _, b := range []string{BackendS3, BackendGCS} {
-		if _, err := New(Config{Backend: b}, "inst1"); err == nil {
-			t.Fatalf("New(%q) must fail closed for an unbuilt backend", b)
-		}
+func TestNewFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	// gcs validates as an identifier but is not built in this binary — fail closed.
+	if _, err := New(ctx, Config{Backend: BackendGCS}, "inst1"); err == nil {
+		t.Fatal("New(gcs) must fail closed for an unbuilt backend")
+	}
+	// s3 is built, but an under-specified s3 config (no bucket) fails at Validate.
+	if _, err := New(ctx, Config{Backend: BackendS3}, "inst1"); err == nil {
+		t.Fatal("New(s3) with no bucket must error")
 	}
 	// Unknown backend fails at Validate inside New.
-	if _, err := New(Config{Backend: "azure"}, "inst1"); err == nil {
+	if _, err := New(ctx, Config{Backend: "azure"}, "inst1"); err == nil {
 		t.Fatal("New with unknown backend must error")
 	}
 	// A bad instance id fails closed even for a valid backend.
-	if _, err := New(Config{Backend: BackendFilesystem, Directory: t.TempDir()}, "bad/id"); err == nil {
+	if _, err := New(ctx, Config{Backend: BackendFilesystem, Directory: t.TempDir()}, "bad/id"); err == nil {
 		t.Fatal("New with an invalid instance id must error")
 	}
 }

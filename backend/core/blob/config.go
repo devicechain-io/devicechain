@@ -26,16 +26,29 @@ const (
 )
 
 // Config is the typed, fail-closed object-store configuration. It selects the
-// backend and carries the filesystem root for the default backend. Cloud-backend
-// settings (bucket, region, endpoint, credentials-via-secret) are additive fields
-// introduced with their backends; no cloud credential is ever a plaintext config
-// value (ADR-058 §5 — those resolve from the instance secret/K8s Secret).
+// backend and carries the backend's non-secret settings. No cloud CREDENTIAL is
+// ever a plaintext config value (ADR-058 §5): the S3 backend takes its access key /
+// secret from the standard AWS credential chain (env vars from the instance K8s
+// Secret, IRSA, or an instance profile), never from these fields.
 type Config struct {
 	// Backend selects where objects live. Default: BackendFilesystem.
 	Backend string
+
 	// Directory is the filesystem-backend root (a mounted volume/PVC path).
 	// Required for BackendFilesystem; ignored for cloud backends.
 	Directory string
+
+	// S3 settings (BackendS3). Non-secret only.
+	//
+	// Bucket is the target bucket (required for s3). Region is the AWS region
+	// (required unless Endpoint is set, e.g. for MinIO). Endpoint overrides the AWS
+	// endpoint for an S3-compatible service (MinIO); leave empty for AWS S3.
+	// UsePathStyle forces path-style addressing (bucket in the path, not the host) —
+	// required by MinIO and most S3-compatible servers.
+	Bucket       string
+	Region       string
+	Endpoint     string
+	UsePathStyle bool
 }
 
 // DefaultConfig is the zero-cloud default: the filesystem backend. Directory is
@@ -65,7 +78,16 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(c.Directory) == "" {
 			return fmt.Errorf("blob: filesystem backend requires a directory")
 		}
-	case BackendS3, BackendGCS:
+	case BackendS3:
+		if strings.TrimSpace(c.Bucket) == "" {
+			return fmt.Errorf("blob: s3 backend requires a bucket")
+		}
+		// A region OR a custom endpoint must be set: AWS S3 needs a region to build
+		// its endpoint; an S3-compatible service (MinIO) supplies an explicit one.
+		if strings.TrimSpace(c.Region) == "" && strings.TrimSpace(c.Endpoint) == "" {
+			return fmt.Errorf("blob: s3 backend requires a region (AWS) or an endpoint (S3-compatible)")
+		}
+	case BackendGCS:
 		// Declared for forward-compatible validation; built in a later slice.
 	default:
 		return fmt.Errorf("blob: unknown store backend %q", c.Backend)

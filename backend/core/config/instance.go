@@ -236,6 +236,16 @@ type BlobConfiguration struct {
 	// service that constructs a filesystem-backed store; the store's construction
 	// fails closed on an empty directory.
 	Directory string
+
+	// S3-backend settings (backend "s3"), non-secret only. Bucket is required;
+	// Region is the AWS region (or default when only Endpoint is set); Endpoint
+	// targets an S3-compatible service (MinIO); UsePathStyle forces path-style
+	// addressing (MinIO). Credentials come from the standard AWS chain (env from the
+	// instance K8s Secret, IRSA, or an instance profile), never from here (ADR-058 §5).
+	Bucket       string
+	Region       string
+	Endpoint     string
+	UsePathStyle bool
 }
 
 // Infrastructure configuration section
