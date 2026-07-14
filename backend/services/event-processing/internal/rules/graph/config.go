@@ -336,20 +336,74 @@ func buildRule(n Node) (rules.Rule, error) {
 
 // actionConfig is a REACT Action node, projecting onto rules.Action. Type picks the
 // variant; the rule's severity (from the condition) is the alarm tier, so no severity here.
+// The variant fields are a flat union — one action node populates only the fields for its
+// Type; buildAction reads just those, and rules.validateReact rejects an incoherent mix.
 type actionConfig struct {
-	Action   string `json:"action"` // "raiseAlarm" | "sendCommand"
+	Action string `json:"action"` // "raiseAlarm" | "sendCommand" | "httpCall" | "publish"
+	// raiseAlarm
 	AlarmKey string `json:"alarmKey,omitempty"`
-	Command  string `json:"command,omitempty"`
-	Payload  string `json:"payload,omitempty"`
+	// sendCommand
+	Command string `json:"command,omitempty"`
+	Payload string `json:"payload,omitempty"`
+	// httpCall (ADR-060 Tier 1) — inline webhook config, no registered resource.
+	URL          string            `json:"url,omitempty"`
+	Method       string            `json:"method,omitempty"`
+	Headers      map[string]string `json:"headers,omitempty"`
+	BodyTemplate string            `json:"bodyTemplate,omitempty"`
+	SecretRef    string            `json:"secretRef,omitempty"`
+	// publish (ADR-060 Tier 2) — a registered, versioned Connector by token.
+	ConnectorRef    string `json:"connectorRef,omitempty"`
+	PayloadTemplate string `json:"payloadTemplate,omitempty"`
+	// shared by httpCall + publish
+	TimeoutMs int `json:"timeoutMs,omitempty"`
 }
 
-// buildAction decodes an action node and maps it to a rules.Action. Field coherence (a
-// raiseAlarm carrying a command, an alarm without a rule severity, a non-object payload) is
-// left to rules.validateReact inside rules.Compile, so a canvas action and a form action are
-// rejected identically.
+// checkVariant rejects an action config that carries a field belonging to a DIFFERENT action
+// variant than its Action. This is necessary because actionConfig is a flat union — decodeConfig's
+// DisallowUnknownFields can't separate the variants, and rules.validateReact only ever sees the
+// single-variant Action that buildAction constructs, so a foreign field would otherwise be silently
+// dropped (e.g. an httpCall carrying publish's payloadTemplate → an empty-body webhook, or a
+// raiseAlarm carrying a url). Keeping the compiler strict here matters because the canvas graph is
+// written directly over GraphQL and by AI rule-authoring (ADR-056) — "the compiler disposes" only
+// holds if a mistyped/misfielded action is rejected, not quietly reinterpreted. TimeoutMs is shared
+// by httpCall + publish; every other field belongs to exactly one variant.
+func (c actionConfig) checkVariant() error {
+	set := func(s string) bool { return s != "" }
+	foreign := func() bool {
+		switch rules.ActionType(c.Action) {
+		case rules.ActionRaiseAlarm:
+			return set(c.Command) || set(c.Payload) || set(c.URL) || set(c.Method) || len(c.Headers) > 0 ||
+				set(c.BodyTemplate) || set(c.SecretRef) || set(c.ConnectorRef) || set(c.PayloadTemplate) || c.TimeoutMs != 0
+		case rules.ActionSendCommand:
+			return set(c.AlarmKey) || set(c.URL) || set(c.Method) || len(c.Headers) > 0 ||
+				set(c.BodyTemplate) || set(c.SecretRef) || set(c.ConnectorRef) || set(c.PayloadTemplate) || c.TimeoutMs != 0
+		case rules.ActionHTTPCall:
+			return set(c.AlarmKey) || set(c.Command) || set(c.Payload) || set(c.ConnectorRef) || set(c.PayloadTemplate)
+		case rules.ActionPublish:
+			return set(c.AlarmKey) || set(c.Command) || set(c.Payload) || set(c.URL) || set(c.Method) ||
+				len(c.Headers) > 0 || set(c.BodyTemplate) || set(c.SecretRef)
+		default:
+			return false // unknown action: buildAction's default returns the "unknown action" error
+		}
+	}
+	if foreign() {
+		return fmt.Errorf("action node of type %q carries fields belonging to another action type", c.Action)
+	}
+	return nil
+}
+
+// buildAction decodes an action node and maps it to a rules.Action. Cross-variant field coherence
+// (an httpCall carrying a publish field, a raiseAlarm carrying a url) is checked here (checkVariant);
+// intra-variant coherence (an alarm without a rule severity, a non-object payload, an http/publish
+// body that fails to compile, a reserved header, an invalid URL/connector token) is left to
+// rules.validateReact inside rules.Compile — so a canvas action and a form action are rejected
+// identically.
 func buildAction(n Node) (rules.Action, error) {
 	var c actionConfig
 	if err := decodeConfig(n.Config, &c); err != nil {
+		return rules.Action{}, err
+	}
+	if err := c.checkVariant(); err != nil {
 		return rules.Action{}, err
 	}
 	switch rules.ActionType(c.Action) {
@@ -357,8 +411,23 @@ func buildAction(n Node) (rules.Action, error) {
 		return rules.Action{Type: rules.ActionRaiseAlarm, RaiseAlarm: &rules.RaiseAlarmAction{AlarmKey: c.AlarmKey}}, nil
 	case rules.ActionSendCommand:
 		return rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: c.Command, Payload: c.Payload}}, nil
+	case rules.ActionHTTPCall:
+		return rules.Action{Type: rules.ActionHTTPCall, HTTPCall: &rules.HTTPCallAction{
+			URL:          c.URL,
+			Method:       c.Method,
+			Headers:      c.Headers,
+			BodyTemplate: c.BodyTemplate,
+			SecretRef:    c.SecretRef,
+			TimeoutMs:    c.TimeoutMs,
+		}}, nil
+	case rules.ActionPublish:
+		return rules.Action{Type: rules.ActionPublish, Publish: &rules.PublishAction{
+			ConnectorRef:    c.ConnectorRef,
+			PayloadTemplate: c.PayloadTemplate,
+			TimeoutMs:       c.TimeoutMs,
+		}}, nil
 	default:
-		return rules.Action{}, fmt.Errorf("action node has unknown action %q (want raiseAlarm or sendCommand)", c.Action)
+		return rules.Action{}, fmt.Errorf("action node has unknown action %q (want raiseAlarm, sendCommand, httpCall, or publish)", c.Action)
 	}
 }
 

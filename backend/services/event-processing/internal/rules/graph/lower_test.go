@@ -101,6 +101,77 @@ func TestByteIdentity(t *testing.T) {
 			},
 		},
 		{
+			name: "threshold + httpCall webhook (ADR-060)",
+			canvas: canvas(
+				[]Node{
+					src("s"),
+					{ID: "c", Type: NodeThreshold, Config: cfg(map[string]interface{}{
+						"name": "hot", "severity": "critical",
+						"when": map[string]interface{}{"metric": "tempC", "op": "gt", "threshold": map[string]interface{}{"kind": "literal", "value": 30}},
+					})},
+					{ID: "a", Type: NodeAction, Config: cfg(map[string]interface{}{
+						"action": "httpCall", "url": "https://example.com/hook", "bodyTemplate": `"overheat"`,
+					})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+				Edge{From: "c:signal", To: "a:in"},
+			),
+			want: rules.Rule{
+				Name: "hot", Type: rules.TypeThreshold, Severity: rules.SeverityCritical,
+				When:    rules.Condition{Metric: "tempC", Op: rules.OpGt, Threshold: f64(30)},
+				Actions: []rules.Action{{Type: rules.ActionHTTPCall, HTTPCall: &rules.HTTPCallAction{URL: "https://example.com/hook", BodyTemplate: `"overheat"`}}},
+			},
+		},
+		{
+			name: "httpCall with headers + secret + timeout (ADR-060, map-sort byte-identity)",
+			canvas: canvas(
+				[]Node{
+					src("s"),
+					{ID: "c", Type: NodeThreshold, Config: cfg(map[string]interface{}{
+						"name": "hot", "severity": "warning",
+						"when": map[string]interface{}{"metric": "tempC", "op": "gt", "threshold": map[string]interface{}{"kind": "literal", "value": 30}},
+					})},
+					{ID: "a", Type: NodeAction, Config: cfg(map[string]interface{}{
+						"action": "httpCall", "url": "https://example.com/hook",
+						"headers":   map[string]interface{}{"X-Env": "prod", "Content-Type": "application/json"},
+						"secretRef": "hook-token", "timeoutMs": 5000,
+					})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+				Edge{From: "c:signal", To: "a:in"},
+			),
+			want: rules.Rule{
+				Name: "hot", Type: rules.TypeThreshold, Severity: rules.SeverityWarning,
+				When: rules.Condition{Metric: "tempC", Op: rules.OpGt, Threshold: f64(30)},
+				Actions: []rules.Action{{Type: rules.ActionHTTPCall, HTTPCall: &rules.HTTPCallAction{
+					URL: "https://example.com/hook", Headers: map[string]string{"X-Env": "prod", "Content-Type": "application/json"},
+					SecretRef: "hook-token", TimeoutMs: 5000,
+				}}},
+			},
+		},
+		{
+			name: "threshold + publish to connector (ADR-060)",
+			canvas: canvas(
+				[]Node{
+					src("s"),
+					{ID: "c", Type: NodeThreshold, Config: cfg(map[string]interface{}{
+						"name": "hot", "severity": "major",
+						"when": map[string]interface{}{"metric": "tempC", "op": "gt", "threshold": map[string]interface{}{"kind": "literal", "value": 30}},
+					})},
+					{ID: "a", Type: NodeAction, Config: cfg(map[string]interface{}{
+						"action": "publish", "connectorRef": "pager", "payloadTemplate": `"overheat"`,
+					})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+				Edge{From: "c:signal", To: "a:in"},
+			),
+			want: rules.Rule{
+				Name: "hot", Type: rules.TypeThreshold, Severity: rules.SeverityMajor,
+				When:    rules.Condition{Metric: "tempC", Op: rules.OpGt, Threshold: f64(30)},
+				Actions: []rules.Action{{Type: rules.ActionPublish, Publish: &rules.PublishAction{ConnectorRef: "pager", PayloadTemplate: `"overheat"`}}},
+			},
+		},
+		{
 			name: "duration, no action (emit-derived-event)",
 			canvas: canvas(
 				[]Node{
@@ -394,6 +465,20 @@ func TestRejects(t *testing.T) {
 				Edge{From: "s", To: "c:in"},
 			),
 			wantNodeID: "",
+		},
+		{
+			name: "action carries a foreign variant field (httpCall with publish's payloadTemplate)",
+			def: canvas(
+				[]Node{
+					src("s"), th("c", "a"),
+					{ID: "act", Type: NodeAction, Config: cfg(map[string]interface{}{
+						"action": "httpCall", "url": "https://example.com/hook", "payloadTemplate": `"x"`,
+					})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+				Edge{From: "c:signal", To: "act:in"},
+			),
+			wantNodeID: "act",
 		},
 		{
 			name: "correlation cannot carry actions",

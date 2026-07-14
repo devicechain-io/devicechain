@@ -91,7 +91,7 @@ const WINDOW_MODES: ComboboxOption[] = [
 // also offers "match every event"; absence takes no leaf at all.
 type CondMode = 'structured' | 'cel' | 'none';
 type BoundKind = 'literal' | 'attr';
-type ActionKind = 'raiseAlarm' | 'sendCommand';
+type ActionKind = 'raiseAlarm' | 'sendCommand' | 'httpCall' | 'publish';
 
 interface ActionRow {
   type: ActionKind;
@@ -103,6 +103,11 @@ interface ActionRow {
   // saving does not silently strip the guard; a guarded row shows a read-only note steering the
   // author back to the canvas to change it.
   guard?: string;
+  // The outbound REACT actions (httpCall / publish, ADR-060) are authored on the Canvas, not in
+  // this form. The form carries such an action through VERBATIM (the original wire object) so a
+  // canvas-authored connector rule opened here and saved is not corrupted — mirroring the guard
+  // pass-through. `raw`, when set, is the whole wire action and is emitted unchanged.
+  raw?: Record<string, unknown>;
 }
 
 // Per-type authoring shape derived from compile.go.
@@ -730,16 +735,27 @@ export function DetectionRuleForm({
             <div key={i} className="space-y-3 rounded-md border p-3">
               <div className="flex items-center justify-between gap-2">
                 <FormField label={`Action ${i + 1}`} htmlFor={`dr-action-${i}`}>
-                  <Combobox
-                    id={`dr-action-${i}`}
-                    value={a.type}
-                    onChange={(v) => setActionAt(i, { type: v as ActionKind })}
-                    options={[
-                      { value: 'raiseAlarm', label: 'Raise alarm' },
-                      { value: 'sendCommand', label: 'Send command' },
-                    ]}
-                    allowClear={false}
-                  />
+                  {a.raw ? (
+                    // An outbound action (httpCall / publish) is Canvas-authored; the form shows it
+                    // read-only and preserves it. No Combobox — it can't be retyped here.
+                    <Input
+                      id={`dr-action-${i}`}
+                      value={a.type === 'publish' ? 'Publish to a connector' : 'Call a webhook'}
+                      readOnly
+                      disabled
+                    />
+                  ) : (
+                    <Combobox
+                      id={`dr-action-${i}`}
+                      value={a.type}
+                      onChange={(v) => setActionAt(i, { type: v as ActionKind })}
+                      options={[
+                        { value: 'raiseAlarm', label: 'Raise alarm' },
+                        { value: 'sendCommand', label: 'Send command' },
+                      ]}
+                      allowClear={false}
+                    />
+                  )}
                 </FormField>
                 <Button size="sm" variant="ghost" onClick={() => removeAction(i)}>
                   Remove
@@ -751,7 +767,12 @@ export function DetectionRuleForm({
                   switch to the Canvas to change or remove it.
                 </p>
               )}
-              {a.type === 'raiseAlarm' ? (
+              {a.raw ? (
+                <p className="rounded-md border border-dashed bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
+                  An outbound {a.type === 'publish' ? 'publish' : 'webhook'} action authored on the Canvas. It is preserved here; switch to the
+                  Canvas to change it, or Remove it.
+                </p>
+              ) : a.type === 'raiseAlarm' ? (
                 <FormField
                   label="Alarm key"
                   htmlFor={`dr-alarm-key-${i}`}
@@ -915,6 +936,9 @@ function buildWhen(a: BuildArgs): Record<string, unknown> | undefined {
 }
 
 function buildAction(a: ActionRow): Record<string, unknown> {
+  // An outbound action (httpCall / publish) the form doesn't edit is emitted verbatim from the
+  // wire object captured at load (guard already inside it), so a canvas rule round-trips losslessly.
+  if (a.raw) return a.raw;
   // Preserve a canvas-authored guard verbatim (the form cannot edit it, but must not drop it).
   const withGuard = (o: Record<string, unknown>): Record<string, unknown> => (a.guard ? { ...o, guard: a.guard } : o);
   if (a.type === 'sendCommand') {
@@ -1000,7 +1024,13 @@ function parseDefinition(raw: string): ParsedDefinition | null {
   // Actions.
   const rawActions = Array.isArray(d.actions) ? (d.actions as Record<string, unknown>[]) : [];
   const actions: ActionRow[] = rawActions.map((act) => {
-    const t = str(act.type) === 'sendCommand' ? 'sendCommand' : 'raiseAlarm';
+    const wireType = str(act.type);
+    // Outbound actions (ADR-060) are canvas-authored; carry them through verbatim so a save
+    // from the form doesn't rewrite them as a raiseAlarm (which the fallback below would do).
+    if (wireType === 'httpCall' || wireType === 'publish') {
+      return { type: wireType, alarmKey: '', command: '', payload: '', raw: act };
+    }
+    const t = wireType === 'sendCommand' ? 'sendCommand' : 'raiseAlarm';
     const ra = (act.raiseAlarm ?? {}) as Record<string, unknown>;
     const sc = (act.sendCommand ?? {}) as Record<string, unknown>;
     return {

@@ -7,10 +7,13 @@
 // mutates the opaque node config; the server-authoritative compileCanvas is what validates it,
 // so this panel is permissive and the diagnostics land on the node.
 
-import { type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { Textarea } from '@/routes/common';
+import { useQuery } from '@/lib/hooks/use-query';
+import { listConnectors } from '@/lib/api/connectors';
 import {
   AGG_FUNCS,
   COMPARE_OPS,
@@ -360,33 +363,8 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
           </p>
         </div>
       );
-    case 'action': {
-      const kind = strVal(config.action) || 'raiseAlarm';
-      return (
-        <div className="space-y-4">
-          <FormField label="Action" htmlFor="cfg-action">
-            <Select id="cfg-action" value={kind} onChange={(v) => onChange({ action: v })}>
-              <option value="raiseAlarm">Raise alarm</option>
-              <option value="sendCommand">Send command</option>
-            </Select>
-          </FormField>
-          {kind === 'raiseAlarm' ? (
-            <FormField label="Alarm key" htmlFor="cfg-alarmkey" description="Repeated firings escalate one alarm keyed on this. Empty ⇒ the rule's token.">
-              <Input id="cfg-alarmkey" value={strVal(config.alarmKey)} onChange={(e) => set({ alarmKey: e.target.value || undefined })} placeholder="freezer-warm" />
-            </FormField>
-          ) : (
-            <>
-              <FormField label="Command" htmlFor="cfg-command">
-                <Input id="cfg-command" value={strVal(config.command)} onChange={(e) => set({ command: e.target.value })} placeholder="cool" />
-              </FormField>
-              <FormField label="Payload (JSON)" htmlFor="cfg-payload" description="Optional static argument object.">
-                <Textarea id="cfg-payload" value={strVal(config.payload)} onChange={(e) => set({ payload: e.target.value || undefined })} placeholder='{"level":2}' />
-              </FormField>
-            </>
-          )}
-        </div>
-      );
-    }
+    case 'action':
+      return <ActionFields config={config} set={set} onChange={onChange} />;
     case 'compute':
       return (
         <div className="space-y-4">
@@ -410,4 +388,152 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
         </div>
       );
   }
+}
+
+// ── REACT action node fields (raiseAlarm / sendCommand / httpCall / publish) ──
+// A component (not an inline case) so the publish connector picker can fetch the
+// tenant's connectors. Switching the action kind resets the config to just
+// { action } — the compiler reads only the selected variant's fields, and a reset
+// keeps a stale url/body from lingering in the stored graph when you change kind.
+function ActionFields({
+  config,
+  set,
+  onChange,
+}: {
+  config: NodeConfig;
+  set: (patch: NodeConfig) => void;
+  onChange: (config: NodeConfig) => void;
+}) {
+  const kind = strVal(config.action) || 'raiseAlarm';
+  return (
+    <div className="space-y-4">
+      <FormField label="Action" htmlFor="cfg-action">
+        <Select id="cfg-action" value={kind} onChange={(v) => onChange({ action: v })}>
+          <option value="raiseAlarm">Raise alarm</option>
+          <option value="sendCommand">Send command</option>
+          <option value="httpCall">Call a webhook</option>
+          <option value="publish">Publish to a connector</option>
+        </Select>
+      </FormField>
+
+      {kind === 'raiseAlarm' && (
+        <FormField label="Alarm key" htmlFor="cfg-alarmkey" description="Repeated firings escalate one alarm keyed on this. Empty ⇒ the rule's token.">
+          <Input id="cfg-alarmkey" value={strVal(config.alarmKey)} onChange={(e) => set({ alarmKey: e.target.value || undefined })} placeholder="freezer-warm" />
+        </FormField>
+      )}
+
+      {kind === 'sendCommand' && (
+        <>
+          <FormField label="Command" htmlFor="cfg-command">
+            <Input id="cfg-command" value={strVal(config.command)} onChange={(e) => set({ command: e.target.value })} placeholder="cool" />
+          </FormField>
+          <FormField label="Payload (JSON)" htmlFor="cfg-payload" description="Optional static argument object.">
+            <Textarea id="cfg-payload" value={strVal(config.payload)} onChange={(e) => set({ payload: e.target.value || undefined })} placeholder='{"level":2}' />
+          </FormField>
+        </>
+      )}
+
+      {kind === 'httpCall' && (
+        <>
+          <FormField label="URL" htmlFor="cfg-url" description="An http/https endpoint. POST only. Delivered by the outbound-connectors service.">
+            <Input id="cfg-url" value={strVal(config.url)} onChange={(e) => set({ url: e.target.value })} placeholder="https://hooks.example.com/incident" />
+          </FormField>
+          <FormField label="Body (CEL)" htmlFor="cfg-body" description="A CEL expression over the detection (value / hasValue / series) evaluating to the request body string. Empty ⇒ no body.">
+            <Textarea id="cfg-body" value={strVal(config.bodyTemplate)} onChange={(e) => set({ bodyTemplate: e.target.value || undefined })} placeholder={'"device " + string(series) + " overheated"'} />
+          </FormField>
+          <FormField label="Headers" htmlFor="cfg-headers" description="Optional static headers, one “Key: Value” per line. Authorization / X-DC-* are reserved and rejected at publish.">
+            <HeadersField value={config.headers} onChange={(h) => set({ headers: h })} />
+          </FormField>
+          <FormField label="Secret handle" htmlFor="cfg-secretref" description="Optional. The name of a stored secret presented as the auth header at dispatch. Never the cleartext value.">
+            <Input id="cfg-secretref" value={strVal(config.secretRef)} onChange={(e) => set({ secretRef: e.target.value || undefined })} placeholder="incident-webhook-token" />
+          </FormField>
+        </>
+      )}
+
+      {kind === 'publish' && (
+        <>
+          <FormField label="Connector" htmlFor="cfg-connectorref" description="The registered connector to publish through. Manage connectors under Connectors.">
+            <ConnectorPicker value={strVal(config.connectorRef)} onChange={(v) => set({ connectorRef: v || undefined })} />
+          </FormField>
+          <FormField label="Payload (CEL)" htmlFor="cfg-payloadtemplate" description="A CEL expression over the detection evaluating to the message body string. Empty ⇒ an empty payload.">
+            <Textarea id="cfg-payloadtemplate" value={strVal(config.payloadTemplate)} onChange={(e) => set({ payloadTemplate: e.target.value || undefined })} placeholder={'"overheat: " + string(series)'} />
+          </FormField>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ConnectorPicker lists the tenant's connectors for the publish action. Only a
+// published connector actually dispatches, but the list is all connectors (the
+// publish-time existence check is server-side); an unknown/stale current value is
+// still shown so it isn't silently dropped.
+function ConnectorPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const { data, loading } = useQuery(() => listConnectors({ pageNumber: 1, pageSize: 100 }), []);
+  const connectors = data?.results ?? [];
+  const known = connectors.some((c) => c.token === value);
+  // Only show the "no connectors" hint when there's also nothing selected — a stale/deleted
+  // ref (value set, list empty) must still render the Select so the author can see and clear it.
+  if (!loading && connectors.length === 0 && !value) {
+    return (
+      <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+        No connectors yet. Create one under <Link to="/connectors" className="text-primary hover:underline">Connectors</Link>, then pick it here.
+      </p>
+    );
+  }
+  return (
+    <Select id="cfg-connectorref" value={value} onChange={onChange}>
+      <option value="">{loading ? 'Loading…' : 'Select a connector…'}</option>
+      {/* Show a "(not found)" row for a value not in the list — but only once loaded, so a valid
+          ref doesn't flash as not-found while the query is in flight. */}
+      {!loading && value && !known && <option value={value}>{value} (not found)</option>}
+      {connectors.map((c) => (
+        <option key={c.token} value={c.token}>
+          {c.name ? `${c.name} (${c.token})` : c.token}
+        </option>
+      ))}
+    </Select>
+  );
+}
+
+// HeadersField edits the httpCall static headers. It keeps the RAW text in local state so typing
+// works normally: a controlled textarea re-derived through parseHeaders on every keystroke would
+// erase an in-progress colon-less line (you could never type a header). The parsed map is written
+// to the node config on each change; the textarea shows the local text. It is remounted per node
+// (NodeInspector is keyed by node id), so the seed is always the selected node's headers.
+function HeadersField({ value, onChange }: { value: unknown; onChange: (h: Record<string, string> | undefined) => void }) {
+  const [text, setText] = useState(() => formatHeaders(value));
+  return (
+    <Textarea
+      id="cfg-headers"
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(parseHeaders(e.target.value));
+      }}
+      placeholder={'Content-Type: application/json'}
+    />
+  );
+}
+
+// parseHeaders turns a "Key: Value" per line textarea into a header map (or undefined
+// when empty). formatHeaders is the inverse for display.
+function parseHeaders(raw: string): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    const i = t.indexOf(':');
+    if (i < 0) continue;
+    const k = t.slice(0, i).trim();
+    if (k) out[k] = t.slice(i + 1).trim();
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function formatHeaders(h: unknown): string {
+  if (!h || typeof h !== 'object') return '';
+  return Object.entries(h as Record<string, string>)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('\n');
 }

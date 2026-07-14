@@ -75,6 +75,16 @@ interface WireAction {
   type?: string;
   raiseAlarm?: { alarmKey?: string };
   sendCommand?: { command?: string; payload?: string };
+  // ADR-060 outbound actions.
+  httpCall?: {
+    url?: string;
+    method?: string;
+    headers?: Record<string, string>;
+    bodyTemplate?: string;
+    secretRef?: string;
+    timeoutMs?: number;
+  };
+  publish?: { connectorRef?: string; payloadTemplate?: string; timeoutMs?: number };
   // The per-action REACT guard (slice 9c). When present, the synthesis inserts a branch node
   // carrying it between the condition and this action, so a guarded rule re-opens on the canvas.
   guard?: string;
@@ -178,6 +188,23 @@ function actionConfig(a: WireAction): ActionConfig | null {
   if (a.type === 'sendCommand') {
     const cfg: ActionConfig = { action: 'sendCommand', command: a.sendCommand?.command ?? '' };
     if (a.sendCommand?.payload) cfg.payload = a.sendCommand.payload;
+    return cfg;
+  }
+  if (a.type === 'httpCall') {
+    const h = a.httpCall ?? {};
+    const cfg: ActionConfig = { action: 'httpCall', url: h.url ?? '' };
+    if (h.method) cfg.method = h.method;
+    if (h.headers && Object.keys(h.headers).length > 0) cfg.headers = h.headers;
+    if (h.bodyTemplate) cfg.bodyTemplate = h.bodyTemplate;
+    if (h.secretRef) cfg.secretRef = h.secretRef;
+    if (h.timeoutMs) cfg.timeoutMs = h.timeoutMs;
+    return cfg;
+  }
+  if (a.type === 'publish') {
+    const p = a.publish ?? {};
+    const cfg: ActionConfig = { action: 'publish', connectorRef: p.connectorRef ?? '' };
+    if (p.payloadTemplate) cfg.payloadTemplate = p.payloadTemplate;
+    if (p.timeoutMs) cfg.timeoutMs = p.timeoutMs;
     return cfg;
   }
   return null;
