@@ -111,6 +111,27 @@ at an External-Secrets-managed / pre-created Secret holding the `instance` key.
 {{- end -}}
 
 {{/*
+The object-store backend config block (instance.config.infrastructure.blob, ADR-058),
+resolved safely to an empty dict when absent — e.g. under instance.existingSecret, where
+the config is managed out-of-band and not visible to the chart. Returned as JSON for the
+caller to fromJson. Shared by the blob PVC template and the deployment mount so both read
+the exact same backend + directory.
+*/}}
+{{- define "devicechain.blobBackendConfig" -}}
+{{- ((.Values.instance.config | default dict).infrastructure | default dict).blob | default dict | toJson -}}
+{{- end -}}
+
+{{/*
+The filesystem object-store PVC name: blobStorage.persistence.existingClaim when supplied,
+else the chart-created default. Shared by the PVC template and the deployment volume so a
+rendered claim and its mount always agree.
+*/}}
+{{- define "devicechain.blobClaimName" -}}
+{{- $p := (.Values.blobStorage | default dict).persistence | default dict -}}
+{{- $p.existingClaim | default (printf "dci-%s-blob" .Values.instance.id) -}}
+{{- end -}}
+
+{{/*
 The per-service config ConfigMap `data` block: one key per enabled area. Factored
 out so the rendered ConfigMap and the E8 checksum annotation are computed from the
 exact same source. Takes the root context.

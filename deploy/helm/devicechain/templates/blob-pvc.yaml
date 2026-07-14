@@ -1,0 +1,105 @@
+{{/*
+PersistentVolumeClaim backing the FILESYSTEM object store (ADR-058). The filesystem blob
+backend persists opaque binaries that do not belong in Postgres (branding logos today;
+firmware/OTA + exports later) under instance.config.infrastructure.blob.directory, which
+MUST be a durable mounted volume — and an RWX (ReadWriteMany) volume shared across pods when
+a consuming area runs more than one replica, since a filesystem store is per-pod otherwise.
+This claim is mounted into the blobStorage.mountAreas at that directory (see deployment.yaml).
+
+Rendered only when blobStorage.persistence.enabled selects a chart-created claim for the
+filesystem backend with a resolved mount path. Skipped when an existingClaim is supplied (the
+operator manages the PVC) or the s3 backend is in use (no volume needed). The guards below fail
+the render on a persistence/backend mismatch rather than silently producing a store that 503s
+(no volume) or writes to an unmounted read-only path at runtime.
+*/}}
+{{- $blob := include "devicechain.blobBackendConfig" . | fromJson -}}
+{{- $backend := $blob.backend | default "filesystem" -}}
+{{- $directory := $blob.directory | default "" -}}
+{{- $p := (.Values.blobStorage | default dict).persistence | default dict -}}
+{{- $mountPath := $p.mountPath | default "" -}}
+{{- $path := ternary $mountPath $directory (ne $mountPath "") -}}
+{{- $wantVolume := or $p.enabled (not (empty $p.existingClaim)) -}}
+{{- $mountAreas := (.Values.blobStorage | default dict).mountAreas | default (list "user-management") -}}
+{{- $enabledAreas := splitList "," (include "devicechain.enabledAreas" .) -}}
+{{/*
+The Go services that build a filesystem blob store and thus need the volume mounted (ADR-058).
+Mirrors the code (today: user-management, for branding logos) the way the hard-dependency
+catalog in _helpers.tpl mirrors backend/k8s/functionalarea — keep it in sync as consumers land.
+*/}}
+{{- $blobConsumers := list "user-management" -}}
+
+{{/* The mount path (an explicit override) must match where the store actually writes. */}}
+{{- if and (ne $mountPath "") (ne $directory "") (ne $mountPath $directory) -}}
+{{-   fail (printf "blobStorage.persistence.mountPath (%q) must match instance.config.infrastructure.blob.directory (%q): the volume mounts where the filesystem store writes" $mountPath $directory) -}}
+{{- end -}}
+
+{{/* mountPath is an escape hatch for instance.existingSecret (where the chart cannot read
+     blob.directory). With inline config, blob.directory is the source of truth. */}}
+{{- if and (ne $mountPath "") (eq $directory "") (eq (.Values.instance.existingSecret | default "") "") -}}
+{{-   fail "blobStorage.persistence.mountPath is only for instance.existingSecret deployments (where the chart cannot read blob.directory); with inline config set instance.config.infrastructure.blob.directory instead" -}}
+{{- end -}}
+
+{{/* A configured filesystem store with no volume would 503 or fail writes on the read-only rootfs. */}}
+{{- if and (eq $backend "filesystem") (ne $directory "") (not $wantVolume) -}}
+{{-   fail "instance.config.infrastructure.blob.directory is set for the filesystem backend but no volume is provided: set blobStorage.persistence.enabled=true (or blobStorage.persistence.existingClaim) so the directory is a durable mounted volume, or switch to the s3 backend" -}}
+{{- end -}}
+
+{{/* Volume settings only apply to the filesystem backend — s3 needs no volume. */}}
+{{- if and $wantVolume (ne $backend "filesystem") -}}
+{{-   fail (printf "blobStorage volume settings only apply to the filesystem blob backend (got %q): the s3 backend needs no volume — disable blobStorage.persistence" $backend) -}}
+{{- end -}}
+
+{{/* A chart-created/existing volume needs somewhere to mount. */}}
+{{- if and $wantVolume (eq $backend "filesystem") (eq $path "") -}}
+{{-   fail "blobStorage.persistence requires a mount path: set instance.config.infrastructure.blob.directory (or blobStorage.persistence.mountPath when the config is supplied via instance.existingSecret)" -}}
+{{- end -}}
+
+{{/* Every enabled store consumer must actually mount the volume, or it starts with a
+     configured filesystem store and no writable path and crash-loops (fatal at startup). */}}
+{{- if and $wantVolume (eq $backend "filesystem") (ne $path "") -}}
+{{-   range $c := $blobConsumers -}}
+{{-     if and (has $c $enabledAreas) (not (has $c $mountAreas)) -}}
+{{-       fail (printf "blobStorage: area %q consumes the object store (ADR-058) but is not in blobStorage.mountAreas — it would start with a configured filesystem store and no writable volume and crash-loop; add %q to blobStorage.mountAreas" $c $c) -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+
+{{/* A chart-created RWO claim cannot back a consumer running more than one replica (a
+     filesystem store is per-pod): fail rather than wedge the second pod on volume attach. */}}
+{{- if and $p.enabled (eq $backend "filesystem") (ne $path "") (empty $p.existingClaim) (not (has "ReadWriteMany" ($p.accessModes | default (list "ReadWriteOnce")))) -}}
+{{-   range $a := $mountAreas -}}
+{{-     if has $a $enabledAreas -}}
+{{-       $replicas := get (get ($.Values.functionalAreas | default dict) $a | default dict) "replicas" | default $.Values.replicas -}}
+{{-       if gt (int $replicas) 1 -}}
+{{-         fail (printf "blobStorage: area %q runs replicas=%v but the chart-created claim is not ReadWriteMany — a filesystem object store is per-pod, so replicas cannot share it; set blobStorage.persistence.accessModes:[ReadWriteMany] with an RWX storageClass, or use the s3 backend" $a $replicas) -}}
+{{-       end -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+
+{{- if and $p.enabled (eq $backend "filesystem") (ne $path "") (empty $p.existingClaim) -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "devicechain.blobClaimName" . }}
+  namespace: {{ .Values.instance.id }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+  {{- with $p.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml ($p.accessModes | default (list "ReadWriteOnce")) | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ $p.size | default "5Gi" }}
+  {{- if $p.storageClass }}
+  {{- if eq $p.storageClass "-" }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ $p.storageClass | quote }}
+  {{- end }}
+  {{- end }}
+{{- end -}}

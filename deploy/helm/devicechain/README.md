@@ -90,6 +90,62 @@ functionalAreas:
 `values.schema.json` validates the deployment-selection envelope (profile enum,
 area names, image/instance shape) at `helm install`/`upgrade` time.
 
+## Object store (ADR-058)
+
+Opaque binaries that don't belong in Postgres (branding logos today; firmware/OTA +
+exports later) go to a pluggable object store, configured under
+`instance.config.infrastructure.blob`. Two backends:
+
+- **`s3`** (recommended for production / multi-replica) — AWS S3 or any
+  S3-compatible service (MinIO). No volume is needed. Credentials come from the
+  standard AWS chain (env, IRSA, instance profile), **never** from values
+  (ADR-058 §5); set only `bucket` (+ `region`, or `endpoint`/`usePathStyle` for MinIO).
+
+  ```yaml
+  instance:
+    config:
+      infrastructure:
+        blob:
+          backend: s3
+          bucket: dc-prod-blobs
+          region: us-east-1
+  ```
+
+- **`filesystem`** (default) — writes under `blob.directory`. Because the pods run
+  with a read-only root filesystem, that directory **must** be a writable mounted
+  volume, wired via the top-level `blobStorage` block. The chart renders (and mounts)
+  a `PersistentVolumeClaim` for it:
+
+  ```yaml
+  instance:
+    config:
+      infrastructure:
+        blob:
+          backend: filesystem
+          directory: /var/lib/devicechain/blob
+  blobStorage:
+    persistence:
+      enabled: true
+      size: 10Gi
+      # RWX + an RWX-capable class are REQUIRED when a consumer runs replicas > 1
+      # (a filesystem store is per-pod otherwise); prefer the s3 backend at scale.
+      accessModes: [ReadWriteMany]
+      storageClass: efs-sc
+  ```
+
+  Use `blobStorage.persistence.existingClaim` to mount a PVC you provisioned
+  out-of-band instead. Only the areas in `blobStorage.mountAreas` (default
+  `user-management`) mount the volume. Leaving `blob.directory` empty and
+  persistence disabled keeps the store "not configured" — logo upload/read return
+  503 while inline/URL logos still work. The render **fails** on a mismatch
+  (persistence enabled for the `s3` backend, a directory with no volume, or a
+  `mountPath` that disagrees with `blob.directory`).
+
+  Switching a live instance from `filesystem` to `s3` sets `persistence.enabled=false`,
+  and Helm then deletes the chart-created PVC (and its stored objects). Migrate the data
+  first, or set `blobStorage.persistence.annotations: {helm.sh/resource-policy: keep}` to
+  retain the claim.
+
 ## Zero-downtime upgrades
 
 `helm upgrade` rolls forward without dropping traffic. Each Deployment uses a
@@ -114,6 +170,9 @@ with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable`
 - Per enabled area: a `Deployment` (with `/readyz` readiness + `/healthz`
   liveness probes, ADR-022 decision 3) and a `Service` on the GraphQL port (plus
   any `extraPorts` for the area, e.g. event-sources' HTTP ingest on 8081).
+- Optional (`blobStorage.persistence.enabled=true`, filesystem backend): a
+  `PersistentVolumeClaim` (`dci-<id>-blob`) mounted into `blobStorage.mountAreas`
+  at the store directory (ADR-058).
 - The web console (`frontend.enabled=true`, on by default): a static nginx
   `Deployment` + `Service` serving the Vite/React SPA. Disable for
   headless/ingest-only instances.
