@@ -170,18 +170,29 @@ func (api *Api) EntityGroupVersions(ctx context.Context, token string) ([]*Entit
 	return versions, nil
 }
 
-// entityGroupReferencedByEnabledRule reports whether any enabled DetectionRule
-// scopes to this group (ADR-062 reference-counting), gating DeleteEntityGroup with
-// ErrEntityInUse. A rule scoped to group@v needs the version's frozen selector to
-// stamp membership at resolution, so the group must outlive the rule.
-//
-// DetectionRules gain their optional EntityGroup@version scope in ADR-062 S4; until
-// that column exists no rule can reference any group, so this is structurally false.
-// S4 replaces the body with the enabled-rule count over the rule scope column. This
-// is a forward seam that keeps DeleteEntityGroup's fail-closed contract stable across
-// the slice boundary — not a compat shim for an old shape.
-func (api *Api) entityGroupReferencedByEnabledRule(_ context.Context, _ uint) (bool, error) {
-	return false, nil
+// entityGroupReferencedByRule reports whether ANY DetectionRule — enabled or disabled —
+// scopes to this group at any version (ADR-062 reference-counting), gating DeleteEntityGroup
+// with ErrEntityInUse. A rule pinning group@v needs the version's frozen selector to stamp
+// membership at resolution, so the group must outlive the rule. Disabled rules count too: a
+// parked rule still pins the group and can be re-enabled, so deleting the group out from
+// under it would leave a dangling pin that silently never fires once re-enabled — the delete
+// fails closed instead. (The narrower ENABLED count drives read-model GC, not this guard; see
+// enabledRulesReferencingScopeOnTx.)
+func (api *Api) entityGroupReferencedByRule(ctx context.Context, groupId uint) (bool, error) {
+	var token string
+	if err := api.RDB.DB(ctx).Model(&EntityGroup{}).Where("id = ?", groupId).
+		Select("token").Scan(&token).Error; err != nil {
+		return false, err
+	}
+	if token == "" {
+		return false, nil
+	}
+	var n int64
+	if err := api.RDB.DB(ctx).Model(&DetectionRule{}).
+		Where("entity_group_token = ?", token).Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // EntityGroupVersionByNumber loads a single frozen version of a group by number, returning

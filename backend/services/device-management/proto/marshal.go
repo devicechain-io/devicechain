@@ -389,7 +389,12 @@ func UnmarshalEntityDeletedEvent(encoded []byte) (*model.EntityDeletedEvent, err
 func MarshalDetectionRulesPublishedEvent(event *model.DetectionRulesPublishedEvent) ([]byte, error) {
 	rules := make([]*PPublishedDetectionRule, 0, len(event.Rules))
 	for _, r := range event.Rules {
-		rules = append(rules, &PPublishedDetectionRule{Token: r.Token, Definition: r.Definition})
+		rules = append(rules, &PPublishedDetectionRule{
+			Token:              r.Token,
+			Definition:         r.Definition,
+			EntityGroupToken:   r.EntityGroupToken,
+			EntityGroupVersion: r.EntityGroupVersion,
+		})
 	}
 	return proto.Marshal(&PDetectionRulesPublishedEvent{
 		ProfileVersionToken: event.ProfileVersionToken,
@@ -406,7 +411,12 @@ func UnmarshalDetectionRulesPublishedEvent(encoded []byte) (*model.DetectionRule
 	}
 	rules := make([]model.PublishedDetectionRule, 0, len(pbevent.Rules))
 	for _, r := range pbevent.Rules {
-		rules = append(rules, model.PublishedDetectionRule{Token: r.Token, Definition: r.Definition})
+		rules = append(rules, model.PublishedDetectionRule{
+			Token:              r.Token,
+			Definition:         r.Definition,
+			EntityGroupToken:   r.EntityGroupToken,
+			EntityGroupVersion: r.EntityGroupVersion,
+		})
 	}
 	publishedAt, err := parseOptionalTime(pbevent.PublishedAt)
 	if err != nil {

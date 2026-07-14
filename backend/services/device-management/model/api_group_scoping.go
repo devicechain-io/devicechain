@@ -128,90 +128,14 @@ func (api *Api) membersMatchingFrozenOnTx(ctx context.Context, tx *gorm.DB, froz
 // can never arm a rule against a half-populated read-model, and so a concurrent recompute
 // cannot interleave (it blocks on the same family lock and then self-heals its one entity).
 func (api *Api) RegisterGroupVersionForScoping(ctx context.Context, groupToken string, version int32) error {
-	group, err := api.entityGroupByToken(ctx, groupToken)
+	group, frozen, keys, err := api.loadGroupVersionForScoping(ctx, groupToken, version)
 	if err != nil {
 		return err
 	}
-	if MembershipMode(group.MembershipMode) != MembershipDynamic {
-		return fmt.Errorf("only a dynamic entity group can be scoped (group %q is %q)", groupToken, group.MembershipMode)
-	}
-	frozen, err := api.EntityGroupVersionByNumber(ctx, group.ID, version)
-	if err != nil {
-		return err
-	}
-
-	// Compile the frozen selector to extract its referenced facet keys. It already
-	// cleared the publish gate, so this cannot reject; compile is how Keys() is reached.
-	sel, err := selector.Compile(frozen.Selector, frozen.MemberType, 0)
-	if err != nil {
-		return err
-	}
-	keys := sel.Keys()
-
 	var evictIds []uint
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		// Serialize against every concurrent recompute (and other Register) of this family
-		// so the backfill snapshot below cannot be raced into a permanent hole.
-		if err := api.lockMembershipFamily(ctx, tx, frozen.MemberType); err != nil {
-			return err
-		}
-		// Rebuild is register-idempotent: clear any prior enrollment for this exact
-		// group@v, then re-insert. Scoped to (group_id, selector_version) so a different
-		// version's rows are untouched. Hard-delete (Unscoped): these are derived rows whose
-		// unique indexes exclude deleted_at, so a soft-delete tombstone would collide with
-		// the re-insert below.
-		if err := tx.Unscoped().Where("group_id = ? AND selector_version = ?", group.ID, version).
-			Delete(&EntityGroupFacetRef{}).Error; err != nil {
-			return err
-		}
-		// Collect the PRIOR members before wiping them, so a re-register that drops a
-		// no-longer-matching entity evicts its (now stale-positive) cache too — not only the
-		// new member set (the wipe exists precisely to correct drift).
-		var prior []EntityGroupMembership
-		if err := tx.Where("group_id = ? AND selector_version = ?", group.ID, version).Find(&prior).Error; err != nil {
-			return err
-		}
-		for _, m := range prior {
-			evictIds = append(evictIds, m.EntityId)
-		}
-		if err := tx.Unscoped().Where("group_id = ? AND selector_version = ?", group.ID, version).
-			Delete(&EntityGroupMembership{}).Error; err != nil {
-			return err
-		}
-		for _, k := range keys {
-			ref := &EntityGroupFacetRef{
-				FacetKey:        k,
-				MemberType:      frozen.MemberType,
-				GroupId:         group.ID,
-				SelectorVersion: version,
-				GroupToken:      group.Token,
-			}
-			if err := tx.Create(ref).Error; err != nil {
-				return err
-			}
-		}
-		// Backfill under the lock: read the full member set on the tx, then batch-insert.
-		members, err := api.membersMatchingFrozenOnTx(ctx, tx, frozen)
-		if err != nil {
-			return err
-		}
-		rows := make([]EntityGroupMembership, 0, len(members))
-		for _, m := range members {
-			rows = append(rows, EntityGroupMembership{
-				EntityType:      frozen.MemberType,
-				EntityId:        m.Id,
-				GroupId:         group.ID,
-				SelectorVersion: version,
-				GroupToken:      group.Token,
-			})
-			evictIds = append(evictIds, m.Id)
-		}
-		if len(rows) > 0 {
-			if err := tx.CreateInBatches(rows, 200).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		evictIds, err = api.registerGroupVersionOnTx(ctx, tx, group, frozen, keys)
+		return err
 	})
 	if err != nil {
 		return err
@@ -222,6 +146,106 @@ func (api *Api) RegisterGroupVersionForScoping(ctx context.Context, groupToken s
 	api.evictMemberships(ctx, frozen.MemberType, evictIds)
 	api.evictScopedGroupsExist(ctx)
 	return nil
+}
+
+// loadGroupVersionForScoping resolves a (groupToken, version) to the group, its frozen
+// version, and the frozen selector's referenced facet keys — the immutable inputs a
+// registration needs. It rejects a static-group reference (only a dynamic group is
+// scopeable) and fails closed if the group or version is absent. Reads run on the plain
+// handle: the group's mode and the frozen version are effectively immutable inputs, so a
+// caller inside a transaction may safely pre-load them here without threading the tx.
+func (api *Api) loadGroupVersionForScoping(ctx context.Context, groupToken string, version int32) (*EntityGroup, *EntityGroupVersion, []string, error) {
+	group, err := api.entityGroupByToken(ctx, groupToken)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if MembershipMode(group.MembershipMode) != MembershipDynamic {
+		return nil, nil, nil, fmt.Errorf("only a dynamic entity group can be scoped (group %q is %q)", groupToken, group.MembershipMode)
+	}
+	frozen, err := api.EntityGroupVersionByNumber(ctx, group.ID, version)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// Compile the frozen selector to extract its referenced facet keys. It already
+	// cleared the publish gate, so this cannot reject; compile is how Keys() is reached.
+	sel, err := selector.Compile(frozen.Selector, frozen.MemberType, 0)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return group, frozen, sel.Keys(), nil
+}
+
+// registerGroupVersionOnTx is the transaction body of a registration: it (re)builds the
+// reverse-index + read-model rows for one frozen group@v under the family lock, returning
+// the entity ids whose membership cache must be evicted post-commit (both prior and new
+// members). It runs on a caller-provided tx so a rule-save can enroll a group@v in the SAME
+// transaction that persists the rule (ADR-062 same-txn arming: a rule and the read-model it
+// depends on commit atomically, so a rule can never go live against a half-built read-model).
+// RegisterGroupVersionForScoping wraps it in its own transaction; the caller owns eviction.
+func (api *Api) registerGroupVersionOnTx(ctx context.Context, tx *gorm.DB, group *EntityGroup, frozen *EntityGroupVersion, keys []string) ([]uint, error) {
+	// Serialize against every concurrent recompute (and other Register) of this family
+	// so the backfill snapshot below cannot be raced into a permanent hole.
+	if err := api.lockMembershipFamily(ctx, tx, frozen.MemberType); err != nil {
+		return nil, err
+	}
+	// Rebuild is register-idempotent: clear any prior enrollment for this exact
+	// group@v, then re-insert. Scoped to (group_id, selector_version) so a different
+	// version's rows are untouched. Hard-delete (Unscoped): these are derived rows whose
+	// unique indexes exclude deleted_at, so a soft-delete tombstone would collide with
+	// the re-insert below.
+	if err := tx.Unscoped().Where("group_id = ? AND selector_version = ?", group.ID, frozen.Version).
+		Delete(&EntityGroupFacetRef{}).Error; err != nil {
+		return nil, err
+	}
+	// Collect the PRIOR members before wiping them, so a re-register that drops a
+	// no-longer-matching entity evicts its (now stale-positive) cache too — not only the
+	// new member set (the wipe exists precisely to correct drift).
+	var evictIds []uint
+	var prior []EntityGroupMembership
+	if err := tx.Where("group_id = ? AND selector_version = ?", group.ID, frozen.Version).Find(&prior).Error; err != nil {
+		return nil, err
+	}
+	for _, m := range prior {
+		evictIds = append(evictIds, m.EntityId)
+	}
+	if err := tx.Unscoped().Where("group_id = ? AND selector_version = ?", group.ID, frozen.Version).
+		Delete(&EntityGroupMembership{}).Error; err != nil {
+		return nil, err
+	}
+	for _, k := range keys {
+		ref := &EntityGroupFacetRef{
+			FacetKey:        k,
+			MemberType:      frozen.MemberType,
+			GroupId:         group.ID,
+			SelectorVersion: frozen.Version,
+			GroupToken:      group.Token,
+		}
+		if err := tx.Create(ref).Error; err != nil {
+			return nil, err
+		}
+	}
+	// Backfill under the lock: read the full member set on the tx, then batch-insert.
+	members, err := api.membersMatchingFrozenOnTx(ctx, tx, frozen)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]EntityGroupMembership, 0, len(members))
+	for _, m := range members {
+		rows = append(rows, EntityGroupMembership{
+			EntityType:      frozen.MemberType,
+			EntityId:        m.Id,
+			GroupId:         group.ID,
+			SelectorVersion: frozen.Version,
+			GroupToken:      group.Token,
+		})
+		evictIds = append(evictIds, m.Id)
+	}
+	if len(rows) > 0 {
+		if err := tx.CreateInBatches(rows, 200).Error; err != nil {
+			return nil, err
+		}
+	}
+	return evictIds, nil
 }
 
 // DeregisterGroupVersionForScoping GCs a group@version's read-model + reverse-index rows
@@ -236,22 +260,8 @@ func (api *Api) DeregisterGroupVersionForScoping(ctx context.Context, groupToken
 	var evictType string
 	var evictIds []uint
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		// Collect the affected members before tearing their rows down, so their caches can
-		// be evicted post-commit (they lose this membership).
-		var members []EntityGroupMembership
-		if err := tx.Where("group_id = ? AND selector_version = ?", group.ID, version).Find(&members).Error; err != nil {
-			return err
-		}
-		for _, m := range members {
-			evictType = m.EntityType
-			evictIds = append(evictIds, m.EntityId)
-		}
-		if err := tx.Unscoped().Where("group_id = ? AND selector_version = ?", group.ID, version).
-			Delete(&EntityGroupFacetRef{}).Error; err != nil {
-			return err
-		}
-		return tx.Unscoped().Where("group_id = ? AND selector_version = ?", group.ID, version).
-			Delete(&EntityGroupMembership{}).Error
+		evictType, evictIds, err = api.deregisterGroupVersionOnTx(ctx, tx, group.ID, version)
+		return err
 	})
 	if err != nil {
 		return err
@@ -259,6 +269,34 @@ func (api *Api) DeregisterGroupVersionForScoping(ctx context.Context, groupToken
 	api.evictMemberships(ctx, evictType, evictIds)
 	api.evictScopedGroupsExist(ctx)
 	return nil
+}
+
+// deregisterGroupVersionOnTx is the transaction body of a deregistration: it tears down one
+// group@v's read-model + reverse-index rows on the caller's tx, returning the entity family
+// and ids to evict post-commit. It runs on a caller-provided tx so a rule-save can GC a
+// no-longer-referenced group@v in the same transaction that persists the rule change.
+func (api *Api) deregisterGroupVersionOnTx(ctx context.Context, tx *gorm.DB, groupId uint, version int32) (string, []uint, error) {
+	// Collect the affected members before tearing their rows down, so their caches can
+	// be evicted post-commit (they lose this membership).
+	var evictType string
+	var evictIds []uint
+	var members []EntityGroupMembership
+	if err := tx.Where("group_id = ? AND selector_version = ?", groupId, version).Find(&members).Error; err != nil {
+		return "", nil, err
+	}
+	for _, m := range members {
+		evictType = m.EntityType
+		evictIds = append(evictIds, m.EntityId)
+	}
+	if err := tx.Unscoped().Where("group_id = ? AND selector_version = ?", groupId, version).
+		Delete(&EntityGroupFacetRef{}).Error; err != nil {
+		return "", nil, err
+	}
+	if err := tx.Unscoped().Where("group_id = ? AND selector_version = ?", groupId, version).
+		Delete(&EntityGroupMembership{}).Error; err != nil {
+		return "", nil, err
+	}
+	return evictType, evictIds, nil
 }
 
 // recomputeMembershipForAttr re-evaluates one entity's membership after a SHARED-scope

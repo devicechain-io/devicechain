@@ -87,6 +87,39 @@ func TestPublishDeviceProfile_EmitsEnabledRules(t *testing.T) {
 	}
 }
 
+// A rule's group scope (ADR-062 S4) survives the snapshot freeze and rides the published-rule
+// fact to event-processing: the scope columns are NOT json:"-", so buildProfileSnapshot's
+// marshal carries them into the frozen version, and enabledSnapshotRules projects them.
+func TestPublishDeviceProfile_PropagatesRuleScope(t *testing.T) {
+	api := newPublishEmitTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	capture := &capturePublishedRules{}
+	api.DetectionRulesPublishedPublisher = capture
+
+	p := &DeviceProfile{}
+	p.Token = "prof"
+	if err := api.RDB.DB(ctx).Create(p).Error; err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	scoped := &DetectionRule{
+		DeviceProfileId: p.ID, Definition: datatypes.JSON([]byte(`{"name":"n","type":"threshold"}`)),
+		Enabled: true, EntityGroupToken: strptr("arid-areas"), EntityGroupVersion: i32ptr(7),
+	}
+	scoped.Token = "hot"
+	if err := api.RDB.DB(ctx).Create(scoped).Error; err != nil {
+		t.Fatalf("seed scoped rule: %v", err)
+	}
+
+	if _, err := api.PublishDeviceProfile(ctx, "prof", nil, nil, "tester"); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if assert.Len(t, capture.events, 1) && assert.Len(t, capture.events[0].Rules, 1) {
+		got := capture.events[0].Rules[0]
+		assert.Equal(t, "arid-areas", got.EntityGroupToken, "scope token propagates in the fact")
+		assert.Equal(t, int32(7), got.EntityGroupVersion, "scope version propagates in the fact")
+	}
+}
+
 // The version token tracks the monotonic version number across successive publishes.
 func TestPublishDeviceProfile_EmitsVersionedToken(t *testing.T) {
 	api := newPublishEmitTestApi(t)

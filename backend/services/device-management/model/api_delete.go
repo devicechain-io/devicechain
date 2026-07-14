@@ -339,9 +339,42 @@ func (api *Api) DeleteCommandDefinition(ctx context.Context, token string) (bool
 	return api.hardDeleteByToken(ctx, &CommandDefinition{}, token)
 }
 
-// DeleteDetectionRule deletes a single detection rule by token (ADR-051 slice 4b).
+// DeleteDetectionRule deletes a single detection rule by token (ADR-051 slice 4b). If the
+// rule pinned a group scope (ADR-062 S4), deleting it reconciles the read-model enrollment
+// in the same transaction — GCing the pinned group@v when this was the last enabled rule
+// referencing it — so a deleted rule leaves no orphan membership rows.
 func (api *Api) DeleteDetectionRule(ctx context.Context, token string) (bool, error) {
-	return api.hardDeleteByToken(ctx, &DetectionRule{}, token)
+	// Load the rule's scope before deleting so reconcile can GC the group@v it vacates. A
+	// missing rule is a no-op delete (no scope to reconcile).
+	existing, err := api.DetectionRulesByToken(ctx, []string{token})
+	if err != nil {
+		return false, err
+	}
+	if len(existing) == 0 {
+		return false, nil
+	}
+	oldScope := ruleScopeOf(existing[0].EntityGroupToken, existing[0].EntityGroupVersion)
+
+	var deleted bool
+	var evictions []membershipEviction
+	var changed bool
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Unscoped().Where("token = ?", token).Delete(&DetectionRule{})
+		if res.Error != nil {
+			return res.Error
+		}
+		deleted = res.RowsAffected > 0
+		if !deleted {
+			return nil
+		}
+		evictions, changed, err = api.reconcileRuleScopingOnTx(ctx, tx, oldScope, nil)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	api.fireScopingEvictions(ctx, evictions, changed)
+	return deleted, nil
 }
 
 // DeleteProvisioningProfile deletes a single provisioning profile by token (ADR-012).

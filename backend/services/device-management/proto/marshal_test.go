@@ -169,7 +169,10 @@ func TestMarshalDetectionRulesPublishedEventRoundTrips(t *testing.T) {
 	event := &model.DetectionRulesPublishedEvent{
 		ProfileVersionToken: "sensor-profile@3",
 		Rules: []model.PublishedDetectionRule{
-			{Token: "overheat", Definition: `{"name":"overheat","type":"threshold","when":{"metric":"t","op":"gt","threshold":80}}`},
+			// A scoped rule (ADR-062 S4) must carry its group@version pin through the fact.
+			{Token: "overheat", Definition: `{"name":"overheat","type":"threshold","when":{"metric":"t","op":"gt","threshold":80}}`,
+				EntityGroupToken: "arid-areas", EntityGroupVersion: 4},
+			// An unscoped rule carries an empty token / version 0.
 			{Token: "flatline", Definition: `{"name":"flatline","type":"absence","timeout":"5m"}`},
 		},
 		PublishedAt: publishedAt,

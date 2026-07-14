@@ -261,7 +261,15 @@ func (api *Api) enabledSnapshotRules(snapshot datatypes.JSON) []PublishedDetecti
 		if !dr.Enabled {
 			continue
 		}
-		out = append(out, PublishedDetectionRule{Token: dr.Token, Definition: string(dr.Definition)})
+		pr := PublishedDetectionRule{Token: dr.Token, Definition: string(dr.Definition)}
+		// Propagate the rule's optional group scope (ADR-062 S4) to event-processing. The
+		// frozen snapshot carried the scope columns (not json:"-"), so a scoped rule ships
+		// its pin; an unscoped rule ships empty token / version 0 (the engine's "no scope").
+		if dr.EntityGroupToken != nil && dr.EntityGroupVersion != nil {
+			pr.EntityGroupToken = *dr.EntityGroupToken
+			pr.EntityGroupVersion = *dr.EntityGroupVersion
+		}
+		out = append(out, pr)
 	}
 	return out
 }

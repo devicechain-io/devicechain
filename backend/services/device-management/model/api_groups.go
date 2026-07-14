@@ -226,7 +226,7 @@ func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, erro
 		}
 		return false, err
 	}
-	inUse, err := api.entityGroupReferencedByEnabledRule(ctx, group.ID)
+	inUse, err := api.entityGroupReferencedByRule(ctx, group.ID)
 	if err != nil {
 		return false, err
 	}

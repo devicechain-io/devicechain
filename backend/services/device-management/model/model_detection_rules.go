@@ -62,6 +62,22 @@ type DetectionRule struct {
 	// published-rule fact emitter (ADR-051 slice 4b) does not feed a disabled rule into the
 	// DETECT engine's active set. Do not read "disabled" as "absent from the snapshot".
 	Enabled bool
+
+	// EntityGroupToken / EntityGroupVersion pin the rule's OPTIONAL scope to one
+	// published dynamic entity-group version (ADR-062 S4): the rule fires only for
+	// events whose resolved entity is a member of {EntityGroupToken}@{EntityGroupVersion}
+	// (stamped into ResolvedEvent.ScopeMemberships at resolution, S3). Both are nil for an
+	// unscoped rule (the profile-wide default). They are set together or not at all
+	// (validateDetectionRuleScope enforces the pairing) and pin a SPECIFIC version so the
+	// rule's target set can never drift under a later group-selector edit (ADR-062:
+	// scope-to-{group}@{version}). Deliberately NOT json:"-" (unlike AuthoringGraph): the
+	// scope IS runtime state, so it must ride buildProfileSnapshot's marshal into the frozen
+	// version and thence the published-rule fact to event-processing (enabledSnapshotRules →
+	// PublishedDetectionRule → the engine's ScopedRule). Saving a scoped rule enrolls the
+	// group@v for membership maintenance; un-scoping the last enabled rule GCs it (see
+	// reconcileRuleScoping).
+	EntityGroupToken   *string
+	EntityGroupVersion *int32
 }
 
 // Data required to create a detection rule. Definition is the rules.Rule JSON document
@@ -79,6 +95,12 @@ type DetectionRuleCreateRequest struct {
 	// form-authored rule with no canvas sidecar; when present it must be a JSON object. It is
 	// stored verbatim and never parsed here.
 	AuthoringGraph *string
+	// EntityGroupToken / EntityGroupVersion are the OPTIONAL group scope (ADR-062 S4): the
+	// published dynamic entity-group version whose members the rule fires for. Both nil ⇒ an
+	// unscoped (profile-wide) rule; set together ⇒ scoped. validateDetectionRuleScope enforces
+	// the pairing and that the group is a published dynamic group with that version.
+	EntityGroupToken   *string
+	EntityGroupVersion *int32
 }
 
 // Search criteria for locating detection rules.

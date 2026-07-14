@@ -100,23 +100,42 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 	if err := validateAuthoringGraph(request.AuthoringGraph); err != nil {
 		return nil, err
 	}
+	if err := api.validateDetectionRuleScope(ctx, request); err != nil {
+		return nil, err
+	}
 
+	scopeToken, scopeVersion := normalizedRuleScope(request.EntityGroupToken, request.EntityGroupVersion)
 	created := &DetectionRule{
 		TokenReference: rdb.TokenReference{Token: request.Token},
 		NamedEntity: rdb.NamedEntity{
 			Name:        rdb.NullStrOf(request.Name),
 			Description: rdb.NullStrOf(request.Description),
 		},
-		MetadataEntity: rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
-		DeviceProfile:  matches[0],
-		Definition:     datatypes.JSON(request.Definition),
-		AuthoringGraph: authoringGraphJSON(request.AuthoringGraph),
-		Enabled:        request.Enabled,
+		MetadataEntity:     rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+		DeviceProfile:      matches[0],
+		Definition:         datatypes.JSON(request.Definition),
+		AuthoringGraph:     authoringGraphJSON(request.AuthoringGraph),
+		Enabled:            request.Enabled,
+		EntityGroupToken:   scopeToken,
+		EntityGroupVersion: scopeVersion,
 	}
-	result := api.RDB.DB(ctx).Create(created)
-	if result.Error != nil {
-		return nil, result.Error
+	// Persist the rule and reconcile the read-model enrollment for its scope in ONE
+	// transaction (ADR-062 S4 same-txn arming): if enrolling the pinned group@v fails, the
+	// rule write rolls back rather than committing a scoped-but-unenrolled rule that would
+	// silently never fire once published.
+	var evictions []membershipEviction
+	var changed bool
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(created).Error; err != nil {
+			return err
+		}
+		evictions, changed, err = api.reconcileRuleScopingOnTx(ctx, tx, nil, ruleScopeOf(scopeToken, scopeVersion))
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
+	api.fireScopingEvictions(ctx, evictions, changed)
 	return created, nil
 }
 
@@ -140,8 +159,16 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	if err := validateAuthoringGraph(request.AuthoringGraph); err != nil {
 		return nil, err
 	}
+	if err := api.validateDetectionRuleScope(ctx, request); err != nil {
+		return nil, err
+	}
 
 	updated := matches[0]
+	// Capture the scope the rule pinned BEFORE overwriting it, so reconcile can GC a group@v
+	// the edit vacates (a scope change, an un-scope, or a disable that drops the last
+	// enabled reference).
+	oldScope := ruleScopeOf(updated.EntityGroupToken, updated.EntityGroupVersion)
+
 	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
@@ -152,6 +179,11 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	// canvas-authored rule thus drops the now-stale graph, which is correct.
 	updated.AuthoringGraph = authoringGraphJSON(request.AuthoringGraph)
 	updated.Enabled = request.Enabled
+	// Re-set the scope (nil clears it): a full replace, same as the sidecar.
+	scopeToken, scopeVersion := normalizedRuleScope(request.EntityGroupToken, request.EntityGroupVersion)
+	updated.EntityGroupToken = scopeToken
+	updated.EntityGroupVersion = scopeVersion
+	newScope := ruleScopeOf(scopeToken, scopeVersion)
 
 	// Re-parent if the profile token changed.
 	if updated.DeviceProfile == nil || request.DeviceProfileToken != updated.DeviceProfile.Token {
@@ -166,10 +198,23 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 		updated.DeviceProfileId = matches[0].ID
 	}
 
-	result := api.RDB.DB(ctx).Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	// Save the rule and reconcile enrollment for both the vacated and adopted scope in ONE
+	// transaction (ADR-062 S4). Save clears the scope columns to NULL when the edit
+	// un-scopes the rule (Save writes zero-value pointer fields), so the read-model GC below
+	// sees the true post-edit reference count.
+	var evictions []membershipEviction
+	var changed bool
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(updated).Error; err != nil {
+			return err
+		}
+		evictions, changed, err = api.reconcileRuleScopingOnTx(ctx, tx, oldScope, newScope)
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
+	api.fireScopingEvictions(ctx, evictions, changed)
 	return updated, nil
 }
 

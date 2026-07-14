@@ -27,7 +27,8 @@ func newGroupVersionTestApi(t *testing.T) (*Api, context.Context) {
 	}
 	if err := db.AutoMigrate(&EntityGroup{}, &EntityGroupVersion{},
 		&EntityGroupMembership{}, &EntityGroupFacetRef{},
-		&EntityRelationship{}, &EntityAttribute{}, &Alarm{}); err != nil {
+		&EntityRelationship{}, &EntityAttribute{}, &Alarm{},
+		&DetectionRule{}, &DeviceProfile{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return NewApi(&rdb.RdbManager{Database: db}), core.WithTenant(context.Background(), "acme")
@@ -261,8 +262,8 @@ func TestDeleteEntityGroup_UnknownTokenIsNoOp(t *testing.T) {
 	deleted, err := api.DeleteEntityGroup(ctx, "ghost")
 	assert.NoError(t, err)
 	assert.False(t, deleted)
-	// The guard returns "not referenced" in S1 (rules gain the scope column in S4).
-	inUse, err := api.entityGroupReferencedByEnabledRule(ctx, 1)
+	// The guard returns "not referenced" for a group no rule scopes to.
+	inUse, err := api.entityGroupReferencedByRule(ctx, 1)
 	assert.NoError(t, err)
 	assert.False(t, inUse)
 }
