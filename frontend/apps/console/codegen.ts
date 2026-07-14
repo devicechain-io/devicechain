@@ -26,6 +26,7 @@ const config: CodegenConfig = {
         'src/lib/api/credentials.ts',
         'src/lib/api/alarms.ts',
         'src/lib/api/facet-keys.ts',
+        'src/lib/api/browse.ts',
       ],
       preset: 'client',
       presetConfig: { fragmentMasking: false },

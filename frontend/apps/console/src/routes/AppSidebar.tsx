@@ -9,6 +9,7 @@ import {
   Building2,
   ChevronRight,
   Cpu,
+  Filter,
   Layers,
   LayoutDashboard,
   LayoutGrid,
@@ -110,6 +111,9 @@ const NAV: NavNode[] = [
   // registry rather than a leaf under each construct group. Gated by device:read
   // like the rest of device-management.
   { label: 'Facets', href: '/facets', icon: Tags, requires: 'device:read' },
+  // Faceted browse + dynamic groups (ADR-061 G4) — compose a selector from facet
+  // axes, preview matches live, save it as a dynamic group. Cross-cutting like Facets.
+  { label: 'Browse', href: '/browse', icon: Filter, requires: 'device:read' },
   { label: 'Audit', href: '/audit', icon: ScrollText, requires: 'audit:read' },
   { label: 'Branding', href: '/branding', icon: Palette, requires: 'branding:write' },
 ];
