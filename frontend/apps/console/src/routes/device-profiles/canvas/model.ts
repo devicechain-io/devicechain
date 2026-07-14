@@ -75,7 +75,7 @@ export type CompareOp = 'gt' | 'ge' | 'lt' | 'le' | 'eq' | 'ne';
 export type AggFunc = 'count' | 'sum' | 'avg' | 'min' | 'max';
 export type WindowMode = 'tumbling' | 'sliding' | 'session' | 'count';
 export type Severity = 'critical' | 'major' | 'minor' | 'warning' | 'indeterminate';
-export type ActionKind = 'raiseAlarm' | 'sendCommand';
+export type ActionKind = 'raiseAlarm' | 'sendCommand' | 'httpCall' | 'publish';
 
 export const COMPARE_OPS: CompareOp[] = ['gt', 'ge', 'lt', 'le', 'eq', 'ne'];
 export const AGG_FUNCS: AggFunc[] = ['count', 'sum', 'avg', 'min', 'max'];
@@ -150,9 +150,23 @@ export type CorrelationConfig = RuleMeta & {
 };
 export interface ActionConfig {
   action: ActionKind;
+  // raiseAlarm
   alarmKey?: string;
+  // sendCommand
   command?: string;
   payload?: string;
+  // httpCall (ADR-060 Tier 1) — an inline webhook. bodyTemplate/CEL over the derived
+  // event; secretRef is an ADR-059 handle (never the cleartext), resolved at dispatch.
+  url?: string;
+  method?: string;
+  headers?: Record<string, string>;
+  bodyTemplate?: string;
+  secretRef?: string;
+  // publish (ADR-060 Tier 2) — a registered Connector by token; payloadTemplate/CEL.
+  connectorRef?: string;
+  payloadTemplate?: string;
+  // shared by httpCall + publish; 0 ⇒ the dispatcher default.
+  timeoutMs?: number;
 }
 
 // A REACT branch node (slice 9c): a signal→signal router carrying one CEL boolean (`when`) that

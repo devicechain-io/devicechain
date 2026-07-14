@@ -406,6 +406,9 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
                 </p>
               )}
               <NodeInspector
+                // Key by node id so per-field local state (e.g. the headers editor's
+                // raw text) resets when a different node is selected.
+                key={selected.id}
                 type={(selected.data as CanvasNodeData).nodeType}
                 config={(selected.data as CanvasNodeData).config}
                 onChange={(config) => updateConfig(selected.id, config)}
