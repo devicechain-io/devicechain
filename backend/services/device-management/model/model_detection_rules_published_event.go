@@ -12,9 +12,18 @@ import (
 // DetectionRulesPublishedEvent: its authoring token (unique per profile, ADR-042)
 // and the opaque rules.Rule JSON definition (ADR-051 slice 4b-1). device-management
 // never parses the definition — event-processing's DETECT compiler does, on consume.
+//
+// EntityGroupToken / EntityGroupVersion carry the rule's OPTIONAL group scope (ADR-062
+// S4): the published dynamic entity-group version whose members the rule fires for. An
+// unscoped (profile-wide) rule carries an empty token and version 0 — the engine treats
+// a scoped rule (non-empty token) as firing only for events whose ScopeMemberships
+// include {EntityGroupToken}@{EntityGroupVersion}. device-management does not interpret
+// the scope beyond freezing and propagating it; the membership set-test is the engine's.
 type PublishedDetectionRule struct {
-	Token      string
-	Definition string
+	Token              string
+	Definition         string
+	EntityGroupToken   string
+	EntityGroupVersion int32
 }
 
 // DetectionRulesPublishedEvent is the envelope emitted post-commit when a device

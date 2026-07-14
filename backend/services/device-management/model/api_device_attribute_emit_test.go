@@ -38,7 +38,7 @@ func newAttrEmitTestApi(t *testing.T) (*Api, *captureAttr, context.Context) {
 	}
 	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
 		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{},
-		&EntityAttribute{}, &EntityGroupMembership{}, &EntityGroupFacetRef{}); err != nil {
+		&EntityAttribute{}, &EntityGroupMembership{}, &EntityGroupFacetRef{}, &DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	api := NewApi(&rdb.RdbManager{Database: db})

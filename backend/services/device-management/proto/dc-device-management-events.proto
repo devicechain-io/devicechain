@@ -216,6 +216,12 @@ message PEntityDeletedEvent {
 message PPublishedDetectionRule {
     string token = 1;
     string definition = 2;
+    // Optional group scope (ADR-062 S4): the published dynamic entity-group version
+    // whose members the rule fires for. Empty token / version 0 ⇒ an unscoped
+    // (profile-wide) rule; a non-empty token ⇒ the engine fires the rule only for events
+    // whose scope_memberships include {entity_group_token}@{entity_group_version}.
+    string entity_group_token = 3;
+    int32 entity_group_version = 4;
 }
 
 /**

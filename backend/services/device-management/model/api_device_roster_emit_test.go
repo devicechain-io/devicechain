@@ -35,7 +35,7 @@ func newRosterEmitTestApi(t *testing.T) *Api {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
 	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
-		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}); err != nil {
+		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return NewApi(&rdb.RdbManager{Database: db})

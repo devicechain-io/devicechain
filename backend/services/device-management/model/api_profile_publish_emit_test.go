@@ -36,7 +36,7 @@ func newPublishEmitTestApi(t *testing.T) *Api {
 	}
 	// PublishDeviceProfile builds a snapshot from every definition list, then writes a version.
 	if err := db.AutoMigrate(&DeviceProfile{}, &DeviceProfileVersion{}, &MetricDefinition{},
-		&CommandDefinition{}, &DetectionRule{}, &DeviceType{}); err != nil {
+		&CommandDefinition{}, &DetectionRule{}, &DeviceType{}, &DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return NewApi(&rdb.RdbManager{Database: db})

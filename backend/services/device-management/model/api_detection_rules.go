@@ -100,19 +100,28 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 	if err := validateAuthoringGraph(request.AuthoringGraph); err != nil {
 		return nil, err
 	}
+	if err := api.validateDetectionRuleScope(ctx, request); err != nil {
+		return nil, err
+	}
 
+	scopeToken, scopeVersion := normalizedRuleScope(request.EntityGroupToken, request.EntityGroupVersion)
 	created := &DetectionRule{
 		TokenReference: rdb.TokenReference{Token: request.Token},
 		NamedEntity: rdb.NamedEntity{
 			Name:        rdb.NullStrOf(request.Name),
 			Description: rdb.NullStrOf(request.Description),
 		},
-		MetadataEntity: rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
-		DeviceProfile:  matches[0],
-		Definition:     datatypes.JSON(request.Definition),
-		AuthoringGraph: authoringGraphJSON(request.AuthoringGraph),
-		Enabled:        request.Enabled,
+		MetadataEntity:     rdb.MetadataEntity{Metadata: rdb.MetadataStrOf(request.Metadata)},
+		DeviceProfile:      matches[0],
+		Definition:         datatypes.JSON(request.Definition),
+		AuthoringGraph:     authoringGraphJSON(request.AuthoringGraph),
+		Enabled:            request.Enabled,
+		EntityGroupToken:   scopeToken,
+		EntityGroupVersion: scopeVersion,
 	}
+	// A draft rule save stores the scope but does NOT enroll the read-model: enrollment
+	// follows PUBLISHED state (the active-version scope-ref sync at publish/rollback), so a
+	// draft edit can never tear the read-model out from under a still-live published rule.
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
 		return nil, result.Error
@@ -140,6 +149,9 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	if err := validateAuthoringGraph(request.AuthoringGraph); err != nil {
 		return nil, err
 	}
+	if err := api.validateDetectionRuleScope(ctx, request); err != nil {
+		return nil, err
+	}
 
 	updated := matches[0]
 	updated.Token = request.Token
@@ -152,6 +164,11 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	// canvas-authored rule thus drops the now-stale graph, which is correct.
 	updated.AuthoringGraph = authoringGraphJSON(request.AuthoringGraph)
 	updated.Enabled = request.Enabled
+	// Re-set the scope (nil clears it): a full replace, same as the sidecar. Enrollment is
+	// NOT reconciled here — a draft edit is inert until published (see CreateDetectionRule).
+	scopeToken, scopeVersion := normalizedRuleScope(request.EntityGroupToken, request.EntityGroupVersion)
+	updated.EntityGroupToken = scopeToken
+	updated.EntityGroupVersion = scopeVersion
 
 	// Re-parent if the profile token changed.
 	if updated.DeviceProfile == nil || request.DeviceProfileToken != updated.DeviceProfile.Token {
@@ -166,6 +183,8 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 		updated.DeviceProfileId = matches[0].ID
 	}
 
+	// Save clears the scope columns to NULL when the edit un-scopes the rule (gorm Save
+	// writes zero-value pointer fields as NULL).
 	result := api.RDB.DB(ctx).Save(updated)
 	if result.Error != nil {
 		return nil, result.Error

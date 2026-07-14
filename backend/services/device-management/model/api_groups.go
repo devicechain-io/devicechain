@@ -226,13 +226,6 @@ func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, erro
 		}
 		return false, err
 	}
-	inUse, err := api.entityGroupReferencedByEnabledRule(ctx, group.ID)
-	if err != nil {
-		return false, err
-	}
-	if inUse {
-		return false, fmt.Errorf("%w: entity group %q is referenced by a detection rule", ErrEntityInUse, token)
-	}
 	// Collect the members that will lose this group's membership so their caches can be
 	// evicted post-delete (ADR-062). Gathered before the cascade tears the rows down.
 	var evictType string
@@ -248,7 +241,26 @@ func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, erro
 	// Cascade the group's frozen versions AND its scoping rows (ADR-062 S2 membership +
 	// reverse-index rows where it is the scoping group) with it: append-only history and
 	// derived scoping rows have no meaning once the group is gone.
+	//
+	// The in-use guard runs INSIDE the delete transaction, under the group family's advisory
+	// lock, so a concurrent publish enrolling a rule against this group serializes on the same
+	// lock. The two orderings both resolve safely: either the publish commits its scope-ref
+	// rows first and our guard sees them and refuses the delete (ErrEntityInUse), or our delete
+	// commits first and the publish's enrollment reconcile then fails closed on the vanished
+	// group (loadGroupVersionForScoping → not-found → the whole publish rolls back). Without
+	// this lock+in-txn re-check, plain check-then-delete could drop a group a just-published
+	// rule pins.
 	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeGroup, &EntityGroup{}, token, func(tx *gorm.DB, id uint) error {
+		if err := api.lockMembershipFamily(ctx, tx, group.MemberType); err != nil {
+			return err
+		}
+		inUse, err := api.entityGroupReferencedByRule(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if inUse {
+			return fmt.Errorf("%w: entity group %q is referenced by a detection rule", ErrEntityInUse, token)
+		}
 		if err := tx.Unscoped().Where("entity_group_id = ?", id).Delete(&EntityGroupVersion{}).Error; err != nil {
 			return err
 		}

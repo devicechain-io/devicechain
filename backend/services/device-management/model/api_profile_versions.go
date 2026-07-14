@@ -199,9 +199,19 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 		Snapshot:        snapshot,
 		PublishedBy:     publishedBy,
 	}
+	// Parse the just-built snapshot to extract its ENABLED scoped rules — the live scope
+	// references this new active version carries (ADR-062 S4). A parse failure fails the
+	// publish closed: enrollment must match the version being frozen.
+	newSnap, err := parseProfileSnapshot(snapshot)
+	if err != nil {
+		return nil, err
+	}
+
 	// Insert the version and advance the active pointer atomically: if the pointer
 	// update failed after the insert we would leave an orphan version and devices
 	// resolving the stale one, so wrap both.
+	var evictions []membershipEviction
+	var changed bool
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(version).Error; err != nil {
 			return err
@@ -217,11 +227,18 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 		if res.RowsAffected == 0 {
 			return fmt.Errorf("%w: device profile %q", gorm.ErrRecordNotFound, token)
 		}
-		return nil
+		// Re-sync this profile's live scope references to the new active version and
+		// reconcile read-model enrollment (ADR-062 S4) — in the SAME transaction as the
+		// active-version change, so a scoped rule is enrolled before its fact arms the engine,
+		// and a group@v this version stopped referencing is GC'd. Enrollment tracks published
+		// state, not the mutable draft.
+		evictions, changed, err = api.syncProfileScopeRefsAndEnroll(ctx, tx, profile.ID, scopedRulesInSnapshot(newSnap))
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
+	api.fireScopingEvictions(ctx, evictions, changed)
 
 	// Propagate the frozen rule set to event-processing (ADR-051 slice 4b-3): emit the
 	// ENABLED detection rules keyed on this version's token, POST-COMMIT and best-effort. It
@@ -261,7 +278,15 @@ func (api *Api) enabledSnapshotRules(snapshot datatypes.JSON) []PublishedDetecti
 		if !dr.Enabled {
 			continue
 		}
-		out = append(out, PublishedDetectionRule{Token: dr.Token, Definition: string(dr.Definition)})
+		pr := PublishedDetectionRule{Token: dr.Token, Definition: string(dr.Definition)}
+		// Propagate the rule's optional group scope (ADR-062 S4) to event-processing. The
+		// frozen snapshot carried the scope columns (not json:"-"), so a scoped rule ships
+		// its pin; an unscoped rule ships empty token / version 0 (the engine's "no scope").
+		if dr.EntityGroupToken != nil && dr.EntityGroupVersion != nil {
+			pr.EntityGroupToken = *dr.EntityGroupToken
+			pr.EntityGroupVersion = *dr.EntityGroupVersion
+		}
+		out = append(out, pr)
 	}
 	return out
 }
@@ -278,25 +303,45 @@ func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version
 		return nil, err
 	}
 
-	var count int64
-	if err := api.RDB.DB(ctx).Model(&DeviceProfileVersion{}).
-		Where("device_profile_id = ? AND version = ?", profile.ID, version).
-		Count(&count).Error; err != nil {
+	// Load the target version (existence check + its frozen snapshot): the snapshot's scoped
+	// rules are the live references the rolled-back-to active version carries, which enrollment
+	// must be re-synced to (a rollback can re-activate a scoped rule the current active version
+	// dropped — without re-enrolling, that resurrected rule would fire against an empty
+	// read-model). ADR-062 S4.
+	var target DeviceProfileVersion
+	if err := api.RDB.DB(ctx).Where("device_profile_id = ? AND version = ?", profile.ID, version).
+		First(&target).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: device profile %q has no version %d", gorm.ErrRecordNotFound, token, version)
+		}
 		return nil, err
 	}
-	if count == 0 {
-		return nil, fmt.Errorf("%w: device profile %q has no version %d", gorm.ErrRecordNotFound, token, version)
+	targetSnap, err := parseProfileSnapshot(target.Snapshot)
+	if err != nil {
+		return nil, err
 	}
 
-	res := api.RDB.DB(ctx).Model(&DeviceProfile{}).Where("id = ?", profile.ID).
-		Update("active_version", version)
-	if res.Error != nil {
-		return nil, res.Error
+	var evictions []membershipEviction
+	var changed bool
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&DeviceProfile{}).Where("id = ?", profile.ID).
+			Update("active_version", version)
+		if res.Error != nil {
+			return res.Error
+		}
+		// The profile was deleted between the existence check and here.
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("%w: device profile %q", gorm.ErrRecordNotFound, token)
+		}
+		// Re-sync scope references to the rolled-back-to version and reconcile enrollment in
+		// the same transaction as the pointer flip.
+		evictions, changed, err = api.syncProfileScopeRefsAndEnroll(ctx, tx, profile.ID, scopedRulesInSnapshot(targetSnap))
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
-	// The profile was deleted between the existence check and here.
-	if res.RowsAffected == 0 {
-		return nil, fmt.Errorf("%w: device profile %q", gorm.ErrRecordNotFound, token)
-	}
+	api.fireScopingEvictions(ctx, evictions, changed)
 	// Re-propagate the rolled-back-to version's rules POST-COMMIT (ADR-051 slice 4c-2):
 	// a rollback re-points ActiveVersion WITHOUT publishing, so without this emit
 	// event-processing has no signal that the active version changed — its rule facts only
