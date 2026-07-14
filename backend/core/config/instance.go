@@ -215,6 +215,29 @@ func (c SecretsConfiguration) DecodedRootKey() ([]byte, error) {
 	return raw, nil
 }
 
+// DefaultBlobBackend is the object-store backend selected when none is configured:
+// the local filesystem/PVC (ADR-058). Declared here (not imported from core/blob)
+// for the same reason as the secrets defaults above — the blob package's own
+// Config.Validate is the authoritative check, run at store construction in the
+// service that uses it (fail-closed at startup on an unknown/unbuilt backend).
+const DefaultBlobBackend = "filesystem"
+
+// BlobConfiguration selects the object/asset-store backend and carries the
+// filesystem root for the default backend (ADR-058). It is instance-infra config,
+// like Secrets: only a service that constructs a blob store needs it (today,
+// user-management for branding logos). Cloud-backend settings (bucket/region/
+// endpoint) are additive fields introduced with those backends; no cloud
+// credential is ever a plaintext value here (ADR-058 §5 — those resolve from the
+// instance secret material).
+type BlobConfiguration struct {
+	// Backend selects where objects live. Default "filesystem". S3/GCS are additive.
+	Backend string
+	// Directory is the filesystem-backend root (a mounted volume/PVC). Required by a
+	// service that constructs a filesystem-backed store; the store's construction
+	// fails closed on an empty directory.
+	Directory string
+}
+
 // Infrastructure configuration section
 type InfrastructureConfiguration struct {
 	Nats             NatsConfiguration
@@ -225,6 +248,7 @@ type InfrastructureConfiguration struct {
 	CommandDelivery  CommandDeliveryConfiguration
 	ServiceAuth      ServiceAuthConfiguration
 	Secrets          SecretsConfiguration
+	Blob             BlobConfiguration
 }
 
 // Generic datastore configuration
@@ -288,6 +312,14 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	}
 	if secrets.KEKProvider == "" {
 		secrets.KEKProvider = DefaultSecretsKEKProvider
+	}
+	// Default the object-store backend so an instance document that omits it means
+	// "the zero-cloud default" (filesystem/PVC), not an invalid empty selection. The
+	// Directory is deliberately NOT defaulted — it is a deployment-specific mount
+	// path supplied via Helm, and the store construction fails closed if it is
+	// missing for a service that uses the store.
+	if c.Infrastructure.Blob.Backend == "" {
+		c.Infrastructure.Blob.Backend = DefaultBlobBackend
 	}
 }
 

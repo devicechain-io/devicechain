@@ -6,9 +6,11 @@ package main
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/blob"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -32,6 +34,7 @@ var (
 	GraphQLManager  *gqlcore.GraphQLManager
 	IdentityManager *identity.Manager
 	SettingsService *settings.Service
+	BlobStore       blob.Store
 )
 
 func main() {
@@ -147,10 +150,19 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// default tier, ADR-038) and its own /settings/graphql handler.
 	SettingsService = settings.NewService(settings.NewStore(RdbManager))
 
+	// The object/asset store (ADR-058) — the branding-logo consumer. Constructed
+	// once; nil when not configured (branding-logo upload/read then 503, Tier-0
+	// logos still work). A configured-but-unbuilt backend fails startup closed.
+	BlobStore, err = buildBlobStore()
+	if err != nil {
+		return err
+	}
+
 	// Map of providers injected into the graphql http context.
 	providers := map[gqlcore.ContextKey]interface{}{
 		graphql.ContextIdentityKey: IdentityManager,
 		graphql.ContextSettingsKey: SettingsService,
+		graphql.ContextBlobKey:     BlobStore,
 	}
 
 	// user-management validates its own API requests with the local public key
@@ -178,7 +190,26 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// sealed package so the seam is pre-cut for a future extraction.
 	registerSettingsHandler()
 
+	// Tenant branding-logo object-store endpoints (ADR-058): an authorizing read
+	// proxy + a branding:write upload, on the shared http server. Data-plane tier
+	// (tenant access tokens), self-scoped to the caller's tenant.
+	graphql.RegisterBrandingLogoHandler(http.DefaultServeMux, BlobStore, IdentityManager, IdentityManager.Validator())
+
 	return nil
+}
+
+// buildBlobStore constructs the object/asset store (ADR-058) from the instance
+// infrastructure config. The filesystem backend with no directory is treated as
+// "not configured": the store is nil (the branding-logo endpoints then return 503
+// and Tier-0 inline/URL logos still work), rather than failing an otherwise-healthy
+// service that has not mounted a blob volume. A configured backend that is unknown
+// or not built in this binary fails closed here (blob.New).
+func buildBlobStore() (blob.Store, error) {
+	cfg := Microservice.InstanceConfiguration.Infrastructure.Blob
+	if cfg.Backend == blob.BackendFilesystem && strings.TrimSpace(cfg.Directory) == "" {
+		return nil, nil
+	}
+	return blob.New(blob.Config{Backend: cfg.Backend, Directory: cfg.Directory}, Microservice.InstanceId)
 }
 
 // registerAdminHandler parses the admin schema and registers its identity-token

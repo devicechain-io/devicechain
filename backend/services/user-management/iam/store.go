@@ -274,10 +274,18 @@ func (s *Store) CreateTenant(ctx context.Context, t *Tenant) error {
 	return s.sys(ctx).Create(t).Error
 }
 
-// UpdateTenant persists the mutable fields of an already-loaded tenant (name,
-// config). Save writes by primary key.
+// UpdateTenant persists the ADMIN-mutable fields of an already-loaded tenant (name,
+// config, governance overrides). It Selects exactly those columns rather than a
+// full-row Save: the self-service branding_* columns (ADR-038/058) must NOT be
+// rewritten from the value loaded here — a concurrent logo upload could have moved
+// branding_logo (and GC'd the old blob), so a stale full-row write would point it at
+// a just-deleted object and orphan the new one. Select preserves the JSON serializer
+// on Config and writes a nil governance pointer as NULL (clear-to-inherit).
 func (s *Store) UpdateTenant(ctx context.Context, t *Tenant) error {
-	return s.sys(ctx).Save(t).Error
+	return s.sys(ctx).Model(t).
+		Select("Name", "Config", "IngestMessagesPerSecond", "IngestBurst",
+			"OutboundMessagesPerSecond", "OutboundBurst").
+		Updates(t).Error
 }
 
 // UpdateTenantFields writes only the named columns of an already-loaded tenant,

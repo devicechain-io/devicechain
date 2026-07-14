@@ -367,13 +367,16 @@ func (m *Manager) CurrentTenant(ctx context.Context, token string) (*iam.Tenant,
 	return m.iam.TenantByToken(ctx, token)
 }
 
-// SetTenantBranding writes the caller's own tenant white-labeling override
+// SetTenantBranding writes the caller's own tenant white-labeling THEME override
 // (ADR-038 Phase 2), keyed by the tenant token from the caller's access token —
 // so it is inherently self-scoped (the caller can only rebrand the tenant they
-// are acting within). The override is a full replace of the branding sub-object:
-// a nil field CLEARS that column, re-inheriting the operator/code default. Reads
-// the tenant-unscoped control-plane table (like CurrentTenant), returning the
-// reloaded tenant so the resolver can hand back the freshly-resolved branding.
+// are acting within). It is a full replace of the theme columns: a nil field
+// CLEARS that column, re-inheriting the operator/code default. It deliberately does
+// NOT touch branding_logo (managed by SetTenantLogo / the upload endpoint, ADR-058)
+// — otherwise a theme save, which cannot carry back an object-store logo reference,
+// would wipe an uploaded logo. Reads the tenant-unscoped control-plane table (like
+// CurrentTenant), returning the reloaded tenant so the resolver can hand back the
+// freshly-resolved branding.
 func (m *Manager) SetTenantBranding(ctx context.Context, token string, b branding.Branding) (*iam.Tenant, error) {
 	t, err := m.iam.TenantByToken(ctx, token)
 	if err != nil {
@@ -381,7 +384,6 @@ func (m *Manager) SetTenantBranding(ctx context.Context, token string, b brandin
 	}
 	fields := map[string]any{
 		"branding_title":           b.Title,
-		"branding_logo":            b.Logo,
 		"branding_logo_max_height": b.LogoMaxHeight,
 		"branding_primary":         b.Primary,
 		"branding_background":      b.Background,
@@ -392,6 +394,34 @@ func (m *Manager) SetTenantBranding(ctx context.Context, token string, b brandin
 		return nil, err
 	}
 	return m.iam.TenantByToken(ctx, token)
+}
+
+// TenantByToken loads a tenant by its token (the tenant-unscoped control-plane
+// table). Exposed for the branding-logo HTTP handlers (ADR-058), which need the
+// caller's own tenant row to read/replace its object-store logo reference.
+func (m *Manager) TenantByToken(ctx context.Context, token string) (*iam.Tenant, error) {
+	return m.iam.TenantByToken(ctx, token)
+}
+
+// SetTenantLogo writes ONLY the caller's own branding_logo column and returns its
+// PREVIOUS value, so the caller can garbage-collect an orphaned object-store blob
+// when the reference changes (ADR-058). Unlike SetTenantBranding it does not touch
+// any other branding column. A ref of "" clears the logo. Self-scoped by the token
+// from the caller's access token.
+func (m *Manager) SetTenantLogo(ctx context.Context, token, ref string) (prev *string, err error) {
+	t, err := m.iam.TenantByToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	prev = t.BrandingLogo
+	var value any
+	if ref != "" {
+		value = ref
+	} // else nil → SQL NULL (clear)
+	if err := m.iam.UpdateTenantFields(ctx, t, map[string]any{"branding_logo": value}); err != nil {
+		return nil, err
+	}
+	return prev, nil
 }
 
 // CurrentUser resolves the global identity making the request, keyed by the

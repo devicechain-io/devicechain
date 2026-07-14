@@ -41,9 +41,13 @@ type Tenant {
 }
 
 # The resolved white-labeling applied to the console shell (ADR-038). A null field
-# means "inherit the built-in look" for that aspect. Colors are hex #rrggbb; logo
-# is an https URL or a bounded raster data: URI; logoMaxHeight caps the render in
-# px; updatedAt versions the value so a client can key its cache.
+# means "inherit the built-in look" for that aspect. Colors are hex #rrggbb;
+# logoMaxHeight caps the render in px; updatedAt versions the value so a client can
+# key its cache. logo is either a directly-usable value (an https URL or a bounded
+# raster data: URI, Tier-0) or, for an object-store-backed (Tier-1) logo, a proxy
+# path the client fetches with its token — the raw storage reference is never
+# exposed. Logo lifecycle is managed OUT of the full-replace input below, via
+# setTenantLogo (url/clear) and the POST /branding/logo upload (ADR-058).
 type TenantBranding {
     title: String
     logo: String
@@ -55,14 +59,15 @@ type TenantBranding {
     updatedAt: String
 }
 
-# A white-labeling override for setTenantBranding. Every field is optional: a null
-# field CLEARS that override, re-inheriting the operator/code default. Validated
-# server-side (fail-closed): hex colors, an https-or-raster-data: logo within the
-# size ceiling (SVG only as an https URL, never inline data:), a bounded title and
-# logo height.
+# A white-labeling override for setTenantBranding — the theme fields only. Every
+# field is optional: a null field CLEARS that override, re-inheriting the operator/
+# code default. Validated server-side (fail-closed): hex colors, a bounded title and
+# logo height. The logo is deliberately NOT here: a client cannot round-trip an
+# object-store logo reference through a full replace, so setting colors/title would
+# otherwise wipe an uploaded logo — logo is managed separately (setTenantLogo +
+# the upload endpoint, ADR-058).
 input TenantBrandingInput {
     title: String
-    logo: String
     logoMaxHeight: Int
     primary: String
     background: String
@@ -121,11 +126,18 @@ type Mutation {
     # Update the signed-in user's own display name (first/last). Email is fixed;
     # self-scoped to the caller's identity.
     updateProfile(firstName: String, lastName: String): CurrentIdentity!
-    # Set the caller's OWN tenant white-labeling (ADR-038). Self-scoped to the
-    # tenant in the access token; requires branding:write. A null field clears
-    # that override. Returns the tenant with its freshly-resolved branding so the
-    # editing client can write it straight into cache.
+    # Set the caller's OWN tenant white-labeling theme (ADR-038): title, colors,
+    # logo height. Self-scoped to the tenant in the access token; requires
+    # branding:write. A null field clears that override. Does NOT manage the logo
+    # (see setTenantLogo). Returns the tenant with its freshly-resolved branding so
+    # the editing client can write it straight into cache.
     setTenantBranding(input: TenantBrandingInput!): Tenant!
+    # Set the caller's OWN tenant logo to an https URL (or a bounded raster data:
+    # URI), or clear it with null — self-scoped, requires branding:write (ADR-038).
+    # An uploaded (binary) logo instead goes to the object store via POST
+    # /branding/logo (ADR-058); both paths garbage-collect a replaced object-store
+    # logo. A blob storage reference is never accepted here (clients never hold one).
+    setTenantLogo(logo: String): Tenant!
 }
 
 schema {

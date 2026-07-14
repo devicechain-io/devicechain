@@ -25,10 +25,13 @@ export function useReload(): [number, () => void] {
   return [version, reload];
 }
 
-// errMessage extracts a human-readable message from a thrown error (GraphQL
-// errors carry the server's message; anything else is a transport failure).
+// errMessage extracts a human-readable message from a thrown error. GraphQL errors
+// carry the server's message; a plain Error carries its own (e.g. a non-GraphQL
+// endpoint like the branding-logo upload surfaces the server's 4xx/503 body); only a
+// truly opaque throwable falls back to the generic transport failure.
 export function errMessage(err: unknown): string {
   if (err instanceof GraphQLRequestError) return err.message;
+  if (err instanceof Error && err.message) return err.message;
   return 'Could not reach the server.';
 }
 

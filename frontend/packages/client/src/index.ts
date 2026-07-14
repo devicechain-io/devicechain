@@ -11,6 +11,7 @@
 export {
   gql,
   areaPath,
+  resolveAuthToken,
   setAuthTokenGetter,
   setIdentityTokenGetter,
   GraphQLRequestError,

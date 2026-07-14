@@ -118,6 +118,20 @@ instance:
         # form its KEK). DR: losing this key loses every stored secret — back up the
         # rendered instance Secret.
         rootKey: ""
+      blob:
+        # Object/asset-store backend for opaque binaries that do not belong in
+        # Postgres (branding logos today; firmware/OTA + exports later, ADR-058).
+        # Default: the local filesystem. directory is the store root — it MUST be a
+        # MOUNTED, SHARED volume (an RWX PVC) when user-management runs more than one
+        # replica, since a filesystem store is not shared across pods otherwise.
+        # Left EMPTY by default: the object store is then "not configured" and
+        # branding-logo upload/read return 503 (Tier-0 inline/URL logos still work) —
+        # a safe default rather than a silent per-pod ephemeral store. Set directory
+        # (and mount a volume there) to enable object-store logos; or use an
+        # S3-compatible backend once available. No cloud credential lives here
+        # (those resolve from the secret layer, ADR-058 §5 / ADR-059).
+        backend: filesystem
+        directory: ""
     persistence:
       rdb:
         type: postgres95

@@ -1,15 +1,17 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Self-service tenant white-labeling editor (ADR-038 Phase 2, slice 38c). A
-// tenant admin (branding:write) edits their OWN tenant's title, palette, and logo.
-// It edits the RAW override (tenant.brandingOverride): an empty field means
-// "inherit" (clear the override), so leaving everything blank restores the stock
-// DeviceChain look. The server is authoritative — client checks here are fail-fast
-// UX only. On save the mutation returns the freshly-resolved tenant, which we write
-// straight into the tenant cache so the rebrand shows across the shell immediately.
+// Self-service tenant white-labeling editor (ADR-038 Phase 2 / ADR-058). A tenant
+// admin (branding:write) edits their OWN tenant's title, palette, and logo. Title,
+// colors, and logo height are the THEME — edited as the RAW override
+// (tenant.brandingOverride, an empty field = inherit) and committed together on
+// Save. The LOGO is managed separately with immediate actions (upload to the object
+// store, set an https URL, or remove): a client cannot round-trip an object-store
+// logo reference through the theme's full replace, so keeping it on the theme save
+// would wipe an uploaded logo. Each write returns the freshly-resolved tenant, which
+// we write straight into the tenant cache so the rebrand shows across the shell.
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Upload, X } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
@@ -22,23 +24,30 @@ import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
 import { useCurrentTenant, useSetCurrentTenant } from '@/auth/TenantProvider';
 import {
+  getCurrentTenant,
   setTenantBranding,
+  setTenantLogo,
+  uploadTenantLogo,
   type TenantBranding,
   type TenantBrandingInput,
 } from '@/lib/api/user-management';
 import { contrastRatio } from '@/lib/branding';
+import { useBrandingLogoSrc } from '@/lib/useBrandingLogo';
 import { errMessage } from '@/routes/common';
 
-// Mirrors the server allow-list (branding package): inline logos are raster-only
-// (SVG must be an https URL) and capped on DECODED bytes. Client pre-check only.
-const INLINE_LOGO_MIME = ['image/png', 'image/jpeg', 'image/webp'];
-const MAX_LOGO_BYTES = 256 * 1024;
+// Mirrors the server allow-list (branding package): uploaded logos are raster-only
+// (SVG must be an https URL) and capped on bytes. Client pre-check only — fail-fast
+// UX; the server re-validates (and sniffs the real type).
+const UPLOAD_LOGO_MIME = ['image/png', 'image/jpeg', 'image/webp'];
+const MAX_UPLOAD_LOGO_BYTES = 1024 * 1024; // 1 MiB (branding.MaxUploadedLogoBytes)
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+// An object-store logo surfaces to the client as this proxy path, not a URL — the
+// URL field is left blank for one (it is an upload, not a pasted link).
+const PROXY_LOGO_PREFIX = '/branding/logo';
 
-// The editor's per-field state — strings so "" cleanly represents "inherit".
+// The theme form's per-field state — strings so "" cleanly represents "inherit".
 interface FormState {
   title: string;
-  logo: string;
   logoMaxHeight: string;
   primary: string;
   background: string;
@@ -46,18 +55,9 @@ interface FormState {
   accent: string;
 }
 
-function initialState(o: {
-  title?: string | null;
-  logo?: string | null;
-  logoMaxHeight?: number | null;
-  primary?: string | null;
-  background?: string | null;
-  foreground?: string | null;
-  accent?: string | null;
-} | null): FormState {
+function initialState(o: TenantBranding | null): FormState {
   return {
     title: o?.title ?? '',
-    logo: o?.logo ?? '',
     logoMaxHeight: o?.logoMaxHeight != null ? String(o.logoMaxHeight) : '',
     primary: o?.primary ?? '',
     background: o?.background ?? '',
@@ -85,9 +85,10 @@ export default function BrandingPage() {
   // Seed the editor only from a REAL fetched override. A fetched tenant always
   // carries a non-null brandingOverride (GraphQL `TenantBranding!`), so a null here
   // means the tenant fetch hasn't landed yet — gate on a loading state rather than
-  // seed the form blank, which would make a save full-replace-clear every existing
-  // override (setTenantBranding is a full replace; a blank field = clear). Keying
-  // the editor by token+updatedAt re-seeds it if the tenant is refetched/rebranded.
+  // seed the form blank, which would make a theme save full-replace-clear every
+  // existing override (setTenantBranding is a full replace of the theme; a blank
+  // field = clear). Keyed by token only: a logo action refetches the tenant, and
+  // remounting on that would discard the user's in-progress theme edits.
   const override = tenant?.brandingOverride ?? null;
   if (!override) {
     return (
@@ -96,28 +97,57 @@ export default function BrandingPage() {
       </PageShell>
     );
   }
-  return <BrandingEditor key={`${tenant?.token}:${override.updatedAt ?? ''}`} override={override} />;
+  return <BrandingEditor key={tenant?.token} override={override} />;
 }
 
 function BrandingEditor({ override }: { override: TenantBranding }) {
   const applyTenant = useSetCurrentTenant();
+  const tenant = useCurrentTenant();
   const toast = useToast();
 
   const [form, setForm] = useState<FormState>(() => initialState(override));
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [logoBusy, setLogoBusy] = useState(false);
+  // Tracks whether the user has edited the theme form since it was last seeded, so a
+  // background refetch (stale-while-revalidate cache) can re-seed a PRISTINE form
+  // without clobbering in-progress edits. The editor is keyed by token only (so a
+  // logo action does not remount and discard edits), which drops the remount-reseed;
+  // this restores the stale-seed protection without the remount.
+  const [dirty, setDirty] = useState(false);
+  // The https/data URL field. Seeded from the current override logo only when it is
+  // a directly-usable value (not an object-store proxy path).
+  const [logoUrl, setLogoUrl] = useState(() => {
+    const l = override.logo ?? '';
+    return l.startsWith(PROXY_LOGO_PREFIX) ? '' : l;
+  });
 
-  const set = (k: keyof FormState, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  // Re-seed a pristine theme form when a newer override arrives (e.g. the initial
+  // seed came from a stale cached tenant, or another admin changed the theme). Never
+  // re-seed once the user has started editing — their edits win until they Save.
+  useEffect(() => {
+    if (!dirty) setForm(initialState(override));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [override.updatedAt]);
+
+  const set = (k: keyof FormState, v: string) => {
+    setDirty(true);
+    setForm((f) => ({ ...f, [k]: v }));
+  };
+
+  // The live resolved logo (updated by the logo actions via the tenant cache), used
+  // for the preview. Whether THIS tenant set its own logo — which gates the Remove
+  // action — is the raw override, not the resolved cascade: an inherited operator-
+  // default logo is not this tenant's to remove.
+  const logoPreviewSrc = useBrandingLogoSrc(tenant?.branding?.logo);
+  const hasOwnLogo = !!tenant?.brandingOverride?.logo;
 
   // Client-side hex validation (fail-fast); the server re-validates.
   const badHex = (['primary', 'background', 'foreground', 'accent'] as const).filter(
     (k) => form[k] !== '' && !HEX_RE.test(form[k]),
   );
 
-  // Non-blocking contrast hints (guidance only, never block a save — ADR-038 §4):
-  // the sidebar foreground-on-background pair, and primary against its always-white
-  // foreground (--primary-foreground is white in both themes, so a light primary
-  // gives unreadable white-on-light button text with no other warning).
+  // Non-blocking contrast hints (guidance only, never block a save — ADR-038 §4).
   const contrast = useMemo(() => {
     if (!HEX_RE.test(form.foreground) || !HEX_RE.test(form.background)) return null;
     return contrastRatio(form.foreground, form.background);
@@ -136,7 +166,6 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
     const height = form.logoMaxHeight.trim();
     const input: TenantBrandingInput = {
       title: emptyToNull(form.title.trim()),
-      logo: emptyToNull(form.logo.trim()),
       logoMaxHeight: height === '' ? null : Number(height),
       primary: emptyToNull(form.primary.trim()),
       background: emptyToNull(form.background.trim()),
@@ -148,6 +177,7 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
       const updated = await setTenantBranding(input);
       applyTenant(updated); // write-through cache → shell re-themes immediately
       setForm(initialState(updated.brandingOverride));
+      setDirty(false);
       toast.toast('Branding saved');
     } catch (err) {
       setFormError(errMessage(err));
@@ -156,21 +186,72 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
     }
   };
 
-  const onPickFile = async (file: File) => {
+  // ── Logo actions (immediate; each refreshes the tenant cache) ──────────────
+
+  const onUpload = async (file: File) => {
     setFormError(null);
-    if (!INLINE_LOGO_MIME.includes(file.type)) {
-      setFormError('Inline logos must be PNG, JPEG, or WebP. For SVG, host it and paste an https URL.');
+    if (!UPLOAD_LOGO_MIME.includes(file.type)) {
+      setFormError('Uploaded logos must be PNG, JPEG, or WebP. For SVG, host it and paste an https URL.');
       return;
     }
-    if (file.size > MAX_LOGO_BYTES) {
-      setFormError(`Logo must be at most ${MAX_LOGO_BYTES / 1024} KB (this file is ${Math.round(file.size / 1024)} KB). Host larger logos and paste an https URL.`);
+    if (file.size > MAX_UPLOAD_LOGO_BYTES) {
+      setFormError(
+        `Logo must be at most 1 MB (this file is ${Math.round(file.size / 1024)} KB).`,
+      );
       return;
     }
+    setLogoBusy(true);
     try {
-      const dataUri = await readAsDataURL(file);
-      set('logo', dataUri);
+      await uploadTenantLogo(file);
+    } catch (err) {
+      setFormError(errMessage(err)); // the upload itself failed — nothing persisted
+      setLogoBusy(false);
+      return;
+    }
+    // The upload persisted the reference; refetch to pick up the resolved branding.
+    // A refetch failure here does NOT mean the upload failed, so report success and
+    // let the next natural load reconcile rather than implying the upload was lost.
+    try {
+      applyTenant(await getCurrentTenant());
     } catch {
-      setFormError('Could not read that file.');
+      /* logo is persisted; the shell will pick it up on the next refresh */
+    }
+    setLogoUrl('');
+    toast.toast('Logo uploaded');
+    setLogoBusy(false);
+  };
+
+  const applyLogoUrl = async () => {
+    setFormError(null);
+    // Blank is NOT a clear here — removal is the explicit "Remove logo" action, so an
+    // accidental "Apply URL" with an empty field can't silently delete an uploaded
+    // logo (its blob is GC'd server-side and unrecoverable).
+    if (logoUrl.trim() === '') {
+      setFormError('Enter an https URL, or use “Remove logo” to clear it.');
+      return;
+    }
+    setLogoBusy(true);
+    try {
+      applyTenant(await setTenantLogo(logoUrl.trim()));
+      toast.toast('Logo updated');
+    } catch (err) {
+      setFormError(errMessage(err));
+    } finally {
+      setLogoBusy(false);
+    }
+  };
+
+  const removeLogo = async () => {
+    setFormError(null);
+    setLogoBusy(true);
+    try {
+      applyTenant(await setTenantLogo(null));
+      setLogoUrl('');
+      toast.toast('Logo removed');
+    } catch (err) {
+      setFormError(errMessage(err));
+    } finally {
+      setLogoBusy(false);
     }
   };
 
@@ -212,14 +293,28 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
             </p>
           )}
 
-          <FormField label="Logo" htmlFor="b-logo" description="An https URL (any image, incl. SVG) or upload a PNG/JPEG/WebP (≤256 KB, stored inline).">
+          <FormField
+            label="Logo"
+            description="Upload a PNG/JPEG/WebP (≤1 MB, stored in the object store) or paste an https URL (any image, incl. SVG). Applied immediately — not part of Save."
+          >
             <div className="space-y-2">
-              <Input id="b-logo" value={form.logo} placeholder="https://…" onChange={(e) => set('logo', e.target.value)} />
               <div className="flex items-center gap-2">
-                <UploadButton onPick={onPickFile} />
-                {form.logo && (
-                  <Button type="button" variant="ghost" size="sm" onClick={() => set('logo', '')}>
-                    <X className="mr-1 size-3.5" /> Clear
+                <Input
+                  aria-label="Logo URL"
+                  value={logoUrl}
+                  placeholder="https://…"
+                  disabled={logoBusy}
+                  onChange={(e) => setLogoUrl(e.target.value)}
+                />
+                <Button type="button" variant="outline" size="sm" disabled={logoBusy} onClick={applyLogoUrl}>
+                  Apply URL
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <UploadButton disabled={logoBusy} onPick={onUpload} />
+                {hasOwnLogo && (
+                  <Button type="button" variant="ghost" size="sm" disabled={logoBusy} onClick={removeLogo}>
+                    <X className="mr-1 size-3.5" /> Remove logo
                   </Button>
                 )}
               </div>
@@ -231,7 +326,7 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
           </FormField>
         </div>
 
-        <BrandingPreview form={form} />
+        <BrandingPreview form={form} logoSrc={logoPreviewSrc} />
       </div>
     </PageShell>
   );
@@ -271,7 +366,7 @@ function ColorField({
   );
 }
 
-function UploadButton({ onPick }: { onPick: (file: File) => void }) {
+function UploadButton({ onPick, disabled }: { onPick: (file: File) => void; disabled?: boolean }) {
   const ref = useRef<HTMLInputElement>(null);
   return (
     <>
@@ -286,16 +381,16 @@ function UploadButton({ onPick }: { onPick: (file: File) => void }) {
           e.target.value = ''; // allow re-picking the same file
         }}
       />
-      <Button type="button" variant="outline" size="sm" onClick={() => ref.current?.click()}>
+      <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={() => ref.current?.click()}>
         <Upload className="mr-1 size-3.5" /> Upload
       </Button>
     </>
   );
 }
 
-// A live preview of the palette + logo, rendered only from the form state (never
-// applied to the real shell until save). The logo is shown only in an <img>.
-function BrandingPreview({ form }: { form: FormState }) {
+// A live preview of the palette + logo. Colors come from the (unsaved) theme form;
+// the logo is the live resolved logo (already applied), shown only in an <img>.
+function BrandingPreview({ form, logoSrc }: { form: FormState; logoSrc: string | null }) {
   const primary = HEX_RE.test(form.primary) ? form.primary : undefined;
   const bg = HEX_RE.test(form.background) ? form.background : undefined;
   const fg = HEX_RE.test(form.foreground) ? form.foreground : undefined;
@@ -305,8 +400,8 @@ function BrandingPreview({ form }: { form: FormState }) {
       <p className="text-sm font-medium text-foreground">Preview</p>
       <div className="overflow-hidden rounded-lg border border-border">
         <div className="flex items-center gap-2 px-3 py-3" style={{ background: bg, color: fg }}>
-          {form.logo ? (
-            <img src={form.logo} alt="" className="w-auto max-w-[70%] object-contain" style={{ maxHeight: height }} />
+          {logoSrc ? (
+            <img src={logoSrc} alt="" className="w-auto max-w-[70%] object-contain" style={{ maxHeight: height }} />
           ) : (
             <span className="text-sm font-semibold">{form.title.trim() || 'DeviceChain'}</span>
           )}
@@ -328,13 +423,4 @@ function BrandingPreview({ form }: { form: FormState }) {
 
 function emptyToNull(v: string): string | null {
   return v === '' ? null : v;
-}
-
-function readAsDataURL(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
 }
