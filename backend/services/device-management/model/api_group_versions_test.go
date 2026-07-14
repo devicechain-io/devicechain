@@ -185,6 +185,73 @@ func TestDeleteEntityGroup_CascadesVersions(t *testing.T) {
 	assert.EqualValues(t, 0, after, "the group's frozen versions are cascade-deleted")
 }
 
+// The (entity_group_id, version) unique index rejects a duplicate version number —
+// the guard that makes concurrent publishes safe (the loser's insert fails).
+func TestEntityGroupVersion_DuplicateVersionRejected(t *testing.T) {
+	api, ctx := newGroupVersionTestApi(t)
+	g := createDynamicGroup(t, api, ctx, "g1", `attr["climate"] == "arid"`)
+
+	first := &EntityGroupVersion{EntityGroupId: g.ID, Version: 1, Selector: "x", MemberType: "device", SelectorSchema: 1}
+	assert.NoError(t, api.RDB.DB(ctx).Create(first).Error)
+
+	dup := &EntityGroupVersion{EntityGroupId: g.ID, Version: 1, Selector: "y", MemberType: "device", SelectorSchema: 1}
+	assert.Error(t, api.RDB.DB(ctx).Create(dup).Error, "a duplicate (entity_group_id, version) must be rejected")
+}
+
+// A draft edit must NOT revert the active-version pointer (the MED race Fable found):
+// UpdateEntityGroup omits active_version, so an edit after a publish leaves the
+// pointer intact.
+func TestUpdateEntityGroup_DoesNotRevertActiveVersion(t *testing.T) {
+	api, ctx := newGroupVersionTestApi(t)
+	createDynamicGroup(t, api, ctx, "g1", `attr["climate"] == "arid"`)
+	if _, err := api.PublishEntityGroup(ctx, "g1", nil, nil, "alice"); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	// Edit the draft selector after publishing.
+	newSel := `attr["climate"] == "humid"`
+	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupCreateRequest{Token: "g1", Selector: &newSel}); err != nil {
+		t.Fatalf("edit draft: %v", err)
+	}
+
+	g, err := api.entityGroupByToken(ctx, "g1")
+	assert.NoError(t, err)
+	assert.True(t, g.ActiveVersion.Valid, "the edit must not clear the active pointer")
+	assert.EqualValues(t, 1, g.ActiveVersion.Int32, "the edit must not revert the active pointer")
+	assert.Equal(t, newSel, g.Selector.String, "the draft selector is still updated")
+}
+
+// Versions are tenant-scoped: two tenants may own a group under the same token, and
+// each sees only its own versions.
+func TestEntityGroupVersions_TenantIsolation(t *testing.T) {
+	api, _ := newGroupVersionTestApi(t)
+	ctxA := core.WithTenant(context.Background(), "acme")
+	ctxB := core.WithTenant(context.Background(), "globex")
+
+	createDynamicGroup(t, api, ctxA, "shared", `attr["climate"] == "arid"`)
+	if _, err := api.PublishEntityGroup(ctxA, "shared", nil, nil, "a"); err != nil {
+		t.Fatalf("A publish v1: %v", err)
+	}
+	if _, err := api.PublishEntityGroup(ctxA, "shared", nil, nil, "a"); err != nil {
+		t.Fatalf("A publish v2: %v", err)
+	}
+
+	// Tenant B owns a same-token group with its own single version.
+	createDynamicGroup(t, api, ctxB, "shared", `attr["climate"] == "humid"`)
+	if _, err := api.PublishEntityGroup(ctxB, "shared", nil, nil, "b"); err != nil {
+		t.Fatalf("B publish v1: %v", err)
+	}
+
+	aVersions, err := api.EntityGroupVersions(ctxA, "shared")
+	assert.NoError(t, err)
+	assert.Len(t, aVersions, 2, "tenant A sees only its two versions")
+
+	bVersions, err := api.EntityGroupVersions(ctxB, "shared")
+	assert.NoError(t, err)
+	assert.Len(t, bVersions, 1, "tenant B sees only its one version")
+	assert.Equal(t, `attr["climate"] == "humid"`, bVersions[0].Selector, "B reads its own frozen selector, not A's")
+}
+
 // Deleting a nonexistent group token is a no-op (mirrors deleteEdgeEntity), not an
 // error — and the ErrEntityInUse guard is reachable machinery even while structurally
 // false in S1.

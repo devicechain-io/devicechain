@@ -105,6 +105,12 @@ func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 		if res.RowsAffected == 0 {
 			return fmt.Errorf("%w: entity group %q", gorm.ErrRecordNotFound, token)
 		}
+		// ADR-062 S2 maintenance hook goes HERE, inside the publish txn after the
+		// repoint: if this group is already rule-referenced, enroll the new group@v for
+		// membership maintenance (backfill the read-model, extend the reverse index)
+		// enlisted in this same transaction so the read-model advances atomically with
+		// the active pointer. No-op in S1 — no rule can reference a group until S4 adds
+		// the DetectionRule scope column, so there is nothing to enroll yet.
 		return nil
 	})
 	if err != nil {

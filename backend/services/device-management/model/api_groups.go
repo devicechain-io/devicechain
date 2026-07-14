@@ -154,7 +154,12 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 	updated.BorderColor = rdb.NullStrOf(request.BorderColor)
 	updated.Metadata = rdb.MetadataStrOf(request.Metadata)
 
-	result := api.RDB.DB(ctx).Save(updated)
+	// Omit active_version: a draft edit must never write the version pointer back.
+	// The struct was loaded before this Save, so writing it whole would let an edit
+	// racing a concurrent PublishEntityGroup/RollbackEntityGroup silently revert the
+	// active pointer to its stale value — a rule-load-bearing field once S2/S3 read it
+	// (ADR-062). The pointer is moved only by publish/rollback.
+	result := api.RDB.DB(ctx).Omit("ActiveVersion").Save(updated)
 	if result.Error != nil {
 		return nil, result.Error
 	}
