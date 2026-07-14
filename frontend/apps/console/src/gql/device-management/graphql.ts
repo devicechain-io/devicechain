@@ -306,6 +306,11 @@ export type MetricDefinitionSearchCriteria = {
   pageSize: number;
 };
 
+export type PaginationInput = {
+  pageNumber: number;
+  pageSize: number;
+};
+
 export type AlarmsQueryVariables = Exact<{
   criteria: AlarmSearchCriteria;
 }>;
@@ -488,6 +493,30 @@ export type AuditEventsQueryVariables = Exact<{
 
 
 export type AuditEventsQuery = { auditEvents: { results: Array<{ id: string, occurredTime: string, category: string, actor: string, operation: string, tableName: string | null, entityPk: string | null, entityLabel: string | null, rowsAffected: number }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type PreviewSelectorQueryVariables = Exact<{
+  memberType: string;
+  selector: string;
+  pagination: PaginationInput;
+}>;
+
+
+export type PreviewSelectorQuery = { previewSelector: { valid: boolean, error: string | null, members: { results: Array<{ id: string, token: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } | null } };
+
+export type DynamicGroupsQueryVariables = Exact<{
+  memberType: string;
+}>;
+
+
+export type DynamicGroupsQuery = { entityGroups: { results: Array<{ id: string, token: string, name: string | null, memberType: string, membershipMode: string, selector: string | null }>, pagination: { totalRecords: number | null } } };
+
+export type GroupMembersQueryVariables = Exact<{
+  tokens: Array<string> | string;
+  pagination: PaginationInput;
+}>;
+
+
+export type GroupMembersQuery = { entityGroupsByToken: Array<{ token: string, members: { results: Array<{ id: string, token: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } }> };
 
 export type DeviceCredentialsQueryVariables = Exact<{
   criteria: DeviceCredentialSearchCriteria;
@@ -1333,6 +1362,66 @@ export const AuditEventsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AuditEventsQuery, AuditEventsQueryVariables>;
+export const PreviewSelectorDocument = new TypedDocumentString(`
+    query PreviewSelector($memberType: String!, $selector: String!, $pagination: PaginationInput!) {
+  previewSelector(
+    memberType: $memberType
+    selector: $selector
+    pagination: $pagination
+  ) {
+    valid
+    error
+    members {
+      results {
+        id
+        token
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<PreviewSelectorQuery, PreviewSelectorQueryVariables>;
+export const DynamicGroupsDocument = new TypedDocumentString(`
+    query DynamicGroups($memberType: String!) {
+  entityGroups(
+    criteria: {pageNumber: 1, pageSize: 200, memberType: $memberType, membershipMode: "dynamic"}
+  ) {
+    results {
+      id
+      token
+      name
+      memberType
+      membershipMode
+      selector
+    }
+    pagination {
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DynamicGroupsQuery, DynamicGroupsQueryVariables>;
+export const GroupMembersDocument = new TypedDocumentString(`
+    query GroupMembers($tokens: [String!]!, $pagination: PaginationInput!) {
+  entityGroupsByToken(tokens: $tokens) {
+    token
+    members(pagination: $pagination) {
+      results {
+        id
+        token
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<GroupMembersQuery, GroupMembersQueryVariables>;
 export const DeviceCredentialsDocument = new TypedDocumentString(`
     query DeviceCredentials($criteria: DeviceCredentialSearchCriteria!) {
   deviceCredentials(criteria: $criteria) {

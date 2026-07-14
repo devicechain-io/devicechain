@@ -16,6 +16,7 @@ import ConnectorsPage from '@/routes/connectors/ConnectorsPage';
 import ConnectorDetailPage from '@/routes/connectors/ConnectorDetailPage';
 import AuditPage from '@/routes/audit/AuditPage';
 import FacetKeysPage from '@/routes/facets/FacetKeysPage';
+import BrowsePage from '@/routes/browse/BrowsePage';
 import BrandingPage from '@/routes/BrandingPage';
 import { ResourceListPage, ResourceDetailPage, type RegistryResource } from '@/components/registry';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
@@ -97,6 +98,7 @@ export default function App() {
           <Route path="connectors/:token" element={<ConnectorDetailPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="facets" element={<FacetKeysPage />} />
+          <Route path="browse" element={<BrowsePage />} />
           <Route path="branding" element={<BrandingPage />} />
           {/* Every registry list/detail renders through the one generic page
               component, so React reuses the instance across routes. Key each
