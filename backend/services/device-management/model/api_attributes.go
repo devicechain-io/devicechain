@@ -58,7 +58,11 @@ func (api *Api) SetEntityAttribute(ctx context.Context,
 		existing.ValueType = request.ValueType
 		existing.Value = rdb.NullStrOf(request.Value)
 		existing.LastUpdated = time.Now()
-		if err := api.RDB.DB(ctx).Save(existing).Error; err != nil {
+		// Same-txn membership recompute (ADR-062 S2): a SHARED-scope facet change can move
+		// this entity in/out of a rule-scoped group, so the read-model is updated in the
+		// write's transaction (a no-op when no rule references the changed key).
+		if err := api.writeAttrThenRecompute(ctx, request.EntityType, entityId, request.AttrKey, request.Scope,
+			func(db *gorm.DB) error { return db.Save(existing).Error }); err != nil {
 			return nil, err
 		}
 		api.emitDeviceAttributeForSet(ctx, request, existing.LastUpdated)
@@ -77,7 +81,8 @@ func (api *Api) SetEntityAttribute(ctx context.Context,
 		Value:       rdb.NullStrOf(request.Value),
 		LastUpdated: time.Now(),
 	}
-	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
+	if err := api.writeAttrThenRecompute(ctx, request.EntityType, entityId, request.AttrKey, request.Scope,
+		func(db *gorm.DB) error { return db.Create(created).Error }); err != nil {
 		return nil, err
 	}
 	api.emitDeviceAttributeForSet(ctx, request, created.LastUpdated)
@@ -261,10 +266,39 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 	// on the same key can still stamp out of commit order (they self-heal on the next write
 	// — the accepted monotonic-clock posture, as for the roster/profile-active projections).
 	removedAt := time.Now().UTC()
-	result := api.RDB.DB(ctx).Where(
-		"entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
-		entityType, entityId, scope, attrKey).Delete(&EntityAttribute{})
-	if result.Error == nil && result.RowsAffected > 0 && dynamicThresholdEligible(entityType, scope) {
+	var rowsAffected int64
+	// Same-txn membership recompute (ADR-062 S2): removing a SHARED-scope facet can drop
+	// this entity out of a rule-scoped group, so the delete + the read-model recompute
+	// commit together (a recompute failure rolls the delete back). Only wrap in a
+	// transaction when the delete can affect membership; a CLIENT-scope delete runs bare.
+	if membershipScopeEligible(entityType, scope) {
+		err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+			result := tx.Where(
+				"entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
+				entityType, entityId, scope, attrKey).Delete(&EntityAttribute{})
+			if result.Error != nil {
+				return result.Error
+			}
+			rowsAffected = result.RowsAffected
+			if rowsAffected > 0 {
+				return api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
+			}
+			return nil
+		})
+		if err != nil {
+			return false, err
+		}
+	} else {
+		result := api.RDB.DB(ctx).Where(
+			"entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
+			entityType, entityId, scope, attrKey).Delete(&EntityAttribute{})
+		if result.Error != nil {
+			return false, result.Error
+		}
+		rowsAffected = result.RowsAffected
+	}
+
+	if rowsAffected > 0 && dynamicThresholdEligible(entityType, scope) {
 		// A tracked device attribute was actually removed: drop it from event-processing's
 		// dynamic-threshold projection (ADR-051 slice 4c-3), scoped to the (device, scope, key)
 		// this delete targeted so the sibling scope's value is untouched. The old value type is
@@ -278,7 +312,7 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 			UpdatedAt:   removedAt,
 		})
 	}
-	return result.RowsAffected > 0, result.Error
+	return rowsAffected > 0, nil
 }
 
 // EntityAttributesByEntity loads all attributes for an entity (optionally scoped)

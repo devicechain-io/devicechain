@@ -48,6 +48,33 @@ func (s *Selector) CostMax() uint64 { return s.costMax }
 // Leaves is the number of facet comparisons (EXISTS semi-joins) the selector lowers to.
 func (s *Selector) Leaves() int { return s.leaves }
 
+// Keys returns the DISTINCT facet keys the selector references — the string literals of
+// attr["k"] / "k" in attr — in first-appearance order. It walks the same lowering path
+// Compile already proved lowerable (so it cannot hit a non-lowerable node), reusing
+// semiJoin's per-leaf key capture rather than a second, drift-prone walk. It is the input
+// to ADR-062's facet-key→group reverse index: an attribute write on key K need only
+// recompute membership for the groups whose selector references K.
+func (s *Selector) Keys() []string {
+	lc := &lowerCtx{p: LowerParams{
+		MemberType:  s.memberType,
+		MemberTable: "_keys_",
+		FacetScope:  "_",
+		NumericCast: func(col string) string { return col },
+	}}
+	// The selector already cleared Compile, so the walk cannot error; ignore it defensively.
+	_, _ = lowerExpr(s.ast.NativeRep().Expr(), lc)
+	seen := make(map[string]struct{}, len(lc.keys))
+	out := make([]string, 0, len(lc.keys))
+	for _, k := range lc.keys {
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	return out
+}
+
 // Compile parses, type-checks, cost-gates, and proves-lowerable a dynamic-group selector
 // against the shared selector environment for the given member family. It fails closed: a
 // parse/type error, a non-boolean result, a worst-case cost above costCeiling, a node

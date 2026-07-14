@@ -233,9 +233,13 @@ func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, erro
 	if inUse {
 		return false, fmt.Errorf("%w: entity group %q is referenced by a detection rule", ErrEntityInUse, token)
 	}
-	// Cascade the group's frozen versions with it: append-only history has no meaning
-	// once the group is gone, and the versions carry no cross-service references.
+	// Cascade the group's frozen versions AND its scoping rows (ADR-062 S2 membership +
+	// reverse-index rows where it is the scoping group) with it: append-only history and
+	// derived scoping rows have no meaning once the group is gone.
 	return api.deleteEdgeEntity(ctx, entity.TypeGroup, &EntityGroup{}, token, func(tx *gorm.DB, id uint) error {
-		return tx.Unscoped().Where("entity_group_id = ?", id).Delete(&EntityGroupVersion{}).Error
+		if err := tx.Unscoped().Where("entity_group_id = ?", id).Delete(&EntityGroupVersion{}).Error; err != nil {
+			return err
+		}
+		return api.purgeGroupScopingRows(tx, id)
 	})
 }

@@ -119,6 +119,12 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 			"originator_type = ? AND originator_id = ?", string(etype), id).Delete(&Alarm{}).Error; err != nil {
 			return err
 		}
+		// Cascade the entity's group memberships (ADR-062 S2): its membership rows address
+		// it by (entity_type, entity_id) with no DB foreign key, mirroring the attribute
+		// cascade, so a deleted member must not leave a dangling membership row.
+		if err := api.purgeEntityMemberships(tx, string(etype), id); err != nil {
+			return err
+		}
 		if cascade != nil {
 			if err := cascade(tx, id); err != nil {
 				return err
