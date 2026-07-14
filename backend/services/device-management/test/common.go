@@ -45,6 +45,29 @@ type MockApi struct {
 	// ProfileScopeErr, when set, makes ProfileScopeByDeviceType fail — so a test can
 	// assert scope resolution runs (and aborts) before any state mutation.
 	ProfileScopeErr error
+
+	// MembershipsFn, when set, returns an entity's dynamic-group memberships (ADR-062)
+	// per (entityType, entityId) — so a resolver test can give the device and an anchor
+	// different memberships and assert the stamped union. Nil returns MembershipsResult.
+	MembershipsFn func(entityType string, entityId uint) []model.GroupMembership
+	// MembershipsResult is the default memberships returned when MembershipsFn is unset
+	// (nil → empty, so a test that does not care gets no scope stamp).
+	MembershipsResult []model.GroupMembership
+	// MembershipsErr, when set, makes MembershipsForEntity fail.
+	MembershipsErr error
+}
+
+// MembershipsForEntity (ADR-062) returns the suite-configured memberships for the
+// entity — MembershipsFn if set, else MembershipsResult — or an error. The default
+// (both unset) is empty: a resolver test that does not care stamps no scope.
+func (api *MockApi) MembershipsForEntity(ctx context.Context, entityType string, entityId uint) ([]model.GroupMembership, error) {
+	if api.MembershipsErr != nil {
+		return nil, api.MembershipsErr
+	}
+	if api.MembershipsFn != nil {
+		return api.MembershipsFn(entityType, entityId), nil
+	}
+	return api.MembershipsResult, nil
 }
 
 func (api *MockApi) DeviceTypesById(ctx context.Context, ids []uint) ([]*model.DeviceType, error) {

@@ -81,9 +81,14 @@ type evictCall struct {
 	token   string
 	sources []uint
 }
+type membershipEvict struct {
+	entityType string
+	entityIds  []uint
+}
 type captureEvictor struct {
-	calls      []evictCall
-	relSources [][]uint
+	calls            []evictCall
+	relSources       [][]uint
+	membershipEvicts []membershipEvict
 }
 
 func (c *captureEvictor) EvictEntityDelete(_ context.Context, etype entity.Type, id uint, token string, sources []uint) {
@@ -92,6 +97,10 @@ func (c *captureEvictor) EvictEntityDelete(_ context.Context, etype entity.Type,
 
 func (c *captureEvictor) EvictRelationshipSources(_ context.Context, sourceDeviceIds []uint) {
 	c.relSources = append(c.relSources, sourceDeviceIds)
+}
+
+func (c *captureEvictor) EvictMemberships(_ context.Context, entityType string, entityIds []uint) {
+	c.membershipEvicts = append(c.membershipEvicts, membershipEvict{entityType, entityIds})
 }
 
 // Deleting an entity evicts the hot-path caches (ADR-044 F2): the deleted device's

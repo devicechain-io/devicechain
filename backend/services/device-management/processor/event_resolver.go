@@ -79,7 +79,7 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 // device travels as its token (ADR-044): the numeric row id stays inside
 // device-management and never reaches event-management / device-state.
 func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []model.ResolvedAnchor,
-	event *esmodel.UnresolvedEvent, rezPayload interface{}, scope *model.ProfileScope) *EventResolutionResults {
+	memberships []model.GroupRef, event *esmodel.UnresolvedEvent, rezPayload interface{}, scope *model.ProfileScope) *EventResolutionResults {
 	resolved := &model.ResolvedEvent{
 		Source:              event.Source,
 		AltId:               event.AltId,
@@ -87,12 +87,49 @@ func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []mo
 		DeviceTypeToken:     scope.DeviceTypeToken,
 		ProfileVersionToken: scope.ProfileVersionToken,
 		Anchors:             anchors,
+		ScopeMemberships:    memberships,
 		OccurredTime:        event.OccurredTime,
 		ProcessedTime:       event.ProcessedTime,
 		EventType:           event.EventType,
 		Payload:             rezPayload,
 	}
 	return &EventResolutionResults{Device: device, Resolved: resolved}
+}
+
+// membershipTarget is one entity whose dynamic-group memberships contribute to an
+// event's scope stamp — the reporting device or one of its tracked anchors.
+type membershipTarget struct {
+	Type string
+	Id   uint
+}
+
+// unionMemberships resolves and de-duplicates the rule-scoped group memberships across
+// the given targets (the device ∪ each tracked anchor) into the event's ScopeMemberships
+// (ADR-062). Each read is served from the negative-caching membership cache, so a
+// non-member target (the common case) is a cache hit returning empty. De-dup is by
+// (group token, version): a device tracked into two arid areas is in scope once.
+func (rez *EventResolver) unionMemberships(ctx context.Context, targets []membershipTarget) ([]model.GroupRef, error) {
+	type mkey struct {
+		token   string
+		version int32
+	}
+	seen := make(map[mkey]struct{})
+	out := make([]model.GroupRef, 0)
+	for _, t := range targets {
+		ms, err := rez.Api.MembershipsForEntity(ctx, t.Type, t.Id)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range ms {
+			k := mkey{m.GroupToken, m.SelectorVersion}
+			if _, dup := seen[k]; dup {
+				continue
+			}
+			seen[k] = struct{}{}
+			out = append(out, model.GroupRef{GroupToken: m.GroupToken, Version: m.SelectorVersion})
+		}
+	}
+	return out, nil
 }
 
 // resolveScope denormalizes the device's rule-scoping identity (ADR-051) so
@@ -165,7 +202,15 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	anchors := []model.ResolvedAnchor{
 		{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID},
 	}
-	resolved := rez.MergeToResolveEvent(device, anchors, event, payload, scope)
+	// Stamp the device+new-anchor dynamic-group memberships (ADR-062).
+	memberships, err := rez.unionMemberships(ctx, []membershipTarget{
+		{Type: string(entity.TypeDevice), Id: device.ID},
+		{Type: created.TargetType, Id: created.TargetId},
+	})
+	if err != nil {
+		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
+	}
+	resolved := rez.MergeToResolveEvent(device, anchors, memberships, event, payload, scope)
 
 	return []EventResolutionResults{*resolved}, 0, nil
 }
@@ -367,8 +412,9 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
 	}
 
-	// Denormalize the full set of the device's tracked relationships as anchors.
-	anchors, reason, err := rez.deviceAnchors(ctx, device)
+	// Denormalize the full set of the device's tracked relationships as anchors, and the
+	// device+anchor dynamic-group memberships (ADR-062) stamped alongside them.
+	anchors, memberships, reason, err := rez.deviceAnchors(ctx, device)
 	if err != nil {
 		return nil, reason, err
 	}
@@ -383,7 +429,7 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 		return nil, reason, err
 	}
 
-	result := rez.MergeToResolveEvent(device, anchors, event, resolved, scope)
+	result := rez.MergeToResolveEvent(device, anchors, memberships, event, resolved, scope)
 	return []EventResolutionResults{*result}, 0, nil
 }
 
@@ -391,7 +437,7 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 // one per tracked relationship — or an empty set when the device has no tracked
 // relationship. Every anchor is denormalized onto the event (ADR-013 addendum
 // 2026-07-01), so a device assigned to several targets is queryable by each.
-func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Device) ([]model.ResolvedAnchor, uint, error) {
+func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Device) ([]model.ResolvedAnchor, []model.GroupRef, uint, error) {
 	tracked := true
 	sourceType := string(entity.TypeDevice)
 	criteria := model.EntityRelationshipSearchCriteria{
@@ -405,9 +451,13 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Devic
 	}
 	drels, err := rez.Api.EntityRelationships(ctx, criteria)
 	if err != nil {
-		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
+		return nil, nil, uint(dmproto.FailureReason_ApiCallFailed), err
 	}
 	anchors := make([]model.ResolvedAnchor, 0, len(drels.Results))
+	// The membership stamp (ADR-062) is the union over the device itself and every
+	// emitted anchor: a device-facet rule matches on the device's memberships, a
+	// geographic rule ("arid areas") matches on an area anchor's.
+	targets := []membershipTarget{{Type: string(entity.TypeDevice), Id: device.ID}}
 	for i := range drels.Results {
 		r := &drels.Results[i]
 		// TargetToken is denormalized at relationship-create time (ADR-044). An empty
@@ -425,8 +475,13 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Devic
 			AnchorToken:    r.TargetToken,
 			RelationshipId: r.ID,
 		})
+		targets = append(targets, membershipTarget{Type: r.TargetType, Id: r.TargetId})
 	}
-	return anchors, 0, nil
+	memberships, err := rez.unionMemberships(ctx, targets)
+	if err != nil {
+		return nil, nil, uint(dmproto.FailureReason_ApiCallFailed), err
+	}
+	return anchors, memberships, 0, nil
 }
 
 // validateMeasurements enforces the device's metric definitions (resolved via its

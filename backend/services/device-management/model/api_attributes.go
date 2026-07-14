@@ -271,6 +271,7 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 	// this entity out of a rule-scoped group, so the delete + the read-model recompute
 	// commit together (a recompute failure rolls the delete back). Only wrap in a
 	// transaction when the delete can affect membership; a CLIENT-scope delete runs bare.
+	membershipTouched := false
 	if membershipScopeEligible(entityType, scope) {
 		err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 			result := tx.Where(
@@ -281,12 +282,19 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 			}
 			rowsAffected = result.RowsAffected
 			if rowsAffected > 0 {
-				return api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
+				t, err := api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
+				membershipTouched = t
+				return err
 			}
 			return nil
 		})
 		if err != nil {
 			return false, err
+		}
+		// Evict the entity's membership cache post-commit (ADR-062) — only if a
+		// rule-referenced group existed for the key.
+		if membershipTouched {
+			api.evictMemberships(ctx, entityType, []uint{entityId})
 		}
 	} else {
 		result := api.RDB.DB(ctx).Where(

@@ -88,10 +88,28 @@ type ResolvedEvent struct {
 	// unpublished (no active version) — the device has no resolvable rules.
 	DeviceTypeToken     string
 	ProfileVersionToken string
-	OccurredTime        time.Time
-	ProcessedTime       time.Time
-	EventType           esmodel.EventType
-	Payload             interface{}
+	// ScopeMemberships denormalizes, at resolve time, the rule-scoped dynamic-group
+	// versions the reporting device AND its anchors currently belong to (ADR-062): the
+	// union of MembershipsForEntity over the device and each anchor. event-processing's
+	// DETECT engine treats a group-scoped rule as in-scope for this event iff its
+	// {group}@{version} is present here — a set test on the replayed bytes, so scope is
+	// replay-correct BY CONSTRUCTION (the membership is frozen into the immutable event
+	// at the instant it happened, never re-queried on replay). Empty when no rule
+	// references any group the device or its anchors belong to (the pay-nothing case).
+	ScopeMemberships []GroupRef
+	OccurredTime     time.Time
+	ProcessedTime    time.Time
+	EventType        esmodel.EventType
+	Payload          interface{}
+}
+
+// GroupRef is one rule-scoped dynamic-group version an event is stamped as belonging
+// to (ADR-062): the group's stable per-tenant token and the frozen selector version
+// the membership was computed against. The engine's scope check is
+// `group@v ∈ event.ScopeMemberships`.
+type GroupRef struct {
+	GroupToken string
+	Version    int32
 }
 
 // ResolvedAnchor is one of a resolved event's anchors — a tracked relationship's

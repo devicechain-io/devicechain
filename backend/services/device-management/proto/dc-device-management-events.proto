@@ -43,6 +43,17 @@ message PResolvedAnchor {
 }
 
 /**
+ * One rule-scoped dynamic-group version an event belongs to (ADR-062): the group's
+ * per-tenant token and the frozen selector version the membership was computed
+ * against. Carried on the resolved event so the DETECT engine's scope check is a set
+ * test on the replayed bytes (replay-correct by construction).
+ */
+message PScopeMembership {
+	string group_token = 1;
+	int32 version = 2;
+}
+
+/**
  * Event that was successfully resolved. It carries the full set of the device's
  * tracked-relationship anchors (empty when the device is unassigned). The source
  * device is addressed by its token (ADR-044): the numeric row id never crosses the
@@ -73,6 +84,9 @@ message PResolvedAnchor {
     bytes payload = 10;
 	optional string device_type_token = 11;
 	optional string profile_version_token = 12;
+	// The rule-scoped dynamic-group versions the device + its anchors belong to
+	// (ADR-062), stamped at resolve time; empty when no rule references such a group.
+	repeated PScopeMembership scope_memberships = 13;
 }
 
 /**

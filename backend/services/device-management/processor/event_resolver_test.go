@@ -181,6 +181,46 @@ func (suite *EventResolverTestSuite) TestResolvedEventCarriesProfileScope() {
 	assert.Equal(suite.T(), uint(77), suite.API.ProfileScopeArg)
 }
 
+// The resolver stamps the DEDUPED UNION of the reporting device's and each anchor's
+// dynamic-group memberships onto the event as ScopeMemberships (ADR-062), so the DETECT
+// engine's scope check is a set test on the replayed bytes. A device-facet membership and
+// a geographic (area-anchor) membership both land; a membership shared by two targets
+// appears once.
+func (suite *EventResolverTestSuite) TestResolvedEventCarriesScopeMemberships() {
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
+	// One tracked anchor: the device is located-in an area (row id 900).
+	suite.API.Mock.On("EntityRelationships").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
+			{TargetType: "area", TargetToken: "warehouse-3", TargetId: 900},
+		}}, nil)
+	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
+
+	device := deviceWithToken("TEST-123")
+	device.ID = 500
+	// The device is in beta-fleet@1 + shared@1; the area is in arid-areas@2 + shared@1.
+	suite.API.MembershipsFn = func(entityType string, entityId uint) []dmodel.GroupMembership {
+		if entityType == "device" && entityId == 500 {
+			return []dmodel.GroupMembership{{GroupToken: "beta-fleet", SelectorVersion: 1}, {GroupToken: "shared", SelectorVersion: 1}}
+		}
+		if entityType == "area" && entityId == 900 {
+			return []dmodel.GroupMembership{{GroupToken: "arid-areas", SelectorVersion: 2}, {GroupToken: "shared", SelectorVersion: 1}}
+		}
+		return nil
+	}
+
+	results, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
+		context.Background(), device, measurementEvent("temp", "42"))
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint(0), reason)
+	assert.Len(suite.T(), results, 1)
+	assert.ElementsMatch(suite.T(), []dmodel.GroupRef{
+		{GroupToken: "beta-fleet", Version: 1},
+		{GroupToken: "arid-areas", Version: 2},
+		{GroupToken: "shared", Version: 1}, // shared by device+area, deduped to one
+	}, results[0].Resolved.ScopeMemberships)
+}
+
 // A scope-resolution failure on a new-relationship event aborts BEFORE the
 // relationship is created — so a transient lookup blip cannot leave a committed
 // relationship that a redelivery would duplicate (a fresh token per attempt is not

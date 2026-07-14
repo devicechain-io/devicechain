@@ -148,7 +148,8 @@ func (api *Api) RegisterGroupVersionForScoping(ctx context.Context, groupToken s
 	}
 	keys := sel.Keys()
 
-	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	var evictIds []uint
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		// Serialize against every concurrent recompute (and other Register) of this family
 		// so the backfill snapshot below cannot be raced into a permanent hole.
 		if err := api.lockMembershipFamily(ctx, tx, frozen.MemberType); err != nil {
@@ -193,6 +194,7 @@ func (api *Api) RegisterGroupVersionForScoping(ctx context.Context, groupToken s
 				SelectorVersion: version,
 				GroupToken:      group.Token,
 			})
+			evictIds = append(evictIds, m.Id)
 		}
 		if len(rows) > 0 {
 			if err := tx.CreateInBatches(rows, 200).Error; err != nil {
@@ -201,6 +203,13 @@ func (api *Api) RegisterGroupVersionForScoping(ctx context.Context, groupToken s
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// Evict the backfilled members' membership caches post-commit so the resolver stamps
+	// the newly-materialized memberships (the ADR-062 arming visibility invariant).
+	api.evictMemberships(ctx, frozen.MemberType, evictIds)
+	return nil
 }
 
 // DeregisterGroupVersionForScoping GCs a group@version's read-model + reverse-index rows
@@ -212,7 +221,19 @@ func (api *Api) DeregisterGroupVersionForScoping(ctx context.Context, groupToken
 	if err != nil {
 		return err
 	}
-	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	var evictType string
+	var evictIds []uint
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// Collect the affected members before tearing their rows down, so their caches can
+		// be evicted post-commit (they lose this membership).
+		var members []EntityGroupMembership
+		if err := tx.Where("group_id = ? AND selector_version = ?", group.ID, version).Find(&members).Error; err != nil {
+			return err
+		}
+		for _, m := range members {
+			evictType = m.EntityType
+			evictIds = append(evictIds, m.EntityId)
+		}
 		if err := tx.Unscoped().Where("group_id = ? AND selector_version = ?", group.ID, version).
 			Delete(&EntityGroupFacetRef{}).Error; err != nil {
 			return err
@@ -220,6 +241,11 @@ func (api *Api) DeregisterGroupVersionForScoping(ctx context.Context, groupToken
 		return tx.Unscoped().Where("group_id = ? AND selector_version = ?", group.ID, version).
 			Delete(&EntityGroupMembership{}).Error
 	})
+	if err != nil {
+		return err
+	}
+	api.evictMemberships(ctx, evictType, evictIds)
+	return nil
 }
 
 // recomputeMembershipForAttr re-evaluates one entity's membership after a SHARED-scope
@@ -233,22 +259,25 @@ func (api *Api) DeregisterGroupVersionForScoping(ctx context.Context, groupToken
 // exec-spec decision): a recompute failure rolls the attribute write back rather than
 // leaving the attribute changed but membership stale (which, absent a reconcile sweep,
 // would be a silently-dropped membership update — the at-most-once hole ADR-062 rejects).
-func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, entityType string, entityId uint, attrKey string) error {
+// The returned bool reports whether any rule-referenced group existed for the key
+// (i.e. real work happened) — the caller evicts the entity's membership cache post-commit
+// only then, preserving pay-nothing for tenants with no rule-scoped groups.
+func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, entityType string, entityId uint, attrKey string) (bool, error) {
 	refs := make([]EntityGroupFacetRef, 0)
 	if err := db.
 		Where("facet_key = ? AND member_type = ?", attrKey, entityType).
 		Find(&refs).Error; err != nil {
-		return err
+		return false, err
 	}
 	if len(refs) == 0 {
-		return nil
+		return false, nil
 	}
 	// Serialize this family's membership maintenance (only now that there is real work): a
 	// concurrent write to a DIFFERENT facet of the same entity, or a Register, must not
 	// write-skew the read-model. The second writer blocks here and re-evaluates against the
 	// first's committed state.
 	if err := api.lockMembershipFamily(ctx, db, entityType); err != nil {
-		return err
+		return false, err
 	}
 	for _, ref := range refs {
 		var frozen EntityGroupVersion
@@ -260,15 +289,15 @@ func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, ent
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				continue
 			}
-			return err
+			return false, err
 		}
 		isMember, err := api.isMemberBySelector(ctx, db, frozen.MemberType, frozen.Selector, entityId)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if isMember {
 			if err := api.upsertMembership(db, entityType, entityId, ref.GroupId, ref.SelectorVersion, ref.GroupToken); err != nil {
-				return err
+				return false, err
 			}
 		} else {
 			// Hard-delete: a soft-delete tombstone would block a later re-join's insert
@@ -277,11 +306,11 @@ func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, ent
 				Where("entity_type = ? AND entity_id = ? AND group_id = ? AND selector_version = ?",
 					entityType, entityId, ref.GroupId, ref.SelectorVersion).
 				Delete(&EntityGroupMembership{}).Error; err != nil {
-				return err
+				return false, err
 			}
 		}
 	}
-	return nil
+	return true, nil
 }
 
 // upsertMembership inserts a positive membership row on the given db handle, treating a
@@ -310,25 +339,37 @@ func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, e
 	if !membershipScopeEligible(entityType, scope) {
 		return write(api.RDB.DB(ctx))
 	}
-	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	var touched bool
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := write(tx); err != nil {
 			return err
 		}
-		return api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
+		t, err := api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
+		touched = t
+		return err
 	})
+	if err != nil {
+		return err
+	}
+	// Evict the entity's membership cache post-commit — only if a rule-referenced group
+	// existed for the key (otherwise no membership could have changed, and an unused tenant
+	// pays nothing).
+	if touched {
+		api.evictMemberships(ctx, entityType, []uint{entityId})
+	}
+	return nil
 }
 
 // MembershipsForEntity returns the group@versions the entity currently belongs to (its
 // positive rows). It is the hot read the resolver (S3) stamps onto an event; an entity in
 // no rule-scoped group returns an empty slice (the pay-nothing common case).
 //
-// S3 CACHE NOTE: S3 wraps this read with a negative-caching CachedApi decorator (an empty
-// result is cached — the common case). When it does, it MUST evict the entity's cache key
-// on EVERY path that mutates a membership row, or a missed eviction becomes a permanently
-// missed/false detection: recomputeMembershipForAttr (per entity), purgeEntityMemberships
-// (entity delete), purgeGroupScopingRows + RegisterGroupVersionForScoping +
-// DeregisterGroupVersionForScoping (which touch many entities → a family/tenant-wide evict).
-// No cache exists in S2, so these paths intentionally carry no eviction yet.
+// CACHE (S3): the CachedApi decorator wraps this read with negative caching (an empty
+// result is cached — the common case). Every path that mutates a membership row evicts the
+// affected entities' cache keys post-commit so a stale stamp is never served: the attribute
+// set/delete recompute (writeAttrThenRecompute / DeleteEntityAttribute — per entity), entity
+// delete (deleteEdgeEntity), and RegisterGroupVersionForScoping / DeregisterGroupVersionForScoping
+// / DeleteEntityGroup (which evict every affected member). The TTL is a self-healing backstop.
 func (api *Api) MembershipsForEntity(ctx context.Context, entityType string, entityId uint) ([]GroupMembership, error) {
 	rows := make([]EntityGroupMembership, 0)
 	if err := api.RDB.DB(ctx).
