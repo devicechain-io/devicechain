@@ -346,22 +346,36 @@ func (e *Engine) Descope(ruleID, series string, at time.Time) bool {
 	}
 	key := SeriesKey{Rule: ruleID, Series: series}
 	before := len(e.out)
-	// Resolve a raised alarm first (emits EdgeResolved, stale-guarded); resolve() deletes the
-	// raised latch iff it emitted. A stale descope leaves the latch (a newer reading supports it).
-	if _, raised := e.raised[key]; raised {
-		e.resolve(r, key, at)
+	// Resolve a raised alarm. Unlike a value falling edge, a descope is NOT subject to the D3/F2
+	// event-time stale guard: membership is stamped at RESOLUTION and is monotone with stream
+	// sequence, so a bounded-late out-of-scope event is still the current word on membership (in
+	// seq order) — suppressing its resolve would strand the alarm raised forever if the device
+	// never reports again. So resolve at max(at, rising-edge): never before the raise (which
+	// would be a nonsensical negative-duration alarm) but always emitted.
+	if raisedAt, raised := e.raised[key]; raised {
+		resolveAt := at
+		if resolveAt.Before(raisedAt) {
+			resolveAt = raisedAt
+		}
+		e.resolve(r, key, resolveAt) // resolveAt >= raisedAt, so resolve() always emits + clears
 	}
-	dropped := e.dropSeriesKey(key)
+	dropped := e.dropSeriesKey(key, r.Kind)
 	return dropped || len(e.out) > before
 }
 
-// dropSeriesKey garbage-collects one exact SeriesKey across every per-series structure (the
-// nine state maps + the pane map + the pending-close heap + the timer wheel), reporting whether
-// anything was removed. It deliberately does NOT touch the raised latch (Descope's resolve owns
-// it — a stale descope must keep the latch) and does NOT drop buffered out-detections: a
-// resolved event is wholly in- or out-of-scope for a given rule (memberships are per-event, not
-// per-sample), so a descope never coincides with that same rule's freshly-buffered raise.
-func (e *Engine) dropSeriesKey(key SeriesKey) bool {
+// dropSeriesKey garbage-collects one exact SeriesKey across the per-series structures, reporting
+// whether anything was removed. It deliberately does NOT touch the raised latch (Descope's
+// resolve owns it) and does NOT drop buffered out-detections: a resolved event is wholly in- or
+// out-of-scope for a given rule (memberships are per-event, not per-sample), so a descope never
+// coincides with that same rule's freshly-buffered raise.
+//
+// It stays O(1) for the overwhelmingly common no-state descope (most events are out of scope for
+// any given scoped rule): the eight SeriesKey maps are direct-key deletes; the pane map + close
+// heap are swept ONLY for Aggregate (the sole kind that opens them), so every other kind skips
+// the O(all-panes)/O(heap) walk; and the timer is cancelled LAZILY (an O(1) generation bump)
+// only when the key actually has a live timer — the snapshot persists only live timers, so the
+// invalidated entry never reaches durability and popDue discards it when its deadline passes.
+func (e *Engine) dropSeriesKey(key SeriesKey, kind RuleKind) bool {
 	n := 0
 	n += dropOneKey(e.active, key)
 	n += dropOneKey(e.sliding, key)
@@ -371,14 +385,19 @@ func (e *Engine) dropSeriesKey(key SeriesKey) bool {
 	n += dropOneKey(e.slides, key)
 	n += dropOneKey(e.corr, key)
 	n += dropOneKey(e.expected, key)
-	for pk := range e.panes {
-		if pk.Rule == key.Rule && pk.Series == key.Series {
-			n++
-			delete(e.panes, pk)
+	if kind == Aggregate {
+		for pk := range e.panes {
+			if pk.Rule == key.Rule && pk.Series == key.Series {
+				n++
+				delete(e.panes, pk)
+			}
 		}
+		e.closes.purgeSeriesKey(key)
 	}
-	e.closes.purgeSeriesKey(key)
-	e.wheel.purgeSeriesKey(key)
+	if _, hasTimer := e.wheel.live[key]; hasTimer {
+		e.wheel.cancel(key)
+		n++
+	}
 	return n > 0
 }
 

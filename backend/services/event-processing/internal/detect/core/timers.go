@@ -138,30 +138,6 @@ func (w *timerWheel) purgeRule(id string) {
 	heap.Init(&w.pq)
 }
 
-// purgeSeriesKey sweeps ONE exact SeriesKey out of the wheel — its generation bookkeeping and
-// any of its timers still in the pq heap. It is the per-key analogue of purgeRule, backing the
-// ADR-062 membership-flip: when a series leaves a scoped rule's group, its armed timer (a
-// Duration hold, an Absence dead-man) must be cancelled so it cannot fire a detection for a
-// series the rule no longer covers. Indices are reset before heap.Init to keep the heap
-// consistent.
-func (w *timerWheel) purgeSeriesKey(key SeriesKey) {
-	delete(w.gens, key)
-	delete(w.live, key)
-	old := w.pq
-	kept := old[:0]
-	for _, t := range old {
-		if t.key != key {
-			t.index = len(kept)
-			kept = append(kept, t)
-		}
-	}
-	for i := len(kept); i < len(old); i++ {
-		old[i] = nil // release the dropped *timer for GC
-	}
-	w.pq = kept
-	heap.Init(&w.pq)
-}
-
 // firedTimer is a due timer: the key plus the deadline it was scheduled for (so the
 // detection is stamped at the moment the condition elapsed, not the watermark overshoot).
 type firedTimer struct {

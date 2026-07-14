@@ -121,7 +121,9 @@ func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEve
 			})
 		}
 	}
-	if len(scoped) == 0 && len(res.Descopes) == 0 {
+	// Only the descope path had work (every applicable rule was out of scope): skip building
+	// inputs entirely — there is nothing to feed.
+	if len(scoped) == 0 {
 		return res
 	}
 

@@ -16,5 +16,6 @@ var (
 		NewRosterSchema(),
 		NewDeviceAttributeSchema(),
 		NewRuleStatsSchema(),
+		NewDetectRuleScopeSchema(),
 	}
 )

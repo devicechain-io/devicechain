@@ -76,18 +76,23 @@ func TestDescopeUnknownRuleIsNoOp(t *testing.T) {
 	}
 }
 
-// A STALE descope — one whose time precedes the rising edge — must NOT resolve the alarm
-// (review D3/F2 falling-edge discipline): an out-of-order older event showing out-of-scope is
-// not evidence the series left scope now, when the latest reading still supports the alarm.
-func TestDescopeStaleDoesNotResolve(t *testing.T) {
+// A bounded-late out-of-scope event STILL resolves the alarm — unlike a value falling edge, a
+// descope is not subject to the event-time stale guard: membership is stamped at resolution and
+// is monotone with stream sequence, so a late out-of-scope event is still the current word on
+// membership. Suppressing it would strand the alarm raised forever if the device never reports
+// again. The resolve is clamped to the rising edge (never a negative-duration alarm).
+func TestDescopeLateStillResolvesAtRisingEdge(t *testing.T) {
 	e := NewEngine([]Rule{{ID: "r", Kind: Threshold, Op: GT, Thresh: 30}}, 0)
 	if d := feedEvent(e, 1, "r", "d", 10, 40, true); len(d) != 1 || d[0].Edge != EdgeRaised {
 		t.Fatalf("raise at t=10: %+v", d)
 	}
-	// A descope stamped BEFORE the rising edge must not clear the latch.
-	e.Descope("r", "d", at(5))
-	if got := e.Drain(); len(got) != 0 {
-		t.Fatalf("a stale descope must emit no resolve; got %+v", got)
+	// A descope stamped BEFORE the rising edge resolves at the rising-edge time (clamped up).
+	if e.Descope("r", "d", at(5)) != true {
+		t.Fatal("a descope of a raised series must report a change even when late")
+	}
+	got := e.Drain()
+	if len(got) != 1 || got[0].Edge != EdgeResolved || !got[0].At.Equal(at(10)) {
+		t.Fatalf("a late descope must resolve at the rising edge (t=10); got %+v", got)
 	}
 }
 

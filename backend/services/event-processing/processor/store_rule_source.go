@@ -45,7 +45,12 @@ func (s *StoreRuleSource) Load(ctx context.Context) ([]runtime.ScopedRule, error
 	grouped := map[scope][]dmmodel.PublishedDetectionRule{}
 	for _, r := range rows {
 		k := scope{r.Tenant, r.ProfileVersionToken}
-		grouped[k] = append(grouped[k], dmmodel.PublishedDetectionRule{Token: r.RuleToken, Definition: r.Definition})
+		grouped[k] = append(grouped[k], dmmodel.PublishedDetectionRule{
+			Token:              r.RuleToken,
+			Definition:         r.Definition,
+			EntityGroupToken:   r.EntityGroupToken,
+			EntityGroupVersion: r.EntityGroupVersion,
+		})
 	}
 	var scoped []runtime.ScopedRule
 	compileFailures := 0
@@ -97,6 +102,10 @@ func factRuleRows(tenant string, ev *dmmodel.DetectionRulesPublishedEvent) []mod
 			ProfileVersionToken: ev.ProfileVersionToken,
 			RuleToken:           r.Token,
 			Definition:          r.Definition,
+			// Persist the group scope (ADR-062 S4) so the rule rebuilds SCOPED after a restart
+			// — the projection is the restart source of truth, not the finite-retention fact.
+			EntityGroupToken:   r.EntityGroupToken,
+			EntityGroupVersion: r.EntityGroupVersion,
 		}
 		// Dedup within the batch (last-wins): a single INSERT ... ON CONFLICT cannot touch the
 		// same row twice, so a forged/buggy fact repeating a token would otherwise wedge the

@@ -244,7 +244,7 @@ func TestScopedDurationDescopeSuppressesStaleTimer(t *testing.T) {
 
 	// seq1 @ +1s, IN scope, temp 90 → opens the hold (timer arms at +11s).
 	rp.handle(measuredMsgScoped(t, 1, "acme", "d1", "p@1", "temperature", "90", &fakeAck{}, arid))
-	// seq2 @ +20s (past +11s), OUT of scope (no membership) → descope drops the hold first.
+	// seq @ +12s (past +11s), OUT of scope (no membership) → descope drops the hold first.
 	rp.handle(measuredMsgScoped(t, 12, "acme", "d1", "p@1", "temperature", "90", &fakeAck{}, nil))
 
 	rp.checkpoint(ctx)

@@ -78,6 +78,41 @@ func TestStoreRuleSourceRebuildsFromProjection(t *testing.T) {
 	}
 }
 
+// The group scope survives the durable projection round-trip (ADR-062 S4 — the restart source
+// of truth is this projection, NOT the finite-retention fact): a scoped rule persisted via
+// factRuleRows and rebuilt via StoreRuleSource.Load reloads SCOPED, not silently profile-wide
+// (which would fire fleet-wide + never descope after a restart, breaking restart determinism).
+func TestStoreRuleSourcePreservesGroupScope(t *testing.T) {
+	store := newTestRuleStore(t)
+	ctx := context.Background()
+	// Persist exactly as the live fact consumer does.
+	rows := factRuleRows("acme", &dmmodel.DetectionRulesPublishedEvent{
+		ProfileVersionToken: "prof@1",
+		Rules: []dmmodel.PublishedDetectionRule{
+			{Token: "scoped", Definition: validFactRule, EntityGroupToken: "arid-areas", EntityGroupVersion: 3},
+			{Token: "wide", Definition: validFactRule},
+		},
+	})
+	if err := store.Upsert(ctx, rows); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+
+	scoped, err := NewStoreRuleSource(store).Load(ctx)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	byID := map[string]runtime.ScopedRule{}
+	for _, sr := range scoped {
+		byID[sr.Compiled.ID] = sr
+	}
+	if sr := byID["acme/prof@1/scoped"]; sr.GroupToken != "arid-areas" || sr.GroupVersion != 3 {
+		t.Fatalf("scope must survive the projection round-trip; got (%q,%d)", sr.GroupToken, sr.GroupVersion)
+	}
+	if sr := byID["acme/prof@1/wide"]; sr.GroupToken != "" {
+		t.Fatalf("unscoped rule must stay unscoped through reload; got %q", sr.GroupToken)
+	}
+}
+
 // A persisted rule that no longer compiles is skipped by the rebuild (not fatal); the rest load.
 func TestStoreRuleSourceSkipsUncompilable(t *testing.T) {
 	store := newTestRuleStore(t)
