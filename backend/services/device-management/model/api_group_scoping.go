@@ -174,16 +174,19 @@ func (api *Api) DeregisterGroupVersionForScoping(ctx context.Context, groupToken
 func (api *Api) resolveAllMembersByFrozenSelector(ctx context.Context, frozen *EntityGroupVersion) ([]EntityMember, error) {
 	const pageSize int32 = 500
 	all := make([]EntityMember, 0)
-	for page := int32(0); ; page++ {
+	// PageNumber is 1-based: rdb.ListOf clamps < 1 to 1, so starting at 0 would fetch
+	// page 1 twice and skip the last page (duplicate inserts on a >pageSize backfill).
+	for page := int32(1); ; page++ {
 		res, err := api.PreviewSelector(ctx, frozen.MemberType, frozen.Selector,
 			rdb.Pagination{PageNumber: page, PageSize: pageSize})
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, res.Results...)
-		// The page-size clamp (ADR-029) may cap PageSize below the request, so stop on a
-		// short page relative to what was actually returned, not the requested size.
-		if int32(len(res.Results)) == 0 || res.Pagination.PageEnd >= res.Pagination.TotalRecords {
+		// Stop when this page reached the last record, or returned nothing (a defensive
+		// backstop). PageEnd is the effective (post-clamp) span end, so a clamped PageSize
+		// is handled correctly.
+		if len(res.Results) == 0 || res.Pagination.PageEnd >= res.Pagination.TotalRecords {
 			break
 		}
 	}

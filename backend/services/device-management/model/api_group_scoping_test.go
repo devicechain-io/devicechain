@@ -5,7 +5,9 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -123,6 +125,35 @@ func TestRegister_BackfillsMembershipAndReverseIndex(t *testing.T) {
 		assert.Equal(t, "device", refs[0].MemberType)
 		assert.Equal(t, "arid-areas", refs[0].GroupToken)
 	}
+}
+
+// Backfill pages through more than one page (the loop is 1-based; a 0-based start would
+// fetch page 1 twice and duplicate-insert). Members are seeded with direct inserts to keep
+// the test fast; Register must materialize every one exactly once.
+func TestRegister_BackfillPagesBeyondPageSize(t *testing.T) {
+	api, ctx := newScopingTestApi(t)
+	const n = 550 // > the 500 backfill page size
+	arid := "arid"
+	for i := 0; i < n; i++ {
+		id := seedDevice(t, api, ctx, fmt.Sprintf("d%d", i))
+		if err := api.RDB.DB(ctx).Create(&EntityAttribute{
+			EntityType: "device", EntityId: id, Scope: string(AttributeScopeShared),
+			AttrKey: "climate", ValueType: string(AttributeValueString),
+			Value: rdb.NullStrOf(&arid), LastUpdated: time.Now(),
+		}).Error; err != nil {
+			t.Fatalf("seed attr %d: %v", i, err)
+		}
+	}
+
+	g, v := publishAridGroup(t, api, ctx, "arid-areas")
+	if err := api.RegisterGroupVersionForScoping(ctx, "arid-areas", v); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	var rows int64
+	api.RDB.DB(ctx).Model(&EntityGroupMembership{}).
+		Where("group_id = ? AND selector_version = ?", g.ID, v).Count(&rows)
+	assert.EqualValues(t, n, rows, "every member backfilled exactly once across pages")
 }
 
 // A SHARED facet write recomputes membership incrementally: a device that starts humid
