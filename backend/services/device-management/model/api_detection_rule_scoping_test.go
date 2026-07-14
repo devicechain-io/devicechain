@@ -173,6 +173,42 @@ func TestRuleScope_RollbackReEnrolls(t *testing.T) {
 	assert.EqualValues(t, 1, countFacetRefs(t, api, ctx, g.ID, v), "rollback to the scoped version re-enrolls")
 }
 
+// Rolling back to a retained version whose scoped group was since deleted fails CLOSED with a
+// diagnosable error, leaving no enrollment (Fable MED-1): the delete-guard intentionally does
+// not scan retained non-active snapshots, so a group a rollback target pins can be gone — the
+// rollback must refuse atomically rather than resurrect a rule against a missing group.
+func TestRuleScope_RollbackToDeletedGroupFailsClosed(t *testing.T) {
+	api, ctx := newRuleScopeTestApi(t)
+	seedProfile(t, api, ctx, "p1")
+	g, v := publishAridGroup(t, api, ctx, "arid-areas")
+
+	_, err := api.CreateDetectionRule(ctx, scopeReq("r1", "p1", true, strptr("arid-areas"), i32ptr(v)))
+	require.NoError(t, err)
+	publishProfile(t, api, ctx, "p1") // v1 scoped → enrolled
+
+	// Un-scope + publish v2 → the ref row (and enrollment) drop, and no draft pin remains.
+	_, err = api.UpdateDetectionRule(ctx, "r1", scopeReq("r1", "p1", true, nil, nil))
+	require.NoError(t, err)
+	publishProfile(t, api, ctx, "p1")
+	require.EqualValues(t, 0, countFacetRefs(t, api, ctx, g.ID, v), "v2 GC'd enrollment")
+
+	// The group is now deletable (no live or draft reference).
+	deleted, err := api.DeleteEntityGroup(ctx, "arid-areas")
+	require.NoError(t, err)
+	require.True(t, deleted)
+
+	// Rolling back to v1 (which pins the now-deleted group) must fail closed, diagnosably.
+	_, err = api.RollbackDeviceProfile(ctx, "p1", 1)
+	require.Error(t, err, "rollback to a version pinning a deleted group must refuse")
+	assert.Contains(t, err.Error(), "no longer exists", "the error names the missing group")
+
+	// The active version did not change and no enrollment was resurrected (atomic rollback).
+	profiles, err := api.DeviceProfilesByToken(ctx, []string{"p1"})
+	require.NoError(t, err)
+	require.Len(t, profiles, 1)
+	assert.EqualValues(t, 2, profiles[0].ActiveVersion.Int32, "active version unchanged after the failed rollback")
+}
+
 // The profile-delete fix (Fable HIGH-2): deleting a profile whose published rule was the last
 // reference to a group@v GCs the enrollment (no orphan rows).
 func TestRuleScope_ProfileDeleteGCsEnrollment(t *testing.T) {

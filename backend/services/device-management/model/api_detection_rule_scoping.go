@@ -68,7 +68,7 @@ func (api *Api) validateDetectionRuleScope(ctx context.Context, request *Detecti
 	if hasToken != hasVersion {
 		return fmt.Errorf("a detection rule scope requires both an entity group token and a version")
 	}
-	if _, _, _, err := api.loadGroupVersionForScoping(ctx, *request.EntityGroupToken, *request.EntityGroupVersion); err != nil {
+	if _, _, _, err := api.loadGroupVersionForScoping(ctx, api.RDB.DB(ctx), *request.EntityGroupToken, *request.EntityGroupVersion); err != nil {
 		return fmt.Errorf("invalid detection rule scope: %w", err)
 	}
 	return nil
@@ -173,9 +173,15 @@ func (api *Api) reconcileEnrollmentOnTx(ctx context.Context, tx *gorm.DB, affect
 			return nil, false, err
 		}
 		if n > 0 {
-			group, frozen, keys, err := api.loadGroupVersionForScoping(ctx, s.Token, s.Version)
+			group, frozen, keys, err := api.loadGroupVersionForScoping(ctx, tx, s.Token, s.Version)
 			if err != nil {
-				return nil, false, err
+				// A live scoped rule references this group@v but the group/version is gone.
+				// Fail closed (the caller's publish/rollback rolls back atomically), but wrap
+				// the bare not-found so the operator can tell WHY the version won't activate —
+				// this is the retained-version-whose-group-was-deleted corner (the delete-guard
+				// intentionally does not scan retained non-active snapshots, so a deleted group
+				// can strand a rollback target; the failure surfaces here rather than silently).
+				return nil, false, fmt.Errorf("cannot activate profile version: scoped entity group %q@%d no longer exists: %w", s.Token, s.Version, err)
 			}
 			materialized, err := api.scopeMaterializedOnTx(tx, group.ID, s.Version)
 			if err != nil {
@@ -191,8 +197,9 @@ func (api *Api) reconcileEnrollmentOnTx(ctx context.Context, tx *gorm.DB, affect
 			evictions = append(evictions, membershipEviction{Type: frozen.MemberType, Ids: ids})
 			changed = true
 		} else {
-			group, err := api.entityGroupByToken(ctx, s.Token)
-			if err != nil {
+			// Resolve the group id on the tx (same connection + lock; no second pool conn).
+			var group EntityGroup
+			if err := tx.Where("token = ?", s.Token).First(&group).Error; err != nil {
 				// The group is already gone (its delete-guard let it go because no live rule
 				// referenced it): nothing to tear down.
 				if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -268,9 +275,11 @@ func (api *Api) scopeRefcountOnTx(tx *gorm.DB, groupToken string, version int32)
 
 // scopeMaterializedOnTx reports whether a group@v already has read-model rows — either
 // reverse-index (facet-ref) or membership rows. It lets reconcile skip a redundant rebuild of
-// an immutable frozen version that is already enrolled. Checking BOTH tables covers the two
-// edge shapes: a selector referencing no facets (no facet-refs but real members) and a
-// selector currently matching no entities (facet-refs but no members).
+// an immutable frozen version that is already enrolled (e.g. a second profile publishes a rule
+// scoped to a group@v another profile already enrolled). Checking BOTH tables is defensive
+// belt-and-suspenders: in practice a compiled selector always references at least one facet
+// (the lowering rejects any non-facet leaf), so facet-refs alone would suffice, but the extra
+// membership check costs one indexed count and cannot be wrong.
 func (api *Api) scopeMaterializedOnTx(tx *gorm.DB, groupId uint, version int32) (bool, error) {
 	var refs int64
 	if err := tx.Model(&EntityGroupFacetRef{}).

@@ -243,11 +243,13 @@ func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, erro
 	// derived scoping rows have no meaning once the group is gone.
 	//
 	// The in-use guard runs INSIDE the delete transaction, under the group family's advisory
-	// lock, so a concurrent publish that is enrolling a rule against this group serializes
-	// behind us and either its ref rows are committed before our guard reads (we block) or our
-	// delete commits before its enrollment (its register re-materializes nothing for a gone
-	// group — and its guard-less publish is itself gated by the same lock). Without this,
-	// check-then-delete could drop a group a just-published rule pins.
+	// lock, so a concurrent publish enrolling a rule against this group serializes on the same
+	// lock. The two orderings both resolve safely: either the publish commits its scope-ref
+	// rows first and our guard sees them and refuses the delete (ErrEntityInUse), or our delete
+	// commits first and the publish's enrollment reconcile then fails closed on the vanished
+	// group (loadGroupVersionForScoping → not-found → the whole publish rolls back). Without
+	// this lock+in-txn re-check, plain check-then-delete could drop a group a just-published
+	// rule pins.
 	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeGroup, &EntityGroup{}, token, func(tx *gorm.DB, id uint) error {
 		if err := api.lockMembershipFamily(ctx, tx, group.MemberType); err != nil {
 			return err

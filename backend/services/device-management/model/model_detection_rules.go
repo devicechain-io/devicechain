@@ -73,9 +73,11 @@ type DetectionRule struct {
 	// scope-to-{group}@{version}). Deliberately NOT json:"-" (unlike AuthoringGraph): the
 	// scope IS runtime state, so it must ride buildProfileSnapshot's marshal into the frozen
 	// version and thence the published-rule fact to event-processing (enabledSnapshotRules →
-	// PublishedDetectionRule → the engine's ScopedRule). Saving a scoped rule enrolls the
-	// group@v for membership maintenance; un-scoping the last enabled rule GCs it (see
-	// reconcileRuleScoping).
+	// PublishedDetectionRule → the engine's ScopedRule). Enrollment of the pinned group@v for
+	// membership maintenance follows PUBLISHED state, not this draft column: a scoped enabled
+	// rule enrolls its group@v when its profile's active version is (re)published to include it
+	// and GCs it when the last such live reference drops (see DetectionRuleScopeRef /
+	// syncProfileScopeRefsAndEnroll) — a draft edit here has no enrollment side effect.
 	EntityGroupToken   *string
 	EntityGroupVersion *int32
 }

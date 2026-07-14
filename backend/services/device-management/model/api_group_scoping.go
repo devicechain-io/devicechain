@@ -117,18 +117,20 @@ func (api *Api) membersMatchingFrozenOnTx(ctx context.Context, tx *gorm.DB, froz
 	return members, nil
 }
 
-// RegisterGroupVersionForScoping enrolls a frozen group@version for membership
-// maintenance (ADR-062 S4 calls this when a rule first references it): it extracts the
-// frozen selector's facet keys into the reverse index and backfills the read-model with an
-// authoritative set query, so the group@v is fully materialized before the rule arms. It is
-// idempotent — re-registering an already-enrolled group@v rebuilds it — and rejects a
-// static or unpublished-version reference (a rule can only scope to a published dynamic
-// group@version). The whole enrollment — the family lock, the reverse-index rebuild, the
-// backfill read, and the membership insert — runs in ONE transaction so a partial backfill
-// can never arm a rule against a half-populated read-model, and so a concurrent recompute
-// cannot interleave (it blocks on the same family lock and then self-heals its one entity).
+// RegisterGroupVersionForScoping enrolls a frozen group@version for membership maintenance:
+// it extracts the frozen selector's facet keys into the reverse index and backfills the
+// read-model with an authoritative set query, so the group@v is fully materialized. It is
+// idempotent — re-registering an already-enrolled group@v rebuilds it — and rejects a static
+// or unpublished-version reference (only a published dynamic group@version is scopeable). The
+// whole enrollment — the family lock, the reverse-index rebuild, the backfill read, and the
+// membership insert — runs in ONE transaction so a partial backfill can never leave a
+// half-populated read-model, and a concurrent recompute cannot interleave (it blocks on the
+// same family lock). This is the standalone (whole-transaction) form; the S4 publish/rollback
+// path composes the read-model reconcile into its own txn via registerGroupVersionOnTx and
+// owns the refcount that decides register-vs-deregister (reconcileEnrollmentOnTx), so this
+// wrapper is an admin/test entry point and does NOT itself consult a reference count.
 func (api *Api) RegisterGroupVersionForScoping(ctx context.Context, groupToken string, version int32) error {
-	group, frozen, keys, err := api.loadGroupVersionForScoping(ctx, groupToken, version)
+	group, frozen, keys, err := api.loadGroupVersionForScoping(ctx, api.RDB.DB(ctx), groupToken, version)
 	if err != nil {
 		return err
 	}
@@ -151,19 +153,22 @@ func (api *Api) RegisterGroupVersionForScoping(ctx context.Context, groupToken s
 // loadGroupVersionForScoping resolves a (groupToken, version) to the group, its frozen
 // version, and the frozen selector's referenced facet keys — the immutable inputs a
 // registration needs. It rejects a static-group reference (only a dynamic group is
-// scopeable) and fails closed if the group or version is absent. Reads run on the plain
-// handle: the group's mode and the frozen version are effectively immutable inputs, so a
-// caller inside a transaction may safely pre-load them here without threading the tx.
-func (api *Api) loadGroupVersionForScoping(ctx context.Context, groupToken string, version int32) (*EntityGroup, *EntityGroupVersion, []string, error) {
-	group, err := api.entityGroupByToken(ctx, groupToken)
-	if err != nil {
+// scopeable) and fails closed if the group or version is absent. It runs on the caller's db
+// handle: a reconcile INSIDE the publish/rollback transaction passes its tx (so the reads
+// share that connection + the family advisory lock it already holds, rather than borrowing a
+// second pool connection mid-transaction); the standalone path passes the plain handle. The
+// tenant callback applies identically to either. The group's mode and the frozen version are
+// effectively immutable, so which snapshot the reads see does not affect correctness.
+func (api *Api) loadGroupVersionForScoping(ctx context.Context, db *gorm.DB, groupToken string, version int32) (*EntityGroup, *EntityGroupVersion, []string, error) {
+	var group EntityGroup
+	if err := db.Where("token = ?", groupToken).First(&group).Error; err != nil {
 		return nil, nil, nil, err
 	}
 	if MembershipMode(group.MembershipMode) != MembershipDynamic {
 		return nil, nil, nil, fmt.Errorf("only a dynamic entity group can be scoped (group %q is %q)", groupToken, group.MembershipMode)
 	}
-	frozen, err := api.EntityGroupVersionByNumber(ctx, group.ID, version)
-	if err != nil {
+	var frozen EntityGroupVersion
+	if err := db.Where("entity_group_id = ? AND version = ?", group.ID, version).First(&frozen).Error; err != nil {
 		return nil, nil, nil, err
 	}
 	// Compile the frozen selector to extract its referenced facet keys. It already
@@ -172,16 +177,17 @@ func (api *Api) loadGroupVersionForScoping(ctx context.Context, groupToken strin
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return group, frozen, sel.Keys(), nil
+	return &group, &frozen, sel.Keys(), nil
 }
 
 // registerGroupVersionOnTx is the transaction body of a registration: it (re)builds the
 // reverse-index + read-model rows for one frozen group@v under the family lock, returning
 // the entity ids whose membership cache must be evicted post-commit (both prior and new
-// members). It runs on a caller-provided tx so a rule-save can enroll a group@v in the SAME
-// transaction that persists the rule (ADR-062 same-txn arming: a rule and the read-model it
-// depends on commit atomically, so a rule can never go live against a half-built read-model).
-// RegisterGroupVersionForScoping wraps it in its own transaction; the caller owns eviction.
+// members). It runs on a caller-provided tx so the S4 publish/rollback path can enroll a
+// group@v in the SAME transaction that flips a profile's active version (ADR-062 arming: the
+// read-model and the version that makes a scoped rule live commit atomically, so a rule can
+// never go live against a half-built read-model). RegisterGroupVersionForScoping wraps it in
+// its own transaction for the standalone admin/test path; the caller owns eviction.
 func (api *Api) registerGroupVersionOnTx(ctx context.Context, tx *gorm.DB, group *EntityGroup, frozen *EntityGroupVersion, keys []string) ([]uint, error) {
 	// Serialize against every concurrent recompute (and other Register) of this family
 	// so the backfill snapshot below cannot be raced into a permanent hole.
@@ -248,10 +254,12 @@ func (api *Api) registerGroupVersionOnTx(ctx context.Context, tx *gorm.DB, group
 	return evictIds, nil
 }
 
-// DeregisterGroupVersionForScoping GCs a group@version's read-model + reverse-index rows
-// (ADR-062 S4 calls this when the last rule un-references it). It is safe to call for a
-// never-registered group@v (deletes nothing). Reference-counting — deciding when the LAST
-// rule stops referencing group@v — is S4's concern; this just tears the rows down.
+// DeregisterGroupVersionForScoping GCs a group@version's read-model + reverse-index rows. It
+// is safe to call for a never-registered group@v (deletes nothing). This is the standalone
+// (whole-transaction) admin/test form and does NOT itself consult a reference count — the S4
+// publish/rollback path decides register-vs-deregister from the DetectionRuleScopeRef refcount
+// (reconcileEnrollmentOnTx) and composes deregisterGroupVersionOnTx into its own txn. Do NOT
+// wire this into a live path without a refcount guard: it tears the rows down unconditionally.
 func (api *Api) DeregisterGroupVersionForScoping(ctx context.Context, groupToken string, version int32) error {
 	group, err := api.entityGroupByToken(ctx, groupToken)
 	if err != nil {
@@ -273,8 +281,9 @@ func (api *Api) DeregisterGroupVersionForScoping(ctx context.Context, groupToken
 
 // deregisterGroupVersionOnTx is the transaction body of a deregistration: it tears down one
 // group@v's read-model + reverse-index rows on the caller's tx, returning the entity family
-// and ids to evict post-commit. It runs on a caller-provided tx so a rule-save can GC a
-// no-longer-referenced group@v in the same transaction that persists the rule change.
+// and ids to evict post-commit. It runs on a caller-provided tx so the S4 publish/rollback
+// reconcile can GC a no-longer-referenced group@v in the same transaction that flips the
+// profile's active version.
 func (api *Api) deregisterGroupVersionOnTx(ctx context.Context, tx *gorm.DB, groupId uint, version int32) (string, []uint, error) {
 	// Collect the affected members before tearing their rows down, so their caches can
 	// be evicted post-commit (they lose this membership).
