@@ -164,3 +164,108 @@ func TestDeliverBeforeCheckpointDefersOnPublishError(t *testing.T) {
 		t.Fatalf("after recovery: writes=%d acks=%d, want 1,1", w.writes, ack.acks)
 	}
 }
+
+// measuredMsgScoped is measuredMsg with the event's ScopeMemberships stamped (as the resolver
+// would, S3) — refs nil means "in no rule-scoped group".
+func measuredMsgScoped(t *testing.T, seq uint64, tenant, device, profileVersion, metric, value string, ack *fakeAck, refs []dmmodel.GroupRef) messaging.Message {
+	t.Helper()
+	occurred := testBase.Add(time.Duration(seq) * time.Second)
+	ev := &dmmodel.ResolvedEvent{
+		Source:              "http1",
+		SourceDeviceToken:   device,
+		ProfileVersionToken: profileVersion,
+		OccurredTime:        occurred,
+		ProcessedTime:       occurred,
+		EventType:           esmodel.Measurement,
+		ScopeMemberships:    refs,
+		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+			Entries: []dmmodel.ResolvedMeasurementEntry{{Name: metric, Value: value}},
+		}}},
+	}
+	b, err := dmproto.MarshalResolvedEvent(ev)
+	if err != nil {
+		t.Fatalf("marshal resolved event: %v", err)
+	}
+	m := messaging.NewConsumedMessage("dc."+tenant+".resolved-events", b, 0, nil, ack)
+	m.StreamSeq = seq
+	return m
+}
+
+// scopedDurationReg wires a single Duration rule (temperature > 80 held 10s) scoped to
+// arid-areas@1 for tenant acme / profile p@1.
+func scopedDurationReg(t *testing.T) *runtime.RuleRegistry {
+	t.Helper()
+	thr := 80.0
+	cr, err := rules0.Compile(rules0.Rule{
+		ID:   "acme/hold",
+		Name: "sustained-heat",
+		Type: rules0.TypeDuration,
+		Hold: rules0.Duration(10 * time.Second),
+		When: rules0.Condition{Metric: "temperature", Op: rules0.OpGt, Threshold: &thr},
+	}, rules0.Limits{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	return runtime.NewRuleRegistry([]runtime.ScopedRule{
+		{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: cr, GroupToken: "arid-areas", GroupVersion: 1},
+	})
+}
+
+func newScopedDurationProcessor(t *testing.T, ctx context.Context, w *captureWriter) *ResolvedEventsProcessor {
+	t.Helper()
+	store := newTestStore(t)
+	reg := scopedDurationReg(t)
+	rp := &ResolvedEventsProcessor{
+		Store: store,
+		cfg: Config{
+			PartitionId: "singleton", CheckpointEvents: 100, CheckpointInterval: time.Hour,
+			TickInterval: time.Hour, Clock: detectcore.RealClock{},
+		},
+		registry:  reg,
+		publisher: runtime.NewPublisher(w, reg, (*detectMetrics)(nil)),
+		clock:     detectcore.RealClock{},
+		procCtx:   ctx,
+	}
+	if err := rp.restore(ctx); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	return rp
+}
+
+// ADR-062 S4 end-to-end: a device opens a scoped Duration hold while IN the group, then reports
+// again OUT of the group at a time PAST the hold deadline. The descope must drop the pending
+// hold BEFORE ProcessResolved advances the watermark — otherwise advance() would fire the stale
+// timer and raise a spurious alarm for a device the rule no longer covers.
+func TestScopedDurationDescopeSuppressesStaleTimer(t *testing.T) {
+	ctx := context.Background()
+	w := &captureWriter{}
+	rp := newScopedDurationProcessor(t, ctx, w)
+	arid := []dmmodel.GroupRef{{GroupToken: "arid-areas", Version: 1}}
+
+	// seq1 @ +1s, IN scope, temp 90 → opens the hold (timer arms at +11s).
+	rp.handle(measuredMsgScoped(t, 1, "acme", "d1", "p@1", "temperature", "90", &fakeAck{}, arid))
+	// seq2 @ +20s (past +11s), OUT of scope (no membership) → descope drops the hold first.
+	rp.handle(measuredMsgScoped(t, 12, "acme", "d1", "p@1", "temperature", "90", &fakeAck{}, nil))
+
+	rp.checkpoint(ctx)
+	if w.writes != 0 {
+		t.Fatalf("a descoped hold must not raise a spurious alarm; got %d derived writes", w.writes)
+	}
+}
+
+// Control: the SAME sequence but the device stays IN scope — the matured hold DOES raise, so the
+// suppression above is a real effect of the descope, not a vacuous pass.
+func TestScopedDurationStaysInScopeRaises(t *testing.T) {
+	ctx := context.Background()
+	w := &captureWriter{}
+	rp := newScopedDurationProcessor(t, ctx, w)
+	arid := []dmmodel.GroupRef{{GroupToken: "arid-areas", Version: 1}}
+
+	rp.handle(measuredMsgScoped(t, 1, "acme", "d1", "p@1", "temperature", "90", &fakeAck{}, arid))
+	rp.handle(measuredMsgScoped(t, 12, "acme", "d1", "p@1", "temperature", "90", &fakeAck{}, arid))
+
+	rp.checkpoint(ctx)
+	if w.writes != 1 {
+		t.Fatalf("an in-scope matured hold must raise once; got %d derived writes", w.writes)
+	}
+}

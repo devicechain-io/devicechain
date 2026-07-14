@@ -25,6 +25,15 @@ type ScopedRule struct {
 	ProfileVersionToken string
 	// Compiled is the slice-3 lowered rule (core config + leaf predicate + feed metrics).
 	Compiled *rules.CompiledRule
+	// GroupToken / GroupVersion are the rule's OPTIONAL group scope (ADR-062 S4): the published
+	// dynamic entity-group version whose members the rule fires for. Empty token ⇒ an unscoped
+	// (profile-wide) rule. When set, Plan feeds this rule only for events whose ScopeMemberships
+	// include {GroupToken}@{GroupVersion}, and feeds a DESCOPE for events that lack it (dropping
+	// the series' state + resolving). The scope is constant per rule id (the id embeds the
+	// immutable profile-version token, so a scope change always mints a new id), so it needs no
+	// change-detection beyond Definition.
+	GroupToken   string
+	GroupVersion int32
 	// Definition is the raw opaque rule JSON the Compiled came from. It is retained purely as
 	// a change-detector: a reused profile token can re-mint an existing rule id with a
 	// DIFFERENT body whose difference lives only in the predicate (not the lowered core.Rule),

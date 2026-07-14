@@ -322,6 +322,77 @@ func deleteSeriesKeys[V any](m map[SeriesKey]V, rule string) {
 	}
 }
 
+// Descope drops ALL keyed state for one exact (rule, series) and resolves a raised alarm — the
+// ADR-062 S4 membership-flip. When a group-scoped rule's series (device) leaves the scoped
+// group, the resolved event stops carrying the rule's group@v (ScopeMemberships), so the
+// runtime feeds a descope here instead of a normal sample: any raised alarm resolves and every
+// window/timer state for the series is torn down, so nothing fires spuriously for a series the
+// rule no longer covers (a mid-hold Duration timer or an open Aggregate pane would otherwise
+// fire off the watermark with no event to re-check scope). It is the per-exact-SeriesKey
+// analogue of RemoveRule (which is per-rule, too coarse — other series of the rule keep running).
+//
+// Idempotent and cheap in the common case: most events are out of scope for any given scoped
+// rule, and a series with no state and no latch is a no-op. Replay-safe and deterministic: the
+// only input is the immutable event's ScopeMemberships plus snapshotted state. The falling-edge
+// resolve is stale-guarded exactly like resolve() (an out-of-order event older than the rising
+// edge does not clear an alarm the latest reading still supports). Runs on the single-writer
+// loop. Returns whether it changed any state (so the caller can mark the checkpoint dirty).
+func (e *Engine) Descope(ruleID, series string, at time.Time) bool {
+	r, ok := e.rules[ruleID]
+	if !ok {
+		// The rule is gone (removed between fan-out and here): its state, if any, was GC'd by
+		// RemoveRule. Nothing to resolve or drop.
+		return false
+	}
+	key := SeriesKey{Rule: ruleID, Series: series}
+	before := len(e.out)
+	// Resolve a raised alarm first (emits EdgeResolved, stale-guarded); resolve() deletes the
+	// raised latch iff it emitted. A stale descope leaves the latch (a newer reading supports it).
+	if _, raised := e.raised[key]; raised {
+		e.resolve(r, key, at)
+	}
+	dropped := e.dropSeriesKey(key)
+	return dropped || len(e.out) > before
+}
+
+// dropSeriesKey garbage-collects one exact SeriesKey across every per-series structure (the
+// nine state maps + the pane map + the pending-close heap + the timer wheel), reporting whether
+// anything was removed. It deliberately does NOT touch the raised latch (Descope's resolve owns
+// it — a stale descope must keep the latch) and does NOT drop buffered out-detections: a
+// resolved event is wholly in- or out-of-scope for a given rule (memberships are per-event, not
+// per-sample), so a descope never coincides with that same rule's freshly-buffered raise.
+func (e *Engine) dropSeriesKey(key SeriesKey) bool {
+	n := 0
+	n += dropOneKey(e.active, key)
+	n += dropOneKey(e.sliding, key)
+	n += dropOneKey(e.lastVal, key)
+	n += dropOneKey(e.counts, key)
+	n += dropOneKey(e.session, key)
+	n += dropOneKey(e.slides, key)
+	n += dropOneKey(e.corr, key)
+	n += dropOneKey(e.expected, key)
+	for pk := range e.panes {
+		if pk.Rule == key.Rule && pk.Series == key.Series {
+			n++
+			delete(e.panes, pk)
+		}
+	}
+	e.closes.purgeSeriesKey(key)
+	e.wheel.purgeSeriesKey(key)
+	return n > 0
+}
+
+// dropOneKey deletes one exact SeriesKey from a state map, returning 1 if it was present
+// (else 0) — the per-key counterpart to deleteSeriesKeys, used by dropSeriesKey to report
+// whether a descope actually removed state.
+func dropOneKey[V any](m map[SeriesKey]V, key SeriesKey) int {
+	if _, ok := m[key]; ok {
+		delete(m, key)
+		return 1
+	}
+	return 0
+}
+
 func countSeriesKeys[V any](counts map[string]int, m map[SeriesKey]V) {
 	for k := range m {
 		counts[k.Rule]++
