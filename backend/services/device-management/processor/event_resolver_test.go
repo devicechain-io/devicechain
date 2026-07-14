@@ -181,12 +181,75 @@ func (suite *EventResolverTestSuite) TestResolvedEventCarriesProfileScope() {
 	assert.Equal(suite.T(), uint(77), suite.API.ProfileScopeArg)
 }
 
+// The resolver stamps the DEDUPED UNION of the reporting device's and each anchor's
+// dynamic-group memberships onto the event as ScopeMemberships (ADR-062), so the DETECT
+// engine's scope check is a set test on the replayed bytes. A device-facet membership and
+// a geographic (area-anchor) membership both land; a membership shared by two targets
+// appears once.
+func (suite *EventResolverTestSuite) TestResolvedEventCarriesScopeMemberships() {
+	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
+	// One tracked anchor: the device is located-in an area (row id 900).
+	suite.API.Mock.On("EntityRelationships").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
+			{TargetType: "area", TargetToken: "warehouse-3", TargetId: 900},
+		}}, nil)
+	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
+
+	device := deviceWithToken("TEST-123")
+	device.ID = 500
+	// The device is in beta-fleet@1 + shared@1; the area is in arid-areas@2 + shared@1.
+	suite.API.MembershipsFn = func(entityType string, entityId uint) []dmodel.GroupMembership {
+		if entityType == "device" && entityId == 500 {
+			return []dmodel.GroupMembership{{GroupToken: "beta-fleet", SelectorVersion: 1}, {GroupToken: "shared", SelectorVersion: 1}}
+		}
+		if entityType == "area" && entityId == 900 {
+			return []dmodel.GroupMembership{{GroupToken: "arid-areas", SelectorVersion: 2}, {GroupToken: "shared", SelectorVersion: 1}}
+		}
+		return nil
+	}
+
+	results, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
+		context.Background(), device, measurementEvent("temp", "42"))
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint(0), reason)
+	assert.Len(suite.T(), results, 1)
+	assert.ElementsMatch(suite.T(), []dmodel.GroupRef{
+		{GroupToken: "beta-fleet", Version: 1},
+		{GroupToken: "arid-areas", Version: 2},
+		{GroupToken: "shared", Version: 1}, // shared by device+area, deduped to one
+	}, results[0].Resolved.ScopeMemberships)
+}
+
 // A scope-resolution failure on a new-relationship event aborts BEFORE the
 // relationship is created — so a transient lookup blip cannot leave a committed
 // relationship that a redelivery would duplicate (a fresh token per attempt is not
 // idempotent). It also maps to the retryable ApiCallFailed reason (ADR-051 review).
 func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnScopeError() {
 	suite.API.ProfileScopeErr = errors.New("transient scope lookup failure")
+
+	event := &esmodel.UnresolvedEvent{
+		Device:    "TEST-123",
+		EventType: esmodel.NewRelationship,
+		Payload: &esmodel.UnresolvedNewRelationshipPayload{
+			RelationshipType: "located-in", TargetType: "area", Target: "warehouse-3",
+		},
+	}
+	_, reason, err := suite.resolver(config.AuthModeOptional).HandleNewRelationshipEvent(
+		context.Background(), deviceWithToken("TEST-123"), event)
+
+	assert.Error(suite.T(), err)
+	assert.Equal(suite.T(), uint(dmproto.FailureReason_ApiCallFailed), reason)
+	suite.API.AssertNotCalled(suite.T(), "CreateEntityRelationship")
+}
+
+// The SAME pre-create invariant for the membership stamp (ADR-062): a failure reading the
+// device's dynamic-group memberships must abort BEFORE the relationship is created, or a
+// redelivery would mint a duplicate (fresh-token) relationship. Scope resolves fine here;
+// the membership read (via the AnyScopedGroups gate) is what fails.
+func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnMembershipError() {
+	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
+	suite.API.AnyScopedGroupsErr = errors.New("transient membership lookup failure")
 
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",

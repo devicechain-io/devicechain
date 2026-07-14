@@ -156,6 +156,81 @@ func TestRegister_BackfillPagesBeyondPageSize(t *testing.T) {
 	assert.EqualValues(t, n, rows, "every member backfilled exactly once across pages")
 }
 
+// containsEvict reports whether the captured membership evictions include the entity.
+func containsEvict(evicts []membershipEvict, entityType string, id uint) bool {
+	for _, e := range evicts {
+		if e.entityType != entityType {
+			continue
+		}
+		for _, got := range e.entityIds {
+			if got == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Every membership-mutation path evicts the affected entities' cache (ADR-062 S3): a
+// missed eviction on the negative cache is a permanently stale stamp, so this wiring is
+// load-bearing.
+func TestMembershipEviction_FiresOnMutations(t *testing.T) {
+	api, ctx := newScopingTestApi(t)
+	ev := &captureEvictor{}
+	api.CacheEvictor = ev
+
+	d := seedDevice(t, api, ctx, "d1")
+	setSharedClimate(t, api, ctx, "d1", "arid")
+	publishAridGroup(t, api, ctx, "arid-areas")
+
+	// Register backfills d1 (arid) → evicts d1's membership + the scoped-groups flag.
+	if err := api.RegisterGroupVersionForScoping(ctx, "arid-areas", 1); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	assert.GreaterOrEqual(t, ev.scopedGroupsEvicts, 1, "register evicts the scoped-groups flag")
+	assert.True(t, containsEvict(ev.membershipEvicts, "device", d), "register evicts the backfilled member")
+
+	// A SHARED facet write that flips membership evicts that entity.
+	ev.membershipEvicts = nil
+	setSharedClimate(t, api, ctx, "d1", "humid") // d1 leaves the group
+	assert.True(t, containsEvict(ev.membershipEvicts, "device", d), "recompute evicts the flipped entity")
+
+	// Deregister evicts the scoped-groups flag.
+	flagBefore := ev.scopedGroupsEvicts
+	if err := api.DeregisterGroupVersionForScoping(ctx, "arid-areas", 1); err != nil {
+		t.Fatalf("deregister: %v", err)
+	}
+	assert.Greater(t, ev.scopedGroupsEvicts, flagBefore, "deregister evicts the scoped-groups flag")
+
+	// Entity delete evicts the deleted entity's own membership.
+	ev.membershipEvicts = nil
+	if _, err := api.DeleteDevice(ctx, "d1"); err != nil {
+		t.Fatalf("delete device: %v", err)
+	}
+	assert.True(t, containsEvict(ev.membershipEvicts, "device", d), "entity delete evicts the entity")
+}
+
+// Deleting a rule-scoped group evicts its members + the scoped-groups flag.
+func TestMembershipEviction_OnGroupDelete(t *testing.T) {
+	api, ctx := newScopingTestApi(t)
+	ev := &captureEvictor{}
+	api.CacheEvictor = ev
+	d := seedDevice(t, api, ctx, "d1")
+	setSharedClimate(t, api, ctx, "d1", "arid")
+	publishAridGroup(t, api, ctx, "arid-areas")
+	if err := api.RegisterGroupVersionForScoping(ctx, "arid-areas", 1); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	ev.membershipEvicts = nil
+	flagBefore := ev.scopedGroupsEvicts
+	if _, err := api.DeleteEntityGroup(ctx, "arid-areas"); err != nil {
+		t.Fatalf("delete group: %v", err)
+	}
+	assert.True(t, containsEvict(ev.membershipEvicts, "device", d), "group delete evicts its members")
+	assert.Greater(t, ev.scopedGroupsEvicts, flagBefore, "group delete evicts the scoped-groups flag")
+}
+
 // A SHARED facet write recomputes membership incrementally: a device that starts humid
 // joins when set arid, and an arid member leaves when set humid.
 func TestRecompute_JoinAndLeaveOnSet(t *testing.T) {

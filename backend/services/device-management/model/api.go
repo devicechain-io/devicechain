@@ -80,6 +80,16 @@ type Api struct {
 type CacheEvictor interface {
 	EvictEntityDelete(ctx context.Context, etype entity.Type, id uint, token string, trackingSourceDeviceIds []uint)
 	EvictRelationshipSources(ctx context.Context, sourceDeviceIds []uint)
+	// EvictMemberships drops the cached group-membership entry of each given entity of
+	// a family (ADR-062), called post-commit on every path that mutates a membership row
+	// (recompute, entity delete, group register/deregister/delete). A missed eviction on
+	// the negative-cached read is a permanently stale stamp, so this fires precisely.
+	EvictMemberships(ctx context.Context, entityType string, entityIds []uint)
+	// EvictScopedGroupsExist drops the tenant's cached "any rule-scoped group exists"
+	// flag (ADR-062 Decision 7), called post-commit on register/deregister/group-delete so
+	// the resolver's pay-nothing short-circuit re-evaluates promptly (else a just-armed
+	// group is skipped, or a torn-down one still pays, until the flag's TTL).
+	EvictScopedGroupsExist(ctx context.Context)
 }
 
 // Create a new API instance.
@@ -162,6 +172,24 @@ func (api *Api) evictRelationshipSources(ctx context.Context, sourceDeviceIds []
 	}
 }
 
+// evictMemberships drops the cached membership entries of the given entities when an
+// evictor is wired (ADR-062). No-op otherwise, or for an empty list. Called post-commit
+// from every membership-mutation path.
+func (api *Api) evictMemberships(ctx context.Context, entityType string, entityIds []uint) {
+	if api.CacheEvictor != nil && len(entityIds) > 0 {
+		api.CacheEvictor.EvictMemberships(ctx, entityType, entityIds)
+	}
+}
+
+// evictScopedGroupsExist drops the tenant's cached scoped-groups-exist flag when an
+// evictor is wired (ADR-062 Decision 7). No-op otherwise. Called post-commit from
+// register/deregister/group-delete, where the set of scoped groups may have changed.
+func (api *Api) evictScopedGroupsExist(ctx context.Context) {
+	if api.CacheEvictor != nil {
+		api.CacheEvictor.EvictScopedGroupsExist(ctx)
+	}
+}
+
 // Interface for device management API (used for mocking)
 type DeviceManagementApi interface {
 	// Device types.
@@ -191,6 +219,13 @@ type DeviceManagementApi interface {
 	EntityRelationships(ctx context.Context, criteria EntityRelationshipSearchCriteria) (*EntityRelationshipSearchResults, error)
 	CreateEntityRelationship(ctx context.Context, request *EntityRelationshipCreateRequest) (*EntityRelationship, error)
 	EntityRelationshipTypesByToken(ctx context.Context, tokens []string) ([]*EntityRelationshipType, error)
+
+	// Dynamic-group membership read (ADR-062): the group@versions an entity belongs to,
+	// stamped onto a resolved event by the resolver. Served through the cache.
+	MembershipsForEntity(ctx context.Context, entityType string, entityId uint) ([]GroupMembership, error)
+	// AnyScopedGroups (ADR-062 Decision 7): whether the tenant has any rule-scoped group,
+	// gating the resolver's per-entity membership reads. Served through the cache.
+	AnyScopedGroups(ctx context.Context) (bool, error)
 
 	// Metric definitions (ADR-016).
 	CreateMetricDefinition(ctx context.Context, request *MetricDefinitionCreateRequest) (*MetricDefinition, error)

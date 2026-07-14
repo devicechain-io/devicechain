@@ -45,6 +45,45 @@ type MockApi struct {
 	// ProfileScopeErr, when set, makes ProfileScopeByDeviceType fail — so a test can
 	// assert scope resolution runs (and aborts) before any state mutation.
 	ProfileScopeErr error
+
+	// MembershipsFn, when set, returns an entity's dynamic-group memberships (ADR-062)
+	// per (entityType, entityId) — so a resolver test can give the device and an anchor
+	// different memberships and assert the stamped union. Nil returns MembershipsResult.
+	MembershipsFn func(entityType string, entityId uint) []model.GroupMembership
+	// MembershipsResult is the default memberships returned when MembershipsFn is unset
+	// (nil → empty, so a test that does not care gets no scope stamp).
+	MembershipsResult []model.GroupMembership
+	// MembershipsErr, when set, makes MembershipsForEntity fail.
+	MembershipsErr error
+	// AnyScopedGroupsResult forces the pay-nothing gate open; otherwise the gate is open
+	// iff the suite configured any memberships, so a membership test needn't set both.
+	AnyScopedGroupsResult bool
+	// AnyScopedGroupsErr, when set, makes AnyScopedGroups fail.
+	AnyScopedGroupsErr error
+}
+
+// AnyScopedGroups (ADR-062 Decision 7) reports whether the resolver's pay-nothing gate is
+// open: true when explicitly forced or when the suite configured any memberships (so a
+// membership-stamp test does not have to set both). Default false → the resolver
+// short-circuits and stamps nothing.
+func (api *MockApi) AnyScopedGroups(ctx context.Context) (bool, error) {
+	if api.AnyScopedGroupsErr != nil {
+		return false, api.AnyScopedGroupsErr
+	}
+	return api.AnyScopedGroupsResult || api.MembershipsFn != nil || len(api.MembershipsResult) > 0, nil
+}
+
+// MembershipsForEntity (ADR-062) returns the suite-configured memberships for the
+// entity — MembershipsFn if set, else MembershipsResult — or an error. The default
+// (both unset) is empty: a resolver test that does not care stamps no scope.
+func (api *MockApi) MembershipsForEntity(ctx context.Context, entityType string, entityId uint) ([]model.GroupMembership, error) {
+	if api.MembershipsErr != nil {
+		return nil, api.MembershipsErr
+	}
+	if api.MembershipsFn != nil {
+		return api.MembershipsFn(entityType, entityId), nil
+	}
+	return api.MembershipsResult, nil
 }
 
 func (api *MockApi) DeviceTypesById(ctx context.Context, ids []uint) ([]*model.DeviceType, error) {

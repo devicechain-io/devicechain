@@ -149,6 +149,10 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 	// Drop the hot-path caches this delete invalidated so ingest stops resolving the
 	// removed entity and re-creating its anchors within the cache TTL (ADR-044 F2).
 	api.evictEntityDelete(ctx, etype, id, token, trackingSources)
+	// Drop the deleted entity's own membership cache (ADR-062): its rows were purged in
+	// the cascade above, so a stale positive stamp must not survive. A no-op for an entity
+	// that was never a member.
+	api.evictMemberships(ctx, string(etype), []uint{id})
 	return true, nil
 }
 

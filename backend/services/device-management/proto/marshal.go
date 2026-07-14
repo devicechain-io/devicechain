@@ -514,6 +514,13 @@ func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 			RelationshipId: uint64(a.RelationshipId),
 		})
 	}
+	memberships := make([]*PScopeMembership, 0, len(event.ScopeMemberships))
+	for _, m := range event.ScopeMemberships {
+		memberships = append(memberships, &PScopeMembership{
+			GroupToken: m.GroupToken,
+			Version:    m.Version,
+		})
+	}
 	pbevent := &PResolvedEvent{
 		Source:              event.Source,
 		AltId:               event.AltId,
@@ -521,6 +528,7 @@ func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 		Anchors:             anchors,
 		DeviceTypeToken:     optionalString(event.DeviceTypeToken),
 		ProfileVersionToken: optionalString(event.ProfileVersionToken),
+		ScopeMemberships:    memberships,
 		OccurredTime:        event.OccurredTime.Format(time.RFC3339),
 		ProcessedTime:       event.ProcessedTime.Format(time.RFC3339),
 		EventType:           int64(event.EventType),
@@ -568,6 +576,13 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 			RelationshipId: uint(a.RelationshipId),
 		})
 	}
+	memberships := make([]model.GroupRef, 0, len(pbevent.ScopeMemberships))
+	for _, m := range pbevent.ScopeMemberships {
+		memberships = append(memberships, model.GroupRef{
+			GroupToken: m.GroupToken,
+			Version:    m.Version,
+		})
+	}
 
 	event := &model.ResolvedEvent{
 		Source:              pbevent.Source,
@@ -576,6 +591,7 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 		Anchors:             anchors,
 		DeviceTypeToken:     pbevent.GetDeviceTypeToken(),
 		ProfileVersionToken: pbevent.GetProfileVersionToken(),
+		ScopeMemberships:    memberships,
 		OccurredTime:        occurred,
 		ProcessedTime:       processed,
 		EventType:           esmodel.EventType(pbevent.EventType),

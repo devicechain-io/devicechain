@@ -78,6 +78,88 @@ func (capi *CachedApi) evictRelationshipSources(ctx context.Context, tenant stri
 	}
 }
 
+// EvictMemberships satisfies model.CacheEvictor (ADR-062): it drops the cached
+// membership entry of each given entity of a family, so a mutated membership is not
+// served stale from the negative cache. No tenant in context means the cache was
+// bypassed on write, so nothing to evict.
+func (capi *CachedApi) EvictMemberships(ctx context.Context, entityType string, entityIds []uint) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return
+	}
+	for _, id := range entityIds {
+		_ = capi.caches.MembershipsByEntity.Delete(ctx, membershipsByEntityKey(tenant, entityType, id))
+	}
+}
+
+// membershipsByEntityKey builds the tenant-scoped cache key for an entity's group
+// memberships, keyed by family + row id (row ids are per-table, so the family must be
+// part of the key to avoid a device/area id collision).
+func membershipsByEntityKey(tenant, entityType string, entityId uint) string {
+	return fmt.Sprintf("%s|%s|%d", tenant, entityType, entityId)
+}
+
+// EvictScopedGroupsExist satisfies model.CacheEvictor (ADR-062 Decision 7): it drops the
+// tenant's cached scoped-groups-exist flag so the resolver's pay-nothing gate re-evaluates.
+func (capi *CachedApi) EvictScopedGroupsExist(ctx context.Context) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return
+	}
+	_ = capi.caches.ScopedGroupsExist.Delete(ctx, tenant)
+}
+
+// AnyScopedGroups serves the resolver's pay-nothing gate (ADR-062 Decision 7) from a
+// per-tenant cache: whether the tenant has any rule-scoped group. A lookup without a
+// tenant in context bypasses the cache and goes straight to the DB.
+func (capi *CachedApi) AnyScopedGroups(ctx context.Context) (bool, error) {
+	tenant, hasTenant := core.TenantFromContext(ctx)
+	if !hasTenant {
+		return capi.Api.AnyScopedGroups(ctx)
+	}
+	var cached bool
+	if found, err := capi.caches.ScopedGroupsExist.Get(ctx, tenant, &cached); err == nil && found {
+		return cached, nil
+	}
+	exists, err := capi.Api.AnyScopedGroups(ctx)
+	if err != nil {
+		return false, err
+	}
+	_ = capi.caches.ScopedGroupsExist.Set(ctx, tenant, exists)
+	return exists, nil
+}
+
+// MembershipsForEntity serves the resolve path's per-entity group-membership lookup
+// (ADR-062) from cache, including empty results (a non-member is the common case and
+// must not query on every event). A lookup without a tenant in context bypasses the
+// cache and goes straight to the DB.
+//
+// Like the sibling read-through caches here (MetricDefsByType, ProfileScopeByType), this is
+// cache-aside: a mutation evicts post-commit, but a read that missed and is repopulating
+// across that commit can re-store the pre-commit value, so worst-case staleness is TTL-
+// bounded, not the eviction instant. That is the accepted posture for these caches. ADR-062's
+// arming invariant must therefore not depend on sub-TTL visibility of a just-registered
+// group@v — S4's rule arming owns that guarantee (e.g. arming a safety margin after Register).
+func (capi *CachedApi) MembershipsForEntity(ctx context.Context, entityType string, entityId uint) ([]GroupMembership, error) {
+	tenant, hasTenant := core.TenantFromContext(ctx)
+	if !hasTenant {
+		return capi.Api.MembershipsForEntity(ctx, entityType, entityId)
+	}
+
+	key := membershipsByEntityKey(tenant, entityType, entityId)
+	var cached []GroupMembership
+	if found, err := capi.caches.MembershipsByEntity.Get(ctx, key, &cached); err == nil && found {
+		return cached, nil
+	}
+
+	memberships, err := capi.Api.MembershipsForEntity(ctx, entityType, entityId)
+	if err != nil {
+		return nil, err
+	}
+	_ = capi.caches.MembershipsByEntity.Set(ctx, key, memberships)
+	return memberships, nil
+}
+
 // deviceByTokenKey builds the tenant-scoped cache key for a single device token.
 // The tenant is part of the key so a hit can never cross tenant boundaries.
 func deviceByTokenKey(tenant string, token string) string {

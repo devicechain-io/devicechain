@@ -85,6 +85,7 @@ const (
 	DefaultDeviceCacheTtlSeconds       = 60
 	DefaultRelationshipCacheTtlSeconds = 60
 	DefaultMetricDefCacheTtlSeconds    = 60
+	DefaultMembershipCacheTtlSeconds   = 60
 )
 
 type DeviceManagementConfiguration struct {
@@ -103,6 +104,12 @@ type DeviceManagementConfiguration struct {
 	DeviceCacheTtlSeconds       int
 	RelationshipCacheTtlSeconds int
 	MetricDefCacheTtlSeconds    int
+	// MembershipCacheTtlSeconds bounds the per-entity dynamic-group membership cache
+	// read on the hot resolve path when stamping scope memberships onto an event
+	// (ADR-062). Negative results are cached (a non-member is the common case), and the
+	// TTL is a self-healing backstop behind the explicit per-entity eviction on every
+	// membership mutation.
+	MembershipCacheTtlSeconds int
 }
 
 // Creates the default device management configuration
@@ -131,6 +138,9 @@ func (c *DeviceManagementConfiguration) ApplyDefaults() {
 	if c.MetricDefCacheTtlSeconds == 0 {
 		c.MetricDefCacheTtlSeconds = DefaultMetricDefCacheTtlSeconds
 	}
+	if c.MembershipCacheTtlSeconds == 0 {
+		c.MembershipCacheTtlSeconds = DefaultMembershipCacheTtlSeconds
+	}
 }
 
 // Validate enforces semantic constraints after decoding and defaulting, failing
@@ -150,6 +160,9 @@ func (c *DeviceManagementConfiguration) Validate() error {
 	}
 	if c.MetricDefCacheTtlSeconds <= 0 {
 		return fmt.Errorf("metricDefCacheTtlSeconds must be positive (got %d)", c.MetricDefCacheTtlSeconds)
+	}
+	if c.MembershipCacheTtlSeconds <= 0 {
+		return fmt.Errorf("membershipCacheTtlSeconds must be positive (got %d)", c.MembershipCacheTtlSeconds)
 	}
 	return nil
 }

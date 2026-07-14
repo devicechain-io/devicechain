@@ -233,13 +233,33 @@ func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, erro
 	if inUse {
 		return false, fmt.Errorf("%w: entity group %q is referenced by a detection rule", ErrEntityInUse, token)
 	}
+	// Collect the members that will lose this group's membership so their caches can be
+	// evicted post-delete (ADR-062). Gathered before the cascade tears the rows down.
+	var evictType string
+	var evictIds []uint
+	var members []EntityGroupMembership
+	if err := api.RDB.DB(ctx).Where("group_id = ?", group.ID).Find(&members).Error; err != nil {
+		return false, err
+	}
+	for _, m := range members {
+		evictType = m.EntityType
+		evictIds = append(evictIds, m.EntityId)
+	}
 	// Cascade the group's frozen versions AND its scoping rows (ADR-062 S2 membership +
 	// reverse-index rows where it is the scoping group) with it: append-only history and
 	// derived scoping rows have no meaning once the group is gone.
-	return api.deleteEdgeEntity(ctx, entity.TypeGroup, &EntityGroup{}, token, func(tx *gorm.DB, id uint) error {
+	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeGroup, &EntityGroup{}, token, func(tx *gorm.DB, id uint) error {
 		if err := tx.Unscoped().Where("entity_group_id = ?", id).Delete(&EntityGroupVersion{}).Error; err != nil {
 			return err
 		}
 		return api.purgeGroupScopingRows(tx, id)
 	})
+	if err != nil {
+		return false, err
+	}
+	if deleted {
+		api.evictMemberships(ctx, evictType, evictIds)
+		api.evictScopedGroupsExist(ctx)
+	}
+	return deleted, nil
 }

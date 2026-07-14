@@ -15,6 +15,8 @@ const (
 	CACHE_NAME_RELATIONSHIPS_BY_SOURCE = "relationships-by-source"
 	CACHE_NAME_METRIC_DEFS_BY_TYPE     = "metric-defs-by-type"
 	CACHE_NAME_PROFILE_SCOPE_BY_TYPE   = "profile-scope-by-type"
+	CACHE_NAME_MEMBERSHIPS_BY_ENTITY   = "memberships-by-entity"
+	CACHE_NAME_SCOPED_GROUPS_EXIST     = "scoped-groups-exist"
 )
 
 // Caches bundles the caches the cached API decorator reads from and evicts. The
@@ -42,6 +44,17 @@ type Caches struct {
 	// Empty scopes (untyped/unpublished) are cached too so a device with no rules does
 	// not query on every event.
 	ProfileScopeByType *messaging.Cache
+	// MembershipsByEntity caches the rule-scoped dynamic-group versions an entity
+	// belongs to (ADR-062), keyed by tenant+entityType+entityId, read on the hot
+	// resolve path to stamp scope memberships onto an event. Empty results are cached
+	// (a non-member is the common case); the entry is explicitly evicted on every
+	// membership mutation, with the TTL as a self-healing backstop.
+	MembershipsByEntity *messaging.Cache
+	// ScopedGroupsExist caches, per tenant, whether ANY rule-scoped group exists
+	// (ADR-062 Decision 7) — the resolver's pay-nothing gate: a tenant with no scoped
+	// group does zero per-entity membership reads. Evicted on register/deregister/
+	// group-delete; the TTL is a backstop.
+	ScopedGroupsExist *messaging.Cache
 }
 
 // InitializeCaches builds the caches used by the cached API, TTL'd from the
@@ -71,10 +84,23 @@ func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementC
 	if err != nil {
 		return nil, err
 	}
+	membershipsByEntity, err := nmgr.NewCache(CACHE_NAME_MEMBERSHIPS_BY_ENTITY,
+		time.Duration(cfg.MembershipCacheTtlSeconds)*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	// The scoped-groups-exist gate shares the membership cache's invalidation cadence.
+	scopedGroupsExist, err := nmgr.NewCache(CACHE_NAME_SCOPED_GROUPS_EXIST,
+		time.Duration(cfg.MembershipCacheTtlSeconds)*time.Second)
+	if err != nil {
+		return nil, err
+	}
 	return &Caches{
 		DeviceByToken:         deviceByToken,
 		RelationshipsBySource: relationshipsBySource,
 		MetricDefsByType:      metricDefsByType,
 		ProfileScopeByType:    profileScopeByType,
+		MembershipsByEntity:   membershipsByEntity,
+		ScopedGroupsExist:     scopedGroupsExist,
 	}, nil
 }

@@ -34,6 +34,10 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 			{AnchorType: "customer", AnchorToken: "acme", RelationshipId: 5},
 			{AnchorType: "area", AnchorToken: "warehouse-3", RelationshipId: 8},
 		},
+		ScopeMemberships: []model.GroupRef{
+			{GroupToken: "arid-areas", Version: 2},
+			{GroupToken: "beta-fleet", Version: 1},
+		},
 		OccurredTime:  occurred,
 		ProcessedTime: processed,
 		EventType:     esmodel.Measurement,
@@ -54,6 +58,9 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 	assert.True(t, got.ProcessedTime.Equal(processed), "processed time round-trip: got %s want %s", got.ProcessedTime, processed)
 	// The full anchor set survives the round-trip.
 	assert.Equal(t, event.Anchors, got.Anchors)
+	// The stamped scope memberships survive intact (ADR-062) — the engine's scope check
+	// is a set test on exactly these replayed bytes.
+	assert.Equal(t, event.ScopeMemberships, got.ScopeMemberships)
 	// The denormalized rule-scoping tokens survive intact (ADR-051).
 	assert.Equal(t, "sensor-type", got.DeviceTypeToken)
 	assert.Equal(t, "temp-profile@3", got.ProfileVersionToken)
