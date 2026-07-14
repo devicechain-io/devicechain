@@ -65,28 +65,38 @@ func numericCastFor(db *gorm.DB) func(string) string {
 }
 
 // lowerParamsFor recompiles the group's stored (already-vetted) selector and lowers it,
-// returning the SQL WHERE fragment, its args, and the member table. Recompiling per resolve
-// is simple and correct for v1; a compiled-selector cache is a later optimization keyed on
-// SelectorSchema. Fails closed if the group is not a resolvable dynamic group.
+// returning the SQL WHERE fragment, its args, and the member table. Fails closed if the
+// group is not a resolvable dynamic group; otherwise delegates to lowerSelectorSource.
 func (api *Api) lowerParamsFor(ctx context.Context, group *EntityGroup) (frag string, args []any, table string, err error) {
 	if MembershipMode(group.MembershipMode) != MembershipDynamic || !group.Selector.Valid {
 		return "", nil, "", fmt.Errorf("entity group %q is not a dynamic group", group.Token)
 	}
+	return api.lowerSelectorSource(ctx, group.MemberType, group.Selector.String)
+}
+
+// lowerSelectorSource compiles a selector source for a member family and lowers it to the
+// SQL WHERE fragment, its args, and the member table. It is shared by a saved group's
+// resolve (lowerParamsFor) and the unsaved-selector preview (PreviewSelector) so both take
+// the identical publish-gate + lowering path. Recompiling per call is simple and correct
+// for v1; a compiled-selector cache is a later optimization keyed on SelectorSchema. A
+// compile/lowering rejection (non-lowerable, over-budget) is returned as the selector
+// package's typed error so a caller can surface it inline.
+func (api *Api) lowerSelectorSource(ctx context.Context, memberType, source string) (frag string, args []any, table string, err error) {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
 		return "", nil, "", core.ErrNoTenant
 	}
-	_, table, ok = memberModelAndTable(group.MemberType)
+	_, table, ok = memberModelAndTable(memberType)
 	if !ok {
-		return "", nil, "", fmt.Errorf("entity group %q has an unresolvable member family %q", group.Token, group.MemberType)
+		return "", nil, "", fmt.Errorf("unresolvable member family %q", memberType)
 	}
-	sel, err := selector.Compile(group.Selector.String, group.MemberType, 0)
+	sel, err := selector.Compile(source, memberType, 0)
 	if err != nil {
 		return "", nil, "", err
 	}
 	frag, args, err = sel.Lower(selector.LowerParams{
 		TenantId:    tenant,
-		MemberType:  group.MemberType,
+		MemberType:  memberType,
 		MemberTable: table,
 		FacetScope:  string(AttributeScopeShared), // v1 pins facets to SHARED (§3.4)
 		NumericCast: numericCastFor(api.RDB.DB(ctx)),
@@ -114,7 +124,17 @@ func (api *Api) ResolveGroupMembers(ctx context.Context, group *EntityGroup,
 	if err != nil {
 		return nil, err
 	}
-	memberModel, _, _ := memberModelAndTable(group.MemberType)
+	return api.queryDynamicMembers(ctx, group.MemberType, frag, args, pagination)
+}
+
+// queryDynamicMembers runs a lowered selector fragment as the paginated, indexed member
+// query — the eval-on-read path shared by a saved dynamic group's resolve and the unsaved
+// previewSelector. The page is always bounded (Unbounded forced off) so no caller can turn
+// it into an unbounded scan of the member family.
+func (api *Api) queryDynamicMembers(ctx context.Context, memberType, frag string, args []any,
+	pagination rdb.Pagination) (*EntityMemberSearchResults, error) {
+	pagination.Unbounded = false // never an unbounded scan, even if a caller asks
+	memberModel, _, _ := memberModelAndTable(memberType)
 
 	results := make([]EntityMember, 0)
 	db, pag := api.RDB.ListOf(ctx, memberModel, func(q *gorm.DB) *gorm.DB {
@@ -126,6 +146,25 @@ func (api *Api) ResolveGroupMembers(ctx context.Context, group *EntityGroup,
 		return nil, db.Error
 	}
 	return &EntityMemberSearchResults{Results: results, Pagination: pag}, nil
+}
+
+// PreviewSelector compiles + cost-gates + lowers a CANDIDATE selector for a member family
+// and returns its matching members WITHOUT persisting a group (ADR-061 G4 §4) — the console's
+// live "matches N" authoring preview, the browse-panel analogue of the ADR-053 replay preview.
+// It takes the identical publish gate + lowering + bounded query as a saved dynamic group, so
+// what the author previews is exactly what the group would resolve. A compile/lowering
+// rejection (a non-lowerable or over-budget selector) surfaces as the selector package's typed
+// error for the caller to show inline; it is an author error, not a server fault.
+func (api *Api) PreviewSelector(ctx context.Context, memberType, source string,
+	pagination rdb.Pagination) (*EntityMemberSearchResults, error) {
+	if !ValidGroupMemberType(entity.Type(memberType)) {
+		return nil, fmt.Errorf("%q is not a valid group member family", memberType)
+	}
+	frag, args, _, err := api.lowerSelectorSource(ctx, memberType, source)
+	if err != nil {
+		return nil, err
+	}
+	return api.queryDynamicMembers(ctx, memberType, frag, args, pagination)
 }
 
 // staticGroupMembers pages the targets of a static group's "member" edges. TargetToken is

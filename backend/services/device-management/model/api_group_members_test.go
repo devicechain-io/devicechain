@@ -5,8 +5,10 @@ package model
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/devicechain-io/dc-device-management/internal/selector"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -136,6 +138,42 @@ func TestResolveGroupMembers_Static(t *testing.T) {
 	is, err := api.IsGroupMember(ctx, g, memberID)
 	assert.NoError(t, err)
 	assert.True(t, is, "the edge target is a member")
+}
+
+// PreviewSelector evaluates a candidate selector without saving a group — the console's
+// live "matches N" authoring preview. It returns the same matches a saved dynamic group
+// would resolve, and surfaces a non-lowerable candidate as the selector engine's typed error.
+func TestPreviewSelector(t *testing.T) {
+	api, ctx := newGroupMemberTestApi(t)
+	seedDeviceWithClimate(t, api, ctx, "d-arid", "arid")
+	seedDeviceWithClimate(t, api, ctx, "d-humid", "humid")
+	seedDeviceWithClimate(t, api, ctx, "d-bare", "") // no climate facet
+
+	// A valid candidate matches exactly the entities a saved group would.
+	res, err := api.PreviewSelector(ctx, "device", `attr["climate"] == "arid"`,
+		rdb.Pagination{PageNumber: 1, PageSize: 100})
+	if err != nil {
+		t.Fatalf("preview valid selector: %v", err)
+	}
+	tokens := make([]string, 0, len(res.Results))
+	for _, m := range res.Results {
+		tokens = append(tokens, m.Token)
+	}
+	assert.ElementsMatch(t, []string{"d-arid"}, tokens, "preview matches only the arid device")
+	assert.Equal(t, int32(1), res.Pagination.TotalRecords)
+
+	// A non-lowerable candidate (two indexes) surfaces the selector engine's typed error so
+	// the query resolver can present it inline rather than as a server fault.
+	_, err = api.PreviewSelector(ctx, "device", `attr["a"] == attr["b"]`,
+		rdb.Pagination{PageNumber: 1, PageSize: 100})
+	assert.Error(t, err, "a non-lowerable candidate is rejected")
+	var notLowerable *selector.NotLowerableError
+	assert.True(t, errors.As(err, &notLowerable), "rejection is a typed NotLowerableError, got %T", err)
+
+	// An unknown member family fails closed before any compilation.
+	_, err = api.PreviewSelector(ctx, "widget", `attr["climate"] == "arid"`,
+		rdb.Pagination{PageNumber: 1, PageSize: 100})
+	assert.Error(t, err, "an unknown member family is rejected")
 }
 
 // A dynamic resolve never runs an unbounded scan even if a caller requests one.

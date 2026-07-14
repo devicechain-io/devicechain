@@ -73,3 +73,29 @@ func (r *SchemaResolver) EntityGroups(ctx context.Context, args struct {
 
 	return &EntityGroupSearchResultsResolver{M: *found, S: r, C: ctx}, nil
 }
+
+// Evaluate a candidate dynamic-group selector for a member family WITHOUT saving it —
+// the console's live "matches N" authoring preview (ADR-061 G4). A publish-gate rejection
+// (non-lowerable / over-budget / malformed) is returned as valid=false + an inline error
+// rather than a hard GraphQL error, so the authoring UI surfaces it as the user types; a
+// non-author fault (no tenant, DB error) is still a real error.
+func (r *SchemaResolver) PreviewSelector(ctx context.Context, args struct {
+	MemberType string
+	Selector   string
+	Pagination PaginationInput
+}) (*SelectorPreviewResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+
+	api := r.GetApi(ctx)
+	found, err := api.PreviewSelector(ctx, args.MemberType, args.Selector, rdbPagination(args.Pagination))
+	if err != nil {
+		if isSelectorAuthorError(err) {
+			msg := err.Error()
+			return &SelectorPreviewResolver{IsValid: false, ErrMsg: &msg, S: r, C: ctx}, nil
+		}
+		return nil, err
+	}
+	return &SelectorPreviewResolver{IsValid: true, Matches: found, S: r, C: ctx}, nil
+}

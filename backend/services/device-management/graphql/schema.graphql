@@ -45,6 +45,14 @@ type SearchResultsPagination {
 	totalRecords: Int
 }
 
+# Pagination arguments for a paginated field or query (the input analogue of the
+# pageNumber/pageSize pair the search-criteria inputs carry inline). Resolution is
+# always bounded by the platform page-size ceiling regardless of the requested size.
+input PaginationInput {
+    pageNumber: Int!
+    pageSize: Int!
+}
+
 # Represents a type or class of devices
 type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
     id: ID!
@@ -517,10 +525,40 @@ type EntityGroup implements Model & TokenReference & NamedEntity & BrandedEntity
     # The entity family this group collects: device | asset | area | customer.
     memberType: String!
     # How members are determined: static (explicit "member" edges) or dynamic
-    # (a CEL selector; not yet creatable — ADR-061 G3).
+    # (a CEL selector over member-entity facet attributes — ADR-061 G3).
     membershipMode: String!
     # The CEL membership predicate, present only for dynamic groups.
     selector: String
+    # The resolved members of this group — a static group's "member" edges or a
+    # dynamic group's eval-on-read selector matches, transparently (a consumer does
+    # not branch on mode). Always bounded + paginated (ADR-061 G4).
+    members(pagination: PaginationInput!): EntityGroupMemberSearchResults!
+}
+
+# A resolved member of an entity group — the lightweight identity (row id + token)
+# of a family entity, enough for a consumer to hydrate the full record. The family
+# is the group's memberType, so it is not repeated per member.
+type EntityGroupMember {
+    id: ID!
+    token: String!
+}
+
+# A paginated page of an entity group's resolved members.
+type EntityGroupMemberSearchResults {
+    results: [EntityGroupMember!]!
+    pagination: SearchResultsPagination!
+}
+
+# The result of evaluating a CANDIDATE dynamic-group selector without saving it
+# (ADR-061 G4). A selector that fails the publish gate (non-lowerable, over-budget,
+# a parse/type error) returns valid=false with the console-surfaceable error in
+# `error` and a null `members`, so the authoring UI can show the problem inline as
+# the user types rather than treating it as a hard failure. When valid, `members`
+# carries the eval-on-read matches (the live "matches N" preview).
+type SelectorPreview {
+    valid: Boolean!
+    error: String
+    members: EntityGroupMemberSearchResults
 }
 
 # Data required to create or replace an entity group (ADR-061). membershipMode
@@ -1130,6 +1168,12 @@ type Query {
     entityGroupsByToken(tokens: [String!]!): [EntityGroup!]!
     # List entity groups that meet criteria (optionally by member family / mode).
     entityGroups(criteria: EntityGroupSearchCriteria!): EntityGroupSearchResults!
+    # Evaluate a CANDIDATE dynamic-group selector for a member family WITHOUT saving
+    # it — the console's live "matches N" authoring preview (ADR-061 G4 §4). Takes the
+    # identical publish gate + lowering + bounded query as a saved dynamic group, so
+    # the preview is exactly what the group would resolve. A non-lowerable / over-budget
+    # / malformed selector returns valid=false with an inline error, never a hard fault.
+    previewSelector(memberType: String!, selector: String!, pagination: PaginationInput!): SelectorPreview!
     # Find device credentials by unique id.
     deviceCredentialsById(ids: [ID!]!): [DeviceCredential!]!
     # Find device credentials by unique token.
@@ -1260,8 +1304,9 @@ type Mutation {
     updateDevice(token: String!, request: DeviceCreateRequest): Device!
     # Delete a device, cascade-removing its credentials and relationship edges.
     deleteDevice(token: String!): Boolean!
-    # Create a new entity group (ADR-061). Static groups only for now; a group's
-    # members are then managed over "member" relationship edges.
+    # Create a new entity group (ADR-061). A static group's members are managed over
+    # "member" relationship edges; a dynamic group carries a CEL selector and resolves
+    # its members eval-on-read (validated + cost-gated at create).
     createEntityGroup(request: EntityGroupCreateRequest): EntityGroup!
     # Update an existing entity group's presentation fields (member family + mode
     # are immutable).
