@@ -189,10 +189,10 @@ type Store interface {
 
 // New builds the configured Store. The backend is validated by Config.Validate,
 // then constructed; a backend that is a KNOWN identifier but not built in this
-// binary (s3, gcs — later slices) fails closed here rather than silently doing
-// nothing. instanceID is the fixed key prefix (ADR-048) and must be a valid
-// segment.
-func New(cfg Config, instanceID string) (Store, error) {
+// binary (gcs — a later slice) fails closed here rather than silently doing nothing.
+// instanceID is the fixed key prefix (ADR-048) and must be a valid segment. ctx is
+// used only for backend construction (e.g. the S3 backend's AWS config load).
+func New(ctx context.Context, cfg Config, instanceID string) (Store, error) {
 	cfg = cfg.withDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -203,7 +203,9 @@ func New(cfg Config, instanceID string) (Store, error) {
 	switch cfg.Backend {
 	case BackendFilesystem:
 		return NewFilesystemStore(cfg, instanceID)
-	case BackendS3, BackendGCS:
+	case BackendS3:
+		return NewS3Store(ctx, cfg, instanceID)
+	case BackendGCS:
 		return nil, fmt.Errorf("blob: backend %q is declared but not built in this binary", cfg.Backend)
 	default:
 		// Unreachable after Validate, but fail closed rather than return a nil store.

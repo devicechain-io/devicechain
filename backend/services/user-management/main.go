@@ -153,7 +153,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// The object/asset store (ADR-058) — the branding-logo consumer. Constructed
 	// once; nil when not configured (branding-logo upload/read then 503, Tier-0
 	// logos still work). A configured-but-unbuilt backend fails startup closed.
-	BlobStore, err = buildBlobStore()
+	BlobStore, err = buildBlobStore(ctx)
 	if err != nil {
 		return err
 	}
@@ -204,12 +204,19 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 // and Tier-0 inline/URL logos still work), rather than failing an otherwise-healthy
 // service that has not mounted a blob volume. A configured backend that is unknown
 // or not built in this binary fails closed here (blob.New).
-func buildBlobStore() (blob.Store, error) {
+func buildBlobStore(ctx context.Context) (blob.Store, error) {
 	cfg := Microservice.InstanceConfiguration.Infrastructure.Blob
 	if cfg.Backend == blob.BackendFilesystem && strings.TrimSpace(cfg.Directory) == "" {
 		return nil, nil
 	}
-	return blob.New(blob.Config{Backend: cfg.Backend, Directory: cfg.Directory}, Microservice.InstanceId)
+	return blob.New(ctx, blob.Config{
+		Backend:      cfg.Backend,
+		Directory:    cfg.Directory,
+		Bucket:       cfg.Bucket,
+		Region:       cfg.Region,
+		Endpoint:     cfg.Endpoint,
+		UsePathStyle: cfg.UsePathStyle,
+	}, Microservice.InstanceId)
 }
 
 // registerAdminHandler parses the admin schema and registers its identity-token
