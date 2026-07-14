@@ -243,6 +243,29 @@ func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnScop
 	suite.API.AssertNotCalled(suite.T(), "CreateEntityRelationship")
 }
 
+// The SAME pre-create invariant for the membership stamp (ADR-062): a failure reading the
+// device's dynamic-group memberships must abort BEFORE the relationship is created, or a
+// redelivery would mint a duplicate (fresh-token) relationship. Scope resolves fine here;
+// the membership read (via the AnyScopedGroups gate) is what fails.
+func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnMembershipError() {
+	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
+	suite.API.AnyScopedGroupsErr = errors.New("transient membership lookup failure")
+
+	event := &esmodel.UnresolvedEvent{
+		Device:    "TEST-123",
+		EventType: esmodel.NewRelationship,
+		Payload: &esmodel.UnresolvedNewRelationshipPayload{
+			RelationshipType: "located-in", TargetType: "area", Target: "warehouse-3",
+		},
+	}
+	_, reason, err := suite.resolver(config.AuthModeOptional).HandleNewRelationshipEvent(
+		context.Background(), deviceWithToken("TEST-123"), event)
+
+	assert.Error(suite.T(), err)
+	assert.Equal(suite.T(), uint(dmproto.FailureReason_ApiCallFailed), reason)
+	suite.API.AssertNotCalled(suite.T(), "CreateEntityRelationship")
+}
+
 // A measurement violating a declared metric definition routes to the dead-letter
 // path (FailureReason_Invalid) before any relationship fan-out is attempted.
 func (suite *EventResolverTestSuite) TestMeasurementValidationRejects() {
