@@ -35,23 +35,6 @@ fragment DefaultAsset on Asset {
   metadata
 }
 
-# Content associated with asset group.
-fragment DefaultAssetGroup on AssetGroup {
-  id
-  createdAt
-  updatedAt
-  deletedAt
-  token
-  name
-  description
-  imageUrl
-  icon
-  backgroundColor
-  foregroundColor
-  borderColor
-  metadata
-}
-
 # Create asset type and return identifiers.
 mutation createAssetType($token: String!, $name: String, $description: String, 
   $imageUrl: String, $icon: String, $backgroundColor: String, $foregroundColor: String, $borderColor: String, $metadata: String) {
@@ -114,43 +97,6 @@ query listAssets($pageNumber: Int!, $pageSize: Int!) {
   assets(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
     results {
       ...DefaultAsset
-    }
-    pagination {
-      ...DefaultPagination
-    }
-  }
-}
-
-# Create asset group and return identifiers.
-mutation createAssetGroup($token: String!, $name: String, $description: String, 
-  $imageUrl: String, $icon: String, $backgroundColor: String, $foregroundColor: String, $borderColor: String, $metadata: String) {
-  createAssetGroup(request: { 
-    token: $token,
-    name: $name,
-    description: $description,
-    imageUrl: $imageUrl,
-    icon: $icon,
-    backgroundColor: $backgroundColor,
-    foregroundColor: $foregroundColor,
-    borderColor: $borderColor,
-    metadata: $metadata
-  }) {
-    ...DefaultAssetGroup
-  }
-}
-
-# Get asset groups by unique tokens.
-query getAssetGroupsByToken($tokens: [String!]!) {
-  assetGroupsByToken(tokens: $tokens) {
-    ...DefaultAssetGroup
-  }
-}
-
-# List asset groups that match criteria.
-query listAssetGroups($pageNumber: Int!, $pageSize: Int!) {
-  assetGroups(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
-    results {
-      ...DefaultAssetGroup
     }
     pagination {
       ...DefaultPagination

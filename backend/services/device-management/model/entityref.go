@@ -86,14 +86,11 @@ func loaderFor[T any](
 
 // entityLoaders maps each entity type to its loader (ADR-013).
 var entityLoaders = map[entity.Type]entityLoader{
-	entity.TypeDevice:        loaderFor((*Api).DevicesByToken, (*Api).DevicesById, func(m *Device) uint { return m.ID }, func(m *Device) string { return m.Token }),
-	entity.TypeDeviceGroup:   loaderFor((*Api).DeviceGroupsByToken, (*Api).DeviceGroupsById, func(m *DeviceGroup) uint { return m.ID }, func(m *DeviceGroup) string { return m.Token }),
-	entity.TypeAsset:         loaderFor((*Api).AssetsByToken, (*Api).AssetsById, func(m *Asset) uint { return m.ID }, func(m *Asset) string { return m.Token }),
-	entity.TypeAssetGroup:    loaderFor((*Api).AssetGroupsByToken, (*Api).AssetGroupsById, func(m *AssetGroup) uint { return m.ID }, func(m *AssetGroup) string { return m.Token }),
-	entity.TypeArea:          loaderFor((*Api).AreasByToken, (*Api).AreasById, func(m *Area) uint { return m.ID }, func(m *Area) string { return m.Token }),
-	entity.TypeAreaGroup:     loaderFor((*Api).AreaGroupsByToken, (*Api).AreaGroupsById, func(m *AreaGroup) uint { return m.ID }, func(m *AreaGroup) string { return m.Token }),
-	entity.TypeCustomer:      loaderFor((*Api).CustomersByToken, (*Api).CustomersById, func(m *Customer) uint { return m.ID }, func(m *Customer) string { return m.Token }),
-	entity.TypeCustomerGroup: loaderFor((*Api).CustomerGroupsByToken, (*Api).CustomerGroupsById, func(m *CustomerGroup) uint { return m.ID }, func(m *CustomerGroup) string { return m.Token }),
+	entity.TypeDevice:   loaderFor((*Api).DevicesByToken, (*Api).DevicesById, func(m *Device) uint { return m.ID }, func(m *Device) string { return m.Token }),
+	entity.TypeAsset:    loaderFor((*Api).AssetsByToken, (*Api).AssetsById, func(m *Asset) uint { return m.ID }, func(m *Asset) string { return m.Token }),
+	entity.TypeArea:     loaderFor((*Api).AreasByToken, (*Api).AreasById, func(m *Area) uint { return m.ID }, func(m *Area) string { return m.Token }),
+	entity.TypeCustomer: loaderFor((*Api).CustomersByToken, (*Api).CustomersById, func(m *Customer) uint { return m.ID }, func(m *Customer) string { return m.Token }),
+	entity.TypeGroup:    loaderFor((*Api).EntityGroupsByToken, (*Api).EntityGroupsById, func(m *EntityGroup) uint { return m.ID }, func(m *EntityGroup) string { return m.Token }),
 }
 
 // ResolveEntityToken resolves an entity reference (type + token) to its row id,

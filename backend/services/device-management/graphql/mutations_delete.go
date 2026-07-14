@@ -40,12 +40,12 @@ func (r *SchemaResolver) DeleteDevice(ctx context.Context, args struct{ Token st
 	return r.GetApi(ctx).DeleteDevice(ctx, args.Token)
 }
 
-// Delete a device group and its relationship edges.
-func (r *SchemaResolver) DeleteDeviceGroup(ctx context.Context, args struct{ Token string }) (bool, error) {
+// Delete an entity group and its relationship edges (ADR-061).
+func (r *SchemaResolver) DeleteEntityGroup(ctx context.Context, args struct{ Token string }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return false, err
 	}
-	return r.GetApi(ctx).DeleteDeviceGroup(ctx, args.Token)
+	return r.GetApi(ctx).DeleteEntityGroup(ctx, args.Token)
 }
 
 // Delete a single device credential.
@@ -72,14 +72,6 @@ func (r *SchemaResolver) DeleteAsset(ctx context.Context, args struct{ Token str
 	return r.GetApi(ctx).DeleteAsset(ctx, args.Token)
 }
 
-// Delete an asset group and its relationship edges.
-func (r *SchemaResolver) DeleteAssetGroup(ctx context.Context, args struct{ Token string }) (bool, error) {
-	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
-		return false, err
-	}
-	return r.GetApi(ctx).DeleteAssetGroup(ctx, args.Token)
-}
-
 // Delete an area type (refused while areas reference it).
 func (r *SchemaResolver) DeleteAreaType(ctx context.Context, args struct{ Token string }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
@@ -96,14 +88,6 @@ func (r *SchemaResolver) DeleteArea(ctx context.Context, args struct{ Token stri
 	return r.GetApi(ctx).DeleteArea(ctx, args.Token)
 }
 
-// Delete an area group and its relationship edges.
-func (r *SchemaResolver) DeleteAreaGroup(ctx context.Context, args struct{ Token string }) (bool, error) {
-	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
-		return false, err
-	}
-	return r.GetApi(ctx).DeleteAreaGroup(ctx, args.Token)
-}
-
 // Delete a customer type (refused while customers reference it).
 func (r *SchemaResolver) DeleteCustomerType(ctx context.Context, args struct{ Token string }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
@@ -118,14 +102,6 @@ func (r *SchemaResolver) DeleteCustomer(ctx context.Context, args struct{ Token 
 		return false, err
 	}
 	return r.GetApi(ctx).DeleteCustomer(ctx, args.Token)
-}
-
-// Delete a customer group and its relationship edges.
-func (r *SchemaResolver) DeleteCustomerGroup(ctx context.Context, args struct{ Token string }) (bool, error) {
-	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
-		return false, err
-	}
-	return r.GetApi(ctx).DeleteCustomerGroup(ctx, args.Token)
 }
 
 // Delete a relationship type (refused while edges still use it).

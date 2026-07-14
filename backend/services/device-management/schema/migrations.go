@@ -27,5 +27,6 @@ var (
 		NewAlarmContributorsSchema(),
 		NewDropAlarmDefinitionsSchema(),
 		NewDetectionRuleAuthoringGraphSchema(),
+		NewEntityGroupFoldSchema(),
 	}
 )

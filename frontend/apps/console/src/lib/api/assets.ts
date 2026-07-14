@@ -7,11 +7,18 @@ import { graphql } from '@/gql/device-management';
 import type {
   AssetsQuery,
   AssetTypesQuery,
-  AssetGroupsQuery,
   AssetTypeCreateRequest,
-  AssetGroupCreateRequest,
   AssetCreateRequest,
 } from '@/gql/device-management/graphql';
+import {
+  listEntityGroups,
+  getEntityGroupOfType,
+  createEntityGroup,
+  updateEntityGroup,
+  deleteEntityGroup,
+  type EntityGroup,
+  type GroupFormRequest,
+} from './device-management';
 
 // Public types are derived from the generated operation results so they always
 // reflect the actual selection sets and can never drift from the schema.
@@ -20,12 +27,12 @@ export type AssetType = AssetTypesQuery['assetTypes']['results'][number];
 export type Pagination = AssetsQuery['assets']['pagination'];
 export type AssetSearchResults = AssetsQuery['assets'];
 export type AssetTypeSearchResults = AssetTypesQuery['assetTypes'];
-export type AssetGroup = AssetGroupsQuery['assetGroups']['results'][number];
-export type AssetGroupSearchResults = AssetGroupsQuery['assetGroups'];
+// Asset groups are the uniform EntityGroup filtered to memberType='asset' (ADR-061).
+export type AssetGroup = EntityGroup;
 
 // Re-export the generated request inputs so forms can type their request objects
 // without reaching into the generated module directly.
-export type { AssetTypeCreateRequest, AssetGroupCreateRequest, AssetCreateRequest };
+export type { AssetTypeCreateRequest, AssetCreateRequest };
 
 // ── Assets ──────────────────────────────────────────────────────────────
 
@@ -276,103 +283,15 @@ export async function deleteAssetType(token: string): Promise<boolean> {
   return data.deleteAssetType;
 }
 
-// ── Asset groups ──────────────────────────────────────────────────────────
+// ── Asset groups (memberType = 'asset') ─────────────────────────────────────
+// Thin wrappers over the uniform EntityGroup operations (ADR-061), baking in the
+// asset member family. See device-management.ts for the canonical group ops.
 
-const ASSET_GROUPS = graphql(`
-  query AssetGroups($criteria: AssetGroupSearchCriteria!) {
-    assetGroups(criteria: $criteria) {
-      results {
-        id
-        token
-        name
-        description
-        createdAt
-      }
-      pagination {
-        pageStart
-        pageEnd
-        totalRecords
-      }
-    }
-  }
-`);
-
-export async function listAssetGroups(opts: {
-  pageNumber: number;
-  pageSize: number;
-}): Promise<AssetGroupSearchResults> {
-  const data = await gql('device-management', ASSET_GROUPS, {
-    criteria: {
-      pageNumber: opts.pageNumber,
-      pageSize: opts.pageSize,
-    },
-  });
-  return data.assetGroups;
-}
-
-// The asset-group getter and mutations select the same shape as the AssetGroups
-// query so their results stay assignable to the shared AssetGroup type.
-const ASSET_GROUP_BY_TOKEN = graphql(`
-  query AssetGroupByToken($tokens: [String!]!) {
-    assetGroupsByToken(tokens: $tokens) {
-      id
-      token
-      name
-      description
-      createdAt
-    }
-  }
-`);
-
-export async function getAssetGroup(token: string): Promise<AssetGroup | null> {
-  const data = await gql('device-management', ASSET_GROUP_BY_TOKEN, { tokens: [token] });
-  return data.assetGroupsByToken[0] ?? null;
-}
-
-const CREATE_ASSET_GROUP = graphql(`
-  mutation CreateAssetGroup($request: AssetGroupCreateRequest) {
-    createAssetGroup(request: $request) {
-      id
-      token
-      name
-      description
-      createdAt
-    }
-  }
-`);
-
-export async function createAssetGroup(request: AssetGroupCreateRequest): Promise<AssetGroup> {
-  const data = await gql('device-management', CREATE_ASSET_GROUP, { request });
-  return data.createAssetGroup;
-}
-
-const UPDATE_ASSET_GROUP = graphql(`
-  mutation UpdateAssetGroup($token: String!, $request: AssetGroupCreateRequest) {
-    updateAssetGroup(token: $token, request: $request) {
-      id
-      token
-      name
-      description
-      createdAt
-    }
-  }
-`);
-
-export async function updateAssetGroup(
-  token: string,
-  request: AssetGroupCreateRequest,
-): Promise<AssetGroup> {
-  const data = await gql('device-management', UPDATE_ASSET_GROUP, { token, request });
-  return data.updateAssetGroup;
-}
-
-const DELETE_ASSET_GROUP = graphql(`
-  mutation DeleteAssetGroup($token: String!) {
-    deleteAssetGroup(token: $token)
-  }
-`);
-
-export async function deleteAssetGroup(token: string): Promise<boolean> {
-  const data = await gql('device-management', DELETE_ASSET_GROUP, { token });
-  return data.deleteAssetGroup;
-}
+export const listAssetGroups = (opts: { pageNumber: number; pageSize: number }) =>
+  listEntityGroups({ ...opts, memberType: 'asset' });
+export const getAssetGroup = (token: string) => getEntityGroupOfType(token, 'asset');
+export const createAssetGroup = (request: GroupFormRequest) =>
+  createEntityGroup({ ...request, memberType: 'asset' });
+export const updateAssetGroup = (token: string, request: GroupFormRequest) =>
+  updateEntityGroup(token, { ...request, memberType: 'asset' });
+export const deleteAssetGroup = deleteEntityGroup;

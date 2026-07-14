@@ -110,40 +110,6 @@ type DeviceSearchResults struct {
 	Pagination rdb.SearchResultsPagination
 }
 
-// Data required to create a device group.
-type DeviceGroupCreateRequest struct {
-	Token           string
-	Name            *string
-	Description     *string
-	ImageUrl        *string
-	Icon            *string
-	BackgroundColor *string
-	ForegroundColor *string
-	BorderColor     *string
-	Metadata        *string
-}
-
-// Represents a group of devices.
-type DeviceGroup struct {
-	gorm.Model
-	rdb.TenantScoped
-	rdb.TokenReference
-	rdb.NamedEntity
-	rdb.BrandedEntity
-	rdb.MetadataEntity
-}
-
-// Search criteria for locating device groups.
-type DeviceGroupSearchCriteria struct {
-	rdb.Pagination
-}
-
-// Results for device group search.
-type DeviceGroupSearchResults struct {
-	Results    []DeviceGroup
-	Pagination rdb.SearchResultsPagination
-}
-
 // Credential type vocabulary (ADR-014). Pluggable: new types (LWM2M, DID) add
 // no Device-schema churn.
 type CredentialType string

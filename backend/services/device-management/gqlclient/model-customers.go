@@ -20,12 +20,3 @@ type ICustomer interface {
 	IMetadataEntity
 	GetCustomerType() DefaultCustomerCustomerType
 }
-
-// Customer group entity.
-type ICustomerGroup interface {
-	IModel
-	ITokenReference
-	INamedEntity
-	IBrandedEntity
-	IMetadataEntity
-}

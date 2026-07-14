@@ -76,37 +76,3 @@ type AreaSearchResults struct {
 	Results    []Area
 	Pagination rdb.SearchResultsPagination
 }
-
-// Data required to create an area group.
-type AreaGroupCreateRequest struct {
-	Token           string
-	Name            *string
-	Description     *string
-	ImageUrl        *string
-	Icon            *string
-	BackgroundColor *string
-	ForegroundColor *string
-	BorderColor     *string
-	Metadata        *string
-}
-
-// Represents a group of areas.
-type AreaGroup struct {
-	gorm.Model
-	rdb.TenantScoped
-	rdb.TokenReference
-	rdb.NamedEntity
-	rdb.BrandedEntity
-	rdb.MetadataEntity
-}
-
-// Search criteria for locating area groups.
-type AreaGroupSearchCriteria struct {
-	rdb.Pagination
-}
-
-// Results for area group search.
-type AreaGroupSearchResults struct {
-	Results    []AreaGroup
-	Pagination rdb.SearchResultsPagination
-}

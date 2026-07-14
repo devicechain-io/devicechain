@@ -31,7 +31,7 @@ export function MembershipPanel({
   memberSingular,
   loadCandidates,
 }: {
-  /** Backend entity-type token for the group, e.g. "assetgroup". */
+  /** Backend entity-type token for the group — always "group" since ADR-061. */
   groupType: string;
   groupToken: string;
   /** Backend entity-type token for members, e.g. "asset". */

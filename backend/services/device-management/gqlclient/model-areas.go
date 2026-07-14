@@ -20,12 +20,3 @@ type IArea interface {
 	IMetadataEntity
 	GetAreaType() DefaultAreaAreaType
 }
-
-// Area group entity.
-type IAreaGroup interface {
-	IModel
-	ITokenReference
-	INamedEntity
-	IBrandedEntity
-	IMetadataEntity
-}

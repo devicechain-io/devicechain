@@ -31,19 +31,13 @@ func entityIdToken(value interface{}) (uint, string) {
 	switch e := value.(type) {
 	case *model.Device:
 		return e.ID, e.Token
-	case *model.DeviceGroup:
-		return e.ID, e.Token
 	case *model.Asset:
-		return e.ID, e.Token
-	case *model.AssetGroup:
 		return e.ID, e.Token
 	case *model.Area:
 		return e.ID, e.Token
-	case *model.AreaGroup:
-		return e.ID, e.Token
 	case *model.Customer:
 		return e.ID, e.Token
-	case *model.CustomerGroup:
+	case *model.EntityGroup:
 		return e.ID, e.Token
 	}
 	return 0, ""
@@ -66,23 +60,9 @@ func (r *EntityResolver) ToDevice() (*DeviceResolver, bool) {
 	return nil, false
 }
 
-func (r *EntityResolver) ToDeviceGroup() (*DeviceGroupResolver, bool) {
-	if e, ok := r.value.(*model.DeviceGroup); ok {
-		return &DeviceGroupResolver{M: *e, S: r.S, C: r.C}, true
-	}
-	return nil, false
-}
-
 func (r *EntityResolver) ToAsset() (*AssetResolver, bool) {
 	if e, ok := r.value.(*model.Asset); ok {
 		return &AssetResolver{M: *e, S: r.S, C: r.C}, true
-	}
-	return nil, false
-}
-
-func (r *EntityResolver) ToAssetGroup() (*AssetGroupResolver, bool) {
-	if e, ok := r.value.(*model.AssetGroup); ok {
-		return &AssetGroupResolver{M: *e, S: r.S, C: r.C}, true
 	}
 	return nil, false
 }
@@ -94,13 +74,6 @@ func (r *EntityResolver) ToArea() (*AreaResolver, bool) {
 	return nil, false
 }
 
-func (r *EntityResolver) ToAreaGroup() (*AreaGroupResolver, bool) {
-	if e, ok := r.value.(*model.AreaGroup); ok {
-		return &AreaGroupResolver{M: *e, S: r.S, C: r.C}, true
-	}
-	return nil, false
-}
-
 func (r *EntityResolver) ToCustomer() (*CustomerResolver, bool) {
 	if e, ok := r.value.(*model.Customer); ok {
 		return &CustomerResolver{M: *e, S: r.S, C: r.C}, true
@@ -108,9 +81,9 @@ func (r *EntityResolver) ToCustomer() (*CustomerResolver, bool) {
 	return nil, false
 }
 
-func (r *EntityResolver) ToCustomerGroup() (*CustomerGroupResolver, bool) {
-	if e, ok := r.value.(*model.CustomerGroup); ok {
-		return &CustomerGroupResolver{M: *e, S: r.S, C: r.C}, true
+func (r *EntityResolver) ToEntityGroup() (*EntityGroupResolver, bool) {
+	if e, ok := r.value.(*model.EntityGroup); ok {
+		return &EntityGroupResolver{M: *e, S: r.S, C: r.C}, true
 	}
 	return nil, false
 }

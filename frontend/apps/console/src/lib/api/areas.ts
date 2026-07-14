@@ -7,25 +7,32 @@ import { graphql } from '@/gql/device-management';
 import type {
   AreasQuery,
   AreaTypesQuery,
-  AreaGroupsQuery,
   AreaTypeCreateRequest,
-  AreaGroupCreateRequest,
   AreaCreateRequest,
 } from '@/gql/device-management/graphql';
+import {
+  listEntityGroups,
+  getEntityGroupOfType,
+  createEntityGroup,
+  updateEntityGroup,
+  deleteEntityGroup,
+  type EntityGroup,
+  type GroupFormRequest,
+} from './device-management';
 
 // Public types are derived from the generated operation results so they always
 // reflect the actual selection sets and can never drift from the schema.
 export type Area = AreasQuery['areas']['results'][number];
 export type AreaType = AreaTypesQuery['areaTypes']['results'][number];
-export type AreaGroup = AreaGroupsQuery['areaGroups']['results'][number];
+// Area groups are the uniform EntityGroup filtered to memberType='area' (ADR-061).
+export type AreaGroup = EntityGroup;
 export type Pagination = AreasQuery['areas']['pagination'];
 export type AreaSearchResults = AreasQuery['areas'];
 export type AreaTypeSearchResults = AreaTypesQuery['areaTypes'];
-export type AreaGroupSearchResults = AreaGroupsQuery['areaGroups'];
 
 // Re-export the generated request inputs so forms can type their request objects
 // without reaching into the generated module directly.
-export type { AreaTypeCreateRequest, AreaGroupCreateRequest, AreaCreateRequest };
+export type { AreaTypeCreateRequest, AreaCreateRequest };
 
 // ── Areas ───────────────────────────────────────────────────────────────
 
@@ -276,103 +283,15 @@ export async function deleteAreaType(token: string): Promise<boolean> {
   return data.deleteAreaType;
 }
 
-// ── Area groups ─────────────────────────────────────────────────────────
+// ── Area groups (memberType = 'area') ───────────────────────────────────────
+// Thin wrappers over the uniform EntityGroup operations (ADR-061), baking in the
+// area member family. See device-management.ts for the canonical group ops.
 
-const AREA_GROUPS = graphql(`
-  query AreaGroups($criteria: AreaGroupSearchCriteria!) {
-    areaGroups(criteria: $criteria) {
-      results {
-        id
-        token
-        name
-        description
-        createdAt
-      }
-      pagination {
-        pageStart
-        pageEnd
-        totalRecords
-      }
-    }
-  }
-`);
-
-export async function listAreaGroups(opts: {
-  pageNumber: number;
-  pageSize: number;
-}): Promise<AreaGroupSearchResults> {
-  const data = await gql('device-management', AREA_GROUPS, {
-    criteria: {
-      pageNumber: opts.pageNumber,
-      pageSize: opts.pageSize,
-    },
-  });
-  return data.areaGroups;
-}
-
-// The area-group getter and mutations select the same shape as the AreaGroups
-// query so their results stay assignable to the shared AreaGroup type.
-const AREA_GROUP_BY_TOKEN = graphql(`
-  query AreaGroupByToken($tokens: [String!]!) {
-    areaGroupsByToken(tokens: $tokens) {
-      id
-      token
-      name
-      description
-      createdAt
-    }
-  }
-`);
-
-export async function getAreaGroup(token: string): Promise<AreaGroup | null> {
-  const data = await gql('device-management', AREA_GROUP_BY_TOKEN, { tokens: [token] });
-  return data.areaGroupsByToken[0] ?? null;
-}
-
-const CREATE_AREA_GROUP = graphql(`
-  mutation CreateAreaGroup($request: AreaGroupCreateRequest) {
-    createAreaGroup(request: $request) {
-      id
-      token
-      name
-      description
-      createdAt
-    }
-  }
-`);
-
-export async function createAreaGroup(request: AreaGroupCreateRequest): Promise<AreaGroup> {
-  const data = await gql('device-management', CREATE_AREA_GROUP, { request });
-  return data.createAreaGroup;
-}
-
-const UPDATE_AREA_GROUP = graphql(`
-  mutation UpdateAreaGroup($token: String!, $request: AreaGroupCreateRequest) {
-    updateAreaGroup(token: $token, request: $request) {
-      id
-      token
-      name
-      description
-      createdAt
-    }
-  }
-`);
-
-export async function updateAreaGroup(
-  token: string,
-  request: AreaGroupCreateRequest,
-): Promise<AreaGroup> {
-  const data = await gql('device-management', UPDATE_AREA_GROUP, { token, request });
-  return data.updateAreaGroup;
-}
-
-const DELETE_AREA_GROUP = graphql(`
-  mutation DeleteAreaGroup($token: String!) {
-    deleteAreaGroup(token: $token)
-  }
-`);
-
-export async function deleteAreaGroup(token: string): Promise<boolean> {
-  const data = await gql('device-management', DELETE_AREA_GROUP, { token });
-  return data.deleteAreaGroup;
-}
+export const listAreaGroups = (opts: { pageNumber: number; pageSize: number }) =>
+  listEntityGroups({ ...opts, memberType: 'area' });
+export const getAreaGroup = (token: string) => getEntityGroupOfType(token, 'area');
+export const createAreaGroup = (request: GroupFormRequest) =>
+  createEntityGroup({ ...request, memberType: 'area' });
+export const updateAreaGroup = (token: string, request: GroupFormRequest) =>
+  updateEntityGroup(token, { ...request, memberType: 'area' });
+export const deleteAreaGroup = deleteEntityGroup;

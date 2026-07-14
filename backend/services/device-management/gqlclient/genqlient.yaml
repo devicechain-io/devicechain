@@ -5,6 +5,7 @@ operations:
 - ./genqlient-assets.graphql
 - ./genqlient-areas.graphql
 - ./genqlient-customers.graphql
+- ./genqlient-groups.graphql
 generated: generated.go
 package: gqlclient
 optional: pointer

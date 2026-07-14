@@ -76,37 +76,3 @@ type CustomerSearchResults struct {
 	Results    []Customer
 	Pagination rdb.SearchResultsPagination
 }
-
-// Data required to create a customer group.
-type CustomerGroupCreateRequest struct {
-	Token           string
-	Name            *string
-	Description     *string
-	ImageUrl        *string
-	Icon            *string
-	BackgroundColor *string
-	ForegroundColor *string
-	BorderColor     *string
-	Metadata        *string
-}
-
-// Represents a group of customers.
-type CustomerGroup struct {
-	gorm.Model
-	rdb.TenantScoped
-	rdb.TokenReference
-	rdb.NamedEntity
-	rdb.BrandedEntity
-	rdb.MetadataEntity
-}
-
-// Search criteria for locating customer groups.
-type CustomerGroupSearchCriteria struct {
-	rdb.Pagination
-}
-
-// Results for customer group search.
-type CustomerGroupSearchResults struct {
-	Results    []CustomerGroup
-	Pagination rdb.SearchResultsPagination
-}

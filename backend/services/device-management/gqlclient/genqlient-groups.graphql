@@ -1,0 +1,62 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Content associated with a uniform entity group (ADR-061).
+fragment DefaultEntityGroup on EntityGroup {
+  id
+  createdAt
+  updatedAt
+  deletedAt
+  token
+  name
+  description
+  imageUrl
+  icon
+  backgroundColor
+  foregroundColor
+  borderColor
+  metadata
+  memberType
+  membershipMode
+  selector
+}
+
+# Create entity group and return identifiers.
+mutation createEntityGroup($token: String!, $memberType: String!, $membershipMode: String,
+  $name: String, $description: String, $imageUrl: String, $icon: String, $backgroundColor: String,
+  $foregroundColor: String, $borderColor: String, $metadata: String) {
+  createEntityGroup(request: {
+    token: $token,
+    memberType: $memberType,
+    membershipMode: $membershipMode,
+    name: $name,
+    description: $description,
+    imageUrl: $imageUrl,
+    icon: $icon,
+    backgroundColor: $backgroundColor,
+    foregroundColor: $foregroundColor,
+    borderColor: $borderColor,
+    metadata: $metadata
+  }) {
+    ...DefaultEntityGroup
+  }
+}
+
+# Get entity groups by unique tokens.
+query getEntityGroupsByToken($tokens: [String!]!) {
+  entityGroupsByToken(tokens: $tokens) {
+    ...DefaultEntityGroup
+  }
+}
+
+# List entity groups that match criteria.
+query listEntityGroups($pageNumber: Int!, $pageSize: Int!) {
+  entityGroups(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
+    results {
+      ...DefaultEntityGroup
+    }
+    pagination {
+      ...DefaultPagination
+    }
+  }
+}

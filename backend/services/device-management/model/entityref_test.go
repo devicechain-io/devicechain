@@ -23,7 +23,7 @@ func TestEntityLoadersCoverAllTypes(t *testing.T) {
 }
 
 func TestIsEntityType(t *testing.T) {
-	if !IsEntityType("device") || !IsEntityType("customergroup") {
+	if !IsEntityType("device") || !IsEntityType("group") {
 		t.Fatal("known entity types rejected")
 	}
 	if IsEntityType("widget") || IsEntityType("") {

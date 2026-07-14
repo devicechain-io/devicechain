@@ -35,23 +35,6 @@ fragment DefaultArea on Area {
   metadata
 }
 
-# Content associated with area group.
-fragment DefaultAreaGroup on AreaGroup {
-  id
-  createdAt
-  updatedAt
-  deletedAt
-  token
-  name
-  description
-  imageUrl
-  icon
-  backgroundColor
-  foregroundColor
-  borderColor
-  metadata
-}
-
 # Create area type and return identifiers.
 mutation createAreaType($token: String!, $name: String, $description: String, 
   $imageUrl: String, $icon: String, $backgroundColor: String, $foregroundColor: String, $borderColor: String, $metadata: String) {
@@ -114,43 +97,6 @@ query listAreas($pageNumber: Int!, $pageSize: Int!) {
   areas(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
     results {
       ...DefaultArea
-    }
-    pagination {
-      ...DefaultPagination
-    }
-  }
-}
-
-# Create area group and return identifiers.
-mutation createAreaGroup($token: String!, $name: String, $description: String, 
-  $imageUrl: String, $icon: String, $backgroundColor: String, $foregroundColor: String, $borderColor: String, $metadata: String) {
-  createAreaGroup(request: { 
-    token: $token,
-    name: $name,
-    description: $description,
-    imageUrl: $imageUrl,
-    icon: $icon,
-    backgroundColor: $backgroundColor,
-    foregroundColor: $foregroundColor,
-    borderColor: $borderColor,
-    metadata: $metadata
-  }) {
-    ...DefaultAreaGroup
-  }
-}
-
-# Get area groups by unique tokens.
-query getAreaGroupsByToken($tokens: [String!]!) {
-  areaGroupsByToken(tokens: $tokens) {
-    ...DefaultAreaGroup
-  }
-}
-
-# List area groups that match criteria.
-query listAreaGroups($pageNumber: Int!, $pageSize: Int!) {
-  areaGroups(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
-    results {
-      ...DefaultAreaGroup
     }
     pagination {
       ...DefaultPagination

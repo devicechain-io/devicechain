@@ -35,23 +35,6 @@ fragment DefaultDevice on Device {
   metadata
 }
 
-# Content associated with a device group.
-fragment DefaultDeviceGroup on DeviceGroup {
-  id
-  createdAt
-  updatedAt
-  deletedAt
-  token
-  name
-  description
-  imageUrl
-  icon
-  backgroundColor
-  foregroundColor
-  borderColor
-  metadata
-}
-
 # Create device type and return identifiers.
 mutation createDeviceType($token: String!, $name: String, $description: String, 
   $imageUrl: String, $icon: String, $backgroundColor: String, $foregroundColor: String, $borderColor: String, $metadata: String) {
@@ -121,39 +104,3 @@ query listDevices($pageNumber: Int!, $pageSize: Int!) {
   }
 }
 
-# Create device group and return identifiers.
-mutation createDeviceGroup($token: String!, $name: String, $description: String, 
-  $imageUrl: String, $icon: String, $backgroundColor: String, $foregroundColor: String, $borderColor: String, $metadata: String) {
-  createDeviceGroup(request: { 
-    token: $token,
-    name: $name,
-    description: $description,
-    imageUrl: $imageUrl,
-    icon: $icon,
-    backgroundColor: $backgroundColor,
-    foregroundColor: $foregroundColor,
-    borderColor: $borderColor,
-    metadata: $metadata
-  }) {
-    ...DefaultDeviceGroup
-  }
-}
-
-# Get device groups by unique tokens.
-query getDeviceGroupsByToken($tokens: [String!]!) {
-  deviceGroupsByToken(tokens: $tokens) {
-    ...DefaultDeviceGroup
-  }
-}
-
-# List device groups that match criteria.
-query listDeviceGroups($pageNumber: Int!, $pageSize: Int!) {
-  deviceGroups(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
-    results {
-      ...DefaultDeviceGroup
-    }
-    pagination {
-      ...DefaultPagination
-    }
-  }
-}

@@ -9,8 +9,8 @@ import type {
   DeviceTypesQuery,
   DeviceTypeCreateRequest,
   DeviceCreateRequest,
-  DeviceGroupsQuery,
-  DeviceGroupCreateRequest,
+  EntityGroupsQuery,
+  EntityGroupCreateRequest,
   DeviceProfilesQuery,
   DeviceProfileByTokenQuery,
   DeviceProfileVersionsQuery,
@@ -33,8 +33,11 @@ export type DeviceType = DeviceTypesQuery['deviceTypes']['results'][number];
 export type Pagination = DevicesQuery['devices']['pagination'];
 export type DeviceSearchResults = DevicesQuery['devices'];
 export type DeviceTypeSearchResults = DeviceTypesQuery['deviceTypes'];
-export type DeviceGroup = DeviceGroupsQuery['deviceGroups']['results'][number];
-export type DeviceGroupSearchResults = DeviceGroupsQuery['deviceGroups'];
+// The uniform entity group (ADR-061). All four registry families share it,
+// distinguished by memberType. DeviceGroup et al. are memberType-specialized
+// aliases defined alongside their family wrappers below.
+export type EntityGroup = EntityGroupsQuery['entityGroups']['results'][number];
+export type EntityGroupSearchResults = EntityGroupsQuery['entityGroups'];
 
 export type DeviceProfile = DeviceProfilesQuery['deviceProfiles']['results'][number];
 export type DeviceProfileSearchResults = DeviceProfilesQuery['deviceProfiles'];
@@ -49,7 +52,7 @@ export type DetectionRule = DetectionRulesQuery['detectionRules']['results'][num
 export type {
   DeviceTypeCreateRequest,
   DeviceCreateRequest,
-  DeviceGroupCreateRequest,
+  EntityGroupCreateRequest,
   DeviceProfileCreateRequest,
   MetricDefinitionCreateRequest,
   CommandDefinitionCreateRequest,
@@ -375,17 +378,31 @@ export async function deleteDeviceType(token: string): Promise<boolean> {
   return data.deleteDeviceType;
 }
 
-// ── Device groups ─────────────────────────────────────────────────────────
+// ── Entity groups (ADR-061) ─────────────────────────────────────────────────
+//
+// The four registry families (device / asset / area / customer) share one uniform
+// EntityGroup on the backend, distinguished by memberType. These are the canonical
+// group operations; each family's API module re-exports thin wrappers that bake in
+// their memberType (see the Device-group wrappers below and areas/assets/customers).
 
-const DEVICE_GROUPS = graphql(`
-  query DeviceGroups($criteria: DeviceGroupSearchCriteria!) {
-    deviceGroups(criteria: $criteria) {
+// A group form supplies presentation fields only; the family wrapper injects
+// memberType. membershipMode/selector are omitted — dynamic groups are not yet
+// authorable (they land with the selector engine, ADR-061 G3/G4).
+export type GroupFormRequest = Omit<
+  EntityGroupCreateRequest,
+  'memberType' | 'membershipMode' | 'selector'
+>;
+
+const ENTITY_GROUPS = graphql(`
+  query EntityGroups($criteria: EntityGroupSearchCriteria!) {
+    entityGroups(criteria: $criteria) {
       results {
         id
         token
         name
         description
         createdAt
+        memberType
       }
       pagination {
         pageStart
@@ -396,85 +413,114 @@ const DEVICE_GROUPS = graphql(`
   }
 `);
 
-export async function listDeviceGroups(opts: {
+export async function listEntityGroups(opts: {
+  memberType: string;
   pageNumber: number;
   pageSize: number;
-}): Promise<DeviceGroupSearchResults> {
-  const data = await gql('device-management', DEVICE_GROUPS, {
+}): Promise<EntityGroupSearchResults> {
+  const data = await gql('device-management', ENTITY_GROUPS, {
     criteria: {
+      memberType: opts.memberType,
       pageNumber: opts.pageNumber,
       pageSize: opts.pageSize,
     },
   });
-  return data.deviceGroups;
+  return data.entityGroups;
 }
 
-// The device-group getter and mutations select the same shape as the DeviceGroups
-// query so their results stay assignable to the shared DeviceGroup type.
-const DEVICE_GROUP_BY_TOKEN = graphql(`
-  query DeviceGroupByToken($tokens: [String!]!) {
-    deviceGroupsByToken(tokens: $tokens) {
+// The getter and mutations select the same shape as the EntityGroups query so
+// their results stay assignable to the shared EntityGroup type.
+const ENTITY_GROUP_BY_TOKEN = graphql(`
+  query EntityGroupByToken($tokens: [String!]!) {
+    entityGroupsByToken(tokens: $tokens) {
       id
       token
       name
       description
       createdAt
+      memberType
     }
   }
 `);
 
-export async function getDeviceGroup(token: string): Promise<DeviceGroup | null> {
-  const data = await gql('device-management', DEVICE_GROUP_BY_TOKEN, { tokens: [token] });
-  return data.deviceGroupsByToken[0] ?? null;
+export async function getEntityGroup(token: string): Promise<EntityGroup | null> {
+  const data = await gql('device-management', ENTITY_GROUP_BY_TOKEN, { tokens: [token] });
+  return data.entityGroupsByToken[0] ?? null;
 }
 
-const CREATE_DEVICE_GROUP = graphql(`
-  mutation CreateDeviceGroup($request: DeviceGroupCreateRequest) {
-    createDeviceGroup(request: $request) {
-      id
-      token
-      name
-      description
-      createdAt
-    }
-  }
-`);
-
-export async function createDeviceGroup(request: DeviceGroupCreateRequest): Promise<DeviceGroup> {
-  const data = await gql('device-management', CREATE_DEVICE_GROUP, { request });
-  return data.createDeviceGroup;
-}
-
-const UPDATE_DEVICE_GROUP = graphql(`
-  mutation UpdateDeviceGroup($token: String!, $request: DeviceGroupCreateRequest) {
-    updateDeviceGroup(token: $token, request: $request) {
-      id
-      token
-      name
-      description
-      createdAt
-    }
-  }
-`);
-
-export async function updateDeviceGroup(
+// getEntityGroupOfType loads a group and confirms it belongs to the expected
+// member family, so a cross-family token (e.g. an asset group's token opened under
+// /device-groups) resolves to null rather than mis-rendering in the wrong screen.
+// The four family getters below are specializations of it.
+export async function getEntityGroupOfType(
   token: string,
-  request: DeviceGroupCreateRequest,
-): Promise<DeviceGroup> {
-  const data = await gql('device-management', UPDATE_DEVICE_GROUP, { token, request });
-  return data.updateDeviceGroup;
+  memberType: string,
+): Promise<EntityGroup | null> {
+  const group = await getEntityGroup(token);
+  return group && group.memberType === memberType ? group : null;
 }
 
-const DELETE_DEVICE_GROUP = graphql(`
-  mutation DeleteDeviceGroup($token: String!) {
-    deleteDeviceGroup(token: $token)
+const CREATE_ENTITY_GROUP = graphql(`
+  mutation CreateEntityGroup($request: EntityGroupCreateRequest) {
+    createEntityGroup(request: $request) {
+      id
+      token
+      name
+      description
+      createdAt
+      memberType
+    }
   }
 `);
 
-export async function deleteDeviceGroup(token: string): Promise<boolean> {
-  const data = await gql('device-management', DELETE_DEVICE_GROUP, { token });
-  return data.deleteDeviceGroup;
+export async function createEntityGroup(request: EntityGroupCreateRequest): Promise<EntityGroup> {
+  const data = await gql('device-management', CREATE_ENTITY_GROUP, { request });
+  return data.createEntityGroup;
 }
+
+const UPDATE_ENTITY_GROUP = graphql(`
+  mutation UpdateEntityGroup($token: String!, $request: EntityGroupCreateRequest) {
+    updateEntityGroup(token: $token, request: $request) {
+      id
+      token
+      name
+      description
+      createdAt
+      memberType
+    }
+  }
+`);
+
+export async function updateEntityGroup(
+  token: string,
+  request: EntityGroupCreateRequest,
+): Promise<EntityGroup> {
+  const data = await gql('device-management', UPDATE_ENTITY_GROUP, { token, request });
+  return data.updateEntityGroup;
+}
+
+const DELETE_ENTITY_GROUP = graphql(`
+  mutation DeleteEntityGroup($token: String!) {
+    deleteEntityGroup(token: $token)
+  }
+`);
+
+export async function deleteEntityGroup(token: string): Promise<boolean> {
+  const data = await gql('device-management', DELETE_ENTITY_GROUP, { token });
+  return data.deleteEntityGroup;
+}
+
+// ── Device groups (memberType = 'device') ───────────────────────────────────
+export type DeviceGroup = EntityGroup;
+
+export const listDeviceGroups = (opts: { pageNumber: number; pageSize: number }) =>
+  listEntityGroups({ ...opts, memberType: 'device' });
+export const getDeviceGroup = (token: string) => getEntityGroupOfType(token, 'device');
+export const createDeviceGroup = (request: GroupFormRequest) =>
+  createEntityGroup({ ...request, memberType: 'device' });
+export const updateDeviceGroup = (token: string, request: GroupFormRequest) =>
+  updateEntityGroup(token, { ...request, memberType: 'device' });
+export const deleteDeviceGroup = deleteEntityGroup;
 
 // ── Device profiles (ADR-045) ─────────────────────────────────────────────
 
