@@ -21,6 +21,7 @@ DeviceChain is a set of stateless Go microservices over a shared core library, c
 | **notification-management** | Routes triggered alarms to humans — per-tenant policy over email (SMTP) and webhook, with per-severity escalation. |
 | **user-management** | Global identities, per-tenant memberships, the role catalog, and JWT issuance/validation. |
 | **outbound-connectors** | Delivers REACT's outbound actions to external systems — an HTTP/webhook call and a `publish` to message brokers and cloud queues (MQTT, Kafka, AWS SNS/SQS) — over tenant-scoped, versioned connectors with credentials held in the secret store. Runs in its own process so a slow or misbehaving external system can't touch the detection pipeline. See [Outbound Connectors](./outbound-connectors.md). |
+| **mcp** _(opt-in)_ | A read-only Model Context Protocol server that lets AI assistants operate a tenant on a user's behalf. A thin OAuth 2.1 resource server over the GraphQL API carrying the caller's own tenant-scoped token — no service token, curated read tools only. See [AI Access (MCP)](./mcp.md). |
 | **operator** | A controller-runtime operator that manages the `DeviceChainInstance` lifecycle (status aggregation, config hot-reload). Workloads themselves are rendered by the Helm chart; tenants are control-plane database records, not reconciled resources. |
 
 Additional services — batch operations and scheduling — are planned. See the repository for current status.
