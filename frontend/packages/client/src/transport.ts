@@ -22,7 +22,8 @@ export type Area =
   | 'event-processing'
   | 'device-state'
   | 'command-delivery'
-  | 'dashboard-management';
+  | 'dashboard-management'
+  | 'outbound-connectors';
 
 // Relative URL matching the cluster ingress contract: the ingress routes
 // https://<host>/api/<area>/graphql to each functional-area service and serves

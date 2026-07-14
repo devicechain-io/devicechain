@@ -16,6 +16,7 @@ import {
   Package,
   ScrollText,
   SlidersHorizontal,
+  Webhook,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -59,6 +60,7 @@ const NAV: NavNode[] = [
   { label: 'Dashboard', href: '/', icon: LayoutGrid },
   { label: 'Dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read' },
   { label: 'Alarms', href: '/alarms', icon: AlertTriangle, requires: 'alarm:read' },
+  { label: 'Connectors', href: '/connectors', icon: Webhook, requires: 'connector:read' },
   {
     label: 'Devices',
     icon: Cpu,
