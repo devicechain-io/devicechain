@@ -34,6 +34,15 @@ func (api *Api) SetEntityAttribute(ctx context.Context,
 		return nil, fmt.Errorf("invalid attribute value type: %s", request.ValueType)
 	}
 
+	// Normalize the stored value so the value column is always well-formed for its
+	// value_type (ADR-061 G3 §3.4): a numeric type that would hold non-numeric text is
+	// coerced to unset (NULL), so the facet-selector lowering's ea.value::numeric cast
+	// never sees uncastable text — and, matching the existing dynamic-threshold contract,
+	// an unset numeric emits a projection removal downstream rather than a stale value. A
+	// boolean is canonicalized to 'true'/'false' (an unparseable one coerced to unset) so a
+	// bool facet leaf matches a fixed literal. STRING/JSON are stored verbatim.
+	request.Value = normalizeAttributeValue(request.ValueType, request.Value)
+
 	// Resolve and validate the owner entity reference.
 	entityId, err := api.ResolveEntityToken(ctx, request.EntityType, request.Entity)
 	if err != nil {
@@ -116,6 +125,59 @@ func dynamicThresholdEligible(entityType, scope string) bool {
 	default:
 		return false
 	}
+}
+
+// normalizeAttributeValue enforces the storage-form invariant the facet-selector lowering
+// (ADR-061 G3 §3.4) relies on, coercing (never rejecting — the existing write contract does
+// not reject) a value into a form well-defined for its value_type. A present value of a
+// numeric type (LONG/DOUBLE) that does not parse to a finite number is coerced to unset
+// (nil), so a row tagged LONG/DOUBLE never holds text that would fault the ea.value::numeric
+// cast; an unset numeric then emits a dynamic-threshold removal downstream, preserving the
+// prior "non-numeric value clears the projection" behavior. A present BOOLEAN is
+// canonicalized to 'true'/'false' (an unparseable one coerced to unset). A nil value stays
+// unset, and STRING/JSON pass through verbatim.
+func normalizeAttributeValue(valueType string, value *string) *string {
+	if value == nil {
+		return nil
+	}
+	switch AttributeValueType(valueType) {
+	case AttributeValueLong, AttributeValueDouble:
+		// Canonicalize, don't pass through: Go's ParseFloat accepts spellings Postgres
+		// numeric rejects (hex floats like "0x1p2", and any future Go-syntax drift), so a
+		// verbatim store would leave a LONG/DOUBLE row that faults ea.value::numeric at
+		// resolve. Re-serializing the parsed number to plain decimal removes the whole class
+		// and keeps LONG integer precision via a dedicated int path.
+		return canonicalNumericText(valueType, value)
+	case AttributeValueBoolean:
+		b, err := strconv.ParseBool(*value)
+		if err != nil {
+			return nil
+		}
+		canonical := strconv.FormatBool(b)
+		return &canonical
+	default:
+		return value
+	}
+}
+
+// canonicalNumericText re-serializes a numeric attribute value to a plain-decimal form that
+// Postgres numeric accepts, returning nil when it does not parse (coerced to unset). A LONG
+// integer round-trips through int64 to keep full precision; everything else (a LONG written
+// as "3.0", a DOUBLE, a hex float) goes through the float path and emits a plain-decimal
+// string ('f' format — no exponent, no hex, no NaN/Inf, which numericAttributeValue rejects).
+func canonicalNumericText(valueType string, value *string) *string {
+	if AttributeValueType(valueType) == AttributeValueLong {
+		if i, err := strconv.ParseInt(*value, 10, 64); err == nil {
+			s := strconv.FormatInt(i, 10)
+			return &s
+		}
+	}
+	f, ok := numericAttributeValue(valueType, value)
+	if !ok {
+		return nil
+	}
+	s := strconv.FormatFloat(f, 'f', -1, 64)
+	return &s
 }
 
 // numericAttributeValue parses an attribute value into a float64 when its declared type
