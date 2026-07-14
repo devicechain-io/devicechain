@@ -19,7 +19,8 @@ type Documents = {
     "\n  mutation SelectTenant($identityToken: String!, $tenant: String!) {\n    selectTenant(identityToken: $identityToken, tenant: $tenant) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": typeof types.SelectTenantDocument,
     "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n    }\n  }\n": typeof types.IdentityMembershipsDocument,
     "\n  mutation Refresh($refreshToken: String!) {\n    refresh(refreshToken: $refreshToken) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": typeof types.RefreshDocument,
-    "\n  query CurrentTenant {\n    tenant {\n      token\n      name\n      description\n    }\n  }\n": typeof types.CurrentTenantDocument,
+    "\n  query CurrentTenant {\n    tenant {\n      token\n      name\n      description\n      branding {\n        title\n        logo\n        logoMaxHeight\n        primary\n        background\n        foreground\n        accent\n        updatedAt\n      }\n      brandingOverride {\n        title\n        logo\n        logoMaxHeight\n        primary\n        background\n        foreground\n        accent\n        updatedAt\n      }\n    }\n  }\n": typeof types.CurrentTenantDocument,
+    "\n  mutation SetTenantBranding($input: TenantBrandingInput!) {\n    setTenantBranding(input: $input) {\n      token\n      name\n      description\n      branding {\n        title\n        logo\n        logoMaxHeight\n        primary\n        background\n        foreground\n        accent\n        updatedAt\n      }\n      brandingOverride {\n        title\n        logo\n        logoMaxHeight\n        primary\n        background\n        foreground\n        accent\n        updatedAt\n      }\n    }\n  }\n": typeof types.SetTenantBrandingDocument,
     "\n  query Me {\n    me {\n      email\n      firstName\n      lastName\n    }\n  }\n": typeof types.MeDocument,
     "\n  mutation UpdateProfile($firstName: String, $lastName: String) {\n    updateProfile(firstName: $firstName, lastName: $lastName) {\n      email\n      firstName\n      lastName\n    }\n  }\n": typeof types.UpdateProfileDocument,
 };
@@ -28,7 +29,8 @@ const documents: Documents = {
     "\n  mutation SelectTenant($identityToken: String!, $tenant: String!) {\n    selectTenant(identityToken: $identityToken, tenant: $tenant) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": types.SelectTenantDocument,
     "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n    }\n  }\n": types.IdentityMembershipsDocument,
     "\n  mutation Refresh($refreshToken: String!) {\n    refresh(refreshToken: $refreshToken) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": types.RefreshDocument,
-    "\n  query CurrentTenant {\n    tenant {\n      token\n      name\n      description\n    }\n  }\n": types.CurrentTenantDocument,
+    "\n  query CurrentTenant {\n    tenant {\n      token\n      name\n      description\n      branding {\n        title\n        logo\n        logoMaxHeight\n        primary\n        background\n        foreground\n        accent\n        updatedAt\n      }\n      brandingOverride {\n        title\n        logo\n        logoMaxHeight\n        primary\n        background\n        foreground\n        accent\n        updatedAt\n      }\n    }\n  }\n": types.CurrentTenantDocument,
+    "\n  mutation SetTenantBranding($input: TenantBrandingInput!) {\n    setTenantBranding(input: $input) {\n      token\n      name\n      description\n      branding {\n        title\n        logo\n        logoMaxHeight\n        primary\n        background\n        foreground\n        accent\n        updatedAt\n      }\n      brandingOverride {\n        title\n        logo\n        logoMaxHeight\n        primary\n        background\n        foreground\n        accent\n        updatedAt\n      }\n    }\n  }\n": types.SetTenantBrandingDocument,
     "\n  query Me {\n    me {\n      email\n      firstName\n      lastName\n    }\n  }\n": types.MeDocument,
     "\n  mutation UpdateProfile($firstName: String, $lastName: String) {\n    updateProfile(firstName: $firstName, lastName: $lastName) {\n      email\n      firstName\n      lastName\n    }\n  }\n": types.UpdateProfileDocument,
 };
@@ -52,7 +54,11 @@ export function graphql(source: "\n  mutation Refresh($refreshToken: String!) {\
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query CurrentTenant {\n    tenant {\n      token\n      name\n      description\n    }\n  }\n"): typeof import('./graphql').CurrentTenantDocument;
+export function graphql(source: "\n  query CurrentTenant {\n    tenant {\n      token\n      name\n      description\n      branding {\n        title\n        logo\n        logoMaxHeight\n        primary\n        background\n        foreground\n        accent\n        updatedAt\n      }\n      brandingOverride {\n        title\n        logo\n        logoMaxHeight\n        primary\n        background\n        foreground\n        accent\n        updatedAt\n      }\n    }\n  }\n"): typeof import('./graphql').CurrentTenantDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation SetTenantBranding($input: TenantBrandingInput!) {\n    setTenantBranding(input: $input) {\n      token\n      name\n      description\n      branding {\n        title\n        logo\n        logoMaxHeight\n        primary\n        background\n        foreground\n        accent\n        updatedAt\n      }\n      brandingOverride {\n        title\n        logo\n        logoMaxHeight\n        primary\n        background\n        foreground\n        accent\n        updatedAt\n      }\n    }\n  }\n"): typeof import('./graphql').SetTenantBrandingDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

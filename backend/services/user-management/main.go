@@ -31,6 +31,7 @@ var (
 	NatsManager     *messaging.NatsManager
 	GraphQLManager  *gqlcore.GraphQLManager
 	IdentityManager *identity.Manager
+	SettingsService *settings.Service
 )
 
 func main() {
@@ -141,9 +142,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		registerOAuthHandlers()
 	}
 
+	// The instance-scoped settings Service (ADR-042 P2). Shared between the
+	// data-plane resolver (which reads the branding.default setting as the cascade's
+	// default tier, ADR-038) and its own /settings/graphql handler.
+	SettingsService = settings.NewService(settings.NewStore(RdbManager))
+
 	// Map of providers injected into the graphql http context.
 	providers := map[gqlcore.ContextKey]interface{}{
 		graphql.ContextIdentityKey: IdentityManager,
+		graphql.ContextSettingsKey: SettingsService,
 	}
 
 	// user-management validates its own API requests with the local public key
@@ -190,9 +197,8 @@ func registerAdminHandler() {
 // identity-token handler on the default mux (ADR-042 P2). The settings Service
 // wraps the instance RdbManager via its own sealed store (no iam dependency).
 func registerSettingsHandler() {
-	settingsSvc := settings.NewService(settings.NewStore(RdbManager))
 	settingsProviders := map[gqlcore.ContextKey]interface{}{
-		graphql.ContextSettingsKey: settingsSvc,
+		graphql.ContextSettingsKey: SettingsService,
 	}
 	settingsSchema := gqlcore.MustParseSchema(graphql.SettingsSchemaContent, &graphql.SettingsResolver{})
 	http.Handle("/settings/graphql", gqlcore.NewAdminHttpHandler(settingsSchema, settingsProviders, Microservice.Readiness))

@@ -15,6 +15,7 @@ import AlarmsPage from '@/routes/alarms/AlarmsPage';
 import ConnectorsPage from '@/routes/connectors/ConnectorsPage';
 import ConnectorDetailPage from '@/routes/connectors/ConnectorDetailPage';
 import AuditPage from '@/routes/audit/AuditPage';
+import BrandingPage from '@/routes/BrandingPage';
 import { ResourceListPage, ResourceDetailPage, type RegistryResource } from '@/components/registry';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { deviceTypeResource } from '@/routes/device-types/resource';
@@ -94,6 +95,7 @@ export default function App() {
           <Route path="connectors" element={<ConnectorsPage />} />
           <Route path="connectors/:token" element={<ConnectorDetailPage />} />
           <Route path="audit" element={<AuditPage />} />
+          <Route path="branding" element={<BrandingPage />} />
           {/* Every registry list/detail renders through the one generic page
               component, so React reuses the instance across routes. Key each
               element by its resource's base path to force a fresh mount on

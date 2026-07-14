@@ -28,6 +28,15 @@ import (
 // global token grammar — see core.ValidateToken).
 const KeyTokenMasks = "entity.token_masks"
 
+// KeyBrandingDefault is the instance-wide white-labeling default (ADR-038 Phase 2):
+// the JSON branding shape (title/logo/logoMaxHeight/primary/background/foreground/
+// accent) an operator can override platform-wide, sitting below any per-tenant
+// override and above the console's built-in look. The value shape is owned by the
+// branding package; this store treats it as opaque JSON (like the token masks). The
+// code default below only sets a title + logo height — colors stay absent so an
+// un-rebranded tenant keeps the shipped palette rather than a re-derived one.
+const KeyBrandingDefault = "branding.default"
+
 // Definition is a known system setting: its key, its code default value, and a
 // human description for the settings UI. The set of Definitions is the whole
 // vocabulary — a write to an unknown key is rejected (fail-closed, like typed
@@ -46,6 +55,11 @@ func Definitions() []Definition {
 			Key:         KeyTokenMasks,
 			Default:     json.RawMessage(`{"default":"{slug}"}`),
 			Description: `Per-entity-type token mask templates the console uses to generate and normalize tokens (ADR-042). Keys are entity types (or "default"); values are mask templates.`,
+		},
+		{
+			Key:         KeyBrandingDefault,
+			Default:     json.RawMessage(`{"title":"DeviceChain","logoMaxHeight":28}`),
+			Description: `Instance-wide white-labeling default (ADR-038): title, logo, logoMaxHeight, and hex colors (primary/background/foreground/accent). Sits below any per-tenant override. Omitted colors keep the console's built-in palette.`,
 		},
 	}
 }

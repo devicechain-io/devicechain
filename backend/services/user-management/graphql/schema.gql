@@ -22,12 +22,52 @@ type Membership {
 }
 
 # The tenant the authenticated caller is acting within (control plane). Drives
-# the console's tenant header; branding (logo/colors) will extend this type as it
-# lands.
+# the console's tenant header, and carries the resolved white-labeling branding
+# (ADR-038) the console applies to the shell.
 type Tenant {
     token: String!
     name: String
     description: String
+    # The resolved white-labeling for this tenant: the tenant's override folded
+    # over the operator/code default (most-specific-non-null wins). Always present;
+    # an individual field is null when nothing overrides it, and the console then
+    # keeps its built-in look for that field. Never carried in the JWT (ADR-038 §1).
+    branding: TenantBranding!
+    # The tenant's RAW branding override — the stored columns with no cascade, so a
+    # null field means "this tenant inherits" (vs `branding`, which fills it from
+    # the default). The editor reads this to show set-vs-inherited per field; it is
+    # NOT for applying to the shell. Self-scoped, like `branding`.
+    brandingOverride: TenantBranding!
+}
+
+# The resolved white-labeling applied to the console shell (ADR-038). A null field
+# means "inherit the built-in look" for that aspect. Colors are hex #rrggbb; logo
+# is an https URL or a bounded raster data: URI; logoMaxHeight caps the render in
+# px; updatedAt versions the value so a client can key its cache.
+type TenantBranding {
+    title: String
+    logo: String
+    logoMaxHeight: Int
+    primary: String
+    background: String
+    foreground: String
+    accent: String
+    updatedAt: String
+}
+
+# A white-labeling override for setTenantBranding. Every field is optional: a null
+# field CLEARS that override, re-inheriting the operator/code default. Validated
+# server-side (fail-closed): hex colors, an https-or-raster-data: logo within the
+# size ceiling (SVG only as an https URL, never inline data:), a bounded title and
+# logo height.
+input TenantBrandingInput {
+    title: String
+    logo: String
+    logoMaxHeight: Int
+    primary: String
+    background: String
+    foreground: String
+    accent: String
 }
 
 # The governance overrides for the tenant the caller is acting within. A null
@@ -81,6 +121,11 @@ type Mutation {
     # Update the signed-in user's own display name (first/last). Email is fixed;
     # self-scoped to the caller's identity.
     updateProfile(firstName: String, lastName: String): CurrentIdentity!
+    # Set the caller's OWN tenant white-labeling (ADR-038). Self-scoped to the
+    # tenant in the access token; requires branding:write. A null field clears
+    # that override. Returns the tenant with its freshly-resolved branding so the
+    # editing client can write it straight into cache.
+    setTenantBranding(input: TenantBrandingInput!): Tenant!
 }
 
 schema {

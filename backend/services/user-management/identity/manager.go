@@ -21,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-user-management/branding"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
@@ -363,6 +364,33 @@ func (m *Manager) IdentityEmail(identityToken string) (string, error) {
 // tenant-unscoped control-plane table (iam.Store uses the system context), so it
 // works from a tenant-scoped data-plane request.
 func (m *Manager) CurrentTenant(ctx context.Context, token string) (*iam.Tenant, error) {
+	return m.iam.TenantByToken(ctx, token)
+}
+
+// SetTenantBranding writes the caller's own tenant white-labeling override
+// (ADR-038 Phase 2), keyed by the tenant token from the caller's access token —
+// so it is inherently self-scoped (the caller can only rebrand the tenant they
+// are acting within). The override is a full replace of the branding sub-object:
+// a nil field CLEARS that column, re-inheriting the operator/code default. Reads
+// the tenant-unscoped control-plane table (like CurrentTenant), returning the
+// reloaded tenant so the resolver can hand back the freshly-resolved branding.
+func (m *Manager) SetTenantBranding(ctx context.Context, token string, b branding.Branding) (*iam.Tenant, error) {
+	t, err := m.iam.TenantByToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]any{
+		"branding_title":           b.Title,
+		"branding_logo":            b.Logo,
+		"branding_logo_max_height": b.LogoMaxHeight,
+		"branding_primary":         b.Primary,
+		"branding_background":      b.Background,
+		"branding_foreground":      b.Foreground,
+		"branding_accent":          b.Accent,
+	}
+	if err := m.iam.UpdateTenantFields(ctx, t, fields); err != nil {
+		return nil, err
+	}
 	return m.iam.TenantByToken(ctx, token)
 }
 

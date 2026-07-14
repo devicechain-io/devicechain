@@ -147,6 +147,22 @@ type Tenant struct {
 	// unlimited, and a set value must be positive.
 	OutboundMessagesPerSecond *float64
 	OutboundBurst             *int
+
+	// Per-tenant white-labeling overrides (ADR-038 Phase 2). Each is a nullable
+	// override on the same cascading-column pattern as the governance knobs above:
+	// a nil field means "inherit" — the operator's `branding.default` system
+	// setting, then the code default, then (for a color/logo still nil at every
+	// tier) the console's built-in look. Branding is never in the JWT (ADR-038 §1);
+	// it is resolved onto the self-scoped `tenant` query. Colors are hex #rrggbb;
+	// BrandingLogo is an https URL or a bounded raster data: URI (validated in the
+	// branding package). BrandingLogoMaxHeight caps the chip/sidebar render in px.
+	BrandingTitle         *string
+	BrandingLogo          *string
+	BrandingLogoMaxHeight *int
+	BrandingPrimary       *string
+	BrandingBackground    *string
+	BrandingForeground    *string
+	BrandingAccent        *string
 }
 
 func (Tenant) TableName() string { return "iam_tenants" }
