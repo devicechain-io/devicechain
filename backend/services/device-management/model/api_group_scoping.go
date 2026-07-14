@@ -7,11 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 
 	"github.com/devicechain-io/dc-device-management/internal/selector"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // This file implements the ADR-062 S2 membership subsystem inside device-management:
@@ -70,14 +72,61 @@ func (api *Api) isMemberBySelector(ctx context.Context, db *gorm.DB, memberType,
 	return count > 0, nil
 }
 
+// lockMembershipFamily takes a transaction-scoped exclusive advisory lock keyed on
+// (tenant, memberType), serializing ALL membership maintenance for one family within the
+// tenant (both an incremental recompute and a Register). This is what makes same-txn
+// recompute actually diverge-free: same-txn alone is not serializable, so two concurrent
+// writes to DIFFERENT facets of the same entity — or a write racing a Register — could
+// write-skew the read-model into a permanent stale/missed membership (there is no reconcile
+// sweep). Serializing per family forces the second writer to re-evaluate against the first's
+// committed state. It is Postgres-only (pg_advisory_xact_lock auto-releases at commit);
+// under sqlite (tests) the single writer already serializes, so it is a no-op. Taken only
+// when there is maintenance to do (a rule-referenced group exists for the family), so an
+// unused tenant never pays for it.
+func (api *Api) lockMembershipFamily(ctx context.Context, tx *gorm.DB, memberType string) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return core.ErrNoTenant
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(tenant + "\x00" + memberType))
+	return tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(h.Sum64())).Error
+}
+
+// membersMatchingFrozenOnTx resolves the full member set of a frozen version's selector on
+// the given transaction (so a Register's backfill reads under its family lock). It lowers
+// the FROZEN selector text — exactly what the pinned version matches — to the indexed
+// predicate and reads every matching id/token in one query. It is an internal admin-time
+// backfill (rule arming), so it is not externally paginated; the family lock bounds
+// concurrency.
+func (api *Api) membersMatchingFrozenOnTx(ctx context.Context, tx *gorm.DB, frozen *EntityGroupVersion) ([]EntityMember, error) {
+	frag, args, table, err := api.lowerSelectorSource(ctx, frozen.MemberType, frozen.Selector)
+	if err != nil {
+		return nil, err
+	}
+	memberModel, _, _ := memberModelAndTable(frozen.MemberType)
+	members := make([]EntityMember, 0)
+	err = tx.Model(memberModel).Where(frag, args...).
+		Select(table+".id", table+".token").Order(table + ".id").Find(&members).Error
+	if err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
 // RegisterGroupVersionForScoping enrolls a frozen group@version for membership
 // maintenance (ADR-062 S4 calls this when a rule first references it): it extracts the
 // frozen selector's facet keys into the reverse index and backfills the read-model with an
 // authoritative set query, so the group@v is fully materialized before the rule arms. It is
 // idempotent — re-registering an already-enrolled group@v rebuilds it — and rejects a
 // static or unpublished-version reference (a rule can only scope to a published dynamic
-// group@version). The whole enrollment runs in one transaction so a partial backfill can
-// never arm a rule against a half-populated read-model.
+// group@version). The whole enrollment — the family lock, the reverse-index rebuild, the
+// backfill read, and the membership insert — runs in ONE transaction so a partial backfill
+// can never arm a rule against a half-populated read-model, and so a concurrent recompute
+// cannot interleave (it blocks on the same family lock and then self-heals its one entity).
 func (api *Api) RegisterGroupVersionForScoping(ctx context.Context, groupToken string, version int32) error {
 	group, err := api.entityGroupByToken(ctx, groupToken)
 	if err != nil {
@@ -99,14 +148,12 @@ func (api *Api) RegisterGroupVersionForScoping(ctx context.Context, groupToken s
 	}
 	keys := sel.Keys()
 
-	// Resolve the full member set outside the write transaction (a bounded, paginated
-	// set query); the rows are then written transactionally with the reverse index.
-	members, err := api.resolveAllMembersByFrozenSelector(ctx, frozen)
-	if err != nil {
-		return err
-	}
-
 	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// Serialize against every concurrent recompute (and other Register) of this family
+		// so the backfill snapshot below cannot be raced into a permanent hole.
+		if err := api.lockMembershipFamily(ctx, tx, frozen.MemberType); err != nil {
+			return err
+		}
 		// Rebuild is register-idempotent: clear any prior enrollment for this exact
 		// group@v, then re-insert. Scoped to (group_id, selector_version) so a different
 		// version's rows are untouched. Hard-delete (Unscoped): these are derived rows whose
@@ -132,15 +179,23 @@ func (api *Api) RegisterGroupVersionForScoping(ctx context.Context, groupToken s
 				return err
 			}
 		}
+		// Backfill under the lock: read the full member set on the tx, then batch-insert.
+		members, err := api.membersMatchingFrozenOnTx(ctx, tx, frozen)
+		if err != nil {
+			return err
+		}
+		rows := make([]EntityGroupMembership, 0, len(members))
 		for _, m := range members {
-			row := &EntityGroupMembership{
+			rows = append(rows, EntityGroupMembership{
 				EntityType:      frozen.MemberType,
 				EntityId:        m.Id,
 				GroupId:         group.ID,
 				SelectorVersion: version,
 				GroupToken:      group.Token,
-			}
-			if err := tx.Create(row).Error; err != nil {
+			})
+		}
+		if len(rows) > 0 {
+			if err := tx.CreateInBatches(rows, 200).Error; err != nil {
 				return err
 			}
 		}
@@ -167,32 +222,6 @@ func (api *Api) DeregisterGroupVersionForScoping(ctx context.Context, groupToken
 	})
 }
 
-// resolveAllMembersByFrozenSelector pages the full member set of a frozen version's
-// selector (a bounded set query, the backfill authority). It reuses PreviewSelector — the
-// same compile-gate + lowering + bounded page a saved group's resolve takes — over the
-// FROZEN selector text, so what is backfilled is exactly what the pinned version matches.
-func (api *Api) resolveAllMembersByFrozenSelector(ctx context.Context, frozen *EntityGroupVersion) ([]EntityMember, error) {
-	const pageSize int32 = 500
-	all := make([]EntityMember, 0)
-	// PageNumber is 1-based: rdb.ListOf clamps < 1 to 1, so starting at 0 would fetch
-	// page 1 twice and skip the last page (duplicate inserts on a >pageSize backfill).
-	for page := int32(1); ; page++ {
-		res, err := api.PreviewSelector(ctx, frozen.MemberType, frozen.Selector,
-			rdb.Pagination{PageNumber: page, PageSize: pageSize})
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, res.Results...)
-		// Stop when this page reached the last record, or returned nothing (a defensive
-		// backstop). PageEnd is the effective (post-clamp) span end, so a clamped PageSize
-		// is handled correctly.
-		if len(res.Results) == 0 || res.Pagination.PageEnd >= res.Pagination.TotalRecords {
-			break
-		}
-	}
-	return all, nil
-}
-
 // recomputeMembershipForAttr re-evaluates one entity's membership after a SHARED-scope
 // facet write, bounded by the reverse index (ADR-062 §3): it finds the group@versions
 // whose frozen selector references the changed facet key FOR THIS FAMILY, re-tests the one
@@ -213,6 +242,13 @@ func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, ent
 	}
 	if len(refs) == 0 {
 		return nil
+	}
+	// Serialize this family's membership maintenance (only now that there is real work): a
+	// concurrent write to a DIFFERENT facet of the same entity, or a Register, must not
+	// write-skew the read-model. The second writer blocks here and re-evaluates against the
+	// first's committed state.
+	if err := api.lockMembershipFamily(ctx, db, entityType); err != nil {
+		return err
 	}
 	for _, ref := range refs {
 		var frozen EntityGroupVersion
@@ -249,19 +285,10 @@ func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, ent
 }
 
 // upsertMembership inserts a positive membership row on the given db handle, treating a
-// duplicate as success (the entity was already a member — recompute is idempotent). The
-// group token is denormalized onto the row for the resolver's stamp.
+// duplicate as success via ON CONFLICT DO NOTHING (the entity was already a member —
+// recompute is idempotent, and the insert is race-safe on its own even independent of the
+// family lock). The group token is denormalized onto the row for the resolver's stamp.
 func (api *Api) upsertMembership(db *gorm.DB, entityType string, entityId, groupId uint, version int32, groupToken string) error {
-	var count int64
-	if err := db.Model(&EntityGroupMembership{}).
-		Where("entity_type = ? AND entity_id = ? AND group_id = ? AND selector_version = ?",
-			entityType, entityId, groupId, version).
-		Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
 	row := &EntityGroupMembership{
 		EntityType:      entityType,
 		EntityId:        entityId,
@@ -269,7 +296,7 @@ func (api *Api) upsertMembership(db *gorm.DB, entityType string, entityId, group
 		SelectorVersion: version,
 		GroupToken:      groupToken,
 	}
-	return db.Create(row).Error
+	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(row).Error
 }
 
 // writeAttrThenRecompute runs an attribute write and, when the write can affect
@@ -294,6 +321,14 @@ func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, e
 // MembershipsForEntity returns the group@versions the entity currently belongs to (its
 // positive rows). It is the hot read the resolver (S3) stamps onto an event; an entity in
 // no rule-scoped group returns an empty slice (the pay-nothing common case).
+//
+// S3 CACHE NOTE: S3 wraps this read with a negative-caching CachedApi decorator (an empty
+// result is cached — the common case). When it does, it MUST evict the entity's cache key
+// on EVERY path that mutates a membership row, or a missed eviction becomes a permanently
+// missed/false detection: recomputeMembershipForAttr (per entity), purgeEntityMemberships
+// (entity delete), purgeGroupScopingRows + RegisterGroupVersionForScoping +
+// DeregisterGroupVersionForScoping (which touch many entities → a family/tenant-wide evict).
+// No cache exists in S2, so these paths intentionally carry no eviction yet.
 func (api *Api) MembershipsForEntity(ctx context.Context, entityType string, entityId uint) ([]GroupMembership, error) {
 	rows := make([]EntityGroupMembership, 0)
 	if err := api.RDB.DB(ctx).
