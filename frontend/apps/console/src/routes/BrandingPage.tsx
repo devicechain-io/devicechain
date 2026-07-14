@@ -11,7 +11,7 @@
 // would wipe an uploaded logo. Each write returns the freshly-resolved tenant, which
 // we write straight into the tenant cache so the rebrand shows across the shell.
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Upload, X } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
@@ -109,6 +109,12 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [logoBusy, setLogoBusy] = useState(false);
+  // Tracks whether the user has edited the theme form since it was last seeded, so a
+  // background refetch (stale-while-revalidate cache) can re-seed a PRISTINE form
+  // without clobbering in-progress edits. The editor is keyed by token only (so a
+  // logo action does not remount and discard edits), which drops the remount-reseed;
+  // this restores the stale-seed protection without the remount.
+  const [dirty, setDirty] = useState(false);
   // The https/data URL field. Seeded from the current override logo only when it is
   // a directly-usable value (not an object-store proxy path).
   const [logoUrl, setLogoUrl] = useState(() => {
@@ -116,12 +122,25 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
     return l.startsWith(PROXY_LOGO_PREFIX) ? '' : l;
   });
 
-  const set = (k: keyof FormState, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  // Re-seed a pristine theme form when a newer override arrives (e.g. the initial
+  // seed came from a stale cached tenant, or another admin changed the theme). Never
+  // re-seed once the user has started editing — their edits win until they Save.
+  useEffect(() => {
+    if (!dirty) setForm(initialState(override));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [override.updatedAt]);
+
+  const set = (k: keyof FormState, v: string) => {
+    setDirty(true);
+    setForm((f) => ({ ...f, [k]: v }));
+  };
 
   // The live resolved logo (updated by the logo actions via the tenant cache), used
-  // for the preview and to decide whether a Remove control is shown.
-  const currentLogo = tenant?.branding?.logo ?? null;
-  const logoPreviewSrc = useBrandingLogoSrc(currentLogo);
+  // for the preview. Whether THIS tenant set its own logo — which gates the Remove
+  // action — is the raw override, not the resolved cascade: an inherited operator-
+  // default logo is not this tenant's to remove.
+  const logoPreviewSrc = useBrandingLogoSrc(tenant?.branding?.logo);
+  const hasOwnLogo = !!tenant?.brandingOverride?.logo;
 
   // Client-side hex validation (fail-fast); the server re-validates.
   const badHex = (['primary', 'background', 'foreground', 'accent'] as const).filter(
@@ -158,6 +177,7 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
       const updated = await setTenantBranding(input);
       applyTenant(updated); // write-through cache → shell re-themes immediately
       setForm(initialState(updated.brandingOverride));
+      setDirty(false);
       toast.toast('Branding saved');
     } catch (err) {
       setFormError(errMessage(err));
@@ -176,30 +196,44 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
     }
     if (file.size > MAX_UPLOAD_LOGO_BYTES) {
       setFormError(
-        `Logo must be at most ${MAX_UPLOAD_LOGO_BYTES / 1024} KB (this file is ${Math.round(file.size / 1024)} KB).`,
+        `Logo must be at most 1 MB (this file is ${Math.round(file.size / 1024)} KB).`,
       );
       return;
     }
     setLogoBusy(true);
     try {
       await uploadTenantLogo(file);
-      // The upload persisted the reference; refetch to pick up the resolved branding.
-      applyTenant(await getCurrentTenant());
-      setLogoUrl('');
-      toast.toast('Logo uploaded');
     } catch (err) {
-      setFormError(errMessage(err));
-    } finally {
+      setFormError(errMessage(err)); // the upload itself failed — nothing persisted
       setLogoBusy(false);
+      return;
     }
+    // The upload persisted the reference; refetch to pick up the resolved branding.
+    // A refetch failure here does NOT mean the upload failed, so report success and
+    // let the next natural load reconcile rather than implying the upload was lost.
+    try {
+      applyTenant(await getCurrentTenant());
+    } catch {
+      /* logo is persisted; the shell will pick it up on the next refresh */
+    }
+    setLogoUrl('');
+    toast.toast('Logo uploaded');
+    setLogoBusy(false);
   };
 
   const applyLogoUrl = async () => {
     setFormError(null);
+    // Blank is NOT a clear here — removal is the explicit "Remove logo" action, so an
+    // accidental "Apply URL" with an empty field can't silently delete an uploaded
+    // logo (its blob is GC'd server-side and unrecoverable).
+    if (logoUrl.trim() === '') {
+      setFormError('Enter an https URL, or use “Remove logo” to clear it.');
+      return;
+    }
     setLogoBusy(true);
     try {
-      applyTenant(await setTenantLogo(logoUrl.trim() || null));
-      toast.toast(logoUrl.trim() ? 'Logo updated' : 'Logo removed');
+      applyTenant(await setTenantLogo(logoUrl.trim()));
+      toast.toast('Logo updated');
     } catch (err) {
       setFormError(errMessage(err));
     } finally {
@@ -278,7 +312,7 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
               </div>
               <div className="flex items-center gap-2">
                 <UploadButton disabled={logoBusy} onPick={onUpload} />
-                {currentLogo && (
+                {hasOwnLogo && (
                   <Button type="button" variant="ghost" size="sm" disabled={logoBusy} onClick={removeLogo}>
                     <X className="mr-1 size-3.5" /> Remove logo
                   </Button>

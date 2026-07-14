@@ -38,11 +38,13 @@ export function useBrandingLogoSrc(logo: string | null | undefined): string | nu
     setSrc(null);
     let cancelled = false;
     let objectUrl: string | null = null;
+    const abort = new AbortController();
     (async () => {
       try {
         const token = await resolveAuthToken();
         const res = await fetch(USER_MANAGEMENT_API_BASE + logo, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
+          signal: abort.signal,
         });
         if (!res.ok) throw new Error(String(res.status));
         const bytes = await res.blob();
@@ -55,6 +57,7 @@ export function useBrandingLogoSrc(logo: string | null | undefined): string | nu
     })();
     return () => {
       cancelled = true;
+      abort.abort(); // stop an in-flight fetch on unmount / logo change
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [logo]);
