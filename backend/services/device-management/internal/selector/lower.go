@@ -47,6 +47,10 @@ type lowerCtx struct {
 	p      LowerParams
 	args   []any
 	leaves int
+	// keys accumulates every facet key the walk visits (one per semi-join), in
+	// fragment order. Lower ignores it; Keys() (ADR-062) reads it off a throwaway walk
+	// to extract the selector's referenced facet keys for the reverse index.
+	keys []string
 }
 
 // Lower walks the selector's type-checked AST and returns the SQL WHERE fragment plus its
@@ -169,6 +173,7 @@ func lowerNumericCompare(fn string, args []celast.Expr, lc *lowerCtx) (string, e
 // optional value predicate's own args, so the positional "?" order always matches.
 func (lc *lowerCtx) semiJoin(key, predSQL string, predArgs []any) string {
 	lc.leaves++
+	lc.keys = append(lc.keys, key)
 	var b strings.Builder
 	b.WriteString("EXISTS (SELECT 1 FROM entity_attributes ea WHERE ea.tenant_id = ? AND ea.entity_type = ? AND ea.entity_id = ")
 	b.WriteString(lc.p.MemberTable)

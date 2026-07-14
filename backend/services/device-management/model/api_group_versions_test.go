@@ -26,6 +26,7 @@ func newGroupVersionTestApi(t *testing.T) (*Api, context.Context) {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
 	if err := db.AutoMigrate(&EntityGroup{}, &EntityGroupVersion{},
+		&EntityGroupMembership{}, &EntityGroupFacetRef{},
 		&EntityRelationship{}, &EntityAttribute{}, &Alarm{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

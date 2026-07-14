@@ -31,5 +31,6 @@ var (
 		NewFacetKeySchema(),
 		NewEntityAttributeFacetIndexSchema(),
 		NewEntityGroupVersioningSchema(),
+		NewMembershipReadModelSchema(),
 	}
 )
