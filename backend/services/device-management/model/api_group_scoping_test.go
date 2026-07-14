@@ -36,7 +36,7 @@ func newScopingTestApi(t *testing.T) (*Api, context.Context) {
 	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceCredential{}, &Area{}, &AreaType{},
 		&EntityAttribute{}, &EntityGroup{}, &EntityGroupVersion{}, &EntityGroupMembership{},
 		&EntityGroupFacetRef{}, &EntityRelationship{}, &Alarm{},
-		&DetectionRule{}, &DeviceProfile{}); err != nil {
+		&DetectionRule{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	api := NewApi(&rdb.RdbManager{Database: db})

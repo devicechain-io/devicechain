@@ -226,7 +226,18 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 	if n > 0 {
 		return false, fmt.Errorf("%w: %d device type(s) reference device profile %q", ErrEntityInUse, n, token)
 	}
+	var evictions []membershipEviction
+	var changed bool
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// Drop this profile's live scope references and GC any group@v whose last live
+		// reference this profile held (ADR-062 S4): a desired-empty re-sync deregisters the
+		// read-model for those group@versions, in the same transaction as the delete so no
+		// orphan enrollment (or stale AnyScopedGroups gate) survives the profile.
+		var err error
+		evictions, changed, err = api.syncProfileScopeRefsAndEnroll(ctx, tx, dp.ID, nil)
+		if err != nil {
+			return err
+		}
 		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&MetricDefinition{}).Error; err != nil {
 			return err
 		}
@@ -245,6 +256,7 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 	if err != nil {
 		return false, err
 	}
+	api.fireScopingEvictions(ctx, evictions, changed)
 	return true, nil
 }
 
@@ -339,42 +351,13 @@ func (api *Api) DeleteCommandDefinition(ctx context.Context, token string) (bool
 	return api.hardDeleteByToken(ctx, &CommandDefinition{}, token)
 }
 
-// DeleteDetectionRule deletes a single detection rule by token (ADR-051 slice 4b). If the
-// rule pinned a group scope (ADR-062 S4), deleting it reconciles the read-model enrollment
-// in the same transaction — GCing the pinned group@v when this was the last enabled rule
-// referencing it — so a deleted rule leaves no orphan membership rows.
+// DeleteDetectionRule deletes a single detection rule by token (ADR-051 slice 4b). Deleting a
+// DRAFT rule does not touch read-model enrollment (ADR-062 S4): enrollment follows the
+// published active-version scope-ref set, reconciled at the next publish/rollback — a deleted
+// draft simply drops out of the next snapshot. The published-reference row (if this rule was
+// live) is GC'd when its profile's active version is re-synced, or on profile delete.
 func (api *Api) DeleteDetectionRule(ctx context.Context, token string) (bool, error) {
-	// Load the rule's scope before deleting so reconcile can GC the group@v it vacates. A
-	// missing rule is a no-op delete (no scope to reconcile).
-	existing, err := api.DetectionRulesByToken(ctx, []string{token})
-	if err != nil {
-		return false, err
-	}
-	if len(existing) == 0 {
-		return false, nil
-	}
-	oldScope := ruleScopeOf(existing[0].EntityGroupToken, existing[0].EntityGroupVersion)
-
-	var deleted bool
-	var evictions []membershipEviction
-	var changed bool
-	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		res := tx.Unscoped().Where("token = ?", token).Delete(&DetectionRule{})
-		if res.Error != nil {
-			return res.Error
-		}
-		deleted = res.RowsAffected > 0
-		if !deleted {
-			return nil
-		}
-		evictions, changed, err = api.reconcileRuleScopingOnTx(ctx, tx, oldScope, nil)
-		return err
-	})
-	if err != nil {
-		return false, err
-	}
-	api.fireScopingEvictions(ctx, evictions, changed)
-	return deleted, nil
+	return api.hardDeleteByToken(ctx, &DetectionRule{}, token)
 }
 
 // DeleteProvisioningProfile deletes a single provisioning profile by token (ADR-012).

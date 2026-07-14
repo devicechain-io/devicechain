@@ -170,29 +170,38 @@ func (api *Api) EntityGroupVersions(ctx context.Context, token string) ([]*Entit
 	return versions, nil
 }
 
-// entityGroupReferencedByRule reports whether ANY DetectionRule — enabled or disabled —
-// scopes to this group at any version (ADR-062 reference-counting), gating DeleteEntityGroup
-// with ErrEntityInUse. A rule pinning group@v needs the version's frozen selector to stamp
-// membership at resolution, so the group must outlive the rule. Disabled rules count too: a
-// parked rule still pins the group and can be re-enabled, so deleting the group out from
-// under it would leave a dangling pin that silently never fires once re-enabled — the delete
-// fails closed instead. (The narrower ENABLED count drives read-model GC, not this guard; see
-// enabledRulesReferencingScopeOnTx.)
-func (api *Api) entityGroupReferencedByRule(ctx context.Context, groupId uint) (bool, error) {
+// entityGroupReferencedByRule reports whether a group is referenced by any detection rule —
+// either a LIVE published scoped rule (a DetectionRuleScopeRef row) OR a DRAFT scoped rule
+// (an authoring DetectionRule row, enabled or not) — at any version, gating DeleteEntityGroup
+// with ErrEntityInUse (ADR-062). A live rule pinning group@v needs the version's frozen
+// selector stamped at resolution, so the group must outlive it. A draft pin counts too: it
+// would fail its next publish closed if the group vanished, so blocking the delete surfaces
+// the conflict at delete time rather than at a later, more surprising publish. It runs on the
+// caller's handle so DeleteEntityGroup can re-check it INSIDE its lock+txn (closing the
+// check-then-delete race against a concurrent publish).
+func (api *Api) entityGroupReferencedByRule(ctx context.Context, db *gorm.DB, groupId uint) (bool, error) {
 	var token string
-	if err := api.RDB.DB(ctx).Model(&EntityGroup{}).Where("id = ?", groupId).
+	if err := db.Model(&EntityGroup{}).Where("id = ?", groupId).
 		Select("token").Scan(&token).Error; err != nil {
 		return false, err
 	}
 	if token == "" {
 		return false, nil
 	}
-	var n int64
-	if err := api.RDB.DB(ctx).Model(&DetectionRule{}).
-		Where("entity_group_token = ?", token).Count(&n).Error; err != nil {
+	var published int64
+	if err := db.Model(&DetectionRuleScopeRef{}).
+		Where("group_token = ?", token).Count(&published).Error; err != nil {
 		return false, err
 	}
-	return n > 0, nil
+	if published > 0 {
+		return true, nil
+	}
+	var draft int64
+	if err := db.Model(&DetectionRule{}).
+		Where("entity_group_token = ?", token).Count(&draft).Error; err != nil {
+		return false, err
+	}
+	return draft > 0, nil
 }
 
 // EntityGroupVersionByNumber loads a single frozen version of a group by number, returning

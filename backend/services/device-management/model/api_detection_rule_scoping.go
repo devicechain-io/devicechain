@@ -5,35 +5,43 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
 	"gorm.io/gorm"
 )
 
-// This file is the ADR-062 S4 rule-side glue between a DetectionRule's optional group scope
-// and the S2 membership read-model. A rule pins {EntityGroupToken}@{EntityGroupVersion}; the
-// resolver stamps an event's memberships from the read-model, and the engine fires the rule
-// only for events whose ScopeMemberships include the pinned group@v. For that stamp to exist,
-// the pinned group@v must be ENROLLED for membership maintenance (registered) whenever an
-// ENABLED rule references it, and torn down (deregistered) once the last enabled rule stops.
-// reconcileRuleScopingOnTx maintains that invariant transactionally alongside the rule write.
+// This file is the ADR-062 S4 glue between a DetectionRule's optional group scope and the
+// S2 membership read-model. A rule pins {EntityGroupToken}@{EntityGroupVersion}; the resolver
+// stamps an event's memberships from the read-model, and the engine fires the rule only for
+// events whose ScopeMemberships include the pinned group@v. For that stamp to exist, the
+// pinned group@v must be ENROLLED for membership maintenance (registered) whenever a LIVE
+// rule references it, and torn down (deregistered) once the last live rule stops.
+//
+// Enrollment follows PUBLISHED state, not the mutable draft. The live DETECT engine runs a
+// profile's ACTIVE published version, so a rule "goes live" at publish, not at draft-save;
+// keying enrollment on drafts would tear the read-model out from under a still-live published
+// rule the moment its draft was disabled/re-scoped (and would strand a rolled-back version's
+// rule with no enrollment). So the reference set is the DetectionRuleScopeRef table — one row
+// per scoped enabled rule in each profile's active version — re-synced whenever the active
+// version changes (publish / rollback) and on profile delete. Draft rule save only validates
+// and stores the scope columns; it does NOT touch enrollment.
 
-// ruleScope is a rule's optional pin to one published dynamic group@version. A nil *ruleScope
-// means "unscoped" (a profile-wide rule).
+// ruleScope is a rule's pin to one published dynamic group@version. A nil *ruleScope means
+// "unscoped" (a profile-wide rule).
 type ruleScope struct {
 	Token   string
 	Version int32
 }
 
-// ruleScopeOf extracts the (token, version) pair a rule's columns pin, or nil when unscoped.
-// The two columns are always both-set or both-nil (validateDetectionRuleScope enforces it),
-// so a half-set pair is treated as unscoped defensively rather than panicking.
-func ruleScopeOf(token *string, version *int32) *ruleScope {
-	if token == nil || *token == "" || version == nil {
-		return nil
-	}
-	return &ruleScope{Token: *token, Version: *version}
+// scopeRefRow is one live scoped rule: its authoring token plus the group@v it pins. It is
+// the projection of an enabled scoped rule in a profile's active-version snapshot into a
+// DetectionRuleScopeRef row.
+type scopeRefRow struct {
+	RuleToken    string
+	GroupToken   string
+	GroupVersion int32
 }
 
 // normalizedRuleScope maps a request's raw scope fields to the stored form: a nil-or-empty
@@ -67,61 +75,104 @@ func (api *Api) validateDetectionRuleScope(ctx context.Context, request *Detecti
 }
 
 // membershipEviction is one family's set of entity ids whose membership cache must be evicted
-// post-commit after a reconcile touched the read-model.
+// post-commit after enrollment changed.
 type membershipEviction struct {
 	Type string
 	Ids  []uint
 }
 
-// reconcileRuleScopingOnTx brings the membership read-model into line with a rule's scope
-// after the rule row has been written on tx (ADR-062 S4). For each group@v the change could
-// affect — the old scope, the new scope, or both — it recomputes how many ENABLED rules now
-// reference that exact group@v and either enrolls it (>0, if not already materialized) or GCs
-// it (0). Running on the SAME tx as the rule write makes arming atomic: a rule and the
-// read-model it depends on commit together, so a rule can never go live against a read-model
-// that a failed enrollment left half-built. It returns the per-family evictions the caller
-// fires post-commit and whether any (de)registration ran (so the caller can evict the
-// AnyScopedGroups gate, whose truth may have flipped).
-func (api *Api) reconcileRuleScopingOnTx(ctx context.Context, tx *gorm.DB, old, new *ruleScope) ([]membershipEviction, bool, error) {
-	// The affected group@versions, de-duplicated: an unchanged scope (old == new) is one
-	// entry re-evaluated once; a scope change is both the vacated and the adopted group@v.
-	affected := make([]ruleScope, 0, 2)
-	add := func(s *ruleScope) {
-		if s == nil {
-			return
-		}
-		for _, e := range affected {
-			if e == *s {
-				return
-			}
-		}
-		affected = append(affected, *s)
+// scopedRulesInSnapshot projects a profile snapshot's ENABLED scoped rules to scopeRefRows —
+// exactly the set of live rules that reference a group@v under that version. Disabled rules
+// are inert (never fed to the engine) and un-scoped rules reference nothing, so both are
+// omitted. It is the desired DetectionRuleScopeRef set for a profile whose active version is
+// this snapshot.
+func scopedRulesInSnapshot(snap *ProfileSnapshot) []scopeRefRow {
+	if snap == nil {
+		return nil
 	}
-	add(old)
-	add(new)
+	out := make([]scopeRefRow, 0, len(snap.Rules))
+	for _, r := range snap.Rules {
+		if r == nil || !r.Enabled {
+			continue
+		}
+		if r.EntityGroupToken == nil || r.EntityGroupVersion == nil || *r.EntityGroupToken == "" {
+			continue
+		}
+		out = append(out, scopeRefRow{
+			RuleToken:    r.Token,
+			GroupToken:   *r.EntityGroupToken,
+			GroupVersion: *r.EntityGroupVersion,
+		})
+	}
+	return out
+}
 
-	// Acquire the per-family membership locks UP FRONT in a canonical (sorted) order. A
-	// re-scope that moves a rule across families (e.g. a device group to an area group)
-	// touches two families; without a fixed acquisition order two such reconciles could lock
-	// them in opposite orders and deadlock. The locks are re-entrant within the txn, so the
-	// per-branch lockMembershipFamily calls below (which also serve the standalone
-	// Register/Deregister paths) are no-ops here. Same-family or single-family reconciles —
-	// the overwhelming common case — acquire exactly one lock.
+// syncProfileScopeRefsAndEnroll re-syncs a profile's DetectionRuleScopeRef rows to `desired`
+// (its active version's scoped enabled rules) and reconciles the S2 read-model enrollment for
+// every group@v the change touched, all on the caller's tx (so it is atomic with the
+// active-version change that triggered it — publish / rollback / profile delete). It returns
+// the per-family cache evictions to fire post-commit and whether enrollment changed (so the
+// caller can evict the AnyScopedGroups gate). The whole re-sync is delete-all-then-insert for
+// this profile: a profile has one active version, so its live scoped set is fully replaced.
+func (api *Api) syncProfileScopeRefsAndEnroll(ctx context.Context, tx *gorm.DB, profileId uint, desired []scopeRefRow) ([]membershipEviction, bool, error) {
+	// The group@versions this profile referenced BEFORE the change (to detect ones it is
+	// dropping) and AFTER (ones it is adding) — their union is what enrollment must re-check.
+	var existing []DetectionRuleScopeRef
+	if err := tx.Where("device_profile_id = ?", profileId).Find(&existing).Error; err != nil {
+		return nil, false, err
+	}
+	affected := make([]ruleScope, 0, len(existing)+len(desired))
+	seen := make(map[ruleScope]bool)
+	addAffected := func(s ruleScope) {
+		if !seen[s] {
+			seen[s] = true
+			affected = append(affected, s)
+		}
+	}
+	for _, e := range existing {
+		addAffected(ruleScope{Token: e.GroupToken, Version: e.GroupVersion})
+	}
+	// Replace the profile's rows: hard-delete the old set (derived rows; a soft-delete
+	// tombstone would collide with the re-insert on the unique index), then insert the new.
+	if err := tx.Unscoped().Where("device_profile_id = ?", profileId).Delete(&DetectionRuleScopeRef{}).Error; err != nil {
+		return nil, false, err
+	}
+	for _, d := range desired {
+		row := &DetectionRuleScopeRef{
+			DeviceProfileId: profileId,
+			RuleToken:       d.RuleToken,
+			GroupToken:      d.GroupToken,
+			GroupVersion:    d.GroupVersion,
+		}
+		if err := tx.Create(row).Error; err != nil {
+			return nil, false, err
+		}
+		addAffected(ruleScope{Token: d.GroupToken, Version: d.GroupVersion})
+	}
+	return api.reconcileEnrollmentOnTx(ctx, tx, affected)
+}
+
+// reconcileEnrollmentOnTx brings the read-model enrollment into line with the current
+// DetectionRuleScopeRef refcount for each affected group@v: > 0 live references ⇒ materialize
+// (register, skipping an already-materialized immutable version); 0 ⇒ GC (deregister). The
+// refcount is global across profiles, so a group@v two profiles reference stays enrolled until
+// the last un-references it. Family locks are taken up front in canonical order (deadlock-free
+// against concurrent reconciles and attribute-write recomputes).
+func (api *Api) reconcileEnrollmentOnTx(ctx context.Context, tx *gorm.DB, affected []ruleScope) ([]membershipEviction, bool, error) {
+	if len(affected) == 0 {
+		return nil, false, nil
+	}
 	if err := api.lockAffectedFamiliesOnTx(ctx, tx, affected); err != nil {
 		return nil, false, err
 	}
-
 	var evictions []membershipEviction
 	changed := false
 	for _, s := range affected {
-		n, err := api.enabledRulesReferencingScopeOnTx(tx, s.Token, s.Version)
+		n, err := api.scopeRefcountOnTx(tx, s.Token, s.Version)
 		if err != nil {
 			return nil, false, err
 		}
 		if n > 0 {
-			// An enabled rule references this group@v — ensure the read-model is enrolled.
-			// The frozen version is immutable, so an already-materialized group@v is already
-			// correct: skip the (atomic but wasteful) rebuild when its rows already exist.
 			group, frozen, keys, err := api.loadGroupVersionForScoping(ctx, s.Token, s.Version)
 			if err != nil {
 				return nil, false, err
@@ -140,14 +191,11 @@ func (api *Api) reconcileRuleScopingOnTx(ctx context.Context, tx *gorm.DB, old, 
 			evictions = append(evictions, membershipEviction{Type: frozen.MemberType, Ids: ids})
 			changed = true
 		} else {
-			// No enabled rule references this group@v any longer — GC its read-model. Safe
-			// (and a no-op) if it was never registered. The group itself still exists (a
-			// referencing rule row kept it alive), so its id resolves.
 			group, err := api.entityGroupByToken(ctx, s.Token)
 			if err != nil {
-				// The group vanished (its delete-guard let it go because no rule referenced
-				// it): nothing to tear down for a group that is already gone.
-				if err == gorm.ErrRecordNotFound {
+				// The group is already gone (its delete-guard let it go because no live rule
+				// referenced it): nothing to tear down.
+				if errors.Is(err, gorm.ErrRecordNotFound) {
 					continue
 				}
 				return nil, false, err
@@ -156,10 +204,12 @@ func (api *Api) reconcileRuleScopingOnTx(ctx context.Context, tx *gorm.DB, old, 
 			if err != nil {
 				return nil, false, err
 			}
+			// Only mark changed when rows were actually torn down: a no-op deregister of a
+			// never-enrolled scope must not spuriously evict the AnyScopedGroups gate.
 			if len(ids) > 0 {
 				evictions = append(evictions, membershipEviction{Type: etype, Ids: ids})
+				changed = true
 			}
-			changed = true
 		}
 	}
 	return evictions, changed, nil
@@ -167,8 +217,8 @@ func (api *Api) reconcileRuleScopingOnTx(ctx context.Context, tx *gorm.DB, old, 
 
 // lockAffectedFamiliesOnTx takes the per-family advisory locks for every family the affected
 // scopes belong to, in sorted member-type order, so concurrent multi-family reconciles cannot
-// deadlock. A scope whose group has vanished contributes no family (nothing to lock). Postgres
-// advisory locks are re-entrant within a transaction, so re-locking a family later is free.
+// deadlock. A scope whose group has vanished contributes no family. Postgres advisory locks are
+// re-entrant within a transaction, so re-locking a family later (in register/deregister) is free.
 func (api *Api) lockAffectedFamiliesOnTx(ctx context.Context, tx *gorm.DB, affected []ruleScope) error {
 	seen := make(map[string]bool)
 	families := make([]string, 0, len(affected))
@@ -193,9 +243,9 @@ func (api *Api) lockAffectedFamiliesOnTx(ctx context.Context, tx *gorm.DB, affec
 	return nil
 }
 
-// fireScopingEvictions applies the post-commit cache evictions a reconcile produced: each
-// family's membership rows, plus the AnyScopedGroups gate when a (de)registration ran (its
-// truth — does this tenant use rule scoping at all — may have flipped).
+// fireScopingEvictions applies the post-commit cache evictions an enrollment reconcile
+// produced: each family's membership rows, plus the AnyScopedGroups gate when enrollment
+// changed (its truth — does this tenant use rule scoping at all — may have flipped).
 func (api *Api) fireScopingEvictions(ctx context.Context, evictions []membershipEviction, changed bool) {
 	for _, ev := range evictions {
 		api.evictMemberships(ctx, ev.Type, ev.Ids)
@@ -205,14 +255,13 @@ func (api *Api) fireScopingEvictions(ctx context.Context, evictions []membership
 	}
 }
 
-// enabledRulesReferencingScopeOnTx counts the ENABLED detection rules that pin exactly this
-// group@v (tenant-scoped by the rdb callback). It is the reference count that decides whether
-// the read-model for group@v must stay enrolled: a disabled rule does not need a live
-// read-model (it is inert until re-enabled, which re-runs reconcile).
-func (api *Api) enabledRulesReferencingScopeOnTx(tx *gorm.DB, groupToken string, version int32) (int64, error) {
+// scopeRefcountOnTx counts the LIVE (published, enabled) rules that pin exactly this group@v,
+// across all profiles (tenant-scoped by the rdb callback). It is the enrollment refcount: the
+// read-model for group@v stays materialized while this is > 0.
+func (api *Api) scopeRefcountOnTx(tx *gorm.DB, groupToken string, version int32) (int64, error) {
 	var n int64
-	err := tx.Model(&DetectionRule{}).
-		Where("enabled = ? AND entity_group_token = ? AND entity_group_version = ?", true, groupToken, version).
+	err := tx.Model(&DetectionRuleScopeRef{}).
+		Where("group_token = ? AND group_version = ?", groupToken, version).
 		Count(&n).Error
 	return n, err
 }

@@ -33,5 +33,6 @@ var (
 		NewEntityGroupVersioningSchema(),
 		NewMembershipReadModelSchema(),
 		NewDetectionRuleScopeSchema(),
+		NewDetectionRuleScopeRefSchema(),
 	}
 )
