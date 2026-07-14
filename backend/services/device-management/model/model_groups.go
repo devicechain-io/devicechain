@@ -67,6 +67,13 @@ type EntityGroup struct {
 	// SelectorSchema records the selector-env SchemaVersion the Selector was
 	// checked against (0 for static groups).
 	SelectorSchema int `gorm:"not null;default:0"`
+	// ActiveVersion is the published EntityGroupVersion (ADR-062 S1) a rule-scoped
+	// resolve reads the frozen selector from — the currently-live membership rule.
+	// Null until the group is first published: the live Selector column is the
+	// mutable DRAFT (a browse/filter consumer resolves it eval-on-read directly), and
+	// only a rule scope needs the frozen version. Static groups are never versioned,
+	// so this stays null for them. Publish advances the pointer; rollback flips it.
+	ActiveVersion sql.NullInt32
 }
 
 // Data required to create or replace an entity group.

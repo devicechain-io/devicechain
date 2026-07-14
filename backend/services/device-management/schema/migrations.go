@@ -30,5 +30,6 @@ var (
 		NewEntityGroupFoldSchema(),
 		NewFacetKeySchema(),
 		NewEntityAttributeFacetIndexSchema(),
+		NewEntityGroupVersioningSchema(),
 	}
 )
