@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -76,6 +77,11 @@ func NewS3Store(ctx context.Context, cfg Config, instanceID string) (Store, erro
 	if strings.TrimSpace(cfg.Bucket) == "" {
 		return nil, fmt.Errorf("blob: s3 backend requires a bucket")
 	}
+	// Mirror Config.Validate's requirement so a direct caller of NewS3Store (not via
+	// New) cannot silently target real AWS us-east-1 with only a bucket configured.
+	if strings.TrimSpace(cfg.Region) == "" && strings.TrimSpace(cfg.Endpoint) == "" {
+		return nil, fmt.Errorf("blob: s3 backend requires a region (AWS) or an endpoint (S3-compatible)")
+	}
 	if err := validateSegment("instanceId", instanceID); err != nil {
 		return nil, err
 	}
@@ -122,16 +128,29 @@ func (s *s3Store) Put(ctx context.Context, key Key, r io.Reader, opts PutOptions
 	}
 	// Buffer bounded by the ceiling so we can enforce MaxSize and hand PutObject a
 	// known-length, seekable body (required for signing without a chunked upload).
+	bounded := opts.MaxSize > 0
 	limit := opts.MaxSize
-	if limit <= 0 {
+	if !bounded {
 		limit = s3UnboundedPutCap
+	}
+	// Guard limit+1 against int64 overflow (a MaxInt64 "unlimited" sentinel would
+	// wrap negative, making LimitReader read zero bytes and silently commit an empty
+	// object). Reading one byte past a limit this large never actually trips.
+	if limit > math.MaxInt64-1 {
+		limit = math.MaxInt64 - 1
 	}
 	buf, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return Ref{}, fmt.Errorf("blob: reading object: %w", err)
 	}
 	if int64(len(buf)) > limit {
-		return Ref{}, ErrTooLarge
+		if bounded {
+			return Ref{}, ErrTooLarge
+		}
+		// No caller ceiling, but the object is past this backend's interim buffered
+		// cap — a distinct, honest error rather than ErrTooLarge (streaming/multipart
+		// is a later slice; the ADR-058 range-read lands with it).
+		return Ref{}, fmt.Errorf("blob: object exceeds the s3 backend's %d-byte buffered-upload cap; set PutOptions.MaxSize for a bounded upload (streaming upload is not yet supported)", s3UnboundedPutCap)
 	}
 	input := &s3.PutObjectInput{
 		Bucket:        aws.String(s.bucket),

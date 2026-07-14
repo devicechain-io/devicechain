@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +107,22 @@ func TestS3PutMaxSize(t *testing.T) {
 	}
 	if f.putIn != nil {
 		t.Fatal("PutObject must not be called for an over-limit body")
+	}
+}
+
+func TestS3MaxSizeSentinelNoTruncate(t *testing.T) {
+	// A MaxInt64 "effectively unlimited" MaxSize must not overflow limit+1 and
+	// commit a zero-length object.
+	f := &fakeS3{}
+	s := newS3(f)
+	data := []byte("hello-not-truncated")
+	if _, err := s.Put(context.Background(),
+		Key{Tenant: "t", Purpose: "branding-logo", ID: "x.png"},
+		bytes.NewReader(data), PutOptions{MaxSize: math.MaxInt64}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if !bytes.Equal(f.putBody, data) {
+		t.Fatalf("MaxInt64 MaxSize stored %q, want %q", f.putBody, data)
 	}
 }
 

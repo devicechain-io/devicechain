@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"os"
 	"path/filepath"
@@ -148,7 +149,13 @@ func (s *filesystemStore) Put(ctx context.Context, key Key, r io.Reader, opts Pu
 	// so an over-limit stream cannot fill the volume before we notice.
 	var src io.Reader = r
 	if opts.MaxSize > 0 {
-		src = io.LimitReader(r, opts.MaxSize+1)
+		// Guard MaxSize+1 against int64 overflow (a MaxInt64 sentinel would wrap
+		// negative and make LimitReader read zero bytes → a silent empty object).
+		lim := opts.MaxSize
+		if lim > math.MaxInt64-1 {
+			lim = math.MaxInt64 - 1
+		}
+		src = io.LimitReader(r, lim+1)
 	}
 	n, err := io.Copy(tmp, src)
 	if err != nil {

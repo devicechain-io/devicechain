@@ -146,8 +146,13 @@ type PutOptions struct {
 	// the Key.ID extension.
 	ContentType string
 	// MaxSize rejects the write once more than MaxSize bytes have been read, with
-	// ErrTooLarge and no committed object. 0 means no store-side limit (the caller
-	// is responsible for its own ceiling).
+	// ErrTooLarge and no committed object. 0 means the CALLER imposes no ceiling —
+	// but a backend that must buffer to write (the S3 backend, which needs a known
+	// length to sign) then applies its own interim safety cap and rejects an object
+	// past it with a distinct error, NOT ErrTooLarge (streaming/multipart upload is
+	// a later slice). The filesystem backend streams and imposes no cap at MaxSize 0.
+	// Set MaxSize whenever the size is known (the branding consumer does) for uniform,
+	// backend-independent behavior.
 	MaxSize int64
 }
 

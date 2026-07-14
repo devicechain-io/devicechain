@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,6 +126,25 @@ func TestFilesystemMaxSizeEnforced(t *testing.T) {
 	// Exactly at the limit is allowed.
 	if _, err := s.Put(ctx, key, bytes.NewReader(bytes.Repeat([]byte("a"), 10)), PutOptions{MaxSize: 10}); err != nil {
 		t.Fatalf("Put at limit: %v", err)
+	}
+}
+
+func TestFilesystemMaxSizeSentinelNoTruncate(t *testing.T) {
+	// A MaxInt64 "effectively unlimited" MaxSize must not overflow limit+1 and
+	// silently store a zero-length object.
+	ctx := context.Background()
+	s := newFS(t)
+	data := []byte("hello-not-truncated")
+	ref, err := s.Put(ctx, Key{Tenant: "t", Purpose: "branding-logo", ID: "x.png"}, bytes.NewReader(data), PutOptions{MaxSize: math.MaxInt64})
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	info, err := s.Stat(ctx, ref)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if info.Size != int64(len(data)) {
+		t.Fatalf("MaxInt64 MaxSize stored %d bytes, want %d", info.Size, len(data))
 	}
 }
 
