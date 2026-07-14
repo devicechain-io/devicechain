@@ -35,23 +35,6 @@ fragment DefaultCustomer on Customer {
   metadata
 }
 
-# Content associated with customer group.
-fragment DefaultCustomerGroup on CustomerGroup {
-  id
-  createdAt
-  updatedAt
-  deletedAt
-  token
-  name
-  description
-  imageUrl
-  icon
-  backgroundColor
-  foregroundColor
-  borderColor
-  metadata
-}
-
 # Create customer type and return identifiers.
 mutation createCustomerType($token: String!, $name: String, $description: String, 
   $imageUrl: String, $icon: String, $backgroundColor: String, $foregroundColor: String, $borderColor: String, $metadata: String) {
@@ -120,41 +103,3 @@ query listCustomers($pageNumber: Int!, $pageSize: Int!) {
     }
   }
 }
-
-# Create customer group and return identifiers.
-mutation createCustomerGroup($token: String!, $name: String, $description: String, 
-  $imageUrl: String, $icon: String, $backgroundColor: String, $foregroundColor: String, $borderColor: String, $metadata: String) {
-  createCustomerGroup(request: { 
-    token: $token,
-    name: $name,
-    description: $description,
-    imageUrl: $imageUrl,
-    icon: $icon,
-    backgroundColor: $backgroundColor,
-    foregroundColor: $foregroundColor,
-    borderColor: $borderColor,
-    metadata: $metadata
-  }) {
-    ...DefaultCustomerGroup
-  }
-}
-
-# Get customer groups by unique tokens.
-query getCustomerGroupsByToken($tokens: [String!]!) {
-  customerGroupsByToken(tokens: $tokens) {
-    ...DefaultCustomerGroup
-  }
-}
-
-# List customer groups that match criteria.
-query listCustomerGroups($pageNumber: Int!, $pageSize: Int!) {
-  customerGroups(criteria: { pageNumber: $pageNumber, pageSize: $pageSize }) {
-    results {
-      ...DefaultCustomerGroup
-    }
-    pagination {
-      ...DefaultPagination
-    }
-  }
-}
-

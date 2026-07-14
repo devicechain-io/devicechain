@@ -20,12 +20,3 @@ type IDevice interface {
 	IMetadataEntity
 	GetDeviceType() DefaultDeviceDeviceType
 }
-
-// Device group entity.
-type IDeviceGroup interface {
-	IModel
-	ITokenReference
-	INamedEntity
-	IBrandedEntity
-	IMetadataEntity
-}

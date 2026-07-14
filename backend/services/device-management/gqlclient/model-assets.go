@@ -20,12 +20,3 @@ type IAsset interface {
 	IMetadataEntity
 	GetAssetType() DefaultAssetAssetType
 }
-
-// Asset group entity.
-type IAssetGroup interface {
-	IModel
-	ITokenReference
-	INamedEntity
-	IBrandedEntity
-	IMetadataEntity
-}

@@ -17,29 +17,30 @@ package entity
 type Type string
 
 const (
-	TypeDevice        Type = "device"
-	TypeDeviceGroup   Type = "devicegroup"
-	TypeAsset         Type = "asset"
-	TypeAssetGroup    Type = "assetgroup"
-	TypeArea          Type = "area"
-	TypeAreaGroup     Type = "areagroup"
-	TypeCustomer      Type = "customer"
-	TypeCustomerGroup Type = "customergroup"
+	TypeDevice   Type = "device"
+	TypeAsset    Type = "asset"
+	TypeArea     Type = "area"
+	TypeCustomer Type = "customer"
+	// TypeGroup is the single, member-family-agnostic group type (ADR-061). It
+	// replaces the former per-family group tokens (devicegroup/assetgroup/
+	// areagroup/customergroup): a group's member family is now a column on the
+	// uniform EntityGroup, not four distinct entity identities.
+	TypeGroup Type = "group"
 )
 
 // All is every recognized entity type, in a stable order.
 var All = []Type{
-	TypeDevice, TypeDeviceGroup,
-	TypeAsset, TypeAssetGroup,
-	TypeArea, TypeAreaGroup,
-	TypeCustomer, TypeCustomerGroup,
+	TypeDevice,
+	TypeAsset,
+	TypeArea,
+	TypeCustomer,
+	TypeGroup,
 }
 
 // Valid reports whether t is a recognized entity type.
 func (t Type) Valid() bool {
 	switch t {
-	case TypeDevice, TypeDeviceGroup, TypeAsset, TypeAssetGroup,
-		TypeArea, TypeAreaGroup, TypeCustomer, TypeCustomerGroup:
+	case TypeDevice, TypeAsset, TypeArea, TypeCustomer, TypeGroup:
 		return true
 	default:
 		return false

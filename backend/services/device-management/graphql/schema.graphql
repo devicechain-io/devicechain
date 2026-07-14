@@ -500,7 +500,7 @@ type DeviceSearchResults {
 }
 
 # Represents a group of related devices.
-type DeviceGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity & Entity {
+type EntityGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity & Entity {
     id: ID!
     createdAt: String
     updatedAt: String
@@ -514,11 +514,22 @@ type DeviceGroup implements Model & TokenReference & NamedEntity & BrandedEntity
     foregroundColor: String
     borderColor: String
     metadata: String
+    # The entity family this group collects: device | asset | area | customer.
+    memberType: String!
+    # How members are determined: static (explicit "member" edges) or dynamic
+    # (a CEL selector; not yet creatable — ADR-061 G3).
+    membershipMode: String!
+    # The CEL membership predicate, present only for dynamic groups.
+    selector: String
 }
 
-# Data required to create a device group.
-input DeviceGroupCreateRequest {
+# Data required to create or replace an entity group (ADR-061). membershipMode
+# defaults to "static"; selector is only permitted (and required) for "dynamic".
+input EntityGroupCreateRequest {
     token: String!
+    memberType: String!
+    membershipMode: String
+    selector: String
     name: String
     description: String
     imageUrl: String
@@ -529,15 +540,18 @@ input DeviceGroupCreateRequest {
     metadata: String
 }
 
-# Criteria used when searching for device groups.
-input DeviceGroupSearchCriteria {
+# Criteria used when searching for entity groups. memberType and membershipMode
+# are optional filters.
+input EntityGroupSearchCriteria {
     pageNumber: Int!
     pageSize: Int!
+    memberType: String
+    membershipMode: String
 }
 
-# Search results returned from device group query.
-type DeviceGroupSearchResults {
-    results: [DeviceGroup!]!
+# Search results returned from entity groups query.
+type EntityGroupSearchResults {
+    results: [EntityGroup!]!
     pagination: SearchResultsPagination!
 }
 
@@ -748,48 +762,6 @@ type AssetSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a group of related assets.
-type AssetGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity & Entity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    name: String
-    description: String
-    imageUrl: String
-    icon: String
-    backgroundColor: String
-    foregroundColor: String
-    borderColor: String
-    metadata: String
-}
-
-# Data required to create an asset group.
-input AssetGroupCreateRequest {
-    token: String!
-    name: String
-    description: String
-    imageUrl: String
-    icon: String
-    backgroundColor: String
-    foregroundColor: String
-    borderColor: String
-    metadata: String
-}
-
-# Criteria used when searching for asset groups.
-input AssetGroupSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-}
-
-# Search results returned from asset groups query.
-type AssetGroupSearchResults {
-    results: [AssetGroup!]!
-    pagination: SearchResultsPagination!
-}
-
 # Represents a type or class of customers
 type CustomerType implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
     id: ID!
@@ -867,48 +839,6 @@ type CustomerSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a group of related customers.
-type CustomerGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity & Entity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    name: String
-    description: String
-    imageUrl: String
-    icon: String
-    backgroundColor: String
-    foregroundColor: String
-    borderColor: String
-    metadata: String
-}
-
-# Data required to create a customer group.
-input CustomerGroupCreateRequest {
-    token: String!
-    name: String
-    description: String
-    imageUrl: String
-    icon: String
-    backgroundColor: String
-    foregroundColor: String
-    borderColor: String
-    metadata: String
-}
-
-# Criteria used when searching for customer groups.
-input CustomerGroupSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-}
-
-# Search results returned from customer group query.
-type CustomerGroupSearchResults {
-    results: [CustomerGroup!]!
-    pagination: SearchResultsPagination!
-}
-
 # Represents a type or class of areas
 type AreaType implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
     id: ID!
@@ -983,48 +913,6 @@ input AreaSearchCriteria {
 # Search results returned from areas query.
 type AreaSearchResults {
     results: [Area!]!
-    pagination: SearchResultsPagination!
-}
-
-# Represents a group of related areas.
-type AreaGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity & Entity {
-    id: ID!
-    createdAt: String
-    updatedAt: String
-    deletedAt: String
-    token: String!
-    name: String
-    description: String
-    imageUrl: String
-    icon: String
-    backgroundColor: String
-    foregroundColor: String
-    borderColor: String
-    metadata: String
-}
-
-# Data required to create an area group.
-input AreaGroupCreateRequest {
-    token: String!
-    name: String
-    description: String
-    imageUrl: String
-    icon: String
-    backgroundColor: String
-    foregroundColor: String
-    borderColor: String
-    metadata: String
-}
-
-# Criteria used when searching for area groups.
-input AreaGroupSearchCriteria {
-    pageNumber: Int!
-    pageSize: Int!
-}
-
-# Search results returned from area groups query.
-type AreaGroupSearchResults {
-    results: [AreaGroup!]!
     pagination: SearchResultsPagination!
 }
 
@@ -1180,12 +1068,12 @@ type Query {
     devicesByExternalId(externalIds: [String!]!): [Device!]!
     # List devices that meet criteria.
     devices(criteria: DeviceSearchCriteria!): DeviceSearchResults!
-    # Find device groups by unique id.
-    deviceGroupsById(ids: [ID!]!): [DeviceGroup!]!
-    # Find device groups by unique token.
-    deviceGroupsByToken(tokens: [String!]!): [DeviceGroup!]!
-    # List device groups that meet criteria.
-    deviceGroups(criteria: DeviceGroupSearchCriteria!): DeviceGroupSearchResults!
+    # Find entity groups by unique id.
+    entityGroupsById(ids: [ID!]!): [EntityGroup!]!
+    # Find entity groups by unique token.
+    entityGroupsByToken(tokens: [String!]!): [EntityGroup!]!
+    # List entity groups that meet criteria (optionally by member family / mode).
+    entityGroups(criteria: EntityGroupSearchCriteria!): EntityGroupSearchResults!
     # Find device credentials by unique id.
     deviceCredentialsById(ids: [ID!]!): [DeviceCredential!]!
     # Find device credentials by unique token.
@@ -1231,12 +1119,6 @@ type Query {
     assetsByToken(tokens: [String!]!): [Asset!]!
     # List assets that meet criteria.
     assets(criteria: AssetSearchCriteria!): AssetSearchResults!
-    # Find asset groups by unique id.
-    assetGroupsById(ids: [ID!]!): [AssetGroup!]!
-    # Find asset groups by unique token.
-    assetGroupsByToken(tokens: [String!]!): [AssetGroup!]!
-    # List asset groups that meet criteria.
-    assetGroups(criteria: AssetGroupSearchCriteria!): AssetGroupSearchResults!
 
     # Find customer types by unique id.
     customerTypesById(ids: [ID!]!): [CustomerType!]!
@@ -1250,12 +1132,6 @@ type Query {
     customersByToken(tokens: [String!]!): [Customer!]!
     # List customers that meet criteria.
     customers(criteria: CustomerSearchCriteria!): CustomerSearchResults!
-    # Find customer groups by unique id.
-    customerGroupsById(ids: [ID!]!): [CustomerGroup!]!
-    # Find customer groups by unique token.
-    customerGroupsByToken(tokens: [String!]!): [CustomerGroup!]!
-    # List customer groups that meet criteria.
-    customerGroups(criteria: CustomerGroupSearchCriteria!): CustomerGroupSearchResults!
 
     # Find area types by unique id.
     areaTypesById(ids: [ID!]!): [AreaType!]!
@@ -1269,12 +1145,6 @@ type Query {
     areasByToken(tokens: [String!]!): [Area!]!
     # List areas that meet criteria.
     areas(criteria: AreaSearchCriteria!): AreaSearchResults!
-    # Find area groups by unique id.
-    areaGroupsById(ids: [ID!]!): [AreaGroup!]!
-    # Find area groups by unique token.
-    areaGroupsByToken(tokens: [String!]!): [AreaGroup!]!
-    # List area groups that meet criteria.
-    areaGroups(criteria: AreaGroupSearchCriteria!): AreaGroupSearchResults!
 }
 
 # Contains mutations executed against model.
@@ -1334,12 +1204,14 @@ type Mutation {
     updateDevice(token: String!, request: DeviceCreateRequest): Device!
     # Delete a device, cascade-removing its credentials and relationship edges.
     deleteDevice(token: String!): Boolean!
-    # Create a new device group.
-    createDeviceGroup(request: DeviceGroupCreateRequest): DeviceGroup!
-    # Update an existing device group.
-    updateDeviceGroup(token: String!, request: DeviceGroupCreateRequest): DeviceGroup!
-    # Delete a device group and its relationship edges.
-    deleteDeviceGroup(token: String!): Boolean!
+    # Create a new entity group (ADR-061). Static groups only for now; a group's
+    # members are then managed over "member" relationship edges.
+    createEntityGroup(request: EntityGroupCreateRequest): EntityGroup!
+    # Update an existing entity group's presentation fields (member family + mode
+    # are immutable).
+    updateEntityGroup(token: String!, request: EntityGroupCreateRequest): EntityGroup!
+    # Delete an entity group and its relationship edges.
+    deleteEntityGroup(token: String!): Boolean!
     # Create a new device credential.
     createDeviceCredential(request: DeviceCredentialCreateRequest): DeviceCredential!
     # Update an existing device credential.
@@ -1390,12 +1262,6 @@ type Mutation {
     updateAsset(token: String!, request: AssetCreateRequest): Asset!
     # Delete an asset and its relationship edges.
     deleteAsset(token: String!): Boolean!
-    # Create a new asset group.
-    createAssetGroup(request: AssetGroupCreateRequest): AssetGroup!
-    # Update an existing asset group.
-    updateAssetGroup(token: String!, request: AssetGroupCreateRequest): AssetGroup!
-    # Delete an asset group and its relationship edges.
-    deleteAssetGroup(token: String!): Boolean!
 
     # Create a new customer type.
     createCustomerType(request: CustomerTypeCreateRequest): CustomerType!
@@ -1409,12 +1275,6 @@ type Mutation {
     updateCustomer(token: String!, request: CustomerCreateRequest): Customer!
     # Delete a customer and its relationship edges.
     deleteCustomer(token: String!): Boolean!
-    # Create a new customer group.
-    createCustomerGroup(request: CustomerGroupCreateRequest): CustomerGroup!
-    # Update an existing customer group.
-    updateCustomerGroup(token: String!, request: CustomerGroupCreateRequest): CustomerGroup!
-    # Delete a customer group and its relationship edges.
-    deleteCustomerGroup(token: String!): Boolean!
 
     # Create a new area type.
     createAreaType(request: AreaTypeCreateRequest): AreaType!
@@ -1428,12 +1288,6 @@ type Mutation {
     updateArea(token: String!, request: AreaCreateRequest): Area!
     # Delete an area and its relationship edges.
     deleteArea(token: String!): Boolean!
-    # Create a new area group.
-    createAreaGroup(request: AreaGroupCreateRequest): AreaGroup!
-    # Update an existing area group.
-    updateAreaGroup(token: String!, request: AreaGroupCreateRequest): AreaGroup!
-    # Delete an area group and its relationship edges.
-    deleteAreaGroup(token: String!): Boolean!
 }
 
 # A single alarm state-change, pushed live to a subscriber (ADR-041 / ADR-037). It

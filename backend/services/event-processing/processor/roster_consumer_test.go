@@ -132,8 +132,8 @@ func TestEntityDeletedConsumerRemovesDeviceOnly(t *testing.T) {
 	rp := newTestProcessor(newTestStore(t), nil, 1)
 	rp.RosterStore = store
 	rp.EntityDeletedReader = &fakeReader{results: []readResult{
-		{msg: entityDeletedMsg(t, "acme", entity.TypeDeviceGroup, "grp1", grpAck)}, // ignored
-		{msg: entityDeletedMsg(t, "acme", entity.TypeDevice, "dev1", devAck)},      // removes dev1
+		{msg: entityDeletedMsg(t, "acme", entity.TypeGroup, "grp1", grpAck)},  // ignored
+		{msg: entityDeletedMsg(t, "acme", entity.TypeDevice, "dev1", devAck)}, // removes dev1
 	}}
 	cctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

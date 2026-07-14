@@ -247,11 +247,6 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 		})
 }
 
-// DeleteDeviceGroup deletes a device group and its relationship edges.
-func (api *Api) DeleteDeviceGroup(ctx context.Context, token string) (bool, error) {
-	return api.deleteEdgeEntity(ctx, entity.TypeDeviceGroup, &DeviceGroup{}, token, nil)
-}
-
 // DeleteDeviceCredential deletes a single device credential by token (ADR-014).
 func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool, error) {
 	return api.hardDeleteByToken(ctx, &DeviceCredential{}, token)
@@ -270,11 +265,6 @@ func (api *Api) DeleteAsset(ctx context.Context, token string) (bool, error) {
 	return api.deleteEdgeEntity(ctx, entity.TypeAsset, &Asset{}, token, nil)
 }
 
-// DeleteAssetGroup deletes an asset group and its relationship edges.
-func (api *Api) DeleteAssetGroup(ctx context.Context, token string) (bool, error) {
-	return api.deleteEdgeEntity(ctx, entity.TypeAssetGroup, &AssetGroup{}, token, nil)
-}
-
 // --- Areas ---------------------------------------------------------------------
 
 // DeleteAreaType deletes an area type. Refused while any area references it.
@@ -288,11 +278,6 @@ func (api *Api) DeleteArea(ctx context.Context, token string) (bool, error) {
 	return api.deleteEdgeEntity(ctx, entity.TypeArea, &Area{}, token, nil)
 }
 
-// DeleteAreaGroup deletes an area group and its relationship edges.
-func (api *Api) DeleteAreaGroup(ctx context.Context, token string) (bool, error) {
-	return api.deleteEdgeEntity(ctx, entity.TypeAreaGroup, &AreaGroup{}, token, nil)
-}
-
 // --- Customers -----------------------------------------------------------------
 
 // DeleteCustomerType deletes a customer type. Refused while any customer references it.
@@ -304,11 +289,6 @@ func (api *Api) DeleteCustomerType(ctx context.Context, token string) (bool, err
 // DeleteCustomer deletes a customer and its relationship edges.
 func (api *Api) DeleteCustomer(ctx context.Context, token string) (bool, error) {
 	return api.deleteEdgeEntity(ctx, entity.TypeCustomer, &Customer{}, token, nil)
-}
-
-// DeleteCustomerGroup deletes a customer group and its relationship edges.
-func (api *Api) DeleteCustomerGroup(ctx context.Context, token string) (bool, error) {
-	return api.deleteEdgeEntity(ctx, entity.TypeCustomerGroup, &CustomerGroup{}, token, nil)
 }
 
 // --- Relationships (ADR-013) ---------------------------------------------------

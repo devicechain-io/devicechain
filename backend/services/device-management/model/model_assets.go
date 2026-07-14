@@ -76,37 +76,3 @@ type AssetSearchResults struct {
 	Results    []Asset
 	Pagination rdb.SearchResultsPagination
 }
-
-// Data required to create an asset group.
-type AssetGroupCreateRequest struct {
-	Token           string
-	Name            *string
-	Description     *string
-	ImageUrl        *string
-	Icon            *string
-	BackgroundColor *string
-	ForegroundColor *string
-	BorderColor     *string
-	Metadata        *string
-}
-
-// Represents a group of assets.
-type AssetGroup struct {
-	gorm.Model
-	rdb.TenantScoped
-	rdb.TokenReference
-	rdb.NamedEntity
-	rdb.BrandedEntity
-	rdb.MetadataEntity
-}
-
-// Search criteria for locating asset groups.
-type AssetGroupSearchCriteria struct {
-	rdb.Pagination
-}
-
-// Results for asset group search.
-type AssetGroupSearchResults struct {
-	Results    []AssetGroup
-	Pagination rdb.SearchResultsPagination
-}
