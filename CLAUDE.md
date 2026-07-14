@@ -29,6 +29,11 @@ backend/
                               Resolved-events tap → keyed-streaming CEL detection core (owned, cel-go
                               predicates) → REACT actions (raise-alarm, send-command). Rules authored on
                               the profile as forms or on a visual automation canvas w/ replay preview (ADR-053)
+    outbound-connectors/      dedicated REACT outbound sink (ADR-060): durable NATS consumer of the REACT
+                              connector-dispatch stream → hand-rolled SSRF-hardened httpCall webhook +
+                              embedded-Bento (MIT warpstreamlabs/bento, kept out of the DETECT binary)
+                              publish to MQTT/Kafka/AWS-SNS/AWS-SQS over a versioned Connector entity,
+                              secret-authed (ADR-059) + per-tenant egress-governed (ADR-023)
     mcp/                      opt-in OAuth 2.1 Resource Server exposing read-only tools (devices, state,
                               telemetry, alarms, commands) to AI agents over MCP, fronting per-area GraphQL
                               under the caller's own token — no service token, confused-deputy red line (ADR-047)

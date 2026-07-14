@@ -39,10 +39,14 @@ A threshold can be a **fixed value** on the rule, or **dynamic** — the name of
 
 ## Automated actions
 
-When a rule fires, its **REACT** actions run. Two are built in:
+When a rule fires, its **REACT** actions run. The built-in actions are:
 
 - **Raise alarm** — open (or escalate) a stateful alarm for the device, described below. This is the default and needs no target beyond a severity.
 - **Send command** — enqueue a command back to the device through the persistent command pipeline (dispatch is idempotent, so a replay or retry never double-sends).
+- **Call a webhook** (`httpCall`) — POST a CEL-shaped payload to an external HTTP endpoint, with SSRF-hardened delivery and optional secret-store auth.
+- **Publish to a connector** (`publish`) — hand a CEL-shaped payload to an **[outbound connector](./outbound-connectors.md)** that fans it out to a message broker or cloud queue (MQTT, Kafka, AWS SNS/SQS).
+
+The last two — the outbound actions — are described in **[Outbound Connectors](./outbound-connectors.md)**; they are delivered by a separate service so a slow external system never slows detection.
 
 A rule can carry several actions (up to a small fixed limit), and each action can be **guarded** by a condition on the firing — so, for example, one rule can raise an alarm on every firing but send a command only when the reading is in a particular band. Because a firing is **edge-triggered** (a rising edge when the condition starts holding, a falling edge when it stops), an alarm raised on the rising edge is cleared automatically on the falling edge — you author the raise, and the clear is implied.
 
@@ -74,7 +78,7 @@ Because DeviceChain models device context as a **[typed relationship graph](./do
 
 ## Reaching a human
 
-A raised alarm can notify people through the **notification** system. A per-tenant policy routes alarms to **email (SMTP)** and **webhook** channels, with per-severity **escalation** (notify a wider audience if an alarm is not acknowledged in time) and throttling/deduplication so a noisy condition does not flood a channel. Channel credentials (the SMTP password, a webhook bearer token) are held in the platform's **encrypted secret store** — sealed at rest with envelope encryption, write-only over the API, and never returned as cleartext. This machine-to-human path is kept distinct from the machine-to-machine **[outbound connectors](./architecture.md)** that fan events out to other systems.
+A raised alarm can notify people through the **notification** system. A per-tenant policy routes alarms to **email (SMTP)** and **webhook** channels, with per-severity **escalation** (notify a wider audience if an alarm is not acknowledged in time) and throttling/deduplication so a noisy condition does not flood a channel. Channel credentials (the SMTP password, a webhook bearer token) are held in the platform's **encrypted secret store** — sealed at rest with envelope encryption, write-only over the API, and never returned as cleartext. This machine-to-human path is kept distinct from the machine-to-machine **[outbound connectors](./outbound-connectors.md)** that fan events out to other systems.
 
 ## Seeing alarms & rule health
 

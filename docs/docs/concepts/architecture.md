@@ -13,16 +13,17 @@ DeviceChain is a set of stateless Go microservices over a shared core library, c
 |---|---|
 | **event-sources** | Inbound device transports. Decodes raw messages (JSON today; Protobuf and custom decoders planned), applies a per-tenant ingest rate limit, and publishes them onto the pipeline. |
 | **device-management** | Devices, device types + versioned device profiles, the typed relationship graph, the alarm object and its lifecycle, and event resolution (attaching device + organizational context to each event). |
-| **event-processing** | The DETECT + REACT pipeline: a replay-correct streaming core evaluates detection rules over resolved events (threshold, duration, repeating, rate-of-change, absence, windowed aggregate, area correlation) and dispatches automated actions (raise alarm, send command). Detection lives here; the alarm object it raises stays in device-management. |
+| **event-processing** | The DETECT + REACT pipeline: a replay-correct streaming core evaluates detection rules over resolved events (threshold, duration, repeating, rate-of-change, absence, windowed aggregate, area correlation) and dispatches automated actions (raise alarm, send command, and outbound connectors). Detection lives here; the alarm object it raises stays in device-management, and connector delivery is handed off to outbound-connectors. |
 | **event-management** | Persists resolved events to TimescaleDB, applies the data-lifecycle policies (compression / retention / rollups), and serves time-series queries over GraphQL. |
 | **device-state** | The live last-known-state projection per device — presence, latest location, and current reading per measurement. |
 | **command-delivery** | Persistent, two-way command dispatch to devices, tracked through a per-command lifecycle. |
 | **dashboard-management** | Versioned dashboard definitions (draft, publish / rollback, export), rendered by the embeddable widget packages. |
 | **notification-management** | Routes triggered alarms to humans — per-tenant policy over email (SMTP) and webhook, with per-severity escalation. |
 | **user-management** | Global identities, per-tenant memberships, the role catalog, and JWT issuance/validation. |
+| **outbound-connectors** | Delivers REACT's outbound actions to external systems — an HTTP/webhook call and a `publish` to message brokers and cloud queues (MQTT, Kafka, AWS SNS/SQS) — over tenant-scoped, versioned connectors with credentials held in the secret store. Runs in its own process so a slow or misbehaving external system can't touch the detection pipeline. See [Outbound Connectors](./outbound-connectors.md). |
 | **operator** | A controller-runtime operator that manages the `DeviceChainInstance` lifecycle (status aggregation, config hot-reload). Workloads themselves are rendered by the Helm chart; tenants are control-plane database records, not reconciled resources. |
 
-Additional services — outbound connectors, batch operations, and scheduling — are planned. See the repository for current status.
+Additional services — batch operations and scheduling — are planned. See the repository for current status.
 
 ## The data and messaging backbone
 
@@ -58,7 +59,7 @@ Services start in a **not-ready** state and fetch the JWT signing keys from `use
 
 ## Secret handling
 
-Integration and provider credentials — an SMTP password, a webhook bearer token, and future outbound-connector auth — are never stored in plaintext config or a reversible column. They live in an **encrypted secret store**: each value is sealed at rest with a per-secret AES-256-GCM data key wrapped by a key-encryption key (KEK), where the default KEK is a root key on the instance's existing Kubernetes Secret — encryption-at-rest with no additional infrastructure, and cloud KMS / HashiCorp Vault are drop-in alternatives for regulated deployments. A consumer stores only an opaque **handle**; the value is **write-only over the API** and resolved server-internally at use time, never returned as cleartext. Secret mutations are audited (who, when, which handle — never the value).
+Integration and provider credentials — an SMTP password, a webhook bearer token, an outbound-connector's broker or cloud credential — are never stored in plaintext config or a reversible column. They live in an **encrypted secret store**: each value is sealed at rest with a per-secret AES-256-GCM data key wrapped by a key-encryption key (KEK), where the default KEK is a root key on the instance's existing Kubernetes Secret — encryption-at-rest with no additional infrastructure, and cloud KMS / HashiCorp Vault are drop-in alternatives for regulated deployments. A consumer stores only an opaque **handle**; the value is **write-only over the API** and resolved server-internally at use time, never returned as cleartext. Secret mutations are audited (who, when, which handle — never the value).
 
 ## API surface
 

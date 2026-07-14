@@ -26,12 +26,13 @@ DeviceChain is a set of cooperating microservices over a shared core library:
 
 - **event-sources** — pluggable inbound transports (MQTT today; HTTP, CoAP, WebSocket planned) that decode raw device messages onto the pipeline.
 - **device-management** — devices, device types + versioned device profiles, the relationship graph, the alarm object and its lifecycle, and event resolution.
-- **event-processing** — the detection + action pipeline over resolved events: replay-correct streaming rules (threshold, duration, repeating, rate-of-change, absence, windowed aggregate, area correlation) and automated responses (raise alarm, send command). Detection lives here; the alarm object it raises stays in device-management.
+- **event-processing** — the detection + action pipeline over resolved events: replay-correct streaming rules (threshold, duration, repeating, rate-of-change, absence, windowed aggregate, area correlation) and automated responses (raise alarm, send command, and outbound connectors). Detection lives here; the alarm object it raises stays in device-management.
 - **event-management** — persists resolved events to TimescaleDB and serves time-series queries (including live subscriptions over a graphql-ws bridge).
 - **device-state** — the live last-known-state projection per device (current reading per measurement).
 - **command-delivery** — persistent two-way command dispatch to devices.
 - **dashboard-management** — versioned dashboard definitions (draft, publish/rollback, export) rendered by the embeddable widget packages.
 - **notification-management** — routes triggered alarms to humans over email (SMTP) and webhook, with per-severity escalation.
+- **outbound-connectors** — delivers REACT's outbound actions (webhook `httpCall`, and `publish` to MQTT/Kafka/AWS SNS/SQS) to external systems over versioned, secret-authed connectors.
 - **user-management** — global identities, per-tenant memberships, the role catalog, and JWT issuance/validation.
 - **operator (k8s)** — reconciles CRDs into the running platform.
 

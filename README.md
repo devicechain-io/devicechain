@@ -105,7 +105,8 @@ per tenant.
 | **command-delivery** | Persistent, two-way command dispatch to devices. |
 | **dashboard-management** | Stores tenant dashboard definitions; the embeddable widget packages render live telemetry over them. |
 | **notification-management** | Routes triggered alarms to humans — per-tenant policy over email (SMTP) and webhook, with per-severity escalation. |
-| **event-processing** | The DETECT + REACT pipeline and the sole alarm engine: taps the resolved-events stream, detects conditions over a keyed-streaming CEL core, and dispatches actions (raise-alarm, send-command). Rules are authored on the profile as forms or on a visual automation canvas. |
+| **event-processing** | The DETECT + REACT pipeline and the sole alarm engine: taps the resolved-events stream, detects conditions over a keyed-streaming CEL core, and dispatches actions (raise-alarm, send-command, and outbound connectors). Rules are authored on the profile as forms or on a visual automation canvas. |
+| **outbound-connectors** | Delivers REACT's outbound actions to external systems — an HTTP/webhook `httpCall` and a `publish` to MQTT, Kafka, AWS SNS, and AWS SQS — over a tenant-scoped, versioned connector whose credentials live in the secret store. Isolated from the detection engine in its own process. |
 | **mcp** | An opt-in OAuth 2.1 Resource Server exposing read-only tools (devices, state, telemetry, alarms, commands) to AI agents over the Model Context Protocol, fronting the per-area GraphQL under the caller's own token. |
 | **operator** | A controller-runtime operator reconciling the `Instance` custom resource (an instance's deployment shape). |
 
@@ -245,7 +246,7 @@ backend/    Go monorepo (Go Workspaces)
   core/       shared library — entity, auth, messaging, config, rdb, graphql
   services/   microservices — device-management, user-management, event-management,
               event-sources, device-state, command-delivery, dashboard-management,
-              notification-management, event-processing, mcp
+              notification-management, event-processing, outbound-connectors, mcp
   k8s/        Kubernetes operator (controller-runtime)
   cli/        dcctl — instance bootstrap / destroy and admin tooling
 frontend/   npm workspace — apps/console (React + TypeScript management console)
