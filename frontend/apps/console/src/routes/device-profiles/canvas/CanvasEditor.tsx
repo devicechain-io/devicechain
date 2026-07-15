@@ -303,6 +303,13 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
         authoringGraph: JSON.stringify(fromReactFlow(nodes, edges)),
         enabled,
         metadata: entity?.metadata ?? undefined,
+        // Preserve the rule's group scope (ADR-062 S4) verbatim across a canvas save. The scope
+        // lives in columns, not the canvas graph, and an update is a full replace — so omitting
+        // it here would silently clear the scope and turn a group-scoped rule profile-wide. The
+        // scope is authored in the Form tab; the canvas passes it through, mirroring how the
+        // form passes a canvas-authored guard/raw action through verbatim.
+        entityGroupToken: entity?.entityGroupToken ?? undefined,
+        entityGroupVersion: entity?.entityGroupVersion ?? undefined,
       };
       if (editing) {
         await updateDetectionRule(entity.token, request);
@@ -344,6 +351,15 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
           </Button>
         </div>
       </div>
+      {entity?.entityGroupToken && (
+        <p className="text-xs text-muted-foreground">
+          Scoped to group{' '}
+          <span className="font-medium">
+            {entity.entityGroupToken}@{entity.entityGroupVersion}
+          </span>{' '}
+          — preserved on save; edit the scope in the Form tab.
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 p-2">
         <span className="text-xs font-medium text-muted-foreground">Add:</span>

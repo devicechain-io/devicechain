@@ -305,6 +305,7 @@ export function DetectionRuleForm({
   const [scopeGroupVersion, setScopeGroupVersion] = useState<number | null>(entity?.entityGroupVersion ?? null);
   const [scopeGroups, setScopeGroups] = useState<ScopeGroup[]>([]);
   const [scopeVersions, setScopeVersions] = useState<ScopeGroupVersion[]>([]);
+  const [scopeVersionsStatus, setScopeVersionsStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
   const [scopeCount, setScopeCount] = useState<
     { status: 'idle' | 'checking' | 'ok' | 'error'; total?: number; message?: string }
   >({ status: 'idle' });
@@ -441,9 +442,10 @@ export function DetectionRuleForm({
         // "Checking…" up until the browser's own network timeout. Racing a 10s timeout clears
         // the advisory feedback instead (Fable LOW); the stray loser timer is a harmless no-op.
         const res = await Promise.race([
-          // Pass the scoped flag so the gate rejects a scope on an unsupported kind
-          // (absence/correlation) inline, not only at publish (ADR-062 S4).
-          validateDetectionRule(validateToken, definition, scoped),
+          // Pass the actual scoped state (a group is chosen) so the gate rejects a scope on an
+          // unsupported kind (absence/correlation) inline, not only at publish (ADR-062 S4).
+          // Keyed on the group being chosen, not the checkbox — an empty scope saves unscoped.
+          validateDetectionRule(validateToken, definition, scoped && !!scopeGroupToken),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('validate timeout')), 10_000)),
         ]);
         if (cancelled) return;
@@ -456,7 +458,7 @@ export function DetectionRuleForm({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [definition, validateToken, scoped]);
+  }, [definition, validateToken, scoped, scopeGroupToken]);
 
   // Load the dynamic groups a rule can scope to, the first time scoping is turned on.
   useEffect(() => {
@@ -478,19 +480,24 @@ export function DetectionRuleForm({
   useEffect(() => {
     if (!scopeGroupToken) {
       setScopeVersions([]);
+      setScopeVersionsStatus('idle');
       return;
     }
     let cancelled = false;
+    setScopeVersionsStatus('loading');
     listEntityGroupVersions(scopeGroupToken)
       .then((vs) => {
         if (cancelled) return;
         setScopeVersions(vs);
+        setScopeVersionsStatus('ok');
         setScopeGroupVersion((cur) =>
           cur != null && vs.some((v) => v.version === cur) ? cur : (vs[0]?.version ?? null),
         );
       })
       .catch(() => {
-        if (!cancelled) setScopeVersions([]);
+        if (cancelled) return;
+        setScopeVersions([]);
+        setScopeVersionsStatus('error');
       });
     return () => {
       cancelled = true;
@@ -500,7 +507,10 @@ export function DetectionRuleForm({
   // Live "matches N entities" preview for the PINNED version's frozen selector (the exact set
   // the scoped rule will target), mirroring the browse screen's previewSelector count.
   useEffect(() => {
-    if (!scoped || !scopeGroupToken || scopeGroupVersion == null) {
+    // Skip the preview for an unsupported kind (the count line is hidden anyway) and any
+    // incomplete scope — no wasted selector query.
+    const unsupportedKind = ruleType === 'absence' || ruleType === 'correlation';
+    if (!scoped || !scopeGroupToken || scopeGroupVersion == null || unsupportedKind) {
       setScopeCount({ status: 'idle' });
       return;
     }
@@ -526,7 +536,7 @@ export function DetectionRuleForm({
     return () => {
       cancelled = true;
     };
-  }, [scoped, scopeGroupToken, scopeGroupVersion, scopeVersions]);
+  }, [scoped, scopeGroupToken, scopeGroupVersion, scopeVersions, ruleType]);
 
   const submit = async () => {
     if (definition == null) return; // guarded by the disabled button; satisfies the type narrowing
@@ -581,7 +591,16 @@ export function DetectionRuleForm({
     value: String(v.version),
     label: v.label ? `v${v.version} — ${v.label}` : `v${v.version}`,
   }));
-  const scopeUnsupportedKind = scoped && (ruleType === 'absence' || ruleType === 'correlation');
+  // A scope is only actually applied once a GROUP is chosen — key the advisory refusal + the
+  // half-set gate on that, not on the checkbox alone (ticking "scope" without picking a group
+  // still saves an UNSCOPED rule, so a refusal warning there would be misleading).
+  const scopeChosen = scoped && !!scopeGroupToken;
+  const scopeUnsupportedKind = scopeChosen && (ruleType === 'absence' || ruleType === 'correlation');
+  // The member family of the selected group, to word the count ("3 areas" not "3 entities").
+  const scopeMemberType = scopeGroups.find((g) => g.token === scopeGroupToken)?.memberType ?? 'entity';
+  // Block save on a half-set scope (a group with no version chosen — an unpublished group, or a
+  // click before the versions fetch resolved); the backend would reject the publish anyway.
+  const scopeHint = scopeChosen && scopeGroupVersion == null ? 'Pick a published version for the scoped group.' : null;
 
   return (
     <div className="space-y-4">
@@ -702,9 +721,14 @@ export function DetectionRuleForm({
                 />
               </FormField>
             )}
-            {scopeGroupToken && scopeVersions.length === 0 && (
+            {scopeGroupToken && scopeVersionsStatus === 'ok' && scopeVersions.length === 0 && (
               <p className="text-sm text-amber-700 dark:text-amber-400">
                 This group has no published version yet — publish the group before scoping a rule to it.
+              </p>
+            )}
+            {scopeGroupToken && scopeVersionsStatus === 'error' && (
+              <p className="text-sm text-amber-700 dark:text-amber-400">
+                Could not load this group's versions — check your connection and try again.
               </p>
             )}
             {scopeUnsupportedKind && (
@@ -717,7 +741,7 @@ export function DetectionRuleForm({
               <p className="text-sm text-muted-foreground" aria-live="polite">
                 {scopeCount.status === 'checking' && 'Counting members…'}
                 {scopeCount.status === 'ok' &&
-                  `Currently matches ${scopeCount.total} ${scopeCount.total === 1 ? 'entity' : 'entities'}.`}
+                  `Currently matches ${scopeCount.total} ${scopeCount.total === 1 ? scopeMemberType : `${scopeMemberType}s`}.`}
                 {scopeCount.status === 'error' && `Selector preview unavailable: ${scopeCount.message}`}
               </p>
             )}
@@ -987,21 +1011,21 @@ export function DetectionRuleForm({
         </div>
       )}
 
-      {hint && <p className="text-sm text-amber-600 dark:text-amber-500">{hint}</p>}
+      {(hint || scopeHint) && <p className="text-sm text-amber-600 dark:text-amber-500">{hint ?? scopeHint}</p>}
 
       {/* Inline compiler feedback (advisory — does not block the draft save). */}
-      {!hint && validation?.status === 'checking' && (
+      {!hint && !scopeHint && validation?.status === 'checking' && (
         <p className="text-sm text-muted-foreground">Checking the rule compiles…</p>
       )}
-      {!hint && validation?.status === 'error' && (
+      {!hint && !scopeHint && validation?.status === 'error' && (
         <p className="text-sm text-red-600 dark:text-red-500">Compiler: {validation.message}</p>
       )}
-      {!hint && validation?.status === 'ok' && (
+      {!hint && !scopeHint && validation?.status === 'ok' && (
         <p className="text-sm text-emerald-600 dark:text-emerald-500">The rule compiles. ✓</p>
       )}
 
       <div className="flex gap-2 pt-1">
-        <Button onClick={submit} loading={busy} disabled={busy || hint != null}>
+        <Button onClick={submit} loading={busy} disabled={busy || hint != null || scopeHint != null}>
           {editing ? 'Save changes' : 'Create detection rule'}
         </Button>
       </div>
