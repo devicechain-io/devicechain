@@ -7,7 +7,84 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-user-management/iam"
+	"golang.org/x/crypto/bcrypt"
 )
+
+// verifyClientAuth is the pure token-endpoint client-authentication decision: a
+// disabled client is always rejected; a confidential client must present a
+// bcrypt-matching secret; a public client must NOT present a secret.
+func TestVerifyClientAuth(t *testing.T) {
+	const secret = "s3cr3t-value"
+	hash, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	confidential := &iam.OAuthClient{Enabled: true, SecretHash: string(hash)}
+	public := &iam.OAuthClient{Enabled: true}
+
+	// Confidential: correct secret passes; wrong/absent secret is invalid_client.
+	if e := verifyClientAuth(confidential, secret, true); e != nil {
+		t.Errorf("confidential + correct secret: got %v, want nil", e)
+	}
+	if e := verifyClientAuth(confidential, "wrong", true); e == nil || e.Code != "invalid_client" {
+		t.Errorf("confidential + wrong secret: got %v, want invalid_client", e)
+	}
+	if e := verifyClientAuth(confidential, "", false); e == nil || e.Code != "invalid_client" {
+		t.Errorf("confidential + no secret: got %v, want invalid_client", e)
+	}
+
+	// Public: no secret passes; a presented secret is a misconfiguration → invalid_client.
+	if e := verifyClientAuth(public, "", false); e != nil {
+		t.Errorf("public + no secret: got %v, want nil", e)
+	}
+	if e := verifyClientAuth(public, "anything", true); e == nil || e.Code != "invalid_client" {
+		t.Errorf("public + presented secret: got %v, want invalid_client", e)
+	}
+
+	// A disabled client is rejected regardless of type/secret.
+	for _, c := range []*iam.OAuthClient{
+		{Enabled: false, SecretHash: string(hash)},
+		{Enabled: false},
+	} {
+		if e := verifyClientAuth(c, secret, true); e == nil || e.Code != "invalid_client" {
+			t.Errorf("disabled client: got %v, want invalid_client", e)
+		}
+	}
+}
+
+// checkRefreshClientBinding is the refresh-grant client-binding rule: a confidential
+// client's refresh token requires the request to be that same authenticated client;
+// public/unbound tokens stay lenient; a deleted client's tokens are rejected.
+func TestCheckRefreshClientBinding(t *testing.T) {
+	confidential := &iam.OAuthClient{Enabled: true, SecretHash: "$2a$hash"}
+	public := &iam.OAuthClient{Enabled: true}
+
+	// Unbound token (no client_id claim): always allowed, no lookup consulted.
+	if e := checkRefreshClientBinding("", "", nil, false); e != nil {
+		t.Errorf("unbound: got %v, want nil", e)
+	}
+	// Confidential bound token: allowed only when the authenticated client matches.
+	if e := checkRefreshClientBinding("grafana", "grafana", confidential, true); e != nil {
+		t.Errorf("confidential + matching client: got %v, want nil", e)
+	}
+	// THE EXPLOIT: a stolen refresh token presented with no client credentials.
+	if e := checkRefreshClientBinding("grafana", "", confidential, true); e == nil || e.Code != "invalid_grant" {
+		t.Errorf("confidential + no authenticated client: got %v, want invalid_grant", e)
+	}
+	// Cross-client: another confidential client cannot refresh this token.
+	if e := checkRefreshClientBinding("grafana", "other", confidential, true); e == nil || e.Code != "invalid_grant" {
+		t.Errorf("confidential + wrong client: got %v, want invalid_grant", e)
+	}
+	// Public bound token: lenient — refreshable with the token alone (no secret exists).
+	if e := checkRefreshClientBinding("mcp", "", public, true); e != nil {
+		t.Errorf("public bound + no client: got %v, want nil (lenient)", e)
+	}
+	// A deleted client's tokens are rejected (deletion kills sessions).
+	if e := checkRefreshClientBinding("gone", "gone", nil, false); e == nil || e.Code != "invalid_grant" {
+		t.Errorf("deleted client: got %v, want invalid_grant", e)
+	}
+}
 
 // PKCE S256 verification against the RFC 7636 Appendix B test vector, plus the
 // negative and empty cases (an empty verifier or challenge must never verify).

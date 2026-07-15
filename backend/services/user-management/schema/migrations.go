@@ -26,5 +26,6 @@ var (
 		NewOAuthClientSchema(),
 		NewTenantOutboundGovernance(),
 		NewTenantBranding(),
+		NewOAuthClientConfidential(),
 	}
 )

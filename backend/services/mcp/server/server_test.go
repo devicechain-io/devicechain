@@ -50,7 +50,7 @@ func TestServerNew_AuthMiddlewareGatesRequests(t *testing.T) {
 
 	// A token bound to a different audience → 401 (anti-confused-deputy).
 	wrongAud, _ := iss.IssueOAuthAccess("acme", "a@b.c", nil, []string{"device:read"},
-		coreauth.ScopeReadOnly, []string{"https://some-other-resource"}, false, "j-aud")
+		coreauth.ScopeReadOnly, []string{"https://some-other-resource"}, false, "mcp", "j-aud")
 	resp = post("Bearer " + wrongAud.Token)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("wrong aud: status = %d, want 401", resp.StatusCode)
@@ -59,7 +59,7 @@ func TestServerNew_AuthMiddlewareGatesRequests(t *testing.T) {
 
 	// Correct audience but a non-read-only scope → 403 (the Scopes option enforced).
 	badScope, _ := iss.IssueOAuthAccess("acme", "a@b.c", nil, []string{"device:read"},
-		"some-other-scope", []string{testResource}, false, "j-scope")
+		"some-other-scope", []string{testResource}, false, "mcp", "j-scope")
 	resp = post("Bearer " + badScope.Token)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("wrong scope: status = %d, want 403", resp.StatusCode)

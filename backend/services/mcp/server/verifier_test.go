@@ -33,7 +33,7 @@ func TestVerifier_AudienceBoundTokenAccepted(t *testing.T) {
 	verify := NewTokenVerifier(validator, testResource)
 
 	tok, err := iss.IssueOAuthAccess("acme", "a@b.c", []string{"viewer"},
-		[]string{"device:read"}, coreauth.ScopeReadOnly, []string{testResource}, false, "jti-1")
+		[]string{"device:read"}, coreauth.ScopeReadOnly, []string{testResource}, false, "mcp", "jti-1")
 	if err != nil {
 		t.Fatalf("IssueOAuthAccess: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestVerifier_WrongAudienceRejected(t *testing.T) {
 	verify := NewTokenVerifier(validator, testResource)
 
 	tok, _ := iss.IssueOAuthAccess("acme", "a@b.c", nil, []string{"device:read"},
-		coreauth.ScopeReadOnly, []string{"https://some-other-resource"}, false, "jti-2")
+		coreauth.ScopeReadOnly, []string{"https://some-other-resource"}, false, "mcp", "jti-2")
 	_, err := verify(context.Background(), tok.Token, nil)
 	if !errors.Is(err, sdkauth.ErrInvalidToken) {
 		t.Errorf("wrong-audience token: err = %v, want ErrInvalidToken", err)

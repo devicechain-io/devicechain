@@ -60,6 +60,11 @@ type Claims struct {
 	// already capped to the scope at issue time. The audience a scoped token is
 	// bound to (RFC 8707) rides the standard "aud" registered claim.
 	Scope string `json:"scope,omitempty"`
+	// ClientId is the OAuth 2.1 client the token was minted for (ADR-047 / RFC 9068);
+	// empty on non-OAuth tokens. It binds the refresh grant to its client so a token
+	// minted for a confidential client can only be refreshed by that same
+	// authenticated client — a stolen refresh token is useless without the secret.
+	ClientId string `json:"client_id,omitempty"`
 	// TokenType distinguishes access from refresh tokens (see TokenType*).
 	TokenType string `json:"typ"`
 

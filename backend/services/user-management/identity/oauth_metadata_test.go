@@ -39,7 +39,11 @@ func TestBuildAuthorizationServerMetadata(t *testing.T) {
 	assertContains(t, "grant_types", md.GrantTypesSupported, "authorization_code")
 	assertContains(t, "grant_types", md.GrantTypesSupported, "refresh_token")
 	assertContains(t, "code_challenge_methods", md.CodeChallengeMethodsSupported, "S256")
+	// Public (none) AND confidential (client_secret_basic/post) authentication are
+	// advertised — the confidential-client fold-in.
 	assertContains(t, "token_endpoint_auth_methods", md.TokenEndpointAuthMethodsSupported, "none")
+	assertContains(t, "token_endpoint_auth_methods", md.TokenEndpointAuthMethodsSupported, "client_secret_basic")
+	assertContains(t, "token_endpoint_auth_methods", md.TokenEndpointAuthMethodsSupported, "client_secret_post")
 	assertContains(t, "scopes", md.ScopesSupported, auth.ScopeReadOnly)
 }
 

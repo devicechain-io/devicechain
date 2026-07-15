@@ -171,11 +171,16 @@ func (Tenant) TableName() string { return "iam_tenants" }
 // the authorization-code flow against (ADR-047). Instance-global control-plane
 // data (like the role/tenant catalog), reached through the system context — an
 // OAuth client is a platform-level registration, not tenant-scoped; the tenant is
-// chosen per-grant at the authorize step. Every v1 client is a PUBLIC client
-// (token_endpoint_auth_method=none) that proves possession via PKCE, so there is
-// deliberately no client secret to store. RedirectURIs is the exact-match
-// allowlist the authorize endpoint checks; Scopes is the set of scopes this client
-// may request (each a member of auth.SupportedScopes).
+// chosen per-grant at the authorize step. A client is PUBLIC by default
+// (token_endpoint_auth_method=none) and proves possession via PKCE — the MCP case.
+// A CONFIDENTIAL client (e.g. a server-side web app like Grafana) additionally
+// authenticates to the token endpoint with a secret: SecretHash holds the bcrypt
+// hash of that secret (empty ⇔ public). The AS only ever VERIFIES a presented
+// secret against this hash; the cleartext is shown once at mint/rotate and never
+// stored, so — unlike connector/AI secrets (ADR-059's reversible store) — there is
+// nothing to decrypt back. PKCE stays mandatory for both types. RedirectURIs is
+// the exact-match allowlist the authorize endpoint checks; Scopes is the set of
+// scopes this client may request (each a member of auth.SupportedScopes).
 type OAuthClient struct {
 	gorm.Model
 	rdb.NamedEntity
@@ -184,9 +189,17 @@ type OAuthClient struct {
 	RedirectURIs []string `gorm:"serializer:json"`
 	Scopes       []string `gorm:"serializer:json"`
 	Enabled      bool     `gorm:"not null;default:true"`
+	// SecretHash is the bcrypt hash of a confidential client's secret; empty for a
+	// public PKCE client. bcrypt output is 60 bytes — size:100 leaves headroom.
+	SecretHash string `gorm:"size:100"`
 }
 
 func (OAuthClient) TableName() string { return "iam_oauth_clients" }
+
+// IsConfidential reports whether this client authenticates to the token endpoint
+// with a client secret (a bcrypt SecretHash is registered). A public PKCE client
+// returns false.
+func (c OAuthClient) IsConfidential() bool { return c.SecretHash != "" }
 
 // AuditLabel implements rdb.AuditLabeler: label an audited iam row with its
 // human-facing, non-sensitive identifier — a role/tenant token, a client_id, or

@@ -279,9 +279,11 @@ func registerOAuthHandlers() {
 	http.Handle(identity.MetadataPath, identity.AuthorizationServerMetadataHandler(Configuration.Auth.IssuerUrl))
 
 	// The token endpoint (ADR-047 slice B): authorization_code (+ PKCE) and
-	// refresh_token grants for public clients. The authorize endpoint that issues
-	// codes lands in slice C.
+	// refresh_token grants. AuthenticateClient runs first — public clients (PKCE) and
+	// confidential clients (client_secret_basic/post) both flow through it. The
+	// authorize endpoint that issues codes lands in slice C.
 	http.Handle(identity.TokenPath, identity.TokenHandler(
+		IdentityManager.AuthenticateClient,
 		IdentityManager.RedeemAuthorizationCode,
 		IdentityManager.RefreshOAuth,
 	))

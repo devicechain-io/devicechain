@@ -18,7 +18,7 @@ func TestIssueOAuthAccess_RoundTrip(t *testing.T) {
 
 	tok, err := iss.IssueOAuthAccess("tenant-a", "alice@example.com",
 		[]string{"viewer"}, []string{"device:read", "event:read"},
-		ScopeReadOnly, []string{"https://mcp.example.com"}, false, "jti-oauth")
+		ScopeReadOnly, []string{"https://mcp.example.com"}, false, "mcp-client", "jti-oauth")
 	if err != nil {
 		t.Fatalf("IssueOAuthAccess: %v", err)
 	}
@@ -28,6 +28,9 @@ func TestIssueOAuthAccess_RoundTrip(t *testing.T) {
 	}
 	if claims.Tenant != "tenant-a" {
 		t.Errorf("tenant = %q, want tenant-a", claims.Tenant)
+	}
+	if claims.ClientId != "mcp-client" {
+		t.Errorf("client_id = %q, want mcp-client", claims.ClientId)
 	}
 	if claims.Scope != ScopeReadOnly {
 		t.Errorf("scope = %q, want %q", claims.Scope, ScopeReadOnly)
@@ -61,6 +64,9 @@ func TestNonOAuthTokensHaveNoScopeOrAudience(t *testing.T) {
 	if len(claims.Audience) != 0 {
 		t.Errorf("aud = %v, want empty", claims.Audience)
 	}
+	if claims.ClientId != "" {
+		t.Errorf("client_id = %q, want empty on a non-OAuth token", claims.ClientId)
+	}
 }
 
 // An OAuth refresh token carries the scope/audience so a refresh grant re-mints an
@@ -72,7 +78,7 @@ func TestIssueOAuthRefresh_CarriesScopeAndAudience(t *testing.T) {
 
 	tok, err := iss.IssueOAuthRefresh("tenant-a", "alice@example.com",
 		[]string{"viewer"}, []string{"device:read"},
-		ScopeReadOnly, []string{"https://mcp.example.com"}, "jti-refresh")
+		ScopeReadOnly, []string{"https://mcp.example.com"}, "mcp-client", "jti-refresh")
 	if err != nil {
 		t.Fatalf("IssueOAuthRefresh: %v", err)
 	}

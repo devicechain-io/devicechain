@@ -171,9 +171,10 @@ type AdminAuditEventSearchResults {
 }
 
 # A registered OAuth 2.1 client (ADR-047): the allowlist entry the Authorization
-# Server validates the authorization-code flow against. Every client is a public
-# client (PKCE, no secret), so none is exposed here. redirectUris is the
-# exact-match allowlist; scopes is the set the client may request.
+# Server validates the authorization-code flow against. redirectUris is the
+# exact-match allowlist; scopes is the set the client may request. hasSecret tells
+# whether it is a confidential client (authenticates at the token endpoint with a
+# secret) or a public PKCE client — the cleartext secret is never exposed here.
 type AdminOAuthClient {
     id: ID!
     createdAt: String
@@ -184,17 +185,29 @@ type AdminOAuthClient {
     enabled: Boolean!
     redirectUris: [String!]!
     scopes: [String!]!
+    hasSecret: Boolean!
+}
+
+# The result of registering or rotating a client. clientSecret is the cleartext,
+# returned EXACTLY ONCE (only its bcrypt hash is stored) — null for a public client.
+# Capture it now; it cannot be retrieved again.
+type AdminOAuthClientSecret {
+    client: AdminOAuthClient!
+    clientSecret: String
 }
 
 # Data to register an OAuth client. clientId is its stable public identifier; each
 # redirectUri must be https (or http for a loopback host) with no fragment; each
-# scope must name a scope the AS grants (e.g. "read-only").
+# scope must name a scope the AS grants (e.g. "read-only"). confidential requests a
+# server-generated client secret (returned once) for a confidential client;
+# omitted/false registers a public PKCE client.
 input AdminOAuthClientCreateRequest {
     clientId: String!
     name: String
     description: String
     redirectUris: [String!]!
     scopes: [String!]!
+    confidential: Boolean
 }
 
 # Data to update a client (its clientId is fixed).
@@ -267,14 +280,19 @@ type Mutation {
     # tenant still has memberships (requires tenant:write).
     deleteTenant(token: String!): Boolean!
 
-    # Register an OAuth client, enabled by default (requires client:write).
-    createOauthClient(request: AdminOAuthClientCreateRequest!): AdminOAuthClient!
+    # Register an OAuth client, enabled by default (requires client:write). Returns
+    # the client plus, for a confidential client, its one-time cleartext secret.
+    createOauthClient(request: AdminOAuthClientCreateRequest!): AdminOAuthClientSecret!
     # Replace a client's name, redirect URIs, and scopes by clientId (requires
     # client:write).
     updateOauthClient(clientId: String!, request: AdminOAuthClientUpdateRequest!): AdminOAuthClient!
     # Enable or disable a client; a disabled client is rejected at the authorize /
     # token endpoints (requires client:write).
     setOauthClientEnabled(clientId: String!, enabled: Boolean!): AdminOAuthClient!
+    # Mint a fresh secret for a client (promotes a public client to confidential),
+    # invalidating any previous one. Returns the new one-time secret (requires
+    # client:write).
+    rotateOauthClientSecret(clientId: String!): AdminOAuthClientSecret!
     # Delete a client by clientId; returns whether one was removed (requires
     # client:write).
     deleteOauthClient(clientId: String!): Boolean!
