@@ -1,11 +1,12 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ChevronsUpDown, LineChart, LogOut, ShieldCheck, UserPen } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthProvider';
 import { useCurrentUser } from '@/auth/CurrentUserProvider';
+import { useMetricsAvailable } from '@/lib/hooks/use-metrics-available';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { FormDrawer } from '@/components/registry';
 import { ProfileForm } from '@/routes/ProfileForm';
@@ -40,28 +41,9 @@ export function NavUser() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
-  // Metrics (Grafana) is instance-level + cross-tenant, so the link is operator-only —
-  // and it is only wired when the instance was bootstrapped with Grafana SSO (the
-  // /grafana ingress). Probe Grafana's public health endpoint (same-origin, so no CORS)
-  // for superusers only and show the link solely on a real 200. redirect:'manual' is
-  // load-bearing: when /grafana is absent the ingress 302s to the console SPA (which
-  // then 200s as HTML) — following that redirect would false-positive, so an opaque
-  // redirect must read as unavailable.
-  const [metricsAvailable, setMetricsAvailable] = useState(false);
-
-  useEffect(() => {
-    if (!superuser || !isIdentityAuthenticated) {
-      setMetricsAvailable(false);
-      return;
-    }
-    const ctrl = new AbortController();
-    fetch('/grafana/api/health', { method: 'GET', redirect: 'manual', signal: ctrl.signal })
-      .then((res) => setMetricsAvailable(res.ok))
-      .catch(() => {
-        if (!ctrl.signal.aborted) setMetricsAvailable(false);
-      });
-    return () => ctrl.abort();
-  }, [superuser, isIdentityAuthenticated]);
+  // Metrics (Grafana) is instance-level + cross-tenant, so the link is operator-only.
+  // Only probe (and only ever show it) for an authenticated superuser.
+  const metricsAvailable = useMetricsAvailable(superuser && isIdentityAuthenticated);
 
   if (!claims) return null;
 

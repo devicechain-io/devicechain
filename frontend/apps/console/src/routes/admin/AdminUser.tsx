@@ -1,10 +1,11 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronsUpDown, LineChart, LogOut, Building2 } from 'lucide-react';
 import { useAuth } from '@/auth/AuthProvider';
+import { useMetricsAvailable } from '@/lib/hooks/use-metrics-available';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { decodeToken } from '@devicechain/client';
 import { useToast } from '@/components/ui/toast';
@@ -44,22 +45,10 @@ export function AdminUser() {
   const [busy, setBusy] = useState(false);
   // Metrics (Grafana) is instance-level + cross-tenant, so it belongs in the
   // superuser-only admin console — and is the ONLY account menu a membership-less
-  // operator ever sees (they cannot enter a tenant). Show the link only when Grafana
-  // SSO is actually wired: probe its public health endpoint (same-origin, no CORS).
-  // redirect:'manual' is load-bearing — when /grafana is absent the ingress 302s to
-  // the SPA (which 200s as HTML); following that would false-positive, so an opaque
-  // redirect must read as unavailable.
-  const [metricsAvailable, setMetricsAvailable] = useState(false);
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    fetch('/grafana/api/health', { method: 'GET', redirect: 'manual', signal: ctrl.signal })
-      .then((res) => setMetricsAvailable(res.ok))
-      .catch(() => {
-        if (!ctrl.signal.aborted) setMetricsAvailable(false);
-      });
-    return () => ctrl.abort();
-  }, []);
+  // operator ever sees (they cannot enter a tenant). The whole /admin area is already
+  // superuser-gated (AdminProtectedRoute), so probe unconditionally; the hook still
+  // hides the link unless Grafana SSO is actually wired.
+  const metricsAvailable = useMetricsAvailable();
 
   const email = identityToken ? (decodeToken(identityToken)?.username ?? 'Administrator') : 'Administrator';
 
