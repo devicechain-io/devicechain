@@ -128,14 +128,8 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 	}
 
 	// Run migrations in a database independent manner.
-	mtable := strings.ReplaceAll(fmt.Sprintf("%s_%s", rdb.Microservice.FunctionalArea, "migrations"), "-", "_")
-	options := &gormigrate.Options{
-		TableName:                 mtable,
-		IDColumnName:              "id",
-		IDColumnSize:              255,
-		UseTransaction:            false,
-		ValidateUnknownMigrations: false,
-	}
+	mtable := MigrationTableName(rdb.Microservice.FunctionalArea)
+	options := MigrationOptions(rdb.Microservice.FunctionalArea)
 	// Migrations are system-level bootstrap operations that run before any tenant
 	// exists. Bind a system context so the tenant-scoping Create callback (ADR-015
 	// fail-closed) does not reject gormigrate's own bookkeeping INSERTs into the
@@ -159,6 +153,28 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// MigrationTableName returns the gormigrate bookkeeping table name for a functional
+// area (dashes → underscores, e.g. "device-management" → "device_management_migrations").
+func MigrationTableName(area string) string {
+	return strings.ReplaceAll(fmt.Sprintf("%s_%s", area, "migrations"), "-", "_")
+}
+
+// MigrationOptions returns the gormigrate options every service's migration chain
+// runs with. Exported so an out-of-process equivalence harness (the migration-flatten
+// check) drives the chain identically to production — same table, same
+// UseTransaction:false (Timescale DDL can't run in a txn), same lenient
+// ValidateUnknownMigrations (migrations may be pruned from the slice once their shape
+// is dead) — so a squashed baseline is diffed against the real thing, not a lookalike.
+func MigrationOptions(area string) *gormigrate.Options {
+	return &gormigrate.Options{
+		TableName:                 MigrationTableName(area),
+		IDColumnName:              "id",
+		IDColumnSize:              255,
+		UseTransaction:            false,
+		ValidateUnknownMigrations: false,
+	}
 }
 
 // AdvisoryLockKey derives a stable bigint key for pg_advisory_lock from a name,
