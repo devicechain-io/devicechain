@@ -23,5 +23,6 @@ use (
 	./backend/services/outbound-connectors
 	./backend/services/user-management
 	./backend/sims/dc-simulator
+	./backend/tools/migrationdiff
 	./deploy
 )
