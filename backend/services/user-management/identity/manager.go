@@ -51,6 +51,21 @@ type BootstrapConfig struct {
 	// SuperuserEmail/SuperuserPassword identify the global superuser identity.
 	SuperuserEmail    string
 	SuperuserPassword string
+
+	// SeedClients are OAuth 2.1 clients to provision at startup (ADR-047) — e.g. a
+	// confidential Grafana SSO client. Idempotently upserted on every boot so a
+	// redeploy re-syncs them to config; the secret arrives pre-hashed.
+	SeedClients []SeedOAuthClient
+}
+
+// SeedOAuthClient is a startup-provisioned OAuth client (ADR-047): a bcrypt
+// SecretHash (empty ⇒ public) plus the redirect/scope allowlists. The cleartext
+// secret is never carried here — only its hash.
+type SeedOAuthClient struct {
+	ClientId     string
+	RedirectURIs []string
+	Scopes       []string
+	SecretHash   string
 }
 
 // Manager owns native auth for the instance. Build it with NewManager, then
@@ -622,6 +637,13 @@ func (m *Manager) seed(ctx context.Context) error {
 			return err
 		}
 
+		// Re-sync configured OAuth clients on every boot (idempotent upsert) —
+		// independent of the identity count below, so a redeploy re-provisions a
+		// bootstrap client (e.g. Grafana SSO) with its freshly-minted secret hash.
+		if err := m.seedOAuthClients(ctx); err != nil {
+			return err
+		}
+
 		n, err := m.iam.CountIdentities(ctx)
 		if err != nil {
 			return err
@@ -642,6 +664,27 @@ func (m *Manager) seed(ctx context.Context) error {
 			Msg("Seeded superuser (system role=superuser, authority=*) with the default password — CHANGE IT IMMEDIATELY.")
 		return nil
 	})
+}
+
+// seedOAuthClients idempotently upserts each configured bootstrap OAuth client
+// (ADR-047). Config is the source of truth: an existing client is updated to match
+// (so a redeploy re-syncs its redirect URIs / scopes / secret hash), a new one is
+// created. The secret arrives pre-hashed; nothing here handles cleartext.
+func (m *Manager) seedOAuthClients(ctx context.Context) error {
+	for _, sc := range m.bootstrap.SeedClients {
+		if err := m.iam.UpsertOAuthClient(ctx, &iam.OAuthClient{
+			ClientId:     sc.ClientId,
+			RedirectURIs: sc.RedirectURIs,
+			Scopes:       sc.Scopes,
+			SecretHash:   sc.SecretHash,
+			Enabled:      true,
+		}); err != nil {
+			return fmt.Errorf("seed oauth client %q: %w", sc.ClientId, err)
+		}
+		log.Info().Str("clientId", sc.ClientId).Bool("confidential", sc.SecretHash != "").
+			Msg("Seeded OAuth client from config")
+	}
+	return nil
 }
 
 // normalizeEmail lower-cases and trims an email so lookups and uniqueness are

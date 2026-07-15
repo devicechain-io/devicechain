@@ -103,3 +103,67 @@ func TestValidateIssuerUrl(t *testing.T) {
 		})
 	}
 }
+
+// A seedClients document decodes (camelCase JSON → struct fields) and validates —
+// the injection point dcctl uses to provision a confidential Grafana client.
+func TestSeedClientsDecodeAndValidate(t *testing.T) {
+	doc := `{
+	  "auth": {
+	    "seedClients": [
+	      {
+	        "clientId": "grafana",
+	        "redirectUris": ["https://dc.example.com/grafana/login/generic_oauth"],
+	        "scopes": ["read-only"],
+	        "secretHash": "$2a$10$abcdefghijklmnopqrstuv"
+	      }
+	    ]
+	  }
+	}`
+	cfg := &UserManagementConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+	assert.NoError(t, cfg.Validate())
+
+	if assert.Len(t, cfg.Auth.SeedClients, 1) {
+		sc := cfg.Auth.SeedClients[0]
+		assert.Equal(t, "grafana", sc.ClientId)
+		assert.Equal(t, []string{"https://dc.example.com/grafana/login/generic_oauth"}, sc.RedirectURIs)
+		assert.Equal(t, []string{"read-only"}, sc.Scopes)
+		assert.NotEmpty(t, sc.SecretHash)
+	}
+}
+
+// Each seed-client entry is validated fail-closed at startup, mirroring the admin
+// API's rules, so a malformed provisioned client cannot boot the service.
+func TestValidateSeedClients(t *testing.T) {
+	base := func(sc SeedOAuthClientConfig) *UserManagementConfiguration {
+		cfg := NewUserManagementConfiguration()
+		cfg.Auth.SeedClients = []SeedOAuthClientConfig{sc}
+		return cfg
+	}
+	ok := SeedOAuthClientConfig{
+		ClientId: "grafana", RedirectURIs: []string{"https://dc.example.com/grafana/login/generic_oauth"},
+		Scopes: []string{"read-only"}, SecretHash: "$2a$10$hash",
+	}
+	assert.NoError(t, base(ok).Validate(), "a well-formed confidential seed client is valid")
+
+	pub := ok
+	pub.SecretHash = ""
+	assert.NoError(t, base(pub).Validate(), "an empty secret hash (public client) is allowed")
+
+	bad := map[string]SeedOAuthClientConfig{
+		"empty clientId":       {ClientId: "", RedirectURIs: ok.RedirectURIs, Scopes: ok.Scopes},
+		"bad clientId charset": {ClientId: "bad id", RedirectURIs: ok.RedirectURIs, Scopes: ok.Scopes},
+		"no redirect":          {ClientId: "grafana", RedirectURIs: nil, Scopes: ok.Scopes},
+		"http non-loopback":    {ClientId: "grafana", RedirectURIs: []string{"http://dc.example.com/cb"}, Scopes: ok.Scopes},
+		"no scope":             {ClientId: "grafana", RedirectURIs: ok.RedirectURIs, Scopes: nil},
+		"unknown scope":        {ClientId: "grafana", RedirectURIs: ok.RedirectURIs, Scopes: []string{"write"}},
+	}
+	for name, sc := range bad {
+		t.Run(name, func(t *testing.T) { assert.Error(t, base(sc).Validate()) })
+	}
+
+	// Duplicate clientIds across entries are rejected.
+	dup := NewUserManagementConfiguration()
+	dup.Auth.SeedClients = []SeedOAuthClientConfig{ok, ok}
+	assert.Error(t, dup.Validate(), "duplicate clientId rejected")
+}

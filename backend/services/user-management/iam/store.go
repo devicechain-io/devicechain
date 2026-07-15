@@ -10,6 +10,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Store is the persistence layer for the iam model. The entities are
@@ -333,6 +334,20 @@ func (s *Store) OAuthClientByClientId(ctx context.Context, clientId string) (*OA
 // unique index and surfaces as an error.
 func (s *Store) CreateOAuthClient(ctx context.Context, c *OAuthClient) error {
 	return s.sys(ctx).Create(c).Error
+}
+
+// UpsertOAuthClient creates a client or, if one with the same client_id already
+// exists, updates its mutable fields to match — the idempotent path a startup seed
+// uses so a redeploy re-syncs a config-managed client (redirect URIs, scopes, secret
+// hash, enabled) to the current config. client_id and created_at are preserved;
+// name/description are left untouched (seed clients do not set them). OAuth clients
+// are hard-deleted, so there are no soft-delete tombstones to collide with the
+// client_id unique index.
+func (s *Store) UpsertOAuthClient(ctx context.Context, c *OAuthClient) error {
+	return s.sys(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "client_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"redirect_uris", "scopes", "secret_hash", "enabled", "updated_at"}),
+	}).Create(c).Error
 }
 
 // UpdateOAuthClient persists the mutable fields of an already-loaded client
