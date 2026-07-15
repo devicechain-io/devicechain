@@ -10,7 +10,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // Store is the persistence layer for the iam model. The entities are
@@ -336,18 +335,15 @@ func (s *Store) CreateOAuthClient(ctx context.Context, c *OAuthClient) error {
 	return s.sys(ctx).Create(c).Error
 }
 
-// UpsertOAuthClient creates a client or, if one with the same client_id already
-// exists, updates its mutable fields to match — the idempotent path a startup seed
-// uses so a redeploy re-syncs a config-managed client (redirect URIs, scopes, secret
-// hash, enabled) to the current config. client_id and created_at are preserved;
-// name/description are left untouched (seed clients do not set them). OAuth clients
-// are hard-deleted, so there are no soft-delete tombstones to collide with the
-// client_id unique index.
-func (s *Store) UpsertOAuthClient(ctx context.Context, c *OAuthClient) error {
-	return s.sys(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "client_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"redirect_uris", "scopes", "secret_hash", "enabled", "updated_at"}),
-	}).Create(c).Error
+// UpdateOAuthClientProvisioned re-syncs the CONFIG-MANAGED fields of an
+// already-loaded seeded client (redirect URIs, scopes, secret hash) by primary key.
+// It deliberately does NOT touch `enabled`: enable/disable is an operational lever
+// that must survive a restart, so an admin who disables a compromised seeded client
+// is not overridden on the next boot. name/description are also left untouched
+// (seed clients do not set them). The caller only invokes this when a field actually
+// drifted, so a steady-state boot writes nothing.
+func (s *Store) UpdateOAuthClientProvisioned(ctx context.Context, c *OAuthClient) error {
+	return s.sys(ctx).Model(c).Select("redirect_uris", "scopes", "secret_hash").Updates(c).Error
 }
 
 // UpdateOAuthClient persists the mutable fields of an already-loaded client

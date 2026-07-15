@@ -8,7 +8,17 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/crypto/bcrypt"
 )
+
+// aBcryptHash is a real bcrypt hash used wherever a seed client's SecretHash must be
+// well-formed (config now rejects a non-bcrypt hash — e.g. cleartext).
+func aBcryptHash(t *testing.T) string {
+	t.Helper()
+	h, err := bcrypt.GenerateFromPassword([]byte("a-client-secret"), bcrypt.MinCost)
+	assert.NoError(t, err)
+	return string(h)
+}
 
 // Loading an empty document defaults the superuser (ADR-033) so the documented
 // first login works (ADR-022 decision 1 defaulting via core.LoadConfiguration).
@@ -114,7 +124,7 @@ func TestSeedClientsDecodeAndValidate(t *testing.T) {
 	        "clientId": "grafana",
 	        "redirectUris": ["https://dc.example.com/grafana/login/generic_oauth"],
 	        "scopes": ["read-only"],
-	        "secretHash": "$2a$10$abcdefghijklmnopqrstuv"
+	        "secretHash": "` + aBcryptHash(t) + `"
 	      }
 	    ]
 	  }
@@ -142,7 +152,7 @@ func TestValidateSeedClients(t *testing.T) {
 	}
 	ok := SeedOAuthClientConfig{
 		ClientId: "grafana", RedirectURIs: []string{"https://dc.example.com/grafana/login/generic_oauth"},
-		Scopes: []string{"read-only"}, SecretHash: "$2a$10$hash",
+		Scopes: []string{"read-only"}, SecretHash: aBcryptHash(t),
 	}
 	assert.NoError(t, base(ok).Validate(), "a well-formed confidential seed client is valid")
 
@@ -157,6 +167,11 @@ func TestValidateSeedClients(t *testing.T) {
 		"http non-loopback":    {ClientId: "grafana", RedirectURIs: []string{"http://dc.example.com/cb"}, Scopes: ok.Scopes},
 		"no scope":             {ClientId: "grafana", RedirectURIs: ok.RedirectURIs, Scopes: nil},
 		"unknown scope":        {ClientId: "grafana", RedirectURIs: ok.RedirectURIs, Scopes: []string{"write"}},
+		// The secret must be a real bcrypt hash — cleartext or a malformed string is
+		// rejected at boot rather than failing confusingly later.
+		"cleartext secret":  {ClientId: "grafana", RedirectURIs: ok.RedirectURIs, Scopes: ok.Scopes, SecretHash: "my-plaintext-secret"},
+		"malformed hash":    {ClientId: "grafana", RedirectURIs: ok.RedirectURIs, Scopes: ok.Scopes, SecretHash: "$2a$10$tooshort"},
+		"non-bcrypt scheme": {ClientId: "grafana", RedirectURIs: ok.RedirectURIs, Scopes: ok.Scopes, SecretHash: "$argon2id$v=19$m=65536"},
 	}
 	for name, sc := range bad {
 		t.Run(name, func(t *testing.T) { assert.Error(t, base(sc).Validate()) })

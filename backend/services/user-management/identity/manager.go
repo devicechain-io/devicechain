@@ -666,25 +666,70 @@ func (m *Manager) seed(ctx context.Context) error {
 	})
 }
 
-// seedOAuthClients idempotently upserts each configured bootstrap OAuth client
-// (ADR-047). Config is the source of truth: an existing client is updated to match
-// (so a redeploy re-syncs its redirect URIs / scopes / secret hash), a new one is
-// created. The secret arrives pre-hashed; nothing here handles cleartext.
+// seedOAuthClients reconciles each configured bootstrap OAuth client (ADR-047).
+// Config is the source of truth for the provisioned fields (redirect URIs, scopes,
+// secret hash): a missing client is created (enabled), an existing one is re-synced
+// ONLY when one of those fields drifted. It deliberately never rewrites `enabled`
+// after creation — an admin who disables a compromised seeded client must not be
+// overridden on the next boot — and it writes nothing on a steady-state boot, so a
+// rollout does not spew phantom audit rows. The secret arrives pre-hashed; nothing
+// here handles cleartext.
 func (m *Manager) seedOAuthClients(ctx context.Context) error {
 	for _, sc := range m.bootstrap.SeedClients {
-		if err := m.iam.UpsertOAuthClient(ctx, &iam.OAuthClient{
-			ClientId:     sc.ClientId,
-			RedirectURIs: sc.RedirectURIs,
-			Scopes:       sc.Scopes,
-			SecretHash:   sc.SecretHash,
-			Enabled:      true,
-		}); err != nil {
+		existing, err := m.iam.OAuthClientByClientId(ctx, sc.ClientId)
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			if err := m.iam.CreateOAuthClient(ctx, &iam.OAuthClient{
+				ClientId:     sc.ClientId,
+				RedirectURIs: sc.RedirectURIs,
+				Scopes:       sc.Scopes,
+				SecretHash:   sc.SecretHash,
+				Enabled:      true,
+			}); err != nil {
+				return fmt.Errorf("seed oauth client %q: %w", sc.ClientId, err)
+			}
+			log.Info().Str("clientId", sc.ClientId).Bool("confidential", sc.SecretHash != "").
+				Msg("Seeded OAuth client from config")
+		case err != nil:
 			return fmt.Errorf("seed oauth client %q: %w", sc.ClientId, err)
+		default:
+			if provisionedFieldsMatch(existing, sc) {
+				continue // in sync — no write, no audit row
+			}
+			existing.RedirectURIs = sc.RedirectURIs
+			existing.Scopes = sc.Scopes
+			existing.SecretHash = sc.SecretHash
+			if err := m.iam.UpdateOAuthClientProvisioned(ctx, existing); err != nil {
+				return fmt.Errorf("re-sync oauth client %q: %w", sc.ClientId, err)
+			}
+			log.Info().Str("clientId", sc.ClientId).Msg("Re-synced OAuth client from config")
 		}
-		log.Info().Str("clientId", sc.ClientId).Bool("confidential", sc.SecretHash != "").
-			Msg("Seeded OAuth client from config")
 	}
 	return nil
+}
+
+// provisionedFieldsMatch reports whether an existing client already matches the
+// config-managed fields of a seed entry (secret hash + redirect URIs + scopes), so
+// the reconcile skips a no-op write. `enabled` is intentionally NOT compared — it is
+// runtime-owned after creation.
+func provisionedFieldsMatch(existing *iam.OAuthClient, sc SeedOAuthClient) bool {
+	return existing.SecretHash == sc.SecretHash &&
+		stringSlicesEqual(existing.RedirectURIs, sc.RedirectURIs) &&
+		stringSlicesEqual(existing.Scopes, sc.Scopes)
+}
+
+// stringSlicesEqual reports order-sensitive slice equality (redirect URIs and scopes
+// are exact-match allowlists, so order is not normalized).
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // normalizeEmail lower-cases and trims an email so lookups and uniqueness are

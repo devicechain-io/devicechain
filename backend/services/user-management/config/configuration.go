@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // AuthConfiguration controls JWT issuance, signing-key rotation, and the
@@ -159,6 +160,17 @@ func validateSeedClient(sc SeedOAuthClientConfig) error {
 	for _, s := range sc.Scopes {
 		if !auth.IsSupportedScope(s) {
 			return fmt.Errorf("unknown scope %q (supported: %s)", s, strings.Join(auth.SupportedScopes, ", "))
+		}
+	}
+	// A confidential client's secret is delivered PRE-HASHED. Require it to actually
+	// be a bcrypt hash so a boot-time config error catches an operator who pasted the
+	// cleartext (which would otherwise be stored as the "hash", fail every token
+	// exchange with a confusing remote invalid_client, and leave cleartext in config)
+	// or an over-length string (which would fail later at the varchar(100) column).
+	// Empty is allowed — a public PKCE client.
+	if sc.SecretHash != "" {
+		if _, err := bcrypt.Cost([]byte(sc.SecretHash)); err != nil {
+			return fmt.Errorf("secretHash must be a bcrypt hash (the pre-hashed client secret), not cleartext: %w", err)
 		}
 	}
 	return nil
