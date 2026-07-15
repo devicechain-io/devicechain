@@ -47,10 +47,74 @@ variable "slim" {
 }
 
 variable "grafana_admin_password" {
-  description = "Grafana admin password (auth is native admin for now; OIDC via user-management ADR-047 is a follow-up). Sensitive."
+  description = "Grafana admin password — the break-glass native login that stays available alongside OAuth SSO. Sensitive."
   type        = string
   default     = "devicechain"
   sensitive   = true
+}
+
+# --- Grafana SSO (ADR-047): OAuth against user-management, operator-tier only ------
+
+variable "grafana_oauth_enabled" {
+  description = <<-EOT
+    Turn on Grafana OAuth SSO against DeviceChain's user-management OAuth 2.1 AS
+    (ADR-047). When true, Grafana is served under a subpath (grafana_root_url +
+    serve_from_sub_path) with its own ingress, and login is gated to the
+    operator/superuser tier ONLY via role_attribute_path — metrics are instance-level
+    + cross-tenant, so a tenant user must never reach them. Requires the OAuth vars
+    below. Native admin login stays available as break-glass.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "grafana_oauth_client_id" {
+  description = "OAuth client_id Grafana authenticates as (the confidential client seeded in user-management)."
+  type        = string
+  default     = "grafana"
+}
+
+variable "grafana_oauth_client_secret" {
+  description = "Cleartext OAuth client secret for Grafana (its bcrypt hash is what user-management stores). Minted by the bring-up. Sensitive."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "grafana_oauth_auth_url" {
+  description = "Browser-facing authorize endpoint, e.g. https://<host>/api/user-management/oauth/authorize."
+  type        = string
+  default     = ""
+}
+
+variable "grafana_oauth_token_url" {
+  description = "Server-side token endpoint Grafana's pod calls — an IN-CLUSTER service URL (Grafana cannot reach the public ingress host), e.g. http://user-management.<instance>:8080/oauth/token."
+  type        = string
+  default     = ""
+}
+
+variable "grafana_oauth_api_url" {
+  description = "Server-side userinfo endpoint Grafana's pod calls — an in-cluster service URL, e.g. http://user-management.<instance>:8080/oauth/userinfo."
+  type        = string
+  default     = ""
+}
+
+variable "grafana_root_url" {
+  description = "External root URL Grafana is served at, e.g. https://<host>/grafana. Sets grafana.ini server.root_url + serve_from_sub_path and the OAuth redirect base."
+  type        = string
+  default     = ""
+}
+
+variable "grafana_ingress_host" {
+  description = "Host the /grafana ingress answers on (the same host as the app ingress). Empty leaves Grafana ClusterIP + port-forward only."
+  type        = string
+  default     = ""
+}
+
+variable "ingress_class" {
+  description = "IngressClass for the /grafana ingress (match the app's, e.g. nginx)."
+  type        = string
+  default     = "nginx"
 }
 
 variable "prometheus_retention" {
@@ -117,6 +181,85 @@ locals {
     kubeProxy             = { enabled = false }
   } : {}
 
+  # Grafana SSO (ADR-047): when enabled, serve Grafana under a subpath and gate login
+  # to the operator/superuser tier via the `sudo` userinfo claim. role_attribute_strict
+  # DENIES any user the path maps to an empty role, so a non-operator who completes the
+  # OAuth flow is refused (never silently defaulted to Viewer on cross-tenant metrics).
+  grafana_ini = var.grafana_oauth_enabled ? {
+    server = {
+      root_url            = var.grafana_root_url
+      serve_from_sub_path = true
+    }
+    "auth.generic_oauth" = {
+      enabled   = true
+      name      = "DeviceChain"
+      client_id = var.grafana_oauth_client_id
+      # client_secret is NOT set here: the grafana subchart's assertNoLeakedSecrets
+      # rejects a literal secret in grafana.ini (which renders into a ConfigMap), so
+      # it is injected as GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET via envRenderSecret (a
+      # real k8s Secret) below — Grafana env overrides the ini.
+      scopes    = "read-only"
+      auth_url  = var.grafana_oauth_auth_url
+      token_url = var.grafana_oauth_token_url
+      api_url   = var.grafana_oauth_api_url
+      use_pkce  = true
+      # `sudo` is the operator/superuser-tier claim userinfo returns. Map it to Admin;
+      # everyone else to an empty role which, with strict mode, is denied login.
+      role_attribute_path   = "sudo && 'Admin' || ''"
+      role_attribute_strict = true
+      login_attribute_path  = "preferred_username"
+      email_attribute_path  = "email"
+    }
+  } : {}
+
+  # The /grafana ingress (grafana subchart) lives in the monitoring namespace — the
+  # app ingress is in the instance namespace and cannot cross-namespace route to
+  # Grafana's Service. serve_from_sub_path (above) means the path is NOT stripped.
+  # Built unconditionally (consistent HCL type) and included at the merge below only
+  # when enabled + a host is set.
+  # The /grafana ingress (grafana subchart) lives in the monitoring namespace — the
+  # app ingress is in the instance namespace and cannot cross-namespace route to
+  # Grafana's Service. serve_from_sub_path (above) means the path is NOT stripped.
+  # No `tls` block: the app ingress already terminates TLS for this shared host, and
+  # nginx serves every ingress on the host over that cert (SNI). Declaring a second
+  # tls entry here that names a non-existent secret would make host-cert resolution
+  # order-dependent and could degrade the console's TLS. (A dedicated monitoring-ns
+  # cert-manager Issuer is a possible future refinement.) Built unconditionally
+  # (consistent HCL type); included at the merge only when enabled + a host is set.
+  grafana_ingress_enabled = var.grafana_oauth_enabled && var.grafana_ingress_host != ""
+  grafana_ingress = {
+    enabled          = true
+    ingressClassName = var.ingress_class
+    hosts            = [var.grafana_ingress_host]
+    path             = "/grafana"
+    pathType         = "Prefix"
+  }
+
+  grafana_values = merge({
+    # Native admin login stays available as break-glass alongside OAuth SSO.
+    adminPassword = var.grafana_admin_password
+    service       = { type = "ClusterIP" }
+    resources     = { requests = { cpu = "50m", memory = "150Mi" } }
+    sidecar = {
+      dashboards = {
+        enabled = true
+        label   = "grafana_dashboard"
+        # The DeviceChain dashboard ConfigMaps live in the per-instance namespace,
+        # not Grafana's — search every namespace so they auto-import.
+        searchNamespace = "ALL"
+      }
+      datasources = { enabled = true }
+    }
+    },
+    var.grafana_oauth_enabled ? { "grafana.ini" = local.grafana_ini } : {},
+    # The OAuth client secret as a rendered k8s Secret → env (not grafana.ini). Grafana
+    # maps GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET onto auth.generic_oauth.client_secret.
+    var.grafana_oauth_enabled ? {
+      envRenderSecret = { GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET = var.grafana_oauth_client_secret }
+    } : {},
+    local.grafana_ingress_enabled ? { ingress = local.grafana_ingress } : {},
+  )
+
   values = merge({
     # The Operator CRDs are what the DeviceChain instance chart's ServiceMonitors /
     # PrometheusRule depend on — install them with the stack.
@@ -145,26 +288,7 @@ locals {
       }
     }
 
-    grafana = {
-      # Native admin auth for now. FOLLOW-UP: auth.generic_oauth against
-      # user-management's OAuth 2.1 AS (ADR-047), gated to the operator/superuser
-      # tier only (metrics are instance-level + cross-tenant → never tenant users),
-      # so the console's superuser-only "Metrics" link is true SSO. Slots in here as
-      # additional grafana.* / grafana.ini keys with no module restructure.
-      adminPassword = var.grafana_admin_password
-      service       = { type = "ClusterIP" }
-      resources     = { requests = { cpu = "50m", memory = "150Mi" } }
-      sidecar = {
-        dashboards = {
-          enabled = true
-          label   = "grafana_dashboard"
-          # The DeviceChain dashboard ConfigMaps live in the per-instance namespace,
-          # not Grafana's — search every namespace so they auto-import.
-          searchNamespace = "ALL"
-        }
-        datasources = { enabled = true }
-      }
-    }
+    grafana = local.grafana_values
   }, local.kind_component_overrides)
 }
 

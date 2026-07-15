@@ -272,3 +272,54 @@ variable "monitoring_storage_class" {
   type        = string
   default     = ""
 }
+
+# --- Grafana SSO (ADR-047) — set by the bring-up when it provisions the client ----
+
+variable "monitoring_grafana_oauth_enabled" {
+  description = "Turn on Grafana OAuth SSO against user-management (ADR-047), operator/superuser-tier only. The bring-up sets this true once it has minted the client secret and computed the URLs below."
+  type        = bool
+  default     = false
+}
+
+variable "monitoring_grafana_oauth_client_id" {
+  description = "OAuth client_id Grafana authenticates as (the confidential client seeded in user-management)."
+  type        = string
+  default     = "grafana"
+}
+
+variable "monitoring_grafana_oauth_client_secret" {
+  description = "Cleartext Grafana OAuth client secret (user-management stores its bcrypt hash). Minted by the bring-up. Sensitive."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "monitoring_grafana_oauth_auth_url" {
+  description = "Browser-facing authorize endpoint (public host via the /api/user-management ingress), e.g. https://<host>/api/user-management/oauth/authorize."
+  type        = string
+  default     = ""
+}
+
+variable "monitoring_grafana_oauth_token_url" {
+  description = "Server-side token endpoint Grafana's pod calls — an IN-CLUSTER service URL (the pod cannot reach the public host), e.g. http://user-management.<instance>:8080/oauth/token."
+  type        = string
+  default     = ""
+}
+
+variable "monitoring_grafana_oauth_api_url" {
+  description = "Server-side userinfo endpoint Grafana's pod calls — an in-cluster service URL, e.g. http://user-management.<instance>:8080/oauth/userinfo."
+  type        = string
+  default     = ""
+}
+
+variable "monitoring_grafana_root_url" {
+  description = "External root URL Grafana is served at, e.g. https://<host>/grafana (drives root_url + serve_from_sub_path + the OAuth redirect base)."
+  type        = string
+  default     = ""
+}
+
+variable "monitoring_grafana_ingress_host" {
+  description = "Host the /grafana ingress answers on (same host as the app ingress). Empty leaves Grafana ClusterIP + port-forward only."
+  type        = string
+  default     = ""
+}

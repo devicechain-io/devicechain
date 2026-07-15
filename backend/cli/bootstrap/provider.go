@@ -33,6 +33,10 @@ type Options struct {
 	// (default-on). Set it when the cluster already has the Prometheus Operator, or
 	// to opt out of in-cluster metrics collection.
 	NoMonitoring bool
+	// GrafanaSSO wires Grafana login to DeviceChain SSO (ADR-047): it enables the
+	// OAuth AS (sets the issuer), seeds a confidential Grafana client, and configures
+	// Grafana's generic_oauth + /grafana ingress — operator/superuser-tier only.
+	GrafanaSSO bool
 }
 
 // Provider abstracts the target environment (local cluster today; cloud later)

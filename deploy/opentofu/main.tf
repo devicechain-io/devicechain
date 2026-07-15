@@ -95,4 +95,25 @@ module "monitoring" {
   prometheus_retention   = var.monitoring_prometheus_retention
   prometheus_storage     = var.monitoring_prometheus_storage
   storage_class          = var.monitoring_storage_class
+
+  # Grafana SSO (ADR-047): operator-tier-only OAuth against user-management + the
+  # /grafana ingress. Off unless the bring-up mints a client secret and supplies URLs.
+  grafana_oauth_enabled       = var.monitoring_grafana_oauth_enabled
+  grafana_oauth_client_id     = var.monitoring_grafana_oauth_client_id
+  grafana_oauth_client_secret = var.monitoring_grafana_oauth_client_secret
+  grafana_oauth_auth_url      = var.monitoring_grafana_oauth_auth_url
+  grafana_oauth_token_url     = var.monitoring_grafana_oauth_token_url
+  grafana_oauth_api_url       = var.monitoring_grafana_oauth_api_url
+  grafana_root_url            = var.monitoring_grafana_root_url
+  grafana_ingress_host        = var.monitoring_grafana_ingress_host
+  ingress_class               = var.ingress_class
+
+  # When SSO is on, the monitoring stack ships a /grafana Ingress, which the
+  # ingress-nginx admission webhook must validate. Both installs otherwise run in
+  # parallel, so the webhook can still be unreachable (connection refused) when the
+  # Grafana ingress is created. Serialize monitoring after ingress-nginx — whose
+  # helm_release waits for the controller (and thus its admission endpoint) to be
+  # ready. The app services avoid this naturally: their ingresses are created in the
+  # later helm step, after this apply completes.
+  depends_on = [module.ingress_nginx]
 }

@@ -105,6 +105,30 @@ func helmInstall(ctx context.Context, st *State) error {
 		"metrics": map[string]interface{}{"enabled": !st.NoMonitoring},
 	}
 
+	// Grafana SSO (ADR-047): turn on user-management's OAuth AS (the issuer) and seed
+	// the confidential Grafana client. The bcrypt hash is the SAME secret whose
+	// cleartext went to Grafana's config in the tofu step (one mint, both sides). The
+	// redirect URI matches the /grafana ingress path. Deep-merges into the chart's
+	// functionalAreas.user-management.config, preserving the other areas' config.
+	if grafanaSSOEnabled(st) {
+		u := grafanaSSOURLsFor(st)
+		vals["functionalAreas"] = map[string]interface{}{
+			"user-management": map[string]interface{}{
+				"config": map[string]interface{}{
+					"auth": map[string]interface{}{
+						"issuerUrl": u.Issuer,
+						"seedClients": []map[string]interface{}{{
+							"clientId":     "grafana",
+							"redirectUris": []string{u.Redirect},
+							"scopes":       []string{"read-only"},
+							"secretHash":   st.Values["grafanaOAuthSecretBcrypt"],
+						}},
+					},
+				},
+			},
+		}
+	}
+
 	// Upgrade if the release already exists, otherwise install — so a re-run is
 	// idempotent.
 	hist := action.NewHistory(actionConfig)

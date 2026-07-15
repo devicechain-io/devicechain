@@ -52,7 +52,9 @@ type State struct {
 	// NoMonitoring skips the kube-prometheus-stack install in the infra apply
 	// (default-on, like Postgres/Timescale). See Options for the rationale.
 	NoMonitoring bool
-	Values       map[string]string
+	// GrafanaSSO wires Grafana login to DeviceChain SSO (ADR-047). See Options.
+	GrafanaSSO bool
+	Values     map[string]string
 }
 
 // Step is a single named unit of bootstrap work.

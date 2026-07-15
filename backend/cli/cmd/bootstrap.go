@@ -23,6 +23,7 @@ var (
 	bootstrapHost          string
 	bootstrapNoTLS         bool
 	bootstrapNoMonitoring  bool
+	bootstrapGrafanaSSO    bool
 )
 
 // bootstrapCmd provisions a usable DeviceChain instance on a target provider.
@@ -58,6 +59,7 @@ var bootstrapCmd = &cobra.Command{
 			IngressHost:   bootstrapHost,
 			NoTLS:         bootstrapNoTLS,
 			NoMonitoring:  bootstrapNoMonitoring,
+			GrafanaSSO:    bootstrapGrafanaSSO,
 		}
 
 		ctx := cmd.Context()
@@ -79,6 +81,7 @@ var bootstrapCmd = &cobra.Command{
 			IngressHost:   opts.IngressHost,
 			NoTLS:         opts.NoTLS,
 			NoMonitoring:  opts.NoMonitoring,
+			GrafanaSSO:    opts.GrafanaSSO,
 			Values:        map[string]string{},
 		}
 		return bootstrap.NewDefaultPipeline().Run(ctx, st)
@@ -98,6 +101,7 @@ func init() {
 	bootstrapCmd.Flags().StringVar(&bootstrapHost, "host", "", "ingress host to expose the instance on (default devicechain.local; use 'localhost' for a local cluster to skip the /etc/hosts edit)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoTLS, "no-tls", false, "serve plain HTTP instead of a self-signed cert (with --host localhost, a zero-config http://localhost/)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoMonitoring, "no-monitoring", false, "skip the monitoring stack (Prometheus/Grafana) AND the chart's ServiceMonitors/alerts — for a minimal install or a cluster where you wire metrics separately")
+	bootstrapCmd.Flags().BoolVar(&bootstrapGrafanaSSO, "grafana-sso", false, "wire Grafana login to DeviceChain SSO (ADR-047), operator/superuser-tier only; enables the OAuth AS (needs https, or --host localhost --no-tls for local http)")
 
 	rootCmd.AddCommand(bootstrapCmd)
 }
