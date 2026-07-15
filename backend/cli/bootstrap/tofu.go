@@ -74,6 +74,24 @@ func applyInfra(ctx context.Context, st *State) error {
 			tfexec.Var("nats_service_password_bcrypt="+st.Values["natsServicePasswordBcrypt"]),
 		)
 	}
+	// Grafana SSO (ADR-047): configure Grafana's generic_oauth + the /grafana ingress
+	// against the minted client secret and the computed URLs. The browser-facing
+	// authorize URL uses the public host; token/userinfo are in-cluster (Grafana's pod
+	// can't reach the public ingress). user-management gets the matching issuer + the
+	// bcrypt hash of this same secret in helmInstall.
+	if grafanaSSOEnabled(st) {
+		u := grafanaSSOURLsFor(st)
+		opts = append(opts,
+			tfexec.Var("monitoring_grafana_oauth_enabled=true"),
+			tfexec.Var("monitoring_grafana_oauth_client_secret="+st.Values["grafanaOAuthSecret"]),
+			tfexec.Var("monitoring_grafana_oauth_auth_url="+u.AuthURL),
+			tfexec.Var("monitoring_grafana_oauth_token_url="+u.TokenURL),
+			tfexec.Var("monitoring_grafana_oauth_api_url="+u.APIURL),
+			tfexec.Var("monitoring_grafana_root_url="+u.RootURL),
+			tfexec.Var("monitoring_grafana_ingress_host="+u.Host),
+			tfexec.Var(fmt.Sprintf("monitoring_grafana_ingress_tls=%t", u.TLS)),
+		)
+	}
 	if err := tf.Apply(ctx, opts...); err != nil {
 		return fmt.Errorf("tofu apply: %w", err)
 	}

@@ -19,6 +19,7 @@ import (
 	dck8s "github.com/devicechain-io/dc-k8s/config"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/fatih/color"
+	"golang.org/x/crypto/bcrypt"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -127,6 +128,27 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		return fail("minting secrets root key", err)
 	}
 	st.Values["secretsRootKey"] = secretsRootKey
+
+	// Mint the Grafana OAuth client secret (ADR-047 SSO) when SSO is wired: one mint,
+	// both sides — the cleartext goes to Grafana's generic_oauth config (the monitoring
+	// tofu module) and the bcrypt hash is seeded into user-management (helmInstall), so
+	// the two can't drift. Skipped (with a note) when SSO was requested but the issuer
+	// would be invalid — http on a non-localhost host.
+	if grafanaSSORequestedButInvalid(st) {
+		fmt.Println(color.YellowString("  Grafana SSO skipped: an http issuer needs a localhost host. Re-run with --host localhost (and --no-tls) or enable TLS."))
+	}
+	if grafanaSSOEnabled(st) {
+		secret, err := randomSecret(32)
+		if err != nil {
+			return fail("minting Grafana OAuth secret", err)
+		}
+		hash, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+		if err != nil {
+			return fail("hashing Grafana OAuth secret", err)
+		}
+		st.Values["grafanaOAuthSecret"] = secret
+		st.Values["grafanaOAuthSecretBcrypt"] = string(hash)
+	}
 
 	// Resolve the image source. Default to published images at a pinned version;
 	// the developer path builds from source into a local registry instead.
@@ -470,11 +492,19 @@ func stepReport(ctx context.Context, st *State) error {
 			color.YellowString("(sign in to the admin console to create your first tenant — change this password immediately)"))
 	}
 	if svc := st.Values["grafanaService"]; svc != "" {
-		ns := st.Values["grafanaNamespace"]
-		fmt.Printf("  %s %s\n",
-			color.WhiteString("Grafana:"),
-			color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/  (admin / devicechain)", ns, svc))
-		fmt.Printf("           %s\n", color.YellowString("dev-grade default password — override monitoring_grafana_admin_password, or wait for the OIDC-via-user-management follow-up (ADR-047)"))
+		if grafanaSSOEnabled(st) {
+			u := grafanaSSOURLsFor(st)
+			fmt.Printf("  %s %s\n",
+				color.WhiteString("Grafana:"),
+				color.GreenString("%s  (sign in with DeviceChain SSO — operators/superusers only)", u.RootURL))
+			fmt.Printf("           %s\n", color.YellowString("cross-tenant metrics are operator-tier only; the native admin login stays available as break-glass"))
+		} else {
+			ns := st.Values["grafanaNamespace"]
+			fmt.Printf("  %s %s\n",
+				color.WhiteString("Grafana:"),
+				color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/  (admin / devicechain)", ns, svc))
+			fmt.Printf("           %s\n", color.YellowString("dev-grade default password — override monitoring_grafana_admin_password, or enable SSO with --grafana-sso (ADR-047)"))
+		}
 	}
 	if !st.DryRun {
 		host := st.Values["ingressHost"]
