@@ -82,6 +82,17 @@ type DetectionRule struct {
 	EntityGroupVersion *int32
 }
 
+// GroupScoped reports whether the rule carries a valid group scope (ADR-062 S4): a non-empty
+// token AND a version. It is the SINGLE definition of "is this rule scoped", shared by the
+// publish gate's validation flag, the published-rule fact projection, and the scope-ref sync,
+// so those three sites can never drift into disagreeing about which rules are scoped. The
+// pairing is enforced on write (validateDetectionRuleScope / normalizedRuleScope), so in
+// practice both fields are set together or both nil; this predicate is defensive about a
+// half-set pair (treats it as unscoped) and lets a caller safely deref both when it returns true.
+func (dr *DetectionRule) GroupScoped() bool {
+	return dr.EntityGroupToken != nil && *dr.EntityGroupToken != "" && dr.EntityGroupVersion != nil
+}
+
 // Data required to create a detection rule. Definition is the rules.Rule JSON document
 // as a string; it is checked for JSON well-formedness on create/update and compiled
 // (the authoritative validation) by event-processing at publish.

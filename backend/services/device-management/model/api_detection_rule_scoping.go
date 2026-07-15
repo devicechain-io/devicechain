@@ -92,10 +92,7 @@ func scopedRulesInSnapshot(snap *ProfileSnapshot) []scopeRefRow {
 	}
 	out := make([]scopeRefRow, 0, len(snap.Rules))
 	for _, r := range snap.Rules {
-		if r == nil || !r.Enabled {
-			continue
-		}
-		if r.EntityGroupToken == nil || r.EntityGroupVersion == nil || *r.EntityGroupToken == "" {
+		if r == nil || !r.Enabled || !r.GroupScoped() {
 			continue
 		}
 		out = append(out, scopeRefRow{

@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -58,7 +59,7 @@ func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct
 		if in.GroupScoped &&
 			(rule.Type == rules.TypeAbsence || rule.Type == rules.TypeCorrelation) {
 			errs = append(errs, newValidationErrorMsg(i, in.Token,
-				"a group scope is not supported on an "+string(rule.Type)+" rule (only event-driven, device-keyed kinds can be group-scoped)"))
+				fmt.Sprintf("a group scope is not supported on a rule of type %q (only event-driven, device-keyed kinds can be group-scoped)", rule.Type)))
 			continue
 		}
 		// The stored blob carries no runtime id (that is composed at fact-emit time), so
