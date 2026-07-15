@@ -44,9 +44,19 @@ variable "nats_chart_version" {
 }
 
 variable "nats_jetstream_storage" {
-  description = "PersistentVolume size for NATS JetStream file storage."
+  description = <<-EOT
+    PersistentVolume size for NATS JetStream file storage. The default must fit the
+    platform's OWN stream set on a cold start: every per-suffix stream reserves up to
+    DefaultStreamMaxBytes (1 GiB, core/config) against max_file_store (90% of this),
+    and JetStream reserves that ceiling UP FRONT at stream creation. The platform
+    creates ~13 such streams, so the old 8Gi (→7Gi ceiling, ~7 streams) overflowed on
+    a fresh bring-up — the last stream-creating services (device-management,
+    event-processing, event-sources) crashlooped with "insufficient storage resources
+    available". 32Gi (→~28Gi ceiling) fits every stream at its 1 GiB bound with
+    headroom for data under load. Raise it further for real ingest volume.
+  EOT
   type        = string
-  default     = "8Gi"
+  default     = "32Gi"
 }
 
 variable "nats_jetstream_max_file_store" {
