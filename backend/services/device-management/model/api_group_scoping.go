@@ -80,9 +80,19 @@ func (api *Api) isMemberBySelector(ctx context.Context, db *gorm.DB, memberType,
 // write-skew the read-model into a permanent stale/missed membership (there is no reconcile
 // sweep). Serializing per family forces the second writer to re-evaluate against the first's
 // committed state. It is Postgres-only (pg_advisory_xact_lock auto-releases at commit);
-// under sqlite (tests) the single writer already serializes, so it is a no-op. Taken only
-// when there is maintenance to do (a rule-referenced group exists for the family), so an
-// unused tenant never pays for it.
+// under sqlite (tests) the single writer already serializes, so it is a no-op.
+//
+// CORRECTNESS DEPENDS ON READ COMMITTED (Postgres's default): the serialization argument
+// relies on each statement taking a FRESH snapshot after the lock is acquired, so a
+// transaction that blocks behind the lock then sees the holder's committed writes. Under
+// REPEATABLE READ / SERIALIZABLE the blocked transaction's snapshot predates the lock wait and
+// the skew reopens silently — do NOT raise default_transaction_isolation for these connections
+// without revisiting recomputeMembershipForAttr and registerGroupVersionOnTx.
+//
+// Taken by each Register/Deregister and by every eligible (SHARED-scope, anchor-able)
+// attribute-write recompute — which now acquires it BEFORE reading the reverse index (see
+// recomputeMembershipForAttr), so an eligible write pays an uncontended lock even absent scoped
+// groups. A tenant doing no scoped registration and no eligible attribute write never pays.
 func (api *Api) lockMembershipFamily(ctx context.Context, tx *gorm.DB, memberType string) error {
 	if tx.Dialector.Name() != "postgres" {
 		return nil
@@ -268,6 +278,14 @@ func (api *Api) DeregisterGroupVersionForScoping(ctx context.Context, groupToken
 	var evictType string
 	var evictIds []uint
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// Take the family lock, mirroring registerGroupVersionOnTx (ADR-062 S5): the reconcile
+		// path locks via lockAffectedFamiliesOnTx before composing deregisterGroupVersionOnTx,
+		// but this standalone wrapper is the caller that would otherwise tear rows down lock-free
+		// and race a concurrent recompute into an orphan membership row. Advisory xact locks are
+		// re-entrant, so this is harmless if a caller already holds it.
+		if err := api.lockMembershipFamily(ctx, tx, group.MemberType); err != nil {
+			return err
+		}
 		evictType, evictIds, err = api.deregisterGroupVersionOnTx(ctx, tx, group.ID, version)
 		return err
 	})
@@ -323,6 +341,27 @@ func (api *Api) deregisterGroupVersionOnTx(ctx context.Context, tx *gorm.DB, gro
 // (i.e. real work happened) — the caller evicts the entity's membership cache post-commit
 // only then, preserving pay-nothing for tenants with no rule-scoped groups.
 func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, entityType string, entityId uint, attrKey string) (bool, error) {
+	// Serialize this family's membership maintenance BEFORE reading the reverse index (ADR-062
+	// S5): a concurrent write to a DIFFERENT facet of the same entity, a Register, or a
+	// Deregister must not write-skew the read-model. Reading refs FIRST (the prior shape) let
+	// two hazards through under READ COMMITTED, because an MVCC select neither sees nor blocks
+	// on another transaction's uncommitted rows:
+	//   (a) missed enrollment — a concurrent Register whose facet-ref insert had not yet
+	//       committed was read as an empty ref set, so this write skipped the lock and its
+	//       recompute entirely; the entity was then silently never enrolled (and, absent a
+	//       reconcile sweep, stayed missing — the at-most-once hole ADR-062 rejects).
+	//   (b) orphan resurrection — a stale ref read before a concurrent Deregister committed
+	//       re-upserted a membership row for a group@v whose reverse index was being torn down,
+	//       leaving a membership row with no facet ref.
+	// Taking the family lock first forces whichever transaction holds it to commit before the
+	// other reads, so the ref set read here reflects all committed Register/Deregister work and
+	// the backfill-vs-attribute race resolves deterministically in the lock holder's favor. The
+	// cost is that an eligible (SHARED-scope, anchor-able) attribute write now takes the
+	// tenant+family advisory lock even for a tenant with no scoped groups; attribute writes are
+	// low-volume metadata ops and the lock is uncontended in that case, so it is acceptable.
+	if err := api.lockMembershipFamily(ctx, db, entityType); err != nil {
+		return false, err
+	}
 	refs := make([]EntityGroupFacetRef, 0)
 	if err := db.
 		Where("facet_key = ? AND member_type = ?", attrKey, entityType).
@@ -331,13 +370,6 @@ func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, ent
 	}
 	if len(refs) == 0 {
 		return false, nil
-	}
-	// Serialize this family's membership maintenance (only now that there is real work): a
-	// concurrent write to a DIFFERENT facet of the same entity, or a Register, must not
-	// write-skew the read-model. The second writer blocks here and re-evaluates against the
-	// first's committed state.
-	if err := api.lockMembershipFamily(ctx, db, entityType); err != nil {
-		return false, err
 	}
 	for _, ref := range refs {
 		var frozen EntityGroupVersion

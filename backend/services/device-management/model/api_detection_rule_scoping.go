@@ -270,13 +270,18 @@ func (api *Api) scopeRefcountOnTx(tx *gorm.DB, groupToken string, version int32)
 	return n, err
 }
 
-// scopeMaterializedOnTx reports whether a group@v already has read-model rows — either
-// reverse-index (facet-ref) or membership rows. It lets reconcile skip a redundant rebuild of
-// an immutable frozen version that is already enrolled (e.g. a second profile publishes a rule
-// scoped to a group@v another profile already enrolled). Checking BOTH tables is defensive
-// belt-and-suspenders: in practice a compiled selector always references at least one facet
-// (the lowering rejects any non-facet leaf), so facet-refs alone would suffice, but the extra
-// membership check costs one indexed count and cannot be wrong.
+// scopeMaterializedOnTx reports whether a group@v is already enrolled for membership
+// maintenance — i.e. its reverse index (facet-ref rows) exists. It lets reconcile skip a
+// redundant rebuild of an immutable frozen version that is already enrolled (e.g. a second
+// profile publishes a rule scoped to a group@v another profile already enrolled).
+//
+// Keyed on facet-refs ALONE (ADR-062 S5): a compiled selector always references at least one
+// facet (the lowering rejects any non-facet leaf), so the facet-ref rows ARE the authoritative
+// enrollment marker — and this matches AnyScopedGroups (also facet-ref-based), so the two
+// cannot disagree. Deliberately NOT keyed on membership rows too: a stray membership row with
+// no reverse index (should never occur once the recompute lock-ordering fix is in place, but
+// defense in depth) must not mask a missing index and skip the rebuild that restores it —
+// re-enrollment stays self-healing.
 func (api *Api) scopeMaterializedOnTx(tx *gorm.DB, groupId uint, version int32) (bool, error) {
 	var refs int64
 	if err := tx.Model(&EntityGroupFacetRef{}).
@@ -284,14 +289,5 @@ func (api *Api) scopeMaterializedOnTx(tx *gorm.DB, groupId uint, version int32) 
 		Limit(1).Count(&refs).Error; err != nil {
 		return false, err
 	}
-	if refs > 0 {
-		return true, nil
-	}
-	var members int64
-	if err := tx.Model(&EntityGroupMembership{}).
-		Where("group_id = ? AND selector_version = ?", groupId, version).
-		Limit(1).Count(&members).Error; err != nil {
-		return false, err
-	}
-	return members > 0, nil
+	return refs > 0, nil
 }

@@ -249,6 +249,10 @@ func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnScop
 // the membership read (via the AnyScopedGroups gate) is what fails.
 func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnMembershipError() {
 	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
+	// The complete stamp reads the device's existing tracked anchors first; that read
+	// succeeds and the membership union (via the AnyScopedGroups gate) is what fails.
+	suite.API.Mock.On("EntityRelationships").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 	suite.API.AnyScopedGroupsErr = errors.New("transient membership lookup failure")
 
 	event := &esmodel.UnresolvedEvent{
@@ -264,6 +268,87 @@ func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnMemb
 	assert.Error(suite.T(), err)
 	assert.Equal(suite.T(), uint(dmproto.FailureReason_ApiCallFailed), reason)
 	suite.API.AssertNotCalled(suite.T(), "CreateEntityRelationship")
+}
+
+// The complete stamp adds a new fallible read on the relationship path — the device's existing
+// tracked anchors (EntityRelationships) — which must ALSO abort BEFORE the non-idempotent
+// create, or a redelivery would mint a duplicate (fresh-token) relationship (ADR-062 S5).
+func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnAnchorError() {
+	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
+	suite.API.Mock.On("EntityRelationships").Return(
+		(*dmodel.EntityRelationshipSearchResults)(nil), errors.New("transient anchor lookup failure"))
+
+	event := &esmodel.UnresolvedEvent{
+		Device:    "TEST-123",
+		EventType: esmodel.NewRelationship,
+		Payload: &esmodel.UnresolvedNewRelationshipPayload{
+			RelationshipType: "located-in", TargetType: "area", Target: "warehouse-3",
+		},
+	}
+	_, reason, err := suite.resolver(config.AuthModeOptional).HandleNewRelationshipEvent(
+		context.Background(), deviceWithToken("TEST-123"), event)
+
+	assert.Error(suite.T(), err)
+	assert.Equal(suite.T(), uint(dmproto.FailureReason_ApiCallFailed), reason)
+	suite.API.AssertNotCalled(suite.T(), "CreateEntityRelationship")
+}
+
+// A new-relationship (assignment) event stamps the COMPLETE membership union — the device
+// AND its EXISTING tracked anchors (ADR-062 S5) — not the device alone. This is the fix for a
+// spurious descope: DETECT's Plan reads a group missing from an event's stamp as "the series
+// left that group", so if an assignment event on a device already located-in an arid area
+// omitted the area's arid-areas membership, the engine would tear down and resolve a live
+// arid-areas-scoped alarm on that device. The NEW target's own memberships are still omitted
+// (safe: no prior state for a group only now joined).
+func (suite *EventResolverTestSuite) TestNewRelationshipStampsTrackedAnchorMemberships() {
+	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
+	// The device is already located-in an arid area (row id 900) BEFORE this assignment.
+	suite.API.Mock.On("EntityRelationships").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
+			{TargetType: "area", TargetToken: "warehouse-3", TargetId: 900},
+		}}, nil)
+	// The assignment being created: device -> gateway.
+	suite.API.Mock.On("CreateEntityRelationship").Return(
+		&dmodel.EntityRelationship{TargetType: "gateway", TargetToken: "gw-1", TargetId: 42}, nil)
+	// device 500 is in beta-fleet@1; the already-tracked area 900 is in arid-areas@2. The NEW
+	// target (gateway 42) is in all-gateways@1 — but it is NOT a tracked anchor at resolve time,
+	// so its memberships must never be READ (reading them would be a fallible call after the
+	// non-idempotent create). If the code queried it, all-gateways@1 would leak into the stamp
+	// and the exact-match assertion below would fail.
+	suite.API.MembershipsFn = func(entityType string, entityId uint) []dmodel.GroupMembership {
+		if entityType == "device" && entityId == 500 {
+			return []dmodel.GroupMembership{{GroupToken: "beta-fleet", SelectorVersion: 1}}
+		}
+		if entityType == "area" && entityId == 900 {
+			return []dmodel.GroupMembership{{GroupToken: "arid-areas", SelectorVersion: 2}}
+		}
+		if entityType == "gateway" && entityId == 42 {
+			return []dmodel.GroupMembership{{GroupToken: "all-gateways", SelectorVersion: 1}}
+		}
+		return nil
+	}
+
+	device := deviceWithToken("TEST-123")
+	device.ID = 500
+	event := &esmodel.UnresolvedEvent{
+		Device:    "TEST-123",
+		EventType: esmodel.NewRelationship,
+		Payload: &esmodel.UnresolvedNewRelationshipPayload{
+			RelationshipType: "connected-to", TargetType: "gateway", Target: "gw-1",
+		},
+	}
+	results, reason, err := suite.resolver(config.AuthModeOptional).HandleNewRelationshipEvent(
+		context.Background(), device, event)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint(0), reason)
+	assert.Len(suite.T(), results, 1)
+	// arid-areas@2 comes from the EXISTING tracked area anchor — device-only stamping (the bug)
+	// would have dropped it and spuriously descoped an arid-areas-scoped rule.
+	assert.ElementsMatch(suite.T(), []dmodel.GroupRef{
+		{GroupToken: "beta-fleet", Version: 1},
+		{GroupToken: "arid-areas", Version: 2},
+	}, results[0].Resolved.ScopeMemberships)
 }
 
 // A measurement violating a declared metric definition routes to the dead-letter
