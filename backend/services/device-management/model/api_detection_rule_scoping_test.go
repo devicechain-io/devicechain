@@ -256,6 +256,34 @@ func TestRuleScope_CrossProfileReferenceCounting(t *testing.T) {
 	assert.EqualValues(t, 0, countFacetRefs(t, api, ctx, g.ID, v), "GC'd when the last profile un-references it")
 }
 
+// Re-enrollment is keyed on the reverse index (facet refs), NOT on membership rows (ADR-062
+// S5): a stray membership row with no facet refs — the residue a read-model race could leave —
+// must NOT be read as "already enrolled" and skip the rebuild, or the group@v would keep a
+// frozen membership set and never recompute again. Publishing a rule that references such a
+// group@v must rebuild its reverse index.
+func TestRuleScope_OrphanMembershipDoesNotMaskReEnrollment(t *testing.T) {
+	api, ctx := newRuleScopeTestApi(t)
+	seedProfile(t, api, ctx, "p1")
+	d := seedDevice(t, api, ctx, "d1")
+	setSharedClimate(t, api, ctx, "d1", "arid")
+	g, v := publishAridGroup(t, api, ctx, "arid-areas")
+
+	// Manufacture the orphan residue: a membership row for g@v with no facet-ref rows.
+	require.NoError(t, api.RDB.DB(ctx).Create(&EntityGroupMembership{
+		EntityType: "device", EntityId: d, GroupId: g.ID, SelectorVersion: v, GroupToken: "arid-areas",
+	}).Error)
+	require.EqualValues(t, 0, countFacetRefs(t, api, ctx, g.ID, v), "precondition: no reverse index yet")
+
+	// Publish a rule pinned to g@v → reconcile must REBUILD the reverse index despite the
+	// pre-existing (orphan) membership row, rather than treating the row as "already enrolled".
+	_, err := api.CreateDetectionRule(ctx, scopeReq("r1", "p1", true, strptr("arid-areas"), i32ptr(v)))
+	require.NoError(t, err)
+	publishProfile(t, api, ctx, "p1")
+
+	assert.Greater(t, countFacetRefs(t, api, ctx, g.ID, v), int64(0),
+		"an orphan membership row must not mask the reverse-index rebuild")
+}
+
 // The delete-guard blocks deleting a group referenced by a LIVE published rule, and by a
 // DRAFT scoped rule (which would fail its next publish otherwise); once un-referenced the
 // group deletes.

@@ -187,21 +187,28 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	// Resolve everything fallible BEFORE creating the relationship — the scope AND the
 	// device's dynamic-group memberships (ADR-062) — so a transient lookup failure aborts
 	// cleanly instead of leaving a committed relationship that a redelivery would create a
-	// second time (a fresh token per attempt is NOT idempotent). Only the DEVICE's
-	// memberships are stamped here: the new target's own group memberships are unknown until
-	// the relationship exists, and reading them post-create would reintroduce a fallible
-	// call after the non-idempotent create. They land on the device's subsequent standard
-	// events, which anchor the now-tracked relationship (v1 group-scoped rules are
-	// event-driven on telemetry, not on the assignment event itself).
+	// second time (a fresh token per attempt is NOT idempotent).
+	//
+	// Stamp the COMPLETE membership union — the device AND its EXISTING tracked anchors
+	// (ADR-062 S5) — exactly as the standard telemetry path does. Every resolved event must
+	// carry the authoritative membership set, because DETECT's descope path (runtime.Plan)
+	// reads a group MISSING from the stamp as "this series left that group" and tears down its
+	// keyed state + resolves any raised alarm. Stamping device-only here dropped the
+	// memberships the device already holds through its tracked areas (e.g. an "arid areas"
+	// geographic scope), so an ordinary assignment event spuriously descoped a live rule —
+	// flapping the alarm and cancelling a running hold. The NEW target's own memberships are
+	// still omitted (unknown until the relationship exists, and reading them post-create would
+	// reintroduce a fallible call after the non-idempotent create); that is safe because the
+	// device holds no prior state for a group it only now joined, so their absence tears down
+	// nothing. They land on the device's next telemetry event, which anchors the now-tracked
+	// relationship.
 	scope, reason, err := rez.resolveScope(ctx, device)
 	if err != nil {
 		return nil, reason, err
 	}
-	memberships, err := rez.unionMemberships(ctx, []membershipTarget{
-		{Type: string(entity.TypeDevice), Id: device.ID},
-	})
+	_, memberships, reason, err := rez.deviceAnchors(ctx, device)
 	if err != nil {
-		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
+		return nil, reason, err
 	}
 
 	// Create new relationship from the event payload.
