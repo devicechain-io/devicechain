@@ -8,7 +8,9 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // AuthConfiguration controls JWT issuance, signing-key rotation, and the
@@ -44,6 +46,27 @@ type AuthConfiguration struct {
 	// dcctl bootstrap supplies a generated password.
 	SuperuserEmail    string
 	SuperuserPassword string
+
+	// SeedClients registers OAuth 2.1 clients at startup (idempotent upsert), so a
+	// deployment can provision a confidential client — e.g. Grafana SSO (ADR-047) —
+	// without a manual admin call. The secret is delivered PRE-HASHED (bcrypt); the
+	// cleartext lives only in the consuming client's own config (the mint-once
+	// pattern the NATS service password uses). Config is the source of truth: a
+	// redeploy re-syncs each client's redirect URIs / scopes / secret hash. Empty by
+	// default (no seeded clients).
+	SeedClients []SeedOAuthClientConfig
+}
+
+// SeedOAuthClientConfig is a single OAuth client provisioned at startup (ADR-047).
+// ClientId is its stable identifier; RedirectURIs the exact-match allowlist; Scopes
+// the scopes it may request; SecretHash the bcrypt hash of its secret for a
+// confidential client (empty ⇒ a public PKCE client). The cleartext secret is never
+// carried here — only its hash — so a config dump never yields a usable credential.
+type SeedOAuthClientConfig struct {
+	ClientId     string
+	RedirectURIs []string
+	Scopes       []string
+	SecretHash   string
 }
 
 type UserManagementConfiguration struct {
@@ -101,6 +124,73 @@ func (c *UserManagementConfiguration) Validate() error {
 	if c.Auth.IssuerUrl != "" {
 		if err := validateIssuerUrl(c.Auth.IssuerUrl); err != nil {
 			return fmt.Errorf("auth.issuerUrl: %w", err)
+		}
+	}
+	seen := make(map[string]struct{}, len(c.Auth.SeedClients))
+	for i, sc := range c.Auth.SeedClients {
+		if err := validateSeedClient(sc); err != nil {
+			return fmt.Errorf("auth.seedClients[%d]: %w", i, err)
+		}
+		if _, dup := seen[sc.ClientId]; dup {
+			return fmt.Errorf("auth.seedClients: duplicate clientId %q", sc.ClientId)
+		}
+		seen[sc.ClientId] = struct{}{}
+	}
+	return nil
+}
+
+// validateSeedClient enforces the same shape the admin API requires of a runtime
+// client (a valid clientId, at least one OAuth-2.1-legal redirect URI, and at least
+// one scope this AS grants), failing startup closed on a malformed seed entry.
+func validateSeedClient(sc SeedOAuthClientConfig) error {
+	if err := validateClientId(sc.ClientId); err != nil {
+		return err
+	}
+	if len(sc.RedirectURIs) == 0 {
+		return fmt.Errorf("at least one redirectUri is required")
+	}
+	for _, u := range sc.RedirectURIs {
+		if err := auth.ValidateRedirectURI(u); err != nil {
+			return fmt.Errorf("redirectUri: %w", err)
+		}
+	}
+	if len(sc.Scopes) == 0 {
+		return fmt.Errorf("at least one scope is required")
+	}
+	for _, s := range sc.Scopes {
+		if !auth.IsSupportedScope(s) {
+			return fmt.Errorf("unknown scope %q (supported: %s)", s, strings.Join(auth.SupportedScopes, ", "))
+		}
+	}
+	// A confidential client's secret is delivered PRE-HASHED. Require it to actually
+	// be a bcrypt hash so a boot-time config error catches an operator who pasted the
+	// cleartext (which would otherwise be stored as the "hash", fail every token
+	// exchange with a confusing remote invalid_client, and leave cleartext in config)
+	// or an over-length string (which would fail later at the varchar(100) column).
+	// Empty is allowed — a public PKCE client.
+	if sc.SecretHash != "" {
+		if _, err := bcrypt.Cost([]byte(sc.SecretHash)); err != nil {
+			return fmt.Errorf("secretHash must be a bcrypt hash (the pre-hashed client secret), not cleartext: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateClientId enforces a bounded, URL/config-safe clientId (letters, digits,
+// '-', '_', '.'; ≤128 chars) — the same rule the admin API applies, kept in sync
+// here so a seeded client cannot carry an id the admin API would reject.
+func validateClientId(id string) error {
+	if id == "" {
+		return fmt.Errorf("clientId is required")
+	}
+	if len(id) > 128 {
+		return fmt.Errorf("clientId must be at most 128 characters")
+	}
+	for _, r := range id {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '.'
+		if !ok {
+			return fmt.Errorf("clientId may contain only letters, digits, '-', '_', '.' (got %q)", id)
 		}
 	}
 	return nil

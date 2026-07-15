@@ -51,6 +51,21 @@ type BootstrapConfig struct {
 	// SuperuserEmail/SuperuserPassword identify the global superuser identity.
 	SuperuserEmail    string
 	SuperuserPassword string
+
+	// SeedClients are OAuth 2.1 clients to provision at startup (ADR-047) — e.g. a
+	// confidential Grafana SSO client. Idempotently upserted on every boot so a
+	// redeploy re-syncs them to config; the secret arrives pre-hashed.
+	SeedClients []SeedOAuthClient
+}
+
+// SeedOAuthClient is a startup-provisioned OAuth client (ADR-047): a bcrypt
+// SecretHash (empty ⇒ public) plus the redirect/scope allowlists. The cleartext
+// secret is never carried here — only its hash.
+type SeedOAuthClient struct {
+	ClientId     string
+	RedirectURIs []string
+	Scopes       []string
+	SecretHash   string
 }
 
 // Manager owns native auth for the instance. Build it with NewManager, then
@@ -622,6 +637,13 @@ func (m *Manager) seed(ctx context.Context) error {
 			return err
 		}
 
+		// Re-sync configured OAuth clients on every boot (idempotent upsert) —
+		// independent of the identity count below, so a redeploy re-provisions a
+		// bootstrap client (e.g. Grafana SSO) with its freshly-minted secret hash.
+		if err := m.seedOAuthClients(ctx); err != nil {
+			return err
+		}
+
 		n, err := m.iam.CountIdentities(ctx)
 		if err != nil {
 			return err
@@ -642,6 +664,72 @@ func (m *Manager) seed(ctx context.Context) error {
 			Msg("Seeded superuser (system role=superuser, authority=*) with the default password — CHANGE IT IMMEDIATELY.")
 		return nil
 	})
+}
+
+// seedOAuthClients reconciles each configured bootstrap OAuth client (ADR-047).
+// Config is the source of truth for the provisioned fields (redirect URIs, scopes,
+// secret hash): a missing client is created (enabled), an existing one is re-synced
+// ONLY when one of those fields drifted. It deliberately never rewrites `enabled`
+// after creation — an admin who disables a compromised seeded client must not be
+// overridden on the next boot — and it writes nothing on a steady-state boot, so a
+// rollout does not spew phantom audit rows. The secret arrives pre-hashed; nothing
+// here handles cleartext.
+func (m *Manager) seedOAuthClients(ctx context.Context) error {
+	for _, sc := range m.bootstrap.SeedClients {
+		existing, err := m.iam.OAuthClientByClientId(ctx, sc.ClientId)
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			if err := m.iam.CreateOAuthClient(ctx, &iam.OAuthClient{
+				ClientId:     sc.ClientId,
+				RedirectURIs: sc.RedirectURIs,
+				Scopes:       sc.Scopes,
+				SecretHash:   sc.SecretHash,
+				Enabled:      true,
+			}); err != nil {
+				return fmt.Errorf("seed oauth client %q: %w", sc.ClientId, err)
+			}
+			log.Info().Str("clientId", sc.ClientId).Bool("confidential", sc.SecretHash != "").
+				Msg("Seeded OAuth client from config")
+		case err != nil:
+			return fmt.Errorf("seed oauth client %q: %w", sc.ClientId, err)
+		default:
+			if provisionedFieldsMatch(existing, sc) {
+				continue // in sync — no write, no audit row
+			}
+			existing.RedirectURIs = sc.RedirectURIs
+			existing.Scopes = sc.Scopes
+			existing.SecretHash = sc.SecretHash
+			if err := m.iam.UpdateOAuthClientProvisioned(ctx, existing); err != nil {
+				return fmt.Errorf("re-sync oauth client %q: %w", sc.ClientId, err)
+			}
+			log.Info().Str("clientId", sc.ClientId).Msg("Re-synced OAuth client from config")
+		}
+	}
+	return nil
+}
+
+// provisionedFieldsMatch reports whether an existing client already matches the
+// config-managed fields of a seed entry (secret hash + redirect URIs + scopes), so
+// the reconcile skips a no-op write. `enabled` is intentionally NOT compared — it is
+// runtime-owned after creation.
+func provisionedFieldsMatch(existing *iam.OAuthClient, sc SeedOAuthClient) bool {
+	return existing.SecretHash == sc.SecretHash &&
+		stringSlicesEqual(existing.RedirectURIs, sc.RedirectURIs) &&
+		stringSlicesEqual(existing.Scopes, sc.Scopes)
+}
+
+// stringSlicesEqual reports order-sensitive slice equality (redirect URIs and scopes
+// are exact-match allowlists, so order is not normalized).
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // normalizeEmail lower-cases and trims an email so lookups and uniqueness are

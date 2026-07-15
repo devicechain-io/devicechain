@@ -117,6 +117,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	IdentityManager = identity.NewManager(Microservice, RdbManager, lock, accessTTL, refreshTTL, Configuration.Auth.IssuerUrl, identity.BootstrapConfig{
 		SuperuserEmail:    Configuration.Auth.SuperuserEmail,
 		SuperuserPassword: Configuration.Auth.SuperuserPassword,
+		SeedClients:       seedClientsFromConfig(Configuration.Auth.SeedClients),
 	})
 	if err := IdentityManager.Initialize(ctx, refreshKV, codesKV); err != nil {
 		return err
@@ -196,6 +197,25 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	graphql.RegisterBrandingLogoHandler(http.DefaultServeMux, BlobStore, IdentityManager, IdentityManager.Validator())
 
 	return nil
+}
+
+// seedClientsFromConfig maps the typed config seed-client entries onto the
+// identity-layer struct the manager provisions at startup (ADR-047), keeping the
+// config package free of an identity import.
+func seedClientsFromConfig(in []config.SeedOAuthClientConfig) []identity.SeedOAuthClient {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]identity.SeedOAuthClient, 0, len(in))
+	for _, c := range in {
+		out = append(out, identity.SeedOAuthClient{
+			ClientId:     c.ClientId,
+			RedirectURIs: c.RedirectURIs,
+			Scopes:       c.Scopes,
+			SecretHash:   c.SecretHash,
+		})
+	}
+	return out
 }
 
 // buildBlobStore constructs the object/asset store (ADR-058) from the instance

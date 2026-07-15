@@ -8,7 +8,17 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/crypto/bcrypt"
 )
+
+// aBcryptHash is a real bcrypt hash used wherever a seed client's SecretHash must be
+// well-formed (config now rejects a non-bcrypt hash — e.g. cleartext).
+func aBcryptHash(t *testing.T) string {
+	t.Helper()
+	h, err := bcrypt.GenerateFromPassword([]byte("a-client-secret"), bcrypt.MinCost)
+	assert.NoError(t, err)
+	return string(h)
+}
 
 // Loading an empty document defaults the superuser (ADR-033) so the documented
 // first login works (ADR-022 decision 1 defaulting via core.LoadConfiguration).
@@ -102,4 +112,73 @@ func TestValidateIssuerUrl(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A seedClients document decodes (camelCase JSON → struct fields) and validates —
+// the injection point dcctl uses to provision a confidential Grafana client.
+func TestSeedClientsDecodeAndValidate(t *testing.T) {
+	doc := `{
+	  "auth": {
+	    "seedClients": [
+	      {
+	        "clientId": "grafana",
+	        "redirectUris": ["https://dc.example.com/grafana/login/generic_oauth"],
+	        "scopes": ["read-only"],
+	        "secretHash": "` + aBcryptHash(t) + `"
+	      }
+	    ]
+	  }
+	}`
+	cfg := &UserManagementConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(doc), cfg))
+	assert.NoError(t, cfg.Validate())
+
+	if assert.Len(t, cfg.Auth.SeedClients, 1) {
+		sc := cfg.Auth.SeedClients[0]
+		assert.Equal(t, "grafana", sc.ClientId)
+		assert.Equal(t, []string{"https://dc.example.com/grafana/login/generic_oauth"}, sc.RedirectURIs)
+		assert.Equal(t, []string{"read-only"}, sc.Scopes)
+		assert.NotEmpty(t, sc.SecretHash)
+	}
+}
+
+// Each seed-client entry is validated fail-closed at startup, mirroring the admin
+// API's rules, so a malformed provisioned client cannot boot the service.
+func TestValidateSeedClients(t *testing.T) {
+	base := func(sc SeedOAuthClientConfig) *UserManagementConfiguration {
+		cfg := NewUserManagementConfiguration()
+		cfg.Auth.SeedClients = []SeedOAuthClientConfig{sc}
+		return cfg
+	}
+	ok := SeedOAuthClientConfig{
+		ClientId: "grafana", RedirectURIs: []string{"https://dc.example.com/grafana/login/generic_oauth"},
+		Scopes: []string{"read-only"}, SecretHash: aBcryptHash(t),
+	}
+	assert.NoError(t, base(ok).Validate(), "a well-formed confidential seed client is valid")
+
+	pub := ok
+	pub.SecretHash = ""
+	assert.NoError(t, base(pub).Validate(), "an empty secret hash (public client) is allowed")
+
+	bad := map[string]SeedOAuthClientConfig{
+		"empty clientId":       {ClientId: "", RedirectURIs: ok.RedirectURIs, Scopes: ok.Scopes},
+		"bad clientId charset": {ClientId: "bad id", RedirectURIs: ok.RedirectURIs, Scopes: ok.Scopes},
+		"no redirect":          {ClientId: "grafana", RedirectURIs: nil, Scopes: ok.Scopes},
+		"http non-loopback":    {ClientId: "grafana", RedirectURIs: []string{"http://dc.example.com/cb"}, Scopes: ok.Scopes},
+		"no scope":             {ClientId: "grafana", RedirectURIs: ok.RedirectURIs, Scopes: nil},
+		"unknown scope":        {ClientId: "grafana", RedirectURIs: ok.RedirectURIs, Scopes: []string{"write"}},
+		// The secret must be a real bcrypt hash — cleartext or a malformed string is
+		// rejected at boot rather than failing confusingly later.
+		"cleartext secret":  {ClientId: "grafana", RedirectURIs: ok.RedirectURIs, Scopes: ok.Scopes, SecretHash: "my-plaintext-secret"},
+		"malformed hash":    {ClientId: "grafana", RedirectURIs: ok.RedirectURIs, Scopes: ok.Scopes, SecretHash: "$2a$10$tooshort"},
+		"non-bcrypt scheme": {ClientId: "grafana", RedirectURIs: ok.RedirectURIs, Scopes: ok.Scopes, SecretHash: "$argon2id$v=19$m=65536"},
+	}
+	for name, sc := range bad {
+		t.Run(name, func(t *testing.T) { assert.Error(t, base(sc).Validate()) })
+	}
+
+	// Duplicate clientIds across entries are rejected.
+	dup := NewUserManagementConfiguration()
+	dup.Auth.SeedClients = []SeedOAuthClientConfig{ok, ok}
+	assert.Error(t, dup.Validate(), "duplicate clientId rejected")
 }

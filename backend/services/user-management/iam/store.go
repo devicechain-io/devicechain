@@ -335,6 +335,17 @@ func (s *Store) CreateOAuthClient(ctx context.Context, c *OAuthClient) error {
 	return s.sys(ctx).Create(c).Error
 }
 
+// UpdateOAuthClientProvisioned re-syncs the CONFIG-MANAGED fields of an
+// already-loaded seeded client (redirect URIs, scopes, secret hash) by primary key.
+// It deliberately does NOT touch `enabled`: enable/disable is an operational lever
+// that must survive a restart, so an admin who disables a compromised seeded client
+// is not overridden on the next boot. name/description are also left untouched
+// (seed clients do not set them). The caller only invokes this when a field actually
+// drifted, so a steady-state boot writes nothing.
+func (s *Store) UpdateOAuthClientProvisioned(ctx context.Context, c *OAuthClient) error {
+	return s.sys(ctx).Model(c).Select("redirect_uris", "scopes", "secret_hash").Updates(c).Error
+}
+
 // UpdateOAuthClient persists the mutable fields of an already-loaded client
 // (name/description, redirect URIs, scopes) by primary key. Save writes every
 // column, so the caller loads-then-mutates to avoid clobbering client_id.
