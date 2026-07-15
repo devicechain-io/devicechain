@@ -130,7 +130,7 @@ EOF
 fi
 
 # ---- 4. infrastructure (OpenTofu) ------------------------------------------
-log "🧱 Infrastructure — OpenTofu (NATS, Postgres, Timescale, ingress-nginx, cert-manager)"
+log "🧱 Infrastructure — OpenTofu (NATS, Postgres, Timescale, ingress-nginx, cert-manager, monitoring)"
 TF=tofu; command -v tofu >/dev/null 2>&1 || TF=terraform
 if [ ! -f "$TF_DIR/terraform.tfvars" ]; then
   step "writing terraform.tfvars (targets $CONTEXT)"
@@ -157,10 +157,17 @@ unset NATS_CALLOUT_ISSUER_PUBLIC NATS_CALLOUT_ISSUER_SEED NATS_SERVICE_PASSWORD 
 eval "$(cd "$ROOT" && go run ./backend/core/natsauth/cmd/genauth)"
 : "${NATS_CALLOUT_ISSUER_PUBLIC:?minting failed}" "${NATS_CALLOUT_ISSUER_SEED:?}" "${NATS_SERVICE_PASSWORD:?}" "${NATS_SERVICE_PASSWORD_BCRYPT:?}"
 
+# monitoring_slim: kube-prometheus-stack keeps its TSDB on emptyDir with smaller
+# resource requests so it fits the local single-node kind cluster. Opt out of the
+# whole stack (and the chart's ServiceMonitors below) with MONITORING=0.
+MONITORING="${MONITORING:-1}"
+MON_ARGS=(-var "monitoring_slim=true")
+[ "$MONITORING" = "0" ] && MON_ARGS=(-var "enable_monitoring=false")
 ( cd "$TF_DIR" && "$TF" init -input=false >/dev/null && "$TF" apply -input=false -auto-approve \
     -var "nats_enable_auth=true" \
     -var "nats_callout_issuer_public=$NATS_CALLOUT_ISSUER_PUBLIC" \
-    -var "nats_service_password_bcrypt=$NATS_SERVICE_PASSWORD_BCRYPT" )
+    -var "nats_service_password_bcrypt=$NATS_SERVICE_PASSWORD_BCRYPT" \
+    "${MON_ARGS[@]}" )
 
 # NATS TLS material (ADR-025): the broker terminates TLS and emits its CA as an
 # output; thread it into the instance config so services + the MQTT source dial
@@ -213,9 +220,11 @@ make -C "$OPERATOR_DIR" deploy IMG="$OPERATOR_IMG"
 
 # ---- 6. instance chart (Helm) ----------------------------------------------
 log "⎈ Instance chart — Helm (instance.id=$INSTANCE, profile=$PROFILE)"
-# metrics.enabled=false: the ServiceMonitors need the Prometheus Operator CRDs,
-# which a bare kind cluster does not have. Production clusters with the operator
-# leave the chart default (on).
+# metrics.enabled=true: the OpenTofu step above installs kube-prometheus-stack, so
+# the Prometheus Operator CRDs the ServiceMonitors/PrometheusRule need are present
+# (the infra apply runs before this Helm step). The Grafana sidecar auto-imports the
+# chart's dashboard ConfigMaps. Port-forward: kubectl -n monitoring port-forward
+# svc/kube-prometheus-stack-grafana 3000:80 (admin / devicechain).
 helm --kube-context "$CONTEXT" upgrade --install dc "$CHART_DIR" \
   --set instance.id="$INSTANCE" \
   --set profile="$PROFILE" \
@@ -224,7 +233,7 @@ helm --kube-context "$CONTEXT" upgrade --install dc "$CHART_DIR" \
   --set ingress.tls.enabled="$([ "$INGRESS_TLS" = "1" ] && echo true || echo false)" \
   --set image.registry="$REGISTRY" \
   --set image.tag="$VERSION" \
-  --set metrics.enabled=false \
+  --set metrics.enabled="$([ "$MONITORING" = "0" ] && echo false || echo true)" \
   "${NATS_TLS_ARGS[@]}" \
   "${NATS_AUTH_ARGS[@]}" \
   "${SERVICE_AUTH_ARGS[@]}" \

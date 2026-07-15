@@ -98,9 +98,11 @@ func helmInstall(ctx context.Context, st *State) error {
 			"tls":     map[string]interface{}{"enabled": !st.NoTLS},
 		},
 		"image": map[string]interface{}{"registry": st.ImageRegistry, "tag": st.ImageVersion},
-		// A bare cluster has no Prometheus Operator, so the ServiceMonitors the
-		// metrics path renders would fail to apply.
-		"metrics": map[string]interface{}{"enabled": false},
+		// Metrics rendering (ServiceMonitors / PrometheusRule / dashboards) needs the
+		// Prometheus Operator CRDs. The infra step installs kube-prometheus-stack by
+		// default (BEFORE this Helm step), so enable it — UNLESS --no-monitoring, where
+		// we install no operator and must not render CRs against absent CRDs.
+		"metrics": map[string]interface{}{"enabled": !st.NoMonitoring},
 	}
 
 	// Upgrade if the release already exists, otherwise install — so a re-run is

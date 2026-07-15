@@ -29,6 +29,10 @@ type Options struct {
 	// self-signed cert — combined with localhost, a zero-config http://localhost/.
 	IngressHost string
 	NoTLS       bool
+	// NoMonitoring skips installing the kube-prometheus-stack observability stack
+	// (default-on). Set it when the cluster already has the Prometheus Operator, or
+	// to opt out of in-cluster metrics collection.
+	NoMonitoring bool
 }
 
 // Provider abstracts the target environment (local cluster today; cloud later)

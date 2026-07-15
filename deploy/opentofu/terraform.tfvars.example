@@ -37,3 +37,14 @@
 # ingress_class              = "nginx"
 # ingress_nginx_chart_version = "4.11.3"
 # cert_manager_chart_version  = "v1.16.2"
+
+# Observability (kube-prometheus-stack — Prometheus/Grafana/Alertmanager). Default-on.
+# Set enable_monitoring=false if the cluster already has the Prometheus Operator.
+# Local/kind should set monitoring_slim=true (emptyDir TSDB, smaller requests).
+# enable_monitoring                 = true
+# monitoring_slim                   = false
+# monitoring_chart_version          = "65.1.1"
+# monitoring_grafana_admin_password = "CHANGE-ME"
+# monitoring_prometheus_retention   = "15d"
+# monitoring_prometheus_storage     = "20Gi"
+# monitoring_storage_class          = "retain-ssd"

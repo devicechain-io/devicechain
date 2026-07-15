@@ -22,12 +22,22 @@ these modules, passing its cluster credentials to the providers.
 | TimescaleDB | same generic module, Timescale image | `dc-timescaledb-single.dc-system:5432` |
 | NGINX ingress controller | `ingress-nginx` Helm chart | IngressClass `nginx` |
 | cert-manager (+ CRDs) | `cert-manager` Helm chart | namespace `cert-manager` |
+| Observability (Prometheus/Grafana/Alertmanager) | `kube-prometheus-stack` Helm chart | namespace `monitoring` |
 
 The ingress controller and cert-manager are the TLS/ingress *capability*; the
 per-instance **Ingress resource + cert Issuer** that route to the app Services are
 rendered by the Helm chart (it knows the enabled functional areas) — set
 `ingress.enabled=true` there. Both are toggleable (`enable_ingress_nginx`,
 `enable_cert_manager`) if the cluster already has them.
+
+The monitoring stack installs the Prometheus Operator CRDs the DeviceChain chart's
+ServiceMonitors / PrometheusRule / dashboard ConfigMaps depend on, so it applies
+**before** the Helm step and the chart's `metrics.enabled` rendering "just works".
+It is default-on (`enable_monitoring`); set `monitoring_slim=true` on a local/kind
+cluster (emptyDir TSDB, smaller requests). Grafana auth is native admin for now
+(`monitoring_grafana_admin_password`); OIDC via user-management (ADR-047), gated to
+the operator/superuser tier, is a follow-up. Reach Grafana with
+`kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80`.
 
 These endpoints line up with the Helm chart's `values.yaml` defaults, so the chart
 deploys against this infra with no extra wiring.

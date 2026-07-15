@@ -22,6 +22,7 @@ var (
 	bootstrapBuild         bool
 	bootstrapHost          string
 	bootstrapNoTLS         bool
+	bootstrapNoMonitoring  bool
 )
 
 // bootstrapCmd provisions a usable DeviceChain instance on a target provider.
@@ -56,6 +57,7 @@ var bootstrapCmd = &cobra.Command{
 			BuildImages:   bootstrapBuild,
 			IngressHost:   bootstrapHost,
 			NoTLS:         bootstrapNoTLS,
+			NoMonitoring:  bootstrapNoMonitoring,
 		}
 
 		ctx := cmd.Context()
@@ -76,6 +78,7 @@ var bootstrapCmd = &cobra.Command{
 			BuildImages:   opts.BuildImages,
 			IngressHost:   opts.IngressHost,
 			NoTLS:         opts.NoTLS,
+			NoMonitoring:  opts.NoMonitoring,
 			Values:        map[string]string{},
 		}
 		return bootstrap.NewDefaultPipeline().Run(ctx, st)
@@ -94,6 +97,7 @@ func init() {
 	bootstrapCmd.Flags().BoolVar(&bootstrapBuild, "build", false, "build images from source into a local registry (developer path; requires source + ko)")
 	bootstrapCmd.Flags().StringVar(&bootstrapHost, "host", "", "ingress host to expose the instance on (default devicechain.local; use 'localhost' for a local cluster to skip the /etc/hosts edit)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoTLS, "no-tls", false, "serve plain HTTP instead of a self-signed cert (with --host localhost, a zero-config http://localhost/)")
+	bootstrapCmd.Flags().BoolVar(&bootstrapNoMonitoring, "no-monitoring", false, "skip the monitoring stack (Prometheus/Grafana) AND the chart's ServiceMonitors/alerts — for a minimal install or a cluster where you wire metrics separately")
 
 	rootCmd.AddCommand(bootstrapCmd)
 }
