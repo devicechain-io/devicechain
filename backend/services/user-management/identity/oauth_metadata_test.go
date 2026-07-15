@@ -29,6 +29,9 @@ func TestBuildAuthorizationServerMetadata(t *testing.T) {
 	if md.TokenEndpoint != issuer+"/oauth/token" {
 		t.Errorf("token_endpoint = %q", md.TokenEndpoint)
 	}
+	if md.UserinfoEndpoint != issuer+"/oauth/userinfo" {
+		t.Errorf("userinfo_endpoint = %q", md.UserinfoEndpoint)
+	}
 	// jwks_uri is the public /oauth/jwks mirror, not the ingress-blocked /auth/jwks.
 	if md.JwksURI != issuer+"/oauth/jwks" {
 		t.Errorf("jwks_uri = %q", md.JwksURI)

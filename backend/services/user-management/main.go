@@ -293,6 +293,14 @@ func registerOAuthHandlers() {
 	// redeems.
 	http.Handle(identity.AuthorizePath, identity.AuthorizeHandler(IdentityManager))
 
+	// The userinfo endpoint (ADR-047 SSO): a login client (Grafana) that treats the
+	// access token as opaque calls it with the token as a Bearer credential to read
+	// the subject's identity + the operator-tier `sudo` claim. Validation goes
+	// through the access-token validator (signature + type + tenant).
+	http.Handle(identity.UserinfoPath, identity.UserinfoHandler(func(t string) (*auth.Claims, error) {
+		return IdentityManager.Validator().Validate(t)
+	}))
+
 	// Public JWKS mirror for external OAuth token validators (see OAuthJwksPath).
 	// Serves the same retained key set as /auth/jwks.
 	http.HandleFunc(identity.OAuthJwksPath, func(w http.ResponseWriter, r *http.Request) {
