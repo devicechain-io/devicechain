@@ -24,7 +24,35 @@ var (
 	bootstrapNoTLS         bool
 	bootstrapNoMonitoring  bool
 	bootstrapGrafanaSSO    bool
+	bootstrapDev           bool
 )
+
+// devModeResolution is the set of flag values the --dev preset settles on.
+type devModeResolution struct {
+	Build bool
+	Host  string
+	NoTLS bool
+	Yes   bool
+}
+
+// resolveDevMode expands the --dev local-developer preset — build images from
+// source, host=localhost, plain http, assume-yes (a zero-config http://localhost/
+// bring-up) — on top of the user's explicit flags. It REJECTS an explicit flag that
+// contradicts the preset rather than silently overriding it, so --dev can never mask
+// a mistake (e.g. a real --host that would otherwise be quietly discarded). `changed`
+// reports whether the user set a given flag explicitly (cmd.Flags().Changed).
+func resolveDevMode(changed func(string) bool, host string, noTLS, build bool) (devModeResolution, error) {
+	if changed("host") && host != "localhost" {
+		return devModeResolution{}, fmt.Errorf("--dev pins --host to localhost; remove the conflicting --host %q (or drop --dev)", host)
+	}
+	if changed("no-tls") && !noTLS {
+		return devModeResolution{}, fmt.Errorf("--dev serves plain http on localhost; remove --no-tls=false (or drop --dev)")
+	}
+	if changed("build") && !build {
+		return devModeResolution{}, fmt.Errorf("--dev builds images from source; remove --build=false (or drop --dev)")
+	}
+	return devModeResolution{Build: true, Host: "localhost", NoTLS: true, Yes: true}, nil
+}
 
 // bootstrapCmd provisions a usable DeviceChain instance on a target provider.
 // It is a thin wrapper over the bootstrap engine package (ADR-032).
@@ -37,6 +65,18 @@ var bootstrapCmd = &cobra.Command{
 		provider, err := bootstrap.Get(args[0])
 		if err != nil {
 			return err
+		}
+
+		// --dev expands to the local-developer preset (and rejects contradictory
+		// flags) before anything else runs, so preflight and the pipeline see the
+		// resolved values.
+		if bootstrapDev {
+			res, err := resolveDevMode(cmd.Flags().Changed, bootstrapHost, bootstrapNoTLS, bootstrapBuild)
+			if err != nil {
+				return err
+			}
+			bootstrapBuild, bootstrapHost, bootstrapNoTLS, bootstrapAssumeYes = res.Build, res.Host, res.NoTLS, res.Yes
+			fmt.Println("dev mode: --build --host localhost --no-tls --yes")
 		}
 
 		// Diagnose the local system up front so a run fails fast on a missing
@@ -102,6 +142,7 @@ func init() {
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoTLS, "no-tls", false, "serve plain HTTP instead of a self-signed cert (with --host localhost, a zero-config http://localhost/)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoMonitoring, "no-monitoring", false, "skip the monitoring stack (Prometheus/Grafana) AND the chart's ServiceMonitors/alerts — for a minimal install or a cluster where you wire metrics separately")
 	bootstrapCmd.Flags().BoolVar(&bootstrapGrafanaSSO, "grafana-sso", false, "wire Grafana login to DeviceChain SSO (ADR-047), operator/superuser-tier only; enables the OAuth AS (needs https, or --host localhost --no-tls for local http)")
+	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags. Compose with --grafana-sso for local SSO")
 
 	rootCmd.AddCommand(bootstrapCmd)
 }
