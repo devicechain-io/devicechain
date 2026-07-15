@@ -111,12 +111,6 @@ variable "grafana_ingress_host" {
   default     = ""
 }
 
-variable "grafana_ingress_tls" {
-  description = "Whether the /grafana ingress terminates TLS (match the app ingress). When true a cert for grafana_ingress_host is expected on the shared secret."
-  type        = bool
-  default     = false
-}
-
 variable "ingress_class" {
   description = "IngressClass for the /grafana ingress (match the app's, e.g. nginx)."
   type        = string
@@ -197,15 +191,18 @@ locals {
       serve_from_sub_path = true
     }
     "auth.generic_oauth" = {
-      enabled       = true
-      name          = "DeviceChain"
-      client_id     = var.grafana_oauth_client_id
-      client_secret = var.grafana_oauth_client_secret
-      scopes        = "read-only"
-      auth_url      = var.grafana_oauth_auth_url
-      token_url     = var.grafana_oauth_token_url
-      api_url       = var.grafana_oauth_api_url
-      use_pkce      = true
+      enabled   = true
+      name      = "DeviceChain"
+      client_id = var.grafana_oauth_client_id
+      # client_secret is NOT set here: the grafana subchart's assertNoLeakedSecrets
+      # rejects a literal secret in grafana.ini (which renders into a ConfigMap), so
+      # it is injected as GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET via envRenderSecret (a
+      # real k8s Secret) below — Grafana env overrides the ini.
+      scopes    = "read-only"
+      auth_url  = var.grafana_oauth_auth_url
+      token_url = var.grafana_oauth_token_url
+      api_url   = var.grafana_oauth_api_url
+      use_pkce  = true
       # `sudo` is the operator/superuser-tier claim userinfo returns. Map it to Admin;
       # everyone else to an empty role which, with strict mode, is denied login.
       role_attribute_path   = "sudo && 'Admin' || ''"
@@ -220,6 +217,15 @@ locals {
   # Grafana's Service. serve_from_sub_path (above) means the path is NOT stripped.
   # Built unconditionally (consistent HCL type) and included at the merge below only
   # when enabled + a host is set.
+  # The /grafana ingress (grafana subchart) lives in the monitoring namespace — the
+  # app ingress is in the instance namespace and cannot cross-namespace route to
+  # Grafana's Service. serve_from_sub_path (above) means the path is NOT stripped.
+  # No `tls` block: the app ingress already terminates TLS for this shared host, and
+  # nginx serves every ingress on the host over that cert (SNI). Declaring a second
+  # tls entry here that names a non-existent secret would make host-cert resolution
+  # order-dependent and could degrade the console's TLS. (A dedicated monitoring-ns
+  # cert-manager Issuer is a possible future refinement.) Built unconditionally
+  # (consistent HCL type); included at the merge only when enabled + a host is set.
   grafana_ingress_enabled = var.grafana_oauth_enabled && var.grafana_ingress_host != ""
   grafana_ingress = {
     enabled          = true
@@ -227,10 +233,6 @@ locals {
     hosts            = [var.grafana_ingress_host]
     path             = "/grafana"
     pathType         = "Prefix"
-    tls = var.grafana_ingress_tls ? [{
-      secretName = "grafana-tls"
-      hosts      = [var.grafana_ingress_host]
-    }] : []
   }
 
   grafana_values = merge({
@@ -250,6 +252,11 @@ locals {
     }
     },
     var.grafana_oauth_enabled ? { "grafana.ini" = local.grafana_ini } : {},
+    # The OAuth client secret as a rendered k8s Secret → env (not grafana.ini). Grafana
+    # maps GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET onto auth.generic_oauth.client_secret.
+    var.grafana_oauth_enabled ? {
+      envRenderSecret = { GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET = var.grafana_oauth_client_secret }
+    } : {},
     local.grafana_ingress_enabled ? { ingress = local.grafana_ingress } : {},
   )
 

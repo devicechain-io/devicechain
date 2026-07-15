@@ -89,7 +89,6 @@ func applyInfra(ctx context.Context, st *State) error {
 			tfexec.Var("monitoring_grafana_oauth_api_url="+u.APIURL),
 			tfexec.Var("monitoring_grafana_root_url="+u.RootURL),
 			tfexec.Var("monitoring_grafana_ingress_host="+u.Host),
-			tfexec.Var(fmt.Sprintf("monitoring_grafana_ingress_tls=%t", u.TLS)),
 		)
 	}
 	if err := tf.Apply(ctx, opts...); err != nil {

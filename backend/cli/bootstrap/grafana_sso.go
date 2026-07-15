@@ -3,6 +3,8 @@
 
 package bootstrap
 
+import "strings"
+
 // Grafana SSO wiring (ADR-047): when --grafana-sso is set, the bring-up turns on
 // user-management's OAuth 2.1 AS (sets the issuer), seeds a confidential Grafana
 // client, and configures Grafana's generic_oauth + a /grafana ingress — gated to the
@@ -26,12 +28,15 @@ type grafanaSSOURLs struct {
 }
 
 // grafanaHost resolves the ingress host the SSO URLs are built on (the same host the
-// app ingress uses).
+// app ingress uses). It is lowercased: the issuer must be lowercase or
+// user-management's validateIssuerUrl rejects it and the service CrashLoops at
+// startup (a mixed-case --host would otherwise pass this gate but fail there).
 func grafanaHost(st *State) string {
-	if st.IngressHost != "" {
-		return st.IngressHost
+	host := st.IngressHost
+	if host == "" {
+		host = DefaultIngressHost
 	}
-	return DefaultIngressHost
+	return strings.ToLower(host)
 }
 
 // grafanaSSOEnabled reports whether Grafana SSO should be wired: it was requested,

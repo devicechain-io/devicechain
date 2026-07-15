@@ -323,9 +323,3 @@ variable "monitoring_grafana_ingress_host" {
   type        = string
   default     = ""
 }
-
-variable "monitoring_grafana_ingress_tls" {
-  description = "Whether the /grafana ingress terminates TLS (match the app ingress)."
-  type        = bool
-  default     = false
-}

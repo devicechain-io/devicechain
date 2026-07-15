@@ -134,6 +134,9 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// tofu module) and the bcrypt hash is seeded into user-management (helmInstall), so
 	// the two can't drift. Skipped (with a note) when SSO was requested but the issuer
 	// would be invalid — http on a non-localhost host.
+	if st.GrafanaSSO && st.NoMonitoring {
+		fmt.Println(color.YellowString("  Grafana SSO skipped: it needs the monitoring stack, which --no-monitoring disables."))
+	}
 	if grafanaSSORequestedButInvalid(st) {
 		fmt.Println(color.YellowString("  Grafana SSO skipped: an http issuer needs a localhost host. Re-run with --host localhost (and --no-tls) or enable TLS."))
 	}

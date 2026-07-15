@@ -106,6 +106,5 @@ module "monitoring" {
   grafana_oauth_api_url       = var.monitoring_grafana_oauth_api_url
   grafana_root_url            = var.monitoring_grafana_root_url
   grafana_ingress_host        = var.monitoring_grafana_ingress_host
-  grafana_ingress_tls         = var.monitoring_grafana_ingress_tls
   ingress_class               = var.ingress_class
 }
