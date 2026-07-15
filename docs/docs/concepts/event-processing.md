@@ -19,6 +19,12 @@ Detection rules are defined on a **[device profile](./domain-model.md)** — the
 
 A rule states a **condition** over the profile's telemetry, declares its **severity**, and lists the **actions** to run when it fires.
 
+## Scoping a rule to a group
+
+By default a rule applies to **every device** that resolves to its profile. A rule can also be **scoped to a [dynamic group](./domain-model.md#facets-and-dynamic-groups)** so it fires only for the devices that are currently members — for example, run a stricter heat rule only on *devices in arid areas*. Scoping is optional and set per rule.
+
+Group membership is recorded on each event **as it is resolved**, so the engine sees exactly which rules applied at that moment — including when it replays history to preview or re-derive firings. When a device joins or leaves the group, it is enrolled or dropped on its next event, with no rule edit and no rescan.
+
 ## Condition types
 
 | Condition | Fires when | Parameters |
