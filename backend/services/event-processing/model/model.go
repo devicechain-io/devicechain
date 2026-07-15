@@ -83,6 +83,14 @@ type DetectRule struct {
 	// compiler on load — the same document device-management stored and the publish gate
 	// validated.
 	Definition string `gorm:"not null"`
+	// EntityGroupToken / EntityGroupVersion are the rule's OPTIONAL group scope (ADR-062 S4):
+	// the published dynamic entity-group version whose members the rule fires for. They MUST be
+	// persisted here (not only threaded from the live fact) because this projection — not the
+	// finite-retention fact stream — is the restart source of truth: a rule rebuilt from a row
+	// missing its scope would silently reload profile-wide, firing for every device and never
+	// descoping, which is also a restart-determinism break. Empty token / version 0 ⇒ unscoped.
+	EntityGroupToken   string `gorm:"size:256;not null;default:''"`
+	EntityGroupVersion int32  `gorm:"not null;default:0"`
 	// UpdatedAt is gorm-managed; it records when this rule was last (re)published.
 	UpdatedAt time.Time
 }

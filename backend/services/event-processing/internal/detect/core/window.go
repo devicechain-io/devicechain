@@ -156,6 +156,25 @@ func (h *closeHeap) purgeRule(id string) {
 	heap.Init(h)
 }
 
+// purgeSeriesKey drops every pending pane close for ONE exact (rule, series) — the per-key
+// analogue of purgeRule, backing the ADR-062 membership-flip so an Aggregate rule's armed
+// pane-close cannot fire for a series that has left the rule's scoped group.
+func (h *closeHeap) purgeSeriesKey(key SeriesKey) {
+	old := *h
+	kept := old[:0]
+	for _, c := range old {
+		if c.pk.Rule != key.Rule || c.pk.Series != key.Series {
+			c.index = len(kept)
+			kept = append(kept, c)
+		}
+	}
+	for i := len(kept); i < len(old); i++ {
+		old[i] = nil // release the dropped *closeItem for GC
+	}
+	*h = kept
+	heap.Init(h)
+}
+
 // applyRepeating handles a Repeating rule: keep a sliding buffer of matching-event times
 // within Window, and fire on the rising edge where the trailing count reaches Count.
 //

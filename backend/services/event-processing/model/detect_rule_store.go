@@ -29,16 +29,19 @@ func NewDetectRuleStore(r *rdb.RdbManager) *DetectRuleStore {
 
 // Upsert persists a batch of rules (one published-rule fact's worth) in a single
 // transaction, overwriting any existing row for the same rule id. It is idempotent, so a
-// redelivered fact is a no-op replay. An empty batch is a no-op. The definition column is
-// updated on conflict (tenant/profileVersionToken/ruleToken are functionally determined by
-// the id, so they never change for a given id).
+// redelivered fact is a no-op replay. An empty batch is a no-op. The mutable columns are
+// updated on conflict — the definition AND the group scope (ADR-062 S4): a deleted-and-reused
+// profile token can re-mint an existing rule id with a DIFFERENT scope (the same token-reuse
+// case the definition update exists for), and a stale projected scope would reload the wrong
+// membership set after a restart. tenant/profileVersionToken/ruleToken are functionally
+// determined by the id, so they never change for a given id.
 func (s *DetectRuleStore) Upsert(ctx context.Context, rules []DetectRule) error {
 	if len(rules) == 0 {
 		return nil
 	}
 	return s.rdb.DB(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "rule_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"definition", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"definition", "entity_group_token", "entity_group_version", "updated_at"}),
 	}).Create(&rules).Error
 }
 

@@ -78,6 +78,87 @@ func TestStoreRuleSourceRebuildsFromProjection(t *testing.T) {
 	}
 }
 
+// The group scope survives the durable projection round-trip (ADR-062 S4 — the restart source
+// of truth is this projection, NOT the finite-retention fact): a scoped rule persisted via
+// factRuleRows and rebuilt via StoreRuleSource.Load reloads SCOPED, not silently profile-wide
+// (which would fire fleet-wide + never descope after a restart, breaking restart determinism).
+func TestStoreRuleSourcePreservesGroupScope(t *testing.T) {
+	store := newTestRuleStore(t)
+	ctx := context.Background()
+	// Persist exactly as the live fact consumer does.
+	rows := factRuleRows("acme", &dmmodel.DetectionRulesPublishedEvent{
+		ProfileVersionToken: "prof@1",
+		Rules: []dmmodel.PublishedDetectionRule{
+			{Token: "scoped", Definition: validFactRule, EntityGroupToken: "arid-areas", EntityGroupVersion: 3},
+			{Token: "wide", Definition: validFactRule},
+		},
+	})
+	if err := store.Upsert(ctx, rows); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+
+	scoped, err := NewStoreRuleSource(store).Load(ctx)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	byID := map[string]runtime.ScopedRule{}
+	for _, sr := range scoped {
+		byID[sr.Compiled.ID] = sr
+	}
+	if sr := byID["acme/prof@1/scoped"]; sr.GroupToken != "arid-areas" || sr.GroupVersion != 3 {
+		t.Fatalf("scope must survive the projection round-trip; got (%q,%d)", sr.GroupToken, sr.GroupVersion)
+	}
+	if sr := byID["acme/prof@1/wide"]; sr.GroupToken != "" {
+		t.Fatalf("unscoped rule must stay unscoped through reload; got %q", sr.GroupToken)
+	}
+}
+
+// Re-publishing an existing rule id with a DIFFERENT group scope (the deleted+reused profile
+// token edge) must OVERWRITE the projected scope — a stale scope would reload the wrong
+// membership set after a restart (Fable follow-up finding 1).
+func TestStoreUpsertOverwritesGroupScope(t *testing.T) {
+	store := newTestRuleStore(t)
+	ctx := context.Background()
+	if err := store.Upsert(ctx, []model.DetectRule{
+		{RuleId: "acme/p@1/r1", Tenant: "acme", ProfileVersionToken: "p@1", RuleToken: "r1", Definition: validFactRule,
+			EntityGroupToken: "arid-areas", EntityGroupVersion: 1},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Re-publish the SAME id with a new scope.
+	if err := store.Upsert(ctx, []model.DetectRule{
+		{RuleId: "acme/p@1/r1", Tenant: "acme", ProfileVersionToken: "p@1", RuleToken: "r1", Definition: validFactRule,
+			EntityGroupToken: "humid-areas", EntityGroupVersion: 5},
+	}); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	rows, err := store.LoadAll(ctx)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(rows) != 1 || rows[0].EntityGroupToken != "humid-areas" || rows[0].EntityGroupVersion != 5 {
+		t.Fatalf("upsert must overwrite the projected scope; got %+v", rows)
+	}
+}
+
+// The reused-id change-detector treats a scope change (with a byte-identical definition) as a
+// semantic change, so the engine GCs the stale keyed state (Fable follow-up finding 2).
+func TestScopedRuleDiffersFromOnScopeChange(t *testing.T) {
+	base := runtime.ScopedRule{Definition: validFactRule, GroupToken: "arid", GroupVersion: 1}
+	same := runtime.ScopedRule{Definition: validFactRule, GroupToken: "arid", GroupVersion: 1}
+	if base.DiffersFrom(&same) {
+		t.Fatal("identical definition + scope must not differ")
+	}
+	scopeChanged := runtime.ScopedRule{Definition: validFactRule, GroupToken: "arid", GroupVersion: 2}
+	if !base.DiffersFrom(&scopeChanged) {
+		t.Fatal("a scope-version change (same definition) must be detected as a change")
+	}
+	groupChanged := runtime.ScopedRule{Definition: validFactRule, GroupToken: "humid", GroupVersion: 1}
+	if !base.DiffersFrom(&groupChanged) {
+		t.Fatal("a scope-group change (same definition) must be detected as a change")
+	}
+}
+
 // A persisted rule that no longer compiles is skipped by the rebuild (not fatal); the rest load.
 func TestStoreRuleSourceSkipsUncompilable(t *testing.T) {
 	store := newTestRuleStore(t)

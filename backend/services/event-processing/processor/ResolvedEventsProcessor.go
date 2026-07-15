@@ -770,7 +770,7 @@ func (rp *ResolvedEventsProcessor) reconcileRegistry(ctx context.Context) error 
 		// A reused profile token can re-mint an existing id with a DIFFERENT body; GC the stale keyed
 		// state before re-installing so a hold/accumulator is never grafted onto a rule that changed
 		// meaning (the same comparison applyRuleUpdate makes on the live path).
-		if old, ok := rp.registry.Lookup(sr.Compiled.ID); ok && old.Definition != sr.Definition {
+		if old, ok := rp.registry.Lookup(sr.Compiled.ID); ok && sr.DiffersFrom(old) {
 			rp.engine.RemoveRule(sr.Compiled.ID)
 			changed++
 		}
@@ -1155,9 +1155,25 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	plan := rp.registry.Plan(msg.StreamSeq, tenant, event, occurred, attr)
 	rp.metrics.RecordFanout(len(plan.Events), plan.EvalErrors)
 	prev := rp.engine.LastSeq()
+	// ADR-062 S4 membership-flip: apply descopes for the rules this event is OUT of scope
+	// for BEFORE ProcessResolved advances the watermark. Ordering is load-bearing — advance()
+	// fires due timers, so a stale Duration/Absence timer for a departed series must be
+	// dropped first or it would fire a spurious detection for a series the rule no longer
+	// covers. Gated on the SAME message-seq idempotency as ProcessResolved (only a fresh
+	// message applies): a redelivered older message must not re-drop state a later in-scope
+	// message already rebuilt. Descope is otherwise idempotent (a series with no state / no
+	// latch is a no-op).
+	descoped := false
+	if msg.StreamSeq > prev {
+		for _, d := range plan.Descopes {
+			if rp.engine.Descope(d.RuleID, d.Series, d.At) {
+				descoped = true
+			}
+		}
+	}
 	rp.engine.ProcessResolved(msg.StreamSeq, occurred, plan.Events)
 	rp.drainDetections()
-	if rp.engine.LastSeq() > prev {
+	if rp.engine.LastSeq() > prev || descoped {
 		rp.dirty = true
 		rp.metrics.recordApplied()
 		return true
@@ -1368,7 +1384,7 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 		// stale rule's keyed state before installing the replacement, so a Duration hold or a
 		// window accumulator is never grafted onto a rule that now means something else. An
 		// unchanged redelivery leaves state intact (the whole point of preserve-on-reupsert).
-		if old, ok := rp.registry.Lookup(sr.Compiled.ID); ok && old.Definition != sr.Definition {
+		if old, ok := rp.registry.Lookup(sr.Compiled.ID); ok && sr.DiffersFrom(old) {
 			rp.engine.RemoveRule(sr.Compiled.ID)
 			gcd = true
 		}

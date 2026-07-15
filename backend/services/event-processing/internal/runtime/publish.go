@@ -5,6 +5,7 @@ package runtime
 
 import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/rs/zerolog/log"
 )
@@ -66,7 +67,44 @@ func CompilePublishedRules(tenant, profileVersionToken string, published []dmmod
 				Str("rule", p.Token).Msg("Published detection rule failed to compile; skipping (publish gate should have rejected it).")
 			continue
 		}
-		scoped = append(scoped, ScopedRule{Tenant: tenant, ProfileVersionToken: profileVersionToken, Compiled: compiled, Definition: p.Definition})
+		// ADR-062 S4 fail-closed guard: a group scope is only meaningful for an event-driven,
+		// device-keyed kind — the ones Plan feeds per resolved event and can scope by the
+		// device's membership. Absence is timer-driven off the roster (not events), so a scope
+		// would silently never apply; Correlation is keyed by ANCHOR, not the device series the
+		// membership stamp and the descope address, so a scope would mis-key. Refuse to load
+		// such a rule (it does NOT run) rather than run it with a silently-ignored or mis-applied
+		// scope. This backstops the publish gate (which SHOULD reject it author-facing); a rule
+		// reaching here scoped-and-wrong-kind is a gate/consumer contract violation.
+		if p.EntityGroupToken != "" {
+			// A group scope only applies to an event-driven, device-keyed kind — reject it on an
+			// absence (timer-driven off the roster) or correlation (anchor-keyed) rule, which the
+			// membership stamp and the descope cannot address (fail closed: the rule does not run).
+			if compiled.Core.Kind == core.Absence || compiled.Core.Kind == core.Correlation {
+				failed++
+				log.Error().Str("tenant", tenant).Str("profileVersion", profileVersionToken).
+					Str("rule", p.Token).Str("type", string(rule.Type)).
+					Msg("Published detection rule has a group scope on an unsupported kind (absence/correlation); skipping (fail closed).")
+				continue
+			}
+			// A scoped rule must pin a positive version — version 0 with a non-empty token is a
+			// malformed fact that would be out of scope for EVERY event (never fires, always
+			// descopes). Refuse it rather than load a silently-inert rule.
+			if p.EntityGroupVersion <= 0 {
+				failed++
+				log.Error().Str("tenant", tenant).Str("profileVersion", profileVersionToken).
+					Str("rule", p.Token).Str("group", p.EntityGroupToken).Int32("version", p.EntityGroupVersion).
+					Msg("Published detection rule has a group scope with a non-positive version; skipping (fail closed).")
+				continue
+			}
+		}
+		scoped = append(scoped, ScopedRule{
+			Tenant:              tenant,
+			ProfileVersionToken: profileVersionToken,
+			Compiled:            compiled,
+			GroupToken:          p.EntityGroupToken,
+			GroupVersion:        p.EntityGroupVersion,
+			Definition:          p.Definition,
+		})
 	}
 	return scoped, failed
 }

@@ -25,6 +25,17 @@ type ScopedRule struct {
 	ProfileVersionToken string
 	// Compiled is the slice-3 lowered rule (core config + leaf predicate + feed metrics).
 	Compiled *rules.CompiledRule
+	// GroupToken / GroupVersion are the rule's OPTIONAL group scope (ADR-062 S4): the published
+	// dynamic entity-group version whose members the rule fires for. Empty token ⇒ an unscoped
+	// (profile-wide) rule. When set, Plan feeds this rule only for events whose ScopeMemberships
+	// include {GroupToken}@{GroupVersion}, and feeds a DESCOPE for events that lack it (dropping
+	// the series' state + resolving). Normally the scope is constant per rule id (the id embeds
+	// the immutable profile-version token), but a deleted-and-reused profile token can re-mint an
+	// existing id with a DIFFERENT scope — the same reuse case the Definition change-detector
+	// exists for — so DiffersFrom folds the scope into the "did the semantics change" test that
+	// gates GC-ing stale keyed state (see ResolvedEventsProcessor).
+	GroupToken   string
+	GroupVersion int32
 	// Definition is the raw opaque rule JSON the Compiled came from. It is retained purely as
 	// a change-detector: a reused profile token can re-mint an existing rule id with a
 	// DIFFERENT body whose difference lives only in the predicate (not the lowered core.Rule),
@@ -85,6 +96,19 @@ func NewRuleRegistry(scoped []ScopedRule) *RuleRegistry {
 		reg.Upsert(scoped[i])
 	}
 	return reg
+}
+
+// DiffersFrom reports whether this rule's SEMANTICS differ from a prior entry filed under the
+// same id — the test that decides whether a reused id (a deleted+reused profile token re-minting
+// an old id) must GC the stale keyed state before installing the replacement. It compares the
+// raw Definition (a change may live only in the predicate, invisible to the lowered core.Rule)
+// AND the group scope (ADR-062 S4): a scope change with a byte-identical definition (the scope
+// is a sibling field, not part of the definition JSON) still means the rule now covers a
+// different membership set, so grafting the old series' held state onto it would mis-fire.
+func (sr ScopedRule) DiffersFrom(old *ScopedRule) bool {
+	return old.Definition != sr.Definition ||
+		old.GroupToken != sr.GroupToken ||
+		old.GroupVersion != sr.GroupVersion
 }
 
 // id is the rule's compiled id, or "" when there is nothing to file (a nil compiled rule).

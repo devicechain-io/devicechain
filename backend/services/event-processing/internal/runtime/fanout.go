@@ -18,12 +18,49 @@ type PlanResult struct {
 	// carries). Empty when the event matches no in-scope rule or carries no metric any rule
 	// gates on.
 	Events []core.Event
+	// Descopes are the (rule, series) pairs whose GROUP-SCOPED rule the event is OUT of scope
+	// for (ADR-062 S4 membership-flip): the event's resolved entity is not a member of the
+	// rule's pinned group@version, so instead of feeding a sample the runtime feeds a descope
+	// to the engine (Engine.Descope) — resolving any raised alarm and tearing down the series'
+	// keyed state so nothing fires spuriously for a series the rule no longer covers. Computed
+	// once per event (memberships are per-event, not per-sample).
+	Descopes []DescopeOp
 	// EvalErrors counts leaf-predicate evaluation failures (e.g. a raw-CEL leaf tripping the
 	// runtime cost limit, or referencing a metric it did not presence-guard). The offending
 	// rule contributes no event for that sample: the event is SKIPPED, not fed a false leaf —
 	// which for a Duration rule is the safe outcome (a false would cancel the hold; a skip
 	// preserves it). The count is surfaced for metrics rather than failing the whole message.
 	EvalErrors int
+}
+
+// DescopeOp names a (rule, series) whose keyed state the engine must drop + resolve because the
+// series left the rule's scoped group (ADR-062 S4). At is the event's clamped time — the moment
+// the descope takes effect (and the stale-guarded falling-edge time of any resolve it emits).
+type DescopeOp struct {
+	RuleID string
+	Series string
+	At     time.Time
+}
+
+// scopeMemberKey is the set-membership key for a stamped group@version — the exact pair the
+// resolver denormalized onto the event and a scoped rule pins.
+type scopeMemberKey struct {
+	token   string
+	version int32
+}
+
+// scopeMembershipSet projects an event's stamped ScopeMemberships into a set for O(1) rule
+// scope tests. Empty for the pay-nothing common case (a tenant not using rule scoping, or a
+// device in no rule-scoped group).
+func scopeMembershipSet(ev *dmmodel.ResolvedEvent) map[scopeMemberKey]struct{} {
+	if len(ev.ScopeMemberships) == 0 {
+		return nil
+	}
+	set := make(map[scopeMemberKey]struct{}, len(ev.ScopeMemberships))
+	for _, m := range ev.ScopeMemberships {
+		set[scopeMemberKey{token: m.GroupToken, version: m.Version}] = struct{}{}
+	}
+	return set
 }
 
 // Plan selects the rules a resolved event feeds and builds one core Event per applicable rule
@@ -53,11 +90,43 @@ type PlanResult struct {
 // for every sample (attributes are device-, not sample-scoped); nil when the device has none, which
 // the presence-guarded comparison reads as a clean non-match. The predicate never mutates it.
 func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEvent, occurred time.Time, attr map[string]float64) PlanResult {
-	scoped := reg.RulesFor(tenant, ev.ProfileVersionToken)
-	if len(scoped) == 0 {
+	profileRules := reg.RulesFor(tenant, ev.ProfileVersionToken)
+	if len(profileRules) == 0 {
 		return PlanResult{}
 	}
 	res := PlanResult{}
+
+	// ADR-062 S4 group scope, decided ONCE per event (memberships are per-event, not
+	// per-sample): partition the profile's rules into those the event is IN scope for (fed
+	// normally below) and those a GROUP-SCOPED rule is OUT of scope for (fed a descope, so the
+	// series' state is dropped + any alarm resolved). An unscoped rule (empty GroupToken) is
+	// always in scope — the profile-wide default. The membership set is empty for the
+	// pay-nothing common case, so an unscoped-only profile skips this entirely.
+	members := scopeMembershipSet(ev)
+	scoped := profileRules
+	if hasGroupScopedRule(profileRules) {
+		scoped = make([]*ScopedRule, 0, len(profileRules))
+		for _, sr := range profileRules {
+			if sr.GroupToken == "" {
+				scoped = append(scoped, sr)
+				continue
+			}
+			if _, ok := members[scopeMemberKey{token: sr.GroupToken, version: sr.GroupVersion}]; ok {
+				scoped = append(scoped, sr)
+				continue
+			}
+			// Out of scope: drop this series' state for the rule + resolve if raised.
+			res.Descopes = append(res.Descopes, DescopeOp{
+				RuleID: sr.Compiled.ID, Series: ev.SourceDeviceToken, At: occurred,
+			})
+		}
+	}
+	// Only the descope path had work (every applicable rule was out of scope): skip building
+	// inputs entirely — there is nothing to feed.
+	if len(scoped) == 0 {
+		return res
+	}
+
 	inputs := BuildInputs(ev, occurred)
 	for i := range inputs {
 		inputs[i].Attr = attr
@@ -121,6 +190,18 @@ func (res *PlanResult) fanCorrelation(seq uint64, cr *rules.CompiledRule, ev *dm
 		}
 		res.Events = append(res.Events, e)
 	}
+}
+
+// hasGroupScopedRule reports whether any rule in the set carries a group scope — the cheap gate
+// that keeps the per-event scope partition (and its membership-set build) off the hot path for
+// the overwhelmingly common all-unscoped profile.
+func hasGroupScopedRule(rules []*ScopedRule) bool {
+	for _, sr := range rules {
+		if sr.GroupToken != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // anyMetricPresent reports whether the sample carries at least one of the given metric keys.
