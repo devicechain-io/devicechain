@@ -13,8 +13,9 @@ import (
 // detectionRuleInput is one rule submitted to the validation gate: its authoring token
 // (for error anchoring) and the opaque rules.Rule JSON to compile.
 type detectionRuleInput struct {
-	Token      string
-	Definition string
+	Token       string
+	Definition  string
+	GroupScoped bool
 }
 
 // ValidateDetectionRules compiles and cost-gates a batch of detection-rule definitions —
@@ -48,6 +49,18 @@ func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct
 			errs = append(errs, newValidationError(i, in.Token, err))
 			continue
 		}
+		// ADR-062 S4: a group scope only applies to an event-driven, device-keyed kind. Reject
+		// it on an absence (timer-driven off the roster) or correlation (anchor-keyed) rule with
+		// an author-facing error at publish — the same refusal the runtime makes fail-closed on
+		// load (CompilePublishedRules), surfaced here so the author sees it instead of the rule
+		// silently not running. device-management forwards the scoped flag (it never parses the
+		// taxonomy); this gate owns the kind check.
+		if in.GroupScoped &&
+			(rule.Type == rules.TypeAbsence || rule.Type == rules.TypeCorrelation) {
+			errs = append(errs, newValidationErrorMsg(i, in.Token,
+				"a group scope is not supported on an "+string(rule.Type)+" rule (only event-driven, device-keyed kinds can be group-scoped)"))
+			continue
+		}
 		// The stored blob carries no runtime id (that is composed at fact-emit time), so
 		// force the token as the compile-time id: Compile requires a non-empty id and uses
 		// it only to anchor its error messages, so this yields token-named errors without
@@ -64,7 +77,13 @@ func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct
 
 // newValidationError builds a rejection resolver anchored to the offending rule.
 func newValidationError(index int, token string, err error) *DetectionRuleValidationErrorResolver {
-	return &DetectionRuleValidationErrorResolver{index: int32(index), token: token, message: err.Error()}
+	return newValidationErrorMsg(index, token, err.Error())
+}
+
+// newValidationErrorMsg builds a rejection resolver from a ready message (a rejection that is
+// not a compile error — e.g. an unsupported group scope, ADR-062 S4).
+func newValidationErrorMsg(index int, token, message string) *DetectionRuleValidationErrorResolver {
+	return &DetectionRuleValidationErrorResolver{index: int32(index), token: token, message: message}
 }
 
 // DetectionRuleValidationResultResolver resolves the batch outcome. It carries only the

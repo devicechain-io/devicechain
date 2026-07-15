@@ -247,6 +247,12 @@ type DetectionRule implements Model & TokenReference & NamedEntity & MetadataEnt
     authoringGraph: String
     enabled: Boolean!
     metadata: String
+    # The optional group scope (ADR-062 S4): the published dynamic entity-group version whose
+    # members the rule fires for. Both null for an unscoped (profile-wide) rule; set together
+    # for a scoped rule (the engine fires it only for events whose resolved entity is a member
+    # of entityGroupToken@entityGroupVersion).
+    entityGroupToken: String
+    entityGroupVersion: Int
 }
 
 # Data required to create a detection rule. definition is the rules.Rule JSON document as a
@@ -263,6 +269,11 @@ input DetectionRuleCreateRequest {
     authoringGraph: String
     enabled: Boolean!
     metadata: String
+    # The optional group scope (ADR-062 S4): the published dynamic entity-group version whose
+    # members the rule fires for. Omit both for an unscoped rule; set both together for a scoped
+    # rule. Validated at save (must be a published dynamic group@version).
+    entityGroupToken: String
+    entityGroupVersion: Int
 }
 
 # Criteria used when searching for detection rules.

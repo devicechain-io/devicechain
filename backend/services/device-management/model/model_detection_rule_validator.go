@@ -6,10 +6,16 @@ package model
 import "context"
 
 // RuleToValidate is one draft detection rule handed to the validation gate: its token
-// (for error anchoring) and its opaque rules.Rule JSON definition.
+// (for error anchoring), its opaque rules.Rule JSON definition, and whether it carries a
+// group scope (ADR-062 S4). GroupScoped lets event-processing — which owns the rule
+// taxonomy and can see the kind — reject a scope on a kind it cannot apply to (absence /
+// correlation) with an author-facing error at publish, rather than the runtime silently
+// skipping the rule. device-management cannot make that check itself (it never parses the
+// definition), so it forwards the scoped flag and lets the single-homed validator decide.
 type RuleToValidate struct {
-	Token      string
-	Definition string
+	Token       string
+	Definition  string
+	GroupScoped bool
 }
 
 // DetectionRuleValidationFailure names one rule event-processing rejected at compile,

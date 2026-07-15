@@ -235,6 +235,11 @@ input DetectionRuleInput {
     token: String!
     # The opaque rules.Rule JSON definition to compile.
     definition: String!
+    # Whether the rule carries a group scope (ADR-062 S4). device-management forwards this so
+    # the gate — which parses the taxonomy — can reject a scope on a kind it cannot apply to
+    # (absence / correlation) with an author-facing error, rather than the runtime silently
+    # skipping the rule. Defaults to false (unscoped) when omitted.
+    groupScoped: Boolean = false
 }
 
 # The outcome of validating a batch of detection-rule definitions.

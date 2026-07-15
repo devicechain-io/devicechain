@@ -135,7 +135,12 @@ func enabledRulesToValidate(rules []*DetectionRule) []RuleToValidate {
 		if !dr.Enabled {
 			continue
 		}
-		out = append(out, RuleToValidate{Token: dr.Token, Definition: string(dr.Definition)})
+		out = append(out, RuleToValidate{
+			Token:      dr.Token,
+			Definition: string(dr.Definition),
+			// A rule is group-scoped iff it pins a group token (ADR-062 S4).
+			GroupScoped: dr.EntityGroupToken != nil && *dr.EntityGroupToken != "",
+		})
 	}
 	return out
 }
