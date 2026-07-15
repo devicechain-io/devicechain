@@ -107,4 +107,13 @@ module "monitoring" {
   grafana_root_url            = var.monitoring_grafana_root_url
   grafana_ingress_host        = var.monitoring_grafana_ingress_host
   ingress_class               = var.ingress_class
+
+  # When SSO is on, the monitoring stack ships a /grafana Ingress, which the
+  # ingress-nginx admission webhook must validate. Both installs otherwise run in
+  # parallel, so the webhook can still be unreachable (connection refused) when the
+  # Grafana ingress is created. Serialize monitoring after ingress-nginx — whose
+  # helm_release waits for the controller (and thus its admission endpoint) to be
+  # ready. The app services avoid this naturally: their ingresses are created in the
+  # later helm step, after this apply completes.
+  depends_on = [module.ingress_nginx]
 }
