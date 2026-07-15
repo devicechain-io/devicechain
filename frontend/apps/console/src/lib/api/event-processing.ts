@@ -34,9 +34,15 @@ export interface RuleValidation {
 // gate and collapses the result to one diagnostic. `token` anchors the compiler's error
 // messages; the definition is the opaque rules.Rule JSON string the form emits. It is pure
 // validation (no state is read or written), so it is safe to call repeatedly / debounced.
-export async function validateDetectionRule(token: string, definition: string): Promise<RuleValidation> {
+export async function validateDetectionRule(
+  token: string,
+  definition: string,
+  groupScoped = false,
+): Promise<RuleValidation> {
   const data = await gql('event-processing', VALIDATE_DETECTION_RULES, {
-    rules: [{ token, definition }],
+    // groupScoped lets the gate reject a scope on an unsupported kind (absence/correlation)
+    // inline (ADR-062 S4), so the author sees it in the editor, not only at publish.
+    rules: [{ token, definition, groupScoped }],
   });
   const result = data.validateDetectionRules;
   if (result.valid) return { ok: true, message: null };

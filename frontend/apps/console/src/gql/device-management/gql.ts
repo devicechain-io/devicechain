@@ -88,7 +88,9 @@ type Documents = {
     "\n  mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {\n    createCommandDefinition(request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.CreateCommandDefinitionDocument,
     "\n  mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {\n    updateCommandDefinition(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.UpdateCommandDefinitionDocument,
     "\n  mutation DeleteCommandDefinition($token: String!) {\n    deleteCommandDefinition(token: $token)\n  }\n": typeof types.DeleteCommandDefinitionDocument,
-    "\n  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {\n    detectionRules(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        definition\n        authoringGraph\n        enabled\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DetectionRulesDocument,
+    "\n  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {\n    detectionRules(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        definition\n        authoringGraph\n        enabled\n        metadata\n        entityGroupToken\n        entityGroupVersion\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DetectionRulesDocument,
+    "\n  query ScopeGroups {\n    entityGroups(criteria: { pageNumber: 1, pageSize: 500, membershipMode: \"dynamic\" }) {\n      results {\n        token\n        name\n        memberType\n        activeVersion\n      }\n    }\n  }\n": typeof types.ScopeGroupsDocument,
+    "\n  query EntityGroupVersions($token: String!) {\n    entityGroupVersions(token: $token) {\n      version\n      selector\n      memberType\n      label\n    }\n  }\n": typeof types.EntityGroupVersionsDocument,
     "\n  mutation CreateDetectionRule($request: DetectionRuleCreateRequest!) {\n    createDetectionRule(request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.CreateDetectionRuleDocument,
     "\n  mutation UpdateDetectionRule($token: String!, $request: DetectionRuleCreateRequest!) {\n    updateDetectionRule(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": typeof types.UpdateDetectionRuleDocument,
     "\n  mutation DeleteDetectionRule($token: String!) {\n    deleteDetectionRule(token: $token)\n  }\n": typeof types.DeleteDetectionRuleDocument,
@@ -173,7 +175,9 @@ const documents: Documents = {
     "\n  mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {\n    createCommandDefinition(request: $request) {\n      id\n      token\n    }\n  }\n": types.CreateCommandDefinitionDocument,
     "\n  mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {\n    updateCommandDefinition(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": types.UpdateCommandDefinitionDocument,
     "\n  mutation DeleteCommandDefinition($token: String!) {\n    deleteCommandDefinition(token: $token)\n  }\n": types.DeleteCommandDefinitionDocument,
-    "\n  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {\n    detectionRules(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        definition\n        authoringGraph\n        enabled\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DetectionRulesDocument,
+    "\n  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {\n    detectionRules(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        definition\n        authoringGraph\n        enabled\n        metadata\n        entityGroupToken\n        entityGroupVersion\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DetectionRulesDocument,
+    "\n  query ScopeGroups {\n    entityGroups(criteria: { pageNumber: 1, pageSize: 500, membershipMode: \"dynamic\" }) {\n      results {\n        token\n        name\n        memberType\n        activeVersion\n      }\n    }\n  }\n": types.ScopeGroupsDocument,
+    "\n  query EntityGroupVersions($token: String!) {\n    entityGroupVersions(token: $token) {\n      version\n      selector\n      memberType\n      label\n    }\n  }\n": types.EntityGroupVersionsDocument,
     "\n  mutation CreateDetectionRule($request: DetectionRuleCreateRequest!) {\n    createDetectionRule(request: $request) {\n      id\n      token\n    }\n  }\n": types.CreateDetectionRuleDocument,
     "\n  mutation UpdateDetectionRule($token: String!, $request: DetectionRuleCreateRequest!) {\n    updateDetectionRule(token: $token, request: $request) {\n      id\n      token\n    }\n  }\n": types.UpdateDetectionRuleDocument,
     "\n  mutation DeleteDetectionRule($token: String!) {\n    deleteDetectionRule(token: $token)\n  }\n": types.DeleteDetectionRuleDocument,
@@ -480,7 +484,15 @@ export function graphql(source: "\n  mutation DeleteCommandDefinition($token: St
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {\n    detectionRules(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        definition\n        authoringGraph\n        enabled\n        metadata\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').DetectionRulesDocument;
+export function graphql(source: "\n  query DetectionRules($criteria: DetectionRuleSearchCriteria!) {\n    detectionRules(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        definition\n        authoringGraph\n        enabled\n        metadata\n        entityGroupToken\n        entityGroupVersion\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').DetectionRulesDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query ScopeGroups {\n    entityGroups(criteria: { pageNumber: 1, pageSize: 500, membershipMode: \"dynamic\" }) {\n      results {\n        token\n        name\n        memberType\n        activeVersion\n      }\n    }\n  }\n"): typeof import('./graphql').ScopeGroupsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query EntityGroupVersions($token: String!) {\n    entityGroupVersions(token: $token) {\n      version\n      selector\n      memberType\n      label\n    }\n  }\n"): typeof import('./graphql').EntityGroupVersionsDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

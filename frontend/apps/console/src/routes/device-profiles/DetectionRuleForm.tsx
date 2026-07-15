@@ -32,9 +32,14 @@ import { Textarea, errMessage } from '@/routes/common';
 import {
   createDetectionRule,
   updateDetectionRule,
+  listScopeGroups,
+  listEntityGroupVersions,
   type DetectionRule,
   type DetectionRuleCreateRequest,
+  type ScopeGroup,
+  type ScopeGroupVersion,
 } from '@/lib/api/device-management';
+import { previewSelector } from '@/lib/api/browse';
 import { validateDetectionRule } from '@/lib/api/event-processing';
 import { sameLogicalRule } from './rule-equal';
 
@@ -293,6 +298,16 @@ export function DetectionRuleForm({
   const [description, setDescription] = useState(entity?.description ?? initial?.description ?? '');
   const [severity, setSeverity] = useState(initial?.severity ?? '');
   const [enabled, setEnabled] = useState(entity?.enabled ?? true);
+  // ADR-062 S4 group scope: a rule may be pinned to a published dynamic entity-group version,
+  // so it fires only for events whose resolved entity is a member of that group@version.
+  const [scoped, setScoped] = useState<boolean>(!!entity?.entityGroupToken);
+  const [scopeGroupToken, setScopeGroupToken] = useState<string>(entity?.entityGroupToken ?? '');
+  const [scopeGroupVersion, setScopeGroupVersion] = useState<number | null>(entity?.entityGroupVersion ?? null);
+  const [scopeGroups, setScopeGroups] = useState<ScopeGroup[]>([]);
+  const [scopeVersions, setScopeVersions] = useState<ScopeGroupVersion[]>([]);
+  const [scopeCount, setScopeCount] = useState<
+    { status: 'idle' | 'checking' | 'ok' | 'error'; total?: number; message?: string }
+  >({ status: 'idle' });
   const [ruleType, setRuleType] = useState<RuleType>(initial?.type ?? 'threshold');
 
   // Condition.
@@ -426,7 +441,9 @@ export function DetectionRuleForm({
         // "Checking…" up until the browser's own network timeout. Racing a 10s timeout clears
         // the advisory feedback instead (Fable LOW); the stray loser timer is a harmless no-op.
         const res = await Promise.race([
-          validateDetectionRule(validateToken, definition),
+          // Pass the scoped flag so the gate rejects a scope on an unsupported kind
+          // (absence/correlation) inline, not only at publish (ADR-062 S4).
+          validateDetectionRule(validateToken, definition, scoped),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('validate timeout')), 10_000)),
         ]);
         if (cancelled) return;
@@ -439,7 +456,77 @@ export function DetectionRuleForm({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [definition, validateToken]);
+  }, [definition, validateToken, scoped]);
+
+  // Load the dynamic groups a rule can scope to, the first time scoping is turned on.
+  useEffect(() => {
+    if (!scoped || scopeGroups.length > 0) return;
+    let cancelled = false;
+    listScopeGroups()
+      .then((gs) => {
+        if (!cancelled) setScopeGroups(gs);
+      })
+      .catch(() => {
+        /* the picker just stays empty; the field is optional */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scoped, scopeGroups.length]);
+
+  // Load the selected group's published versions; default to the newest when none is chosen.
+  useEffect(() => {
+    if (!scopeGroupToken) {
+      setScopeVersions([]);
+      return;
+    }
+    let cancelled = false;
+    listEntityGroupVersions(scopeGroupToken)
+      .then((vs) => {
+        if (cancelled) return;
+        setScopeVersions(vs);
+        setScopeGroupVersion((cur) =>
+          cur != null && vs.some((v) => v.version === cur) ? cur : (vs[0]?.version ?? null),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setScopeVersions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scopeGroupToken]);
+
+  // Live "matches N entities" preview for the PINNED version's frozen selector (the exact set
+  // the scoped rule will target), mirroring the browse screen's previewSelector count.
+  useEffect(() => {
+    if (!scoped || !scopeGroupToken || scopeGroupVersion == null) {
+      setScopeCount({ status: 'idle' });
+      return;
+    }
+    const version = scopeVersions.find((v) => v.version === scopeGroupVersion);
+    if (!version) {
+      setScopeCount({ status: 'idle' });
+      return;
+    }
+    let cancelled = false;
+    setScopeCount({ status: 'checking' });
+    previewSelector(version.memberType, version.selector, 1)
+      .then((preview) => {
+        if (cancelled) return;
+        if (!preview.valid || !preview.members) {
+          setScopeCount({ status: 'error', message: preview.error ?? 'selector invalid' });
+          return;
+        }
+        setScopeCount({ status: 'ok', total: preview.members.pagination.totalRecords ?? 0 });
+      })
+      .catch(() => {
+        if (!cancelled) setScopeCount({ status: 'idle' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scoped, scopeGroupToken, scopeGroupVersion, scopeVersions]);
 
   const submit = async () => {
     if (definition == null) return; // guarded by the disabled button; satisfies the type narrowing
@@ -462,6 +549,9 @@ export function DetectionRuleForm({
         authoringGraph: keepGraph ? entity!.authoringGraph : undefined,
         enabled,
         metadata: entity?.metadata ?? undefined,
+        // ADR-062 S4 group scope — sent together or not at all; cleared when un-scoped.
+        entityGroupToken: scoped && scopeGroupToken ? scopeGroupToken : undefined,
+        entityGroupVersion: scoped && scopeGroupToken && scopeGroupVersion != null ? scopeGroupVersion : undefined,
       };
       if (editing) {
         await updateDetectionRule(entity.token, request);
@@ -479,6 +569,19 @@ export function DetectionRuleForm({
 
   const showCount = ruleType === 'repeating' || ruleType === 'correlation' || (ruleType === 'aggregate' && windowMode === 'count');
   const aggNeedsValueMetric = ruleType === 'aggregate' && aggFunc !== 'count';
+
+  // ADR-062 S4 scope picker options + the unsupported-kind guard (absence is timer-driven off
+  // the roster; correlation is anchor-keyed — a group scope cannot apply to either, and the
+  // publish gate rejects it).
+  const scopeGroupOptions: ComboboxOption[] = scopeGroups.map((g) => ({
+    value: g.token,
+    label: `${g.name ?? g.token} · ${g.memberType}`,
+  }));
+  const scopeVersionOptions: ComboboxOption[] = scopeVersions.map((v) => ({
+    value: String(v.version),
+    label: v.label ? `v${v.version} — ${v.label}` : `v${v.version}`,
+  }));
+  const scopeUnsupportedKind = scoped && (ruleType === 'absence' || ruleType === 'correlation');
 
   return (
     <div className="space-y-4">
@@ -552,6 +655,75 @@ export function DetectionRuleForm({
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="h-4 w-4" />
         Enabled — a disabled rule is kept with the profile but not run.
       </label>
+
+      {/* ADR-062 S4 group scope: pin the rule to a published dynamic entity-group version so it
+          fires only for member entities (e.g. an area group for "devices in an arid area"). */}
+      <div className="space-y-3 rounded-md border border-border/60 p-3">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={scoped}
+            onChange={(e) => setScoped(e.target.checked)}
+            className="h-4 w-4"
+          />
+          Scope to an entity group — fire this rule only for members of a group version.
+        </label>
+        {scoped && (
+          <div className="space-y-3 pl-6">
+            <FormField
+              label="Group"
+              htmlFor="dr-scope-group"
+              description="A dynamic entity group. Members are resolved from the group version's frozen selector."
+            >
+              <Combobox
+                id="dr-scope-group"
+                value={scopeGroupToken}
+                onChange={(v) => {
+                  setScopeGroupToken(v);
+                  setScopeGroupVersion(null);
+                }}
+                options={scopeGroupOptions}
+                placeholder={scopeGroups.length === 0 ? 'No dynamic groups yet' : 'Select a group'}
+              />
+            </FormField>
+            {scopeGroupToken && (
+              <FormField
+                label="Version"
+                htmlFor="dr-scope-version"
+                description="The rule pins a specific published version, so its target set never drifts under a later group edit."
+              >
+                <Combobox
+                  id="dr-scope-version"
+                  value={scopeGroupVersion != null ? String(scopeGroupVersion) : ''}
+                  onChange={(v) => setScopeGroupVersion(v ? Number(v) : null)}
+                  options={scopeVersionOptions}
+                  allowClear={false}
+                  placeholder={scopeVersions.length === 0 ? 'Group has no published version' : 'Select a version'}
+                />
+              </FormField>
+            )}
+            {scopeGroupToken && scopeVersions.length === 0 && (
+              <p className="text-sm text-amber-700 dark:text-amber-400">
+                This group has no published version yet — publish the group before scoping a rule to it.
+              </p>
+            )}
+            {scopeUnsupportedKind && (
+              <p className="text-sm text-amber-700 dark:text-amber-400">
+                A group scope is not supported on a {ruleType} rule — publishing will be refused. Absence and
+                correlation rules cannot be group-scoped.
+              </p>
+            )}
+            {scopeGroupToken && scopeGroupVersion != null && !scopeUnsupportedKind && (
+              <p className="text-sm text-muted-foreground" aria-live="polite">
+                {scopeCount.status === 'checking' && 'Counting members…'}
+                {scopeCount.status === 'ok' &&
+                  `Currently matches ${scopeCount.total} ${scopeCount.total === 1 ? 'entity' : 'entities'}.`}
+                {scopeCount.status === 'error' && `Selector preview unavailable: ${scopeCount.message}`}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Condition leaf (structured / CEL / none), hidden for absence. */}
       <ConditionEditor
