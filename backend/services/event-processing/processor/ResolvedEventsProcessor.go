@@ -770,7 +770,7 @@ func (rp *ResolvedEventsProcessor) reconcileRegistry(ctx context.Context) error 
 		// A reused profile token can re-mint an existing id with a DIFFERENT body; GC the stale keyed
 		// state before re-installing so a hold/accumulator is never grafted onto a rule that changed
 		// meaning (the same comparison applyRuleUpdate makes on the live path).
-		if old, ok := rp.registry.Lookup(sr.Compiled.ID); ok && old.Definition != sr.Definition {
+		if old, ok := rp.registry.Lookup(sr.Compiled.ID); ok && sr.DiffersFrom(old) {
 			rp.engine.RemoveRule(sr.Compiled.ID)
 			changed++
 		}
@@ -1384,7 +1384,7 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 		// stale rule's keyed state before installing the replacement, so a Duration hold or a
 		// window accumulator is never grafted onto a rule that now means something else. An
 		// unchanged redelivery leaves state intact (the whole point of preserve-on-reupsert).
-		if old, ok := rp.registry.Lookup(sr.Compiled.ID); ok && old.Definition != sr.Definition {
+		if old, ok := rp.registry.Lookup(sr.Compiled.ID); ok && sr.DiffersFrom(old) {
 			rp.engine.RemoveRule(sr.Compiled.ID)
 			gcd = true
 		}
