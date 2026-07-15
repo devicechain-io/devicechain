@@ -3,7 +3,7 @@
 
 import { Link, useLocation } from 'react-router-dom';
 import { Building2, ScrollText, Settings, ShieldCheck, Users } from 'lucide-react';
-import { Logomark } from '@/components/brand/Logo';
+import { Logomark, LogoHorizontal } from '@/components/brand/Logo';
 import {
   Sidebar,
   SidebarContent,
@@ -34,18 +34,23 @@ export function AdminSidebar() {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader>
+      <SidebarHeader className="pt-4">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild tooltip="DeviceChain Admin">
+            <SidebarMenuButton
+              size="lg"
+              asChild
+              tooltip="DeviceChain Admin"
+              className="justify-center"
+            >
               <Link to="/admin">
-                <div className="flex aspect-square size-8 items-center justify-center">
-                  <Logomark className="size-7" />
-                </div>
-                <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">
-                    Device<span className="text-primary">Chain</span>
-                  </span>
+                {/* Collapsed icon rail: cube mark only. */}
+                <Logomark className="hidden size-7 shrink-0 group-data-[collapsible=icon]:block" />
+                {/* Expanded: the DeviceChain lockup (same as the tenant console), with
+                    the Admin Console label beneath. Admin is instance-level, so there is
+                    no tenant branding here — always the DeviceChain wordmark. */}
+                <div className="flex flex-col items-center gap-1 group-data-[collapsible=icon]:hidden">
+                  <LogoHorizontal deviceColor="currentColor" className="h-[17px] w-auto" />
                   <span className="truncate text-xs text-muted-foreground">Admin Console</span>
                 </div>
               </Link>

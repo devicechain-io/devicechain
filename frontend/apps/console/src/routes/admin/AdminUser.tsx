@@ -3,8 +3,9 @@
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronsUpDown, LogOut, Building2 } from 'lucide-react';
+import { ChevronsUpDown, LineChart, LogOut, Building2 } from 'lucide-react';
 import { useAuth } from '@/auth/AuthProvider';
+import { useMetricsAvailable } from '@/lib/hooks/use-metrics-available';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { decodeToken } from '@devicechain/client';
 import { useToast } from '@/components/ui/toast';
@@ -42,6 +43,12 @@ export function AdminUser() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
+  // Metrics (Grafana) is instance-level + cross-tenant, so it belongs in the
+  // superuser-only admin console — and is the ONLY account menu a membership-less
+  // operator ever sees (they cannot enter a tenant). The whole /admin area is already
+  // superuser-gated (AdminProtectedRoute), so probe unconditionally; the hook still
+  // hides the link unless Grafana SSO is actually wired.
+  const metricsAvailable = useMetricsAvailable();
 
   const email = identityToken ? (decodeToken(identityToken)?.username ?? 'Administrator') : 'Administrator';
 
@@ -99,6 +106,18 @@ export function AdminUser() {
                   {m.tenant}
                 </DropdownMenuItem>
               ))
+            )}
+
+            {metricsAvailable && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild className="cursor-pointer">
+                  <a href="/grafana" target="_blank" rel="noopener noreferrer">
+                    <LineChart size={16} />
+                    Metrics
+                  </a>
+                </DropdownMenuItem>
+              </>
             )}
 
             <DropdownMenuSeparator />

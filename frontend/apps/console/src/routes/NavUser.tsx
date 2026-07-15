@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
-import { ChevronsUpDown, LogOut, ShieldCheck, UserPen } from 'lucide-react';
+import { ChevronsUpDown, LineChart, LogOut, ShieldCheck, UserPen } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthProvider';
 import { useCurrentUser } from '@/auth/CurrentUserProvider';
+import { useMetricsAvailable } from '@/lib/hooks/use-metrics-available';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { FormDrawer } from '@/components/registry';
 import { ProfileForm } from '@/routes/ProfileForm';
@@ -40,6 +41,9 @@ export function NavUser() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
+  // Metrics (Grafana) is instance-level + cross-tenant, so the link is operator-only.
+  // Only probe (and only ever show it) for an authenticated superuser.
+  const metricsAvailable = useMetricsAvailable(superuser && isIdentityAuthenticated);
 
   if (!claims) return null;
 
@@ -97,6 +101,14 @@ export function NavUser() {
                   <ShieldCheck size={16} />
                   Admin console
                 </DropdownMenuItem>
+                {metricsAvailable && (
+                  <DropdownMenuItem asChild className="cursor-pointer">
+                    <a href="/grafana" target="_blank" rel="noopener noreferrer">
+                      <LineChart size={16} />
+                      Metrics
+                    </a>
+                  </DropdownMenuItem>
+                )}
               </>
             )}
 
