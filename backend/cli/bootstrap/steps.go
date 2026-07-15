@@ -325,7 +325,11 @@ func stepInfraApply(ctx context.Context, st *State) error {
 	if st.DryRun {
 		doing("applying infrastructure stack (OpenTofu)")
 		fmt.Println()
-		wouldDo("tofu init+apply deploy/opentofu (NATS, Postgres, Timescale, ingress, cert-manager)")
+		monitoring := "monitoring (Prometheus/Grafana)"
+		if st.NoMonitoring {
+			monitoring = "monitoring SKIPPED (--no-monitoring)"
+		}
+		wouldDo("tofu init+apply deploy/opentofu (NATS, Postgres, Timescale, ingress, cert-manager, " + monitoring + ")")
 		return nil
 	}
 	return runStreamed("applying infrastructure stack (OpenTofu)", "infrastructure stack",
@@ -464,6 +468,13 @@ func stepReport(ctx context.Context, st *State) error {
 			color.GreenString(st.Values["superuserEmail"]),
 			color.GreenString(st.Values["superuserPassword"]),
 			color.YellowString("(sign in to the admin console to create your first tenant — change this password immediately)"))
+	}
+	if svc := st.Values["grafanaService"]; svc != "" {
+		ns := st.Values["grafanaNamespace"]
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Grafana:"),
+			color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/  (admin / devicechain)", ns, svc))
+		fmt.Printf("           %s\n", color.YellowString("dev-grade default password — override monitoring_grafana_admin_password, or wait for the OIDC-via-user-management follow-up (ADR-047)"))
 	}
 	if !st.DryRun {
 		host := st.Values["ingressHost"]

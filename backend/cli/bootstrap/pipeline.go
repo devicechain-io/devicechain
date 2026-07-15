@@ -49,7 +49,10 @@ type State struct {
 	// plain HTTP instead of a self-signed cert. See Options for the UX rationale.
 	IngressHost string
 	NoTLS       bool
-	Values      map[string]string
+	// NoMonitoring skips the kube-prometheus-stack install in the infra apply
+	// (default-on, like Postgres/Timescale). See Options for the rationale.
+	NoMonitoring bool
+	Values       map[string]string
 }
 
 // Step is a single named unit of bootstrap work.

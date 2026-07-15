@@ -211,3 +211,54 @@ variable "timescale_storage_class" {
   type        = string
   default     = ""
 }
+
+# --- Observability (kube-prometheus-stack — Prometheus/Grafana/Alertmanager) -----
+
+variable "enable_monitoring" {
+  description = "Install the kube-prometheus-stack observability stack (Prometheus Operator + Prometheus + Grafana + Alertmanager). Default-on like Postgres/Timescale; set false if the cluster already has the Prometheus Operator, or to skip metrics collection entirely."
+  type        = bool
+  default     = true
+}
+
+variable "monitoring_namespace" {
+  description = "Namespace for the monitoring stack."
+  type        = string
+  default     = "monitoring"
+}
+
+variable "monitoring_chart_version" {
+  description = "kube-prometheus-stack chart version. Pinned by default — this chart's Operator CRDs are installed once and never upgraded by Helm, so an unpinned 'latest' drifting across bootstraps skews the operator against install-day CRDs. Bump deliberately."
+  type        = string
+  default     = "65.1.1"
+}
+
+variable "monitoring_slim" {
+  description = "Reduce the footprint for a local/kind cluster: Prometheus keeps its TSDB on emptyDir (no PVC) and requests fewer resources. The bring-up sets this true on a local context."
+  type        = bool
+  default     = false
+}
+
+variable "monitoring_grafana_admin_password" {
+  description = "Grafana admin password. Native admin auth for now; OIDC via user-management (ADR-047) is a follow-up. Override for any non-local deploy."
+  type        = string
+  default     = "devicechain"
+  sensitive   = true
+}
+
+variable "monitoring_prometheus_retention" {
+  description = "How long Prometheus retains samples (e.g. 15d). Lower it for a slim/local cluster on emptyDir."
+  type        = string
+  default     = "15d"
+}
+
+variable "monitoring_prometheus_storage" {
+  description = "PVC size for the Prometheus TSDB when NOT slim. Ignored in slim mode (emptyDir)."
+  type        = string
+  default     = "20Gi"
+}
+
+variable "monitoring_storage_class" {
+  description = "StorageClass for the Prometheus PVC; empty uses the cluster default. Ignored in slim mode."
+  type        = string
+  default     = ""
+}

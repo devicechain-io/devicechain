@@ -79,3 +79,20 @@ module "cert_manager" {
   namespace     = var.cert_manager_namespace
   chart_version = var.cert_manager_chart_version
 }
+
+# Observability — kube-prometheus-stack (Prometheus Operator + Prometheus +
+# Grafana + Alertmanager). Installs the ServiceMonitor/PrometheusRule CRDs the
+# instance chart's metrics.enabled rendering depends on, ahead of the Helm step.
+# Default-on (like Postgres/Timescale); set enable_monitoring=false to skip.
+module "monitoring" {
+  source = "./modules/monitoring"
+  count  = var.enable_monitoring ? 1 : 0
+
+  namespace              = var.monitoring_namespace
+  chart_version          = var.monitoring_chart_version
+  slim                   = var.monitoring_slim
+  grafana_admin_password = var.monitoring_grafana_admin_password
+  prometheus_retention   = var.monitoring_prometheus_retention
+  prometheus_storage     = var.monitoring_prometheus_storage
+  storage_class          = var.monitoring_storage_class
+}

@@ -50,3 +50,13 @@ output "cert_manager_namespace" {
   description = "Namespace cert-manager was installed into (null if not installed here)."
   value       = var.enable_cert_manager ? module.cert_manager[0].namespace : null
 }
+
+output "grafana_namespace" {
+  description = "Namespace the monitoring stack (Grafana) was installed into (null if not installed here)."
+  value       = var.enable_monitoring ? module.monitoring[0].namespace : null
+}
+
+output "grafana_service" {
+  description = "Grafana ClusterIP Service name (null if monitoring not installed here). The bring-up prints a port-forward hint to it."
+  value       = var.enable_monitoring ? module.monitoring[0].grafana_service : null
+}

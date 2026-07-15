@@ -48,9 +48,19 @@ func applyInfra(ctx context.Context, st *State) error {
 
 	opts := []tfexec.ApplyOption{tfexec.Var("kubeconfig_context=" + st.KubeContext)}
 	// On a kind/minikube node, ingress-nginx must bind the node's 80/443 via
-	// hostPort; a LoadBalancer stays <pending> and times out the apply.
+	// hostPort; a LoadBalancer stays <pending> and times out the apply. The
+	// monitoring stack likewise runs in its slim profile (emptyDir TSDB, smaller
+	// requests) so it fits a local single-node cluster.
 	if looksLocal(st.KubeContext) {
-		opts = append(opts, tfexec.Var("ingress_use_host_port=true"))
+		opts = append(opts,
+			tfexec.Var("ingress_use_host_port=true"),
+			tfexec.Var("monitoring_slim=true"),
+		)
+	}
+	// The observability stack is default-on (like Postgres/Timescale); --no-monitoring
+	// skips it for a cluster that already has the Prometheus Operator.
+	if st.NoMonitoring {
+		opts = append(opts, tfexec.Var("enable_monitoring=false"))
 	}
 	// Broker authentication (ADR-025): enable auth callout on NATS and pass the
 	// minted public issuer + the bcrypt hash of the service password. The plaintext
@@ -96,6 +106,20 @@ func applyInfra(ctx context.Context, st *State) error {
 			return fmt.Errorf("decoding nats_ca output: %w", err)
 		}
 		st.Values["natsCA"] = ca
+	}
+	// Grafana access (when monitoring was installed): stash the namespace/service so
+	// the report step can print a port-forward hint. Null when --no-monitoring.
+	if meta, ok := outputs["grafana_service"]; ok {
+		var svc string
+		if err := json.Unmarshal(meta.Value, &svc); err == nil && svc != "" {
+			st.Values["grafanaService"] = svc
+		}
+	}
+	if meta, ok := outputs["grafana_namespace"]; ok {
+		var ns string
+		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
+			st.Values["grafanaNamespace"] = ns
+		}
 	}
 	return nil
 }
