@@ -82,6 +82,9 @@ type tokenSpec struct {
 	// token is bound to. Empty on every other token type.
 	scope    string
 	audience []string
+	// clientID is the OAuth 2.1 client a scoped token was minted for (ADR-047),
+	// binding the refresh grant to its client. Empty on every other token type.
+	clientID string
 	jti      string
 	ttl      time.Duration
 }
@@ -116,11 +119,11 @@ func (i *Issuer) IssueTenantAccess(tenant, email string, roles, authorities []st
 // the scope's allowance), so the scope cannot be exceeded even for a subject
 // holding "*". This mint does not re-derive the cap — it trusts the caller — so
 // the authorization endpoint is the single place the intersection is applied.
-func (i *Issuer) IssueOAuthAccess(tenant, email string, roles, authorities []string, scope string, audience []string, actingAsSuperuser bool, jti string) (IssuedToken, error) {
+func (i *Issuer) IssueOAuthAccess(tenant, email string, roles, authorities []string, scope string, audience []string, actingAsSuperuser bool, clientID, jti string) (IssuedToken, error) {
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeAccess, tenant: tenant, username: email, email: email,
 		roles: roles, authorities: authorities, actingAsSuperuser: actingAsSuperuser,
-		scope: scope, audience: audience, jti: jti, ttl: i.accessTTL,
+		scope: scope, audience: audience, clientID: clientID, jti: jti, ttl: i.accessTTL,
 	})
 }
 
@@ -128,11 +131,11 @@ func (i *Issuer) IssueOAuthAccess(tenant, email string, roles, authorities []str
 // and audience so a refresh grant re-mints an access token with the same
 // scope/audience binding without re-consulting the authorize step. Like every
 // refresh token its jti is persisted server-side (NATS KV) for revocation.
-func (i *Issuer) IssueOAuthRefresh(tenant, email string, roles, authorities []string, scope string, audience []string, jti string) (IssuedToken, error) {
+func (i *Issuer) IssueOAuthRefresh(tenant, email string, roles, authorities []string, scope string, audience []string, clientID, jti string) (IssuedToken, error) {
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeRefresh, tenant: tenant, username: email, email: email,
 		roles: roles, authorities: authorities,
-		scope: scope, audience: audience, jti: jti, ttl: i.refreshTTL,
+		scope: scope, audience: audience, clientID: clientID, jti: jti, ttl: i.refreshTTL,
 	})
 }
 
@@ -179,6 +182,7 @@ func (i *Issuer) sign(spec tokenSpec) (IssuedToken, error) {
 		Authorities:       spec.authorities,
 		ActingAsSuperuser: spec.actingAsSuperuser,
 		Scope:             spec.scope,
+		ClientId:          spec.clientID,
 		TokenType:         spec.tokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    i.issuer,

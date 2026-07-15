@@ -16,8 +16,10 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -72,12 +74,70 @@ type oauthError struct {
 func (e *oauthError) Error() string { return e.Code + ": " + e.Desc }
 
 // RFC 6749 §5.2 / §4.1.2.1 error constructors used across the token endpoint.
-// (invalid_client is intentionally absent: v1 clients are public and never
-// authenticate at the token endpoint, so no failure maps to it.)
+// invalid_client (401) applies once a client authenticates: a confidential client
+// that fails secret verification, or a public client that presents a secret.
 func errInvalidRequest(desc string) *oauthError { return &oauthError{"invalid_request", desc, 400} }
 func errInvalidGrant(desc string) *oauthError   { return &oauthError{"invalid_grant", desc, 400} }
 func errInvalidScope(desc string) *oauthError   { return &oauthError{"invalid_scope", desc, 400} }
+func errInvalidClient(desc string) *oauthError  { return &oauthError{"invalid_client", desc, 401} }
 func errServer(desc string) *oauthError         { return &oauthError{"server_error", desc, 500} }
+
+// AuthenticateClient enforces token-endpoint client authentication (ADR-047
+// confidential-client fold-in / RFC 6749 §3.2.1). clientID is the client the
+// request identifies (from HTTP Basic or the client_id form field); secret is the
+// presented client secret; presented reports whether ANY secret was supplied.
+//
+//   - No clientID and no secret ⇒ nil: a bare public flow (e.g. a public client's
+//     refresh) authenticates nothing — unchanged from before confidential clients.
+//   - Unknown or disabled client, or a confidential client with a missing/wrong
+//     secret ⇒ invalid_client. A dummy bcrypt compare runs on the unknown-client
+//     path so it costs the same as a wrong-secret path (no client-enumeration
+//     timing oracle, mirroring the login equalizer).
+//   - A public client that nonetheless presents a secret ⇒ invalid_client: it has
+//     no registered secret, so a presented one is a misconfiguration, not ignored.
+//
+// PKCE still runs in the grant regardless — client authentication is defence in
+// depth on top of it, never a replacement.
+func (m *Manager) AuthenticateClient(ctx context.Context, clientID, secret string, presented bool) error {
+	if clientID == "" {
+		if presented {
+			return errInvalidClient("client_secret provided without client_id")
+		}
+		return nil
+	}
+	client, err := m.iam.OAuthClientByClientId(ctx, clientID)
+	if err != nil {
+		_ = bcrypt.CompareHashAndPassword(m.dummyHash, []byte(secret))
+		return errInvalidClient("client authentication failed")
+	}
+	if e := verifyClientAuth(client, secret, presented); e != nil {
+		return e
+	}
+	return nil
+}
+
+// verifyClientAuth is the pure client-authentication decision for an already-loaded
+// client (no I/O), so it is exhaustively unit-testable. A disabled client is always
+// rejected. A confidential client must present a secret that bcrypt-matches its
+// hash; a public client must NOT present a secret (it has none registered).
+func verifyClientAuth(client *iam.OAuthClient, secret string, presented bool) *oauthError {
+	if !client.Enabled {
+		return errInvalidClient("client is disabled")
+	}
+	if client.IsConfidential() {
+		if !presented {
+			return errInvalidClient("client authentication required")
+		}
+		if bcrypt.CompareHashAndPassword([]byte(client.SecretHash), []byte(secret)) != nil {
+			return errInvalidClient("client authentication failed")
+		}
+		return nil
+	}
+	if presented {
+		return errInvalidClient("public client must not present a client_secret")
+	}
+	return nil
+}
 
 // SaveAuthorizationCode stores a freshly issued authorization code (ADR-047). The
 // code string is the KV key; Create (not Put) is used so a key collision fails
@@ -100,7 +160,9 @@ func (m *Manager) SaveAuthorizationCode(code string, rec AuthorizationCode) erro
 // client + redirect_uri + PKCE verifier against what the code was issued for,
 // re-resolves the tenant grant, caps it to the granted scope, and mints an OAuth
 // access + refresh pair. Every failure is a generic invalid_grant (no oracle about
-// which check failed), except a client mismatch (invalid_client).
+// which check failed) — including a client mismatch, which stays invalid_grant so a
+// leaked code gives an attacker no distinguishable "that code is live" signal (the
+// inline comment below explains why it is not invalid_client).
 func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, redirectURI, codeVerifier string) (*OAuthTokens, error) {
 	if m.codesKV == nil {
 		return nil, errServer("authorization-code store not configured")
@@ -136,7 +198,7 @@ func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, r
 		return nil, errInvalidGrant("PKCE verification failed")
 	}
 
-	tokens, err := m.mintScopedGrant(ctx, rec.Email, rec.Tenant, rec.Scope, rec.Scope, rec.Audience)
+	tokens, err := m.mintScopedGrant(ctx, rec.Email, rec.Tenant, rec.Scope, rec.Scope, rec.Audience, rec.ClientId)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +213,13 @@ func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, r
 // NARROW the token's scope (RFC 6749 §6); a request to widen it is rejected. An
 // ordinary (scope-less) refresh token is not accepted here — it belongs to the
 // non-OAuth /refresh path (symmetric to that path rejecting scoped tokens).
-func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope string) (*OAuthTokens, error) {
+//
+// requestClientID is the client the request authenticated as (the token endpoint
+// already verified its secret via AuthenticateClient). A refresh token minted for a
+// CONFIDENTIAL client may only be refreshed by that same client (RFC 6749 §6/§10.4),
+// so a stolen refresh token is useless without the client secret — enforced by
+// checkRefreshClientBinding BEFORE the single-use rotation consumes the token.
+func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope, requestClientID string) (*OAuthTokens, error) {
 	claims, err := m.validator.ValidateRefresh(refreshToken)
 	if err != nil {
 		return nil, errInvalidGrant("refresh token is invalid or expired")
@@ -159,6 +227,23 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 	if claims.Scope == "" {
 		return nil, errInvalidGrant("not an OAuth refresh token")
 	}
+
+	// Enforce the client binding before consuming the one-shot refresh token: look up
+	// the client the token was minted for and require the confidential ones to have
+	// re-authenticated as themselves.
+	if boundClient := claims.ClientId; boundClient != "" {
+		client, cerr := m.iam.OAuthClientByClientId(ctx, boundClient)
+		found := true
+		if errors.Is(cerr, gorm.ErrRecordNotFound) {
+			found = false
+		} else if cerr != nil {
+			return nil, errServer(cerr.Error())
+		}
+		if berr := checkRefreshClientBinding(boundClient, requestClientID, client, found); berr != nil {
+			return nil, berr
+		}
+	}
+
 	scope := claims.Scope
 	if requestedScope != "" {
 		if !isScopeSubset(requestedScope, claims.Scope) {
@@ -178,13 +263,42 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 	// The access token carries the (possibly narrowed) scope; the rotated refresh
 	// token keeps the ORIGINAL grant scope (RFC 6749 §6 — a per-request narrowing
 	// bounds the access token, it does not permanently downgrade the grant), so a
-	// client that narrows once does not irreversibly lose the rest of its grant.
-	tokens, err := m.mintScopedGrant(ctx, claims.Username, claims.Tenant, scope, claims.Scope, []string(claims.Audience))
+	// client that narrows once does not irreversibly lose the rest of its grant. The
+	// client binding is carried forward so the rotated token stays bound.
+	tokens, err := m.mintScopedGrant(ctx, claims.Username, claims.Tenant, scope, claims.Scope, []string(claims.Audience), claims.ClientId)
 	if err != nil {
 		return nil, err
 	}
 	m.recordAuth(ctx, rdb.AuditOpRefresh, claims.Username, claims.Tenant)
 	return tokens, nil
+}
+
+// checkRefreshClientBinding is the pure rule for whether a refresh may proceed given
+// the client the token was minted for (ADR-047 confidential fold-in). An unbound
+// token (no client_id claim) is unrestricted. A token whose client no longer exists
+// is rejected — deleting a client kills its sessions. A CONFIDENTIAL client's token
+// requires the request to have authenticated as that same client (requestClientID
+// matches, its secret already verified by AuthenticateClient), so a stolen refresh
+// token cannot be used without the secret. A PUBLIC client's token stays lenient (it
+// has no secret to enforce, and requiring client_id would break existing public
+// clients that refresh with the token alone).
+func checkRefreshClientBinding(boundClientID, requestClientID string, client *iam.OAuthClient, found bool) *oauthError {
+	if boundClientID == "" {
+		return nil
+	}
+	if !found {
+		return errInvalidGrant("the client this refresh token was issued to no longer exists")
+	}
+	// A disabled client is the kill switch: its outstanding sessions die too, whether
+	// the client is confidential or public (the confidential case is also caught at
+	// the token endpoint, but a bare refresh with no client_id skips that check).
+	if !client.Enabled {
+		return errInvalidGrant("the client this refresh token was issued to is disabled")
+	}
+	if client.IsConfidential() && requestClientID != boundClientID {
+		return errInvalidGrant("refresh token was issued to another client")
+	}
+	return nil
 }
 
 // mintScopedGrant re-resolves the identity's current grant in a tenant, caps the
@@ -195,7 +309,7 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 // grant scope. Shared by both grant types so the scope cap is applied in exactly
 // one place. The identity/tenant checks mirror Refresh: a disabled identity, lost
 // membership, or denied tenant fails the grant.
-func (m *Manager) mintScopedGrant(ctx context.Context, email, tenant, accessScope, refreshScope string, audience []string) (*OAuthTokens, error) {
+func (m *Manager) mintScopedGrant(ctx context.Context, email, tenant, accessScope, refreshScope string, audience []string, clientID string) (*OAuthTokens, error) {
 	accessAllow, err := scopeAllowance(accessScope)
 	if err != nil {
 		return nil, errInvalidScope(err.Error())
@@ -249,12 +363,12 @@ func (m *Manager) mintScopedGrant(ctx context.Context, email, tenant, accessScop
 	issuer := m.issuer
 	m.mu.RUnlock()
 
-	access, err := issuer.IssueOAuthAccess(tenant, email, roles, accessCapped, accessScope, audience, su, uuid.NewString())
+	access, err := issuer.IssueOAuthAccess(tenant, email, roles, accessCapped, accessScope, audience, su, clientID, uuid.NewString())
 	if err != nil {
 		return nil, errServer(err.Error())
 	}
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueOAuthRefresh(tenant, email, roles, refreshCapped, refreshScope, audience, refreshJti)
+	refresh, err := issuer.IssueOAuthRefresh(tenant, email, roles, refreshCapped, refreshScope, audience, clientID, refreshJti)
 	if err != nil {
 		return nil, errServer(err.Error())
 	}

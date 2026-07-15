@@ -41,7 +41,7 @@ func TestRefreshRejectsScopedToken(t *testing.T) {
 
 	scoped, err := iss.IssueOAuthRefresh("tenant-a", "alice@example.com",
 		[]string{"viewer"}, []string{"device:read"},
-		auth.ScopeReadOnly, []string{"https://mcp.example.com"}, "jti-scoped")
+		auth.ScopeReadOnly, []string{"https://mcp.example.com"}, "", "jti-scoped")
 	if err != nil {
 		t.Fatalf("IssueOAuthRefresh: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestRefreshOAuthRejectsScopelessToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueRefresh: %v", err)
 	}
-	_, err = m.RefreshOAuth(context.Background(), plain.Token, "")
+	_, err = m.RefreshOAuth(context.Background(), plain.Token, "", "")
 	assertOAuthErrorCode(t, err, "invalid_grant")
 }
 
@@ -80,11 +80,11 @@ func TestRefreshOAuthRejectsScopeWidening(t *testing.T) {
 	m := &Manager{validator: auth.NewValidator(&key.PublicKey)}
 
 	scoped, err := iss.IssueOAuthRefresh("tenant-a", "alice@example.com", nil,
-		[]string{"device:read"}, auth.ScopeReadOnly, nil, "jti-scoped")
+		[]string{"device:read"}, auth.ScopeReadOnly, nil, "", "jti-scoped")
 	if err != nil {
 		t.Fatalf("IssueOAuthRefresh: %v", err)
 	}
-	_, err = m.RefreshOAuth(context.Background(), scoped.Token, "read-only write")
+	_, err = m.RefreshOAuth(context.Background(), scoped.Token, "read-only write", "")
 	assertOAuthErrorCode(t, err, "invalid_scope")
 }
 

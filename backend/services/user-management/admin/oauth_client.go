@@ -5,6 +5,8 @@ package admin
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -19,16 +22,22 @@ import (
 // result for a missing client_id.
 var ErrOAuthClientNotFound = errors.New("oauth client not found")
 
+// clientSecretBytes is the entropy of a generated confidential-client secret: 32
+// random bytes → 43 base64url chars, comfortably under bcrypt's 72-byte input cap.
+const clientSecretBytes = 32
+
 // OAuthClientInput is the data to register an OAuth 2.1 client (ADR-047). ClientId
 // is its stable public identifier; RedirectURIs is the exact-match allowlist;
-// Scopes is the set it may request (each a supported scope). Every v1 client is a
-// public client (PKCE, no secret), so none is accepted here.
+// Scopes is the set it may request (each a supported scope). Confidential requests
+// a client secret (server-generated, returned once) so the client authenticates at
+// the token endpoint; false registers a public PKCE client (the MCP default).
 type OAuthClientInput struct {
 	ClientId     string
 	Name         string
 	Description  string
 	RedirectURIs []string
 	Scopes       []string
+	Confidential bool
 }
 
 // OAuthClientMutableInput is the data to update a client: its client_id identity
@@ -46,25 +55,73 @@ func (s *Service) ListOAuthClients(ctx context.Context) ([]iam.OAuthClient, erro
 }
 
 // CreateOAuthClient registers a client after validating its id, redirect URIs, and
-// scopes. Enabled on creation.
-func (s *Service) CreateOAuthClient(ctx context.Context, in OAuthClientInput) (*iam.OAuthClient, error) {
+// scopes. Enabled on creation. When in.Confidential is set, a secret is generated,
+// bcrypt-hashed onto the row, and returned as the second result — the ONLY time the
+// cleartext exists outside the caller; it is never stored or returned again. A
+// public client returns an empty secret.
+func (s *Service) CreateOAuthClient(ctx context.Context, in OAuthClientInput) (*iam.OAuthClient, string, error) {
 	if err := validateClientId(in.ClientId); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := validateRedirectURIs(in.RedirectURIs); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := validateClientScopes(in.Scopes); err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	var secret, hash string
+	if in.Confidential {
+		var err error
+		if secret, hash, err = generateClientSecret(); err != nil {
+			return nil, "", err
+		}
 	}
 	c := &iam.OAuthClient{
 		ClientId: in.ClientId, RedirectURIs: in.RedirectURIs, Scopes: in.Scopes, Enabled: true,
+		SecretHash:  hash,
 		NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&in.Name), Description: rdb.NullStrOf(&in.Description)},
 	}
 	if err := s.iam.CreateOAuthClient(ctx, c); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return s.iam.OAuthClientByClientId(ctx, in.ClientId)
+	out, err := s.iam.OAuthClientByClientId(ctx, in.ClientId)
+	return out, secret, err
+}
+
+// RotateOAuthClientSecret mints a fresh secret for a client, replacing any existing
+// hash (which immediately invalidates the previous secret), and returns the new
+// cleartext once. It also promotes a public client to confidential. The cleartext is
+// never stored or returned again.
+func (s *Service) RotateOAuthClientSecret(ctx context.Context, clientId string) (*iam.OAuthClient, string, error) {
+	c, err := s.loadOAuthClient(ctx, clientId)
+	if err != nil {
+		return nil, "", err
+	}
+	secret, hash, err := generateClientSecret()
+	if err != nil {
+		return nil, "", err
+	}
+	if err := s.iam.SetOAuthClientSecretHash(ctx, c, hash); err != nil {
+		return nil, "", err
+	}
+	out, err := s.iam.OAuthClientByClientId(ctx, clientId)
+	return out, secret, err
+}
+
+// generateClientSecret returns a fresh high-entropy client secret (base64url so it
+// drops cleanly into a config file) alongside its bcrypt hash. Only the hash is
+// persisted; the cleartext is shown to the operator once.
+func generateClientSecret() (secret, hash string, err error) {
+	buf := make([]byte, clientSecretBytes)
+	if _, err = rand.Read(buf); err != nil {
+		return "", "", fmt.Errorf("generate client secret: %w", err)
+	}
+	secret = base64.RawURLEncoding.EncodeToString(buf)
+	h, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+	if err != nil {
+		return "", "", fmt.Errorf("hash client secret: %w", err)
+	}
+	return secret, string(h), nil
 }
 
 // UpdateOAuthClient replaces a client's mutable fields (name/description, redirect

@@ -347,6 +347,14 @@ func (s *Store) SetOAuthClientEnabled(ctx context.Context, c *OAuthClient, enabl
 	return s.sys(ctx).Model(c).Update("enabled", enabled).Error
 }
 
+// SetOAuthClientSecretHash writes a client's bcrypt secret hash in place (a
+// single-column update, like SetOAuthClientEnabled) — used to mint or rotate a
+// confidential client's secret without rewriting its other columns. An empty hash
+// reverts the client to public.
+func (s *Store) SetOAuthClientSecretHash(ctx context.Context, c *OAuthClient, hash string) error {
+	return s.sys(ctx).Model(c).Update("secret_hash", hash).Error
+}
+
 // DeleteOAuthClient hard-deletes a client row.
 func (s *Store) DeleteOAuthClient(ctx context.Context, c *OAuthClient) error {
 	return s.sys(ctx).Unscoped().Delete(c).Error

@@ -28,16 +28,47 @@ type tokenErrorResponse struct {
 	ErrorDescription string `json:"error_description,omitempty"`
 }
 
-// TokenHandler builds the OAuth 2.1 token endpoint (ADR-047 / RFC 6749 §3.2). It
-// is a POST form endpoint supporting the authorization_code (+ PKCE) and
-// refresh_token grants for public clients (no client authentication — possession is
-// proven by PKCE for the code grant and by the refresh token itself). The two grant
-// implementations are injected (like ServiceTokenHandler) so the HTTP shaping is
-// unit-testable without a live store; each returns an *oauthError to select the RFC
-// 6749 §5.2 error code + status, or a generic error rendered as server_error.
+// clientCredentials is the client identity + secret a token request presents.
+type clientCredentials struct {
+	clientID  string
+	secret    string
+	presented bool // a client_secret was supplied (by either method)
+}
+
+// extractClientCredentials reads client authentication from a token request per RFC
+// 6749 §2.3.1: HTTP Basic (client_secret_basic) or the client_id/client_secret form
+// fields (client_secret_post). Using BOTH methods at once, or a Basic client_id that
+// disagrees with a body client_id, is invalid_request. client_id may also arrive
+// with no secret (a public client) — allowed here and resolved by AuthenticateClient.
+func extractClientCredentials(r *http.Request) (clientCredentials, *oauthError) {
+	formID := r.PostForm.Get("client_id")
+	formSecret := r.PostForm.Get("client_secret")
+	basicID, basicSecret, hasBasic := r.BasicAuth()
+
+	if hasBasic && formSecret != "" {
+		return clientCredentials{}, errInvalidRequest("use only one client authentication method")
+	}
+	if hasBasic {
+		if formID != "" && formID != basicID {
+			return clientCredentials{}, errInvalidRequest("client_id mismatch between Authorization header and request body")
+		}
+		return clientCredentials{clientID: basicID, secret: basicSecret, presented: true}, nil
+	}
+	return clientCredentials{clientID: formID, secret: formSecret, presented: formSecret != ""}, nil
+}
+
+// TokenHandler builds the OAuth 2.1 token endpoint (ADR-047 / RFC 6749 §3.2). It is
+// a POST form endpoint supporting the authorization_code (+ PKCE) and refresh_token
+// grants. Before the grant it authenticates the client (authenticateClient): a
+// confidential client must present a valid secret (client_secret_basic/post), a
+// public client proves possession by PKCE / the refresh token alone. The client-auth
+// and grant implementations are injected (like ServiceTokenHandler) so the HTTP
+// shaping is unit-testable without a live store; each returns an *oauthError to
+// select the RFC 6749 §5.2 error code + status, or a generic error → server_error.
 func TokenHandler(
+	authenticateClient func(ctx context.Context, clientID, secret string, presented bool) error,
 	redeemCode func(ctx context.Context, code, clientID, redirectURI, codeVerifier string) (*OAuthTokens, error),
-	refreshGrant func(ctx context.Context, refreshToken, scope string) (*OAuthTokens, error),
+	refreshGrant func(ctx context.Context, refreshToken, scope, clientID string) (*OAuthTokens, error),
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -51,26 +82,40 @@ func TokenHandler(
 			return
 		}
 
+		// Client authentication runs for BOTH grants, before the grant logic. A
+		// confidential client that fails it never reaches the grant.
+		creds, cerr := extractClientCredentials(r)
+		if cerr != nil {
+			writeTokenError(w, cerr)
+			return
+		}
+		if err := authenticateClient(r.Context(), creds.clientID, creds.secret, creds.presented); err != nil {
+			writeGrantError(w, err)
+			return
+		}
+
 		var tokens *OAuthTokens
 		var err error
 		switch grant := r.PostForm.Get("grant_type"); grant {
 		case "authorization_code":
 			code := r.PostForm.Get("code")
 			verifier := r.PostForm.Get("code_verifier")
-			clientID := r.PostForm.Get("client_id")
 			redirectURI := r.PostForm.Get("redirect_uri")
-			if code == "" || verifier == "" || clientID == "" || redirectURI == "" {
+			// client_id comes from the authenticated credentials (Basic header or the
+			// client_id form field), not re-read from the body, so a Basic-authenticated
+			// confidential client need not also repeat client_id in the form.
+			if code == "" || verifier == "" || creds.clientID == "" || redirectURI == "" {
 				writeTokenError(w, errInvalidRequest("code, code_verifier, client_id, and redirect_uri are required"))
 				return
 			}
-			tokens, err = redeemCode(r.Context(), code, clientID, redirectURI, verifier)
+			tokens, err = redeemCode(r.Context(), code, creds.clientID, redirectURI, verifier)
 		case "refresh_token":
 			refreshToken := r.PostForm.Get("refresh_token")
 			if refreshToken == "" {
 				writeTokenError(w, errInvalidRequest("refresh_token is required"))
 				return
 			}
-			tokens, err = refreshGrant(r.Context(), refreshToken, r.PostForm.Get("scope"))
+			tokens, err = refreshGrant(r.Context(), refreshToken, r.PostForm.Get("scope"), creds.clientID)
 		case "":
 			writeTokenError(w, errInvalidRequest("grant_type is required"))
 			return
@@ -80,12 +125,7 @@ func TokenHandler(
 		}
 
 		if err != nil {
-			var oerr *oauthError
-			if errors.As(err, &oerr) {
-				writeTokenError(w, oerr)
-				return
-			}
-			writeTokenError(w, errServer("internal error"))
+			writeGrantError(w, err)
 			return
 		}
 		if tokens == nil {
@@ -94,6 +134,17 @@ func TokenHandler(
 		}
 		writeTokenSuccess(w, tokens)
 	}
+}
+
+// writeGrantError renders an error from client-auth or a grant: a typed *oauthError
+// selects the RFC 6749 §5.2 code + status; anything else is an opaque server_error.
+func writeGrantError(w http.ResponseWriter, err error) {
+	var oerr *oauthError
+	if errors.As(err, &oerr) {
+		writeTokenError(w, oerr)
+		return
+	}
+	writeTokenError(w, errServer("internal error"))
 }
 
 // writeTokenSuccess renders the §5.1 body. Token responses MUST NOT be cached
@@ -112,11 +163,16 @@ func writeTokenSuccess(w http.ResponseWriter, t *OAuthTokens) {
 }
 
 // writeTokenError renders the §5.2 error body with the mapped status. Like the
-// success response it is marked no-store (§5.1).
+// success response it is marked no-store (§5.1). An invalid_client (401) carries a
+// WWW-Authenticate: Basic challenge, as RFC 6749 §5.2 requires when a client that
+// tried to authenticate is rejected.
 func writeTokenError(w http.ResponseWriter, e *oauthError) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
+	if e.Code == "invalid_client" {
+		w.Header().Set("WWW-Authenticate", `Basic realm="oauth", charset="UTF-8"`)
+	}
 	w.WriteHeader(e.Status)
 	_ = json.NewEncoder(w).Encode(tokenErrorResponse{Error: e.Code, ErrorDescription: e.Desc})
 }

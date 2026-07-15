@@ -53,8 +53,9 @@ type AuthorizationServerMetadata struct {
 // by config validation) so endpoint URLs concatenate cleanly and the "issuer"
 // field compares byte-for-byte against the value a client derived from discovery.
 // The advertised surface is deliberately narrow: authorization-code + refresh
-// grants only, PKCE S256 mandatory, public clients (no client secret), and the
-// scopes this AS actually grants.
+// grants only, PKCE S256 mandatory, and the scopes this AS actually grants. Client
+// authentication is "none" (public PKCE clients, e.g. MCP) OR client_secret_basic/
+// _post (confidential clients, e.g. a server-side app like Grafana).
 func BuildAuthorizationServerMetadata(issuer string) AuthorizationServerMetadata {
 	return AuthorizationServerMetadata{
 		Issuer:                issuer,
@@ -67,7 +68,7 @@ func BuildAuthorizationServerMetadata(issuer string) AuthorizationServerMetadata
 		ResponseTypesSupported:            []string{"code"},
 		ResponseModesSupported:            []string{"query"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
-		TokenEndpointAuthMethodsSupported: []string{"none"},
+		TokenEndpointAuthMethodsSupported: []string{"none", "client_secret_basic", "client_secret_post"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 	}
 }

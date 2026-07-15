@@ -41,12 +41,40 @@ func (r *AdminOAuthClientResolver) Scopes() []string {
 	}
 	return r.M.Scopes
 }
+func (r *AdminOAuthClientResolver) HasSecret() bool { return r.M.IsConfidential() }
 
 func wrapOAuthClient(c *iam.OAuthClient, err error) (*AdminOAuthClientResolver, error) {
 	if err != nil {
 		return nil, err
 	}
 	return &AdminOAuthClientResolver{M: *c}, nil
+}
+
+// AdminOAuthClientSecretResolver carries a client alongside its one-time cleartext
+// secret (nil for a public client, or once a rotate/create result is re-read). The
+// secret field is populated ONLY on the create/rotate response and never persisted.
+type AdminOAuthClientSecretResolver struct {
+	M      iam.OAuthClient
+	Secret string // "" ⇒ public client, rendered as null
+}
+
+func (r *AdminOAuthClientSecretResolver) Client() *AdminOAuthClientResolver {
+	return &AdminOAuthClientResolver{M: r.M}
+}
+func (r *AdminOAuthClientSecretResolver) ClientSecret() *string {
+	if r.Secret == "" {
+		return nil
+	}
+	s := r.Secret
+	return &s
+}
+
+// wrapOAuthClientSecret builds the create/rotate payload from the service result.
+func wrapOAuthClientSecret(c *iam.OAuthClient, secret string, err error) (*AdminOAuthClientSecretResolver, error) {
+	if err != nil {
+		return nil, err
+	}
+	return &AdminOAuthClientSecretResolver{M: *c, Secret: secret}, nil
 }
 
 // OauthClients lists the OAuth client registry (requires client:read).
@@ -72,6 +100,7 @@ type adminOAuthClientCreateInput struct {
 	Description  *string
 	RedirectUris []string
 	Scopes       []string
+	Confidential *bool
 }
 
 // adminOAuthClientUpdateInput mirrors AdminOAuthClientUpdateRequest.
@@ -82,21 +111,36 @@ type adminOAuthClientUpdateInput struct {
 	Scopes       []string
 }
 
-// CreateOauthClient registers an OAuth client (requires client:write).
+// CreateOauthClient registers an OAuth client (requires client:write). For a
+// confidential client the response carries the one-time cleartext secret.
 func (r *AdminResolver) CreateOauthClient(ctx context.Context, args struct {
 	Request adminOAuthClientCreateInput
-}) (*AdminOAuthClientResolver, error) {
+}) (*AdminOAuthClientSecretResolver, error) {
 	if err := auth.Authorize(ctx, auth.ClientWrite); err != nil {
 		return nil, err
 	}
-	c, err := r.getAdminService(ctx).CreateOAuthClient(ctx, admin.OAuthClientInput{
+	confidential := args.Request.Confidential != nil && *args.Request.Confidential
+	c, secret, err := r.getAdminService(ctx).CreateOAuthClient(ctx, admin.OAuthClientInput{
 		ClientId:     args.Request.ClientId,
 		Name:         strOrEmpty(args.Request.Name),
 		Description:  strOrEmpty(args.Request.Description),
 		RedirectURIs: args.Request.RedirectUris,
 		Scopes:       args.Request.Scopes,
+		Confidential: confidential,
 	})
-	return wrapOAuthClient(c, err)
+	return wrapOAuthClientSecret(c, secret, err)
+}
+
+// RotateOauthClientSecret mints a fresh secret for a client, invalidating any
+// previous one, and returns the new one-time secret (requires client:write).
+func (r *AdminResolver) RotateOauthClientSecret(ctx context.Context, args struct {
+	ClientId string
+}) (*AdminOAuthClientSecretResolver, error) {
+	if err := auth.Authorize(ctx, auth.ClientWrite); err != nil {
+		return nil, err
+	}
+	c, secret, err := r.getAdminService(ctx).RotateOAuthClientSecret(ctx, args.ClientId)
+	return wrapOAuthClientSecret(c, secret, err)
 }
 
 // UpdateOauthClient replaces a client's mutable fields by clientId (requires
