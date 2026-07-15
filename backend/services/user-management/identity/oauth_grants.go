@@ -160,7 +160,9 @@ func (m *Manager) SaveAuthorizationCode(code string, rec AuthorizationCode) erro
 // client + redirect_uri + PKCE verifier against what the code was issued for,
 // re-resolves the tenant grant, caps it to the granted scope, and mints an OAuth
 // access + refresh pair. Every failure is a generic invalid_grant (no oracle about
-// which check failed), except a client mismatch (invalid_client).
+// which check failed) — including a client mismatch, which stays invalid_grant so a
+// leaked code gives an attacker no distinguishable "that code is live" signal (the
+// inline comment below explains why it is not invalid_client).
 func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, redirectURI, codeVerifier string) (*OAuthTokens, error) {
 	if m.codesKV == nil {
 		return nil, errServer("authorization-code store not configured")
@@ -286,6 +288,12 @@ func checkRefreshClientBinding(boundClientID, requestClientID string, client *ia
 	}
 	if !found {
 		return errInvalidGrant("the client this refresh token was issued to no longer exists")
+	}
+	// A disabled client is the kill switch: its outstanding sessions die too, whether
+	// the client is confidential or public (the confidential case is also caught at
+	// the token endpoint, but a bare refresh with no client_id skips that check).
+	if !client.Enabled {
+		return errInvalidGrant("the client this refresh token was issued to is disabled")
 	}
 	if client.IsConfidential() && requestClientID != boundClientID {
 		return errInvalidGrant("refresh token was issued to another client")

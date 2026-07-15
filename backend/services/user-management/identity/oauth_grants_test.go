@@ -84,6 +84,16 @@ func TestCheckRefreshClientBinding(t *testing.T) {
 	if e := checkRefreshClientBinding("gone", "gone", nil, false); e == nil || e.Code != "invalid_grant" {
 		t.Errorf("deleted client: got %v, want invalid_grant", e)
 	}
+	// A disabled client's tokens are rejected too — disable is a uniform kill switch,
+	// including a public client refreshing with the token alone.
+	disabledPublic := &iam.OAuthClient{Enabled: false}
+	if e := checkRefreshClientBinding("mcp", "", disabledPublic, true); e == nil || e.Code != "invalid_grant" {
+		t.Errorf("disabled public client: got %v, want invalid_grant", e)
+	}
+	disabledConfidential := &iam.OAuthClient{Enabled: false, SecretHash: "$2a$hash"}
+	if e := checkRefreshClientBinding("grafana", "grafana", disabledConfidential, true); e == nil || e.Code != "invalid_grant" {
+		t.Errorf("disabled confidential client: got %v, want invalid_grant", e)
+	}
 }
 
 // PKCE S256 verification against the RFC 7636 Appendix B test vector, plus the
