@@ -21,6 +21,11 @@ const (
 	MetadataPath  = "/.well-known/oauth-authorization-server"
 	AuthorizePath = "/oauth/authorize"
 	TokenPath     = "/oauth/token"
+	// UserinfoPath is the OIDC-style userinfo endpoint (advertised as
+	// userinfo_endpoint). A confidential login client (Grafana, ADR-047 SSO) that
+	// treats the access token as opaque calls it with the token as a Bearer
+	// credential to read the subject's identity + the operator-tier `sudo` claim.
+	UserinfoPath = "/oauth/userinfo"
 	// OAuthJwksPath is the JWK Set endpoint advertised to *external* OAuth clients
 	// as jwks_uri. It deliberately sits under /oauth/ rather than reusing the
 	// internal /auth/jwks (ADR-008): the cluster ingress 404s all external
@@ -39,6 +44,7 @@ type AuthorizationServerMetadata struct {
 	Issuer                            string   `json:"issuer"`
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
 	TokenEndpoint                     string   `json:"token_endpoint"`
+	UserinfoEndpoint                  string   `json:"userinfo_endpoint,omitempty"`
 	JwksURI                           string   `json:"jwks_uri"`
 	ScopesSupported                   []string `json:"scopes_supported,omitempty"`
 	ResponseTypesSupported            []string `json:"response_types_supported"`
@@ -61,6 +67,7 @@ func BuildAuthorizationServerMetadata(issuer string) AuthorizationServerMetadata
 		Issuer:                issuer,
 		AuthorizationEndpoint: issuer + AuthorizePath,
 		TokenEndpoint:         issuer + TokenPath,
+		UserinfoEndpoint:      issuer + UserinfoPath,
 		JwksURI:               issuer + OAuthJwksPath,
 		// Copy the exported scope slice so the served document can't be skewed by a
 		// later mutation of the package-global.

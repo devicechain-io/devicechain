@@ -39,9 +39,16 @@ type Claims struct {
 	// Email is the global identity's email (ADR-033). Carried on identity tokens
 	// (and tenant tokens minted from one) as the stable cross-tenant principal id.
 	Email string `json:"email,omitempty"`
-	// ActingAsSuperuser marks a tenant token minted for a superuser who selected a
-	// tenant they hold no membership in (break-glass). Carried for audit so the
-	// log shows a superuser acted, not a phantom tenant-admin.
+	// ActingAsSuperuser (the "sudo" claim) marks a token whose subject holds the
+	// superuser system role — set on ANY tenant/OAuth token minted for a superuser,
+	// whether or not they are a member of the selected tenant (its most visible use
+	// is the break-glass case of a superuser entering a non-member tenant). Derived
+	// from a fresh isSuperuser() DB lookup at every mint, so a revoked role stops
+	// propagating at the next mint/refresh. Carried for audit (the log shows a
+	// superuser acted, not a phantom tenant-admin) and as the operator/superuser-tier
+	// signal a login client reads via userinfo (ADR-047 SSO). It identifies WHO the
+	// subject is, not what the token may do — an OAuth scope cap narrows Authorities
+	// but deliberately leaves sudo set — so never treat it as an authorization.
 	ActingAsSuperuser bool `json:"sudo,omitempty"`
 	// Roles are the subject's assigned role names. Carried for display/audit;
 	// enforcement is on Authorities, not role names (ADR-008 RBAC).
