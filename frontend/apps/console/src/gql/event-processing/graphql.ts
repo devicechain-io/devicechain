@@ -6,6 +6,7 @@ export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' |
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 export type DetectionRuleInput = {
   definition: string;
+  groupScoped?: boolean | null | undefined;
   token: string;
 };
 
