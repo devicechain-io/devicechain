@@ -143,6 +143,8 @@ export type DetectionRuleCreateRequest = {
   description?: string | null | undefined;
   deviceProfileToken: string;
   enabled: boolean;
+  entityGroupToken?: string | null | undefined;
+  entityGroupVersion?: number | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
   token: string;

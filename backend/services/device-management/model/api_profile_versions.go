@@ -135,7 +135,11 @@ func enabledRulesToValidate(rules []*DetectionRule) []RuleToValidate {
 		if !dr.Enabled {
 			continue
 		}
-		out = append(out, RuleToValidate{Token: dr.Token, Definition: string(dr.Definition)})
+		out = append(out, RuleToValidate{
+			Token:       dr.Token,
+			Definition:  string(dr.Definition),
+			GroupScoped: dr.GroupScoped(), // ADR-062 S4 — single shared predicate
+		})
 	}
 	return out
 }
@@ -282,7 +286,7 @@ func (api *Api) enabledSnapshotRules(snapshot datatypes.JSON) []PublishedDetecti
 		// Propagate the rule's optional group scope (ADR-062 S4) to event-processing. The
 		// frozen snapshot carried the scope columns (not json:"-"), so a scoped rule ships
 		// its pin; an unscoped rule ships empty token / version 0 (the engine's "no scope").
-		if dr.EntityGroupToken != nil && dr.EntityGroupVersion != nil {
+		if dr.GroupScoped() {
 			pr.EntityGroupToken = *dr.EntityGroupToken
 			pr.EntityGroupVersion = *dr.EntityGroupVersion
 		}

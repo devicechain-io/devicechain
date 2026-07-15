@@ -61,6 +61,12 @@ func (r *DetectionRuleResolver) AuthoringGraph() *string {
 	return &s
 }
 
+// EntityGroupToken / EntityGroupVersion expose the rule's optional group scope (ADR-062 S4),
+// both null for an unscoped (profile-wide) rule. int32 is graph-gophers' Int mapping.
+func (r *DetectionRuleResolver) EntityGroupToken() *string { return r.M.EntityGroupToken }
+
+func (r *DetectionRuleResolver) EntityGroupVersion() *int32 { return r.M.EntityGroupVersion }
+
 func (r *DetectionRuleResolver) DeviceProfile() *DeviceProfileResolver {
 	if r.M.DeviceProfile != nil {
 		return &DeviceProfileResolver{M: *r.M.DeviceProfile, S: r.S, C: r.C}

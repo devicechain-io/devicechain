@@ -72,6 +72,40 @@ func TestValidateDetectionRules_MixedRejections(t *testing.T) {
 	}
 }
 
+// A group scope (ADR-062 S4) on an absence or correlation rule is rejected with an
+// author-facing error; the same rule UNSCOPED is accepted (the refusal is about the scope,
+// not the kind), and a scoped threshold is accepted (a supported kind).
+func TestValidateDetectionRules_RejectsScopeOnUnsupportedKind(t *testing.T) {
+	r := &SchemaResolver{}
+	absence := `{"name":"gone","type":"absence","timeout":"5m"}`
+	correlation := `{"name":"co","type":"correlation","anchorType":"site","count":3,"window":"100s"}`
+	threshold := `{"name":"hot","type":"threshold","when":{"metric":"t","op":"gt","threshold":1}}`
+	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), struct{ Rules []detectionRuleInput }{
+		Rules: []detectionRuleInput{
+			{Token: "scoped-abs", Definition: absence, GroupScoped: true},
+			{Token: "scoped-corr", Definition: correlation, GroupScoped: true},
+			{Token: "unscoped-abs", Definition: absence, GroupScoped: false},
+			{Token: "scoped-thr", Definition: threshold, GroupScoped: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Valid() {
+		t.Fatal("expected invalid (two scoped rules on unsupported kinds)")
+	}
+	if len(res.Errors()) != 2 {
+		t.Fatalf("expected exactly 2 rejections (the scoped absence + correlation); got %d: %+v", len(res.Errors()), res.Errors())
+	}
+	if res.Errors()[0].Token() != "scoped-abs" || res.Errors()[1].Token() != "scoped-corr" {
+		t.Fatalf("rejections must anchor to the scoped absence + correlation; got %q, %q",
+			res.Errors()[0].Token(), res.Errors()[1].Token())
+	}
+	if res.Errors()[0].Message() == "" {
+		t.Error("expected an author-facing reason")
+	}
+}
+
 // A definition with no id still validates: the resolver forces the token as the compile-time
 // id, so a rule the author stored without the runtime-composed id is not spuriously rejected.
 func TestValidateDetectionRules_TokenSuppliesId(t *testing.T) {

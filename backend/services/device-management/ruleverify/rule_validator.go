@@ -55,7 +55,9 @@ func (v *Validator) ValidateDetectionRules(ctx context.Context, rules []model.Ru
 
 	inputs := make([]map[string]any, 0, len(rules))
 	for _, r := range rules {
-		inputs = append(inputs, map[string]any{"token": r.Token, "definition": r.Definition})
+		inputs = append(inputs, map[string]any{
+			"token": r.Token, "definition": r.Definition, "groupScoped": r.GroupScoped,
+		})
 	}
 
 	var out struct {
