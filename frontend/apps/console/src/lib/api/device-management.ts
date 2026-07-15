@@ -21,6 +21,8 @@ import type {
   CommandDefinitionCreateRequest,
   DetectionRulesQuery,
   DetectionRuleCreateRequest,
+  ScopeGroupsQuery,
+  EntityGroupVersionsQuery,
   DeviceFacet,
 } from '@/gql/device-management/graphql';
 
@@ -894,6 +896,8 @@ const DETECTION_RULES = graphql(`
         authoringGraph
         enabled
         metadata
+        entityGroupToken
+        entityGroupVersion
       }
       pagination {
         pageStart
@@ -903,6 +907,51 @@ const DETECTION_RULES = graphql(`
     }
   }
 `);
+
+// ── ADR-062 S4 rule scope picker ──────────────────────────────────────────
+// A saved dynamic entity group, across ALL member families (device / area / customer /
+// asset), that a detection rule can be scoped to. Unlike browse's per-family listing, the
+// rule-scope picker lets an author pin a rule to any anchor-able group (e.g. an AREA group
+// for the geographic "run this rule for devices in an arid area" case).
+export type ScopeGroup = ScopeGroupsQuery['entityGroups']['results'][number];
+export type ScopeGroupVersion = EntityGroupVersionsQuery['entityGroupVersions'][number];
+
+const SCOPE_GROUPS = graphql(`
+  query ScopeGroups {
+    entityGroups(criteria: { pageNumber: 1, pageSize: 500, membershipMode: "dynamic" }) {
+      results {
+        token
+        name
+        memberType
+        activeVersion
+      }
+    }
+  }
+`);
+
+// listScopeGroups returns every dynamic entity group (all families) a rule may scope to.
+export async function listScopeGroups(): Promise<ScopeGroup[]> {
+  const data = await gql('device-management', SCOPE_GROUPS, undefined);
+  return data.entityGroups.results;
+}
+
+const ENTITY_GROUP_VERSIONS = graphql(`
+  query EntityGroupVersions($token: String!) {
+    entityGroupVersions(token: $token) {
+      version
+      selector
+      memberType
+      label
+    }
+  }
+`);
+
+// listEntityGroupVersions returns a group's published versions (newest first), each with its
+// FROZEN selector — the exact set the pinned version matches, used to preview the scoped count.
+export async function listEntityGroupVersions(token: string): Promise<ScopeGroupVersion[]> {
+  const data = await gql('device-management', ENTITY_GROUP_VERSIONS, { token });
+  return data.entityGroupVersions;
+}
 
 // A profile's rule set is small and rendered whole in a tab, so load one large page.
 export async function listDetectionRules(profileToken: string): Promise<DetectionRule[]> {

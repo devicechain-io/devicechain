@@ -851,7 +851,19 @@ export type DetectionRulesQueryVariables = Exact<{
 }>;
 
 
-export type DetectionRulesQuery = { detectionRules: { results: Array<{ id: string, token: string, name: string | null, description: string | null, definition: string, authoringGraph: string | null, enabled: boolean, metadata: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type DetectionRulesQuery = { detectionRules: { results: Array<{ id: string, token: string, name: string | null, description: string | null, definition: string, authoringGraph: string | null, enabled: boolean, metadata: string | null, entityGroupToken: string | null, entityGroupVersion: number | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type ScopeGroupsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type ScopeGroupsQuery = { entityGroups: { results: Array<{ token: string, name: string | null, memberType: string, activeVersion: number | null }> } };
+
+export type EntityGroupVersionsQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type EntityGroupVersionsQuery = { entityGroupVersions: Array<{ version: number, selector: string, memberType: string, label: string | null }> };
 
 export type CreateDetectionRuleMutationVariables = Exact<{
   request: DetectionRuleCreateRequest;
@@ -2084,6 +2096,8 @@ export const DetectionRulesDocument = new TypedDocumentString(`
       authoringGraph
       enabled
       metadata
+      entityGroupToken
+      entityGroupVersion
     }
     pagination {
       pageStart
@@ -2093,6 +2107,30 @@ export const DetectionRulesDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<DetectionRulesQuery, DetectionRulesQueryVariables>;
+export const ScopeGroupsDocument = new TypedDocumentString(`
+    query ScopeGroups {
+  entityGroups(
+    criteria: {pageNumber: 1, pageSize: 500, membershipMode: "dynamic"}
+  ) {
+    results {
+      token
+      name
+      memberType
+      activeVersion
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<ScopeGroupsQuery, ScopeGroupsQueryVariables>;
+export const EntityGroupVersionsDocument = new TypedDocumentString(`
+    query EntityGroupVersions($token: String!) {
+  entityGroupVersions(token: $token) {
+    version
+    selector
+    memberType
+    label
+  }
+}
+    `) as unknown as TypedDocumentString<EntityGroupVersionsQuery, EntityGroupVersionsQueryVariables>;
 export const CreateDetectionRuleDocument = new TypedDocumentString(`
     mutation CreateDetectionRule($request: DetectionRuleCreateRequest!) {
   createDetectionRule(request: $request) {
