@@ -62,9 +62,18 @@ func (r *SchemaResolver) runInference(ctx context.Context, resolved *inference.R
 // Rate-limiting is NOT logged at Warn: a rising rate-limited count is the operator's
 // signal (see the shed metric), and a per-call warn would flood the log for exactly
 // the sustained-over-quota caller it fires on — the ADR-023 G.1 lesson.
+// Each branch returns the BARE sentinel rather than err, so the coarsening is
+// structural: a future producer that wraps a sentinel with detail (a tenant id, an
+// upstream message) cannot leak that wrapping through this seam by accident. Today's
+// producers return bare sentinels, so this changes nothing observable.
 func tenantSafeError(err error) error {
-	if err == nil || errors.Is(err, inference.ErrConsentRequired) || errors.Is(err, inference.ErrRateLimited) {
-		return err
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, inference.ErrConsentRequired):
+		return inference.ErrConsentRequired
+	case errors.Is(err, inference.ErrRateLimited):
+		return inference.ErrRateLimited
 	}
 	log.Warn().Err(err).Msg("inferRuleCandidate inference failed")
 	return inference.ErrUnavailable

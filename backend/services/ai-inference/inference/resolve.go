@@ -115,7 +115,11 @@ func (r *Resolver) ResolveForTenant(ctx context.Context, tenant string) (*Resolv
 	}
 	active, err := r.api.ActiveProvider(ctx)
 	if err != nil {
-		return nil, err
+		// Wrapped, not returned raw: this is a LOCAL store failure, and an unwrapped error
+		// classifies as a provider fault — pointing an operator at their inference provider
+		// when their own database is the thing that blipped. The detail is coarsened away
+		// from the caller by tenantSafeError and logged server-side either way.
+		return nil, fmt.Errorf("%w: could not read the active provider: %v", ErrUnavailable, err)
 	}
 	if active == nil {
 		return nil, fmt.Errorf("%w: no active provider is configured", ErrUnavailable)

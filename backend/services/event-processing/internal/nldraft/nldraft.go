@@ -44,6 +44,13 @@ const unavailableReason = "the inference provider is unavailable, or this tenant
 // set, and reveals no topology.
 const rateLimitedReason = "this tenant has reached its AI drafting rate limit; wait a moment and try again"
 
+// repairTruncatedMessage is surfaced as an unanchored diagnostic when the repair loop
+// is cut short by the rate limit AFTER a candidate was already produced. Without it a
+// truncated loop is indistinguishable from a model that simply could not write a
+// compiling rule, and the author would rewrite a description that was never the
+// problem. Like rateLimitedReason it is a fixed constant carrying no upstream detail.
+const repairTruncatedMessage = "the AI drafting rate limit was reached before this draft could be repaired; wait a moment and try again"
+
 // ErrRateLimited marks an inference call rejected because the tenant is over its rate
 // ceiling. The Inferer implementation classifies the transport error into it (see the
 // processor's inference client), so the drafter can report the transient, retryable
@@ -163,6 +170,12 @@ func (d *Drafter) Draft(ctx context.Context, tenant string, req Request) (Result
 			if rounds > 0 {
 				// A prior attempt already produced a rejected candidate + diagnostics; return them
 				// (actionable) rather than discarding that spent work as a bare "unavailable".
+				if errors.Is(err, ErrRateLimited) {
+					// Say so, rather than let a truncated loop read as "the AI could not write a
+					// compiling rule". The repair turn that would likely have fixed it never ran,
+					// and the author's next move is to wait — not to rewrite their description.
+					lastDiags = append(lastDiags, Diagnostic{Message: repairTruncatedMessage})
+				}
 				break
 			}
 			// Rate-limited is reported as its own reason: it is transient and the author

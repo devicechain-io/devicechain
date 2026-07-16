@@ -497,8 +497,9 @@ functionalAreas:
     # author a rule is not the authority to spend the operator's provider key without bound,
     # so every tenant is metered against the platform ceiling below. A tenant may raise or
     # lower its own ceiling via the ai_inference_* overrides on its control-plane row (set in
-    # the console's admin tenant screen); an unset override inherits these, and there is no
-    # "unlimited" setting — a non-positive value is rejected at startup, not treated as off.
+    # the console's admin tenant screen); an unset override inherits these. There is no
+    # "unlimited" setting: 0 means UNSET here (as it does for every tunable above) and takes
+    # the default, while a negative value fails startup — neither disables metering.
     config: {}
       # inferenceTimeoutMs: 60000        # per-call ceiling on one outbound provider call (max 120000)
       # maxPromptBytes: 131072           # cap on an inbound prompt (+ its schema context); 128 KiB default

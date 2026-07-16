@@ -199,3 +199,46 @@ func TestDraft_OtherFailure_ReportsGenericReason(t *testing.T) {
 	assert.Equal(t, unavailableReason, res.UnavailableReason)
 	assert.NotContains(t, res.UnavailableReason, "10.0.0.5", "the reason must never leak topology")
 }
+
+// A rate limit hit AFTER a candidate was produced keeps the spent work (the candidate +
+// its compiler diagnostics) AND says the repair loop was truncated — otherwise the
+// author reads "the AI wrote a non-compiling rule" and rewrites a description that was
+// never the problem, when the fix is to wait.
+func TestDraft_RateLimitedMidLoop_KeepsWorkAndSaysTruncated(t *testing.T) {
+	f := &fakeInferer{
+		outputs:  []InferOutput{{Candidate: invalidRule, Model: "m", Provider: "p"}},
+		err:      fmt.Errorf("ai-inference: %w", ErrRateLimited),
+		errAfter: 2, // call 1 produces a candidate; the repair call (2) is shed
+	}
+	res := draft(t, f, Request{Text: "alarm when temp over 80"})
+
+	// Not "unavailable": a candidate exists, so the author gets the actionable result.
+	assert.False(t, res.Unavailable)
+	assert.False(t, res.OK)
+	assert.Equal(t, invalidRule, res.RawCandidate)
+	assert.EqualValues(t, 1, res.Attempts)
+
+	require.NotEmpty(t, res.Diagnostics)
+	last := res.Diagnostics[len(res.Diagnostics)-1]
+	assert.Equal(t, repairTruncatedMessage, last.Message)
+	assert.Empty(t, last.Field, "the truncation notice is unanchored — it is not a compiler field rejection")
+	// The compiler's own diagnostics are still there alongside it.
+	assert.Equal(t, "when", res.Diagnostics[0].Field)
+}
+
+// A non-rate-limit mid-loop failure keeps today's behaviour: spent work preserved, no
+// truncation notice (nothing about waiting would help).
+func TestDraft_OtherFailureMidLoop_NoTruncationNotice(t *testing.T) {
+	f := &fakeInferer{
+		outputs:  []InferOutput{{Candidate: invalidRule, Model: "m", Provider: "p"}},
+		err:      errors.New("connection refused"),
+		errAfter: 2,
+	}
+	res := draft(t, f, Request{Text: "alarm when temp over 80"})
+
+	assert.False(t, res.OK)
+	require.NotEmpty(t, res.Diagnostics)
+	for _, d := range res.Diagnostics {
+		assert.NotEqual(t, repairTruncatedMessage, d.Message)
+	}
+}
