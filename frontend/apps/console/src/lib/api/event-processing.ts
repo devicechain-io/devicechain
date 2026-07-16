@@ -9,7 +9,14 @@
 // parses the taxonomy, so this is where a bad rule is actually caught.
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/event-processing';
-import type { RuleHealthQuery, DetectionStreamSubscription, CompileCanvasQuery, PreviewRuleQuery } from '@/gql/event-processing/graphql';
+import type {
+  RuleHealthQuery,
+  DetectionStreamSubscription,
+  CompileCanvasQuery,
+  PreviewRuleQuery,
+  DraftDetectionRuleFromTextMutation,
+  MetricHintInput,
+} from '@/gql/event-processing/graphql';
 
 const VALIDATE_DETECTION_RULES = graphql(`
   query ValidateDetectionRules($rules: [DetectionRuleInput!]!) {
@@ -81,6 +88,51 @@ export type CanvasDiagnostic = CanvasCompileResult['diagnostics'][number];
 export async function compileCanvas(graph: string, profileToken: string): Promise<CanvasCompileResult> {
   const data = await gql('event-processing', COMPILE_CANVAS, { graph, profileToken });
   return data.compileCanvas;
+}
+
+// ── NL draft (ADR-056 slice 1 — the third authoring door) ─────────────────
+// Turn a plain-language description into a compiling DETECT rule draft. The AI only PROPOSES
+// a candidate string; the server runs it through the SAME rules.Compile firewall the form and
+// canvas doors use (AI proposes, the compiler disposes — it never sits in the replay-correct
+// path). The console hands the returned `definition` to the form for the human to review and
+// save through the normal create door — this call persists nothing. External routing is a
+// per-tenant, fail-closed opt-in: with no active/consented provider it returns unavailable=true
+// (never a hard error). Non-idempotent (spends inference budget) → modeled as a mutation.
+const DRAFT_DETECTION_RULE_FROM_TEXT = graphql(`
+  mutation DraftDetectionRuleFromText($input: DraftRuleFromTextInput!) {
+    draftDetectionRuleFromText(input: $input) {
+      ok
+      definition
+      estimatedCost
+      model
+      provider
+      attempts
+      rawCandidate
+      diagnostics {
+        field
+        message
+      }
+      unavailable
+      unavailableReason
+    }
+  }
+`);
+
+export type DraftRuleResult = DraftDetectionRuleFromTextMutation['draftDetectionRuleFromText'];
+export type DraftDiagnostic = DraftRuleResult['diagnostics'][number];
+export type { MetricHintInput };
+
+// draftDetectionRuleFromText asks the active inference provider to draft a rule from `text`,
+// passing the profile's metric vocabulary so the model references real keys. It throws only on a
+// transport/auth failure; an unavailable provider, a non-compiling draft, and a compiling draft
+// all come back in the result (unavailable / !ok+diagnostics / ok+definition respectively).
+export async function draftDetectionRuleFromText(input: {
+  text: string;
+  profileToken: string;
+  metrics: MetricHintInput[];
+}): Promise<DraftRuleResult> {
+  const data = await gql('event-processing', DRAFT_DETECTION_RULE_FROM_TEXT, { input });
+  return data.draftDetectionRuleFromText;
 }
 
 // ── Replay preview (ADR-053 slice 9d — the headline) ──────────────────────
