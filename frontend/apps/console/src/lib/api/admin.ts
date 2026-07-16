@@ -80,6 +80,7 @@ const TENANTS = graphql(`
       ingestBurst
       outboundMessagesPerSecond
       outboundBurst
+      aiExternalEnabled
       createdAt
       updatedAt
     }
@@ -413,6 +414,7 @@ const CREATE_TENANT = graphql(`
       ingestBurst
       outboundMessagesPerSecond
       outboundBurst
+      aiExternalEnabled
       createdAt
       updatedAt
     }
@@ -436,6 +438,7 @@ const UPDATE_TENANT = graphql(`
       ingestBurst
       outboundMessagesPerSecond
       outboundBurst
+      aiExternalEnabled
       createdAt
       updatedAt
     }
@@ -459,6 +462,7 @@ const SET_TENANT_ENABLED = graphql(`
       ingestBurst
       outboundMessagesPerSecond
       outboundBurst
+      aiExternalEnabled
       createdAt
       updatedAt
     }

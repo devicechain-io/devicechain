@@ -81,6 +81,18 @@ const config: CodegenConfig = {
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },
     },
+    // The instance-scoped, operator-managed AI inference-provider list (ADR-056),
+    // served by the ai-inference service. Its own schema + client; the console lists
+    // and authors providers here (create, pick the active one, write-only API key)
+    // and offers the operator smoke-test (testAiProvider). It rides the tenant
+    // access-token data-plane lane (ai:admin), NOT the identity/admin lane.
+    './src/gql/ai-inference/': {
+      schema: '../../../backend/services/ai-inference/graphql/schema.graphql',
+      documents: ['src/lib/api/ai-inference.ts'],
+      preset: 'client',
+      presetConfig: { fragmentMasking: false },
+      config: { documentMode: 'string' },
+    },
     // The instance-scoped admin API (ADR-033), served by user-management at
     // /admin/graphql. Its own schema + client so the admin console's typed
     // operations never mix with the tenant-scoped user-management ones.
