@@ -11,13 +11,13 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-event-sources/config"
-	"github.com/devicechain-io/dc-event-sources/governance"
 	"github.com/devicechain-io/dc-event-sources/graphql"
 	"github.com/devicechain-io/dc-event-sources/model"
 	processor "github.com/devicechain-io/dc-event-sources/processor"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/svcclient"
@@ -122,7 +122,7 @@ func buildRateLimiter() {
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-	resolver := governance.NewTenantLimitResolver(governance.NewServiceFetcher(client, umURL, def), def)
+	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest)
 	RateLimiter = core.NewTenantRateLimiter(resolver.Resolve)
 	log.Info().Str("userManagement", umURL).Msg("Per-tenant ingest overrides enabled (fail-open to platform default).")
 }

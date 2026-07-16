@@ -11,13 +11,13 @@ import (
 	epconfig "github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-outbound-connectors/config"
-	"github.com/devicechain-io/dc-outbound-connectors/governance"
 	"github.com/devicechain-io/dc-outbound-connectors/graphql"
 	"github.com/devicechain-io/dc-outbound-connectors/model"
 	"github.com/devicechain-io/dc-outbound-connectors/processor"
@@ -157,7 +157,7 @@ func buildEgressLimiter() *core.TenantRateLimiter {
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors", []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-	resolver := governance.NewTenantLimitResolver(governance.NewServiceFetcher(client, umURL, def), def)
+	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Outbound)
 	log.Info().Str("userManagement", umURL).Msg("Per-tenant outbound overrides enabled (fail-open to platform default).")
 	return core.NewTenantRateLimiter(resolver.Resolve)
 }

@@ -40,7 +40,7 @@ func (f *fakeFetcher) callCount() int {
 // out-of-band refresh; once it completes, Resolve serves the fetched override.
 func TestResolve_DefaultThenOverride(t *testing.T) {
 	f := &fakeFetcher{result: Limits{MessagesPerSecond: 5, Burst: 10}}
-	r := NewTenantLimitResolver(f, platformDefault)
+	r := NewTenantLimitResolver(f, platformDefault, "test")
 
 	rps, burst := r.Resolve("acme")
 	assert.Equal(t, float64(1000), rps, "uncached tenant serves the platform default")
@@ -56,7 +56,7 @@ func TestResolve_DefaultThenOverride(t *testing.T) {
 // unmetered).
 func TestResolve_FailOpenToDefault(t *testing.T) {
 	f := &fakeFetcher{err: errors.New("user-management unreachable")}
-	r := NewTenantLimitResolver(f, platformDefault)
+	r := NewTenantLimitResolver(f, platformDefault, "test")
 
 	rps, burst := r.Resolve("acme")
 	assert.Equal(t, float64(1000), rps)
@@ -77,7 +77,7 @@ func TestResolve_DedupesInflight(t *testing.T) {
 	// first refresh is still running.
 	release := make(chan struct{})
 	f := &blockingFetcher{gate: release, result: Limits{MessagesPerSecond: 5, Burst: 10}}
-	r := NewTenantLimitResolver(f, platformDefault)
+	r := NewTenantLimitResolver(f, platformDefault, "test")
 
 	for i := 0; i < 20; i++ {
 		r.Resolve("acme")
@@ -95,7 +95,7 @@ func TestResolve_DedupesInflight(t *testing.T) {
 // fetch.
 func TestResolve_StaleRefresh(t *testing.T) {
 	f := &fakeFetcher{result: Limits{MessagesPerSecond: 5, Burst: 10}}
-	r := NewTenantLimitResolver(f, platformDefault)
+	r := NewTenantLimitResolver(f, platformDefault, "test")
 	now := time.Unix(0, 0)
 	r.now = func() time.Time { return now }
 
@@ -129,7 +129,7 @@ func TestResolve_StaleRefresh(t *testing.T) {
 func TestResolve_CapsConcurrentRefreshes(t *testing.T) {
 	release := make(chan struct{})
 	f := &blockingFetcher{gate: release, result: Limits{MessagesPerSecond: 5, Burst: 10}}
-	r := NewTenantLimitResolver(f, platformDefault)
+	r := NewTenantLimitResolver(f, platformDefault, "test")
 
 	// Resolve many distinct tenants while every fetch is blocked; each is uncached
 	// so each wants a refresh, but the cap bounds how many actually launch.
@@ -141,6 +141,17 @@ func TestResolve_CapsConcurrentRefreshes(t *testing.T) {
 	// Give any stragglers a moment; it must still be exactly the cap, no more.
 	assert.Equal(t, maxConcurrentRefreshes, f.callCount(), "concurrent fetches must be capped")
 	close(release)
+}
+
+// Each dimension names a distinct pair of tenantGovernance fields; mixing them up
+// would silently govern the wrong resource.
+func TestDimensions_AreDistinct(t *testing.T) {
+	assert.Equal(t, "ingestMessagesPerSecond", Ingest.RateField)
+	assert.Equal(t, "ingestBurst", Ingest.BurstField)
+	assert.Equal(t, "outboundMessagesPerSecond", Outbound.RateField)
+	assert.Equal(t, "outboundBurst", Outbound.BurstField)
+	assert.NotEqual(t, Ingest.RateField, Outbound.RateField)
+	assert.NotEqual(t, Ingest.Name, Outbound.Name)
 }
 
 func tenantName(i int) string {
