@@ -10,6 +10,19 @@ export type DetectionRuleInput = {
   token: string;
 };
 
+export type DraftRuleFromTextInput = {
+  metrics?: Array<MetricHintInput> | null | undefined;
+  profileToken: string;
+  text: string;
+};
+
+export type MetricHintInput = {
+  dataType?: string | null | undefined;
+  description?: string | null | undefined;
+  key: string;
+  unit?: string | null | undefined;
+};
+
 export type PreviewRuleInput = {
   end: string;
   graph?: string | null | undefined;
@@ -37,6 +50,13 @@ export type CompileCanvasQueryVariables = Exact<{
 
 
 export type CompileCanvasQuery = { compileCanvas: { ok: boolean, definition: string | null, estimatedCost: number | null, diagnostics: Array<{ nodeId: string | null, severity: string, message: string }> } };
+
+export type DraftDetectionRuleFromTextMutationVariables = Exact<{
+  input: DraftRuleFromTextInput;
+}>;
+
+
+export type DraftDetectionRuleFromTextMutation = { draftDetectionRuleFromText: { ok: boolean, definition: string | null, estimatedCost: number | null, model: string | null, provider: string | null, attempts: number, rawCandidate: string | null, unavailable: boolean, unavailableReason: string | null, diagnostics: Array<{ field: string | null, message: string }> } };
 
 export type PreviewRuleQueryVariables = Exact<{
   input: PreviewRuleInput;
@@ -104,6 +124,25 @@ export const CompileCanvasDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CompileCanvasQuery, CompileCanvasQueryVariables>;
+export const DraftDetectionRuleFromTextDocument = new TypedDocumentString(`
+    mutation DraftDetectionRuleFromText($input: DraftRuleFromTextInput!) {
+  draftDetectionRuleFromText(input: $input) {
+    ok
+    definition
+    estimatedCost
+    model
+    provider
+    attempts
+    rawCandidate
+    diagnostics {
+      field
+      message
+    }
+    unavailable
+    unavailableReason
+  }
+}
+    `) as unknown as TypedDocumentString<DraftDetectionRuleFromTextMutation, DraftDetectionRuleFromTextMutationVariables>;
 export const PreviewRuleDocument = new TypedDocumentString(`
     query PreviewRule($input: PreviewRuleInput!) {
   previewRule(input: $input) {

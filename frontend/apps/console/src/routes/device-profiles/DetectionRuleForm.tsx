@@ -283,14 +283,25 @@ function ConditionEditor({
 export function DetectionRuleForm({
   profileToken,
   entity,
+  initialDefinition,
   onDone,
 }: {
   profileToken: string;
   entity?: DetectionRule;
+  // An unsaved rules.Rule definition JSON to pre-fill a NEW rule from — the seam the NL door
+  // (ADR-056 slice 1) hands its compiled draft through. Unlike `entity` it does NOT flip the
+  // form into edit mode: there is no stored rule yet, so the token stays required/editable and
+  // saving runs the create path. Ignored when `entity` is set (editing an existing rule wins).
+  initialDefinition?: string;
   onDone: (message: string) => void;
 }) {
   const editing = entity != null;
-  const initial = editing ? parseDefinition(entity.definition) : null;
+  // Pre-fill precedence: the stored rule when editing, else an NL/handoff draft, else blank.
+  const initial = editing
+    ? parseDefinition(entity.definition)
+    : initialDefinition != null
+      ? parseDefinition(initialDefinition)
+      : null;
 
   // Header.
   const [token, setToken] = useState(entity?.token ?? '');
