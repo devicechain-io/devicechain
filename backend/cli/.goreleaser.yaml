@@ -36,10 +36,17 @@ builds:
       - -s -w
       - -X github.com/devicechain-io/dcctl/cmd.Version={{ .Version }}
       - -X github.com/devicechain-io/dcctl/cmd.gitCommit={{ .FullCommit }}
+      # A released binary is the longest-lived dcctl there is — it sits on a PATH
+      # for months, which is exactly the staleness `dcctl version` reports. Left
+      # unstamped it would print "built: unknown", disabling the age and stale
+      # warning precisely for the population that needs them most.
+      - -X github.com/devicechain-io/dcctl/cmd.buildDate={{ .Date }}
+      - -X github.com/devicechain-io/dcctl/cmd.gitTreeState={{ if .IsGitDirty }}dirty{{ else }}clean{{ end }}
       # Pin the default image version a released dcctl deploys to this release's
       # tag, so `dcctl bootstrap` (published path) pulls real images instead of
-      # the unpublished ":dev". The Makefile dev build stamps this too; only the
-      # goreleaser path was missing it.
+      # the unpublished ":dev". Unlike the Makefile's dev builds — whose
+      # cmd.Version carries a build stamp naming no pushed image — a release's
+      # version IS its image tag, so both stamps take {{ .Version }} here.
       - -X github.com/devicechain-io/dcctl/bootstrap.DefaultImageVersion={{ .Version }}
 
 archives:

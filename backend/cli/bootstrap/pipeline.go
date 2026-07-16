@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/fatih/color"
 )
@@ -24,12 +25,30 @@ const LocalRegistry = "localhost:5000"
 // flag / gcp provider can override this through State.)
 const DefaultIngressHost = "devicechain.local"
 
-// DefaultImageVersion is the published image tag deployed by default. It is the
-// single source of truth from the repo-root VERSION file, injected via ldflags
-// at build time (the Makefile stamps the same value into cmd.Version, so
-// `dcctl version` and the default image version always match). "dev" is the
-// unstamped fallback for plain `go build`.
+// DefaultImageVersion is the published image tag deployed by default: the
+// repo-root VERSION file value, injected via ldflags at build time. "dev" is the
+// unstamped fallback for a plain `go build`.
+//
+// This must remain a tag that RESOLVES IN A REGISTRY, which is why it is not
+// simply cmd.Version. A dev build's cmd.Version carries a build stamp
+// ("0.0.1-dev.20260716T155833Z") to distinguish it from every other build of the
+// same VERSION; that value names no image that has ever been pushed. The two
+// therefore differ by design for dev builds and coincide only for releases —
+// `dcctl version` prints both. Stamping cmd.Version's value here would send
+// bootstrap after a nonexistent tag; IsUnpublishedImageVersion is the backstop.
 var DefaultImageVersion = "dev"
+
+// IsUnpublishedImageVersion reports whether tag names an image that the
+// published registry cannot have: the unstamped "dev" fallback, or a dev build
+// stamp that only ever named a locally-built image.
+//
+// This guards the seam between two values that must not be conflated — see
+// DefaultImageVersion. It is enforced at the point of consumption because the
+// mistake it catches is made in the build tooling (the Makefile ldflags), which
+// no Go test executes.
+func IsUnpublishedImageVersion(tag string) bool {
+	return tag == "dev" || strings.Contains(tag, "-dev.")
+}
 
 // State threads data between pipeline steps. Values is populated as the
 // pipeline runs (generated passwords, endpoints, admin cred, etc.).

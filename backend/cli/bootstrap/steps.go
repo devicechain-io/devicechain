@@ -173,13 +173,13 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			st.ImageVersion = DefaultImageVersion
 		}
 	}
-	// A binary built without version stamping (plain `go build`) falls back to
-	// "dev", which only ever exists in a local registry — the published registry
-	// has no :dev tag. Fail clearly here instead of an ImagePullBackOff on every
-	// workload several minutes into the run.
-	if !st.BuildImages && st.ImageVersion == "dev" {
+	// Deploying an image tag that was never published fails as an
+	// ImagePullBackOff on every workload, several minutes into a run that looked
+	// healthy — so reject it here, where we can say why.
+	if !st.BuildImages && IsUnpublishedImageVersion(st.ImageVersion) {
 		return fail("resolving image source", fmt.Errorf(
-			"this dcctl build has no pinned image version; deploy a tagged release with --version <tag>, or build from source with --build"))
+			"this dcctl build has no pinned image version (%q is not a published tag); deploy a tagged release with --version <tag>, or build from source with --build",
+			st.ImageVersion))
 	}
 
 	imageSource := fmt.Sprintf("%s/<area>:%s (published)", st.ImageRegistry, st.ImageVersion)
