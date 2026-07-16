@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/httpsink"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -139,11 +140,15 @@ func (p *claudeProvider) Infer(ctx context.Context, in Input) (Output, error) {
 		return Output{}, fmt.Errorf("read inference response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Endpoint + key are both operator-owned at the same trust tier (unlike a
-		// tenant-configured webhook), and the key is never in the body, so a bounded
-		// snippet is safe to surface and aids diagnosis (e.g. a bad model id or an
-		// expired key returns a structured Anthropic error).
-		return Output{}, fmt.Errorf("inference provider returned %d: %s", resp.StatusCode, snippet(raw))
+		// A key is on the wire (the x-api-key header), so NEVER surface the response body
+		// in the returned error: the body is the ENDPOINT's, not ours, and a reflecting
+		// proxy/gateway/WAF error page could echo the request header and leak the key into
+		// the tenant-facing error and the logs. This mirrors core/httpsink's suppression
+		// of a secret-bearing call's body. A redacted snippet is logged server-side for
+		// operator diagnosis; the caller learns only the status code.
+		log.Warn().Int("status", resp.StatusCode).Str("body", redact(snippet(raw), p.apiKey)).
+			Msg("Inference provider returned a non-success status")
+		return Output{}, fmt.Errorf("inference provider returned %d", resp.StatusCode)
 	}
 
 	var parsed claudeResponse
@@ -156,7 +161,9 @@ func (p *claudeProvider) Infer(ctx context.Context, in Input) (Output, error) {
 			text.WriteString(block.Text)
 		}
 	}
-	candidate := text.String()
+	// Scrub any occurrence of the key from the candidate (belt-and-suspenders vs a
+	// purpose-built reflecting endpoint) before it is returned verbatim to the caller.
+	candidate := redact(text.String(), p.apiKey)
 	if strings.TrimSpace(candidate) == "" {
 		return Output{}, fmt.Errorf("inference provider returned no text content")
 	}
@@ -164,10 +171,19 @@ func (p *claudeProvider) Infer(ctx context.Context, in Input) (Output, error) {
 }
 
 // snippet returns a whitespace-trimmed, length-bounded view of a provider error body
-// for diagnostics.
+// for diagnostics (server-side logs only).
 func snippet(raw []byte) string {
 	if len(raw) > errSnippetBytes {
 		raw = raw[:errSnippetBytes]
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+// redact replaces any occurrence of secret in s with a placeholder, so a provider
+// response that reflected the API key cannot carry it into a candidate or a log.
+func redact(s, secret string) string {
+	if secret == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, secret, "[redacted]")
 }

@@ -44,6 +44,12 @@ type Resolver struct {
 // injects a deny-all checker when service-to-service auth is unconfigured, so the
 // cascade never dereferences a nil checker and external routing stays denied.
 func NewResolver(api *model.Api, consent ConsentChecker, bounds Bounds, client *http.Client) *Resolver {
+	if consent == nil {
+		// Enforce the documented invariant fail-closed rather than deferring to a nil
+		// dereference on the first external-kind resolution: a nil checker denies all
+		// external routing.
+		consent = NewDeniedConsentChecker("no consent checker configured")
+	}
 	return &Resolver{api: api, consent: consent, bounds: bounds, client: client}
 }
 

@@ -5,12 +5,14 @@ package graphql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-ai-inference/inference"
 	"github.com/devicechain-io/dc-ai-inference/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/rs/zerolog/log"
 )
 
 // InferenceRequestInput is the inbound inference request (a prompt + optional system
@@ -45,6 +47,20 @@ func (r *SchemaResolver) runInference(ctx context.Context, resolved *inference.R
 	return &InferenceResultResolver{candidate: out.Candidate, model: out.Model, provider: resolved.Token}, nil
 }
 
+// tenantSafeError coarsens an inference error for the TENANT-facing path. An
+// ErrConsentRequired is surfaced as-is (actionable — the tenant opts in); everything
+// else collapses to the bare ErrUnavailable sentinel with the detail logged
+// server-side, so an unprivileged caller never learns internal topology (the
+// user-management URL, the provider endpoint) or which specific gate tripped. The
+// operator testAiProvider path keeps the detailed error (same trust tier as the config).
+func tenantSafeError(err error) error {
+	if err == nil || errors.Is(err, inference.ErrConsentRequired) {
+		return err
+	}
+	log.Warn().Err(err).Msg("inferRuleCandidate inference failed")
+	return inference.ErrUnavailable
+}
+
 // InferRuleCandidate runs a prompt through the ACTIVE provider on behalf of a tenant's
 // NL-authoring request (ADR-056 Zone 1). Gated by the least-privilege ai:infer
 // authority (the event-processing service token holds it, Slice 1); the tenant comes
@@ -70,9 +86,13 @@ func (r *SchemaResolver) InferRuleCandidate(ctx context.Context, args struct {
 	}
 	resolved, err := r.Inference.ResolveForTenant(ctx, tenant)
 	if err != nil {
-		return nil, err
+		return nil, tenantSafeError(err)
 	}
-	return r.runInference(ctx, resolved, args.Request)
+	result, err := r.runInference(ctx, resolved, args.Request)
+	if err != nil {
+		return nil, tenantSafeError(err)
+	}
+	return result, nil
 }
 
 // TestAiProvider runs an operator-supplied prompt through a SPECIFIC provider (by
