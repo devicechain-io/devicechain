@@ -6,6 +6,7 @@ package nldraft
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -170,4 +171,74 @@ func TestNewDrafter_DefaultsMaxAttempts(t *testing.T) {
 	res, err := d.Draft(context.Background(), "acme", Request{Text: "x"})
 	require.NoError(t, err)
 	assert.EqualValues(t, defaultMaxAttempts, res.Attempts)
+}
+
+// A tenant over its inference rate ceiling gets the TRANSIENT reason, not the generic
+// one. The distinction matters to the author: the generic reason points at provider
+// configuration and would send them to an operator, when the fix is to wait a moment.
+func TestDraft_RateLimited_ReportsTransientReason(t *testing.T) {
+	f := &fakeInferer{err: fmt.Errorf("ai-inference: %w: upstream said no", ErrRateLimited)}
+	res := draft(t, f, Request{Text: "alarm when temp over 80"})
+
+	assert.True(t, res.Unavailable)
+	assert.False(t, res.OK)
+	assert.Equal(t, rateLimitedReason, res.UnavailableReason)
+	assert.NotEqual(t, unavailableReason, res.UnavailableReason)
+	// The reason describes the caller's own behaviour against their own tenant's
+	// ceiling; it must never carry the wrapped upstream detail (topology).
+	assert.NotContains(t, res.UnavailableReason, "upstream said no")
+}
+
+// Every other inference failure keeps the generic fixed reason, so a marker that ever
+// drifts degrades to today's message rather than to a wrong one.
+func TestDraft_OtherFailure_ReportsGenericReason(t *testing.T) {
+	f := &fakeInferer{err: errors.New("ai-inference: dial tcp 10.0.0.5:8080: connection refused")}
+	res := draft(t, f, Request{Text: "alarm when temp over 80"})
+
+	assert.True(t, res.Unavailable)
+	assert.Equal(t, unavailableReason, res.UnavailableReason)
+	assert.NotContains(t, res.UnavailableReason, "10.0.0.5", "the reason must never leak topology")
+}
+
+// A rate limit hit AFTER a candidate was produced keeps the spent work (the candidate +
+// its compiler diagnostics) AND says the repair loop was truncated — otherwise the
+// author reads "the AI wrote a non-compiling rule" and rewrites a description that was
+// never the problem, when the fix is to wait.
+func TestDraft_RateLimitedMidLoop_KeepsWorkAndSaysTruncated(t *testing.T) {
+	f := &fakeInferer{
+		outputs:  []InferOutput{{Candidate: invalidRule, Model: "m", Provider: "p"}},
+		err:      fmt.Errorf("ai-inference: %w", ErrRateLimited),
+		errAfter: 2, // call 1 produces a candidate; the repair call (2) is shed
+	}
+	res := draft(t, f, Request{Text: "alarm when temp over 80"})
+
+	// Not "unavailable": a candidate exists, so the author gets the actionable result.
+	assert.False(t, res.Unavailable)
+	assert.False(t, res.OK)
+	assert.Equal(t, invalidRule, res.RawCandidate)
+	assert.EqualValues(t, 1, res.Attempts)
+
+	require.NotEmpty(t, res.Diagnostics)
+	last := res.Diagnostics[len(res.Diagnostics)-1]
+	assert.Equal(t, repairTruncatedMessage, last.Message)
+	assert.Empty(t, last.Field, "the truncation notice is unanchored — it is not a compiler field rejection")
+	// The compiler's own diagnostics are still there alongside it.
+	assert.Equal(t, "when", res.Diagnostics[0].Field)
+}
+
+// A non-rate-limit mid-loop failure keeps today's behaviour: spent work preserved, no
+// truncation notice (nothing about waiting would help).
+func TestDraft_OtherFailureMidLoop_NoTruncationNotice(t *testing.T) {
+	f := &fakeInferer{
+		outputs:  []InferOutput{{Candidate: invalidRule, Model: "m", Provider: "p"}},
+		err:      errors.New("connection refused"),
+		errAfter: 2,
+	}
+	res := draft(t, f, Request{Text: "alarm when temp over 80"})
+
+	assert.False(t, res.OK)
+	require.NotEmpty(t, res.Diagnostics)
+	for _, d := range res.Diagnostics {
+		assert.NotEqual(t, repairTruncatedMessage, d.Message)
+	}
 }

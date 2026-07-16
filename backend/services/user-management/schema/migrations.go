@@ -28,5 +28,6 @@ var (
 		NewTenantBranding(),
 		NewOAuthClientConfidential(),
 		NewTenantAiOptIn(),
+		NewTenantAiGovernance(),
 	}
 )

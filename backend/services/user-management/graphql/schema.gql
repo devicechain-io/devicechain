@@ -88,6 +88,12 @@ type TenantGovernance {
     # model (ADR-056 §6). Non-null and fail-closed: false unless explicitly opted
     # in. Read by the ai-inference service over a service token.
     aiExternalEnabled: Boolean!
+    # How fast this tenant may spend AI inference budget (ADR-056 §6 / ADR-023),
+    # enforced by the ai-inference service. Declared per MINUTE — drafting is a
+    # human-paced authoring action, so the legible ceiling is "30 a minute", not
+    # "0.5 a second". Null inherits the platform default, never unlimited.
+    aiInferenceRequestsPerMinute: Float
+    aiInferenceBurst: Int
 }
 
 # The identity the caller is signed in as (control plane), for display in the

@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
 	"github.com/devicechain-io/dc-microservice/svcclient"
@@ -35,10 +36,25 @@ func NewInferenceClient(client *svcclient.Client, url string) nldraft.Inferer {
 	return &inferenceClient{client: client, url: url}
 }
 
+// rateLimitMarker is the stable substring ai-inference's ErrRateLimited carries (ADR-056 §6 /
+// ADR-023). It is a WIRE CONTRACT between the two services: svcclient surfaces a GraphQL error
+// only as its message text, so classifying a transient rate-limit — the one inference outcome the
+// author fixes by waiting rather than by calling an operator — means matching on it here.
+//
+// Deliberately a prefix of the sentinel's text rather than the whole message, so wording may be
+// refined without breaking the match. If it ever does drift, the failure is BENIGN by
+// construction: the error falls through to the generic unavailable reason, which is exactly
+// today's behaviour — a rate-limited author sees a vaguer message, never a wrong outcome. The
+// alternative (teaching svcclient to decode GraphQL error extensions) is a core change for every
+// service and is the right home for this if a second caller ever needs typed error codes.
+const rateLimitMarker = "inference rate limit exceeded"
+
 // Infer carries one prompt to the active provider under the given tenant and returns the raw
-// candidate. Any error (not configured, no active provider, consent denied, or a transport
-// failure) propagates to the drafter, which reports it as an unavailable result — the caller
-// never sees a partial success.
+// candidate. Any error (not configured, no active provider, consent denied, rate limited, or a
+// transport failure) propagates to the drafter, which reports it as an unavailable result — the
+// caller never sees a partial success. A rate-limit rejection is classified into
+// nldraft.ErrRateLimited so the drafter can report the transient outcome without knowing the
+// transport; every other error stays opaque to it.
 func (c *inferenceClient) Infer(ctx context.Context, tenant, prompt, system string) (nldraft.InferOutput, error) {
 	request := map[string]any{"prompt": prompt}
 	if system != "" {
@@ -54,6 +70,11 @@ func (c *inferenceClient) Infer(ctx context.Context, tenant, prompt, system stri
 		} `json:"inferRuleCandidate"`
 	}
 	if err := c.client.Query(ctx, c.url, tenant, inferRuleCandidateMutation, vars, &out); err != nil {
+		if strings.Contains(err.Error(), rateLimitMarker) {
+			// Wrapped, not replaced: the drafter matches the sentinel while the underlying
+			// detail still reaches the server-side log.
+			return nldraft.InferOutput{}, fmt.Errorf("ai-inference: %w: %v", nldraft.ErrRateLimited, err)
+		}
 		return nldraft.InferOutput{}, fmt.Errorf("ai-inference: %w", err)
 	}
 	return nldraft.InferOutput{

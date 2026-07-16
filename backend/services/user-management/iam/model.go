@@ -173,6 +173,21 @@ type Tenant struct {
 	// it over a service token via the TenantGovernance query — the same seam
 	// outbound-connectors reads the outbound rate through — never from the JWT.
 	AiExternalEnabled *bool
+
+	// Per-tenant AI-inference governance overrides (ADR-056 §6 / ADR-023): how fast
+	// THIS tenant may spend inference budget, enforced by the ai-inference service at
+	// the one place external routing is authorized. A distinct dimension from the
+	// consent flag above — consent decides WHETHER the tenant's data may leave the
+	// boundary, this decides HOW OFTEN — and distinct from ingest/outbound, which
+	// govern device traffic rather than a paid external call.
+	//
+	// The rate is declared per MINUTE (not per second like the traffic dimensions):
+	// drafting is a human-paced authoring action, so a legible ceiling is "30 drafts
+	// a minute", not "0.5 a second". Same fail-safe semantics as every other knob:
+	// nil means "inherit the platform default", never unlimited, and a set value must
+	// be positive.
+	AiInferenceRequestsPerMinute *float64
+	AiInferenceBurst             *int
 }
 
 func (Tenant) TableName() string { return "iam_tenants" }

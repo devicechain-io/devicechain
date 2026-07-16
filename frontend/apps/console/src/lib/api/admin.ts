@@ -81,6 +81,8 @@ const TENANTS = graphql(`
       outboundMessagesPerSecond
       outboundBurst
       aiExternalEnabled
+      aiInferenceRequestsPerMinute
+      aiInferenceBurst
       createdAt
       updatedAt
     }
@@ -415,6 +417,8 @@ const CREATE_TENANT = graphql(`
       outboundMessagesPerSecond
       outboundBurst
       aiExternalEnabled
+      aiInferenceRequestsPerMinute
+      aiInferenceBurst
       createdAt
       updatedAt
     }
@@ -439,6 +443,8 @@ const UPDATE_TENANT = graphql(`
       outboundMessagesPerSecond
       outboundBurst
       aiExternalEnabled
+      aiInferenceRequestsPerMinute
+      aiInferenceBurst
       createdAt
       updatedAt
     }
@@ -463,6 +469,8 @@ const SET_TENANT_ENABLED = graphql(`
       outboundMessagesPerSecond
       outboundBurst
       aiExternalEnabled
+      aiInferenceRequestsPerMinute
+      aiInferenceBurst
       createdAt
       updatedAt
     }

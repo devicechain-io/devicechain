@@ -83,6 +83,22 @@ func (r *TenantGovernanceResolver) AiExternalEnabled() bool {
 	return r.t.AiExternalEnabled != nil && *r.t.AiExternalEnabled
 }
 
+// AiInferenceRequestsPerMinute / AiInferenceBurst resolve the tenant's AI-inference
+// rate overrides (ADR-056 §6 / ADR-023). Unlike the consent flag above these are
+// ordinary nullable ceilings: nil means "inherit the platform default", which is
+// itself a real limit. Read by the ai-inference service over a service token.
+func (r *TenantGovernanceResolver) AiInferenceRequestsPerMinute() *float64 {
+	return r.t.AiInferenceRequestsPerMinute
+}
+
+func (r *TenantGovernanceResolver) AiInferenceBurst() *int32 {
+	if r.t.AiInferenceBurst == nil {
+		return nil
+	}
+	v := int32(*r.t.AiInferenceBurst)
+	return &v
+}
+
 // TenantGovernance returns the governance overrides for the tenant the caller is
 // acting within — the read side of ADR-023 per-tenant limits (both the ingest and
 // the ADR-060 outbound dimensions), consumed by the enforcing services over a

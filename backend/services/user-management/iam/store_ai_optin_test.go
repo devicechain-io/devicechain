@@ -75,3 +75,57 @@ func TestUpdateTenantRoundTripsAiConsent(t *testing.T) {
 	require.NoError(t, s.UpdateTenant(ctx, tt))
 	require.Nil(t, reload().AiExternalEnabled)
 }
+
+// TestUpdateTenantRoundTripsAiGovernance pins the same write-side invariant for the
+// AI-inference rate overrides (ADR-056 §6 / ADR-023). UpdateTenant's column allowlist
+// is the hazard: a column missing from that Select is SILENTLY unwritable — the update
+// reports success while the old value survives. For a consent flag that fails open; for
+// a ceiling it means a tightened limit never takes effect and an operator reacting to a
+// runaway tenant would watch their change do nothing.
+//
+// This asserts the round trip at the DB, not just that applyTo sets the struct fields.
+func TestUpdateTenantRoundTripsAiGovernance(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.CreateTenant(ctx, &Tenant{Token: "acme"}))
+
+	reload := func() *Tenant {
+		got, err := s.TenantByToken(ctx, "acme")
+		require.NoError(t, err)
+		return got
+	}
+
+	// A freshly-created tenant declares no override (inherits the platform default).
+	require.Nil(t, reload().AiInferenceRequestsPerMinute)
+	require.Nil(t, reload().AiInferenceBurst)
+
+	// Declare an override.
+	rate, burst := 12.5, 4
+	tt := reload()
+	tt.AiInferenceRequestsPerMinute = &rate
+	tt.AiInferenceBurst = &burst
+	require.NoError(t, s.UpdateTenant(ctx, tt))
+	require.NotNil(t, reload().AiInferenceRequestsPerMinute)
+	require.Equal(t, 12.5, *reload().AiInferenceRequestsPerMinute)
+	require.NotNil(t, reload().AiInferenceBurst)
+	require.Equal(t, 4, *reload().AiInferenceBurst)
+
+	// TIGHTEN it — the case an operator reaches for against a runaway tenant.
+	tighter, tighterBurst := 2.0, 1
+	tt = reload()
+	tt.AiInferenceRequestsPerMinute = &tighter
+	tt.AiInferenceBurst = &tighterBurst
+	require.NoError(t, s.UpdateTenant(ctx, tt))
+	require.Equal(t, 2.0, *reload().AiInferenceRequestsPerMinute)
+	require.Equal(t, 1, *reload().AiInferenceBurst)
+
+	// Clear back to nil — must write NULL (inherit the default), not leave the old
+	// ceiling in place.
+	tt = reload()
+	tt.AiInferenceRequestsPerMinute = nil
+	tt.AiInferenceBurst = nil
+	require.NoError(t, s.UpdateTenant(ctx, tt))
+	require.Nil(t, reload().AiInferenceRequestsPerMinute)
+	require.Nil(t, reload().AiInferenceBurst)
+}

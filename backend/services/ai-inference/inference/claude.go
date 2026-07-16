@@ -102,6 +102,14 @@ type claudeResponse struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
+	// Usage is what the call actually cost. The Messages API reports it on every
+	// response; reading it is what makes inference spend observable at all (nothing
+	// else in the platform counts tokens). Absent from a provider that does not report
+	// usage, in which case it reads as zero — reported as unknown, never as free.
+	Usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
 }
 
 // Infer runs one prompt through the Messages API and returns the concatenated text
@@ -167,7 +175,12 @@ func (p *claudeProvider) Infer(ctx context.Context, in Input) (Output, error) {
 	if strings.TrimSpace(candidate) == "" {
 		return Output{}, fmt.Errorf("inference provider returned no text content")
 	}
-	return Output{Candidate: candidate, Model: parsed.Model}, nil
+	return Output{
+		Candidate:    candidate,
+		Model:        parsed.Model,
+		InputTokens:  parsed.Usage.InputTokens,
+		OutputTokens: parsed.Usage.OutputTokens,
+	}, nil
 }
 
 // snippet returns a whitespace-trimmed, length-bounded view of a provider error body

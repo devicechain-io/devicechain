@@ -492,7 +492,19 @@ functionalAreas:
     # NL-authoring inference path is cleanly UNAVAILABLE (a DENY-ALL consent checker) rather
     # than silently permissive; the ai:admin provider smoke test does not consult consent and
     # still works.
+    #
+    # Inference spend is RATE-GOVERNED per tenant (ADR-056 §6 / ADR-023): the authority to
+    # author a rule is not the authority to spend the operator's provider key without bound,
+    # so every tenant is metered against the platform ceiling below. A tenant may raise or
+    # lower its own ceiling via the ai_inference_* overrides on its control-plane row (set in
+    # the console's admin tenant screen); an unset override inherits these. There is no
+    # "unlimited" setting: 0 means UNSET here (as it does for every tunable above) and takes
+    # the default, while a negative value fails startup — neither disables metering.
     config: {}
-      # inferenceTimeoutMs: 60000   # per-call ceiling on one outbound provider call (max 120000)
-      # maxPromptBytes: 131072      # cap on an inbound prompt (+ its schema context); 128 KiB default
-      # maxOutputTokens: 2048       # cap on the provider's generated output for one call (a rule candidate is small)
+      # inferenceTimeoutMs: 60000        # per-call ceiling on one outbound provider call (max 120000)
+      # maxPromptBytes: 131072           # cap on an inbound prompt (+ its schema context); 128 KiB default
+      # maxOutputTokens: 2048            # cap on the provider's generated output for one call (a rule candidate is small)
+      # inferenceRequestsPerMinute: 30   # PLATFORM per-tenant rate ceiling. Declared per minute: drafting is a
+      #                                  # human-paced authoring action. One draft costs up to 3 provider calls
+      #                                  # (the bounded repair loop), so 30/min is ~10 drafts a minute sustained.
+      # inferenceBurst: 15               # tokens a tenant may spend back-to-back before the rate binds (~5 drafts)

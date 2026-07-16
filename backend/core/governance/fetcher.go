@@ -26,6 +26,26 @@ type Dimension struct {
 	// default", which is itself a limit, never unlimited.
 	RateField  string
 	BurstField string
+	// PerSecondScale converts this dimension's DECLARED rate unit into the
+	// per-second rate the token bucket meters on. A dimension declared per second
+	// leaves it 1; one declared per minute sets 1.0/60. It exists so a dimension can
+	// be declared in the unit that reads naturally to an operator without every
+	// enforcing service open-coding the conversion — see PerSecond.
+	PerSecondScale float64
+}
+
+// PerSecond converts a rate declared in this dimension's unit into the per-second
+// rate core.TenantRateLimiter meters on. Both the platform default and a tenant
+// override must pass through it, so the two can never disagree about the unit.
+//
+// A non-positive scale is treated as 1 (identity) rather than collapsing the rate
+// to zero: a zero-value Dimension is a programming error, and metering at the
+// declared number is a far safer reading of one than metering at nothing.
+func (d Dimension) PerSecond(declared float64) float64 {
+	if d.PerSecondScale <= 0 {
+		return declared
+	}
+	return declared * d.PerSecondScale
 }
 
 // The governance dimensions declared on the iam_tenants control-plane row and
@@ -33,10 +53,25 @@ type Dimension struct {
 // tenant overriding one inherits the platform default for the others.
 var (
 	// Ingest governs inbound device telemetry admission at event-sources (ADR-023 G.1/G.2).
-	Ingest = Dimension{Name: "ingest", RateField: "ingestMessagesPerSecond", BurstField: "ingestBurst"}
+	Ingest = Dimension{
+		Name: "ingest", RateField: "ingestMessagesPerSecond", BurstField: "ingestBurst",
+		PerSecondScale: 1,
+	}
 	// Outbound governs REACT connector egress, charged at both the source
 	// (event-processing) and the sink (outbound-connectors) — ADR-060 SD-3.
-	Outbound = Dimension{Name: "outbound", RateField: "outboundMessagesPerSecond", BurstField: "outboundBurst"}
+	Outbound = Dimension{
+		Name: "outbound", RateField: "outboundMessagesPerSecond", BurstField: "outboundBurst",
+		PerSecondScale: 1,
+	}
+	// AIInference governs how fast a tenant may spend AI inference budget, enforced
+	// by ai-inference at the one place external routing is authorized (ADR-056 §6).
+	// Declared per MINUTE, unlike the device-traffic dimensions above: drafting is a
+	// human-paced authoring action, so the legible operator ceiling is "30 a minute"
+	// rather than "0.5 a second".
+	AIInference = Dimension{
+		Name: "ai-inference", RateField: "aiInferenceRequestsPerMinute", BurstField: "aiInferenceBurst",
+		PerSecondScale: 1.0 / 60.0,
+	}
 )
 
 // serviceFetcher fetches a tenant's limits for one dimension from
@@ -117,7 +152,10 @@ func resolveLimits(raw map[string]json.RawMessage, def Limits, dim Dimension) (L
 	var floored []string
 	if v, present := raw[dim.RateField]; present && !isNull(v) {
 		if rate, ok := parseRate(v); ok {
-			limits.MessagesPerSecond = rate
+			// The override is declared in the dimension's own unit; the bucket meters
+			// per second. Converting here (rather than at the enforcing service) is what
+			// keeps an override and its platform default from disagreeing about the unit.
+			limits.MessagesPerSecond = dim.PerSecond(rate)
 		} else {
 			floored = append(floored, dim.RateField)
 		}

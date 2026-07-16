@@ -116,3 +116,41 @@ func TestClaudeDefaultEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(p.url, anthropicDefaultBase+anthropicMessagesPath))
 }
+
+// The Messages API reports what every call cost; the provider must surface it. This is
+// the only place the platform learns what inference spend actually is, so a silently
+// dropped usage block would make the spend metrics read zero forever.
+func TestClaudeInferReportsUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],` +
+			`"usage":{"input_tokens":123,"output_tokens":45}}`))
+	}))
+	defer srv.Close()
+
+	p, err := newClaudeProvider(srv.Client(), srv.URL, "m", "k", 16)
+	require.NoError(t, err)
+	out, err := p.Infer(context.Background(), Input{Prompt: "hi"})
+	require.NoError(t, err)
+	assert.Equal(t, 123, out.InputTokens)
+	assert.Equal(t, 45, out.OutputTokens)
+}
+
+// A provider that reports no usage yields zeros, which downstream reads as UNKNOWN
+// rather than free — the call still succeeds and still returns its candidate.
+func TestClaudeInferMissingUsageIsZero(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer srv.Close()
+
+	// A key that does not occur in the canned candidate: the provider scrubs any
+	// occurrence of the key from the text it returns, so a one-character key like "k"
+	// would be redacted out of the word "ok" and mask what this test is asserting.
+	p, err := newClaudeProvider(srv.Client(), srv.URL, "m", "sk-distinct", 16)
+	require.NoError(t, err)
+	out, err := p.Infer(context.Background(), Input{Prompt: "hi"})
+	require.NoError(t, err)
+	assert.Equal(t, "ok", out.Candidate)
+	assert.Zero(t, out.InputTokens)
+	assert.Zero(t, out.OutputTokens)
+}

@@ -35,6 +35,22 @@ var ErrUnavailable = errors.New("inference is unavailable")
 // opt in rather than tell an operator to fix configuration.
 var ErrConsentRequired = errors.New("tenant has not opted in to external AI routing")
 
+// ErrRateLimited is returned when the tenant is over its per-tenant inference rate
+// ceiling (ADR-056 §6 / ADR-023). Distinct from ErrUnavailable because it is
+// TRANSIENT and actionable in a way the others are not: nothing is misconfigured and
+// the caller should simply retry shortly, whereas "unavailable" tells an author to go
+// find an operator. Leaking "you are going too fast" to the caller is safe — it
+// reveals only the caller's own behaviour against a ceiling their own operator set.
+var ErrRateLimited = errors.New("inference rate limit exceeded for this tenant; retry shortly")
+
+// RateGate meters a tenant's inference calls against its effective ceiling. Allow
+// reports whether this call may proceed and CONSUMES budget when it returns true, so
+// it must be called once per call actually made, at the point the call is committed
+// to. core.TenantRateLimiter satisfies it.
+type RateGate interface {
+	Allow(tenant string) bool
+}
+
 // Input is a single inference request: an optional system prompt and the user prompt.
 // The output-token cap and the endpoint are baked into the resolved Provider (from the
 // service config + the provider row), not carried here, so a caller cannot widen them.
@@ -54,6 +70,13 @@ type Output struct {
 	Candidate string
 	// Model is the model id the provider reported answering with (for observability).
 	Model string
+	// InputTokens / OutputTokens are what the call actually cost, as the provider
+	// reported it. Zero means the provider did not report usage (unknown), not free —
+	// so a consumer must treat 0 as "no data", never as evidence of a cheap call. They
+	// exist to make inference spend OBSERVABLE (a metric + a log); nothing enforces a
+	// cumulative budget against them, and the rate ceiling does not read them.
+	InputTokens  int
+	OutputTokens int
 }
 
 // Provider is the provider-agnostic inference call. A single implementation ships at

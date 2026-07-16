@@ -44,18 +44,36 @@ func (r *SchemaResolver) runInference(ctx context.Context, resolved *inference.R
 	if err != nil {
 		return nil, err
 	}
+	// Counted for BOTH entrypoints: an operator smoke test spends the same real budget
+	// a tenant draft does, so excluding it would understate what the key actually cost.
+	r.Metrics.recordUsage(out.InputTokens, out.OutputTokens)
 	return &InferenceResultResolver{candidate: out.Candidate, model: out.Model, provider: resolved.Token}, nil
 }
 
-// tenantSafeError coarsens an inference error for the TENANT-facing path. An
-// ErrConsentRequired is surfaced as-is (actionable — the tenant opts in); everything
-// else collapses to the bare ErrUnavailable sentinel with the detail logged
-// server-side, so an unprivileged caller never learns internal topology (the
-// user-management URL, the provider endpoint) or which specific gate tripped. The
-// operator testAiProvider path keeps the detailed error (same trust tier as the config).
+// tenantSafeError coarsens an inference error for the TENANT-facing path. Two
+// sentinels are surfaced as-is because each is actionable by the caller and neither
+// reveals anything but the caller's own situation: ErrConsentRequired (the tenant opts
+// in) and ErrRateLimited (the caller retries shortly). Everything else collapses to
+// the bare ErrUnavailable sentinel with the detail logged server-side, so an
+// unprivileged caller never learns internal topology (the user-management URL, the
+// provider endpoint) or which specific gate tripped. The operator testAiProvider path
+// keeps the detailed error (same trust tier as the config).
+//
+// Rate-limiting is NOT logged at Warn: a rising rate-limited count is the operator's
+// signal (see the shed metric), and a per-call warn would flood the log for exactly
+// the sustained-over-quota caller it fires on — the ADR-023 G.1 lesson.
+// Each branch returns the BARE sentinel rather than err, so the coarsening is
+// structural: a future producer that wraps a sentinel with detail (a tenant id, an
+// upstream message) cannot leak that wrapping through this seam by accident. Today's
+// producers return bare sentinels, so this changes nothing observable.
 func tenantSafeError(err error) error {
-	if err == nil || errors.Is(err, inference.ErrConsentRequired) {
-		return err
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, inference.ErrConsentRequired):
+		return inference.ErrConsentRequired
+	case errors.Is(err, inference.ErrRateLimited):
+		return inference.ErrRateLimited
 	}
 	log.Warn().Err(err).Msg("inferRuleCandidate inference failed")
 	return inference.ErrUnavailable
@@ -84,14 +102,19 @@ func (r *SchemaResolver) InferRuleCandidate(ctx context.Context, args struct {
 	if err := r.Inference.ValidatePrompt(args.Request.systemPrompt(), args.Request.Prompt); err != nil {
 		return nil, err
 	}
+	// Every exit past this point records exactly one outcome, so the served + shed +
+	// denied counts reconcile against the requests that reached the cascade.
 	resolved, err := r.Inference.ResolveForTenant(ctx, tenant)
 	if err != nil {
+		r.Metrics.recordCall(outcomeFor(err))
 		return nil, tenantSafeError(err)
 	}
 	result, err := r.runInference(ctx, resolved, args.Request)
 	if err != nil {
+		r.Metrics.recordCall(outcomeFor(err))
 		return nil, tenantSafeError(err)
 	}
+	r.Metrics.recordCall(outcomeServed)
 	return result, nil
 }
 

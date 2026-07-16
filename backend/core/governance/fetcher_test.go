@@ -116,6 +116,19 @@ func TestResolveLimits_FractionalRateLegalBurstNot(t *testing.T) {
 	assert.Equal(t, []string{"ingestBurst"}, floored)
 }
 
+// The AI dimension's override is declared per MINUTE and must reach the bucket as a
+// per-second rate. Getting this wrong by 60x in either direction is the difference
+// between no governance at all and locking authors out.
+func TestResolveLimits_AIInferenceRateIsPerMinute(t *testing.T) {
+	limits, floored := resolveLimits(map[string]json.RawMessage{
+		"aiInferenceRequestsPerMinute": raw("30"),
+		"aiInferenceBurst":             raw("15"),
+	}, Limits{MessagesPerSecond: 0.5, Burst: 15}, AIInference)
+	assert.InDelta(t, 0.5, limits.MessagesPerSecond, 1e-9, "30 a minute is 0.5 a second")
+	assert.Equal(t, 15, limits.Burst, "burst is a count and is never scaled")
+	assert.Empty(t, floored)
+}
+
 // The fetcher reads only its own dimension: an outbound override must not leak
 // into an ingest resolver.
 func TestResolveLimits_IgnoresOtherDimensions(t *testing.T) {

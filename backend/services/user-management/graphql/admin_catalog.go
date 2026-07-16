@@ -64,6 +64,18 @@ func (r *AdminTenantResolver) OutboundBurst() *int32 {
 // means the tenant is not opted in.
 func (r *AdminTenantResolver) AiExternalEnabled() *bool { return r.M.AiExternalEnabled }
 
+func (r *AdminTenantResolver) AiInferenceRequestsPerMinute() *float64 {
+	return r.M.AiInferenceRequestsPerMinute
+}
+
+func (r *AdminTenantResolver) AiInferenceBurst() *int32 {
+	if r.M.AiInferenceBurst == nil {
+		return nil
+	}
+	v := int32(*r.M.AiInferenceBurst)
+	return &v
+}
+
 // Config resolves the AdminTenant.config field: the freeform config map as a
 // JSON object string, or null when unset.
 func (r *AdminTenantResolver) Config() (*string, error) {
@@ -176,25 +188,29 @@ func (r *AdminResolver) DeleteRole(ctx context.Context, args struct {
 
 // adminTenantCreateInput mirrors AdminTenantCreateRequest.
 type adminTenantCreateInput struct {
-	Token                     string
-	Name                      *string
-	Config                    *string
-	IngestMessagesPerSecond   *float64
-	IngestBurst               *int32
-	OutboundMessagesPerSecond *float64
-	OutboundBurst             *int32
-	AiExternalEnabled         *bool
+	Token                        string
+	Name                         *string
+	Config                       *string
+	IngestMessagesPerSecond      *float64
+	IngestBurst                  *int32
+	OutboundMessagesPerSecond    *float64
+	OutboundBurst                *int32
+	AiExternalEnabled            *bool
+	AiInferenceRequestsPerMinute *float64
+	AiInferenceBurst             *int32
 }
 
 // adminTenantUpdateInput mirrors AdminTenantUpdateRequest.
 type adminTenantUpdateInput struct {
-	Name                      *string
-	Config                    *string
-	IngestMessagesPerSecond   *float64
-	IngestBurst               *int32
-	OutboundMessagesPerSecond *float64
-	OutboundBurst             *int32
-	AiExternalEnabled         *bool
+	Name                         *string
+	Config                       *string
+	IngestMessagesPerSecond      *float64
+	IngestBurst                  *int32
+	OutboundMessagesPerSecond    *float64
+	OutboundBurst                *int32
+	AiExternalEnabled            *bool
+	AiInferenceRequestsPerMinute *float64
+	AiInferenceBurst             *int32
 }
 
 // intPtr adapts an optional GraphQL Int (*int32) to the model's *int, preserving
@@ -220,11 +236,15 @@ func (r *AdminResolver) CreateTenant(ctx context.Context, args struct {
 	}
 	tenant, err := r.getAdminService(ctx).CreateTenant(ctx, admin.TenantInput{
 		Token: args.Request.Token, Name: strOrEmpty(args.Request.Name), Config: cfg,
-		IngestMessagesPerSecond:   args.Request.IngestMessagesPerSecond,
-		IngestBurst:               intPtr(args.Request.IngestBurst),
-		OutboundMessagesPerSecond: args.Request.OutboundMessagesPerSecond,
-		OutboundBurst:             intPtr(args.Request.OutboundBurst),
-		AiExternalEnabled:         args.Request.AiExternalEnabled,
+		GovernanceOverrides: admin.GovernanceOverrides{
+			IngestMessagesPerSecond:      args.Request.IngestMessagesPerSecond,
+			IngestBurst:                  intPtr(args.Request.IngestBurst),
+			OutboundMessagesPerSecond:    args.Request.OutboundMessagesPerSecond,
+			OutboundBurst:                intPtr(args.Request.OutboundBurst),
+			AiInferenceRequestsPerMinute: args.Request.AiInferenceRequestsPerMinute,
+			AiInferenceBurst:             intPtr(args.Request.AiInferenceBurst),
+		},
+		AiExternalEnabled: args.Request.AiExternalEnabled,
 	})
 	return wrapTenant(tenant, err)
 }
@@ -243,11 +263,15 @@ func (r *AdminResolver) UpdateTenant(ctx context.Context, args struct {
 	}
 	tenant, err := r.getAdminService(ctx).UpdateTenant(ctx, args.Token, admin.TenantMutableInput{
 		Name: strOrEmpty(args.Request.Name), Config: cfg,
-		IngestMessagesPerSecond:   args.Request.IngestMessagesPerSecond,
-		IngestBurst:               intPtr(args.Request.IngestBurst),
-		OutboundMessagesPerSecond: args.Request.OutboundMessagesPerSecond,
-		OutboundBurst:             intPtr(args.Request.OutboundBurst),
-		AiExternalEnabled:         args.Request.AiExternalEnabled,
+		GovernanceOverrides: admin.GovernanceOverrides{
+			IngestMessagesPerSecond:      args.Request.IngestMessagesPerSecond,
+			IngestBurst:                  intPtr(args.Request.IngestBurst),
+			OutboundMessagesPerSecond:    args.Request.OutboundMessagesPerSecond,
+			OutboundBurst:                intPtr(args.Request.OutboundBurst),
+			AiInferenceRequestsPerMinute: args.Request.AiInferenceRequestsPerMinute,
+			AiInferenceBurst:             intPtr(args.Request.AiInferenceBurst),
+		},
+		AiExternalEnabled: args.Request.AiExternalEnabled,
 	})
 	return wrapTenant(tenant, err)
 }

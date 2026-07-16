@@ -287,10 +287,15 @@ func (s *Store) CreateTenant(ctx context.Context, t *Tenant) error {
 // its zero value (false), and a nil pointer writes NULL — so a revoked consent
 // actually clears rather than leaving a stale `true` that would keep routing the
 // tenant's data to an external model (a fail-OPEN bug this list guards against).
+//
+// EVERY admin-mutable governance column must appear here. One omitted from the list
+// is silently unwritable: the update appears to succeed while the old value
+// survives, which for a limit means a tightened ceiling never takes effect.
 func (s *Store) UpdateTenant(ctx context.Context, t *Tenant) error {
 	return s.sys(ctx).Model(t).
 		Select("Name", "Config", "IngestMessagesPerSecond", "IngestBurst",
-			"OutboundMessagesPerSecond", "OutboundBurst", "AiExternalEnabled").
+			"OutboundMessagesPerSecond", "OutboundBurst", "AiExternalEnabled",
+			"AiInferenceRequestsPerMinute", "AiInferenceBurst").
 		Updates(t).Error
 }
 
