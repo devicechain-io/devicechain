@@ -39,6 +39,9 @@ import AdminLayout from '@/routes/admin/AdminLayout';
 import AdminTenantsPage from '@/routes/admin/TenantsPage';
 import AdminNewTenantPage from '@/routes/admin/tenants/NewTenantPage';
 import AdminTenantDetailPage from '@/routes/admin/tenants/TenantDetailPage';
+import AdminTiersPage from '@/routes/admin/TiersPage';
+import AdminNewTierPage from '@/routes/admin/tiers/NewTierPage';
+import AdminTierDetailPage from '@/routes/admin/tiers/TierDetailPage';
 import AdminIdentitiesPage from '@/routes/admin/IdentitiesPage';
 import AdminNewIdentityPage from '@/routes/admin/identities/NewIdentityPage';
 import AdminIdentityDetailPage from '@/routes/admin/identities/IdentityDetailPage';
@@ -131,6 +134,9 @@ export default function App() {
           <Route path="tenants" element={<AdminTenantsPage />} />
           <Route path="tenants/new" element={<AdminNewTenantPage />} />
           <Route path="tenants/:token" element={<AdminTenantDetailPage />} />
+          <Route path="tiers" element={<AdminTiersPage />} />
+          <Route path="tiers/new" element={<AdminNewTierPage />} />
+          <Route path="tiers/:token" element={<AdminTierDetailPage />} />
           <Route path="identities" element={<AdminIdentitiesPage />} />
           <Route path="identities/new" element={<AdminNewIdentityPage />} />
           <Route path="identities/:email" element={<AdminIdentityDetailPage />} />

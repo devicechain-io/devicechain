@@ -103,6 +103,73 @@ type AdminTenant {
     # routed externally, these gate HOW OFTEN.
     aiInferenceRequestsPerMinute: Float
     aiInferenceBurst: Int
+    # What this tenant is ACTUALLY metered at for every governance dimension, and
+    # WHY (ADR-065 decision 7): the cascade above resolved down to one value per
+    # dimension, carrying the level that produced it and the levels it beat.
+    #
+    # This is the readable form of the fields above, not a replacement for them:
+    # those are the tenant's own overrides (what a write sets), this is the result
+    # of folding them onto the tier. Resolved by the same code the data plane reads
+    # its ceilings through, so it cannot claim something the platform does not do.
+    effectiveSettings: [AdminTenantSetting!]!
+}
+
+# One governance dimension the platform declares (ADR-023): a rate/burst pair a
+# tenant may be limited on, and which a tier may set a default for.
+#
+# Enumerated rather than hardcoded by callers so a tier editor or an
+# effective-settings view renders every dimension the platform actually has — a
+# fourth becomes configurable and visible the day it is declared, instead of
+# shipping a ceiling no operator can see or set.
+type AdminGovernanceDimension {
+    # Short stable id ("ingest"), also the key an operator-facing caller matches on.
+    name: String!
+    # Operator-facing heading ("Ingest", "AI drafting").
+    label: String!
+    # The tier config keys this dimension's rate and burst are set under — the same
+    # names the enforcing service reads off the wire.
+    rateField: String!
+    burstField: String!
+    # The unit the RATE is declared in ("events/sec", "requests/min"). Bursts are a
+    # count and have no unit.
+    rateUnit: String!
+}
+
+# A tenant's effective rate for one dimension, with the provenance that makes it
+# inspectable as tier + delta rather than an opaque merged number.
+type AdminRateSetting {
+    # Which level produced the effective value: "override" (the tenant carries an
+    # audited exception), "tier" (its packaging decides), or "platform-default".
+    source: String!
+    # The effective rate. NULL when source is "platform-default" — and that is not a
+    # gap to fill in: the platform default is NOT user-management's to state. Each
+    # enforcing service constructs its own from its own Helm config, and the outbound
+    # dimension has two independent copies (event-processing at the REACT source,
+    # outbound-connectors at the sink, ADR-060 SD-3) which may legally differ. A
+    # number here would be a third copy that drifts the first time a chart value is
+    # edited. It is still a real ceiling, never unlimited (ADR-023).
+    value: Float
+    # What the tier declares for this dimension (null if it declares none), and the
+    # tenant's own override (null if it carries none) — shown together so an operator
+    # sees the packaging and the exception to it, not just the winner.
+    tier: Float
+    override: Float
+}
+
+# A tenant's effective burst for one dimension. As AdminRateSetting, but a burst is
+# a whole count.
+type AdminBurstSetting {
+    source: String!
+    value: Int
+    tier: Int
+    override: Int
+}
+
+# What a tenant is effectively metered at for one dimension (ADR-065 decision 7).
+type AdminTenantSetting {
+    dimension: AdminGovernanceDimension!
+    rate: AdminRateSetting!
+    burst: AdminBurstSetting!
 }
 
 # A globally-defined, named bundle of authorities (ADR-008 RBAC / ADR-033). Scope
@@ -311,6 +378,10 @@ type Query {
     # authorities rather than one of its own: a tier is tenant-registry packaging,
     # administered on the same plane by the same operator.
     tenantTiers: [AdminTenantTier!]!
+    # The governance dimensions the platform declares (requires tenant:read), so a
+    # tier editor can offer exactly the settings a tier may carry rather than keep
+    # its own list of them. Static for a given build; not tenant-specific.
+    governanceDimensions: [AdminGovernanceDimension!]!
     # List the role catalog, optionally filtered to a scope (requires role:read).
     roles(scope: String): [AdminRole!]!
     # The known authority vocabulary (sorted, includes "*"), for offering a

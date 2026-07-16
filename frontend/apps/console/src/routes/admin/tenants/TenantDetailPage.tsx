@@ -14,6 +14,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { listTenants, setTenantEnabled, deleteTenant } from '@/lib/api/admin';
 import { BackLink, StatusBadge, errMessage, useReload } from '@/routes/common';
 import { TenantForm } from '@/routes/admin/tenants/TenantForm';
+import { TenantSettingsPanel } from '@/routes/admin/tenants/TenantSettingsPanel';
 
 export default function TenantDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
@@ -101,15 +102,23 @@ export default function TenantDetailPage() {
         </div>
       }
     >
-      <SectionPanel>
-        <TenantForm
-          tenant={tenant}
-          onDone={(m) => {
-            toast(m);
-            reload();
-          }}
-        />
-      </SectionPanel>
+      <div className="space-y-6">
+        <SectionPanel>
+          <TenantForm
+            tenant={tenant}
+            onDone={(m) => {
+              toast(m);
+              reload();
+            }}
+          />
+        </SectionPanel>
+        {/* Rendered below the form, and re-read after every save: this is the
+            RESULT of what the form sets folded onto the tenant's tier, not another
+            way to edit it. */}
+        <SectionPanel title="Effective settings">
+          <TenantSettingsPanel tenant={tenant} />
+        </SectionPanel>
+      </div>
     </PageShell>
   );
 }

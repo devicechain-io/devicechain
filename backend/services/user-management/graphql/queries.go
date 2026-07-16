@@ -64,39 +64,24 @@ type TenantGovernanceResolver struct {
 	t *iam.Tenant
 }
 
-// tierOf returns the tenant's tier, or nil when it is not loaded. The tier is a
-// required FK and both read paths preload it, so nil means a caller loaded the
-// tenant some other way; the fold below then simply degrades to "no tier setting",
-// i.e. the pre-ADR-065 behavior of override-or-platform-default. That is the
-// fail-safe direction: a missed preload costs a tier's tuning, never a ceiling.
-func (r *TenantGovernanceResolver) tierOf() *iam.TenantTier { return r.t.Tier }
-
-// rate folds one dimension's rate: the tenant's own override wins, else the tier's
-// setting, else null (inherit the platform default).
+// rate folds one dimension's rate down the ADR-065 decision 5 cascade — the
+// tenant's own override, else the tier's setting, else null (inherit the platform
+// default).
 //
-// An override is only allowed to win if it is USABLE. An unusable one (non-positive)
-// is unreachable through the API — the write path rejects it — so it can only arrive
-// by a direct DB write; but passing it through would send it to the consumer, which
-// floors an unusable value to the PLATFORM DEFAULT and would thereby skip the tier
-// entirely. That is the one case where "the consumer already folds onto the default"
-// is not equivalent to D5's cascade: a gold tenant carrying a junk -5 override would
-// meter at 1000/s instead of its tier's 2000/s. Judging it here keeps the levels in
-// the order the ADR specifies — override → tier → platform default.
-func (r *TenantGovernanceResolver) rate(override *float64, dim governance.Dimension) *float64 {
-	if override != nil && iam.UsableRate(*override) {
-		return override
-	}
-	return r.tierOf().RateFor(dim)
+// The fold itself lives on iam.Tenant, not here, because the admin plane resolves
+// the SAME cascade to show an operator what a tenant is metered at and why. Two
+// implementations would eventually disagree, and the one an operator reads would be
+// the one that is wrong. This surface simply drops the provenance the admin plane
+// keeps: a service enforcing a ceiling has no business knowing WHY the number is
+// what it is.
+func (r *TenantGovernanceResolver) rate(dim governance.Dimension) *float64 {
+	v, _ := r.t.EffectiveRate(dim)
+	return v
 }
 
 // burst folds one dimension's burst the same way, adapting to the GraphQL Int.
-func (r *TenantGovernanceResolver) burst(override *int, dim governance.Dimension) *int32 {
-	var v *int
-	if override != nil && iam.UsableBurst(*override) {
-		v = override
-	} else {
-		v = r.tierOf().BurstFor(dim)
-	}
+func (r *TenantGovernanceResolver) burst(dim governance.Dimension) *int32 {
+	v, _ := r.t.EffectiveBurst(dim)
 	if v == nil {
 		return nil
 	}
@@ -105,19 +90,19 @@ func (r *TenantGovernanceResolver) burst(override *int, dim governance.Dimension
 }
 
 func (r *TenantGovernanceResolver) IngestMessagesPerSecond() *float64 {
-	return r.rate(r.t.IngestMessagesPerSecond, governance.Ingest)
+	return r.rate(governance.Ingest)
 }
 
 func (r *TenantGovernanceResolver) IngestBurst() *int32 {
-	return r.burst(r.t.IngestBurst, governance.Ingest)
+	return r.burst(governance.Ingest)
 }
 
 func (r *TenantGovernanceResolver) OutboundMessagesPerSecond() *float64 {
-	return r.rate(r.t.OutboundMessagesPerSecond, governance.Outbound)
+	return r.rate(governance.Outbound)
 }
 
 func (r *TenantGovernanceResolver) OutboundBurst() *int32 {
-	return r.burst(r.t.OutboundBurst, governance.Outbound)
+	return r.burst(governance.Outbound)
 }
 
 // AiExternalEnabled resolves the tenant's external-AI consent as a non-null
@@ -135,11 +120,11 @@ func (r *TenantGovernanceResolver) AiExternalEnabled() bool {
 // ordinary nullable ceilings: nil means "inherit the platform default", which is
 // itself a real limit. Read by the ai-inference service over a service token.
 func (r *TenantGovernanceResolver) AiInferenceRequestsPerMinute() *float64 {
-	return r.rate(r.t.AiInferenceRequestsPerMinute, governance.AIInference)
+	return r.rate(governance.AIInference)
 }
 
 func (r *TenantGovernanceResolver) AiInferenceBurst() *int32 {
-	return r.burst(r.t.AiInferenceBurst, governance.AIInference)
+	return r.burst(governance.AIInference)
 }
 
 // TenantGovernance returns the governance overrides for the tenant the caller is
