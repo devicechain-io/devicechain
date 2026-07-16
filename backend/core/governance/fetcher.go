@@ -48,31 +48,63 @@ func (d Dimension) PerSecond(declared float64) float64 {
 	return declared * d.PerSecondScale
 }
 
+// allDimensions accumulates every Dimension declared below. It is populated by
+// register at package init, NOT hand-maintained: a list restated beside the
+// declarations is a list that silently stops matching them, and the whole value of
+// enumerating dimensions (see AllDimensions) is that a consumer deriving keys from
+// them cannot drift. Declaring a Dimension through register is what puts it in the
+// platform's vocabulary.
+var allDimensions []Dimension
+
+// register records a Dimension as it is declared and returns it, so the declaration
+// site IS the registration site and the two cannot disagree.
+func register(d Dimension) Dimension {
+	allDimensions = append(allDimensions, d)
+	return d
+}
+
 // The governance dimensions declared on the iam_tenants control-plane row and
 // exposed by user-management's tenantGovernance query. Each is independent: a
 // tenant overriding one inherits the platform default for the others.
 var (
 	// Ingest governs inbound device telemetry admission at event-sources (ADR-023 G.1/G.2).
-	Ingest = Dimension{
+	Ingest = register(Dimension{
 		Name: "ingest", RateField: "ingestMessagesPerSecond", BurstField: "ingestBurst",
 		PerSecondScale: 1,
-	}
+	})
 	// Outbound governs REACT connector egress, charged at both the source
 	// (event-processing) and the sink (outbound-connectors) — ADR-060 SD-3.
-	Outbound = Dimension{
+	Outbound = register(Dimension{
 		Name: "outbound", RateField: "outboundMessagesPerSecond", BurstField: "outboundBurst",
 		PerSecondScale: 1,
-	}
+	})
 	// AIInference governs how fast a tenant may spend AI inference budget, enforced
 	// by ai-inference at the one place external routing is authorized (ADR-056 §6).
 	// Declared per MINUTE, unlike the device-traffic dimensions above: drafting is a
 	// human-paced authoring action, so the legible operator ceiling is "30 a minute"
 	// rather than "0.5 a second".
-	AIInference = Dimension{
+	AIInference = register(Dimension{
 		Name: "ai-inference", RateField: "aiInferenceRequestsPerMinute", BurstField: "aiInferenceBurst",
 		PerSecondScale: 1.0 / 60.0,
-	}
+	})
 )
+
+// AllDimensions returns every governance dimension the platform declares — the ones
+// registered above, not a restatement of them.
+//
+// It exists so a consumer can enumerate the dimensions rather than keep its own
+// list. user-management builds its ADR-065 tenant-tier config key registry from
+// this, so a tier's settings keys are the same names as the wire fields an enforcing
+// service reads, and a fourth dimension gets tier support the day it is declared
+// rather than the day someone remembers to add it in two places.
+//
+// Returns a COPY: the backing array is package state, and handing it out would let
+// one caller's append or index-write reach every other caller.
+func AllDimensions() []Dimension {
+	out := make([]Dimension, len(allDimensions))
+	copy(out, allDimensions)
+	return out
+}
 
 // serviceFetcher fetches a tenant's limits for one dimension from
 // user-management's data-plane governance query over a service token (ADR-044).

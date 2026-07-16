@@ -105,6 +105,11 @@ func (r *AdminResolver) CreateTenantTier(ctx context.Context, args struct {
 }
 
 // UpdateTenantTier updates a tier by token (requires tenant:write).
+//
+// An OMITTED config leaves the tier's settings untouched; an explicit one replaces
+// them. The distinction is carried all the way down (hence the pointer) rather than
+// collapsed here: a rename that omits config must not clear it, because that would
+// silently drop every tenant at the tier to the platform default.
 func (r *AdminResolver) UpdateTenantTier(ctx context.Context, args struct {
 	Token   string
 	Request adminTenantTierUpdateInput
@@ -112,9 +117,20 @@ func (r *AdminResolver) UpdateTenantTier(ctx context.Context, args struct {
 	if err := auth.Authorize(ctx, auth.TenantWrite); err != nil {
 		return nil, err
 	}
-	cfg, err := parseConfig(args.Request.Config)
-	if err != nil {
-		return nil, err
+	var cfg *map[string]any
+	if args.Request.Config != nil {
+		parsed, err := parseConfig(args.Request.Config)
+		if err != nil {
+			return nil, err
+		}
+		// A supplied-but-empty config ("{}" or "") clears the settings — the
+		// deliberate way to say "this tier declares nothing", which parseConfig
+		// renders as a nil map. Normalize it to a non-nil empty map so the service
+		// still sees "supplied".
+		if parsed == nil {
+			parsed = map[string]any{}
+		}
+		cfg = &parsed
 	}
 	return wrapTier(r.getAdminService(ctx).UpdateTenantTier(ctx, args.Token, admin.TierMutableInput{
 		Name:        strOrEmpty(args.Request.Name),

@@ -59,10 +59,11 @@ input AdminTenantTierCreateRequest {
 # Data to update a tier (its token is fixed). Editing a tier changes behavior for
 # every tenant at it, live.
 #
-# A FULL REPLACE of the mutable fields, not a patch: an omitted field is CLEARED,
-# not left alone. Send the tier's current values for anything you are not changing —
-# in particular, a rename that omits config wipes the tier's settings for every
-# tenant at it.
+# name and description are a full replace: omitting one CLEARS it. config is not —
+# omitting it leaves the tier's settings untouched, and passing "{}" clears them.
+# The asymmetry is deliberate: clearing a name is cosmetic, while clearing config
+# silently re-prices every tenant at the tier (they fall back to the platform default
+# within a minute), which is too destructive to reach by omission.
 input AdminTenantTierUpdateRequest {
     name: String
     description: String

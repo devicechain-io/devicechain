@@ -26,19 +26,51 @@ func dropTables(tx *gorm.DB, tables []string) error {
 
 // seededTiers is the tenant tier vocabulary the baseline installs (ADR-065
 // decision 4). It is a SEED, not a definition: an operator may edit these rows or
-// add their own, because what "bronze includes" is a product decision that changes,
-// and a code deploy is the wrong lifecycle for it.
+// add their own — live, with no deploy — because what "bronze includes" is a product
+// decision that changes. Nothing in the code may assume these values still hold.
 //
-// Config is deliberately empty. The settings keys arrive with the key registry that
-// validates them (decision 8) — a key no validator knows about is precisely the
-// fail-open blob ADR-023 forbids.
+// Config carries ADR-023 rate ceilings, validated against the key registry
+// (decision 8; see iam.ValidateTierConfig). Every key here must be registered or the
+// tier is unwritable — which is the point: a typo cannot become a setting nothing
+// reads.
+//
+// SILVER DECLARES NOTHING, deliberately. Its ceilings are the platform defaults
+// (event-sources ingest 1000/s burst 2000; outbound-connectors 100/s burst 200),
+// and the standard tier IS the platform's own default packaging — so an operator
+// who raises a platform default in Helm moves silver with it, rather than silently
+// leaving every standard tenant pinned to a number frozen here. Gold and bronze are
+// the explicit deviations, and being absolute they do NOT track that default; that
+// is the trade for saying exactly what a tier is sold as.
+//
+// The AI-inference dimension is left to the platform default at every tier: what a
+// tier offers there is WHICH MODELS, a join table rather than a rate (decision 10),
+// and that lands with the provider menu.
 //
 // No "best-effort" tier is seeded. It only ever existed in ADR-063 to name the
 // bottom band of a dial; with a required FK there is no unset state for it to name.
-var seededTiers = []struct{ token, name, description string }{
-	{iam.TierGoldToken, "Gold", "Premium packaging: the last to shed under contention, the broadest set of AI models, the highest default ceilings."},
-	{iam.TierSilverToken, "Silver", "Standard packaging: the default balance of ceilings and entitlements."},
-	{iam.TierBronzeToken, "Bronze", "Entry packaging: the first to shed under contention, a reduced set of AI models, conservative default ceilings."},
+var seededTiers = []struct {
+	token, name, description string
+	config                   map[string]any
+}{
+	{iam.TierGoldToken, "Gold",
+		"Premium packaging: the last to shed under contention, the broadest set of AI models, and the highest ceilings — double the standard ingest and egress rate.",
+		map[string]any{
+			"ingestMessagesPerSecond":   float64(2000),
+			"ingestBurst":               float64(4000),
+			"outboundMessagesPerSecond": float64(200),
+			"outboundBurst":             float64(400),
+		}},
+	{iam.TierSilverToken, "Silver",
+		"Standard packaging: the platform's default ceilings and entitlements.",
+		nil},
+	{iam.TierBronzeToken, "Bronze",
+		"Entry packaging: the first to shed under contention, a reduced set of AI models, and conservative ceilings — a quarter of the standard ingest and egress rate.",
+		map[string]any{
+			"ingestMessagesPerSecond":   float64(250),
+			"ingestBurst":               float64(500),
+			"outboundMessagesPerSecond": float64(25),
+			"outboundBurst":             float64(50),
+		}},
 }
 
 // baselineTables is every table this baseline owns, ordered so a Rollback drops
@@ -126,12 +158,21 @@ func NewBaselineSchema() *gormigrate.Migration {
 func seedTenantTiers(tx *gorm.DB) error {
 	for _, s := range seededTiers {
 		name, desc := s.name, s.description
+		// The seeds are held to the same registry the API enforces, so a bad key
+		// here fails the migration loudly at boot rather than shipping a tier whose
+		// setting nothing reads.
+		if err := iam.ValidateTierConfig(s.config); err != nil {
+			return fmt.Errorf("seed tenant tier %q: %w", s.token, err)
+		}
 		tier := iam.TenantTier{Token: s.token}
 		if err := tx.Where(iam.TenantTier{Token: s.token}).
-			Attrs(iam.TenantTier{NamedEntity: rdb.NamedEntity{
-				Name:        rdb.NullStrOf(&name),
-				Description: rdb.NullStrOf(&desc),
-			}}).
+			Attrs(iam.TenantTier{
+				NamedEntity: rdb.NamedEntity{
+					Name:        rdb.NullStrOf(&name),
+					Description: rdb.NullStrOf(&desc),
+				},
+				Config: s.config,
+			}).
 			FirstOrCreate(&tier).Error; err != nil {
 			return fmt.Errorf("seed tenant tier %q: %w", s.token, err)
 		}

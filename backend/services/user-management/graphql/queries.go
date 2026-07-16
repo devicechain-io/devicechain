@@ -8,6 +8,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-user-management/iam"
 )
@@ -41,36 +42,82 @@ func (r *SchemaResolver) Tenant(ctx context.Context) (*TenantResolver, error) {
 	return &TenantResolver{t: t, svc: r}, nil
 }
 
-// TenantGovernanceResolver resolves the TenantGovernance type: a tenant's ingest
-// governance overrides. A null field means the tenant inherits the platform
-// default (the enforcing service supplies that default), so a null here is not
-// "unlimited".
+// TenantGovernanceResolver resolves the TenantGovernance type: a tenant's EFFECTIVE
+// ceilings, already folded over its ADR-065 tier. A null field means neither the
+// tenant nor its tier declares one, so the enforcing service applies the platform
+// default — a null here is "inherit", never "unlimited".
+//
+// This is where the ADR-065 cascade is assembled, and it is deliberately assembled
+// HERE rather than at the consumer. core/governance already folds whatever this
+// returns onto the platform default, so resolving `tenant override ?? tier` at the
+// authority makes the full cascade — per-tenant override → tier → platform default
+// (decision 5) — fall out with NO change to any enforcing service, and without the
+// tier (a user-management entity) leaking across a service boundary into every
+// consumer of the query.
+//
+// The tier layer is invisible on the wire on purpose. A service enforcing a ceiling
+// has no business knowing WHY the number is what it is; that provenance question is
+// the admin plane's, which exposes the tier and the tenant's override separately so
+// effective settings stay inspectable as tier + delta rather than an opaque merged
+// blob (decision 7).
 type TenantGovernanceResolver struct {
 	t *iam.Tenant
 }
 
+// tierOf returns the tenant's tier, or nil when it is not loaded. The tier is a
+// required FK and both read paths preload it, so nil means a caller loaded the
+// tenant some other way; the fold below then simply degrades to "no tier setting",
+// i.e. the pre-ADR-065 behavior of override-or-platform-default. That is the
+// fail-safe direction: a missed preload costs a tier's tuning, never a ceiling.
+func (r *TenantGovernanceResolver) tierOf() *iam.TenantTier { return r.t.Tier }
+
+// rate folds one dimension's rate: the tenant's own override wins, else the tier's
+// setting, else null (inherit the platform default).
+//
+// An override is only allowed to win if it is USABLE. An unusable one (non-positive)
+// is unreachable through the API — the write path rejects it — so it can only arrive
+// by a direct DB write; but passing it through would send it to the consumer, which
+// floors an unusable value to the PLATFORM DEFAULT and would thereby skip the tier
+// entirely. That is the one case where "the consumer already folds onto the default"
+// is not equivalent to D5's cascade: a gold tenant carrying a junk -5 override would
+// meter at 1000/s instead of its tier's 2000/s. Judging it here keeps the levels in
+// the order the ADR specifies — override → tier → platform default.
+func (r *TenantGovernanceResolver) rate(override *float64, dim governance.Dimension) *float64 {
+	if override != nil && iam.UsableRate(*override) {
+		return override
+	}
+	return r.tierOf().RateFor(dim)
+}
+
+// burst folds one dimension's burst the same way, adapting to the GraphQL Int.
+func (r *TenantGovernanceResolver) burst(override *int, dim governance.Dimension) *int32 {
+	var v *int
+	if override != nil && iam.UsableBurst(*override) {
+		v = override
+	} else {
+		v = r.tierOf().BurstFor(dim)
+	}
+	if v == nil {
+		return nil
+	}
+	i := int32(*v)
+	return &i
+}
+
 func (r *TenantGovernanceResolver) IngestMessagesPerSecond() *float64 {
-	return r.t.IngestMessagesPerSecond
+	return r.rate(r.t.IngestMessagesPerSecond, governance.Ingest)
 }
 
 func (r *TenantGovernanceResolver) IngestBurst() *int32 {
-	if r.t.IngestBurst == nil {
-		return nil
-	}
-	v := int32(*r.t.IngestBurst)
-	return &v
+	return r.burst(r.t.IngestBurst, governance.Ingest)
 }
 
 func (r *TenantGovernanceResolver) OutboundMessagesPerSecond() *float64 {
-	return r.t.OutboundMessagesPerSecond
+	return r.rate(r.t.OutboundMessagesPerSecond, governance.Outbound)
 }
 
 func (r *TenantGovernanceResolver) OutboundBurst() *int32 {
-	if r.t.OutboundBurst == nil {
-		return nil
-	}
-	v := int32(*r.t.OutboundBurst)
-	return &v
+	return r.burst(r.t.OutboundBurst, governance.Outbound)
 }
 
 // AiExternalEnabled resolves the tenant's external-AI consent as a non-null
@@ -88,15 +135,11 @@ func (r *TenantGovernanceResolver) AiExternalEnabled() bool {
 // ordinary nullable ceilings: nil means "inherit the platform default", which is
 // itself a real limit. Read by the ai-inference service over a service token.
 func (r *TenantGovernanceResolver) AiInferenceRequestsPerMinute() *float64 {
-	return r.t.AiInferenceRequestsPerMinute
+	return r.rate(r.t.AiInferenceRequestsPerMinute, governance.AIInference)
 }
 
 func (r *TenantGovernanceResolver) AiInferenceBurst() *int32 {
-	if r.t.AiInferenceBurst == nil {
-		return nil
-	}
-	v := int32(*r.t.AiInferenceBurst)
-	return &v
+	return r.burst(r.t.AiInferenceBurst, governance.AIInference)
 }
 
 // TenantGovernance returns the governance overrides for the tenant the caller is
