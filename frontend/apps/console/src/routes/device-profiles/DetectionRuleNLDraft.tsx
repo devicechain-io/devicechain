@@ -13,7 +13,7 @@
 // the feature is broken. A non-compiling draft comes back with the compiler's diagnostics + the
 // model's raw attempt, so the author can refine the description and try again.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Textarea, errMessage } from '@/routes/common';
@@ -40,6 +40,13 @@ export function DetectionRuleNLDraft({
   // The last non-ok outcome (unavailable, or a non-compiling draft with diagnostics). An ok
   // outcome is not held here — the parent switches to the form on the same tick.
   const [result, setResult] = useState<DraftRuleResult | null>(null);
+  // The draft mutation is slow by design (a bounded compile/repair loop). If the author switches
+  // away (to the canvas/form) while it is in flight, this panel unmounts; the resolving call must
+  // NOT then fire onDrafted — that would hijack the mode and could discard unsaved canvas work.
+  const mountedRef = useRef(true);
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
 
   // Load the profile's metric vocabulary so the model references REAL metric keys (the same list
   // the Metrics tab shows). Best-effort: if it fails the model just works from the description.
@@ -75,16 +82,25 @@ export function DetectionRuleNLDraft({
     setResult(null);
     try {
       const res = await draftDetectionRuleFromText({ text: description, profileToken, metrics });
-      if (res.ok && res.definition) {
-        // The compiler accepted it — hand the compiled draft to the form to review + save.
-        onDrafted(res.definition);
+      // The author may have navigated away while this was in flight — if so, drop the result
+      // rather than yanking them out of whatever door they switched to.
+      if (!mountedRef.current) return;
+      if (res.ok) {
+        if (res.definition) {
+          // The compiler accepted it — hand the compiled draft to the form to review + save.
+          onDrafted(res.definition);
+          return;
+        }
+        // ok with no definition would be a server contract break; surface it rather than
+        // silently flipping the button back to idle with nothing shown.
+        setError('The draft compiled but returned no definition. Please try again.');
         return;
       }
       setResult(res);
     } catch (e) {
-      setError(errMessage(e));
+      if (mountedRef.current) setError(errMessage(e));
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   }
 
@@ -94,7 +110,7 @@ export function DetectionRuleNLDraft({
   return (
     <div className="space-y-4">
       <div className="space-y-1">
-        <p className="text-sm text-muted-foreground">
+        <p id="nl-draft-help" className="text-sm text-muted-foreground">
           Describe the rule in plain language. AI drafts it and the compiler checks it; you review and
           save the result through the form.
         </p>
@@ -104,6 +120,8 @@ export function DetectionRuleNLDraft({
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={4}
+        aria-label="Rule description"
+        aria-describedby="nl-draft-help"
         placeholder="e.g. Raise a major alarm when the case temperature stays above 80°C for 5 minutes"
         onKeyDown={(e) => {
           // ⌘/Ctrl-Enter drafts, matching the app's other free-text submit affordances.
