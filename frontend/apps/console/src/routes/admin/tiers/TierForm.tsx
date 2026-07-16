@@ -15,24 +15,7 @@ import {
   type AdminTenantTierDetail,
 } from '@/lib/api/admin';
 import { Textarea, errMessage } from '@/routes/common';
-
-// parseConfig reads a tier's settings blob. A tier that declares nothing (the
-// seeded standard tier) carries null, which is a valid, meaningful state — not an
-// error — so it reads as an empty map.
-function parseConfig(raw: string | null | undefined): Record<string, number> {
-  if (!raw) return {};
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const out: Record<string, number> = {};
-    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof v === 'number') out[k] = v;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
+import { parseTierConfig, buildTierConfigPatch } from '@/routes/admin/tiers/tierConfig';
 
 // TierForm creates a tier (tier absent) or edits one (tier present, token fixed).
 //
@@ -58,46 +41,27 @@ export function TierForm({
   // distinguishable from a zero — "this tier declares no ceiling here" and "this
   // tier's ceiling is zero" are opposite facts, and the second is not writable at
   // all (a zero ceiling admits nothing, so the server rejects it).
-  const [settings, setSettings] = useState<Record<string, string>>(() => {
-    const cfg = parseConfig(tier?.config);
-    return Object.fromEntries(Object.entries(cfg).map(([k, v]) => [k, String(v)]));
-  });
+  const [settings, setSettings] = useState<Record<string, string>>(() => parseTierConfig(tier?.config));
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const setSetting = (key: string, value: string) =>
     setSettings((prev) => ({ ...prev, [key]: value }));
 
-  // Build the config blob from the rendered fields. An empty field OMITS its key,
-  // which is how a tier says "inherit the platform default" — the standard tier
-  // declares nothing at all, so a raised platform default moves it rather than
-  // leaving it pinned to a number frozen in the tier.
-  //
-  // Only keys for dimensions the platform currently declares survive a save. Any
-  // other key is one the server's registry would reject anyway, so preserving it
-  // here would make the tier permanently unsavable rather than protect anything.
-  const buildConfig = (): Record<string, number> => {
-    const cfg: Record<string, number> = {};
-    for (const d of dimensions ?? []) {
-      for (const key of [d.rateField, d.burstField]) {
-        const raw = (settings[key] ?? '').trim();
-        if (raw === '') continue;
-        const n = Number(raw);
-        if (Number.isFinite(n)) cfg[key] = n;
-      }
-    }
-    return cfg;
-  };
+  // Whether the settings editor actually RENDERED. Load-bearing, not cosmetic: the
+  // fields are built from a query, and until it lands there are no fields — so the
+  // form cannot claim to know what this tier's settings should be.
+  const settingsEditorReady = dimensions != null && dimensions.length > 0;
 
   const submit = async () => {
     setFormError(null);
     setBusy(true);
     try {
-      // config is sent EXPLICITLY on every save, never omitted. The server treats an
-      // omitted config as "leave the settings alone" precisely so a rename cannot
-      // silently wipe a tier's packaging — but this form IS the settings editor, so
-      // what it shows is what the tier should have, including empty ("{}" clears).
-      const config = JSON.stringify(buildConfig());
+      // What to send as config — or UNDEFINED to leave the tier's settings alone.
+      // The decision lives in buildTierConfigPatch, which is where its reasoning and
+      // its tests are: sending "{}" built from an editor that never rendered would
+      // clear the tier and re-price every tenant at it.
+      const config = buildTierConfigPatch(dimensions, settings, tier?.config);
       if (editing) {
         await updateTenantTier(tier.token, {
           name: name.trim() || undefined,
@@ -168,7 +132,15 @@ export function TierForm({
           </p>
         </div>
         {dimensionsError ? (
-          <p className="text-sm text-destructive">Settings unavailable ({dimensionsError}).</p>
+          // Say plainly that settings are untouched, not just that something failed.
+          // An operator who saves a rename here needs to know the ceilings survived —
+          // otherwise the safe behavior looks identical to a silent wipe.
+          <p className="text-sm text-destructive">
+            Settings unavailable ({dimensionsError}). This tier’s existing ceilings are left
+            unchanged; name and description can still be saved.
+          </p>
+        ) : !settingsEditorReady ? (
+          <p className="text-sm text-muted-foreground">Loading settings…</p>
         ) : (
           <div className="grid grid-cols-2 gap-2">
             {(dimensions ?? []).map((d) => (
