@@ -72,7 +72,7 @@ export type SetActiveAiProviderMutationVariables = Exact<{
 }>;
 
 
-export type SetActiveAiProviderMutation = { setActiveAiProvider: { token: string, active: boolean } };
+export type SetActiveAiProviderMutation = { setActiveAiProvider: { token: string, active: boolean, updatedAt: string | null } };
 
 export type ClearActiveAiProviderMutationVariables = Exact<{ [key: string]: never; }>;
 
@@ -191,6 +191,7 @@ export const SetActiveAiProviderDocument = new TypedDocumentString(`
   setActiveAiProvider(token: $token) {
     token
     active
+    updatedAt
   }
 }
     `) as unknown as TypedDocumentString<SetActiveAiProviderMutation, SetActiveAiProviderMutationVariables>;

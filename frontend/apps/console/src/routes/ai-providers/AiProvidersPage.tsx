@@ -65,12 +65,21 @@ export default function AiProvidersPage() {
   const [creating, setCreating] = useState(false);
   const [version, reload] = useReload();
 
+  // Skip the fetches entirely for an unauthorized visitor (they'd all 403) — the page
+  // renders a permission notice below. Hooks stay unconditional (rules of hooks); the
+  // loaders short-circuit on canManage.
   const { data, loading, error } = useQuery(
-    () => listAiProviders({ pageNumber, pageSize }),
-    [pageNumber, version],
+    () => (canManage ? listAiProviders({ pageNumber, pageSize }) : Promise.resolve(null)),
+    [pageNumber, version, canManage],
   );
-  const { data: active } = useQuery(() => getActiveAiProvider(), [version]);
-  const { data: kinds } = useQuery(() => listAiProviderKinds(), []);
+  const { data: active, error: activeError } = useQuery(
+    () => (canManage ? getActiveAiProvider() : Promise.resolve(null)),
+    [version, canManage],
+  );
+  const { data: kinds } = useQuery(
+    () => (canManage ? listAiProviderKinds() : Promise.resolve([])),
+    [canManage],
+  );
 
   if (!canManage) {
     return (
@@ -98,8 +107,12 @@ export default function AiProvidersPage() {
     try {
       await deleteAiProvider(token);
       toast(`Provider “${token}” deleted`);
+      // Always reload so the active-provider banner refreshes too (its query keys on
+      // version, not pageNumber) — deleting the active provider must not leave the
+      // banner naming a row that no longer exists. On the last-row-of-a-later-page
+      // case, also step back a page; the list keys on both, so it refetches once.
       if (results.length === 1 && pageNumber > 1) setPageNumber(pageNumber - 1);
-      else reload();
+      reload();
     } catch (err) {
       toast(errMessage(err), 'error');
     }
@@ -138,7 +151,11 @@ export default function AiProvidersPage() {
         />
       </FormDrawer>
 
-      <ActiveBanner activeName={active?.name ?? null} activeToken={active?.token ?? null} />
+      <ActiveBanner
+        activeName={active?.name ?? null}
+        activeToken={active?.token ?? null}
+        error={activeError ?? null}
+      />
 
       {loading ? (
         <LoadingState description="Loading providers…" />
@@ -234,10 +251,22 @@ export default function AiProvidersPage() {
 
 // A one-line status of which provider currently answers authoring requests — the
 // "default of none" state is called out because it means the feature is off.
-function ActiveBanner({ activeName, activeToken }: { activeName: string | null; activeToken: string | null }) {
+function ActiveBanner({
+  activeName,
+  activeToken,
+  error,
+}: {
+  activeName: string | null;
+  activeToken: string | null;
+  error: string | null;
+}) {
   return (
     <div className="mb-4 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
-      {activeToken ? (
+      {error ? (
+        <span className="text-muted-foreground">
+          Active-provider status is currently unavailable ({error}).
+        </span>
+      ) : activeToken ? (
         <span>
           Active provider:{' '}
           <span className="font-medium text-foreground">{activeName || activeToken}</span> — NL→rule

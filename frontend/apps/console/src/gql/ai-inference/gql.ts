@@ -21,7 +21,7 @@ type Documents = {
     "\n  query ActiveAiProvider {\n    activeAiProvider {\n      token\n      name\n      kind\n      model\n      hasSecret\n    }\n  }\n": typeof types.ActiveAiProviderDocument,
     "\n  mutation CreateAiProvider($request: AiProviderCreateRequest!) {\n    createAiProvider(request: $request) {\n      token\n    }\n  }\n": typeof types.CreateAiProviderDocument,
     "\n  mutation UpdateAiProvider(\n    $token: String!\n    $request: AiProviderCreateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateAiProvider(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": typeof types.UpdateAiProviderDocument,
-    "\n  mutation SetActiveAiProvider($token: String!) {\n    setActiveAiProvider(token: $token) {\n      token\n      active\n    }\n  }\n": typeof types.SetActiveAiProviderDocument,
+    "\n  mutation SetActiveAiProvider($token: String!) {\n    setActiveAiProvider(token: $token) {\n      token\n      active\n      updatedAt\n    }\n  }\n": typeof types.SetActiveAiProviderDocument,
     "\n  mutation ClearActiveAiProvider {\n    clearActiveAiProvider\n  }\n": typeof types.ClearActiveAiProviderDocument,
     "\n  mutation DeleteAiProvider($token: String!) {\n    deleteAiProvider(token: $token)\n  }\n": typeof types.DeleteAiProviderDocument,
     "\n  mutation TestAiProvider($token: String!, $request: InferenceRequest!) {\n    testAiProvider(token: $token, request: $request) {\n      candidate\n      model\n      provider\n    }\n  }\n": typeof types.TestAiProviderDocument,
@@ -33,7 +33,7 @@ const documents: Documents = {
     "\n  query ActiveAiProvider {\n    activeAiProvider {\n      token\n      name\n      kind\n      model\n      hasSecret\n    }\n  }\n": types.ActiveAiProviderDocument,
     "\n  mutation CreateAiProvider($request: AiProviderCreateRequest!) {\n    createAiProvider(request: $request) {\n      token\n    }\n  }\n": types.CreateAiProviderDocument,
     "\n  mutation UpdateAiProvider(\n    $token: String!\n    $request: AiProviderCreateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateAiProvider(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": types.UpdateAiProviderDocument,
-    "\n  mutation SetActiveAiProvider($token: String!) {\n    setActiveAiProvider(token: $token) {\n      token\n      active\n    }\n  }\n": types.SetActiveAiProviderDocument,
+    "\n  mutation SetActiveAiProvider($token: String!) {\n    setActiveAiProvider(token: $token) {\n      token\n      active\n      updatedAt\n    }\n  }\n": types.SetActiveAiProviderDocument,
     "\n  mutation ClearActiveAiProvider {\n    clearActiveAiProvider\n  }\n": types.ClearActiveAiProviderDocument,
     "\n  mutation DeleteAiProvider($token: String!) {\n    deleteAiProvider(token: $token)\n  }\n": types.DeleteAiProviderDocument,
     "\n  mutation TestAiProvider($token: String!, $request: InferenceRequest!) {\n    testAiProvider(token: $token, request: $request) {\n      candidate\n      model\n      provider\n    }\n  }\n": types.TestAiProviderDocument,
@@ -66,7 +66,7 @@ export function graphql(source: "\n  mutation UpdateAiProvider(\n    $token: Str
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  mutation SetActiveAiProvider($token: String!) {\n    setActiveAiProvider(token: $token) {\n      token\n      active\n    }\n  }\n"): typeof import('./graphql').SetActiveAiProviderDocument;
+export function graphql(source: "\n  mutation SetActiveAiProvider($token: String!) {\n    setActiveAiProvider(token: $token) {\n      token\n      active\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').SetActiveAiProviderDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

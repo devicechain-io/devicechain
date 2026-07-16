@@ -45,8 +45,15 @@ export default function AiProviderDetailPage() {
   const token = rawToken ?? '';
   const { claims } = useAuth();
   const canManage = hasAuthority(claims, 'ai:admin');
-  const { data, loading, error } = useQuery(() => getAiProvider(token), [token]);
-  const { data: kinds } = useQuery(() => listAiProviderKinds(), []);
+  // Skip the fetches for an unauthorized visitor (they'd 403); the notice renders below.
+  const { data, loading, error } = useQuery(
+    () => (canManage ? getAiProvider(token) : Promise.resolve(null)),
+    [token, canManage],
+  );
+  const { data: kinds } = useQuery(
+    () => (canManage ? listAiProviderKinds() : Promise.resolve([])),
+    [canManage],
+  );
 
   if (!canManage) {
     return (
@@ -188,16 +195,34 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
     }
   };
 
+  // Both set-active and clear-active touch the row's updated_at server-side, so the
+  // editor's optimistic-concurrency baseline must advance with them — otherwise the
+  // very next Save fails as a spurious "modified by another writer". clearActive is
+  // also global (it clears WHOEVER is active), so before clearing we re-read our own
+  // active state: if another operator promoted a different provider since this page
+  // loaded, we must NOT clear (that would turn THEIRS off) — we resync and bail.
   const toggleActive = async () => {
+    const wantClear = active; // intent, from what the operator currently sees
     setActiveBusy(true);
     try {
-      if (active) {
+      if (wantClear) {
+        const fresh = await getAiProvider(loaded.token);
+        setActive(fresh?.active ?? false);
+        if (fresh) setBaseline((b) => ({ ...b, updatedAt: fresh.updatedAt ?? b.updatedAt }));
+        if (!fresh?.active) {
+          toast('This provider is no longer active — refreshed', 'error');
+          return;
+        }
         await clearActiveAiProvider();
-        setActive(false);
+        // The clear touched our row; re-read to fold in the fresh updatedAt + active=false.
+        const after = await getAiProvider(loaded.token);
+        setActive(after?.active ?? false);
+        if (after) setBaseline((b) => ({ ...b, updatedAt: after.updatedAt ?? b.updatedAt }));
         toast('Cleared the active provider — NL→rule authoring is now off');
       } else {
-        await setActiveAiProvider(loaded.token);
-        setActive(true);
+        const res = await setActiveAiProvider(loaded.token);
+        setActive(res.active);
+        setBaseline((b) => ({ ...b, updatedAt: res.updatedAt ?? b.updatedAt }));
         toast(`“${loaded.token}” is now the active provider`);
       }
     } catch (err) {

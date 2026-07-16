@@ -220,13 +220,18 @@ const SET_ACTIVE_AI_PROVIDER = graphql(`
     setActiveAiProvider(token: $token) {
       token
       active
+      updatedAt
     }
   }
 `);
 
 // Promote a provider to THE active one, clearing any previous. Returns the promoted
-// provider's {token, active}.
-export async function setActiveAiProvider(token: string): Promise<{ token: string; active: boolean }> {
+// provider's {token, active, updatedAt} — the fresh updatedAt matters because the
+// promote touches the row, so a stale editor baseline would otherwise CONFLICT on the
+// next save.
+export async function setActiveAiProvider(
+  token: string,
+): Promise<{ token: string; active: boolean; updatedAt: string | null }> {
   const data = await gql('ai-inference', SET_ACTIVE_AI_PROVIDER, { token });
   return data.setActiveAiProvider;
 }
