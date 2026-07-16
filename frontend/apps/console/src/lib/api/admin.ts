@@ -14,6 +14,8 @@ import type {
   IdentitiesQuery,
   TenantsQuery,
   TenantTiersQuery,
+  TenantTierCatalogQuery,
+  GovernanceDimensionsQuery,
   RolesQuery,
   AdminAuditEventsQuery,
   AdminAuditEventSearchCriteria,
@@ -22,6 +24,9 @@ import type {
   AdminRoleUpdateRequest,
   AdminTenantCreateRequest,
   AdminTenantUpdateRequest,
+  AdminTenantTierCreateRequest,
+  AdminTenantTierUpdateRequest,
+  CreateTenantMutation,
 } from '@/gql/user-management-admin/graphql';
 
 // Public types derive from the generated operation results so they can never
@@ -29,7 +34,16 @@ import type {
 export type AdminIdentity = IdentitiesQuery['identities'][number];
 export type AdminMembership = AdminIdentity['memberships'][number];
 export type AdminTenant = TenantsQuery['tenants'][number];
+export type AdminTenantSetting = AdminTenant['effectiveSettings'][number];
+// What the tenant-returning MUTATIONS hand back: the tenant's own record, without
+// the resolved effectiveSettings the list query carries. A distinct type because the
+// difference is real — a write returns what was written, and re-deriving the whole
+// cascade on every mutation would be work for a field no caller of them reads (the
+// one screen showing effective settings reloads through listTenants). Callers that
+// need the cascade must go read it, not assume a mutation result carries it.
+export type AdminTenantRecord = CreateTenantMutation['createTenant'];
 export type AdminTenantTier = TenantTiersQuery['tenantTiers'][number];
+export type AdminGovernanceDimension = GovernanceDimensionsQuery['governanceDimensions'][number];
 export type AdminRole = RolesQuery['roles'][number];
 export type AdminAuditEvent = AdminAuditEventsQuery['auditEvents']['results'][number];
 export type AdminAuditEventSearchResults = AdminAuditEventsQuery['auditEvents'];
@@ -41,7 +55,19 @@ export type {
   AdminRoleUpdateRequest,
   AdminTenantCreateRequest,
   AdminTenantUpdateRequest,
+  AdminTenantTierCreateRequest,
+  AdminTenantTierUpdateRequest,
 };
+
+// Which level of the ADR-065 cascade produced an effective setting. Mirrors
+// iam.SettingSource on the server; the schema carries it as a String rather than an
+// enum (the codebase has no enum precedent), so the values are named once here
+// rather than spelled at each comparison.
+export const SETTING_SOURCE = {
+  override: 'override',
+  tier: 'tier',
+  platformDefault: 'platform-default',
+} as const;
 
 // ── Queries ───────────────────────────────────────────────────────────────
 
@@ -89,6 +115,33 @@ const TENANTS = graphql(`
       aiExternalEnabled
       aiInferenceRequestsPerMinute
       aiInferenceBurst
+      # What the tenant is ACTUALLY metered at, with the provenance that makes it
+      # readable as tier + delta (ADR-065 decision 7). Resolved server-side by the
+      # same cascade the data plane reads its ceilings through — deliberately not
+      # recomputed here from the fields above, which would be a second implementation
+      # that eventually tells an operator something the platform does not do.
+      #
+      # Selected only on this query, not on the tenant-returning mutations: the one
+      # screen that renders it reads through listTenants and reloads after a write.
+      effectiveSettings {
+        dimension {
+          name
+          label
+          rateUnit
+        }
+        rate {
+          source
+          value
+          tier
+          override
+        }
+        burst {
+          source
+          value
+          tier
+          override
+        }
+      }
       createdAt
       updatedAt
     }
@@ -98,6 +151,27 @@ const TENANTS = graphql(`
 export async function listTenants(): Promise<AdminTenant[]> {
   const data = await gql('user-management/admin', TENANTS, undefined, { identity: true });
   return data.tenants;
+}
+
+// The governance dimensions the platform declares (ADR-023). Enumerated from the
+// server rather than listed here, so the tier editor offers exactly the settings a
+// tier may carry: a fourth dimension becomes configurable the day it is declared,
+// instead of shipping a ceiling no operator can see or set.
+const GOVERNANCE_DIMENSIONS = graphql(`
+  query GovernanceDimensions {
+    governanceDimensions {
+      name
+      label
+      rateField
+      burstField
+      rateUnit
+    }
+  }
+`);
+
+export async function listGovernanceDimensions(): Promise<AdminGovernanceDimension[]> {
+  const data = await gql('user-management/admin', GOVERNANCE_DIMENSIONS, undefined, { identity: true });
+  return data.governanceDimensions;
 }
 
 // The tier catalog (ADR-065) — the operator-defined packaging a tenant is created
@@ -118,6 +192,94 @@ const TENANT_TIERS = graphql(`
 export async function listTenantTiers(): Promise<AdminTenantTier[]> {
   const data = await gql('user-management/admin', TENANT_TIERS, undefined, { identity: true });
   return data.tenantTiers;
+}
+
+// The tier catalog as the MANAGEMENT screen needs it: settings and tenant count on
+// top of the picker's vocabulary. Kept separate from TENANT_TIERS above rather than
+// widening it — tenantCount runs a query per tier, which the tenant form's dropdown
+// should not pay for.
+const TENANT_TIER_CATALOG = graphql(`
+  query TenantTierCatalog {
+    tenantTiers {
+      id
+      token
+      name
+      description
+      config
+      tenantCount
+      createdAt
+      updatedAt
+    }
+  }
+`);
+
+export type AdminTenantTierDetail = TenantTierCatalogQuery['tenantTiers'][number];
+
+export async function listTenantTierCatalog(): Promise<AdminTenantTierDetail[]> {
+  const data = await gql('user-management/admin', TENANT_TIER_CATALOG, undefined, { identity: true });
+  return data.tenantTiers;
+}
+
+const CREATE_TENANT_TIER = graphql(`
+  mutation CreateTenantTier($request: AdminTenantTierCreateRequest!) {
+    createTenantTier(request: $request) {
+      id
+      token
+      name
+      description
+      config
+      tenantCount
+      createdAt
+      updatedAt
+    }
+  }
+`);
+
+export async function createTenantTier(request: AdminTenantTierCreateRequest): Promise<AdminTenantTierDetail> {
+  const data = await gql('user-management/admin', CREATE_TENANT_TIER, { request }, { identity: true });
+  return data.createTenantTier;
+}
+
+const UPDATE_TENANT_TIER = graphql(`
+  mutation UpdateTenantTier($token: String!, $request: AdminTenantTierUpdateRequest!) {
+    updateTenantTier(token: $token, request: $request) {
+      id
+      token
+      name
+      description
+      config
+      tenantCount
+      createdAt
+      updatedAt
+    }
+  }
+`);
+
+// Update a tier. NOTE the asymmetry the server enforces (AdminTenantTierUpdateRequest):
+// name/description are a full replace, but config is a PATCH — omitting it leaves the
+// tier's settings alone, and only an explicit "{}" clears them. A rename that dropped
+// config would silently re-price every tenant at the tier within a minute, so callers
+// editing settings must send config explicitly.
+export async function updateTenantTier(
+  token: string,
+  request: AdminTenantTierUpdateRequest,
+): Promise<AdminTenantTierDetail> {
+  const data = await gql('user-management/admin', UPDATE_TENANT_TIER, { token, request }, { identity: true });
+  return data.updateTenantTier;
+}
+
+const DELETE_TENANT_TIER = graphql(`
+  mutation DeleteTenantTier($token: String!) {
+    deleteTenantTier(token: $token)
+  }
+`);
+
+// Delete a tier; returns whether one was removed. Refused by the server while any
+// tenant is still packaged at it — a tenant's tier is a required FK, so there is no
+// un-tiered state to strand them in.
+export async function deleteTenantTier(token: string): Promise<boolean> {
+  const data = await gql('user-management/admin', DELETE_TENANT_TIER, { token }, { identity: true });
+  return data.deleteTenantTier;
 }
 
 const ROLES = graphql(`
@@ -455,7 +617,7 @@ const CREATE_TENANT = graphql(`
   }
 `);
 
-export async function createTenant(request: AdminTenantCreateRequest): Promise<AdminTenant> {
+export async function createTenant(request: AdminTenantCreateRequest): Promise<AdminTenantRecord> {
   const data = await gql('user-management/admin', CREATE_TENANT, { request }, { identity: true });
   return data.createTenant;
 }
@@ -485,7 +647,7 @@ const UPDATE_TENANT = graphql(`
   }
 `);
 
-export async function updateTenant(token: string, request: AdminTenantUpdateRequest): Promise<AdminTenant> {
+export async function updateTenant(token: string, request: AdminTenantUpdateRequest): Promise<AdminTenantRecord> {
   const data = await gql('user-management/admin', UPDATE_TENANT, { token, request }, { identity: true });
   return data.updateTenant;
 }
@@ -515,7 +677,7 @@ const SET_TENANT_ENABLED = graphql(`
   }
 `);
 
-export async function setTenantEnabled(token: string, enabled: boolean): Promise<AdminTenant> {
+export async function setTenantEnabled(token: string, enabled: boolean): Promise<AdminTenantRecord> {
   const data = await gql('user-management/admin', SET_TENANT_ENABLED, { token, enabled }, { identity: true });
   return data.setTenantEnabled;
 }

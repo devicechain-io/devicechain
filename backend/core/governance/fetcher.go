@@ -32,6 +32,22 @@ type Dimension struct {
 	// be declared in the unit that reads naturally to an operator without every
 	// enforcing service open-coding the conversion — see PerSecond.
 	PerSecondScale float64
+
+	// Label and RateUnit are operator-facing display, carried here so the admin
+	// plane can ENUMERATE the dimensions rather than restate them. They are the
+	// only two facts about a dimension a human-facing surface needs that cannot be
+	// computed from the rest: Name is a log token ("ai-inference"), not a heading,
+	// and while the unit is implied by PerSecondScale, recovering "requests/min"
+	// from 1.0/60 is a decoding trick that breaks the moment a dimension is
+	// declared per hour.
+	//
+	// They live at the declaration site for the same reason the registration does:
+	// the console renders its tier editor and its effective-settings table from
+	// this list, so a fourth dimension becomes configurable and visible the day it
+	// is declared. A console keeping its own copy would silently omit it — leaving
+	// a shipped ceiling that no operator can see or set.
+	Label    string
+	RateUnit string
 }
 
 // PerSecond converts a rate declared in this dimension's unit into the per-second
@@ -71,12 +87,14 @@ var (
 	Ingest = register(Dimension{
 		Name: "ingest", RateField: "ingestMessagesPerSecond", BurstField: "ingestBurst",
 		PerSecondScale: 1,
+		Label:          "Ingest", RateUnit: "events/sec",
 	})
 	// Outbound governs REACT connector egress, charged at both the source
 	// (event-processing) and the sink (outbound-connectors) — ADR-060 SD-3.
 	Outbound = register(Dimension{
 		Name: "outbound", RateField: "outboundMessagesPerSecond", BurstField: "outboundBurst",
 		PerSecondScale: 1,
+		Label:          "Outbound", RateUnit: "calls/sec",
 	})
 	// AIInference governs how fast a tenant may spend AI inference budget, enforced
 	// by ai-inference at the one place external routing is authorized (ADR-056 §6).
@@ -86,6 +104,7 @@ var (
 	AIInference = register(Dimension{
 		Name: "ai-inference", RateField: "aiInferenceRequestsPerMinute", BurstField: "aiInferenceBurst",
 		PerSecondScale: 1.0 / 60.0,
+		Label:          "AI drafting", RateUnit: "requests/min",
 	})
 )
 

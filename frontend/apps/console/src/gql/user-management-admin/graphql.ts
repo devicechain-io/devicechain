@@ -52,6 +52,19 @@ export type AdminTenantCreateRequest = {
   token: string;
 };
 
+export type AdminTenantTierCreateRequest = {
+  config?: string | null | undefined;
+  description?: string | null | undefined;
+  name?: string | null | undefined;
+  token: string;
+};
+
+export type AdminTenantTierUpdateRequest = {
+  config?: string | null | undefined;
+  description?: string | null | undefined;
+  name?: string | null | undefined;
+};
+
 export type AdminTenantUpdateRequest = {
   aiExternalEnabled?: boolean | null | undefined;
   aiInferenceBurst?: number | null | undefined;
@@ -73,12 +86,44 @@ export type IdentitiesQuery = { identities: Array<{ id: string, email: string, f
 export type TenantsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null } }> };
+export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null }, effectiveSettings: Array<{ dimension: { name: string, label: string, rateUnit: string }, rate: { source: string, value: number | null, tier: number | null, override: number | null }, burst: { source: string, value: number | null, tier: number | null, override: number | null } }> }> };
+
+export type GovernanceDimensionsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type GovernanceDimensionsQuery = { governanceDimensions: Array<{ name: string, label: string, rateField: string, burstField: string, rateUnit: string }> };
 
 export type TenantTiersQueryVariables = Exact<{ [key: string]: never; }>;
 
 
 export type TenantTiersQuery = { tenantTiers: Array<{ id: string, token: string, name: string | null, description: string | null }> };
+
+export type TenantTierCatalogQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type TenantTierCatalogQuery = { tenantTiers: Array<{ id: string, token: string, name: string | null, description: string | null, config: string | null, tenantCount: number, createdAt: string | null, updatedAt: string | null }> };
+
+export type CreateTenantTierMutationVariables = Exact<{
+  request: AdminTenantTierCreateRequest;
+}>;
+
+
+export type CreateTenantTierMutation = { createTenantTier: { id: string, token: string, name: string | null, description: string | null, config: string | null, tenantCount: number, createdAt: string | null, updatedAt: string | null } };
+
+export type UpdateTenantTierMutationVariables = Exact<{
+  token: string;
+  request: AdminTenantTierUpdateRequest;
+}>;
+
+
+export type UpdateTenantTierMutation = { updateTenantTier: { id: string, token: string, name: string | null, description: string | null, config: string | null, tenantCount: number, createdAt: string | null, updatedAt: string | null } };
+
+export type DeleteTenantTierMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteTenantTierMutation = { deleteTenantTier: boolean };
 
 export type RolesQueryVariables = Exact<{
   scope?: string | null | undefined;
@@ -283,11 +328,41 @@ export const TenantsDocument = new TypedDocumentString(`
     aiExternalEnabled
     aiInferenceRequestsPerMinute
     aiInferenceBurst
+    effectiveSettings {
+      dimension {
+        name
+        label
+        rateUnit
+      }
+      rate {
+        source
+        value
+        tier
+        override
+      }
+      burst {
+        source
+        value
+        tier
+        override
+      }
+    }
     createdAt
     updatedAt
   }
 }
     `) as unknown as TypedDocumentString<TenantsQuery, TenantsQueryVariables>;
+export const GovernanceDimensionsDocument = new TypedDocumentString(`
+    query GovernanceDimensions {
+  governanceDimensions {
+    name
+    label
+    rateField
+    burstField
+    rateUnit
+  }
+}
+    `) as unknown as TypedDocumentString<GovernanceDimensionsQuery, GovernanceDimensionsQueryVariables>;
 export const TenantTiersDocument = new TypedDocumentString(`
     query TenantTiers {
   tenantTiers {
@@ -298,6 +373,53 @@ export const TenantTiersDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<TenantTiersQuery, TenantTiersQueryVariables>;
+export const TenantTierCatalogDocument = new TypedDocumentString(`
+    query TenantTierCatalog {
+  tenantTiers {
+    id
+    token
+    name
+    description
+    config
+    tenantCount
+    createdAt
+    updatedAt
+  }
+}
+    `) as unknown as TypedDocumentString<TenantTierCatalogQuery, TenantTierCatalogQueryVariables>;
+export const CreateTenantTierDocument = new TypedDocumentString(`
+    mutation CreateTenantTier($request: AdminTenantTierCreateRequest!) {
+  createTenantTier(request: $request) {
+    id
+    token
+    name
+    description
+    config
+    tenantCount
+    createdAt
+    updatedAt
+  }
+}
+    `) as unknown as TypedDocumentString<CreateTenantTierMutation, CreateTenantTierMutationVariables>;
+export const UpdateTenantTierDocument = new TypedDocumentString(`
+    mutation UpdateTenantTier($token: String!, $request: AdminTenantTierUpdateRequest!) {
+  updateTenantTier(token: $token, request: $request) {
+    id
+    token
+    name
+    description
+    config
+    tenantCount
+    createdAt
+    updatedAt
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateTenantTierMutation, UpdateTenantTierMutationVariables>;
+export const DeleteTenantTierDocument = new TypedDocumentString(`
+    mutation DeleteTenantTier($token: String!) {
+  deleteTenantTier(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteTenantTierMutation, DeleteTenantTierMutationVariables>;
 export const RolesDocument = new TypedDocumentString(`
     query Roles($scope: String) {
   roles(scope: $scope) {
