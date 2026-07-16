@@ -20,19 +20,25 @@ type Scope = 'system' | 'tenant';
 // and detail pages can render it without duplicating that wiring.
 export function RoleForm({ role, onDone }: { role?: AdminRole; onDone: (message: string) => void }) {
   const editing = role != null;
-  const { data: authorityVocab } = useQuery(listAuthorities, []);
+  const [scope, setScope] = useState<Scope>((role?.scope as Scope) ?? 'tenant');
 
-  // Offer the known authority vocabulary as a checklist; "*" is the full-access
-  // super-authority, called out so it isn't granted by accident.
+  // Ask for the vocabulary this role's SCOPE may grant, and re-ask when the scope
+  // changes: an authority's tier and a role's scope must agree (ADR-065), so the
+  // unscoped list would offer a tenant role `ai:admin` and the operator would learn
+  // the rule from a rejected save.
+  const { data: authorityVocab } = useQuery(() => listAuthorities(scope), [scope]);
+
+  // "*" is the full-access super-authority, called out so it isn't granted by
+  // accident. It is offered at either scope and means "everything at this scope".
   const authorityOptions = useMemo<ComboboxOption[]>(
     () =>
       (authorityVocab ?? []).map((a) =>
-        a === '*' ? { value: '*', label: '*', description: 'Full access (super-authority)' } : { value: a },
+        a === '*'
+          ? { value: '*', label: '*', description: `Full access within this ${scope} role's scope` }
+          : { value: a },
       ),
-    [authorityVocab],
+    [authorityVocab, scope],
   );
-
-  const [scope, setScope] = useState<Scope>((role?.scope as Scope) ?? 'tenant');
   const [token, setToken] = useState(role?.token ?? '');
   const [name, setName] = useState(role?.name ?? '');
   const [description, setDescription] = useState(role?.description ?? '');
@@ -80,7 +86,13 @@ export function RoleForm({ role, onDone }: { role?: AdminRole; onDone: (message:
               variant={scope === s ? 'default' : 'outline'}
               size="sm"
               disabled={editing}
-              onClick={() => setScope(s)}
+              onClick={() => {
+                setScope(s);
+                // The two scopes' vocabularies are disjoint apart from "*" (ADR-065),
+                // so anything picked for the old scope would be refused on save. Drop
+                // it here rather than carry an invalid selection into a save error.
+                setAuthorities((prev) => prev.filter((a) => a === '*'));
+              }}
             >
               {s}
             </Button>

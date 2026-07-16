@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Link, useLocation } from 'react-router-dom';
-import { Building2, Layers, ScrollText, Settings, ShieldCheck, Users } from 'lucide-react';
+import { Building2, Layers, ScrollText, Settings, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import { Logomark, LogoHorizontal } from '@/components/brand/Logo';
 import {
   Sidebar,
@@ -20,13 +20,14 @@ import {
 import { AdminUser } from '@/routes/admin/AdminUser';
 
 // The admin console manages the instance-global control plane (ADR-033):
-// tenants and the packaging they are sold, the identity directory, and the role
-// catalog.
+// tenants and the packaging they are sold, the identity directory, the role
+// catalog, and the AI provider list every tenant's NL authoring routes through.
 const NAV = [
   { label: 'Tenants', href: '/admin/tenants', icon: Building2 },
   { label: 'Tiers', href: '/admin/tiers', icon: Layers },
   { label: 'Identities', href: '/admin/identities', icon: Users },
   { label: 'Roles', href: '/admin/roles', icon: ShieldCheck },
+  { label: 'AI Providers', href: '/admin/ai-providers', icon: Sparkles },
   { label: 'Audit', href: '/admin/audit', icon: ScrollText },
   { label: 'Settings', href: '/admin/settings', icon: Settings },
 ];

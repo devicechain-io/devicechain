@@ -337,15 +337,19 @@ export async function listAdminAuditEvents(
 }
 
 const AUTHORITIES = graphql(`
-  query Authorities {
-    authorities
+  query Authorities($scope: String) {
+    authorities(scope: $scope)
   }
 `);
 
-// listAuthorities returns the known authority vocabulary so role forms can offer
-// a checklist instead of free-text authority strings.
-export async function listAuthorities(): Promise<string[]> {
-  const data = await gql('user-management/admin', AUTHORITIES, undefined, { identity: true });
+// listAuthorities returns the authority vocabulary so role forms can offer a
+// checklist instead of free-text authority strings. Pass the role's scope to get
+// only what a role at that scope may GRANT: an authority's tier and a role's scope
+// must agree (ADR-065), so an unscoped checklist would offer a tenant role
+// `ai:admin` and let the operator find out from a save error. Omit it for the whole
+// vocabulary.
+export async function listAuthorities(scope?: 'system' | 'tenant'): Promise<string[]> {
+  const data = await gql('user-management/admin', AUTHORITIES, { scope: scope ?? null }, { identity: true });
   return data.authorities;
 }
 

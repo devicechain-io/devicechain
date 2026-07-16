@@ -9,7 +9,6 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-ai-inference/inference"
-	"github.com/devicechain-io/dc-ai-inference/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/rs/zerolog/log"
@@ -32,10 +31,13 @@ func (in InferenceRequestInput) systemPrompt() string {
 }
 
 // runInference validates the prompt, applies the configured per-call deadline, runs
-// the provider, and shapes the result. Shared by both inference entrypoints; the
-// caller has already resolved the provider through the fail-closed cascade.
-func (r *SchemaResolver) runInference(ctx context.Context, resolved *inference.Resolved, req InferenceRequestInput) (*InferenceResultResolver, error) {
-	inferCtx, cancel := context.WithTimeout(ctx, r.Inference.InferenceTimeout())
+// the provider, and shapes the result. Shared by both inference entrypoints — the
+// tenant path here and the operator smoke test on the admin plane — which is why it
+// is a free function taking what it needs rather than a method on either resolver
+// root. The caller has already resolved the provider through the fail-closed
+// cascade.
+func runInference(ctx context.Context, res *inference.Resolver, metrics *Metrics, resolved *inference.Resolved, req InferenceRequestInput) (*InferenceResultResolver, error) {
+	inferCtx, cancel := context.WithTimeout(ctx, res.InferenceTimeout())
 	defer cancel()
 	out, err := resolved.Provider.Infer(inferCtx, inference.Input{
 		System: req.systemPrompt(),
@@ -46,7 +48,7 @@ func (r *SchemaResolver) runInference(ctx context.Context, resolved *inference.R
 	}
 	// Counted for BOTH entrypoints: an operator smoke test spends the same real budget
 	// a tenant draft does, so excluding it would understate what the key actually cost.
-	r.Metrics.recordUsage(out.InputTokens, out.OutputTokens)
+	metrics.recordUsage(out.InputTokens, out.OutputTokens)
 	return &InferenceResultResolver{candidate: out.Candidate, model: out.Model, provider: resolved.Token}, nil
 }
 
@@ -86,6 +88,11 @@ func tenantSafeError(err error) error {
 // external-routing consent gate fail-closed — this resolver never reaches a provider
 // without it. The returned candidate is validated downstream by rules.Compile; it is
 // not trusted or persisted here.
+//
+// This is the WHOLE tenant-facing surface of the service. ai:infer is a tenant-tier
+// authority and is deliberately far narrower than ai:admin: a holder can run a
+// prompt through the active provider; it cannot read, list, or change the provider
+// config (that is ai:admin, system-tier, on the admin plane).
 func (r *SchemaResolver) InferRuleCandidate(ctx context.Context, args struct {
 	Request InferenceRequestInput
 }) (*InferenceResultResolver, error) {
@@ -109,105 +116,11 @@ func (r *SchemaResolver) InferRuleCandidate(ctx context.Context, args struct {
 		r.Metrics.recordCall(outcomeFor(err))
 		return nil, tenantSafeError(err)
 	}
-	result, err := r.runInference(ctx, resolved, args.Request)
+	result, err := runInference(ctx, r.Inference, r.Metrics, resolved, args.Request)
 	if err != nil {
 		r.Metrics.recordCall(outcomeFor(err))
 		return nil, tenantSafeError(err)
 	}
 	r.Metrics.recordCall(outcomeServed)
 	return result, nil
-}
-
-// TestAiProvider runs an operator-supplied prompt through a SPECIFIC provider (by
-// token) as a smoke test — the ai:admin test-infer affordance behind the console
-// provider screen (Slice 0d). It validates a provider's endpoint + key before the
-// operator promotes it. Gated by ai:admin (a provider-management action, not the
-// production inference path); it does NOT apply the tenant-consent gate (an operator
-// testing operator-owned instance config with an operator prompt — no tenant data
-// crosses the boundary), but the provider's key must still resolve, so a test never
-// calls out unauthenticated.
-func (r *SchemaResolver) TestAiProvider(ctx context.Context, args struct {
-	Token   string
-	Request InferenceRequestInput
-}) (*InferenceResultResolver, error) {
-	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
-		return nil, err
-	}
-	if r.Inference == nil {
-		return nil, fmt.Errorf("inference is not configured")
-	}
-	if err := r.Inference.ValidatePrompt(args.Request.systemPrompt(), args.Request.Prompt); err != nil {
-		return nil, err
-	}
-	resolved, err := r.Inference.ResolveProvider(ctx, args.Token)
-	if err != nil {
-		return nil, err
-	}
-	return r.runInference(ctx, resolved, args.Request)
-}
-
-// CreateAiProvider creates a new provider.
-func (r *SchemaResolver) CreateAiProvider(ctx context.Context, args struct {
-	Request model.AIProviderCreateRequest
-}) (*AIProviderResolver, error) {
-	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
-		return nil, err
-	}
-	created, err := r.GetApi(ctx).CreateAIProvider(ctx, &args.Request)
-	if err != nil {
-		return nil, err
-	}
-	return &AIProviderResolver{M: *created, S: r, C: ctx}, nil
-}
-
-// UpdateAiProvider updates the provider with the given (current) token.
-// expectedUpdatedAt, when supplied, is an optimistic-concurrency precondition.
-func (r *SchemaResolver) UpdateAiProvider(ctx context.Context, args struct {
-	Token             string
-	Request           model.AIProviderCreateRequest
-	ExpectedUpdatedAt *string
-}) (*AIProviderResolver, error) {
-	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
-		return nil, err
-	}
-	updated, err := r.GetApi(ctx).UpdateAIProvider(ctx, args.Token, &args.Request, args.ExpectedUpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &AIProviderResolver{M: *updated, S: r, C: ctx}, nil
-}
-
-// DeleteAiProvider deletes the provider with the given token.
-func (r *SchemaResolver) DeleteAiProvider(ctx context.Context, args struct {
-	Token string
-}) (bool, error) {
-	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
-		return false, err
-	}
-	return r.GetApi(ctx).DeleteAIProvider(ctx, args.Token)
-}
-
-// SetActiveAiProvider promotes the provider with the given token to THE active one.
-func (r *SchemaResolver) SetActiveAiProvider(ctx context.Context, args struct {
-	Token string
-}) (*AIProviderResolver, error) {
-	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
-		return nil, err
-	}
-	active, err := r.GetApi(ctx).SetActiveProvider(ctx, args.Token)
-	if err != nil {
-		return nil, err
-	}
-	return &AIProviderResolver{M: *active, S: r, C: ctx}, nil
-}
-
-// ClearActiveAiProvider clears the active provider (return to "default of none").
-func (r *SchemaResolver) ClearActiveAiProvider(ctx context.Context) (bool, error) {
-	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
-		return false, err
-	}
-	if err := r.GetApi(ctx).ClearActiveProvider(ctx); err != nil {
-		return false, err
-	}
-	return true, nil
 }

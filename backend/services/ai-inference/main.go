@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/devicechain-io/dc-ai-inference/config"
@@ -190,15 +191,46 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		gqlcore.ContextRdbKey: RdbManager,
 		gqlcore.ContextApiKey: Api,
 	}
+	// One Metrics instance across both planes: an operator smoke test and a tenant
+	// draft spend the same key against the same budget, so they must count into the
+	// same series (see runInference).
+	metrics := graphql.NewMetrics(Microservice)
+
 	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{
 		Area:      string(Microservice.FunctionalArea),
 		Inference: InferenceResolver,
-		Metrics:   graphql.NewMetrics(Microservice),
+		Metrics:   metrics,
 	})
 	Microservice.StartInstanceAuthGate(ctx)
 	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(),
 		parsed, providers, Microservice.Readiness)
-	return GraphQLManager.Initialize(ctx)
+	if err := GraphQLManager.Initialize(ctx); err != nil {
+		return err
+	}
+
+	// The instance-scoped provider admin API (ADR-056 §4, re-homed by ADR-065),
+	// served on the shared http server at /admin/graphql. It validates identity-tier
+	// tokens rather than tenant access tokens and runs in the system context — the
+	// same lane user-management's admin API uses (ADR-033).
+	//
+	// This endpoint IS the fix: the provider list is instance config an operator
+	// owns, but it used to be served on the tenant data plane, so the only way to
+	// reach it was from inside a tenant. Registered here, before the GraphQL server
+	// starts in afterMicroserviceStarted.
+	registerAdminHandler(providers, metrics)
+	return nil
+}
+
+// registerAdminHandler parses the admin schema and registers its identity-token
+// handler on the default mux. It shares the data plane's context providers (the
+// same Api over the same RdbManager + secret store) — the planes differ in who may
+// call them, not in what they read.
+func registerAdminHandler(providers map[gqlcore.ContextKey]interface{}, metrics *graphql.Metrics) {
+	adminSchema := gqlcore.MustParseSchema(graphql.AdminSchemaContent, &graphql.AdminResolver{
+		Inference: InferenceResolver,
+		Metrics:   metrics,
+	})
+	http.Handle("/admin/graphql", gqlcore.NewAdminHttpHandler(adminSchema, providers, Microservice.Readiness))
 }
 
 // afterMicroserviceStarted starts components after the microservice is started.

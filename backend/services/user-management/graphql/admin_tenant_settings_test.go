@@ -123,11 +123,11 @@ func TestGovernanceDimensionsFailClosed(t *testing.T) {
 	_, err := r.GovernanceDimensions(context.Background())
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 
-	limited := auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{string(auth.UserWrite)}})
+	limited := adminCtx(string(auth.UserWrite))
 	_, err = r.GovernanceDimensions(limited)
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 
-	reader := auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{string(auth.TenantRead)}})
+	reader := adminCtx(string(auth.TenantRead))
 	dims, err := r.GovernanceDimensions(reader)
 	require.NoError(t, err)
 	require.Len(t, dims, len(governance.AllDimensions()))

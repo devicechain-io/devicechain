@@ -11,7 +11,7 @@ import type { ReactNode } from 'react';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/routes/common';
-import type { AiProvider } from '@/lib/api/ai-inference';
+import type { AiProvider } from '@/lib/api/ai-inference-admin';
 
 // How the API key is being edited. On create the meaningful modes are 'set' (type a
 // value) and, implicitly, leaving it empty (no key). On edit, 'keep' preserves the

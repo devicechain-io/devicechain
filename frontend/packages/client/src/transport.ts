@@ -9,10 +9,15 @@
 
 import type { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 
-// DeviceChain functional areas that expose a GraphQL endpoint. The
-// `user-management/admin` "area" is the instance-scoped admin API (ADR-033),
-// served by user-management at a second path and authenticated with the identity
-// token rather than a tenant access token (see the `identity` request option).
+// DeviceChain functional areas that expose a GraphQL endpoint. An "area" ending in
+// `/admin` is a service's instance-scoped admin API (ADR-033), served by that
+// service at a second path and authenticated with the identity token rather than a
+// tenant access token (see the `identity` request option).
+//
+// `ai-inference` has no `/admin` sibling here because it has no tenant-facing
+// surface a console would call: its data plane serves exactly one mutation, reached
+// by event-processing's service token, never by a browser. Its whole console-facing
+// surface is the operator provider list (ADR-065).
 export type Area =
   | 'user-management'
   | 'user-management/admin'
@@ -24,7 +29,7 @@ export type Area =
   | 'command-delivery'
   | 'dashboard-management'
   | 'outbound-connectors'
-  | 'ai-inference';
+  | 'ai-inference/admin';
 
 // Relative URL matching the cluster ingress contract: the ingress routes
 // https://<host>/api/<area>/graphql to each functional-area service and serves
@@ -32,6 +37,17 @@ export type Area =
 // 'user-management/admin' resolves to /api/user-management/admin/graphql.
 export function areaPath(area: Area): string {
   return `/api/${area}/graphql`;
+}
+
+// Whether an area is served on an instance-scoped lane that authenticates with the
+// IDENTITY token rather than a tenant access token (ADR-033). Those endpoints accept
+// nothing else, so the credential follows from the area and is not a per-call
+// choice: deriving it here means a new admin call cannot silently ride the tenant
+// token and 401 (or, worse, be given a tenant token that some future endpoint
+// accepts). Callers may still pass `identity` explicitly; this is the default, not
+// an override.
+export function isIdentityArea(area: Area): boolean {
+  return area.endsWith('/admin') || area.endsWith('/settings');
 }
 
 // ── Auth token injection ────────────────────────────────────────────────
@@ -88,6 +104,10 @@ export interface RequestOptions {
   /**
    * Authenticate with the identity token instead of the tenant access token —
    * for the instance-scoped admin API (ADR-033). Ignored when `anonymous`.
+   *
+   * Rarely needed: an `/admin` or `/settings` area defaults to the identity token
+   * already (see isIdentityArea). Pass it only to force the lane for an area whose
+   * name does not say so.
    */
   identity?: boolean;
 }
@@ -120,7 +140,8 @@ export async function gql<TResult, TVariables>(
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
   if (!options?.anonymous) {
-    const getter = options?.identity ? identityTokenGetter : tokenGetter;
+    const useIdentity = options?.identity ?? isIdentityArea(area);
+    const getter = useIdentity ? identityTokenGetter : tokenGetter;
     if (getter) {
       const token = await getter();
       if (token) headers['Authorization'] = `Bearer ${token}`;

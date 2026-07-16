@@ -3,10 +3,17 @@
 
 // The AI Providers list (ADR-056 §4). Providers are INSTANCE-scoped, operator-managed
 // {kind, endpoint, model, write-only API key} configs; at most one is the ACTIVE
-// provider used for NL→rule authoring ("default of none" when none is active). This
-// screen is gated on the `ai:admin` operator authority — a normal tenant never holds
-// it, so only a superuser acting in a tenant sees it (the service still fails closed
-// server-side regardless).
+// provider used for NL→rule authoring ("default of none" when none is active).
+//
+// This is an ADMIN-console screen (ADR-065): it sits behind AdminProtectedRoute (a
+// superuser identity session) and calls the ai-inference ADMIN plane, which accepts
+// only an identity token and gates every resolver on ai:admin. Like every other admin
+// screen it therefore carries no per-page authority check of its own — the route is
+// the UI gate and the server is the real one.
+//
+// It deliberately does NOT read `useAuth().claims`: those are the TENANT access
+// token's claims, and this screen has no tenant. An operator reaching it commonly has
+// no tenant session at all.
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -20,7 +27,7 @@ import {
   deleteAiProvider,
   setActiveAiProvider,
   getAiProvider,
-} from '@/lib/api/ai-inference';
+} from '@/lib/api/ai-inference-admin';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -33,8 +40,6 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { useAuth } from '@/auth/AuthProvider';
-import { hasAuthority } from '@devicechain/client';
 import { errMessage, rowLinkProps, StatusBadge, useReload } from '@/routes/common';
 import { FormDrawer } from '@/components/registry';
 import {
@@ -52,6 +57,7 @@ import {
   providerSecretArg,
   type ProviderEditorState,
 } from './AiProviderForm';
+import { aiProviderPath } from './paths';
 
 const pageSize = 20;
 
@@ -59,39 +65,16 @@ export default function AiProvidersPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
-  const { claims } = useAuth();
-  const canManage = hasAuthority(claims, 'ai:admin');
   const [pageNumber, setPageNumber] = useState(1);
   const [creating, setCreating] = useState(false);
   const [version, reload] = useReload();
 
-  // Skip the fetches entirely for an unauthorized visitor (they'd all 403) — the page
-  // renders a permission notice below. Hooks stay unconditional (rules of hooks); the
-  // loaders short-circuit on canManage.
   const { data, loading, error } = useQuery(
-    () => (canManage ? listAiProviders({ pageNumber, pageSize }) : Promise.resolve(null)),
-    [pageNumber, version, canManage],
+    () => listAiProviders({ pageNumber, pageSize }),
+    [pageNumber, version],
   );
-  const { data: active, error: activeError } = useQuery(
-    () => (canManage ? getActiveAiProvider() : Promise.resolve(null)),
-    [version, canManage],
-  );
-  const { data: kinds } = useQuery(
-    () => (canManage ? listAiProviderKinds() : Promise.resolve([])),
-    [canManage],
-  );
-
-  if (!canManage) {
-    return (
-      <PageShell title="AI Providers" description="Inference providers for NL→rule authoring">
-        <p className="text-sm text-muted-foreground">
-          You don’t have permission to manage inference providers. This is an operator
-          concern — ask an operator for the
-          <span className="font-mono"> ai:admin </span> authority.
-        </p>
-      </PageShell>
-    );
-  }
+  const { data: active, error: activeError } = useQuery(() => getActiveAiProvider(), [version]);
+  const { data: kinds } = useQuery(listAiProviderKinds, []);
 
   const results = data?.results ?? [];
 
@@ -146,7 +129,7 @@ export default function AiProvidersPage() {
             toast(`Provider “${token}” created`);
             setCreating(false);
             reload();
-            navigate(`/ai-providers/${encodeURIComponent(token)}`);
+            navigate(aiProviderPath(token));
           }}
         />
       </FormDrawer>
@@ -178,7 +161,7 @@ export default function AiProvidersPage() {
               {results.map((p) => (
                 <DataTableRow
                   key={p.token}
-                  {...rowLinkProps(() => navigate(`/ai-providers/${encodeURIComponent(p.token)}`))}
+                  {...rowLinkProps(() => navigate(aiProviderPath(p.token)))}
                 >
                   <DataTableCell className="font-medium text-foreground">
                     <span className="inline-flex items-center gap-2">

@@ -82,13 +82,19 @@ const config: CodegenConfig = {
       config: { documentMode: 'string' },
     },
     // The instance-scoped, operator-managed AI inference-provider list (ADR-056),
-    // served by the ai-inference service. Its own schema + client; the console lists
-    // and authors providers here (create, pick the active one, write-only API key)
-    // and offers the operator smoke-test (testAiProvider). It rides the tenant
-    // access-token data-plane lane (ai:admin), NOT the identity/admin lane.
-    './src/gql/ai-inference/': {
-      schema: '../../../backend/services/ai-inference/graphql/schema.graphql',
-      documents: ['src/lib/api/ai-inference.ts'],
+    // served by the ai-inference service at /admin/graphql. The console lists and
+    // authors providers here (create, pick the active one, write-only API key) and
+    // offers the operator smoke-test (testAiProvider).
+    //
+    // It generates from the service's ADMIN schema and rides the identity lane, not
+    // the tenant data-plane lane — the ADR-065 correction. The service's data-plane
+    // schema is deliberately absent: its only mutation is called by
+    // event-processing's service token, so the console has nothing to generate from
+    // it, and pointing at it here is what let the provider screen be built on the
+    // wrong plane in the first place.
+    './src/gql/ai-inference-admin/': {
+      schema: '../../../backend/services/ai-inference/graphql/admin_schema.graphql',
+      documents: ['src/lib/api/ai-inference-admin.ts'],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },

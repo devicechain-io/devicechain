@@ -139,7 +139,9 @@ export type AdminAuditEventsQueryVariables = Exact<{
 
 export type AdminAuditEventsQuery = { auditEvents: { results: Array<{ id: string, occurredTime: string, category: string, tenant: string | null, actor: string, operation: string, tableName: string | null, entityPk: string | null, entityLabel: string | null, rowsAffected: number }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
-export type AuthoritiesQueryVariables = Exact<{ [key: string]: never; }>;
+export type AuthoritiesQueryVariables = Exact<{
+  scope?: string | null | undefined;
+}>;
 
 
 export type AuthoritiesQuery = { authorities: Array<string> };
@@ -458,8 +460,8 @@ export const AdminAuditEventsDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<AdminAuditEventsQuery, AdminAuditEventsQueryVariables>;
 export const AuthoritiesDocument = new TypedDocumentString(`
-    query Authorities {
-  authorities
+    query Authorities($scope: String) {
+  authorities(scope: $scope)
 }
     `) as unknown as TypedDocumentString<AuthoritiesQuery, AuthoritiesQueryVariables>;
 export const CreateIdentityDocument = new TypedDocumentString(`
