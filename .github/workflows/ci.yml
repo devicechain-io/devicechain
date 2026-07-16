@@ -252,8 +252,21 @@ jobs:
         run: helm lint deploy/helm/devicechain
 
       - name: helm template
-        # Catch template render errors without keeping the output.
-        run: helm template deploy/helm/devicechain >/dev/null
+        # Catch template render errors without keeping the output. The chart REQUIRES an
+        # instance root key (ADR-059) for any profile carrying a secret-store area —
+        # notification-management is in the default profile — so mint a throwaway one:
+        # it is render-only, never leaves this step, and encrypts nothing.
+        run: |
+          key="$(openssl rand -base64 32)"
+          # The default profile: the standard system.
+          helm template deploy/helm/devicechain \
+            --set "instance.config.infrastructure.secrets.rootKey=$key" >/dev/null
+          # And the full profile, which additionally ships ai-inference,
+          # outbound-connectors, and mcp — the last deriving its required URLs from the
+          # ingress, so render it with one rather than let "everything" break unnoticed.
+          helm template deploy/helm/devicechain --set profile=full \
+            --set ingress.enabled=true --set ingress.host=localhost --set ingress.tls.enabled=false \
+            --set "instance.config.infrastructure.secrets.rootKey=$key" >/dev/null
 
   # ---------------------------------------------------------------------------
   # OpenTofu: format, init (no backend), validate.

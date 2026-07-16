@@ -22,9 +22,11 @@ type InstanceSpec struct {
 	Configuration EntityConfiguration `json:"configuration"`
 
 	// Profile names a curated set of functional areas to deploy (e.g.
-	// "full", "telemetry", "ingest-only") — ADR-022 decision 2. Mutually
+	// "default", "full", "telemetry", "ingest-only") — ADR-022 decision 2. Mutually
 	// exclusive with EnabledFunctionalAreas; an empty profile with no explicit
-	// set defaults to the full profile.
+	// set resolves to the "default" profile: the standard system. "full"
+	// additionally ships the areas that reach outside the instance (AI inference,
+	// outbound connectors, MCP).
 	// +optional
 	Profile string `json:"profile,omitempty"`
 

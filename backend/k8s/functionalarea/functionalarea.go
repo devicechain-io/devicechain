@@ -135,9 +135,9 @@ var catalog = map[FunctionalArea]Manifest{
 		// that executes each fired httpCall/publish action. Functionally dead without the
 		// area producing what it consumes, so event-processing is a Hard dep (which in turn
 		// hard-deps device-management). It produces only a terminal dead-letter subject
-		// (consumed by nothing). Like mcp it is NOT in any profile — outbound connectors
-		// are an opt-in automation capability enabled on demand (post-GA fast-follow), so a
-		// deployment adds it explicitly to enabledFunctionalAreas.
+		// (consumed by nothing). Like mcp it is held back from ProfileDefault — outbound
+		// connectors open an EGRESS surface, so a deployment opts in deliberately, either
+		// via ProfileFull or by naming it in enabledFunctionalAreas.
 		Area:     OutboundConn,
 		Consumes: []string{"connector-dispatch"},
 		HardDeps: []FunctionalArea{EventProcessing},
@@ -149,9 +149,11 @@ var catalog = map[FunctionalArea]Manifest{
 		// it produces/consumes nothing on NATS. Its read tools resolve devices, alarms,
 		// and capabilities, so it is functionally dead without device-management (Hard);
 		// the telemetry/state/command tools degrade per-tool without their areas (Soft).
-		// Auth is a Soft dep (the token validator degrades, ADR-022 decision 3). It is
-		// NOT in any profile — it requires explicit configuration (its resource + issuer
-		// URLs) and is enabled on demand, like the OAuth AS it fronts.
+		// Auth is a Soft dep (the token validator degrades, ADR-022 decision 3). It is held
+		// back from ProfileDefault — an AGENT-FACING API is a deliberate choice — so a
+		// deployment opts in via ProfileFull or by naming it in enabledFunctionalAreas. Its
+		// required resource + issuer URLs are derived from the ingress by the chart, but a
+		// client can only obtain a token once the OAuth AS it fronts is enabled.
 		Area:     Mcp,
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement, EventManagement, DeviceState, CommandDelivery},
@@ -162,8 +164,9 @@ var catalog = map[FunctionalArea]Manifest{
 		// NATS — event-processing CALLS it over a service token (slice 0c), the reverse of
 		// a stream dependency, so it has no Hard deps. It reads the per-tenant external-AI
 		// consent flag from user-management (Soft — the read degrades fail-closed when
-		// absent). Like mcp/outbound-connectors it is NOT in any profile: NL authoring is an
-		// opt-in capability that requires a configured provider, enabled on demand.
+		// absent). Like mcp/outbound-connectors it is held back from ProfileDefault: NL
+		// authoring reaches an EXTERNAL provider on a paid key, so a deployment opts in
+		// deliberately, either via ProfileFull or by naming it in enabledFunctionalAreas.
 		Area:     AiInference,
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
@@ -174,8 +177,16 @@ var catalog = map[FunctionalArea]Manifest{
 type Profile string
 
 const (
-	// ProfileFull enables every functional area except opt-in areas that require
-	// explicit configuration (mcp), which are enabled on demand via an explicit set.
+	// ProfileDefault is the standard instance: the whole device/telemetry/automation
+	// system, and what an unset selection resolves to. It omits the areas that reach
+	// OUTSIDE the instance — AI inference, outbound connectors, and MCP — because each
+	// carries a decision an operator should make deliberately (a paid provider key, an
+	// egress surface, an agent-facing API), not inherit from a default.
+	ProfileDefault Profile = "default"
+	// ProfileFull is literally everything this build ships, including the areas
+	// ProfileDefault holds back. Its contract is that it stays exhaustive: a new area
+	// belongs here unless there is a reason it cannot be, so "full" never again drifts
+	// into meaning "most of it".
 	ProfileFull Profile = "full"
 	// ProfileTelemetry is ingest → resolve → persist + live state, without the
 	// command path.
@@ -185,12 +196,18 @@ const (
 	ProfileIngestOnly Profile = "ingest-only"
 )
 
+// standardAreas is ProfileDefault's set, shared so ProfileFull is expressed as
+// "the standard system plus the rest" rather than a second hand-maintained list
+// that could silently disagree with it.
+var standardAreas = []FunctionalArea{
+	UserManagement, DeviceManagement, EventSources,
+	EventManagement, DeviceState, DashboardMgmt, CommandDelivery,
+	NotificationMgmt, EventProcessing,
+}
+
 var profiles = map[Profile][]FunctionalArea{
-	ProfileFull: {
-		UserManagement, DeviceManagement, EventSources,
-		EventManagement, DeviceState, DashboardMgmt, CommandDelivery,
-		NotificationMgmt, EventProcessing,
-	},
+	ProfileDefault: standardAreas,
+	ProfileFull:    append(append([]FunctionalArea{}, standardAreas...), AiInference, OutboundConn, Mcp),
 	ProfileTelemetry: {
 		UserManagement, DeviceManagement, EventSources, EventManagement, DeviceState, DashboardMgmt,
 	},
@@ -225,8 +242,11 @@ func CoreAreas() []FunctionalArea {
 
 // ResolveEnabled turns an Instance's declared deployment intent into a concrete
 // enabled set (ADR-022 decision 2). Exactly one of profile or explicit may be
-// given; an empty intent defaults to the full profile. The result is not yet
-// validated — callers run Validate on it.
+// given; an empty intent resolves to ProfileDefault — the standard system, NOT
+// ProfileFull, which would silently deploy the areas that reach outside the instance
+// to anyone who declared no intent at all. This must stay in step with the chart's
+// own empty-selection fallback (_helpers.tpl), which resolves the same way.
+// The result is not yet validated — callers run Validate on it.
 func ResolveEnabled(profile string, explicit []FunctionalArea) ([]FunctionalArea, error) {
 	hasProfile := strings.TrimSpace(profile) != ""
 	hasExplicit := len(explicit) > 0
@@ -242,7 +262,7 @@ func ResolveEnabled(profile string, explicit []FunctionalArea) ([]FunctionalArea
 	case hasExplicit:
 		return append([]FunctionalArea(nil), explicit...), nil
 	default:
-		return append([]FunctionalArea(nil), profiles[ProfileFull]...), nil
+		return append([]FunctionalArea(nil), profiles[ProfileDefault]...), nil
 	}
 }
 

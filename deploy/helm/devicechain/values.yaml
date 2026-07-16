@@ -1,14 +1,23 @@
 # DeviceChain Helm values.
 #
 # Deployment selection (ADR-022 decision 2): set exactly one of `profile` or
-# `enabledFunctionalAreas`. An empty selection defaults to the full profile. The
+# `enabledFunctionalAreas`. An empty selection resolves to the `default` profile. The
 # chart fails the render if the resulting set omits a required core area
 # (user-management, device-management) or an enabled area's hard dependency.
 
-# A named profile: one of "full", "telemetry", "ingest-only". Left empty by
-# default so an override file that sets `enabledFunctionalAreas` is not rejected
-# for "setting both" against a baked-in profile (E19); an empty selection still
-# resolves to the full profile.
+# A named profile: one of "default", "full", "telemetry", "ingest-only".
+#
+#   default  the standard system: the whole device/telemetry/automation platform.
+#   full     everything this build ships — `default` PLUS the three areas that reach
+#            OUTSIDE the instance (ai-inference, outbound-connectors, mcp). Each of
+#            those carries a decision to make deliberately (a paid provider key, an
+#            egress surface, an agent-facing API), which is why they are not in
+#            `default` — and each needs infrastructure.secrets.rootKey below.
+#
+# Left empty by default so an override file that sets `enabledFunctionalAreas` is not
+# rejected for "setting both" against a baked-in profile (E19); an empty selection
+# still resolves to `default` — never to `full`, since deploying an egress or AI
+# surface should never follow from stating no intent at all.
 profile: ""
 
 # An explicit set of functional areas, as an alternative to `profile`.
@@ -441,20 +450,35 @@ functionalAreas:
     # outboundBurst: 200              # platform-default source egress burst
   mcp:
     # The MCP server (ADR-047): an OAuth 2.1 Resource Server fronting the per-area
-    # GraphQL over the Model Context Protocol. It is an OPT-IN area — not in any
-    # profile — enabled explicitly (enabledFunctionalAreas: [..., mcp]). It REQUIRES
-    # both URLs below (it fails startup without them): resourceUrl is this server's
-    # identifier that access tokens must be audience-bound to (RFC 8707/9728);
-    # issuerUrl is the OAuth AS (this instance's user-management) that issues them.
-    # Both are external https origins (http only for a localhost value).
+    # GraphQL over the Model Context Protocol. Held back from the `default` profile
+    # (an agent-facing API is a deliberate choice), shipped by `full`, or named
+    # explicitly in enabledFunctionalAreas.
+    #
+    # It REQUIRES both URLs below and fails startup without them — so when an ingress
+    # is configured they are DERIVED from it and you need set nothing: resourceUrl
+    # becomes <origin>/api/mcp and issuerUrl <origin>/api/user-management, where
+    # <origin> is the ingress scheme + host. Set either here to override.
+    #
+    # resourceUrl is this server's identifier that access tokens must be
+    # audience-bound to (RFC 8707/9728). issuerUrl is the OAuth AS (this instance's
+    # user-management) that issues them, and must equal user-management's
+    # auth.issuerUrl BYTE-FOR-BYTE (an RFC 8414 issuer is compared exactly) — which
+    # is why both derive from one origin rather than being spelled out twice. Both are
+    # external https origins (http only for a localhost value).
+    #
+    # NOTE the OAuth AS is OFF unless user-management's auth.issuerUrl is set: mcp
+    # still starts and serves its metadata (it fetches JWKS in the background), but no
+    # client can obtain a token until the AS is enabled — a separate, deliberate
+    # switch, since setting the issuer changes the `iss` claim of EVERY minted token.
     config: {}
-      # resourceUrl: https://<host>/mcp
-      # issuerUrl: https://<host>/user-management
+      # resourceUrl: https://<host>/api/mcp
+      # issuerUrl: https://<host>/api/user-management
   outbound-connectors:
     # The outbound-connectors service (ADR-060): a durable consumer of the
     # connector-dispatch stream that executes each fired httpCall/publish REACT action
     # (the HTTP call / broker publish, secret resolution, dead-lettering). It is an
-    # OPT-IN area — not in any profile — enabled explicitly (enabledFunctionalAreas:
+    # OPT-IN area — held back from `default` (it opens an EGRESS surface), shipped by
+    # `full`, or named explicitly (enabledFunctionalAreas:
     # [..., event-processing, outbound-connectors]); it hard-depends on event-processing
     # (its dispatch producer). It keeps its own envelope-encrypted secret store (ADR-059)
     # for outbound credentials, so the instance root key (infrastructure.secrets) must be
@@ -475,7 +499,8 @@ functionalAreas:
     # only; it holds NO ambient authority over tenant data and never sits in the
     # replay-correct DETECT/REACT path ("AI proposes, the CEL compiler disposes").
     #
-    # OPT-IN area — not in any profile — enabled explicitly (enabledFunctionalAreas:
+    # OPT-IN area — held back from `default` (it reaches an EXTERNAL provider on a paid
+    # key), shipped by `full`, or named explicitly (enabledFunctionalAreas:
     # [..., ai-inference]). It has NO hard dependency: when a peer it would consult is
     # absent it fails the affected path CLOSED rather than refusing to start.
     #

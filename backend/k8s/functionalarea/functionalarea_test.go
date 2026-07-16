@@ -42,11 +42,18 @@ func TestProfilesAreValid(t *testing.T) {
 	}
 }
 
-// An empty intent defaults to the full profile.
-func TestResolveDefaultsToFull(t *testing.T) {
+// An empty intent resolves to the DEFAULT profile — the standard system. Declaring no
+// intent must never deploy the areas that reach outside the instance (AI inference,
+// outbound connectors, MCP); that takes an explicit "full". This is also the chart's
+// empty-selection behaviour, and the two must not diverge: the chart renders what is
+// deployed, this package is what the operator resolves.
+func TestResolveDefaultsToDefaultProfile(t *testing.T) {
 	enabled, err := ResolveEnabled("", nil)
 	assert.NoError(t, err)
-	assert.ElementsMatch(t, profiles[ProfileFull], enabled)
+	assert.ElementsMatch(t, profiles[ProfileDefault], enabled)
+	assert.NotContains(t, enabled, AiInference, "an unstated intent must not deploy AI inference")
+	assert.NotContains(t, enabled, OutboundConn, "an unstated intent must not deploy outbound connectors")
+	assert.NotContains(t, enabled, Mcp, "an unstated intent must not deploy MCP")
 }
 
 // Profile and explicit set are mutually exclusive.
@@ -88,12 +95,17 @@ func TestValidateRejectsUnknownArea(t *testing.T) {
 	assert.ErrorContains(t, err, "made-up")
 }
 
-// The MCP area is a known, opt-in area (ADR-047): not in any profile, hard-depends
-// on device-management, and validates as an explicit set alongside the core areas.
+// The MCP area is a known, opt-in area (ADR-047): held back from the standard
+// profiles, present in ProfileFull, hard-depends on device-management, and validates
+// as an explicit set alongside the core areas.
 func TestMcpIsOptInArea(t *testing.T) {
 	assert.True(t, Known(Mcp))
+	assert.Contains(t, profiles[ProfileFull], Mcp, "full ships everything, including mcp")
 	for p, areas := range profiles {
-		assert.NotContains(t, areas, Mcp, "mcp must not be in profile %s (it requires explicit config)", p)
+		if p == ProfileFull {
+			continue
+		}
+		assert.NotContains(t, areas, Mcp, "mcp must not be in profile %s (it is enabled deliberately)", p)
 	}
 	m, ok := ManifestFor(Mcp)
 	assert.True(t, ok)
@@ -104,12 +116,17 @@ func TestMcpIsOptInArea(t *testing.T) {
 	assert.ErrorContains(t, Validate([]FunctionalArea{UserManagement, Mcp}), string(DeviceManagement))
 }
 
-// The outbound-connectors area is a known, opt-in area (ADR-060): not in any profile, hard-depends
-// on event-processing (its dispatch producer), and validates only when that chain is enabled too.
+// The outbound-connectors area is a known, opt-in area (ADR-060): held back from the
+// standard profiles, present in ProfileFull, hard-depends on event-processing (its
+// dispatch producer), and validates only when that chain is enabled too.
 func TestOutboundConnectorsIsOptInArea(t *testing.T) {
 	assert.True(t, Known(OutboundConn))
+	assert.Contains(t, profiles[ProfileFull], OutboundConn, "full ships everything, including outbound-connectors")
 	for p, areas := range profiles {
-		assert.NotContains(t, areas, OutboundConn, "outbound-connectors must not be in profile %s (it is enabled on demand)", p)
+		if p == ProfileFull {
+			continue
+		}
+		assert.NotContains(t, areas, OutboundConn, "outbound-connectors must not be in profile %s (it is enabled deliberately)", p)
 	}
 	m, ok := ManifestFor(OutboundConn)
 	assert.True(t, ok)
@@ -120,14 +137,18 @@ func TestOutboundConnectorsIsOptInArea(t *testing.T) {
 	assert.ErrorContains(t, Validate([]FunctionalArea{UserManagement, DeviceManagement, OutboundConn}), string(EventProcessing))
 }
 
-// The ai-inference area is a known, opt-in area (ADR-056): not in any profile and,
-// unlike a stream consumer, it has NO hard deps — event-processing calls IT, so it can
-// be enabled with just the core areas. It only soft-deps user-management (the consent
-// flag read degrades fail-closed).
+// The ai-inference area is a known, opt-in area (ADR-056): held back from the standard
+// profiles, present in ProfileFull, and — unlike a stream consumer — it has NO hard
+// deps, since event-processing calls IT, so it can be enabled with just the core areas.
+// It only soft-deps user-management (the consent flag read degrades fail-closed).
 func TestAiInferenceIsOptInArea(t *testing.T) {
 	assert.True(t, Known(AiInference))
+	assert.Contains(t, profiles[ProfileFull], AiInference, "full ships everything, including ai-inference")
 	for p, areas := range profiles {
-		assert.NotContains(t, areas, AiInference, "ai-inference must not be in profile %s (it is enabled on demand)", p)
+		if p == ProfileFull {
+			continue
+		}
+		assert.NotContains(t, areas, AiInference, "ai-inference must not be in profile %s (it is enabled deliberately)", p)
 	}
 	m, ok := ManifestFor(AiInference)
 	assert.True(t, ok)
@@ -147,4 +168,31 @@ func TestValidateAcceptsCoreOnly(t *testing.T) {
 func TestSoftDepsNotEnforced(t *testing.T) {
 	err := Validate([]FunctionalArea{UserManagement, DeviceManagement})
 	assert.NoError(t, err)
+}
+
+// ProfileFull means EVERYTHING this build ships. This is the guard against the drift
+// that made "full" a misnomer: three areas (mcp, outbound-connectors, ai-inference)
+// were added to the catalog over time and each was quietly left out of every profile,
+// so the profile named "full" silently came to mean "most of it" — and the areas
+// behind two GA marquee features became unreachable from the installer, which only
+// ever passes a profile. A new area now fails this test until it is placed
+// deliberately: in full, or excluded with a stated reason.
+func TestProfileFullShipsEveryKnownArea(t *testing.T) {
+	for a := range catalog {
+		assert.Contains(t, profiles[ProfileFull], a,
+			"area %q is missing from the full profile — full must ship everything", a)
+	}
+	assert.Len(t, profiles[ProfileFull], len(catalog), "full must contain every known area exactly once")
+	assert.NoError(t, Validate(profiles[ProfileFull]), "the full profile must itself be a valid selection")
+}
+
+// ProfileDefault is the standard system and must stay a valid, self-consistent
+// selection — and a strict subset of full.
+func TestProfileDefaultIsTheStandardSystem(t *testing.T) {
+	assert.NoError(t, Validate(profiles[ProfileDefault]))
+	for _, a := range profiles[ProfileDefault] {
+		assert.Contains(t, profiles[ProfileFull], a, "default must be a subset of full")
+	}
+	assert.Less(t, len(profiles[ProfileDefault]), len(profiles[ProfileFull]),
+		"default holds back the areas that reach outside the instance")
 }

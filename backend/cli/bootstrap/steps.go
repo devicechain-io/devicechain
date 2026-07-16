@@ -25,10 +25,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// defaultProfile is used when the user does not specify one. "full" enables all
-// functional areas — the right default for a complete local instance (the chart
-// schema accepts: full, telemetry, ingest-only).
-const defaultProfile = "full"
+// defaultProfile is used when the user does not specify one: the standard system —
+// the whole device/telemetry/automation platform, and the right default for a
+// complete instance. It deliberately is NOT "full": full additionally ships the areas
+// that reach outside the instance (AI inference, outbound connectors, MCP), each of
+// which carries a decision an operator should make rather than inherit — a paid
+// provider key, an egress surface, an agent-facing API. Pass --profile full to get
+// everything. (The chart schema accepts: default, full, telemetry, ingest-only.)
+const defaultProfile = "default"
 
 // Local developer build-path conventions (mirrors deploy/local). The registry
 // is reachable from the host as ImageRegistry (localhost:<port>) and from the

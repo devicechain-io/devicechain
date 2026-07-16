@@ -19,8 +19,9 @@ You choose which services to run with **either** a named profile **or** an expli
 
 | Profile | Functional areas |
 |---|---|
-| `full` | user-management, device-management, event-sources, event-management, device-state, command-delivery |
-| `telemetry` | user-management, device-management, event-sources, event-management, device-state |
+| `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing — the standard system, and what an unset profile resolves to |
+| `full` | everything in `default`, plus `ai-inference`, `outbound-connectors`, and `mcp`: the areas that reach outside the instance, each of which carries a decision to make deliberately (a paid provider key, an egress surface, an agent-facing API) |
+| `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 
 ```bash

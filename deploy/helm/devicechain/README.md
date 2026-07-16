@@ -37,11 +37,12 @@ helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
 ## Choosing what to deploy (ADR-022 decision 2)
 
 Set **either** a named `profile` **or** an explicit `enabledFunctionalAreas`
-list (not both). An empty selection defaults to `full`.
+list (not both). An empty selection resolves to `default`.
 
 | Profile | Functional areas |
 |---|---|
-| `full` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing |
+| `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing |
+| `full` | everything in `default`, plus `ai-inference`, `outbound-connectors`, `mcp` |
 | `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 
@@ -60,13 +61,29 @@ and `device-management` are the required core; the other four are independently
 optional. (The dependency catalog mirrors `backend/k8s/functionalarea`, the Go
 source of truth.)
 
-Three areas are **opt-in** — deliberately in no profile, enabled only by naming them
-in an explicit `enabledFunctionalAreas` set:
+> **Required value.** `instance.config.infrastructure.secrets.rootKey` — a base64
+> 256-bit key (`openssl rand -base64 32`) — is required for any profile carrying an
+> area that owns an envelope-encrypted secret store (ADR-059):
+> `notification-management` (in `default`), `outbound-connectors`, and `ai-inference`.
+> Such a service cannot form its KEK and refuses to start without it, so the chart
+> **fails the render** rather than shipping a crash-loop. `dcctl bootstrap` mints one
+> automatically. The chart deliberately does NOT generate one: Helm's random functions
+> re-run on every upgrade, which would rotate the KEK and orphan every stored secret.
+
+`default` is the standard system. `full` is exhaustive — it ships **every** area this
+build has, and a test enforces that, so "full" cannot drift back into meaning "most of
+it".
+
+The difference is the three areas that reach OUTSIDE the instance. `default` holds them
+back because each carries a decision an operator should make deliberately rather than
+inherit — a paid provider key, an egress surface, an agent-facing API — not because
+they are second-class. Get them with `--set profile=full`, or name them in an explicit
+`enabledFunctionalAreas` set:
 
 | Area | Purpose | Notes |
 |---|---|---|
 | `outbound-connectors` | REACT outbound sink (ADR-060) | hard-depends on `event-processing`; needs `infrastructure.secrets.rootKey` for its ADR-059 credential store |
-| `mcp` | read-only MCP resource server (ADR-047) | requires `mcp.config.resourceUrl` + `issuerUrl` |
+| `mcp` | read-only MCP resource server (ADR-047) | needs `resourceUrl` + `issuerUrl`, **derived from the ingress** when one is configured (override under `functionalAreas.mcp.config`). Starts and serves metadata regardless, but a client can only obtain a token once the OAuth AS is on — set `user-management`'s `auth.issuerUrl`, a separate deliberate switch |
 | `ai-inference` | NL→rule authoring proxy (ADR-056) | no hard dep (fails paths closed); needs `infrastructure.secrets.rootKey` for provider keys; external routing needs `serviceAuth.secret` + `userManagement` and is per-tenant opt-in / fail-closed |
 
 ## Per-service configuration
