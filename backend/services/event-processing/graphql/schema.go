@@ -7,6 +7,7 @@ import (
 	"context"
 	_ "embed"
 
+	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
 	"github.com/devicechain-io/dc-event-processing/model"
 )
 
@@ -27,6 +28,10 @@ type SchemaResolver struct {
 	DetectRules *model.DetectRuleStore
 	RuleStats   *model.RuleStatStore
 	Profiles    *model.ProfileActiveStore
+	// Drafter is the ADR-056 NL→rule drafting orchestrator (slice 1). It is nil when the
+	// inference path is not wired (ai-inference is an opt-in area); the draft resolver
+	// nil-checks it and returns an unavailable result rather than panicking.
+	Drafter *nldraft.Drafter
 }
 
 // EventProcessingInfo resolves the scaffold identity query.

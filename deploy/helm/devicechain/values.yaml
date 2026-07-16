@@ -98,6 +98,16 @@ instance:
         # (or empty hostname) disables REACT send-command dispatch, fail-closed.
         hostname: command-delivery
         port: 8080
+      aiInference:
+        # ai-inference is reached in-cluster by its instance-namespace Service name for
+        # event-processing to draft a detection rule from natural language (ADR-056 slice 1):
+        # it carries the human's NL prompt to the active provider over a service token
+        # (ai:infer) and runs the returned candidate through its own rules.Compile firewall.
+        # ai-inference is an OPT-IN area (in no profile) — enable it AND set the coordinate
+        # here to turn NL rule-drafting on. Unset (or empty hostname) leaves NL drafting
+        # cleanly UNAVAILABLE, fail-closed (the form + canvas authoring doors are unaffected).
+        hostname: ai-inference
+        port: 8080
       serviceAuth:
         # Shared secret backing the synchronous cross-service call primitive
         # (ADR-044 amendment): a caller presents it to user-management's mint
