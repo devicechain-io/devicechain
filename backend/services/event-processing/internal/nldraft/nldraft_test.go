@@ -6,6 +6,7 @@ package nldraft
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -170,4 +171,31 @@ func TestNewDrafter_DefaultsMaxAttempts(t *testing.T) {
 	res, err := d.Draft(context.Background(), "acme", Request{Text: "x"})
 	require.NoError(t, err)
 	assert.EqualValues(t, defaultMaxAttempts, res.Attempts)
+}
+
+// A tenant over its inference rate ceiling gets the TRANSIENT reason, not the generic
+// one. The distinction matters to the author: the generic reason points at provider
+// configuration and would send them to an operator, when the fix is to wait a moment.
+func TestDraft_RateLimited_ReportsTransientReason(t *testing.T) {
+	f := &fakeInferer{err: fmt.Errorf("ai-inference: %w: upstream said no", ErrRateLimited)}
+	res := draft(t, f, Request{Text: "alarm when temp over 80"})
+
+	assert.True(t, res.Unavailable)
+	assert.False(t, res.OK)
+	assert.Equal(t, rateLimitedReason, res.UnavailableReason)
+	assert.NotEqual(t, unavailableReason, res.UnavailableReason)
+	// The reason describes the caller's own behaviour against their own tenant's
+	// ceiling; it must never carry the wrapped upstream detail (topology).
+	assert.NotContains(t, res.UnavailableReason, "upstream said no")
+}
+
+// Every other inference failure keeps the generic fixed reason, so a marker that ever
+// drifts degrades to today's message rather than to a wrong one.
+func TestDraft_OtherFailure_ReportsGenericReason(t *testing.T) {
+	f := &fakeInferer{err: errors.New("ai-inference: dial tcp 10.0.0.5:8080: connection refused")}
+	res := draft(t, f, Request{Text: "alarm when temp over 80"})
+
+	assert.True(t, res.Unavailable)
+	assert.Equal(t, unavailableReason, res.UnavailableReason)
+	assert.NotContains(t, res.UnavailableReason, "10.0.0.5", "the reason must never leak topology")
 }

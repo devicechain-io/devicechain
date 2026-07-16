@@ -30,6 +30,20 @@ const (
 	// MaxInferenceTimeoutMs caps the configurable per-call timeout at startup so an
 	// operator cannot set an unbounded wait.
 	MaxInferenceTimeoutMs = 120_000
+
+	// DefaultInferenceRequestsPerMinute / DefaultInferenceBurst are the PLATFORM
+	// per-tenant rate ceiling for inference calls (ADR-056 §6 / ADR-023) — the
+	// fail-safe every tenant is metered at when it declares no override. They are a
+	// budget gate, not an authz gate: authorization to author a rule is not
+	// authorization to spend the operator's provider key without bound.
+	//
+	// Sized against the shape of real authoring rather than a round number. One NL
+	// draft costs up to nldraft's bounded repair loop (3 calls today), so 30/min is
+	// ~10 drafts a minute sustained and a burst of 15 is ~5 back-to-back — comfortably
+	// above a human describing rules and clicking Draft, and orders of magnitude below
+	// a script looping the door, which is the case this exists to shed.
+	DefaultInferenceRequestsPerMinute = 30
+	DefaultInferenceBurst             = 15
 )
 
 // AiInferenceConfiguration is the typed, fail-closed configuration for the
@@ -54,6 +68,13 @@ type AiInferenceConfiguration struct {
 	// MaxOutputTokens caps a provider's generated output. Unset (0) defaults to
 	// DefaultMaxOutputTokens; a non-positive value is rejected.
 	MaxOutputTokens int
+
+	// InferenceRequestsPerMinute / InferenceBurst are the PLATFORM per-tenant rate
+	// ceiling for inference calls (ADR-056 §6 / ADR-023), applied to every tenant that
+	// declares no override on its control-plane row. Unset (0) defaults; a non-positive
+	// value is rejected — there is no "unlimited" setting, by design.
+	InferenceRequestsPerMinute float64
+	InferenceBurst             int
 }
 
 // NewAiInferenceConfiguration creates the default configuration.
@@ -74,6 +95,12 @@ func (c *AiInferenceConfiguration) ApplyDefaults() {
 	if c.MaxOutputTokens == 0 {
 		c.MaxOutputTokens = DefaultMaxOutputTokens
 	}
+	if c.InferenceRequestsPerMinute == 0 {
+		c.InferenceRequestsPerMinute = DefaultInferenceRequestsPerMinute
+	}
+	if c.InferenceBurst == 0 {
+		c.InferenceBurst = DefaultInferenceBurst
+	}
 }
 
 // Validate rejects out-of-range tunables fail-closed (ADR-022 decision 1).
@@ -86,6 +113,16 @@ func (c *AiInferenceConfiguration) Validate() error {
 	}
 	if c.MaxOutputTokens <= 0 {
 		return fmt.Errorf("maxOutputTokens must be positive, got %d", c.MaxOutputTokens)
+	}
+	// Never unlimited: a non-positive ceiling is rejected at startup rather than
+	// coerced, so an operator who meant to widen the limit cannot accidentally remove
+	// it (0 would otherwise mean "meter nothing" to the caller's eye and "admit
+	// nothing" to the token bucket).
+	if c.InferenceRequestsPerMinute <= 0 {
+		return fmt.Errorf("inferenceRequestsPerMinute must be positive, got %v", c.InferenceRequestsPerMinute)
+	}
+	if c.InferenceBurst <= 0 {
+		return fmt.Errorf("inferenceBurst must be positive, got %d", c.InferenceBurst)
 	}
 	return nil
 }

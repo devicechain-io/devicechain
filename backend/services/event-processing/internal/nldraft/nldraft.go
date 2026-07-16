@@ -36,6 +36,20 @@ const defaultMaxAttempts = 3
 // re-expanding err.Error() here would undo that. The real error is logged server-side instead.
 const unavailableReason = "the inference provider is unavailable, or this tenant has not enabled external AI routing"
 
+// rateLimitedReason is the safe message for a tenant over its inference rate ceiling
+// (ADR-056 §6 / ADR-023). Distinct from unavailableReason because the two call for
+// opposite actions: "unavailable" sends the author to an operator, while this resolves
+// by waiting a moment. Telling an author they are over their own tenant's ceiling
+// leaks nothing — it describes their own behaviour against a limit their own operator
+// set, and reveals no topology.
+const rateLimitedReason = "this tenant has reached its AI drafting rate limit; wait a moment and try again"
+
+// ErrRateLimited marks an inference call rejected because the tenant is over its rate
+// ceiling. The Inferer implementation classifies the transport error into it (see the
+// processor's inference client), so the drafter can report the transient, retryable
+// outcome without depending on the transport.
+var ErrRateLimited = errors.New("inference rate limited")
+
 // MetricHint is one entry of the target profile's metric vocabulary, supplied by the caller
 // (the console already loads it) so the prompt can reference real metric keys. All fields but
 // Key are advisory prompt context.
@@ -151,9 +165,16 @@ func (d *Drafter) Draft(ctx context.Context, tenant string, req Request) (Result
 				// (actionable) rather than discarding that spent work as a bare "unavailable".
 				break
 			}
+			// Rate-limited is reported as its own reason: it is transient and the author
+			// fixes it by waiting, whereas the generic reason points at configuration and
+			// would send them to an operator for nothing.
+			reason := unavailableReason
+			if errors.Is(err, ErrRateLimited) {
+				reason = rateLimitedReason
+			}
 			return Result{
 				Unavailable:       true,
-				UnavailableReason: unavailableReason,
+				UnavailableReason: reason,
 				Attempts:          int32(rounds),
 			}, nil
 		}

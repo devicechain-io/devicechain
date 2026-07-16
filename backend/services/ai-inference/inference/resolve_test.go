@@ -45,9 +45,39 @@ func (p panicConsent) ExternalEnabled(context.Context, string) (bool, error) {
 	return false, nil
 }
 
+// fakeRate is a scriptable RateGate that records how many times it was charged, so a
+// test can prove the gate is consulted exactly once per resolution and only after the
+// cheap local gates.
+type fakeRate struct {
+	allow  bool
+	calls  int
+	tenant string
+}
+
+func (f *fakeRate) Allow(tenant string) bool {
+	f.calls++
+	f.tenant = tenant
+	return f.allow
+}
+
+// panicRate fails the test if charged — used to prove a path never spends budget.
+type panicRate struct{ t *testing.T }
+
+func (p panicRate) Allow(string) bool {
+	p.t.Fatal("the rate gate must not be charged on this path")
+	return false
+}
+
 // newHarness builds a real in-memory Api (the ai_providers table + the secret store,
-// via the production migrations) plus a resolver over the given consent checker.
+// via the production migrations) plus a resolver over the given consent checker. The
+// rate gate is nil (unmetered) — see newHarnessWithRate.
 func newHarness(t *testing.T, consent ConsentChecker) (*Resolver, *model.Api, context.Context) {
+	t.Helper()
+	return newHarnessWithRate(t, consent, nil)
+}
+
+// newHarnessWithRate is newHarness with an explicit per-tenant rate gate.
+func newHarnessWithRate(t *testing.T, consent ConsentChecker, rate RateGate) (*Resolver, *model.Api, context.Context) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -59,7 +89,7 @@ func newHarness(t *testing.T, consent ConsentChecker) (*Resolver, *model.Api, co
 	require.NoError(t, err)
 	api := model.NewApi(&rdb.RdbManager{Database: db}, secrets.NewStore(db, kek))
 	bounds := Bounds{MaxOutputTokens: 100, MaxPromptBytes: 1000, Timeout: 5 * time.Second}
-	return NewResolver(api, consent, bounds, nil), api, context.Background()
+	return NewResolver(api, consent, rate, bounds, nil), api, context.Background()
 }
 
 func strp(s string) *string { return &s }
@@ -194,9 +224,113 @@ func TestResolveProviderMissing(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUnavailable)
 }
 
+// A tenant over its inference rate ceiling is shed with the distinct, transient
+// ErrRateLimited sentinel — not the coarse ErrUnavailable, which would tell an author
+// to go find an operator for something that resolves by waiting a moment.
+func TestResolveForTenantRateLimited(t *testing.T) {
+	consent := &fakeConsent{enabled: true}
+	rate := &fakeRate{allow: false}
+	r, api, ctx := newHarnessWithRate(t, consent, rate)
+	makeProvider(t, api, ctx, "p", "", "sk", true)
+	_, err := api.SetActiveProvider(ctx, "p")
+	require.NoError(t, err)
+
+	_, err = r.ResolveForTenant(ctx, "t1")
+	assert.ErrorIs(t, err, ErrRateLimited)
+	assert.Equal(t, 1, rate.calls, "the gate is charged exactly once per resolution")
+	assert.Equal(t, "t1", rate.tenant, "the ceiling is charged against the CALLING tenant")
+}
+
+// ORDERING, the load-bearing part. The rate gate must sit in FRONT of the consent
+// check: consent is deliberately uncached (so a revocation takes effect at once), which
+// makes it one user-management query per call — a caller looping the door would turn
+// its loop into a user-management flood. Shedding first keeps the loop in memory.
+func TestResolveForTenantRateLimitPrecedesConsent(t *testing.T) {
+	consent := &fakeConsent{enabled: true}
+	rate := &fakeRate{allow: false}
+	r, api, ctx := newHarnessWithRate(t, consent, rate)
+	makeProvider(t, api, ctx, "p", "", "sk", true)
+	_, err := api.SetActiveProvider(ctx, "p")
+	require.NoError(t, err)
+
+	_, err = r.ResolveForTenant(ctx, "t1")
+	assert.ErrorIs(t, err, ErrRateLimited)
+	assert.Zero(t, consent.calls, "a shed call must not reach the uncached consent network call")
+}
+
+// The consent gate still runs on every call that is UNDER the ceiling, so putting rate
+// first cannot let data cross the boundary un-consented — it changes only the message
+// an abusive caller sees, never the security invariant.
+func TestResolveForTenantRateAllowedStillChecksConsent(t *testing.T) {
+	consent := &fakeConsent{enabled: false}
+	rate := &fakeRate{allow: true}
+	r, api, ctx := newHarnessWithRate(t, consent, rate)
+	makeProvider(t, api, ctx, "p", "", "sk", true)
+	_, err := api.SetActiveProvider(ctx, "p")
+	require.NoError(t, err)
+
+	_, err = r.ResolveForTenant(ctx, "t1")
+	assert.ErrorIs(t, err, ErrConsentRequired, "consent is still enforced under the ceiling")
+	assert.Equal(t, 1, consent.calls)
+}
+
+// Budget is only charged past the cheap local gates: a call that could never have been
+// served (no active provider) must not consume the tenant's ceiling.
+func TestResolveForTenantNoActiveDoesNotChargeBudget(t *testing.T) {
+	r, api, ctx := newHarnessWithRate(t, &fakeConsent{enabled: true}, panicRate{t})
+	makeProvider(t, api, ctx, "p", "", "sk", true) // created but NOT activated
+	_, err := r.ResolveForTenant(ctx, "t1")
+	assert.ErrorIs(t, err, ErrUnavailable)
+}
+
+// Likewise a request with no tenant: there is nothing to charge.
+func TestResolveForTenantNoTenantDoesNotChargeBudget(t *testing.T) {
+	r, _, ctx := newHarnessWithRate(t, &fakeConsent{enabled: true}, panicRate{t})
+	_, err := r.ResolveForTenant(ctx, "  ")
+	assert.ErrorIs(t, err, ErrUnavailable)
+}
+
+// The operator smoke test is instance-scoped config validation, not a tenant spending
+// its own budget, so it never charges the per-tenant ceiling (it has no tenant to
+// charge). It resolves through ResolveProvider, which skips both gates by design.
+func TestResolveProviderSmokeTestDoesNotChargeBudget(t *testing.T) {
+	srv := cannedServer(t)
+	defer srv.Close()
+	r, api, ctx := newHarnessWithRate(t, panicConsent{t}, panicRate{t})
+	makeProvider(t, api, ctx, "p", srv.URL, "sk", true)
+	resolved, err := r.ResolveProvider(ctx, "p")
+	require.NoError(t, err)
+	assert.Equal(t, "p", resolved.Token)
+}
+
+// A resolver built with no gate is unmetered — the tests-only escape hatch. main always
+// wires one, since the platform default is itself a limit.
+func TestResolveForTenantNilRateGateIsUnmetered(t *testing.T) {
+	srv := cannedServer(t)
+	defer srv.Close()
+	r, api, ctx := newHarnessWithRate(t, &fakeConsent{enabled: true}, nil)
+	makeProvider(t, api, ctx, "p", srv.URL, "sk", true)
+	_, err := api.SetActiveProvider(ctx, "p")
+	require.NoError(t, err)
+	_, err = r.ResolveForTenant(ctx, "t1")
+	assert.NoError(t, err)
+}
+
 func TestValidatePrompt(t *testing.T) {
 	r, _, _ := newHarness(t, &fakeConsent{})
 	assert.Error(t, r.ValidatePrompt("", "   "), "empty prompt rejected")
 	assert.Error(t, r.ValidatePrompt("", strings.Repeat("x", 1001)), "oversized prompt rejected")
 	assert.NoError(t, r.ValidatePrompt("sys", "draft a rule"))
+}
+
+// WIRE CONTRACT. event-processing classifies a transient rate-limit by matching this
+// substring on the returned GraphQL error message (svcclient surfaces only the message
+// text, not error extensions), so it can tell an author "wait a moment" instead of the
+// generic "unavailable, go find an operator".
+//
+// If this text changes, update `rateLimitMarker` in
+// event-processing/processor/nl_inference_client.go. Drift degrades benignly — the
+// author just sees the vaguer reason — but it silently loses the better message.
+func TestErrRateLimitedCarriesTheWireMarker(t *testing.T) {
+	assert.Contains(t, ErrRateLimited.Error(), "inference rate limit exceeded")
 }

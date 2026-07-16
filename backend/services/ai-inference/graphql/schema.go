@@ -26,6 +26,9 @@ type SchemaResolver struct {
 	// mutations dispatch through it. Nil disables the inference mutations (they return
 	// an error), so a partial deployment cannot serve an unwired inference path.
 	Inference *inference.Resolver
+	// Metrics counts inference outcomes and token spend. Nil-safe: a resolver built
+	// without a Microservice (unit tests) runs unmeasured.
+	Metrics *Metrics
 }
 
 // GetApi returns the provider api from context (injected as a provider in main).

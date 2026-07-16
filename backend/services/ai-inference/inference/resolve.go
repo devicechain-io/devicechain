@@ -34,23 +34,26 @@ type Bounds struct {
 type Resolver struct {
 	api     *model.Api
 	consent ConsentChecker
+	rate    RateGate
 	bounds  Bounds
 	client  *http.Client
 }
 
 // NewResolver builds a resolver over the provider store (for the active pointer + the
-// secret store), the consent checker (fail-closed), the configured bounds, and an
-// optional HTTP client (nil ⇒ the package default). consent must be non-nil — main
-// injects a deny-all checker when service-to-service auth is unconfigured, so the
-// cascade never dereferences a nil checker and external routing stays denied.
-func NewResolver(api *model.Api, consent ConsentChecker, bounds Bounds, client *http.Client) *Resolver {
+// secret store), the consent checker (fail-closed), the per-tenant rate gate, the
+// configured bounds, and an optional HTTP client (nil ⇒ the package default). consent
+// must be non-nil — main injects a deny-all checker when service-to-service auth is
+// unconfigured, so the cascade never dereferences a nil checker and external routing
+// stays denied. A nil rate gate leaves calls unmetered and is for tests only; main
+// always wires one, since the platform default is itself a limit.
+func NewResolver(api *model.Api, consent ConsentChecker, rate RateGate, bounds Bounds, client *http.Client) *Resolver {
 	if consent == nil {
 		// Enforce the documented invariant fail-closed rather than deferring to a nil
 		// dereference on the first external-kind resolution: a nil checker denies all
 		// external routing.
 		consent = NewDeniedConsentChecker("no consent checker configured")
 	}
-	return &Resolver{api: api, consent: consent, bounds: bounds, client: client}
+	return &Resolver{api: api, consent: consent, rate: rate, bounds: bounds, client: client}
 }
 
 // Resolved is a built provider plus the identity of the row it came from, so the
@@ -81,18 +84,31 @@ func (r *Resolver) ValidatePrompt(system, prompt string) error {
 }
 
 // ResolveForTenant resolves the ACTIVE provider for a tenant's inference request,
-// enforcing the external-routing consent gate. This is the production NL-authoring
-// path (Slice 1). Every step fails closed:
+// enforcing the external-routing consent gate and the per-tenant rate ceiling. This is
+// the production NL-authoring path (Slice 1). Every step fails closed:
 //
 //  1. a tenant must be present (the caller reads it from the service-token header);
 //  2. an active provider must be configured ("default of none" ⇒ unavailable);
 //  3. the active provider must be enabled;
-//  4. if the provider routes outside the boundary (every GA kind), the tenant must
+//  4. the tenant must be within its inference rate ceiling (ADR-056 §6 / ADR-023);
+//  5. if the provider routes outside the boundary (every GA kind), the tenant must
 //     have opted in — a consent-check error is treated as NOT permitted, never allowed;
-//  5. the provider's API key must resolve (see build).
+//  6. the provider's API key must resolve (see build).
 //
-// The active-provider read (local) runs before the consent check (a network call) so a
-// "default of none" instance short-circuits without touching user-management.
+// ORDERING IS LOAD-BEARING. The active-provider read (local) runs before anything on
+// the network, so a "default of none" instance short-circuits without touching
+// user-management. The rate gate then runs BEFORE the consent check, because consent
+// is deliberately UNCACHED — it queries user-management on every call so a revocation
+// takes effect immediately — which makes it an amplifier: a caller looping the draft
+// door would otherwise turn one loop into one user-management query per iteration. An
+// in-memory bucket in front sheds that loop for free. The rate resolver's own lookups
+// are out-of-band, capped, and cached, so the hot path stays local either way.
+//
+// Charging before consent means an over-rate tenant that never opted in is told it is
+// rate-limited rather than that it needs consent. That ordering costs nothing: the
+// consent gate still runs on every call that is under the ceiling, so no data crosses
+// the boundary without it — the security invariant is unchanged, only the message an
+// abusive caller sees.
 func (r *Resolver) ResolveForTenant(ctx context.Context, tenant string) (*Resolved, error) {
 	if strings.TrimSpace(tenant) == "" {
 		return nil, fmt.Errorf("%w: no tenant in context", ErrUnavailable)
@@ -106,6 +122,11 @@ func (r *Resolver) ResolveForTenant(ctx context.Context, tenant string) (*Resolv
 	}
 	if !active.Enabled {
 		return nil, fmt.Errorf("%w: the active provider is disabled", ErrUnavailable)
+	}
+	// Charged once per resolution, and only past the cheap local gates above, so a
+	// call that could never have been served does not burn the tenant's budget.
+	if r.rate != nil && !r.rate.Allow(tenant) {
+		return nil, ErrRateLimited
 	}
 	if model.IsExternalProviderKind(active.Kind) {
 		ok, err := r.consent.ExternalEnabled(ctx, tenant)

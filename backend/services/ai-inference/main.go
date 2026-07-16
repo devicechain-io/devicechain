@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-ai-inference/schema"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
@@ -116,19 +117,38 @@ func buildInferenceResolver() *inference.Resolver {
 		Timeout:         time.Duration(Configuration.InferenceTimeoutMs) * time.Millisecond,
 	}
 
+	// The platform per-tenant ceiling every tenant is metered at absent an override.
+	// Declared per minute; converted once, here, through the dimension that owns the
+	// unit, so it cannot disagree with a fetched override (which converts the same way).
+	def := governance.Limits{
+		MessagesPerSecond: governance.AIInference.PerSecond(Configuration.InferenceRequestsPerMinute),
+		Burst:             Configuration.InferenceBurst,
+	}
+
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	var consent inference.ConsentChecker
+	var rate inference.RateGate
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — external-routing consent cannot be verified; the NL-authoring inference path is unavailable (fail-closed, ADR-056). The ai:admin provider smoke test is unaffected.")
 		consent = inference.NewDeniedConsentChecker("service-to-service auth is not configured")
+		// Per-tenant overrides are unreadable, so meter every tenant at the platform
+		// default. The gate is still wired: the default is itself a limit.
+		rate = core.NewTenantRateLimiter(func(string) (float64, int) { return def.MessagesPerSecond, def.Burst })
 	} else {
+		// One service-token client backs both reads: consent and the rate overrides come
+		// from the same tenantGovernance query under the same least-privilege tenant:read.
 		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "ai-inference", []string{string(auth.TenantRead)})
 		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 		consent = inference.NewServiceConsentChecker(client, umURL)
-		log.Info().Str("userManagement", umURL).Msg("External-routing consent enforced from user-management tenantGovernance (fail-closed, ADR-056).")
+		resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.AIInference)
+		rate = core.NewTenantRateLimiter(resolver.Resolve)
+		log.Info().Str("userManagement", umURL).
+			Float64("requestsPerMinute", Configuration.InferenceRequestsPerMinute).
+			Int("burst", Configuration.InferenceBurst).
+			Msg("External-routing consent + per-tenant inference rate enforced from user-management tenantGovernance (fail-closed, ADR-056).")
 	}
 
-	return inference.NewResolver(Api, consent, bounds, nil)
+	return inference.NewResolver(Api, consent, rate, bounds, nil)
 }
 
 // afterMicroserviceInitialized initializes components after the microservice is up.
@@ -173,6 +193,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{
 		Area:      string(Microservice.FunctionalArea),
 		Inference: InferenceResolver,
+		Metrics:   graphql.NewMetrics(Microservice),
 	})
 	Microservice.StartInstanceAuthGate(ctx)
 	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(),
