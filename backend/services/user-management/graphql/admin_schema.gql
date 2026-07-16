@@ -48,6 +48,10 @@ type AdminTenant {
     # tenant inherits the platform default; a set value raises or lowers its ceiling.
     outboundMessagesPerSecond: Float
     outboundBurst: Int
+    # Per-tenant external-AI consent (ADR-056 §6). Null/false means the tenant is
+    # not opted in (fail-closed); true records the operator's consent to route this
+    # tenant's data to an external frontier model.
+    aiExternalEnabled: Boolean
 }
 
 # A globally-defined, named bundle of authorities (ADR-008 RBAC / ADR-033). Scope
@@ -91,10 +95,14 @@ input AdminTenantCreateRequest {
     ingestBurst: Int
     outboundMessagesPerSecond: Float
     outboundBurst: Int
+    # Per-tenant external-AI consent (ADR-056 §6); omit for not-opted-in (the
+    # fail-closed default).
+    aiExternalEnabled: Boolean
 }
 
 # Data to update a tenant (its token is fixed). A null ingest* / outbound* override
-# clears it, reverting the tenant to the platform default.
+# clears it, reverting the tenant to the platform default. A null aiExternalEnabled
+# likewise clears consent (the tenant reverts to not-opted-in).
 input AdminTenantUpdateRequest {
     name: String
     config: String
@@ -102,6 +110,7 @@ input AdminTenantUpdateRequest {
     ingestBurst: Int
     outboundMessagesPerSecond: Float
     outboundBurst: Int
+    aiExternalEnabled: Boolean
 }
 
 # Data required to create a global identity. Each system role must name an

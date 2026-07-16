@@ -163,6 +163,16 @@ type Tenant struct {
 	BrandingBackground    *string
 	BrandingForeground    *string
 	BrandingAccent        *string
+
+	// Per-tenant external-AI consent (ADR-056 §6, an ADR-023 governance flag). Gates
+	// whether THIS tenant's data — NL rule-authoring prompts + the device schema they
+	// carry — may be routed to an EXTERNAL frontier model by the ai-inference service.
+	// nil/false means NOT opted in, and it is fail-closed by construction: absent
+	// explicit consent only in-boundary paths run, and at GA there are none, so NL
+	// authoring is simply unavailable for the tenant. The ai-inference service reads
+	// it over a service token via the TenantGovernance query — the same seam
+	// outbound-connectors reads the outbound rate through — never from the JWT.
+	AiExternalEnabled *bool
 }
 
 func (Tenant) TableName() string { return "iam_tenants" }

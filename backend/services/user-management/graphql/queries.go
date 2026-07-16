@@ -73,6 +73,16 @@ func (r *TenantGovernanceResolver) OutboundBurst() *int32 {
 	return &v
 }
 
+// AiExternalEnabled resolves the tenant's external-AI consent as a non-null
+// boolean, fail-closed: a nil column (never opted in) reads as false. Unlike the
+// rate overrides above — where nil means "inherit a platform default" — there is
+// no default to inherit here; nil means "no consent". The ai-inference service
+// reads this over a service token before it may route the tenant's data to an
+// external model (ADR-056 §6).
+func (r *TenantGovernanceResolver) AiExternalEnabled() bool {
+	return r.t.AiExternalEnabled != nil && *r.t.AiExternalEnabled
+}
+
 // TenantGovernance returns the governance overrides for the tenant the caller is
 // acting within — the read side of ADR-023 per-tenant limits (both the ingest and
 // the ADR-060 outbound dimensions), consumed by the enforcing services over a

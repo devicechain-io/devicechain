@@ -180,7 +180,8 @@ CREATE TABLE "user-management".iam_tenants (
  branding_primary text,
  branding_background text,
  branding_foreground text,
- branding_accent text
+ branding_accent text,
+ ai_external_enabled boolean
 );
 CREATE TABLE "user-management".signing_keys (
  id bigint NOT NULL,
