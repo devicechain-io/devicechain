@@ -29,31 +29,31 @@ type Bounds struct {
 
 // Resolver turns an inference request into a ready-to-call Provider only after every
 // fail-closed gate passes. It is the ONE place external routing is authorized; there
-// is no path around it that reaches a Provider. It owns the active-provider read, the
-// external-routing consent gate, the key resolution, and provider construction.
+// is no path around it that reaches a Provider. It owns the menu resolution, the
+// external-routing consent gate, the rate ceiling, the key resolution, and provider
+// construction.
 type Resolver struct {
-	api     *model.Api
-	consent ConsentChecker
-	rate    RateGate
-	bounds  Bounds
-	client  *http.Client
+	api    *model.Api
+	facts  TenantFactsReader
+	rate   RateGate
+	bounds Bounds
+	client *http.Client
 }
 
-// NewResolver builds a resolver over the provider store (for the active pointer + the
-// secret store), the consent checker (fail-closed), the per-tenant rate gate, the
-// configured bounds, and an optional HTTP client (nil ⇒ the package default). consent
-// must be non-nil — main injects a deny-all checker when service-to-service auth is
-// unconfigured, so the cascade never dereferences a nil checker and external routing
+// NewResolver builds a resolver over the provider store (for the grant tables + the
+// secret store), the tenant-facts reader (fail-closed), the per-tenant rate gate, the
+// configured bounds, and an optional HTTP client (nil ⇒ the package default). facts
+// must be non-nil — main injects a deny-all reader when service-to-service auth is
+// unconfigured, so the cascade never dereferences a nil reader and external routing
 // stays denied. A nil rate gate leaves calls unmetered and is for tests only; main
 // always wires one, since the platform default is itself a limit.
-func NewResolver(api *model.Api, consent ConsentChecker, rate RateGate, bounds Bounds, client *http.Client) *Resolver {
-	if consent == nil {
+func NewResolver(api *model.Api, facts TenantFactsReader, rate RateGate, bounds Bounds, client *http.Client) *Resolver {
+	if facts == nil {
 		// Enforce the documented invariant fail-closed rather than deferring to a nil
-		// dereference on the first external-kind resolution: a nil checker denies all
-		// external routing.
-		consent = NewDeniedConsentChecker("no consent checker configured")
+		// dereference on the first tenant resolution: a nil reader denies everything.
+		facts = NewDeniedTenantFactsReader("no tenant-facts reader configured")
 	}
-	return &Resolver{api: api, consent: consent, rate: rate, bounds: bounds, client: client}
+	return &Resolver{api: api, facts: facts, rate: rate, bounds: bounds, client: client}
 }
 
 // Resolved is a built provider plus the identity of the row it came from, so the
@@ -83,65 +83,86 @@ func (r *Resolver) ValidatePrompt(system, prompt string) error {
 	return nil
 }
 
-// ResolveForTenant resolves the ACTIVE provider for a tenant's inference request,
-// enforcing the external-routing consent gate and the per-tenant rate ceiling. This is
-// the production NL-authoring path (Slice 1). Every step fails closed:
+// ResolveForTenant resolves the model a tenant's inference request should use — its
+// tier's DEFAULT from the menu ADR-065 entitles it to — enforcing the external-routing
+// consent gate and the per-tenant rate ceiling. This is the production NL-authoring
+// path (Slice 1). Every step fails closed:
 //
 //  1. a tenant must be present (the caller reads it from the service-token header);
-//  2. an active provider must be configured ("default of none" ⇒ unavailable);
-//  3. the active provider must be enabled;
-//  4. the tenant must be within its inference rate ceiling (ADR-056 §6 / ADR-023);
-//  5. if the provider routes outside the boundary (every GA kind), the tenant must
-//     have opted in — a consent-check error is treated as NOT permitted, never allowed;
-//  6. the provider's API key must resolve (see build).
+//  2. this instance must grant something to somebody (nothing granted ⇒ unavailable);
+//  3. the tenant must be within its inference rate ceiling (ADR-056 §6 / ADR-023);
+//  4. the tenant's facts (consent + tier) must be readable from user-management — a
+//     failure is NOT permission, never a guess;
+//  5. the tenant's menu must name a default model (see model.Api.MenuForTenant);
+//  6. if that model routes outside the boundary (every GA kind), the tenant must have
+//     opted in;
+//  7. the model's API key must resolve (see build).
 //
-// ORDERING IS LOAD-BEARING. The active-provider read (local) runs before anything on
-// the network, so a "default of none" instance short-circuits without touching
-// user-management. The rate gate then runs BEFORE the consent check, because consent
-// is deliberately UNCACHED — it queries user-management on every call so a revocation
-// takes effect immediately — which makes it an amplifier: a caller looping the draft
-// door would otherwise turn one loop into one user-management query per iteration. An
-// in-memory bucket in front sheds that loop for free. The rate resolver's own lookups
-// are out-of-band, capped, and cached, so the hot path stays local either way.
+// ORDERING IS LOAD-BEARING, and this preserves the property the retired active-pointer
+// read used to give for free. A purely LOCAL check (does this instance grant anything
+// at all?) runs before anything on the network, so an instance where AI was never
+// configured short-circuits without touching user-management — the "costs nothing when
+// switched off" property.
 //
-// Charging before consent means an over-rate tenant that never opted in is told it is
-// rate-limited rather than that it needs consent. That ordering costs nothing: the
-// consent gate still runs on every call that is under the ceiling, so no data crosses
-// the boundary without it — the security invariant is unchanged, only the message an
-// abusive caller sees.
+// The rate gate then runs BEFORE the tenant-facts read, because that read is
+// deliberately UNCACHED — it queries user-management on every call so a consent
+// revocation takes effect immediately — which makes it an amplifier: a caller looping
+// the draft door would otherwise turn one loop into one user-management query per
+// iteration. An in-memory bucket in front sheds that loop for free.
+//
+// Charging before the facts read means an over-rate tenant that never opted in is told
+// it is rate-limited rather than that it needs consent. That ordering costs nothing:
+// the consent gate still runs on every call that is under the ceiling, so no data
+// crosses the boundary without it — the security invariant is unchanged, only the
+// message an abusive caller sees.
+//
+// Consent is checked AFTER the menu resolves, because which boundary question applies
+// depends on which model answered: an in-boundary model needs no consent, and once the
+// embedded model ships (ADR-056 §4) a tenant that consents to nothing still gets
+// in-boundary drafting. Reading consent earlier would be free (it arrives on the same
+// query) but applying it earlier would collapse the two axes ADR-056 decision 4 keeps
+// apart.
 func (r *Resolver) ResolveForTenant(ctx context.Context, tenant string) (*Resolved, error) {
 	if strings.TrimSpace(tenant) == "" {
 		return nil, fmt.Errorf("%w: no tenant in context", ErrUnavailable)
 	}
-	active, err := r.api.ActiveProvider(ctx)
+	granted, err := r.api.AnyGrants(ctx)
 	if err != nil {
 		// Wrapped, not returned raw: this is a LOCAL store failure, and an unwrapped error
 		// classifies as a provider fault — pointing an operator at their inference provider
 		// when their own database is the thing that blipped. The detail is coarsened away
 		// from the caller by tenantSafeError and logged server-side either way.
-		return nil, fmt.Errorf("%w: could not read the active provider: %v", ErrUnavailable, err)
+		return nil, fmt.Errorf("%w: could not read the provider grants: %v", ErrUnavailable, err)
 	}
-	if active == nil {
-		return nil, fmt.Errorf("%w: no active provider is configured", ErrUnavailable)
+	if !granted {
+		return nil, fmt.Errorf("%w: no provider is granted to any tier or tenant", ErrUnavailable)
 	}
-	if !active.Enabled {
-		return nil, fmt.Errorf("%w: the active provider is disabled", ErrUnavailable)
-	}
-	// Charged once per resolution, and only past the cheap local gates above, so a
-	// call that could never have been served does not burn the tenant's budget.
+	// Charged once per resolution, and only past the cheap local gate above, so a call
+	// that could never have been served does not burn the tenant's budget.
 	if r.rate != nil && !r.rate.Allow(tenant) {
 		return nil, ErrRateLimited
 	}
-	if model.IsExternalProviderKind(active.Kind) {
-		ok, err := r.consent.ExternalEnabled(ctx, tenant)
-		if err != nil {
-			return nil, fmt.Errorf("%w: could not verify external-routing consent: %v", ErrUnavailable, err)
-		}
-		if !ok {
-			return nil, ErrConsentRequired
-		}
+	facts, err := r.facts.Facts(ctx, tenant)
+	if err != nil {
+		return nil, fmt.Errorf("%w: could not read the tenant's AI settings: %v", ErrUnavailable, err)
 	}
-	return r.build(ctx, active)
+	menu, err := r.api.MenuForTenant(ctx, facts.TierToken)
+	if err != nil {
+		return nil, fmt.Errorf("%w: could not resolve the tenant's model menu: %v", ErrUnavailable, err)
+	}
+	if menu.Default == nil {
+		// Two distinct causes, one coarse answer to the caller: the tier offers nothing
+		// (a deliberate package that excludes AI, or one nobody has granted to yet), or
+		// it offers several models and marks none of them the default. Both are for an
+		// operator to resolve; neither is the tenant's to act on.
+		return nil, fmt.Errorf("%w: the tenant's tier %q offers no default model (menu size %d)",
+			ErrUnavailable, facts.TierToken, len(menu.Providers))
+	}
+	chosen := menu.Default
+	if model.IsExternalProviderKind(chosen.Kind) && !facts.ExternalEnabled {
+		return nil, ErrConsentRequired
+	}
+	return r.build(ctx, chosen)
 }
 
 // ResolveProvider resolves a SPECIFIC provider by token for an operator smoke test

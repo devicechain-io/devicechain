@@ -104,13 +104,15 @@ func buildSecretStore() (secrets.SecretStore, error) {
 }
 
 // buildInferenceResolver constructs the fail-closed inference resolver over the
-// provider store, the configured per-call bounds, and the external-routing consent
-// checker. The consent checker reads the per-tenant ai_external_enabled flag from
-// user-management over a service token (least-privilege tenant:read, mirroring the
-// egress-limit fetcher). When the shared service secret or the user-management
-// endpoint is absent, a DENY-ALL checker is injected so the external NL-authoring path
-// is cleanly unavailable rather than silently permissive (the ai:admin operator smoke
-// test does not consult consent, so it still works). ADR-056.
+// provider store, the configured per-call bounds, and the tenant-facts reader. That
+// reader answers both per-call questions from ONE user-management tenantGovernance
+// query over a service token (least-privilege tenant:read, mirroring the egress-limit
+// fetcher): the ai_external_enabled consent flag (ADR-056 §6) and the tenant's tier
+// (ADR-065), which is what the model menu resolves against. When the shared service
+// secret or the user-management endpoint is absent, a DENY-ALL reader is injected so
+// the NL-authoring path is cleanly unavailable rather than silently permissive (the
+// ai:admin operator smoke test resolves a named provider and reads no tenant facts, so
+// it still works).
 func buildInferenceResolver() *inference.Resolver {
 	bounds := inference.Bounds{
 		MaxOutputTokens: Configuration.MaxOutputTokens,
@@ -127,29 +129,30 @@ func buildInferenceResolver() *inference.Resolver {
 	}
 
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	var consent inference.ConsentChecker
+	var facts inference.TenantFactsReader
 	var rate inference.RateGate
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
-		log.Warn().Msg("Service secret or user-management endpoint not configured — external-routing consent cannot be verified; the NL-authoring inference path is unavailable (fail-closed, ADR-056). The ai:admin provider smoke test is unaffected.")
-		consent = inference.NewDeniedConsentChecker("service-to-service auth is not configured")
+		log.Warn().Msg("Service secret or user-management endpoint not configured — a tenant's external-routing consent and tier cannot be read; the NL-authoring inference path is unavailable (fail-closed, ADR-056/065). The ai:admin provider smoke test is unaffected.")
+		facts = inference.NewDeniedTenantFactsReader("service-to-service auth is not configured")
 		// Per-tenant overrides are unreadable, so meter every tenant at the platform
 		// default. The gate is still wired: the default is itself a limit.
 		rate = core.NewTenantRateLimiter(func(string) (float64, int) { return def.MessagesPerSecond, def.Burst })
 	} else {
-		// One service-token client backs both reads: consent and the rate overrides come
-		// from the same tenantGovernance query under the same least-privilege tenant:read.
+		// One service-token client backs both reads: the tenant facts (consent + tier)
+		// and the rate overrides come from the same tenantGovernance query under the same
+		// least-privilege tenant:read.
 		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "ai-inference", []string{string(auth.TenantRead)})
 		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-		consent = inference.NewServiceConsentChecker(client, umURL)
+		facts = inference.NewServiceTenantFactsReader(client, umURL)
 		resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.AIInference)
 		rate = core.NewTenantRateLimiter(resolver.Resolve)
 		log.Info().Str("userManagement", umURL).
 			Float64("requestsPerMinute", Configuration.InferenceRequestsPerMinute).
 			Int("burst", Configuration.InferenceBurst).
-			Msg("External-routing consent + per-tenant inference rate enforced from user-management tenantGovernance (fail-closed, ADR-056).")
+			Msg("External-routing consent, tenant tier + per-tenant inference rate read from user-management tenantGovernance (fail-closed, ADR-056/065).")
 	}
 
-	return inference.NewResolver(Api, consent, rate, bounds, nil)
+	return inference.NewResolver(Api, facts, rate, bounds, nil)
 }
 
 // afterMicroserviceInitialized initializes components after the microservice is up.
@@ -182,7 +185,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// resolve it (and its secret store, for hasSecret) from the request context.
 	Api = model.NewApi(RdbManager, SecretStore)
 
-	// Build the fail-closed inference resolver: the active-provider read + the
+	// Build the fail-closed inference resolver: the menu resolution + the
 	// external-routing consent gate + key resolution + provider construction. It is the
 	// ONE place external routing is authorized (ADR-056). The root resolver holds it.
 	InferenceResolver = buildInferenceResolver()

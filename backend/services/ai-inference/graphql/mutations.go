@@ -81,7 +81,7 @@ func tenantSafeError(err error) error {
 	return inference.ErrUnavailable
 }
 
-// InferRuleCandidate runs a prompt through the ACTIVE provider on behalf of a tenant's
+// InferRuleCandidate runs a prompt through the tenant's DEFAULT model on behalf of a tenant's
 // NL-authoring request (ADR-056 Zone 1). Gated by the least-privilege ai:infer
 // authority (the event-processing service token holds it, Slice 1); the tenant comes
 // from context (the service-token X-DC-Tenant header). The resolver enforces the
@@ -91,7 +91,7 @@ func tenantSafeError(err error) error {
 //
 // This is the WHOLE tenant-facing surface of the service. ai:infer is a tenant-tier
 // authority and is deliberately far narrower than ai:admin: a holder can run a
-// prompt through the active provider; it cannot read, list, or change the provider
+// prompt through the model its tier offers; it cannot read, list, or change the provider
 // config (that is ai:admin, system-tier, on the admin plane).
 func (r *SchemaResolver) InferRuleCandidate(ctx context.Context, args struct {
 	Request InferenceRequestInput

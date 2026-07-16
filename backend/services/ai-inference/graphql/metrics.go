@@ -28,7 +28,7 @@ const (
 	// consent; not an error condition.
 	outcomeConsentRequired = "consent_required"
 	// outcomeUnavailable — a fail-closed gate tripped for an operator-facing reason (no
-	// active provider, disabled, missing key, no tenant). Which gate is deliberately
+	// nothing granted, no default, disabled, missing key, no tenant). Which gate is deliberately
 	// NOT a label: it would leak configuration shape into a metric and is already in
 	// the server-side log.
 	outcomeUnavailable = "unavailable"

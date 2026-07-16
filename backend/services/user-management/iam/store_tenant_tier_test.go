@@ -131,3 +131,47 @@ func TestDeleteTenantTierIsHard(t *testing.T) {
 	require.NoError(t, s.CreateTenantTier(ctx, &TenantTier{Token: TierBronzeToken}),
 		"a deleted tier must free its token for re-creation")
 }
+
+// TestTenantByTokenPreloadsTheTier pins the association itself, not a fixture that
+// supplies it.
+//
+// This looks redundant next to the round-trip above, and it is not. The graphql layer's
+// TenantGovernanceResolver.TierToken() reads t.Tier.Token and returns "" when Tier is
+// nil, which is only correct because THIS query preloads it. Every test on that
+// resolver hand-builds &Tenant{Tier: &TenantTier{...}} — so each one derives its
+// expectation from a fixture that guarantees the very thing production has to supply,
+// and dropping the Preload here would leave all of them green.
+//
+// The failure that would ship is silent and total: every tenant resolves tierToken:"",
+// ai-inference joins that against its grant tables, finds nothing, and reports the NL
+// authoring door "unavailable" for everyone — which is indistinguishable from the
+// correct fail-closed answer for an unknown tier. Nothing logs, nothing errors.
+func TestTenantByTokenPreloadsTheTier(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	gold := seedTier(t, s, TierGoldToken)
+	require.NoError(t, s.CreateTenant(ctx, &Tenant{Token: "acme", TierID: gold.ID}))
+
+	got, err := s.TenantByToken(ctx, "acme")
+	require.NoError(t, err)
+	require.NotNil(t, got.Tier,
+		"TenantByToken must preload Tier: the governance wire reads Tier.Token and degrades to \"\" — silently — without it")
+	require.Equal(t, TierGoldToken, got.Tier.Token)
+}
+
+// TestListTenantsPreloadsTheTier pins the same association on the admin list path,
+// which renders the tier column and the effective-settings cascade.
+func TestListTenantsPreloadsTheTier(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	gold := seedTier(t, s, TierGoldToken)
+	require.NoError(t, s.CreateTenant(ctx, &Tenant{Token: "acme", TierID: gold.ID}))
+
+	tenants, err := s.ListTenants(ctx)
+	require.NoError(t, err)
+	require.Len(t, tenants, 1)
+	require.NotNil(t, tenants[0].Tier, "the admin list resolves each tenant's tier + effective settings")
+	require.Equal(t, TierGoldToken, tenants[0].Tier.Token)
+}

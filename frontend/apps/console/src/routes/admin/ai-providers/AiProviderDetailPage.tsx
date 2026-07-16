@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The AI-provider detail / editor (ADR-056 §4). Edits {kind, name, description,
-// endpoint, model, params, enabled, write-only API key}, promotes/clears the active
-// provider, and hosts the operator smoke test (testAiProvider) — a live call through
-// the provider's endpoint + key, the affordance to validate a provider before
-// promoting it. The key is write-only: the editor is told only whether one exists.
+// endpoint, model, params, enabled, write-only API key} and hosts the operator smoke
+// test (testAiProvider) — a live call through the provider's endpoint + key, the
+// affordance to validate a provider before granting it to anyone. The key is
+// write-only: the editor is told only whether one exists.
+//
+// Which tenants may USE this provider is not decided here: that is the tier↔provider
+// grant surface (ADR-065 decision 10). Editing a model and selling it are separate
+// acts with separate audit trails.
 //
 // An ADMIN-console screen (ADR-065): behind AdminProtectedRoute, calling the
 // ai-inference ADMIN plane (identity token, ai:admin on every resolver). Like every
@@ -15,12 +19,10 @@
 
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Star, StarOff } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Textarea, BackLink, errMessage } from '@/routes/common';
@@ -31,8 +33,6 @@ import {
   getAiProvider,
   listAiProviderKinds,
   updateAiProvider,
-  setActiveAiProvider,
-  clearActiveAiProvider,
   testAiProvider,
   type AiProvider,
 } from '@/lib/api/ai-inference-admin';
@@ -105,10 +105,8 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
 
   const [editor, setEditor] = useState<ProviderEditorState>(() => providerStateFrom(loaded));
   const [baseline, setBaseline] = useState<Baseline>(() => baselineFrom(loaded));
-  const [active, setActive] = useState(loaded.active);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [activeBusy, setActiveBusy] = useState(false);
 
   // Dirty when any field or the API key differs from the saved baseline. A key change
   // is a pending clear or a set with a typed value — an empty 'set' (the resting state
@@ -179,73 +177,14 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
     }
   };
 
-  // Both set-active and clear-active touch the row's updated_at server-side, so the
-  // editor's optimistic-concurrency baseline must advance with them — otherwise the
-  // very next Save fails as a spurious "modified by another writer". clearActive is
-  // also global (it clears WHOEVER is active), so before clearing we re-read our own
-  // active state: if another operator promoted a different provider since this page
-  // loaded, we must NOT clear (that would turn THEIRS off) — we resync and bail.
-  const toggleActive = async () => {
-    const wantClear = active; // intent, from what the operator currently sees
-    setActiveBusy(true);
-    try {
-      if (wantClear) {
-        const fresh = await getAiProvider(loaded.token);
-        setActive(fresh?.active ?? false);
-        if (fresh) setBaseline((b) => ({ ...b, updatedAt: fresh.updatedAt ?? b.updatedAt }));
-        if (!fresh?.active) {
-          toast('This provider is no longer active — refreshed', 'error');
-          return;
-        }
-        await clearActiveAiProvider();
-        // The clear touched our row; re-read to fold in the fresh updatedAt + active=false.
-        const after = await getAiProvider(loaded.token);
-        setActive(after?.active ?? false);
-        if (after) setBaseline((b) => ({ ...b, updatedAt: after.updatedAt ?? b.updatedAt }));
-        toast('Cleared the active provider — NL→rule authoring is now off');
-      } else {
-        const res = await setActiveAiProvider(loaded.token);
-        setActive(res.active);
-        setBaseline((b) => ({ ...b, updatedAt: res.updatedAt ?? b.updatedAt }));
-        toast(`“${loaded.token}” is now the active provider`);
-      }
-    } catch (err) {
-      toast(errMessage(err), 'error');
-    } finally {
-      setActiveBusy(false);
-    }
-  };
-
   return (
     <PageShell
       title={loaded.name || loaded.token}
       description={<BackLink to={AI_PROVIDERS_BASE}>All providers</BackLink>}
       banner="dashboard"
-      action={
-        <Button variant={active ? 'outline' : 'default'} onClick={toggleActive} loading={activeBusy} disabled={activeBusy}>
-          {active ? (
-            <>
-              <StarOff size={16} /> Clear active
-            </>
-          ) : (
-            <>
-              <Star size={16} /> Set as active
-            </>
-          )}
-        </Button>
-      }
     >
       <div className="max-w-2xl space-y-8">
         <section className="space-y-4">
-          {active ? (
-            <Badge variant="success" className="gap-1">
-              <Star size={11} /> Active provider
-            </Badge>
-          ) : (
-            <Badge variant="outline" className="text-muted-foreground">
-              Not active
-            </Badge>
-          )}
           {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
           <AiProviderForm
             state={editor}

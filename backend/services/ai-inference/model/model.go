@@ -13,12 +13,19 @@ import (
 )
 
 // AIProvider is an INSTANCE-scoped, operator-managed inference-provider config
-// (ADR-056 §4). It is deliberately NOT tenant-scoped: at GA the provider list +
-// its API keys are an operator concern (the hosted offering's shared key, or a
-// self-hosted endpoint), and a tenant only CONSENTS to external routing (the
-// per-tenant ai_external_enabled flag on user-management, ADR-056 §6). Tenant BYOK
-// is a documented post-GA fast-follow — the secret store + the resolver already
-// take a scope, so adding tenant rows later is additive.
+// (ADR-056 §4). It is deliberately NOT tenant-scoped: the provider list + its API
+// keys are an operator concern (the hosted offering's shared key, or a self-hosted
+// endpoint). A tenant does not own providers; it is OFFERED a menu of them by its
+// tier (ADR-065 — see AIProviderTierGrant) and separately CONSENTS to external
+// routing (the per-tenant ai_external_enabled flag on user-management, ADR-056 §6).
+// Those are two different questions — "which models may I choose from" and "may my
+// data leave the boundary" — and they compose: a model is usable iff granted AND
+// (in-boundary OR consented).
+//
+// There is no tenant BYOK: a customer wanting its own keys buys a dedicated instance
+// (ADR-065 decision 12, superseding ADR-059's "instance default + tenant BYOK"
+// phrasing), which is where every other per-tenant-infrastructure request already
+// lands.
 //
 // The row holds no cleartext credential: the API key is sealed in the ADR-059
 // secret store under the provider's immutable id (AIProviderSecretRef) and never
@@ -49,16 +56,13 @@ type AIProvider struct {
 	// a JSON object, or null. The Provider impl (slice 0c) interprets it.
 	Params datatypes.JSON
 	// Enabled gates whether this provider may be resolved and used. A disabled
-	// provider stays in the list (and can be the active one) but never serves a call.
-	// No gorm `default`: a `default:true` would make gorm write the DB default for the
-	// zero value (false) on Create, so a provider could never be persisted DISABLED —
-	// the `enabled: Boolean!` GraphQL contract always sends an explicit value anyway.
+	// provider stays in the list (and may still be granted to tiers) but never serves
+	// a call, so an operator can take a model out of service without unpicking its
+	// packaging. No gorm `default`: a `default:true` would make gorm write the DB
+	// default for the zero value (false) on Create, so a provider could never be
+	// persisted DISABLED — the `enabled: Boolean!` GraphQL contract always sends an
+	// explicit value anyway.
 	Enabled bool `gorm:"not null"`
-	// Active marks THE one provider used by default for inference. At most one live
-	// row is active at a time (enforced by a partial unique index + a transactional
-	// SetActiveProvider); zero active is the valid "default of none" — with no active
-	// provider the feature is simply unavailable (fail-closed).
-	Active bool `gorm:"not null;default:false"`
 }
 
 func (AIProvider) TableName() string { return "ai_providers" }

@@ -82,9 +82,12 @@ input TenantBrandingInput {
 # "inherit", never "unlimited". Read by the enforcing services over a service token:
 # event-sources (ingest*) and outbound-connectors (outbound*, ADR-060).
 #
-# The tier itself is deliberately not on the wire: a service enforcing a ceiling has
-# no business knowing why the number is what it is. That provenance belongs to the
-# admin plane, which exposes the tier and the tenant's override separately.
+# The tier's VALUES are deliberately not on the wire: a service enforcing a ceiling
+# has no business knowing why the number is what it is. That provenance belongs to the
+# admin plane, which exposes the tier and the tenant's override separately. The tier's
+# IDENTITY is exposed (tierToken) for the one consumer that must resolve a SET this
+# service cannot fold for it — see the field. Field selection keeps the rest honest:
+# a service that does not ask does not learn.
 type TenantGovernance {
     ingestMessagesPerSecond: Float
     ingestBurst: Int
@@ -100,6 +103,13 @@ type TenantGovernance {
     # "0.5 a second". Null inherits the platform default, never unlimited.
     aiInferenceRequestsPerMinute: Float
     aiInferenceBurst: Int
+    # This tenant's ADR-065 packaging tier — its identity, not a value derived from it.
+    # Read by ai-inference, which joins its own tier↔provider grants against it to
+    # resolve which AI models the tenant may use (decision 10). It is here rather than
+    # folded away like a ceiling because this service cannot resolve that set: it
+    # cannot see providers at all (ai-inference is opt-in; user-management ships
+    # everywhere and may never reference it).
+    tierToken: String!
 }
 
 # The identity the caller is signed in as (control plane), for display in the

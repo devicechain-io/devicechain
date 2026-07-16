@@ -57,21 +57,6 @@ func (r *AdminResolver) AiProviderKinds(ctx context.Context) ([]string, error) {
 	return model.ProviderKinds(), nil
 }
 
-// ActiveAiProvider returns THE active provider, or nil when none is active.
-func (r *AdminResolver) ActiveAiProvider(ctx context.Context) (*AIProviderResolver, error) {
-	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
-		return nil, err
-	}
-	active, err := apiFrom(ctx).ActiveProvider(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if active == nil {
-		return nil, nil
-	}
-	return &AIProviderResolver{M: *active, C: ctx}, nil
-}
-
 // CreateAiProvider creates a new provider.
 func (r *AdminResolver) CreateAiProvider(ctx context.Context, args struct {
 	Request model.AIProviderCreateRequest
@@ -113,29 +98,130 @@ func (r *AdminResolver) DeleteAiProvider(ctx context.Context, args struct {
 	return apiFrom(ctx).DeleteAIProvider(ctx, args.Token)
 }
 
-// SetActiveAiProvider promotes the provider with the given token to THE active one.
-func (r *AdminResolver) SetActiveAiProvider(ctx context.Context, args struct {
-	Token string
-}) (*AIProviderResolver, error) {
+// AiProviderTierGrants returns every tier→provider grant on this instance: the
+// packaging matrix (ADR-065 decision 10). Instance-global, including grants whose tier
+// no longer exists — the console renders those as unknown so a stale grant is visible
+// rather than filtered out of the only screen that could show it.
+func (r *AdminResolver) AiProviderTierGrants(ctx context.Context) ([]*AIProviderTierGrantResolver, error) {
 	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
 		return nil, err
 	}
-	active, err := apiFrom(ctx).SetActiveProvider(ctx, args.Token)
+	grants, err := apiFrom(ctx).ListTierGrants(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &AIProviderResolver{M: *active, C: ctx}, nil
+	out := make([]*AIProviderTierGrantResolver, 0, len(grants))
+	for _, g := range grants {
+		out = append(out, &AIProviderTierGrantResolver{M: g, C: ctx})
+	}
+	return out, nil
 }
 
-// ClearActiveAiProvider clears the active provider (return to "default of none").
-func (r *AdminResolver) ClearActiveAiProvider(ctx context.Context) (bool, error) {
+// AiProviderTenantGrants returns one tenant's additive grants (ADR-065 decision 7's
+// audited exception).
+func (r *AdminResolver) AiProviderTenantGrants(ctx context.Context, args struct {
+	Tenant string
+}) ([]*AIProviderTenantGrantResolver, error) {
+	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
+		return nil, err
+	}
+	grants, err := apiFrom(ctx).ListTenantGrants(ctx, args.Tenant)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*AIProviderTenantGrantResolver, 0, len(grants))
+	for _, g := range grants {
+		out = append(out, &AIProviderTenantGrantResolver{M: g, C: ctx})
+	}
+	return out, nil
+}
+
+// GrantAiProviderToTier offers a provider to every tenant at a tier. Idempotent;
+// makeDefault promotes it to the tier's default in the same transaction.
+func (r *AdminResolver) GrantAiProviderToTier(ctx context.Context, args struct {
+	Tier        string
+	Provider    string
+	MakeDefault *bool
+}) (bool, error) {
 	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
 		return false, err
 	}
-	if err := apiFrom(ctx).ClearActiveProvider(ctx); err != nil {
+	makeDefault := args.MakeDefault != nil && *args.MakeDefault
+	if err := apiFrom(ctx).GrantProviderToTier(ctx, args.Tier, args.Provider, makeDefault); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// RevokeAiProviderFromTier withdraws a tier's offer of a provider, reporting whether a
+// grant was removed. Idempotent.
+func (r *AdminResolver) RevokeAiProviderFromTier(ctx context.Context, args struct {
+	Tier     string
+	Provider string
+}) (bool, error) {
+	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
+		return false, err
+	}
+	return apiFrom(ctx).RevokeProviderFromTier(ctx, args.Tier, args.Provider)
+}
+
+// SetAiTierDefault marks an already-granted provider as a tier's default model,
+// demoting any previous default atomically.
+func (r *AdminResolver) SetAiTierDefault(ctx context.Context, args struct {
+	Tier     string
+	Provider string
+}) (bool, error) {
+	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
+		return false, err
+	}
+	if err := apiFrom(ctx).SetTierDefault(ctx, args.Tier, args.Provider); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ClearAiTierDefault leaves a tier's grants in place but marks none of them default.
+// Idempotent. With two or more models offered, tenants at the tier must then choose
+// explicitly.
+func (r *AdminResolver) ClearAiTierDefault(ctx context.Context, args struct {
+	Tier string
+}) (bool, error) {
+	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
+		return false, err
+	}
+	if err := apiFrom(ctx).ClearTierDefault(ctx, args.Tier); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// GrantAiProviderToTenant adds a provider to ONE tenant's menu over and above its
+// tier. Additive-only by construction: there is no matching deny, so this can never
+// take away what the tenant's tier offers. Idempotent.
+func (r *AdminResolver) GrantAiProviderToTenant(ctx context.Context, args struct {
+	Tenant   string
+	Provider string
+}) (bool, error) {
+	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
+		return false, err
+	}
+	if err := apiFrom(ctx).GrantProviderToTenant(ctx, args.Tenant, args.Provider); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// RevokeAiProviderFromTenant removes a tenant's additive grant, reporting whether one
+// was removed. This withdraws an exception, not an entitlement — what the tier offers
+// is untouched. Idempotent.
+func (r *AdminResolver) RevokeAiProviderFromTenant(ctx context.Context, args struct {
+	Tenant   string
+	Provider string
+}) (bool, error) {
+	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
+		return false, err
+	}
+	return apiFrom(ctx).RevokeProviderFromTenant(ctx, args.Tenant, args.Provider)
 }
 
 // TestAiProvider runs an operator-supplied prompt through a SPECIFIC provider (by

@@ -32,24 +32,19 @@ export type AiProvidersQueryVariables = Exact<{
 }>;
 
 
-export type AiProvidersQuery = { aiProviders: { results: Array<{ token: string, name: string | null, kind: string, model: string, enabled: boolean, active: boolean, hasSecret: boolean }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AiProvidersQuery = { aiProviders: { results: Array<{ token: string, name: string | null, kind: string, model: string, enabled: boolean, hasSecret: boolean }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AiProviderQueryVariables = Exact<{
   token: string;
 }>;
 
 
-export type AiProviderQuery = { aiProvider: { id: string, token: string, name: string | null, description: string | null, kind: string, endpoint: string | null, model: string, params: string | null, enabled: boolean, active: boolean, hasSecret: boolean, updatedAt: string | null } | null };
+export type AiProviderQuery = { aiProvider: { id: string, token: string, name: string | null, description: string | null, kind: string, endpoint: string | null, model: string, params: string | null, enabled: boolean, hasSecret: boolean, updatedAt: string | null } | null };
 
 export type AiProviderKindsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
 export type AiProviderKindsQuery = { aiProviderKinds: Array<string> };
-
-export type ActiveAiProviderQueryVariables = Exact<{ [key: string]: never; }>;
-
-
-export type ActiveAiProviderQuery = { activeAiProvider: { token: string, name: string | null, kind: string, model: string, hasSecret: boolean } | null };
 
 export type CreateAiProviderMutationVariables = Exact<{
   request: AiProviderCreateRequest;
@@ -66,18 +61,6 @@ export type UpdateAiProviderMutationVariables = Exact<{
 
 
 export type UpdateAiProviderMutation = { updateAiProvider: { token: string, updatedAt: string | null } };
-
-export type SetActiveAiProviderMutationVariables = Exact<{
-  token: string;
-}>;
-
-
-export type SetActiveAiProviderMutation = { setActiveAiProvider: { token: string, active: boolean, updatedAt: string | null } };
-
-export type ClearActiveAiProviderMutationVariables = Exact<{ [key: string]: never; }>;
-
-
-export type ClearActiveAiProviderMutation = { clearActiveAiProvider: boolean };
 
 export type DeleteAiProviderMutationVariables = Exact<{
   token: string;
@@ -122,7 +105,6 @@ export const AiProvidersDocument = new TypedDocumentString(`
       kind
       model
       enabled
-      active
       hasSecret
     }
     pagination {
@@ -145,7 +127,6 @@ export const AiProviderDocument = new TypedDocumentString(`
     model
     params
     enabled
-    active
     hasSecret
     updatedAt
   }
@@ -156,17 +137,6 @@ export const AiProviderKindsDocument = new TypedDocumentString(`
   aiProviderKinds
 }
     `) as unknown as TypedDocumentString<AiProviderKindsQuery, AiProviderKindsQueryVariables>;
-export const ActiveAiProviderDocument = new TypedDocumentString(`
-    query ActiveAiProvider {
-  activeAiProvider {
-    token
-    name
-    kind
-    model
-    hasSecret
-  }
-}
-    `) as unknown as TypedDocumentString<ActiveAiProviderQuery, ActiveAiProviderQueryVariables>;
 export const CreateAiProviderDocument = new TypedDocumentString(`
     mutation CreateAiProvider($request: AiProviderCreateRequest!) {
   createAiProvider(request: $request) {
@@ -186,20 +156,6 @@ export const UpdateAiProviderDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<UpdateAiProviderMutation, UpdateAiProviderMutationVariables>;
-export const SetActiveAiProviderDocument = new TypedDocumentString(`
-    mutation SetActiveAiProvider($token: String!) {
-  setActiveAiProvider(token: $token) {
-    token
-    active
-    updatedAt
-  }
-}
-    `) as unknown as TypedDocumentString<SetActiveAiProviderMutation, SetActiveAiProviderMutationVariables>;
-export const ClearActiveAiProviderDocument = new TypedDocumentString(`
-    mutation ClearActiveAiProvider {
-  clearActiveAiProvider
-}
-    `) as unknown as TypedDocumentString<ClearActiveAiProviderMutation, ClearActiveAiProviderMutationVariables>;
 export const DeleteAiProviderDocument = new TypedDocumentString(`
     mutation DeleteAiProvider($token: String!) {
   deleteAiProvider(token: $token)
