@@ -19,6 +19,8 @@ var (
 	ErrRoleNotFound         = errors.New("role not found")
 	ErrProtectedRole        = errors.New("the superuser system role cannot be deleted")
 	ErrTenantHasMemberships = errors.New("tenant still has memberships; remove them first")
+	ErrTierNotFound         = errors.New("tenant tier not found")
+	ErrTierInUse            = errors.New("tenant tier still has tenants; move them to another tier first")
 )
 
 // RoleInput is the data to create a role (ADR-008 RBAC / ADR-033). Scope is
@@ -181,9 +183,14 @@ func (g GovernanceOverrides) applyTo(t *iam.Tenant) {
 
 // TenantInput is the data to create a tenant.
 type TenantInput struct {
-	Token  string
-	Name   string
-	Config map[string]any
+	Token string
+	Name  string
+	// TierToken names the tier this tenant is packaged at (ADR-065 decision 3).
+	// REQUIRED: every tenant has a tier, so there is no unset state and nothing to
+	// default. It names the tier rather than carrying its id so the API is stable
+	// against reseeding and legible in an audit row.
+	TierToken string
+	Config    map[string]any
 	GovernanceOverrides
 	// AiExternalEnabled is the per-tenant external-AI consent (ADR-056 §6):
 	// nil/false = not opted in (fail-closed), true = the operator has recorded this
@@ -195,8 +202,15 @@ type TenantInput struct {
 
 // TenantMutableInput is the data to update a tenant: its token is fixed.
 type TenantMutableInput struct {
-	Name   string
-	Config map[string]any
+	Name string
+	// TierToken is required on update too, and re-tiering a tenant is a legitimate,
+	// live operation (ADR-065 decision 14: settings-only — nothing durable is keyed
+	// on the tier, so it needs no flush or drain and converges on core/governance's
+	// 60s TTL). Required rather than optional-means-unchanged because this input is
+	// a full replace of the mutable fields, not a patch: an omitted tier here would
+	// be indistinguishable from "clear it", which the FK forbids anyway.
+	TierToken string
+	Config    map[string]any
 	GovernanceOverrides
 	AiExternalEnabled *bool
 }
@@ -215,7 +229,7 @@ func validateBurstOverride(field string, v *int) error {
 	return nil
 }
 
-// CreateTenant registers a new tenant (enabled by default).
+// CreateTenant registers a new tenant (enabled by default) at the named tier.
 func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant, error) {
 	if in.Token == "" {
 		return nil, fmt.Errorf("token is required")
@@ -223,8 +237,12 @@ func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant
 	if err := in.validate(); err != nil {
 		return nil, err
 	}
+	tier, err := s.resolveTier(ctx, in.TierToken)
+	if err != nil {
+		return nil, err
+	}
 	t := &iam.Tenant{
-		Token: in.Token, Enabled: true, Config: in.Config,
+		Token: in.Token, Enabled: true, Config: in.Config, TierID: tier.ID,
 		NamedEntity:       rdb.NamedEntity{Name: rdb.NullStrOf(&in.Name)},
 		AiExternalEnabled: in.AiExternalEnabled,
 	}
@@ -235,11 +253,30 @@ func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant
 	return s.iam.TenantByToken(ctx, in.Token)
 }
 
-// UpdateTenant replaces a tenant's name, config, and governance overrides. A nil
-// override field clears it (reverting the tenant to the platform default), so the
-// update is a full replace of the mutable fields, not a partial patch.
+// resolveTier maps a tier token to its row, rejecting an empty or unknown tier.
+// This is where ADR-065 decision 3's "required at creation" is enforced in terms a
+// caller can read: the NOT NULL FK behind it would refuse the write anyway, but as
+// a constraint violation naming a column, not a mistake naming a tier.
+func (s *Service) resolveTier(ctx context.Context, token string) (*iam.TenantTier, error) {
+	if token == "" {
+		return nil, fmt.Errorf("tierToken is required: every tenant is packaged at a tier")
+	}
+	tier, err := s.iam.TenantTierByToken(ctx, token)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("%w: %q", ErrTierNotFound, token)
+	}
+	return tier, err
+}
+
+// UpdateTenant replaces a tenant's name, tier, config, and governance overrides. A
+// nil override field clears it (reverting the tenant to the platform default), so
+// the update is a full replace of the mutable fields, not a partial patch.
 func (s *Service) UpdateTenant(ctx context.Context, token string, in TenantMutableInput) (*iam.Tenant, error) {
 	if err := in.validate(); err != nil {
+		return nil, err
+	}
+	tier, err := s.resolveTier(ctx, in.TierToken)
+	if err != nil {
 		return nil, err
 	}
 	t, err := s.loadTenant(ctx, token)
@@ -247,6 +284,7 @@ func (s *Service) UpdateTenant(ctx context.Context, token string, in TenantMutab
 		return nil, err
 	}
 	t.Name = rdb.NullStrOf(&in.Name)
+	t.TierID = tier.ID
 	t.Config = in.Config
 	t.AiExternalEnabled = in.AiExternalEnabled
 	in.applyTo(t)
@@ -289,6 +327,119 @@ func (s *Service) DeleteTenant(ctx context.Context, token string) (bool, error) 
 		return false, err
 	}
 	return true, nil
+}
+
+// TierInput is the data to create a tenant tier (ADR-065). Config is the settings
+// blob; it is validated against the key registry once consuming keys exist
+// (decision 8) — until then an empty blob is the only honest value, since a key
+// nothing validates fails open.
+type TierInput struct {
+	Token       string
+	Name        string
+	Description string
+	Config      map[string]any
+}
+
+// TierMutableInput is the data to update a tier: its token is fixed. Everything
+// else is editable, deliberately — packaging is data, not a code deploy (decision
+// 4), and what a tier includes is a product decision that changes.
+//
+// A FULL REPLACE of the mutable fields, matching the tenant inputs above: an
+// omitted field is cleared, not preserved. Callers load-then-mutate. This is worth
+// watching once the key registry lands and Config carries entitlements: a rename
+// that drops Config would clear a tier's packaging for every tenant at it, live,
+// within the 60s TTL. If that shape ever reaches a caller that patches rather than
+// replaces, make this an explicit patch instead of relying on the convention.
+type TierMutableInput struct {
+	Name        string
+	Description string
+	Config      map[string]any
+}
+
+// ListTenantTiers returns the tier catalog (ADR-065).
+func (s *Service) ListTenantTiers(ctx context.Context) ([]iam.TenantTier, error) {
+	return s.iam.ListTenantTiers(ctx)
+}
+
+// CountTenantsAtTier returns how many tenants are packaged at a tier — surfaced so
+// the console can show the blast radius of editing one, and why deleting it is
+// refused.
+func (s *Service) CountTenantsAtTier(ctx context.Context, tierID uint) (int64, error) {
+	return s.iam.CountTenantsAtTier(ctx, tierID)
+}
+
+// CreateTenantTier registers a new tier.
+func (s *Service) CreateTenantTier(ctx context.Context, in TierInput) (*iam.TenantTier, error) {
+	if in.Token == "" {
+		return nil, fmt.Errorf("token is required")
+	}
+	t := &iam.TenantTier{
+		Token:  in.Token,
+		Config: in.Config,
+		NamedEntity: rdb.NamedEntity{
+			Name: rdb.NullStrOf(&in.Name), Description: rdb.NullStrOf(&in.Description),
+		},
+	}
+	if err := s.iam.CreateTenantTier(ctx, t); err != nil {
+		return nil, err
+	}
+	return s.iam.TenantTierByToken(ctx, in.Token)
+}
+
+// UpdateTenantTier replaces a tier's name, description, and config.
+//
+// Editing a tier changes behavior for EVERY tenant at it, live and with no deploy.
+// That is the point of an entity rather than an enum, but it is a wide blast radius
+// on a running system and a commercial act — hence the audit trail (ADR-065
+// consequences). It needs no flush: nothing durable is keyed on the tier, so the
+// change converges on core/governance's 60s TTL (decision 14).
+func (s *Service) UpdateTenantTier(ctx context.Context, token string, in TierMutableInput) (*iam.TenantTier, error) {
+	t, err := s.loadTier(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	t.Name = rdb.NullStrOf(&in.Name)
+	t.Description = rdb.NullStrOf(&in.Description)
+	t.Config = in.Config
+	if err := s.iam.UpdateTenantTier(ctx, t); err != nil {
+		return nil, err
+	}
+	return s.iam.TenantTierByToken(ctx, token)
+}
+
+// DeleteTenantTier removes a tier. Idempotent: a missing tier returns (false, nil).
+// REFUSED while any tenant is still packaged at it (ADR-065 decision 9, the ADR-044
+// ErrEntityInUse pattern) — a tenant's tier is a required FK, so there is no
+// coherent state on the far side of deleting one that is in use. The FK is RESTRICT
+// and would refuse it regardless; this check is what makes the refusal legible.
+func (s *Service) DeleteTenantTier(ctx context.Context, token string) (bool, error) {
+	t, err := s.iam.TenantTierByToken(ctx, token)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	n, err := s.iam.CountTenantsAtTier(ctx, t.ID)
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return false, fmt.Errorf("%w (%d tenant(s) at %q)", ErrTierInUse, n, token)
+	}
+	if err := s.iam.DeleteTenantTier(ctx, t); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// loadTier resolves a tier by token, mapping not-found to ErrTierNotFound.
+func (s *Service) loadTier(ctx context.Context, token string) (*iam.TenantTier, error) {
+	t, err := s.iam.TenantTierByToken(ctx, token)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrTierNotFound
+	}
+	return t, err
 }
 
 // loadRole resolves a role by (scope, token), mapping not-found to ErrRoleNotFound.

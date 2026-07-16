@@ -115,13 +115,56 @@ type Membership struct {
 
 func (Membership) TableName() string { return "iam_memberships" }
 
+// Well-known seeded tenant tiers (ADR-065 decision 4). The vocabulary ships
+// pre-populated but is operator-editable — what "bronze includes" is a product
+// decision that changes, so packaging is data, not a code deploy. These constants
+// name the seeds the migration installs; nothing in the code may assume they still
+// exist or still mean what they meant at seed time. No fourth "best-effort" tier is
+// seeded: there is no unset state for it to name (decision 3).
+const (
+	TierGoldToken   = "gold"
+	TierSilverToken = "silver"
+	TierBronzeToken = "bronze"
+)
+
+// TenantTier is the operator-defined packaging entity: the one durable answer to
+// "what kind of customer is this?" (ADR-065). Subsystems READ it and each owns its
+// own interpretation — ADR-063 maps it to shed order, ADR-056 to the set of AI
+// models offered, ADR-023 to default ceilings — but none of them redefines it. It
+// exists because those three axes were converging on ADR-063's priority int, which
+// is an OPERATIONAL dial wearing COMMERCIAL names: a shed dial is tuned, a tier is
+// sold, and one field cannot be both.
+//
+// Config is the embedded settings blob. It is deliberately unstructured HERE and
+// validated at the WRITE path against a key registry (ADR-065 decision 8, the
+// ADR-061 FacetKey pattern), so a typo in a key is rejected rather than silently
+// doing nothing — an unvalidated blob fails OPEN, which ADR-023 forbids. That
+// registry lands with the first consuming key; until then the blob carries no keys,
+// because a key no validator knows about is exactly the fail-open shape.
+//
+// Like the rest of this package the tier is instance-global (not rdb.TenantScoped)
+// — it is control-plane packaging an operator defines across tenants, reached
+// through the system context.
+type TenantTier struct {
+	gorm.Model
+	rdb.NamedEntity
+
+	Token  string         `gorm:"uniqueIndex;not null;size:128"`
+	Config map[string]any `gorm:"serializer:json"`
+}
+
+func (TenantTier) TableName() string { return "iam_tenant_tiers" }
+
 // Tenant is the control-plane record of a tenant (ADR-033). The data plane scopes
 // purely by the tenant id string (the JWT claim, the rows' TenantId, the NATS
 // subject), so a tenant is a registry entry + per-tenant config, NOT a
 // provisioned resource — this replaces the former DeviceChainTenant CRD, whose
 // reconciler only maintained an (empty) ConfigMap that nothing read. Token is the
-// tenant id used everywhere. Config is freeform JSON for now; structured concerns
-// (quotas, retention) graduate to their own FK tables later.
+// tenant id used everywhere. Config is freeform JSON; structured concerns graduate
+// out of it into their own columns or FK tables — the governance overrides below
+// did, and TierID is the latest (ADR-065 lifted "what kind of customer is this?"
+// out of exactly this blob, where it had been living as an ad-hoc `{"tier":"gold"}`
+// convention that nothing read and nothing validated).
 type Tenant struct {
 	gorm.Model
 	rdb.NamedEntity
@@ -129,6 +172,16 @@ type Tenant struct {
 	Token   string         `gorm:"uniqueIndex;not null;size:128"`
 	Enabled bool           `gorm:"not null;default:true"`
 	Config  map[string]any `gorm:"serializer:json"`
+
+	// The tier this tenant is packaged at (ADR-065 decision 3). REQUIRED — a NOT
+	// NULL FK, which is the point: there is no unset state, so the "what does an
+	// un-tiered tenant get?" fail-safe-default question is deleted rather than
+	// answered. The FK is RESTRICT on delete, so a tier in use cannot be removed out
+	// from under its tenants (ADR-044: validate invariants sync); the store's
+	// CountTenantsAtTier check exists to turn that into a legible refusal rather
+	// than a raw constraint violation, not to replace it.
+	TierID uint        `gorm:"not null;index"`
+	Tier   *TenantTier `gorm:"foreignKey:TierID;constraint:OnDelete:RESTRICT"`
 
 	// Per-tenant governance overrides (ADR-023). A nil field means "inherit the
 	// platform default"; a set value raises or lowers the ceiling for this tenant
@@ -233,6 +286,7 @@ func (c OAuthClient) IsConfidential() bool { return c.SecretHash != "" }
 // pk.)
 func (r Role) AuditLabel() string        { return r.Token }
 func (t Tenant) AuditLabel() string      { return t.Token }
+func (t TenantTier) AuditLabel() string  { return t.Token }
 func (c OAuthClient) AuditLabel() string { return c.ClientId }
 func (i Identity) AuditLabel() string    { return i.Email }
 

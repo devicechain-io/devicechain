@@ -29,6 +29,46 @@ type AdminMembership {
     roles: [String!]!
 }
 
+# An operator-defined packaging tier (ADR-065): the one durable answer to "what
+# kind of customer is this?". Subsystems read it and each owns its own
+# interpretation — shed order, the set of AI models offered, default ceilings — but
+# none redefines it. gold/silver/bronze ship seeded and are editable: packaging is
+# data, not a code deploy.
+type AdminTenantTier {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    token: String!
+    name: String
+    description: String
+    # The tier's settings as a JSON object string (null when unset).
+    config: String
+    # How many tenants are packaged at this tier. A tier with tenants cannot be
+    # deleted (its tenants' tier is a required FK).
+    tenantCount: Int!
+}
+
+# Data to create a tier. config is an optional JSON object string.
+input AdminTenantTierCreateRequest {
+    token: String!
+    name: String
+    description: String
+    config: String
+}
+
+# Data to update a tier (its token is fixed). Editing a tier changes behavior for
+# every tenant at it, live.
+#
+# A FULL REPLACE of the mutable fields, not a patch: an omitted field is CLEARED,
+# not left alone. Send the tier's current values for anything you are not changing —
+# in particular, a rename that omits config wipes the tier's settings for every
+# tenant at it.
+input AdminTenantTierUpdateRequest {
+    name: String
+    description: String
+    config: String
+}
+
 # A control-plane tenant record (ADR-033): a registry entry, not a provisioned
 # resource. Config is freeform JSON exposed as a JSON-encoded string.
 type AdminTenant {
@@ -38,6 +78,9 @@ type AdminTenant {
     token: String!
     name: String
     enabled: Boolean!
+    # The tier this tenant is packaged at (ADR-065). Never null: every tenant has a
+    # tier, enforced by a NOT NULL FK, so there is no un-tiered state.
+    tier: AdminTenantTier!
     # Freeform per-tenant config as a JSON object string (null when unset).
     config: String
     # Per-tenant ingest governance overrides. Null means the tenant inherits the
@@ -97,6 +140,9 @@ input AdminRoleUpdateRequest {
 input AdminTenantCreateRequest {
     token: String!
     name: String
+    # The tier to package this tenant at, by token (ADR-065). Required — there is no
+    # un-tiered tenant, so there is nothing to default.
+    tierToken: String!
     config: String
     ingestMessagesPerSecond: Float
     ingestBurst: Int
@@ -119,6 +165,10 @@ input AdminTenantCreateRequest {
 # likewise clears consent (the tenant reverts to not-opted-in).
 input AdminTenantUpdateRequest {
     name: String
+    # The tier to package this tenant at, by token (ADR-065). Required, like on
+    # create: this request is a full replace of the mutable fields, and a tenant is
+    # never un-tiered. Re-tiering is a live, settings-only change.
+    tierToken: String!
     config: String
     ingestMessagesPerSecond: Float
     ingestBurst: Int
@@ -256,6 +306,10 @@ type Query {
     identities: [AdminIdentity!]!
     # List every tenant (requires tenant:read).
     tenants: [AdminTenant!]!
+    # List the tenant tier catalog (requires tenant:read). Gated on the tenant
+    # authorities rather than one of its own: a tier is tenant-registry packaging,
+    # administered on the same plane by the same operator.
+    tenantTiers: [AdminTenantTier!]!
     # List the role catalog, optionally filtered to a scope (requires role:read).
     roles(scope: String): [AdminRole!]!
     # The known authority vocabulary (sorted, includes "*"), for offering a
@@ -299,9 +353,18 @@ type Mutation {
     # superuser system role is protected (requires role:write).
     deleteRole(scope: String!, token: String!): Boolean!
 
-    # Create a tenant, enabled by default (requires tenant:write).
+    # Create a tenant tier (requires tenant:write).
+    createTenantTier(request: AdminTenantTierCreateRequest!): AdminTenantTier!
+    # Update a tier by token. This changes behavior for every tenant at the tier,
+    # live and with no deploy (requires tenant:write).
+    updateTenantTier(token: String!, request: AdminTenantTierUpdateRequest!): AdminTenantTier!
+    # Delete a tier by token; returns whether one was removed. Refused while any
+    # tenant is still packaged at it (requires tenant:write).
+    deleteTenantTier(token: String!): Boolean!
+
+    # Create a tenant, enabled by default, at the requested tier (requires tenant:write).
     createTenant(request: AdminTenantCreateRequest!): AdminTenant!
-    # Replace a tenant's name, config, and ingest overrides by token; omitting an
+    # Replace a tenant's name, tier, config, and ingest overrides by token; omitting an
     # ingest override clears it back to the platform default (requires tenant:write).
     updateTenant(token: String!, request: AdminTenantUpdateRequest!): AdminTenant!
     # Enable or disable a tenant (requires tenant:write).

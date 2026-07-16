@@ -46,6 +46,7 @@ export default function TenantsPage() {
             <DataTableHead>
               <DataTableHeaderCell>Token</DataTableHeaderCell>
               <DataTableHeaderCell>Name</DataTableHeaderCell>
+              <DataTableHeaderCell>Tier</DataTableHeaderCell>
               <DataTableHeaderCell>Status</DataTableHeaderCell>
               <DataTableHeaderCell>Config</DataTableHeaderCell>
             </DataTableHead>
@@ -57,6 +58,8 @@ export default function TenantsPage() {
                 >
                   <DataTableCell className="font-medium">{t.token}</DataTableCell>
                   <DataTableCell>{t.name ?? '—'}</DataTableCell>
+                  {/* Never blank: the tier is a required FK (ADR-065). */}
+                  <DataTableCell>{t.tier.name || t.tier.token}</DataTableCell>
                   <DataTableCell>
                     <StatusBadge enabled={t.enabled} />
                   </DataTableCell>
