@@ -10,10 +10,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Build stamps, injected via ldflags by the makefile — the sole build path.
+// Build stamps, injected via ldflags by the two real build paths: the makefile
+// (developer builds) and goreleaser (released binaries) — keep the two in sync.
 // Every one of these is best-effort: a `go build ./...` or `go run .` that
-// bypasses the makefile leaves them empty, so `dcctl version` must render
-// without them rather than print a confidently wrong answer.
+// bypasses both leaves them empty, so `dcctl version` must render without them
+// rather than print a confidently wrong answer.
 var (
 	// gitCommit is the full hash of HEAD at build time.
 	gitCommit string
@@ -37,8 +38,9 @@ var (
 // project's entire history, so without the suffix every dev build ever made
 // reports an identical version and no two can be told apart.
 //
-// This deliberately does NOT match bootstrap.DefaultImageVersion, which must
-// stay a resolvable published image tag. `version` prints both.
+// For dev builds this deliberately does NOT match bootstrap.DefaultImageVersion,
+// which must stay a tag that resolves in a registry; see that value's docs.
+// `version` prints both.
 var Version = "dev"
 
 // rootCmd represents the base command when called without any subcommands

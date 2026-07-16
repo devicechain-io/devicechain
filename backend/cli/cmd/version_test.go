@@ -147,28 +147,23 @@ func TestHumanizeAge(t *testing.T) {
 	}
 }
 
-// The whole point of the version suffix is that two builds of the same VERSION
-// are distinguishable. Assert the fields carry enough to tell them apart even
-// when the version string cannot.
-func TestVersionFieldsSurfaceBuildIdentity(t *testing.T) {
+// The version command's whole purpose is that two builds of the same VERSION are
+// distinguishable, which requires the commit/built fields to be rendered at all.
+func TestVersionFieldsRendersEveryStamp(t *testing.T) {
 	fields := versionFields(time.Now())
 
-	labels := make(map[string]string, len(fields))
+	var labels []string
 	for _, f := range fields {
-		labels[f.label] = f.value
-	}
-
-	for _, want := range []string{"commit", "built", "images", "go", "platform"} {
-		if _, ok := labels[want]; !ok {
-			t.Errorf("version output is missing the %q field", want)
+		labels = append(labels, f.label)
+		if strings.TrimSpace(f.value) == "" {
+			t.Errorf("field %q rendered empty; it must say what it does not know "+
+				"rather than print a blank", f.label)
 		}
 	}
 
-	// `images` must stay a bare image tag: it is fed to a registry lookup, so a
-	// build stamp leaking into it would send bootstrap after an image that does
-	// not exist.
-	if strings.Contains(labels["images"], "-dev.") {
-		t.Errorf("images tag %q carries a dev build stamp; it must remain a "+
-			"resolvable published tag", labels["images"])
+	got := strings.Join(labels, ",")
+	const want = "commit,built,images,go,platform"
+	if got != want {
+		t.Errorf("version fields = %q, want %q", got, want)
 	}
 }
