@@ -74,6 +74,20 @@ var (
 	}
 )
 
+// AllDimensions returns every governance dimension the platform declares.
+//
+// It exists so a consumer can enumerate the dimensions rather than restate them.
+// user-management builds its ADR-065 tenant-tier config key registry from this, so
+// a tier's settings keys are BY CONSTRUCTION the same names as the wire fields and
+// cannot drift from them — the alternative being a hand-kept list that silently
+// stops matching the day a fourth dimension lands.
+//
+// Returns a fresh slice per call: the Dimensions are package vars, and handing out
+// a shared backing array would let one caller's append or index-write reach another.
+func AllDimensions() []Dimension {
+	return []Dimension{Ingest, Outbound, AIInference}
+}
+
 // serviceFetcher fetches a tenant's limits for one dimension from
 // user-management's data-plane governance query over a service token (ADR-044).
 type serviceFetcher struct {

@@ -368,10 +368,15 @@ func (s *Service) CountTenantsAtTier(ctx context.Context, tierID uint) (int64, e
 	return s.iam.CountTenantsAtTier(ctx, tierID)
 }
 
-// CreateTenantTier registers a new tier.
+// CreateTenantTier registers a new tier. Its config is validated against the key
+// registry (ADR-065 decision 8): an unknown key is rejected here rather than
+// accepted and silently ignored at read.
 func (s *Service) CreateTenantTier(ctx context.Context, in TierInput) (*iam.TenantTier, error) {
 	if in.Token == "" {
 		return nil, fmt.Errorf("token is required")
+	}
+	if err := iam.ValidateTierConfig(in.Config); err != nil {
+		return nil, err
 	}
 	t := &iam.TenantTier{
 		Token:  in.Token,
@@ -394,6 +399,9 @@ func (s *Service) CreateTenantTier(ctx context.Context, in TierInput) (*iam.Tena
 // consequences). It needs no flush: nothing durable is keyed on the tier, so the
 // change converges on core/governance's 60s TTL (decision 14).
 func (s *Service) UpdateTenantTier(ctx context.Context, token string, in TierMutableInput) (*iam.TenantTier, error) {
+	if err := iam.ValidateTierConfig(in.Config); err != nil {
+		return nil, err
+	}
 	t, err := s.loadTier(ctx, token)
 	if err != nil {
 		return nil, err

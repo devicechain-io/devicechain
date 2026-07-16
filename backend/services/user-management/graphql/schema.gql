@@ -75,10 +75,16 @@ input TenantBrandingInput {
     accent: String
 }
 
-# The governance overrides for the tenant the caller is acting within. A null
-# field means the tenant inherits the platform default (never unlimited). Read by
-# the enforcing services over a service token: event-sources (ingest*) and
-# outbound-connectors (outbound*, ADR-060).
+# The EFFECTIVE governance ceilings for the tenant the caller is acting within,
+# already folded over the tenant's tier (ADR-065): each field is the tenant's own
+# override if it has one, else its tier's setting. A null field means neither
+# declares one, so the enforcing service applies the platform default — null is
+# "inherit", never "unlimited". Read by the enforcing services over a service token:
+# event-sources (ingest*) and outbound-connectors (outbound*, ADR-060).
+#
+# The tier itself is deliberately not on the wire: a service enforcing a ceiling has
+# no business knowing why the number is what it is. That provenance belongs to the
+# admin plane, which exposes the tier and the tenant's override separately.
 type TenantGovernance {
     ingestMessagesPerSecond: Float
     ingestBurst: Int
