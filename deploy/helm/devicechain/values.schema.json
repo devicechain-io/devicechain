@@ -25,7 +25,8 @@
           "notification-management",
           "event-processing",
           "outbound-connectors",
-          "mcp"
+          "mcp",
+          "ai-inference"
         ]
       },
       "uniqueItems": true,
@@ -211,7 +212,8 @@
               "notification-management",
               "event-processing",
               "outbound-connectors",
-              "mcp"
+              "mcp",
+              "ai-inference"
             ]
           },
           "uniqueItems": true,

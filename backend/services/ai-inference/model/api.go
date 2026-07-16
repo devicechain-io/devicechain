@@ -147,7 +147,7 @@ func (api *Api) CreateAIProvider(ctx context.Context, request *AIProviderCreateR
 	}
 	// Seal the key under the provider's handle. The row is written first so its
 	// immutable id (the secret's stable key) exists.
-	if err := api.applyProviderSecret(created.ID, request.Secret); err != nil {
+	if err := api.applyProviderSecret(ctx, created.ID, request.Secret); err != nil {
 		// Roll the row back (best effort) so the create is atomic from the caller's
 		// view — otherwise a retry would collide on the now-existing token.
 		if delErr := api.sys(ctx).Unscoped().Delete(created).Error; delErr != nil {
@@ -190,9 +190,19 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 		"enabled":     request.Enabled,
 	}
 
-	// No precondition → unconditional last-write-wins.
+	// No precondition → unconditional last-write-wins. Save the loaded row (its PK +
+	// AuditLabel reach the audit journal, unlike a map Updates) with the new fields;
+	// Active is left at its loaded value (owned by SetActiveProvider), not touched.
 	if expectedUpdatedAt == nil {
-		if err := api.sys(ctx).Model(&AIProvider{}).Where("id = ?", current.ID).Updates(fields).Error; err != nil {
+		current.Token = request.Token
+		current.Name = rdb.NullStrOf(request.Name)
+		current.Description = rdb.NullStrOf(request.Description)
+		current.Kind = request.Kind
+		current.Endpoint = endpoint
+		current.ModelID = request.Model
+		current.Params = params
+		current.Enabled = request.Enabled
+		if err := api.sys(ctx).Save(current).Error; err != nil {
 			return nil, err
 		}
 		return api.reloadWithSecret(ctx, request.Token, current.ID, request.Secret)
@@ -221,7 +231,7 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 // freshly-reloaded provider (for the bumped updated_at).
 func (api *Api) reloadWithSecret(ctx context.Context, token string, id uint, secret *string) (*AIProvider, error) {
 	if secret != nil {
-		if err := api.applyProviderSecret(id, secret); err != nil {
+		if err := api.applyProviderSecret(ctx, id, secret); err != nil {
 			return nil, err
 		}
 	}
@@ -238,16 +248,19 @@ func (api *Api) reloadWithSecret(ctx context.Context, token string, id uint, sec
 // applyProviderSecret writes the provider's API key to the store to match the
 // request: a non-empty value is sealed (Put), an explicit empty string clears it
 // (Delete, idempotent). A nil secret is a caller decision made above (preserve) and
-// never reaches here. Keyed by the provider's immutable id, instance-scoped.
-func (api *Api) applyProviderSecret(id uint, secret *string) error {
+// never reaches here. Keyed by the provider's immutable id, instance-scoped. The
+// request ctx is threaded through (not context.Background) so the operator's claims
+// reach the audit journal for this — the most sensitive mutation in the service; the
+// store overrides to the system lane for an instance-scoped ref, so no tenant leaks.
+func (api *Api) applyProviderSecret(ctx context.Context, id uint, secret *string) error {
 	if secret == nil {
 		return nil
 	}
 	ref := AIProviderSecretRef(id)
 	if *secret == "" {
-		return api.Secrets.Delete(context.Background(), ref)
+		return api.Secrets.Delete(ctx, ref)
 	}
-	return api.Secrets.Put(context.Background(), ref, []byte(*secret))
+	return api.Secrets.Put(ctx, ref, []byte(*secret))
 }
 
 // AIProvidersByToken looks up providers by their current tokens.
@@ -351,7 +364,7 @@ func (api *Api) DeleteAIProvider(ctx context.Context, token string) (bool, error
 	// (Delete is idempotent). The row is already hard-deleted, so a failure to remove
 	// the (now unreachable) secret must not report the provider as undeleted: log and
 	// continue. Orphaned ciphertext is benign — ids are never recycled.
-	if err := api.Secrets.Delete(context.Background(), AIProviderSecretRef(id)); err != nil {
+	if err := api.Secrets.Delete(ctx, AIProviderSecretRef(id)); err != nil {
 		log.Warn().Err(err).Str("token", token).
 			Msg("Deleted provider but failed to remove its stored key (orphaned ciphertext)")
 	}
