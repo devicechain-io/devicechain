@@ -61,6 +61,15 @@ and `device-management` are the required core; the other four are independently
 optional. (The dependency catalog mirrors `backend/k8s/functionalarea`, the Go
 source of truth.)
 
+> **Required value.** `instance.config.infrastructure.secrets.rootKey` — a base64
+> 256-bit key (`openssl rand -base64 32`) — is required for any profile carrying an
+> area that owns an envelope-encrypted secret store (ADR-059):
+> `notification-management` (in `default`), `outbound-connectors`, and `ai-inference`.
+> Such a service cannot form its KEK and refuses to start without it, so the chart
+> **fails the render** rather than shipping a crash-loop. `dcctl bootstrap` mints one
+> automatically. The chart deliberately does NOT generate one: Helm's random functions
+> re-run on every upgrade, which would rotate the KEK and orphan every stored secret.
+
 `default` is the standard system. `full` is exhaustive — it ships **every** area this
 build has, and a test enforces that, so "full" cannot drift back into meaning "most of
 it".
