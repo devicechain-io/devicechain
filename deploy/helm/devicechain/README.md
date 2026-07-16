@@ -60,6 +60,15 @@ and `device-management` are the required core; the other four are independently
 optional. (The dependency catalog mirrors `backend/k8s/functionalarea`, the Go
 source of truth.)
 
+Three areas are **opt-in** — deliberately in no profile, enabled only by naming them
+in an explicit `enabledFunctionalAreas` set:
+
+| Area | Purpose | Notes |
+|---|---|---|
+| `outbound-connectors` | REACT outbound sink (ADR-060) | hard-depends on `event-processing`; needs `infrastructure.secrets.rootKey` for its ADR-059 credential store |
+| `mcp` | read-only MCP resource server (ADR-047) | requires `mcp.config.resourceUrl` + `issuerUrl` |
+| `ai-inference` | NL→rule authoring proxy (ADR-056) | no hard dep (fails paths closed); needs `infrastructure.secrets.rootKey` for provider keys; external routing needs `serviceAuth.secret` + `userManagement` and is per-tenant opt-in / fail-closed |
+
 ## Per-service configuration
 
 Each service loads its typed config fail-closed (ADR-022 decision 1). Override it
