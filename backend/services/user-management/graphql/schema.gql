@@ -84,6 +84,10 @@ type TenantGovernance {
     ingestBurst: Int
     outboundMessagesPerSecond: Float
     outboundBurst: Int
+    # Whether this tenant has opted in to routing its data to an EXTERNAL frontier
+    # model (ADR-056 §6). Non-null and fail-closed: false unless explicitly opted
+    # in. Read by the ai-inference service over a service token.
+    aiExternalEnabled: Boolean!
 }
 
 # The identity the caller is signed in as (control plane), for display in the

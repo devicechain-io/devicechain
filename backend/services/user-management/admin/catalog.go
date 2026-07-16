@@ -123,6 +123,10 @@ type TenantInput struct {
 	IngestBurst               *int
 	OutboundMessagesPerSecond *float64
 	OutboundBurst             *int
+	// AiExternalEnabled is the per-tenant external-AI consent (ADR-056 §6):
+	// nil/false = not opted in (fail-closed), true = the operator has recorded this
+	// tenant's consent to route its data to an external frontier model.
+	AiExternalEnabled *bool
 }
 
 // TenantMutableInput is the data to update a tenant: its token is fixed.
@@ -133,6 +137,7 @@ type TenantMutableInput struct {
 	IngestBurst               *int
 	OutboundMessagesPerSecond *float64
 	OutboundBurst             *int
+	AiExternalEnabled         *bool
 }
 
 // validateGovernance rejects a non-positive override on any governance dimension.
@@ -182,6 +187,7 @@ func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant
 		IngestBurst:               in.IngestBurst,
 		OutboundMessagesPerSecond: in.OutboundMessagesPerSecond,
 		OutboundBurst:             in.OutboundBurst,
+		AiExternalEnabled:         in.AiExternalEnabled,
 	}
 	if err := s.iam.CreateTenant(ctx, t); err != nil {
 		return nil, err
@@ -206,6 +212,7 @@ func (s *Service) UpdateTenant(ctx context.Context, token string, in TenantMutab
 	t.IngestBurst = in.IngestBurst
 	t.OutboundMessagesPerSecond = in.OutboundMessagesPerSecond
 	t.OutboundBurst = in.OutboundBurst
+	t.AiExternalEnabled = in.AiExternalEnabled
 	if err := s.iam.UpdateTenant(ctx, t); err != nil {
 		return nil, err
 	}

@@ -59,6 +59,11 @@ func (r *AdminTenantResolver) OutboundBurst() *int32 {
 	return &v
 }
 
+// AiExternalEnabled resolves the per-tenant external-AI consent (ADR-056 §6) for
+// the operator's visibility/edit: the raw nullable column, where null (or false)
+// means the tenant is not opted in.
+func (r *AdminTenantResolver) AiExternalEnabled() *bool { return r.M.AiExternalEnabled }
+
 // Config resolves the AdminTenant.config field: the freeform config map as a
 // JSON object string, or null when unset.
 func (r *AdminTenantResolver) Config() (*string, error) {
@@ -178,6 +183,7 @@ type adminTenantCreateInput struct {
 	IngestBurst               *int32
 	OutboundMessagesPerSecond *float64
 	OutboundBurst             *int32
+	AiExternalEnabled         *bool
 }
 
 // adminTenantUpdateInput mirrors AdminTenantUpdateRequest.
@@ -188,6 +194,7 @@ type adminTenantUpdateInput struct {
 	IngestBurst               *int32
 	OutboundMessagesPerSecond *float64
 	OutboundBurst             *int32
+	AiExternalEnabled         *bool
 }
 
 // intPtr adapts an optional GraphQL Int (*int32) to the model's *int, preserving
@@ -217,6 +224,7 @@ func (r *AdminResolver) CreateTenant(ctx context.Context, args struct {
 		IngestBurst:               intPtr(args.Request.IngestBurst),
 		OutboundMessagesPerSecond: args.Request.OutboundMessagesPerSecond,
 		OutboundBurst:             intPtr(args.Request.OutboundBurst),
+		AiExternalEnabled:         args.Request.AiExternalEnabled,
 	})
 	return wrapTenant(tenant, err)
 }
@@ -239,6 +247,7 @@ func (r *AdminResolver) UpdateTenant(ctx context.Context, args struct {
 		IngestBurst:               intPtr(args.Request.IngestBurst),
 		OutboundMessagesPerSecond: args.Request.OutboundMessagesPerSecond,
 		OutboundBurst:             intPtr(args.Request.OutboundBurst),
+		AiExternalEnabled:         args.Request.AiExternalEnabled,
 	})
 	return wrapTenant(tenant, err)
 }
