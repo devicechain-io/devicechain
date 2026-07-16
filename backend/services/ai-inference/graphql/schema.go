@@ -15,9 +15,11 @@ import (
 //go:embed schema.graphql
 var SchemaContent string
 
-// SchemaResolver is the root resolver for the ai-inference GraphQL surface: the
-// service identity, the instance-scoped AIProvider CRUD (ADR-056 §4), and the
-// fail-closed inference call (§inference).
+// SchemaResolver is the root resolver for the ai-inference DATA plane: the service
+// identity and the fail-closed inference call made on a tenant's behalf. The
+// operator-facing provider CRUD lives on AdminResolver, a separate root served at
+// /admin/graphql behind an identity token (ADR-065) — a tenant does not administer
+// instance config.
 type SchemaResolver struct {
 	// Area is the deployed functional area, returned by aiInferenceInfo.
 	Area string
@@ -31,8 +33,10 @@ type SchemaResolver struct {
 	Metrics *Metrics
 }
 
-// GetApi returns the provider api from context (injected as a provider in main).
-func (r *SchemaResolver) GetApi(ctx context.Context) *model.Api {
+// apiFrom returns the provider api from context (injected as a provider in main).
+// It is a free function rather than a method because both resolver roots need it
+// and neither owns it — the api is request context, not resolver state.
+func apiFrom(ctx context.Context) *model.Api {
 	return ctx.Value(gqlcore.ContextApiKey).(*model.Api)
 }
 

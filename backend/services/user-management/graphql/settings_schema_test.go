@@ -55,7 +55,7 @@ func TestSettingsFailClosed(t *testing.T) {
 // neither read nor write instance settings.
 func TestSettingsForbidWithoutAuthority(t *testing.T) {
 	r := &SettingsResolver{}
-	ctx := auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{}})
+	ctx := adminCtx()
 
 	_, err := r.Settings(ctx)
 	assert.ErrorIs(t, err, auth.ErrForbidden)

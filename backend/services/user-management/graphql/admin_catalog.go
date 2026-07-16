@@ -119,13 +119,31 @@ func (r *AdminResolver) Roles(ctx context.Context, args struct{ Scope *string })
 	return out, nil
 }
 
-// Authorities lists the known authority vocabulary so the console can offer a
-// checklist when defining a role (requires role:read).
-func (r *AdminResolver) Authorities(ctx context.Context) ([]string, error) {
+// Authorities lists the authority vocabulary so the console can offer a checklist
+// when defining a role (requires role:read).
+//
+// With a scope it lists only what a role at that scope may actually GRANT
+// (ADR-065): an authority's tier and a role's scope must agree, so an unfiltered
+// checklist would offer a tenant role ai:admin and let the operator discover the
+// rule from a save error. The argument is optional and an absent scope still
+// returns the whole vocabulary — the console's role editor is the only caller that
+// has a scope to give, and a caller that just wants the vocabulary should not be
+// forced to invent one.
+func (r *AdminResolver) Authorities(ctx context.Context, args struct{ Scope *string }) ([]string, error) {
 	if err := auth.Authorize(ctx, auth.RoleRead); err != nil {
 		return nil, err
 	}
-	return auth.Authorities(), nil
+	if args.Scope == nil {
+		return auth.Authorities(), nil
+	}
+	scope := iam.RoleScope(*args.Scope)
+	if !scope.Valid() {
+		return nil, fmt.Errorf("invalid role scope %q (want %q or %q)", *args.Scope, iam.ScopeSystem, iam.ScopeTenant)
+	}
+	if scope == iam.ScopeSystem {
+		return auth.AuthoritiesForScope(auth.TierSystem), nil
+	}
+	return auth.AuthoritiesForScope(auth.TierTenant), nil
 }
 
 // adminRoleCreateInput mirrors AdminRoleCreateRequest.

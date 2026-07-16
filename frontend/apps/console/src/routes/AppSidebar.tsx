@@ -18,7 +18,6 @@ import {
   Palette,
   ScrollText,
   SlidersHorizontal,
-  Sparkles,
   Tags,
   Webhook,
   type LucideIcon,
@@ -117,10 +116,10 @@ const NAV: NavNode[] = [
   { label: 'Browse', href: '/browse', icon: Filter, requires: 'device:read' },
   { label: 'Audit', href: '/audit', icon: ScrollText, requires: 'audit:read' },
   { label: 'Branding', href: '/branding', icon: Palette, requires: 'branding:write' },
-  // Inference providers for NL→rule authoring (ADR-056) — an operator concern gated
-  // on ai:admin, an authority a normal tenant never holds (so only a superuser acting
-  // in a tenant sees it).
-  { label: 'AI Providers', href: '/ai-providers', icon: Sparkles, requires: 'ai:admin' },
+  // Inference providers for NL→rule authoring (ADR-056) are NOT here: they are
+  // instance config an operator owns, so they live in the admin console (ADR-065). A
+  // tenant's only say over AI is its external-routing consent, set per tenant by an
+  // operator.
 ];
 
 function isLeaf(node: NavNode): node is NavLeaf {

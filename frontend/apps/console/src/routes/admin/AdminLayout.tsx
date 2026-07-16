@@ -8,8 +8,10 @@ import { ErrorBoundary } from '@/components/ui/error-boundary';
 
 const PAGE_TITLES: { pattern: string; title: string }[] = [
   { pattern: '/admin/tenants', title: 'Tenants' },
+  { pattern: '/admin/tiers', title: 'Tiers' },
   { pattern: '/admin/identities', title: 'Identities' },
   { pattern: '/admin/roles', title: 'Roles' },
+  { pattern: '/admin/ai-providers', title: 'AI Providers' },
   { pattern: '/admin/audit', title: 'Audit' },
   { pattern: '/admin/settings', title: 'Settings' },
 ];

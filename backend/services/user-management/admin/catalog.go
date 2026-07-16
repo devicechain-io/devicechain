@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -55,7 +56,7 @@ func (s *Service) CreateRole(ctx context.Context, in RoleInput) (*iam.Role, erro
 	if in.Token == "" {
 		return nil, fmt.Errorf("token is required")
 	}
-	if err := validateAuthorities(in.Authorities); err != nil {
+	if err := validateAuthorities(scope, in.Authorities); err != nil {
 		return nil, err
 	}
 	r := &iam.Role{
@@ -74,7 +75,7 @@ func (s *Service) UpdateRole(ctx context.Context, scope, token string, in RoleMu
 	if err != nil {
 		return nil, err
 	}
-	if err := validateAuthorities(in.Authorities); err != nil {
+	if err := validateAuthorities(rs, in.Authorities); err != nil {
 		return nil, err
 	}
 	r, err := s.loadRole(ctx, rs, token)
@@ -492,11 +493,42 @@ func parseScope(s string) (iam.RoleScope, error) {
 }
 
 // validateAuthorities rejects the request if any authority is not a known
-// capability, so a typo cannot create a role that silently grants nothing.
-func validateAuthorities(authorities []string) error {
+// capability, so a typo cannot create a role that silently grants nothing — and if
+// any authority belongs to a tier this role's scope cannot carry (ADR-065).
+//
+// The tier half exists because a role's scope and its authorities used to be
+// unrelated: a TENANT-scoped role could be granted ai:admin (or tenant:write, or
+// settings:write), which is how an instance-scoped operator resource became
+// reachable from the tenant console. Authorize now refuses a system-tier authority
+// on a tenant access token regardless, so such a role would grant nothing it
+// claims to — this makes the lie unwritable rather than merely inert, and names
+// the valid alternatives so the fix is obvious from the error.
+//
+// The super-authority "*" is deliberately allowed at either scope: it means
+// "everything at the bearer's tier", which the check-time rule now makes literally
+// true (a tenant-admin's "*" grants every tenant-tier authority and no more). The
+// seeded system `superuser` and tenant `tenant-admin` roles both rely on this.
+func validateAuthorities(scope iam.RoleScope, authorities []string) error {
+	want := auth.TierTenant
+	if scope == iam.ScopeSystem {
+		want = auth.TierSystem
+	}
 	for _, a := range authorities {
 		if !auth.ValidAuthority(a) {
 			return fmt.Errorf("unknown authority %q", a)
+		}
+		if auth.Authority(a) == auth.AuthorityAll {
+			continue
+		}
+		tier, known := auth.TierOf(auth.Authority(a))
+		if !known {
+			// Unreachable while ValidAuthority and the tier map share one source, but
+			// fail closed rather than granting an authority whose tier is unknown.
+			return fmt.Errorf("authority %q declares no tier", a)
+		}
+		if tier != want {
+			return fmt.Errorf("authority %q is %s-tier and cannot be granted to a %s-scoped role; %s-scoped roles may grant: %s",
+				a, tier, scope, scope, strings.Join(auth.AuthoritiesForScope(want), ", "))
 		}
 	}
 	return nil

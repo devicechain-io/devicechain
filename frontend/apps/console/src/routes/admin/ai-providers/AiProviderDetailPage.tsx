@@ -4,9 +4,14 @@
 // The AI-provider detail / editor (ADR-056 §4). Edits {kind, name, description,
 // endpoint, model, params, enabled, write-only API key}, promotes/clears the active
 // provider, and hosts the operator smoke test (testAiProvider) — a live call through
-// the provider's endpoint + key, the ai:admin affordance to validate a provider
-// before promoting it. The key is write-only: the editor is told only whether one
-// exists.
+// the provider's endpoint + key, the affordance to validate a provider before
+// promoting it. The key is write-only: the editor is told only whether one exists.
+//
+// An ADMIN-console screen (ADR-065): behind AdminProtectedRoute, calling the
+// ai-inference ADMIN plane (identity token, ai:admin on every resolver). Like every
+// other admin screen it carries no per-page authority check — and it must not read
+// `useAuth().claims`, which are the TENANT access token's and are commonly absent
+// here.
 
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
@@ -21,8 +26,6 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { Textarea, BackLink, errMessage } from '@/routes/common';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
-import { useAuth } from '@/auth/AuthProvider';
-import { hasAuthority } from '@devicechain/client';
 import {
   getAiProvider,
   listAiProviderKinds,
@@ -31,7 +34,7 @@ import {
   clearActiveAiProvider,
   testAiProvider,
   type AiProvider,
-} from '@/lib/api/ai-inference';
+} from '@/lib/api/ai-inference-admin';
 import {
   AiProviderForm,
   providerStateFrom,
@@ -43,28 +46,8 @@ import {
 export default function AiProviderDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
   const token = rawToken ?? '';
-  const { claims } = useAuth();
-  const canManage = hasAuthority(claims, 'ai:admin');
-  // Skip the fetches for an unauthorized visitor (they'd 403); the notice renders below.
-  const { data, loading, error } = useQuery(
-    () => (canManage ? getAiProvider(token) : Promise.resolve(null)),
-    [token, canManage],
-  );
-  const { data: kinds } = useQuery(
-    () => (canManage ? listAiProviderKinds() : Promise.resolve([])),
-    [canManage],
-  );
-
-  if (!canManage) {
-    return (
-      <PageShell title={token} banner="dashboard">
-        <p className="text-sm text-muted-foreground">
-          You don’t have permission to manage inference providers (
-          <span className="font-mono">ai:admin</span>).
-        </p>
-      </PageShell>
-    );
-  }
+  const { data, loading, error } = useQuery(() => getAiProvider(token), [token]);
+  const { data: kinds } = useQuery(listAiProviderKinds, []);
   if (loading) {
     return (
       <PageShell title={token} banner="dashboard">

@@ -12,6 +12,20 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// adminCtx builds the credential the admin plane actually carries: an IDENTITY
+// token (ADR-033 — /admin/graphql validates identity-tier tokens and runs in the
+// system context). The token type is load-bearing, not decoration: system-tier
+// authorities like tenant:read and user:write can only be satisfied by an identity
+// or service token (ADR-065), so claims left untyped here would be refused on the
+// tier and every "forbidden without the right authority" assertion below would
+// pass for the wrong reason — testing nothing.
+func adminCtx(authorities ...string) context.Context {
+	return auth.WithClaims(context.Background(), &auth.Claims{
+		TokenType:   auth.TokenTypeIdentity,
+		Authorities: authorities,
+	})
+}
+
 // TestAdminSchemaParses validates that the admin schema parses against its
 // resolver root — every admin field must have a matching resolver method
 // (ADR-033).
@@ -47,7 +61,7 @@ func TestAdminQueriesFailClosed(t *testing.T) {
 // non-superuser cannot read the admin directory.
 func TestAdminQueriesForbidWithoutAuthority(t *testing.T) {
 	r := &AdminResolver{}
-	ctx := auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{}})
+	ctx := adminCtx()
 
 	_, err := r.Identities(ctx)
 	assert.ErrorIs(t, err, auth.ErrForbidden)
@@ -74,7 +88,7 @@ func TestAdminOAuthClientMutationsFailClosed(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 
 	// Authenticated but without client:write → forbidden.
-	ctx = auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{"user:read"}})
+	ctx = adminCtx("user:read")
 	_, err = r.SetOauthClientEnabled(ctx, struct {
 		ClientId string
 		Enabled  bool
@@ -115,7 +129,7 @@ func TestAdminMutationsFailClosed(t *testing.T) {
 // lacking user:write is refused on a representative mutation.
 func TestAdminMutationsForbidWithoutAuthority(t *testing.T) {
 	r := &AdminResolver{}
-	ctx := auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{string(auth.UserRead)}})
+	ctx := adminCtx(string(auth.UserRead))
 
 	_, err := r.CreateIdentity(ctx, struct{ Request adminIdentityCreateInput }{})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
@@ -138,7 +152,7 @@ func TestAdminCatalogFailClosed(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 
 	// Authenticated but holding only user:write — wrong authority for the catalog.
-	limited := auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{string(auth.UserWrite)}})
+	limited := adminCtx(string(auth.UserWrite))
 	_, err = r.Roles(limited, struct{ Scope *string }{})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 	_, err = r.CreateRole(limited, struct{ Request adminRoleCreateInput }{})
@@ -174,7 +188,7 @@ func TestAdminTenantTierFailClosed(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 
 	// Authenticated but holding only user:write — wrong authority for packaging.
-	limited := auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{string(auth.UserWrite)}})
+	limited := adminCtx(string(auth.UserWrite))
 	_, err = r.TenantTiers(limited)
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 	_, err = r.CreateTenantTier(limited, struct{ Request adminTenantTierCreateInput }{})
@@ -189,7 +203,7 @@ func TestAdminTenantTierFailClosed(t *testing.T) {
 
 	// tenant:read is enough to LIST tiers but never to change them — a read-only
 	// operator must not be able to re-price the platform.
-	reader := auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{string(auth.TenantRead)}})
+	reader := adminCtx(string(auth.TenantRead))
 	_, err = r.CreateTenantTier(reader, struct{ Request adminTenantTierCreateInput }{})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 	_, err = r.DeleteTenantTier(reader, struct{ Token string }{})

@@ -13,10 +13,13 @@ import (
 	gql "github.com/graph-gophers/graphql-go"
 )
 
-// AIProviderResolver resolves the fields of a single provider.
+// AIProviderResolver resolves the fields of a single provider. It carries the
+// request context (for the secret-store existence check) but NOT a resolver root:
+// it is built only by the admin plane, and holding a root would re-couple the
+// provider surface to whichever schema happened to construct it — the coupling
+// ADR-065 just untangled.
 type AIProviderResolver struct {
 	M model.AIProvider
-	S *SchemaResolver
 	C context.Context
 }
 
@@ -60,7 +63,7 @@ func (r *AIProviderResolver) Active() bool { return r.M.Active }
 // encrypted secret store (ADR-059), so this is a store existence check rather than a
 // column read — an ai:admin holder learns only the boolean.
 func (r *AIProviderResolver) HasSecret() (bool, error) {
-	return r.S.GetApi(r.C).Secrets.Exists(r.C, model.AIProviderSecretRef(r.M.ID))
+	return apiFrom(r.C).Secrets.Exists(r.C, model.AIProviderSecretRef(r.M.ID))
 }
 
 // InferenceResultResolver resolves a single inference result: the candidate the
@@ -82,7 +85,6 @@ func (r *InferenceResultResolver) Provider() string { return r.provider }
 // SearchResultsPaginationResolver resolves pagination info on a result page.
 type SearchResultsPaginationResolver struct {
 	M rdb.SearchResultsPagination
-	S *SchemaResolver
 	C context.Context
 }
 
@@ -95,18 +97,17 @@ func (r *SearchResultsPaginationResolver) TotalRecords() *int32 { return &r.M.To
 // AIProviderSearchResultsResolver resolves a page of providers.
 type AIProviderSearchResultsResolver struct {
 	M model.AIProviderSearchResults
-	S *SchemaResolver
 	C context.Context
 }
 
 func (r *AIProviderSearchResultsResolver) Results() []*AIProviderResolver {
 	resolvers := make([]*AIProviderResolver, 0, len(r.M.Results))
 	for _, current := range r.M.Results {
-		resolvers = append(resolvers, &AIProviderResolver{M: current, S: r.S, C: r.C})
+		resolvers = append(resolvers, &AIProviderResolver{M: current, C: r.C})
 	}
 	return resolvers
 }
 
 func (r *AIProviderSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
-	return &SearchResultsPaginationResolver{M: r.M.Pagination, S: r.S, C: r.C}
+	return &SearchResultsPaginationResolver{M: r.M.Pagination, C: r.C}
 }

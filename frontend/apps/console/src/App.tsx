@@ -14,8 +14,8 @@ import DashboardDetailPage from '@/routes/dashboards/DashboardDetailPage';
 import AlarmsPage from '@/routes/alarms/AlarmsPage';
 import ConnectorsPage from '@/routes/connectors/ConnectorsPage';
 import ConnectorDetailPage from '@/routes/connectors/ConnectorDetailPage';
-import AiProvidersPage from '@/routes/ai-providers/AiProvidersPage';
-import AiProviderDetailPage from '@/routes/ai-providers/AiProviderDetailPage';
+import AiProvidersPage from '@/routes/admin/ai-providers/AiProvidersPage';
+import AiProviderDetailPage from '@/routes/admin/ai-providers/AiProviderDetailPage';
 import AuditPage from '@/routes/audit/AuditPage';
 import FacetKeysPage from '@/routes/facets/FacetKeysPage';
 import BrowsePage from '@/routes/browse/BrowsePage';
@@ -101,8 +101,6 @@ export default function App() {
           <Route path="alarms" element={<AlarmsPage />} />
           <Route path="connectors" element={<ConnectorsPage />} />
           <Route path="connectors/:token" element={<ConnectorDetailPage />} />
-          <Route path="ai-providers" element={<AiProvidersPage />} />
-          <Route path="ai-providers/:token" element={<AiProviderDetailPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="facets" element={<FacetKeysPage />} />
           <Route path="browse" element={<BrowsePage />} />
@@ -144,6 +142,10 @@ export default function App() {
           <Route path="roles/new" element={<AdminNewRolePage />} />
           <Route path="roles/:scope/:token" element={<AdminRoleDetailPage />} />
           <Route path="audit" element={<AdminAuditPage />} />
+          {/* Instance-scoped AI provider config: an operator resource, so it lives
+              on the admin plane rather than inside a tenant (ADR-065). */}
+          <Route path="ai-providers" element={<AiProvidersPage />} />
+          <Route path="ai-providers/:token" element={<AiProviderDetailPage />} />
           <Route path="settings" element={<AdminSettingsPage />} />
         </Route>
       </Route>
