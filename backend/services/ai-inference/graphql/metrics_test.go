@@ -24,7 +24,7 @@ func TestOutcomeFor(t *testing.T) {
 		{"rate limited", inference.ErrRateLimited, outcomeRateLimited},
 		{"consent required", inference.ErrConsentRequired, outcomeConsentRequired},
 		{"unavailable", inference.ErrUnavailable, outcomeUnavailable},
-		{"wrapped unavailable", fmt.Errorf("%w: no active provider is configured", inference.ErrUnavailable), outcomeUnavailable},
+		{"wrapped unavailable", fmt.Errorf("%w: no provider is granted to any tier or tenant", inference.ErrUnavailable), outcomeUnavailable},
 		{"wrapped rate limited", fmt.Errorf("ai-inference: %w", inference.ErrRateLimited), outcomeRateLimited},
 		{"provider failure", errors.New("inference provider returned 500"), outcomeProviderError},
 	}
@@ -36,11 +36,11 @@ func TestOutcomeFor(t *testing.T) {
 }
 
 // A LOCAL store failure must not read as a provider fault. The resolver wraps its
-// active-provider read error in ErrUnavailable precisely so this classifies as
-// unavailable: an operator seeing provider_error spike would go investigate their
-// inference key and endpoint when their own database was the thing that blipped.
+// grant-read error in ErrUnavailable precisely so this classifies as unavailable: an
+// operator seeing provider_error spike would go investigate their inference key and
+// endpoint when their own database was the thing that blipped.
 func TestOutcomeFor_LocalStoreFailureIsNotAProviderFault(t *testing.T) {
-	storeErr := fmt.Errorf("%w: could not read the active provider: %v",
+	storeErr := fmt.Errorf("%w: could not read the provider grants: %v",
 		inference.ErrUnavailable, errors.New("dial tcp 127.0.0.1:5432: connection refused"))
 	assert.Equal(t, outcomeUnavailable, outcomeFor(storeErr))
 	assert.NotEqual(t, outcomeProviderError, outcomeFor(storeErr))

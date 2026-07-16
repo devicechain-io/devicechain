@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The AI Providers list (ADR-056 §4). Providers are INSTANCE-scoped, operator-managed
-// {kind, endpoint, model, write-only API key} configs; at most one is the ACTIVE
-// provider used for NL→rule authoring ("default of none" when none is active).
+// {kind, endpoint, model, write-only API key} configs. Registering a model here does
+// not offer it to anyone: which tenants may use it is decided by granting it to a
+// tenant TIER (ADR-065 decision 10), which is its own screen.
 //
 // This is an ADMIN-console screen (ADR-065): it sits behind AdminProtectedRoute (a
 // superuser identity session) and calls the ai-inference ADMIN plane, which accepts
@@ -17,15 +18,13 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Star, Trash2 } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   listAiProviders,
   listAiProviderKinds,
-  getActiveAiProvider,
   createAiProvider,
   deleteAiProvider,
-  setActiveAiProvider,
   getAiProvider,
 } from '@/lib/api/ai-inference-admin';
 import { PageShell } from '@/components/ui/page-shell';
@@ -73,7 +72,6 @@ export default function AiProvidersPage() {
     () => listAiProviders({ pageNumber, pageSize }),
     [pageNumber, version],
   );
-  const { data: active, error: activeError } = useQuery(() => getActiveAiProvider(), [version]);
   const { data: kinds } = useQuery(listAiProviderKinds, []);
 
   const results = data?.results ?? [];
@@ -82,7 +80,7 @@ export default function AiProvidersPage() {
     if (
       !(await confirm({
         title: 'Delete provider',
-        description: `Delete “${token}” and its API key? If it is the active provider, NL→rule authoring falls back to “none active” (feature off) until another is promoted.`,
+        description: `Delete “${token}” and its API key? This is refused while any tier or tenant is still granted the provider — remove those grants first.`,
         confirmLabel: 'Delete',
       }))
     )
@@ -90,21 +88,9 @@ export default function AiProvidersPage() {
     try {
       await deleteAiProvider(token);
       toast(`Provider “${token}” deleted`);
-      // Always reload so the active-provider banner refreshes too (its query keys on
-      // version, not pageNumber) — deleting the active provider must not leave the
-      // banner naming a row that no longer exists. On the last-row-of-a-later-page
-      // case, also step back a page; the list keys on both, so it refetches once.
+      // On the last-row-of-a-later-page case, step back a page; the list keys on both
+      // page and version, so it refetches once.
       if (results.length === 1 && pageNumber > 1) setPageNumber(pageNumber - 1);
-      reload();
-    } catch (err) {
-      toast(errMessage(err), 'error');
-    }
-  };
-
-  const promote = async (token: string) => {
-    try {
-      await setActiveAiProvider(token);
-      toast(`“${token}” is now the active provider`);
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -114,7 +100,7 @@ export default function AiProvidersPage() {
   return (
     <PageShell
       title="AI Providers"
-      description="AI models available for drafting rules from a description. At most one is active — the model that answers drafting requests."
+      description="AI models registered on this instance. Registering one does not offer it to anyone — grant it to a tier to put it on those tenants’ menu."
       banner="dashboard"
       action={
         <Button onClick={() => setCreating(true)}>
@@ -134,18 +120,12 @@ export default function AiProvidersPage() {
         />
       </FormDrawer>
 
-      <ActiveBanner
-        activeName={active?.name ?? null}
-        activeToken={active?.token ?? null}
-        error={activeError ?? null}
-      />
-
       {loading ? (
         <LoadingState description="Loading providers…" />
       ) : error ? (
         <ErrorState description={error} />
       ) : results.length === 0 ? (
-        <EmptyState description="No providers yet. Create one and promote it to active to enable NL→rule authoring." />
+        <EmptyState description="No providers yet. Create one, then grant it to a tier to enable NL→rule authoring for those tenants." />
       ) : (
         <>
           <DataTable>
@@ -164,14 +144,7 @@ export default function AiProvidersPage() {
                   {...rowLinkProps(() => navigate(aiProviderPath(p.token)))}
                 >
                   <DataTableCell className="font-medium text-foreground">
-                    <span className="inline-flex items-center gap-2">
-                      {p.name || p.token}
-                      {p.active && (
-                        <Badge variant="success" className="gap-1">
-                          <Star size={11} /> Active
-                        </Badge>
-                      )}
-                    </span>
+                    {p.name || p.token}
                   </DataTableCell>
                   <DataTableCell className="text-muted-foreground">{p.kind}</DataTableCell>
                   <DataTableCell className="text-muted-foreground">{p.model}</DataTableCell>
@@ -189,19 +162,6 @@ export default function AiProvidersPage() {
                   </DataTableCell>
                   <DataTableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
-                      {!p.active && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void promote(p.token);
-                          }}
-                          onKeyDown={(e) => e.stopPropagation()}
-                        >
-                          <Star size={14} /> Set active
-                        </Button>
-                      )}
                       <Button
                         variant="ghost"
                         size="sm"
@@ -229,38 +189,6 @@ export default function AiProvidersPage() {
         </>
       )}
     </PageShell>
-  );
-}
-
-// A one-line status of which provider currently answers authoring requests — the
-// "default of none" state is called out because it means the feature is off.
-function ActiveBanner({
-  activeName,
-  activeToken,
-  error,
-}: {
-  activeName: string | null;
-  activeToken: string | null;
-  error: string | null;
-}) {
-  return (
-    <div className="mb-4 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
-      {error ? (
-        <span className="text-muted-foreground">
-          Active-provider status is currently unavailable ({error}).
-        </span>
-      ) : activeToken ? (
-        <span>
-          Active provider:{' '}
-          <span className="font-medium text-foreground">{activeName || activeToken}</span> — NL→rule
-          authoring routes to this model (for tenants that have opted in to external routing).
-        </span>
-      ) : (
-        <span className="text-muted-foreground">
-          No active provider — NL→rule authoring is off until one is promoted.
-        </span>
-      )}
-    </div>
   );
 }
 

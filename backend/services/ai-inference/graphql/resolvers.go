@@ -56,7 +56,32 @@ func (r *AIProviderResolver) Params() *string {
 
 func (r *AIProviderResolver) Enabled() bool { return r.M.Enabled }
 
-func (r *AIProviderResolver) Active() bool { return r.M.Active }
+// AIProviderTierGrantResolver resolves one tier→provider offer. TierToken is returned
+// verbatim, including when no such tier exists: this service cannot validate it (the
+// tier catalog is on user-management's identity-only admin plane and this service
+// holds a service token), so an unknown tier must stay VISIBLE to the operator rather
+// than be filtered away by the one surface that could reveal it.
+type AIProviderTierGrantResolver struct {
+	M model.TierGrant
+	C context.Context
+}
+
+func (r *AIProviderTierGrantResolver) Tier() string { return r.M.TierToken }
+func (r *AIProviderTierGrantResolver) Provider() *AIProviderResolver {
+	return &AIProviderResolver{M: r.M.Provider, C: r.C}
+}
+func (r *AIProviderTierGrantResolver) IsDefault() bool { return r.M.IsDefault }
+
+// AIProviderTenantGrantResolver resolves one per-tenant additive grant.
+type AIProviderTenantGrantResolver struct {
+	M model.TenantGrant
+	C context.Context
+}
+
+func (r *AIProviderTenantGrantResolver) Tenant() string { return r.M.TenantToken }
+func (r *AIProviderTenantGrantResolver) Provider() *AIProviderResolver {
+	return &AIProviderResolver{M: r.M.Provider, C: r.C}
+}
 
 // HasSecret reports whether an API key is configured, without exposing it. The key is
 // write-only (accepted on create/update, never returned) and lives in the envelope-

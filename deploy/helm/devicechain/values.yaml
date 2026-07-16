@@ -110,7 +110,7 @@ instance:
       aiInference:
         # ai-inference is reached in-cluster by its instance-namespace Service name for
         # event-processing to draft a detection rule from natural language (ADR-056 slice 1):
-        # it carries the human's NL prompt to the active provider over a service token
+        # it carries the human's NL prompt to the tenant's model over a service token
         # (ai:infer) and runs the returned candidate through its own rules.Compile firewall.
         # ai-inference is an OPT-IN area (in no profile) — enable it AND set the coordinate
         # here to turn NL rule-drafting on. Unset (or empty hostname) leaves NL drafting
@@ -506,8 +506,9 @@ functionalAreas:
     #
     # It keeps its own envelope-encrypted secret store (ADR-059) for provider API keys,
     # so the instance root key (infrastructure.secrets.rootKey above) MUST be configured
-    # or the service fails startup closed. The ACTIVE provider and its API key are runtime
-    # state managed in the console (AI Providers screen) / GraphQL — NOT Helm config.
+    # or the service fails startup closed. Providers, their API keys, and which tenant
+    # TIERS each is granted to (ADR-065) are runtime state managed in the admin console
+    # (/admin/ai-providers) / GraphQL — NOT Helm config.
     #
     # External routing is PER-TENANT opt-in and fail-closed (ADR-056 §6): the service
     # reads each tenant's ai_external_enabled consent flag from user-management over a

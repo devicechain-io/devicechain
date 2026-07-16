@@ -4,10 +4,14 @@
 #
 # AI Inference ADMIN GraphQL Schema (ADR-056 §4, re-homed by ADR-065)
 #
-# The INSTANCE-scoped, operator-managed provider list: register providers, pick THE
-# active one ("default of none"), smoke-test an endpoint before promoting it. Served
-# at /admin/graphql behind an IDENTITY token, in the system context across tenants —
-# the same shape user-management's admin API uses (ADR-033).
+# The INSTANCE-scoped, operator-managed provider list: register providers, smoke-test
+# an endpoint, and PACKAGE providers by granting them to tenant tiers (ADR-065).
+# Served at /admin/graphql behind an IDENTITY token, in the system context across
+# tenants — the same shape user-management's admin API uses (ADR-033).
+#
+# Registering a model and selling it are separate acts here: a new provider is offered
+# to nobody until it is granted to a tier, so an operator can add and test one without
+# it appearing on any tenant's menu.
 #
 # Why this is a separate plane and not just a set of ai:admin fields on the data
 # plane (the ADR-065 origin story): ai-inference validated tenant access tokens
@@ -49,13 +53,35 @@ type AiProvider {
     model: String!
     # The opaque per-kind inference params (a JSON object), or null.
     params: String
-    # Whether this provider may be resolved and used.
+    # Whether this provider may be resolved and used. A disabled provider keeps its
+    # grants but never serves a call, so a model can be taken out of service without
+    # unpicking its packaging.
     enabled: Boolean!
-    # Whether this is THE active provider used by default for inference. At most one
-    # provider is active; none active is the valid "default of none" (feature off).
-    active: Boolean!
     # Whether an API key is configured, without exposing it.
     hasSecret: Boolean!
+}
+
+# One tier→provider offer: this provider is on the menu of every tenant at this tier
+# (ADR-065 decision 10).
+type AiProviderTierGrant {
+    # The user-management tier token. Returned verbatim even when no such tier exists:
+    # this service cannot validate it (the tier catalog is on user-management's
+    # identity-only admin plane, and this service holds a service token), so an unknown
+    # tier stays visible to the operator instead of being filtered out of the one
+    # screen that could reveal it.
+    tier: String!
+    provider: AiProvider!
+    # Whether this is the tier's default model — the one used when a caller expresses
+    # no preference. At most one grant per tier is the default.
+    isDefault: Boolean!
+}
+
+# One per-tenant additive grant: a model this tenant may use over and above what its
+# tier offers (ADR-065 decision 7's audited exception). Additive-only — there is no
+# matching deny, so an exception can never undercut what the tier sold.
+type AiProviderTenantGrant {
+    tenant: String!
+    provider: AiProvider!
 }
 
 # Data to create or update a provider. `secret` (the API key) is write-only: omit it
@@ -110,24 +136,42 @@ type Query {
     aiProviders(criteria: AiProviderSearchCriteria!): AiProviderSearchResults!
     # The registered provider-kind vocabulary, for a console picker (requires ai:admin).
     aiProviderKinds: [String!]!
-    # THE active provider, or null when none is active ("default of none").
-    activeAiProvider: AiProvider
+    # Every tier→provider grant on this instance: the packaging matrix (requires
+    # ai:admin). Includes grants naming a tier that no longer exists.
+    aiProviderTierGrants: [AiProviderTierGrant!]!
+    # One tenant's additive grants (requires ai:admin).
+    aiProviderTenantGrants(tenant: String!): [AiProviderTenantGrant!]!
 }
 
 type Mutation {
-    # Create a new provider (never active on create — promote it with setAiProvider).
+    # Create a new provider. It is offered to nobody until granted to a tier.
     createAiProvider(request: AiProviderCreateRequest!): AiProvider!
     # Update the provider with the given (current) token. When expectedUpdatedAt is
     # supplied it is an optimistic-concurrency precondition: the update fails (CONFLICT)
-    # if the provider's updatedAt has changed since. `active` is not changed here.
+    # if the provider's updatedAt has changed since. Grants are not changed here.
     updateAiProvider(token: String!, request: AiProviderCreateRequest!, expectedUpdatedAt: String): AiProvider!
     # Delete the provider with the given token (and its key). Returns whether a row was
-    # deleted. Deleting the active provider leaves the platform with none active.
+    # deleted. REFUSED while any tier or tenant is still granted the provider: the
+    # grants must be removed first, so an operator cannot silently strip a model from
+    # live tenants with one delete.
     deleteAiProvider(token: String!): Boolean!
-    # Promote the provider with the given token to THE active one, clearing any previous.
-    setActiveAiProvider(token: String!): AiProvider!
-    # Clear the active provider (return to "default of none"). Returns true always.
-    clearActiveAiProvider: Boolean!
+    # Offer a provider to every tenant at a tier. Idempotent. makeDefault promotes it to
+    # the tier's default in the same transaction, demoting any previous one.
+    grantAiProviderToTier(tier: String!, provider: String!, makeDefault: Boolean): Boolean!
+    # Withdraw a tier's offer of a provider. Returns whether a grant was removed.
+    revokeAiProviderFromTier(tier: String!, provider: String!): Boolean!
+    # Mark an already-granted provider as a tier's default model, demoting any previous
+    # default. Fails if the pair is not granted — a default must be something the tier
+    # actually offers.
+    setAiTierDefault(tier: String!, provider: String!): Boolean!
+    # Leave a tier's grants in place but mark none of them default. With two or more
+    # models offered, tenants at the tier must then choose explicitly.
+    clearAiTierDefault(tier: String!): Boolean!
+    # Add a provider to ONE tenant's menu over and above its tier. Idempotent.
+    grantAiProviderToTenant(tenant: String!, provider: String!): Boolean!
+    # Remove a tenant's additive grant. Returns whether one was removed. This withdraws
+    # an exception, not an entitlement — what the tenant's tier offers is untouched.
+    revokeAiProviderFromTenant(tenant: String!, provider: String!): Boolean!
     # Smoke-test a SPECIFIC provider (by token) with an operator-supplied prompt — the
     # affordance to validate a provider's endpoint + key before promoting it. It applies
     # no tenant-consent gate (operator config, an operator prompt, no tenant data

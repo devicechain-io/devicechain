@@ -168,22 +168,27 @@ const (
 	BrandingWrite Authority = "branding:write"
 
 	// AI inference provider administration (ai-inference, ADR-056). Gates the
-	// INSTANCE-scoped, operator-managed AIProvider CRUD + the active-provider pointer
-	// — the registered inference providers (kind, endpoint, model, write-only API key)
-	// NL→rule authoring routes through. Instance-global like settings:*/client:*: a
-	// provider list + its keys are an operator concern, not a tenant's (a tenant only
-	// CONSENTS to external routing, gated separately by the ADR-023 governance flag).
+	// INSTANCE-scoped, operator-managed AIProvider CRUD — the registered inference
+	// providers (kind, endpoint, model, write-only API key) NL→rule authoring routes
+	// through — AND the tier↔provider grants that decide which tenants are offered
+	// which model (ADR-065). Instance-global like settings:*/client:*: a provider list,
+	// its keys, and the packaging built on it are an operator concern, not a tenant's
+	// (a tenant only CONSENTS to external routing, gated separately by the ADR-023
+	// governance flag). A tenant able to grant itself a provider would be writing its
+	// own entitlements, which is why this is system-tier.
 	AIAdmin Authority = "ai:admin"
 
 	// AIInfer gates the inference CALL itself (ai-inference inferRuleCandidate,
 	// ADR-056). It is deliberately separate from — and far narrower than — ai:admin:
 	// its sole holder is the event-processing service token that carries a human's
-	// NL→rule authoring prompt to the active provider (Slice 1). The inference service
+	// NL→rule authoring prompt to whichever model the tenant's tier offers (Slice 1).
+	// The inference service
 	// holds NO ambient authority over tenant data with it (ADR-047 confused-deputy red
 	// line): the call returns only a candidate string, which flows back through the
 	// deterministic rules.Compile firewall carrying the human's own token. A holder
-	// can run a prompt through the active provider; it cannot read, list, or change the
-	// provider config (that is ai:admin) or touch any tenant resource.
+	// can run a prompt through the model its tenant is entitled to; it cannot read,
+	// list, grant, or change provider config (that is ai:admin) or touch any tenant
+	// resource.
 	AIInfer Authority = "ai:infer"
 )
 

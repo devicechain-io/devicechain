@@ -16,4 +16,5 @@ import (
 var Migrations = []*gormigrate.Migration{
 	secrets.NewSecretStoreSchema(),
 	NewAIProvidersSchema(),
+	NewAIProviderGrantsSchema(),
 }

@@ -24,9 +24,9 @@ func strp(s string) *string { return &s }
 var testRootKey = []byte("0123456789abcdef0123456789abcdef")
 
 // newTestApi spins up an in-memory sqlite database with the tenant-scope + token-grammar
-// callbacks registered, the ai_providers table + its partial unique indexes + the shared
+// callbacks registered, the ai_providers + grant tables and their indexes + the shared
 // secrets table migrated, and an envelope-encrypting secret store over the same DB, so
-// the CRUD path (including the API-key round-trip and the active-provider invariant) is
+// the CRUD path (including the API-key round-trip and the grant invariants) is
 // exercised exactly as production does.
 func newTestApi(t *testing.T) *Api {
 	t.Helper()
@@ -35,12 +35,14 @@ func newTestApi(t *testing.T) *Api {
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	require.NoError(t, secrets.NewSecretStoreSchema().Migrate(db))
-	// Run the REAL provider migration (table + both partial unique indexes), then the
-	// tests below INSERT via the model type — so this also proves the migration and the
-	// model agree on the table name ("ai_providers"), the exact mismatch gorm's
-	// initialism handling would otherwise introduce. (schema imports no model type, so
-	// there is no import cycle.)
+	// Run the REAL migrations (tables + every index + the grant FKs), then the tests
+	// below INSERT via the model types — so this also proves the migrations and the
+	// models agree on the table names ("ai_providers", "ai_provider_tier_grants",
+	// "ai_provider_tenant_grants"), the exact mismatch gorm's initialism handling would
+	// otherwise introduce on all three. (schema imports no model type, so there is no
+	// import cycle.)
 	require.NoError(t, schema.NewAIProvidersSchema().Migrate(db))
+	require.NoError(t, schema.NewAIProviderGrantsSchema().Migrate(db))
 	kek, err := secrets.NewInstanceKeyProvider(testRootKey)
 	require.NoError(t, err)
 	return NewApi(&rdb.RdbManager{Database: db}, secrets.NewStore(db, kek))
@@ -81,7 +83,6 @@ func TestProviderCrud(t *testing.T) {
 	created, err := api.CreateAIProvider(ctx, claudeReq("primary", strp("sk-test-123")))
 	require.NoError(t, err)
 	assert.Equal(t, "primary", created.Token)
-	assert.False(t, created.Active, "a new provider is never active")
 	assert.Equal(t, "sk-test-123", secretValue(t, api, ctx, "primary"))
 
 	// Read back.
@@ -151,50 +152,18 @@ func TestEndpointQueryRejected(t *testing.T) {
 	}
 }
 
-// TestActiveProviderInvariant pins "default of none" + at-most-one-active: promoting a
-// second provider clears the first, and clearing returns to none.
-func TestActiveProviderInvariant(t *testing.T) {
+// TestGrantToUnknownProvider rejects a grant naming a provider that does not exist.
+// The FK would reject the insert regardless; this pins the friendlier error, since the
+// grant surface addresses providers by token and a constraint violation names an id.
+func TestGrantToUnknownProvider(t *testing.T) {
 	api := newTestApi(t)
 	ctx := context.Background()
 
-	_, err := api.CreateAIProvider(ctx, claudeReq("a", nil))
-	require.NoError(t, err)
-	_, err = api.CreateAIProvider(ctx, claudeReq("b", nil))
-	require.NoError(t, err)
+	err := api.GrantProviderToTier(ctx, "gold", "nope", false)
+	assert.ErrorIs(t, err, ErrUnknownProvider)
 
-	// Default of none.
-	active, err := api.ActiveProvider(ctx)
-	require.NoError(t, err)
-	assert.Nil(t, active, "no provider is active until one is promoted")
-
-	// Promote a.
-	_, err = api.SetActiveProvider(ctx, "a")
-	require.NoError(t, err)
-	active, _ = api.ActiveProvider(ctx)
-	require.NotNil(t, active)
-	assert.Equal(t, "a", active.Token)
-
-	// Promote b → a is cleared (at most one active).
-	_, err = api.SetActiveProvider(ctx, "b")
-	require.NoError(t, err)
-	active, _ = api.ActiveProvider(ctx)
-	require.NotNil(t, active)
-	assert.Equal(t, "b", active.Token)
-	found, _ := api.AIProvidersByToken(ctx, []string{"a"})
-	require.Len(t, found, 1)
-	assert.False(t, found[0].Active, "promoting b must clear a")
-
-	// Clear → back to none.
-	require.NoError(t, api.ClearActiveProvider(ctx))
-	active, _ = api.ActiveProvider(ctx)
-	assert.Nil(t, active)
-}
-
-// TestSetActiveMissingProvider returns not-found for an unknown token.
-func TestSetActiveMissingProvider(t *testing.T) {
-	api := newTestApi(t)
-	_, err := api.SetActiveProvider(context.Background(), "nope")
-	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	err = api.GrantProviderToTenant(ctx, "acme", "nope")
+	assert.ErrorIs(t, err, ErrUnknownProvider)
 }
 
 // TestUpdateConflict pins the optimistic-concurrency precondition.

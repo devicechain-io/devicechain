@@ -13,7 +13,7 @@ import (
 var AdminSchemaContent string
 
 // AdminResolver is the root resolver for the ai-inference ADMIN plane: the
-// instance-scoped, operator-managed AIProvider CRUD, the active-provider pointer,
+// instance-scoped, operator-managed AIProvider CRUD, the tier↔provider grants,
 // and the operator smoke test. It is served on its own /admin/graphql endpoint,
 // which validates IDENTITY-tier tokens and runs in the system context across
 // tenants (ADR-033's shape, applied here by ADR-065).

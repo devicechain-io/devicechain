@@ -6,7 +6,7 @@
 #
 # This is the tenant-facing surface, and it is deliberately tiny: one call, made on
 # behalf of a tenant's NL→rule authoring request. Everything an OPERATOR does —
-# registering providers, their write-only API keys, picking the active one, smoke-
+# registering providers, their write-only API keys, granting them to tiers, smoke-
 # testing an endpoint — lives on the instance-scoped admin plane instead
 # (admin_schema.graphql, served at /admin/graphql behind an identity token).
 #
@@ -47,9 +47,9 @@ type Query {
 }
 
 type Mutation {
-    # Run a prompt through THE ACTIVE provider for a tenant's NL→rule authoring request
+    # Run a prompt through the tenant's DEFAULT model for its NL→rule authoring request
     # (ADR-056 Zone 1). Gated by the least-privilege ai:infer authority; the tenant
-    # comes from the caller's token. Fails closed when no active provider is configured,
+    # comes from the caller's token. Fails closed when the tenant's tier offers no model,
     # the provider is disabled, the tenant has not opted in to external routing, or no
     # API key is set. The candidate is validated downstream by the rule compiler.
     inferRuleCandidate(request: InferenceRequest!): InferenceResult!

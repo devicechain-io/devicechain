@@ -127,8 +127,10 @@ func (api *Api) validateRequest(request *AIProviderCreateRequest) (datatypes.JSO
 
 // CreateAIProvider inserts a new provider. The kind must be registered and the model
 // present; a non-empty request.Secret (the API key) is sealed into the secret store
-// under the provider's handle (never a column). A new provider is never active — the
-// operator promotes one with SetActiveProvider ("default of none").
+// under the provider's handle (never a column). A new provider is offered to no one
+// until it is granted to a tier (ADR-065) — registering a model and selling it are
+// separate acts, so an operator can add and smoke-test a provider without it
+// appearing on any tenant's menu.
 func (api *Api) CreateAIProvider(ctx context.Context, request *AIProviderCreateRequest) (*AIProvider, error) {
 	params, endpoint, err := api.validateRequest(request)
 	if err != nil {
@@ -146,7 +148,6 @@ func (api *Api) CreateAIProvider(ctx context.Context, request *AIProviderCreateR
 		ModelID:  request.Model,
 		Params:   params,
 		Enabled:  request.Enabled,
-		Active:   false,
 	}
 	if err := api.sys(ctx).Create(created).Error; err != nil {
 		return nil, err
@@ -167,8 +168,9 @@ func (api *Api) CreateAIProvider(ctx context.Context, request *AIProviderCreateR
 
 // UpdateAIProvider replaces the provider with the given (current) token. The secret
 // is write-only: a nil request.Secret preserves the stored key, a non-nil value
-// replaces it, and an explicit empty string clears it. Active is NOT touched here
-// (it is owned by SetActiveProvider). When expectedUpdatedAt is non-nil it is an
+// replaces it, and an explicit empty string clears it. A provider's GRANTS are not
+// touched here — editing a model and changing who is offered it are separate acts
+// with separate audit trails. When expectedUpdatedAt is non-nil it is an
 // optimistic-concurrency precondition (ErrConflict if the row moved on since).
 func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIProviderCreateRequest, expectedUpdatedAt *string) (*AIProvider, error) {
 	params, endpoint, err := api.validateRequest(request)
@@ -197,8 +199,7 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 	}
 
 	// No precondition → unconditional last-write-wins. Save the loaded row (its PK +
-	// AuditLabel reach the audit journal, unlike a map Updates) with the new fields;
-	// Active is left at its loaded value (owned by SetActiveProvider), not touched.
+	// AuditLabel reach the audit journal, unlike a map Updates) with the new fields.
 	if expectedUpdatedAt == nil {
 		current.Token = request.Token
 		current.Name = rdb.NullStrOf(request.Name)
@@ -295,63 +296,19 @@ func (api *Api) AIProviders(ctx context.Context, criteria AIProviderSearchCriter
 	return &AIProviderSearchResults{Results: results, Pagination: pag}, nil
 }
 
-// ActiveProvider returns the one provider currently marked active, or nil when none
-// is (the valid "default of none"). A disabled active provider is still returned —
-// the resolver (slice 0c) is the one place that treats disabled as unavailable, so
-// the operator can see which provider is selected even while it is toggled off.
-func (api *Api) ActiveProvider(ctx context.Context) (*AIProvider, error) {
-	var p AIProvider
-	err := api.sys(ctx).Where("active = ?", true).First(&p).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &p, nil
-}
-
-// SetActiveProvider promotes the provider with the given token to THE active one,
-// atomically clearing any previously-active provider in the same transaction so the
-// "at most one active" invariant holds (and is backstopped by the partial unique
-// index). Returns gorm.ErrRecordNotFound if no provider has that token.
-func (api *Api) SetActiveProvider(ctx context.Context, token string) (*AIProvider, error) {
-	var result *AIProvider
-	err := api.sys(ctx).Transaction(func(tx *gorm.DB) error {
-		var target AIProvider
-		if err := tx.Where("token = ?", token).First(&target).Error; err != nil {
-			return err
-		}
-		if target.Active {
-			result = &target
-			return nil
-		}
-		if err := tx.Model(&AIProvider{}).Where("active = ?", true).Update("active", false).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&AIProvider{}).Where("id = ?", target.ID).Update("active", true).Error; err != nil {
-			return err
-		}
-		target.Active = true
-		result = &target
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-// ClearActiveProvider unsets whichever provider is active, returning the platform to
-// the "default of none" state (the feature then reports unavailable). Idempotent.
-func (api *Api) ClearActiveProvider(ctx context.Context) error {
-	return api.sys(ctx).Model(&AIProvider{}).Where("active = ?", true).Update("active", false).Error
-}
-
 // DeleteAIProvider hard-deletes the provider with the given token and its stored key,
 // reporting whether a row was deleted. Hard delete (Unscoped): a provider has no
-// trash/restore semantics, and deleting the active provider simply leaves the
-// platform with no active provider (fail-closed unavailable), which is valid.
+// trash/restore semantics.
+//
+// A provider that any tier or tenant is still granted is REFUSED (ErrProviderInUse,
+// naming the grants). This is the ADR-044 ErrEntityInUse shape user-management already
+// uses to protect a tier that tenants reference, and it is the refusal that makes
+// provider deletion safe: cascading instead would let one delete silently empty a
+// tier's menu and strip AI from every tenant at that tier within the governance cache
+// TTL, with nothing in the operator's way. The database backs this up — provider_id
+// carries ON DELETE RESTRICT and the delete below is a real DELETE, so the constraint
+// genuinely fires — but the check runs first so the operator gets a legible message
+// instead of a constraint violation.
 func (api *Api) DeleteAIProvider(ctx context.Context, token string) (bool, error) {
 	matches, err := api.AIProvidersByToken(ctx, []string{token})
 	if err != nil {
@@ -361,6 +318,10 @@ func (api *Api) DeleteAIProvider(ctx context.Context, token string) (bool, error
 		return false, nil
 	}
 	id := matches[0].ID
+
+	if err := api.assertProviderNotGranted(ctx, id); err != nil {
+		return false, err
+	}
 
 	if err := api.sys(ctx).Unscoped().Where("token = ?", token).Delete(&AIProvider{}).Error; err != nil {
 		return false, err

@@ -5,10 +5,11 @@
 // (ADR-056). It owns the Provider interface (the provider-agnostic call contract),
 // the shipped Claude implementation, and — the security core — the resolution
 // cascade that turns an inference request into a ready-to-call provider only after
-// every gate passes: an active provider is configured and enabled, the tenant has
-// consented to external routing (when the provider routes outside the boundary), and
-// the provider's API key resolves. Any gap fails CLOSED (ErrUnavailable /
-// ErrConsentRequired) — there is no path that calls out without consent.
+// every gate passes: the tenant's tier offers it a model (ADR-065), that model is
+// enabled, the tenant is within its rate ceiling, the tenant has consented to
+// external routing (when the model routes outside the boundary), and the model's API
+// key resolves. Any gap fails CLOSED (ErrUnavailable / ErrConsentRequired) — there is
+// no path that calls out without consent.
 //
 // The service holds NO ambient authority over tenant data (ADR-047): a provider
 // returns only a candidate string, which flows back to the caller (event-processing,
@@ -23,8 +24,9 @@ import (
 )
 
 // ErrUnavailable is the fail-closed sentinel returned when inference cannot be served
-// for a benign, operator-facing reason: no active provider, a disabled provider, a
-// missing key, an unbuilt kind, or no tenant in context. It is deliberately coarse —
+// for a benign, operator-facing reason: the tenant's tier offers it no model, the
+// menu names no default, every offered model is disabled, a key is missing, the kind
+// has no implementation, or there is no tenant in context. It is deliberately coarse —
 // the caller surfaces "unavailable" without leaking which gate tripped to an
 // unprivileged path.
 var ErrUnavailable = errors.New("inference is unavailable")
@@ -90,11 +92,5 @@ type Provider interface {
 	Infer(ctx context.Context, in Input) (Output, error)
 }
 
-// ConsentChecker reports whether a tenant has opted in to external AI routing. It is
-// the ai-inference side of the ADR-056 §6 governance flag, read from user-management
-// over a service token. It MUST fail closed: the resolution cascade treats any error
-// as "not permitted", so an unconfigured or unreachable checker denies external
-// routing rather than allowing it.
-type ConsentChecker interface {
-	ExternalEnabled(ctx context.Context, tenant string) (bool, error)
-}
+// The per-call tenant facts this service reads from user-management (consent + tier)
+// are defined by TenantFactsReader in consent.go.

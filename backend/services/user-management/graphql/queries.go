@@ -55,11 +55,21 @@ func (r *SchemaResolver) Tenant(ctx context.Context) (*TenantResolver, error) {
 // tier (a user-management entity) leaking across a service boundary into every
 // consumer of the query.
 //
-// The tier layer is invisible on the wire on purpose. A service enforcing a ceiling
-// has no business knowing WHY the number is what it is; that provenance question is
-// the admin plane's, which exposes the tier and the tenant's override separately so
-// effective settings stay inspectable as tier + delta rather than an opaque merged
-// blob (decision 7).
+// The tier's VALUES are invisible on the wire on purpose. A service enforcing a
+// ceiling has no business knowing WHY the number is what it is; that provenance
+// question is the admin plane's, which exposes the tier and the tenant's override
+// separately so effective settings stay inspectable as tier + delta rather than an
+// opaque merged blob (decision 7).
+//
+// The tier's IDENTITY is a different matter, and tierToken below exposes it. That is
+// not a softening of the rule above but a distinct need: ai-inference resolves which
+// AI models a tenant may use from its own tier↔provider grant tables (ADR-065 decision
+// 10), and this service cannot fold that for it the way it folds a ceiling, because it
+// cannot see providers at all — ai-inference is an opt-in area and user-management
+// ships in every profile, so it may never reference one. A ceiling is a number we can
+// resolve; a menu is a set only the other service can. GraphQL field selection keeps
+// the original property intact for everyone else: the services enforcing ceilings do
+// not select tierToken and so never learn the provenance of their numbers.
 type TenantGovernanceResolver struct {
 	t *iam.Tenant
 }
@@ -125,6 +135,25 @@ func (r *TenantGovernanceResolver) AiInferenceRequestsPerMinute() *float64 {
 
 func (r *TenantGovernanceResolver) AiInferenceBurst() *int32 {
 	return r.burst(governance.AIInference)
+}
+
+// TierToken resolves the tenant's ADR-065 tier token — the tenant's packaging
+// identity, not any value derived from it. ai-inference reads it over a service token
+// and joins its own tier↔provider grants against it to resolve which AI models the
+// tenant may use (decision 10); see the note on TenantGovernanceResolver for why that
+// set cannot be folded here the way a ceiling is.
+//
+// Non-null: the tier is a NOT NULL FK on the tenant row (decision 3 — required at
+// creation, which is what deletes the "what if it is unset" question rather than
+// answering it), and the tenant is loaded with its tier. A defensive empty string
+// rather than a nil dereference if that ever stops holding: an empty tier token
+// resolves to an empty menu at the consumer, which is fail-closed — an unreadable tier
+// must not fall through to somebody else's models.
+func (r *TenantGovernanceResolver) TierToken() string {
+	if r.t.Tier == nil {
+		return ""
+	}
+	return r.t.Tier.Token
 }
 
 // TenantGovernance returns the governance overrides for the tenant the caller is

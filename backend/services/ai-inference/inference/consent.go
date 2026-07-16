@@ -10,49 +10,95 @@ import (
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
-// serviceConsentChecker reads a tenant's external-AI-routing consent from
-// user-management's tenantGovernance query over a service token (ADR-044, mirroring
-// the egress-limit fetcher). The flag is the ADR-056 §6 ai_external_enabled governance
-// column, set by an operator via the admin tenant mutation. A query error propagates —
-// the resolution cascade treats it as NOT permitted, so a transient user-management
-// outage denies external routing rather than allowing it.
-type serviceConsentChecker struct {
+// TenantFacts are the per-call facts this service reads from user-management about a
+// tenant. Both come from the SAME tenantGovernance query, deliberately: they are read
+// on every inference call, and asking for them separately would double an
+// intentionally-uncached round trip.
+type TenantFacts struct {
+	// ExternalEnabled is the ADR-056 §6 ai_external_enabled consent flag: may this
+	// tenant's data leave the boundary. Operator-set, fail-closed.
+	ExternalEnabled bool
+	// TierToken is the tenant's ADR-065 packaging tier — what this service joins its
+	// own grant tables against to resolve the tenant's model menu. The tier entity
+	// itself lives in user-management and is never mirrored here.
+	//
+	// This is the one place the tier crosses the wire, and it does not contradict
+	// ADR-065 slice 2's decision to keep the tier OFF the governance wire. That
+	// decision is about the provenance of a resolved VALUE: a service enforcing a
+	// ceiling has no business knowing why the number is what it is. This is a
+	// different need — the tier is an IDENTITY used to resolve a SET, and
+	// user-management cannot resolve that set on our behalf because it cannot see
+	// providers at all (ai-inference is opt-in; user-management ships everywhere and
+	// may never reference it). GraphQL field selection keeps the original property
+	// intact: the other services reading tenantGovernance do not select tierToken.
+	TierToken string
+}
+
+// TenantFactsReader reads the per-call tenant facts. An interface so the resolver can
+// be driven without a user-management peer in tests, and so main can inject a
+// fail-closed reader when service-to-service auth is unconfigured.
+type TenantFactsReader interface {
+	Facts(ctx context.Context, tenant string) (TenantFacts, error)
+}
+
+// serviceTenantFactsReader reads a tenant's facts from user-management's
+// tenantGovernance query over a service token (ADR-044, mirroring the egress-limit
+// fetcher). A query error propagates — the resolution cascade treats a failure as NOT
+// permitted, so a transient user-management outage denies external routing rather than
+// allowing it, and yields no menu rather than a guessed one.
+type serviceTenantFactsReader struct {
 	client *svcclient.Client
 	umURL  string
 }
 
-// NewServiceConsentChecker builds a ConsentChecker that reads tenantGovernance from
-// user-management at umURL (its /graphql endpoint) over the given service-token client.
-func NewServiceConsentChecker(client *svcclient.Client, umURL string) ConsentChecker {
-	return &serviceConsentChecker{client: client, umURL: umURL}
+// NewServiceTenantFactsReader builds a TenantFactsReader that reads tenantGovernance
+// from user-management at umURL (its /graphql endpoint) over the given service-token
+// client.
+func NewServiceTenantFactsReader(client *svcclient.Client, umURL string) TenantFactsReader {
+	return &serviceTenantFactsReader{client: client, umURL: umURL}
 }
 
-func (c *serviceConsentChecker) ExternalEnabled(ctx context.Context, tenant string) (bool, error) {
-	const q = `query { tenantGovernance { aiExternalEnabled } }`
-	var out struct {
-		TenantGovernance struct {
-			AiExternalEnabled bool `json:"aiExternalEnabled"`
-		} `json:"tenantGovernance"`
+// tenantFactsQuery and tenantFactsResponse are the CROSS-SERVICE contract with
+// user-management, named at package scope so a test can pin them against the shape
+// user-management actually serves rather than against a copy. Both field names must
+// match user-management's TenantGovernance type exactly: a drifted name decodes to the
+// zero value, and both zero values (false, "") are indistinguishable from legitimate
+// fail-closed answers, so the door would go quiet for every tenant with nothing in any
+// log to say why.
+const tenantFactsQuery = `query { tenantGovernance { aiExternalEnabled tierToken } }`
+
+type tenantFactsResponse struct {
+	TenantGovernance struct {
+		AiExternalEnabled bool   `json:"aiExternalEnabled"`
+		TierToken         string `json:"tierToken"`
+	} `json:"tenantGovernance"`
+}
+
+func (r *serviceTenantFactsReader) Facts(ctx context.Context, tenant string) (TenantFacts, error) {
+	var out tenantFactsResponse
+	if err := r.client.Query(ctx, r.umURL, tenant, tenantFactsQuery, nil, &out); err != nil {
+		return TenantFacts{}, err
 	}
-	if err := c.client.Query(ctx, c.umURL, tenant, q, nil, &out); err != nil {
-		return false, err
-	}
-	return out.TenantGovernance.AiExternalEnabled, nil
+	return TenantFacts{
+		ExternalEnabled: out.TenantGovernance.AiExternalEnabled,
+		TierToken:       out.TenantGovernance.TierToken,
+	}, nil
 }
 
-// deniedConsentChecker fails closed when service-to-service auth is not configured:
-// external-routing consent cannot be verified, so it is never permitted. main injects
-// this when the shared service secret or the user-management endpoint is absent, so the
-// external NL-authoring path is cleanly unavailable rather than silently permissive.
-// (The operator smoke test does not go through consent, so it still works.)
-type deniedConsentChecker struct{ reason string }
+// deniedTenantFactsReader fails closed when service-to-service auth is not configured:
+// neither consent nor the tenant's tier can be established, so nothing may be routed.
+// main injects this when the shared service secret or the user-management endpoint is
+// absent, so the NL-authoring path is cleanly unavailable rather than silently
+// permissive. (The operator smoke test resolves a named provider directly and reads no
+// tenant facts, so it still works.)
+type deniedTenantFactsReader struct{ reason string }
 
-// NewDeniedConsentChecker builds a fail-closed checker that denies all external
-// routing, carrying a reason for the surfaced error.
-func NewDeniedConsentChecker(reason string) ConsentChecker {
-	return deniedConsentChecker{reason: reason}
+// NewDeniedTenantFactsReader builds a fail-closed reader that denies every tenant
+// resolution, carrying a reason for the surfaced error.
+func NewDeniedTenantFactsReader(reason string) TenantFactsReader {
+	return deniedTenantFactsReader{reason: reason}
 }
 
-func (d deniedConsentChecker) ExternalEnabled(context.Context, string) (bool, error) {
-	return false, fmt.Errorf("external-routing consent cannot be verified: %s", d.reason)
+func (d deniedTenantFactsReader) Facts(context.Context, string) (TenantFacts, error) {
+	return TenantFacts{}, fmt.Errorf("tenant facts cannot be read: %s", d.reason)
 }

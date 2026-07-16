@@ -94,12 +94,33 @@ func TestAdminPlaneCarriesTheWholeProviderSurface(t *testing.T) {
 	schema := gql.MustParseSchema(AdminSchemaContent, &AdminResolver{})
 
 	assert.Equal(t,
-		[]string{"activeAiProvider", "aiProvider", "aiProviderKinds", "aiProviders"},
+		[]string{"aiProvider", "aiProviderKinds", "aiProviderTenantGrants",
+			"aiProviderTierGrants", "aiProviders"},
 		fieldNames(t, schema, "queryType"))
 	assert.Equal(t,
-		[]string{"clearActiveAiProvider", "createAiProvider", "deleteAiProvider",
-			"setActiveAiProvider", "testAiProvider", "updateAiProvider"},
+		[]string{"clearAiTierDefault", "createAiProvider", "deleteAiProvider",
+			"grantAiProviderToTenant", "grantAiProviderToTier", "revokeAiProviderFromTenant",
+			"revokeAiProviderFromTier", "setAiTierDefault", "testAiProvider",
+			"updateAiProvider"},
 		fieldNames(t, schema, "mutationType"))
+}
+
+// TestTheActivePointerIsGone pins the ADR-065 retirement at the surface. The
+// single-active-provider pointer modeled "one model, globally" and could express no
+// packaging at all; it is replaced by the per-tier menu. Naming the retired fields
+// explicitly is what stops one being reintroduced by a resolver copied from history —
+// which would silently give every tenant the same model regardless of what its tier
+// was sold.
+func TestTheActivePointerIsGone(t *testing.T) {
+	schema := gql.MustParseSchema(AdminSchemaContent, &AdminResolver{})
+	served := append(fieldNames(t, schema, "queryType"), fieldNames(t, schema, "mutationType")...)
+
+	for _, retired := range []string{"activeAiProvider", "setActiveAiProvider", "clearActiveAiProvider"} {
+		assert.NotContains(t, served, retired,
+			"the instance-wide active pointer is retired — entitlement is per-tier now (ADR-065)")
+	}
+	assert.NotContains(t, AdminSchemaContent, "active: Boolean!",
+		"a provider carries no active flag — being offered is a property of the GRANT, not of the provider")
 }
 
 // TestAdminResolversFailClosed confirms every admin resolver rejects an
@@ -123,7 +144,10 @@ func TestAdminResolversFailClosed(t *testing.T) {
 	_, err = r.AiProviderKinds(ctx)
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 
-	_, err = r.ActiveAiProvider(ctx)
+	_, err = r.AiProviderTierGrants(ctx)
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	_, err = r.AiProviderTenantGrants(ctx, struct{ Tenant string }{Tenant: "acme"})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 
 	_, err = r.CreateAiProvider(ctx, struct{ Request model.AIProviderCreateRequest }{})
@@ -140,10 +164,33 @@ func TestAdminResolversFailClosed(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	assert.False(t, ok)
 
-	_, err = r.SetActiveAiProvider(ctx, struct{ Token string }{Token: "x"})
+	// The grant surface is the packaging surface: every one of these decides which
+	// tenants may spend the operator's API key, so each must fail closed on its own.
+	ok, err = r.GrantAiProviderToTier(ctx, struct {
+		Tier        string
+		Provider    string
+		MakeDefault *bool
+	}{Tier: "gold", Provider: "p"})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	assert.False(t, ok)
 
-	ok, err = r.ClearActiveAiProvider(ctx)
+	ok, err = r.RevokeAiProviderFromTier(ctx, struct{ Tier, Provider string }{Tier: "gold", Provider: "p"})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	assert.False(t, ok)
+
+	ok, err = r.SetAiTierDefault(ctx, struct{ Tier, Provider string }{Tier: "gold", Provider: "p"})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	assert.False(t, ok)
+
+	ok, err = r.ClearAiTierDefault(ctx, struct{ Tier string }{Tier: "gold"})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	assert.False(t, ok)
+
+	ok, err = r.GrantAiProviderToTenant(ctx, struct{ Tenant, Provider string }{Tenant: "acme", Provider: "p"})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	assert.False(t, ok)
+
+	ok, err = r.RevokeAiProviderFromTenant(ctx, struct{ Tenant, Provider string }{Tenant: "acme", Provider: "p"})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	assert.False(t, ok)
 
@@ -172,7 +219,17 @@ func TestAdminResolversForbidWithoutAiAdmin(t *testing.T) {
 	_, err = r.CreateAiProvider(ctx, struct{ Request model.AIProviderCreateRequest }{})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 
-	_, err = r.SetActiveAiProvider(ctx, struct{ Token string }{Token: "x"})
+	// tenant:read is what an operator managing TIERS holds (tier CRUD is gated on it,
+	// ADR-065 slice 1). It must not carry over into deciding which models a tier is
+	// sold: the two surfaces sit either side of the API-key boundary.
+	_, err = r.GrantAiProviderToTier(ctx, struct {
+		Tier        string
+		Provider    string
+		MakeDefault *bool
+	}{Tier: "gold", Provider: "p"})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+
+	_, err = r.GrantAiProviderToTenant(ctx, struct{ Tenant, Provider string }{Tenant: "acme", Provider: "p"})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 
 	_, err = r.TestAiProvider(ctx, struct {
@@ -185,13 +242,17 @@ func TestAdminResolversForbidWithoutAiAdmin(t *testing.T) {
 // TestATenantAdminCannotAdministerProviders is the regression test for the ADR-065
 // origin story, stated at the surface it actually happened on.
 //
-// The seeded `tenant-admin` role is TENANT-scoped and grants "*", so before this
-// slice a member holding it — not just a superuser — passed every ai:admin check on
-// this service and could read the provider list, re-point the active model, or
-// replace an API key. Two independent things now stop that: the resolvers moved to
-// an endpoint that refuses access tokens, and ai:admin became system-tier so "*" on
-// an access token no longer satisfies it. This test pins the second, which is the
-// one that still holds if someone later re-mounts a field on the wrong plane.
+// The seeded `tenant-admin` role is TENANT-scoped and grants "*", so before slice 4 a
+// member holding it — not just a superuser — passed every ai:admin check on this
+// service and could read the provider list, re-point the model, or replace an API key.
+// Two independent things stop that: the resolvers moved to an endpoint that refuses
+// access tokens, and ai:admin became system-tier so "*" on an access token no longer
+// satisfies it. This test pins the second, which is the one that still holds if
+// someone later re-mounts a field on the wrong plane.
+//
+// The grant surface makes this sharper than it was: a tenant able to grant itself a
+// provider would be writing its own entitlements — buying the gold package by API
+// call — so the packaging mutations are checked here alongside the key-bearing ones.
 func TestATenantAdminCannotAdministerProviders(t *testing.T) {
 	r := &AdminResolver{}
 	tenantAdmin := auth.WithClaims(context.Background(), &auth.Claims{
@@ -208,8 +269,18 @@ func TestATenantAdminCannotAdministerProviders(t *testing.T) {
 	_, err = r.CreateAiProvider(tenantAdmin, struct{ Request model.AIProviderCreateRequest }{})
 	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not create a provider`)
 
-	_, err = r.SetActiveAiProvider(tenantAdmin, struct{ Token string }{Token: "x"})
-	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not re-point the active model`)
+	_, err = r.GrantAiProviderToTier(tenantAdmin, struct {
+		Tier        string
+		Provider    string
+		MakeDefault *bool
+	}{Tier: "gold", Provider: "x"})
+	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not decide what a tier is sold`)
+
+	_, err = r.GrantAiProviderToTenant(tenantAdmin, struct{ Tenant, Provider string }{Tenant: "acme", Provider: "x"})
+	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not grant its own tenant a model its tier never offered`)
+
+	_, err = r.AiProviderTierGrants(tenantAdmin)
+	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not read the instance's packaging matrix`)
 
 	_, err = r.TestAiProvider(tenantAdmin, struct {
 		Token   string
