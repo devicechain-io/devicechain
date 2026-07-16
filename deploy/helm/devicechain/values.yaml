@@ -441,15 +441,29 @@ functionalAreas:
     # outboundBurst: 200              # platform-default source egress burst
   mcp:
     # The MCP server (ADR-047): an OAuth 2.1 Resource Server fronting the per-area
-    # GraphQL over the Model Context Protocol. It is an OPT-IN area — not in any
-    # profile — enabled explicitly (enabledFunctionalAreas: [..., mcp]). It REQUIRES
-    # both URLs below (it fails startup without them): resourceUrl is this server's
-    # identifier that access tokens must be audience-bound to (RFC 8707/9728);
-    # issuerUrl is the OAuth AS (this instance's user-management) that issues them.
-    # Both are external https origins (http only for a localhost value).
+    # GraphQL over the Model Context Protocol. Held back from the `default` profile
+    # (an agent-facing API is a deliberate choice), shipped by `full`, or named
+    # explicitly in enabledFunctionalAreas.
+    #
+    # It REQUIRES both URLs below and fails startup without them — so when an ingress
+    # is configured they are DERIVED from it and you need set nothing: resourceUrl
+    # becomes <origin>/api/mcp and issuerUrl <origin>/api/user-management, where
+    # <origin> is the ingress scheme + host. Set either here to override.
+    #
+    # resourceUrl is this server's identifier that access tokens must be
+    # audience-bound to (RFC 8707/9728). issuerUrl is the OAuth AS (this instance's
+    # user-management) that issues them, and must equal user-management's
+    # auth.issuerUrl BYTE-FOR-BYTE (an RFC 8414 issuer is compared exactly) — which
+    # is why both derive from one origin rather than being spelled out twice. Both are
+    # external https origins (http only for a localhost value).
+    #
+    # NOTE the OAuth AS is OFF unless user-management's auth.issuerUrl is set: mcp
+    # still starts and serves its metadata (it fetches JWKS in the background), but no
+    # client can obtain a token until the AS is enabled — a separate, deliberate
+    # switch, since setting the issuer changes the `iss` claim of EVERY minted token.
     config: {}
-      # resourceUrl: https://<host>/mcp
-      # issuerUrl: https://<host>/user-management
+      # resourceUrl: https://<host>/api/mcp
+      # issuerUrl: https://<host>/api/user-management
   outbound-connectors:
     # The outbound-connectors service (ADR-060): a durable consumer of the
     # connector-dispatch stream that executes each fired httpCall/publish REACT action

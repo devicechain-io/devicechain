@@ -7,8 +7,8 @@
   "properties": {
     "profile": {
       "type": "string",
-      "enum": ["", "full", "telemetry", "ingest-only"],
-      "description": "A named profile, or empty to use enabledFunctionalAreas (or default to full)."
+      "enum": ["", "default", "full", "telemetry", "ingest-only"],
+      "description": "A named profile, or empty to use enabledFunctionalAreas (or fall back to the default profile). 'default' is the standard system; 'full' ships every area."
     },
     "enabledFunctionalAreas": {
       "type": "array",

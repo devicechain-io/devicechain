@@ -174,8 +174,16 @@ var catalog = map[FunctionalArea]Manifest{
 type Profile string
 
 const (
-	// ProfileFull enables every functional area except opt-in areas that require
-	// explicit configuration (mcp), which are enabled on demand via an explicit set.
+	// ProfileDefault is the standard instance: the whole device/telemetry/automation
+	// system, and what an unset selection resolves to. It omits the areas that reach
+	// OUTSIDE the instance — AI inference, outbound connectors, and MCP — because each
+	// carries a decision an operator should make deliberately (a paid provider key, an
+	// egress surface, an agent-facing API), not inherit from a default.
+	ProfileDefault Profile = "default"
+	// ProfileFull is literally everything this build ships, including the areas
+	// ProfileDefault holds back. Its contract is that it stays exhaustive: a new area
+	// belongs here unless there is a reason it cannot be, so "full" never again drifts
+	// into meaning "most of it".
 	ProfileFull Profile = "full"
 	// ProfileTelemetry is ingest → resolve → persist + live state, without the
 	// command path.
@@ -185,12 +193,18 @@ const (
 	ProfileIngestOnly Profile = "ingest-only"
 )
 
+// standardAreas is ProfileDefault's set, shared so ProfileFull is expressed as
+// "the standard system plus the rest" rather than a second hand-maintained list
+// that could silently disagree with it.
+var standardAreas = []FunctionalArea{
+	UserManagement, DeviceManagement, EventSources,
+	EventManagement, DeviceState, DashboardMgmt, CommandDelivery,
+	NotificationMgmt, EventProcessing,
+}
+
 var profiles = map[Profile][]FunctionalArea{
-	ProfileFull: {
-		UserManagement, DeviceManagement, EventSources,
-		EventManagement, DeviceState, DashboardMgmt, CommandDelivery,
-		NotificationMgmt, EventProcessing,
-	},
+	ProfileDefault: standardAreas,
+	ProfileFull:    append(append([]FunctionalArea{}, standardAreas...), AiInference, OutboundConn, Mcp),
 	ProfileTelemetry: {
 		UserManagement, DeviceManagement, EventSources, EventManagement, DeviceState, DashboardMgmt,
 	},

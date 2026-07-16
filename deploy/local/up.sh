@@ -30,7 +30,7 @@ OPERATOR_DIR="$ROOT/backend/k8s"
 CLUSTER=${CLUSTER:-devicechain}
 CONTEXT="kind-${CLUSTER}"
 INSTANCE=${INSTANCE:-devicechain}
-PROFILE=${PROFILE:-full}
+PROFILE=${PROFILE:-default}
 SKIP_PREFLIGHT=${SKIP_PREFLIGHT:-0}
 # Ingress host. Default to localhost so the browse URL below actually resolves on
 # kind (the chart default is devicechain.local, which would 404 a plain localhost
