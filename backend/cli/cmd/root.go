@@ -10,11 +10,35 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Git commit info passed via makefile
-var gitCommit string
+// Build stamps, injected via ldflags by the makefile — the sole build path.
+// Every one of these is best-effort: a `go build ./...` or `go run .` that
+// bypasses the makefile leaves them empty, so `dcctl version` must render
+// without them rather than print a confidently wrong answer.
+var (
+	// gitCommit is the full hash of HEAD at build time.
+	gitCommit string
 
-// Version is the release version, injected via ldflags at build time
-// (goreleaser / the release workflow). Defaults to "dev" for local builds.
+	// gitTreeState is "clean" or "dirty" — whether the working tree carried
+	// uncommitted changes at build time. A dirty build's commit hash does not
+	// identify its source, which is precisely when you most need to be told.
+	gitTreeState string
+
+	// buildDate is an RFC 3339 UTC timestamp of the build. `version` renders a
+	// relative age from it: the stale-binary failure mode is invisible to a
+	// version string alone, because a version can repeat across builds while an
+	// age cannot.
+	buildDate string
+)
+
+// Version is the build version, injected via ldflags at build time. For a
+// release build this is the plain VERSION-file value (e.g. "0.0.1"); for any
+// other build the makefile appends a "-dev.<utc-timestamp>" suffix, because the
+// VERSION file is a slow-moving constant — pre-GA it has read 0.0.1 for the
+// project's entire history, so without the suffix every dev build ever made
+// reports an identical version and no two can be told apart.
+//
+// This deliberately does NOT match bootstrap.DefaultImageVersion, which must
+// stay a resolvable published image tag. `version` prints both.
 var Version = "dev"
 
 // rootCmd represents the base command when called without any subcommands
