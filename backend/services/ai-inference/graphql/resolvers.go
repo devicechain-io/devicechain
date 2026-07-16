@@ -63,6 +63,22 @@ func (r *AIProviderResolver) HasSecret() (bool, error) {
 	return r.S.GetApi(r.C).Secrets.Exists(r.C, model.AIProviderSecretRef(r.M.ID))
 }
 
+// InferenceResultResolver resolves a single inference result: the candidate the
+// provider produced, the model that answered, and the provider token that served it.
+// The candidate is returned verbatim — it is validated by the deterministic compiler
+// downstream (event-processing rules.Compile), never trusted here.
+type InferenceResultResolver struct {
+	candidate string
+	model     string
+	provider  string
+}
+
+func (r *InferenceResultResolver) Candidate() string { return r.candidate }
+
+func (r *InferenceResultResolver) Model() string { return r.model }
+
+func (r *InferenceResultResolver) Provider() string { return r.provider }
+
 // SearchResultsPaginationResolver resolves pagination info on a result page.
 type SearchResultsPaginationResolver struct {
 	M rdb.SearchResultsPagination

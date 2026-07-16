@@ -51,6 +51,26 @@ func ProviderKinds() []string {
 	return out
 }
 
+// externalProviderKinds are the kinds that route an inference call OUTSIDE the
+// deployment boundary (a hosted third-party API). A tenant must have OPTED IN
+// (ADR-056 §6, the ai_external_enabled governance flag) before its authoring
+// requests may use one — the resolution cascade enforces this fail-closed. A future
+// self-hosted / in-boundary kind is deliberately NOT listed here, so it needs no
+// external-routing consent (its data never leaves the boundary); at GA every
+// registered kind is external.
+var externalProviderKinds = map[AIProviderKind]struct{}{
+	AIProviderKindAnthropic: {},
+}
+
+// IsExternalProviderKind reports whether s names a kind that routes outside the
+// deployment boundary and therefore requires per-tenant external-routing consent.
+// An unregistered kind returns false — it has no impl and is rejected earlier, so
+// this never gates on an unknown value.
+func IsExternalProviderKind(s string) bool {
+	_, ok := externalProviderKinds[AIProviderKind(s)]
+	return ok
+}
+
 // validateProviderKind rejects a kind outside the registered vocabulary.
 func validateProviderKind(k string) error {
 	if !ValidProviderKind(k) {

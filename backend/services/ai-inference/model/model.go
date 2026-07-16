@@ -50,7 +50,10 @@ type AIProvider struct {
 	Params datatypes.JSON
 	// Enabled gates whether this provider may be resolved and used. A disabled
 	// provider stays in the list (and can be the active one) but never serves a call.
-	Enabled bool `gorm:"not null;default:true"`
+	// No gorm `default`: a `default:true` would make gorm write the DB default for the
+	// zero value (false) on Create, so a provider could never be persisted DISABLED —
+	// the `enabled: Boolean!` GraphQL contract always sends an explicit value anyway.
+	Enabled bool `gorm:"not null"`
 	// Active marks THE one provider used by default for inference. At most one live
 	// row is active at a time (enforced by a partial unique index + a transactional
 	// SetActiveProvider); zero active is the valid "default of none" — with no active

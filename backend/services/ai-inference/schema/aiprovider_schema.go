@@ -27,8 +27,12 @@ type aiProviderV1 struct {
 	Endpoint string `gorm:"size:512"`
 	ModelID  string `gorm:"column:model;not null;size:128"`
 	Params   datatypes.JSON
-	Enabled  bool `gorm:"not null;default:true"`
-	Active   bool `gorm:"not null;default:false"`
+	// No gorm `default` on Enabled: a `default:true` would make gorm substitute the DB
+	// default for the Go zero value (false) on Create, so a provider could never be
+	// persisted DISABLED. The GraphQL contract is `enabled: Boolean!` (always explicit),
+	// so the create path always carries a value and no DB default is needed.
+	Enabled bool `gorm:"not null"`
+	Active  bool `gorm:"not null;default:false"`
 }
 
 func (aiProviderV1) TableName() string { return "ai_providers" }

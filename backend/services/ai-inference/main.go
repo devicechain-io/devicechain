@@ -6,15 +6,20 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-ai-inference/config"
 	"github.com/devicechain-io/dc-ai-inference/graphql"
+	"github.com/devicechain-io/dc-ai-inference/inference"
 	"github.com/devicechain-io/dc-ai-inference/model"
 	"github.com/devicechain-io/dc-ai-inference/schema"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	"github.com/devicechain-io/dc-microservice/svcclient"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -24,8 +29,9 @@ var (
 	RdbManager     *rdb.RdbManager
 	GraphQLManager *gqlcore.GraphQLManager
 
-	SecretStore secrets.SecretStore
-	Api         *model.Api
+	SecretStore       secrets.SecretStore
+	Api               *model.Api
+	InferenceResolver *inference.Resolver
 )
 
 func main() {
@@ -95,6 +101,36 @@ func buildSecretStore() (secrets.SecretStore, error) {
 	return secrets.NewStore(RdbManager.Database, kek), nil
 }
 
+// buildInferenceResolver constructs the fail-closed inference resolver over the
+// provider store, the configured per-call bounds, and the external-routing consent
+// checker. The consent checker reads the per-tenant ai_external_enabled flag from
+// user-management over a service token (least-privilege tenant:read, mirroring the
+// egress-limit fetcher). When the shared service secret or the user-management
+// endpoint is absent, a DENY-ALL checker is injected so the external NL-authoring path
+// is cleanly unavailable rather than silently permissive (the ai:admin operator smoke
+// test does not consult consent, so it still works). ADR-056.
+func buildInferenceResolver() *inference.Resolver {
+	bounds := inference.Bounds{
+		MaxOutputTokens: Configuration.MaxOutputTokens,
+		MaxPromptBytes:  Configuration.MaxPromptBytes,
+		Timeout:         time.Duration(Configuration.InferenceTimeoutMs) * time.Millisecond,
+	}
+
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	var consent inference.ConsentChecker
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("Service secret or user-management endpoint not configured — external-routing consent cannot be verified; the NL-authoring inference path is unavailable (fail-closed, ADR-056). The ai:admin provider smoke test is unaffected.")
+		consent = inference.NewDeniedConsentChecker("service-to-service auth is not configured")
+	} else {
+		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "ai-inference", []string{string(auth.TenantRead)})
+		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+		consent = inference.NewServiceConsentChecker(client, umURL)
+		log.Info().Str("userManagement", umURL).Msg("External-routing consent enforced from user-management tenantGovernance (fail-closed, ADR-056).")
+	}
+
+	return inference.NewResolver(Api, consent, bounds, nil)
+}
+
 // afterMicroserviceInitialized initializes components after the microservice is up.
 // The service is synchronous (no NATS): it persists the provider list and, from slice
 // 0c, serves inference requests over GraphQL.
@@ -125,11 +161,19 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// resolve it (and its secret store, for hasSecret) from the request context.
 	Api = model.NewApi(RdbManager, SecretStore)
 
+	// Build the fail-closed inference resolver: the active-provider read + the
+	// external-routing consent gate + key resolution + provider construction. It is the
+	// ONE place external routing is authorized (ADR-056). The root resolver holds it.
+	InferenceResolver = buildInferenceResolver()
+
 	providers := map[gqlcore.ContextKey]interface{}{
 		gqlcore.ContextRdbKey: RdbManager,
 		gqlcore.ContextApiKey: Api,
 	}
-	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{Area: string(Microservice.FunctionalArea)})
+	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{
+		Area:      string(Microservice.FunctionalArea),
+		Inference: InferenceResolver,
+	})
 	Microservice.StartInstanceAuthGate(ctx)
 	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(),
 		parsed, providers, Microservice.Readiness)
