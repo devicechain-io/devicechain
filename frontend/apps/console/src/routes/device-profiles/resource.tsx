@@ -223,7 +223,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
         <DefinitionsPanel
           profileToken={p.token}
           singular="detection rule"
-          description="The DETECT rules that raise alarms and send commands off this profile's telemetry (ADR-057). Author linearly in the Form, or visually on the Canvas (ADR-053) — both compile to the same rule."
+          description="Rules that raise alarms and send commands off this profile's telemetry. Author them step by step in the Form, or visually on the Canvas — both compile to the same rule."
           load={listDetectionRules}
           remove={deleteDetectionRule}
           removeConfirm={(d) => `Delete detection rule “${d.token}”?`}
