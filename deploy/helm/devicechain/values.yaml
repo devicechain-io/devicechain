@@ -458,3 +458,31 @@ functionalAreas:
       # outboundMessagesPerSecond: 100  # platform-default egress rate ceiling (never unlimited; below ingest)
       # outboundBurst: 200              # platform-default egress burst
       # egressWaitBudgetMs: 5000        # smoothing wait for a token before a shed (bounded < AckWait − max send)
+  ai-inference:
+    # The ai-inference service (ADR-056): a synchronous, fail-closed proxy to an
+    # external inference provider (Claude at GA) that powers NL→rule authoring — the
+    # "third front door" to the CEL rule compiler. It returns a candidate rule STRING
+    # only; it holds NO ambient authority over tenant data and never sits in the
+    # replay-correct DETECT/REACT path ("AI proposes, the CEL compiler disposes").
+    #
+    # OPT-IN area — not in any profile — enabled explicitly (enabledFunctionalAreas:
+    # [..., ai-inference]). It has NO hard dependency: when a peer it would consult is
+    # absent it fails the affected path CLOSED rather than refusing to start.
+    #
+    # It keeps its own envelope-encrypted secret store (ADR-059) for provider API keys,
+    # so the instance root key (infrastructure.secrets.rootKey above) MUST be configured
+    # or the service fails startup closed. The ACTIVE provider and its API key are runtime
+    # state managed in the console (AI Providers screen) / GraphQL — NOT Helm config.
+    #
+    # External routing is PER-TENANT opt-in and fail-closed (ADR-056 §6): the service
+    # reads each tenant's ai_external_enabled consent flag from user-management over a
+    # least-privilege tenant:read service token, so it needs infrastructure.serviceAuth.secret
+    # AND infrastructure.userManagement configured (userManagement is defaulted above;
+    # serviceAuth.secret defaults empty and is minted by the bring-up / dcctl). Absent either, the
+    # NL-authoring inference path is cleanly UNAVAILABLE (a DENY-ALL consent checker) rather
+    # than silently permissive; the ai:admin provider smoke test does not consult consent and
+    # still works.
+    config: {}
+      # inferenceTimeoutMs: 60000   # per-call ceiling on one outbound provider call (max 120000)
+      # maxPromptBytes: 131072      # cap on an inbound prompt (+ its schema context); 128 KiB default
+      # maxOutputTokens: 2048       # cap on the provider's generated output for one call (a rule candidate is small)
