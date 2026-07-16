@@ -138,6 +138,19 @@ func TestBadEndpointRejected(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidEndpoint)
 }
 
+// TestEndpointQueryRejected rejects an endpoint carrying a query or fragment — the
+// provider impl splices its API path onto this base, so a query/fragment would build a
+// broken URL.
+func TestEndpointQueryRejected(t *testing.T) {
+	api := newTestApi(t)
+	for _, ep := range []string{"https://host/base?x=1", "https://host/base#frag"} {
+		req := claudeReq("x", nil)
+		req.Endpoint = strp(ep)
+		_, err := api.CreateAIProvider(context.Background(), req)
+		assert.ErrorIs(t, err, ErrInvalidEndpoint, ep)
+	}
+}
+
 // TestActiveProviderInvariant pins "default of none" + at-most-one-active: promoting a
 // second provider clears the first, and clearing returns to none.
 func TestActiveProviderInvariant(t *testing.T) {

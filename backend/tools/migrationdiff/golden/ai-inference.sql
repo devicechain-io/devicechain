@@ -53,7 +53,7 @@ CREATE TABLE "ai-inference".ai_providers (
  endpoint character varying(512),
  model character varying(128) NOT NULL,
  params jsonb,
- enabled boolean DEFAULT true NOT NULL,
+ enabled boolean NOT NULL,
  active boolean DEFAULT false NOT NULL
 );
 CREATE TABLE "ai-inference".audit_events (

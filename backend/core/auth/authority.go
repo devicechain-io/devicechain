@@ -107,6 +107,17 @@ const (
 	// provider list + its keys are an operator concern, not a tenant's (a tenant only
 	// CONSENTS to external routing, gated separately by the ADR-023 governance flag).
 	AIAdmin Authority = "ai:admin"
+
+	// AIInfer gates the inference CALL itself (ai-inference inferRuleCandidate,
+	// ADR-056). It is deliberately separate from — and far narrower than — ai:admin:
+	// its sole holder is the event-processing service token that carries a human's
+	// NL→rule authoring prompt to the active provider (Slice 1). The inference service
+	// holds NO ambient authority over tenant data with it (ADR-047 confused-deputy red
+	// line): the call returns only a candidate string, which flows back through the
+	// deterministic rules.Compile firewall carrying the human's own token. A holder
+	// can run a prompt through the active provider; it cannot read, list, or change the
+	// provider config (that is ai:admin) or touch any tenant resource.
+	AIInfer Authority = "ai:infer"
 )
 
 // vocabulary is the set of every known authority. A Role may only grant
@@ -142,6 +153,7 @@ var vocabulary = map[Authority]struct{}{
 	ConnectorWrite:    {},
 	BrandingWrite:     {},
 	AIAdmin:           {},
+	AIInfer:           {},
 }
 
 // ValidAuthority reports whether s names a known authority (including the

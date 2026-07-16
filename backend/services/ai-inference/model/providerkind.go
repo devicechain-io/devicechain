@@ -51,6 +51,28 @@ func ProviderKinds() []string {
 	return out
 }
 
+// internalProviderKinds are the kinds that route an inference call INSIDE the
+// deployment boundary (a self-hosted / in-cluster model): tenant data never leaves,
+// so no external-routing consent is required. This is an explicit ALLOWLIST, and
+// IsExternalProviderKind is its complement — a kind is treated as EXTERNAL (consent
+// required, ADR-056 §6) unless it is affirmatively registered here as in-boundary.
+//
+// The direction is deliberate and fail-closed: a FUTURE PR that adds an external
+// provider kind to the resolver's build() switch but forgets to touch this map still
+// requires consent — it does NOT silently skip the opt-in gate (the cross-file seam
+// bug an external denylist would invite; cf. ADR-062 S5). The cost of the inversion is
+// only that a genuinely in-boundary kind must be added here to skip consent, an
+// affirmative, reviewable act. Empty at GA: every registered kind is external.
+var internalProviderKinds = map[AIProviderKind]struct{}{}
+
+// IsExternalProviderKind reports whether s routes outside the deployment boundary and
+// therefore requires per-tenant external-routing consent. Fail-closed: any kind not
+// explicitly registered as in-boundary (including an unknown value) is external.
+func IsExternalProviderKind(s string) bool {
+	_, internal := internalProviderKinds[AIProviderKind(s)]
+	return !internal
+}
+
 // validateProviderKind rejects a kind outside the registered vocabulary.
 func validateProviderKind(k string) error {
 	if !ValidProviderKind(k) {

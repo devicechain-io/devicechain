@@ -82,6 +82,25 @@ type AiProviderSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# An inference request: the user prompt plus an optional system prompt. The
+# output-token cap, the provider endpoint, and the call timeout are server-side (the
+# fail-closed service config + the resolved provider row), never caller-supplied.
+input InferenceRequest {
+    # The user prompt (required).
+    prompt: String!
+    # An optional system prompt (instructions/persona).
+    system: String
+}
+
+# The result of an inference call: the candidate the provider produced (returned
+# verbatim — validated downstream by the deterministic rule compiler, not trusted
+# here), the model that answered, and the provider token that served it.
+type InferenceResult {
+    candidate: String!
+    model: String!
+    provider: String!
+}
+
 type Query {
     # Non-sensitive service identity (the deployed functional area).
     aiInferenceInfo: ServiceInfo!
@@ -109,6 +128,17 @@ type Mutation {
     setActiveAiProvider(token: String!): AiProvider!
     # Clear the active provider (return to "default of none"). Returns true always.
     clearActiveAiProvider: Boolean!
+    # Run a prompt through THE ACTIVE provider for a tenant's NL→rule authoring request
+    # (ADR-056 Zone 1). Gated by the least-privilege ai:infer authority; the tenant
+    # comes from the caller's token. Fails closed when no active provider is configured,
+    # the provider is disabled, the tenant has not opted in to external routing, or no
+    # API key is set. The candidate is validated downstream by the rule compiler.
+    inferRuleCandidate(request: InferenceRequest!): InferenceResult!
+    # Smoke-test a SPECIFIC provider (by token) with an operator-supplied prompt — the
+    # ai:admin affordance to validate a provider's endpoint + key before promoting it.
+    # Unlike inferRuleCandidate it applies no tenant-consent gate (operator config, an
+    # operator prompt), but the provider's key must still resolve.
+    testAiProvider(token: String!, request: InferenceRequest!): InferenceResult!
 }
 
 schema {

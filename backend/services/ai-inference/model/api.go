@@ -96,6 +96,12 @@ func endpointValue(raw *string) (string, error) {
 	if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return "", ErrInvalidEndpoint
 	}
+	// Reject a query or fragment: the endpoint is a BASE URL onto which the provider
+	// impl splices its API path (e.g. /v1/messages), so a query/fragment would produce a
+	// silently broken URL. Credentials belong in the ADR-059 secret handle, never here.
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", ErrInvalidEndpoint
+	}
 	return v, nil
 }
 
