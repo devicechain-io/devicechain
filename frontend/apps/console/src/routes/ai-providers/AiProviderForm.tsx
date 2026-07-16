@@ -71,6 +71,7 @@ export function providerStateFrom(p: AiProvider): ProviderEditorState {
 // provider can be created key-less and filled in later (it just can't serve until one
 // is set), so the only hard checks are model + endpoint/params shape.
 export function validateProvider(state: ProviderEditorState): string | null {
+  if (state.kind.trim() === '') return 'Kind is required.';
   if (state.model.trim() === '') return 'Model is required.';
   if (state.endpoint.trim() !== '' && !/^https?:\/\//i.test(state.endpoint.trim())) {
     return 'Endpoint must be an http(s) URL, or blank for the kind default.';

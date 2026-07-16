@@ -8,7 +8,7 @@
 // it, so only a superuser acting in a tenant sees it (the service still fails closed
 // server-side regardless).
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Star, Trash2 } from 'lucide-react';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -259,6 +259,16 @@ function AiProviderCreateForm({ kinds, onDone }: { kinds: string[]; onDone: (tok
   const [editor, setEditor] = useState<ProviderEditorState>(() => newProviderState(kinds));
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // The kind vocabulary is fetched async by the parent, so the form can mount (the
+  // drawer opened) before it lands, leaving the controlled <select> stuck on an empty
+  // kind. Adopt the first kind once it arrives — only while still empty, so a user's
+  // explicit pick is never overwritten.
+  useEffect(() => {
+    if (editor.kind === '' && kinds.length > 0) {
+      setEditor((e) => (e.kind === '' ? { ...e, kind: kinds[0] } : e));
+    }
+  }, [kinds, editor.kind]);
 
   const submit = async () => {
     setFormError(null);
