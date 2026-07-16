@@ -281,10 +281,16 @@ func (s *Store) CreateTenant(ctx context.Context, t *Tenant) error {
 // branding_logo (and GC'd the old blob), so a stale full-row write would point it at
 // a just-deleted object and orphan the new one. Select preserves the JSON serializer
 // on Config and writes a nil governance pointer as NULL (clear-to-inherit).
+//
+// AiExternalEnabled (ADR-056 §6) is in the Select list so an operator can both
+// grant AND revoke consent on update: an explicit Select writes the column even at
+// its zero value (false), and a nil pointer writes NULL — so a revoked consent
+// actually clears rather than leaving a stale `true` that would keep routing the
+// tenant's data to an external model (a fail-OPEN bug this list guards against).
 func (s *Store) UpdateTenant(ctx context.Context, t *Tenant) error {
 	return s.sys(ctx).Model(t).
 		Select("Name", "Config", "IngestMessagesPerSecond", "IngestBurst",
-			"OutboundMessagesPerSecond", "OutboundBurst").
+			"OutboundMessagesPerSecond", "OutboundBurst", "AiExternalEnabled").
 		Updates(t).Error
 }
 
