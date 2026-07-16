@@ -4,6 +4,7 @@
 package iam
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -82,14 +83,65 @@ func ValidateTierConfig(cfg map[string]any) error {
 	return nil
 }
 
-// validatePositiveRate accepts a finite positive number. JSON decodes every number
-// to float64, so that is the only numeric shape to expect here.
+// toFloat coerces any numeric config value to a float64.
+//
+// It judges a NUMBER, not a float64, and both the validators and the readers below
+// go through it so the two can never disagree about what counts as one. That
+// matters because the same key arrives as different Go types depending on the door:
+// the GraphQL write path and the gorm json round-trip both decode to float64
+// (encoding/json's default), but a seed is whatever literal its author typed — and
+// `"ingestBurst": 4000` is an int. Insisting on float64 would fail a migration at
+// boot over a type nobody thinks about while reading a table of numbers.
+//
+// json.Number is accepted for the same reason: it costs nothing here, and it is what
+// a decoder configured with UseNumber would hand us.
+func toFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int8:
+		return float64(n), true
+	case int16:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case uint:
+		return float64(n), true
+	case uint8:
+		return float64(n), true
+	case uint16:
+		return float64(n), true
+	case uint32:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+// validatePositiveRate accepts a finite positive number. A non-positive rate would
+// hand core.TenantRateLimiter a bucket that admits NOTHING — an outage for every
+// tenant at the tier — so inherit-the-platform-default is the only safe reading of
+// one, and it must be spelled by omitting the key rather than zeroing it.
 func validatePositiveRate(v any) error {
-	f, ok := v.(float64)
+	f, ok := toFloat(v)
 	if !ok {
 		return fmt.Errorf("must be a number (got %T)", v)
 	}
-	if f <= 0 || math.IsInf(f, 0) || math.IsNaN(f) {
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return fmt.Errorf("must be a finite number (got %v)", f)
+	}
+	if f <= 0 {
 		return fmt.Errorf("must be positive (got %v); omit it to inherit the platform default", f)
 	}
 	return nil
@@ -98,9 +150,12 @@ func validatePositiveRate(v any) error {
 // validatePositiveBurst accepts a positive whole number. A fractional burst is not
 // an integer count and must not silently truncate into a live ceiling.
 func validatePositiveBurst(v any) error {
-	f, ok := v.(float64)
+	f, ok := toFloat(v)
 	if !ok {
 		return fmt.Errorf("must be a number (got %T)", v)
+	}
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return fmt.Errorf("must be a finite number (got %v)", f)
 	}
 	if f != math.Trunc(f) {
 		return fmt.Errorf("must be a whole number (got %v)", f)
@@ -135,6 +190,11 @@ func (t *TenantTier) BurstFor(dim governance.Dimension) *int {
 
 // positiveNumber reads a numeric config key, returning nil unless it is present and
 // passes validate.
+//
+// It coerces through the same toFloat the validators use, deliberately: a validator
+// that accepts a type the reader then drops would be worse than one that rejects it
+// outright — the write would succeed, the setting would be visible in the API, and
+// the tenant would silently keep the platform default.
 func (t *TenantTier) positiveNumber(key string, validate func(any) error) *float64 {
 	if t == nil || t.Config == nil {
 		return nil
@@ -146,7 +206,7 @@ func (t *TenantTier) positiveNumber(key string, validate func(any) error) *float
 	if err := validate(v); err != nil {
 		return nil
 	}
-	f, ok := v.(float64)
+	f, ok := toFloat(v)
 	if !ok {
 		return nil
 	}
