@@ -161,10 +161,11 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
           />
         </FormField>
       </div>
+      {/* The per-tenant external-model consent gate (ADR-056 §6). */}
       <FormField
         label="External AI routing"
         htmlFor="t-ai-external"
-        description="Consent to route this tenant's NL→rule authoring to an external AI model (ADR-056). Off by default; the feature is unavailable for the tenant until this is granted."
+        description="Consent to send this tenant's rule descriptions to an external AI model for drafting. Off by default; rule drafting stays unavailable for the tenant until this is granted."
       >
         <label className="flex items-center gap-2 text-sm">
           <input

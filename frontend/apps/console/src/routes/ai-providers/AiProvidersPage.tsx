@@ -131,7 +131,7 @@ export default function AiProvidersPage() {
   return (
     <PageShell
       title="AI Providers"
-      description="Inference providers for NL→rule authoring (ADR-056). At most one is active — the model that answers authoring requests."
+      description="AI models available for drafting rules from a description. At most one is active — the model that answers drafting requests."
       banner="dashboard"
       action={
         <Button onClick={() => setCreating(true)}>
