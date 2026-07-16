@@ -24,6 +24,7 @@ import { Badge } from '@/components/ui/badge';
 import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Textarea, BackLink, errMessage } from '@/routes/common';
+import { AI_PROVIDERS_BASE } from './paths';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
@@ -45,7 +46,7 @@ import {
 
 export default function AiProviderDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
-  const token = rawToken ?? '';
+  const token = decodeURIComponent(rawToken ?? '');
   const { data, loading, error } = useQuery(() => getAiProvider(token), [token]);
   const { data: kinds } = useQuery(listAiProviderKinds, []);
   if (loading) {
@@ -218,7 +219,7 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
   return (
     <PageShell
       title={loaded.name || loaded.token}
-      description={<BackLink to="/ai-providers">All providers</BackLink>}
+      description={<BackLink to={AI_PROVIDERS_BASE}>All providers</BackLink>}
       banner="dashboard"
       action={
         <Button variant={active ? 'outline' : 'default'} onClick={toggleActive} loading={activeBusy} disabled={activeBusy}>

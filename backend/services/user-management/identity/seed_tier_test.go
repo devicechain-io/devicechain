@@ -24,14 +24,14 @@ func TestViewerAuthoritiesAreAllTenantTier(t *testing.T) {
 		t.Fatal("precondition: the viewer baseline is empty")
 	}
 	for _, a := range viewerAuthorities {
-		tier, known := auth.TierOf(auth.Authority(a))
+		tiers, known := auth.TiersOf(auth.Authority(a))
 		if !known {
 			t.Errorf("viewer grants %q, which declares no tier", a)
 			continue
 		}
-		if tier != auth.TierTenant {
-			t.Errorf("viewer grants %q, which is %s-tier — the read-only baseline every "+
-				"tenant member receives must be tenant-tier only", a, tier)
+		if !tiers.Has(auth.TierTenant) {
+			t.Errorf("viewer grants %q, which is %v — the read-only baseline every "+
+				"tenant member receives must be satisfiable from a tenant access token", a, tiers)
 		}
 	}
 }

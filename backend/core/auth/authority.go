@@ -47,6 +47,35 @@ const (
 	TierTenant Tier = "tenant"
 )
 
+// Tiers is the set of tiers an authority belongs to. It is a SET rather than a
+// single tier because a capability can honestly exist on both planes: audit:read is
+// the standing example — a tenant reads its own journal on device-management's data
+// plane, and an operator reads the instance journal on user-management's admin
+// plane. That is one capability with two scopes, not two capabilities.
+//
+// Dual-tier is deliberately rare, and a test names the ones that are, so adding
+// another is a decision rather than a slip. It is also the weakest entry in the
+// model: an authority listing both tiers is satisfiable from a tenant access token,
+// so it must never gate something instance-global. When in doubt, single-tier.
+type Tiers []Tier
+
+// Has reports whether the set contains a tier.
+func (t Tiers) Has(x Tier) bool {
+	for _, v := range t {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+// system and tenant name the two common cases so the vocabulary below reads as a
+// declaration rather than as slice literals.
+var (
+	system = Tiers{TierSystem}
+	tenant = Tiers{TierTenant}
+)
+
 const (
 	// AuthorityAll is the super-authority: a subject holding it passes every
 	// authorization check AT ITS OWN TIER. The bootstrap superuser's system role
@@ -166,51 +195,59 @@ const (
 // AuthorityAll is deliberately absent: "*" is the super-authority and belongs to
 // whichever tier its token carries it on, so it has no tier of its own. Every
 // lookup below treats it as a special case rather than giving it a wrong answer.
-var vocabulary = map[Authority]Tier{
+var vocabulary = map[Authority]Tiers{
 	// Instance-global operator surfaces. Each is served on an admin plane behind an
 	// identity token, or read between services over a service token — never by a
 	// tenant acting in its own tenant.
-	UserRead:    TierSystem,
-	UserWrite:   TierSystem,
-	RoleRead:    TierSystem,
-	RoleWrite:   TierSystem,
-	TenantRead:  TierSystem,
-	TenantWrite: TierSystem,
+	UserRead:    system,
+	UserWrite:   system,
+	RoleRead:    system,
+	RoleWrite:   system,
+	TenantRead:  system,
+	TenantWrite: system,
 	// The AI provider list is instance config an operator owns — the ADR-065
 	// correction. A tenant only CONSENTS to external routing (a separate flag).
-	AIAdmin:       TierSystem,
-	SettingsRead:  TierSystem,
-	SettingsWrite: TierSystem,
-	ClientRead:    TierSystem,
-	ClientWrite:   TierSystem,
+	AIAdmin:       system,
+	SettingsRead:  system,
+	SettingsWrite: system,
+	ClientRead:    system,
+	ClientWrite:   system,
 
 	// A tenant's own resources.
-	DeviceRead:        TierTenant,
-	DeviceWrite:       TierTenant,
-	EventRead:         TierTenant,
-	StateRead:         TierTenant,
-	AlarmRead:         TierTenant,
-	AlarmWrite:        TierTenant,
-	CommandRead:       TierTenant,
-	CommandWrite:      TierTenant,
-	DashboardRead:     TierTenant,
-	DashboardWrite:    TierTenant,
-	NotificationRead:  TierTenant,
-	NotificationWrite: TierTenant,
-	ConnectorRead:     TierTenant,
-	ConnectorWrite:    TierTenant,
-	BrandingWrite:     TierTenant,
-	// audit:read is tenant-tier because a tenant reads its OWN journal on
-	// device-management's data plane. user-management's admin plane also gates on
-	// it, which is fine and not a contradiction: the tier restricts what a tenant
-	// ACCESS token may satisfy, so an operator's identity token holding a
-	// tenant-tier authority is unaffected.
-	AuditRead: TierTenant,
+	DeviceRead:        tenant,
+	DeviceWrite:       tenant,
+	EventRead:         tenant,
+	StateRead:         tenant,
+	AlarmRead:         tenant,
+	AlarmWrite:        tenant,
+	CommandRead:       tenant,
+	CommandWrite:      tenant,
+	DashboardRead:     tenant,
+	DashboardWrite:    tenant,
+	NotificationRead:  tenant,
+	NotificationWrite: tenant,
+	ConnectorRead:     tenant,
+	ConnectorWrite:    tenant,
+	BrandingWrite:     tenant,
+	// audit:read is the one DUAL-tier authority, and it has to be: two different
+	// resolvers on two different planes gate on it. A tenant reads its own journal on
+	// device-management's data plane (tenant-tier), and an operator reads the instance
+	// journal on user-management's admin plane (system-tier, since an identity token
+	// carries only SYSTEM-role authorities).
+	//
+	// Making it tenant-only would not have been a leak — the check side works either
+	// way, because the tier bounds what an ACCESS token may satisfy and an identity
+	// token is exempt. It would have been a silent LOSS: the GRANT side would refuse
+	// audit:read on a system role, so "an operator who may read the instance audit
+	// journal" becomes unexpressible, leaving only the superuser's "*", and any
+	// existing system role holding it becomes uneditable (UpdateRole revalidates the
+	// whole replacement set, so even a rename would fail).
+	AuditRead: {TierSystem, TierTenant},
 	// ai:infer rides a service token carrying one tenant's authoring prompt. It is
 	// deliberately NOT system-tier despite being held only by a service: it acts
 	// within a tenant, and the inference service holds no ambient authority over
 	// tenant data with it (ADR-047 confused-deputy red line).
-	AIInfer: TierTenant,
+	AIInfer: tenant,
 }
 
 // ValidAuthority reports whether s names a known authority (including the
@@ -223,12 +260,12 @@ func ValidAuthority(s string) bool {
 	return ok
 }
 
-// TierOf returns the tier an authority belongs to. It reports ok=false for the
-// super-authority "*" (which has no tier of its own — it means "everything at the
-// bearer's tier") and for an unknown authority, so a caller must decide what an
+// TiersOf returns the set of tiers an authority belongs to. It reports ok=false for
+// the super-authority "*" (which has no tier of its own — it means "everything at
+// the bearer's tier") and for an unknown authority, so a caller must decide what an
 // untiered authority means rather than receiving a plausible default. Callers that
 // gate on the answer must fail closed when ok is false.
-func TierOf(a Authority) (Tier, bool) {
+func TiersOf(a Authority) (Tiers, bool) {
 	t, ok := vocabulary[a]
 	return t, ok
 }
@@ -255,8 +292,8 @@ func Authorities() []string {
 func AuthoritiesForScope(tier Tier) []string {
 	out := make([]string, 0, len(vocabulary)+1)
 	out = append(out, string(AuthorityAll))
-	for a, t := range vocabulary {
-		if t == tier {
+	for a, tiers := range vocabulary {
+		if tiers.Has(tier) {
 			out = append(out, string(a))
 		}
 	}

@@ -520,15 +520,17 @@ func validateAuthorities(scope iam.RoleScope, authorities []string) error {
 		if auth.Authority(a) == auth.AuthorityAll {
 			continue
 		}
-		tier, known := auth.TierOf(auth.Authority(a))
+		tiers, known := auth.TiersOf(auth.Authority(a))
 		if !known {
 			// Unreachable while ValidAuthority and the tier map share one source, but
 			// fail closed rather than granting an authority whose tier is unknown.
 			return fmt.Errorf("authority %q declares no tier", a)
 		}
-		if tier != want {
+		// A dual-tier authority (audit:read) is grantable at either scope — the same
+		// capability genuinely exists on both planes.
+		if !tiers.Has(want) {
 			return fmt.Errorf("authority %q is %s-tier and cannot be granted to a %s-scoped role; %s-scoped roles may grant: %s",
-				a, tier, scope, scope, strings.Join(auth.AuthoritiesForScope(want), ", "))
+				a, tiers[0], scope, scope, strings.Join(auth.AuthoritiesForScope(want), ", "))
 		}
 	}
 	return nil

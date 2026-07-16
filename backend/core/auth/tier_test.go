@@ -105,7 +105,7 @@ func TestAuthorizeRejectsSystemTierOnAccessTokenEvenWhenNamed(t *testing.T) {
 // operator capability to every tenant-admin holding "*".
 func TestAuthorizeFailsClosedOnAnUntieredAuthority(t *testing.T) {
 	const ghost Authority = "ghost:write"
-	if _, known := TierOf(ghost); known {
+	if _, known := TiersOf(ghost); known {
 		t.Fatal("precondition: ghost:write must not be in the vocabulary")
 	}
 	if err := Authorize(ctxWith(tenantAccessClaims(string(AuthorityAll))), ghost); !errors.Is(err, ErrForbidden) {
@@ -143,13 +143,18 @@ func TestEveryAuthorityDeclaresATier(t *testing.T) {
 		AIAdmin, AIInfer,
 	}
 	for _, a := range expected {
-		tier, known := TierOf(a)
+		tiers, known := TiersOf(a)
 		if !known {
 			t.Errorf("authority %q declares no tier", a)
 			continue
 		}
-		if tier != TierSystem && tier != TierTenant {
-			t.Errorf("authority %q declares an unknown tier %q", a, tier)
+		if len(tiers) == 0 {
+			t.Errorf("authority %q declares an empty tier set — it would be unreachable", a)
+		}
+		for _, tier := range tiers {
+			if tier != TierSystem && tier != TierTenant {
+				t.Errorf("authority %q declares an unknown tier %q", a, tier)
+			}
 		}
 	}
 	if len(expected) != len(vocabulary) {
@@ -157,7 +162,7 @@ func TestEveryAuthorityDeclaresATier(t *testing.T) {
 			len(vocabulary), len(expected))
 	}
 	// "*" is deliberately untiered: it means "everything at the bearer's tier".
-	if _, known := TierOf(AuthorityAll); known {
+	if _, known := TiersOf(AuthorityAll); known {
 		t.Error(`"*" must not declare a tier of its own`)
 	}
 	if !ValidAuthority(string(AuthorityAll)) {
@@ -174,39 +179,94 @@ func TestTheOperatorSurfacesAreSystemTier(t *testing.T) {
 		AIAdmin, TenantRead, TenantWrite, UserRead, UserWrite,
 		RoleRead, RoleWrite, SettingsRead, SettingsWrite, ClientRead, ClientWrite,
 	} {
-		if tier, _ := TierOf(a); tier != TierSystem {
-			t.Errorf("authority %q must be system-tier, got %q", a, tier)
+		tiers, _ := TiersOf(a)
+		if !tiers.Has(TierSystem) {
+			t.Errorf("authority %q must be system-tier, got %v", a, tiers)
 		}
+		// An operator surface must be system-tier ONLY. Listing tenant as well would
+		// make it satisfiable from a tenant access token, quietly undoing the whole
+		// partition for that authority.
+		if tiers.Has(TierTenant) {
+			t.Errorf("authority %q is an instance-global operator surface and must not "+
+				"also be tenant-tier — that would let a tenant access token satisfy it", a)
+		}
+	}
+}
+
+// TestAuditReadIsTheOnlyDualTierAuthority pins the model's one deliberate exception,
+// and pins that it stays the only one.
+//
+// audit:read must be BOTH: device-management's data plane gates a tenant reading its
+// OWN journal on it, and user-management's ADMIN plane gates an operator reading the
+// INSTANCE journal on it. An identity token carries only system-role authorities, so
+// a tenant-only audit:read would leave "an operator who may read the audit journal"
+// unexpressible — the grant side refuses it on a system role — and any existing
+// system role holding it uneditable, since UpdateRole revalidates the whole
+// replacement set.
+//
+// Dual-tier is the weakest thing in this model (it is satisfiable from an access
+// token), so this test names the whole set rather than just asserting audit:read is
+// in it: a second dual-tier authority must be an argued decision, not a slip.
+func TestAuditReadIsTheOnlyDualTierAuthority(t *testing.T) {
+	var dual []Authority
+	for a, tiers := range vocabulary {
+		if tiers.Has(TierSystem) && tiers.Has(TierTenant) {
+			dual = append(dual, a)
+		}
+	}
+	if len(dual) != 1 || dual[0] != AuditRead {
+		t.Fatalf("audit:read must be the only dual-tier authority; got %v. A new one is a "+
+			"real decision: a dual-tier authority is satisfiable from a tenant access token, "+
+			"so it must never gate anything instance-global.", dual)
+	}
+}
+
+// TestAuditReadWorksOnBothPlanes states the consequence directly, at the check.
+func TestAuditReadWorksOnBothPlanes(t *testing.T) {
+	// A tenant member reads its own journal (device-management's data plane).
+	if err := Authorize(ctxWith(tenantAccessClaims(string(AuditRead))), AuditRead); err != nil {
+		t.Fatalf("a tenant must be able to read its own audit journal: %v", err)
+	}
+	// An operator reads the instance journal (user-management's admin plane).
+	if err := Authorize(ctxWith(identityTierClaims(string(AuditRead))), AuditRead); err != nil {
+		t.Fatalf("an operator must be able to read the instance audit journal: %v", err)
 	}
 }
 
 // TestAuthoritiesForScopeOffersOnlyGrantableAuthorities backs the role editor: the
 // checklist it renders must not offer an authority the write path will reject.
 func TestAuthoritiesForScopeOffersOnlyGrantableAuthorities(t *testing.T) {
-	tenant := AuthoritiesForScope(TierTenant)
-	if contains(tenant, string(AIAdmin)) {
+	tenantList := AuthoritiesForScope(TierTenant)
+	if contains(tenantList, string(AIAdmin)) {
 		t.Error("the tenant-scope checklist must not offer ai:admin")
 	}
-	if !contains(tenant, string(DeviceWrite)) {
+	if !contains(tenantList, string(DeviceWrite)) {
 		t.Error("the tenant-scope checklist must offer device:write")
 	}
-	system := AuthoritiesForScope(TierSystem)
-	if !contains(system, string(AIAdmin)) {
+	systemList := AuthoritiesForScope(TierSystem)
+	if !contains(systemList, string(AIAdmin)) {
 		t.Error("the system-scope checklist must offer ai:admin")
 	}
-	if contains(system, string(DeviceWrite)) {
+	if contains(systemList, string(DeviceWrite)) {
 		t.Error("the system-scope checklist must not offer device:write")
 	}
 	// "*" is valid at either tier — it expands to whatever the bearer's tier allows.
-	for _, list := range [][]string{tenant, system} {
+	for _, list := range [][]string{tenantList, systemList} {
 		if !contains(list, string(AuthorityAll)) {
 			t.Error(`every scope's checklist must offer "*"`)
 		}
 	}
-	// Together the two scopes account for the whole vocabulary (+ "*" in both).
-	if len(tenant)+len(system) != len(vocabulary)+2 {
-		t.Errorf("the scoped checklists (%d + %d) do not partition the vocabulary (%d)",
-			len(tenant), len(system), len(vocabulary))
+	// Together the two scopes cover the whole vocabulary: every authority appears in
+	// at least one, "*" in both, and a dual-tier authority in both.
+	var dual int
+	for _, tiers := range vocabulary {
+		if len(tiers) > 1 {
+			dual++
+		}
+	}
+	if len(tenantList)+len(systemList) != len(vocabulary)+2+dual {
+		t.Errorf("the scoped checklists (%d + %d) do not cover the vocabulary (%d, of which %d dual-tier)",
+			len(tenantList), len(systemList), len(vocabulary), dual)
 	}
 }
 

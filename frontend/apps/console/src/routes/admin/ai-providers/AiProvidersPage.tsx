@@ -57,6 +57,7 @@ import {
   providerSecretArg,
   type ProviderEditorState,
 } from './AiProviderForm';
+import { aiProviderPath } from './paths';
 
 const pageSize = 20;
 
@@ -128,7 +129,7 @@ export default function AiProvidersPage() {
             toast(`Provider “${token}” created`);
             setCreating(false);
             reload();
-            navigate(`/ai-providers/${encodeURIComponent(token)}`);
+            navigate(aiProviderPath(token));
           }}
         />
       </FormDrawer>
@@ -160,7 +161,7 @@ export default function AiProvidersPage() {
               {results.map((p) => (
                 <DataTableRow
                   key={p.token}
-                  {...rowLinkProps(() => navigate(`/ai-providers/${encodeURIComponent(p.token)}`))}
+                  {...rowLinkProps(() => navigate(aiProviderPath(p.token)))}
                 >
                   <DataTableCell className="font-medium text-foreground">
                     <span className="inline-flex items-center gap-2">

@@ -42,9 +42,12 @@ var (
 //
 // It fails closed on an unknown authority: an authority absent from the vocabulary
 // has no tier, so it cannot be shown to be safe on an access token and is refused
-// there. "*" is exempt from the lookup by construction — it has no tier of its own
-// (see AuthorityAll) and is bounded by this same rule via the required authority
-// it is being tested against, not by itself.
+// there. An authority declaring BOTH tiers (audit:read) is satisfiable here, which
+// is why dual-tier is reserved for capabilities that genuinely exist on both planes.
+//
+// "*" is exempt from the lookup by construction — it has no tier of its own (see
+// AuthorityAll) and is bounded by this same rule via the required authority it is
+// being tested against, not by itself.
 func satisfies(claims *Claims, required Authority) bool {
 	if !claims.HasAuthority(required) {
 		return false
@@ -59,8 +62,8 @@ func satisfies(claims *Claims, required Authority) bool {
 	// exemption is an ALLOW-LIST rather than "not an access token" so an unset or
 	// unknown TokenType denies instead of admitting: a new token tier must opt in
 	// here deliberately, not inherit the operator plane by forgetting to.
-	tier, known := TierOf(required)
-	return known && tier == TierTenant
+	tiers, known := TiersOf(required)
+	return known && tiers.Has(TierTenant)
 }
 
 // Authorize enforces that the request's verified claims grant the required
