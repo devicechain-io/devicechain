@@ -30,7 +30,13 @@ var testRootKey = []byte("0123456789abcdef0123456789abcdef")
 // exercised exactly as production does.
 func newTestApi(t *testing.T) *Api {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	// foreign_keys=1: SQLite ignores FOREIGN KEY constraints unless asked, so without
+	// this the grant tables' ON DELETE RESTRICT would be declared by the migration and
+	// enforced by nothing in these tests — leaving the claim that the database backs up
+	// ErrProviderInUse resting on the Postgres golden alone. Postgres enforces it
+	// always; turning it on here makes the two engines agree and makes the backstop a
+	// thing the suite can actually prove.
+	db, err := gorm.Open(sqlite.Open("file::memory:?_pragma=foreign_keys(1)"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))

@@ -57,7 +57,12 @@ type AIProviderTierGrant struct {
 	// TierToken is the user-management tier this grant offers the provider to. A
 	// cross-service reference (see the package note above): no FK, not validated at
 	// write, inert when unknown.
-	TierToken string `gorm:"not null;size:128;index"`
+	//
+	// No `index` tag: uix_ai_tier_grant_pair (tier_token, provider_id) leads with this
+	// column and already serves the `WHERE tier_token = ?` lookup, so a second index
+	// would be dead weight — and declaring one here that the migration does not create
+	// is the sort of drift that misleads the next reader into believing it exists.
+	TierToken string `gorm:"not null;size:128"`
 	// ProviderID references AIProvider.ID — the immutable id, not the token, so a
 	// token rename keeps the grant bound (the same reasoning as the secret handle).
 	ProviderID uint `gorm:"not null;index"`

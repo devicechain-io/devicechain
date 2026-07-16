@@ -80,6 +80,11 @@ func TestAPerTenantGrantCannotRevokeWhatTheTierOffers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"sonnet"}, menuTokens(menu),
 		"the tier's offer survives the exception being withdrawn")
+	// Assert on what the tenant can USE, not only on what is listed. Checking
+	// membership alone is what let the non-monotonic-default bug through review here:
+	// every membership assertion passed while the tenant's door was off.
+	require.NotNil(t, menu.Default, "the tier's model is still usable")
+	assert.Equal(t, "sonnet", menu.Default.Token)
 
 	// And there is no per-tenant path to remove the tier's own offer: revoking the
 	// TIER's grant for one tenant is not expressible — the call takes a tier, and its
@@ -92,6 +97,65 @@ func TestAPerTenantGrantCannotRevokeWhatTheTierOffers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"sonnet"}, menuTokens(menu),
 		"a per-tenant revoke must not be able to strip a tier's entitlement")
+}
+
+// TestAnAdditiveGrantNeverChangesTheDefault is the regression test for the sharpest
+// bug in this slice, and the one my own additive-only test missed by asserting on the
+// menu's MEMBERSHIP and never on what the tenant could actually USE.
+//
+// The default used to resolve its "sole model" fallback over the UNION. So a bronze
+// tenant whose tier granted one un-marked model resolved to that model — and then
+// granting it an EXTRA model additively made the union ambiguous and the default
+// vanish, turning the NL door OFF by giving the tenant MORE. Additive-only has to hold
+// for what is usable, not merely for what is listed.
+func TestAnAdditiveGrantNeverChangesTheDefault(t *testing.T) {
+	api := newTestApi(t)
+	mustProvider(t, api, "sonnet")
+	mustProvider(t, api, "fable")
+	// Deliberately NOT marked as the default — the sole-model fallback is what resolves
+	// it, and that fallback is where the bug lived.
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", false))
+
+	before, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
+	require.NoError(t, err)
+	require.NotNil(t, before.Default)
+	require.Equal(t, "sonnet", before.Default.Token)
+
+	// The audited exception: purely additive.
+	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
+
+	after, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"fable", "sonnet"}, menuTokens(after), "the exception adds to the menu")
+	require.NotNil(t, after.Default,
+		"granting a tenant an EXTRA model must never leave it with no usable default")
+	assert.Equal(t, "sonnet", after.Default.Token,
+		"the tier decides the default; an additive exception cannot move it")
+}
+
+// TestADisabledMarkedDefaultIsNotSubstituted. When the operator has marked a default
+// and it goes out of service, the answer is "no default", not "some other model". The
+// tier still offers another enabled model here — the point is that it must NOT be
+// silently promoted: that would re-price every tenant at the tier the moment an
+// operator disabled a model during an incident, which is exactly the silent routing
+// the ambiguity rule exists to prevent.
+func TestADisabledMarkedDefaultIsNotSubstituted(t *testing.T) {
+	api := newTestApi(t)
+	mustProvider(t, api, "cheap")
+	mustProvider(t, api, "premium")
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "cheap", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "premium", false))
+
+	req := claudeReq("cheap", nil)
+	req.Enabled = false
+	_, err := api.UpdateAIProvider(adminCtx(), "cheap", req, nil)
+	require.NoError(t, err)
+
+	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"premium"}, menuTokens(menu), "the disabled model leaves the menu")
+	assert.Nil(t, menu.Default,
+		"disabling the marked default must not silently promote a model the operator never chose")
 }
 
 // TestAdditiveGrantsAreIsolatedBetweenTenants is the leak test. The additive grants
@@ -121,6 +185,26 @@ func TestMenuRequiresATenantInContext(t *testing.T) {
 	_, err := api.MenuForTenant(context.Background(), "bronze")
 	assert.ErrorIs(t, err, core.ErrNoTenant,
 		"resolving a menu with no tenant must fail closed, not read across tenants")
+}
+
+// TestMenuRefusesTheSystemContext closes the hole the ctx guard leaves open.
+// core.WithSystemContext DISABLES the tenant-scope callback but PRESERVES the tenant,
+// so a "is there a tenant?" check passes while the isolation the read depends on is
+// switched off — every tenant's exceptions would land in one tenant's menu. No caller
+// does this today; the guard exists because this function's own contract tells callers
+// to rely on the callback, which makes the one context that removes the callback a trap
+// for whoever adds the next caller.
+func TestMenuRefusesTheSystemContext(t *testing.T) {
+	api := newTestApi(t)
+	mustProvider(t, api, "sonnet")
+	mustProvider(t, api, "fable")
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "globex", "fable"))
+
+	sysCtx := core.WithSystemContext(tenantCtx("acme"))
+	_, err := api.MenuForTenant(sysCtx, "bronze")
+	require.Error(t, err, "a system context disables tenant scoping: resolving a menu under it must be refused")
+	assert.Contains(t, err.Error(), "across tenants")
 }
 
 // TestATierWithNoGrantsHasAnEmptyMenu. Zero grants is a legitimate package ("this tier
@@ -396,4 +480,37 @@ func TestListTierGrantsShowsAnUnknownTier(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, grants, 1)
 	assert.Equal(t, "gld", grants[0].TierToken, "a typo'd tier must remain visible to the operator")
+}
+
+// TestTheDatabaseItselfRefusesADeleteThatBypassesTheCheck proves the FK backstop is
+// real rather than merely declared.
+//
+// assertProviderNotGranted is the refusal an operator meets, and it is the one that
+// produces a legible message — but it is application code, and application code can be
+// walked around (raw SQL, a future code path, a bug). The claim in the migration's doc
+// is that the database itself would still refuse. This test is what makes that claim
+// true rather than aspirational: it deletes the provider row DIRECTLY, skipping the
+// check entirely, and requires the constraint to stop it.
+//
+// It also proves the test harness enables SQLite's foreign_keys pragma. Without that
+// pragma SQLite silently ignores every FOREIGN KEY, this test would pass by deleting
+// happily and asserting nothing, and the backstop would rest on the Postgres golden
+// alone.
+func TestTheDatabaseItselfRefusesADeleteThatBypassesTheCheck(t *testing.T) {
+	api := newTestApi(t)
+	p := mustProvider(t, api, "sonnet")
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
+
+	// Straight past assertProviderNotGranted, as raw SQL or a future caller would.
+	err := api.sys(adminCtx()).Unscoped().Where("id = ?", p.ID).Delete(&AIProvider{}).Error
+	require.Error(t, err, "the FOREIGN KEY must refuse a granted provider even with the application check bypassed")
+
+	found, err := api.AIProvidersByToken(adminCtx(), []string{"sonnet"})
+	require.NoError(t, err)
+	assert.Len(t, found, 1, "the refused delete must leave the provider intact")
+
+	// And the grant is not orphaned.
+	grants, err := api.ListTierGrants(adminCtx())
+	require.NoError(t, err)
+	assert.Len(t, grants, 1)
 }
