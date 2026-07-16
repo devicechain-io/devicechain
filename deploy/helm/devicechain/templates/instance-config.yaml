@@ -24,6 +24,7 @@ metadata:
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
 type: Opaque
+{{- include "devicechain.validateSecretsRootKey" . }}
 stringData:
   instance: {{ .Values.instance.config | toJson | quote }}
 {{- end }}

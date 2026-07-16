@@ -213,6 +213,20 @@ SERVICE_AUTH_SECRET=$(openssl rand -hex 32)
 : "${SERVICE_AUTH_SECRET:?minting failed}"
 SERVICE_AUTH_ARGS=(--set "instance.config.infrastructure.serviceAuth.secret=${SERVICE_AUTH_SECRET}")
 
+# The instance root key (ADR-059): the KEK every envelope-encrypted secret store wraps
+# its DEKs with. WITHOUT it, any area that owns a secret store fails startup CLOSED —
+# "a service that cannot form its KEK does not start" — which is ai-inference and
+# outbound-connectors, i.e. exactly what PROFILE=full now brings up. dcctl bootstrap
+# has always minted this (backend/cli/bootstrap/steps.go); this manual mirror did not,
+# so the gap only stayed invisible while those areas were unreachable from a profile.
+# Base64 (not hex like the secret above): the config decodes a base64 256-bit key.
+# Its +/= alphabet carries no --set metacharacters — the separator is "," and base64
+# has none — and the value round-trips through --set verbatim.
+step "minting the instance secret-store root key"
+SECRETS_ROOT_KEY=$(openssl rand -base64 32)
+: "${SECRETS_ROOT_KEY:?minting failed}"
+SECRETS_ARGS=(--set "instance.config.infrastructure.secrets.rootKey=${SECRETS_ROOT_KEY}")
+
 # ---- 5. core (CRDs + operator) ---------------------------------------------
 log "🧩 Core — CRDs + operator ($OPERATOR_IMG)"
 make -C "$OPERATOR_DIR" install
@@ -237,6 +251,7 @@ helm --kube-context "$CONTEXT" upgrade --install dc "$CHART_DIR" \
   "${NATS_TLS_ARGS[@]}" \
   "${NATS_AUTH_ARGS[@]}" \
   "${SERVICE_AUTH_ARGS[@]}" \
+  "${SECRETS_ARGS[@]}" \
   --wait --timeout 10m
 
 # ---- 7. seed ---------------------------------------------------------------

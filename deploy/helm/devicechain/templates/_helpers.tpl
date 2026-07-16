@@ -146,6 +146,7 @@ exact same source. Takes the root context.
 {{- if eq $area "mcp" }}
 {{- /* merge into a FRESH dict: the explicit config wins, and .Values is never mutated. */ -}}
 {{- $cfg = merge (dict) $cfg (include "devicechain.mcpDerivedConfig" $root | fromJson) }}
+{{- include "devicechain.validateMcpConfig" (dict "root" $root "cfg" $cfg) }}
 {{- end }}
 {{ $area }}: {{ $cfg | toJson | quote }}
 {{- end }}
@@ -186,6 +187,54 @@ address.
 {{- dict "resourceUrl" (printf "%s/api/mcp" $origin) "issuerUrl" (printf "%s/api/user-management" $origin) | toJson -}}
 {{- else -}}
 {{- dict | toJson -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.validateMcpConfig fails the render when mcp's required URLs are absent or
+unusable, rather than letting the pod CrashLoop on its own config check where the
+reason is a log line away. Takes a dict {root, cfg} of the FINAL merged config.
+
+The http case is the sharp one: mcp accepts http only for a loopback host, so a
+no-TLS ingress on a real hostname derives a URL it will reject at startup. dcctl
+guards the same combination for Grafana SSO; this is the chart-side equivalent.
+*/}}
+{{- define "devicechain.validateMcpConfig" -}}
+{{- $cfg := .cfg -}}
+{{- $host := .root.Values.ingress.host | default "" | lower -}}
+{{- $loopback := or (eq $host "localhost") (eq $host "127.0.0.1") (eq $host "::1") -}}
+{{- range $field := list "resourceUrl" "issuerUrl" -}}
+  {{- $v := get $cfg $field | default "" -}}
+  {{- if not $v -}}
+    {{- fail (printf "mcp: %s is required and could not be derived — the area is enabled (profile \"full\" ships it) but no ingress is configured to derive it from. Set ingress.enabled + ingress.host, or set functionalAreas.mcp.config.%s explicitly." $field $field) -}}
+  {{- end -}}
+  {{- if and (hasPrefix "http://" $v) (not $loopback) -}}
+    {{- fail (printf "mcp: %s would be %q, which mcp rejects at startup — it allows http only for a loopback host. Set ingress.tls.enabled=true, use ingress.host=localhost, or set functionalAreas.mcp.config.%s to an https URL." $field $v $field) -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.validateSecretsRootKey fails the render when an enabled area owns an
+ADR-059 envelope-encrypted secret store but no instance root key is configured. Such a
+service cannot form its KEK and MUST NOT start ("encryption-at-rest is not optional
+once wired"), so without this the only symptom is a CrashLooping pod.
+
+notification-management is in the DEFAULT profile, so this is not only a "full"
+concern — any install owes a root key.
+*/}}
+{{- define "devicechain.validateSecretsRootKey" -}}
+{{- $needsKey := list "notification-management" "outbound-connectors" "ai-inference" -}}
+{{- $rootKey := "" -}}
+{{- with .Values.instance -}}{{- with .config -}}{{- with .infrastructure -}}{{- with .secrets -}}
+{{- $rootKey = .rootKey | default "" -}}
+{{- end -}}{{- end -}}{{- end -}}{{- end -}}
+{{- if not $rootKey -}}
+  {{- range $a := splitList "," (include "devicechain.enabledAreas" .) -}}
+    {{- if has $a $needsKey -}}
+      {{- fail (printf "instance.config.infrastructure.secrets.rootKey is required: area %q owns an envelope-encrypted secret store (ADR-059) and cannot form its KEK without it, so it would crash-loop. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically." $a) -}}
+    {{- end -}}
+  {{- end -}}
 {{- end -}}
 {{- end -}}
 
