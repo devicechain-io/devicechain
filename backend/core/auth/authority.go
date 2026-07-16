@@ -99,6 +99,14 @@ const (
 	// brand), like tenantGovernance. Distinct from tenant:write, which is the
 	// instance-scoped operator authority over any tenant's control-plane record.
 	BrandingWrite Authority = "branding:write"
+
+	// AI inference provider administration (ai-inference, ADR-056). Gates the
+	// INSTANCE-scoped, operator-managed AIProvider CRUD + the active-provider pointer
+	// — the registered inference providers (kind, endpoint, model, write-only API key)
+	// NL→rule authoring routes through. Instance-global like settings:*/client:*: a
+	// provider list + its keys are an operator concern, not a tenant's (a tenant only
+	// CONSENTS to external routing, gated separately by the ADR-023 governance flag).
+	AIAdmin Authority = "ai:admin"
 )
 
 // vocabulary is the set of every known authority. A Role may only grant
@@ -133,6 +141,7 @@ var vocabulary = map[Authority]struct{}{
 	ConnectorRead:     {},
 	ConnectorWrite:    {},
 	BrandingWrite:     {},
+	AIAdmin:           {},
 }
 
 // ValidAuthority reports whether s names a known authority (including the

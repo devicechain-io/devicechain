@@ -120,6 +120,23 @@ func TestOutboundConnectorsIsOptInArea(t *testing.T) {
 	assert.ErrorContains(t, Validate([]FunctionalArea{UserManagement, DeviceManagement, OutboundConn}), string(EventProcessing))
 }
 
+// The ai-inference area is a known, opt-in area (ADR-056): not in any profile and,
+// unlike a stream consumer, it has NO hard deps — event-processing calls IT, so it can
+// be enabled with just the core areas. It only soft-deps user-management (the consent
+// flag read degrades fail-closed).
+func TestAiInferenceIsOptInArea(t *testing.T) {
+	assert.True(t, Known(AiInference))
+	for p, areas := range profiles {
+		assert.NotContains(t, areas, AiInference, "ai-inference must not be in profile %s (it is enabled on demand)", p)
+	}
+	m, ok := ManifestFor(AiInference)
+	assert.True(t, ok)
+	assert.Empty(t, m.HardDeps)
+	assert.Contains(t, m.SoftDeps, UserManagement)
+	// Enabling it alongside the core areas is valid (no hard dep to satisfy).
+	assert.NoError(t, Validate([]FunctionalArea{UserManagement, DeviceManagement, AiInference}))
+}
+
 // The minimal valid explicit set is just the two core areas.
 func TestValidateAcceptsCoreOnly(t *testing.T) {
 	err := Validate([]FunctionalArea{UserManagement, DeviceManagement})

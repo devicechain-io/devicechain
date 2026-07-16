@@ -38,6 +38,7 @@ const (
 	EventProcessing  FunctionalArea = "event-processing"
 	OutboundConn     FunctionalArea = "outbound-connectors"
 	Mcp              FunctionalArea = "mcp"
+	AiInference      FunctionalArea = "ai-inference"
 )
 
 // Manifest is a functional area's deployment contract (ADR-022 decision 2): the
@@ -154,6 +155,17 @@ var catalog = map[FunctionalArea]Manifest{
 		Area:     Mcp,
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement, EventManagement, DeviceState, CommandDelivery},
+	},
+	AiInference: {
+		// The ai-inference service (ADR-056): the fail-closed inference seam for NL→rule
+		// authoring. It is synchronous (no messaging), so it produces/consumes nothing on
+		// NATS — event-processing CALLS it over a service token (slice 0c), the reverse of
+		// a stream dependency, so it has no Hard deps. It reads the per-tenant external-AI
+		// consent flag from user-management (Soft — the read degrades fail-closed when
+		// absent). Like mcp/outbound-connectors it is NOT in any profile: NL authoring is an
+		// opt-in capability that requires a configured provider, enabled on demand.
+		Area:     AiInference,
+		SoftDeps: []FunctionalArea{UserManagement},
 	},
 }
 
