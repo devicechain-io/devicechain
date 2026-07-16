@@ -56,6 +56,76 @@ type Query {
     previewRule(input: PreviewRuleInput!): PreviewResult!
 }
 
+type Mutation {
+    # Draft a detection rule from a natural-language description (ADR-056 slice 1) — the THIRD
+    # authoring front door, alongside the form builder and the visual canvas. It carries the
+    # author's prompt to the active inference provider (over an ai:infer service token, per-tenant
+    # opt-in + fail-closed) and runs the returned candidate through the SAME rules.Compile firewall
+    # the other doors use, repairing a non-compiling candidate a bounded number of times. It
+    # PERSISTS NOTHING: it returns a compiled rules.Rule draft the author reviews and saves through
+    # the normal createDetectionRule door under their own token — the AI proposes, the deterministic
+    # compiler disposes, the human decides. When the inference path is not configured, no provider is
+    # active, or the tenant has not opted in, it returns unavailable=true (fail-closed), never a hard
+    # error. Modeled as a Mutation (not a Query): it is non-idempotent and spends inference budget, so
+    # it must not be a retriable/parallelizable read. Gated on device:write — drafting is a precursor
+    # to authoring, so a read-only viewer cannot invoke it.
+    draftDetectionRuleFromText(input: DraftRuleFromTextInput!): DraftRuleResult!
+}
+
+# Input to draftDetectionRuleFromText.
+input DraftRuleFromTextInput {
+    # The author's plain-language description of the rule they want.
+    text: String!
+    # The target device profile (carried for provenance/context).
+    profileToken: String!
+    # Optional: the profile's metric vocabulary, so the model references REAL metric keys. The
+    # console supplies it (event-processing holds no metric definitions locally); omitting it just
+    # means the model works from the description alone.
+    metrics: [MetricHintInput!]
+}
+
+# One metric of the target profile's vocabulary, as prompt context. Only key is required; the
+# rest are advisory hints that improve the draft.
+input MetricHintInput {
+    key: String!
+    dataType: String
+    unit: String
+    description: String
+}
+
+# The outcome of an NL drafting request.
+type DraftRuleResult {
+    # True when a candidate compiled through the DETECT firewall.
+    ok: Boolean!
+    # The compiled, canonical rules.Rule JSON (id omitted — the token is assigned at save). Null
+    # unless ok.
+    definition: String
+    # The compiled leaf predicate's worst-case cost. Null unless ok.
+    estimatedCost: Int
+    # Provenance of the answering provider (set whenever a candidate was produced).
+    model: String
+    provider: String
+    # Number of inference rounds performed.
+    attempts: Int!
+    # The model's last rejected raw output, surfaced on !ok so the author can see what the AI tried.
+    rawCandidate: String
+    # Compiler rejection reasons from the final failed attempt (empty when ok).
+    diagnostics: [DraftDiagnostic!]!
+    # True when the inference path itself could not run — not configured, no active provider, or the
+    # tenant has not opted in to external routing (all fail-closed). unavailableReason carries the
+    # (coarsened) message.
+    unavailable: Boolean!
+    unavailableReason: String
+}
+
+# One compiler rejection reason surfaced to the author.
+type DraftDiagnostic {
+    # The rules.Rule field the rejection anchors to (e.g. "when", "threshold"), null when unanchored.
+    field: String
+    # The console-surfaceable reason.
+    message: String!
+}
+
 # Input to previewRule. Exactly one of graph or ruleDefinition names the draft.
 input PreviewRuleInput {
     # A CanvasDefinition JSON (the console canvas editor's graph).

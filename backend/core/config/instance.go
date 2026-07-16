@@ -152,6 +152,21 @@ type CommandDeliveryConfiguration struct {
 	Port     uint32
 }
 
+// AiInferenceConfiguration locates the ai-inference GraphQL endpoint for the
+// synchronous cross-service call event-processing makes to draft a detection rule
+// from natural language (ADR-056 slice 1): event-processing carries the human's
+// NL prompt to the active provider over a service token (least-privilege ai:infer)
+// and runs the returned candidate through its own rules.Compile firewall. Only that
+// caller consumes it, and only when the service secret is also set, so it is neither
+// required by Validate nor filled by ApplyDefaults; event-processing guards on it at
+// startup (warn-and-skip if unset, so NL drafting is cleanly UNAVAILABLE rather than a
+// startup failure). The Helm chart supplies the in-cluster coordinate for a normal
+// deploy. ai-inference is an OPT-IN area, so this is commonly unset.
+type AiInferenceConfiguration struct {
+	Hostname string
+	Port     uint32
+}
+
 // ServiceAuthConfiguration carries the shared secret backing the synchronous
 // cross-service call primitive (ADR-044 amendment). A caller presents Secret to
 // user-management's mint endpoint to obtain a short-lived service token; the mint
@@ -256,6 +271,7 @@ type InfrastructureConfiguration struct {
 	DeviceManagement DeviceManagementConfiguration
 	EventProcessing  EventProcessingConfiguration
 	CommandDelivery  CommandDeliveryConfiguration
+	AiInference      AiInferenceConfiguration
 	ServiceAuth      ServiceAuthConfiguration
 	Secrets          SecretsConfiguration
 	Blob             BlobConfiguration

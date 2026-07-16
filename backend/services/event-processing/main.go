@@ -12,7 +12,9 @@ import (
 	"github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-event-processing/governance"
 	"github.com/devicechain-io/dc-event-processing/graphql"
+	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
+	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-event-processing/processor"
@@ -41,6 +43,7 @@ var (
 	SnapshotStore           *model.SnapshotStore
 	DetectRuleStore         *model.DetectRuleStore
 	RuleStatStore           *model.RuleStatStore
+	Drafter                 *nldraft.Drafter
 	DeviceRosterStore       *model.DeviceRosterStore
 	ProfileActiveStore      *model.ProfileActiveStore
 	DeviceAttributeStore    *model.DeviceAttributeStore
@@ -296,6 +299,30 @@ func buildEgressLimiter() *core.TenantRateLimiter {
 	return core.NewTenantRateLimiter(resolver.Resolve)
 }
 
+// buildDrafter constructs the ADR-056 NL→rule drafting orchestrator (slice 1). It wires the
+// bounded infer→compile→repair loop over an ai-inference service-token client (least-privilege
+// ai:infer — a SEPARATE, narrower scope than the command:write / tenant:read tokens the other
+// seams use). It is enabled only when the shared service secret AND ai-inference's coordinate are
+// set; otherwise it returns nil and the draft door reports "unavailable" fail-closed (the form +
+// canvas authoring doors are unaffected). ai-inference is an opt-in area, so nil is the common
+// case. The candidate it returns is compiled through this service's OWN rules.Compile firewall at
+// the platform-default limits — the AI proposes, the deterministic compiler disposes.
+func buildDrafter() *nldraft.Drafter {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" {
+		log.Warn().Msg("Service secret not configured — NL→rule drafting is UNAVAILABLE (ADR-056 slice 1).")
+		return nil
+	}
+	if infra.AiInference.Hostname == "" || infra.AiInference.Port == 0 {
+		log.Warn().Msg("ai-inference endpoint not configured (infrastructure.aiInference) — NL→rule drafting is UNAVAILABLE (ADR-056 slice 1).")
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.AIInfer)})
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.AiInference.Hostname, infra.AiInference.Port)
+	log.Info().Str("aiInference", url).Msg("NL→rule drafting ENABLED (ADR-056 slice 1): candidates compile through the DETECT firewall at the platform-default limits.")
+	return nldraft.NewDrafter(processor.NewInferenceClient(client, url), rules.DefaultLimits(), 0)
+}
+
 // Called after microservice has been initialized.
 func afterMicroserviceInitialized(ctx context.Context) error {
 	// Parse configuration.
@@ -347,10 +374,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	providers := map[gqlcore.ContextKey]interface{}{
 		gqlcore.ContextNatsKey: NatsManager,
 	}
+	// buildDrafter wires the ADR-056 NL→rule drafting seam (nil ⇒ the draft door reports
+	// unavailable, fail-closed). It is built here so the resolver carries it alongside the
+	// stores.
+	Drafter = buildDrafter()
 	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{
 		DetectRules: DetectRuleStore,
 		RuleStats:   RuleStatStore,
 		Profiles:    ProfileActiveStore,
+		Drafter:     Drafter,
 	})
 
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
