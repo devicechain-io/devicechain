@@ -62,6 +62,16 @@ func TierConfigKeys() []string {
 	return out
 }
 
+// UsableRate reports whether a per-tenant rate override is a live ceiling, by the
+// same rule a tier setting is held to. It exists so the cascade can tell an override
+// that MEANS something from one that does not: an unusable override must fall
+// through to the tier (ADR-065 D5's next level), not past it to the platform
+// default. Only an out-of-band DB write can produce one — the API rejects it.
+func UsableRate(v float64) bool { return validatePositiveRate(v) == nil }
+
+// UsableBurst is UsableRate for a burst.
+func UsableBurst(v int) bool { return validatePositiveBurst(v) == nil }
+
 // ValidateTierConfig rejects a tier config carrying an unknown key or an unusable
 // value. A nil/empty config is valid: a tier that declares nothing simply inherits
 // the platform default for every dimension, which is exactly what the standard tier

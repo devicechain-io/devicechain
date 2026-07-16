@@ -28,6 +28,24 @@ func TestTierConfigKeysCoverEveryDimension(t *testing.T) {
 	require.Len(t, TierConfigKeys(), len(dims)*2)
 }
 
+// TestTierConfigKeysMatchTheKnownDimensions is the half the test above cannot do.
+// That one derives its expectation from AllDimensions() and so passes by
+// construction — if a dimension went missing from the registry's SOURCE, both the
+// code and the assertion would lose it together and the test would still be green.
+//
+// This one names the platform's dimensions independently, so it fails if a declared
+// dimension ever stops being enumerated (its tier keys would be rejected as
+// "unknown", making the setting unconfigurable) or if a fourth lands without anyone
+// deciding what it means for a tier. Update this list deliberately when the
+// vocabulary changes — that is the point of it.
+func TestTierConfigKeysMatchTheKnownDimensions(t *testing.T) {
+	require.ElementsMatch(t, []string{
+		"ingestMessagesPerSecond", "ingestBurst",
+		"outboundMessagesPerSecond", "outboundBurst",
+		"aiInferenceRequestsPerMinute", "aiInferenceBurst",
+	}, TierConfigKeys())
+}
+
 // TestValidateTierConfigRejectsUnknownKeys is the reason the registry exists
 // (ADR-065 decision 8). An unvalidated blob fails OPEN: a typo is accepted, read by
 // nobody, and does nothing — the operator believes they configured a ceiling and the

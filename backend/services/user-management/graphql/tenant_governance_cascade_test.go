@@ -76,6 +76,35 @@ func TestGovernanceCascadeTierBelowOverride(t *testing.T) {
 	})
 }
 
+// TestUnusableOverrideFallsThroughToTheTierNotPastIt pins the one case where "the
+// consumer already folds onto the platform default, so the composition is
+// equivalent" is NOT equivalent to ADR-065 D5's cascade.
+//
+// An unusable override (non-positive) can only arrive via a direct out-of-band DB
+// write — the API rejects it. If this seam passed it through, core/governance would
+// floor it to the PLATFORM DEFAULT, skipping the tier entirely: a gold tenant
+// carrying a junk -5 would meter at 1000/s rather than its tier's 2000/s. The
+// cascade says override → tier → default, so an override that means nothing must
+// fall through to the TIER, not past it.
+func TestUnusableOverrideFallsThroughToTheTierNotPastIt(t *testing.T) {
+	junk := &TenantGovernanceResolver{t: &iam.Tenant{
+		Tier:                    goldTier(),
+		IngestMessagesPerSecond: f64(-5),
+		IngestBurst:             ip(0),
+	}}
+	require.Equal(t, float64(2000), *junk.IngestMessagesPerSecond(),
+		"a junk override must fall through to the tier, not past it to the platform default")
+	require.EqualValues(t, 4000, *junk.IngestBurst())
+
+	// With no tier setting either, it still degrades to null (inherit the platform
+	// default) — never to the junk value itself.
+	noTier := &TenantGovernanceResolver{t: &iam.Tenant{
+		Tier:                      &iam.TenantTier{Token: iam.TierSilverToken},
+		OutboundMessagesPerSecond: f64(0),
+	}}
+	require.Nil(t, noTier.OutboundMessagesPerSecond())
+}
+
 // TestGovernanceCascadeFailsSafeWithoutTier pins the direction a missing tier fails
 // in. The tier is a required FK and both read paths preload it, so a nil Tier means
 // a caller loaded the tenant some other way — a bug. It must degrade to the

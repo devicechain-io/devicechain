@@ -344,16 +344,24 @@ type TierInput struct {
 // else is editable, deliberately — packaging is data, not a code deploy (decision
 // 4), and what a tier includes is a product decision that changes.
 //
-// A FULL REPLACE of the mutable fields, matching the tenant inputs above: an
-// omitted field is cleared, not preserved. Callers load-then-mutate. This is worth
-// watching once the key registry lands and Config carries entitlements: a rename
-// that drops Config would clear a tier's packaging for every tenant at it, live,
-// within the 60s TTL. If that shape ever reaches a caller that patches rather than
-// replaces, make this an explicit patch instead of relying on the convention.
+// Name and Description are a full replace, matching the tenant inputs above: an
+// omitted one is cleared. CONFIG IS NOT — it is an explicit patch, and the
+// asymmetry is deliberate.
+//
+// Clearing a name is cosmetic and instantly visible. Clearing Config silently
+// re-prices every tenant at the tier: they fall back to the platform default within
+// core/governance's 60s TTL, with no error and no log. Under a full-replace rule,
+// `updateTenantTier(token:"gold", request:{name:"Gold Plus"})` — a mutation that
+// states only a rename — would drop every gold tenant from 2000/s to 1000/s. That is
+// too destructive to be reachable by omission, so nil means "leave it alone" and an
+// explicit empty map means "clear it".
 type TierMutableInput struct {
 	Name        string
 	Description string
-	Config      map[string]any
+	// Config replaces the tier's settings when non-nil; nil leaves them unchanged.
+	// A non-nil empty map clears them (re-inheriting the platform default), so
+	// "clear" stays expressible — just never by accident.
+	Config *map[string]any
 }
 
 // ListTenantTiers returns the tier catalog (ADR-065).
@@ -391,7 +399,9 @@ func (s *Service) CreateTenantTier(ctx context.Context, in TierInput) (*iam.Tena
 	return s.iam.TenantTierByToken(ctx, in.Token)
 }
 
-// UpdateTenantTier replaces a tier's name, description, and config.
+// UpdateTenantTier replaces a tier's name and description, and replaces its config
+// only when one is supplied (see TierMutableInput: config is a patch, precisely so a
+// rename cannot silently re-price every tenant at the tier).
 //
 // Editing a tier changes behavior for EVERY tenant at it, live and with no deploy.
 // That is the point of an entity rather than an enum, but it is a wide blast radius
@@ -399,8 +409,10 @@ func (s *Service) CreateTenantTier(ctx context.Context, in TierInput) (*iam.Tena
 // consequences). It needs no flush: nothing durable is keyed on the tier, so the
 // change converges on core/governance's 60s TTL (decision 14).
 func (s *Service) UpdateTenantTier(ctx context.Context, token string, in TierMutableInput) (*iam.TenantTier, error) {
-	if err := iam.ValidateTierConfig(in.Config); err != nil {
-		return nil, err
+	if in.Config != nil {
+		if err := iam.ValidateTierConfig(*in.Config); err != nil {
+			return nil, err
+		}
 	}
 	t, err := s.loadTier(ctx, token)
 	if err != nil {
@@ -408,7 +420,9 @@ func (s *Service) UpdateTenantTier(ctx context.Context, token string, in TierMut
 	}
 	t.Name = rdb.NullStrOf(&in.Name)
 	t.Description = rdb.NullStrOf(&in.Description)
-	t.Config = in.Config
+	if in.Config != nil {
+		t.Config = *in.Config
+	}
 	if err := s.iam.UpdateTenantTier(ctx, t); err != nil {
 		return nil, err
 	}

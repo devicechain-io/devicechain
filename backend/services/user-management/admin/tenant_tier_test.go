@@ -143,6 +143,110 @@ func TestDeleteTenantTierRefusedWhileInUse(t *testing.T) {
 	require.False(t, removed)
 }
 
+// TestTierConfigIsValidatedAtTheDoor pins ADR-065 D8's actual invariant: unknown
+// keys are rejected AT WRITE. The registry's unit tests only exercise
+// ValidateTierConfig as a pure function, which says nothing about whether anything
+// CALLS it — delete both call sites and those tests stay green while the blob is
+// fail-open again. This drives the real doors instead.
+//
+// Fail-open is the whole point of the registry: an unknown key is accepted, read by
+// nobody, and does nothing, while an operator believes they sold and configured a
+// ceiling.
+func TestTierConfigIsValidatedAtTheDoor(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+
+	// Create: a plausible typo of a real key must not reach the database.
+	_, err := s.CreateTenantTier(ctx, TierInput{
+		Token:  "platinum",
+		Config: map[string]any{"ingestMessagesPerSec": float64(500)},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown tier setting")
+
+	// ...and the refusal is total: no tier was created.
+	tiers, err := s.ListTenantTiers(ctx)
+	require.NoError(t, err)
+	require.Empty(t, tiers)
+
+	// Create: an unusable value on a KNOWN key is refused too — a zero ceiling
+	// admits nothing, which is an outage for every tenant at the tier.
+	_, err = s.CreateTenantTier(ctx, TierInput{
+		Token:  "platinum",
+		Config: map[string]any{"ingestMessagesPerSecond": float64(0)},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must be positive")
+
+	// Update: the same bar applies to the edit door.
+	seedTiers(t, s)
+	_, err = s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{
+		Name:   "Gold",
+		Config: &map[string]any{"ingestBurst": float64(0)},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must be positive")
+
+	_, err = s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{
+		Name:   "Gold",
+		Config: &map[string]any{"shedPriority": float64(80)},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown tier setting")
+
+	// A valid config passes both doors and lands.
+	got, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{
+		Name:   "Gold",
+		Config: &map[string]any{"ingestMessagesPerSecond": float64(2000)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, float64(2000), got.Config["ingestMessagesPerSecond"])
+}
+
+// TestRenamingATierDoesNotWipeItsPackaging is the guard for a silent, tier-wide
+// re-pricing.
+//
+// If config were a full replace like name/description, then
+// `updateTenantTier(token:"gold", request:{name:"Gold Plus"})` — a mutation that
+// states ONLY a rename — would NULL gold's settings. Every gold tenant would drop
+// from 2000/s to the platform default within core/governance's 60s TTL: no error, no
+// log, live, and total loss of the thing tiers exist to carry. The direction is
+// fail-safe (the default, never unlimited), which is the only reason it would be
+// survivable rather than an outage.
+//
+// So config is a patch: nil leaves it alone, and an explicit empty map clears it.
+func TestRenamingATierDoesNotWipeItsPackaging(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+
+	_, err := s.CreateTenantTier(ctx, TierInput{
+		Token:  iam.TierGoldToken,
+		Name:   "Gold",
+		Config: map[string]any{"ingestMessagesPerSecond": float64(2000)},
+	})
+	require.NoError(t, err)
+
+	// A rename that says nothing about config must leave the packaging intact.
+	renamed, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{Name: "Gold Plus"})
+	require.NoError(t, err)
+	require.Equal(t, "Gold Plus", renamed.Name.String)
+	require.Equal(t, float64(2000), renamed.Config["ingestMessagesPerSecond"],
+		"a name-only update must not clear the tier's ceilings")
+
+	// It survives the round-trip too, not just the returned struct.
+	reloaded, err := s.loadTier(ctx, iam.TierGoldToken)
+	require.NoError(t, err)
+	require.Equal(t, float64(2000), reloaded.Config["ingestMessagesPerSecond"])
+
+	// Clearing stays possible — it just has to be said out loud.
+	cleared, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{
+		Name:   "Gold Plus",
+		Config: &map[string]any{},
+	})
+	require.NoError(t, err)
+	require.Empty(t, cleared.Config, "an explicit empty config clears the tier's settings")
+}
+
 // TestUpdateTenantTierEditsPackaging pins decision 4: the seeded vocabulary is
 // operator-editable — what "bronze includes" is a product decision, so it must be
 // changeable without a deploy, for every tenant at that tier at once.

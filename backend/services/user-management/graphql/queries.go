@@ -73,8 +73,17 @@ func (r *TenantGovernanceResolver) tierOf() *iam.TenantTier { return r.t.Tier }
 
 // rate folds one dimension's rate: the tenant's own override wins, else the tier's
 // setting, else null (inherit the platform default).
+//
+// An override is only allowed to win if it is USABLE. An unusable one (non-positive)
+// is unreachable through the API — the write path rejects it — so it can only arrive
+// by a direct DB write; but passing it through would send it to the consumer, which
+// floors an unusable value to the PLATFORM DEFAULT and would thereby skip the tier
+// entirely. That is the one case where "the consumer already folds onto the default"
+// is not equivalent to D5's cascade: a gold tenant carrying a junk -5 override would
+// meter at 1000/s instead of its tier's 2000/s. Judging it here keeps the levels in
+// the order the ADR specifies — override → tier → platform default.
 func (r *TenantGovernanceResolver) rate(override *float64, dim governance.Dimension) *float64 {
-	if override != nil {
+	if override != nil && iam.UsableRate(*override) {
 		return override
 	}
 	return r.tierOf().RateFor(dim)
@@ -82,8 +91,10 @@ func (r *TenantGovernanceResolver) rate(override *float64, dim governance.Dimens
 
 // burst folds one dimension's burst the same way, adapting to the GraphQL Int.
 func (r *TenantGovernanceResolver) burst(override *int, dim governance.Dimension) *int32 {
-	v := override
-	if v == nil {
+	var v *int
+	if override != nil && iam.UsableBurst(*override) {
+		v = override
+	} else {
 		v = r.tierOf().BurstFor(dim)
 	}
 	if v == nil {
