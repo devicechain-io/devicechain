@@ -21,6 +21,9 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
   const [ingestBurst, setIngestBurst] = useState(tenant?.ingestBurst?.toString() ?? '');
   const [outboundRate, setOutboundRate] = useState(tenant?.outboundMessagesPerSecond?.toString() ?? '');
   const [outboundBurst, setOutboundBurst] = useState(tenant?.outboundBurst?.toString() ?? '');
+  // Per-tenant consent to route NL→rule authoring to an external AI model (ADR-056 §6).
+  // Default off (fail-closed): a null/false flag means the tenant has not opted in.
+  const [aiExternalEnabled, setAiExternalEnabled] = useState(tenant?.aiExternalEnabled === true);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -41,6 +44,9 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
         ingestBurst: optNum(ingestBurst),
         outboundMessagesPerSecond: optNum(outboundRate),
         outboundBurst: optNum(outboundBurst),
+        // Sent explicitly (true/false) — consent is a deliberate operator decision, so
+        // an unchecked box records "not opted in" rather than leaving it ambiguous.
+        aiExternalEnabled,
       };
       if (editing) {
         await updateTenant(tenant.token, { name: name.trim() || undefined, config: cfg, ...gov });
@@ -148,6 +154,22 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
           />
         </FormField>
       </div>
+      <FormField
+        label="External AI routing"
+        htmlFor="t-ai-external"
+        description="Consent to route this tenant's NL→rule authoring to an external AI model (ADR-056). Off by default; the feature is unavailable for the tenant until this is granted."
+      >
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            id="t-ai-external"
+            type="checkbox"
+            checked={aiExternalEnabled}
+            onChange={(e) => setAiExternalEnabled(e.target.checked)}
+            className="h-4 w-4 rounded border-input"
+          />
+          <span>Allow external AI routing for NL→rule authoring</span>
+        </label>
+      </FormField>
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy || (!editing && !token.trim())}>
           {editing ? 'Save changes' : 'Create tenant'}
