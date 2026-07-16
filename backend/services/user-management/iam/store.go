@@ -76,10 +76,12 @@ func (s *Store) ListIdentities(ctx context.Context) ([]Identity, error) {
 	return ids, err
 }
 
-// ListTenants returns every control-plane tenant row (ADR-033), ordered by token.
+// ListTenants returns every control-plane tenant row (ADR-033), ordered by token,
+// each with its tier preloaded (ADR-065) — the tier is a required FK, so a tenant
+// read without it is incomplete by construction.
 func (s *Store) ListTenants(ctx context.Context) ([]Tenant, error) {
 	var tenants []Tenant
-	err := s.sys(ctx).Order("token").Find(&tenants).Error
+	err := s.sys(ctx).Preload("Tier").Order("token").Find(&tenants).Error
 	return tenants, err
 }
 
@@ -166,11 +168,11 @@ func (s *Store) DeleteIdentity(ctx context.Context, id *Identity) error {
 	})
 }
 
-// TenantByToken resolves a control-plane tenant by its token, or returns
-// gorm.ErrRecordNotFound.
+// TenantByToken resolves a control-plane tenant by its token (with its ADR-065
+// tier preloaded), or returns gorm.ErrRecordNotFound.
 func (s *Store) TenantByToken(ctx context.Context, token string) (*Tenant, error) {
 	var t Tenant
-	if err := s.sys(ctx).Where("token = ?", token).First(&t).Error; err != nil {
+	if err := s.sys(ctx).Preload("Tier").Where("token = ?", token).First(&t).Error; err != nil {
 		return nil, err
 	}
 	return &t, nil
@@ -288,12 +290,19 @@ func (s *Store) CreateTenant(ctx context.Context, t *Tenant) error {
 // actually clears rather than leaving a stale `true` that would keep routing the
 // tenant's data to an external model (a fail-OPEN bug this list guards against).
 //
+// TierID (ADR-065) is in the Select list because a tenant's tier may change live
+// (decision 14: settings-only, no flush, no drain — nothing durable is keyed on the
+// tier, so it converges on core/governance's existing 60s TTL). Its NOT NULL FK is
+// what keeps a bad write loud: the caller resolves a tier TOKEN to this id, so an
+// omitted tier would land as 0 and violate the constraint rather than silently
+// re-tiering the tenant.
+//
 // EVERY admin-mutable governance column must appear here. One omitted from the list
 // is silently unwritable: the update appears to succeed while the old value
 // survives, which for a limit means a tightened ceiling never takes effect.
 func (s *Store) UpdateTenant(ctx context.Context, t *Tenant) error {
 	return s.sys(ctx).Model(t).
-		Select("Name", "Config", "IngestMessagesPerSecond", "IngestBurst",
+		Select("Name", "Config", "TierID", "IngestMessagesPerSecond", "IngestBurst",
 			"OutboundMessagesPerSecond", "OutboundBurst", "AiExternalEnabled",
 			"AiInferenceRequestsPerMinute", "AiInferenceBurst").
 		Updates(t).Error
@@ -321,6 +330,58 @@ func (s *Store) SetTenantEnabled(ctx context.Context, t *Tenant, enabled bool) e
 // no memberships still reference it (see CountMembershipsInTenant).
 func (s *Store) DeleteTenant(ctx context.Context, t *Tenant) error {
 	return s.sys(ctx).Unscoped().Delete(t).Error
+}
+
+// ListTenantTiers returns the tier catalog (ADR-065), ordered by token for a
+// stable listing.
+func (s *Store) ListTenantTiers(ctx context.Context) ([]TenantTier, error) {
+	var tiers []TenantTier
+	err := s.sys(ctx).Order("token").Find(&tiers).Error
+	return tiers, err
+}
+
+// TenantTierByToken resolves a single tier by its token, or returns
+// gorm.ErrRecordNotFound.
+func (s *Store) TenantTierByToken(ctx context.Context, token string) (*TenantTier, error) {
+	var t TenantTier
+	if err := s.sys(ctx).Where("token = ?", token).First(&t).Error; err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// CreateTenantTier inserts a new tier; a duplicate token violates the unique index
+// and surfaces as an error.
+func (s *Store) CreateTenantTier(ctx context.Context, t *TenantTier) error {
+	return s.sys(ctx).Create(t).Error
+}
+
+// UpdateTenantTier persists the mutable fields of an already-loaded tier (name,
+// description, config) by primary key. Save writes every column, so the caller
+// loads-then-mutates to avoid clobbering the token.
+func (s *Store) UpdateTenantTier(ctx context.Context, t *TenantTier) error {
+	return s.sys(ctx).Save(t).Error
+}
+
+// DeleteTenantTier hard-deletes a tier row. The caller must first establish that no
+// tenant still references it (see CountTenantsAtTier); the FK is RESTRICT, so a
+// missed check fails loudly rather than orphaning tenants — but it fails as a raw
+// constraint violation, which is why the caller checks.
+//
+// Unscoped (hard), like every other iam delete: these entities embed gorm.Model, so
+// a default delete would only set deleted_at and leave the row occupying the unique
+// token index, blocking re-creation of a tier with the same name.
+func (s *Store) DeleteTenantTier(ctx context.Context, t *TenantTier) error {
+	return s.sys(ctx).Unscoped().Delete(t).Error
+}
+
+// CountTenantsAtTier returns how many tenants are packaged at a tier — the guard
+// the admin uses before deleting one (ADR-065 decision 9 / the ADR-044
+// ErrEntityInUse pattern).
+func (s *Store) CountTenantsAtTier(ctx context.Context, tierID uint) (int64, error) {
+	var n int64
+	err := s.sys(ctx).Model(&Tenant{}).Where("tier_id = ?", tierID).Count(&n).Error
+	return n, err
 }
 
 // ListOAuthClients returns the OAuth client registry, ordered by client_id for a

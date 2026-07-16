@@ -7,7 +7,8 @@ import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { createTenant, updateTenant, type AdminTenant } from '@/lib/api/admin';
+import { useQuery } from '@/lib/hooks/use-query';
+import { createTenant, updateTenant, listTenantTiers, type AdminTenant } from '@/lib/api/admin';
 import { Textarea, errMessage } from '@/routes/common';
 
 // TenantForm creates a tenant (tenant absent) or edits one (tenant present, with
@@ -16,6 +17,12 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
   const editing = tenant != null;
   const [token, setToken] = useState(tenant?.token ?? '');
   const [name, setName] = useState(tenant?.name ?? '');
+  // The packaging tier (ADR-065). Required — every tenant has one, so a new tenant
+  // starts with NO tier selected and the operator must choose. Deliberately not
+  // pre-filled with a "sensible default": defaulting it would quietly recreate the
+  // un-tiered tenant the required FK exists to rule out, and which tier a customer
+  // is on is a commercial decision, not a form convenience.
+  const [tierToken, setTierToken] = useState(tenant?.tier.token ?? '');
   const [config, setConfig] = useState(tenant?.config ?? '');
   const [ingestRate, setIngestRate] = useState(tenant?.ingestMessagesPerSecond?.toString() ?? '');
   const [ingestBurst, setIngestBurst] = useState(tenant?.ingestBurst?.toString() ?? '');
@@ -31,6 +38,7 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
   const [aiBurst, setAiBurst] = useState(tenant?.aiInferenceBurst?.toString() ?? '');
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { data: tiers, error: tiersError } = useQuery(() => listTenantTiers(), []);
 
   // An empty override field submits undefined, so the request omits it and the
   // tenant inherits the platform default (clearing any existing override).
@@ -56,10 +64,10 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
         aiInferenceBurst: optNum(aiBurst),
       };
       if (editing) {
-        await updateTenant(tenant.token, { name: name.trim() || undefined, config: cfg, ...gov });
+        await updateTenant(tenant.token, { name: name.trim() || undefined, tierToken, config: cfg, ...gov });
         onDone(`Tenant “${tenant.token}” updated`);
       } else {
-        await createTenant({ token: token.trim(), name: name.trim() || undefined, config: cfg, ...gov });
+        await createTenant({ token: token.trim(), name: name.trim() || undefined, tierToken, config: cfg, ...gov });
         onDone(`Tenant “${token.trim()}” created`);
       }
     } catch (err) {
@@ -93,11 +101,39 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
       <FormField label="Name" htmlFor="t-name">
         <Input id="t-name" value={name} placeholder="Acme Corp" onChange={(e) => setName(e.target.value)} />
       </FormField>
+      {/* The tenant's packaging tier (ADR-065) — one fact that several subsystems
+          read: how the tenant is treated under contention, which AI models it may
+          choose from, its default ceilings. Changing it takes effect within a
+          minute and needs no restart. */}
+      <FormField
+        label="Tier"
+        htmlFor="t-tier"
+        description={
+          editing
+            ? 'The packaging this tenant is held to. Changing it applies within a minute.'
+            : 'The packaging this tenant is held to. Sets its defaults across the platform; individual settings below can still override them.'
+        }
+      >
+        <select
+          id="t-tier"
+          value={tierToken}
+          onChange={(e) => setTierToken(e.target.value)}
+          className="h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <option value="">Select a tier…</option>
+          {(tiers ?? []).map((t) => (
+            <option key={t.token} value={t.token}>
+              {t.name || t.token}
+            </option>
+          ))}
+        </select>
+        {tiersError && <p className="mt-1 text-sm text-destructive">Tiers unavailable ({tiersError}).</p>}
+      </FormField>
       <FormField label="Config (JSON)" htmlFor="t-config" description="Optional freeform JSON object.">
         <Textarea
           id="t-config"
           value={config}
-          placeholder='{ "tier": "gold" }'
+          placeholder='{ "region": "us-east" }'
           onChange={(e) => setConfig(e.target.value)}
         />
       </FormField>
@@ -210,7 +246,9 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
         </FormField>
       </div>
       <div className="flex gap-2">
-        <Button onClick={submit} loading={busy} disabled={busy || (!editing && !token.trim())}>
+        {/* A tenant is never un-tiered, so submit stays disabled until one is
+            picked — the client-side half of the required FK behind it. */}
+        <Button onClick={submit} loading={busy} disabled={busy || !tierToken || (!editing && !token.trim())}>
           {editing ? 'Save changes' : 'Create tenant'}
         </Button>
       </div>

@@ -146,3 +146,52 @@ func TestAdminCatalogFailClosed(t *testing.T) {
 	_, err = r.CreateTenant(limited, struct{ Request adminTenantCreateInput }{})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 }
+
+// TestAdminTenantTierFailClosed holds the tier resolvers (ADR-065) to the same
+// least-privilege bar as the rest of the catalog: unauthenticated is rejected, and
+// an identity holding only user:write cannot read or edit the tier vocabulary.
+//
+// Worth pinning rather than assuming: a tier is a COMMERCIAL fact — what a customer
+// is sold, and (once ADR-056's menu lands) which AI models they may spend money on.
+// Editing one moves every tenant at that tier, live. Reads gate on tenant:read and
+// writes on tenant:write, deliberately reusing the tenant authorities rather than
+// minting a tier-specific pair: a tier is tenant-registry packaging administered by
+// the same operator on the same plane.
+func TestAdminTenantTierFailClosed(t *testing.T) {
+	r := &AdminResolver{}
+
+	bare := context.Background()
+	_, err := r.TenantTiers(bare)
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	_, err = r.CreateTenantTier(bare, struct{ Request adminTenantTierCreateInput }{})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	_, err = r.UpdateTenantTier(bare, struct {
+		Token   string
+		Request adminTenantTierUpdateInput
+	}{})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	_, err = r.DeleteTenantTier(bare, struct{ Token string }{})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	// Authenticated but holding only user:write — wrong authority for packaging.
+	limited := auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{string(auth.UserWrite)}})
+	_, err = r.TenantTiers(limited)
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+	_, err = r.CreateTenantTier(limited, struct{ Request adminTenantTierCreateInput }{})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+	_, err = r.UpdateTenantTier(limited, struct {
+		Token   string
+		Request adminTenantTierUpdateInput
+	}{})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+	_, err = r.DeleteTenantTier(limited, struct{ Token string }{})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+
+	// tenant:read is enough to LIST tiers but never to change them — a read-only
+	// operator must not be able to re-price the platform.
+	reader := auth.WithClaims(context.Background(), &auth.Claims{Authorities: []string{string(auth.TenantRead)}})
+	_, err = r.CreateTenantTier(reader, struct{ Request adminTenantTierCreateInput }{})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+	_, err = r.DeleteTenantTier(reader, struct{ Token string }{})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+}

@@ -48,6 +48,7 @@ export type AdminTenantCreateRequest = {
   name?: string | null | undefined;
   outboundBurst?: number | null | undefined;
   outboundMessagesPerSecond?: number | null | undefined;
+  tierToken: string;
   token: string;
 };
 
@@ -61,6 +62,7 @@ export type AdminTenantUpdateRequest = {
   name?: string | null | undefined;
   outboundBurst?: number | null | undefined;
   outboundMessagesPerSecond?: number | null | undefined;
+  tierToken: string;
 };
 
 export type IdentitiesQueryVariables = Exact<{ [key: string]: never; }>;
@@ -71,7 +73,12 @@ export type IdentitiesQuery = { identities: Array<{ id: string, email: string, f
 export type TenantsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null }> };
+export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null } }> };
+
+export type TenantTiersQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type TenantTiersQuery = { tenantTiers: Array<{ id: string, token: string, name: string | null, description: string | null }> };
 
 export type RolesQueryVariables = Exact<{
   scope?: string | null | undefined;
@@ -194,7 +201,7 @@ export type CreateTenantMutationVariables = Exact<{
 }>;
 
 
-export type CreateTenantMutation = { createTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null } };
+export type CreateTenantMutation = { createTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null } } };
 
 export type UpdateTenantMutationVariables = Exact<{
   token: string;
@@ -202,7 +209,7 @@ export type UpdateTenantMutationVariables = Exact<{
 }>;
 
 
-export type UpdateTenantMutation = { updateTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null } };
+export type UpdateTenantMutation = { updateTenant: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null } } };
 
 export type SetTenantEnabledMutationVariables = Exact<{
   token: string;
@@ -210,7 +217,7 @@ export type SetTenantEnabledMutationVariables = Exact<{
 }>;
 
 
-export type SetTenantEnabledMutation = { setTenantEnabled: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null } };
+export type SetTenantEnabledMutation = { setTenantEnabled: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestMessagesPerSecond: number | null, ingestBurst: number | null, outboundMessagesPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null } } };
 
 export type DeleteTenantMutationVariables = Exact<{
   token: string;
@@ -264,6 +271,10 @@ export const TenantsDocument = new TypedDocumentString(`
     token
     name
     enabled
+    tier {
+      token
+      name
+    }
     config
     ingestMessagesPerSecond
     ingestBurst
@@ -277,6 +288,16 @@ export const TenantsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<TenantsQuery, TenantsQueryVariables>;
+export const TenantTiersDocument = new TypedDocumentString(`
+    query TenantTiers {
+  tenantTiers {
+    id
+    token
+    name
+    description
+  }
+}
+    `) as unknown as TypedDocumentString<TenantTiersQuery, TenantTiersQueryVariables>;
 export const RolesDocument = new TypedDocumentString(`
     query Roles($scope: String) {
   roles(scope: $scope) {
@@ -482,6 +503,10 @@ export const CreateTenantDocument = new TypedDocumentString(`
     token
     name
     enabled
+    tier {
+      token
+      name
+    }
     config
     ingestMessagesPerSecond
     ingestBurst
@@ -502,6 +527,10 @@ export const UpdateTenantDocument = new TypedDocumentString(`
     token
     name
     enabled
+    tier {
+      token
+      name
+    }
     config
     ingestMessagesPerSecond
     ingestBurst
@@ -522,6 +551,10 @@ export const SetTenantEnabledDocument = new TypedDocumentString(`
     token
     name
     enabled
+    tier {
+      token
+      name
+    }
     config
     ingestMessagesPerSecond
     ingestBurst

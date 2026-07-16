@@ -13,6 +13,7 @@ import { graphql } from '@/gql/user-management-admin';
 import type {
   IdentitiesQuery,
   TenantsQuery,
+  TenantTiersQuery,
   RolesQuery,
   AdminAuditEventsQuery,
   AdminAuditEventSearchCriteria,
@@ -28,6 +29,7 @@ import type {
 export type AdminIdentity = IdentitiesQuery['identities'][number];
 export type AdminMembership = AdminIdentity['memberships'][number];
 export type AdminTenant = TenantsQuery['tenants'][number];
+export type AdminTenantTier = TenantTiersQuery['tenantTiers'][number];
 export type AdminRole = RolesQuery['roles'][number];
 export type AdminAuditEvent = AdminAuditEventsQuery['auditEvents']['results'][number];
 export type AdminAuditEventSearchResults = AdminAuditEventsQuery['auditEvents'];
@@ -75,6 +77,10 @@ const TENANTS = graphql(`
       token
       name
       enabled
+      tier {
+        token
+        name
+      }
       config
       ingestMessagesPerSecond
       ingestBurst
@@ -92,6 +98,26 @@ const TENANTS = graphql(`
 export async function listTenants(): Promise<AdminTenant[]> {
   const data = await gql('user-management/admin', TENANTS, undefined, { identity: true });
   return data.tenants;
+}
+
+// The tier catalog (ADR-065) — the operator-defined packaging a tenant is created
+// at. tenantCount is deliberately not selected here: this feeds the tenant form's
+// picker, which only needs the vocabulary, and asking for the count would run a
+// query per tier to render a dropdown.
+const TENANT_TIERS = graphql(`
+  query TenantTiers {
+    tenantTiers {
+      id
+      token
+      name
+      description
+    }
+  }
+`);
+
+export async function listTenantTiers(): Promise<AdminTenantTier[]> {
+  const data = await gql('user-management/admin', TENANT_TIERS, undefined, { identity: true });
+  return data.tenantTiers;
 }
 
 const ROLES = graphql(`
@@ -411,6 +437,10 @@ const CREATE_TENANT = graphql(`
       token
       name
       enabled
+      tier {
+        token
+        name
+      }
       config
       ingestMessagesPerSecond
       ingestBurst
@@ -437,6 +467,10 @@ const UPDATE_TENANT = graphql(`
       token
       name
       enabled
+      tier {
+        token
+        name
+      }
       config
       ingestMessagesPerSecond
       ingestBurst
@@ -463,6 +497,10 @@ const SET_TENANT_ENABLED = graphql(`
       token
       name
       enabled
+      tier {
+        token
+        name
+      }
       config
       ingestMessagesPerSecond
       ingestBurst

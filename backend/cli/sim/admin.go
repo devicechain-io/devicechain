@@ -41,8 +41,22 @@ func (a *Admin) EnsureSuperuser(ctx context.Context) error {
 	return nil
 }
 
+// simTenantTier is the tier the sim's tenant is created at (ADR-065). Every tenant
+// is packaged at a tier — the field is required — so this names one explicitly
+// rather than relying on a default, of which there is none by design. Silver is the
+// neutral middle of the seeded vocabulary: a sim tenant is a demo, not a customer,
+// and giving it gold would quietly make the sim exercise the most privileged
+// packaging rather than the typical one.
+//
+// The token is a literal, not a shared constant: dcctl talks to the admin API over
+// the wire and does not import user-management. An operator who renames or deletes
+// the seeded silver tier will see this refuse with an unknown-tier error, which is
+// the right failure — loud, and naming the tier.
+const simTenantTier = "silver"
+
 const (
-	createTenantMutation   = `mutation($token:String!,$name:String){createTenant(request:{token:$token,name:$name}){token}}`
+	createTenantMutation = `mutation($token:String!,$name:String,$tier:String!){` +
+		`createTenant(request:{token:$token,name:$name,tierToken:$tier}){token}}`
 	createIdentityMutation = `mutation($email:String!,$password:String!){` +
 		`createIdentity(request:{email:$email,password:$password,enabled:true,systemRoles:[]}){email}}`
 	addMembershipMutation = `mutation($email:String!,$tenant:String!){` +
@@ -59,7 +73,7 @@ const (
 // tolerated so a re-run of create (ADR-035 idempotent bootstrap) succeeds.
 func (a *Admin) CreateTenant(ctx context.Context, token, name string) error {
 	err := a.session.Query(ctx, a.adminURL, createTenantMutation,
-		map[string]any{"token": token, "name": name}, nil)
+		map[string]any{"token": token, "name": name, "tier": simTenantTier}, nil)
 	return tolerateExists(fmt.Errorf("create tenant %q: %w", token, err), err)
 }
 

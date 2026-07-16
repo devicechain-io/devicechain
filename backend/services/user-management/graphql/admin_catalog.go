@@ -78,11 +78,15 @@ func (r *AdminTenantResolver) AiInferenceBurst() *int32 {
 
 // Config resolves the AdminTenant.config field: the freeform config map as a
 // JSON object string, or null when unset.
-func (r *AdminTenantResolver) Config() (*string, error) {
-	if len(r.M.Config) == 0 {
+func (r *AdminTenantResolver) Config() (*string, error) { return marshalConfig(r.M.Config) }
+
+// marshalConfig renders a config map as a JSON object string, or null when empty —
+// the inverse of parseConfig, shared by the tenant and tier config fields.
+func marshalConfig(cfg map[string]any) (*string, error) {
+	if len(cfg) == 0 {
 		return nil, nil
 	}
-	b, err := json.Marshal(r.M.Config)
+	b, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -190,6 +194,7 @@ func (r *AdminResolver) DeleteRole(ctx context.Context, args struct {
 type adminTenantCreateInput struct {
 	Token                        string
 	Name                         *string
+	TierToken                    string
 	Config                       *string
 	IngestMessagesPerSecond      *float64
 	IngestBurst                  *int32
@@ -203,6 +208,7 @@ type adminTenantCreateInput struct {
 // adminTenantUpdateInput mirrors AdminTenantUpdateRequest.
 type adminTenantUpdateInput struct {
 	Name                         *string
+	TierToken                    string
 	Config                       *string
 	IngestMessagesPerSecond      *float64
 	IngestBurst                  *int32
@@ -235,7 +241,8 @@ func (r *AdminResolver) CreateTenant(ctx context.Context, args struct {
 		return nil, err
 	}
 	tenant, err := r.getAdminService(ctx).CreateTenant(ctx, admin.TenantInput{
-		Token: args.Request.Token, Name: strOrEmpty(args.Request.Name), Config: cfg,
+		Token: args.Request.Token, Name: strOrEmpty(args.Request.Name),
+		TierToken: args.Request.TierToken, Config: cfg,
 		GovernanceOverrides: admin.GovernanceOverrides{
 			IngestMessagesPerSecond:      args.Request.IngestMessagesPerSecond,
 			IngestBurst:                  intPtr(args.Request.IngestBurst),
@@ -262,7 +269,7 @@ func (r *AdminResolver) UpdateTenant(ctx context.Context, args struct {
 		return nil, err
 	}
 	tenant, err := r.getAdminService(ctx).UpdateTenant(ctx, args.Token, admin.TenantMutableInput{
-		Name: strOrEmpty(args.Request.Name), Config: cfg,
+		Name: strOrEmpty(args.Request.Name), TierToken: args.Request.TierToken, Config: cfg,
 		GovernanceOverrides: admin.GovernanceOverrides{
 			IngestMessagesPerSecond:      args.Request.IngestMessagesPerSecond,
 			IngestBurst:                  intPtr(args.Request.IngestBurst),
