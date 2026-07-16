@@ -181,7 +181,9 @@ CREATE TABLE "user-management".iam_tenants (
  branding_background text,
  branding_foreground text,
  branding_accent text,
- ai_external_enabled boolean
+ ai_external_enabled boolean,
+ ai_inference_requests_per_minute numeric,
+ ai_inference_burst bigint
 );
 CREATE TABLE "user-management".signing_keys (
  id bigint NOT NULL,

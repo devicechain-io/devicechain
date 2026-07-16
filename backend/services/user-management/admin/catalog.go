@@ -115,47 +115,90 @@ func (s *Service) DeleteRole(ctx context.Context, scope, token string) (bool, er
 // TenantInput is the data to create a tenant. Config is freeform JSON (ADR-033).
 // The Ingest* / Outbound* governance overrides are nil to inherit the platform
 // default.
-type TenantInput struct {
-	Token                     string
-	Name                      string
-	Config                    map[string]any
+// GovernanceOverrides carries every per-tenant ADR-023 rate ceiling an admin may
+// declare. Each is nullable: nil means "inherit the platform default", never
+// unlimited. Grouped in one struct — and embedded in both tenant inputs — so a new
+// dimension is added once here rather than threaded through two input structs and a
+// validator's positional argument list (which, at six interchangeable numeric
+// pointers, is a swap waiting to happen).
+type GovernanceOverrides struct {
 	IngestMessagesPerSecond   *float64
 	IngestBurst               *int
 	OutboundMessagesPerSecond *float64
 	OutboundBurst             *int
+	// AI-inference rate (ADR-056 §6). Declared per MINUTE, unlike the per-second
+	// device-traffic dimensions above: drafting is a human-paced authoring action.
+	AiInferenceRequestsPerMinute *float64
+	AiInferenceBurst             *int
+}
+
+// validate rejects a non-positive override on any governance dimension. A nil field
+// means "inherit the platform default"; a provided value must be positive — a zero
+// or negative ceiling is never a valid override (the platform default, itself always
+// positive, is the fail-safe floor), so callers clear an override by omitting it,
+// not by setting it to zero. Field names match the GraphQL input so the error points
+// at what the caller actually sent.
+func (g GovernanceOverrides) validate() error {
+	for _, r := range []struct {
+		field string
+		value *float64
+	}{
+		{"ingestMessagesPerSecond", g.IngestMessagesPerSecond},
+		{"outboundMessagesPerSecond", g.OutboundMessagesPerSecond},
+		{"aiInferenceRequestsPerMinute", g.AiInferenceRequestsPerMinute},
+	} {
+		if err := validateRateOverride(r.field, r.value); err != nil {
+			return err
+		}
+	}
+	for _, b := range []struct {
+		field string
+		value *int
+	}{
+		{"ingestBurst", g.IngestBurst},
+		{"outboundBurst", g.OutboundBurst},
+		{"aiInferenceBurst", g.AiInferenceBurst},
+	} {
+		if err := validateBurstOverride(b.field, b.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyTo writes every override onto a tenant row. A nil field writes NULL, which
+// clears the override back to the platform default — the update is a full replace of
+// the governance fields, not a partial patch. Every field set here must also appear
+// in Store.UpdateTenant's Select allowlist or the write is silently dropped.
+func (g GovernanceOverrides) applyTo(t *iam.Tenant) {
+	t.IngestMessagesPerSecond = g.IngestMessagesPerSecond
+	t.IngestBurst = g.IngestBurst
+	t.OutboundMessagesPerSecond = g.OutboundMessagesPerSecond
+	t.OutboundBurst = g.OutboundBurst
+	t.AiInferenceRequestsPerMinute = g.AiInferenceRequestsPerMinute
+	t.AiInferenceBurst = g.AiInferenceBurst
+}
+
+// TenantInput is the data to create a tenant.
+type TenantInput struct {
+	Token  string
+	Name   string
+	Config map[string]any
+	GovernanceOverrides
 	// AiExternalEnabled is the per-tenant external-AI consent (ADR-056 §6):
 	// nil/false = not opted in (fail-closed), true = the operator has recorded this
-	// tenant's consent to route its data to an external frontier model.
+	// tenant's consent to route its data to an external frontier model. Distinct from
+	// the governance ceilings above: it gates WHETHER the tenant's data may leave the
+	// boundary, not how often.
 	AiExternalEnabled *bool
 }
 
 // TenantMutableInput is the data to update a tenant: its token is fixed.
 type TenantMutableInput struct {
-	Name                      string
-	Config                    map[string]any
-	IngestMessagesPerSecond   *float64
-	IngestBurst               *int
-	OutboundMessagesPerSecond *float64
-	OutboundBurst             *int
-	AiExternalEnabled         *bool
-}
-
-// validateGovernance rejects a non-positive override on any governance dimension.
-// A nil field means "inherit the platform default"; a provided value must be
-// positive — a zero or negative ceiling is never a valid override (the platform
-// default, itself always positive, is the fail-safe floor), so callers clear an
-// override by omitting it, not by setting it to zero.
-func validateGovernance(ingestMps *float64, ingestBurst *int, outboundMps *float64, outboundBurst *int) error {
-	if err := validateRateOverride("ingestMessagesPerSecond", ingestMps); err != nil {
-		return err
-	}
-	if err := validateBurstOverride("ingestBurst", ingestBurst); err != nil {
-		return err
-	}
-	if err := validateRateOverride("outboundMessagesPerSecond", outboundMps); err != nil {
-		return err
-	}
-	return validateBurstOverride("outboundBurst", outboundBurst)
+	Name   string
+	Config map[string]any
+	GovernanceOverrides
+	AiExternalEnabled *bool
 }
 
 func validateRateOverride(field string, v *float64) error {
@@ -177,18 +220,15 @@ func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant
 	if in.Token == "" {
 		return nil, fmt.Errorf("token is required")
 	}
-	if err := validateGovernance(in.IngestMessagesPerSecond, in.IngestBurst, in.OutboundMessagesPerSecond, in.OutboundBurst); err != nil {
+	if err := in.validate(); err != nil {
 		return nil, err
 	}
 	t := &iam.Tenant{
 		Token: in.Token, Enabled: true, Config: in.Config,
-		NamedEntity:               rdb.NamedEntity{Name: rdb.NullStrOf(&in.Name)},
-		IngestMessagesPerSecond:   in.IngestMessagesPerSecond,
-		IngestBurst:               in.IngestBurst,
-		OutboundMessagesPerSecond: in.OutboundMessagesPerSecond,
-		OutboundBurst:             in.OutboundBurst,
-		AiExternalEnabled:         in.AiExternalEnabled,
+		NamedEntity:       rdb.NamedEntity{Name: rdb.NullStrOf(&in.Name)},
+		AiExternalEnabled: in.AiExternalEnabled,
 	}
+	in.applyTo(t)
 	if err := s.iam.CreateTenant(ctx, t); err != nil {
 		return nil, err
 	}
@@ -199,7 +239,7 @@ func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant
 // override field clears it (reverting the tenant to the platform default), so the
 // update is a full replace of the mutable fields, not a partial patch.
 func (s *Service) UpdateTenant(ctx context.Context, token string, in TenantMutableInput) (*iam.Tenant, error) {
-	if err := validateGovernance(in.IngestMessagesPerSecond, in.IngestBurst, in.OutboundMessagesPerSecond, in.OutboundBurst); err != nil {
+	if err := in.validate(); err != nil {
 		return nil, err
 	}
 	t, err := s.loadTenant(ctx, token)
@@ -208,11 +248,8 @@ func (s *Service) UpdateTenant(ctx context.Context, token string, in TenantMutab
 	}
 	t.Name = rdb.NullStrOf(&in.Name)
 	t.Config = in.Config
-	t.IngestMessagesPerSecond = in.IngestMessagesPerSecond
-	t.IngestBurst = in.IngestBurst
-	t.OutboundMessagesPerSecond = in.OutboundMessagesPerSecond
-	t.OutboundBurst = in.OutboundBurst
 	t.AiExternalEnabled = in.AiExternalEnabled
+	in.applyTo(t)
 	if err := s.iam.UpdateTenant(ctx, t); err != nil {
 		return nil, err
 	}

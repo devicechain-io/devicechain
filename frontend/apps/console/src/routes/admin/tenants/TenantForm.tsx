@@ -24,6 +24,11 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
   // Per-tenant consent to route NL→rule authoring to an external AI model (ADR-056 §6).
   // Default off (fail-closed): a null/false flag means the tenant has not opted in.
   const [aiExternalEnabled, setAiExternalEnabled] = useState(tenant?.aiExternalEnabled === true);
+  // How fast an opted-in tenant may spend inference budget. A separate dimension from
+  // the consent flag above — that gates whether the tenant may route externally at all,
+  // this gates how often — and declared per minute, since drafting is human-paced.
+  const [aiRate, setAiRate] = useState(tenant?.aiInferenceRequestsPerMinute?.toString() ?? '');
+  const [aiBurst, setAiBurst] = useState(tenant?.aiInferenceBurst?.toString() ?? '');
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -47,6 +52,8 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
         // Sent explicitly (true/false) — consent is a deliberate operator decision, so
         // an unchecked box records "not opted in" rather than leaving it ambiguous.
         aiExternalEnabled,
+        aiInferenceRequestsPerMinute: optNum(aiRate),
+        aiInferenceBurst: optNum(aiBurst),
       };
       if (editing) {
         await updateTenant(tenant.token, { name: name.trim() || undefined, config: cfg, ...gov });
@@ -170,6 +177,37 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
           <span>Allow external AI routing for NL→rule authoring</span>
         </label>
       </FormField>
+      <div className="grid grid-cols-2 gap-2">
+        <FormField
+          label="AI drafting rate (requests/min)"
+          htmlFor="t-ai-rate"
+          description="Rate ceiling for AI inference requests. Leave blank to inherit the platform default."
+        >
+          <Input
+            id="t-ai-rate"
+            type="number"
+            min="0"
+            value={aiRate}
+            placeholder="default"
+            onChange={(e) => setAiRate(e.target.value)}
+          />
+        </FormField>
+        <FormField
+          label="AI drafting burst"
+          htmlFor="t-ai-burst"
+          description="Leave blank to inherit the platform default."
+        >
+          <Input
+            id="t-ai-burst"
+            type="number"
+            min="0"
+            step="1"
+            value={aiBurst}
+            placeholder="default"
+            onChange={(e) => setAiBurst(e.target.value)}
+          />
+        </FormField>
+      </div>
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy || (!editing && !token.trim())}>
           {editing ? 'Save changes' : 'Create tenant'}

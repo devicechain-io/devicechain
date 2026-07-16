@@ -150,8 +150,37 @@ func TestDimensions_AreDistinct(t *testing.T) {
 	assert.Equal(t, "ingestBurst", Ingest.BurstField)
 	assert.Equal(t, "outboundMessagesPerSecond", Outbound.RateField)
 	assert.Equal(t, "outboundBurst", Outbound.BurstField)
-	assert.NotEqual(t, Ingest.RateField, Outbound.RateField)
-	assert.NotEqual(t, Ingest.Name, Outbound.Name)
+	assert.Equal(t, "aiInferenceRequestsPerMinute", AIInference.RateField)
+	assert.Equal(t, "aiInferenceBurst", AIInference.BurstField)
+
+	seen := map[string]bool{}
+	for _, d := range []Dimension{Ingest, Outbound, AIInference} {
+		assert.False(t, seen[d.Name], "dimension names must be distinct: %s", d.Name)
+		assert.False(t, seen[d.RateField], "rate fields must be distinct: %s", d.RateField)
+		assert.False(t, seen[d.BurstField], "burst fields must be distinct: %s", d.BurstField)
+		seen[d.Name], seen[d.RateField], seen[d.BurstField] = true, true, true
+	}
+}
+
+// Every declared dimension must carry a positive scale. A zero value would mean the
+// declared unit is unstated; PerSecond falls back to identity rather than zeroing a
+// ceiling, but a real dimension should never rely on that fallback.
+func TestDimensions_DeclareAPositiveScale(t *testing.T) {
+	for _, d := range []Dimension{Ingest, Outbound, AIInference} {
+		assert.Positive(t, d.PerSecondScale, "%s must declare its rate unit", d.Name)
+	}
+}
+
+// The per-second dimensions pass rates through untouched; the AI dimension is
+// declared per minute, so its rate divides by 60 on the way to the bucket.
+func TestDimension_PerSecond(t *testing.T) {
+	assert.Equal(t, 1000.0, Ingest.PerSecond(1000))
+	assert.Equal(t, 100.0, Outbound.PerSecond(100))
+	assert.InDelta(t, 0.5, AIInference.PerSecond(30), 1e-9, "30/minute is 0.5/second")
+	assert.InDelta(t, 1.0, AIInference.PerSecond(60), 1e-9)
+
+	// A zero-value Dimension meters at the declared number rather than at nothing.
+	assert.Equal(t, 42.0, Dimension{Name: "unscaled"}.PerSecond(42))
 }
 
 func tenantName(i int) string {

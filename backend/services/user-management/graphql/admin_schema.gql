@@ -52,6 +52,13 @@ type AdminTenant {
     # not opted in (fail-closed); true records the operator's consent to route this
     # tenant's data to an external frontier model.
     aiExternalEnabled: Boolean
+    # Per-tenant AI-inference rate overrides (ADR-056 §6 / ADR-023): how fast this
+    # tenant may spend inference budget on the NL authoring door. Declared per
+    # MINUTE. Null means the tenant inherits the platform default, never unlimited.
+    # Distinct from aiExternalEnabled: that gates WHETHER this tenant's data may be
+    # routed externally, these gate HOW OFTEN.
+    aiInferenceRequestsPerMinute: Float
+    aiInferenceBurst: Int
 }
 
 # A globally-defined, named bundle of authorities (ADR-008 RBAC / ADR-033). Scope
@@ -98,6 +105,13 @@ input AdminTenantCreateRequest {
     # Per-tenant external-AI consent (ADR-056 §6); omit for not-opted-in (the
     # fail-closed default).
     aiExternalEnabled: Boolean
+    # Per-tenant AI-inference rate overrides (ADR-056 §6 / ADR-023): how fast this
+    # tenant may spend inference budget on the NL authoring door. Declared per
+    # MINUTE. Null means the tenant inherits the platform default, never unlimited.
+    # Distinct from aiExternalEnabled: that gates WHETHER this tenant's data may be
+    # routed externally, these gate HOW OFTEN.
+    aiInferenceRequestsPerMinute: Float
+    aiInferenceBurst: Int
 }
 
 # Data to update a tenant (its token is fixed). A null ingest* / outbound* override
@@ -111,6 +125,13 @@ input AdminTenantUpdateRequest {
     outboundMessagesPerSecond: Float
     outboundBurst: Int
     aiExternalEnabled: Boolean
+    # Per-tenant AI-inference rate overrides (ADR-056 §6 / ADR-023): how fast this
+    # tenant may spend inference budget on the NL authoring door. Declared per
+    # MINUTE. Null means the tenant inherits the platform default, never unlimited.
+    # Distinct from aiExternalEnabled: that gates WHETHER this tenant's data may be
+    # routed externally, these gate HOW OFTEN.
+    aiInferenceRequestsPerMinute: Float
+    aiInferenceBurst: Int
 }
 
 # Data required to create a global identity. Each system role must name an
