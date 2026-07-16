@@ -42,11 +42,18 @@ func TestProfilesAreValid(t *testing.T) {
 	}
 }
 
-// An empty intent defaults to the full profile.
-func TestResolveDefaultsToFull(t *testing.T) {
+// An empty intent resolves to the DEFAULT profile — the standard system. Declaring no
+// intent must never deploy the areas that reach outside the instance (AI inference,
+// outbound connectors, MCP); that takes an explicit "full". This is also the chart's
+// empty-selection behaviour, and the two must not diverge: the chart renders what is
+// deployed, this package is what the operator resolves.
+func TestResolveDefaultsToDefaultProfile(t *testing.T) {
 	enabled, err := ResolveEnabled("", nil)
 	assert.NoError(t, err)
-	assert.ElementsMatch(t, profiles[ProfileFull], enabled)
+	assert.ElementsMatch(t, profiles[ProfileDefault], enabled)
+	assert.NotContains(t, enabled, AiInference, "an unstated intent must not deploy AI inference")
+	assert.NotContains(t, enabled, OutboundConn, "an unstated intent must not deploy outbound connectors")
+	assert.NotContains(t, enabled, Mcp, "an unstated intent must not deploy MCP")
 }
 
 // Profile and explicit set are mutually exclusive.

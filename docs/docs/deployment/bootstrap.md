@@ -85,7 +85,7 @@ pipeline, chart, and operator are identical.
 | Flag | Purpose |
 |------|---------|
 | `--kube-context <name>` | Target a specific kube-context (default: auto-detect a local one). |
-| `--profile <profile>` | Functional-area profile: `full` (default), `telemetry`, or `ingest-only`. |
+| `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, and MCP), `telemetry`, or `ingest-only`. |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |
 | `--registry` / `--version` | Override the image registry / tag (defaults: published `ghcr.io/devicechain-io`, or `localhost:5000` + `dev` with `--build`). |
 | `--host <name>` | Ingress host to expose the instance on (default `devicechain.local`). Use `localhost` on a local cluster to reach the console with **no `/etc/hosts` edit**. |
