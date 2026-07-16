@@ -6,6 +6,7 @@ package main
 import (
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
 
+	aiinference "github.com/devicechain-io/dc-ai-inference/schema"
 	commanddelivery "github.com/devicechain-io/dc-command-delivery/model"
 	dashboardmanagement "github.com/devicechain-io/dc-dashboard-management/model"
 	devicemanagement "github.com/devicechain-io/dc-device-management/schema"
@@ -31,6 +32,7 @@ type area struct {
 // changes — the same entry now points at the baseline, and `verify` proves it
 // reproduces the golden the incremental chain produced.
 var areas = []area{
+	{"ai-inference", aiinference.Migrations},
 	{"command-delivery", commanddelivery.Migrations},
 	{"dashboard-management", dashboardmanagement.Migrations},
 	{"device-management", devicemanagement.Migrations},

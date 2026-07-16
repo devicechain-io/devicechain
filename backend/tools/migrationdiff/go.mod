@@ -3,6 +3,7 @@ module github.com/devicechain-io/dc-migrationdiff
 go 1.26.5
 
 require (
+	github.com/devicechain-io/dc-ai-inference v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-command-delivery v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-dashboard-management v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-device-management v0.0.1
@@ -59,6 +60,8 @@ require (
 )
 
 replace github.com/devicechain-io/dc-microservice => ../../core
+
+replace github.com/devicechain-io/dc-ai-inference => ../../services/ai-inference
 
 replace github.com/devicechain-io/dc-command-delivery => ../../services/command-delivery
 

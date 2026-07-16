@@ -1,0 +1,117 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+#
+# AI Inference GraphQL Schema (ADR-056)
+#
+# This service is the fail-closed inference seam for NL→rule authoring. This surface is
+# the INSTANCE-scoped, operator-managed provider list (create providers, pick THE active
+# one — "default of none"). Providers are an operator concern at GA (the hosted key, or a
+# self-hosted endpoint); a tenant only CONSENTS to external routing (the per-tenant
+# ai_external_enabled flag on user-management, ADR-056 §6). API keys are write-only — a
+# `secret` goes IN on create/update and is sealed in the ADR-059 secret store; it never
+# comes back out (the read side exposes only `hasSecret`). The inference call itself
+# (inferRuleCandidate) lands in slice 0c.
+
+# Pagination info for search results.
+type SearchResultsPagination {
+    pageStart: Int
+    pageEnd: Int
+    totalRecords: Int
+}
+
+# Static service identity — the deployed functional area (non-sensitive).
+type ServiceInfo {
+    area: String!
+}
+
+# An instance-scoped, operator-managed inference-provider config (ADR-056 §4). The
+# `kind` selects the provider implementation (`anthropic` at GA); `endpoint` overrides
+# the kind's default base URL (for a self-hosted / proxied model); `params` is the
+# opaque per-kind tuning document. The API key is never returned — `hasSecret` reports
+# only whether one is configured.
+type AiProvider {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    token: String!
+    name: String
+    description: String
+    # One of the registered provider kinds (see the aiProviderKinds query).
+    kind: String!
+    # The provider API base URL, or null for the kind's built-in default.
+    endpoint: String
+    # The provider model id (e.g. "claude-opus-4-8").
+    model: String!
+    # The opaque per-kind inference params (a JSON object), or null.
+    params: String
+    # Whether this provider may be resolved and used.
+    enabled: Boolean!
+    # Whether this is THE active provider used by default for inference. At most one
+    # provider is active; none active is the valid "default of none" (feature off).
+    active: Boolean!
+    # Whether an API key is configured, without exposing it.
+    hasSecret: Boolean!
+}
+
+# Data to create or update a provider. `secret` (the API key) is write-only: omit it on
+# update to preserve the stored key, send a value to replace it, or send an empty string
+# to clear it. On create, omit or empty means no key yet.
+input AiProviderCreateRequest {
+    token: String!
+    name: String
+    description: String
+    kind: String!
+    endpoint: String
+    model: String!
+    params: String
+    enabled: Boolean!
+    secret: String
+}
+
+# Criteria used when searching for providers.
+input AiProviderSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    kind: String
+}
+
+# Search results returned from a provider query.
+type AiProviderSearchResults {
+    results: [AiProvider!]!
+    pagination: SearchResultsPagination!
+}
+
+type Query {
+    # Non-sensitive service identity (the deployed functional area).
+    aiInferenceInfo: ServiceInfo!
+    # Look up a single provider by its token.
+    aiProvider(token: String!): AiProvider
+    # Search providers by criteria.
+    aiProviders(criteria: AiProviderSearchCriteria!): AiProviderSearchResults!
+    # The registered provider-kind vocabulary (for a console picker).
+    aiProviderKinds: [String!]!
+    # THE active provider, or null when none is active ("default of none").
+    activeAiProvider: AiProvider
+}
+
+type Mutation {
+    # Create a new provider (never active on create — promote it with setActiveAiProvider).
+    createAiProvider(request: AiProviderCreateRequest!): AiProvider!
+    # Update the provider with the given (current) token. When expectedUpdatedAt is
+    # supplied it is an optimistic-concurrency precondition: the update fails (CONFLICT)
+    # if the provider's updatedAt has changed since. `active` is not changed here.
+    updateAiProvider(token: String!, request: AiProviderCreateRequest!, expectedUpdatedAt: String): AiProvider!
+    # Delete the provider with the given token (and its key). Returns whether a row was
+    # deleted. Deleting the active provider leaves the platform with none active.
+    deleteAiProvider(token: String!): Boolean!
+    # Promote the provider with the given token to THE active one, clearing any previous.
+    setActiveAiProvider(token: String!): AiProvider!
+    # Clear the active provider (return to "default of none"). Returns true always.
+    clearActiveAiProvider: Boolean!
+}
+
+schema {
+    query: Query
+    mutation: Mutation
+}
