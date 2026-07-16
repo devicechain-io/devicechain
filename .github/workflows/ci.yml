@@ -313,7 +313,26 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # Pin ko rather than letting the action resolve its default "latest-release".
+      # That resolution is, inside the action:
+      #   tag=$(curl -L -s -u "username:${GH_TOKEN}" \
+      #           https://api.github.com/repos/ko-build/ko/releases/latest | jq -r '.tag_name')
+      # which makes every image-smoke job depend on GitHub's AUTHENTICATED API being
+      # healthy at that moment — and when it is not, the action pipes an HTML error
+      # page straight into jq, which dies with "Invalid numeric literal at line 1,
+      # column 10" and an empty tag, failing the job in ~10s before anything is built.
+      # That is exactly what took out all 12 image-smoke jobs on 2026-07-16: GitHub was
+      # 503-ing authenticated api.github.com requests while unauthenticated ones still
+      # returned 200, so the failure looked like a code problem and was not.
+      #
+      # A pinned version takes the action's `*)` branch (tag="${KO_VERSION}"), skipping
+      # the lookup entirely; the binary then comes from the release-asset host, not the
+      # API. It also makes the image build reproducible — the same ko for every run
+      # rather than whatever shipped that morning, which is what pinning a build tool
+      # is for. Bump this deliberately.
       - uses: ko-build/setup-ko@v0.10
+        with:
+          version: v0.19.1
 
       - name: ko build (local, no push)
         working-directory: ${{ matrix.module }}

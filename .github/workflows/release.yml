@@ -108,7 +108,17 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # Pinned for the same reasons as ci.yml's image-smoke — and it matters more here.
+      # The action's default "latest-release" resolves ko by curl-ing GitHub's
+      # AUTHENTICATED API and piping the body to jq, so an API blip fails the job with
+      # an "Invalid numeric literal" jq error before anything builds (all 12 CI jobs,
+      # 2026-07-16). On a RELEASE that would mean a tag that publishes no images for a
+      # reason that has nothing to do with the code. It also means the released images
+      # are built by whichever ko happened to be current that day; a release should be
+      # reproducible. Keep this in step with ci.yml — bump both together, deliberately.
       - uses: ko-build/setup-ko@v0.10
+        with:
+          version: v0.19.1
 
       - name: Log in to ghcr
         env:
