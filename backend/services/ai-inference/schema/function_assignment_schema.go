@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// aiFunctionAssignmentV1 is the ai_function_assignments shape frozen at this migration.
+// aiFunctionAssignment is the ai_function_assignments shape frozen at this migration.
 // It pins an explicit TableName for the reason every table in this service does: gorm's
 // naming splits the "AI" initialism, so the derived name would not match the one the
 // runtime model pins — and migrationdiff cannot catch that class of disagreement,
@@ -29,17 +29,17 @@ import (
 // whereas a raw ALTER TABLE ... ADD CONSTRAINT is Postgres-only and fails the unit
 // tests). Keeping it off the runtime model avoids gorm's association auto-save, which
 // would try to upsert the provider whenever an assignment is written.
-type aiFunctionAssignmentV1 struct {
+type aiFunctionAssignment struct {
 	ID        uint `gorm:"primarykey"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	rdb.TenantScoped
-	Function   string        `gorm:"not null;size:64"`
-	ProviderID uint          `gorm:"not null;index"`
-	Provider   *aiProviderV1 `gorm:"foreignKey:ProviderID;constraint:OnDelete:RESTRICT"`
+	Function   string      `gorm:"not null;size:64"`
+	ProviderID uint        `gorm:"not null;index"`
+	Provider   *aiProvider `gorm:"foreignKey:ProviderID;constraint:OnDelete:RESTRICT"`
 }
 
-func (aiFunctionAssignmentV1) TableName() string { return "ai_function_assignments" }
+func (aiFunctionAssignment) TableName() string { return "ai_function_assignments" }
 
 // NewAIFunctionAssignmentsSchema adds the table that stores a tenant's chosen model per
 // AI function — the mechanism that REPLACED the derived "default model".
@@ -70,12 +70,12 @@ func NewAIFunctionAssignmentsSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20260716140000",
 		Migrate: func(tx *gorm.DB) error {
-			if err := tx.AutoMigrate(&aiFunctionAssignmentV1{}); err != nil {
+			if err := tx.AutoMigrate(&aiFunctionAssignment{}); err != nil {
 				return err
 			}
 
 			stmt := &gorm.Statement{DB: tx}
-			if err := stmt.Parse(&aiFunctionAssignmentV1{}); err != nil {
+			if err := stmt.Parse(&aiFunctionAssignment{}); err != nil {
 				return err
 			}
 
