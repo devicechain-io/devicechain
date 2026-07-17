@@ -85,12 +85,15 @@ export function TierAiModelsPanel({
           </p>
         </SectionPanel>
       )}
+      {/* No header strip: the tier's token, name and tenant count are already in the
+          page header a few lines up. The matrix screen keeps it (many tiers stacked). */}
       <TierPanel
         tier={tier}
         providers={providers}
         busy={busy}
         onToggleGrant={toggleGrant}
         onChooseDefault={chooseDefault}
+        showHeader={false}
       />
     </div>
   );

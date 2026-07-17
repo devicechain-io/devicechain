@@ -166,18 +166,25 @@ export function useTierPackaging(reload: () => void) {
 // TierPanel renders one tier's grant/default matrix. Presentation only — every decision
 // (what to confirm, what to write) lives in useTierPackaging above; this maps a
 // PackagingTier and the provider list to controls and hands clicks back to the handlers.
+//
+// showHeader draws the tier's token/name/tenant-count strip above the table. The matrix
+// screen stacks many panels and needs each one labelled, so it defaults on; a single
+// tier's detail tab already shows all three in the page header, so it turns this off to
+// avoid the duplicate.
 export function TierPanel({
   tier,
   providers,
   busy,
   onToggleGrant,
   onChooseDefault,
+  showHeader = true,
 }: {
   tier: PackagingTier;
   providers: AiProviderListItem[];
   busy: boolean;
   onToggleGrant: (tier: PackagingTier, provider: string, granted: boolean) => void;
   onChooseDefault: (tier: PackagingTier, value: string) => void;
+  showHeader?: boolean;
 }) {
   const warning = tierWarning(tier);
   // The marked default is normally one of the rows below. It is not when the provider list
@@ -191,16 +198,18 @@ export function TierPanel({
 
   return (
     <SectionPanel
-      title={tier.token}
-      description={tier.name ?? undefined}
+      title={showHeader ? tier.token : undefined}
+      description={showHeader ? (tier.name ?? undefined) : undefined}
       action={
-        tier.known ? (
-          <Badge variant="secondary">
-            {tier.tenantCount} tenant{tier.tenantCount === 1 ? '' : 's'}
-          </Badge>
-        ) : (
-          <Badge variant="outline">unknown tier</Badge>
-        )
+        showHeader ? (
+          tier.known ? (
+            <Badge variant="secondary">
+              {tier.tenantCount} tenant{tier.tenantCount === 1 ? '' : 's'}
+            </Badge>
+          ) : (
+            <Badge variant="outline">unknown tier</Badge>
+          )
+        ) : undefined
       }
     >
       <div className="space-y-4">
