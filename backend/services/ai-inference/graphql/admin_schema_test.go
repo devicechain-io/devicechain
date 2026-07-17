@@ -98,37 +98,85 @@ func TestAdminPlaneCarriesTheWholeProviderSurface(t *testing.T) {
 			"aiProviderTierGrants", "aiProviders"},
 		fieldNames(t, schema, "queryType"))
 	assert.Equal(t,
-		[]string{"clearPlatformBaselineProvider", "createAiProvider",
+		[]string{"clearAiTierDefault", "createAiProvider",
 			"deleteAiProvider", "grantAiProviderToTenant", "grantAiProviderToTier",
 			"revokeAiProviderFromTenant", "revokeAiProviderFromTier",
-			"setPlatformBaselineProvider", "testAiProvider", "updateAiProvider"},
+			"setAiTierDefault", "testAiProvider", "updateAiProvider"},
 		fieldNames(t, schema, "mutationType"))
 }
 
-// TestTheDerivedDefaultIsGone pins the cutover at the surface, the way
-// TestTheActivePointerIsGone pins its predecessor. The "default model" mechanism
-// inferred which model served a call from properties of the grant sets, and so
-// re-answered whenever an operator changed a set — the same non-monotonic shape, five
-// times over (see model/function.go).
+// TestTheDefaultIsAnExplicitPerTierActAtTheSurface pins the shape of the default at the
+// API, which is where a reintroduction would enter.
 //
-// Naming the retired fields explicitly is what stops one coming back via a resolver
-// copied from history. A reintroduced setAiTierDefault would not merely be redundant: it
-// would be a SECOND answer to "which model serves this call", sitting beside the stored
-// assignment with no rule for which wins.
-func TestTheDerivedDefaultIsGone(t *testing.T) {
+// A per-tier default EXISTS and is set explicitly (setAiTierDefault). What must never come
+// back is the machinery that let one be INFERRED, and the surface is where that machinery
+// is visible:
+//
+//   - makeDefault on a grant mutation. This is where the auto-mark bug lived: it made the
+//     default a property of the grant call, so a later grant could silently overturn an
+//     operator's explicit "no default". Granting and defaulting are separate acts.
+//   - a TENANT-axis default. The per-tenant grant is additive-only; a dormant tenant mark
+//     that springs alive when a tier is unpackaged was the fifth bug. The tenant's answer
+//     is a stored (tenant, function) assignment, not a mark on its exception.
+//   - the instance-wide platform baseline, which gave every tier the same fallback and so
+//     was not a per-tier default at all.
+//
+// Naming them explicitly is what stops one arriving via a resolver copied from history.
+func TestTheDefaultIsAnExplicitPerTierActAtTheSurface(t *testing.T) {
 	schema := gql.MustParseSchema(AdminSchemaContent, &AdminResolver{})
 	served := append(fieldNames(t, schema, "queryType"), fieldNames(t, schema, "mutationType")...)
 
 	for _, retired := range []string{
-		"setAiTierDefault", "clearAiTierDefault", "setAiTenantDefault", "clearAiTenantDefault",
+		"setAiTenantDefault", "clearAiTenantDefault",
+		"setPlatformBaselineProvider", "clearPlatformBaselineProvider",
 	} {
 		assert.NotContains(t, served, retired,
-			"the derived default is retired — the answer is a stored (tenant, function) assignment")
+			"the default is per-TIER and explicit: there is no tenant-axis mark and no instance-wide baseline")
 	}
-	assert.NotContains(t, AdminSchemaContent, "isDefault",
-		"a grant carries no default mark: it is an entitlement, not an answer")
-	assert.NotContains(t, AdminSchemaContent, "makeDefault",
-		"granting is not a statement about which model anything uses")
+	// Read the ARGUMENTS the server will actually accept, rather than grepping the SDL for
+	// "makeDefault": the field's own doc comment explains why that flag is forbidden, so a
+	// substring scan would fire on the documentation that prevents the bug. Introspection
+	// asserts the capability — can a grant call carry a default? — which is the thing that
+	// matters.
+	res := schema.Exec(context.Background(),
+		`{ __type(name: "Mutation") { fields { name args { name } } } }`, "", nil)
+	require.Empty(t, res.Errors)
+	var mutations struct {
+		Type struct {
+			Fields []struct {
+				Name string `json:"name"`
+				Args []struct {
+					Name string `json:"name"`
+				} `json:"args"`
+			} `json:"fields"`
+		} `json:"__type"`
+	}
+	require.NoError(t, json.Unmarshal(res.Data, &mutations))
+	for _, f := range mutations.Type.Fields {
+		for _, a := range f.Args {
+			assert.NotEqual(t, "makeDefault", a.Name,
+				"%s must not carry a makeDefault argument: granting is not a statement about "+
+					"which model anything uses, and that flag is where the auto-mark bug lived", f.Name)
+		}
+	}
+
+	// The provider type carries no instance-wide baseline flag — the default rides a TIER
+	// GRANT, so it cannot be a property of the provider.
+	provider := schema.Exec(context.Background(),
+		`{ __type(name: "AiProvider") { fields { name } } }`, "", nil)
+	require.Empty(t, provider.Errors)
+	assert.NotContains(t, string(provider.Data), "isPlatformBaseline",
+		"a provider carries no instance-wide baseline flag — the default rides a TIER GRANT")
+
+	// The positive half: the per-tier default is reachable, and it is a mark on the grant
+	// rather than a property of the provider.
+	assert.Contains(t, served, "setAiTierDefault")
+	assert.Contains(t, served, "clearAiTierDefault")
+	grant := schema.Exec(context.Background(),
+		`{ __type(name: "AiProviderTierGrant") { fields { name } } }`, "", nil)
+	require.Empty(t, grant.Errors)
+	assert.Contains(t, string(grant.Data), `"isDefault"`,
+		"a tier grant reports whether it is the tier's default — the operator must be able to read the mark back")
 }
 
 // TestTheActivePointerIsGone pins the ADR-065 retirement at the surface. The
@@ -200,13 +248,13 @@ func TestAdminResolversFailClosed(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	assert.False(t, ok)
 
-	// The baseline designation decides what every tenant that never chose a model gets,
-	// so it fails closed on its own like the rest of the packaging surface.
-	ok, err = r.SetPlatformBaselineProvider(ctx, struct{ Token string }{Token: "p"})
+	// The tier default decides what every tenant at that tier which never chose a model
+	// gets, so it fails closed on its own like the rest of the packaging surface.
+	ok, err = r.SetAiTierDefault(ctx, struct{ Tier, Provider string }{Tier: "gold", Provider: "p"})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	assert.False(t, ok)
 
-	ok, err = r.ClearPlatformBaselineProvider(ctx)
+	ok, err = r.ClearAiTierDefault(ctx, struct{ Tier string }{Tier: "gold"})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	assert.False(t, ok)
 
@@ -249,7 +297,7 @@ func TestAdminResolversForbidWithoutAiAdmin(t *testing.T) {
 	_, err = r.GrantAiProviderToTier(ctx, struct{ Tier, Provider string }{Tier: "gold", Provider: "p"})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 
-	_, err = r.SetPlatformBaselineProvider(ctx, struct{ Token string }{Token: "p"})
+	_, err = r.SetAiTierDefault(ctx, struct{ Tier, Provider string }{Tier: "gold", Provider: "p"})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 
 	_, err = r.GrantAiProviderToTenant(ctx, struct{ Tenant, Provider string }{Tenant: "acme", Provider: "p"})
@@ -295,8 +343,8 @@ func TestATenantAdminCannotAdministerProviders(t *testing.T) {
 	_, err = r.GrantAiProviderToTier(tenantAdmin, struct{ Tier, Provider string }{Tier: "gold", Provider: "x"})
 	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not decide what a tier is sold`)
 
-	_, err = r.SetPlatformBaselineProvider(tenantAdmin, struct{ Token string }{Token: "x"})
-	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not designate the instance's baseline model`)
+	_, err = r.SetAiTierDefault(tenantAdmin, struct{ Tier, Provider string }{Tier: "gold", Provider: "x"})
+	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not decide what its tier defaults to`)
 
 	_, err = r.GrantAiProviderToTenant(tenantAdmin, struct{ Tenant, Provider string }{Tenant: "acme", Provider: "x"})
 	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not grant its own tenant a model its tier never offered`)

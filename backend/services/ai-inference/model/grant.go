@@ -18,17 +18,18 @@ import (
 // This replaces the retired instance-wide single-active pointer, which modeled
 // "one model, globally" and could express no packaging at all.
 //
-// A GRANT IS AN ENTITLEMENT AND NOTHING ELSE. It says a model is on the menu; it does
-// not say which model anything USES. That second question is answered by a stored
-// (tenant, function) → provider assignment (see function.go) and, failing that, by the
-// platform-baseline provider — never by a property of these rows, and never by their
-// count. Both grant tables once carried an IsDefault mark for that job, and the mark
-// itself was fine; what was not fine was that the mark's PRESENCE was inferred from the
-// grant set (auto-marking the "first" grant, falling back to a sole model, deciding
-// which axis spoke by whether the tier granted anything). Every one of those reads a
-// set operators can change, and so re-answers when they change it. The whole mechanism
-// is gone rather than patched: entitlement lives here, the answer lives in an
-// assignment row, and the two never infer each other.
+// A GRANT IS AN ENTITLEMENT. It says a model is on the menu; it does not say which model
+// anything USES. That second question is answered by a stored (tenant, function) →
+// provider assignment (see function.go) and, failing that, by the tier's explicitly
+// marked default grant (AIProviderTierGrant.IsDefault) — never by a property of these
+// rows, and never by their COUNT.
+//
+// Both are STORED answers an operator wrote. Nothing on the read path may consult the
+// size or the emptiness of a grant set to produce one: that is the shape that shipped as
+// a bug five times, and AIProviderTierGrant.IsDefault carries the full history of it.
+// Note where the default lives — on a tier GRANT row, not on the provider and not on the
+// tenant grant. A tier that grants nothing has nowhere to put a default, so "AI is a
+// tiered entitlement" holds by construction rather than by a runtime check.
 //
 // WHY THE JOIN LIVES HERE AND NOT ON THE TIER. The tier is a user-management entity
 // (iam_tenant_tiers); providers are this service's. They share a database but sit in
@@ -78,6 +79,54 @@ type AIProviderTierGrant struct {
 	// ProviderID references AIProvider.ID — the immutable id, not the token, so a
 	// token rename keeps the grant bound (the same reasoning as the secret handle).
 	ProviderID uint `gorm:"not null;index"`
+	// IsDefault marks this grant as the TIER's default model: what a tenant at this tier
+	// gets for a function it never assigned, provided the model is still on its menu
+	// (Api.ResolveModelForFunction). At most one per tier —
+	// uix_ai_tier_grant_default is the storage backstop.
+	//
+	// THIS MARK WAS DELETED AND RESTORED, AND THE HISTORY IS THE DOCUMENTATION. It once
+	// lived here (and on the tenant grant), was removed after one bug shipped five times,
+	// and came back when the instance-wide platform baseline it was replaced with turned
+	// out to be the wrong shape — a default every tier shares is not a per-tier default.
+	//
+	// THE MARK WAS NEVER THE BUG. The bug was that the mark's PRESENCE was INFERRED from a
+	// set operators can change, so the answer re-answered when they changed it:
+	//
+	//   - a "sole granted model" fallback over the tier∪tenant union — a per-tenant grant
+	//     vaporised the tier's default;
+	//   - the same fallback on the tenant axis;
+	//   - the same on the tier axis — a second UNMARKED grant killed the default for every
+	//     tenant on the tier;
+	//   - an auto-mark probing the MARK set ("no default exists → mark this one"). Operators
+	//     can EMPTY that set (ClearTierDefault, or revoking the marked grant), so a later
+	//     grant silently overturned an explicit "no default";
+	//   - a dormant TENANT mark that sprang alive when its tier was unpackaged.
+	//
+	// So: THE SERVER NEVER INFERS THE DEFAULT. There is no auto-mark, no sole-model
+	// fallback, and no "if the tier has no default, use X". A default exists IFF an
+	// operator explicitly set it (Api.SetTierDefault). GRANTING IS NOT DEFAULTING — they
+	// are separate acts with separate mutations, which is why GrantProviderToTier takes no
+	// makeDefault flag: that flag is exactly where the fourth bug lived.
+	//
+	// The deliberate consequence: A TIER THAT GRANTS MODELS WITH NO DEFAULT MARKED
+	// RESOLVES TO NONE, even when it grants exactly one. That is the correct answer, not a
+	// gap to be helpfully filled — the alternative is a rule that reads the menu's size.
+	// What is meant to stop it being a footgun is the CONSOLE, not the server: the grant
+	// screen WILL present the default alongside the grants (two columns, one screen),
+	// pre-select a radio, and issue an explicit mutation the operator can see and
+	// confirm. A pre-selection an operator confirms is a choice; the same pre-selection
+	// made server-side is an inference.
+	//
+	// ⚠️ THAT SCREEN IS NOT BUILT YET (ADR-065 S5b). Until it ships, granting and marking
+	// are hand-written mutations, and this deliberate behaviour ships with its only named
+	// mitigation missing — an operator who grants a tier a model and stops will find every
+	// tenant on it resolving NONE. The server is right and the story is half-delivered; do
+	// not resolve that tension by teaching the server to guess.
+	//
+	// No gorm `default` tag: a `default:false` would make gorm substitute the DB default
+	// for the Go zero value, the shape that once made AIProvider.Enabled
+	// unpersistable-as-false.
+	IsDefault bool `gorm:"not null"`
 }
 
 func (AIProviderTierGrant) TableName() string { return "ai_provider_tier_grants" }

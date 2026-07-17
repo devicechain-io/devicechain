@@ -84,7 +84,7 @@ func (r *Resolver) ValidatePrompt(system, prompt string) error {
 }
 
 // ResolveForFunction resolves the model a tenant's inference request should use for one
-// FUNCTION — the model it assigned to that function, or the platform baseline if it
+// FUNCTION — the model it assigned to that function, or its tier's marked default if it
 // assigned none, in either case only if ADR-065 entitles it to that model — enforcing
 // the external-routing consent gate and the per-tenant rate ceiling. This is the
 // production NL-authoring path (Slice 1). Every step fails closed:
@@ -167,8 +167,12 @@ func (r *Resolver) ResolveForFunction(ctx context.Context, tenant, function stri
 		// part in. Sending an operator to re-package `bronze` when the row they need is
 		// on the tenant is a slow way to find nothing.
 		//
-		// So the message enumerates every cause rather than guessing between them. It
-		// deliberately does NOT branch on how many models the tenant is entitled to:
+		// So the message enumerates every cause rather than guessing between them —
+		// including the one an operator will hit most: the tier grants models but marked
+		// no default, so a tenant that assigned nothing resolves to nothing. That is a
+		// legitimate package rather than a fault, and the server will not fill it in.
+		//
+		// It deliberately does NOT branch on how many models the tenant is entitled to:
 		// distinguishing "entitled to nothing" from "entitled but nothing resolved" would
 		// mean re-reading the menu and asking for its SIZE, on the one code path whose
 		// entire contract is that no set's size is ever consulted. A slightly longer
@@ -177,7 +181,8 @@ func (r *Resolver) ResolveForFunction(ctx context.Context, tenant, function stri
 		// nothing here to copy.
 		return nil, fmt.Errorf(
 			"%w: no model resolved for %q — either no model is granted to this tenant or to its tier %q, "+
-				"or the model it assigned (or the platform baseline it would fall back to) is not granted to it or is disabled",
+				"or its tier marked no default model, or the model it assigned (or the tier default it "+
+				"would fall back to) is not granted to it or is disabled",
 			ErrUnavailable, function, facts.TierToken)
 	}
 	if model.IsExternalProviderKind(chosen.Kind) && !facts.ExternalEnabled {

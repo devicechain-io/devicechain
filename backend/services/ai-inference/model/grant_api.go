@@ -15,10 +15,9 @@ import (
 )
 
 // ErrProviderInUse refuses the delete of a provider that anything still points at: a
-// tier or tenant GRANT, a tenant's function ASSIGNMENT, or the platform-BASELINE
-// designation. It names every reason so the operator can act rather than guess
-// (ADR-044's ErrEntityInUse shape, as user-management already uses for a tier that
-// tenants reference).
+// tier or tenant GRANT, or a tenant's function ASSIGNMENT. It names every reason so the
+// operator can act rather than guess (ADR-044's ErrEntityInUse shape, as user-management
+// already uses for a tier that tenants reference).
 var ErrProviderInUse = errors.New("provider is still granted and cannot be deleted")
 
 // ErrUnknownProvider is returned when a grant names a provider token that does not
@@ -29,10 +28,11 @@ var ErrUnknownProvider = errors.New("no provider with that token")
 // Menu is a tenant's resolved set of AI models: everything it may draft with.
 //
 // It carries ONLY the set. Which model a given call uses is a separate question with a
-// separate answer — a stored (tenant, function) assignment, falling back to the platform
-// baseline (Api.ResolveModelForFunction). Menu once carried a Default field alongside
-// the set, and co-locating them is what made it natural to compute one from the other;
-// the answer is not a property of the menu, so it does not live on the menu.
+// separate answer — a stored (tenant, function) assignment, falling back to the tier's
+// explicitly marked default grant (Api.ResolveModelForFunction). Menu once carried a
+// Default field alongside the set, and co-locating them is what made it natural to
+// compute one from the other; the answer is not a property of the menu, so it does not
+// live on the menu.
 type Menu struct {
 	// Providers are the ENABLED providers the tenant may use, ordered by token so the
 	// surface is stable for a caller rendering it.
@@ -43,6 +43,10 @@ type Menu struct {
 type TierGrant struct {
 	TierToken string
 	Provider  AIProvider
+	// IsDefault reports whether this grant is the tier's marked default (at most one per
+	// tier). The console renders the tier's grants as a radio group over this, so the
+	// operator sees the grant and the default as the separate facts they are.
+	IsDefault bool
 }
 
 // TenantGrant pairs a per-tenant additive grant with its provider.
@@ -173,14 +177,20 @@ func (api *Api) MenuForTenant(ctx context.Context, tierToken string) (*Menu, err
 // assertProviderNotGranted refuses the delete of a provider that anything still points
 // at, naming what holds it. Called by DeleteAIProvider before the row is removed.
 //
-// It covers all three kinds of reference, for one reason stated once: a delete must not
-// silently take a capability away from a live tenant. A GRANT means somebody is
-// entitled to the model; an ASSIGNMENT means a tenant has chosen it for a function and
-// would silently fall back to the baseline (or to nothing) if it vanished; the BASELINE
-// designation means every tenant that never chose is using it, which is the widest blast
-// radius of the three and the least visible. Each gets a legible refusal naming what to
-// undo, rather than a constraint violation about an id — or, for the baseline, no error
-// at all, since no FK protects a column on the provider's own row.
+// It covers both kinds of reference, for one reason stated once: a delete must not
+// silently take a capability away from a live tenant. A GRANT means somebody is entitled
+// to the model; an ASSIGNMENT means a tenant has chosen it for a function and would
+// silently fall back to its tier's default (or to nothing) if it vanished. Each gets a
+// legible refusal naming what to undo, rather than a constraint violation about an id.
+//
+// THE TIER'S DEFAULT NEEDS NO ARM OF ITS OWN, and that is a consequence of where the
+// mark lives rather than an omission. The default is a column on a tier GRANT row, so a
+// provider that is any tier's default is necessarily granted to that tier and is already
+// caught by the grant arm below — and the row itself is protected by the FK (ON DELETE
+// RESTRICT) beneath it. When the default was a column on the PROVIDER's own row, neither
+// was true: nothing else referenced it, so a hand-written check and a hand-written
+// predicate on the DELETE were the only things standing there. The protection that had
+// to be hand-written is now the protection that was already there.
 func (api *Api) assertProviderNotGranted(ctx context.Context, providerID uint) error {
 	var tierGrants []AIProviderTierGrant
 	if err := api.sys(ctx).Where("provider_id = ?", providerID).Find(&tierGrants).Error; err != nil {
@@ -191,11 +201,11 @@ func (api *Api) assertProviderNotGranted(ctx context.Context, providerID uint) e
 		Where("provider_id = ?", providerID).Count(&tenantCount).Error; err != nil {
 		return err
 	}
-	assignedTo, isBaseline, err := api.assertProviderNotAssigned(ctx, providerID)
+	assignedTo, err := api.assertProviderNotAssigned(ctx, providerID)
 	if err != nil {
 		return err
 	}
-	if len(tierGrants) == 0 && tenantCount == 0 && len(assignedTo) == 0 && !isBaseline {
+	if len(tierGrants) == 0 && tenantCount == 0 && len(assignedTo) == 0 {
 		return nil
 	}
 
@@ -219,9 +229,6 @@ func (api *Api) assertProviderNotGranted(ctx context.Context, providerID uint) e
 		reasons = append(reasons, fmt.Sprintf("assigned to an AI function by tenant(s) %s",
 			strings.Join(assignedTo, ", ")))
 	}
-	if isBaseline {
-		reasons = append(reasons, "designated as the platform baseline model")
-	}
 	return fmt.Errorf("%w: %s; remove those first", ErrProviderInUse, strings.Join(reasons, "; "))
 }
 
@@ -243,12 +250,14 @@ func (api *Api) providerIDByToken(ctx context.Context, token string) (uint, erro
 // nothing more. Idempotent: re-granting an existing pair updates nothing and is not an
 // error.
 //
-// It takes no makeDefault, and there is no auto-mark: granting says a model is on the
+// IT TAKES NO makeDefault, AND THERE IS NO AUTO-MARK. Granting says a model is on the
 // menu, never that anything uses it. The two are separate acts because fusing them is
 // what made the answer a property of the grant set, and therefore non-monotonic — the
 // auto-mark's own probe went through three revisions before the mechanism was deleted.
-// Which model serves a call is SetFunctionModel's business (per tenant) or
-// SetPlatformBaseline's (per instance), and neither is disturbed by a grant.
+// Granting a tier its FIRST model does not mark it the default either: an operator who
+// wants one says so with SetTierDefault, and the console presents both together so the
+// separation costs no clicks. Which model serves a call is SetFunctionModel's business
+// (per tenant) or SetTierDefault's (per tier), and neither is disturbed by a grant.
 //
 // tierToken is not validated against user-management: this service holds a service
 // token and the tier catalog is on user-management's identity-only admin plane, so
@@ -280,17 +289,39 @@ func (api *Api) GrantProviderToTier(ctx context.Context, tierToken, providerToke
 
 // RevokeProviderFromTier withdraws a tier's offer of a provider, reporting whether a
 // grant was removed. Hard delete; idempotent.
+//
+// Revoking the tier's DEFAULT leaves the tier with no default, because the mark is a
+// column on the row being deleted — the tier stops offering the model and stops
+// defaulting to it in one act, which is the coherent reading. Nothing is promoted in its
+// place: a surviving grant becoming the default because another was revoked would be the
+// answer moving as a set shrinks, the same defect as it moving when a set grows. The
+// operator marks a new one (SetTierDefault) or the tier deliberately has none.
 func (api *Api) RevokeProviderFromTier(ctx context.Context, tierToken, providerToken string) (bool, error) {
 	providerID, err := api.providerIDByToken(ctx, providerToken)
 	if err != nil {
 		return false, err
 	}
-	res := api.sys(ctx).Where("tier_token = ? AND provider_id = ?", tierToken, providerID).
-		Delete(&AIProviderTierGrant{})
-	if res.Error != nil {
-		return false, res.Error
+	// Load then delete, rather than deleting by predicate through a zero-value model.
+	// The audit callback labels an entry from the struct it is handed, so a predicate
+	// delete journals " → provider#0": no tier, and a provider that never existed. That
+	// is not a cosmetic gap here — the comment above makes revoking the default THE act
+	// that removes a tier's default, which drops every non-choosing tenant on that tier
+	// to NONE. It is the packaging change ADR-065 decision 7 makes auditable, and an
+	// entry that cannot name what changed is the same as no entry. (Promote, demote and
+	// clear already journal properly; this arm was the one left out.)
+	var existing AIProviderTierGrant
+	err = api.sys(ctx).Where("tier_token = ? AND provider_id = ?", tierToken, providerID).
+		First(&existing).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return false, nil // idempotent: nothing granted, nothing to withdraw.
+	case err != nil:
+		return false, err
 	}
-	return res.RowsAffected > 0, nil
+	if err := api.sys(ctx).Delete(&existing).Error; err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ListTierGrants returns every tier grant with its provider, for the operator surface.
@@ -314,7 +345,7 @@ func (api *Api) ListTierGrants(ctx context.Context) ([]TierGrant, error) {
 			// The FK makes this unreachable; skip rather than surface a zero provider.
 			continue
 		}
-		out = append(out, TierGrant{TierToken: g.TierToken, Provider: p})
+		out = append(out, TierGrant{TierToken: g.TierToken, Provider: p, IsDefault: g.IsDefault})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].TierToken != out[j].TierToken {
@@ -323,6 +354,129 @@ func (api *Api) ListTierGrants(ctx context.Context) ([]TierGrant, error) {
 		return out[i].Provider.Token < out[j].Provider.Token
 	})
 	return out, nil
+}
+
+// SetTierDefault marks an ALREADY-GRANTED provider as the tier's default: what a tenant
+// at this tier gets for a function it never assigned, provided the model is still on its
+// menu (ResolveModelForFunction). Demotes any previous default atomically, so the "at
+// most one default per tier" invariant never transiently breaks.
+//
+// It returns gorm.ErrRecordNotFound when the pair is not granted, and deliberately does
+// NOT create the grant as a side effect: a default must be something the tier actually
+// offers. Granting and defaulting are separate acts (see AIProviderTierGrant.IsDefault) —
+// fusing them is where the auto-mark bug lived.
+//
+// This is the ONLY way a default comes into existence. Nothing marks one implicitly.
+func (api *Api) SetTierDefault(ctx context.Context, tierToken, providerToken string) error {
+	providerID, err := api.providerIDByToken(ctx, providerToken)
+	if err != nil {
+		return err
+	}
+	return api.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing AIProviderTierGrant
+		if err := tx.Where("tier_token = ? AND provider_id = ?", tierToken, providerID).
+			First(&existing).Error; err != nil {
+			// gorm.ErrRecordNotFound: the tier does not offer this model. Surfaced as-is —
+			// the caller must grant it first.
+			return err
+		}
+		if existing.IsDefault {
+			return nil // idempotent: already the default, and re-marking would only churn the journal.
+		}
+
+		// DEMOTE BEFORE PROMOTE, in this transaction: uix_ai_tier_grant_default admits one
+		// is_default row per tier, so promoting first would collide with the incumbent.
+		//
+		// Both writes go THROUGH a loaded row rather than a zero-value model. The audit
+		// callback builds its label and primary key from the struct it is handed
+		// (core/rdb/audit.go), so `tx.Model(&AIProviderTierGrant{}).Where(...)` journals an
+		// empty row — "→ provider#0" — for a change to the tier's packaging. That is the
+		// same trap SetFunctionModel documents, on an act just as auditable.
+		var previous []AIProviderTierGrant
+		if err := tx.Where("tier_token = ? AND is_default = ?", tierToken, true).
+			Find(&previous).Error; err != nil {
+			return err
+		}
+		for i := range previous {
+			previous[i].IsDefault = false
+			if err := tx.Model(&previous[i]).Update("is_default", false).Error; err != nil {
+				return err
+			}
+		}
+
+		existing.IsDefault = true
+		res := tx.Model(&existing).Update("is_default", true)
+		if res.Error != nil {
+			return res.Error
+		}
+		// CHECK RowsAffected. The read above ran in this transaction, but a concurrent
+		// revoke committing between it and this write (READ COMMITTED) leaves the promote
+		// matching nothing while the demote still commits — telling the operator "set"
+		// while the tier is left with NO default, silently dropping every non-choosing
+		// tenant on it to NONE. Fail instead, and the transaction takes the demote with it.
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+}
+
+// ClearTierDefault leaves the tier's grants in place but marks none of them default.
+// Idempotent. Afterwards a tenant at this tier that assigned no model for a function
+// resolves to NONE and must choose explicitly — which is a legitimate package, not a
+// broken state.
+//
+// Its existence is why nothing may auto-mark a default: an operator can EMPTY the mark
+// set deliberately, so a later grant that "notices there is no default" and installs one
+// is not filling a gap — it is overturning a decision.
+func (api *Api) ClearTierDefault(ctx context.Context, tierToken string) error {
+	// Loaded rows, not a predicate update, so the journal names the grant that lost the
+	// mark. See SetTierDefault.
+	var current []AIProviderTierGrant
+	if err := api.sys(ctx).Where("tier_token = ? AND is_default = ?", tierToken, true).
+		Find(&current).Error; err != nil {
+		return err
+	}
+	for i := range current {
+		current[i].IsDefault = false
+		if err := api.sys(ctx).Model(&current[i]).Update("is_default", false).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TierDefault returns the provider a tier has MARKED as its default, or nil when the tier
+// marked none. Nil is an answer, not a gap: a tier whose operator marked no default
+// serves only the tenants that chose explicitly.
+//
+// A single-row lookup on the mark — never a count, and never a read of how many models
+// the tier grants. "The tier grants exactly one model, so that is the default" is the
+// non-monotonic rule this whole design exists to make unexpressible, and it would fit
+// here more naturally than anywhere else in the service. It does not belong here.
+func (api *Api) TierDefault(ctx context.Context, tierToken string) (*AIProvider, error) {
+	var grant AIProviderTierGrant
+	err := api.sys(ctx).Where("tier_token = ? AND is_default = ?", tierToken, true).
+		First(&grant).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+
+	var provider AIProvider
+	err = api.sys(ctx).Where("id = ?", grant.ProviderID).First(&provider).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		// The FK (ON DELETE RESTRICT) makes this unreachable; answer "no default" rather
+		// than surface a zero provider. ResolveModelForFunction would filter it through the
+		// menu and reach the same NONE anyway.
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	return &provider, nil
 }
 
 // GrantProviderToTenant adds a provider to ONE tenant's menu over and above its tier
@@ -364,12 +518,22 @@ func (api *Api) RevokeProviderFromTenant(ctx context.Context, tenantToken, provi
 	if err != nil {
 		return false, err
 	}
-	res := api.sys(ctx).Where("tenant_id = ? AND provider_id = ?", tenantToken, providerID).
-		Delete(&AIProviderTenantGrant{})
-	if res.Error != nil {
-		return false, res.Error
+	// Load then delete — see RevokeProviderFromTier. Withdrawing decision 7's audited
+	// exception is, if anything, the more auditable of the two: it is a change to ONE
+	// named tenant's entitlement.
+	var existing AIProviderTenantGrant
+	err = api.sys(ctx).Where("tenant_id = ? AND provider_id = ?", tenantToken, providerID).
+		First(&existing).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return false, nil
+	case err != nil:
+		return false, err
 	}
-	return res.RowsAffected > 0, nil
+	if err := api.sys(ctx).Delete(&existing).Error; err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ListTenantGrants returns the additive grants for one tenant (operator surface, system

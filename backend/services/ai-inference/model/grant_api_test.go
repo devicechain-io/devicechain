@@ -202,16 +202,30 @@ func TestDisabledProvidersNeverReachAMenu(t *testing.T) {
 }
 
 // TestGrantIsIdempotent. Re-granting must not duplicate a row (the unique index would
-// reject it) nor silently demote the tier's default.
+// reject it) nor disturb the tier's default in either direction — it must neither demote
+// the marked grant nor promote the re-granted one.
 func TestGrantIsIdempotent(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 	mustProvider(t, api, "fable")
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
 
 	// A plain re-grant of the non-default is not a statement about the default.
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable"))
+	def, err := api.TierDefault(adminCtx(), "gold")
+	require.NoError(t, err)
+	require.NotNil(t, def, "re-granting another model must not clear the tier's default")
+	assert.Equal(t, "sonnet", def.Token, "and must not re-point it to the model just re-granted")
+
+	// Nor is re-granting the DEFAULT itself a statement about it: it stays marked, rather
+	// than being demoted by a write that says nothing about defaults.
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
+	def, err = api.TierDefault(adminCtx(), "gold")
+	require.NoError(t, err)
+	require.NotNil(t, def, "re-granting the marked model must leave it marked")
+	assert.Equal(t, "sonnet", def.Token)
 
 	grants, err := api.ListTierGrants(adminCtx())
 	require.NoError(t, err)

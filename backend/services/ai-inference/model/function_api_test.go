@@ -9,6 +9,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // resolveFor is the production question, asked the way production asks it: as the tenant
@@ -75,9 +76,9 @@ func TestAnAssignmentOffTheMenuResolvesToNoneNeverASubstitute(t *testing.T) {
 			mustProvider(t, api, "fable")
 			require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 			require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable"))
-			// sonnet is the baseline AND stays on the menu: if anything is going to be
-			// wrongly substituted, this is what it would be.
-			require.NoError(t, api.SetPlatformBaseline(adminCtx(), "sonnet"))
+			// sonnet is the tier's default AND stays on the menu: if anything is going to
+			// be wrongly substituted, this is what it would be.
+			require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
 			require.NoError(t, api.SetFunctionModel(adminCtx(), "acme", FunctionRuleDrafting, "fable"))
 			require.NotNil(t, resolveFor(t, api, "acme", "gold"), "precondition: the choice is honoured to begin with")
 
@@ -85,7 +86,7 @@ func TestAnAssignmentOffTheMenuResolvesToNoneNeverASubstitute(t *testing.T) {
 
 			assert.Nil(t, resolveFor(t, api, "acme", "gold"),
 				"a tenant that CHOSE has an opinion: losing access to its choice means NONE, "+
-					"never a silent fallback to the baseline")
+					"never a silent fallback to the tier's default")
 		})
 	}
 }
@@ -130,67 +131,231 @@ func TestAnAssignmentCanBeMadeBeforeTheEntitlement(t *testing.T) {
 	assert.Equal(t, "fable", chosen.Token)
 }
 
-// TestAnUnassignedTenantGetsTheBaseline: the baseline is what a tenant that never chose
-// gets — the LCD, and the reason the platform still "just works" without every tenant
-// being configured.
-func TestAnUnassignedTenantGetsTheBaseline(t *testing.T) {
+// TestAnUnassignedTenantGetsTheTierDefault: the tier's marked default is what a tenant
+// that never chose gets — the reason the platform still "just works" for a packaged
+// tenant without every tenant being configured.
+func TestAnUnassignedTenantGetsTheTierDefault(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
-	require.NoError(t, api.SetPlatformBaseline(adminCtx(), "sonnet"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
 
 	chosen := resolveFor(t, api, "acme", "gold")
 	require.NotNil(t, chosen)
 	assert.Equal(t, "sonnet", chosen.Token)
 }
 
-// TestTheBaselineIsFilteredThroughTheTenantsMenu. The baseline is a fallback, not a
-// bypass: it is checked against the menu like any other candidate. A tenant entitled to
-// `fable` only does not get `sonnet` merely because the operator designated it.
-func TestTheBaselineIsFilteredThroughTheTenantsMenu(t *testing.T) {
+// TestATierWithGrantsButNoDefaultResolvesToNone IS THE SHAPE GUARD. Read this one before
+// touching ResolveModelForFunction.
+//
+// A tier grants models and its operator marked NO default. The answer is NONE — including,
+// and especially, when the tier grants EXACTLY ONE model. "There's only one, obviously use
+// it" is the rule that shipped as a bug five times, in five disguises; it is not a helpful
+// convenience the server withholds out of pedantry. It is a rule that reads the SIZE of a
+// set an operator can change, and so re-answers when they change it: the tenant's door
+// works until somebody grants the tier a second model, at which point it silently stops.
+//
+// The single-model arm is the one that matters. A rule counting the menu passes the
+// multi-model case (2 ≠ 1 ⇒ ambiguous ⇒ none) and fails only here, which is exactly how
+// this survived review before: the assertion next to the risky thing was green.
+func TestATierWithGrantsButNoDefaultResolvesToNone(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		grants []string
+	}{
+		{name: "the tier grants exactly one model and marks no default", grants: []string{"sonnet"}},
+		{name: "the tier grants several models and marks no default", grants: []string{"sonnet", "fable"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newTestApi(t)
+			mustProvider(t, api, "sonnet")
+			mustProvider(t, api, "fable")
+			for _, g := range tc.grants {
+				require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", g))
+			}
+
+			// The entitlement is real — this is not an empty-menu test wearing a disguise.
+			menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
+			require.NoError(t, err)
+			require.Len(t, menu.Providers, len(tc.grants),
+				"precondition: the tier really does offer these models")
+
+			assert.Nil(t, resolveFor(t, api, "acme", "gold"),
+				"NO SOLE-MODEL FALLBACK: a granted model is an entitlement, not a choice. "+
+					"Nothing may infer a default from the menu's size")
+		})
+	}
+}
+
+// TestGrantingATierItsFirstModelDoesNotMarkADefault. There is no auto-mark, on any grant,
+// ever — not even the one where it would seem harmless.
+//
+// This is bug #4's grave. The auto-mark probed the MARK set ("no default exists → mark
+// this one"), and the flaw was not the probe's logic but its premise: an operator can
+// EMPTY that set deliberately (ClearTierDefault, or revoking the marked grant). An empty
+// mark set is therefore an ANSWER, not a gap, and a later grant that fills it silently
+// overturns an explicit decision.
+func TestGrantingATierItsFirstModelDoesNotMarkADefault(t *testing.T) {
+	api := newTestApi(t)
+	mustProvider(t, api, "sonnet")
+
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
+
+	def, err := api.TierDefault(adminCtx(), "gold")
+	require.NoError(t, err)
+	assert.Nil(t, def, "granting is not defaulting: the first grant to a tier must not mark itself")
+
+	grants, err := api.ListTierGrants(adminCtx())
+	require.NoError(t, err)
+	require.Len(t, grants, 1)
+	assert.False(t, grants[0].IsDefault, "the stored row must carry no mark either")
+
+	// And the same holds after the operator explicitly clears a default: the mark set is
+	// empty because they said so, and the NEXT grant must not quietly refill it.
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
+	require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
+	mustProvider(t, api, "fable")
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable"))
+
+	def, err = api.TierDefault(adminCtx(), "gold")
+	require.NoError(t, err)
+	assert.Nil(t, def,
+		"an operator EMPTIED the mark set; a later grant that refills it overturns their decision")
+	assert.Nil(t, resolveFor(t, api, "acme", "gold"))
+}
+
+// TestTheTierDefaultIsFilteredThroughTheTenantsMenu. The default is a fallback, not a
+// bypass: it leaves the resolver through the same membership test as any other candidate.
+// A DISABLED default resolves to NONE rather than handing the call to some other granted
+// model — taking a model out of service is an operator act with an operator consequence,
+// not a trigger for silently re-routing a tenant's prompts and its spend.
+func TestTheTierDefaultIsFilteredThroughTheTenantsMenu(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 	mustProvider(t, api, "fable")
-	require.NoError(t, api.SetPlatformBaseline(adminCtx(), "sonnet"))
-	// gold sells fable, not the baseline.
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
+	require.NotNil(t, resolveFor(t, api, "acme", "gold"), "precondition: the default answers")
+
+	// The default goes out of service. `fable` stays granted and enabled — the bait.
+	req := claudeReq("sonnet", nil)
+	req.Enabled = false
+	_, err := api.UpdateAIProvider(adminCtx(), "sonnet", req, nil)
+	require.NoError(t, err)
 
 	assert.Nil(t, resolveFor(t, api, "acme", "gold"),
-		"the baseline is not on this tenant's menu, so it cannot serve it — and `fable` is "+
-			"not substituted in either, because nobody chose it")
+		"a DISABLED tier default resolves to NONE — never to another granted model nobody chose")
+
+	// The mark itself survives: disabling a provider is not un-marking it, so re-enabling
+	// restores the tier without the operator re-entering their choice.
+	def, err := api.TierDefault(adminCtx(), "gold")
+	require.NoError(t, err)
+	require.NotNil(t, def)
+	assert.Equal(t, "sonnet", def.Token, "the mark is packaging; disabling is service state")
 }
 
-// TestATierGrantingNothingResolvesToNoneEvenWithABaseline is THE PRODUCT INVARIANT: AI is
-// a TIERED ENTITLEMENT.
+// TestRevokingTheDefaultGrantLeavesTheTierWithNoDefault, uniformly for every tenant on
+// the tier — INCLUDING one holding a per-tenant exception.
 //
-// The baseline is the lowest-common-denominator for a tenant that never chose a model. It
-// is NOT a free tier. If it could serve a tenant whose tier grants nothing, then every
-// unpackaged tenant on the instance would have a working AI door the moment an operator
-// designated a baseline — the entitlement model inverted, silently, by a single act aimed
-// at something else entirely. Asserted hard, and from both directions (a tenant with no
-// grants at all, and one whose tier sells nothing while other tiers do).
-func TestATierGrantingNothingResolvesToNoneEvenWithABaseline(t *testing.T) {
+// The exception-holder is bug #5's grave and is asserted explicitly. A dormant mark that
+// springs alive when a tier is unpackaged is the same defect as one that dies when a tier
+// is packaged: the tenant's answer moved because somebody else's row changed. Here the
+// exception-holder has a WIDER menu than its neighbour, so any rule that quietly promoted
+// "the model this tenant can still use" would light it up alone.
+func TestRevokingTheDefaultGrantLeavesTheTierWithNoDefault(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
-	require.NoError(t, api.SetPlatformBaseline(adminCtx(), "sonnet"))
+	mustProvider(t, api, "fable")
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
+	// acme additionally holds an exception for fable; globex does not.
+	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
+	require.NotNil(t, resolveFor(t, api, "acme", "gold"), "precondition: acme resolves the default")
+	require.NotNil(t, resolveFor(t, api, "globex", "gold"), "precondition: so does globex")
+
+	removed, err := api.RevokeProviderFromTier(adminCtx(), "gold", "sonnet")
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	// The mark went with the row it lived on; nothing was promoted in its place.
+	def, err := api.TierDefault(adminCtx(), "gold")
+	require.NoError(t, err)
+	assert.Nil(t, def, "revoking the marked grant leaves the tier with NO default")
+
+	assert.Nil(t, resolveFor(t, api, "globex", "gold"), "the tier lost its default; globex has none")
+	assert.Nil(t, resolveFor(t, api, "acme", "gold"),
+		"the exception-holder lands identically: its own fable grant must not be silently "+
+			"promoted into the default its TIER no longer has")
+
+	// acme's exception is untouched — it is an entitlement, and it still needs a choice.
+	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"fable"}, menuTokens(menu), "the exception survives the tier's revoke")
+	require.NoError(t, api.SetFunctionModel(adminCtx(), "acme", FunctionRuleDrafting, "fable"))
+	chosen := resolveFor(t, api, "acme", "gold")
+	require.NotNil(t, chosen)
+	assert.Equal(t, "fable", chosen.Token, "acme resolves fable because it CHOSE it, not because it is alone")
+}
+
+// TestATierGrantingNothingResolvesToNone is THE PRODUCT INVARIANT: AI is a TIERED
+// ENTITLEMENT. A tenant whose tier sells no AI gets none.
+//
+// This USED to be a runtime check — the instance-wide baseline had to be filtered through
+// the menu or every unpackaged tenant would have been handed a working door by one
+// operator act aimed at something else. IT IS NOW STRUCTURAL: the default is a column on a
+// tier GRANT row, so a tier that grants nothing has nowhere to put a default and there is
+// no candidate to filter. The test remains because the invariant is a product promise, not
+// an implementation detail — a future refactor that re-homes the mark must fail here.
+func TestATierGrantingNothingResolvesToNone(t *testing.T) {
+	api := newTestApi(t)
+	mustProvider(t, api, "sonnet")
 
 	// Nothing granted anywhere on the instance.
-	assert.Nil(t, resolveFor(t, api, "acme", "bronze"),
-		"a designated baseline must not hand AI to a tenant nobody sold it to")
+	assert.Nil(t, resolveFor(t, api, "acme", "bronze"))
 
-	// And with `gold` packaged, `bronze` still gets nothing: the baseline follows the
-	// entitlement, not the other way round.
+	// `gold` is packaged and defaulted; `bronze` still gets nothing. The default follows
+	// the entitlement, not the other way round.
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
 	assert.Nil(t, resolveFor(t, api, "acme", "bronze"),
-		"bronze sells no AI; a baseline designated for the instance does not change that")
+		"bronze sells no AI; another tier's default does not change that")
 	require.NotNil(t, resolveFor(t, api, "globex", "gold"),
-		"precondition: the baseline DOES serve a tenant whose tier was sold it")
+		"precondition: the default DOES serve a tenant whose tier was sold it")
 
 	// Even an explicit assignment cannot manufacture an entitlement: the tenant may
 	// choose, but choosing is not buying.
 	require.NoError(t, api.SetFunctionModel(adminCtx(), "acme", FunctionRuleDrafting, "sonnet"))
 	assert.Nil(t, resolveFor(t, api, "acme", "bronze"),
 		"a tenant cannot assign its way onto a model its tier never sold it")
+}
+
+// TestDefaultsAreIndependentAcrossTiers. The mark is per-tier, so gold's default is not
+// bronze's — the whole point of retiring the instance-wide baseline, which by
+// construction gave every tier the same fallback.
+func TestDefaultsAreIndependentAcrossTiers(t *testing.T) {
+	api := newTestApi(t)
+	mustProvider(t, api, "sonnet")
+	mustProvider(t, api, "fable")
+	for _, tier := range []string{"gold", "bronze"} {
+		require.NoError(t, api.GrantProviderToTier(adminCtx(), tier, "sonnet"))
+		require.NoError(t, api.GrantProviderToTier(adminCtx(), tier, "fable"))
+	}
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "fable"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "bronze", "sonnet"))
+
+	gold := resolveFor(t, api, "acme", "gold")
+	require.NotNil(t, gold)
+	assert.Equal(t, "fable", gold.Token)
+
+	bronze := resolveFor(t, api, "globex", "bronze")
+	require.NotNil(t, bronze)
+	assert.Equal(t, "sonnet", bronze.Token, "each tier's default is its own")
+
+	// Clearing one tier's default leaves the other's standing.
+	require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
+	assert.Nil(t, resolveFor(t, api, "acme", "gold"))
+	require.NotNil(t, resolveFor(t, api, "globex", "bronze"), "bronze's default is not gold's to clear")
 }
 
 // TestAnExceptionOnlyTenantCanAssignAndResolve is ADR-065 decision 7's tenant — "a
@@ -207,8 +372,14 @@ func TestAnExceptionOnlyTenantCanAssignAndResolve(t *testing.T) {
 	mustProvider(t, api, "fable")
 	// bronze sells no AI at all; acme holds an audited exception for fable.
 	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
-	require.NoError(t, api.SetFunctionModel(adminCtx(), "acme", FunctionRuleDrafting, "fable"))
 
+	// Until it CHOOSES, it resolves to nothing: its tier marked no default (it has no
+	// grants to mark), and its own exception is an entitlement rather than an answer.
+	// Being the sole model on its menu is emphatically not what makes it resolve.
+	assert.Nil(t, resolveFor(t, api, "acme", "bronze"),
+		"an exception is an entitlement; nothing may promote it to a choice")
+
+	require.NoError(t, api.SetFunctionModel(adminCtx(), "acme", FunctionRuleDrafting, "fable"))
 	chosen := resolveFor(t, api, "acme", "bronze")
 	require.NotNil(t, chosen)
 	assert.Equal(t, "fable", chosen.Token,
@@ -266,19 +437,23 @@ func TestGrantingMoreNeverChangesWhatResolves(t *testing.T) {
 	}, {
 		name: "tier axis: a second tier grant cannot turn the door off for the whole tier",
 		setup: func(t *testing.T, api *Api) {
-			// Nobody assigned anything: the baseline carries this tier.
+			// Nobody assigned anything: the TIER'S DEFAULT carries this tier. This is bug
+			// #3's arm — a second UNMARKED grant killed the default for every tenant on the
+			// tier, because the rule asked whether the tier granted exactly one model.
 			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet"))
-			require.NoError(t, api.SetPlatformBaseline(adminCtx(), "sonnet"))
+			require.NoError(t, api.SetTierDefault(adminCtx(), "bronze", "sonnet"))
 		},
 		grantMore: func(t *testing.T, api *Api) {
 			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "fable"))
 		},
 		want: "sonnet",
 	}, {
-		name: "tenant axis: an exception cannot vaporise a baseline the tenant was resolving",
+		name: "tenant axis: an exception cannot vaporise the tier default the tenant was resolving",
 		setup: func(t *testing.T, api *Api) {
+			// Bug #1's arm: the sole-model fallback resolved over the tier∪tenant UNION, so
+			// giving this tenant MORE made its menu ambiguous and took its door away.
 			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet"))
-			require.NoError(t, api.SetPlatformBaseline(adminCtx(), "sonnet"))
+			require.NoError(t, api.SetTierDefault(adminCtx(), "bronze", "sonnet"))
 		},
 		grantMore: func(t *testing.T, api *Api) {
 			require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
@@ -297,11 +472,49 @@ func TestGrantingMoreNeverChangesWhatResolves(t *testing.T) {
 		want: "sonnet",
 	}, {
 		// The half the old regression test's precondition excluded — and where the fourth
-		// and fifth bugs lived. NONE is an ANSWER: nobody chose and no baseline is
-		// designated. Growing the menu must not silently invent a choice.
+		// and fifth bugs lived. NONE IS AN ANSWER: nobody chose and the tier marked no
+		// default. Growing the menu must not silently invent a choice.
 		name: "NONE survives the tier's menu growing",
 		setup: func(t *testing.T, api *Api) {
 			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet"))
+		},
+		grantMore: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "fable"))
+		},
+		want: "",
+	}, {
+		// Bug #4, stated as the property that killed it. The operator did not merely
+		// neglect to mark a default — they marked one and then CLEARED it. The mark set is
+		// empty BY DECISION, so an auto-mark that "notices there is no default" and
+		// installs one on the next grant is not filling a gap, it is overturning a choice.
+		name: "NONE survives a grant after the operator explicitly CLEARED the default",
+		setup: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet"))
+			require.NoError(t, api.SetTierDefault(adminCtx(), "bronze", "sonnet"))
+			require.NoError(t, api.ClearTierDefault(adminCtx(), "bronze"))
+		},
+		grantMore: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "fable"))
+		},
+		want: "",
+	}, {
+		// Bug #4's history names TWO ways an operator empties the mark set: "ClearTierDefault,
+		// OR revoking the marked grant". The arm above covers the first. This covers the
+		// second, and it is the one a reintroduced auto-mark would light up in first — the
+		// tier is left holding grants and no mark, which is exactly the state an
+		// "install a default, there isn't one" rule mistakes for a fresh tier.
+		name: "NONE survives a grant after the marked grant was REVOKED",
+		setup: func(t *testing.T, api *Api) {
+			// A third model, so revoking the marked one leaves bronze still granting
+			// something — the state this arm is about is "grants, but no mark", which a
+			// tier with zero grants would not exercise.
+			mustProvider(t, api, "cheap")
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet"))
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "cheap"))
+			require.NoError(t, api.SetTierDefault(adminCtx(), "bronze", "sonnet"))
+			removed, err := api.RevokeProviderFromTier(adminCtx(), "bronze", "sonnet")
+			require.NoError(t, err)
+			require.True(t, removed)
 		},
 		grantMore: func(t *testing.T, api *Api) {
 			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "fable"))
@@ -363,56 +576,99 @@ func TestGrantingMoreNeverChangesWhatResolves(t *testing.T) {
 	}
 }
 
-// TestAtMostOnePlatformBaseline pins the invariant uix_ai_providers_baseline backs:
-// designating B demotes A. Without the demote-before-promote ordering the partial unique
-// index would reject the second designation outright.
-func TestAtMostOnePlatformBaseline(t *testing.T) {
+// TestAtMostOneDefaultPerTier pins the invariant uix_ai_tier_grant_default backs: marking
+// B demotes A. Without the demote-before-promote ordering the partial unique index would
+// reject the second mark outright.
+func TestAtMostOneDefaultPerTier(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 	mustProvider(t, api, "fable")
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable"))
 
-	require.NoError(t, api.SetPlatformBaseline(adminCtx(), "sonnet"))
-	require.NoError(t, api.SetPlatformBaseline(adminCtx(), "fable"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "fable"))
 
-	baseline, err := api.PlatformBaseline(adminCtx())
+	def, err := api.TierDefault(adminCtx(), "gold")
 	require.NoError(t, err)
-	require.NotNil(t, baseline)
-	assert.Equal(t, "fable", baseline.Token, "the newest designation is the baseline")
+	require.NotNil(t, def)
+	assert.Equal(t, "fable", def.Token, "the newest mark is the default")
 
-	// Read it back off the rows themselves, not only through the accessor: the accessor
-	// takes the FIRST match, so it would report a single baseline even if two rows carried
-	// the flag — the invariant is about the DATA, so the data is what gets counted.
-	found, err := api.AIProviders(adminCtx(), AIProviderSearchCriteria{})
+	// Count the ROWS, not only the accessor's answer: TierDefault takes the FIRST match,
+	// so it would report a single default even if two rows carried the mark. The invariant
+	// is about the DATA, so the data is what gets counted.
+	grants, err := api.ListTierGrants(adminCtx())
 	require.NoError(t, err)
-	baselines := 0
-	for _, p := range found.Results {
-		if p.IsPlatformBaseline {
-			baselines++
+	marked := 0
+	for _, g := range grants {
+		if g.IsDefault {
+			marked++
 		}
 	}
-	assert.Equal(t, 1, baselines, "designating a second baseline must demote the first")
+	assert.Equal(t, 1, marked, "marking a second default must demote the first")
+
+	// Re-marking the current default is idempotent, not a demote-then-fail.
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "fable"))
+	def, err = api.TierDefault(adminCtx(), "gold")
+	require.NoError(t, err)
+	require.NotNil(t, def)
+	assert.Equal(t, "fable", def.Token)
 }
 
-// TestClearPlatformBaseline: with no baseline designated, a tenant that assigned nothing
-// resolves to NONE — the whole instance falls back to explicit choice.
-func TestClearPlatformBaseline(t *testing.T) {
+// TestSetTierDefaultOnAnUngrantedPairFailsAndCreatesNothing. A default must be something
+// the tier actually OFFERS, so this is refused rather than quietly granting the model as a
+// side effect — a mutation named "set the default" that also sells a tenant a model is a
+// mutation whose blast radius nobody can read off the call site.
+func TestSetTierDefaultOnAnUngrantedPairFailsAndCreatesNothing(t *testing.T) {
+	api := newTestApi(t)
+	mustProvider(t, api, "sonnet")
+	mustProvider(t, api, "fable")
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
+
+	err := api.SetTierDefault(adminCtx(), "gold", "fable")
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound, "the tier does not offer fable; it cannot default to it")
+
+	// Nothing was created, and — the sharper half — the tier's EXISTING default is intact:
+	// the demote must not have committed while the promote matched nothing.
+	grants, err := api.ListTierGrants(adminCtx())
+	require.NoError(t, err)
+	assert.Len(t, grants, 1, "a refused default must not grant the model as a side effect")
+
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
+	require.Error(t, api.SetTierDefault(adminCtx(), "gold", "fable"))
+	def, err := api.TierDefault(adminCtx(), "gold")
+	require.NoError(t, err)
+	require.NotNil(t, def, "a failed re-mark must leave the previous default standing, never half-apply")
+	assert.Equal(t, "sonnet", def.Token)
+
+	// An unknown provider is refused on its own terms.
+	assert.ErrorIs(t, api.SetTierDefault(adminCtx(), "gold", "nope"), ErrUnknownProvider)
+}
+
+// TestClearTierDefault: with no default marked, a tenant that assigned nothing resolves to
+// NONE — the tier falls back to explicit choice, and keeps every entitlement.
+func TestClearTierDefault(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
-	require.NoError(t, api.SetPlatformBaseline(adminCtx(), "sonnet"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
 	require.NotNil(t, resolveFor(t, api, "acme", "gold"))
 
-	require.NoError(t, api.ClearPlatformBaseline(adminCtx()))
+	require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
 
-	baseline, err := api.PlatformBaseline(adminCtx())
+	def, err := api.TierDefault(adminCtx(), "gold")
 	require.NoError(t, err)
-	assert.Nil(t, baseline)
+	assert.Nil(t, def)
 	assert.Nil(t, resolveFor(t, api, "acme", "gold"),
-		"no baseline means a tenant that never chose has no model — the grant is untouched")
+		"no default means a tenant that never chose has no model — the grant is untouched")
 
 	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
 	require.NoError(t, err)
-	assert.Len(t, menu.Providers, 1, "clearing the baseline withdraws no entitlement")
+	assert.Len(t, menu.Providers, 1, "clearing the default withdraws no entitlement")
+
+	// Idempotent, including on a tier that never had one.
+	require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
+	require.NoError(t, api.ClearTierDefault(adminCtx(), "no-such-tier"))
 }
 
 // TestResolveModelForFunctionRefusesTheSystemContext closes the hole the tenant guard
@@ -448,10 +704,10 @@ func TestAssignmentsAreIsolatedBetweenTenants(t *testing.T) {
 	mustProvider(t, api, "fable")
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable"))
-	require.NoError(t, api.SetPlatformBaseline(adminCtx(), "sonnet"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
 
-	// Only acme chooses fable. globex chose nothing, so it must get the BASELINE — not
-	// acme's choice leaking across the tenant boundary.
+	// Only acme chooses fable. globex chose nothing, so it must get its TIER'S DEFAULT —
+	// not acme's choice leaking across the tenant boundary.
 	require.NoError(t, api.SetFunctionModel(adminCtx(), "acme", FunctionRuleDrafting, "fable"))
 
 	acme := resolveFor(t, api, "acme", "gold")
@@ -494,7 +750,7 @@ func TestSetFunctionModelIsAnUpsert(t *testing.T) {
 	assert.Equal(t, "fable", chosen.Token)
 }
 
-// TestClearFunctionModel falls the tenant back to the baseline — the state it was in
+// TestClearFunctionModel falls the tenant back to its tier's default — the state it was in
 // before it ever chose, not a new one. Idempotent.
 func TestClearFunctionModel(t *testing.T) {
 	api := newTestApi(t)
@@ -502,7 +758,7 @@ func TestClearFunctionModel(t *testing.T) {
 	mustProvider(t, api, "fable")
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable"))
-	require.NoError(t, api.SetPlatformBaseline(adminCtx(), "sonnet"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
 	require.NoError(t, api.SetFunctionModel(adminCtx(), "acme", FunctionRuleDrafting, "fable"))
 
 	removed, err := api.ClearFunctionModel(adminCtx(), "acme", FunctionRuleDrafting)
@@ -511,7 +767,7 @@ func TestClearFunctionModel(t *testing.T) {
 
 	chosen := resolveFor(t, api, "acme", "gold")
 	require.NotNil(t, chosen)
-	assert.Equal(t, "sonnet", chosen.Token, "a tenant that un-chose gets the baseline again")
+	assert.Equal(t, "sonnet", chosen.Token, "a tenant that un-chose gets its tier's default again")
 
 	// Idempotent: clearing what is not there is not an error.
 	removed, err = api.ClearFunctionModel(adminCtx(), "acme", FunctionRuleDrafting)
@@ -570,7 +826,7 @@ func TestTheFunctionVocabulary(t *testing.T) {
 
 // TestDeletingAnAssignedProviderIsRefused. An assignment protects a provider exactly as a
 // grant does — a model somebody is using is a model somebody is using. Deleting it would
-// silently drop that tenant to the baseline, or to nothing.
+// silently drop that tenant to its tier's default, or to nothing.
 func TestDeletingAnAssignedProviderIsRefused(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "fable")
@@ -594,20 +850,38 @@ func TestDeletingAnAssignedProviderIsRefused(t *testing.T) {
 	assert.True(t, deleted)
 }
 
-// TestDeletingTheBaselineProviderIsRefused. The baseline has the WIDEST blast radius of
-// the three references and the least visible one: every tenant that never chose is using
-// it, and no FK protects a flag on the provider's own row — so the application check is
-// the only thing standing there.
-func TestDeletingTheBaselineProviderIsRefused(t *testing.T) {
+// TestDeletingATierDefaultProviderIsRefusedByItsGrant. The tier's default is protected
+// without an arm of its own, and this pins the reasoning rather than the wording: the mark
+// rides a GRANT row, so a provider that is any tier's default is necessarily granted to
+// that tier and the grant arm already refuses.
+//
+// When the fallback was a flag on the PROVIDER's own row, nothing referenced it — no FK,
+// no grant — so a hand-written check plus a hand-written predicate on the DELETE were the
+// only things standing there. Both are gone, and this is the test that says their absence
+// is safety rather than a hole.
+func TestDeletingATierDefaultProviderIsRefusedByItsGrant(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
-	require.NoError(t, api.SetPlatformBaseline(adminCtx(), "sonnet"))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
 
 	_, err := api.DeleteAIProvider(adminCtx(), "sonnet")
 	assert.ErrorIs(t, err, ErrProviderInUse)
-	assert.Contains(t, err.Error(), "baseline", "the refusal must say the provider is the baseline")
+	assert.Contains(t, err.Error(), "gold", "the grant that carries the mark is what refuses")
 
-	require.NoError(t, api.ClearPlatformBaseline(adminCtx()))
+	found, err := api.AIProvidersByToken(adminCtx(), []string{"sonnet"})
+	require.NoError(t, err)
+	assert.Len(t, found, 1, "a refused delete must not have removed the row")
+
+	// Revoking the grant takes the mark with it, and then the delete goes through: a gate,
+	// not a wall. Clearing the DEFAULT alone is not enough — the grant still holds it.
+	require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
+	_, err = api.DeleteAIProvider(adminCtx(), "sonnet")
+	assert.ErrorIs(t, err, ErrProviderInUse, "un-marking is not un-granting")
+
+	removed, err := api.RevokeProviderFromTier(adminCtx(), "gold", "sonnet")
+	require.NoError(t, err)
+	require.True(t, removed)
 	deleted, err := api.DeleteAIProvider(adminCtx(), "sonnet")
 	require.NoError(t, err)
 	assert.True(t, deleted)
@@ -621,7 +895,7 @@ func TestTheDeleteRefusalNamesEveryReasonAtOnce(t *testing.T) {
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "sonnet"))
 	require.NoError(t, api.SetFunctionModel(adminCtx(), "acme", FunctionRuleDrafting, "sonnet"))
-	require.NoError(t, api.SetPlatformBaseline(adminCtx(), "sonnet"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "sonnet"))
 
 	_, err := api.DeleteAIProvider(adminCtx(), "sonnet")
 	require.ErrorIs(t, err, ErrProviderInUse)
@@ -629,5 +903,4 @@ func TestTheDeleteRefusalNamesEveryReasonAtOnce(t *testing.T) {
 	assert.Contains(t, msg, "gold", "names the tier grant")
 	assert.Contains(t, msg, "tenant(s)", "names the tenant grant")
 	assert.Contains(t, msg, "acme", "names the assigning tenant")
-	assert.Contains(t, msg, "baseline", "names the baseline designation")
 }

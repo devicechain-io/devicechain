@@ -163,34 +163,44 @@ func (r *AdminResolver) RevokeAiProviderFromTier(ctx context.Context, args struc
 	return apiFrom(ctx).RevokeProviderFromTier(ctx, args.Tier, args.Provider)
 }
 
-// SetPlatformBaselineProvider designates a provider as the instance's baseline model:
-// what a tenant gets for a function it never assigned, PROVIDED its menu includes that
-// model. Demotes any previous baseline atomically.
+// SetAiTierDefault marks an already-granted provider as a tier's default model: what a
+// tenant at that tier gets for a function it never assigned, PROVIDED its menu still
+// includes that model. Demotes any previous default atomically. Refused when the pair is
+// not granted — a default must be something the tier actually offers.
 //
-// It is not the retired instance-wide active pointer returning. That pointer decided
-// which model every tenant used regardless of packaging; this is a fallback filtered
-// through the tenant's own menu, so it can never serve a tenant a model its tier was
-// not sold (model.Api.ResolveModelForFunction).
-func (r *AdminResolver) SetPlatformBaselineProvider(ctx context.Context, args struct {
-	Token string
+// It is a SEPARATE act from granting, and separate on purpose: grantAiProviderToTier
+// carries no makeDefault flag, because fusing the two is what let a grant silently
+// re-answer which model a tenant used. The console will issue both mutations from one
+// screen (ADR-065 S5b, not yet built), so the separation stays a property of the API
+// rather than becoming a chore for the operator — but until that screen exists it IS a
+// chore, and two hand-written mutations. Do not "fix" that by folding the flag back in.
+//
+// It is not the retired instance-wide active pointer returning, nor the retired platform
+// baseline: the mark lives on a TIER GRANT, so it can never serve a tenant a model its
+// tier was not sold (model.Api.ResolveModelForFunction).
+func (r *AdminResolver) SetAiTierDefault(ctx context.Context, args struct {
+	Tier     string
+	Provider string
 }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
 		return false, err
 	}
-	if err := apiFrom(ctx).SetPlatformBaseline(ctx, args.Token); err != nil {
+	if err := apiFrom(ctx).SetTierDefault(ctx, args.Tier, args.Provider); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// ClearPlatformBaselineProvider designates no baseline, leaving every provider
-// registered. Idempotent. Afterwards a tenant that assigned no model for a function
-// resolves to none and must choose explicitly.
-func (r *AdminResolver) ClearPlatformBaselineProvider(ctx context.Context) (bool, error) {
+// ClearAiTierDefault marks none of a tier's grants as its default, leaving every grant in
+// place. Idempotent. Afterwards a tenant at that tier which assigned no model for a
+// function resolves to none and must choose explicitly.
+func (r *AdminResolver) ClearAiTierDefault(ctx context.Context, args struct {
+	Tier string
+}) (bool, error) {
 	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
 		return false, err
 	}
-	if err := apiFrom(ctx).ClearPlatformBaseline(ctx); err != nil {
+	if err := apiFrom(ctx).ClearTierDefault(ctx, args.Tier); err != nil {
 		return false, err
 	}
 	return true, nil

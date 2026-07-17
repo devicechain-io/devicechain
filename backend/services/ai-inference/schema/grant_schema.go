@@ -37,6 +37,11 @@ type aiProviderTierGrantV1 struct {
 	TierToken  string        `gorm:"not null;size:128;uniqueIndex:uix_ai_tier_grant_pair,priority:1"`
 	ProviderID uint          `gorm:"not null;uniqueIndex:uix_ai_tier_grant_pair,priority:2;index"`
 	Provider   *aiProviderV1 `gorm:"foreignKey:ProviderID;constraint:OnDelete:RESTRICT"`
+	// The tier's default model mark — at most one row per tier carries it
+	// (uix_ai_tier_grant_default below). No gorm `default` tag: a `default:false` makes
+	// gorm substitute the DB default for the Go zero value on Create, which is the shape
+	// that once made ai_providers.enabled unpersistable-as-false.
+	IsDefault bool `gorm:"not null"`
 }
 
 func (aiProviderTierGrantV1) TableName() string { return "ai_provider_tier_grants" }
@@ -56,20 +61,20 @@ func (aiProviderTenantGrantV1) TableName() string { return "ai_provider_tenant_g
 // (ADR-065 decision 10): tier→provider offers, and per-tenant additive exceptions.
 // Together they replace the retired instance-wide single-active pointer.
 //
-// A GRANT ROW IS AN ENTITLEMENT AND CARRIES NO DEFAULT MARK. This migration once
-// declared an is_default column on both tables, plus uix_ai_tier_grant_default and
-// uix_ai_tenant_grant_default enforcing "at most one default per tier / per tenant".
-// All of it is gone. The mark was not the problem; deriving WHETHER IT EXISTED from the
-// grant set was — the sole-granted model, the auto-marked first grant, whether the tier
-// granted anything at all. Each derivation re-answered when an operator changed the set,
-// and the shape shipped five times (model/function.go tells the whole story).
+// AT MOST ONE DEFAULT PER TIER is a unique index on (tier_token) filtered to WHERE
+// is_default, which leaves the non-default rows out of the uniqueness set — GORM cannot
+// express a partial index by tag. NO `deleted_at IS NULL` clause is needed, and that is a
+// property of this table rather than an omission: aiProviderTierGrantV1 carries no
+// DeletedAt, so grants HARD-delete and there are no tombstones for the index to count.
+// (Contrast the tombstone-counting unique-index bug this repo carries where a soft-deleted
+// row stays in the uniqueness set.)
 //
-// The answer now lives in ai_function_assignments, keyed by (tenant, function), with
-// ai_providers.is_platform_baseline as the instance-wide fallback. Both are STORED, so
-// nothing here needs a mark and nothing here may be counted to produce one. Removed from
-// the frozen shape in place rather than dropped by a follow-on migration: pre-GA, no
-// installations, so a drop-column migration would be scaffolding for a shape that never
-// existed anywhere durable (CLAUDE.md: prefer decisive cutovers).
+// The is_default mark on the TIER grant is the only default the schema can express — the
+// tenant grant table deliberately has no such column, and neither does ai_providers. That
+// asymmetry is load-bearing: it makes "AI is a tiered entitlement" structural, since a
+// tier granting nothing has no row to mark, and it leaves the per-tenant exception
+// purely additive. See model/grant.go for why the mark was deleted and restored — the
+// mark was never the bug; INFERRING its presence from the grant set was.
 //
 // The provider_id FOREIGN KEY (ON DELETE RESTRICT) is declared by the Provider
 // relation on the shapes above rather than here. Be precise about what it buys,
@@ -91,8 +96,23 @@ func NewAIProviderGrantsSchema() *gormigrate.Migration {
 				return err
 			}
 
+			tierStmt := &gorm.Statement{DB: tx}
+			if err := tierStmt.Parse(&aiProviderTierGrantV1{}); err != nil {
+				return err
+			}
 			tenantStmt := &gorm.Statement{DB: tx}
 			if err := tenantStmt.Parse(&aiProviderTenantGrantV1{}); err != nil {
+				return err
+			}
+
+			// At most one default provider per tier. No `deleted_at IS NULL` clause: this
+			// table hard-deletes, so the index has no tombstones to count (see the doc
+			// above).
+			if err := tx.Exec(fmt.Sprintf(
+				"CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s (%s) WHERE %s",
+				tierStmt.Quote("uix_ai_tier_grant_default"), tierStmt.Quote(tierStmt.Table),
+				tierStmt.Quote("tier_token"), tierStmt.Quote("is_default"),
+			)).Error; err != nil {
 				return err
 			}
 

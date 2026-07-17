@@ -59,11 +59,6 @@ type AiProvider {
     enabled: Boolean!
     # Whether an API key is configured, without exposing it.
     hasSecret: Boolean!
-    # Whether this provider is the instance's baseline model: what a tenant gets for a
-    # function it never assigned. It is filtered through the tenant's own menu, so it
-    # never serves a tenant a model its tier was not sold — this is a fallback, not a
-    # free tier, and not the retired instance-wide active pointer.
-    isPlatformBaseline: Boolean!
 }
 
 # One tier→provider offer: this provider is on the menu of every tenant at this tier
@@ -76,6 +71,12 @@ type AiProviderTierGrant {
     # screen that could reveal it.
     tier: String!
     provider: AiProvider!
+    # Whether this grant is the tier's default model: what a tenant at this tier gets for
+    # a function it never assigned, if the model is still on its menu. At most one grant
+    # per tier carries it, and only because an operator said so (setAiTierDefault) — a
+    # tier may grant models and mark none, in which case its tenants must choose
+    # explicitly. Nothing infers this mark from the grants.
+    isDefault: Boolean!
 }
 
 # One per-tenant additive grant: a model this tenant may use over and above what its
@@ -154,23 +155,35 @@ type Mutation {
     updateAiProvider(token: String!, request: AiProviderCreateRequest!, expectedUpdatedAt: String): AiProvider!
     # Delete the provider with the given token (and its key). Returns whether a row was
     # deleted. REFUSED while anything still points at the provider — a tier or tenant
-    # grant, a tenant's function assignment, or the platform-baseline designation — so
-    # an operator cannot silently strip a model from live tenants with one delete. The
-    # refusal names every reason at once.
+    # grant, or a tenant's function assignment — so an operator cannot silently strip a
+    # model from live tenants with one delete. The refusal names every reason at once. A
+    # tier's default needs no reason of its own: the mark rides a grant row, so a default
+    # is always caught by the grant it belongs to.
     deleteAiProvider(token: String!): Boolean!
     # Offer a provider to every tenant at a tier: an ENTITLEMENT, and nothing about
     # which model anything uses. Idempotent. Granting only ever widens what tenants at
     # the tier may use — it never re-points what any of them gets.
+    #
+    # IT TAKES NO makeDefault ARGUMENT, DELIBERATELY. Granting and defaulting are separate
+    # acts with separate mutations (setAiTierDefault). A makeDefault flag is exactly where
+    # the auto-mark bug lived: it made the default a property of the grant call, so a later
+    # grant could silently overturn an operator's explicit "no default". Granting a tier its
+    # first model does not mark it either.
     grantAiProviderToTier(tier: String!, provider: String!): Boolean!
-    # Withdraw a tier's offer of a provider. Returns whether a grant was removed.
+    # Withdraw a tier's offer of a provider. Returns whether a grant was removed. Revoking
+    # the tier's default leaves the tier with NO default — nothing is promoted in its
+    # place.
     revokeAiProviderFromTier(tier: String!, provider: String!): Boolean!
-    # Designate a provider as the instance's baseline model: what a tenant gets for a
-    # function it never assigned, PROVIDED its menu includes that model. Demotes any
-    # previous baseline. At most one instance-wide.
-    setPlatformBaselineProvider(token: String!): Boolean!
-    # Designate no baseline. Idempotent. Afterwards a tenant that assigned no model for
-    # a function resolves to none and must choose explicitly.
-    clearPlatformBaselineProvider: Boolean!
+    # Mark an ALREADY-GRANTED provider as the tier's default: what a tenant at that tier
+    # gets for a function it never assigned, PROVIDED its menu includes that model.
+    # Demotes any previous default. At most one per tier. Refused when the pair is not
+    # granted — a default must be something the tier actually offers, and this never
+    # creates the grant as a side effect.
+    setAiTierDefault(tier: String!, provider: String!): Boolean!
+    # Mark none of a tier's grants as its default, leaving every grant in place.
+    # Idempotent. Afterwards a tenant at that tier which assigned no model for a function
+    # resolves to none and must choose explicitly.
+    clearAiTierDefault(tier: String!): Boolean!
     # Add a provider to ONE tenant's menu over and above its tier. Idempotent. Additive
     # by construction: it widens what the tenant may use and re-points nothing.
     grantAiProviderToTenant(tenant: String!, provider: String!): Boolean!

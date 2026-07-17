@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -324,23 +323,29 @@ func (api *Api) DeleteAIProvider(ctx context.Context, token string) (bool, error
 		return false, err
 	}
 
-	// The `is_platform_baseline = false` predicate closes the gap between the check above
-	// and this delete. Grants and assignments are backstopped by their FKs (ON DELETE
-	// RESTRICT), so a concurrent grant cannot slip past assertProviderNotGranted — but
-	// the baseline designation is a column on THIS row, so no constraint objects to
-	// deleting the provider a SetPlatformBaseline just designated. Losing the baseline
-	// silently drops every non-choosing tenant to NONE, so the refusal is worth
-	// enforcing where the write actually lands rather than only where we looked.
-	res := api.sys(ctx).Unscoped().
-		Where("token = ? AND is_platform_baseline = ?", token, false).
-		Delete(&AIProvider{})
+	// A plain predicate on the token, with no second guard on the DELETE itself. This
+	// deliberately dropped a `is_platform_baseline = false` predicate (and its
+	// ErrProviderInUse branch) that guarded the retired instance-wide baseline, and the
+	// reason it is now UNNECESSARY rather than merely tidier is worth being precise
+	// about, since removing a check reads like weakening one:
+	//
+	// The default now rides a GRANT ROW (AIProviderTierGrant.IsDefault), not a column on
+	// the provider's own row. So the case the predicate closed — a designation landing
+	// between assertProviderNotGranted and this DELETE, which nothing else would object to
+	// because nothing else referenced it — cannot arise. Marking a provider as a tier's
+	// default requires it to be granted to that tier first (SetTierDefault refuses
+	// otherwise), a grant row carries provider_id with ON DELETE RESTRICT, and the grant
+	// arm of assertProviderNotGranted already refuses on it. The database enforces the
+	// race the hand-written predicate was covering: the protection that had to be
+	// hand-written is now the protection that was already there.
+	res := api.sys(ctx).Unscoped().Where("token = ?", token).Delete(&AIProvider{})
 	if res.Error != nil {
 		return false, res.Error
 	}
 	if res.RowsAffected == 0 {
-		// It existed a moment ago and is not gone by our hand: it was designated the
-		// baseline in between. Report the same legible refusal the check would have.
-		return false, fmt.Errorf("%w: it is the platform baseline model", ErrProviderInUse)
+		// It existed a moment ago and is gone by another writer's hand, taking its key with
+		// it. Report the delete we did not perform as false rather than claiming it.
+		return false, nil
 	}
 
 	// Remove the provider's key so a deleted provider leaves no orphaned secret
