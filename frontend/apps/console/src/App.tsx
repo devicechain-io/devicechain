@@ -16,6 +16,7 @@ import ConnectorsPage from '@/routes/connectors/ConnectorsPage';
 import ConnectorDetailPage from '@/routes/connectors/ConnectorDetailPage';
 import AiProvidersPage from '@/routes/admin/ai-providers/AiProvidersPage';
 import AiProviderDetailPage from '@/routes/admin/ai-providers/AiProviderDetailPage';
+import AiPackagingPage from '@/routes/admin/ai-packaging/AiPackagingPage';
 import AuditPage from '@/routes/audit/AuditPage';
 import FacetKeysPage from '@/routes/facets/FacetKeysPage';
 import BrowsePage from '@/routes/browse/BrowsePage';
@@ -146,6 +147,7 @@ export default function App() {
               on the admin plane rather than inside a tenant (ADR-065). */}
           <Route path="ai-providers" element={<AiProvidersPage />} />
           <Route path="ai-providers/:token" element={<AiProviderDetailPage />} />
+          <Route path="ai-packaging" element={<AiPackagingPage />} />
           <Route path="settings" element={<AdminSettingsPage />} />
         </Route>
       </Route>
