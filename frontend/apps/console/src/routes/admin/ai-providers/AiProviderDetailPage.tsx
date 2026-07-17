@@ -202,10 +202,10 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
   return (
     <PageShell
       title={loaded.name || loaded.token}
-      description={<BackLink to={AI_PROVIDERS_BASE}>All providers</BackLink>}
+      action={<BackLink to={AI_PROVIDERS_BASE}>All providers</BackLink>}
       banner="dashboard"
     >
-      <div className="max-w-2xl space-y-4">
+      <div className="space-y-4">
         {/* Above the tabs so a validation error (which may belong to a field on the other
             tab — e.g. "Model is required" while you saved from Basic) is always visible. */}
         {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
@@ -237,11 +237,7 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
               </div>
             </SectionPanel>
           </TabsContent>
-          {/* forceMount keeps the smoke-test panel mounted across tab switches, so a
-              prompt typed and a result returned survive a trip to Connection to check a
-              field — Radix would otherwise unmount the inactive tab and wipe that local
-              state. Radix adds `hidden` when inactive, so it stays out of view. */}
-          <TabsContent value="test" forceMount>
+          <TabsContent value="test">
             <SectionPanel
               title="Test provider"
               description="Run a prompt live through this provider’s endpoint and key to validate it. This is an operator smoke test — it does not apply the per-tenant external-routing consent gate."
