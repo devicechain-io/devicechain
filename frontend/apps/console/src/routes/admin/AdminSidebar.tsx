@@ -57,8 +57,17 @@ const NAV: NavNode[] = [
       { label: 'Tiers', href: '/admin/tiers', icon: Layers },
     ],
   },
-  { label: 'Identities', href: '/admin/identities', icon: Users },
-  { label: 'Roles', href: '/admin/roles', icon: ShieldCheck },
+  {
+    label: 'Identities',
+    icon: Users,
+    children: [
+      { label: 'List', href: '/admin/identities', icon: List },
+      // Roles are the RBAC vocabulary identities are assigned, so the catalog nests under
+      // Identities (the same "configuration OF the parent" logic that puts Tiers under
+      // Tenants) rather than sitting as its own top-level peer.
+      { label: 'Roles', href: '/admin/roles', icon: ShieldCheck },
+    ],
+  },
   { label: 'AI Providers', href: '/admin/ai-providers', icon: Sparkles },
   // AI packaging (which models each tier grants) is not a top-level screen: it is
   // configuration OF the tiers, reached from a tier's detail page. The route still exists

@@ -66,9 +66,10 @@ The tenant, tier, and AI-provider detail pages share one shape. Copy it for the 
 ## Navigation (admin sidebar)
 
 - **Groups** are collapsible via `SidebarMenuSub`. Nest a screen under a parent when it is
-  configuration *of* that parent's domain — e.g. Tiers lives under Tenants (a tier is
-  packaging of tenants, ADR-065), with an explicit **List** child for the parent's own list
-  page. See [`AdminSidebar.tsx`](src/routes/admin/AdminSidebar.tsx) and the richer
+  configuration *of* that parent's domain, and give the parent an explicit **List** child
+  for its own list page. Established instances: Tiers under Tenants (a tier is packaging of
+  tenants, ADR-065) and Roles under Identities (roles are the RBAC vocabulary identities are
+  assigned). See [`AdminSidebar.tsx`](src/routes/admin/AdminSidebar.tsx) and the richer
   [`AppSidebar.tsx`](src/routes/AppSidebar.tsx).
 - **Accordion:** at most one group open. Auto-expand the group that owns the active route,
   computed from the pathname so deep links and refreshes land expanded.
