@@ -72,6 +72,13 @@ is enforced server-side by the token's authorities.
 The `/dash` viewer runs the same two-step login independently (it does **not**
 reuse the console's session).
 
+## Console UI conventions
+
+The management console's UI patterns and the reasoning behind them — detail-page shape,
+the full-replace one-save rule, Combobox-over-native-select, sidebar groups, and known
+gotchas — live in [`apps/console/CONVENTIONS.md`](apps/console/CONVENTIONS.md). Read it
+before adding an admin surface, and record new UI decisions there.
+
 ## CI gates (run before committing)
 
 ```bash

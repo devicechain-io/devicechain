@@ -7,9 +7,9 @@
 // cleartext key — only whether one exists (`existingHasSecret`) — matching the
 // ADR-059 write-only contract.
 
-import type { ReactNode } from 'react';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
+import { Combobox } from '@/components/ui/combobox';
 import { Textarea } from '@/routes/common';
 import type { AiProvider } from '@/lib/api/ai-inference-admin';
 
@@ -101,50 +101,22 @@ export function providerSecretArg(state: ProviderEditorState, mode: 'create' | '
   return s.value === '' ? undefined : s.value;
 }
 
-// A minimal styled <select>, matching the connector editor's (there is no shared
-// Select primitive; the app uses native selects for closed enums).
-function Select({
-  value,
-  onChange,
-  children,
-  id,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  children: ReactNode;
-  id?: string;
-}) {
-  return (
-    <select
-      id={id}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-    >
-      {children}
-    </select>
-  );
-}
-
-export function AiProviderForm({
+// ProviderBasicFields renders the provider's IDENTITY: kind, name, description, and the
+// enabled toggle — the "what is this" facts. Split out so the detail page can put it on a
+// Basic tab while the create drawer stacks it with the rest.
+export function ProviderBasicFields({
   state,
   onChange,
   kinds,
-  mode,
-  existingHasSecret,
 }: {
   state: ProviderEditorState;
   onChange: (next: ProviderEditorState) => void;
   kinds: string[];
-  mode: 'create' | 'edit';
-  existingHasSecret: boolean;
 }) {
   const set = (patch: Partial<ProviderEditorState>) => onChange({ ...state, ...patch });
-  const setSecret = (next: Partial<SecretState>) =>
-    onChange({ ...state, secret: { ...state.secret, ...next } });
 
-  // The kind list may not include a legacy/unknown value on an existing provider;
-  // include the current kind so the select can render it without silently switching.
+  // The kind list may not include a legacy/unknown value on an existing provider; include
+  // the current kind so the picker can render it without silently switching.
   const kindOptions = kinds.includes(state.kind) || state.kind === '' ? kinds : [state.kind, ...kinds];
 
   return (
@@ -154,13 +126,19 @@ export function AiProviderForm({
         htmlFor="ai-kind"
         description="The provider implementation. `anthropic` is the shipped kind at GA."
       >
-        <Select id="ai-kind" value={state.kind} onChange={(v) => set({ kind: v })}>
-          {kindOptions.map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </Select>
+        {/* A closed enum, but on our styled picker (not a native select) so it reads like
+            every other dropdown in the console. Never clearable — a provider always has a
+            kind. */}
+        <Combobox
+          id="ai-kind"
+          value={state.kind}
+          onChange={(v) => set({ kind: v })}
+          placeholder="Select a kind…"
+          searchPlaceholder="Search kinds…"
+          emptyMessage="No provider kinds."
+          allowClear={false}
+          options={kindOptions.map((k) => ({ value: k, label: k }))}
+        />
       </FormField>
 
       <FormField label="Name" htmlFor="ai-name">
@@ -175,6 +153,35 @@ export function AiProviderForm({
         />
       </FormField>
 
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={state.enabled}
+          onChange={(e) => set({ enabled: e.target.checked })}
+          className="h-4 w-4 rounded border-input"
+        />
+        <span>Enabled</span>
+        <span className="text-muted-foreground">— a disabled provider stays listed but never serves a call.</span>
+      </label>
+    </div>
+  );
+}
+
+// ProviderConnectionFields renders HOW to reach the model: its id, an optional endpoint
+// override, and opaque per-kind params. The write-only API key is a sibling
+// (ProviderApiKeyControl) rather than folded in here, so a caller can lay the credential
+// out on its own.
+export function ProviderConnectionFields({
+  state,
+  onChange,
+}: {
+  state: ProviderEditorState;
+  onChange: (next: ProviderEditorState) => void;
+}) {
+  const set = (patch: Partial<ProviderEditorState>) => onChange({ ...state, ...patch });
+
+  return (
+    <div className="space-y-4">
       <FormField
         label="Model *"
         htmlFor="ai-model"
@@ -215,19 +222,34 @@ export function AiProviderForm({
           className="font-mono text-xs"
         />
       </FormField>
+    </div>
+  );
+}
 
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={state.enabled}
-          onChange={(e) => set({ enabled: e.target.checked })}
-          className="h-4 w-4 rounded border-input"
-        />
-        <span>Enabled</span>
-        <span className="text-muted-foreground">— a disabled provider stays listed but never serves a call.</span>
-      </label>
+// AiProviderForm is the flat composition used by the create drawer: identity, then
+// connection, then the credential — one scroll. The detail page composes the same three
+// pieces into tabs instead.
+export function AiProviderForm({
+  state,
+  onChange,
+  kinds,
+  mode,
+  existingHasSecret,
+}: {
+  state: ProviderEditorState;
+  onChange: (next: ProviderEditorState) => void;
+  kinds: string[];
+  mode: 'create' | 'edit';
+  existingHasSecret: boolean;
+}) {
+  const setSecret = (next: Partial<SecretState>) =>
+    onChange({ ...state, secret: { ...state.secret, ...next } });
 
-      <ApiKeyControl
+  return (
+    <div className="space-y-4">
+      <ProviderBasicFields state={state} onChange={onChange} kinds={kinds} />
+      <ProviderConnectionFields state={state} onChange={onChange} />
+      <ProviderApiKeyControl
         mode={mode}
         existingHasSecret={existingHasSecret}
         secret={state.secret}
@@ -237,11 +259,11 @@ export function AiProviderForm({
   );
 }
 
-// ApiKeyControl implements the write-only key UX. On create it is a single optional
-// input. On edit, a stored key is shown as "configured" with Replace / Clear
+// ProviderApiKeyControl implements the write-only key UX. On create it is a single
+// optional input. On edit, a stored key is shown as "configured" with Replace / Clear
 // affordances — the value never comes back from the server, so the input is only ever
-// for a NEW value.
-function ApiKeyControl({
+// for a NEW value. Exported so the detail page can place the credential on its own tab.
+export function ProviderApiKeyControl({
   mode,
   existingHasSecret,
   secret,
