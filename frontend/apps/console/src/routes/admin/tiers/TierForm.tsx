@@ -2,16 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
+import { Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { TierPill, tierSwatch } from '@/components/tiers/TierPill';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   createTenantTier,
   updateTenantTier,
   listGovernanceDimensions,
+  listTierColorPalette,
   type AdminTenantTierDetail,
 } from '@/lib/api/admin';
 import { Textarea, errMessage } from '@/routes/common';
@@ -33,10 +36,15 @@ export function TierForm({
 }) {
   const editing = tier != null;
   const { data: dimensions, error: dimensionsError } = useQuery(listGovernanceDimensions, []);
+  // The palette is fetched, not hardcoded, so the picker offers exactly the tokens the
+  // server validates on write — the same reason the ceilings come from the dimension
+  // query. Until it lands the picker shows only "no color", which is a safe default.
+  const { data: palette } = useQuery(listTierColorPalette, []);
 
   const [token, setToken] = useState(tier?.token ?? '');
   const [name, setName] = useState(tier?.name ?? '');
   const [description, setDescription] = useState(tier?.description ?? '');
+  const [color, setColor] = useState(tier?.color ?? '');
   // Settings are held as raw strings keyed by config key, so an empty field stays
   // distinguishable from a zero — "this tier declares no ceiling here" and "this
   // tier's ceiling is zero" are opposite facts, and the second is not writable at
@@ -67,6 +75,8 @@ export function TierForm({
           name: name.trim() || undefined,
           description: description.trim() || undefined,
           config,
+          // Color is a full replace, like name: "" is a real value meaning "no pill".
+          color,
         });
         onDone(`Tier “${tier.token}” updated`);
       } else {
@@ -75,6 +85,7 @@ export function TierForm({
           name: name.trim() || undefined,
           description: description.trim() || undefined,
           config,
+          color,
         });
         onDone(`Tier “${token.trim()}” created`);
       }
@@ -122,6 +133,35 @@ export function TierForm({
         />
       </FormField>
 
+      <FormField
+        label="Color"
+        description="A pill shown beside a tenant on this tier. Presentation only — it says nothing about what the tier grants."
+      >
+        <div className="flex items-center gap-3">
+          <div className="flex flex-wrap gap-1.5">
+            {/* "No color" is a first-class choice, not the absence of one — a neutral
+                pill, always offered. */}
+            <ColorSwatch
+              color=""
+              selected={color === ''}
+              onSelect={() => setColor('')}
+              title="No color"
+            />
+            {(palette ?? []).map((c) => (
+              <ColorSwatch
+                key={c}
+                color={c}
+                selected={color === c}
+                onSelect={() => setColor(c)}
+                title={c}
+              />
+            ))}
+          </div>
+          {/* Live preview: what the pill will actually look like with the current name. */}
+          <TierPill label={name.trim() || token.trim() || 'tier'} color={color} />
+        </div>
+      </FormField>
+
       <div className="space-y-3">
         <div>
           <h3 className="text-sm font-medium">Ceilings</h3>
@@ -166,6 +206,36 @@ export function TierForm({
         </Button>
       </div>
     </div>
+  );
+}
+
+// ColorSwatch is one clickable palette chip. It reuses tierSwatch so the chip is the
+// exact color the pill will be — a picker that previewed a different shade than it stored
+// would be its own small lie. The selected chip carries a check.
+function ColorSwatch({
+  color,
+  selected,
+  onSelect,
+  title,
+}: {
+  color: string;
+  selected: boolean;
+  onSelect: () => void;
+  title: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      title={title}
+      aria-label={color === '' ? 'No color' : color}
+      aria-pressed={selected}
+      className={`flex size-6 items-center justify-center rounded-full ring-1 ring-inset transition ${tierSwatch(
+        color,
+      )} ${selected ? 'outline outline-2 outline-offset-1 outline-foreground' : 'hover:opacity-80'}`}
+    >
+      {selected && <Check size={12} />}
+    </button>
   );
 }
 
