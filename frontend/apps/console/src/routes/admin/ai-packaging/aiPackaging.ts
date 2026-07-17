@@ -19,13 +19,6 @@ export interface PackagingTierInput {
   tenantCount: number;
 }
 
-// The provider fields this screen needs.
-export interface PackagingProvider {
-  token: string;
-  name?: string | null;
-  enabled: boolean;
-}
-
 export interface PackagingTier {
   token: string;
   name: string | null;
@@ -43,6 +36,15 @@ export interface PackagingTier {
   // Null is an answer an operator can choose, not a gap: at most one grant per tier
   // carries the mark (uix_ai_tier_grant_default), and nothing infers it.
   defaultProvider: string | null;
+  // Whether the marked default's provider is enabled — false when there is no default.
+  //
+  // It is carried HERE, off the grant row's own provider payload, rather than looked up
+  // in the provider list. The grants query is unpaginated and already returns each
+  // grant's provider, so this answer is always complete; the provider list is paginated
+  // and can be truncated. Looking the mark up in a list that might not contain it made
+  // "is the default disabled" silently answer "no" for a provider below the page cut —
+  // the warning vanished exactly when the operator could least see the cause.
+  defaultProviderEnabled: boolean;
 }
 
 // buildPackagingTiers returns the catalog's tiers in catalog order, followed by any tier
@@ -62,6 +64,7 @@ export function buildPackagingTiers(
       known: true,
       granted: new Set(),
       defaultProvider: null,
+      defaultProviderEnabled: false,
     });
   }
 
@@ -75,11 +78,17 @@ export function buildPackagingTiers(
         known: false,
         granted: new Set(),
         defaultProvider: null,
+        defaultProviderEnabled: false,
       };
       byToken.set(g.tier, tier);
     }
     tier.granted.add(g.provider.token);
-    if (g.isDefault) tier.defaultProvider = g.provider.token;
+    if (g.isDefault) {
+      tier.defaultProvider = g.provider.token;
+      // Taken from the grant's own provider, so the answer never depends on the
+      // paginated provider list. See PackagingTier.defaultProviderEnabled.
+      tier.defaultProviderEnabled = g.provider.enabled;
+    }
   }
 
   const known = catalog.map((t) => byToken.get(t.token)!);
@@ -113,10 +122,16 @@ export type PackagingWarning =
 // change, this drifts and the console starts lying. Keep it to a re-statement of that
 // function's two cases and nothing more; if it needs a third, the server grew a case and
 // this is the reminder to look.
-export function tierWarning(
-  tier: PackagingTier,
-  providers: PackagingProvider[],
-): PackagingWarning | null {
+//
+// IT TAKES NO PROVIDER LIST, DELIBERATELY. It once looked the marked default up in the
+// page's provider list to ask whether it was enabled, which made the answer depend on a
+// list that pagination can truncate: a default below the page cut was simply not found,
+// and "is the default disabled" quietly answered "no" — suppressing the warning exactly
+// where the operator had the least chance of seeing the cause for themselves. The
+// enabledness of the mark now rides the tier (defaultProviderEnabled), sourced from the
+// unpaginated grants query, so the truncated list is not reachable from here. Do not add
+// the parameter back: its absence is what makes that bug unrepresentable.
+export function tierWarning(tier: PackagingTier): PackagingWarning | null {
   // An unknown tier strands nobody: no tenant can report a tier the catalog does not
   // have, so nothing ever resolves through these grants. They are stale config, which is
   // a real thing to tell the operator but not this sentence — the screen surfaces them as
@@ -132,11 +147,7 @@ export function tierWarning(
 
   if (tier.defaultProvider === null) return { kind: 'no-default' };
 
-  const marked = providers.find((p) => p.token === tier.defaultProvider);
-  // An unfound provider means the list was truncated, not that the mark is broken — the
-  // FK (ON DELETE RESTRICT) makes a grant naming a deleted provider unreachable. Say
-  // nothing rather than invent a fault.
-  if (marked && !marked.enabled) {
+  if (!tier.defaultProviderEnabled) {
     return { kind: 'default-disabled', provider: tier.defaultProvider };
   }
   return null;

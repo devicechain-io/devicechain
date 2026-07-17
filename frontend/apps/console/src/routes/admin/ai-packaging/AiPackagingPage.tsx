@@ -83,9 +83,13 @@ export default function AiPackagingPage() {
   // where two fast clicks on the same tier's default interleave.
   const [busy, setBusy] = useState(false);
 
+  // Keyed on [version] like the other two: the tier catalog is half of this join, and a
+  // tier created or deleted on the Tiers screen has to reach this one. Refreshing only
+  // the ai-inference half left a deleted tier rendering as known and a warning's tenant
+  // count arbitrarily stale.
   const { data: catalog, loading: catalogLoading, error: catalogError } = useQuery(
     listTenantTierCatalog,
-    [],
+    [version],
   );
   const { data: providerResults, loading: providersLoading, error: providersError } = useQuery(
     () => listAiProviders({ pageNumber: 1, pageSize: PROVIDER_PAGE_SIZE }),
@@ -102,7 +106,13 @@ export default function AiPackagingPage() {
     [catalog, grants],
   );
 
-  const loading = catalogLoading || providersLoading || grantsLoading;
+  // FIRST load only. `reload()` puts every query back into `loading`, so gating the whole
+  // tree on it replaced the screen with a spinner after every single toggle — packaging
+  // one tier is five gestures and was five full-screen flaps, each destroying focus and
+  // scroll position. useQuery keeps the previous data across a refetch, and `busy`
+  // already freezes the controls, so a refetch can repaint in place.
+  const loading = (catalogLoading && !catalog) || (providersLoading && !providerResults) ||
+    (grantsLoading && !grants);
   const error = catalogError || providersError || grantsError;
   const truncated =
     providerResults != null && (providerResults.pagination.totalRecords ?? 0) > providers.length;
@@ -124,6 +134,20 @@ export default function AiPackagingPage() {
     }
   };
 
+  // WHAT GETS CONFIRMED, AND WHY IT IS NOT EVERY CHANGE. The acts that STRAND tenants are
+  // confirmed: revoking the tier's default, and clearing it. Both leave the tier resolving
+  // to no model for every tenant that never chose one, and the server promotes nothing in
+  // their place. Re-POINTING the default from one granted model to another is not
+  // confirmed — it hands those tenants a different working model rather than none, it is
+  // audited, and this screen shows the result immediately. Blast radius, not mutation
+  // count, is what earns a dialog.
+  const confirmStranding = (tier: PackagingTier, what: string, confirmLabel: string) =>
+    confirm({
+      title: `Leave ${tier.token} with no default model`,
+      description: `${what} leaves ${tier.token} with no default — no other model is promoted in its place, so every tenant at ${tier.token} that has not chosen a model itself will resolve to no model.`,
+      confirmLabel,
+    });
+
   const toggleGrant = async (tier: PackagingTier, provider: string, granted: boolean) => {
     if (!granted) {
       await run(
@@ -132,17 +156,30 @@ export default function AiPackagingPage() {
       );
       return;
     }
-    // Revoking the tier's default is the one click here that silently changes what live
-    // tenants resolve to: the mark rides the row being deleted, and the server promotes
-    // nothing in its place. Say so before it happens.
-    if (tier.defaultProvider === provider) {
-      const ok = await confirm({
-        title: `Revoke ${tier.token}'s default model`,
-        description: `“${provider}” is ${tier.token}'s default. Revoking it leaves ${tier.token} with no default — no other model is promoted in its place, so every tenant at ${tier.token} that has not chosen a model itself will resolve to no model.`,
-        confirmLabel: 'Revoke',
-      });
-      if (!ok) return;
+
+    // An unknown tier has no tenants and can have none, so revoking its grant strands
+    // nobody — the same reason tierWarning stays quiet about it. Confirming here would
+    // claim a consequence that cannot happen.
+    if (tier.known) {
+      // Re-read before deciding. This guard was answering from the last fetch, which goes
+      // stale the moment another operator marks a default in another session: their mark
+      // is deleted with no warning by the one click the dialog exists for. The server is
+      // authoritative and this is advisory, so a failed re-read falls back to the fetched
+      // view rather than blocking the act.
+      let isDefault = tier.defaultProvider === provider;
+      try {
+        const fresh = await listAiProviderTierGrants();
+        isDefault = fresh.some(
+          (g) => g.tier === tier.token && g.provider.token === provider && g.isDefault,
+        );
+      } catch {
+        // Keep the fetched answer.
+      }
+      if (isDefault && !(await confirmStranding(tier, `“${provider}” is ${tier.token}'s default. Revoking it`, 'Revoke'))) {
+        return;
+      }
     }
+
     await run(
       () => revokeAiProviderFromTier(tier.token, provider),
       `“${provider}” is off the ${tier.token} menu`,
@@ -151,6 +188,13 @@ export default function AiPackagingPage() {
 
   const chooseDefault = async (tier: PackagingTier, value: string) => {
     if (value === NO_DEFAULT) {
+      // Radix moves selection with the arrow keys, so this can be reached without a click
+      // — one keypress away from stranding every non-choosing tenant on the tier. The
+      // dialog is what makes it a decision. Skipped when the tier has nothing to strand
+      // with: no grants, or no tenants that could ever be at it.
+      if (tier.known && tier.granted.size > 0 && !(await confirmStranding(tier, 'Clearing the default', 'Clear'))) {
+        return;
+      }
       await run(() => clearAiTierDefault(tier.token), `${tier.token} has no default model`);
       return;
     }
@@ -213,7 +257,15 @@ function TierPanel({
   onToggleGrant: (tier: PackagingTier, provider: string, granted: boolean) => void;
   onChooseDefault: (tier: PackagingTier, value: string) => void;
 }) {
-  const warning = tierWarning(tier, providers);
+  const warning = tierWarning(tier);
+  // The marked default is normally one of the rows below. It is not when the provider list
+  // was truncated past it — and then the group's value names an item that does not exist,
+  // so NOTHING renders as selected: a state the database forbids (a tier has a default or
+  // it does not), and one that invites the operator to "fix" it by choosing No default,
+  // silently clearing a real default they were never shown. Give the mark a row of its own
+  // instead, so the group always has the item its value names.
+  const markedIsListed =
+    tier.defaultProvider === null || providers.some((p) => p.token === tier.defaultProvider);
 
   return (
     <SectionPanel
@@ -308,6 +360,48 @@ function TierPanel({
                   </DataTableRow>
                 );
               })}
+
+              {/* The marked default, when the truncated list has no row for it. Rendered
+                  so the group's value always names a real item — see markedIsListed. */}
+              {!markedIsListed && tier.defaultProvider !== null && (
+                <DataTableRow>
+                  <DataTableCell>
+                    <div className="flex items-center gap-2">
+                      <Link
+                        to={`/admin/ai-providers/${encodeURIComponent(tier.defaultProvider)}`}
+                        className="font-medium hover:underline"
+                      >
+                        {tier.defaultProvider}
+                      </Link>
+                      {!tier.defaultProviderEnabled && <Badge variant="outline">disabled</Badge>}
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      This tier’s default, below the provider-list page cut
+                    </span>
+                  </DataTableCell>
+                  <DataTableCell className="text-center">
+                    <div className="flex justify-center">
+                      <Checkbox
+                        checked
+                        disabled={busy}
+                        aria-label={`Grant ${tier.defaultProvider} to ${tier.token}`}
+                        onCheckedChange={() =>
+                          onToggleGrant(tier, tier.defaultProvider as string, true)
+                        }
+                      />
+                    </div>
+                  </DataTableCell>
+                  <DataTableCell className="text-center">
+                    <div className="flex justify-center">
+                      <RadioGroupItem
+                        value={tier.defaultProvider}
+                        disabled={busy}
+                        aria-label={`Make ${tier.defaultProvider} the default for ${tier.token}`}
+                      />
+                    </div>
+                  </DataTableCell>
+                </DataTableRow>
+              )}
 
               {/* The explicit "no default" option. Without a row to select, clearing a
                   default is an act with no control, and "this tier deliberately has no

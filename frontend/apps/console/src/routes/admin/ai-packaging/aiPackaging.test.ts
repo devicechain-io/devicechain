@@ -6,12 +6,16 @@ import {
   buildPackagingTiers,
   tierWarning,
   warningText,
-  type PackagingProvider,
   type PackagingTierInput,
 } from './aiPackaging';
 import type { AiProviderTierGrant } from '@/lib/api/ai-inference-admin';
 
-const grant = (tier: string, token: string, isDefault = false, enabled = true): AiProviderTierGrant => ({
+const grant = (
+  tier: string,
+  token: string,
+  isDefault = false,
+  enabled = true,
+): AiProviderTierGrant => ({
   tier,
   isDefault,
   provider: { token, name: token, enabled },
@@ -21,12 +25,6 @@ const CATALOG: PackagingTierInput[] = [
   { token: 'gold', name: 'Gold', tenantCount: 2 },
   { token: 'silver', name: 'Silver', tenantCount: 5 },
   { token: 'bronze', name: 'Bronze', tenantCount: 0 },
-];
-
-const PROVIDERS: PackagingProvider[] = [
-  { token: 'opus', name: 'Opus', enabled: true },
-  { token: 'sonnet', name: 'Sonnet', enabled: true },
-  { token: 'retired', name: 'Retired', enabled: false },
 ];
 
 describe('buildPackagingTiers', () => {
@@ -62,6 +60,32 @@ describe('buildPackagingTiers', () => {
     expect(tiers.every((t) => t.known)).toBe(true);
     expect(tiers.every((t) => t.defaultProvider === null)).toBe(true);
   });
+
+  // The enabledness of the mark comes off the GRANT's own provider payload, which is
+  // unpaginated — never from the page's truncatable provider list.
+  it('carries the marked default’s enabledness from the grant itself', () => {
+    const enabled = buildPackagingTiers(CATALOG, [grant('gold', 'opus', true, true)])[0];
+    expect(enabled.defaultProviderEnabled).toBe(true);
+
+    const disabled = buildPackagingTiers(CATALOG, [grant('gold', 'retired', true, false)])[0];
+    expect(disabled.defaultProviderEnabled).toBe(false);
+  });
+
+  // A disabled provider that is merely granted must not be mistaken for a disabled
+  // DEFAULT: only the marked row sets the flag.
+  it('ignores the enabledness of grants that are not the default', () => {
+    const tier = buildPackagingTiers(CATALOG, [
+      grant('gold', 'opus', true, true),
+      grant('gold', 'retired', false, false),
+    ])[0];
+    expect(tier.defaultProviderEnabled).toBe(true);
+  });
+
+  it('leaves defaultProviderEnabled false when the tier marks no default', () => {
+    const tier = buildPackagingTiers(CATALOG, [grant('gold', 'opus', false, true)])[0];
+    expect(tier.defaultProvider).toBeNull();
+    expect(tier.defaultProviderEnabled).toBe(false);
+  });
 });
 
 describe('tierWarning', () => {
@@ -69,17 +93,17 @@ describe('tierWarning', () => {
     buildPackagingTiers(CATALOG, grants).find((t) => t.token === token)!;
 
   it('says nothing about a tier that offers no models — AI off is a package, not a fault', () => {
-    expect(tierWarning(tierNamed('gold', []), PROVIDERS)).toBeNull();
+    expect(tierWarning(tierNamed('gold', []))).toBeNull();
   });
 
   it('says nothing when the tier marks an enabled default', () => {
     const tier = tierNamed('gold', [grant('gold', 'opus', true), grant('gold', 'sonnet')]);
-    expect(tierWarning(tier, PROVIDERS)).toBeNull();
+    expect(tierWarning(tier)).toBeNull();
   });
 
   it('warns when a tier offers models but marks no default', () => {
     const tier = tierNamed('gold', [grant('gold', 'opus'), grant('gold', 'sonnet')]);
-    expect(tierWarning(tier, PROVIDERS)).toEqual({ kind: 'no-default' });
+    expect(tierWarning(tier)).toEqual({ kind: 'no-default' });
   });
 
   // The deliberate server behaviour this whole screen exists to make visible: granting
@@ -87,10 +111,10 @@ describe('tierWarning', () => {
   // fact that there is only one.
   it('warns when a tier offers exactly one model and marks no default', () => {
     const tier = tierNamed('gold', [grant('gold', 'opus')]);
-    expect(tierWarning(tier, PROVIDERS)).toEqual({ kind: 'no-default' });
+    expect(tierWarning(tier)).toEqual({ kind: 'no-default' });
   });
 
-  // The trap that is invisible from the packaging screen alone: the mark is right, the
+  // The trap that is invisible from the provider list alone: the mark is right, the
   // provider is off, and a menu carries enabled providers only.
   //
   // The tier grants a SECOND, enabled model on purpose. With only the disabled one this
@@ -99,18 +123,25 @@ describe('tierWarning', () => {
   // test and the sole-model test together, and the pair would no longer say which rule
   // broke. Two grants isolate this one.
   it('warns when the marked default is disabled', () => {
-    const tier = tierNamed('gold', [grant('gold', 'retired', true), grant('gold', 'opus')]);
-    expect(tierWarning(tier, PROVIDERS)).toEqual({ kind: 'default-disabled', provider: 'retired' });
+    const tier = tierNamed('gold', [grant('gold', 'retired', true, false), grant('gold', 'opus')]);
+    expect(tierWarning(tier)).toEqual({ kind: 'default-disabled', provider: 'retired' });
   });
 
   it('does not warn about a disabled provider that is merely granted, not the default', () => {
-    const tier = tierNamed('gold', [grant('gold', 'opus', true), grant('gold', 'retired')]);
-    expect(tierWarning(tier, PROVIDERS)).toBeNull();
+    const tier = tierNamed('gold', [
+      grant('gold', 'opus', true, true),
+      grant('gold', 'retired', false, false),
+    ]);
+    expect(tierWarning(tier)).toBeNull();
   });
 
-  it('stays quiet when the marked provider is missing from a truncated list', () => {
-    const tier = tierNamed('gold', [grant('gold', 'unlisted', true)]);
-    expect(tierWarning(tier, PROVIDERS)).toBeNull();
+  // The regression the defaultProviderEnabled refactor exists for: the marked default is
+  // disabled and appears in NO provider list this function can see. It must still warn —
+  // the old signature took a provider list, failed to find the mark in it, and went
+  // silent. There is now no list to fail to find it in.
+  it('warns about a disabled default the page’s provider list could not have shown', () => {
+    const tier = tierNamed('gold', [grant('gold', 'unlisted', true, false)]);
+    expect(tierWarning(tier)).toEqual({ kind: 'default-disabled', provider: 'unlisted' });
   });
 
   // An unknown tier would otherwise trip the no-default arm and claim its tenants get no
@@ -118,7 +149,7 @@ describe('tierWarning', () => {
   it('does not claim an unknown tier strands tenants, since nothing resolves through it', () => {
     const tier = tierNamed('platinum', [grant('platinum', 'opus'), grant('platinum', 'sonnet')]);
     expect(tier.known).toBe(false);
-    expect(tierWarning(tier, PROVIDERS)).toBeNull();
+    expect(tierWarning(tier)).toBeNull();
   });
 });
 
@@ -131,9 +162,10 @@ describe('warningText', () => {
   });
 
   it('singularizes one tenant', () => {
-    const tier = buildPackagingTiers([{ token: 'gold', tenantCount: 1 }], [grant('gold', 'opus')]).find(
-      (t) => t.token === 'gold',
-    )!;
+    const tier = buildPackagingTiers(
+      [{ token: 'gold', tenantCount: 1 }],
+      [grant('gold', 'opus')],
+    ).find((t) => t.token === 'gold')!;
     expect(warningText({ kind: 'no-default' }, tier)).toContain('1 tenant packaged here');
   });
 
@@ -150,6 +182,8 @@ describe('warningText', () => {
     const tier = buildPackagingTiers(CATALOG, [grant('gold', 'retired', true, false)]).find(
       (t) => t.token === 'gold',
     )!;
-    expect(warningText({ kind: 'default-disabled', provider: 'retired' }, tier)).toContain('retired');
+    expect(warningText({ kind: 'default-disabled', provider: 'retired' }, tier)).toContain(
+      'retired',
+    );
   });
 });
