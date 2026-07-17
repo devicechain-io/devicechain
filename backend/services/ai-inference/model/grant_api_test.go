@@ -122,6 +122,14 @@ func TestAPerTenantGrantCannotRevokeWhatTheTierOffers(t *testing.T) {
 // sole model and so only ever exercised the one arm already fixed. It asserted the thing
 // NEXT TO the risky thing. Hence a table: the axes are enumerated rather than trusted to
 // whichever one I happened to have in mind.
+//
+// THE ONE DELIBERATE EXCEPTION, stated here because an unstated exception to a property
+// is how instance 4 hid: granting a tier its FIRST model re-points an exception-only
+// tenant on that tier (see TestPackagingATierOverridesAnExceptionOnlyTenantsDefault).
+// That is tier-over-tenant precedence, not a leak — the tier had no opinion before and
+// now has one, and it lands identically for every tenant on the tier, which is the
+// property that actually matters. The alternative (a tenant's mark outranking its tier)
+// is the exception-changes-the-default bug wearing a hat.
 func TestGrantingMoreNeverChangesTheDefault(t *testing.T) {
 	cases := []struct {
 		name string
@@ -286,6 +294,58 @@ func TestAnOperatorsNoDefaultSurvivesTheMenuGrowing(t *testing.T) {
 				"MONOTONICITY: an operator's explicit NO-DEFAULT must survive the menu growing")
 		})
 	}
+}
+
+// TestPackagingATierOverridesAnExceptionOnlyTenantsDefault is the ONE case where granting
+// more DOES move a default, and it is here so that the boundary is asserted rather than
+// discovered. I found it by probing tierSpeaks — which is itself derived from a set
+// operators can change, i.e. it has the shape's signature and had to be checked.
+//
+// A tier that offers nothing has no opinion, so an exception-only tenant's own mark
+// answers. The moment the tier offers ANYTHING, the tier answers for every tenant on it,
+// including the ones holding exceptions. The tenant's mark is not lost — it is outranked,
+// and it decides again if the tier stops offering.
+//
+// This is the price of tier-over-tenant precedence, and it is the right price: the
+// alternative lets a per-tenant grant outrank the tier, which is the bug this whole arc
+// has been about. What makes it defensible is that it lands the SAME for every tenant at
+// the tier — the operator packaged bronze with sonnet, so bronze defaults to sonnet.
+func TestPackagingATierOverridesAnExceptionOnlyTenantsDefault(t *testing.T) {
+	api := newTestApi(t)
+	mustProvider(t, api, "sonnet")
+	mustProvider(t, api, "fable")
+
+	// bronze sells no AI; acme holds an audited exception, so acme's own mark answers.
+	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
+	before, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
+	require.NoError(t, err)
+	require.NotNil(t, before.Default)
+	require.Equal(t, "fable", before.Default.Token)
+
+	// The operator now packages bronze WITH sonnet: the tier acquires an opinion.
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", false))
+
+	acme, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
+	require.NoError(t, err)
+	globex, err := api.MenuForTenant(tenantCtx("globex"), "bronze")
+	require.NoError(t, err)
+
+	require.NotNil(t, acme.Default)
+	require.NotNil(t, globex.Default)
+	assert.Equal(t, "sonnet", acme.Default.Token, "the tier now answers, for the exception holder too")
+	assert.Equal(t, globex.Default.Token, acme.Default.Token,
+		"and it answers the SAME for every tenant on the tier — which is what makes it legible")
+	assert.Equal(t, []string{"fable", "sonnet"}, menuTokens(acme),
+		"acme keeps its exception on the menu: it was outranked, not revoked")
+
+	// The tenant's mark is not discarded — it decides again if the tier goes silent.
+	removed, err := api.RevokeProviderFromTier(adminCtx(), "bronze", "sonnet")
+	require.NoError(t, err)
+	require.True(t, removed)
+	acme, err = api.MenuForTenant(tenantCtx("acme"), "bronze")
+	require.NoError(t, err)
+	require.NotNil(t, acme.Default)
+	assert.Equal(t, "fable", acme.Default.Token)
 }
 
 // TestATierLevelActLandsTheSameForEveryTenantOnTheTier. Revoking a tier's marked default
