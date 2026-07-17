@@ -25,6 +25,8 @@ import { ErrorState } from '@/components/ui/error-state';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { SectionPanel } from '@/components/ui/section-panel';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Textarea, BackLink, errMessage } from '@/routes/common';
 import { AI_PROVIDERS_BASE } from './paths';
 import { useToast } from '@/components/ui/toast';
@@ -37,11 +39,14 @@ import {
   type AiProvider,
 } from '@/lib/api/ai-inference-admin';
 import {
-  AiProviderForm,
+  ProviderBasicFields,
+  ProviderConnectionFields,
+  ProviderApiKeyControl,
   providerStateFrom,
   validateProvider,
   providerSecretArg,
   type ProviderEditorState,
+  type SecretState,
 } from './AiProviderForm';
 
 export default function AiProviderDetailPage() {
@@ -177,31 +182,74 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
     }
   };
 
+  const setSecret = (next: Partial<SecretState>) =>
+    setEditor((e) => ({ ...e, secret: { ...e.secret, ...next } }));
+
+  // The Save button lives on BOTH editing tabs (Basic + Connection). A provider update is
+  // a full replacement of every field, so the two tabs are two views of ONE save — each
+  // persists the whole provider from the shared editor state, exactly as the tenant/tier
+  // forms do. Splitting them into per-tab submits would let one tab's save omit a field
+  // the other owns and silently blank it.
+  const saveBar = (
+    <div className="flex items-center gap-3">
+      <Button onClick={save} loading={saving} disabled={!dirty || saving}>
+        Save provider
+      </Button>
+      {dirty && <span className="text-sm text-muted-foreground">Unsaved changes</span>}
+    </div>
+  );
+
   return (
     <PageShell
       title={loaded.name || loaded.token}
       description={<BackLink to={AI_PROVIDERS_BASE}>All providers</BackLink>}
       banner="dashboard"
     >
-      <div className="max-w-2xl space-y-8">
-        <section className="space-y-4">
-          {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-          <AiProviderForm
-            state={editor}
-            onChange={setEditor}
-            kinds={kinds}
-            mode="edit"
-            existingHasSecret={baseline.hasSecret}
-          />
-          <div className="flex items-center gap-3">
-            <Button onClick={save} loading={saving} disabled={!dirty || saving}>
-              Save provider
-            </Button>
-            {dirty && <span className="text-sm text-muted-foreground">Unsaved changes</span>}
-          </div>
-        </section>
-
-        <TestInferPanel token={loaded.token} hasSecret={baseline.hasSecret} />
+      <div className="max-w-2xl space-y-4">
+        {/* Above the tabs so a validation error (which may belong to a field on the other
+            tab — e.g. "Model is required" while you saved from Basic) is always visible. */}
+        {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+        <Tabs defaultValue="basic">
+          <TabsList>
+            <TabsTrigger value="basic">Basic</TabsTrigger>
+            <TabsTrigger value="connection">Connection</TabsTrigger>
+            <TabsTrigger value="test">Test</TabsTrigger>
+          </TabsList>
+          <TabsContent value="basic">
+            <SectionPanel>
+              <div className="space-y-4">
+                <ProviderBasicFields state={editor} onChange={setEditor} kinds={kinds} />
+                {saveBar}
+              </div>
+            </SectionPanel>
+          </TabsContent>
+          <TabsContent value="connection">
+            <SectionPanel>
+              <div className="space-y-4">
+                <ProviderConnectionFields state={editor} onChange={setEditor} />
+                <ProviderApiKeyControl
+                  mode="edit"
+                  existingHasSecret={baseline.hasSecret}
+                  secret={editor.secret}
+                  onChange={setSecret}
+                />
+                {saveBar}
+              </div>
+            </SectionPanel>
+          </TabsContent>
+          {/* forceMount keeps the smoke-test panel mounted across tab switches, so a
+              prompt typed and a result returned survive a trip to Connection to check a
+              field — Radix would otherwise unmount the inactive tab and wipe that local
+              state. Radix adds `hidden` when inactive, so it stays out of view. */}
+          <TabsContent value="test" forceMount>
+            <SectionPanel
+              title="Test provider"
+              description="Run a prompt live through this provider’s endpoint and key to validate it. This is an operator smoke test — it does not apply the per-tenant external-routing consent gate."
+            >
+              <TestInferPanel token={loaded.token} hasSecret={baseline.hasSecret} dirty={dirty} />
+            </SectionPanel>
+          </TabsContent>
+        </Tabs>
       </div>
     </PageShell>
   );
@@ -212,7 +260,17 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
 // validate the endpoint + key before promoting it. The returned candidate is shown
 // verbatim; downstream it would be validated by the deterministic rule compiler, but
 // here it just proves the provider answers.
-function TestInferPanel({ token, hasSecret }: { token: string; hasSecret: boolean }) {
+function TestInferPanel({
+  token,
+  hasSecret,
+  dirty,
+}: {
+  token: string;
+  hasSecret: boolean;
+  // The smoke test runs against the LAST SAVED provider (by token), not the editor's
+  // unsaved edits — so a dirty editor means the test would validate the old config.
+  dirty: boolean;
+}) {
   const [prompt, setPrompt] = useState('Reply with the single word: ok');
   const [system, setSystem] = useState('');
   const [busy, setBusy] = useState(false);
@@ -237,17 +295,16 @@ function TestInferPanel({ token, hasSecret }: { token: string; hasSecret: boolea
   };
 
   return (
-    <section className="space-y-4 rounded-lg border border-border p-4">
-      <div>
-        <h2 className="text-sm font-semibold text-foreground">Test provider</h2>
-        <p className="text-sm text-muted-foreground">
-          Run a prompt live through this provider’s endpoint and key to validate it. This is an
-          operator smoke test — it does not apply the per-tenant external-routing consent gate.
-        </p>
-      </div>
+    <div className="space-y-4">
       {!hasSecret && (
         <p className="text-sm text-warning">
-          No API key is configured — set and save one above before testing.
+          No API key is configured — set and save one on the Connection tab before testing.
+        </p>
+      )}
+      {dirty && (
+        <p className="text-sm text-muted-foreground">
+          You have unsaved changes. This tests the last saved configuration — save first to test
+          your edits.
         </p>
       )}
       {testError && <ErrorBanner message={testError} onDismiss={() => setTestError(null)} />}
@@ -280,6 +337,6 @@ function TestInferPanel({ token, hasSecret }: { token: string; hasSecret: boolea
           </pre>
         </div>
       )}
-    </section>
+    </div>
   );
 }

@@ -1,16 +1,21 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { Link, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Building2,
+  ChevronRight,
   Layers,
+  List,
   ScrollText,
   Settings,
   ShieldCheck,
   Sparkles,
   Users,
+  type LucideIcon,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { Logomark, LogoHorizontal } from '@/components/brand/Logo';
 import {
   Sidebar,
@@ -23,16 +28,35 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarRail,
 } from '@/components/ui/sidebar';
 import { AdminUser } from '@/routes/admin/AdminUser';
 
-// The admin console manages the instance-global control plane (ADR-033):
-// tenants and the packaging they are sold, the identity directory, the role
-// catalog, and the AI provider list every tenant's NL authoring routes through.
-const NAV = [
-  { label: 'Tenants', href: '/admin/tenants', icon: Building2 },
-  { label: 'Tiers', href: '/admin/tiers', icon: Layers },
+type NavLeaf = { label: string; href: string; icon: LucideIcon };
+type NavGroupNode = { label: string; icon: LucideIcon; children: NavLeaf[] };
+type NavNode = NavLeaf | NavGroupNode;
+
+const isLeaf = (n: NavNode): n is NavLeaf => 'href' in n;
+
+// The admin console manages the instance-global control plane (ADR-033): tenants and the
+// packaging they are sold, the identity directory, the role catalog, and the AI provider
+// list every tenant's NL authoring routes through.
+//
+// Tenants is a GROUP: its list and the tier catalog that prices tenants live together, so
+// Tiers sits under Tenants alongside an explicit List entry rather than as its own
+// top-level peer (ADR-065 — a tier is packaging OF tenants, not a separate domain).
+const NAV: NavNode[] = [
+  {
+    label: 'Tenants',
+    icon: Building2,
+    children: [
+      { label: 'List', href: '/admin/tenants', icon: List },
+      { label: 'Tiers', href: '/admin/tiers', icon: Layers },
+    ],
+  },
   { label: 'Identities', href: '/admin/identities', icon: Users },
   { label: 'Roles', href: '/admin/roles', icon: ShieldCheck },
   { label: 'AI Providers', href: '/admin/ai-providers', icon: Sparkles },
@@ -43,8 +67,31 @@ const NAV = [
   { label: 'Settings', href: '/admin/settings', icon: Settings },
 ];
 
+// A child href matches the current route by prefix, so a tenant/tier DETAIL page keeps its
+// section highlighted. The Tenants children have disjoint prefixes (/admin/tenants vs
+// /admin/tiers), so at most one is ever active.
+function childActive(pathname: string, href: string) {
+  return pathname.startsWith(href);
+}
+
+// Label of the group that owns the current route, if any — used to keep the active group
+// expanded (including on deep links / refreshes).
+function activeGroupLabel(pathname: string): string | undefined {
+  return NAV.find(
+    (n): n is NavGroupNode => !isLeaf(n) && n.children.some((c) => childActive(pathname, c.href)),
+  )?.label;
+}
+
 export function AdminSidebar() {
   const { pathname } = useLocation();
+  const activeGroup = activeGroupLabel(pathname);
+  // Accordion: default to the group that owns the current route, and follow the route when
+  // it moves into a different group (deep links / refreshes land expanded too).
+  const [openGroup, setOpenGroup] = useState<string | null>(activeGroup ?? null);
+  useEffect(() => {
+    if (activeGroup) setOpenGroup(activeGroup);
+  }, [activeGroup]);
+  const toggle = (label: string) => setOpenGroup((cur) => (cur === label ? null : label));
 
   return (
     <Sidebar collapsible="icon">
@@ -78,20 +125,30 @@ export function AdminSidebar() {
           <SidebarGroupLabel>Platform</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {NAV.map((item) => (
-                <SidebarMenuItem key={item.href}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={pathname.startsWith(item.href)}
-                    tooltip={item.label}
-                  >
-                    <Link to={item.href}>
-                      <item.icon />
-                      <span>{item.label}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+              {NAV.map((node) =>
+                isLeaf(node) ? (
+                  <SidebarMenuItem key={node.label}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={childActive(pathname, node.href)}
+                      tooltip={node.label}
+                    >
+                      <Link to={node.href}>
+                        <node.icon />
+                        <span>{node.label}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : (
+                  <NavGroup
+                    key={node.label}
+                    node={node}
+                    pathname={pathname}
+                    open={openGroup === node.label}
+                    onToggle={() => toggle(node.label)}
+                  />
+                ),
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -103,5 +160,62 @@ export function AdminSidebar() {
 
       <SidebarRail />
     </Sidebar>
+  );
+}
+
+function NavGroup({
+  node,
+  pathname,
+  open,
+  onToggle,
+}: {
+  node: NavGroupNode;
+  pathname: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const navigate = useNavigate();
+  const hasActiveChild = node.children.some((c) => childActive(pathname, c.href));
+  // Expanding a group lands you on its first item in one click (the active-group effect
+  // keeps it open); clicking an already-open group just collapses it. But if the current
+  // route is ALREADY inside this group (e.g. a tier detail page), expanding must not yank
+  // the user back to the list — only navigate when opening from outside the group.
+  const handleClick = () => {
+    const willOpen = !open;
+    onToggle();
+    if (willOpen && !hasActiveChild) navigate(node.children[0].href);
+  };
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        onClick={handleClick}
+        // Highlight the collapsed parent so the user still sees where they are.
+        isActive={hasActiveChild && !open}
+        tooltip={node.label}
+      >
+        <node.icon />
+        <span>{node.label}</span>
+        <ChevronRight
+          className={cn(
+            'ml-auto transition-transform group-data-[collapsible=icon]:hidden',
+            open && 'rotate-90',
+          )}
+        />
+      </SidebarMenuButton>
+      {open && (
+        <SidebarMenuSub>
+          {node.children.map((child) => (
+            <SidebarMenuSubItem key={child.href}>
+              <SidebarMenuSubButton asChild isActive={childActive(pathname, child.href)}>
+                <Link to={child.href}>
+                  <child.icon />
+                  <span>{child.label}</span>
+                </Link>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          ))}
+        </SidebarMenuSub>
+      )}
+    </SidebarMenuItem>
   );
 }
