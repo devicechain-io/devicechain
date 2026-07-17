@@ -13,7 +13,10 @@ backend/
                               the typed relationship graph, alarm objects as level-state integrators
                               (ADR-057; detection/authoring now live in event-processing), event resolution
     user-management/          identities, per-tenant memberships, roles, two-tier JWT/JWKS; OAuth 2.1
-                              authorization server (PKCE, RFC 8414/8707) securing MCP access (ADR-047)
+                              authorization server (PKCE, RFC 8414/8707) securing MCP access (ADR-047);
+                              tenant TIER — operator-defined packaging entity subsystems READ but never
+                              redefine (governance ceilings + AI model entitlement, ADR-065); tenant
+                              branding/white-label control record (ADR-038)
     event-management/         persists + queries time-series events (TimescaleDB hypertables;
                               data-lifecycle reconciler + measurement_rollups continuous aggregate, ADR-026)
     event-sources/            inbound device transports (MQTT/NATS), decode → pipeline; per-tenant
@@ -28,12 +31,20 @@ backend/
                               SOLE live alarm engine (measurement evaluator retired, ADR-057 cutover).
                               Resolved-events tap → keyed-streaming CEL detection core (owned, cel-go
                               predicates) → REACT actions (raise-alarm, send-command). Rules authored on
-                              the profile as forms or on a visual automation canvas w/ replay preview (ADR-053)
+                              the profile as forms, on a visual automation canvas w/ replay preview (ADR-053),
+                              or by a natural-language "Describe" door that compiles via ai-inference (ADR-056)
     outbound-connectors/      dedicated REACT outbound sink (ADR-060): durable NATS consumer of the REACT
                               connector-dispatch stream → hand-rolled SSRF-hardened httpCall webhook +
                               embedded-Bento (MIT warpstreamlabs/bento, kept out of the DETECT binary)
                               publish to MQTT/Kafka/AWS-SNS/AWS-SQS over a versioned Connector entity,
                               secret-authed (ADR-059) + per-tenant egress-governed (ADR-023)
+    ai-inference/             opt-in inference service (ADR-056): drafts a DETECT rule from natural language and
+                              runs it through the SAME cel-go compiler (bounded compile/repair loop) — AI proposes,
+                              compiler disposes, never in the replay-correct path. Operator-registered AIProviders
+                              w/ write-only key handles; external use per-tenant opt-in + fail-closed; the model in
+                              use is a (tenant,function)→model assignment falling back to the tenant TIER's default
+                              (ADR-065) — server never infers a default, no menu ⇒ no model. Two GraphQL planes:
+                              tiny tenant data plane (inferRuleCandidate) + identity-token /admin/graphql
     mcp/                      opt-in OAuth 2.1 Resource Server exposing read-only tools (devices, state,
                               telemetry, alarms, commands) to AI agents over MCP, fronting per-area GraphQL
                               under the caller's own token — no service token, confused-deputy red line (ADR-047)
