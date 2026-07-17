@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-ai-inference/inference"
+	"github.com/devicechain-io/dc-ai-inference/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/rs/zerolog/log"
@@ -93,6 +94,13 @@ func tenantSafeError(err error) error {
 // authority and is deliberately far narrower than ai:admin: a holder can run a
 // prompt through the model its tier offers; it cannot read, list, or change the provider
 // config (that is ai:admin, system-tier, on the admin plane).
+//
+// Its usual caller is event-processing's service token, but it is NOT restricted to one:
+// tenant-tier means a tenant access token carrying ai:infer (or "*") reaches this
+// resolver directly over the published ingress, prompt and system prompt of its
+// choosing. Everything that bounds the cost and the blast radius is a gate below —
+// consent, the tier menu, the rate ceiling, the size caps — not the authority. Do not
+// add a control here that assumes a service token on the other end. See auth.AIInfer.
 func (r *SchemaResolver) InferRuleCandidate(ctx context.Context, args struct {
 	Request InferenceRequestInput
 }) (*InferenceResultResolver, error) {
@@ -111,7 +119,12 @@ func (r *SchemaResolver) InferRuleCandidate(ctx context.Context, args struct {
 	}
 	// Every exit past this point records exactly one outcome, so the served + shed +
 	// denied counts reconcile against the requests that reached the cascade.
-	resolved, err := r.Inference.ResolveForTenant(ctx, tenant)
+	// The function is decided HERE, by which resolver this is — never read from the
+	// request. inferRuleCandidate drafts detection rules, so it asks for the model the
+	// tenant assigned to rule-drafting. A caller-supplied function token would be a
+	// client-settable entitlement surface: it would let a caller shop across functions
+	// for whichever one its tenant pointed at the most capable model.
+	resolved, err := r.Inference.ResolveForFunction(ctx, tenant, model.FunctionRuleDrafting)
 	if err != nil {
 		r.Metrics.recordCall(outcomeFor(err))
 		return nil, tenantSafeError(err)

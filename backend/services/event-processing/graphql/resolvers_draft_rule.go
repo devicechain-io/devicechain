@@ -14,7 +14,7 @@ import (
 // DraftDetectionRuleFromText is the ADR-056 slice-1 NL→rule authoring door — the third front
 // door to the one CEL compiler, alongside the form builder (validateDetectionRules) and the
 // visual canvas (compileCanvas). It runs the bounded infer→compile→repair loop: it carries the
-// author's prompt to the active inference provider (over an ai:infer service token, per-tenant
+// author's prompt to the model the tenant's tier offers (over an ai:infer service token, per-tenant
 // opt-in + fail-closed) and runs the returned candidate through the SAME rules.Compile firewall
 // the other doors use. It PERSISTS NOTHING — the compiled draft flows back for the human to
 // review and save through the normal createDetectionRule door under their own token (the AI

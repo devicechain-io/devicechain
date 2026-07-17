@@ -18,6 +18,18 @@ import (
 // This replaces the retired instance-wide single-active pointer, which modeled
 // "one model, globally" and could express no packaging at all.
 //
+// A GRANT IS AN ENTITLEMENT AND NOTHING ELSE. It says a model is on the menu; it does
+// not say which model anything USES. That second question is answered by a stored
+// (tenant, function) → provider assignment (see function.go) and, failing that, by the
+// platform-baseline provider — never by a property of these rows, and never by their
+// count. Both grant tables once carried an IsDefault mark for that job, and the mark
+// itself was fine; what was not fine was that the mark's PRESENCE was inferred from the
+// grant set (auto-marking the "first" grant, falling back to a sole model, deciding
+// which axis spoke by whether the tier granted anything). Every one of those reads a
+// set operators can change, and so re-answers when they change it. The whole mechanism
+// is gone rather than patched: entitlement lives here, the answer lives in an
+// assignment row, and the two never infer each other.
+//
 // WHY THE JOIN LIVES HERE AND NOT ON THE TIER. The tier is a user-management entity
 // (iam_tenant_tiers); providers are this service's. They share a database but sit in
 // different functional-area schemas, i.e. a real service boundary — and
@@ -66,16 +78,6 @@ type AIProviderTierGrant struct {
 	// ProviderID references AIProvider.ID — the immutable id, not the token, so a
 	// token rename keeps the grant bound (the same reasoning as the secret handle).
 	ProviderID uint `gorm:"not null;index"`
-	// IsDefault marks this grant as the tier's default model: the one a task uses
-	// when the caller expresses no preference. At most one per tier (a partial unique
-	// index backs it). ADR-056 decision 3 scopes GA to one task with one default over
-	// the tier's set, so the default is per-tier and carries no task column — a task
-	// taxonomy with exactly one member would be speculative.
-	//
-	// No gorm `default` tag: a `default:false` would make gorm substitute the DB
-	// default for the Go zero value, which is the shape that made Enabled
-	// unpersistable-as-false on AIProvider.
-	IsDefault bool `gorm:"not null"`
 }
 
 func (AIProviderTierGrant) TableName() string { return "ai_provider_tier_grants" }

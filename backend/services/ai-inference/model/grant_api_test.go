@@ -48,15 +48,13 @@ func TestMenuIsTheUnionOfTierAndTenantGrants(t *testing.T) {
 	mustProvider(t, api, "sonnet")
 	mustProvider(t, api, "fable")
 
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet"))
 	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
 
 	menu, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"fable", "sonnet"}, menuTokens(menu),
 		"a bronze tenant with an additive Fable grant sees both")
-	require.NotNil(t, menu.Default)
-	assert.Equal(t, "sonnet", menu.Default.Token, "the tier's marked default wins")
 }
 
 // TestAPerTenantGrantCannotRevokeWhatTheTierOffers pins ADR-065 decision 10's
@@ -68,7 +66,7 @@ func TestAPerTenantGrantCannotRevokeWhatTheTierOffers(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 	mustProvider(t, api, "fable")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
 
 	// Revoking the tenant's exception removes only the exception.
@@ -82,9 +80,13 @@ func TestAPerTenantGrantCannotRevokeWhatTheTierOffers(t *testing.T) {
 		"the tier's offer survives the exception being withdrawn")
 	// Assert on what the tenant can USE, not only on what is listed. Checking
 	// membership alone is what let the non-monotonic-default bug through review here:
-	// every membership assertion passed while the tenant's door was off.
-	require.NotNil(t, menu.Default, "the tier's model is still usable")
-	assert.Equal(t, "sonnet", menu.Default.Token)
+	// every membership assertion passed while the tenant's door was off. Usability now
+	// lives on the function resolver, so that is what gets asked.
+	require.NoError(t, api.SetFunctionModel(adminCtx(), "acme", FunctionRuleDrafting, "sonnet"))
+	chosen, err := api.ResolveModelForFunction(tenantCtx("acme"), "gold", FunctionRuleDrafting)
+	require.NoError(t, err)
+	require.NotNil(t, chosen, "the tier's model is still usable")
+	assert.Equal(t, "sonnet", chosen.Token)
 
 	// And there is no per-tenant path to remove the tier's own offer: revoking the
 	// TIER's grant for one tenant is not expressible — the call takes a tier, and its
@@ -99,65 +101,6 @@ func TestAPerTenantGrantCannotRevokeWhatTheTierOffers(t *testing.T) {
 		"a per-tenant revoke must not be able to strip a tier's entitlement")
 }
 
-// TestAnAdditiveGrantNeverChangesTheDefault is the regression test for the sharpest
-// bug in this slice, and the one my own additive-only test missed by asserting on the
-// menu's MEMBERSHIP and never on what the tenant could actually USE.
-//
-// The default used to resolve its "sole model" fallback over the UNION. So a bronze
-// tenant whose tier granted one un-marked model resolved to that model — and then
-// granting it an EXTRA model additively made the union ambiguous and the default
-// vanish, turning the NL door OFF by giving the tenant MORE. Additive-only has to hold
-// for what is usable, not merely for what is listed.
-func TestAnAdditiveGrantNeverChangesTheDefault(t *testing.T) {
-	api := newTestApi(t)
-	mustProvider(t, api, "sonnet")
-	mustProvider(t, api, "fable")
-	// Deliberately NOT marked as the default — the sole-model fallback is what resolves
-	// it, and that fallback is where the bug lived.
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", false))
-
-	before, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
-	require.NoError(t, err)
-	require.NotNil(t, before.Default)
-	require.Equal(t, "sonnet", before.Default.Token)
-
-	// The audited exception: purely additive.
-	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
-
-	after, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"fable", "sonnet"}, menuTokens(after), "the exception adds to the menu")
-	require.NotNil(t, after.Default,
-		"granting a tenant an EXTRA model must never leave it with no usable default")
-	assert.Equal(t, "sonnet", after.Default.Token,
-		"the tier decides the default; an additive exception cannot move it")
-}
-
-// TestADisabledMarkedDefaultIsNotSubstituted. When the operator has marked a default
-// and it goes out of service, the answer is "no default", not "some other model". The
-// tier still offers another enabled model here — the point is that it must NOT be
-// silently promoted: that would re-price every tenant at the tier the moment an
-// operator disabled a model during an incident, which is exactly the silent routing
-// the ambiguity rule exists to prevent.
-func TestADisabledMarkedDefaultIsNotSubstituted(t *testing.T) {
-	api := newTestApi(t)
-	mustProvider(t, api, "cheap")
-	mustProvider(t, api, "premium")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "cheap", true))
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "premium", false))
-
-	req := claudeReq("cheap", nil)
-	req.Enabled = false
-	_, err := api.UpdateAIProvider(adminCtx(), "cheap", req, nil)
-	require.NoError(t, err)
-
-	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"premium"}, menuTokens(menu), "the disabled model leaves the menu")
-	assert.Nil(t, menu.Default,
-		"disabling the marked default must not silently promote a model the operator never chose")
-}
-
 // TestAdditiveGrantsAreIsolatedBetweenTenants is the leak test. The additive grants
 // are per-tenant data in a table the operator writes from the system context, so the
 // read path's isolation is what stands between one tenant's exception and another's.
@@ -165,7 +108,7 @@ func TestAdditiveGrantsAreIsolatedBetweenTenants(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 	mustProvider(t, api, "fable")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet"))
 	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
 
 	other, err := api.MenuForTenant(tenantCtx("globex"), "bronze")
@@ -180,7 +123,7 @@ func TestAdditiveGrantsAreIsolatedBetweenTenants(t *testing.T) {
 func TestMenuRequiresATenantInContext(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet"))
 
 	_, err := api.MenuForTenant(context.Background(), "bronze")
 	assert.ErrorIs(t, err, core.ErrNoTenant,
@@ -198,7 +141,7 @@ func TestMenuRefusesTheSystemContext(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 	mustProvider(t, api, "fable")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet"))
 	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "globex", "fable"))
 
 	sysCtx := core.WithSystemContext(tenantCtx("acme"))
@@ -215,12 +158,11 @@ func TestMenuRefusesTheSystemContext(t *testing.T) {
 func TestATierWithNoGrantsHasAnEmptyMenu(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 
 	menu, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
 	require.NoError(t, err)
 	assert.Empty(t, menu.Providers, "bronze was sold no AI; that is a package, not a fault")
-	assert.Nil(t, menu.Default)
 }
 
 // TestAnUnknownTierResolvesToNothing. A tier token this service cannot validate (it
@@ -229,7 +171,7 @@ func TestATierWithNoGrantsHasAnEmptyMenu(t *testing.T) {
 func TestAnUnknownTierResolvesToNothing(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 
 	menu, err := api.MenuForTenant(tenantCtx("acme"), "no-such-tier")
 	require.NoError(t, err)
@@ -247,7 +189,7 @@ func TestAnUnknownTierResolvesToNothing(t *testing.T) {
 func TestDisabledProvidersNeverReachAMenu(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 
 	req := claudeReq("sonnet", nil)
 	req.Enabled = false
@@ -257,110 +199,6 @@ func TestDisabledProvidersNeverReachAMenu(t *testing.T) {
 	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
 	require.NoError(t, err)
 	assert.Empty(t, menu.Providers, "a disabled model is granted but not usable")
-	assert.Nil(t, menu.Default, "and it cannot remain the default it was marked as")
-}
-
-// TestTheDefaultFallsBackToASoleModel covers step 2 of the default rule: an operator
-// who grants exactly one model and never marks a default plainly means that model.
-func TestTheDefaultFallsBackToASoleModel(t *testing.T) {
-	api := newTestApi(t)
-	mustProvider(t, api, "sonnet")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", false))
-
-	menu, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
-	require.NoError(t, err)
-	require.NotNil(t, menu.Default)
-	assert.Equal(t, "sonnet", menu.Default.Token)
-}
-
-// TestNoDefaultWhenTheChoiceIsAmbiguous covers step 3: with two models offered and none
-// marked, guessing would silently route a tenant's prompts — and its spend — to a model
-// nobody chose. The menu still resolves; only the default is absent.
-func TestNoDefaultWhenTheChoiceIsAmbiguous(t *testing.T) {
-	api := newTestApi(t)
-	mustProvider(t, api, "sonnet")
-	mustProvider(t, api, "fable")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", false))
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable", false))
-
-	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
-	require.NoError(t, err)
-	assert.Len(t, menu.Providers, 2)
-	assert.Nil(t, menu.Default, "two models and no marked default is ambiguous, not a guess")
-}
-
-// TestAtMostOneDefaultPerTier pins the invariant that replaced "at most one active
-// provider, instance-wide" — re-scoped from global to per-tier, which is the whole
-// shape change ADR-065 makes.
-func TestAtMostOneDefaultPerTier(t *testing.T) {
-	api := newTestApi(t)
-	mustProvider(t, api, "sonnet")
-	mustProvider(t, api, "fable")
-
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable", true))
-
-	grants, err := api.ListTierGrants(adminCtx())
-	require.NoError(t, err)
-	defaults := 0
-	for _, g := range grants {
-		if g.IsDefault {
-			defaults++
-			assert.Equal(t, "fable", g.Provider.Token, "the newest promotion is the default")
-		}
-	}
-	assert.Equal(t, 1, defaults, "promoting a second default must demote the first")
-}
-
-// TestDefaultsAreIndependentAcrossTiers is the property the retired global pointer could
-// not express, and the reason ADR-065 exists: bronze may default to a cheap fast model
-// gold never touches.
-func TestDefaultsAreIndependentAcrossTiers(t *testing.T) {
-	api := newTestApi(t)
-	mustProvider(t, api, "sonnet")
-	mustProvider(t, api, "fable")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable", true))
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", true))
-
-	gold, err := api.MenuForTenant(tenantCtx("acme"), "gold")
-	require.NoError(t, err)
-	require.NotNil(t, gold.Default)
-	assert.Equal(t, "fable", gold.Default.Token)
-
-	bronze, err := api.MenuForTenant(tenantCtx("globex"), "bronze")
-	require.NoError(t, err)
-	require.NotNil(t, bronze.Default)
-	assert.Equal(t, "sonnet", bronze.Default.Token)
-}
-
-// TestSetTierDefaultRequiresTheGrant. A default must be something the tier actually
-// offers; creating the grant as a side effect would let a typo silently sell a model.
-func TestSetTierDefaultRequiresTheGrant(t *testing.T) {
-	api := newTestApi(t)
-	mustProvider(t, api, "sonnet")
-
-	err := api.SetTierDefault(adminCtx(), "gold", "sonnet")
-	assert.Error(t, err, "a provider the tier does not offer cannot be its default")
-
-	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
-	require.NoError(t, err)
-	assert.Empty(t, menu.Providers, "the failed default must not have granted anything")
-}
-
-// TestClearTierDefaultKeepsTheGrants.
-func TestClearTierDefaultKeepsTheGrants(t *testing.T) {
-	api := newTestApi(t)
-	mustProvider(t, api, "sonnet")
-	mustProvider(t, api, "fable")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable", false))
-
-	require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
-
-	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
-	require.NoError(t, err)
-	assert.Len(t, menu.Providers, 2, "clearing the default withdraws nothing")
-	assert.Nil(t, menu.Default)
 }
 
 // TestGrantIsIdempotent. Re-granting must not duplicate a row (the unique index would
@@ -369,20 +207,15 @@ func TestGrantIsIdempotent(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 	mustProvider(t, api, "fable")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable", false))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable"))
 
 	// A plain re-grant of the non-default is not a statement about the default.
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable", false))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable"))
 
 	grants, err := api.ListTierGrants(adminCtx())
 	require.NoError(t, err)
 	assert.Len(t, grants, 2, "re-granting must not duplicate")
-
-	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
-	require.NoError(t, err)
-	require.NotNil(t, menu.Default)
-	assert.Equal(t, "sonnet", menu.Default.Token, "a re-grant must not disturb the default")
 
 	// Tenant grants are idempotent too.
 	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
@@ -398,7 +231,7 @@ func TestGrantIsIdempotent(t *testing.T) {
 func TestDeletingAGrantedProviderIsRefused(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 
 	_, err := api.DeleteAIProvider(adminCtx(), "sonnet")
 	assert.ErrorIs(t, err, ErrProviderInUse)
@@ -459,7 +292,7 @@ func TestGrantsRejectAMalformedTierOrTenantToken(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 
-	err := api.GrantProviderToTier(adminCtx(), "gold.tier", "sonnet", false)
+	err := api.GrantProviderToTier(adminCtx(), "gold.tier", "sonnet")
 	assert.Error(t, err, "a token carrying subject-structural characters must be refused")
 
 	err = api.GrantProviderToTenant(adminCtx(), "acme>evil", "sonnet")
@@ -474,7 +307,7 @@ func TestGrantsRejectAMalformedTierOrTenantToken(t *testing.T) {
 func TestListTierGrantsShowsAnUnknownTier(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gld", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gld", "sonnet"))
 
 	grants, err := api.ListTierGrants(adminCtx())
 	require.NoError(t, err)
@@ -499,7 +332,7 @@ func TestListTierGrantsShowsAnUnknownTier(t *testing.T) {
 func TestTheDatabaseItselfRefusesADeleteThatBypassesTheCheck(t *testing.T) {
 	api := newTestApi(t)
 	p := mustProvider(t, api, "sonnet")
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 
 	// Straight past assertProviderNotGranted, as raw SQL or a future caller would.
 	err := api.sys(adminCtx()).Unscoped().Where("id = ?", p.ID).Delete(&AIProvider{}).Error

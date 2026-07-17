@@ -61,10 +61,19 @@ func NewServiceTenantFactsReader(client *svcclient.Client, umURL string) TenantF
 // tenantFactsQuery and tenantFactsResponse are the CROSS-SERVICE contract with
 // user-management, named at package scope so a test can pin them against the shape
 // user-management actually serves rather than against a copy. Both field names must
-// match user-management's TenantGovernance type exactly: a drifted name decodes to the
-// zero value, and both zero values (false, "") are indistinguishable from legitimate
-// fail-closed answers, so the door would go quiet for every tenant with nothing in any
-// log to say why.
+// match user-management's TenantGovernance type exactly.
+//
+// Drift fails LOUD, not silent, and it is worth being exact about why — the reverse
+// claim stood here for a while and would have argued for defenses this code does not
+// need. The failure is not a zero-value decode: graph-gophers validates the SELECTION
+// against the schema, so a renamed or dropped field makes the whole query an error
+// server-side, svcclient turns a non-empty `errors` array into a Go error rather than
+// decoding `data`, and Facts() returns that error — which ResolveForFunction treats as
+// ErrUnavailable and logs. The door does close for every tenant, but it says so.
+//
+// The names are still pinned by a test on each end (TestFactsQuerySelectsTheContractFields
+// here, TestTierTokenIsServedUnderThatExactName in user-management) because a loud
+// failure at RUNTIME on every tenant is a poor substitute for a red build.
 const tenantFactsQuery = `query { tenantGovernance { aiExternalEnabled tierToken } }`
 
 type tenantFactsResponse struct {

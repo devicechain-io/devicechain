@@ -14,10 +14,11 @@ import (
 	"gorm.io/gorm"
 )
 
-// ErrProviderInUse refuses the delete of a provider that is still granted. It names
-// the grants so the operator can act on it rather than guess (ADR-044's
-// ErrEntityInUse shape, as user-management already uses for a tier that tenants
-// reference).
+// ErrProviderInUse refuses the delete of a provider that anything still points at: a
+// tier or tenant GRANT, a tenant's function ASSIGNMENT, or the platform-BASELINE
+// designation. It names every reason so the operator can act rather than guess
+// (ADR-044's ErrEntityInUse shape, as user-management already uses for a tier that
+// tenants reference).
 var ErrProviderInUse = errors.New("provider is still granted and cannot be deleted")
 
 // ErrUnknownProvider is returned when a grant names a provider token that does not
@@ -25,22 +26,23 @@ var ErrProviderInUse = errors.New("provider is still granted and cannot be delet
 // message about a token rather than a constraint violation about an id.
 var ErrUnknownProvider = errors.New("no provider with that token")
 
-// Menu is a tenant's resolved set of AI models: everything it may draft with, plus
-// which one a task uses absent an explicit choice.
+// Menu is a tenant's resolved set of AI models: everything it may draft with.
+//
+// It carries ONLY the set. Which model a given call uses is a separate question with a
+// separate answer — a stored (tenant, function) assignment, falling back to the platform
+// baseline (Api.ResolveModelForFunction). Menu once carried a Default field alongside
+// the set, and co-locating them is what made it natural to compute one from the other;
+// the answer is not a property of the menu, so it does not live on the menu.
 type Menu struct {
 	// Providers are the ENABLED providers the tenant may use, ordered by token so the
 	// surface is stable for a caller rendering it.
 	Providers []AIProvider
-	// Default is the provider a task uses when the caller expresses no preference, or
-	// nil when the menu cannot name one (see MenuForTenant).
-	Default *AIProvider
 }
 
 // TierGrant pairs a tier grant with its provider, for the admin surface.
 type TierGrant struct {
 	TierToken string
 	Provider  AIProvider
-	IsDefault bool
 }
 
 // TenantGrant pairs a per-tenant additive grant with its provider.
@@ -92,39 +94,13 @@ func (api *Api) AnyGrants(ctx context.Context) (bool, error) {
 // The union is why the per-tenant grant can only ever ADD: there is no deny row to
 // subtract with, so an exception cannot quietly undercut what the tier sold.
 //
-// THE DEFAULT IS DECIDED BY THE TIER, NOT BY THE MENU, and that distinction is the
-// whole of ADR-065 decision 10's additive-only guarantee. An earlier version resolved
-// the "sole model" fallback over the UNION, which made the default NON-MONOTONIC: a
-// bronze tenant whose tier granted one un-marked model resolved to that model, and
-// then granting it an EXTRA model additively made the menu ambiguous and the default
-// vanish — switching the tenant's NL door off by giving it more. Additive-only has to
-// hold for what the tenant can actually USE, not merely for the set's membership.
-//
-// So, most specific first:
-//
-//  1. The tier marked a default → that model, if it is granted and enabled. If the
-//     tier marked one and it is NOT usable (disabled, or its grant revoked), the
-//     answer is NONE — never a substitute. The operator expressed a choice; quietly
-//     routing a tenant's prompts, and its spend, to a different model because the
-//     chosen one went out of service is precisely the silent re-pricing step 3 exists
-//     to prevent. Taking a model out of service is an operator act with an operator
-//     consequence.
-//
-//  2. The tier marked no default but grants exactly one enabled model → that one. An
-//     operator who offers a single model and never marks it plainly means it, and
-//     failing closed there would be pedantry rather than safety. Note this counts the
-//     TIER's grants, so a tenant's additive grants cannot disturb it.
-//
-//  3. The tier grants nothing at all → the tenant's own additive grants stand alone,
-//     and the same sole-model rule applies to them. Without this an exception-only
-//     tenant (decision 7's bronze-gets-Fable case, on a tier that sells no AI) would
-//     have a menu it could never use.
-//
-//  4. Otherwise nil: two or more models with no marked default is genuinely ambiguous,
-//     and guessing would route a tenant's prompts and spend to a model nobody chose.
-//
-// A caller that gets a nil Default with a non-empty menu is not broken — it means the
-// tenant must choose explicitly.
+// IT RESOLVES A SET AND NOTHING ELSE. Which model a call actually uses is
+// ResolveModelForFunction's question, answered from a stored assignment — this function
+// has no opinion on it and holds no mark to express one with. That separation is the fix
+// for a defect that shipped five times: every instance was some flavour of deriving the
+// answer from a property of these sets ("the sole granted model", "the first grant",
+// "does the tier grant anything"), and each derivation re-answered when an operator
+// changed the set. See function.go for the full history.
 //
 // TENANT ISOLATION IS NOT ENFORCED HERE. The additive-grant read below deliberately
 // carries no `WHERE tenant_id = ?`: AIProviderTenantGrant is rdb.TenantScoped, so the
@@ -166,16 +142,10 @@ func (api *Api) MenuForTenant(ctx context.Context, tierToken string) (*Menu, err
 
 	ids := make([]uint, 0, len(tierGrants)+len(tenantGrants))
 	seen := map[uint]bool{}
-	tierIDs := map[uint]bool{}
-	var defaultID uint
 	for _, g := range tierGrants {
-		tierIDs[g.ProviderID] = true
 		if !seen[g.ProviderID] {
 			seen[g.ProviderID] = true
 			ids = append(ids, g.ProviderID)
-		}
-		if g.IsDefault {
-			defaultID = g.ProviderID
 		}
 	}
 	for _, g := range tenantGrants {
@@ -197,58 +167,20 @@ func (api *Api) MenuForTenant(ctx context.Context, tierToken string) (*Menu, err
 	}
 	sort.Slice(providers, func(i, j int) bool { return providers[i].Token < providers[j].Token })
 
-	menu := &Menu{Providers: providers, Default: pickDefault(providers, tierIDs, defaultID, len(tierGrants) > 0)}
-	return menu, nil
+	return &Menu{Providers: providers}, nil
 }
 
-// pickDefault applies the four-step rule documented on MenuForTenant. It is a pure
-// function over the already-resolved menu so the rule can be read — and tested — in
-// one place, rather than inferred from a chain of conditionals inside the query path.
+// assertProviderNotGranted refuses the delete of a provider that anything still points
+// at, naming what holds it. Called by DeleteAIProvider before the row is removed.
 //
-// tierIDs is the set of provider ids the TIER grants (enabled or not); tierGranted
-// says whether the tier grants anything at all, which is what distinguishes "the tier
-// offers nothing, so the tenant's exceptions stand alone" from "the tier offers
-// things, so its grants alone decide the default".
-func pickDefault(providers []AIProvider, tierIDs map[uint]bool, defaultID uint, tierGranted bool) *AIProvider {
-	// 1. The tier expressed a choice: honour it if usable, otherwise none. Never
-	//    substitute a model the operator did not choose.
-	if defaultID != 0 {
-		for i := range providers {
-			if providers[i].ID == defaultID {
-				return &providers[i]
-			}
-		}
-		return nil
-	}
-
-	// 2. No marked default, but the tier offers models: only the TIER's grants may
-	//    decide, so that a tenant's additive grant cannot disturb the default it
-	//    already resolved to (additive-only must hold for what is USABLE, not just for
-	//    what is listed).
-	if tierGranted {
-		var sole *AIProvider
-		for i := range providers {
-			if !tierIDs[providers[i].ID] {
-				continue
-			}
-			if sole != nil {
-				return nil // two or more offered, none marked: ambiguous.
-			}
-			sole = &providers[i]
-		}
-		return sole
-	}
-
-	// 3. The tier offers nothing; the tenant's own exceptions stand alone.
-	if len(providers) == 1 {
-		return &providers[0]
-	}
-	// 4. Ambiguous.
-	return nil
-}
-
-// assertProviderNotGranted refuses the delete of a still-granted provider, naming what
-// holds it. Called by DeleteAIProvider before the row is removed.
+// It covers all three kinds of reference, for one reason stated once: a delete must not
+// silently take a capability away from a live tenant. A GRANT means somebody is
+// entitled to the model; an ASSIGNMENT means a tenant has chosen it for a function and
+// would silently fall back to the baseline (or to nothing) if it vanished; the BASELINE
+// designation means every tenant that never chose is using it, which is the widest blast
+// radius of the three and the least visible. Each gets a legible refusal naming what to
+// undo, rather than a constraint violation about an id — or, for the baseline, no error
+// at all, since no FK protects a column on the provider's own row.
 func (api *Api) assertProviderNotGranted(ctx context.Context, providerID uint) error {
 	var tierGrants []AIProviderTierGrant
 	if err := api.sys(ctx).Where("provider_id = ?", providerID).Find(&tierGrants).Error; err != nil {
@@ -259,7 +191,11 @@ func (api *Api) assertProviderNotGranted(ctx context.Context, providerID uint) e
 		Where("provider_id = ?", providerID).Count(&tenantCount).Error; err != nil {
 		return err
 	}
-	if len(tierGrants) == 0 && tenantCount == 0 {
+	assignedTo, isBaseline, err := api.assertProviderNotAssigned(ctx, providerID)
+	if err != nil {
+		return err
+	}
+	if len(tierGrants) == 0 && tenantCount == 0 && len(assignedTo) == 0 && !isBaseline {
 		return nil
 	}
 
@@ -269,17 +205,24 @@ func (api *Api) assertProviderNotGranted(ctx context.Context, providerID uint) e
 	}
 	sort.Strings(tiers)
 
-	switch {
-	case len(tiers) > 0 && tenantCount > 0:
-		return fmt.Errorf("%w: granted to tier(s) %s and to %d tenant(s); remove those grants first",
-			ErrProviderInUse, strings.Join(tiers, ", "), tenantCount)
-	case len(tiers) > 0:
-		return fmt.Errorf("%w: granted to tier(s) %s; remove those grants first",
-			ErrProviderInUse, strings.Join(tiers, ", "))
-	default:
-		return fmt.Errorf("%w: granted to %d tenant(s); remove those grants first",
-			ErrProviderInUse, tenantCount)
+	// One refusal naming every reason, rather than one reason at a time: an operator
+	// clearing them one by one and re-running the delete learns the next obstacle only
+	// after acting on the last, which turns a single legible refusal into a guessing game.
+	reasons := make([]string, 0, 3)
+	if len(tiers) > 0 {
+		reasons = append(reasons, fmt.Sprintf("granted to tier(s) %s", strings.Join(tiers, ", ")))
 	}
+	if tenantCount > 0 {
+		reasons = append(reasons, fmt.Sprintf("granted to %d tenant(s)", tenantCount))
+	}
+	if len(assignedTo) > 0 {
+		reasons = append(reasons, fmt.Sprintf("assigned to an AI function by tenant(s) %s",
+			strings.Join(assignedTo, ", ")))
+	}
+	if isBaseline {
+		reasons = append(reasons, "designated as the platform baseline model")
+	}
+	return fmt.Errorf("%w: %s; remove those first", ErrProviderInUse, strings.Join(reasons, "; "))
 }
 
 // providerIDByToken resolves a provider token to its immutable id for the grant
@@ -296,21 +239,23 @@ func (api *Api) providerIDByToken(ctx context.Context, token string) (uint, erro
 	return matches[0].ID, nil
 }
 
-// GrantProviderToTier offers a provider to every tenant at a tier. Idempotent:
-// re-granting an existing pair updates nothing and is not an error.
+// GrantProviderToTier offers a provider to every tenant at a tier — an ENTITLEMENT and
+// nothing more. Idempotent: re-granting an existing pair updates nothing and is not an
+// error.
 //
-// makeDefault promotes this grant to the tier's default in the same transaction,
-// demoting any previous one, so the "at most one default per tier" invariant never
-// transiently breaks (the uix_ai_tier_grant_default partial unique index is the
-// storage backstop). Passing false on an existing default does NOT demote it — a
-// plain re-grant is not a statement about the default; use ClearTierDefault.
+// It takes no makeDefault, and there is no auto-mark: granting says a model is on the
+// menu, never that anything uses it. The two are separate acts because fusing them is
+// what made the answer a property of the grant set, and therefore non-monotonic — the
+// auto-mark's own probe went through three revisions before the mechanism was deleted.
+// Which model serves a call is SetFunctionModel's business (per tenant) or
+// SetPlatformBaseline's (per instance), and neither is disturbed by a grant.
 //
 // tierToken is not validated against user-management: this service holds a service
 // token and the tier catalog is on user-management's identity-only admin plane, so
 // there is no door this credential can reach to ask. A grant naming an unknown tier
 // is inert (no tenant reports that tier), and the admin console shows it as unknown
 // rather than hiding it.
-func (api *Api) GrantProviderToTier(ctx context.Context, tierToken, providerToken string, makeDefault bool) error {
+func (api *Api) GrantProviderToTier(ctx context.Context, tierToken, providerToken string) error {
 	if err := core.ValidateToken(tierToken); err != nil {
 		return fmt.Errorf("invalid tier token: %w", err)
 	}
@@ -324,64 +269,13 @@ func (api *Api) GrantProviderToTier(ctx context.Context, tierToken, providerToke
 		err := tx.Where("tier_token = ? AND provider_id = ?", tierToken, providerID).First(&existing).Error
 		switch {
 		case err == nil:
-			// Already granted.
+			return nil
 		case errors.Is(err, gorm.ErrRecordNotFound):
-			existing = AIProviderTierGrant{TierToken: tierToken, ProviderID: providerID}
-			if err := tx.Create(&existing).Error; err != nil {
-				return err
-			}
 		default:
 			return err
 		}
-		if !makeDefault || existing.IsDefault {
-			return nil
-		}
-		return promoteTierDefault(tx, tierToken, existing.ID)
+		return tx.Create(&AIProviderTierGrant{TierToken: tierToken, ProviderID: providerID}).Error
 	})
-}
-
-// promoteTierDefault demotes the tier's current default and promotes grantID, inside
-// the caller's transaction. Order matters: the demote must land before the promote or
-// the partial unique index rejects the second default.
-func promoteTierDefault(tx *gorm.DB, tierToken string, grantID uint) error {
-	if err := tx.Model(&AIProviderTierGrant{}).
-		Where("tier_token = ? AND is_default = ?", tierToken, true).
-		Update("is_default", false).Error; err != nil {
-		return err
-	}
-	return tx.Model(&AIProviderTierGrant{}).
-		Where("id = ?", grantID).Update("is_default", true).Error
-}
-
-// SetTierDefault marks an already-granted provider as the tier's default, demoting any
-// previous one atomically. Returns gorm.ErrRecordNotFound when the pair is not granted
-// — a default must be something the tier actually offers, so this deliberately does
-// not create the grant as a side effect.
-func (api *Api) SetTierDefault(ctx context.Context, tierToken, providerToken string) error {
-	providerID, err := api.providerIDByToken(ctx, providerToken)
-	if err != nil {
-		return err
-	}
-	return api.sys(ctx).Transaction(func(tx *gorm.DB) error {
-		var existing AIProviderTierGrant
-		if err := tx.Where("tier_token = ? AND provider_id = ?", tierToken, providerID).
-			First(&existing).Error; err != nil {
-			return err
-		}
-		if existing.IsDefault {
-			return nil
-		}
-		return promoteTierDefault(tx, tierToken, existing.ID)
-	})
-}
-
-// ClearTierDefault leaves the tier's grants in place but marks none of them default.
-// Idempotent. With two or more models on the menu this makes the tenant choose
-// explicitly (see MenuForTenant).
-func (api *Api) ClearTierDefault(ctx context.Context, tierToken string) error {
-	return api.sys(ctx).Model(&AIProviderTierGrant{}).
-		Where("tier_token = ? AND is_default = ?", tierToken, true).
-		Update("is_default", false).Error
 }
 
 // RevokeProviderFromTier withdraws a tier's offer of a provider, reporting whether a
@@ -420,7 +314,7 @@ func (api *Api) ListTierGrants(ctx context.Context) ([]TierGrant, error) {
 			// The FK makes this unreachable; skip rather than surface a zero provider.
 			continue
 		}
-		out = append(out, TierGrant{TierToken: g.TierToken, Provider: p, IsDefault: g.IsDefault})
+		out = append(out, TierGrant{TierToken: g.TierToken, Provider: p})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].TierToken != out[j].TierToken {

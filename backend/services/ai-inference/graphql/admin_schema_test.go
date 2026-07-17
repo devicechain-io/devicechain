@@ -98,11 +98,37 @@ func TestAdminPlaneCarriesTheWholeProviderSurface(t *testing.T) {
 			"aiProviderTierGrants", "aiProviders"},
 		fieldNames(t, schema, "queryType"))
 	assert.Equal(t,
-		[]string{"clearAiTierDefault", "createAiProvider", "deleteAiProvider",
-			"grantAiProviderToTenant", "grantAiProviderToTier", "revokeAiProviderFromTenant",
-			"revokeAiProviderFromTier", "setAiTierDefault", "testAiProvider",
-			"updateAiProvider"},
+		[]string{"clearPlatformBaselineProvider", "createAiProvider",
+			"deleteAiProvider", "grantAiProviderToTenant", "grantAiProviderToTier",
+			"revokeAiProviderFromTenant", "revokeAiProviderFromTier",
+			"setPlatformBaselineProvider", "testAiProvider", "updateAiProvider"},
 		fieldNames(t, schema, "mutationType"))
+}
+
+// TestTheDerivedDefaultIsGone pins the cutover at the surface, the way
+// TestTheActivePointerIsGone pins its predecessor. The "default model" mechanism
+// inferred which model served a call from properties of the grant sets, and so
+// re-answered whenever an operator changed a set — the same non-monotonic shape, five
+// times over (see model/function.go).
+//
+// Naming the retired fields explicitly is what stops one coming back via a resolver
+// copied from history. A reintroduced setAiTierDefault would not merely be redundant: it
+// would be a SECOND answer to "which model serves this call", sitting beside the stored
+// assignment with no rule for which wins.
+func TestTheDerivedDefaultIsGone(t *testing.T) {
+	schema := gql.MustParseSchema(AdminSchemaContent, &AdminResolver{})
+	served := append(fieldNames(t, schema, "queryType"), fieldNames(t, schema, "mutationType")...)
+
+	for _, retired := range []string{
+		"setAiTierDefault", "clearAiTierDefault", "setAiTenantDefault", "clearAiTenantDefault",
+	} {
+		assert.NotContains(t, served, retired,
+			"the derived default is retired — the answer is a stored (tenant, function) assignment")
+	}
+	assert.NotContains(t, AdminSchemaContent, "isDefault",
+		"a grant carries no default mark: it is an entitlement, not an answer")
+	assert.NotContains(t, AdminSchemaContent, "makeDefault",
+		"granting is not a statement about which model anything uses")
 }
 
 // TestTheActivePointerIsGone pins the ADR-065 retirement at the surface. The
@@ -166,11 +192,7 @@ func TestAdminResolversFailClosed(t *testing.T) {
 
 	// The grant surface is the packaging surface: every one of these decides which
 	// tenants may spend the operator's API key, so each must fail closed on its own.
-	ok, err = r.GrantAiProviderToTier(ctx, struct {
-		Tier        string
-		Provider    string
-		MakeDefault *bool
-	}{Tier: "gold", Provider: "p"})
+	ok, err = r.GrantAiProviderToTier(ctx, struct{ Tier, Provider string }{Tier: "gold", Provider: "p"})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	assert.False(t, ok)
 
@@ -178,11 +200,13 @@ func TestAdminResolversFailClosed(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	assert.False(t, ok)
 
-	ok, err = r.SetAiTierDefault(ctx, struct{ Tier, Provider string }{Tier: "gold", Provider: "p"})
+	// The baseline designation decides what every tenant that never chose a model gets,
+	// so it fails closed on its own like the rest of the packaging surface.
+	ok, err = r.SetPlatformBaselineProvider(ctx, struct{ Token string }{Token: "p"})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	assert.False(t, ok)
 
-	ok, err = r.ClearAiTierDefault(ctx, struct{ Tier string }{Tier: "gold"})
+	ok, err = r.ClearPlatformBaselineProvider(ctx)
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	assert.False(t, ok)
 
@@ -222,11 +246,10 @@ func TestAdminResolversForbidWithoutAiAdmin(t *testing.T) {
 	// tenant:read is what an operator managing TIERS holds (tier CRUD is gated on it,
 	// ADR-065 slice 1). It must not carry over into deciding which models a tier is
 	// sold: the two surfaces sit either side of the API-key boundary.
-	_, err = r.GrantAiProviderToTier(ctx, struct {
-		Tier        string
-		Provider    string
-		MakeDefault *bool
-	}{Tier: "gold", Provider: "p"})
+	_, err = r.GrantAiProviderToTier(ctx, struct{ Tier, Provider string }{Tier: "gold", Provider: "p"})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+
+	_, err = r.SetPlatformBaselineProvider(ctx, struct{ Token string }{Token: "p"})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 
 	_, err = r.GrantAiProviderToTenant(ctx, struct{ Tenant, Provider string }{Tenant: "acme", Provider: "p"})
@@ -269,12 +292,11 @@ func TestATenantAdminCannotAdministerProviders(t *testing.T) {
 	_, err = r.CreateAiProvider(tenantAdmin, struct{ Request model.AIProviderCreateRequest }{})
 	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not create a provider`)
 
-	_, err = r.GrantAiProviderToTier(tenantAdmin, struct {
-		Tier        string
-		Provider    string
-		MakeDefault *bool
-	}{Tier: "gold", Provider: "x"})
+	_, err = r.GrantAiProviderToTier(tenantAdmin, struct{ Tier, Provider string }{Tier: "gold", Provider: "x"})
 	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not decide what a tier is sold`)
+
+	_, err = r.SetPlatformBaselineProvider(tenantAdmin, struct{ Token string }{Token: "x"})
+	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not designate the instance's baseline model`)
 
 	_, err = r.GrantAiProviderToTenant(tenantAdmin, struct{ Tenant, Provider string }{Tenant: "acme", Provider: "x"})
 	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not grant its own tenant a model its tier never offered`)

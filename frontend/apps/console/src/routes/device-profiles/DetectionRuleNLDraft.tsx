@@ -3,12 +3,12 @@
 
 // The natural-language authoring door (ADR-056 slice 1) — the third way to author a DETECT
 // rule, alongside the form and the canvas. The author describes the rule in plain language; the
-// server asks the active inference provider to PROPOSE a candidate and runs it through the SAME
+// server asks the tenant's default model to PROPOSE a candidate and runs it through the SAME
 // rules.Compile firewall the other two doors use ("AI proposes, the compiler disposes" — the AI
 // never sits in the replay-correct path). A compiling draft is handed to the form for the human
 // to review and save through the normal create door; this panel persists nothing.
 //
-// External model routing is a per-tenant, fail-closed opt-in: with no active/consented provider
+// External model routing is a per-tenant, fail-closed opt-in: with no granted/consented model
 // the server returns `unavailable` (not an error), and this panel says so rather than pretending
 // the feature is broken. A non-compiling draft comes back with the compiler's diagnostics + the
 // model's raw attempt, so the author can refine the description and try again.

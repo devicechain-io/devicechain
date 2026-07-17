@@ -192,10 +192,6 @@ export async function updateAiProvider(
   return data.updateAiProvider;
 }
 
-// CONFLICT_MARKER matches the backend's optimistic-concurrency error text (the
-// ai-inference model mirrors dashboard/connector ErrConflict).
-export const CONFLICT_MARKER = 'modified by another writer';
-
 const DELETE_AI_PROVIDER = graphql(`
   mutation DeleteAiProvider($token: String!) {
     deleteAiProvider(token: $token)

@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/glebarez/sqlite"
+	gormigrate "github.com/go-gormigrate/gormigrate/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -44,14 +45,30 @@ func newTestApi(t *testing.T) *Api {
 	// Run the REAL migrations (tables + every index + the grant FKs), then the tests
 	// below INSERT via the model types — so this also proves the migrations and the
 	// models agree on the table names ("ai_providers", "ai_provider_tier_grants",
-	// "ai_provider_tenant_grants"), the exact mismatch gorm's initialism handling would
-	// otherwise introduce on all three. (schema imports no model type, so there is no
-	// import cycle.)
-	require.NoError(t, schema.NewAIProvidersSchema().Migrate(db))
-	require.NoError(t, schema.NewAIProviderGrantsSchema().Migrate(db))
+	// "ai_provider_tenant_grants", "ai_function_assignments"), the exact mismatch gorm's
+	// initialism handling would otherwise introduce on all four. (schema imports no model
+	// type, so there is no import cycle.)
+	require.NoError(t, schemaMigrateAll(t, db))
 	kek, err := secrets.NewInstanceKeyProvider(testRootKey)
 	require.NoError(t, err)
 	return NewApi(&rdb.RdbManager{Database: db}, secrets.NewStore(db, kek))
+}
+
+// schemaMigrateAll runs ai-inference's real migrations, in order, against db. Shared so
+// that a harness variant (see auditedTestApi) cannot drift from this one by forgetting a
+// migration — a divergence that would show up as a missing table in one suite only.
+func schemaMigrateAll(t *testing.T, db *gorm.DB) error {
+	t.Helper()
+	for _, m := range []func() *gormigrate.Migration{
+		schema.NewAIProvidersSchema,
+		schema.NewAIProviderGrantsSchema,
+		schema.NewAIFunctionAssignmentsSchema,
+	} {
+		if err := m().Migrate(db); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // secretValue resolves a provider's stored API key (looked up by token to get its
@@ -165,7 +182,7 @@ func TestGrantToUnknownProvider(t *testing.T) {
 	api := newTestApi(t)
 	ctx := context.Background()
 
-	err := api.GrantProviderToTier(ctx, "gold", "nope", false)
+	err := api.GrantProviderToTier(ctx, "gold", "nope")
 	assert.ErrorIs(t, err, ErrUnknownProvider)
 
 	err = api.GrantProviderToTenant(ctx, "acme", "nope")

@@ -56,6 +56,10 @@ func (r *AIProviderResolver) Params() *string {
 
 func (r *AIProviderResolver) Enabled() bool { return r.M.Enabled }
 
+// IsPlatformBaseline reports whether this provider is the instance's baseline model —
+// what a tenant gets for a function it never assigned, if its menu includes it.
+func (r *AIProviderResolver) IsPlatformBaseline() bool { return r.M.IsPlatformBaseline }
+
 // AIProviderTierGrantResolver resolves one tier→provider offer. TierToken is returned
 // verbatim, including when no such tier exists: this service cannot validate it (the
 // tier catalog is on user-management's identity-only admin plane and this service
@@ -70,7 +74,6 @@ func (r *AIProviderTierGrantResolver) Tier() string { return r.M.TierToken }
 func (r *AIProviderTierGrantResolver) Provider() *AIProviderResolver {
 	return &AIProviderResolver{M: r.M.Provider, C: r.C}
 }
-func (r *AIProviderTierGrantResolver) IsDefault() bool { return r.M.IsDefault }
 
 // AIProviderTenantGrantResolver resolves one per-tenant additive grant.
 type AIProviderTenantGrantResolver struct {
