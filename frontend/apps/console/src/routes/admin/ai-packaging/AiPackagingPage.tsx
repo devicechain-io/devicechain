@@ -1,9 +1,9 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The AI packaging matrix (ADR-065 decision 10, slice S5b): which models each tier
-// offers, and which one it defaults to. One row per provider; each tier contributes two
-// controls, grant and default.
+// The AI packaging screen (ADR-065 decision 10, slice S5b): which models each tier
+// offers, and which one it defaults to. One panel per tier; inside it, one row per
+// provider and two columns — grant and default.
 //
 // WHY THIS SCREEN EXISTS. The server deliberately never infers a default: a tier that
 // grants models and marks none resolves to NO model, even when it grants exactly one.
@@ -31,6 +31,8 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -53,29 +55,32 @@ import {
   revokeAiProviderFromTier,
   setAiTierDefault,
   clearAiTierDefault,
+  type AiProviderListItem,
 } from '@/lib/api/ai-inference-admin';
 import { listTenantTierCatalog } from '@/lib/api/admin';
 import { useReload, errMessage } from '@/routes/common';
 import { buildPackagingTiers, tierWarning, warningText, type PackagingTier } from './aiPackaging';
 
 // Providers are instance config an operator hand-registers, so the realistic count is a
-// handful and one page holds them all. The matrix needs every provider (an ungranted one
-// still needs a row to be grantable), and the list API is the paginated one — so ask for
-// more than anyone will have and say so plainly if that ever stops being true, rather
-// than silently rendering a partial matrix.
+// handful and one page holds them all. Every provider needs a row (an ungranted one still
+// has to be grantable), and the list API is the paginated one — so ask for more than
+// anyone will have, and say so plainly if that ever stops being true rather than silently
+// rendering a partial matrix.
 const PROVIDER_PAGE_SIZE = 200;
 
-// The grant/default pair shares one grid in the header and in every cell, so the two
-// controls line up down the column without the table needing a second header row.
-const PAIR_GRID = 'grid grid-cols-2 gap-3 w-20 place-items-center';
+// The radio value standing for "this tier marks no default". A provider token can never
+// collide with it: core.ValidateToken's grammar is ^[A-Za-z0-9][A-Za-z0-9_-]*$, so a real
+// token cannot begin with an underscore. The sentinel is safe by the grammar, not by
+// convention.
+const NO_DEFAULT = '__no_default__';
 
 export default function AiPackagingPage() {
   const { toast } = useToast();
   const confirm = useConfirm();
   const [version, reload] = useReload();
-  // One in-flight mutation at a time. The controls are cheap and the table is small, so
-  // freezing all of them is simpler than per-cell pending state — and it removes the
-  // race where two fast clicks on the same tier's default interleave.
+  // One in-flight mutation at a time. The controls are cheap and each panel is small, so
+  // freezing them all is simpler than per-cell pending state — and it removes the race
+  // where two fast clicks on the same tier's default interleave.
   const [busy, setBusy] = useState(false);
 
   const { data: catalog, loading: catalogLoading, error: catalogError } = useQuery(
@@ -96,11 +101,6 @@ export default function AiPackagingPage() {
     () => (catalog && grants ? buildPackagingTiers(catalog, grants) : []),
     [catalog, grants],
   );
-  const warnings = useMemo(
-    () => tiers.map((t) => ({ tier: t, warning: tierWarning(t, providers) })).filter((w) => w.warning),
-    [tiers, providers],
-  );
-  const unknownTiers = useMemo(() => tiers.filter((t) => !t.known), [tiers]);
 
   const loading = catalogLoading || providersLoading || grantsLoading;
   const error = catalogError || providersError || grantsError;
@@ -115,6 +115,10 @@ export default function AiPackagingPage() {
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');
+      // Reload on failure too: every control is rendered from server data, so refetching
+      // is what snaps an optimistically-flipped checkbox back to the truth rather than
+      // leaving the operator looking at a state the server rejected.
+      reload();
     } finally {
       setBusy(false);
     }
@@ -145,6 +149,14 @@ export default function AiPackagingPage() {
     );
   };
 
+  const chooseDefault = async (tier: PackagingTier, value: string) => {
+    if (value === NO_DEFAULT) {
+      await run(() => clearAiTierDefault(tier.token), `${tier.token} has no default model`);
+      return;
+    }
+    await run(() => setAiTierDefault(tier.token, value), `${tier.token} defaults to “${value}”`);
+  };
+
   return (
     <PageShell
       title="AI packaging"
@@ -165,58 +177,97 @@ export default function AiPackagingPage() {
               <SectionPanel>
                 <p className="text-sm text-muted-foreground">
                   Showing the first {providers.length} of {providerResults?.pagination.totalRecords}{' '}
-                  providers. This matrix is not complete — grants on the providers below the cut are
-                  not shown here.
+                  providers. The panels below are not complete — a tier may grant a provider that
+                  is not listed here.
                 </p>
               </SectionPanel>
             )}
 
-            {warnings.length > 0 && (
-              <SectionPanel
-                title="Tiers that resolve to no model"
-                description="These tiers offer models but will not serve one to a tenant that has not chosen for itself. That can be deliberate — it is what a tier with no default means — so nothing here is corrected automatically."
-              >
-                <ul className="space-y-2">
-                  {warnings.map(({ tier, warning }) => (
-                    <li key={tier.token} className="flex items-start gap-2 text-sm">
-                      <AlertTriangle
-                        size={16}
-                        className="mt-0.5 shrink-0 text-amber-500"
-                        aria-hidden
-                      />
-                      <span>
-                        <span className="font-medium">{tier.token}</span> — {warningText(warning!, tier)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </SectionPanel>
-            )}
+            {tiers.map((tier) => (
+              <TierPanel
+                key={tier.token}
+                tier={tier}
+                providers={providers}
+                busy={busy}
+                onToggleGrant={toggleGrant}
+                onChooseDefault={chooseDefault}
+              />
+            ))}
+          </>
+        )}
+      </div>
+    </PageShell>
+  );
+}
 
-            <DataTable className="overflow-x-auto">
-              <DataTableHead>
-                <DataTableHeaderCell>Provider</DataTableHeaderCell>
-                {tiers.map((t) => (
-                  <DataTableHeaderCell key={t.token}>
-                    <div className="flex flex-col gap-1.5">
-                      <span className="flex items-center gap-1.5 normal-case">
-                        <span className="text-sm font-medium text-foreground">{t.token}</span>
-                        {t.known ? (
-                          <Badge variant="secondary">{t.tenantCount}</Badge>
-                        ) : (
-                          <Badge variant="outline">unknown</Badge>
-                        )}
-                      </span>
-                      <span className={PAIR_GRID}>
-                        <span>Grant</span>
-                        <span>Default</span>
-                      </span>
-                    </div>
-                  </DataTableHeaderCell>
-                ))}
-              </DataTableHead>
-              <DataTableBody>
-                {providers.map((p) => (
+function TierPanel({
+  tier,
+  providers,
+  busy,
+  onToggleGrant,
+  onChooseDefault,
+}: {
+  tier: PackagingTier;
+  providers: AiProviderListItem[];
+  busy: boolean;
+  onToggleGrant: (tier: PackagingTier, provider: string, granted: boolean) => void;
+  onChooseDefault: (tier: PackagingTier, value: string) => void;
+}) {
+  const warning = tierWarning(tier, providers);
+
+  return (
+    <SectionPanel
+      title={tier.token}
+      description={tier.name ?? undefined}
+      action={
+        tier.known ? (
+          <Badge variant="secondary">
+            {tier.tenantCount} tenant{tier.tenantCount === 1 ? '' : 's'}
+          </Badge>
+        ) : (
+          <Badge variant="outline">unknown tier</Badge>
+        )
+      }
+    >
+      <div className="space-y-4">
+        {!tier.known && (
+          <p className="text-sm text-muted-foreground">
+            No tier with this token exists, so nothing resolves through these grants — no tenant
+            can report a tier the catalog does not have. It is shown because this is the only
+            screen that can reveal it: ai-inference cannot check a tier token when a grant is
+            written, since the catalog lives on a plane its credential cannot reach. Untick every
+            model below to clear it.
+          </p>
+        )}
+
+        {warning && (
+          <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-500" aria-hidden />
+            <span>{warningText(warning, tier)}</span>
+          </div>
+        )}
+
+        {/* One RadioGroup per tier: Radix gives it "exactly one selected", arrow-key
+            movement and role="radiogroup" for free, which is the same invariant
+            uix_ai_tier_grant_default enforces in the database. Items need only be
+            descendants, so the group can wrap the table and its items sit in cells. */}
+        <RadioGroup
+          value={tier.defaultProvider ?? NO_DEFAULT}
+          onValueChange={(v) => onChooseDefault(tier, v)}
+          disabled={busy}
+          className="gap-0"
+          aria-label={`Default model for ${tier.token}`}
+        >
+          <DataTable>
+            <DataTableHead>
+              <DataTableHeaderCell>Provider</DataTableHeaderCell>
+              <DataTableHeaderCell className="w-24 text-center">Grant</DataTableHeaderCell>
+              <DataTableHeaderCell className="w-24 text-center">Default</DataTableHeaderCell>
+            </DataTableHead>
+            <DataTableBody>
+              {providers.map((p) => {
+                const granted = tier.granted.has(p.token);
+                return (
                   <DataTableRow key={p.token}>
                     <DataTableCell>
                       <div className="flex items-center gap-2">
@@ -230,102 +281,61 @@ export default function AiPackagingPage() {
                       </div>
                       <span className="text-xs text-muted-foreground">{p.model}</span>
                     </DataTableCell>
-                    {tiers.map((t) => {
-                      const granted = t.granted.has(p.token);
-                      return (
-                        <DataTableCell key={t.token}>
-                          <div className={PAIR_GRID}>
-                            <input
-                              type="checkbox"
-                              className="size-4 cursor-pointer accent-primary disabled:cursor-not-allowed"
-                              checked={granted}
-                              disabled={busy}
-                              aria-label={`Grant ${p.token} to ${t.token}`}
-                              onChange={() => void toggleGrant(t, p.token, granted)}
-                            />
-                            {/* A native radio group per tier: the browser enforces "at most
-                                one default per tier" for free, which is the same invariant
-                                uix_ai_tier_grant_default enforces in the database. An
-                                ungranted provider cannot be a default — the server refuses
-                                it rather than granting as a side effect — so the control is
-                                disabled rather than hidden, which shows the operator the
-                                order of operations instead of hiding it. */}
-                            <input
-                              type="radio"
-                              name={`ai-default-${t.token}`}
-                              className="size-4 cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-30"
-                              checked={t.defaultProvider === p.token}
-                              disabled={busy || !granted}
-                              aria-label={`Make ${p.token} the default for ${t.token}`}
-                              title={granted ? undefined : 'Grant this model first'}
-                              onChange={() =>
-                                void run(
-                                  () => setAiTierDefault(t.token, p.token),
-                                  `${t.token} defaults to “${p.token}”`,
-                                )
-                              }
-                            />
-                          </div>
-                        </DataTableCell>
-                      );
-                    })}
-                  </DataTableRow>
-                ))}
-
-                {/* The explicit "no default" option. Without a row to select, clearing a
-                    default is an act with no control, and "this tier deliberately has no
-                    default" becomes a state an operator can only fall into rather than
-                    choose. It is the same radio group, so choosing it visibly deselects
-                    whichever model was marked. */}
-                <DataTableRow className="bg-muted/30">
-                  <DataTableCell>
-                    <span className="font-medium">No default</span>
-                    <span className="block text-xs text-muted-foreground">
-                      Tenants at this tier must each choose a model
-                    </span>
-                  </DataTableCell>
-                  {tiers.map((t) => (
-                    <DataTableCell key={t.token}>
-                      <div className={PAIR_GRID}>
-                        <span aria-hidden />
-                        <input
-                          type="radio"
-                          name={`ai-default-${t.token}`}
-                          className="size-4 cursor-pointer accent-primary disabled:cursor-not-allowed"
-                          checked={t.defaultProvider === null}
+                    <DataTableCell className="text-center">
+                      <div className="flex justify-center">
+                        <Checkbox
+                          checked={granted}
                           disabled={busy}
-                          aria-label={`${t.token} has no default model`}
-                          onChange={() =>
-                            void run(
-                              () => clearAiTierDefault(t.token),
-                              `${t.token} has no default model`,
-                            )
-                          }
+                          aria-label={`Grant ${p.token} to ${tier.token}`}
+                          onCheckedChange={() => onToggleGrant(tier, p.token, granted)}
                         />
                       </div>
                     </DataTableCell>
-                  ))}
-                </DataTableRow>
-              </DataTableBody>
-            </DataTable>
+                    <DataTableCell className="text-center">
+                      <div className="flex justify-center">
+                        {/* An ungranted provider cannot be a default — the server refuses
+                            it rather than granting as a side effect — so the control is
+                            disabled rather than hidden, which shows the operator the order
+                            of operations instead of concealing it. */}
+                        <RadioGroupItem
+                          value={p.token}
+                          disabled={busy || !granted}
+                          aria-label={`Make ${p.token} the default for ${tier.token}`}
+                          title={granted ? undefined : 'Grant this model first'}
+                        />
+                      </div>
+                    </DataTableCell>
+                  </DataTableRow>
+                );
+              })}
 
-            {unknownTiers.length > 0 && (
-              <SectionPanel
-                title="Grants naming tiers that no longer exist"
-                description="These grants name a tier the catalog does not have, so nothing resolves through them — no tenant can report a tier that is not there. They are shown because this is the only screen that can reveal them: ai-inference cannot check a tier token when a grant is written, since the catalog lives on a plane its credential cannot reach. Untick a column above to clear one."
-              >
-                <div className="flex flex-wrap gap-2">
-                  {unknownTiers.map((t) => (
-                    <Badge key={t.token} variant="outline">
-                      {t.token}
-                    </Badge>
-                  ))}
-                </div>
-              </SectionPanel>
-            )}
-          </>
-        )}
+              {/* The explicit "no default" option. Without a row to select, clearing a
+                  default is an act with no control, and "this tier deliberately has no
+                  default" becomes a state an operator can only fall into rather than
+                  choose. It is the same group, so choosing it visibly deselects whichever
+                  model was marked. */}
+              <DataTableRow className="bg-muted/30">
+                <DataTableCell>
+                  <span className="font-medium">No default</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Tenants at this tier must each choose a model
+                  </span>
+                </DataTableCell>
+                <DataTableCell className="text-center text-muted-foreground">—</DataTableCell>
+                <DataTableCell className="text-center">
+                  <div className="flex justify-center">
+                    <RadioGroupItem
+                      value={NO_DEFAULT}
+                      disabled={busy}
+                      aria-label={`${tier.token} has no default model`}
+                    />
+                  </div>
+                </DataTableCell>
+              </DataTableRow>
+            </DataTableBody>
+          </DataTable>
+        </RadioGroup>
       </div>
-    </PageShell>
+    </SectionPanel>
   );
 }
