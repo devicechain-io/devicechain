@@ -4,8 +4,8 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { Ban, Power, Trash2 } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
-import { SectionPanel } from '@/components/ui/section-panel';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
@@ -15,6 +15,7 @@ import { listTenants, setTenantEnabled, deleteTenant } from '@/lib/api/admin';
 import { BackLink, StatusBadge, errMessage, useReload } from '@/routes/common';
 import { TenantForm } from '@/routes/admin/tenants/TenantForm';
 import { TenantSettingsPanel } from '@/routes/admin/tenants/TenantSettingsPanel';
+import { TierPill } from '@/components/tiers/TierPill';
 
 export default function TenantDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
@@ -30,14 +31,21 @@ export default function TenantDetailPage() {
 
   const back = <BackLink to="/admin/tenants">Tenants</BackLink>;
 
-  if (loading) {
+  // Gate the spinner and error on the FIRST load only (no data yet). Saving reloads this
+  // query, and useQuery re-enters `loading` on every refetch while keeping the prior
+  // `tenants` — so a bare `if (loading)` unmounted the whole page (and TenantForm) to a
+  // spinner after every save, remounting the form on its default Basic tab and dumping an
+  // operator who saved from Settings back to Basic. With `!tenants` the form stays mounted
+  // and the active tab is preserved; the refetch repaints in place. (Same first-load
+  // gating the tier detail page uses.)
+  if (loading && !tenants) {
     return (
       <PageShell title={token} action={back}>
         <LoadingState description="Loading tenant…" />
       </PageShell>
     );
   }
-  if (error) {
+  if (error && !tenants) {
     return (
       <PageShell title={token} action={back}>
         <ErrorState description={error} />
@@ -82,11 +90,17 @@ export default function TenantDetailPage() {
 
   return (
     <PageShell
-      title={token}
+      // The display name is the title; the token, tier, and enabled state ride beside it
+      // as badges — one row, matching the tier detail page (a tenant can be unnamed, so
+      // fall back to the token as the title too).
+      title={tenant.name || tenant.token}
       description={
         <div className="mt-1 flex items-center gap-2">
+          <Badge variant="outline" className="font-mono">
+            {tenant.token}
+          </Badge>
+          <TierPill label={tenant.tier.token} color={tenant.tier.color} />
           <StatusBadge enabled={tenant.enabled} />
-          {tenant.name && <span className="text-sm text-muted-foreground">{tenant.name}</span>}
         </div>
       }
       action={
@@ -102,23 +116,18 @@ export default function TenantDetailPage() {
         </div>
       }
     >
-      <div className="space-y-6">
-        <SectionPanel>
-          <TenantForm
-            tenant={tenant}
-            onDone={(m) => {
-              toast(m);
-              reload();
-            }}
-          />
-        </SectionPanel>
-        {/* Rendered below the form, and re-read after every save: this is the
-            RESULT of what the form sets folded onto the tenant's tier, not another
-            way to edit it. */}
-        <SectionPanel title="Effective settings">
-          <TenantSettingsPanel tenant={tenant} />
-        </SectionPanel>
-      </div>
+      {/* Tabbed: Basic + Settings edit the tenant (one atomic save), and the Effective
+          tab is the read-only RESULT of what Settings sets, folded onto the tenant's
+          tier — re-read after every save, not another way to edit it. TenantForm renders
+          its own per-tab SectionPanels, so it is not wrapped here. */}
+      <TenantForm
+        tenant={tenant}
+        onDone={(m) => {
+          toast(m);
+          reload();
+        }}
+        effectiveSettingsPanel={<TenantSettingsPanel tenant={tenant} />}
+      />
     </PageShell>
   );
 }
