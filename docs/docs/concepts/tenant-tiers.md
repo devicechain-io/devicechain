@@ -41,9 +41,9 @@ Tiers carry a **display order** and a **color** so an operator can present them 
 - **AI packaging** — the cross-tier matrix mapping which AI models each tier may use.
 - **Per-tenant** — a tenant's tier is set on its admin detail page; its per-function AI model is set there too, from the tier-derived menu.
 
-## Relationship to ThingsBoard tenant profiles
+## A packaging concept in exactly one place
 
-Tenant tiers reach **parity** with ThingsBoard's tenant profiles — a familiar, expected capability for anyone packaging a multi-tenant IoT platform. It is deliberately **not** marketed as a differentiator; it is table stakes, done cleanly, so that the packaging concept lives in exactly one place instead of being scattered across the services that consume it.
+Tenant tiers are a familiar, expected capability for anyone packaging a multi-tenant IoT platform — table stakes, done cleanly. The point of modeling a tier as its own first-class entity is that the "what a tenant is entitled to" concept lives in **exactly one place** instead of being scattered across the services that consume it: governance reads it, AI entitlement reads it, and neither keeps its own copy.
 
 ## See also
 
