@@ -32,7 +32,13 @@ GOLDEN_DIR="$TOOL_DIR/golden"
 
 CONTAINER="${MDIFF_CONTAINER:-dc-mdiff}"
 IMAGE="${MDIFF_IMAGE:-timescale/timescaledb:latest-pg16}"
-PORT="${MDIFF_PORT:-55432}"
+# MDIFF_PORT pins the host port for local debugging; unset (the default, and CI) lets
+# Docker assign a free ephemeral port on loopback. A hardcoded host port is fragile in
+# CI — the throwaway container failed to start with "address already in use" on
+# 0.0.0.0:55432 when something else held the port — and there is no reason to pin one:
+# the tool connects to whatever port we discover below, and the port is bound to
+# 127.0.0.1 rather than 0.0.0.0 so it is never exposed off-box.
+PORT="${MDIFF_PORT:-}"
 PASSWORD="postgres"
 DB="dcmigrationdiff"
 
@@ -40,11 +46,23 @@ cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 cleanup
 
-echo "==> Starting throwaway TimescaleDB ($IMAGE) as $CONTAINER on :$PORT"
+if [ -n "$PORT" ]; then
+  PUBLISH="127.0.0.1:$PORT:5432"
+else
+  PUBLISH="127.0.0.1::5432" # empty middle field → Docker picks a free ephemeral port
+fi
+
+echo "==> Starting throwaway TimescaleDB ($IMAGE) as $CONTAINER"
 docker run -d --name "$CONTAINER" \
   -e POSTGRES_PASSWORD="$PASSWORD" \
-  -p "$PORT:5432" \
+  -p "$PUBLISH" \
   "$IMAGE" >/dev/null
+
+# Discover the host port Docker actually bound (the ephemeral one, or the pinned one).
+# `docker port <c> 5432/tcp` prints e.g. "127.0.0.1:49153"; take the port after the colon.
+HOST_PORT="$(docker port "$CONTAINER" 5432/tcp | head -n1 | sed 's/.*://')"
+[ -n "$HOST_PORT" ] || { echo "could not determine the container's published port" >&2; docker logs "$CONTAINER" | tail -20 >&2; exit 1; }
+echo "==> Postgres published on 127.0.0.1:$HOST_PORT"
 
 echo -n "==> Waiting for Postgres to accept connections"
 for _ in $(seq 1 60); do
@@ -59,7 +77,7 @@ cd "$TOOL_DIR"
 go run . \
   -mode "$MODE" \
   -container "$CONTAINER" \
-  -host localhost -port "$PORT" \
+  -host localhost -port "$HOST_PORT" \
   -user postgres -password "$PASSWORD" \
   -db "$DB" \
   -golden-dir "$GOLDEN_DIR"
