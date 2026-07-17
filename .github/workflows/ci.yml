@@ -89,7 +89,15 @@ jobs:
         with:
           go-version-file: go.work
           cache: true
-          cache-dependency-path: "**/go.sum"
+          # Per-module cache key, NOT the shared "**/go.sum". Every matrix entry
+          # hashing all go.sum files computed the SAME key, and a GitHub cache key is
+          # write-once — so the first job to finish its post-step saved the cache and
+          # every other entry skipped saving. The slowest module (outbound-connectors,
+          # whose Bento tree is ~1,240 extra packages) is the LEAST likely to win that
+          # race, so its build cache was almost never persisted and it recompiled Bento
+          # cold on nearly every run. A per-module key gives each entry its own cache to
+          # restore from.
+          cache-dependency-path: ${{ matrix.module }}/go.sum
 
       - name: gofmt
         working-directory: ${{ matrix.module }}
@@ -351,7 +359,15 @@ jobs:
         with:
           go-version-file: go.work
           cache: true
-          cache-dependency-path: "**/go.sum"
+          # Per-module cache key, NOT the shared "**/go.sum". Every matrix entry
+          # hashing all go.sum files computed the SAME key, and a GitHub cache key is
+          # write-once — so the first job to finish its post-step saved the cache and
+          # every other entry skipped saving. The slowest module (outbound-connectors,
+          # whose Bento tree is ~1,240 extra packages) is the LEAST likely to win that
+          # race, so its build cache was almost never persisted and it recompiled Bento
+          # cold on nearly every run. A per-module key gives each entry its own cache to
+          # restore from.
+          cache-dependency-path: ${{ matrix.module }}/go.sum
 
       # Pin ko rather than letting the action resolve its default "latest-release".
       # That resolution is, inside the action:
