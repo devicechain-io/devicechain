@@ -5,7 +5,6 @@ import { useNavigate } from 'react-router-dom';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { useToast } from '@/components/ui/toast';
-import { BackLink } from '@/routes/common';
 import { TenantForm } from '@/routes/admin/tenants/TenantForm';
 
 export default function NewTenantPage() {
@@ -16,7 +15,6 @@ export default function NewTenantPage() {
     <PageShell
       title="New tenant"
       description="The instance's tenant registry. A tenant is a control-plane record, not a provisioned resource."
-      action={<BackLink to="/admin/tenants">Tenants</BackLink>}
     >
       <SectionPanel>
         <TenantForm

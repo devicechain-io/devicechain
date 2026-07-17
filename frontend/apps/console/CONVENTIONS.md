@@ -16,12 +16,27 @@ rules do not apply to them.
 The tenant, tier, and AI-provider detail pages share one shape. Copy it for the next one.
 
 - **Header.** Title is the human name, falling back to the token when unnamed
-  (`entity.name || entity.token`). Identifying metadata — token, tier, enabled state —
-  rides beside the title as badges/pills in the header's `description` slot, one row. The
-  back link goes in the **`action`** slot so it is right-aligned with the other header
-  actions, never under the title. See
+  (`entity.name || entity.token`). When the entity has a human name *distinct from its
+  token*, that **token rides on the same line as the title** via `titleAdornment`, as a
+  click-to-copy [`CopyToken`](src/components/ui/copy-token.tsx) chip — a token is the id
+  everything references, so it belongs beside the name and must be trivially copyable. Gate
+  the chip on the name existing (`name ? <CopyToken value={token} /> : undefined`): with no
+  name the token *is* the title, so a chip would just repeat it. Entities whose identity
+  simply is the token (e.g. a role) title by the token and add no chip. Other identifying
+  metadata (tier, enabled state, counts) sits *below* as badges/pills in the `description`
+  slot, one row. The **`action`** slot holds only the entity's OWN actions (Enable/Disable,
+  Delete) — never the back link (see Back navigation). See
   [`TierDetailPage.tsx`](src/routes/admin/tiers/TierDetailPage.tsx) and
   [`TenantDetailPage.tsx`](src/routes/admin/tenants/TenantDetailPage.tsx).
+
+- **Back navigation lives in the layout top bar, not the page header.** Both
+  [`AppLayout`](src/routes/AppLayout.tsx) and [`AdminLayout`](src/routes/admin/AdminLayout.tsx)
+  render a route-derived back-link on the RIGHT of the top bar — beside the context
+  indicator (the tenant chip; in admin, the "Admin" badge) — and set the top-bar title to
+  `<Singular> Detail` on a detail page. A detail page therefore passes **only its own
+  actions** to `PageShell`, never a `BackLink`: navigation ("leave this entity") stays
+  visually separate from acting on the entity, and every detail page gets a back-link for
+  free without wiring one.
 
 - **Tabs.** The detail page owns the tabs; each tab wraps its content in its own
   [`SectionPanel`](src/components/ui/section-panel.tsx). The editing tabs share **one form
@@ -82,9 +97,16 @@ The tenant, tier, and AI-provider detail pages share one shape. Copy it for the 
 
 ## Layout primitives
 
-- [`PageShell`](src/components/ui/page-shell.tsx) — the page frame: `title`,
-  `description` (string or node — used for header badges), `action` (right-aligned), and an
-  optional decorative `banner`. Pages own their vertical rhythm with `space-y-*`.
+- **Every page uses [`PageShell`](src/components/ui/page-shell.tsx).** Don't hand-roll a
+  page header. Its slots: `title`, `titleAdornment` (inline with the title — the token
+  chip), `description` (string or node, sits below the title — header badges), `action`
+  (right-aligned buttons), and an optional decorative `banner`. Pages own their vertical
+  rhythm with `space-y-*`.
+- **Pass bare buttons to `action`; the shell lays them out.** It right-aligns them, puts a
+  gap between them, and keeps them `shrink-0` so a long `description` can never crowd or
+  overlap them. Do **not** wrap your actions in your own `flex`/`gap` row — that was how a
+  page ended up with actions jammed against the edge. One button or several, just pass them
+  (a fragment is fine).
 - [`SectionPanel`](src/components/ui/section-panel.tsx) — the titled card. One per tab; it
   supplies its own border/heading, so don't wrap already-bordered content in it (that
   double-borders).

@@ -8,6 +8,7 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { PageShell } from '@/components/ui/page-shell';
+import { CopyToken } from '@/components/ui/copy-token';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -15,7 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { Textarea, errMessage, BackLink } from '@/routes/common';
+import { Textarea, errMessage } from '@/routes/common';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useAuth } from '@/auth/AuthProvider';
@@ -162,7 +163,7 @@ function ConnectorEditor({ loaded }: { loaded: Connector }) {
   return (
     <PageShell
       title={loaded.name || loaded.token}
-      description={<BackLink to="/connectors">All connectors</BackLink>}
+      titleAdornment={loaded.name ? <CopyToken value={loaded.token} /> : undefined}
       banner="dashboard"
     >
       <Tabs defaultValue="config">

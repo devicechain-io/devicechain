@@ -5,9 +5,10 @@ import type { ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Trash2 } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
+import { CopyToken } from '@/components/ui/copy-token';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { TypeCapsule, TokenCapsule } from '@/components/TypeCapsule';
+import { TypeCapsule } from '@/components/TypeCapsule';
 import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -98,18 +99,23 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
         const extra = resource.renderDetailExtra?.(item, reload);
         return extra ? [{ value: 'extra', label: resource.detailExtraLabel ?? 'More', content: extra }] : [];
       })();
-  const heading = resource.nameOf?.(item) || token;
+  const name = resource.nameOf?.(item);
+  const heading = name || token;
   const type = resource.typeOf?.(item);
 
   return (
     <PageShell
       title={heading}
+      titleAdornment={name ? <CopyToken value={token} /> : undefined}
       banner={resource.banner}
+      // The token is the title-line chip now; the description row carries only the type
+      // (when the entity has one), so it is omitted entirely when there is none.
       description={
-        <div className="mt-1 flex flex-wrap items-center gap-2">
-          {type && <TypeCapsule appearance={type} />}
-          <TokenCapsule token={token} />
-        </div>
+        type ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <TypeCapsule appearance={type} />
+          </div>
+        ) : undefined
       }
       action={
         <Button variant="destructive" size="sm" onClick={remove}>

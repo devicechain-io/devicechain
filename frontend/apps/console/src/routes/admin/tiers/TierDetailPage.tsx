@@ -12,10 +12,11 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listTenantTierCatalog, deleteTenantTier } from '@/lib/api/admin';
-import { BackLink, errMessage, useReload } from '@/routes/common';
+import { errMessage, useReload } from '@/routes/common';
 import { TierForm } from '@/routes/admin/tiers/TierForm';
 import { TierAiModelsPanel } from '@/routes/admin/tiers/TierAiModelsPanel';
 import { TierPill } from '@/components/tiers/TierPill';
+import { CopyToken } from '@/components/ui/copy-token';
 
 export default function TierDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
@@ -29,7 +30,6 @@ export default function TierDetailPage() {
 
   const tier = tiers?.find((t) => t.token === token) ?? null;
 
-  const back = <BackLink to="/admin/tiers">Tiers</BackLink>;
 
   // Gate the spinner and error on the FIRST load only (no data yet). Saving reloads this
   // query, and useQuery re-enters `loading` on every refetch while keeping the prior
@@ -40,21 +40,21 @@ export default function TierDetailPage() {
   // gating the matrix page and TierAiModelsPanel use.)
   if (loading && !tiers) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token}>
         <LoadingState description="Loading tier…" />
       </PageShell>
     );
   }
   if (error && !tiers) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token}>
         <ErrorState description={error} />
       </PageShell>
     );
   }
   if (!tier) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token}>
         <ErrorState description={`Tier “${token}” not found.`} />
       </PageShell>
     );
@@ -86,12 +86,13 @@ export default function TierDetailPage() {
 
   return (
     <PageShell
-      // The display name is the title; the token rides beside it as its pill, and the
-      // tenant count as a badge — the "to the right" metadata, matching the other detail
-      // pages (a tier can be unnamed, so fall back to the token as the title too).
+      // The display name is the title; its token rides on the same line as a copyable
+      // chip. Below sit the colored tier pill (the color is the tier's identity) and the
+      // tenant count (a tier can be unnamed, so fall back to the token as the title too).
       title={tier.name || tier.token}
+      titleAdornment={tier.name ? <CopyToken value={tier.token} /> : undefined}
       description={
-        <div className="mt-1 flex items-center gap-2">
+        <div className="flex items-center gap-2">
           <TierPill label={tier.token} color={tier.color} />
           <Badge variant="secondary">
             <Users size={12} /> {tier.tenantCount} {tier.tenantCount === 1 ? 'tenant' : 'tenants'}
@@ -99,12 +100,11 @@ export default function TierDetailPage() {
         </div>
       }
       action={
-        <div className="flex items-center gap-2">
-          {back}
+        <>
           <Button variant="destructive" size="sm" onClick={remove} disabled={inUse}>
             <Trash2 size={14} /> Delete
           </Button>
-        </div>
+        </>
       }
     >
       <div className="space-y-4">

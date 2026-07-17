@@ -64,16 +64,3 @@ export function TypeCapsule({
     </span>
   );
 }
-
-export function TokenCapsule({ token, className }: { token: string; className?: string }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-md border border-border bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground',
-        className,
-      )}
-    >
-      {token}
-    </span>
-  );
-}

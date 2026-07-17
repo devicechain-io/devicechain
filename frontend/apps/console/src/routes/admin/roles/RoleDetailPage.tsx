@@ -12,7 +12,7 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listRoles, deleteRole } from '@/lib/api/admin';
-import { BackLink, errMessage, useReload } from '@/routes/common';
+import { errMessage, useReload } from '@/routes/common';
 import { RoleForm } from '@/routes/admin/roles/RoleForm';
 
 export default function RoleDetailPage() {
@@ -28,25 +28,24 @@ export default function RoleDetailPage() {
 
   const role = roles?.find((r) => r.scope === scope && r.token === token) ?? null;
 
-  const back = <BackLink to="/admin/roles">Roles</BackLink>;
 
   if (loading) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token}>
         <LoadingState description="Loading role…" />
       </PageShell>
     );
   }
   if (error) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token}>
         <ErrorState description={error} />
       </PageShell>
     );
   }
   if (!role) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token}>
         <ErrorState description={`Role “${token}” not found.`} />
       </PageShell>
     );
@@ -72,15 +71,15 @@ export default function RoleDetailPage() {
 
   return (
     <PageShell
+      // A role's identity IS its token (there is no separate human name), so the token is
+      // the title and no copy chip is added — the chip is for entities whose title is a
+      // human name distinct from the token.
       title={token}
       description={`${scope} role`}
       action={
-        <div className="flex items-center gap-2">
-          {back}
-          <Button variant="destructive" size="sm" onClick={remove}>
-            <Trash2 size={14} /> Delete
-          </Button>
-        </div>
+        <Button variant="destructive" size="sm" onClick={remove}>
+          <Trash2 size={14} /> Delete
+        </Button>
       }
     >
       <SectionPanel>

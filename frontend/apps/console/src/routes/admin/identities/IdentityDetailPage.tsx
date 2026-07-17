@@ -32,7 +32,8 @@ import {
   removeMembership,
   type AdminIdentity,
 } from '@/lib/api/admin';
-import { BackLink, StatusBadge, errMessage, useReload } from '@/routes/common';
+import { StatusBadge, errMessage, useReload } from '@/routes/common';
+import { CopyToken } from '@/components/ui/copy-token';
 
 // toOptions turns a token+name record (tenant or role) into combobox options:
 // the token is the value, a friendlier name is the label, and the raw token is
@@ -74,25 +75,24 @@ export default function IdentityDetailPage() {
 
   const identity = identities?.find((i) => i.email === email) ?? null;
 
-  const back = <BackLink to="/admin/identities">Identities</BackLink>;
 
   if (loading) {
     return (
-      <PageShell title={email} action={back}>
+      <PageShell title={email}>
         <LoadingState description="Loading identity…" />
       </PageShell>
     );
   }
   if (error) {
     return (
-      <PageShell title={email} action={back}>
+      <PageShell title={email}>
         <ErrorState description={error} />
       </PageShell>
     );
   }
   if (!identity) {
     return (
-      <PageShell title={email} action={back}>
+      <PageShell title={email}>
         <ErrorState description={`Identity “${email}” not found.`} />
       </PageShell>
     );
@@ -130,16 +130,14 @@ export default function IdentityDetailPage() {
 
   return (
     <PageShell
-      title={identity.email}
-      description={
-        <div className="mt-1 flex items-center gap-2">
-          <StatusBadge enabled={identity.enabled} />
-          {fullName && <span className="text-sm text-muted-foreground">{fullName}</span>}
-        </div>
-      }
+      // The full name is the title, with the email as the copyable id chip beside it. An
+      // identity may have no name entered, in which case the email IS the title and no chip
+      // is shown (the chip carries the id only when the title is a human name).
+      title={fullName || identity.email}
+      titleAdornment={fullName ? <CopyToken value={identity.email} /> : undefined}
+      description={<StatusBadge enabled={identity.enabled} />}
       action={
-        <div className="flex items-center gap-2">
-          {back}
+        <>
           <Button variant="outline" size="sm" onClick={toggleEnabled}>
             {identity.enabled ? <Ban size={14} /> : <Power size={14} />}
             {identity.enabled ? 'Disable' : 'Enable'}
@@ -147,7 +145,7 @@ export default function IdentityDetailPage() {
           <Button variant="destructive" size="sm" onClick={remove}>
             <Trash2 size={14} /> Delete
           </Button>
-        </div>
+        </>
       }
     >
       <IdentityDetail
