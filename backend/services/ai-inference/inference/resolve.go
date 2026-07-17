@@ -151,12 +151,23 @@ func (r *Resolver) ResolveForTenant(ctx context.Context, tenant string) (*Resolv
 		return nil, fmt.Errorf("%w: could not resolve the tenant's model menu: %v", ErrUnavailable, err)
 	}
 	if menu.Default == nil {
-		// Two distinct causes, one coarse answer to the caller: the tier offers nothing
-		// (a deliberate package that excludes AI, or one nobody has granted to yet), or
-		// it offers several models and marks none of them the default. Both are for an
-		// operator to resolve; neither is the tenant's to act on.
-		return nil, fmt.Errorf("%w: the tenant's tier %q offers no default model (menu size %d)",
-			ErrUnavailable, facts.TierToken, len(menu.Providers))
+		// The caller gets one coarse answer either way (ErrUnavailable — an operator
+		// resolves this, not the tenant), but the SERVER log has to name the right thing
+		// to go look at, and this message used to blame the tier unconditionally. It can
+		// just as easily be the tenant's own grants: an exception-only tenant on a tier
+		// that sells no AI has a menu the tier had no part in. Sending an operator to
+		// re-package `bronze` when the mark they need is on the tenant is a slow way to
+		// find nothing.
+		//
+		// An empty menu means nothing is granted at all; a non-empty one with no default
+		// means the mark was cleared or the marked model went out of service.
+		if len(menu.Providers) == 0 {
+			return nil, fmt.Errorf("%w: no model is granted to this tenant or to its tier %q",
+				ErrUnavailable, facts.TierToken)
+		}
+		return nil, fmt.Errorf(
+			"%w: %d model(s) are granted to this tenant or its tier %q, but none is marked default (or the marked one is disabled)",
+			ErrUnavailable, len(menu.Providers), facts.TierToken)
 	}
 	chosen := menu.Default
 	if model.IsExternalProviderKind(chosen.Kind) && !facts.ExternalEnabled {

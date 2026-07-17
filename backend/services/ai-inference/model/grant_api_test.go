@@ -99,38 +99,182 @@ func TestAPerTenantGrantCannotRevokeWhatTheTierOffers(t *testing.T) {
 		"a per-tenant revoke must not be able to strip a tier's entitlement")
 }
 
-// TestAnAdditiveGrantNeverChangesTheDefault is the regression test for the sharpest
-// bug in this slice, and the one my own additive-only test missed by asserting on the
-// menu's MEMBERSHIP and never on what the tenant could actually USE.
+// TestGrantingMoreNeverChangesTheDefault pins MONOTONICITY as a PROPERTY, over every
+// axis a grant can arrive on, because pinning it at a point is what let the same bug
+// ship three times.
 //
-// The default used to resolve its "sole model" fallback over the UNION. So a bronze
-// tenant whose tier granted one un-marked model resolved to that model — and then
-// granting it an EXTRA model additively made the union ambiguous and the default
-// vanish, turning the NL door OFF by giving the tenant MORE. Additive-only has to hold
-// for what is usable, not merely for what is listed.
-func TestAnAdditiveGrantNeverChangesTheDefault(t *testing.T) {
+// The property: if a tenant has a usable default, then granting it (or its tier) an
+// ADDITIONAL model leaves that default exactly where it was. Granting is how an
+// operator gives a tenant more; it must never be how a tenant loses what it had.
+//
+// The history this replaces is worth keeping, because each fix was right about its
+// instance and blind to the shape — a default inferred by COUNTING a set operators can
+// grow. Three instances, all of "…and if exactly one model is granted, use it":
+//
+//   - over the UNION: a per-tenant grant vaporised the TIER's resolved default;
+//   - scoped to the tier, its twin survived on the tenant axis: a second exception
+//     vaporised an exception-only tenant's default (case 3 below);
+//   - and the tier's own arm had it: a second UNMARKED tier grant turned the door off
+//     for EVERY tenant on that tier (case 2 below — the widest blast radius of the
+//     three, and the one no reviewer found; it turned up only by re-running the shape).
+//
+// My original regression test passed throughout, because it started from a tier-granted
+// sole model and so only ever exercised the one arm already fixed. It asserted the thing
+// NEXT TO the risky thing. Hence a table: the axes are enumerated rather than trusted to
+// whichever one I happened to have in mind.
+func TestGrantingMoreNeverChangesTheDefault(t *testing.T) {
+	cases := []struct {
+		name string
+		// setup establishes a tenant with a usable default.
+		setup func(t *testing.T, api *Api)
+		// grantMore adds an entitlement and nothing else.
+		grantMore func(t *testing.T, api *Api)
+		want      string
+	}{{
+		name: "an additive exception cannot move a default the tier marked",
+		setup: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", true))
+		},
+		grantMore: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
+		},
+		want: "sonnet",
+	}, {
+		name: "a second UNMARKED tier grant cannot turn the door off for the whole tier",
+		setup: func(t *testing.T, api *Api) {
+			// Never marked: the auto-mark on the first grant is what carries this now.
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", false))
+		},
+		grantMore: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "fable", false))
+		},
+		want: "sonnet",
+	}, {
+		name: "a second exception cannot turn the door off for an exception-only tenant",
+		setup: func(t *testing.T, api *Api) {
+			// The tier sells no AI at all — decision 7's case. The tenant's default can
+			// live nowhere but its own grant.
+			require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "sonnet"))
+		},
+		grantMore: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
+		},
+		want: "sonnet",
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newTestApi(t)
+			mustProvider(t, api, "sonnet")
+			mustProvider(t, api, "fable")
+			tc.setup(t, api)
+
+			before, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
+			require.NoError(t, err)
+			require.NotNil(t, before.Default, "precondition: the tenant starts with a usable default")
+			require.Equal(t, tc.want, before.Default.Token)
+
+			tc.grantMore(t, api)
+
+			after, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
+			require.NoError(t, err)
+			assert.Len(t, after.Providers, 2, "precondition: the grant actually widened the menu")
+			require.NotNil(t, after.Default,
+				"MONOTONICITY: granting an EXTRA model must never leave the tenant with no default")
+			assert.Equal(t, tc.want, after.Default.Token,
+				"MONOTONICITY: granting an EXTRA model must not re-point the default either")
+		})
+	}
+}
+
+// TestNoDefaultIsEverInferredFromTheMenuSize guards the SHAPE rather than its instances.
+// pickDefault takes the two marks and no set, so there is nothing to count; this asserts
+// the consequence directly, so that reintroducing any "if exactly one model is granted…"
+// rule fails here even on an axis the table above does not enumerate.
+func TestNoDefaultIsEverInferredFromTheMenuSize(t *testing.T) {
+	api := newTestApi(t)
+	mustProvider(t, api, "sonnet")
+
+	// One model, granted, enabled, usable — and marked by nobody, because the mark was
+	// explicitly cleared. A counting rule says "it's the only one, use it". The stored
+	// mark is the only source of a default, so the answer is NONE.
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", false))
+	require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
+
+	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
+	require.NoError(t, err)
+	require.Equal(t, []string{"sonnet"}, menuTokens(menu), "the model is on the menu and usable")
+	assert.Nil(t, menu.Default,
+		"a sole usable model is NOT a default: an operator cleared the mark and that is a choice")
+}
+
+// TestRevokingAMarkedDefaultDoesNotPromoteASurvivor. Revoking hard-deletes the grant the
+// mark lives on, so the mark dies with it. Under the old counting rule that silently
+// promoted whatever remained — re-pricing every tenant at the tier on an operator act
+// that said nothing about the survivor. Disabling the marked default already resolved to
+// NONE; revoking it must land the same way, since an operator has no reason to expect
+// two adjacent acts on the same row to mean opposite things.
+func TestRevokingAMarkedDefaultDoesNotPromoteASurvivor(t *testing.T) {
+	api := newTestApi(t)
+	mustProvider(t, api, "premium")
+	mustProvider(t, api, "cheap")
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "premium", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "cheap", false))
+
+	removed, err := api.RevokeProviderFromTier(adminCtx(), "gold", "premium")
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
+	require.NoError(t, err)
+	require.Equal(t, []string{"cheap"}, menuTokens(menu), "the revoked model leaves the menu")
+	assert.Nil(t, menu.Default,
+		"revoking the marked default must not silently re-point every gold tenant at the survivor")
+}
+
+// TestATenantMarkDoesNotOverrideItsTier fixes the precedence in a test rather than only
+// in a comment. An exception widens what a tenant may CHOOSE; it does not re-point what
+// the tenant GETS by default, or the tier would stop being a legible floor — and two
+// tenants at the same tier would silently draft against different models.
+func TestATenantMarkDoesNotOverrideItsTier(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 	mustProvider(t, api, "fable")
-	// Deliberately NOT marked as the default — the sole-model fallback is what resolves
-	// it, and that fallback is where the bug lived.
-	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", false))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
+	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
+	require.NoError(t, api.SetTenantDefault(adminCtx(), "acme", "fable"))
 
-	before, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
+	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
 	require.NoError(t, err)
-	require.NotNil(t, before.Default)
-	require.Equal(t, "sonnet", before.Default.Token)
+	require.NotNil(t, menu.Default)
+	assert.Equal(t, "sonnet", menu.Default.Token, "the tier's mark outranks the tenant's")
 
-	// The audited exception: purely additive.
+	// ...and the tenant's mark is not discarded: it decides once the tier stops speaking.
+	require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
+	menu, err = api.MenuForTenant(tenantCtx("acme"), "gold")
+	require.NoError(t, err)
+	require.NotNil(t, menu.Default)
+	assert.Equal(t, "fable", menu.Default.Token, "with the tier silent, the tenant's mark decides")
+}
+
+// TestAnExceptionOnlyTenantCanBeRepaired. The bug that started this had no operator
+// remedy — the mark lived only on tier grant rows, so a two-exception tenant on a
+// no-AI tier was stuck until a future slice shipped caller model choice. Whatever the
+// resolution rule, an operator must be able to say which model a tenant defaults to.
+func TestAnExceptionOnlyTenantCanBeRepaired(t *testing.T) {
+	api := newTestApi(t)
+	mustProvider(t, api, "sonnet")
+	mustProvider(t, api, "fable")
+	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "sonnet"))
 	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
 
-	after, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
+	// The tier sells no AI, so nothing on the tier axis can speak for this tenant.
+	require.NoError(t, api.SetTenantDefault(adminCtx(), "acme", "fable"))
+
+	menu, err := api.MenuForTenant(tenantCtx("acme"), "bronze")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"fable", "sonnet"}, menuTokens(after), "the exception adds to the menu")
-	require.NotNil(t, after.Default,
-		"granting a tenant an EXTRA model must never leave it with no usable default")
-	assert.Equal(t, "sonnet", after.Default.Token,
-		"the tier decides the default; an additive exception cannot move it")
+	require.NotNil(t, menu.Default)
+	assert.Equal(t, "fable", menu.Default.Token)
 }
 
 // TestADisabledMarkedDefaultIsNotSubstituted. When the operator has marked a default
@@ -273,20 +417,26 @@ func TestTheDefaultFallsBackToASoleModel(t *testing.T) {
 	assert.Equal(t, "sonnet", menu.Default.Token)
 }
 
-// TestNoDefaultWhenTheChoiceIsAmbiguous covers step 3: with two models offered and none
-// marked, guessing would silently route a tenant's prompts — and its spend — to a model
-// nobody chose. The menu still resolves; only the default is absent.
+// TestNoDefaultWhenTheChoiceIsAmbiguous: with several models offered and the mark
+// explicitly cleared, guessing would silently route a tenant's prompts — and its spend —
+// to a model nobody chose. The menu still resolves; only the default is absent.
+//
+// Note the ClearTierDefault: it is load-bearing, and its necessity IS the fix. Merely
+// granting two models un-marked no longer reaches this state, because the first grant
+// auto-marks — so "granted but no default" is now only ever something an operator asked
+// for, never something that happened to a tier because its menu grew.
 func TestNoDefaultWhenTheChoiceIsAmbiguous(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 	mustProvider(t, api, "fable")
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", false))
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable", false))
+	require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
 
 	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")
 	require.NoError(t, err)
 	assert.Len(t, menu.Providers, 2)
-	assert.Nil(t, menu.Default, "two models and no marked default is ambiguous, not a guess")
+	assert.Nil(t, menu.Default, "several models and no marked default is ambiguous, not a guess")
 }
 
 // TestAtMostOneDefaultPerTier pins the invariant that replaced "at most one active

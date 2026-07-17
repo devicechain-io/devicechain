@@ -224,6 +224,36 @@ func (r *AdminResolver) RevokeAiProviderFromTenant(ctx context.Context, args str
 	return apiFrom(ctx).RevokeProviderFromTenant(ctx, args.Tenant, args.Provider)
 }
 
+// SetAiTenantDefault marks one of a tenant's additive grants as its default, demoting
+// any previous one. It decides the tenant's default only when its tier marks none —
+// see model.SetTenantDefault and model.MenuForTenant's precedence.
+func (r *AdminResolver) SetAiTenantDefault(ctx context.Context, args struct {
+	Tenant   string
+	Provider string
+}) (bool, error) {
+	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
+		return false, err
+	}
+	if err := apiFrom(ctx).SetTenantDefault(ctx, args.Tenant, args.Provider); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ClearAiTenantDefault leaves a tenant's additive grants in place but marks none of them
+// default. Idempotent.
+func (r *AdminResolver) ClearAiTenantDefault(ctx context.Context, args struct {
+	Tenant string
+}) (bool, error) {
+	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
+		return false, err
+	}
+	if err := apiFrom(ctx).ClearTenantDefault(ctx, args.Tenant); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // TestAiProvider runs an operator-supplied prompt through a SPECIFIC provider (by
 // token) as a smoke test — the affordance to validate a provider's endpoint + key
 // before promoting it. It does NOT apply the tenant-consent gate (an operator

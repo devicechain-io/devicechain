@@ -179,16 +179,31 @@ const (
 	AIAdmin Authority = "ai:admin"
 
 	// AIInfer gates the inference CALL itself (ai-inference inferRuleCandidate,
-	// ADR-056). It is deliberately separate from — and far narrower than — ai:admin:
-	// its sole holder is the event-processing service token that carries a human's
+	// ADR-056). It is deliberately separate from — and far narrower than — ai:admin.
+	// Its INTENDED holder is the event-processing service token that carries a human's
 	// NL→rule authoring prompt to whichever model the tenant's tier offers (Slice 1).
-	// The inference service
-	// holds NO ambient authority over tenant data with it (ADR-047 confused-deputy red
-	// line): the call returns only a candidate string, which flows back through the
-	// deterministic rules.Compile firewall carrying the human's own token. A holder
-	// can run a prompt through the model its tenant is entitled to; it cannot read,
-	// list, grant, or change provider config (that is ai:admin) or touch any tenant
-	// resource.
+	//
+	// It is NOT its only possible holder, and the difference matters to anyone reasoning
+	// about the surface: ai:infer is tenant-tier (see the vocabulary below), so any
+	// tenant access token carrying it — including one holding "*" — satisfies it, and
+	// ai-inference's data plane is published at /api/ai-inference. A tenant admin can
+	// therefore call inferRuleCandidate directly, with its own prompt AND system prompt,
+	// skipping the drafting loop. That is bounded, not free: the tier menu, the consent
+	// gate, the per-tenant rate ceiling, and the prompt/output caps all still apply, and
+	// the sanctioned draft door already returns the raw candidate on a compile failure —
+	// so this is another entry point to a capability the tenant has, not a new one.
+	//
+	// Tenant-tier is the deliberate choice (a holder acts WITHIN one tenant); the point
+	// here is only that "service tokens are the sole holders" would be a false comfort to
+	// build on. If that ever needs to be true, it takes an explicit TokenType check at
+	// the resolver — the tier vocabulary alone will not deliver it.
+	//
+	// The inference service holds NO ambient authority over tenant data with it (ADR-047
+	// confused-deputy red line): the call returns only a candidate string, which flows
+	// back through the deterministic rules.Compile firewall carrying the human's own
+	// token. A holder can run a prompt through the model its tenant is entitled to; it
+	// cannot read, list, grant, or change provider config (that is ai:admin) or touch any
+	// tenant resource.
 	AIInfer Authority = "ai:infer"
 )
 

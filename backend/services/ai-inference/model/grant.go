@@ -72,6 +72,12 @@ type AIProviderTierGrant struct {
 	// the tier's set, so the default is per-tier and carries no task column — a task
 	// taxonomy with exactly one member would be speculative.
 	//
+	// THE MARK IS THE ONLY SOURCE OF A DEFAULT. There is no "…and if exactly one model
+	// is granted, treat it as the default" fallback — see pickDefault for why that rule
+	// cost us the same bug three times. GrantProviderToTier auto-marks the FIRST grant
+	// to a tier so that offering a model still just works, which means "granted but no
+	// mark anywhere" only arises from an explicit ClearTierDefault.
+	//
 	// No gorm `default` tag: a `default:false` would make gorm substitute the DB
 	// default for the Go zero value, which is the shape that made Enabled
 	// unpersistable-as-false on AIProvider.
@@ -113,6 +119,19 @@ type AIProviderTenantGrant struct {
 
 	// ProviderID references AIProvider.ID. See AIProviderTierGrant.ProviderID.
 	ProviderID uint `gorm:"not null;index"`
+	// IsDefault marks this grant as the tenant's default model, and it exists for the
+	// one tenant the tier cannot speak for: decision 7's exception-only tenant, whose
+	// tier sells no AI at all. Such a tenant's default can live nowhere else — the tier
+	// has no grant row to carry a mark on.
+	//
+	// It does NOT override the tier's mark. Precedence is tier-then-tenant (pickDefault),
+	// which is what keeps an exception ADDITIVE in the sense that matters: granting a
+	// tenant an extra model widens what it may choose and never re-points what it gets
+	// by default. The tenant axis decides only when the tier axis has nothing to say.
+	//
+	// At most one per tenant (a partial unique index backs it), auto-marked on the
+	// tenant's first grant for the same reason as the tier's.
+	IsDefault bool `gorm:"not null"`
 }
 
 func (AIProviderTenantGrant) TableName() string { return "ai_provider_tenant_grants" }

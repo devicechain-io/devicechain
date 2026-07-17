@@ -49,6 +49,7 @@ type aiProviderTenantGrantV1 struct {
 	rdb.TenantScoped
 	ProviderID uint          `gorm:"not null;index"`
 	Provider   *aiProviderV1 `gorm:"foreignKey:ProviderID;constraint:OnDelete:RESTRICT"`
+	IsDefault  bool          `gorm:"not null"`
 }
 
 func (aiProviderTenantGrantV1) TableName() string { return "ai_provider_tenant_grants" }
@@ -57,11 +58,18 @@ func (aiProviderTenantGrantV1) TableName() string { return "ai_provider_tenant_g
 // (ADR-065 decision 10): tier→provider offers, and per-tenant additive exceptions.
 // Together they replace the retired instance-wide single-active pointer.
 //
-// AT MOST ONE DEFAULT PER TIER is a unique index on (tier_token) filtered to WHERE
-// is_default, leaving the non-default rows out of the uniqueness set — GORM cannot
-// express a partial index by tag. It is the retired uix_ai_providers_active index
-// re-scoped from "one globally" to "one per tier", which is precisely the shape change
-// ADR-065 is about.
+// AT MOST ONE DEFAULT PER TIER — and, independently, per tenant — is a unique index on
+// the owning column filtered to WHERE is_default, leaving the non-default rows out of
+// the uniqueness set (GORM cannot express a partial index by tag). The tier index is
+// the retired uix_ai_providers_active index re-scoped from "one globally" to "one per
+// tier", which is precisely the shape change ADR-065 is about; the tenant index is its
+// twin for decision 7's exception-only tenant, whose tier has no grant row to carry a
+// mark on.
+//
+// Both are STORAGE backstops beneath an application rule that demotes before it
+// promotes. They earn their keep because the alternative to a stored mark — inferring
+// the default by counting the grants — is the bug this migration was amended to kill
+// (pickDefault).
 //
 // The provider_id FOREIGN KEY (ON DELETE RESTRICT) is declared by the Provider
 // relation on the shapes above rather than here. Be precise about what it buys,
@@ -104,10 +112,19 @@ func NewAIProviderGrantsSchema() *gormigrate.Migration {
 			// One additive grant per (tenant, provider). Declared here rather than by
 			// tag because rdb.TenantScoped contributes TenantId as an embedded field and
 			// the composite must name its column.
-			return tx.Exec(fmt.Sprintf(
+			if err := tx.Exec(fmt.Sprintf(
 				"CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s (%s, %s)",
 				tenantStmt.Quote("uix_ai_tenant_grant_pair"), tenantStmt.Quote(tenantStmt.Table),
 				tenantStmt.Quote("tenant_id"), tenantStmt.Quote("provider_id"),
+			)).Error; err != nil {
+				return err
+			}
+
+			// At most one default provider per tenant.
+			return tx.Exec(fmt.Sprintf(
+				"CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s (%s) WHERE %s",
+				tenantStmt.Quote("uix_ai_tenant_grant_default"), tenantStmt.Quote(tenantStmt.Table),
+				tenantStmt.Quote("tenant_id"), tenantStmt.Quote("is_default"),
 			)).Error
 		},
 		Rollback: func(tx *gorm.DB) error {

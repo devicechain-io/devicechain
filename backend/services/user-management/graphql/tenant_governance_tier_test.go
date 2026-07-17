@@ -19,13 +19,17 @@ import (
 //
 // ai-inference reads `tenantGovernance { aiExternalEnabled tierToken }` over a service
 // token and joins tierToken against its own grant tables to decide which AI models a
-// tenant may use (ADR-065 decision 10). If this field is renamed or dropped, that query
-// decodes tierToken as the empty string, the menu resolves to nothing, and the NL
-// authoring door reports "unavailable" for every tenant — with no error anywhere, because
-// an unknown tier resolving to an empty menu is exactly what the fail-closed path is
-// supposed to do. The failure is indistinguishable from correct behaviour.
+// tenant may use (ADR-065 decision 10). Renaming or dropping this field takes the NL
+// authoring door down for every tenant, instance-wide, at runtime.
 //
-// So the field NAME is pinned here, and the same string is pinned on the consuming end
+// It does NOT do so silently — this comment used to claim it would, and that was wrong.
+// graph-gophers validates the selection, so the consumer's query errors outright rather
+// than decoding a zero value, and the consumer surfaces that as ErrUnavailable with a
+// log line. The reason to pin the name here is simpler and better: an instance-wide
+// outage that announces itself is still an instance-wide outage, and this test costs a
+// millisecond to turn it into a red build instead.
+//
+// The same string is pinned on the consuming end
 // (inference.TestFactsQuerySelectsTheContractFields). Two tests, one contract, both cheap.
 func TestTenantGovernanceExposesTheTierToken(t *testing.T) {
 	r := &TenantGovernanceResolver{t: &iam.Tenant{

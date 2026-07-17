@@ -96,7 +96,7 @@ export async function compileCanvas(graph: string, profileToken: string): Promis
 // canvas doors use (AI proposes, the compiler disposes — it never sits in the replay-correct
 // path). The console hands the returned `definition` to the form for the human to review and
 // save through the normal create door — this call persists nothing. External routing is a
-// per-tenant, fail-closed opt-in: with no active/consented provider it returns unavailable=true
+// per-tenant, fail-closed opt-in: with no granted/consented model it returns unavailable=true
 // (never a hard error). Non-idempotent (spends inference budget) → modeled as a mutation.
 const DRAFT_DETECTION_RULE_FROM_TEXT = graphql(`
   mutation DraftDetectionRuleFromText($input: DraftRuleFromTextInput!) {
@@ -122,7 +122,7 @@ export type DraftRuleResult = DraftDetectionRuleFromTextMutation['draftDetection
 export type DraftDiagnostic = DraftRuleResult['diagnostics'][number];
 export type { MetricHintInput };
 
-// draftDetectionRuleFromText asks the active inference provider to draft a rule from `text`,
+// draftDetectionRuleFromText asks the tenant's default model to draft a rule from `text`,
 // passing the profile's metric vocabulary so the model references real keys. It throws only on a
 // transport/auth failure; an unavailable provider, a non-compiling draft, and a compiling draft
 // all come back in the result (unavailable / !ok+diagnostics / ok+definition respectively).

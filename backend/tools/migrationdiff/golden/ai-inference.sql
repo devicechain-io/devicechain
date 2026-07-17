@@ -73,7 +73,8 @@ CREATE TABLE "ai-inference".ai_provider_tenant_grants (
  created_at timestamp with time zone,
  updated_at timestamp with time zone,
  tenant_id character varying(128) NOT NULL,
- provider_id bigint NOT NULL
+ provider_id bigint NOT NULL,
+ is_default boolean NOT NULL
 );
 CREATE TABLE "ai-inference".ai_provider_tier_grants (
  id bigint NOT NULL,
@@ -124,6 +125,7 @@ CREATE TABLE "ai-inference".secrets (
  alg character varying(32) NOT NULL
 );
 CREATE UNIQUE INDEX uix_ai_providers_token ON "ai-inference".ai_providers USING btree (token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_ai_tenant_grant_default ON "ai-inference".ai_provider_tenant_grants USING btree (tenant_id) WHERE is_default;
 CREATE UNIQUE INDEX uix_ai_tenant_grant_pair ON "ai-inference".ai_provider_tenant_grants USING btree (tenant_id, provider_id);
 CREATE UNIQUE INDEX uix_ai_tier_grant_default ON "ai-inference".ai_provider_tier_grants USING btree (tier_token) WHERE is_default;
 CREATE UNIQUE INDEX uix_ai_tier_grant_pair ON "ai-inference".ai_provider_tier_grants USING btree (tier_token, provider_id);

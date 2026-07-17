@@ -92,39 +92,51 @@ func (api *Api) AnyGrants(ctx context.Context) (bool, error) {
 // The union is why the per-tenant grant can only ever ADD: there is no deny row to
 // subtract with, so an exception cannot quietly undercut what the tier sold.
 //
-// THE DEFAULT IS DECIDED BY THE TIER, NOT BY THE MENU, and that distinction is the
-// whole of ADR-065 decision 10's additive-only guarantee. An earlier version resolved
-// the "sole model" fallback over the UNION, which made the default NON-MONOTONIC: a
-// bronze tenant whose tier granted one un-marked model resolved to that model, and
-// then granting it an EXTRA model additively made the menu ambiguous and the default
-// vanish — switching the tenant's NL door off by giving it more. Additive-only has to
-// hold for what the tenant can actually USE, not merely for the set's membership.
+// THE DEFAULT IS A STORED MARK, NEVER A COUNT OF THE MENU. That is the whole of
+// decision 10's additive-only guarantee, and it is worth stating as a rule about rules:
 //
-// So, most specific first:
+//	a default inferred by counting a set that operators can GROW is non-monotonic,
+//	because growing the set changes the answer.
 //
-//  1. The tier marked a default → that model, if it is granted and enabled. If the
-//     tier marked one and it is NOT usable (disabled, or its grant revoked), the
-//     answer is NONE — never a substitute. The operator expressed a choice; quietly
-//     routing a tenant's prompts, and its spend, to a different model because the
-//     chosen one went out of service is precisely the silent re-pricing step 3 exists
-//     to prevent. Taking a model out of service is an operator act with an operator
-//     consequence.
+// This bit us three times before the rule was written down. Every instance was some
+// flavour of "…and if exactly one model is granted, treat it as the default":
 //
-//  2. The tier marked no default but grants exactly one enabled model → that one. An
-//     operator who offers a single model and never marks it plainly means it, and
-//     failing closed there would be pedantry rather than safety. Note this counts the
-//     TIER's grants, so a tenant's additive grants cannot disturb it.
+//   - resolving that fallback over the UNION let a per-tenant grant vaporise a default
+//     the TIER had already resolved;
+//   - scoping it to the tier's grants fixed that one and left its twin on the tenant
+//     axis, where a second exception vaporised an exception-only tenant's default;
+//   - and the tier's own arm had it too — a second UNMARKED grant to a tier turned the
+//     door off for EVERY tenant on that tier.
 //
-//  3. The tier grants nothing at all → the tenant's own additive grants stand alone,
-//     and the same sole-model rule applies to them. Without this an exception-only
-//     tenant (decision 7's bronze-gets-Fable case, on a tier that sells no AI) would
-//     have a menu it could never use.
+// Each fix was correct about its instance and blind to the shape. So the fallback is
+// gone entirely: a default exists iff somebody stored a mark. Offering a model still
+// just works because the grant calls AUTO-MARK the first grant to a tier (and to a
+// tenant) — the convenience moved from read time, where it silently re-answered as the
+// data changed, to write time, where it is a row an operator can see and change.
 //
-//  4. Otherwise nil: two or more models with no marked default is genuinely ambiguous,
-//     and guessing would route a tenant's prompts and spend to a model nobody chose.
+// Precedence, most authoritative first:
 //
-// A caller that gets a nil Default with a non-empty menu is not broken — it means the
-// tenant must choose explicitly.
+//  1. The TIER's marked default → that model, if it is granted and enabled. If the tier
+//     marked one and it is not usable (disabled, or its grant revoked), the answer is
+//     NONE — never a substitute, and never a fall-through to the tenant's mark. The
+//     operator expressed a choice; quietly routing a tenant's prompts, and its spend, to
+//     a different model because the chosen one went out of service is exactly the silent
+//     re-pricing this rule exists to prevent. Taking a model out of service is an
+//     operator act with an operator consequence, and it lands identically for every
+//     tenant on the tier rather than depending on which of them happen to hold
+//     exceptions.
+//
+//  2. The TENANT's marked default → same rule. Reached only when the tier marks
+//     nothing, which is decision 7's exception-only tenant: a tier that sells no AI has
+//     no grant row to carry a mark on, so the tenant's own grant is the only place its
+//     default can live.
+//
+//  3. Otherwise nil. A caller that gets a nil Default with a non-empty menu is not
+//     broken — it means nobody has chosen yet and the tenant must choose explicitly.
+//
+// Note what is NOT here: any branch that reads len(providers). That absence is the
+// invariant, and TestGrantingMoreNeverChangesTheDefault pins it as a property over both
+// axes rather than at the two points a counting rule happened to break.
 //
 // TENANT ISOLATION IS NOT ENFORCED HERE. The additive-grant read below deliberately
 // carries no `WHERE tenant_id = ?`: AIProviderTenantGrant is rdb.TenantScoped, so the
@@ -166,22 +178,23 @@ func (api *Api) MenuForTenant(ctx context.Context, tierToken string) (*Menu, err
 
 	ids := make([]uint, 0, len(tierGrants)+len(tenantGrants))
 	seen := map[uint]bool{}
-	tierIDs := map[uint]bool{}
-	var defaultID uint
+	var tierDefaultID, tenantDefaultID uint
 	for _, g := range tierGrants {
-		tierIDs[g.ProviderID] = true
 		if !seen[g.ProviderID] {
 			seen[g.ProviderID] = true
 			ids = append(ids, g.ProviderID)
 		}
 		if g.IsDefault {
-			defaultID = g.ProviderID
+			tierDefaultID = g.ProviderID
 		}
 	}
 	for _, g := range tenantGrants {
 		if !seen[g.ProviderID] {
 			seen[g.ProviderID] = true
 			ids = append(ids, g.ProviderID)
+		}
+		if g.IsDefault {
+			tenantDefaultID = g.ProviderID
 		}
 	}
 	if len(ids) == 0 {
@@ -197,53 +210,45 @@ func (api *Api) MenuForTenant(ctx context.Context, tierToken string) (*Menu, err
 	}
 	sort.Slice(providers, func(i, j int) bool { return providers[i].Token < providers[j].Token })
 
-	menu := &Menu{Providers: providers, Default: pickDefault(providers, tierIDs, defaultID, len(tierGrants) > 0)}
+	menu := &Menu{Providers: providers, Default: pickDefault(providers, tierDefaultID, tenantDefaultID)}
 	return menu, nil
 }
 
-// pickDefault applies the four-step rule documented on MenuForTenant. It is a pure
-// function over the already-resolved menu so the rule can be read — and tested — in
-// one place, rather than inferred from a chain of conditionals inside the query path.
+// pickDefault applies the precedence documented on MenuForTenant. It is a pure function
+// over the already-resolved menu so the rule can be read — and tested — in one place,
+// rather than inferred from a chain of conditionals inside the query path.
 //
-// tierIDs is the set of provider ids the TIER grants (enabled or not); tierGranted
-// says whether the tier grants anything at all, which is what distinguishes "the tier
-// offers nothing, so the tenant's exceptions stand alone" from "the tier offers
-// things, so its grants alone decide the default".
-func pickDefault(providers []AIProvider, tierIDs map[uint]bool, defaultID uint, tierGranted bool) *AIProvider {
-	// 1. The tier expressed a choice: honour it if usable, otherwise none. Never
-	//    substitute a model the operator did not choose.
-	if defaultID != 0 {
+// It takes the two MARKS, not the grant sets, and that signature is the point: with no
+// set to count, the non-monotonic fallback cannot be reintroduced here without first
+// adding a parameter to carry it. Both ids are provider ids, or 0 for "no mark".
+//
+// The marks are resolved against `providers`, which holds only the ENABLED ones — so a
+// mark on a disabled provider correctly finds nothing and yields NONE.
+func pickDefault(providers []AIProvider, tierDefaultID, tenantDefaultID uint) *AIProvider {
+	find := func(id uint) *AIProvider {
 		for i := range providers {
-			if providers[i].ID == defaultID {
+			if providers[i].ID == id {
 				return &providers[i]
 			}
 		}
 		return nil
 	}
 
-	// 2. No marked default, but the tier offers models: only the TIER's grants may
-	//    decide, so that a tenant's additive grant cannot disturb the default it
-	//    already resolved to (additive-only must hold for what is USABLE, not just for
-	//    what is listed).
-	if tierGranted {
-		var sole *AIProvider
-		for i := range providers {
-			if !tierIDs[providers[i].ID] {
-				continue
-			}
-			if sole != nil {
-				return nil // two or more offered, none marked: ambiguous.
-			}
-			sole = &providers[i]
-		}
-		return sole
+	// 1. The tier's choice is authoritative: honour it if usable, otherwise NONE. No
+	//    fall-through to the tenant's mark — an unusable tier default is a broken tier,
+	//    and every tenant on it should fail the same way rather than have the ones
+	//    holding exceptions quietly served something else.
+	if tierDefaultID != 0 {
+		return find(tierDefaultID)
 	}
 
-	// 3. The tier offers nothing; the tenant's own exceptions stand alone.
-	if len(providers) == 1 {
-		return &providers[0]
+	// 2. The tier marks nothing (it grants nothing, or its default was cleared): the
+	//    tenant's own mark decides. This is decision 7's exception-only tenant.
+	if tenantDefaultID != 0 {
+		return find(tenantDefaultID)
 	}
-	// 4. Ambiguous.
+
+	// 3. Nobody has chosen. Not an error — the caller must choose explicitly.
 	return nil
 }
 
@@ -333,11 +338,40 @@ func (api *Api) GrantProviderToTier(ctx context.Context, tierToken, providerToke
 		default:
 			return err
 		}
-		if !makeDefault || existing.IsDefault {
+		if existing.IsDefault {
 			return nil
+		}
+		if !makeDefault {
+			// AUTO-MARK THE FIRST GRANT. Offering a tier its only model should not also
+			// require a second call to say "…and mean it": before the mark became the
+			// only source of a default, MenuForTenant inferred exactly this case by
+			// counting the grants, and that inference is what made the default
+			// non-monotonic (see pickDefault). So the convenience survives, moved to
+			// write time where it lands as a row an operator can see, change, and clear
+			// — rather than as a rule that silently re-answers whenever the set grows.
+			//
+			// Only when the tier has NO mark at all: a later unmarked grant must not
+			// disturb the tier's existing choice. That is the monotonicity guarantee,
+			// enforced at the point of growth.
+			marked, err := tierHasDefault(tx, tierToken)
+			if err != nil || marked {
+				return err
+			}
 		}
 		return promoteTierDefault(tx, tierToken, existing.ID)
 	})
+}
+
+// tierHasDefault reports whether the tier already has a marked default, inside the
+// caller's transaction. An existence probe, not a count: Limit(1).Count would keep the
+// LIMIT and apply it to the aggregate row, which is the fake early-exit this repo has
+// been bitten by before.
+func tierHasDefault(tx *gorm.DB, tierToken string) (bool, error) {
+	var probe []int64
+	res := tx.Model(&AIProviderTierGrant{}).Select("1").
+		Where("tier_token = ? AND is_default = ?", tierToken, true).
+		Limit(1).Find(&probe)
+	return res.RowsAffected > 0, res.Error
 }
 
 // promoteTierDefault demotes the tier's current default and promotes grantID, inside
@@ -455,10 +489,77 @@ func (api *Api) GrantProviderToTenant(ctx context.Context, tenantToken, provider
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
-		grant := AIProviderTenantGrant{ProviderID: providerID}
+		// Auto-mark the tenant's FIRST grant, and only that one — the tier axis's rule
+		// (see GrantProviderToTier), for the same reason and with the same guarantee: a
+		// second exception must never disturb a default the first one established.
+		marked, err := tenantHasDefault(tx, tenantToken)
+		if err != nil {
+			return err
+		}
+		grant := AIProviderTenantGrant{ProviderID: providerID, IsDefault: !marked}
 		grant.TenantId = tenantToken
 		return tx.Create(&grant).Error
 	})
+}
+
+// tenantHasDefault reports whether the tenant already marks one of its additive grants
+// default. An existence probe — see tierHasDefault.
+func tenantHasDefault(tx *gorm.DB, tenantToken string) (bool, error) {
+	var probe []int64
+	res := tx.Model(&AIProviderTenantGrant{}).Select("1").
+		Where("tenant_id = ? AND is_default = ?", tenantToken, true).
+		Limit(1).Find(&probe)
+	return res.RowsAffected > 0, res.Error
+}
+
+// promoteTenantDefault demotes the tenant's current default and promotes grantID inside
+// the caller's transaction. Demote before promote, or the partial unique index rejects
+// the second default — see promoteTierDefault.
+func promoteTenantDefault(tx *gorm.DB, tenantToken string, grantID uint) error {
+	if err := tx.Model(&AIProviderTenantGrant{}).
+		Where("tenant_id = ? AND is_default = ?", tenantToken, true).
+		Update("is_default", false).Error; err != nil {
+		return err
+	}
+	return tx.Model(&AIProviderTenantGrant{}).
+		Where("id = ?", grantID).Update("is_default", true).Error
+}
+
+// SetTenantDefault marks one of a tenant's additive grants as its default, demoting any
+// previous one atomically. Returns gorm.ErrRecordNotFound when the pair is not granted:
+// a default must be something the tenant actually holds, so this does not create the
+// grant as a side effect (the tier axis's SetTierDefault rule).
+//
+// This is the REPAIR for an exception-only tenant. It matters because the mark it writes
+// is only consulted when the tenant's tier marks nothing (pickDefault) — so an operator
+// calling it for a tenant whose tier does mark a default changes stored state that has
+// no effect today, and takes effect if the tier's mark is ever cleared. That is the
+// honest behaviour for an additive exception, but it is not obvious from the call.
+func (api *Api) SetTenantDefault(ctx context.Context, tenantToken, providerToken string) error {
+	providerID, err := api.providerIDByToken(ctx, providerToken)
+	if err != nil {
+		return err
+	}
+	return api.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing AIProviderTenantGrant
+		if err := tx.Where("tenant_id = ? AND provider_id = ?", tenantToken, providerID).
+			First(&existing).Error; err != nil {
+			return err
+		}
+		if existing.IsDefault {
+			return nil
+		}
+		return promoteTenantDefault(tx, tenantToken, existing.ID)
+	})
+}
+
+// ClearTenantDefault leaves the tenant's additive grants in place but marks none of them
+// default. Idempotent. For an exception-only tenant this means no default at all, so the
+// caller must choose explicitly.
+func (api *Api) ClearTenantDefault(ctx context.Context, tenantToken string) error {
+	return api.sys(ctx).Model(&AIProviderTenantGrant{}).
+		Where("tenant_id = ? AND is_default = ?", tenantToken, true).
+		Update("is_default", false).Error
 }
 
 // RevokeProviderFromTenant removes a tenant's additive grant, reporting whether one was

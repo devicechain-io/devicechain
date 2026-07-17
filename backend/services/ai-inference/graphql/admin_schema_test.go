@@ -98,10 +98,10 @@ func TestAdminPlaneCarriesTheWholeProviderSurface(t *testing.T) {
 			"aiProviderTierGrants", "aiProviders"},
 		fieldNames(t, schema, "queryType"))
 	assert.Equal(t,
-		[]string{"clearAiTierDefault", "createAiProvider", "deleteAiProvider",
-			"grantAiProviderToTenant", "grantAiProviderToTier", "revokeAiProviderFromTenant",
-			"revokeAiProviderFromTier", "setAiTierDefault", "testAiProvider",
-			"updateAiProvider"},
+		[]string{"clearAiTenantDefault", "clearAiTierDefault", "createAiProvider",
+			"deleteAiProvider", "grantAiProviderToTenant", "grantAiProviderToTier",
+			"revokeAiProviderFromTenant", "revokeAiProviderFromTier", "setAiTenantDefault",
+			"setAiTierDefault", "testAiProvider", "updateAiProvider"},
 		fieldNames(t, schema, "mutationType"))
 }
 

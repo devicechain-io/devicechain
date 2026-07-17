@@ -83,7 +83,7 @@ const config: CodegenConfig = {
     },
     // The instance-scoped, operator-managed AI inference-provider list (ADR-056),
     // served by the ai-inference service at /admin/graphql. The console lists and
-    // authors providers here (create, pick the active one, write-only API key) and
+    // authors providers here (create, grant to a tier, write-only API key) and
     // offers the operator smoke-test (testAiProvider).
     //
     // It generates from the service's ADMIN schema and rides the identity lane, not

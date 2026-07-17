@@ -207,6 +207,9 @@ func TestResolveForTenantAmbiguousDefault(t *testing.T) {
 	makeProvider(t, api, ctx, "b", "", "sk", true)
 	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "a", false))
 	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "b", false))
+	// The mark must be CLEARED to reach ambiguity: the first grant to a tier auto-marks,
+	// so a tier whose menu merely grew still has a default (model.pickDefault).
+	require.NoError(t, api.ClearTierDefault(context.Background(), testTier))
 
 	_, err := r.ResolveForTenant(ctx, "t1")
 	assert.ErrorIs(t, err, ErrUnavailable, "an ambiguous default must not be guessed")
