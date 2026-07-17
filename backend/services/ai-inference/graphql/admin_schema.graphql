@@ -87,6 +87,32 @@ type AiProviderTenantGrant {
     provider: AiProvider!
 }
 
+# One member of the platform's AI-function vocabulary: a job a model can be assigned to
+# (ADR-065 S5c′). Platform-declared, never operator-authored — the tokens here are what a
+# tenant's function assignment names. GA declares exactly one (rule-drafting); a second is
+# a code declaration, never a schema change.
+type AiFunction {
+    # The stable token stored in an assignment and validated at write.
+    token: String!
+    # The human label for the operator's picker.
+    name: String!
+    # What the function does, for the same picker.
+    description: String!
+}
+
+# One tenant's stored choice of model for a function (ADR-065 S5c′). This is what the
+# tenant CHOSE, not necessarily what it GETS: an assignment naming a model the tenant is
+# no longer entitled to still appears here (so an operator can see and fix the stale
+# choice), and resolves to no model until the entitlement returns. Entitlement is applied
+# at resolve time, never here.
+type AiFunctionAssignment {
+    # The assigned function's token (one of the aiFunctions vocabulary).
+    function: String!
+    # The provider the tenant chose for it. Present even when off the tenant's current
+    # menu — the operator surface shows the choice regardless of entitlement.
+    provider: AiProvider!
+}
+
 # Data to create or update a provider. `secret` (the API key) is write-only: omit it
 # on update to preserve the stored key, send a value to replace it, or send an empty
 # string to clear it. On create, omit or empty means no key yet.
@@ -144,6 +170,13 @@ type Query {
     aiProviderTierGrants: [AiProviderTierGrant!]!
     # One tenant's additive grants (requires ai:admin).
     aiProviderTenantGrants(tenant: String!): [AiProviderTenantGrant!]!
+    # The platform's AI-function vocabulary, for the per-tenant assignment picker
+    # (requires ai:admin). GA declares exactly one function.
+    aiFunctions: [AiFunction!]!
+    # One tenant's stored per-function model choices (requires ai:admin). Lists what the
+    # tenant CHOSE, including a choice it is no longer entitled to — resolution applies
+    # entitlement, this surface does not, so the operator can see a stale choice to fix it.
+    aiFunctionAssignments(tenant: String!): [AiFunctionAssignment!]!
 }
 
 type Mutation {
@@ -195,6 +228,20 @@ type Mutation {
     # no tenant-consent gate (operator config, an operator prompt, no tenant data
     # crosses the boundary), but the provider's key must still resolve.
     testAiProvider(token: String!, request: InferenceRequest!): InferenceResult!
+    # Assign a tenant's model for one function — the operator's per-tenant choice
+    # (ADR-065 S5c′). One row per (tenant, function); a second call replaces the first.
+    #
+    # IT DOES NOT CHECK THE MENU, DELIBERATELY. Entitlement is applied at RESOLVE time on
+    # every call, so an assignment SURVIVES a temporary revoke: an operator who revokes a
+    # model and grants it back has not silently destroyed the tenant's choice. An
+    # assignment naming a model the tenant is not entitled to simply resolves to no model
+    # until the entitlement returns — it never falls through to a substitute.
+    setAiFunctionModel(tenant: String!, function: String!, provider: String!): Boolean!
+    # Clear a tenant's choice for one function, reporting whether a row was removed.
+    # Idempotent. Afterwards the tenant falls back to its tier's default (if the tier
+    # marked one and the tenant is still entitled to it), which is the state it was in
+    # before it ever chose.
+    clearAiFunctionModel(tenant: String!, function: String!): Boolean!
 }
 
 schema {

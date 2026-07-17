@@ -15,6 +15,7 @@ import { listTenants, setTenantEnabled, deleteTenant } from '@/lib/api/admin';
 import { BackLink, StatusBadge, errMessage, useReload } from '@/routes/common';
 import { TenantForm } from '@/routes/admin/tenants/TenantForm';
 import { TenantSettingsPanel } from '@/routes/admin/tenants/TenantSettingsPanel';
+import { TenantAiModelsPanel } from '@/routes/admin/tenants/TenantAiModelsPanel';
 import { TierPill } from '@/components/tiers/TierPill';
 
 export default function TenantDetailPage() {
@@ -127,6 +128,7 @@ export default function TenantDetailPage() {
           reload();
         }}
         effectiveSettingsPanel={<TenantSettingsPanel tenant={tenant} />}
+        aiModelsPanel={<TenantAiModelsPanel tenant={tenant} />}
       />
     </PageShell>
   );

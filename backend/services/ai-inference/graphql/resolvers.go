@@ -95,6 +95,31 @@ func (r *AIProviderResolver) HasSecret() (bool, error) {
 	return apiFrom(r.C).Secrets.Exists(r.C, model.AIProviderSecretRef(r.M.ID))
 }
 
+// AIFunctionResolver resolves one member of the AI-function vocabulary (ADR-065 S5c′).
+// It carries no context: a function is platform-declared static data, with no per-request
+// state to resolve.
+type AIFunctionResolver struct {
+	M model.Function
+}
+
+func (r *AIFunctionResolver) Token() string       { return r.M.Token }
+func (r *AIFunctionResolver) Name() string        { return r.M.Name }
+func (r *AIFunctionResolver) Description() string { return r.M.Description }
+
+// AIFunctionAssignmentResolver resolves one tenant's stored per-function model choice
+// (ADR-065 S5c′). The provider is returned even when it is off the tenant's current menu:
+// this is the operator surface, which shows the choice regardless of entitlement so a
+// stale choice is visible and fixable (model.Api.ListFunctionAssignments).
+type AIFunctionAssignmentResolver struct {
+	M model.FunctionAssignment
+	C context.Context
+}
+
+func (r *AIFunctionAssignmentResolver) Function() string { return r.M.Function }
+func (r *AIFunctionAssignmentResolver) Provider() *AIProviderResolver {
+	return &AIProviderResolver{M: r.M.Provider, C: r.C}
+}
+
 // InferenceResultResolver resolves a single inference result: the candidate the
 // provider produced, the model that answered, and the provider token that served it.
 // The candidate is returned verbatim — it is validated by the deterministic compiler

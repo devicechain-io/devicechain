@@ -51,6 +51,25 @@ export type AiProviderTierGrantsQueryVariables = Exact<{ [key: string]: never; }
 
 export type AiProviderTierGrantsQuery = { aiProviderTierGrants: Array<{ tier: string, isDefault: boolean, provider: { token: string, name: string | null, enabled: boolean } }> };
 
+export type AiProviderTenantGrantsQueryVariables = Exact<{
+  tenant: string;
+}>;
+
+
+export type AiProviderTenantGrantsQuery = { aiProviderTenantGrants: Array<{ tenant: string, provider: { token: string, name: string | null, enabled: boolean } }> };
+
+export type AiFunctionsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type AiFunctionsQuery = { aiFunctions: Array<{ token: string, name: string, description: string }> };
+
+export type AiFunctionAssignmentsQueryVariables = Exact<{
+  tenant: string;
+}>;
+
+
+export type AiFunctionAssignmentsQuery = { aiFunctionAssignments: Array<{ function: string, provider: { token: string, name: string | null, enabled: boolean } }> };
+
 export type CreateAiProviderMutationVariables = Exact<{
   request: AiProviderCreateRequest;
 }>;
@@ -104,6 +123,23 @@ export type ClearAiTierDefaultMutationVariables = Exact<{
 
 
 export type ClearAiTierDefaultMutation = { clearAiTierDefault: boolean };
+
+export type SetAiFunctionModelMutationVariables = Exact<{
+  tenant: string;
+  function: string;
+  provider: string;
+}>;
+
+
+export type SetAiFunctionModelMutation = { setAiFunctionModel: boolean };
+
+export type ClearAiFunctionModelMutationVariables = Exact<{
+  tenant: string;
+  function: string;
+}>;
+
+
+export type ClearAiFunctionModelMutation = { clearAiFunctionModel: boolean };
 
 export type TestAiProviderMutationVariables = Exact<{
   token: string;
@@ -186,6 +222,39 @@ export const AiProviderTierGrantsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AiProviderTierGrantsQuery, AiProviderTierGrantsQueryVariables>;
+export const AiProviderTenantGrantsDocument = new TypedDocumentString(`
+    query AiProviderTenantGrants($tenant: String!) {
+  aiProviderTenantGrants(tenant: $tenant) {
+    tenant
+    provider {
+      token
+      name
+      enabled
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AiProviderTenantGrantsQuery, AiProviderTenantGrantsQueryVariables>;
+export const AiFunctionsDocument = new TypedDocumentString(`
+    query AiFunctions {
+  aiFunctions {
+    token
+    name
+    description
+  }
+}
+    `) as unknown as TypedDocumentString<AiFunctionsQuery, AiFunctionsQueryVariables>;
+export const AiFunctionAssignmentsDocument = new TypedDocumentString(`
+    query AiFunctionAssignments($tenant: String!) {
+  aiFunctionAssignments(tenant: $tenant) {
+    function
+    provider {
+      token
+      name
+      enabled
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AiFunctionAssignmentsQuery, AiFunctionAssignmentsQueryVariables>;
 export const CreateAiProviderDocument = new TypedDocumentString(`
     mutation CreateAiProvider($request: AiProviderCreateRequest!) {
   createAiProvider(request: $request) {
@@ -230,6 +299,16 @@ export const ClearAiTierDefaultDocument = new TypedDocumentString(`
   clearAiTierDefault(tier: $tier)
 }
     `) as unknown as TypedDocumentString<ClearAiTierDefaultMutation, ClearAiTierDefaultMutationVariables>;
+export const SetAiFunctionModelDocument = new TypedDocumentString(`
+    mutation SetAiFunctionModel($tenant: String!, $function: String!, $provider: String!) {
+  setAiFunctionModel(tenant: $tenant, function: $function, provider: $provider)
+}
+    `) as unknown as TypedDocumentString<SetAiFunctionModelMutation, SetAiFunctionModelMutationVariables>;
+export const ClearAiFunctionModelDocument = new TypedDocumentString(`
+    mutation ClearAiFunctionModel($tenant: String!, $function: String!) {
+  clearAiFunctionModel(tenant: $tenant, function: $function)
+}
+    `) as unknown as TypedDocumentString<ClearAiFunctionModelMutation, ClearAiFunctionModelMutationVariables>;
 export const TestAiProviderDocument = new TypedDocumentString(`
     mutation TestAiProvider($token: String!, $request: InferenceRequest!) {
   testAiProvider(token: $token, request: $request) {
