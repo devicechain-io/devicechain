@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
+import { Combobox } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { useQuery } from '@/lib/hooks/use-query';
 import { createTenant, updateTenant, listTenantTiers, type AdminTenant } from '@/lib/api/admin';
@@ -114,19 +115,23 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
             : 'The packaging this tenant is held to. Sets its defaults across the platform; individual settings below can still override them.'
         }
       >
-        <select
+        {/* Tiers arrive in the operator's display order; the picker preserves it.
+            A tier's name is the label, its token the muted second line — the same
+            two facts, in the same order, an operator sees everywhere else. */}
+        <Combobox
           id="t-tier"
           value={tierToken}
-          onChange={(e) => setTierToken(e.target.value)}
-          className="h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <option value="">Select a tier…</option>
-          {(tiers ?? []).map((t) => (
-            <option key={t.token} value={t.token}>
-              {t.name || t.token}
-            </option>
-          ))}
-        </select>
+          onChange={setTierToken}
+          placeholder="Select a tier…"
+          searchPlaceholder="Search tiers…"
+          emptyMessage="No tiers."
+          allowClear={false}
+          options={(tiers ?? []).map((t) => ({
+            value: t.token,
+            label: t.name || t.token,
+            description: t.name ? t.token : undefined,
+          }))}
+        />
         {tiersError && <p className="mt-1 text-sm text-destructive">Tiers unavailable ({tiersError}).</p>}
       </FormField>
       <FormField label="Config (JSON)" htmlFor="t-config" description="Optional freeform JSON object.">
