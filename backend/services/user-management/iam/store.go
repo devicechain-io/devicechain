@@ -11,6 +11,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ErrTierReorderMismatch is returned by ReorderTenantTiers when the supplied token list
@@ -359,10 +360,19 @@ func (s *Store) ListTenantTiers(ctx context.Context) ([]TenantTier, error) {
 // TenantTier.DisplayOrder for why it is not a rank.
 func (s *Store) ReorderTenantTiers(ctx context.Context, orderedTokens []string) error {
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		// FOR UPDATE on the read: two concurrent reorders now serialize on these rows
+		// instead of updating them in different orders and deadlocking (Postgres would
+		// kill one with a raw deadlock error, not ErrTierReorderMismatch). The second
+		// reorder blocks until the first commits, then sees its result.
 		var tiers []TenantTier
-		if err := tx.Find(&tiers).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Find(&tiers).Error; err != nil {
 			return err
 		}
+
+		// VALIDATE THE WHOLE PERMUTATION BEFORE WRITING ANYTHING. The transaction would
+		// roll back a partial write anyway, but validating first means a rejected reorder
+		// never issues a single UPDATE — the guarantee does not lean on rollback alone,
+		// and the writes below run only once the input is known to be a true permutation.
 		if len(tiers) != len(orderedTokens) {
 			return fmt.Errorf("%w: reorder must list every tier exactly once (have %d, got %d)",
 				ErrTierReorderMismatch, len(tiers), len(orderedTokens))
@@ -372,20 +382,21 @@ func (s *Store) ReorderTenantTiers(ctx context.Context, orderedTokens []string) 
 			byToken[tiers[i].Token] = &tiers[i]
 		}
 		seen := make(map[string]bool, len(orderedTokens))
-		for i, tok := range orderedTokens {
-			t, ok := byToken[tok]
-			if !ok {
+		for _, tok := range orderedTokens {
+			if _, ok := byToken[tok]; !ok {
 				return fmt.Errorf("%w: %q is not a current tier", ErrTierReorderMismatch, tok)
 			}
-			// Reject a duplicate explicitly. With the count already equal to the catalog
-			// size, a repeated token means another is absent — so this and the
-			// unknown-token branch together guarantee the input is a true permutation,
-			// and the writes below assign a contiguous 0..n-1.
+			// A duplicate with the count already equal to the catalog size means another
+			// token is absent — so this plus the unknown-token check guarantee a true
+			// permutation, i.e. the writes below assign a contiguous 0..n-1.
 			if seen[tok] {
 				return fmt.Errorf("%w: %q listed more than once", ErrTierReorderMismatch, tok)
 			}
 			seen[tok] = true
-			if err := tx.Model(t).Update("display_order", i).Error; err != nil {
+		}
+
+		for i, tok := range orderedTokens {
+			if err := tx.Model(byToken[tok]).Update("display_order", i).Error; err != nil {
 				return err
 			}
 		}

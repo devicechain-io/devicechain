@@ -49,11 +49,18 @@ func NewTierPresentationSchema() *gormigrate.Migration {
 			return tx.Table("iam_tenant_tiers").AutoMigrate(&tenantTier{})
 		},
 		Rollback: func(tx *gorm.DB) error {
+			// Guarded with HasColumn so the rollback is individually re-runnable (the
+			// UseTransaction:false doctrine): if the first drop commits and the second
+			// fails, re-running must not die on the already-gone column.
 			m := tx.Table("iam_tenant_tiers").Migrator()
-			if err := m.DropColumn(&tenantTier{}, "DisplayOrder"); err != nil {
-				return err
+			for _, col := range []string{"DisplayOrder", "Color"} {
+				if m.HasColumn(&tenantTier{}, col) {
+					if err := m.DropColumn(&tenantTier{}, col); err != nil {
+						return err
+					}
+				}
 			}
-			return m.DropColumn(&tenantTier{}, "Color")
+			return nil
 		},
 	}
 }

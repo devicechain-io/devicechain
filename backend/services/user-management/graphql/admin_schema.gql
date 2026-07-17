@@ -48,7 +48,7 @@ type AdminTenantTier {
     tenantCount: Int!
     # PRESENTATION ONLY (ADR-065 S5c). The operator's listing order (low to high; the
     # tenantTiers query returns tiers already sorted by it) and a palette-token color for
-    # the tier's pill (one of aiTierColors, or "" for no pill). Neither is ever read to
+    # the tier's pill (one of tierColorPalette.colors, or "" for no pill). Neither is read to
     # make a decision — displayOrder is not a rank and implies no nesting between tiers;
     # shed priority is a separate concern.
     displayOrder: Int!

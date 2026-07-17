@@ -158,7 +158,19 @@ func (r *AdminResolver) ReorderTenantTiers(ctx context.Context, args struct {
 	if err := r.getAdminService(ctx).ReorderTenantTiers(ctx, args.OrderedTokens); err != nil {
 		return nil, err
 	}
-	return r.TenantTiers(ctx)
+	// Build the payload from the service directly rather than calling r.TenantTiers, which
+	// re-authorizes tenant:read — a tenant:write-only token would then get an error
+	// response for a mutation that already committed. The sibling create/update resolvers
+	// return through the service the same way.
+	tiers, err := r.getAdminService(ctx).ListTenantTiers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*AdminTenantTierResolver, 0, len(tiers))
+	for i := range tiers {
+		out = append(out, &AdminTenantTierResolver{M: tiers[i]})
+	}
+	return out, nil
 }
 
 // TierColorPaletteResolver resolves the TierColorPalette type — the closed color

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useNavigate, useParams } from 'react-router-dom';
-import { Trash2, Users } from 'lucide-react';
+import { Trash2, Users, Package, ChevronRight } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Button } from '@/components/ui/button';
@@ -115,6 +115,31 @@ export default function TierDetailPage() {
               reload();
             }}
           />
+        </SectionPanel>
+
+        {/* AI model packaging is configuration OF the tiers (which models each grants),
+            so it is reached from here rather than a top-level nav entry. The destination
+            is the cross-tier matrix — the operator's side-by-side comparison — not a
+            single-tier view, which is why the copy names all tiers. */}
+        <SectionPanel title="AI models">
+          <button
+            type="button"
+            onClick={() => navigate('/admin/ai-packaging')}
+            className="group flex w-full items-center gap-3 rounded-md border border-border px-4 py-3 text-left transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <Package size={18} className="shrink-0 text-muted-foreground" />
+            <span className="flex-1">
+              <span className="block text-sm font-medium">AI model packaging</span>
+              <span className="block text-sm text-muted-foreground">
+                Which AI models this tier grants, and its default — set side by side with the
+                other tiers.
+              </span>
+            </span>
+            <ChevronRight
+              size={16}
+              className="text-muted-foreground/50 transition group-hover:text-muted-foreground"
+            />
+          </button>
         </SectionPanel>
       </div>
     </PageShell>

@@ -14,8 +14,11 @@ package iam
 //     luminance calculation nobody should own.
 //   - The vocabulary is inspectable and validated. A write is checked against this list
 //     (ValidTierColor), so a typo is rejected at the API rather than stored as a color
-//     that renders as nothing. TierColors drives the console's picker, so the two cannot
-//     drift.
+//     that renders as nothing. TierColors drives the console's picker, so the token LIST
+//     cannot drift from what the server accepts. The console's swatch STYLING (its
+//     token→hex map) is a separate thing that CAN drift: a token here with no swatch there
+//     renders a neutral pill rather than the intended color — legible, but not the color
+//     meant. That is the accepted cost of keeping the hex out of the server (below).
 //
 // The server holds only the NAMES. It deliberately does not know the hex values — those
 // are a console concern (a pill is only ever rendered there), and keeping them out of

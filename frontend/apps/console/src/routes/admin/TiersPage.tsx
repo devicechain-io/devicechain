@@ -3,8 +3,7 @@
 
 // The tenant tier catalog (ADR-065), in the operator's arranged order (S5c). Rows are
 // drag-reorderable; the order persists on drop via reorderTenantTiers, which is
-// presentation only — it moves where a tier appears, never what it grants. Each row shows
-// the tier's colored pill so the catalog reads at a glance the way a tenant list will.
+// presentation only — it moves where a tier appears, never what it grants.
 //
 // Ordering is deliberately NOT a rank: dragging gold above bronze says nothing about one
 // containing the other (ADR-065 rejected a tier ordinal for exactly that reason). It is a
@@ -12,7 +11,7 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, GripVertical, ChevronRight } from 'lucide-react';
+import { Plus, GripVertical } from 'lucide-react';
 import {
   DndContext,
   closestCenter,
@@ -37,6 +36,14 @@ import { TierPill } from '@/components/tiers/TierPill';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
+import {
+  DataTable,
+  DataTableHead,
+  DataTableHeaderCell,
+  DataTableBody,
+  DataTableRow,
+  DataTableCell,
+} from '@/components/ui/data-table';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
@@ -52,9 +59,8 @@ export default function TiersPage() {
   const [version, reload] = useReload();
   const { data, loading, error } = useQuery(listTenantTierCatalog, [version]);
 
-  // Local working copy so a drag reorders instantly, before the server round-trip. It is
-  // reset from the server on every (re)load, so a rejected reorder — or another operator's
-  // change — snaps back to the truth.
+  // Local working copy so a drag reorders instantly. Reset from the server on every
+  // (re)load, so a rejected reorder — or another operator's change — snaps back to truth.
   const [order, setOrder] = useState<AdminTenantTierDetail[]>([]);
   const [saving, setSaving] = useState(false);
   useEffect(() => {
@@ -63,12 +69,16 @@ export default function TiersPage() {
 
   const sensors = useSensors(
     useSensor(PointerSensor),
-    // The keyboard sensor is what keeps drag-reordering accessible: focus a handle, space
-    // to lift, arrows to move, space to drop. Without it the feature is mouse-only.
+    // The keyboard sensor keeps drag-reordering accessible: focus a handle, space to
+    // lift, arrows to move. Without it the feature is mouse-only.
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
   const onDragEnd = async (e: DragEndEvent) => {
+    // Guard against a second reorder landing while one is in flight — the keyboard path
+    // can fire onDragEnd even though the pointer-events lock covers the mouse, and two
+    // concurrent reorderTenantTiers calls would race.
+    if (saving) return;
     const { active, over } = e;
     if (!over || active.id === over.id) return;
     const from = order.findIndex((t) => t.token === active.id);
@@ -82,21 +92,22 @@ export default function TiersPage() {
     try {
       await reorderTenantTiers(next.map((t) => t.token));
       toast('Tier order saved');
+      // No reload on success: `next` already IS the order the server committed (the
+      // mutation validated and persisted exactly this token order), so refetching would
+      // only open a window where a stale in-flight read could clobber a subsequent drag.
     } catch (err) {
-      setOrder(prev); // roll the view back to what it was before the drag
+      setOrder(prev); // roll the view back to before the drag
       toast(errMessage(err), 'error');
+      reload(); // and reconcile with the authoritative order
     } finally {
       setSaving(false);
-      // Reconcile with the server regardless: on success this is a no-op, on a rejected
-      // reorder it replaces the optimistic guess with the authoritative order.
-      reload();
     }
   };
 
   return (
     <PageShell
       title="Tiers"
-      description="The packaging a tenant is sold. Drag to arrange how tiers are listed across the console — order is presentation only and implies no ranking; a tier does not contain the ones below it. Each tier sets the defaults its tenants are held to, and editing one moves every tenant at it within a minute, no restart."
+      description="The packaging a tenant is sold. Drag to arrange how tiers are listed — order is presentation only."
       action={
         <Button onClick={() => navigate('/admin/tiers/new')}>
           <Plus size={16} /> New tier
@@ -104,6 +115,11 @@ export default function TiersPage() {
       }
     >
       <div className="space-y-6">
+        {/* Once a list has rendered, keep showing it on a failed reload rather than
+            blanking to an error — but surface the failure instead of hiding it. */}
+        {error && order.length > 0 && (
+          <p className="text-sm text-destructive">Could not refresh tiers ({error}).</p>
+        )}
         {loading && order.length === 0 ? (
           <LoadingState description="Loading tiers…" />
         ) : error && order.length === 0 ? (
@@ -111,80 +127,105 @@ export default function TiersPage() {
         ) : order.length === 0 ? (
           <EmptyState description="No tiers defined yet." />
         ) : (
-          <div className="overflow-hidden rounded-lg border border-border bg-card">
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-              <SortableContext
-                items={order.map((t) => t.token)}
-                strategy={verticalListSortingStrategy}
-              >
-                <ul className={saving ? 'pointer-events-none opacity-70' : undefined}>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+            <SortableContext items={order.map((t) => t.token)} strategy={verticalListSortingStrategy}>
+              <DataTable>
+                <DataTableHead>
+                  <DataTableHeaderCell className="w-8"> </DataTableHeaderCell>
+                  <DataTableHeaderCell>Tier</DataTableHeaderCell>
+                  <DataTableHeaderCell>Description</DataTableHeaderCell>
+                  <DataTableHeaderCell className="text-right">Tenants</DataTableHeaderCell>
+                </DataTableHead>
+                <DataTableBody>
                   {order.map((t) => (
                     <TierRow
                       key={t.token}
                       tier={t}
+                      saving={saving}
                       onOpen={() => navigate(`/admin/tiers/${encodeURIComponent(t.token)}`)}
                     />
                   ))}
-                </ul>
-              </SortableContext>
-            </DndContext>
-          </div>
+                </DataTableBody>
+              </DataTable>
+            </SortableContext>
+          </DndContext>
         )}
       </div>
     </PageShell>
   );
 }
 
-function TierRow({ tier, onOpen }: { tier: AdminTenantTierDetail; onOpen: () => void }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: tier.token,
-  });
+function TierRow({
+  tier,
+  saving,
+  onOpen,
+}: {
+  tier: AdminTenantTierDetail;
+  saving: boolean;
+  onOpen: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: tier.token, disabled: saving });
+
+  const openOnKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      onOpen();
+    }
+  };
 
   return (
-    <li
+    <DataTableRow
       ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={`flex items-center gap-3 border-b border-border px-3 py-3 last:border-b-0 ${
-        isDragging ? 'relative z-10 bg-muted shadow' : 'bg-card'
-      }`}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        ...(isDragging ? { position: 'relative', zIndex: 10 } : {}),
+      }}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={openOnKey}
+      className={`cursor-pointer ${isDragging ? 'bg-muted shadow' : ''}`}
     >
-      {/* Only the handle initiates a drag, so the rest of the row stays clickable to open
-          the tier. The handle carries the dnd listeners + attributes, which include the
-          keyboard interactions and the aria wiring. */}
-      <button
-        type="button"
-        ref={undefined}
-        className="cursor-grab touch-none rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring active:cursor-grabbing"
-        aria-label={`Reorder ${tier.name ?? tier.token}`}
-        {...attributes}
-        {...listeners}
-      >
-        <GripVertical size={16} />
-      </button>
-
-      {/* The rest of the row opens the tier. Hover + a chevron make it read as a link;
-          without them the detail page was reachable but invisible. */}
-      <button
-        type="button"
-        onClick={onOpen}
-        className="group -mx-2 flex flex-1 items-center gap-3 rounded px-2 py-1 text-left hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      >
-        {/* The pill carries the token (lowercase, fixed width, colored). */}
-        <TierPill label={tier.token} color={tier.color} />
-        {/* The human name is the primary label, to the right of the pill, capitalized as
-            entered. Falls back to the token only when a tier has no name. */}
-        <span className="font-medium">{tier.name ?? tier.token}</span>
-        <span className="max-w-md flex-1 truncate text-sm text-muted-foreground">
-          {tier.description ?? 'No description'}
-        </span>
+      <DataTableCell>
+        {/* The grip is the only drag affordance; stopPropagation so activating it does
+            not also open the tier. setActivatorNodeRef tells dnd-kit this is the handle,
+            which keeps keyboard focus restoration correct after a drop. */}
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          className="cursor-grab touch-none rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40"
+          aria-label={`Reorder ${tier.name ?? tier.token}`}
+          disabled={saving}
+          onClick={(e) => e.stopPropagation()}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical size={16} />
+        </button>
+      </DataTableCell>
+      <DataTableCell>
+        <div className="flex items-center gap-3">
+          <TierPill label={tier.token} color={tier.color} />
+          <span className="font-medium">{tier.name ?? tier.token}</span>
+        </div>
+      </DataTableCell>
+      <DataTableCell className="max-w-md truncate text-muted-foreground">
+        {tier.description ?? '—'}
+      </DataTableCell>
+      <DataTableCell className="text-right">
         <Badge variant="secondary">
           {tier.tenantCount} tenant{tier.tenantCount === 1 ? '' : 's'}
         </Badge>
-        <ChevronRight
-          size={16}
-          className="text-muted-foreground/50 transition group-hover:text-muted-foreground"
-        />
-      </button>
-    </li>
+      </DataTableCell>
+    </DataTableRow>
   );
 }

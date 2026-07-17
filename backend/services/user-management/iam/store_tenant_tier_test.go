@@ -210,23 +210,39 @@ func TestReorderTenantTiersRejectsAStaleSet(t *testing.T) {
 	seedTier(t, s, "silver")
 	seedTier(t, s, "bronze")
 
+	// FIRST establish a NON-default arrangement, so "rolled back" is distinguishable from
+	// "partially committed". If every tier stayed at display_order 0, a non-transactional
+	// implementation that wrote gold→0, silver→1 and then errored would leave the exact
+	// same (display_order, token) sort as a clean rollback — and this test would pass
+	// while pinning nothing. With gold/silver/bronze at 0/1/2, a partial write of a
+	// rejected reorder moves a row to a slot that visibly changes the sort.
+	require.NoError(t, s.ReorderTenantTiers(ctx, []string{"gold", "silver", "bronze"}))
+	require.Equal(t, []string{"gold", "silver", "bronze"}, tokensOf(mustList(t, s, ctx)))
+
 	// Missing one (the stale-client case): a set of 2 against a catalog of 3.
-	err := s.ReorderTenantTiers(ctx, []string{"gold", "silver"})
+	err := s.ReorderTenantTiers(ctx, []string{"silver", "gold"})
 	require.ErrorIs(t, err, ErrTierReorderMismatch)
 
-	// An unknown token.
-	err = s.ReorderTenantTiers(ctx, []string{"gold", "silver", "platinum"})
+	// An unknown token — AND the surviving tokens are arranged so a partial commit would
+	// reorder them: bronze→0, silver→1 would flip bronze above gold before the error.
+	err = s.ReorderTenantTiers(ctx, []string{"bronze", "silver", "platinum"})
 	require.ErrorIs(t, err, ErrTierReorderMismatch)
 
-	// A duplicate (count matches, but it is not a permutation).
-	err = s.ReorderTenantTiers(ctx, []string{"gold", "gold", "silver"})
+	// A duplicate (count matches, but it is not a permutation) — likewise bronze first.
+	err = s.ReorderTenantTiers(ctx, []string{"bronze", "bronze", "silver"})
 	require.ErrorIs(t, err, ErrTierReorderMismatch)
 
-	// A rejected reorder must change nothing: the catalog is still its original order.
+	// Every rejected reorder must have changed NOTHING: still the arranged order, not the
+	// partial writes any of the attempts would have made.
+	require.Equal(t, []string{"gold", "silver", "bronze"}, tokensOf(mustList(t, s, ctx)),
+		"a refused reorder is rolled back whole — not one row moved")
+}
+
+func mustList(t *testing.T, s *Store, ctx context.Context) []TenantTier {
+	t.Helper()
 	tiers, err := s.ListTenantTiers(ctx)
 	require.NoError(t, err)
-	require.Equal(t, []string{"bronze", "gold", "silver"}, tokensOf(tiers),
-		"a refused reorder is rolled back whole — display_order is untouched")
+	return tiers
 }
 
 func tokensOf(tiers []TenantTier) []string {
