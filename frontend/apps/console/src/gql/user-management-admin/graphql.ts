@@ -53,6 +53,7 @@ export type AdminTenantCreateRequest = {
 };
 
 export type AdminTenantTierCreateRequest = {
+  color?: string | null | undefined;
   config?: string | null | undefined;
   description?: string | null | undefined;
   name?: string | null | undefined;
@@ -60,6 +61,7 @@ export type AdminTenantTierCreateRequest = {
 };
 
 export type AdminTenantTierUpdateRequest = {
+  color?: string | null | undefined;
   config?: string | null | undefined;
   description?: string | null | undefined;
   name?: string | null | undefined;

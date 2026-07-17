@@ -22,6 +22,7 @@ var (
 	ErrTenantHasMemberships = errors.New("tenant still has memberships; remove them first")
 	ErrTierNotFound         = errors.New("tenant tier not found")
 	ErrTierInUse            = errors.New("tenant tier still has tenants; move them to another tier first")
+	ErrUnknownTierColor     = errors.New("unknown tier color (must be a palette token or empty)")
 )
 
 // RoleInput is the data to create a role (ADR-008 RBAC / ADR-033). Scope is
@@ -339,6 +340,11 @@ type TierInput struct {
 	Name        string
 	Description string
 	Config      map[string]any
+	// Color is a palette token (iam.ValidTierColor) or "" for no pill. Presentation
+	// only (ADR-065 S5c). DisplayOrder is not settable here — a new tier lands at 0 and
+	// is arranged with ReorderTenantTiers, so ordering is one gesture rather than a
+	// number an operator hand-manages against collisions.
+	Color string
 }
 
 // TierMutableInput is the data to update a tier: its token is fixed. Everything
@@ -363,6 +369,11 @@ type TierMutableInput struct {
 	// A non-nil empty map clears them (re-inheriting the platform default), so
 	// "clear" stays expressible — just never by accident.
 	Config *map[string]any
+	// Color is a full replace like Name, not a patch like Config: it is presentation, so
+	// clearing it (to "") is cosmetic and instantly visible, never a silent re-pricing.
+	// A palette token or "" (iam.ValidTierColor). DisplayOrder is not here — it is set
+	// by ReorderTenantTiers, never by editing one tier in isolation.
+	Color string
 }
 
 // ListTenantTiers returns the tier catalog (ADR-065).
@@ -387,9 +398,13 @@ func (s *Service) CreateTenantTier(ctx context.Context, in TierInput) (*iam.Tena
 	if err := iam.ValidateTierConfig(in.Config); err != nil {
 		return nil, err
 	}
+	if !iam.ValidTierColor(in.Color) {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownTierColor, in.Color)
+	}
 	t := &iam.TenantTier{
 		Token:  in.Token,
 		Config: in.Config,
+		Color:  in.Color,
 		NamedEntity: rdb.NamedEntity{
 			Name: rdb.NullStrOf(&in.Name), Description: rdb.NullStrOf(&in.Description),
 		},
@@ -415,12 +430,16 @@ func (s *Service) UpdateTenantTier(ctx context.Context, token string, in TierMut
 			return nil, err
 		}
 	}
+	if !iam.ValidTierColor(in.Color) {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownTierColor, in.Color)
+	}
 	t, err := s.loadTier(ctx, token)
 	if err != nil {
 		return nil, err
 	}
 	t.Name = rdb.NullStrOf(&in.Name)
 	t.Description = rdb.NullStrOf(&in.Description)
+	t.Color = in.Color
 	if in.Config != nil {
 		t.Config = *in.Config
 	}
@@ -428,6 +447,14 @@ func (s *Service) UpdateTenantTier(ctx context.Context, token string, in TierMut
 		return nil, err
 	}
 	return s.iam.TenantTierByToken(ctx, token)
+}
+
+// ReorderTenantTiers sets the operator's listing order for the whole catalog (ADR-065
+// S5c). orderedTokens must be exactly the current tiers — a stale client is refused
+// (iam.ErrTierReorderMismatch) rather than silently dropping a tier it had not loaded.
+// Presentation only: it moves nothing but where tiers appear in a list.
+func (s *Service) ReorderTenantTiers(ctx context.Context, orderedTokens []string) error {
+	return s.iam.ReorderTenantTiers(ctx, orderedTokens)
 }
 
 // DeleteTenantTier removes a tier. Idempotent: a missing tier returns (false, nil).

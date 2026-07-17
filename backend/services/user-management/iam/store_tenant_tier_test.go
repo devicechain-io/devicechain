@@ -175,3 +175,64 @@ func TestListTenantsPreloadsTheTier(t *testing.T) {
 	require.NotNil(t, tenants[0].Tier, "the admin list resolves each tenant's tier + effective settings")
 	require.Equal(t, TierGoldToken, tenants[0].Tier.Token)
 }
+
+// TestListTenantTiersOrdersByDisplayOrder pins the S5c sort: display_order ascending,
+// ties broken by token. Before anyone arranges the tiers they all sit at 0, so the
+// listing must be alphabetical rather than insertion-ordered.
+func TestListTenantTiersOrdersByDisplayOrder(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Insert out of both alphabetical and desired order.
+	seedTier(t, s, "silver")
+	seedTier(t, s, "bronze")
+	seedTier(t, s, "gold")
+
+	tiers, err := s.ListTenantTiers(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"bronze", "gold", "silver"},
+		tokensOf(tiers), "unarranged tiers (all display_order 0) sort alphabetically")
+
+	require.NoError(t, s.ReorderTenantTiers(ctx, []string{"gold", "silver", "bronze"}))
+	tiers, err = s.ListTenantTiers(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"gold", "silver", "bronze"},
+		tokensOf(tiers), "after reorder the list follows the arranged order")
+}
+
+// TestReorderTenantTiersRejectsAStaleSet is the optimistic-concurrency guard: a token
+// list that is not exactly the current catalog is refused, so a client that has not
+// seen a just-added tier cannot silently drop it, and the whole reorder is rolled back.
+func TestReorderTenantTiersRejectsAStaleSet(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedTier(t, s, "gold")
+	seedTier(t, s, "silver")
+	seedTier(t, s, "bronze")
+
+	// Missing one (the stale-client case): a set of 2 against a catalog of 3.
+	err := s.ReorderTenantTiers(ctx, []string{"gold", "silver"})
+	require.ErrorIs(t, err, ErrTierReorderMismatch)
+
+	// An unknown token.
+	err = s.ReorderTenantTiers(ctx, []string{"gold", "silver", "platinum"})
+	require.ErrorIs(t, err, ErrTierReorderMismatch)
+
+	// A duplicate (count matches, but it is not a permutation).
+	err = s.ReorderTenantTiers(ctx, []string{"gold", "gold", "silver"})
+	require.ErrorIs(t, err, ErrTierReorderMismatch)
+
+	// A rejected reorder must change nothing: the catalog is still its original order.
+	tiers, err := s.ListTenantTiers(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"bronze", "gold", "silver"}, tokensOf(tiers),
+		"a refused reorder is rolled back whole — display_order is untouched")
+}
+
+func tokensOf(tiers []TenantTier) []string {
+	out := make([]string, len(tiers))
+	for i, t := range tiers {
+		out[i] = t.Token
+	}
+	return out
+}

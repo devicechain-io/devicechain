@@ -151,6 +151,22 @@ type TenantTier struct {
 
 	Token  string         `gorm:"uniqueIndex;not null;size:128"`
 	Config map[string]any `gorm:"serializer:json"`
+
+	// PRESENTATION ONLY (ADR-065 S5c). Neither is ever read to make a decision — they
+	// exist so the console can list tiers the way an operator arranged them and show a
+	// colored pill beside a tenant. Added by NewTierPresentationSchema.
+	//
+	// DisplayOrder is the operator's chosen listing order, low to high, ties broken by
+	// token. It is NOT a rank and does NOT imply nesting: a higher-placed tier does not
+	// "contain" a lower one. ADR-065 rejected a tier ORDINAL for exactly this reason —
+	// packaging does not nest, two tiers can offer almost the same set arranged
+	// differently, and neither contains the other. ADR-063's shed priority is a separate
+	// field with its own meaning; do not conflate them, and do not read this one for
+	// anything but sort order.
+	DisplayOrder int `gorm:"not null;default:0"`
+	// Color is a token into the named palette (see tier_color.go), or "" for no pill.
+	// Validated against ValidTierColor on write; never a raw hex value.
+	Color string `gorm:"not null;default:'';size:32"`
 }
 
 func (TenantTier) TableName() string { return "iam_tenant_tiers" }
