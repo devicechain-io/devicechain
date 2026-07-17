@@ -5,12 +5,20 @@ package iam
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+// ErrTierReorderMismatch is returned by ReorderTenantTiers when the supplied token list
+// is not exactly the current tier set — a duplicate, an unknown token, or the wrong
+// count. It is what turns the all-or-nothing requirement into an optimistic-concurrency
+// guard against a stale client.
+var ErrTierReorderMismatch = errors.New("reorder token list does not match the current tiers")
 
 // Store is the persistence layer for the iam model. The entities are
 // instance-global (not tenant-scoped), so every access goes through the system
@@ -332,12 +340,68 @@ func (s *Store) DeleteTenant(ctx context.Context, t *Tenant) error {
 	return s.sys(ctx).Unscoped().Delete(t).Error
 }
 
-// ListTenantTiers returns the tier catalog (ADR-065), ordered by token for a
-// stable listing.
+// ListTenantTiers returns the tier catalog (ADR-065) in the operator's arranged order
+// (ADR-065 S5c): display_order ascending, ties broken by token so the listing is stable
+// and, before anyone arranges the tiers, alphabetical rather than insertion-ordered.
 func (s *Store) ListTenantTiers(ctx context.Context) ([]TenantTier, error) {
 	var tiers []TenantTier
-	err := s.sys(ctx).Order("token").Find(&tiers).Error
+	err := s.sys(ctx).Order("display_order, token").Find(&tiers).Error
 	return tiers, err
+}
+
+// ReorderTenantTiers sets display_order to match the given token order (ADR-065 S5c):
+// the token at index i gets display_order i. It is all-or-nothing — the tokens must be
+// exactly the current catalog, no more and no fewer — so a stale client (one that has
+// not seen a tier another operator just added, or just deleted) is refused rather than
+// silently dropping the tier it could not see to the top. That makes the full-set
+// requirement a free optimistic-concurrency check, not busywork.
+//
+// Presentation only: display_order feeds ListTenantTiers' sort and nothing else. See
+// TenantTier.DisplayOrder for why it is not a rank.
+func (s *Store) ReorderTenantTiers(ctx context.Context, orderedTokens []string) error {
+	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		// FOR UPDATE on the read: two concurrent reorders now serialize on these rows
+		// instead of updating them in different orders and deadlocking (Postgres would
+		// kill one with a raw deadlock error, not ErrTierReorderMismatch). The second
+		// reorder blocks until the first commits, then sees its result.
+		var tiers []TenantTier
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Find(&tiers).Error; err != nil {
+			return err
+		}
+
+		// VALIDATE THE WHOLE PERMUTATION BEFORE WRITING ANYTHING. The transaction would
+		// roll back a partial write anyway, but validating first means a rejected reorder
+		// never issues a single UPDATE — the guarantee does not lean on rollback alone,
+		// and the writes below run only once the input is known to be a true permutation.
+		if len(tiers) != len(orderedTokens) {
+			return fmt.Errorf("%w: reorder must list every tier exactly once (have %d, got %d)",
+				ErrTierReorderMismatch, len(tiers), len(orderedTokens))
+		}
+		byToken := make(map[string]*TenantTier, len(tiers))
+		for i := range tiers {
+			byToken[tiers[i].Token] = &tiers[i]
+		}
+		seen := make(map[string]bool, len(orderedTokens))
+		for _, tok := range orderedTokens {
+			if _, ok := byToken[tok]; !ok {
+				return fmt.Errorf("%w: %q is not a current tier", ErrTierReorderMismatch, tok)
+			}
+			// A duplicate with the count already equal to the catalog size means another
+			// token is absent — so this plus the unknown-token check guarantee a true
+			// permutation, i.e. the writes below assign a contiguous 0..n-1.
+			if seen[tok] {
+				return fmt.Errorf("%w: %q listed more than once", ErrTierReorderMismatch, tok)
+			}
+			seen[tok] = true
+		}
+
+		for i, tok := range orderedTokens {
+			if err := tx.Model(byToken[tok]).Update("display_order", i).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // TenantTierByToken resolves a single tier by its token, or returns

@@ -175,3 +175,80 @@ func TestListTenantsPreloadsTheTier(t *testing.T) {
 	require.NotNil(t, tenants[0].Tier, "the admin list resolves each tenant's tier + effective settings")
 	require.Equal(t, TierGoldToken, tenants[0].Tier.Token)
 }
+
+// TestListTenantTiersOrdersByDisplayOrder pins the S5c sort: display_order ascending,
+// ties broken by token. Before anyone arranges the tiers they all sit at 0, so the
+// listing must be alphabetical rather than insertion-ordered.
+func TestListTenantTiersOrdersByDisplayOrder(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Insert out of both alphabetical and desired order.
+	seedTier(t, s, "silver")
+	seedTier(t, s, "bronze")
+	seedTier(t, s, "gold")
+
+	tiers, err := s.ListTenantTiers(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"bronze", "gold", "silver"},
+		tokensOf(tiers), "unarranged tiers (all display_order 0) sort alphabetically")
+
+	require.NoError(t, s.ReorderTenantTiers(ctx, []string{"gold", "silver", "bronze"}))
+	tiers, err = s.ListTenantTiers(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"gold", "silver", "bronze"},
+		tokensOf(tiers), "after reorder the list follows the arranged order")
+}
+
+// TestReorderTenantTiersRejectsAStaleSet is the optimistic-concurrency guard: a token
+// list that is not exactly the current catalog is refused, so a client that has not
+// seen a just-added tier cannot silently drop it, and the whole reorder is rolled back.
+func TestReorderTenantTiersRejectsAStaleSet(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedTier(t, s, "gold")
+	seedTier(t, s, "silver")
+	seedTier(t, s, "bronze")
+
+	// FIRST establish a NON-default arrangement, so "rolled back" is distinguishable from
+	// "partially committed". If every tier stayed at display_order 0, a non-transactional
+	// implementation that wrote gold→0, silver→1 and then errored would leave the exact
+	// same (display_order, token) sort as a clean rollback — and this test would pass
+	// while pinning nothing. With gold/silver/bronze at 0/1/2, a partial write of a
+	// rejected reorder moves a row to a slot that visibly changes the sort.
+	require.NoError(t, s.ReorderTenantTiers(ctx, []string{"gold", "silver", "bronze"}))
+	require.Equal(t, []string{"gold", "silver", "bronze"}, tokensOf(mustList(t, s, ctx)))
+
+	// Missing one (the stale-client case): a set of 2 against a catalog of 3.
+	err := s.ReorderTenantTiers(ctx, []string{"silver", "gold"})
+	require.ErrorIs(t, err, ErrTierReorderMismatch)
+
+	// An unknown token — AND the surviving tokens are arranged so a partial commit would
+	// reorder them: bronze→0, silver→1 would flip bronze above gold before the error.
+	err = s.ReorderTenantTiers(ctx, []string{"bronze", "silver", "platinum"})
+	require.ErrorIs(t, err, ErrTierReorderMismatch)
+
+	// A duplicate (count matches, but it is not a permutation) — likewise bronze first.
+	err = s.ReorderTenantTiers(ctx, []string{"bronze", "bronze", "silver"})
+	require.ErrorIs(t, err, ErrTierReorderMismatch)
+
+	// Every rejected reorder must have changed NOTHING: still the arranged order, not the
+	// partial writes any of the attempts would have made.
+	require.Equal(t, []string{"gold", "silver", "bronze"}, tokensOf(mustList(t, s, ctx)),
+		"a refused reorder is rolled back whole — not one row moved")
+}
+
+func mustList(t *testing.T, s *Store, ctx context.Context) []TenantTier {
+	t.Helper()
+	tiers, err := s.ListTenantTiers(ctx)
+	require.NoError(t, err)
+	return tiers
+}
+
+func tokensOf(tiers []TenantTier) []string {
+	out := make([]string, len(tiers))
+	for i, t := range tiers {
+		out[i] = t.Token
+	}
+	return out
+}

@@ -31,6 +31,10 @@ func (r *AdminTenantTierResolver) Description() *string { return util.NullStr(r.
 // unset — the same shape as AdminTenant.config.
 func (r *AdminTenantTierResolver) Config() (*string, error) { return marshalConfig(r.M.Config) }
 
+// DisplayOrder and Color are presentation only (ADR-065 S5c) — see iam.TenantTier.
+func (r *AdminTenantTierResolver) DisplayOrder() int32 { return int32(r.M.DisplayOrder) }
+func (r *AdminTenantTierResolver) Color() string       { return r.M.Color }
+
 // TenantCount counts the tenants packaged at this tier. Resolved lazily (it takes
 // ctx and runs a query) so that listing tenants — where every row carries its tier
 // — does not fan out into a count per row; only a caller that actually asks for the
@@ -76,6 +80,7 @@ type adminTenantTierCreateInput struct {
 	Name        *string
 	Description *string
 	Config      *string
+	Color       *string
 }
 
 // adminTenantTierUpdateInput mirrors AdminTenantTierUpdateRequest.
@@ -83,6 +88,7 @@ type adminTenantTierUpdateInput struct {
 	Name        *string
 	Description *string
 	Config      *string
+	Color       *string
 }
 
 // CreateTenantTier registers a tier (requires tenant:write).
@@ -101,6 +107,7 @@ func (r *AdminResolver) CreateTenantTier(ctx context.Context, args struct {
 		Name:        strOrEmpty(args.Request.Name),
 		Description: strOrEmpty(args.Request.Description),
 		Config:      cfg,
+		Color:       strOrEmpty(args.Request.Color),
 	}))
 }
 
@@ -136,7 +143,49 @@ func (r *AdminResolver) UpdateTenantTier(ctx context.Context, args struct {
 		Name:        strOrEmpty(args.Request.Name),
 		Description: strOrEmpty(args.Request.Description),
 		Config:      cfg,
+		Color:       strOrEmpty(args.Request.Color),
 	}))
+}
+
+// ReorderTenantTiers sets the operator's listing order for the whole catalog (requires
+// tenant:write) and returns the catalog in the new order. Presentation only.
+func (r *AdminResolver) ReorderTenantTiers(ctx context.Context, args struct {
+	OrderedTokens []string
+}) ([]*AdminTenantTierResolver, error) {
+	if err := auth.Authorize(ctx, auth.TenantWrite); err != nil {
+		return nil, err
+	}
+	if err := r.getAdminService(ctx).ReorderTenantTiers(ctx, args.OrderedTokens); err != nil {
+		return nil, err
+	}
+	// Build the payload from the service directly rather than calling r.TenantTiers, which
+	// re-authorizes tenant:read — a tenant:write-only token would then get an error
+	// response for a mutation that already committed. The sibling create/update resolvers
+	// return through the service the same way.
+	tiers, err := r.getAdminService(ctx).ListTenantTiers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*AdminTenantTierResolver, 0, len(tiers))
+	for i := range tiers {
+		out = append(out, &AdminTenantTierResolver{M: tiers[i]})
+	}
+	return out, nil
+}
+
+// TierColorPaletteResolver resolves the TierColorPalette type — the closed color
+// vocabulary a tier may be assigned (ADR-065 S5c).
+type TierColorPaletteResolver struct{ names []string }
+
+func (r *TierColorPaletteResolver) Colors() []string { return r.names }
+
+// TierColorPalette returns the tier color palette (requires tenant:read) so the console
+// picker offers exactly what the server validates on write.
+func (r *AdminResolver) TierColorPalette(ctx context.Context) (*TierColorPaletteResolver, error) {
+	if err := auth.Authorize(ctx, auth.TenantRead); err != nil {
+		return nil, err
+	}
+	return &TierColorPaletteResolver{names: iam.TierColors()}, nil
 }
 
 // DeleteTenantTier removes a tier; returns whether one was removed (requires

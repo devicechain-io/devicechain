@@ -4,7 +4,6 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { Trash2, Users } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
-import { SectionPanel } from '@/components/ui/section-panel';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -15,6 +14,8 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { listTenantTierCatalog, deleteTenantTier } from '@/lib/api/admin';
 import { BackLink, errMessage, useReload } from '@/routes/common';
 import { TierForm } from '@/routes/admin/tiers/TierForm';
+import { TierAiModelsPanel } from '@/routes/admin/tiers/TierAiModelsPanel';
+import { TierPill } from '@/components/tiers/TierPill';
 
 export default function TierDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
@@ -30,14 +31,21 @@ export default function TierDetailPage() {
 
   const back = <BackLink to="/admin/tiers">Tiers</BackLink>;
 
-  if (loading) {
+  // Gate the spinner and error on the FIRST load only (no data yet). Saving reloads this
+  // query, and useQuery re-enters `loading` on every refetch while keeping the prior
+  // `tiers` — so a bare `if (loading)` unmounted the whole page (and TierForm) to a
+  // spinner after every save, remounting the form on the default Basic tab and dumping an
+  // operator who saved from Settings back to Basic. With `!tiers` the form stays mounted
+  // and the active tab is preserved; the refetch repaints in place. (Same first-load
+  // gating the matrix page and TierAiModelsPanel use.)
+  if (loading && !tiers) {
     return (
       <PageShell title={token} action={back}>
         <LoadingState description="Loading tier…" />
       </PageShell>
     );
   }
-  if (error) {
+  if (error && !tiers) {
     return (
       <PageShell title={token} action={back}>
         <ErrorState description={error} />
@@ -78,13 +86,16 @@ export default function TierDetailPage() {
 
   return (
     <PageShell
-      title={token}
+      // The display name is the title; the token rides beside it as its pill, and the
+      // tenant count as a badge — the "to the right" metadata, matching the other detail
+      // pages (a tier can be unnamed, so fall back to the token as the title too).
+      title={tier.name || tier.token}
       description={
         <div className="mt-1 flex items-center gap-2">
+          <TierPill label={tier.token} color={tier.color} />
           <Badge variant="secondary">
             <Users size={12} /> {tier.tenantCount} {tier.tenantCount === 1 ? 'tenant' : 'tenants'}
           </Badge>
-          {tier.name && <span className="text-sm text-muted-foreground">{tier.name}</span>}
         </div>
       }
       action={
@@ -96,7 +107,7 @@ export default function TierDetailPage() {
         </div>
       }
     >
-      <div className="space-y-6">
+      <div className="space-y-4">
         {inUse && (
           <p className="text-sm text-muted-foreground">
             {tier.tenantCount} {tier.tenantCount === 1 ? 'tenant is' : 'tenants are'} packaged at this
@@ -105,15 +116,20 @@ export default function TierDetailPage() {
             be deleted until {tier.tenantCount === 1 ? 'it is' : 'they are'} moved elsewhere.
           </p>
         )}
-        <SectionPanel>
-          <TierForm
-            tier={tier}
-            onDone={(m) => {
-              toast(m);
-              reload();
-            }}
-          />
-        </SectionPanel>
+        {/* Tabbed: Basic + Settings edit the tier (one atomic save), and the AI-models
+            tab configures which models THIS tier grants — the same control the cross-tier
+            packaging matrix uses, scoped to one tier. TierForm renders its own per-tab
+            SectionPanels, so it is not wrapped here. */}
+        <TierForm
+          tier={tier}
+          onDone={(m) => {
+            toast(m);
+            reload();
+          }}
+          aiModelsPanel={
+            <TierAiModelsPanel token={tier.token} name={tier.name} tenantCount={tier.tenantCount} />
+          }
+        />
       </div>
     </PageShell>
   );

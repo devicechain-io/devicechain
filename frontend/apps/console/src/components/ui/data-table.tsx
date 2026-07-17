@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { forwardRef } from 'react';
 import { cn } from '@/lib/utils';
 
 export function DataTable({ children, className }: { children: React.ReactNode; className?: string }) {
@@ -39,13 +40,17 @@ export function DataTableBody({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function DataTableRow({ children, className, ...props }: React.HTMLAttributes<HTMLTableRowElement>) {
-  return (
-    <tr className={cn('hover:bg-muted/50 transition-colors', className)} {...props}>
-      {children}
-    </tr>
-  );
-}
+// forwardRef so a sortable row (dnd-kit's setNodeRef) can attach to the <tr> — the
+// drag-reorderable Tiers list needs it; a plain caller passes no ref and is unaffected.
+export const DataTableRow = forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTMLTableRowElement>>(
+  function DataTableRow({ children, className, ...props }, ref) {
+    return (
+      <tr ref={ref} className={cn('hover:bg-muted/50 transition-colors', className)} {...props}>
+        {children}
+      </tr>
+    );
+  },
+);
 
 export function DataTableCell({ children, className }: { children: React.ReactNode; className?: string }) {
   return (

@@ -46,14 +46,31 @@ type AdminTenantTier {
     # How many tenants are packaged at this tier. A tier with tenants cannot be
     # deleted (its tenants' tier is a required FK).
     tenantCount: Int!
+    # PRESENTATION ONLY (ADR-065 S5c). The operator's listing order (low to high; the
+    # tenantTiers query returns tiers already sorted by it) and a palette-token color for
+    # the tier's pill (one of tierColorPalette.colors, or "" for no pill). Neither is read to
+    # make a decision — displayOrder is not a rank and implies no nesting between tiers;
+    # shed priority is a separate concern.
+    displayOrder: Int!
+    color: String!
 }
 
-# Data to create a tier. config is an optional JSON object string.
+# The palette a tier's color is chosen from (ADR-065 S5c) — a closed, named vocabulary,
+# not free-form hex, so a pill's contrast is guaranteed in both themes and the value is
+# validated on write. The console maps each name to a theme-aware swatch.
+type TierColorPalette {
+    colors: [String!]!
+}
+
+# Data to create a tier. config is an optional JSON object string. color is a palette
+# token (see tierColorPalette) or omitted/"" for no pill; displayOrder is not set here —
+# a new tier lands last and is arranged with reorderTenantTiers.
 input AdminTenantTierCreateRequest {
     token: String!
     name: String
     description: String
     config: String
+    color: String
 }
 
 # Data to update a tier (its token is fixed). Editing a tier changes behavior for
@@ -68,6 +85,9 @@ input AdminTenantTierUpdateRequest {
     name: String
     description: String
     config: String
+    # A palette token or "" for no pill. A full replace like name (presentation, so
+    # clearing it is cosmetic), not a patch like config.
+    color: String
 }
 
 # A control-plane tenant record (ADR-033): a registry entry, not a provisioned
@@ -382,6 +402,10 @@ type Query {
     # tier editor can offer exactly the settings a tier may carry rather than keep
     # its own list of them. Static for a given build; not tenant-specific.
     governanceDimensions: [AdminGovernanceDimension!]!
+    # The tier color palette (requires tenant:read) — the closed set a tier's color is
+    # chosen from, so the console picker offers exactly what the server will accept.
+    # Static for a given build.
+    tierColorPalette: TierColorPalette!
     # List the role catalog, optionally filtered to a scope (requires role:read).
     roles(scope: String): [AdminRole!]!
     # The authority vocabulary (sorted, includes "*"), for offering a checklist when
@@ -437,6 +461,12 @@ type Mutation {
     # Delete a tier by token; returns whether one was removed. Refused while any
     # tenant is still packaged at it (requires tenant:write).
     deleteTenantTier(token: String!): Boolean!
+    # Set the operator's listing order for the whole tier catalog (requires
+    # tenant:write). orderedTokens must be exactly the current tiers — a stale client
+    # (one that has not seen a tier just added or deleted) is refused rather than
+    # silently dropping it. Presentation only: it changes where tiers appear, nothing
+    # about what any tier grants.
+    reorderTenantTiers(orderedTokens: [String!]!): [AdminTenantTier!]!
 
     # Create a tenant, enabled by default, at the requested tier (requires tenant:write).
     createTenant(request: AdminTenantCreateRequest!): AdminTenant!

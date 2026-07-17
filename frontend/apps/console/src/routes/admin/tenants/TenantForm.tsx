@@ -1,19 +1,42 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
+import { Combobox } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { SectionPanel } from '@/components/ui/section-panel';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useQuery } from '@/lib/hooks/use-query';
 import { createTenant, updateTenant, listTenantTiers, type AdminTenant } from '@/lib/api/admin';
 import { Textarea, errMessage } from '@/routes/common';
 
 // TenantForm creates a tenant (tenant absent) or edits one (tenant present, with
 // its token fixed). Shared by the new + detail pages.
-export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (message: string) => void }) {
+//
+// LAYOUT. Create is a single flat form. Edit is TABBED: Basic (token/name/tier/config)
+// and Settings (the governance ceilings + AI consent), plus an Effective-settings tab
+// whose content the caller passes in (effectiveSettingsPanel) since it is a read-only
+// VIEW of the result, not another editor. Basic and Settings are two VIEWS OF ONE SAVE,
+// not two independent forms: a tenant update sends name/tier/config and the ceilings
+// together, so both tabs share this component's state and its single `submit`, and each
+// renders the same Save button. Splitting them into separate submits could let one tab's
+// save omit — and so silently reset — a field the other tab owns (the AI-consent flag is
+// sent explicitly on every save, so a partial payload is not merely stale, it flips it).
+export function TenantForm({
+  tenant,
+  onDone,
+  effectiveSettingsPanel,
+}: {
+  tenant?: AdminTenant;
+  onDone: (message: string) => void;
+  // When provided (edit only), the form renders tabbed and this is the read-only
+  // Effective-settings tab.
+  effectiveSettingsPanel?: ReactNode;
+}) {
   const editing = tenant != null;
   const [token, setToken] = useState(tenant?.token ?? '');
   const [name, setName] = useState(tenant?.name ?? '');
@@ -77,9 +100,10 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
     }
   };
 
-  return (
-    <div className="space-y-4">
-      {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+  // The identity fields (Basic tab / top of the create form): token, name, tier, config.
+  // Held as a fragment so create renders it inline and edit renders it in a tab.
+  const identityFields = (
+    <>
       <FormField
         label="Token"
         htmlFor="t-token"
@@ -114,19 +138,23 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
             : 'The packaging this tenant is held to. Sets its defaults across the platform; individual settings below can still override them.'
         }
       >
-        <select
+        {/* Tiers arrive in the operator's display order; the picker preserves it.
+            A tier's name is the label, its token the muted second line — the same
+            two facts, in the same order, an operator sees everywhere else. */}
+        <Combobox
           id="t-tier"
           value={tierToken}
-          onChange={(e) => setTierToken(e.target.value)}
-          className="h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <option value="">Select a tier…</option>
-          {(tiers ?? []).map((t) => (
-            <option key={t.token} value={t.token}>
-              {t.name || t.token}
-            </option>
-          ))}
-        </select>
+          onChange={setTierToken}
+          placeholder="Select a tier…"
+          searchPlaceholder="Search tiers…"
+          emptyMessage="No tiers."
+          allowClear={false}
+          options={(tiers ?? []).map((t) => ({
+            value: t.token,
+            label: t.name || t.token,
+            description: t.name ? t.token : undefined,
+          }))}
+        />
         {tiersError && <p className="mt-1 text-sm text-destructive">Tiers unavailable ({tiersError}).</p>}
       </FormField>
       <FormField label="Config (JSON)" htmlFor="t-config" description="Optional freeform JSON object.">
@@ -137,6 +165,12 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
           onChange={(e) => setConfig(e.target.value)}
         />
       </FormField>
+    </>
+  );
+
+  // The governance ceilings + AI consent (Settings tab / lower half of the create form).
+  const settingsFields = (
+    <>
       <div className="grid grid-cols-2 gap-2">
         <FormField
           label="Ingest rate (events/sec)"
@@ -245,13 +279,69 @@ export function TenantForm({ tenant, onDone }: { tenant?: AdminTenant; onDone: (
           />
         </FormField>
       </div>
-      <div className="flex gap-2">
-        {/* A tenant is never un-tiered, so submit stays disabled until one is
-            picked — the client-side half of the required FK behind it. */}
-        <Button onClick={submit} loading={busy} disabled={busy || !tierToken || (!editing && !token.trim())}>
-          {editing ? 'Save changes' : 'Create tenant'}
-        </Button>
+    </>
+  );
+
+  // One handler, so the button is the same act wherever it is rendered (both edit tabs).
+  // A tenant is never un-tiered, so submit stays disabled until one is picked — the
+  // client-side half of the required FK behind it.
+  const saveButton = (
+    <div className="flex gap-2">
+      <Button onClick={submit} loading={busy} disabled={busy || !tierToken || (!editing && !token.trim())}>
+        {editing ? 'Save changes' : 'Create tenant'}
+      </Button>
+    </div>
+  );
+
+  const errorBanner = formError && (
+    <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />
+  );
+
+  // Create: one flat form. The caller (NewTenantPage) supplies the SectionPanel wrapper.
+  if (!editing || effectiveSettingsPanel === undefined) {
+    return (
+      <div className="space-y-4">
+        {errorBanner}
+        {identityFields}
+        {settingsFields}
+        {saveButton}
       </div>
+    );
+  }
+
+  // Edit: tabbed. Basic and Settings are two views of one save (see the component doc), so
+  // each tab renders the same Save button and both persist the whole tenant. Each tab owns
+  // its own SectionPanel, so the detail page renders this form WITHOUT wrapping it.
+  return (
+    <div className="space-y-4">
+      {errorBanner}
+      <Tabs defaultValue="basic">
+        <TabsList>
+          <TabsTrigger value="basic">Basic</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+          <TabsTrigger value="effective">Effective settings</TabsTrigger>
+        </TabsList>
+        <TabsContent value="basic">
+          <SectionPanel>
+            <div className="space-y-4">
+              {identityFields}
+              {saveButton}
+            </div>
+          </SectionPanel>
+        </TabsContent>
+        <TabsContent value="settings">
+          <SectionPanel>
+            <div className="space-y-4">
+              {settingsFields}
+              {saveButton}
+            </div>
+          </SectionPanel>
+        </TabsContent>
+        {/* Read-only view of what the Settings tab resolves to, folded onto the tier. */}
+        <TabsContent value="effective">
+          <SectionPanel title="Effective settings">{effectiveSettingsPanel}</SectionPanel>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

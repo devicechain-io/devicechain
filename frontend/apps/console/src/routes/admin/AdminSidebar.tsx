@@ -5,7 +5,6 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   Building2,
   Layers,
-  Package,
   ScrollText,
   Settings,
   ShieldCheck,
@@ -37,9 +36,9 @@ const NAV = [
   { label: 'Identities', href: '/admin/identities', icon: Users },
   { label: 'Roles', href: '/admin/roles', icon: ShieldCheck },
   { label: 'AI Providers', href: '/admin/ai-providers', icon: Sparkles },
-  // Registering a model and selling it are separate acts (ADR-065), so they are separate
-  // screens: the provider list is the model's config, packaging is which tiers get it.
-  { label: 'AI Packaging', href: '/admin/ai-packaging', icon: Package },
+  // AI packaging (which models each tier grants) is not a top-level screen: it is
+  // configuration OF the tiers, reached from a tier's detail page. The route still exists
+  // (a cross-tier comparison matrix); it is just not its own nav entry.
   { label: 'Audit', href: '/admin/audit', icon: ScrollText },
   { label: 'Settings', href: '/admin/settings', icon: Settings },
 ];

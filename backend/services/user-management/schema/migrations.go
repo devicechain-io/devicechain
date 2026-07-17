@@ -19,14 +19,18 @@ import (
 // (backend/core/rdb). Don't enable that validation without first reconciling those
 // orphaned rows.
 //
-// Until v1.0.0 freezes this baseline, a purely ADDITIVE model change (a new column,
-// a new table) needs no migration at all — the baseline's AutoMigrate converges an
-// existing database on the current structs. Append a migration here only for what
-// AutoMigrate cannot express: a backfill, or a constraint applied over existing
-// rows. Anything appended must be individually re-runnable, since migrations run
-// with UseTransaction:false and replay from the top after a failure.
+// CHANGING THE SCHEMA: append a migration here. Do NOT rely on the baseline's
+// AutoMigrate to converge a model change, and never edit the baseline — it builds
+// from its own frozen snapshot types precisely so it does not track the live models
+// (see baseline_snapshot.go and .agent-os/product/data-modeling.md). A new migration
+// declares its own snapshot of just what it touches. Anything appended must be
+// individually re-runnable, since migrations run with UseTransaction:false and replay
+// from the top after a failure. These are all folded back into the baseline at the GA
+// squash.
 var (
 	Migrations = []*gormigrate.Migration{
 		NewBaselineSchema(),
+		// ADR-065 S5c: display_order + color on iam_tenant_tiers (presentation only).
+		NewTierPresentationSchema(),
 	}
 )

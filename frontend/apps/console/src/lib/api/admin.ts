@@ -106,6 +106,7 @@ const TENANTS = graphql(`
       tier {
         token
         name
+        color
       }
       config
       ingestMessagesPerSecond
@@ -185,6 +186,8 @@ const TENANT_TIERS = graphql(`
       token
       name
       description
+      color
+      displayOrder
     }
   }
 `);
@@ -206,6 +209,8 @@ const TENANT_TIER_CATALOG = graphql(`
       name
       description
       config
+      color
+      displayOrder
       tenantCount
       createdAt
       updatedAt
@@ -228,6 +233,8 @@ const CREATE_TENANT_TIER = graphql(`
       name
       description
       config
+      color
+      displayOrder
       tenantCount
       createdAt
       updatedAt
@@ -248,6 +255,8 @@ const UPDATE_TENANT_TIER = graphql(`
       name
       description
       config
+      color
+      displayOrder
       tenantCount
       createdAt
       updatedAt
@@ -280,6 +289,47 @@ const DELETE_TENANT_TIER = graphql(`
 export async function deleteTenantTier(token: string): Promise<boolean> {
   const data = await gql('user-management/admin', DELETE_TENANT_TIER, { token }, { identity: true });
   return data.deleteTenantTier;
+}
+
+// The tier color palette (ADR-065 S5c): the closed set of tokens a tier's color may be,
+// so the picker offers exactly what the server validates on write. Static for a build.
+const TIER_COLOR_PALETTE = graphql(`
+  query TierColorPalette {
+    tierColorPalette {
+      colors
+    }
+  }
+`);
+
+export async function listTierColorPalette(): Promise<string[]> {
+  const data = await gql('user-management/admin', TIER_COLOR_PALETTE, undefined, { identity: true });
+  return data.tierColorPalette.colors;
+}
+
+const REORDER_TENANT_TIERS = graphql(`
+  mutation ReorderTenantTiers($orderedTokens: [String!]!) {
+    reorderTenantTiers(orderedTokens: $orderedTokens) {
+      id
+      token
+      displayOrder
+    }
+  }
+`);
+
+// Set the operator's listing order for the whole catalog. orderedTokens MUST be exactly
+// the current tiers — the server refuses a stale set (one missing a tier just added, or
+// naming one just deleted) rather than silently dropping it, which is a free
+// optimistic-concurrency guard. Presentation only. Returns the tiers in the new order.
+export async function reorderTenantTiers(
+  orderedTokens: string[],
+): Promise<{ token: string; displayOrder: number }[]> {
+  const data = await gql(
+    'user-management/admin',
+    REORDER_TENANT_TIERS,
+    { orderedTokens },
+    { identity: true },
+  );
+  return data.reorderTenantTiers;
 }
 
 const ROLES = graphql(`
@@ -606,6 +656,7 @@ const CREATE_TENANT = graphql(`
       tier {
         token
         name
+        color
       }
       config
       ingestMessagesPerSecond
@@ -636,6 +687,7 @@ const UPDATE_TENANT = graphql(`
       tier {
         token
         name
+        color
       }
       config
       ingestMessagesPerSecond
@@ -666,6 +718,7 @@ const SET_TENANT_ENABLED = graphql(`
       tier {
         token
         name
+        color
       }
       config
       ingestMessagesPerSecond

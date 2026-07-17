@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/data-table';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listTenants } from '@/lib/api/admin';
+import { TierPill } from '@/components/tiers/TierPill';
 import { StatusBadge, rowLinkProps } from '@/routes/common';
 
 export default function TenantsPage() {
@@ -58,8 +59,12 @@ export default function TenantsPage() {
                 >
                   <DataTableCell className="font-medium">{t.token}</DataTableCell>
                   <DataTableCell>{t.name ?? '—'}</DataTableCell>
-                  {/* Never blank: the tier is a required FK (ADR-065). */}
-                  <DataTableCell>{t.tier.name || t.tier.token}</DataTableCell>
+                  {/* Never blank: the tier is a required FK (ADR-065). The pill carries
+                      the tier token in the tier's color (S5c) — presentation, so a tenant
+                      reads at a glance as its packaging. */}
+                  <DataTableCell>
+                    <TierPill label={t.tier.token} color={t.tier.color} />
+                  </DataTableCell>
                   <DataTableCell>
                     <StatusBadge enabled={t.enabled} />
                   </DataTableCell>
