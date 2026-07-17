@@ -498,6 +498,29 @@ func TestGrantingMoreNeverChangesWhatResolves(t *testing.T) {
 		},
 		want: "",
 	}, {
+		// Bug #4's history names TWO ways an operator empties the mark set: "ClearTierDefault,
+		// OR revoking the marked grant". The arm above covers the first. This covers the
+		// second, and it is the one a reintroduced auto-mark would light up in first — the
+		// tier is left holding grants and no mark, which is exactly the state an
+		// "install a default, there isn't one" rule mistakes for a fresh tier.
+		name: "NONE survives a grant after the marked grant was REVOKED",
+		setup: func(t *testing.T, api *Api) {
+			// A third model, so revoking the marked one leaves bronze still granting
+			// something — the state this arm is about is "grants, but no mark", which a
+			// tier with zero grants would not exercise.
+			mustProvider(t, api, "cheap")
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet"))
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "cheap"))
+			require.NoError(t, api.SetTierDefault(adminCtx(), "bronze", "sonnet"))
+			removed, err := api.RevokeProviderFromTier(adminCtx(), "bronze", "sonnet")
+			require.NoError(t, err)
+			require.True(t, removed)
+		},
+		grantMore: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "fable"))
+		},
+		want: "",
+	}, {
 		name: "NONE survives the tenant getting an exception",
 		setup: func(t *testing.T, api *Api) {
 			require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet"))

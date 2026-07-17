@@ -111,10 +111,17 @@ type AIProviderTierGrant struct {
 	// The deliberate consequence: A TIER THAT GRANTS MODELS WITH NO DEFAULT MARKED
 	// RESOLVES TO NONE, even when it grants exactly one. That is the correct answer, not a
 	// gap to be helpfully filled — the alternative is a rule that reads the menu's size.
-	// What stops it being a footgun is the CONSOLE, not the server: the grant screen
-	// presents the default alongside the grants, pre-selects a radio, and issues an
-	// explicit mutation the operator can see and confirm. A pre-selection an operator
-	// confirms is a choice; the same pre-selection made server-side is an inference.
+	// What is meant to stop it being a footgun is the CONSOLE, not the server: the grant
+	// screen WILL present the default alongside the grants (two columns, one screen),
+	// pre-select a radio, and issue an explicit mutation the operator can see and
+	// confirm. A pre-selection an operator confirms is a choice; the same pre-selection
+	// made server-side is an inference.
+	//
+	// ⚠️ THAT SCREEN IS NOT BUILT YET (ADR-065 S5b). Until it ships, granting and marking
+	// are hand-written mutations, and this deliberate behaviour ships with its only named
+	// mitigation missing — an operator who grants a tier a model and stops will find every
+	// tenant on it resolving NONE. The server is right and the story is half-delivered; do
+	// not resolve that tension by teaching the server to guess.
 	//
 	// No gorm `default` tag: a `default:false` would make gorm substitute the DB default
 	// for the Go zero value, the shape that once made AIProvider.Enabled

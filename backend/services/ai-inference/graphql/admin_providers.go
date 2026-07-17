@@ -170,8 +170,10 @@ func (r *AdminResolver) RevokeAiProviderFromTier(ctx context.Context, args struc
 //
 // It is a SEPARATE act from granting, and separate on purpose: grantAiProviderToTier
 // carries no makeDefault flag, because fusing the two is what let a grant silently
-// re-answer which model a tenant used. The console issues both mutations from one screen,
-// so the separation is a property of the API rather than a chore for the operator.
+// re-answer which model a tenant used. The console will issue both mutations from one
+// screen (ADR-065 S5b, not yet built), so the separation stays a property of the API
+// rather than becoming a chore for the operator — but until that screen exists it IS a
+// chore, and two hand-written mutations. Do not "fix" that by folding the flag back in.
 //
 // It is not the retired instance-wide active pointer returning, nor the retired platform
 // baseline: the mark lives on a TIER GRANT, so it can never serve a tenant a model its

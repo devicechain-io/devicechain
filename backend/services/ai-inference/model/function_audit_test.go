@@ -143,3 +143,46 @@ func TestEveryTierDefaultChangeIsAttributableInTheJournal(t *testing.T) {
 			"entry %d: provider#0 is a row that never existed", i)
 	}
 }
+
+// TestRevokingAGrantIsAttributableInTheJournal is the arm the promote/demote/clear test
+// stopped one step short of — the same "assert the thing NEXT TO the risky thing" shape
+// that hid two of this arc's five bugs, recurring in the test written to prevent it.
+//
+// Revoking is not a lesser act here. RevokeProviderFromTier's own contract makes revoking
+// the marked grant THE way a tier loses its default (the mark is a column on the row being
+// deleted), which drops every non-choosing tenant on that tier to NONE. That is the
+// packaging change ADR-065 decision 7 makes auditable, and a predicate delete through a
+// zero-value model journals " → provider#0" — no tier, and a provider that never existed.
+func TestRevokingAGrantIsAttributableInTheJournal(t *testing.T) {
+	api, db := auditedTestApi(t)
+	haiku := mustProvider(t, api, "haiku")
+	fable := mustProvider(t, api, "fable")
+
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "haiku"))
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "haiku"))
+	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
+
+	// Revoke the tier's DEFAULT — the act that takes gold's default away.
+	removed, err := api.RevokeProviderFromTier(adminCtx(), "gold", "haiku")
+	require.NoError(t, err)
+	require.True(t, removed)
+	// ...and withdraw decision 7's audited exception.
+	removed, err = api.RevokeProviderFromTenant(adminCtx(), "acme", "fable")
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	var deletes []rdb.AuditEvent
+	require.NoError(t, db.WithContext(core.WithSystemContext(context.Background())).
+		Where("operation = ?", "delete").Order("id asc").Find(&deletes).Error)
+	require.Len(t, deletes, 2, "both revokes are journalled")
+
+	assert.Equal(t, AIProviderTierGrant{TierToken: "gold", ProviderID: haiku.ID}.AuditLabel(),
+		deletes[0].EntityLabel, "the tier revoke must name the tier and the REAL provider")
+	wantTenant := AIProviderTenantGrant{ProviderID: fable.ID}
+	wantTenant.TenantId = "acme"
+	assert.Equal(t, wantTenant.AuditLabel(), deletes[1].EntityLabel,
+		"the tenant revoke must name the tenant and the REAL provider")
+	for _, e := range deletes {
+		assert.NotContains(t, e.EntityLabel, "provider#0", "provider#0 is a row that never existed")
+	}
+}

@@ -301,12 +301,27 @@ func (api *Api) RevokeProviderFromTier(ctx context.Context, tierToken, providerT
 	if err != nil {
 		return false, err
 	}
-	res := api.sys(ctx).Where("tier_token = ? AND provider_id = ?", tierToken, providerID).
-		Delete(&AIProviderTierGrant{})
-	if res.Error != nil {
-		return false, res.Error
+	// Load then delete, rather than deleting by predicate through a zero-value model.
+	// The audit callback labels an entry from the struct it is handed, so a predicate
+	// delete journals " → provider#0": no tier, and a provider that never existed. That
+	// is not a cosmetic gap here — the comment above makes revoking the default THE act
+	// that removes a tier's default, which drops every non-choosing tenant on that tier
+	// to NONE. It is the packaging change ADR-065 decision 7 makes auditable, and an
+	// entry that cannot name what changed is the same as no entry. (Promote, demote and
+	// clear already journal properly; this arm was the one left out.)
+	var existing AIProviderTierGrant
+	err = api.sys(ctx).Where("tier_token = ? AND provider_id = ?", tierToken, providerID).
+		First(&existing).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return false, nil // idempotent: nothing granted, nothing to withdraw.
+	case err != nil:
+		return false, err
 	}
-	return res.RowsAffected > 0, nil
+	if err := api.sys(ctx).Delete(&existing).Error; err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ListTierGrants returns every tier grant with its provider, for the operator surface.
@@ -503,12 +518,22 @@ func (api *Api) RevokeProviderFromTenant(ctx context.Context, tenantToken, provi
 	if err != nil {
 		return false, err
 	}
-	res := api.sys(ctx).Where("tenant_id = ? AND provider_id = ?", tenantToken, providerID).
-		Delete(&AIProviderTenantGrant{})
-	if res.Error != nil {
-		return false, res.Error
+	// Load then delete — see RevokeProviderFromTier. Withdrawing decision 7's audited
+	// exception is, if anything, the more auditable of the two: it is a change to ONE
+	// named tenant's entitlement.
+	var existing AIProviderTenantGrant
+	err = api.sys(ctx).Where("tenant_id = ? AND provider_id = ?", tenantToken, providerID).
+		First(&existing).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return false, nil
+	case err != nil:
+		return false, err
 	}
-	return res.RowsAffected > 0, nil
+	if err := api.sys(ctx).Delete(&existing).Error; err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ListTenantGrants returns the additive grants for one tenant (operator surface, system
