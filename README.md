@@ -107,6 +107,7 @@ per tenant.
 | **notification-management** | Routes triggered alarms to humans — per-tenant policy over email (SMTP) and webhook, with per-severity escalation. |
 | **event-processing** | The DETECT + REACT pipeline and the sole alarm engine: taps the resolved-events stream, detects conditions over a keyed-streaming CEL core, and dispatches actions (raise-alarm, send-command, and outbound connectors). Rules are authored on the profile as forms or on a visual automation canvas. |
 | **outbound-connectors** | Delivers REACT's outbound actions to external systems — an HTTP/webhook `httpCall` and a `publish` to MQTT, Kafka, AWS SNS, and AWS SQS — over a tenant-scoped, versioned connector whose credentials live in the secret store. Isolated from the detection engine in its own process. |
+| **ai-inference** | An opt-in service that drafts a detection rule from a natural-language description and hands it to the same compiler humans use — the AI proposes, the compiler disposes, and it never sits in the replay-correct path. Providers are operator-registered with write-only API-key handles; external-model use is per-tenant opt-in and fail-closed, and the model a tenant runs is a tiered entitlement. |
 | **mcp** | An opt-in OAuth 2.1 Resource Server exposing read-only tools (devices, state, telemetry, alarms, commands) to AI agents over the Model Context Protocol, fronting the per-area GraphQL under the caller's own token. |
 | **operator** | A controller-runtime operator reconciling the `Instance` custom resource (an instance's deployment shape). |
 
@@ -230,6 +231,13 @@ Adding a tenant is a control-plane operation — the superuser creates it throug
 admin API / console (an `iam_tenants` record), not a Kubernetes resource. Tenants
 do **not** get their own pods.
 
+An operator packages what a tenant gets through a first-class **tenant tier** — an
+operator-defined, sold-not-tuned entity (gold / silver / bronze, or whatever an
+operator names) that subsystems *read* but never redefine: it supplies the per-tenant
+governance ceilings a tenant inherits and the AI models a tenant may use. A shed dial
+is tuned; a tier is sold. Tiers, priority, and limits are never client-settable and
+never a token claim.
+
 ## Tech stack
 
 | Area | Choice |
@@ -253,7 +261,8 @@ backend/    Go monorepo (Go Workspaces)
   core/       shared library — entity, auth, messaging, config, rdb, graphql
   services/   microservices — device-management, user-management, event-management,
               event-sources, device-state, command-delivery, dashboard-management,
-              notification-management, event-processing, outbound-connectors, mcp
+              notification-management, event-processing, outbound-connectors,
+              ai-inference, mcp
   k8s/        Kubernetes operator (controller-runtime)
   cli/        dcctl — instance bootstrap / destroy and admin tooling
 frontend/   npm workspace — apps/console (React + TypeScript management console)

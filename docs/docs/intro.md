@@ -33,7 +33,8 @@ DeviceChain is a set of cooperating microservices over a shared core library:
 - **dashboard-management** — versioned dashboard definitions (draft, publish/rollback, export) rendered by the embeddable widget packages.
 - **notification-management** — routes triggered alarms to humans over email (SMTP) and webhook, with per-severity escalation.
 - **outbound-connectors** — delivers REACT's outbound actions (webhook `httpCall`, and `publish` to MQTT/Kafka/AWS SNS/SQS) to external systems over versioned, secret-authed connectors.
-- **user-management** — global identities, per-tenant memberships, the role catalog, and JWT issuance/validation.
+- **ai-inference** _(opt-in)_ — drafts a detection rule from a natural-language description and hands it to the same compiler humans use; the AI [proposes and the compiler disposes](./concepts/ai-authoring.md), never in the replay-correct path.
+- **user-management** — global identities, per-tenant memberships, the role catalog, JWT issuance/validation, and the tenant-tier packaging entity.
 - **mcp** _(opt-in)_ — a read-only [Model Context Protocol](./concepts/mcp.md) server that lets AI assistants (Claude, Cursor, VS Code) query a tenant on a user's behalf, under the user's own token.
 - **operator (k8s)** — reconciles CRDs into the running platform.
 
