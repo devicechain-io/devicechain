@@ -1,13 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { SectionPanel } from '@/components/ui/section-panel';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { TierPill, tierSwatch } from '@/components/tiers/TierPill';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
@@ -27,12 +29,23 @@ import { parseTierConfig, buildTierConfigPatch } from '@/routes/admin/tiers/tier
 // registry accepts (ADR-065 decision 8) — it cannot misspell one, and a fourth
 // governance dimension becomes sellable the day it is declared instead of the day
 // someone remembers to add it to this file.
+//
+// LAYOUT. Create is a single flat form. Edit is TABBED: Basic (identity + color) and
+// Settings (ceilings), plus an AI-models tab whose content the caller passes in
+// (aiModelsPanel) since it lives on a different admin plane. Basic and Settings are two
+// VIEWS OF ONE SAVE, not two independent forms: name/description/color are a full replace
+// at the API (a settings-only PATCH that omitted them would clear them), so both tabs
+// share this component's state and its single `submit`, and each renders the same Save
+// button. The AI tab saves itself, per grant, and carries no such button.
 export function TierForm({
   tier,
   onDone,
+  aiModelsPanel,
 }: {
   tier?: AdminTenantTierDetail;
   onDone: (message: string) => void;
+  // When provided (edit only), the form renders tabbed and this is the AI-models tab.
+  aiModelsPanel?: ReactNode;
 }) {
   const editing = tier != null;
   const { data: dimensions, error: dimensionsError } = useQuery(listGovernanceDimensions, []);
@@ -96,9 +109,10 @@ export function TierForm({
     }
   };
 
-  return (
-    <div className="space-y-4">
-      {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+  // The identity fields (Basic tab / top of the create form): token, name, description,
+  // color. Held as a fragment so create renders it inline and edit renders it in a tab.
+  const identityFields = (
+    <>
       <FormField
         label="Token"
         htmlFor="tier-token"
@@ -162,50 +176,105 @@ export function TierForm({
           <TierPill label={token.trim() || 'tier'} color={color} />
         </div>
       </FormField>
+    </>
+  );
 
-      <div className="space-y-3">
-        <div>
-          <h3 className="text-sm font-medium">Ceilings</h3>
-          <p className="text-sm text-muted-foreground">
-            The defaults every tenant at this tier is held to. Leave a field blank for the platform
-            default — which is a real limit, never unlimited. An individual tenant can still be given
-            an override, which is recorded as an exception to this tier.
-          </p>
+  // The ceilings fields (Settings tab / lower half of the create form).
+  const ceilingsFields = (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-sm font-medium">Ceilings</h3>
+        <p className="text-sm text-muted-foreground">
+          The defaults every tenant at this tier is held to. Leave a field blank for the platform
+          default — which is a real limit, never unlimited. An individual tenant can still be given
+          an override, which is recorded as an exception to this tier.
+        </p>
+      </div>
+      {dimensionsError ? (
+        // Say plainly that settings are untouched, not just that something failed.
+        // An operator who saves a rename here needs to know the ceilings survived —
+        // otherwise the safe behavior looks identical to a silent wipe.
+        <p className="text-sm text-destructive">
+          Settings unavailable ({dimensionsError}). This tier’s existing ceilings are left
+          unchanged; name and description can still be saved.
+        </p>
+      ) : !settingsEditorReady ? (
+        <p className="text-sm text-muted-foreground">Loading settings…</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-2">
+          {(dimensions ?? []).map((d) => (
+            <FormFieldPair
+              key={d.name}
+              label={d.label}
+              unit={d.rateUnit}
+              rateField={d.rateField}
+              burstField={d.burstField}
+              rate={settings[d.rateField] ?? ''}
+              burst={settings[d.burstField] ?? ''}
+              onRate={(v) => setSetting(d.rateField, v)}
+              onBurst={(v) => setSetting(d.burstField, v)}
+            />
+          ))}
         </div>
-        {dimensionsError ? (
-          // Say plainly that settings are untouched, not just that something failed.
-          // An operator who saves a rename here needs to know the ceilings survived —
-          // otherwise the safe behavior looks identical to a silent wipe.
-          <p className="text-sm text-destructive">
-            Settings unavailable ({dimensionsError}). This tier’s existing ceilings are left
-            unchanged; name and description can still be saved.
-          </p>
-        ) : !settingsEditorReady ? (
-          <p className="text-sm text-muted-foreground">Loading settings…</p>
-        ) : (
-          <div className="grid grid-cols-2 gap-2">
-            {(dimensions ?? []).map((d) => (
-              <FormFieldPair
-                key={d.name}
-                label={d.label}
-                unit={d.rateUnit}
-                rateField={d.rateField}
-                burstField={d.burstField}
-                rate={settings[d.rateField] ?? ''}
-                burst={settings[d.burstField] ?? ''}
-                onRate={(v) => setSetting(d.rateField, v)}
-                onBurst={(v) => setSetting(d.burstField, v)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+      )}
+    </div>
+  );
 
-      <div className="flex gap-2">
-        <Button onClick={submit} loading={busy} disabled={busy || (!editing && !token.trim())}>
-          {editing ? 'Save changes' : 'Create tier'}
-        </Button>
+  // One handler, so the button is the same act wherever it is rendered (both edit tabs).
+  const saveButton = (
+    <div className="flex gap-2">
+      <Button onClick={submit} loading={busy} disabled={busy || (!editing && !token.trim())}>
+        {editing ? 'Save changes' : 'Create tier'}
+      </Button>
+    </div>
+  );
+
+  const errorBanner = formError && (
+    <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />
+  );
+
+  // Create: one flat form. The caller (NewTierPage) supplies the SectionPanel wrapper.
+  if (!editing || aiModelsPanel === undefined) {
+    return (
+      <div className="space-y-4">
+        {errorBanner}
+        {identityFields}
+        {ceilingsFields}
+        {saveButton}
       </div>
+    );
+  }
+
+  // Edit: tabbed. Basic and Settings are two views of one save (see the component doc), so
+  // each tab renders the same Save button and both persist the whole tier. Each tab owns
+  // its own SectionPanel, so the detail page renders this form WITHOUT wrapping it.
+  return (
+    <div className="space-y-4">
+      {errorBanner}
+      <Tabs defaultValue="basic">
+        <TabsList>
+          <TabsTrigger value="basic">Basic</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+          <TabsTrigger value="ai">AI models</TabsTrigger>
+        </TabsList>
+        <TabsContent value="basic">
+          <SectionPanel>
+            <div className="space-y-4">
+              {identityFields}
+              {saveButton}
+            </div>
+          </SectionPanel>
+        </TabsContent>
+        <TabsContent value="settings">
+          <SectionPanel>
+            <div className="space-y-4">
+              {ceilingsFields}
+              {saveButton}
+            </div>
+          </SectionPanel>
+        </TabsContent>
+        <TabsContent value="ai">{aiModelsPanel}</TabsContent>
+      </Tabs>
     </div>
   );
 }
