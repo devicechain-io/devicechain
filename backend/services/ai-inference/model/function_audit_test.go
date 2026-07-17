@@ -87,54 +87,59 @@ func TestEveryAssignmentChangeIsAttributableInTheJournal(t *testing.T) {
 	}
 }
 
-// TestSettingTheBaselineToAVanishedProviderLeavesTheOldOneStanding. SetPlatformBaseline
-// resolves the token OUTSIDE its transaction, so the provider can legally be deleted in
-// between — legally because it is not the baseline yet, so DeleteAIProvider's in-use
-// refusal lets it through.
-//
-// The designation has neither an FK nor a uniqueness violation to catch that: it is a
-// column on the provider's own row, so nothing objects on our behalf. Without a
-// RowsAffected check the demote commits, the promote updates nothing, and the operator
-// is told "set" while the instance is left with NO baseline — silently dropping every
-// tenant that never chose a model to NONE. Fail the call instead, and leave the previous
-// baseline where it was.
-func TestSettingTheBaselineToAVanishedProviderLeavesTheOldOneStanding(t *testing.T) {
-	api := newTestApi(t)
-	mustProvider(t, api, "haiku")
-	mustProvider(t, api, "doomed")
-	require.NoError(t, api.SetPlatformBaseline(adminCtx(), "haiku"))
-
-	// Stand in for the race by deleting the target first: the token no longer resolves
-	// to a live row, which is the state SetPlatformBaseline would find mid-flight.
-	removed, err := api.DeleteAIProvider(adminCtx(), "doomed")
-	require.NoError(t, err)
-	require.True(t, removed)
-
-	err = api.SetPlatformBaseline(adminCtx(), "doomed")
-	require.Error(t, err, "designating a provider that is not there must fail, not half-apply")
-
-	base, err := api.PlatformBaseline(adminCtx())
-	require.NoError(t, err)
-	require.NotNil(t, base, "the previous baseline must survive a failed re-designation")
-	assert.Equal(t, "haiku", base.Token)
+// tierGrantAudit returns the journal entries for the tier-grant table, oldest first. The
+// table is instance-global (no TenantId), but the journal's own rows are tenant-scoped, so
+// the read takes the same sanctioned system-context bypass as assignmentAudit.
+func tierGrantAudit(t *testing.T, db *gorm.DB) []rdb.AuditEvent {
+	t.Helper()
+	var events []rdb.AuditEvent
+	require.NoError(t, db.WithContext(core.WithSystemContext(context.Background())).
+		Where("table_name LIKE ?", "%ai_provider_tier_grants%").
+		Order("id asc").Find(&events).Error)
+	return events
 }
 
-// TestThePlatformBaselineCannotBeDeleted. Deleting the baseline drops every tenant that
-// never chose a model to NONE, so it is refused like any other in-use provider. The
-// refusal is enforced on the DELETE itself, not only by the check before it: grants and
-// assignments have FKs to fall back on, but the designation is a column on the row being
-// deleted, so nothing would object if the check and the write disagreed.
-func TestThePlatformBaselineCannotBeDeleted(t *testing.T) {
-	api := newTestApi(t)
-	mustProvider(t, api, "haiku")
-	require.NoError(t, api.SetPlatformBaseline(adminCtx(), "haiku"))
+// TestEveryTierDefaultChangeIsAttributableInTheJournal. Marking a tier's default decides
+// which model every non-choosing tenant at that tier uses — and therefore where their
+// spend goes — so it is exactly the packaging act ADR-065 decision 7 makes accountable.
+//
+// It asserts the CONTENT, not the existence, of the journal, because the failure mode here
+// is silent: the audit callback builds its label from the struct handed to gorm, so
+// mutating through a zero-value model (`tx.Model(&AIProviderTierGrant{}).Where(...)`)
+// journals "→ provider#0" — a row that never existed. That is the trap SetFunctionModel
+// documents, and the demote arm is the easiest place to fall into it, since the row being
+// demoted is not the one the caller named.
+func TestEveryTierDefaultChangeIsAttributableInTheJournal(t *testing.T) {
+	api, db := auditedTestApi(t)
+	p1 := mustProvider(t, api, "haiku")
+	p2 := mustProvider(t, api, "opus")
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "haiku"))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "opus"))
 
-	_, err := api.DeleteAIProvider(adminCtx(), "haiku")
-	require.ErrorIs(t, err, ErrProviderInUse)
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "haiku"))
+	// Re-points the tier: demotes haiku, promotes opus. BOTH rows must be attributable.
+	require.NoError(t, api.SetTierDefault(adminCtx(), "gold", "opus"))
+	require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
 
-	// Undesignate it and the delete goes through: the refusal is about the ROLE, not the row.
-	require.NoError(t, api.ClearPlatformBaseline(adminCtx()))
-	removed, err := api.DeleteAIProvider(adminCtx(), "haiku")
-	require.NoError(t, err)
-	assert.True(t, removed)
+	events := tierGrantAudit(t, db)
+	// 2 creates (the grants) then 4 updates: promote haiku, demote haiku, promote opus,
+	// demote opus.
+	updates := make([]rdb.AuditEvent, 0, 4)
+	for _, e := range events {
+		if e.Operation == "update" {
+			updates = append(updates, e)
+		}
+	}
+	require.Len(t, updates, 4, "every promote and demote is journalled")
+
+	haiku := AIProviderTierGrant{TierToken: "gold", ProviderID: p1.ID}.AuditLabel()
+	opus := AIProviderTierGrant{TierToken: "gold", ProviderID: p2.ID}.AuditLabel()
+	assert.Equal(t, []string{haiku, haiku, opus, opus},
+		[]string{updates[0].EntityLabel, updates[1].EntityLabel, updates[2].EntityLabel, updates[3].EntityLabel},
+		"each entry must name the tier and the REAL provider — including the DEMOTED row, "+
+			"which the caller never named")
+	for i, e := range updates {
+		assert.NotContains(t, e.EntityLabel, "provider#0",
+			"entry %d: provider#0 is a row that never existed", i)
+	}
 }

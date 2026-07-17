@@ -63,23 +63,6 @@ type AIProvider struct {
 	// persisted DISABLED — the `enabled: Boolean!` GraphQL contract always sends an
 	// explicit value anyway.
 	Enabled bool `gorm:"not null"`
-	// IsPlatformBaseline designates this provider as the instance's baseline model: the
-	// one a tenant gets for a function it never assigned, PROVIDED the tenant is
-	// entitled to it (see Api.ResolveModelForFunction). At most one instance-wide
-	// (uix_ai_providers_baseline backs it).
-	//
-	// It is a lowest-common-denominator, NOT a free tier. It is checked against the
-	// tenant's menu like any other candidate, so a tenant whose tier grants nothing gets
-	// nothing — AI is a tiered entitlement, and a baseline that bypassed the menu would
-	// invert that for every unpackaged tenant on the instance.
-	//
-	// A STORED designation, never an inference. "The sole enabled provider" or "the
-	// first one registered" would re-answer as the provider list changes, which is the
-	// non-monotonic shape that cost this service five bugs (see function.go).
-	//
-	// No gorm `default` tag: a `default:false` would make gorm substitute the DB default
-	// for the Go zero value, which is the shape that made Enabled unpersistable-as-false.
-	IsPlatformBaseline bool `gorm:"not null"`
 }
 
 func (AIProvider) TableName() string { return "ai_providers" }

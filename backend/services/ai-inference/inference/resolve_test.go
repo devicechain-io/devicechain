@@ -115,16 +115,17 @@ func newHarnessWithRate(t *testing.T, facts TenantFactsReader, rate RateGate) (*
 	return NewResolver(api, facts, rate, bounds, nil), api, core.WithTenant(context.Background(), "t1")
 }
 
-// offer grants a provider to the harness tier AND designates it the platform baseline —
-// the minimum setup for a tenant that has assigned nothing to still resolve a model.
-// Both halves are needed and they are different questions: the grant is the ENTITLEMENT
-// (without it the baseline is filtered out by the menu), the baseline is the ANSWER
-// (without it a tenant that chose nothing resolves to nothing). Writes go through the
-// system context, as the operator admin plane does.
+// offer grants a provider to the harness tier AND marks it the tier's default — the
+// minimum setup for a tenant that has assigned nothing to still resolve a model. Both
+// halves are needed and they are different questions: the grant is the ENTITLEMENT
+// (without it the default is filtered out by the menu, and could not be marked in the
+// first place), the default is the ANSWER (without it a tenant that chose nothing
+// resolves to nothing). Writes go through the system context, as the operator admin
+// plane does.
 func offer(t *testing.T, api *model.Api, token string) {
 	t.Helper()
 	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, token))
-	require.NoError(t, api.SetPlatformBaseline(context.Background(), token))
+	require.NoError(t, api.SetTierDefault(context.Background(), testTier, token))
 }
 
 // assign points the harness tenant's rule-drafting function at a provider.
@@ -213,11 +214,11 @@ func TestResolveForFunctionOnlyModelDisabled(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUnavailable)
 }
 
-// Models offered, but the tenant assigned none and no baseline is designated: the menu
+// Models offered, but the tenant assigned none and its tier marked no default: the menu
 // is non-empty and yet no model can be chosen for the caller. Guessing — "there is only
 // one, use it" — would route the tenant's prompts, and its spend, to a model nobody
 // picked, and is the exact rule that shipped as a bug five times. Fail closed.
-func TestResolveForFunctionNoAssignmentAndNoBaseline(t *testing.T) {
+func TestResolveForFunctionNoAssignmentAndNoTierDefault(t *testing.T) {
 	facts := &fakeFacts{enabled: true}
 	r, api, ctx := newHarness(t, facts)
 	makeProvider(t, api, ctx, "a", "", "sk", true)
@@ -244,7 +245,7 @@ func TestResolveForFunctionASoleGrantedModelIsNotAnAnswer(t *testing.T) {
 }
 
 // The tenant's ASSIGNMENT is what answers, not merely whatever is on the menu, and not
-// the baseline either — an explicit choice outranks the platform's fallback.
+// the tier's default either — an explicit choice outranks the tier's fallback.
 func TestResolveForFunctionUsesTheAssignedModel(t *testing.T) {
 	srv := cannedServer(t)
 	defer srv.Close()
@@ -254,14 +255,14 @@ func TestResolveForFunctionUsesTheAssignedModel(t *testing.T) {
 	makeProvider(t, api, ctx, "premium", srv.URL, "sk", true)
 	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "cheap"))
 	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "premium"))
-	// `cheap` is the instance baseline; t1 explicitly chose `premium`.
-	require.NoError(t, api.SetPlatformBaseline(context.Background(), "cheap"))
+	// `cheap` is the tier's default; t1 explicitly chose `premium`.
+	require.NoError(t, api.SetTierDefault(context.Background(), testTier, "cheap"))
 	assign(t, api, "premium")
 
 	resolved, err := resolve(r, ctx, "t1")
 	require.NoError(t, err)
 	assert.Equal(t, "premium", resolved.Token,
-		"the tenant's assignment answers — not the first model on the menu, and not the baseline")
+		"the tenant's assignment answers — not the first model on the menu, and not the tier default")
 }
 
 // A per-tenant additive grant reaches the resolver: the audited exception is real at

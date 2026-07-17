@@ -35,15 +35,21 @@ type FunctionAssignment struct {
 //	menu = MenuForTenant(tenant).Providers        // enabled ∩ (tier grants ∪ exceptions)
 //	if an assignment for (tenant, function) exists:
 //	    return that provider if it is ON the menu, else NONE
-//	return the platform-baseline provider if it is ON the menu, else NONE
+//	d = TierDefault(tier)                         // the tier's EXPLICITLY MARKED default
+//	if d != nil:
+//	    return d if it is ON the menu, else NONE
+//	return NONE
 //
 // What is absent is any read of a SET'S SIZE OR EMPTINESS. Not len(menu), not "the sole
 // granted model", not "does the tier grant anything", not "does any mark survive". That
-// absence is the entire point of this function and the reason the derived default was
-// deleted rather than repaired: a rule that consults the size of a set an operator can
-// change re-answers when they change it, and that shape shipped five times here under
-// five different disguises (see function.go). Adding a parameter to carry a count is the
-// only way to reintroduce it, which is deliberate — the signature is the guard.
+// absence is the entire point of this function: a rule that consults the size of a set an
+// operator can change re-answers when they change it, and that shape shipped five times
+// here under five different disguises (see function.go and AIProviderTierGrant.IsDefault).
+// Adding a parameter to carry a count is the only way to reintroduce it, which is
+// deliberate — the signature is the guard.
+//
+// A tier that grants models and marks NO default resolves to NONE here, even when it
+// grants exactly one. That is the answer, not an oversight to be helpfully patched.
 //
 // TWO PROPERTIES ARE LOAD-BEARING AND EACH KILLED A BUG:
 //
@@ -53,17 +59,27 @@ type FunctionAssignment struct {
 //     silently re-route a tenant's prompts and its SPEND to a model nobody chose, which
 //     is precisely what an operator disabling a model during an incident must not
 //     trigger. The assignment is not destroyed by this — it is not honoured today and
-//     honoured again the moment the entitlement returns.
+//     honoured again the moment the entitlement returns. The tier's default is subject to
+//     the same rule: a DISABLED default resolves to NONE rather than handing the call to
+//     some other granted model.
 //
-//  2. AI IS A TIERED ENTITLEMENT: NO MENU ⇒ NO MODEL, BASELINE OR NOT. The baseline is
-//     the lowest-common-denominator model for a tenant that never chose one; it is NOT a
-//     free tier. A tenant whose tier grants nothing and who holds no exception resolves
-//     to NONE even with a baseline designated, because the baseline is checked AGAINST
-//     THE MENU like any other candidate. Skipping that check would hand every unpackaged
-//     tenant on the instance a working AI door, which is the product invariant inverted.
+//  2. AI IS A TIERED ENTITLEMENT: NO MENU ⇒ NO MODEL. This USED to be the load-bearing
+//     runtime check on this path, back when the fallback was an instance-wide baseline
+//     designated on the provider's own row: that baseline had to be filtered through the
+//     menu, or every unpackaged tenant on the instance would have been handed a working
+//     AI door by one operator act aimed at something else. IT IS NOW STRUCTURAL. The
+//     default IS a tier grant, so a tier that grants nothing has no default and resolves
+//     to NONE with no special case — the invariant moved out of this function and into
+//     the schema, where it cannot be forgotten.
 //
-// The baseline is a STORED designation (AIProvider.IsPlatformBaseline), not the sole
-// enabled provider or the first one registered — same rule, same reason.
+// The onMenu check on the tier default therefore survives its original justification, and
+// is kept for two reasons. It is what applies the ENABLED gate (the mark says granted, not
+// usable), and the uniformity is the point: every candidate leaves this function through
+// the same membership test, so there is no branch where a future edit can quietly grow a
+// bypass.
+//
+// Both answers are STORED — an assignment row, or an operator-set mark on a grant row.
+// Neither is ever "the sole enabled provider" or "the first one registered".
 func (api *Api) ResolveModelForFunction(ctx context.Context, tierToken, function string) (*AIProvider, error) {
 	if !ValidFunction(function) {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownFunction, function)
@@ -104,24 +120,25 @@ func (api *Api) ResolveModelForFunction(ctx context.Context, tierToken, function
 	switch {
 	case err == nil:
 		// The tenant chose. Honour it iff it is still entitled, and otherwise answer NONE
-		// — never fall through to the baseline, which would be the substitution property 1
-		// exists to forbid. A tenant that chose is not a tenant that has no opinion.
+		// — never fall through to the tier's default, which would be the substitution
+		// property 1 exists to forbid. A tenant that chose is not a tenant that has no
+		// opinion.
 		return onMenu(assignment.ProviderID), nil
 	case errors.Is(err, gorm.ErrRecordNotFound):
 	default:
 		return nil, err
 	}
 
-	// Nobody chose, so the platform's lowest-common-denominator answers — still only if
-	// the tenant is entitled to it (property 2).
-	baseline, err := api.PlatformBaseline(ctx)
+	// Nobody chose, so the tier's default answers — if its operator marked one at all, and
+	// still only through the same membership test as any other candidate.
+	tierDefault, err := api.TierDefault(ctx, tierToken)
 	if err != nil {
 		return nil, err
 	}
-	if baseline == nil {
+	if tierDefault == nil {
 		return nil, nil
 	}
-	return onMenu(baseline.ID), nil
+	return onMenu(tierDefault.ID), nil
 }
 
 // SetFunctionModel stores a tenant's choice of model for one function, replacing any
@@ -178,9 +195,9 @@ func (api *Api) SetFunctionModel(ctx context.Context, tenantToken, function, pro
 }
 
 // ClearFunctionModel removes a tenant's choice for one function, reporting whether a row
-// was removed. Hard delete; idempotent. The tenant falls back to the platform baseline
-// (if it is entitled to it) — which is the state it was in before it ever chose, not a
-// new one.
+// was removed. Hard delete; idempotent. The tenant falls back to its tier's default (if
+// the tier marked one and the tenant is entitled to it) — which is the state it was in
+// before it ever chose, not a new one.
 func (api *Api) ClearFunctionModel(ctx context.Context, tenantToken, function string) (bool, error) {
 	if !ValidFunction(function) {
 		return false, fmt.Errorf("%w: %q", ErrUnknownFunction, function)
@@ -234,82 +251,13 @@ func (api *Api) ListFunctionAssignments(ctx context.Context, tenantToken string)
 	return out, nil
 }
 
-// SetPlatformBaseline designates a provider as the instance's baseline model: the one a
-// tenant gets for a function it never assigned, provided it is entitled to that model
-// (ResolveModelForFunction). At most one instance-wide — uix_ai_providers_baseline is
-// the storage backstop.
-//
-// The demote lands BEFORE the promote, in ONE transaction, or the partial unique index
-// rejects the second baseline. (The same ordering the retired promoteTierDefault used;
-// the shape was never the problem there — inferring WHO to promote was.)
-//
-// The baseline is a designation an operator makes and can read back, never an inference
-// from the provider list. "The only enabled provider" and "the first one registered" are
-// the same non-monotonic shape as the sole-model default: they re-answer when the list
-// changes.
-func (api *Api) SetPlatformBaseline(ctx context.Context, providerToken string) error {
-	providerID, err := api.providerIDByToken(ctx, providerToken)
-	if err != nil {
-		return err
-	}
-	return api.sys(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&AIProvider{}).
-			Where("is_platform_baseline = ?", true).
-			Update("is_platform_baseline", false).Error; err != nil {
-			return err
-		}
-		// Predicate on deleted_at and CHECK RowsAffected. providerIDByToken ran outside
-		// this transaction, so the provider can be deleted in between — legally, since it
-		// is not the baseline yet and so passes DeleteAIProvider's in-use refusal. Without
-		// this check the promote silently updates 0 rows, the demote above still commits,
-		// and the operator is told "set" while the instance is left with NO baseline —
-		// dropping every non-choosing tenant to NONE. The designation has neither an FK
-		// nor a uniqueness violation to catch that for us: it is a column on the
-		// provider's own row, so nothing else objects.
-		res := tx.Model(&AIProvider{}).
-			Where("id = ? AND deleted_at IS NULL", providerID).
-			Update("is_platform_baseline", true)
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			return fmt.Errorf("%w: %q", ErrUnknownProvider, providerToken)
-		}
-		return nil
-	})
-}
-
-// ClearPlatformBaseline leaves every provider registered but designates none as the
-// baseline. Idempotent. Afterwards a tenant that has assigned no model for a function
-// resolves to NONE and must choose explicitly.
-func (api *Api) ClearPlatformBaseline(ctx context.Context) error {
-	return api.sys(ctx).Model(&AIProvider{}).
-		Where("is_platform_baseline = ?", true).
-		Update("is_platform_baseline", false).Error
-}
-
-// PlatformBaseline returns the designated baseline provider, or nil when none is
-// designated. Nil is an answer: an instance whose operator designated no baseline serves
-// only the tenants that chose explicitly.
-func (api *Api) PlatformBaseline(ctx context.Context) (*AIProvider, error) {
-	var found AIProvider
-	err := api.sys(ctx).Where("is_platform_baseline = ?", true).First(&found).Error
-	switch {
-	case err == nil:
-		return &found, nil
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		return nil, nil
-	default:
-		return nil, err
-	}
-}
-
-// assertProviderNotAssigned refuses the delete of a provider that a tenant has assigned
-// to a function, or that is the platform baseline. Called by assertProviderNotGranted.
-func (api *Api) assertProviderNotAssigned(ctx context.Context, providerID uint) ([]string, bool, error) {
+// assertProviderNotAssigned names the tenants that have assigned this provider to a
+// function, so the delete of a provider somebody is using can be refused. Called by
+// assertProviderNotGranted.
+func (api *Api) assertProviderNotAssigned(ctx context.Context, providerID uint) ([]string, error) {
 	var assignments []AIFunctionAssignment
 	if err := api.sys(ctx).Where("provider_id = ?", providerID).Find(&assignments).Error; err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	tenants := make([]string, 0, len(assignments))
 	seen := map[string]bool{}
@@ -320,10 +268,5 @@ func (api *Api) assertProviderNotAssigned(ctx context.Context, providerID uint) 
 		}
 	}
 	sort.Strings(tenants)
-
-	var provider AIProvider
-	if err := api.sys(ctx).Where("id = ?", providerID).First(&provider).Error; err != nil {
-		return nil, false, err
-	}
-	return tenants, provider.IsPlatformBaseline, nil
+	return tenants, nil
 }

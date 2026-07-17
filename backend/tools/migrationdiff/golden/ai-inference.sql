@@ -102,7 +102,8 @@ CREATE TABLE "ai-inference".ai_provider_tier_grants (
  created_at timestamp with time zone,
  updated_at timestamp with time zone,
  tier_token character varying(128) NOT NULL,
- provider_id bigint NOT NULL
+ provider_id bigint NOT NULL,
+ is_default boolean NOT NULL
 );
 CREATE TABLE "ai-inference".ai_providers (
  id bigint NOT NULL,
@@ -116,8 +117,7 @@ CREATE TABLE "ai-inference".ai_providers (
  endpoint character varying(512),
  model character varying(128) NOT NULL,
  params jsonb,
- enabled boolean NOT NULL,
- is_platform_baseline boolean NOT NULL
+ enabled boolean NOT NULL
 );
 CREATE TABLE "ai-inference".audit_events (
  id bigint NOT NULL,
@@ -146,8 +146,8 @@ CREATE TABLE "ai-inference".secrets (
  alg character varying(32) NOT NULL
 );
 CREATE UNIQUE INDEX uix_ai_function_assignment ON "ai-inference".ai_function_assignments USING btree (tenant_id, function);
-CREATE UNIQUE INDEX uix_ai_providers_baseline ON "ai-inference".ai_providers USING btree (is_platform_baseline) WHERE (is_platform_baseline AND (deleted_at IS NULL));
 CREATE UNIQUE INDEX uix_ai_providers_token ON "ai-inference".ai_providers USING btree (token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_ai_tenant_grant_pair ON "ai-inference".ai_provider_tenant_grants USING btree (tenant_id, provider_id);
+CREATE UNIQUE INDEX uix_ai_tier_grant_default ON "ai-inference".ai_provider_tier_grants USING btree (tier_token) WHERE is_default;
 CREATE UNIQUE INDEX uix_ai_tier_grant_pair ON "ai-inference".ai_provider_tier_grants USING btree (tier_token, provider_id);
 CREATE UNIQUE INDEX uix_secrets_tenant_scope_name ON "ai-inference".secrets USING btree (tenant_id, scope, name) WHERE (deleted_at IS NULL);
