@@ -107,6 +107,19 @@ cd deploy/opentofu && tofu fmt -check -recursive && tofu init -backend=false && 
 
 ## Conventions
 
+- **Schema/migrations — two rules, and they are not negotiable:**
+  1. **A migration declares its OWN structs, never the live models.** A migration's shapes are a
+     snapshot of a point in time; the live models are the current incarnation of the same datatypes.
+     A migration that points at a live model is silently rewritten whenever that model changes — which
+     breaks *fresh* installs (`column already exists`) while every existing database applies cleanly
+     and looks healthy. Seeds count: insert through the snapshot, with literal values.
+  2. **Never edit an existing migration.** Append a new one; flatten before GA. A flatten creates the
+     final structure directly — each table once, no `ALTER`s inside it — and carries no version
+     suffixes (post-flatten they are all v1).
+
+  `hack/migration-diff.sh verify` is the ONLY thing that exercises the migrations at all (the unit
+  tests AutoMigrate live structs on SQLite and never run a chain). It runs in CI. Maintainers: the
+  reasoning, the recipes and the gorm traps are in `.agent-os/product/data-modeling.md`.
 - **Pre-GA (v1.0.0):** all models and APIs are changeable. Prefer decisive cutovers over compat shims,
   backfills, or migration scaffolding for old shapes.
 - **Fail closed:** typed config rejects unknown/invalid keys at startup; the DB tenant-scope callback
