@@ -14,7 +14,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listRoles, createIdentity } from '@/lib/api/admin';
-import { BackLink, errMessage } from '@/routes/common';
+import { errMessage } from '@/routes/common';
 
 // toOptions turns a token+name record into combobox options.
 function toOptions(items: { token: string; name?: string | null }[] | null | undefined): ComboboxOption[] {
@@ -65,7 +65,6 @@ export default function NewIdentityPage() {
     <PageShell
       title="New identity"
       description="An email-keyed global principal. Add tenant memberships after creating it."
-      action={<BackLink to="/admin/identities">Identities</BackLink>}
     >
       <SectionPanel>
         <div className="space-y-4">

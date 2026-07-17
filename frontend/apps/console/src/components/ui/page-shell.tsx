@@ -7,9 +7,19 @@ import { cn } from '@/lib/utils';
 interface PageShellProps {
   /** Page title displayed in the sticky header */
   title?: string;
+  /**
+   * Inline node rendered on the SAME line as the title, after it — the standard slot for
+   * an entity's copyable token (see CopyToken). Kept apart from `description` (which sits
+   * BELOW the title) so the token reads as part of the identity, not supporting copy.
+   */
+  titleAdornment?: ReactNode;
   /** Supporting copy below the title — string or ReactNode (e.g. badges) */
   description?: string | ReactNode;
-  /** Action buttons on the right side of the header */
+  /**
+   * Action buttons on the right of the header. Pass the buttons themselves — the shell
+   * lays them out (right-aligned, gap between them, never shrunk by a long description).
+   * Callers must NOT wrap them in their own flex row.
+   */
   action?: ReactNode;
   /**
    * Category key for the muted background texture in the header, e.g. "devices".
@@ -30,6 +40,7 @@ interface PageShellProps {
 
 export function PageShell({
   title,
+  titleAdornment,
   description,
   action,
   header,
@@ -81,16 +92,25 @@ export function PageShell({
           )}
           <div className="relative w-full">
             {header ?? (
-              <div className="flex items-center justify-between">
-                <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-foreground">{title}</h1>
+              // gap-4 keeps a long description off the actions; min-w-0 lets the left
+              // column shrink/wrap instead of shoving the actions past the edge; the
+              // action column is shrink-0 with its own gap so multiple buttons are spaced
+              // and never crowded — the shell owns action layout, callers just pass buttons.
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <h1 className="truncate text-2xl font-bold tracking-tight text-foreground">
+                      {title}
+                    </h1>
+                    {titleAdornment}
+                  </div>
                   {description && (
                     typeof description === 'string'
                       ? <p className="text-sm text-muted-foreground mt-1">{description}</p>
                       : <div className="mt-1">{description}</div>
                   )}
                 </div>
-                {action}
+                {action && <div className="flex shrink-0 items-center gap-2">{action}</div>}
               </div>
             )}
           </div>

@@ -46,6 +46,7 @@ import {
 } from '@devicechain/dashboards';
 import { DashboardRenderer, useResolvedBindings, useSlotCandidates } from '@devicechain/widgets';
 import { PageShell } from '@/components/ui/page-shell';
+import { CopyToken } from '@/components/ui/copy-token';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
@@ -319,7 +320,8 @@ export function DashboardWorkspace({
 
   const dirty = isDirty(working, saved);
   const selected = working.widgets.find((w) => w.id === selectedId) ?? null;
-  const heading = working.title || name || token;
+  const displayName = working.title || name;
+  const heading = displayName || token;
 
   // Warn before a tab close/reload discards unsaved edits. Only armed while dirty.
   useEffect(() => {
@@ -580,6 +582,7 @@ export function DashboardWorkspace({
     <>
     <PageShell
       title={heading}
+      titleAdornment={displayName ? <CopyToken value={token} /> : undefined}
       banner="dashboard"
       description={
         <div className="mt-1">

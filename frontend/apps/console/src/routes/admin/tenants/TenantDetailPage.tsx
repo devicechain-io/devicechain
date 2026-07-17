@@ -5,14 +5,14 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Ban, Power, Trash2 } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { CopyToken } from '@/components/ui/copy-token';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listTenants, setTenantEnabled, deleteTenant } from '@/lib/api/admin';
-import { BackLink, StatusBadge, errMessage, useReload } from '@/routes/common';
+import { StatusBadge, errMessage, useReload } from '@/routes/common';
 import { TenantForm } from '@/routes/admin/tenants/TenantForm';
 import { TenantSettingsPanel } from '@/routes/admin/tenants/TenantSettingsPanel';
 import { TenantAiModelsPanel } from '@/routes/admin/tenants/TenantAiModelsPanel';
@@ -30,8 +30,6 @@ export default function TenantDetailPage() {
 
   const tenant = tenants?.find((t) => t.token === token) ?? null;
 
-  const back = <BackLink to="/admin/tenants">Tenants</BackLink>;
-
   // Gate the spinner and error on the FIRST load only (no data yet). Saving reloads this
   // query, and useQuery re-enters `loading` on every refetch while keeping the prior
   // `tenants` — so a bare `if (loading)` unmounted the whole page (and TenantForm) to a
@@ -41,21 +39,21 @@ export default function TenantDetailPage() {
   // gating the tier detail page uses.)
   if (loading && !tenants) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token}>
         <LoadingState description="Loading tenant…" />
       </PageShell>
     );
   }
   if (error && !tenants) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token}>
         <ErrorState description={error} />
       </PageShell>
     );
   }
   if (!tenant) {
     return (
-      <PageShell title={token} action={back}>
+      <PageShell title={token}>
         <ErrorState description={`Tenant “${token}” not found.`} />
       </PageShell>
     );
@@ -91,22 +89,19 @@ export default function TenantDetailPage() {
 
   return (
     <PageShell
-      // The display name is the title; the token, tier, and enabled state ride beside it
-      // as badges — one row, matching the tier detail page (a tenant can be unnamed, so
-      // fall back to the token as the title too).
+      // The display name is the title; its token rides on the same line as a copyable
+      // chip, and the tier + enabled state sit below as badges (a tenant can be unnamed,
+      // so fall back to the token as the title too).
       title={tenant.name || tenant.token}
+      titleAdornment={tenant.name ? <CopyToken value={tenant.token} /> : undefined}
       description={
-        <div className="mt-1 flex items-center gap-2">
-          <Badge variant="outline" className="font-mono">
-            {tenant.token}
-          </Badge>
+        <div className="flex items-center gap-2">
           <TierPill label={tenant.tier.token} color={tenant.tier.color} />
           <StatusBadge enabled={tenant.enabled} />
         </div>
       }
       action={
-        <div className="flex items-center gap-2">
-          {back}
+        <>
           <Button variant="outline" size="sm" onClick={toggleEnabled}>
             {tenant.enabled ? <Ban size={14} /> : <Power size={14} />}
             {tenant.enabled ? 'Disable' : 'Enable'}
@@ -114,7 +109,7 @@ export default function TenantDetailPage() {
           <Button variant="destructive" size="sm" onClick={remove}>
             <Trash2 size={14} /> Delete
           </Button>
-        </div>
+        </>
       }
     >
       {/* Tabbed: Basic + Settings edit the tenant (one atomic save), and the Effective

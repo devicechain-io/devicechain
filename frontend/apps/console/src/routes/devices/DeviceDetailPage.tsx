@@ -4,11 +4,12 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { Trash2, Wifi, WifiOff } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
+import { CopyToken } from '@/components/ui/copy-token';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { TypeCapsule, TokenCapsule, appearanceOf } from '@/components/TypeCapsule';
+import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -86,11 +87,11 @@ export default function DeviceDetailPage() {
   return (
     <PageShell
       title={device.name || token}
+      titleAdornment={device.name ? <CopyToken value={device.token} /> : undefined}
       banner="devices"
       description={
-        <div className="mt-1 flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <TypeCapsule appearance={appearanceOf(device.deviceType)} />
-          <TokenCapsule token={device.token} />
         </div>
       }
       action={

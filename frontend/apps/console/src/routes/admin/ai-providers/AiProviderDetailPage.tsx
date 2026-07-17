@@ -25,10 +25,10 @@ import { ErrorState } from '@/components/ui/error-state';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { CopyToken } from '@/components/ui/copy-token';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Textarea, BackLink, errMessage } from '@/routes/common';
-import { AI_PROVIDERS_BASE } from './paths';
+import { Textarea, errMessage } from '@/routes/common';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
@@ -202,7 +202,7 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
   return (
     <PageShell
       title={loaded.name || loaded.token}
-      action={<BackLink to={AI_PROVIDERS_BASE}>All providers</BackLink>}
+      titleAdornment={loaded.name ? <CopyToken value={loaded.token} /> : undefined}
       banner="dashboard"
     >
       <div className="space-y-4">

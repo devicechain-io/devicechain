@@ -5,7 +5,6 @@ import { useNavigate } from 'react-router-dom';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { useToast } from '@/components/ui/toast';
-import { BackLink } from '@/routes/common';
 import { RoleForm } from '@/routes/admin/roles/RoleForm';
 
 export default function NewRolePage() {
@@ -16,7 +15,6 @@ export default function NewRolePage() {
     <PageShell
       title="New role"
       description="System roles gate the admin API; tenant roles gate the data plane."
-      action={<BackLink to="/admin/roles">Roles</BackLink>}
     >
       <SectionPanel>
         <RoleForm
