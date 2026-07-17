@@ -21,6 +21,9 @@ import type {
   AiProvidersQuery,
   AiProviderQuery,
   AiProviderTierGrantsQuery,
+  AiProviderTenantGrantsQuery,
+  AiFunctionsQuery,
+  AiFunctionAssignmentsQuery,
   InferenceRequest,
 } from '@/gql/ai-inference-admin/graphql';
 
@@ -30,6 +33,11 @@ export type AiProviderListItem = AiProvidersQuery['aiProviders']['results'][numb
 export type AiProviderSearchResults = AiProvidersQuery['aiProviders'];
 export type AiProvider = NonNullable<AiProviderQuery['aiProvider']>;
 export type AiProviderTierGrant = AiProviderTierGrantsQuery['aiProviderTierGrants'][number];
+export type AiProviderTenantGrant =
+  AiProviderTenantGrantsQuery['aiProviderTenantGrants'][number];
+export type AiFunction = AiFunctionsQuery['aiFunctions'][number];
+export type AiFunctionAssignment =
+  AiFunctionAssignmentsQuery['aiFunctionAssignments'][number];
 
 // ── Queries ─────────────────────────────────────────────────────────────
 
@@ -129,6 +137,72 @@ const AI_PROVIDER_TIER_GRANTS = graphql(`
 export async function listAiProviderTierGrants(): Promise<AiProviderTierGrant[]> {
   const data = await gql('ai-inference/admin', AI_PROVIDER_TIER_GRANTS);
   return data.aiProviderTierGrants;
+}
+
+// One tenant's additive grants (ADR-065 decision 7): models it may use over and above
+// what its tier offers. Used, alongside the tier grants, to compute a tenant's menu on
+// the operator console — the same union the server resolves (model/grant.go MenuForTenant),
+// composed here from facts the operator already sees rather than a new tenant-plane read.
+const AI_PROVIDER_TENANT_GRANTS = graphql(`
+  query AiProviderTenantGrants($tenant: String!) {
+    aiProviderTenantGrants(tenant: $tenant) {
+      tenant
+      provider {
+        token
+        name
+        enabled
+      }
+    }
+  }
+`);
+
+export async function listAiProviderTenantGrants(
+  tenant: string,
+): Promise<AiProviderTenantGrant[]> {
+  const data = await gql('ai-inference/admin', AI_PROVIDER_TENANT_GRANTS, { tenant });
+  return data.aiProviderTenantGrants;
+}
+
+// ── AI-function assignments (ADR-065 S5c′) ──────────────────────────────
+
+// The platform's AI-function vocabulary — the jobs a tenant assigns a model to. GA
+// declares exactly one (rule-drafting); the picker renders one row per function.
+const AI_FUNCTIONS = graphql(`
+  query AiFunctions {
+    aiFunctions {
+      token
+      name
+      description
+    }
+  }
+`);
+
+export async function listAiFunctions(): Promise<AiFunction[]> {
+  const data = await gql('ai-inference/admin', AI_FUNCTIONS);
+  return data.aiFunctions;
+}
+
+// One tenant's stored per-function model choices. Lists what the tenant CHOSE, including a
+// choice it is no longer entitled to — the operator surface shows a stale assignment so it
+// can be seen and fixed; resolution (not this query) applies entitlement.
+const AI_FUNCTION_ASSIGNMENTS = graphql(`
+  query AiFunctionAssignments($tenant: String!) {
+    aiFunctionAssignments(tenant: $tenant) {
+      function
+      provider {
+        token
+        name
+        enabled
+      }
+    }
+  }
+`);
+
+export async function listAiFunctionAssignments(
+  tenant: string,
+): Promise<AiFunctionAssignment[]> {
+  const data = await gql('ai-inference/admin', AI_FUNCTION_ASSIGNMENTS, { tenant });
+  return data.aiFunctionAssignments;
 }
 
 // ── Mutations ───────────────────────────────────────────────────────────
@@ -297,6 +371,47 @@ const CLEAR_AI_TIER_DEFAULT = graphql(`
 export async function clearAiTierDefault(tier: string): Promise<boolean> {
   const data = await gql('ai-inference/admin', CLEAR_AI_TIER_DEFAULT, { tier });
   return data.clearAiTierDefault;
+}
+
+// ── Per-function model assignment (ADR-065 S5c′) ────────────────────────
+
+const SET_AI_FUNCTION_MODEL = graphql(`
+  mutation SetAiFunctionModel($tenant: String!, $function: String!, $provider: String!) {
+    setAiFunctionModel(tenant: $tenant, function: $function, provider: $provider)
+  }
+`);
+
+// Assign a tenant's model for one function. It does NOT check the tenant's menu — the
+// assignment survives a temporary revoke and resolves to no model while off-menu, never
+// to a substitute (model/function_api.go). The console offers only on-menu models in the
+// picker regardless, so an off-menu choice is not reachable from here in normal use.
+export async function setAiFunctionModel(
+  tenant: string,
+  fn: string,
+  provider: string,
+): Promise<boolean> {
+  const data = await gql('ai-inference/admin', SET_AI_FUNCTION_MODEL, {
+    tenant,
+    function: fn,
+    provider,
+  });
+  return data.setAiFunctionModel;
+}
+
+const CLEAR_AI_FUNCTION_MODEL = graphql(`
+  mutation ClearAiFunctionModel($tenant: String!, $function: String!) {
+    clearAiFunctionModel(tenant: $tenant, function: $function)
+  }
+`);
+
+// Clear a tenant's choice for one function; the tenant falls back to its tier's default
+// (if the tier marked one and the tenant is still entitled to it). Idempotent.
+export async function clearAiFunctionModel(tenant: string, fn: string): Promise<boolean> {
+  const data = await gql('ai-inference/admin', CLEAR_AI_FUNCTION_MODEL, {
+    tenant,
+    function: fn,
+  });
+  return data.clearAiFunctionModel;
 }
 
 // ── Operator smoke test (ai:admin) ──────────────────────────────────────

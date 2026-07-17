@@ -18,9 +18,10 @@ import { Textarea, errMessage } from '@/routes/common';
 // its token fixed). Shared by the new + detail pages.
 //
 // LAYOUT. Create is a single flat form. Edit is TABBED: Basic (token/name/tier/config)
-// and Settings (the governance ceilings + AI consent), plus an Effective-settings tab
-// whose content the caller passes in (effectiveSettingsPanel) since it is a read-only
-// VIEW of the result, not another editor. Basic and Settings are two VIEWS OF ONE SAVE,
+// and Settings (the governance ceilings + AI consent), plus two caller-supplied tabs that
+// are NOT part of the tenant save — Effective settings (effectiveSettingsPanel, a read-only
+// view of the result) and AI models (aiModelsPanel, the operator's per-function model
+// assignment, ADR-065 S5c′, with its own mutations). Basic and Settings are two VIEWS OF ONE SAVE,
 // not two independent forms: a tenant update sends name/tier/config and the ceilings
 // together, so both tabs share this component's state and its single `submit`, and each
 // renders the same Save button. Splitting them into separate submits could let one tab's
@@ -30,12 +31,17 @@ export function TenantForm({
   tenant,
   onDone,
   effectiveSettingsPanel,
+  aiModelsPanel,
 }: {
   tenant?: AdminTenant;
   onDone: (message: string) => void;
   // When provided (edit only), the form renders tabbed and this is the read-only
   // Effective-settings tab.
   effectiveSettingsPanel?: ReactNode;
+  // The AI-models tab (edit only): the operator's per-function model assignment for this
+  // tenant (ADR-065 S5c′). Its own mutations, not part of the tenant save — like the
+  // Effective tab, the caller passes it in.
+  aiModelsPanel?: ReactNode;
 }) {
   const editing = tenant != null;
   const [token, setToken] = useState(tenant?.token ?? '');
@@ -320,6 +326,7 @@ export function TenantForm({
           <TabsTrigger value="basic">Basic</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
           <TabsTrigger value="effective">Effective settings</TabsTrigger>
+          {aiModelsPanel !== undefined && <TabsTrigger value="ai-models">AI models</TabsTrigger>}
         </TabsList>
         <TabsContent value="basic">
           <SectionPanel>
@@ -341,6 +348,13 @@ export function TenantForm({
         <TabsContent value="effective">
           <SectionPanel title="Effective settings">{effectiveSettingsPanel}</SectionPanel>
         </TabsContent>
+        {/* The operator's per-function AI model assignment (ADR-065 S5c′) — its own
+            mutations, not part of the tenant save. */}
+        {aiModelsPanel !== undefined && (
+          <TabsContent value="ai-models">
+            <SectionPanel title="AI models">{aiModelsPanel}</SectionPanel>
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

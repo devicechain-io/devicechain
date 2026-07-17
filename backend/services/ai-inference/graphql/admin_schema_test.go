@@ -94,14 +94,14 @@ func TestAdminPlaneCarriesTheWholeProviderSurface(t *testing.T) {
 	schema := gql.MustParseSchema(AdminSchemaContent, &AdminResolver{})
 
 	assert.Equal(t,
-		[]string{"aiProvider", "aiProviderKinds", "aiProviderTenantGrants",
-			"aiProviderTierGrants", "aiProviders"},
+		[]string{"aiFunctionAssignments", "aiFunctions", "aiProvider", "aiProviderKinds",
+			"aiProviderTenantGrants", "aiProviderTierGrants", "aiProviders"},
 		fieldNames(t, schema, "queryType"))
 	assert.Equal(t,
-		[]string{"clearAiTierDefault", "createAiProvider",
+		[]string{"clearAiFunctionModel", "clearAiTierDefault", "createAiProvider",
 			"deleteAiProvider", "grantAiProviderToTenant", "grantAiProviderToTier",
 			"revokeAiProviderFromTenant", "revokeAiProviderFromTier",
-			"setAiTierDefault", "testAiProvider", "updateAiProvider"},
+			"setAiFunctionModel", "setAiTierDefault", "testAiProvider", "updateAiProvider"},
 		fieldNames(t, schema, "mutationType"))
 }
 
@@ -271,6 +271,24 @@ func TestAdminResolversFailClosed(t *testing.T) {
 		Request InferenceRequestInput
 	}{Token: "x"})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	// The per-function assignment surface decides which model a tenant's spend is
+	// directed at, so it fails closed on its own like the rest of the packaging surface.
+	_, err = r.AiFunctions(ctx)
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	_, err = r.AiFunctionAssignments(ctx, struct{ Tenant string }{Tenant: "acme"})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	ok, err = r.SetAiFunctionModel(ctx, struct{ Tenant, Function, Provider string }{
+		Tenant: "acme", Function: "rule-drafting", Provider: "p"})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	assert.False(t, ok)
+
+	ok, err = r.ClearAiFunctionModel(ctx, struct{ Tenant, Function string }{
+		Tenant: "acme", Function: "rule-drafting"})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+	assert.False(t, ok)
 }
 
 // TestAdminResolversForbidWithoutAiAdmin confirms an authenticated operator who does
@@ -307,6 +325,16 @@ func TestAdminResolversForbidWithoutAiAdmin(t *testing.T) {
 		Token   string
 		Request InferenceRequestInput
 	}{Token: "x"})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+
+	// Assigning a tenant's model is a packaging act on the far side of the API-key
+	// boundary too: an operator managing tiers (tenant:read) must not thereby decide
+	// which model any tenant's inference spends the operator's key on.
+	_, err = r.SetAiFunctionModel(ctx, struct{ Tenant, Function, Provider string }{
+		Tenant: "acme", Function: "rule-drafting", Provider: "p"})
+	assert.ErrorIs(t, err, auth.ErrForbidden)
+
+	_, err = r.AiFunctionAssignments(ctx, struct{ Tenant string }{Tenant: "acme"})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 }
 
@@ -348,6 +376,10 @@ func TestATenantAdminCannotAdministerProviders(t *testing.T) {
 
 	_, err = r.GrantAiProviderToTenant(tenantAdmin, struct{ Tenant, Provider string }{Tenant: "acme", Provider: "x"})
 	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not grant its own tenant a model its tier never offered`)
+
+	_, err = r.SetAiFunctionModel(tenantAdmin, struct{ Tenant, Function, Provider string }{
+		Tenant: "acme", Function: "rule-drafting", Provider: "x"})
+	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not choose which model its own tenant's AI spends the operator's key on`)
 
 	_, err = r.AiProviderTierGrants(tenantAdmin)
 	assert.ErrorIs(t, err, auth.ErrForbidden, `a tenant-admin's "*" must not read the instance's packaging matrix`)
