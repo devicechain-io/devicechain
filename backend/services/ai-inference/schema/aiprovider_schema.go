@@ -10,14 +10,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// aiProviderV1 is the ai_providers shape frozen at this migration (the gormigrate
+// aiProvider is the ai_providers shape frozen at this migration (the gormigrate
 // convention pins the migration to a shape independent of later model changes). It
 // declares an explicit TableName: gorm's default naming derives "AIProvider" to
 // "a_iproviders" (its initialism handling splits "AI"), but the model pins the table
 // to "ai_providers" — so the migration MUST pin the same name or it would create a
 // table the runtime CRUD can't find. A package-level type (not a func-local one) is
 // required because only a named type can carry the TableName method.
-type aiProviderV1 struct {
+type aiProvider struct {
 	gorm.Model
 	rdb.TokenReference
 	rdb.NamedEntity
@@ -32,7 +32,7 @@ type aiProviderV1 struct {
 	Enabled bool `gorm:"not null"`
 }
 
-func (aiProviderV1) TableName() string { return "ai_providers" }
+func (aiProvider) TableName() string { return "ai_providers" }
 
 // NewAIProvidersSchema adds the ai_providers table (ADR-056 §4): the instance-scoped,
 // operator-managed inference-provider list.
@@ -66,11 +66,11 @@ func NewAIProvidersSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20260715140000",
 		Migrate: func(tx *gorm.DB) error {
-			if err := tx.AutoMigrate(&aiProviderV1{}); err != nil {
+			if err := tx.AutoMigrate(&aiProvider{}); err != nil {
 				return err
 			}
 			// Global (not per-tenant) unique token among live rows.
-			return rdb.CreatePartialUniqueIndex(tx, &aiProviderV1{}, "uix_ai_providers_token", "token")
+			return rdb.CreatePartialUniqueIndex(tx, &aiProvider{}, "uix_ai_providers_token", "token")
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return tx.Migrator().DropTable("ai_providers")

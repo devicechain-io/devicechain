@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// aiProviderTierGrantV1 / aiProviderTenantGrantV1 are the grant shapes frozen at this
+// aiProviderTierGrant / aiProviderTenantGrant are the grant shapes frozen at this
 // migration. Both pin an explicit TableName for the same reason ai_providers does:
 // gorm's naming would split the "AI" initialism and derive a table
 // ("a_iprovider_tier_grants") that the runtime model — which pins the name below —
@@ -29,14 +29,14 @@ import (
 // ALTER TABLE ... ADD CONSTRAINT is Postgres-only and fails the unit tests. Keeping it
 // off the runtime model avoids gorm's association auto-save, which would try to upsert
 // the provider whenever a grant is created.
-type aiProviderTierGrantV1 struct {
+type aiProviderTierGrant struct {
 	ID        uint `gorm:"primarykey"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	// One grant per (tier, provider): re-granting is idempotent, not a duplicate row.
-	TierToken  string        `gorm:"not null;size:128;uniqueIndex:uix_ai_tier_grant_pair,priority:1"`
-	ProviderID uint          `gorm:"not null;uniqueIndex:uix_ai_tier_grant_pair,priority:2;index"`
-	Provider   *aiProviderV1 `gorm:"foreignKey:ProviderID;constraint:OnDelete:RESTRICT"`
+	TierToken  string      `gorm:"not null;size:128;uniqueIndex:uix_ai_tier_grant_pair,priority:1"`
+	ProviderID uint        `gorm:"not null;uniqueIndex:uix_ai_tier_grant_pair,priority:2;index"`
+	Provider   *aiProvider `gorm:"foreignKey:ProviderID;constraint:OnDelete:RESTRICT"`
 	// The tier's default model mark — at most one row per tier carries it
 	// (uix_ai_tier_grant_default below). No gorm `default` tag: a `default:false` makes
 	// gorm substitute the DB default for the Go zero value on Create, which is the shape
@@ -44,18 +44,18 @@ type aiProviderTierGrantV1 struct {
 	IsDefault bool `gorm:"not null"`
 }
 
-func (aiProviderTierGrantV1) TableName() string { return "ai_provider_tier_grants" }
+func (aiProviderTierGrant) TableName() string { return "ai_provider_tier_grants" }
 
-type aiProviderTenantGrantV1 struct {
+type aiProviderTenantGrant struct {
 	ID        uint `gorm:"primarykey"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	rdb.TenantScoped
-	ProviderID uint          `gorm:"not null;index"`
-	Provider   *aiProviderV1 `gorm:"foreignKey:ProviderID;constraint:OnDelete:RESTRICT"`
+	ProviderID uint        `gorm:"not null;index"`
+	Provider   *aiProvider `gorm:"foreignKey:ProviderID;constraint:OnDelete:RESTRICT"`
 }
 
-func (aiProviderTenantGrantV1) TableName() string { return "ai_provider_tenant_grants" }
+func (aiProviderTenantGrant) TableName() string { return "ai_provider_tenant_grants" }
 
 // NewAIProviderGrantsSchema adds the two tables that carry a tenant's AI model menu
 // (ADR-065 decision 10): tier→provider offers, and per-tenant additive exceptions.
@@ -64,7 +64,7 @@ func (aiProviderTenantGrantV1) TableName() string { return "ai_provider_tenant_g
 // AT MOST ONE DEFAULT PER TIER is a unique index on (tier_token) filtered to WHERE
 // is_default, which leaves the non-default rows out of the uniqueness set — GORM cannot
 // express a partial index by tag. NO `deleted_at IS NULL` clause is needed, and that is a
-// property of this table rather than an omission: aiProviderTierGrantV1 carries no
+// property of this table rather than an omission: aiProviderTierGrant carries no
 // DeletedAt, so grants HARD-delete and there are no tombstones for the index to count.
 // (Contrast the tombstone-counting unique-index bug this repo carries where a soft-deleted
 // row stays in the uniqueness set.)
@@ -92,16 +92,16 @@ func NewAIProviderGrantsSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20260716120000",
 		Migrate: func(tx *gorm.DB) error {
-			if err := tx.AutoMigrate(&aiProviderTierGrantV1{}, &aiProviderTenantGrantV1{}); err != nil {
+			if err := tx.AutoMigrate(&aiProviderTierGrant{}, &aiProviderTenantGrant{}); err != nil {
 				return err
 			}
 
 			tierStmt := &gorm.Statement{DB: tx}
-			if err := tierStmt.Parse(&aiProviderTierGrantV1{}); err != nil {
+			if err := tierStmt.Parse(&aiProviderTierGrant{}); err != nil {
 				return err
 			}
 			tenantStmt := &gorm.Statement{DB: tx}
-			if err := tenantStmt.Parse(&aiProviderTenantGrantV1{}); err != nil {
+			if err := tenantStmt.Parse(&aiProviderTenantGrant{}); err != nil {
 				return err
 			}
 
