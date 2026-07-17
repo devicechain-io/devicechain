@@ -83,20 +83,27 @@ func (r *Resolver) ValidatePrompt(system, prompt string) error {
 	return nil
 }
 
-// ResolveForTenant resolves the model a tenant's inference request should use — its
-// tier's DEFAULT from the menu ADR-065 entitles it to — enforcing the external-routing
-// consent gate and the per-tenant rate ceiling. This is the production NL-authoring
-// path (Slice 1). Every step fails closed:
+// ResolveForFunction resolves the model a tenant's inference request should use for one
+// FUNCTION — the model it assigned to that function, or the platform baseline if it
+// assigned none, in either case only if ADR-065 entitles it to that model — enforcing
+// the external-routing consent gate and the per-tenant rate ceiling. This is the
+// production NL-authoring path (Slice 1). Every step fails closed:
 //
 //  1. a tenant must be present (the caller reads it from the service-token header);
 //  2. this instance must grant something to somebody (nothing granted ⇒ unavailable);
 //  3. the tenant must be within its inference rate ceiling (ADR-056 §6 / ADR-023);
 //  4. the tenant's facts (consent + tier) must be readable from user-management — a
 //     failure is NOT permission, never a guess;
-//  5. the tenant's menu must name a default model (see model.Api.MenuForTenant);
+//  5. a model must resolve for the function (see model.Api.ResolveModelForFunction);
 //  6. if that model routes outside the boundary (every GA kind), the tenant must have
 //     opted in;
 //  7. the model's API key must resolve (see build).
+//
+// The FUNCTION IS NOT CALLER-SUPPLIED. It is decided by which resolver called this —
+// inferRuleCandidate passes model.FunctionRuleDrafting. A caller able to name its own
+// function would be naming its own entitlement: it would shop across functions for
+// whichever one its tenant had assigned the most capable model to. The parameter exists
+// so the SERVER can say which job it is doing, not so a client can.
 //
 // ORDERING IS LOAD-BEARING, and this preserves the property the retired active-pointer
 // read used to give for free. A purely LOCAL check (does this instance grant anything
@@ -116,13 +123,13 @@ func (r *Resolver) ValidatePrompt(system, prompt string) error {
 // crosses the boundary without it — the security invariant is unchanged, only the
 // message an abusive caller sees.
 //
-// Consent is checked AFTER the menu resolves, because which boundary question applies
+// Consent is checked AFTER the model resolves, because which boundary question applies
 // depends on which model answered: an in-boundary model needs no consent, and once the
 // embedded model ships (ADR-056 §4) a tenant that consents to nothing still gets
 // in-boundary drafting. Reading consent earlier would be free (it arrives on the same
 // query) but applying it earlier would collapse the two axes ADR-056 decision 4 keeps
 // apart.
-func (r *Resolver) ResolveForTenant(ctx context.Context, tenant string) (*Resolved, error) {
+func (r *Resolver) ResolveForFunction(ctx context.Context, tenant, function string) (*Resolved, error) {
 	if strings.TrimSpace(tenant) == "" {
 		return nil, fmt.Errorf("%w: no tenant in context", ErrUnavailable)
 	}
@@ -146,30 +153,33 @@ func (r *Resolver) ResolveForTenant(ctx context.Context, tenant string) (*Resolv
 	if err != nil {
 		return nil, fmt.Errorf("%w: could not read the tenant's AI settings: %v", ErrUnavailable, err)
 	}
-	menu, err := r.api.MenuForTenant(ctx, facts.TierToken)
+	chosen, err := r.api.ResolveModelForFunction(ctx, facts.TierToken, function)
 	if err != nil {
-		return nil, fmt.Errorf("%w: could not resolve the tenant's model menu: %v", ErrUnavailable, err)
+		return nil, fmt.Errorf("%w: could not resolve the tenant's model for %q: %v",
+			ErrUnavailable, function, err)
 	}
-	if menu.Default == nil {
+	if chosen == nil {
 		// The caller gets one coarse answer either way (ErrUnavailable — an operator
 		// resolves this, not the tenant), but the SERVER log has to name the right thing
-		// to go look at, and this message used to blame the tier unconditionally. It can
-		// just as easily be the tenant's own grants: an exception-only tenant on a tier
-		// that sells no AI has a menu the tier had no part in. Sending an operator to
-		// re-package `bronze` when the mark they need is on the tenant is a slow way to
-		// find nothing.
+		// to go look at, and this message used to blame the TIER unconditionally. It can
+		// just as easily be the tenant's own grants or its own assignment: an
+		// exception-only tenant on a tier that sells no AI has a menu the tier had no
+		// part in. Sending an operator to re-package `bronze` when the row they need is
+		// on the tenant is a slow way to find nothing.
 		//
-		// An empty menu means nothing is granted at all; a non-empty one with no default
-		// means the mark was cleared or the marked model went out of service.
-		if len(menu.Providers) == 0 {
-			return nil, fmt.Errorf("%w: no model is granted to this tenant or to its tier %q",
-				ErrUnavailable, facts.TierToken)
-		}
+		// So the message enumerates every cause rather than guessing between them. It
+		// deliberately does NOT branch on how many models the tenant is entitled to:
+		// distinguishing "entitled to nothing" from "entitled but nothing resolved" would
+		// mean re-reading the menu and asking for its SIZE, on the one code path whose
+		// entire contract is that no set's size is ever consulted. A slightly longer
+		// message is a better trade than a len() call living next to this decision — that
+		// is exactly the shape five bugs grew out of, and the next reader should find
+		// nothing here to copy.
 		return nil, fmt.Errorf(
-			"%w: %d model(s) are granted to this tenant or its tier %q, but none is marked default (or the marked one is disabled)",
-			ErrUnavailable, len(menu.Providers), facts.TierToken)
+			"%w: no model resolved for %q — either no model is granted to this tenant or to its tier %q, "+
+				"or the model it assigned (or the platform baseline it would fall back to) is not granted to it or is disabled",
+			ErrUnavailable, function, facts.TierToken)
 	}
-	chosen := menu.Default
 	if model.IsExternalProviderKind(chosen.Kind) && !facts.ExternalEnabled {
 		return nil, ErrConsentRequired
 	}

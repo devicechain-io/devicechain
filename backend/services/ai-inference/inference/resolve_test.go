@@ -107,6 +107,7 @@ func newHarnessWithRate(t *testing.T, facts TenantFactsReader, rate RateGate) (*
 	require.NoError(t, secrets.NewSecretStoreSchema().Migrate(db))
 	require.NoError(t, aischema.NewAIProvidersSchema().Migrate(db))
 	require.NoError(t, aischema.NewAIProviderGrantsSchema().Migrate(db))
+	require.NoError(t, aischema.NewAIFunctionAssignmentsSchema().Migrate(db))
 	kek, err := secrets.NewInstanceKeyProvider(testRootKey)
 	require.NoError(t, err)
 	api := model.NewApi(&rdb.RdbManager{Database: db}, secrets.NewStore(db, kek))
@@ -114,12 +115,27 @@ func newHarnessWithRate(t *testing.T, facts TenantFactsReader, rate RateGate) (*
 	return NewResolver(api, facts, rate, bounds, nil), api, core.WithTenant(context.Background(), "t1")
 }
 
-// offer grants a provider to the harness tier and makes it that tier's default — the
-// setup that replaces the retired SetActiveProvider. Grants are written from the
+// offer grants a provider to the harness tier AND designates it the platform baseline —
+// the minimum setup for a tenant that has assigned nothing to still resolve a model.
+// Both halves are needed and they are different questions: the grant is the ENTITLEMENT
+// (without it the baseline is filtered out by the menu), the baseline is the ANSWER
+// (without it a tenant that chose nothing resolves to nothing). Writes go through the
 // system context, as the operator admin plane does.
 func offer(t *testing.T, api *model.Api, token string) {
 	t.Helper()
-	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, token, true))
+	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, token))
+	require.NoError(t, api.SetPlatformBaseline(context.Background(), token))
+}
+
+// assign points the harness tenant's rule-drafting function at a provider.
+func assign(t *testing.T, api *model.Api, token string) {
+	t.Helper()
+	require.NoError(t, api.SetFunctionModel(context.Background(), "t1", model.FunctionRuleDrafting, token))
+}
+
+// resolve calls the production path for the one function the platform declares.
+func resolve(r *Resolver, ctx context.Context, tenant string) (*Resolved, error) {
+	return r.ResolveForFunction(ctx, tenant, model.FunctionRuleDrafting)
 }
 
 func strp(s string) *string { return &s }
@@ -151,20 +167,20 @@ func cannedServer(t *testing.T) *httptest.Server {
 	}))
 }
 
-func TestResolveForTenantNoTenant(t *testing.T) {
+func TestResolveForFunctionNoTenant(t *testing.T) {
 	r, _, ctx := newHarness(t, &fakeFacts{enabled: true})
-	_, err := r.ResolveForTenant(ctx, "  ")
+	_, err := resolve(r, ctx, "  ")
 	assert.ErrorIs(t, err, ErrUnavailable)
 }
 
 // A provider registered but granted to nobody serves nobody: registering a model and
 // selling it are separate acts. This is also the LOCAL short-circuit — the property the
 // retired active-pointer read used to give for free — so it must cost no network call.
-func TestResolveForTenantNothingGranted(t *testing.T) {
+func TestResolveForFunctionNothingGranted(t *testing.T) {
 	facts := &fakeFacts{enabled: true}
 	r, api, ctx := newHarness(t, facts)
 	makeProvider(t, api, ctx, "p", "", "sk", true) // created but granted to no tier
-	_, err := r.ResolveForTenant(ctx, "t1")
+	_, err := resolve(r, ctx, "t1")
 	assert.ErrorIs(t, err, ErrUnavailable)
 	assert.Zero(t, facts.calls,
 		"an instance that grants nothing must answer without touching user-management")
@@ -173,13 +189,13 @@ func TestResolveForTenantNothingGranted(t *testing.T) {
 // A tenant whose TIER offers nothing is unavailable even though other tiers have
 // models — that is the entitlement axis doing its job, and it is the case the retired
 // global pointer could not express at all.
-func TestResolveForTenantTierOffersNothing(t *testing.T) {
+func TestResolveForFunctionTierOffersNothing(t *testing.T) {
 	facts := &fakeFacts{enabled: true, tier: "bronze"}
 	r, api, ctx := newHarness(t, facts)
 	makeProvider(t, api, ctx, "p", "", "sk", true)
 	offer(t, api, "p") // granted to `gold`, not to bronze
 
-	_, err := r.ResolveForTenant(ctx, "t1")
+	_, err := resolve(r, ctx, "t1")
 	assert.ErrorIs(t, err, ErrUnavailable, "a bronze tenant must not reach a gold model")
 }
 
@@ -188,98 +204,115 @@ func TestResolveForTenantTierOffersNothing(t *testing.T) {
 // its tier, so there is nothing local to decide it on. The short-circuit that survives
 // is the coarse "this instance grants nothing at all" — a per-tier answer inherently
 // needs the tier.
-func TestResolveForTenantOnlyModelDisabled(t *testing.T) {
+func TestResolveForFunctionOnlyModelDisabled(t *testing.T) {
 	facts := &fakeFacts{enabled: true}
 	r, api, ctx := newHarness(t, facts)
 	makeProvider(t, api, ctx, "p", "", "sk", false)
 	offer(t, api, "p")
-	_, err := r.ResolveForTenant(ctx, "t1")
+	_, err := resolve(r, ctx, "t1")
 	assert.ErrorIs(t, err, ErrUnavailable)
 }
 
-// Two models offered and none marked default: the menu is non-empty but no model can be
-// chosen for the caller, and guessing would route the tenant's prompts — and its spend —
-// to a model nobody picked. Fail closed.
-func TestResolveForTenantAmbiguousDefault(t *testing.T) {
+// Models offered, but the tenant assigned none and no baseline is designated: the menu
+// is non-empty and yet no model can be chosen for the caller. Guessing — "there is only
+// one, use it" — would route the tenant's prompts, and its spend, to a model nobody
+// picked, and is the exact rule that shipped as a bug five times. Fail closed.
+func TestResolveForFunctionNoAssignmentAndNoBaseline(t *testing.T) {
 	facts := &fakeFacts{enabled: true}
 	r, api, ctx := newHarness(t, facts)
 	makeProvider(t, api, ctx, "a", "", "sk", true)
 	makeProvider(t, api, ctx, "b", "", "sk", true)
-	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "a", false))
-	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "b", false))
-	// The mark must be CLEARED to reach ambiguity: the first grant to a tier auto-marks,
-	// so a tier whose menu merely grew still has a default (model.pickDefault).
-	require.NoError(t, api.ClearTierDefault(context.Background(), testTier))
+	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "a"))
+	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "b"))
 
-	_, err := r.ResolveForTenant(ctx, "t1")
-	assert.ErrorIs(t, err, ErrUnavailable, "an ambiguous default must not be guessed")
+	_, err := resolve(r, ctx, "t1")
+	assert.ErrorIs(t, err, ErrUnavailable, "an unchosen model must not be guessed")
 }
 
-// The tier's marked default is what answers, not merely whatever is on the menu — the
-// property that makes per-tier packaging mean anything.
-func TestResolveForTenantUsesTheTiersDefault(t *testing.T) {
+// And the single-model case lands identically. This is the arm a counting rule would
+// have "helpfully" answered — one model on the menu, entitled, enabled, and still NONE,
+// because nobody said to use it.
+func TestResolveForFunctionASoleGrantedModelIsNotAnAnswer(t *testing.T) {
+	facts := &fakeFacts{enabled: true}
+	r, api, ctx := newHarness(t, facts)
+	makeProvider(t, api, ctx, "a", "", "sk", true)
+	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "a"))
+
+	_, err := resolve(r, ctx, "t1")
+	assert.ErrorIs(t, err, ErrUnavailable,
+		"a sole granted model is an entitlement, not a choice — nothing may infer a default from the menu's size")
+}
+
+// The tenant's ASSIGNMENT is what answers, not merely whatever is on the menu, and not
+// the baseline either — an explicit choice outranks the platform's fallback.
+func TestResolveForFunctionUsesTheAssignedModel(t *testing.T) {
 	srv := cannedServer(t)
 	defer srv.Close()
 	facts := &fakeFacts{enabled: true}
 	r, api, ctx := newHarness(t, facts)
 	makeProvider(t, api, ctx, "cheap", srv.URL, "sk", true)
 	makeProvider(t, api, ctx, "premium", srv.URL, "sk", true)
-	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "cheap", false))
-	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "premium", true))
+	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "cheap"))
+	require.NoError(t, api.GrantProviderToTier(context.Background(), testTier, "premium"))
+	// `cheap` is the instance baseline; t1 explicitly chose `premium`.
+	require.NoError(t, api.SetPlatformBaseline(context.Background(), "cheap"))
+	assign(t, api, "premium")
 
-	resolved, err := r.ResolveForTenant(ctx, "t1")
+	resolved, err := resolve(r, ctx, "t1")
 	require.NoError(t, err)
-	assert.Equal(t, "premium", resolved.Token, "the tier's default answers, not the first model on the menu")
+	assert.Equal(t, "premium", resolved.Token,
+		"the tenant's assignment answers — not the first model on the menu, and not the baseline")
 }
 
 // A per-tenant additive grant reaches the resolver: the audited exception is real at
 // the point it matters, not just in the admin surface.
-func TestResolveForTenantHonoursAnAdditiveGrant(t *testing.T) {
+func TestResolveForFunctionHonoursAnAdditiveGrant(t *testing.T) {
 	srv := cannedServer(t)
 	defer srv.Close()
 	facts := &fakeFacts{enabled: true, tier: "bronze"}
 	r, api, ctx := newHarness(t, facts)
 	makeProvider(t, api, ctx, "fable", srv.URL, "sk", true)
-	// bronze offers nothing; t1 is granted fable as an exception. It is the sole model
-	// on the menu, so it is the default.
+	// bronze offers nothing; t1 is granted fable as an exception and assigns it. Being
+	// the sole model on its menu is NOT what makes it answer — the assignment is.
 	require.NoError(t, api.GrantProviderToTenant(context.Background(), "t1", "fable"))
+	assign(t, api, "fable")
 
-	resolved, err := r.ResolveForTenant(ctx, "t1")
+	resolved, err := resolve(r, ctx, "t1")
 	require.NoError(t, err)
 	assert.Equal(t, "fable", resolved.Token,
 		"a bronze tenant given Fable as an exception can use it (ADR-065 decision 7)")
 }
 
-func TestResolveForTenantConsentDenied(t *testing.T) {
+func TestResolveForFunctionConsentDenied(t *testing.T) {
 	facts := &fakeFacts{enabled: false}
 	r, api, ctx := newHarness(t, facts)
 	makeProvider(t, api, ctx, "p", "", "sk", true)
 	offer(t, api, "p")
-	_, err := r.ResolveForTenant(ctx, "t1")
+	_, err := resolve(r, ctx, "t1")
 	assert.ErrorIs(t, err, ErrConsentRequired)
 	assert.Equal(t, 1, facts.calls)
 }
 
-func TestResolveForTenantConsentError(t *testing.T) {
+func TestResolveForFunctionConsentError(t *testing.T) {
 	facts := &fakeFacts{err: errors.New("um down")}
 	r, api, ctx := newHarness(t, facts)
 	makeProvider(t, api, ctx, "p", "", "sk", true)
 	offer(t, api, "p")
-	_, err := r.ResolveForTenant(ctx, "t1")
+	_, err := resolve(r, ctx, "t1")
 	assert.ErrorIs(t, err, ErrUnavailable, "a consent-check error must fail closed, never allow")
 }
 
-func TestResolveForTenantNoKey(t *testing.T) {
+func TestResolveForFunctionNoKey(t *testing.T) {
 	facts := &fakeFacts{enabled: true}
 	r, api, ctx := newHarness(t, facts)
 	makeProvider(t, api, ctx, "p", "", "", true) // enabled, opted-in, but NO key
 	offer(t, api, "p")
-	_, err := r.ResolveForTenant(ctx, "t1")
+	_, err := resolve(r, ctx, "t1")
 	assert.ErrorIs(t, err, ErrUnavailable)
 	assert.Equal(t, 1, facts.calls, "consent is checked before the key resolves")
 }
 
-func TestResolveForTenantSuccess(t *testing.T) {
+func TestResolveForFunctionSuccess(t *testing.T) {
 	srv := cannedServer(t)
 	defer srv.Close()
 	facts := &fakeFacts{enabled: true}
@@ -287,7 +320,7 @@ func TestResolveForTenantSuccess(t *testing.T) {
 	makeProvider(t, api, ctx, "p", srv.URL, "sk", true)
 	offer(t, api, "p")
 
-	resolved, err := r.ResolveForTenant(ctx, "t1")
+	resolved, err := resolve(r, ctx, "t1")
 	require.NoError(t, err)
 	assert.Equal(t, "p", resolved.Token)
 	out, err := resolved.Provider.Infer(ctx, Input{Prompt: "hi"})
@@ -326,14 +359,14 @@ func TestResolveProviderMissing(t *testing.T) {
 // A tenant over its inference rate ceiling is shed with the distinct, transient
 // ErrRateLimited sentinel — not the coarse ErrUnavailable, which would tell an author
 // to go find an operator for something that resolves by waiting a moment.
-func TestResolveForTenantRateLimited(t *testing.T) {
+func TestResolveForFunctionRateLimited(t *testing.T) {
 	facts := &fakeFacts{enabled: true}
 	rate := &fakeRate{allow: false}
 	r, api, ctx := newHarnessWithRate(t, facts, rate)
 	makeProvider(t, api, ctx, "p", "", "sk", true)
 	offer(t, api, "p")
 
-	_, err := r.ResolveForTenant(ctx, "t1")
+	_, err := resolve(r, ctx, "t1")
 	assert.ErrorIs(t, err, ErrRateLimited)
 	assert.Equal(t, 1, rate.calls, "the gate is charged exactly once per resolution")
 	assert.Equal(t, "t1", rate.tenant, "the ceiling is charged against the CALLING tenant")
@@ -343,14 +376,14 @@ func TestResolveForTenantRateLimited(t *testing.T) {
 // check: consent is deliberately uncached (so a revocation takes effect at once), which
 // makes it one user-management query per call — a caller looping the door would turn
 // its loop into a user-management flood. Shedding first keeps the loop in memory.
-func TestResolveForTenantRateLimitPrecedesConsent(t *testing.T) {
+func TestResolveForFunctionRateLimitPrecedesConsent(t *testing.T) {
 	facts := &fakeFacts{enabled: true}
 	rate := &fakeRate{allow: false}
 	r, api, ctx := newHarnessWithRate(t, facts, rate)
 	makeProvider(t, api, ctx, "p", "", "sk", true)
 	offer(t, api, "p")
 
-	_, err := r.ResolveForTenant(ctx, "t1")
+	_, err := resolve(r, ctx, "t1")
 	assert.ErrorIs(t, err, ErrRateLimited)
 	assert.Zero(t, facts.calls, "a shed call must not reach the uncached consent network call")
 }
@@ -358,31 +391,31 @@ func TestResolveForTenantRateLimitPrecedesConsent(t *testing.T) {
 // The consent gate still runs on every call that is UNDER the ceiling, so putting rate
 // first cannot let data cross the boundary un-consented — it changes only the message
 // an abusive caller sees, never the security invariant.
-func TestResolveForTenantRateAllowedStillChecksConsent(t *testing.T) {
+func TestResolveForFunctionRateAllowedStillChecksConsent(t *testing.T) {
 	facts := &fakeFacts{enabled: false}
 	rate := &fakeRate{allow: true}
 	r, api, ctx := newHarnessWithRate(t, facts, rate)
 	makeProvider(t, api, ctx, "p", "", "sk", true)
 	offer(t, api, "p")
 
-	_, err := r.ResolveForTenant(ctx, "t1")
+	_, err := resolve(r, ctx, "t1")
 	assert.ErrorIs(t, err, ErrConsentRequired, "consent is still enforced under the ceiling")
 	assert.Equal(t, 1, facts.calls)
 }
 
 // Budget is only charged past the cheap local gates: a call that could never have been
 // served (no active provider) must not consume the tenant's ceiling.
-func TestResolveForTenantNoActiveDoesNotChargeBudget(t *testing.T) {
+func TestResolveForFunctionNoActiveDoesNotChargeBudget(t *testing.T) {
 	r, api, ctx := newHarnessWithRate(t, &fakeFacts{enabled: true}, panicRate{t})
 	makeProvider(t, api, ctx, "p", "", "sk", true) // created but NOT activated
-	_, err := r.ResolveForTenant(ctx, "t1")
+	_, err := resolve(r, ctx, "t1")
 	assert.ErrorIs(t, err, ErrUnavailable)
 }
 
 // Likewise a request with no tenant: there is nothing to charge.
-func TestResolveForTenantNoTenantDoesNotChargeBudget(t *testing.T) {
+func TestResolveForFunctionNoTenantDoesNotChargeBudget(t *testing.T) {
 	r, _, ctx := newHarnessWithRate(t, &fakeFacts{enabled: true}, panicRate{t})
-	_, err := r.ResolveForTenant(ctx, "  ")
+	_, err := resolve(r, ctx, "  ")
 	assert.ErrorIs(t, err, ErrUnavailable)
 }
 
@@ -401,13 +434,13 @@ func TestResolveProviderSmokeTestDoesNotChargeBudget(t *testing.T) {
 
 // A resolver built with no gate is unmetered — the tests-only escape hatch. main always
 // wires one, since the platform default is itself a limit.
-func TestResolveForTenantNilRateGateIsUnmetered(t *testing.T) {
+func TestResolveForFunctionNilRateGateIsUnmetered(t *testing.T) {
 	srv := cannedServer(t)
 	defer srv.Close()
 	r, api, ctx := newHarnessWithRate(t, &fakeFacts{enabled: true}, nil)
 	makeProvider(t, api, ctx, "p", srv.URL, "sk", true)
 	offer(t, api, "p")
-	_, err := r.ResolveForTenant(ctx, "t1")
+	_, err := resolve(r, ctx, "t1")
 	assert.NoError(t, err)
 }
 

@@ -136,18 +136,16 @@ func (r *AdminResolver) AiProviderTenantGrants(ctx context.Context, args struct 
 	return out, nil
 }
 
-// GrantAiProviderToTier offers a provider to every tenant at a tier. Idempotent;
-// makeDefault promotes it to the tier's default in the same transaction.
+// GrantAiProviderToTier offers a provider to every tenant at a tier — an entitlement,
+// and nothing about which model anything uses. Idempotent.
 func (r *AdminResolver) GrantAiProviderToTier(ctx context.Context, args struct {
-	Tier        string
-	Provider    string
-	MakeDefault *bool
+	Tier     string
+	Provider string
 }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
 		return false, err
 	}
-	makeDefault := args.MakeDefault != nil && *args.MakeDefault
-	if err := apiFrom(ctx).GrantProviderToTier(ctx, args.Tier, args.Provider, makeDefault); err != nil {
+	if err := apiFrom(ctx).GrantProviderToTier(ctx, args.Tier, args.Provider); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -165,31 +163,34 @@ func (r *AdminResolver) RevokeAiProviderFromTier(ctx context.Context, args struc
 	return apiFrom(ctx).RevokeProviderFromTier(ctx, args.Tier, args.Provider)
 }
 
-// SetAiTierDefault marks an already-granted provider as a tier's default model,
-// demoting any previous default atomically.
-func (r *AdminResolver) SetAiTierDefault(ctx context.Context, args struct {
-	Tier     string
-	Provider string
+// SetPlatformBaselineProvider designates a provider as the instance's baseline model:
+// what a tenant gets for a function it never assigned, PROVIDED its menu includes that
+// model. Demotes any previous baseline atomically.
+//
+// It is not the retired instance-wide active pointer returning. That pointer decided
+// which model every tenant used regardless of packaging; this is a fallback filtered
+// through the tenant's own menu, so it can never serve a tenant a model its tier was
+// not sold (model.Api.ResolveModelForFunction).
+func (r *AdminResolver) SetPlatformBaselineProvider(ctx context.Context, args struct {
+	Token string
 }) (bool, error) {
 	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
 		return false, err
 	}
-	if err := apiFrom(ctx).SetTierDefault(ctx, args.Tier, args.Provider); err != nil {
+	if err := apiFrom(ctx).SetPlatformBaseline(ctx, args.Token); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// ClearAiTierDefault leaves a tier's grants in place but marks none of them default.
-// Idempotent. With two or more models offered, tenants at the tier must then choose
-// explicitly.
-func (r *AdminResolver) ClearAiTierDefault(ctx context.Context, args struct {
-	Tier string
-}) (bool, error) {
+// ClearPlatformBaselineProvider designates no baseline, leaving every provider
+// registered. Idempotent. Afterwards a tenant that assigned no model for a function
+// resolves to none and must choose explicitly.
+func (r *AdminResolver) ClearPlatformBaselineProvider(ctx context.Context) (bool, error) {
 	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
 		return false, err
 	}
-	if err := apiFrom(ctx).ClearTierDefault(ctx, args.Tier); err != nil {
+	if err := apiFrom(ctx).ClearPlatformBaseline(ctx); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -222,36 +223,6 @@ func (r *AdminResolver) RevokeAiProviderFromTenant(ctx context.Context, args str
 		return false, err
 	}
 	return apiFrom(ctx).RevokeProviderFromTenant(ctx, args.Tenant, args.Provider)
-}
-
-// SetAiTenantDefault marks one of a tenant's additive grants as its default, demoting
-// any previous one. It decides the tenant's default only when its tier marks none —
-// see model.SetTenantDefault and model.MenuForTenant's precedence.
-func (r *AdminResolver) SetAiTenantDefault(ctx context.Context, args struct {
-	Tenant   string
-	Provider string
-}) (bool, error) {
-	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
-		return false, err
-	}
-	if err := apiFrom(ctx).SetTenantDefault(ctx, args.Tenant, args.Provider); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-// ClearAiTenantDefault leaves a tenant's additive grants in place but marks none of them
-// default. Idempotent.
-func (r *AdminResolver) ClearAiTenantDefault(ctx context.Context, args struct {
-	Tenant string
-}) (bool, error) {
-	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
-		return false, err
-	}
-	if err := apiFrom(ctx).ClearTenantDefault(ctx, args.Tenant); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // TestAiProvider runs an operator-supplied prompt through a SPECIFIC provider (by

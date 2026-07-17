@@ -12,8 +12,12 @@ import (
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
-// inferRuleCandidateMutation carries one NL-authoring prompt to ai-inference's active provider
-// (ADR-056). The candidate is the raw, untrusted model output — it is validated downstream by
+// inferRuleCandidateMutation carries one NL-authoring prompt to ai-inference (ADR-056), which
+// picks the model itself: the one the tenant assigned to the rule-drafting FUNCTION, or the
+// platform baseline, in either case only if the tenant is entitled to it (ADR-065). The request
+// deliberately carries no model or function: which job this is follows from the mutation being
+// called, and a caller able to name either would be choosing its own entitlement.
+// The candidate is the raw, untrusted model output — it is validated downstream by
 // this service's own rules.Compile firewall, never trusted here. The mutation is authorized by
 // the ai:infer authority the service-token client carries, and ai-inference resolves the tenant
 // from the token's tenant header to gate external-routing consent.

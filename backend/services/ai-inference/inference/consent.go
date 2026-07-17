@@ -68,7 +68,7 @@ func NewServiceTenantFactsReader(client *svcclient.Client, umURL string) TenantF
 // need. The failure is not a zero-value decode: graph-gophers validates the SELECTION
 // against the schema, so a renamed or dropped field makes the whole query an error
 // server-side, svcclient turns a non-empty `errors` array into a Go error rather than
-// decoding `data`, and Facts() returns that error — which ResolveForTenant treats as
+// decoding `data`, and Facts() returns that error — which ResolveForFunction treats as
 // ErrUnavailable and logs. The door does close for every tenant, but it says so.
 //
 // The names are still pinned by a test on each end (TestFactsQuerySelectsTheContractFields

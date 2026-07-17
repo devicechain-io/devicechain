@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-ai-inference/inference"
+	"github.com/devicechain-io/dc-ai-inference/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/rs/zerolog/log"
@@ -118,7 +119,12 @@ func (r *SchemaResolver) InferRuleCandidate(ctx context.Context, args struct {
 	}
 	// Every exit past this point records exactly one outcome, so the served + shed +
 	// denied counts reconcile against the requests that reached the cascade.
-	resolved, err := r.Inference.ResolveForTenant(ctx, tenant)
+	// The function is decided HERE, by which resolver this is — never read from the
+	// request. inferRuleCandidate drafts detection rules, so it asks for the model the
+	// tenant assigned to rule-drafting. A caller-supplied function token would be a
+	// client-settable entitlement surface: it would let a caller shop across functions
+	// for whichever one its tenant pointed at the most capable model.
+	resolved, err := r.Inference.ResolveForFunction(ctx, tenant, model.FunctionRuleDrafting)
 	if err != nil {
 		r.Metrics.recordCall(outcomeFor(err))
 		return nil, tenantSafeError(err)
