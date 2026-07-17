@@ -31,14 +31,21 @@ export default function TierDetailPage() {
 
   const back = <BackLink to="/admin/tiers">Tiers</BackLink>;
 
-  if (loading) {
+  // Gate the spinner and error on the FIRST load only (no data yet). Saving reloads this
+  // query, and useQuery re-enters `loading` on every refetch while keeping the prior
+  // `tiers` — so a bare `if (loading)` unmounted the whole page (and TierForm) to a
+  // spinner after every save, remounting the form on the default Basic tab and dumping an
+  // operator who saved from Settings back to Basic. With `!tiers` the form stays mounted
+  // and the active tab is preserved; the refetch repaints in place. (Same first-load
+  // gating the matrix page and TierAiModelsPanel use.)
+  if (loading && !tiers) {
     return (
       <PageShell title={token} action={back}>
         <LoadingState description="Loading tier…" />
       </PageShell>
     );
   }
-  if (error) {
+  if (error && !tiers) {
     return (
       <PageShell title={token} action={back}>
         <ErrorState description={error} />
