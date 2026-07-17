@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -323,8 +324,23 @@ func (api *Api) DeleteAIProvider(ctx context.Context, token string) (bool, error
 		return false, err
 	}
 
-	if err := api.sys(ctx).Unscoped().Where("token = ?", token).Delete(&AIProvider{}).Error; err != nil {
-		return false, err
+	// The `is_platform_baseline = false` predicate closes the gap between the check above
+	// and this delete. Grants and assignments are backstopped by their FKs (ON DELETE
+	// RESTRICT), so a concurrent grant cannot slip past assertProviderNotGranted — but
+	// the baseline designation is a column on THIS row, so no constraint objects to
+	// deleting the provider a SetPlatformBaseline just designated. Losing the baseline
+	// silently drops every non-choosing tenant to NONE, so the refusal is worth
+	// enforcing where the write actually lands rather than only where we looked.
+	res := api.sys(ctx).Unscoped().
+		Where("token = ? AND is_platform_baseline = ?", token, false).
+		Delete(&AIProvider{})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	if res.RowsAffected == 0 {
+		// It existed a moment ago and is not gone by our hand: it was designated the
+		// baseline in between. Report the same legible refusal the check would have.
+		return false, fmt.Errorf("%w: it is the platform baseline model", ErrProviderInUse)
 	}
 
 	// Remove the provider's key so a deleted provider leaves no orphaned secret

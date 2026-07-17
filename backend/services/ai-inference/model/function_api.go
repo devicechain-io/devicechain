@@ -158,8 +158,15 @@ func (api *Api) SetFunctionModel(ctx context.Context, tenantToken, function, pro
 			if existing.ProviderID == providerID {
 				return nil
 			}
-			return tx.Model(&AIFunctionAssignment{}).
-				Where("id = ?", existing.ID).Update("provider_id", providerID).Error
+			// Update THROUGH the loaded row, not through a zero-value model. The audit
+			// callback reads the struct it is handed to build its label and primary key
+			// (core/rdb/audit.go), so `tx.Model(&AIFunctionAssignment{}).Where("id = ?")`
+			// journals an empty row: no tenant, no function, no PK — on the one arm that
+			// CHANGES a tenant's answer. Re-pointing a tenant's model is precisely the
+			// audited act ADR-065 decision 7 exists for, so an unattributable entry is
+			// the same as no entry.
+			existing.ProviderID = providerID
+			return tx.Model(&existing).Update("provider_id", providerID).Error
 		case errors.Is(err, gorm.ErrRecordNotFound):
 		default:
 			return err
@@ -178,12 +185,24 @@ func (api *Api) ClearFunctionModel(ctx context.Context, tenantToken, function st
 	if !ValidFunction(function) {
 		return false, fmt.Errorf("%w: %q", ErrUnknownFunction, function)
 	}
-	res := api.sys(ctx).Where("tenant_id = ? AND function = ?", tenantToken, function).
-		Delete(&AIFunctionAssignment{})
-	if res.Error != nil {
-		return false, res.Error
+	// Load then delete, rather than deleting by predicate through a zero-value model:
+	// the audit callback labels the entry from the struct it is handed, so a predicate
+	// delete journals "provider#0" for a row that named a real provider. See
+	// SetFunctionModel's update arm — same reason, and clearing a choice is as auditable
+	// as changing one.
+	var existing AIFunctionAssignment
+	err := api.sys(ctx).Where("tenant_id = ? AND function = ?", tenantToken, function).
+		First(&existing).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return false, nil // idempotent: nothing chosen, nothing to clear.
+	case err != nil:
+		return false, err
 	}
-	return res.RowsAffected > 0, nil
+	if err := api.sys(ctx).Delete(&existing).Error; err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ListFunctionAssignments returns one tenant's stored choices with their providers, for
@@ -239,8 +258,24 @@ func (api *Api) SetPlatformBaseline(ctx context.Context, providerToken string) e
 			Update("is_platform_baseline", false).Error; err != nil {
 			return err
 		}
-		return tx.Model(&AIProvider{}).
-			Where("id = ?", providerID).Update("is_platform_baseline", true).Error
+		// Predicate on deleted_at and CHECK RowsAffected. providerIDByToken ran outside
+		// this transaction, so the provider can be deleted in between — legally, since it
+		// is not the baseline yet and so passes DeleteAIProvider's in-use refusal. Without
+		// this check the promote silently updates 0 rows, the demote above still commits,
+		// and the operator is told "set" while the instance is left with NO baseline —
+		// dropping every non-choosing tenant to NONE. The designation has neither an FK
+		// nor a uniqueness violation to catch that for us: it is a column on the
+		// provider's own row, so nothing else objects.
+		res := tx.Model(&AIProvider{}).
+			Where("id = ? AND deleted_at IS NULL", providerID).
+			Update("is_platform_baseline", true)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("%w: %q", ErrUnknownProvider, providerToken)
+		}
+		return nil
 	})
 }
 
