@@ -3,13 +3,14 @@
 
 package schema
 
+// This file imports none of the service's own packages, and that is a property worth
+// keeping rather than an accident. A migration that can reach a live model, a live
+// vocabulary or a live validator is a migration whose behaviour changes when those do.
+// Everything it needs — shapes, seed values, helpers — it holds itself.
 import (
+	"database/sql"
 	"fmt"
 
-	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-user-management/iam"
-	"github.com/devicechain-io/dc-user-management/model"
-	"github.com/devicechain-io/dc-user-management/settings"
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
 	"gorm.io/gorm"
 )
@@ -29,10 +30,10 @@ func dropTables(tx *gorm.DB, tables []string) error {
 // add their own — live, with no deploy — because what "bronze includes" is a product
 // decision that changes. Nothing in the code may assume these values still hold.
 //
-// Config carries ADR-023 rate ceilings, validated against the key registry
-// (decision 8; see iam.ValidateTierConfig). Every key here must be registered or the
-// tier is unwritable — which is the point: a typo cannot become a setting nothing
-// reads.
+// Config carries ADR-023 rate ceilings. These literals were valid against the key
+// registry (decision 8) when this migration was written and are not re-checked against
+// it at boot — see seedTenantTiers. The registry guards what an operator writes; a
+// shipped migration's seed is not a write anyone makes again.
 //
 // SILVER DECLARES NOTHING, deliberately. Its ceilings are the platform defaults
 // (event-sources ingest 1000/s burst 2000; outbound-connectors 100/s burst 200),
@@ -52,7 +53,7 @@ var seededTiers = []struct {
 	token, name, description string
 	config                   map[string]any
 }{
-	{iam.TierGoldToken, "Gold",
+	{"gold", "Gold",
 		"Premium packaging: the last to shed under contention, the broadest set of AI models, and the highest ceilings — double the standard ingest and egress rate.",
 		map[string]any{
 			"ingestMessagesPerSecond":   float64(2000),
@@ -60,10 +61,10 @@ var seededTiers = []struct {
 			"outboundMessagesPerSecond": float64(200),
 			"outboundBurst":             float64(400),
 		}},
-	{iam.TierSilverToken, "Silver",
+	{"silver", "Silver",
 		"Standard packaging: the platform's default ceilings and entitlements.",
 		nil},
-	{iam.TierBronzeToken, "Bronze",
+	{"bronze", "Bronze",
 		"Entry packaging: the first to shed under contention, a reduced set of AI models, and conservative ceilings — a quarter of the standard ingest and egress rate.",
 		map[string]any{
 			"ingestMessagesPerSecond":   float64(250),
@@ -107,36 +108,47 @@ var baselineTables = []string{
 // early migration silently acquired whatever a later slice added to a model — which
 // is how adding the tier's NOT NULL FK made the long-settled tenant migration create
 // that FK on a fresh database, wedging a later migration that then tried to add it
-// again. A single baseline over the current structs cannot drift from itself.
+// again. Collapsing the chain did not fix that — it hid it, because a chain of length
+// one has nothing to wedge against. What fixes it is that this migration now builds
+// from its own snapshot types rather than the live models.
 //
 // Consequence, and it is deliberate: an EXISTING instance is not migrated onto this
 // baseline, it is recreated (dcctl destroy + bootstrap). Nothing here is written to
 // preserve a pre-GA developer database.
 //
-// Adding a column from here on: AutoMigrate is idempotent and converges an existing
-// table on the struct, so a purely additive change needs no new migration at all
-// until v1.0.0 freezes this baseline. Anything NOT additive (a backfill, a
-// constraint over existing rows) still needs its own migration appended after this
-// one, and must be individually re-runnable — migrations run with
+// CHANGING THE SCHEMA FROM HERE ON: append a new migration. Do not touch this one, and
+// do not "update" the snapshot types it builds from — see baseline_snapshot.go. This
+// file describes the schema as of the flatten and must keep describing exactly that,
+// however far the live models move away from it; the difference between the two is
+// carried by the migrations stacked on top, and the GA squash folds them all back into
+// one. Anything appended must be individually re-runnable — migrations run with
 // UseTransaction:false (core/rdb: Timescale DDL cannot run in a transaction), so a
 // half-applied migration is never rolled back and replays from the top on the next
 // boot.
+//
+// The earlier advice here said the opposite — that additive changes needed no migration
+// because AutoMigrate converges. That was true only while this was the ONLY migration,
+// and it was the thing that made a second one impossible to write: the baseline pointed
+// at the live models, so adding a field to one silently changed what this migration
+// creates, and the migration adding that column then hit "column already exists" on
+// every fresh install.
 func NewBaselineSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20260716190000",
 		Migrate: func(tx *gorm.DB) error {
-			// TenantTier before Tenant: the tenant's required FK references it.
-			// AutoMigrate creates the many2many join tables for the role
-			// associations on its own.
+			// The SNAPSHOT types in baseline_snapshot.go, never the live models —
+			// see the note there. tenantTier before tenant: the tenant's required
+			// FK references it. AutoMigrate creates the many2many join tables for
+			// the role associations on its own.
 			if err := tx.AutoMigrate(
-				&model.SigningKey{},
-				&settings.SystemSetting{},
-				&iam.TenantTier{},
-				&iam.Tenant{},
-				&iam.Role{},
-				&iam.Identity{},
-				&iam.Membership{},
-				&iam.OAuthClient{},
+				&signingKey{},
+				&systemSetting{},
+				&tenantTier{},
+				&tenant{},
+				&role{},
+				&identity{},
+				&membership{},
+				&oauthClient{},
 			); err != nil {
 				return err
 			}
@@ -158,22 +170,27 @@ func NewBaselineSchema() *gormigrate.Migration {
 func seedTenantTiers(tx *gorm.DB) error {
 	for _, s := range seededTiers {
 		name, desc := s.name, s.description
-		// The seeds are held to the same registry the API enforces, so a bad key
-		// here fails the migration loudly at boot rather than shipping a tier whose
-		// setting nothing reads.
-		if err := iam.ValidateTierConfig(s.config); err != nil {
-			return fmt.Errorf("seed tenant tier %q: %w", s.token, err)
-		}
-		tier := iam.TenantTier{Token: s.token}
-		if err := tx.Where(iam.TenantTier{Token: s.token}).
-			Attrs(iam.TenantTier{
-				NamedEntity: rdb.NamedEntity{
-					Name:        rdb.NullStrOf(&name),
-					Description: rdb.NullStrOf(&desc),
-				},
-				Config: s.config,
+		// These values are NOT validated against iam's live tier-config key registry,
+		// and that is the snapshot rule rather than an omission. The blobs above are
+		// literals that were valid when this migration was written; checking them
+		// against a registry that moves would let a later slice retiring a governance
+		// dimension make this long-settled migration start failing at boot on every
+		// fresh install. The API validates what an OPERATOR writes, which is the write
+		// path that can actually carry a typo — nobody edits a shipped migration's seed.
+		// Seeded through the SNAPSHOT type, for the same reason the tables are created
+		// from it. Inserting through iam.TenantTier would write whatever columns the
+		// live model has TODAY into the table this migration created back THEN — so the
+		// first column added to the model would make this INSERT name a column that does
+		// not exist here yet, and the migration would die at boot on a fresh install.
+		// A migration's writes are part of its shape.
+		row := tenantTier{Token: s.token}
+		if err := tx.Where(tenantTier{Token: s.token}).
+			Attrs(tenantTier{
+				Name:        sql.NullString{String: name, Valid: true},
+				Description: sql.NullString{String: desc, Valid: true},
+				Config:      s.config,
 			}).
-			FirstOrCreate(&tier).Error; err != nil {
+			FirstOrCreate(&row).Error; err != nil {
 			return fmt.Errorf("seed tenant tier %q: %w", s.token, err)
 		}
 	}
