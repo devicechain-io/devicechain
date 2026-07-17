@@ -2,7 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Link, useLocation } from 'react-router-dom';
-import { Building2, Layers, ScrollText, Settings, ShieldCheck, Sparkles, Users } from 'lucide-react';
+import {
+  Building2,
+  Layers,
+  Package,
+  ScrollText,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Users,
+} from 'lucide-react';
 import { Logomark, LogoHorizontal } from '@/components/brand/Logo';
 import {
   Sidebar,
@@ -28,6 +37,9 @@ const NAV = [
   { label: 'Identities', href: '/admin/identities', icon: Users },
   { label: 'Roles', href: '/admin/roles', icon: ShieldCheck },
   { label: 'AI Providers', href: '/admin/ai-providers', icon: Sparkles },
+  // Registering a model and selling it are separate acts (ADR-065), so they are separate
+  // screens: the provider list is the model's config, packaging is which tiers get it.
+  { label: 'AI Packaging', href: '/admin/ai-packaging', icon: Package },
   { label: 'Audit', href: '/admin/audit', icon: ScrollText },
   { label: 'Settings', href: '/admin/settings', icon: Settings },
 ];

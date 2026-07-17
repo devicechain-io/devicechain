@@ -46,6 +46,11 @@ export type AiProviderKindsQueryVariables = Exact<{ [key: string]: never; }>;
 
 export type AiProviderKindsQuery = { aiProviderKinds: Array<string> };
 
+export type AiProviderTierGrantsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type AiProviderTierGrantsQuery = { aiProviderTierGrants: Array<{ tier: string, isDefault: boolean, provider: { token: string, name: string | null, enabled: boolean } }> };
+
 export type CreateAiProviderMutationVariables = Exact<{
   request: AiProviderCreateRequest;
 }>;
@@ -68,6 +73,37 @@ export type DeleteAiProviderMutationVariables = Exact<{
 
 
 export type DeleteAiProviderMutation = { deleteAiProvider: boolean };
+
+export type GrantAiProviderToTierMutationVariables = Exact<{
+  tier: string;
+  provider: string;
+}>;
+
+
+export type GrantAiProviderToTierMutation = { grantAiProviderToTier: boolean };
+
+export type RevokeAiProviderFromTierMutationVariables = Exact<{
+  tier: string;
+  provider: string;
+}>;
+
+
+export type RevokeAiProviderFromTierMutation = { revokeAiProviderFromTier: boolean };
+
+export type SetAiTierDefaultMutationVariables = Exact<{
+  tier: string;
+  provider: string;
+}>;
+
+
+export type SetAiTierDefaultMutation = { setAiTierDefault: boolean };
+
+export type ClearAiTierDefaultMutationVariables = Exact<{
+  tier: string;
+}>;
+
+
+export type ClearAiTierDefaultMutation = { clearAiTierDefault: boolean };
 
 export type TestAiProviderMutationVariables = Exact<{
   token: string;
@@ -137,6 +173,19 @@ export const AiProviderKindsDocument = new TypedDocumentString(`
   aiProviderKinds
 }
     `) as unknown as TypedDocumentString<AiProviderKindsQuery, AiProviderKindsQueryVariables>;
+export const AiProviderTierGrantsDocument = new TypedDocumentString(`
+    query AiProviderTierGrants {
+  aiProviderTierGrants {
+    tier
+    isDefault
+    provider {
+      token
+      name
+      enabled
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AiProviderTierGrantsQuery, AiProviderTierGrantsQueryVariables>;
 export const CreateAiProviderDocument = new TypedDocumentString(`
     mutation CreateAiProvider($request: AiProviderCreateRequest!) {
   createAiProvider(request: $request) {
@@ -161,6 +210,26 @@ export const DeleteAiProviderDocument = new TypedDocumentString(`
   deleteAiProvider(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteAiProviderMutation, DeleteAiProviderMutationVariables>;
+export const GrantAiProviderToTierDocument = new TypedDocumentString(`
+    mutation GrantAiProviderToTier($tier: String!, $provider: String!) {
+  grantAiProviderToTier(tier: $tier, provider: $provider)
+}
+    `) as unknown as TypedDocumentString<GrantAiProviderToTierMutation, GrantAiProviderToTierMutationVariables>;
+export const RevokeAiProviderFromTierDocument = new TypedDocumentString(`
+    mutation RevokeAiProviderFromTier($tier: String!, $provider: String!) {
+  revokeAiProviderFromTier(tier: $tier, provider: $provider)
+}
+    `) as unknown as TypedDocumentString<RevokeAiProviderFromTierMutation, RevokeAiProviderFromTierMutationVariables>;
+export const SetAiTierDefaultDocument = new TypedDocumentString(`
+    mutation SetAiTierDefault($tier: String!, $provider: String!) {
+  setAiTierDefault(tier: $tier, provider: $provider)
+}
+    `) as unknown as TypedDocumentString<SetAiTierDefaultMutation, SetAiTierDefaultMutationVariables>;
+export const ClearAiTierDefaultDocument = new TypedDocumentString(`
+    mutation ClearAiTierDefault($tier: String!) {
+  clearAiTierDefault(tier: $tier)
+}
+    `) as unknown as TypedDocumentString<ClearAiTierDefaultMutation, ClearAiTierDefaultMutationVariables>;
 export const TestAiProviderDocument = new TypedDocumentString(`
     mutation TestAiProvider($token: String!, $request: InferenceRequest!) {
   testAiProvider(token: $token, request: $request) {

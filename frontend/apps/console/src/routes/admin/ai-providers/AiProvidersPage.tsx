@@ -4,7 +4,7 @@
 // The AI Providers list (ADR-056 §4). Providers are INSTANCE-scoped, operator-managed
 // {kind, endpoint, model, write-only API key} configs. Registering a model here does
 // not offer it to anyone: which tenants may use it is decided by granting it to a
-// tenant TIER (ADR-065 decision 10), which is its own screen.
+// tenant TIER (ADR-065 decision 10), which is its own screen — /admin/ai-packaging.
 //
 // This is an ADMIN-console screen (ADR-065): it sits behind AdminProtectedRoute (a
 // superuser identity session) and calls the ai-inference ADMIN plane, which accepts
@@ -18,7 +18,7 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2 } from 'lucide-react';
+import { Package, Plus, Trash2 } from 'lucide-react';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   listAiProviders,
@@ -100,12 +100,17 @@ export default function AiProvidersPage() {
   return (
     <PageShell
       title="AI Providers"
-      description="AI models registered on this instance. Registering one does not offer it to anyone — grant it to a tier to put it on those tenants’ menu."
+      description="AI models registered on this instance. Registering one does not offer it to anyone — grant it to a tier, under AI packaging, to put it on those tenants’ menu."
       banner="dashboard"
       action={
-        <Button onClick={() => setCreating(true)}>
-          <Plus size={16} /> New provider
-        </Button>
+        <>
+          <Button variant="outline" onClick={() => navigate('/admin/ai-packaging')}>
+            <Package size={16} /> Packaging
+          </Button>
+          <Button onClick={() => setCreating(true)}>
+            <Plus size={16} /> New provider
+          </Button>
+        </>
       }
     >
       <FormDrawer open={creating} onOpenChange={setCreating} title="New AI provider">
