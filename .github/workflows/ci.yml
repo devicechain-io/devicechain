@@ -130,6 +130,46 @@ jobs:
   # release ships.
 
   # ---------------------------------------------------------------------------
+  # Migrations: prove every area's chain still reproduces its golden schema.
+  #
+  # THIS IS THE ONLY THING THAT CHECKS THE MIGRATIONS AT ALL. The unit tests build
+  # their schema by AutoMigrating the LIVE structs on SQLite; nothing but main.go
+  # and this harness ever runs a gormigrate chain, and nothing but this runs it
+  # against real Postgres + Timescale. A migration can therefore be broken, or
+  # silently changed, with every other gate green.
+  #
+  # What it catches that review cannot: a migration is supposed to be frozen in
+  # time, but it is written in Go, so anything it REFERENCES can move underneath
+  # it — and the diff that moves it need not touch the migration, the service, or
+  # even the module. A core/rdb mixin embedded in a migration's snapshot struct is
+  # the live example (~111 of them across the areas today). Gorm's own conventions
+  # are another: adding a TableName() to a model that lacked one silently renames
+  # its indexes, because core/rdb pins the NamingStrategy TablePrefix and that
+  # prefix applies only to DERIVED names. That one was found by this harness, on a
+  # change that looked like pure cleanup and passed every other gate.
+  #
+  # If it fails: either the change was unintended — fix it — or the schema really
+  # did change, in which case re-snapshot the goldens IN THE SAME PR
+  # (hack/migration-diff.sh snapshot) so the diff shows a human what moved.
+  # ---------------------------------------------------------------------------
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # Runs the production rdb.RdbManager path against a throwaway TimescaleDB
+      # the script starts in docker (present on ubuntu-latest), then diffs each
+      # area's pg_dump against backend/tools/migrationdiff/golden/.
+      - name: migration-diff verify
+        run: hack/migration-diff.sh verify
+
+  # ---------------------------------------------------------------------------
   # License header check (backend only, per CLAUDE.md).
   # ---------------------------------------------------------------------------
   license:
