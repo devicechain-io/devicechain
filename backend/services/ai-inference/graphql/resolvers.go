@@ -82,6 +82,7 @@ func (r *AIProviderTenantGrantResolver) Tenant() string { return r.M.TenantToken
 func (r *AIProviderTenantGrantResolver) Provider() *AIProviderResolver {
 	return &AIProviderResolver{M: r.M.Provider, C: r.C}
 }
+func (r *AIProviderTenantGrantResolver) IsDefault() bool { return r.M.IsDefault }
 
 // HasSecret reports whether an API key is configured, without exposing it. The key is
 // write-only (accepted on create/update, never returned) and lives in the envelope-

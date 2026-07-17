@@ -82,6 +82,10 @@ type AiProviderTierGrant {
 type AiProviderTenantGrant {
     tenant: String!
     provider: AiProvider!
+    # Whether this is the TENANT's own marked default. It decides only for a tenant whose
+    # tier offers no models at all — otherwise the tier answers, including when the tier's
+    # answer is "no default". Readable so an operator can see what setAiTenantDefault did.
+    isDefault: Boolean!
 }
 
 # Data to create or update a provider. `secret` (the API key) is write-only: omit it

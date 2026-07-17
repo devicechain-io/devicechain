@@ -188,9 +188,9 @@ func TestGrantingMoreNeverChangesTheDefault(t *testing.T) {
 }
 
 // TestNoDefaultIsEverInferredFromTheMenuSize guards the SHAPE rather than its instances.
-// pickDefault takes the two marks and no set, so there is nothing to count; this asserts
-// the consequence directly, so that reintroducing any "if exactly one model is granted…"
-// rule fails here even on an axis the table above does not enumerate.
+// pickDefault takes the two marks and no sizes, so there is nothing to count; this
+// asserts the consequence directly, so that reintroducing any "if exactly one model is
+// granted…" rule fails here even on an axis the table above does not enumerate.
 func TestNoDefaultIsEverInferredFromTheMenuSize(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
@@ -206,6 +206,116 @@ func TestNoDefaultIsEverInferredFromTheMenuSize(t *testing.T) {
 	require.Equal(t, []string{"sonnet"}, menuTokens(menu), "the model is on the menu and usable")
 	assert.Nil(t, menu.Default,
 		"a sole usable model is NOT a default: an operator cleared the mark and that is a choice")
+}
+
+// TestAnOperatorsNoDefaultSurvivesTheMenuGrowing is the OTHER half of monotonicity, and
+// the half I missed: TestGrantingMoreNeverChangesTheDefault is conditioned on the tenant
+// STARTING with a usable default, so every state where the operator's answer is
+// deliberately NONE fell outside its precondition — and that is exactly where the next
+// bug was living.
+//
+// NONE is an answer, not an absence. An operator who clears a tier's default, or revokes
+// the marked grant, has said "tenants here choose explicitly". Growing the menu must not
+// silently overturn that: the auto-mark's probe is on the GRANT set precisely so that a
+// state an operator can put the tier INTO cannot be mistaken for the state it STARTED in
+// (see GrantProviderToTier).
+func TestAnOperatorsNoDefaultSurvivesTheMenuGrowing(t *testing.T) {
+	cases := []struct {
+		name      string
+		clearIt   func(t *testing.T, api *Api)
+		grantMore func(t *testing.T, api *Api)
+	}{{
+		name: "tier axis: cleared, then granted an unmarked extra",
+		clearIt: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
+			require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
+		},
+		grantMore: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable", false))
+		},
+	}, {
+		name: "tier axis: marked default revoked, then granted an unmarked extra",
+		clearIt: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "cheap", false))
+			removed, err := api.RevokeProviderFromTier(adminCtx(), "gold", "sonnet")
+			require.NoError(t, err)
+			require.True(t, removed)
+		},
+		grantMore: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "fable", false))
+		},
+	}, {
+		name: "tier axis: a re-grant of an ALREADY-granted pair says nothing about the default",
+		clearIt: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", true))
+			require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
+		},
+		grantMore: func(t *testing.T, api *Api) {
+			// Documented as idempotent: "re-granting an existing pair updates nothing".
+			require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet", false))
+		},
+	}, {
+		name: "tenant axis: cleared, then granted a second exception",
+		clearIt: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "sonnet"))
+			require.NoError(t, api.ClearTenantDefault(adminCtx(), "acme"))
+		},
+		grantMore: func(t *testing.T, api *Api) {
+			require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
+		},
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newTestApi(t)
+			mustProvider(t, api, "sonnet")
+			mustProvider(t, api, "fable")
+			mustProvider(t, api, "cheap")
+			tc.clearIt(t, api)
+
+			before, err := api.MenuForTenant(tenantCtx("acme"), "gold")
+			require.NoError(t, err)
+			require.Nil(t, before.Default, "precondition: the operator's answer is NONE")
+
+			tc.grantMore(t, api)
+
+			after, err := api.MenuForTenant(tenantCtx("acme"), "gold")
+			require.NoError(t, err)
+			assert.Nil(t, after.Default,
+				"MONOTONICITY: an operator's explicit NO-DEFAULT must survive the menu growing")
+		})
+	}
+}
+
+// TestATierLevelActLandsTheSameForEveryTenantOnTheTier. Revoking a tier's marked default
+// destroys the mark with the row, so it presents identically to "this tier grants
+// nothing" — and reading the mark alone, the tenant's own mark then answered instead.
+// The result was tenants at ONE tier silently resolving to DIFFERENT models based on
+// which of them happened to hold an exception, on an act aimed at the tier.
+func TestATierLevelActLandsTheSameForEveryTenantOnTheTier(t *testing.T) {
+	api := newTestApi(t)
+	mustProvider(t, api, "premium")
+	mustProvider(t, api, "cheap")
+	mustProvider(t, api, "fable")
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "premium", true))
+	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "cheap", false))
+	// acme holds an exception; globex does not. Both are gold.
+	require.NoError(t, api.GrantProviderToTenant(adminCtx(), "acme", "fable"))
+
+	removed, err := api.RevokeProviderFromTier(adminCtx(), "gold", "premium")
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	plain, err := api.MenuForTenant(tenantCtx("globex"), "gold")
+	require.NoError(t, err)
+	exception, err := api.MenuForTenant(tenantCtx("acme"), "gold")
+	require.NoError(t, err)
+
+	assert.Nil(t, plain.Default, "the tier lost its default, so a plain gold tenant has none")
+	assert.Nil(t, exception.Default,
+		"and an exception-holding gold tenant must land the SAME way — its exception widens "+
+			"what it may choose, it does not quietly answer for the tier")
 }
 
 // TestRevokingAMarkedDefaultDoesNotPromoteASurvivor. Revoking hard-deletes the grant the
@@ -249,12 +359,23 @@ func TestATenantMarkDoesNotOverrideItsTier(t *testing.T) {
 	require.NotNil(t, menu.Default)
 	assert.Equal(t, "sonnet", menu.Default.Token, "the tier's mark outranks the tenant's")
 
-	// ...and the tenant's mark is not discarded: it decides once the tier stops speaking.
+	// Clearing the tier's default does NOT hand the decision to the tenant's mark: a tier
+	// that still GRANTS something is still answering, and its answer is now NONE. Only a
+	// tier with no grants at all has no opinion to have — otherwise a tier-level act
+	// would land differently for the tenants holding exceptions.
 	require.NoError(t, api.ClearTierDefault(adminCtx(), "gold"))
 	menu, err = api.MenuForTenant(tenantCtx("acme"), "gold")
 	require.NoError(t, err)
+	assert.Nil(t, menu.Default,
+		"the tier still offers sonnet, so the tier answers — and it now answers NONE")
+
+	// The tenant's mark is not discarded, though: it decides for a tenant whose tier
+	// offers nothing at all, which is the only tenant it was ever meant to speak for.
+	menu, err = api.MenuForTenant(tenantCtx("acme"), "bronze")
+	require.NoError(t, err)
 	require.NotNil(t, menu.Default)
-	assert.Equal(t, "fable", menu.Default.Token, "with the tier silent, the tenant's mark decides")
+	assert.Equal(t, "fable", menu.Default.Token,
+		"bronze grants nothing, so acme's own mark is the only opinion available")
 }
 
 // TestAnExceptionOnlyTenantCanBeRepaired. The bug that started this had no operator
@@ -404,9 +525,16 @@ func TestDisabledProvidersNeverReachAMenu(t *testing.T) {
 	assert.Nil(t, menu.Default, "and it cannot remain the default it was marked as")
 }
 
-// TestTheDefaultFallsBackToASoleModel covers step 2 of the default rule: an operator
-// who grants exactly one model and never marks a default plainly means that model.
-func TestTheDefaultFallsBackToASoleModel(t *testing.T) {
+// TestTheFirstGrantToATierIsAutoMarked. An operator who offers a tier its only model
+// plainly means that model, so granting still just works without a second call — but the
+// mechanism matters and its name used to lie about it. This test was called
+// "TestTheDefaultFallsBackToASoleModel", describing a READ-time sole-model fallback that
+// is exactly the bug three fixes went into killing; it kept passing here via the
+// auto-mark, telling any future reader the counting rule was alive and sanctioned.
+//
+// The convenience is real. It lives at WRITE time, as a mark on a row an operator can
+// see and change — not as a rule that re-answers as the menu grows.
+func TestTheFirstGrantToATierIsAutoMarked(t *testing.T) {
 	api := newTestApi(t)
 	mustProvider(t, api, "sonnet")
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "bronze", "sonnet", false))
@@ -415,6 +543,12 @@ func TestTheDefaultFallsBackToASoleModel(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, menu.Default)
 	assert.Equal(t, "sonnet", menu.Default.Token)
+
+	// It is a stored mark, not an inference: the grant row itself carries it.
+	grants, err := api.ListTierGrants(adminCtx())
+	require.NoError(t, err)
+	require.Len(t, grants, 1)
+	assert.True(t, grants[0].IsDefault, "the default is a row an operator can read back")
 }
 
 // TestNoDefaultWhenTheChoiceIsAmbiguous: with several models offered and the mark

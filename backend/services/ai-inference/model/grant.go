@@ -74,9 +74,14 @@ type AIProviderTierGrant struct {
 	//
 	// THE MARK IS THE ONLY SOURCE OF A DEFAULT. There is no "…and if exactly one model
 	// is granted, treat it as the default" fallback — see pickDefault for why that rule
-	// cost us the same bug three times. GrantProviderToTier auto-marks the FIRST grant
-	// to a tier so that offering a model still just works, which means "granted but no
-	// mark anywhere" only arises from an explicit ClearTierDefault.
+	// cost us the same bug three times. GrantProviderToTier auto-marks the tier's FIRST
+	// grant so that offering a model still just works; every later grant leaves the mark
+	// alone, including when there is none.
+	//
+	// So a tier CAN be granted-but-unmarked, and that state is deliberate and stable: an
+	// operator reaches it by clearing the default or by revoking the marked grant, and
+	// once there, growing the menu will not fill it back in. Reading it as "nobody has
+	// chosen yet, so choose for them" is the same bug wearing a different hat.
 	//
 	// No gorm `default` tag: a `default:false` would make gorm substitute the DB
 	// default for the Go zero value, which is the shape that made Enabled
