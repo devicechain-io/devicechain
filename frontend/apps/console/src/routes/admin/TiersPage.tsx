@@ -12,7 +12,7 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, GripVertical } from 'lucide-react';
+import { Plus, GripVertical, ChevronRight } from 'lucide-react';
 import {
   DndContext,
   closestCenter,
@@ -162,21 +162,28 @@ function TierRow({ tier, onOpen }: { tier: AdminTenantTierDetail; onOpen: () => 
         <GripVertical size={16} />
       </button>
 
+      {/* The rest of the row opens the tier. Hover + a chevron make it read as a link;
+          without them the detail page was reachable but invisible. */}
       <button
         type="button"
         onClick={onOpen}
-        className="flex flex-1 items-center gap-3 text-left"
+        className="group -mx-2 flex flex-1 items-center gap-3 rounded px-2 py-1 text-left hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
-        <TierPill label={tier.name ?? tier.token} color={tier.color} />
-        <span className="font-medium">{tier.token}</span>
-        {tier.description && (
-          <span className="max-w-md truncate text-sm text-muted-foreground">
-            {tier.description}
-          </span>
-        )}
-        <Badge variant="secondary" className="ml-auto">
+        {/* The pill carries the token (lowercase, fixed width, colored). */}
+        <TierPill label={tier.token} color={tier.color} />
+        {/* The human name is the primary label, to the right of the pill, capitalized as
+            entered. Falls back to the token only when a tier has no name. */}
+        <span className="font-medium">{tier.name ?? tier.token}</span>
+        <span className="max-w-md flex-1 truncate text-sm text-muted-foreground">
+          {tier.description ?? 'No description'}
+        </span>
+        <Badge variant="secondary">
           {tier.tenantCount} tenant{tier.tenantCount === 1 ? '' : 's'}
         </Badge>
+        <ChevronRight
+          size={16}
+          className="text-muted-foreground/50 transition group-hover:text-muted-foreground"
+        />
       </button>
     </li>
   );

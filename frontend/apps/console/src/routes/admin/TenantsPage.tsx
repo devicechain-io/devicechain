@@ -59,11 +59,11 @@ export default function TenantsPage() {
                 >
                   <DataTableCell className="font-medium">{t.token}</DataTableCell>
                   <DataTableCell>{t.name ?? '—'}</DataTableCell>
-                  {/* Never blank: the tier is a required FK (ADR-065). The pill's color
-                      is the tier's (S5c) — presentation, so a tenant reads at a glance as
-                      its packaging. */}
+                  {/* Never blank: the tier is a required FK (ADR-065). The pill carries
+                      the tier token in the tier's color (S5c) — presentation, so a tenant
+                      reads at a glance as its packaging. */}
                   <DataTableCell>
-                    <TierPill label={t.tier.name || t.tier.token} color={t.tier.color} />
+                    <TierPill label={t.tier.token} color={t.tier.color} />
                   </DataTableCell>
                   <DataTableCell>
                     <StatusBadge enabled={t.enabled} />

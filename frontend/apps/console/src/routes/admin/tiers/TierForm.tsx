@@ -157,8 +157,9 @@ export function TierForm({
               />
             ))}
           </div>
-          {/* Live preview: what the pill will actually look like with the current name. */}
-          <TierPill label={name.trim() || token.trim() || 'tier'} color={color} />
+          {/* Live preview: what the pill will actually look like. It carries the token,
+              so the preview shows the token, matching how it renders everywhere else. */}
+          <TierPill label={token.trim() || 'tier'} color={color} />
         </div>
       </FormField>
 

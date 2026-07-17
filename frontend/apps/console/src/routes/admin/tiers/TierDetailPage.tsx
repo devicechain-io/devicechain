@@ -15,6 +15,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { listTenantTierCatalog, deleteTenantTier } from '@/lib/api/admin';
 import { BackLink, errMessage, useReload } from '@/routes/common';
 import { TierForm } from '@/routes/admin/tiers/TierForm';
+import { TierPill } from '@/components/tiers/TierPill';
 
 export default function TierDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
@@ -81,10 +82,11 @@ export default function TierDetailPage() {
       title={token}
       description={
         <div className="mt-1 flex items-center gap-2">
+          <TierPill label={tier.token} color={tier.color} />
+          {tier.name && <span className="text-sm font-medium">{tier.name}</span>}
           <Badge variant="secondary">
             <Users size={12} /> {tier.tenantCount} {tier.tenantCount === 1 ? 'tenant' : 'tenants'}
           </Badge>
-          {tier.name && <span className="text-sm text-muted-foreground">{tier.name}</span>}
         </div>
       }
       action={

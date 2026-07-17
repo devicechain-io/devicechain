@@ -51,7 +51,10 @@ export function TierPill({
   color,
   className,
 }: {
-  // The text on the pill — a tier's name, or its token when unnamed.
+  // The text on the pill — the tier's TOKEN. Kept lowercase and short on purpose: the
+  // pill is the tier's stable identifier + color, and the human-facing NAME (which may be
+  // capitalized or absent) is shown separately beside it. Passing the token keeps every
+  // pill consistent — a mix of names and tokens made some pills capitalized and some not.
   label: string;
   color: string | null | undefined;
   className?: string;
@@ -59,7 +62,10 @@ export function TierPill({
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset',
+        // Fixed min-width + centered so a column of pills lines up regardless of token
+        // length; lowercase because tokens are (a token cannot start upper, but this
+        // makes the intent explicit and survives any future display name slipping in).
+        'inline-flex min-w-[4.5rem] items-center justify-center rounded-full px-2 py-0.5 text-xs font-medium lowercase ring-1 ring-inset',
         tierSwatch(color),
         className,
       )}
