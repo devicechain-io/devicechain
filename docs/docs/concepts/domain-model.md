@@ -79,6 +79,28 @@ form, matching what the platform will accept. Commands you have authored but not
 are named alongside the picker as unavailable, so a missing command reads as "not published
 yet" rather than as a missing feature.
 
+## Command lifecycle
+
+An issued command is persisted and tracked, not fire-and-forget. It moves through:
+
+- **`QUEUED`** — accepted and validated, waiting to be dispatched.
+- **`SENT`** — published to the device's own command topic.
+- **`SUCCESSFUL`** / **`FAILED`** — the device reported the outcome.
+- **`TIMEOUT`** / **`EXPIRED`** — a TTL elapsed. `EXPIRED` means it never went out;
+  `TIMEOUT` means it did and was never answered. Cancelling a command also records
+  `EXPIRED`.
+
+**A command only reaches a terminal outcome if the device answers.** Reporting the result
+is the device's half of the contract — see
+[Responding to a command](../guides/connecting-a-device.md#responding-to-a-command). A
+device that never responds leaves its commands in `SENT` until they expire, and a command
+issued with no `expiresAt` stays there indefinitely, so set one if your devices do not
+report outcomes.
+
+Each device receives commands on a topic scoped to that device alone, and is authorized
+for that topic only — a device cannot observe commands addressed to any other device in
+its tenant.
+
 ## Identity and credentials
 
 A device has a **stable identity** that everything else references, kept separate from its **credentials** (the material it uses to authenticate). Credentials are pluggable — **access token**, **MQTT-basic** (username + password), and **X.509 certificate** — so a device can rotate or hold multiple credentials without changing its identity. A credential's secret is **write-only**: it is submitted when the credential is registered and never returned on read. See [Device credentials](../guides/device-credentials.md).
