@@ -85,16 +85,22 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
   // The device's PUBLISHED vocabulary — what the enqueue gate will actually accept.
   // Loaded separately from the history so a vocabulary failure degrades the form
   // rather than blanking the panel.
-  const { data: vocabulary, loading: vocabularyLoading } = useQuery(
-    () => getDeviceCommandVocabulary(deviceToken),
-    [deviceToken],
-  );
+  const {
+    data: vocabulary,
+    loading: vocabularyLoading,
+    error: vocabularyError,
+  } = useQuery(() => getDeviceCommandVocabulary(deviceToken), [deviceToken]);
 
   // Constrained means the profile declares a vocabulary and the gate rejects anything
   // outside it, so the form offers a picker. Unconstrained means the gate accepts any
-  // key (ADR-043 decision 4) and free text is correct. While the vocabulary is loading —
-  // or if reading it failed — fall back to free text: the server enforces either way, and
-  // a form that refuses to render is worse than one that lets the server answer.
+  // key (ADR-043 decision 4) and free text is correct.
+  //
+  // The form is not rendered until the read settles. Rendering free text first and
+  // swapping in the picker on arrival would discard whatever the operator had already
+  // typed, mid-keystroke. A failed read falls back to free text — the gate is
+  // authoritative either way — but must not then CLAIM the device is unconstrained,
+  // which is a fact we did not learn.
+  const vocabularyKnown = !vocabularyLoading && !vocabularyError;
   const constrained = vocabulary?.constrained === true;
   const publishedCommands: PublishedCommand[] = vocabulary?.commands ?? [];
   const selected = publishedCommands.find((c) => c.commandKey === selectedKey);
@@ -103,9 +109,13 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
     () => parseParameterSchema(selected?.parameterSchema),
     [selected],
   );
-  // A structured parameter can't be typed in the generated form. Rather than dead-end
-  // the operator, such a command falls back to a raw payload box.
-  const needsRawPayload = params.some((p) => !isScalar(p));
+  // A REQUIRED structured parameter can't be satisfied by the generated form, so such a
+  // command falls back to a raw payload box rather than dead-ending the operator. The
+  // threshold is `required` on purpose: it matches what validateParams blocks, so an
+  // OPTIONAL structured parameter is simply omitted here exactly as the dashboard
+  // command-button omits it. Two send paths that disagreed about which commands are
+  // form-fillable would be the same divergence this slice exists to remove.
+  const needsRawPayload = params.some((p) => !isScalar(p) && p.required);
 
   // Seed the value map whenever the selected command changes, so declared defaults are
   // pre-filled and a previous command's values never leak into the next one's payload.
@@ -175,7 +185,9 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
     <div className="space-y-6">
       {/* Issue form. A command:write failure surfaces as a toast on submit. */}
       <div className="space-y-3">
-        {constrained ? (
+        {vocabularyLoading ? (
+          <HintText>Loading this device's commands…</HintText>
+        ) : constrained ? (
           <>
             <FormField
               label="Command"
@@ -246,11 +258,16 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                 />
               </FormField>
             </div>
-            {!vocabularyLoading && (
+            {vocabularyKnown ? (
               <HintText>
                 This device's profile declares no commands, so any command name is
                 accepted. Declare commands on its device profile — and publish it — to get
                 a typed form here.
+              </HintText>
+            ) : (
+              <HintText>
+                Couldn't read this device's commands, so its declared vocabulary isn't
+                shown. Anything you send is still checked by the server.
               </HintText>
             )}
           </>
@@ -258,7 +275,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
         <Button
           onClick={issue}
           loading={submitting}
-          disabled={submitting || (constrained && !selectedKey)}
+          disabled={submitting || vocabularyLoading || (constrained && !selectedKey)}
         >
           <Send size={14} /> Issue command
         </Button>

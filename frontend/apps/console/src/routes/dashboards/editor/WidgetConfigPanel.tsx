@@ -32,9 +32,8 @@ import { useQuery } from '@/lib/hooks/use-query';
 import {
   listCommandDefinitionsForDevice,
   getDeviceCommandVocabulary,
-  type PublishedCommand,
 } from '@/lib/api/device-management';
-import { draftOnlyCommandKeys } from '@/routes/devices/commandVocabulary';
+import { commandChoices, type PickableCommand } from '@/routes/devices/commandVocabulary';
 import { EntityPicker, type EntityKind } from './EntityPicker';
 
 // Widgets that carry a datasource (label/image do not). Alarm widgets carry one too —
@@ -565,13 +564,19 @@ function AnchorFields({
 // form at runtime with no device→profile resolution. Requires a target device to be
 // chosen first (that's where the command list comes from).
 //
-// The picker offers published commands only, because published is what the enqueue gate
-// accepts. Baking a draft would produce a button that looks correct in the editor, renders
-// correctly on the dashboard, and fails only when an operator presses it.
+// When the device's profile CONSTRAINS its vocabulary, the picker offers published
+// commands only, because published is what the enqueue gate accepts. Baking a draft there
+// would produce a button that looks correct in the editor, renders correctly on the
+// dashboard, and fails only when an operator presses it. Draft-only commands are still
+// NAMED below the picker rather than omitted: an author who just wrote a command
+// definition and can't find it needs to be told it is unpublished, not left to conclude
+// the editor is broken.
 //
-// Draft-only commands are still NAMED below the picker rather than omitted: an author who
-// just wrote a command definition and can't find it needs to be told it is unpublished,
-// not left to conclude the editor is broken.
+// When the profile does NOT constrain (no profile, never published, or no definitions —
+// ADR-043 decision 4), the gate accepts any key, so the drafts ARE offerable and are
+// offered. Restricting to published there would leave the whole unconstrained device
+// class — most devices, pre-GA — with an empty picker and no way to author a command
+// button at all, for a button that would have worked.
 function CommandFields({
   deviceToken,
   commandName,
@@ -579,26 +584,24 @@ function CommandFields({
 }: {
   deviceToken: string | undefined;
   commandName: string;
-  onSelect: (def: PublishedCommand | undefined) => void;
+  onSelect: (def: PickableCommand | undefined) => void;
 }) {
   const { data, loading, error } = useQuery(
     async () => {
-      if (!deviceToken) return { published: [], draftOnly: [] };
+      if (!deviceToken) return commandChoices(null, []);
       const [vocabulary, drafts] = await Promise.all([
         getDeviceCommandVocabulary(deviceToken),
         listCommandDefinitionsForDevice(deviceToken),
       ]);
-      return {
-        published: vocabulary.commands,
-        draftOnly: draftOnlyCommandKeys(vocabulary.commands, drafts),
-      };
+      return commandChoices(vocabulary, drafts);
     },
     [deviceToken],
   );
-  const published = data?.published ?? [];
+  const selectable = data?.selectable ?? [];
   const draftOnly = data?.draftOnly ?? [];
+  const constrained = data?.constrained ?? false;
 
-  const options: ComboboxOption[] = published.map((def) => ({
+  const options: ComboboxOption[] = selectable.map((def) => ({
     value: def.commandKey,
     label: def.name ? `${def.name} (${def.commandKey})` : def.commandKey,
   }));
@@ -608,7 +611,7 @@ function CommandFields({
   // Flag it — non-destructively, since the datasource and options update through separate
   // handlers — so the author re-picks rather than silently shipping a button that fails.
   const staleSelection =
-    commandName !== '' && !loading && !error && !published.some((d) => d.commandKey === commandName);
+    commandName !== '' && !loading && !error && !selectable.some((d) => d.commandKey === commandName);
 
   return (
     <div className="space-y-3 rounded-md border border-border p-3">
@@ -623,23 +626,29 @@ function CommandFields({
         <>
           {staleSelection && (
             <p className="text-xs text-destructive">
-              “{commandName}” isn’t published on this device. Pick a command below.
+              “{commandName}” isn’t available on this device. Pick a command below.
             </p>
           )}
-          {published.length === 0 ? (
+          {selectable.length === 0 ? (
             <p className="text-xs text-muted-foreground">
-              This device’s profile publishes no commands. Add a command definition to its device
-              profile, then publish the profile.
+              This device’s profile defines no commands. Add a command definition to its device
+              profile.
             </p>
           ) : (
             <FormField label="Command" description="The command this button issues.">
               <Combobox
                 options={options}
                 value={commandName}
-                onChange={(key) => onSelect(published.find((d) => d.commandKey === key))}
+                onChange={(key) => onSelect(selectable.find((d) => d.commandKey === key))}
                 placeholder="Select a command"
               />
             </FormField>
+          )}
+          {!constrained && selectable.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              This profile isn’t published, so these definitions aren’t enforced yet and any
+              command is accepted. Publish it to hold this button to the contract.
+            </p>
           )}
           {draftOnly.length > 0 && (
             <div className="space-y-1 rounded-md bg-muted/50 p-2">

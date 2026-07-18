@@ -1218,9 +1218,13 @@ type Query {
     validateCommandEnqueue(deviceToken: String!, commandKey: String!, payload: String): CommandEnqueueVerdict!
     # List the commands a device currently accepts (ADR-043 decision 3) — the listing
     # counterpart of validateCommandEnqueue, which is ask-don't-list. Both are answered
-    # from the same resolution, so what this offers is what the gate accepts. Errors if
-    # the device token does not resolve.
-    deviceCommandVocabulary(deviceToken: String!): DeviceCommandVocabulary!
+    # from the same resolution, so what this offers is what the gate accepts.
+    #
+    # Null when the token resolves to no device. That is a normal state rather than a
+    # caller error: a dashboard or saved view can hold a token whose device was since
+    # deleted, and erroring would take the rest of a batched query down with it. It
+    # matches devicesByToken, which omits tokens it cannot resolve.
+    deviceCommandVocabulary(deviceToken: String!): DeviceCommandVocabulary
     # Find detection rules by unique id.
     detectionRulesById(ids: [ID!]!): [DetectionRule!]!
     # Find detection rules by unique token.

@@ -51,8 +51,9 @@ export type CommandDefinition = CommandDefinitionsQuery['commandDefinitions']['r
 // The published vocabulary a device accepts (ADR-043 decision 3) — distinct from
 // CommandDefinition, which is the authored draft. A PublishedCommand carries no id or
 // token: it is a snapshot copy, and the draft it came from may since have changed.
+// Null when the token resolves to no device — a saved view can outlive its device.
 export type DeviceCommandVocabulary = DeviceCommandVocabularyQuery['deviceCommandVocabulary'];
-export type PublishedCommand = DeviceCommandVocabulary['commands'][number];
+export type PublishedCommand = NonNullable<DeviceCommandVocabulary>['commands'][number];
 export type DetectionRule = DetectionRulesQuery['detectionRules']['results'][number];
 
 // Re-export the generated request inputs so forms can type their request objects

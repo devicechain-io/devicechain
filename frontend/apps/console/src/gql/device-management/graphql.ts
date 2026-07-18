@@ -829,7 +829,7 @@ export type DeviceCommandVocabularyQueryVariables = Exact<{
 }>;
 
 
-export type DeviceCommandVocabularyQuery = { deviceCommandVocabulary: { constrained: boolean, commands: Array<{ commandKey: string, name: string | null, description: string | null, parameterSchema: string | null }> } };
+export type DeviceCommandVocabularyQuery = { deviceCommandVocabulary: { constrained: boolean, commands: Array<{ commandKey: string, name: string | null, description: string | null, parameterSchema: string | null }> } | null };
 
 export type CreateCommandDefinitionMutationVariables = Exact<{
   request?: CommandDefinitionCreateRequest | null | undefined;

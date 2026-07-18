@@ -5,7 +5,6 @@ package graphql
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
@@ -107,9 +106,10 @@ func (r *DeviceCommandVocabularyResolver) Commands() []*PublishedCommandResolver
 // knowing what a device accepts is no more privileged than reading its profile, which
 // already exposes the draft of the same vocabulary.
 //
-// Unlike the gate, an unresolvable device token is a GraphQL error rather than a
-// verdict: there is no answer to relay to an API client here, and a caller that asked
-// about a device that does not exist has a bug rather than an invalid command.
+// An unresolvable device token returns null rather than an error. A stale token is a
+// state a client legitimately holds — a dashboard widget outlives the device it was
+// pointed at — and erroring on a non-null field would null out every sibling result in
+// a batched document over one dangling reference.
 func (r *SchemaResolver) DeviceCommandVocabulary(ctx context.Context, args struct {
 	DeviceToken string
 }) (*DeviceCommandVocabularyResolver, error) {
@@ -122,7 +122,7 @@ func (r *SchemaResolver) DeviceCommandVocabulary(ctx context.Context, args struc
 		return nil, err
 	}
 	if !vocab.DeviceExists {
-		return nil, fmt.Errorf("device %q does not exist", args.DeviceToken)
+		return nil, nil
 	}
 	return &DeviceCommandVocabularyResolver{M: *vocab}, nil
 }

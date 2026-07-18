@@ -189,10 +189,15 @@ const deviceCapabilitiesQuery = `query DeviceCapabilities($tokens: [String!]!) {
 }`
 
 // GetDeviceCapabilities reports the metric and command definitions declared on a
-// device's profile. These are the profile's DRAFT definitions (the editable
-// working copy — GraphQL does not expose the published snapshot's definitions), so
-// they may differ from what the device actually resolves: a device resolves the
-// active PUBLISHED version. activeVersion is that published version, or null when
+// device's profile. These are the profile's DRAFT definitions (the editable working
+// copy), so they may differ from what the device actually resolves: a device resolves
+// the active PUBLISHED version.
+//
+// For commands, device-management now serves the published vocabulary directly
+// (deviceCommandVocabulary), so this tool should read that instead of the draft list —
+// an agent told a device "has" a command the enqueue gate will reject is exactly the
+// failure that query exists to remove. Tracked as a follow-up; the tool description
+// warns the caller in the meantime. activeVersion is that published version, or null when
 // the profile has never been published — in which case the device currently
 // resolves none of these capabilities. The tool description states this so the
 // caller (an LLM) does not treat a draft definition as an active capability.
