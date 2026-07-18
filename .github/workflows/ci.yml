@@ -118,6 +118,59 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go vet ./...
 
+      # graph-gophers/graphql-go silently discards input-object entries the schema
+      # does not define when the value arrives through a VARIABLE (the literal path
+      # rejects them correctly). The spec requires a request error, so a misnamed
+      # field returning success is a fail-open: it yields a half-configured entity
+      # that is indistinguishable from a correctly configured one. We carry the fix
+      # in a fork until it lands upstream — see "Forked dependencies" in CLAUDE.md.
+      #
+      # A `replace` applies ONLY in the main module, so every module that resolves
+      # graphql-go needs its own. Four modules (cli, mcp, dc-simulator,
+      # migrationdiff) depend on it TRANSITIVELY and so are invisible to a grep of
+      # go.mod — exactly how a module silently reverts to the unpatched library. The
+      # check runs with GOWORK=off so it proves the module's own go.mod carries the
+      # replace, rather than inheriting it from the workspace.
+      - name: graphql-go fork guard
+        working-directory: ${{ matrix.module }}
+        env:
+          # Pin the exact expected replacement. Matching only the module PATH would
+          # accept github.com/devicechain-io/graphql-go@v1.10.2 — a real tag on the
+          # fork that points at upstream's UNPATCHED code, since a fork inherits the
+          # upstream tags. Matching the version closes that.
+          WANT: "=> github.com/devicechain-io/graphql-go v1.10.2-dc.2"
+        run: |
+          set -o pipefail
+          # Distinguish "not a dependency" (fine) from a genuine failure such as a
+          # proxy outage or a broken go.mod. Swallowing both would let the guard
+          # print "nothing to check" and pass while proving nothing.
+          if ! stderr="$(GOWORK=off go list -m github.com/graph-gophers/graphql-go 2>&1 >/dev/null)"; then
+            case "$stderr" in
+              *"not a known dependency"*|*"not a required module"*|*"no required module provides"*)
+                echo "graphql-go is not in this module's dependency graph; nothing to check."
+                exit 0
+                ;;
+              *)
+                echo "::error::Could not resolve graphql-go, so the fork could not be verified."
+                echo "$stderr"
+                exit 1
+                ;;
+            esac
+          fi
+          resolved="$(GOWORK=off go list -m github.com/graph-gophers/graphql-go)"
+          echo "resolved: $resolved"
+          case "$resolved" in
+            *"$WANT"*) echo "OK: patched fork in use." ;;
+            *)
+              echo "::error::This module does not resolve the patched graphql-go fork."
+              echo "Unknown GraphQL input fields would be silently dropped instead of rejected."
+              echo "Expected a replacement matching: $WANT"
+              echo "Fix with:"
+              echo "  go mod edit -replace github.com/graph-gophers/graphql-go=github.com/devicechain-io/graphql-go@v1.10.2-dc.2"
+              exit 1
+              ;;
+          esac
+
       - name: go test
         working-directory: ${{ matrix.module }}
         # The operator's controllers suite is a kubebuilder envtest scaffold with

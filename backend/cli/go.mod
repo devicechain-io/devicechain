@@ -132,3 +132,5 @@ replace github.com/devicechain-io/dc-k8s => ../k8s
 replace github.com/devicechain-io/dc-microservice => ../core
 
 replace github.com/devicechain-io/dc-user-management => ../services/user-management
+
+replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql-go v1.10.2-dc.2

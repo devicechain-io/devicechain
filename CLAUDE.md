@@ -138,6 +138,50 @@ cd deploy/opentofu && tofu fmt -check -recursive && tofu init -backend=false && 
 - **Multi-tenancy:** a single shared set of services serves all tenants; isolation is enforced at the
   storage (`tenant_id` predicate) and messaging (per-tenant subjects) layers, not by per-tenant pods.
 
+## Forked dependencies
+
+**`github.com/graph-gophers/graphql-go` → `github.com/devicechain-io/graphql-go@v1.10.2-dc.2`**
+
+The upstream library silently discards input-object entries the schema does not define when the
+value arrives through a **variable**. (Values written as *literals* in the query are rejected
+correctly; every real client — console, SDKs, dcctl, codegen — sends variables.) The GraphQL spec
+requires a request error here, so this is a fail-open: a misnamed field returns success and
+produces a half-configured entity indistinguishable from a correct one. It bit us live — sending
+`deviceProfileToken` instead of `profileToken` created a device type with no profile, which left
+its devices with no command vocabulary and made a correct enqueue gate look broken.
+
+The fork carries exactly one commit on top of the upstream `v1.10.2` **tag** (branch
+`dc-release-v1.10.2`), mirroring the iteration direction the library's own literal path already
+uses. Cutting from the tag rather than upstream `main` is deliberate: `main` carries unreleased
+changes — including a refactor of the resolver execution path — that we would otherwise be running
+in production without having chosen them. The same patch sits on `fix/reject-unknown-input-object-fields-in-variables`,
+branched from `main`, which is what the upstream PR proposes. When it lands in a release, **drop
+every `replace` and the CI guard, and bump to that release** — nothing else depends on the fork.
+
+Note the fork inherits upstream's tags, so `devicechain-io/graphql-go@v1.10.2` exists and is
+*unpatched*. Only the `-dc.N` tags carry the fix, which is why the CI guard matches the exact
+version and not just the module path.
+
+Two things to know:
+
+1. A `replace` applies **only in the main module**, so each of the 12 modules that compile
+   graphql-go (core plus the 11 GraphQL-serving services) needs its own. Four more — `cli`,
+   `services/mcp`, `sims/dc-simulator`, `tools/migrationdiff` — carry the replace too. They resolve
+   graphql-go transitively through core but currently compile none of it (`mcp` fronts GraphQL over
+   HTTP rather than executing a schema), so their replace is defensive: it means the day one of them
+   *does* import the library, it gets the patched one rather than silently getting upstream. Because
+   they have no graphql-go line in their `go.mod`, a grep cannot find them — which is exactly how a
+   module ends up on the unpatched library unnoticed. The `graphql-go fork guard` step in the `go`
+   CI job enforces this per module with `GOWORK=off`, so a module that loses its replace fails CI
+   instead of reverting silently.
+2. Dependabot does not track the fork, so upstream security advisories for graphql-go will not
+   raise an alert here. Re-check it by hand when reviewing GraphQL-layer CVEs.
+
+The behaviour is pinned by `TestUnknownInputFieldIsRejected` and `TestValidInputIsNotRejected` in
+[backend/core/graphql/unknown_input_fields_test.go](backend/core/graphql/unknown_input_fields_test.go).
+The second test is the counterweight: rejecting unknown fields is only safe while well-formed input
+still passes untouched.
+
 ## License headers
 
 DeviceChain is licensed under **Apache License 2.0** (see [LICENSE](LICENSE) and [NOTICE](NOTICE)).
