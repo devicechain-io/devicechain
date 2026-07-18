@@ -160,16 +160,24 @@ type streamBounds struct {
 	maxMsgSize int32
 }
 
-// streamBounds reads the configured ceilings, coercing any non-positive value to
-// the platform default so a stream is never created UNLIMITED (0 in a StreamConfig
-// means unlimited to JetStream). ApplyDefaults normally does this at config load;
-// this is belt-and-suspenders for a manually-built config in tests.
-func (nmgr *NatsManager) streamBounds() streamBounds {
+// streamBounds reads the configured ceilings for a suffix, coercing any
+// non-positive value to the platform default so a stream is never created
+// UNLIMITED (0 in a StreamConfig means unlimited to JetStream). ApplyDefaults
+// normally does this at config load; this is belt-and-suspenders for a
+// manually-built config in tests.
+//
+// The byte ceiling is per-SUFFIX (hot vs control-plane, see
+// config.StreamMaxBytesFor) rather than per-caller. That distinction is
+// load-bearing: a suffix's stream is created by whichever of its writer or
+// reader starts first, and those live in DIFFERENT services. If the bound came
+// from the call site, two services could disagree about the same stream and each
+// restart would UpdateStream it back and forth — and per ensureStream, shrinking
+// a ceiling makes DiscardOld evict the overflow immediately. Keying on the suffix
+// makes every service compute the same answer, which is what keeps the reconcile
+// idempotent.
+func (nmgr *NatsManager) streamBounds(suffix string) streamBounds {
 	c := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats
-	b := streamBounds{maxBytes: c.StreamMaxBytes, maxMsgs: c.StreamMaxMsgs, maxMsgSize: c.StreamMaxMsgSize}
-	if b.maxBytes <= 0 {
-		b.maxBytes = config.DefaultStreamMaxBytes
-	}
+	b := streamBounds{maxBytes: c.StreamMaxBytesFor(suffix), maxMsgs: c.StreamMaxMsgs, maxMsgSize: c.StreamMaxMsgSize}
 	if b.maxMsgs <= 0 {
 		b.maxMsgs = config.DefaultStreamMaxMsgs
 	}
@@ -196,7 +204,7 @@ func applyStreamBounds(cfg *nats.StreamConfig, b streamBounds) bool {
 // the scoped producers and the shared wildcard consumer.
 func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
-	bounds := nmgr.streamBounds()
+	bounds := nmgr.streamBounds(suffix)
 	// Retry on connection/server errors so a few seconds of NATS lag on a cluster
 	// restart degrades into a retry rather than a crash-loop (A6). A stream that
 	// does not yet exist (ErrStreamNotFound) is the normal first-run case and is

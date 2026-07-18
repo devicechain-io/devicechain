@@ -90,6 +90,89 @@ func TestApplyDefaultsStreamBounds(t *testing.T) {
 	})
 }
 
+// allStreamSuffixes is the platform's complete stream set, duplicated here as
+// literals because the SUBJECT_* constants live in per-service config packages
+// that core cannot import (services depend on core, not the reverse).
+//
+// THIS LIST MUST BE UPDATED when a service adds a stream suffix. Nothing forces
+// that today, and the gap is not hypothetical: "connector-dispatch.dead" was
+// missed on the first pass of this very change because outbound-connectors builds
+// it by CONCATENATION (SUBJECT_CONNECTOR_DISPATCH + ".dead"), so it appears in no
+// constant scan. A derived suffix defaults to the hot bound and silently inflates
+// the reservation by 1 GiB apiece.
+//
+// The proper fix is to hoist the stream set into core so it is declarable in one
+// place — which would also remove the existing cross-service imports
+// (event-processing reads dmconfig.SUBJECT_RESOLVED_EVENTS). Until then,
+// TestStreamReservationFitsBudget is only as complete as this list.
+var allStreamSuffixes = []string{
+	"inbound-events", "resolved-events", "derived-events", "device-attribute",
+	"device-commands", "command-responses", "connector-dispatch",
+	"detection-rules-published", "device-roster", "entity-deleted",
+	"alarm-events", "raise-alarm", "failed-decode", "failed-events",
+	"connector-dispatch.dead",
+}
+
+// JetStream reserves each stream's MaxBytes UP FRONT at creation, so the disk
+// floor is the SUM of the ceilings — not what the streams hold. Overrunning the
+// broker's max_file_store is not a soft failure: it crashlooped the last
+// stream-creating services with "insufficient storage resources available" when
+// 13 × 1 GiB was pointed at an 8 GiB PV. This pins the arithmetic that makes the
+// PV size safe, which is the invariant the classification exists to serve.
+func TestStreamReservationFitsBudget(t *testing.T) {
+	// The shipped NATS PV is 12Gi and max_file_store derives as 90% of it.
+	const pvBytes = 12 << 30
+	const maxFileStore = pvBytes / 10 * 9
+
+	cfg := &InstanceConfiguration{}
+	cfg.ApplyDefaults()
+	n := cfg.Infrastructure.Nats
+
+	var total int64
+	for _, s := range allStreamSuffixes {
+		total += n.StreamMaxBytesFor(s)
+	}
+	if total > maxFileStore {
+		t.Errorf("stream reservation %d B exceeds max_file_store %d B (PV %d B): "+
+			"a fresh bring-up will crashloop once the reservation overruns the store",
+			total, int64(maxFileStore), int64(pvBytes))
+	}
+}
+
+// The hot/cold split keys on the SUFFIX, and an unclassified suffix must fall to
+// the HOT (larger) bound. That direction is the safe one: over-reserving disk is
+// cheap and visible, while under-bounding a busy stream silently evicts live data
+// via DiscardOld. A regression here is invisible in a dev cluster.
+func TestStreamMaxBytesFor(t *testing.T) {
+	cfg := &InstanceConfiguration{}
+	cfg.ApplyDefaults()
+	n := cfg.Infrastructure.Nats
+
+	if got := n.StreamMaxBytesFor("inbound-events"); got != DefaultStreamMaxBytes {
+		t.Errorf("hot suffix got %d, want %d", got, DefaultStreamMaxBytes)
+	}
+	if got := n.StreamMaxBytesFor("device-roster"); got != DefaultStreamMaxBytesCold {
+		t.Errorf("cold suffix got %d, want %d", got, DefaultStreamMaxBytesCold)
+	}
+	// The fail-safe direction: an unknown suffix (a newly added stream nobody
+	// classified, or a renamed one) must NOT silently inherit the cold bound.
+	if got := n.StreamMaxBytesFor("a-suffix-nobody-classified"); got != DefaultStreamMaxBytes {
+		t.Errorf("unknown suffix got %d, want the hot bound %d", got, DefaultStreamMaxBytes)
+	}
+
+	// Every classified suffix must be a real one — a typo or a rename would leave
+	// the entry inert and silently promote that stream to the hot bound.
+	known := make(map[string]bool, len(allStreamSuffixes))
+	for _, s := range allStreamSuffixes {
+		known[s] = true
+	}
+	for s := range ColdStreamSuffixes {
+		if !known[s] {
+			t.Errorf("ColdStreamSuffixes has %q, which is not a known stream suffix", s)
+		}
+	}
+}
+
 // ApplyDefaults selects the zero-infra secret-store default (envelope-in-Postgres,
 // instance KEK) when omitted, but never synthesizes a root key.
 func TestApplyDefaultsSecrets(t *testing.T) {
