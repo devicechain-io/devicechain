@@ -93,6 +93,8 @@ type CommandDeliveryApi interface {
 	CommandsByToken(ctx context.Context, tokens []string) ([]*Command, error)
 	Commands(ctx context.Context, criteria CommandSearchCriteria) (*CommandSearchResults, error)
 	PendingCommands(ctx context.Context) ([]*Command, error)
+	// TrySweepLock serializes the expiry + redelivery sweep across replicas.
+	TrySweepLock(ctx context.Context, fn func() error) (bool, error)
 }
 
 // canTransition reports whether a command in state `from` may transition to
@@ -385,11 +387,42 @@ func (api *Api) Commands(ctx context.Context, criteria CommandSearchCriteria) (*
 	}, nil
 }
 
-// PendingCommands returns every still-QUEUED command. It is the redelivery
-// worker's source; the caller passes a system context for the cross-tenant sweep.
+// sweepLockName namespaces the advisory lock that makes the expiry + redelivery
+// sweep single-writer across replicas (distinct from the migration lock, so the two
+// never contend).
+const sweepLockName = "command-delivery-sweep"
+
+// TrySweepLock runs fn while holding the cross-replica sweep lock, reporting whether
+// it ran. It does NOT wait: a replica whose peer is already sweeping skips this pass.
+//
+// The lock lives here rather than in the processor because the invariant it protects
+// is a model-level one — exactly one writer walking the QUEUED set — and because the
+// processor talks to this API through an interface, so a lock reached around it could
+// not be exercised in a test.
+func (api *Api) TrySweepLock(ctx context.Context, fn func() error) (bool, error) {
+	return api.RDB.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(sweepLockName), fn)
+}
+
+// PendingCommandBatch bounds one redelivery pass. An unbounded read of every
+// QUEUED command across every tenant is fine on a healthy instance and a memory
+// hazard on an unhealthy one: a fleet that goes offline queues commands without
+// limit, and the sweep would then load the entire backlog into the pod at once —
+// turning a delivery problem into an OOM. A bounded pass drains the backlog over
+// successive sweeps instead, oldest first.
+const PendingCommandBatch = 1000
+
+// PendingCommands returns the oldest still-QUEUED commands, up to
+// PendingCommandBatch. It is the redelivery worker's source; the caller passes a
+// system context for the cross-tenant sweep.
+//
+// The ORDER BY is load-bearing, not cosmetic. Without it the batch is whatever the
+// planner returns, so under a backlog larger than one batch a command could be
+// starved indefinitely while newer ones ship. Ordering by id makes the queue a
+// queue: enqueue order, oldest first, every pass.
 func (api *Api) PendingCommands(ctx context.Context) ([]*Command, error) {
 	found := make([]*Command, 0)
-	result := api.RDB.DB(ctx).Where("status = ?", CommandQueued.String()).Find(&found)
+	result := api.RDB.DB(ctx).Where("status = ?", CommandQueued.String()).
+		Order("id ASC").Limit(PendingCommandBatch).Find(&found)
 	if result.Error != nil {
 		return nil, result.Error
 	}

@@ -72,9 +72,14 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 	return cproc
 }
 
-// deliverPendingCommands fetches all still-QUEUED commands across tenants and
-// delivers each one, marking it SENT on a successful publish. Per-command
-// errors are logged and skipped so one bad command does not abort the batch.
+// deliverPendingCommands fetches a bounded batch of still-QUEUED commands across
+// tenants and delivers each one, marking it SENT on a successful publish.
+// Per-command errors are logged and skipped so one bad command does not abort the
+// batch.
+//
+// Callers MUST hold the sweep lock (see sweepLocked). Publishing a command is a
+// physical actuation, so running this concurrently on two pods sends the device the
+// command twice.
 func (cproc *CommandDeliveryProcessor) deliverPendingCommands(ctx context.Context) {
 	pending, err := cproc.Api.PendingCommands(core.WithSystemContext(ctx))
 	if err != nil {
@@ -86,6 +91,13 @@ func (cproc *CommandDeliveryProcessor) deliverPendingCommands(ctx context.Contex
 			log.Error().Err(err).Uint("command", cmd.ID).Str("device", cmd.DeviceToken).
 				Msg("unable to deliver command")
 		}
+	}
+	// A saturated batch means more is queued than one pass drains. Say so: the next
+	// sweep picks up the remainder, but a persistently full batch is a backlog the
+	// operator needs to see rather than infer from delivery latency.
+	if len(pending) == model.PendingCommandBatch {
+		log.Warn().Int("batch", len(pending)).
+			Msg("Command redelivery batch was full; more commands remain queued for the next sweep.")
 	}
 }
 
@@ -187,13 +199,39 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 	return false
 }
 
-// runSweep performs one expiry + redelivery sweep: it times out stale commands
-// across all tenants, then (re)delivers any still-queued commands.
-func (cproc *CommandDeliveryProcessor) runSweep(ctx context.Context) {
-	if _, err := cproc.Api.ExpireStale(core.WithSystemContext(ctx), time.Now()); err != nil {
-		log.Error().Err(err).Msg("command expiry sweep failed")
+// sweepLocked runs one expiry + redelivery sweep under a try-lock, so exactly one
+// replica sweeps at a time.
+//
+// Without this every replica ran its own sweep over the same global QUEUED set and
+// published every pending command, so an instance running N replicas delivered each
+// command N times. That is not a wasted-work problem — a command is an actuation, and
+// a device told twice to dispense, unlock, or reboot does it twice. It was also
+// reachable by following our own guidance: the deployment docs recommend replicas:2
+// for zero-downtime rollouts.
+//
+// The lock is a TRY, not a wait. A blocking acquire would merely queue the replicas
+// and let each run the sweep in turn — the same duplicate deliveries, spread over
+// time. A replica that cannot take the lock has nothing useful to do: its peer is
+// already sweeping the same global set, and the ticker brings it back in 30 seconds.
+//
+// The lock covers expiry too. ExpireStale is a conditional UPDATE and safe to race,
+// but holding one lock for the whole sweep keeps the invariant simple — one sweeper —
+// rather than requiring a reader to re-derive which halves are safe to run twice.
+func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) {
+	ran, err := cproc.Api.TrySweepLock(ctx, func() error {
+		if _, err := cproc.Api.ExpireStale(core.WithSystemContext(ctx), time.Now()); err != nil {
+			log.Error().Err(err).Msg("command expiry sweep failed")
+		}
+		cproc.deliverPendingCommands(ctx)
+		return nil
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("could not acquire the command sweep lock")
+		return
 	}
-	cproc.deliverPendingCommands(ctx)
+	if !ran {
+		log.Debug().Msg("Another replica holds the command sweep lock; skipping this pass.")
+	}
 }
 
 // Initialize the component.
@@ -216,8 +254,10 @@ func (cproc *CommandDeliveryProcessor) Start(ctx context.Context) error {
 // consumer loop, and the expiry + redelivery ticker.
 func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 	// Deliver any commands that were queued while the service was down
-	// (deliver-on-reconnect semantics).
-	go cproc.deliverPendingCommands(ctx)
+	// (deliver-on-reconnect semantics). Locked like the ticker's sweep: a rolling
+	// restart starts several pods at once, which is precisely when an unguarded
+	// startup pass would publish every queued command once per new pod.
+	go cproc.sweepLocked(ctx)
 
 	// Processing loop for inbound device responses.
 	go func() {
@@ -238,7 +278,7 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 			case <-cproc.quit:
 				return
 			case <-ticker.C:
-				cproc.runSweep(ctx)
+				cproc.sweepLocked(ctx)
 			}
 		}
 	}()
