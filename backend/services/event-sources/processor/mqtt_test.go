@@ -91,4 +91,49 @@ func TestMqttOnMessage_NoTenantDropped(t *testing.T) {
 	assert.Equal(t, 0, allowCalls)
 }
 
+// Command traffic shares the {instanceId}/{tenant}/… tree this source subscribes
+// to with a wildcard, but it is not telemetry. The defect this pins is not the
+// noise — it is that metering ran first, so every command the platform sent and
+// every response a device returned spent the tenant's INGEST budget. A busy
+// command session could rate-limit that tenant's real events.
+func TestMqttOnMessage_CommandPlaneIgnored(t *testing.T) {
+	for _, topic := range []string{
+		"inst-1/acme/device-commands",
+		"inst-1/acme/command-responses",
+	} {
+		t.Run(topic, func(t *testing.T) {
+			allowCalls := 0
+			es, received := newTestMqttSource(t, func(string, string) bool { allowCalls++; return true })
+
+			es.onMessage(nil, &fakeMqttMessage{
+				topic:   topic,
+				payload: []byte(`{"commandToken":"c1","success":true}`),
+			})
+
+			assert.Len(t, es.messages, 0, "command traffic must not enter the decode path")
+			assert.Equal(t, 0, allowCalls, "command traffic must not spend the tenant's ingest budget")
+			assert.Equal(t, 0, *received, "command traffic must not count as an inbound device event")
+		})
+	}
+}
+
+// The exclusion matches the segment after {instanceId}/{tenant} and nothing else,
+// so a device is not silently prevented from publishing events on a topic that
+// merely contains one of those words further down.
+func TestMqttOnMessage_CommandPlaneMatchIsExact(t *testing.T) {
+	for _, topic := range []string{
+		"inst-1/acme/devices/device-commands/events",
+		"inst-1/acme/events/command-responses",
+		"inst-1/acme/device-commands-extra",
+	} {
+		t.Run(topic, func(t *testing.T) {
+			es, _ := newTestMqttSource(t, func(string, string) bool { return true })
+
+			es.onMessage(nil, &fakeMqttMessage{topic: topic, payload: []byte(`{"device":"d1"}`)})
+
+			assert.Len(t, es.messages, 1, "only the segment after the tenant selects the command plane")
+		})
+	}
+}
+
 var _ mqtt.Message = (*fakeMqttMessage)(nil)
