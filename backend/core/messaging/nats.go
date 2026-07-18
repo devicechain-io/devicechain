@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -198,13 +199,37 @@ func applyStreamBounds(cfg *nats.StreamConfig, b streamBounds) bool {
 	return changed
 }
 
+// applyStreamSubjects reconciles the subjects an existing stream captures to the
+// shape the current build expects, reporting whether anything changed.
+//
+// This exists because a subject shape can CHANGE between releases — device-commands
+// went from tenant-scoped to per-device — and a stream created by an older build
+// keeps its original subject list forever otherwise. The failure that causes is
+// silent and asymmetric: a FRESH install creates the stream with the new subject and
+// works, while every EXISTING cluster keeps the old one, so publishes match no
+// stream and commands stop being delivered with nothing in the logs to say why. A
+// green upgrade on a fresh cluster proves nothing about an existing one.
+//
+// Reconciling is safe for messages already stored: JetStream keeps them, they simply
+// stop being matched by a filter that no longer covers them. It is deliberately a
+// full replacement rather than a union — carrying the old subject forward is how the
+// tenant-wide command subject would have survived the very change that removed it.
+func applyStreamSubjects(cfg *nats.StreamConfig, subjects []string) bool {
+	if slices.Equal(cfg.Subjects, subjects) {
+		return false
+	}
+	cfg.Subjects = subjects
+	return true
+}
+
 // ensureStream creates the per-suffix stream if it does not already exist, and
-// reconciles its size ceilings if it does. The stream captures every tenant's
-// subjects for the suffix via the wildcard subject, so a single stream backs both
-// the scoped producers and the shared wildcard consumer.
+// reconciles its size ceilings and subjects if it does. The stream captures every
+// tenant's subjects for the suffix, so a single stream backs both the scoped
+// producers and the shared wildcard consumer.
 func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	bounds := nmgr.streamBounds(suffix)
+	subjects := []string{StreamSubject(nmgr.Microservice.InstanceId, suffix)}
 	// Retry on connection/server errors so a few seconds of NATS lag on a cluster
 	// restart degrades into a retry rather than a crash-loop (A6). A stream that
 	// does not yet exist (ErrStreamNotFound) is the normal first-run case and is
@@ -223,13 +248,16 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			// makes DiscardOld immediately evict the overflow. Change the bound via
 			// config, not out-of-band, to avoid that.
 			cfg := info.Config
-			if applyStreamBounds(&cfg, bounds) {
+			boundsChanged := applyStreamBounds(&cfg, bounds)
+			subjectsChanged := applyStreamSubjects(&cfg, subjects)
+			if boundsChanged || subjectsChanged {
 				if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
 					return err
 				}
 				log.Info().Str("stream", name).Int64("maxBytes", bounds.maxBytes).
 					Int64("maxMsgs", bounds.maxMsgs).Int32("maxMsgSize", bounds.maxMsgSize).
-					Msg("Reconciled JetStream stream size ceilings")
+					Strs("subjects", cfg.Subjects).Bool("subjectsChanged", subjectsChanged).
+					Msg("Reconciled JetStream stream configuration")
 			}
 			return nil
 		} else if !errors.Is(err, nats.ErrStreamNotFound) {
@@ -237,7 +265,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 		}
 		cfg := &nats.StreamConfig{
 			Name:      name,
-			Subjects:  []string{WildcardSubject(nmgr.Microservice.InstanceId, suffix)},
+			Subjects:  subjects,
 			Storage:   nats.FileStorage,
 			Retention: nats.LimitsPolicy,
 			Discard:   nats.DiscardOld,
@@ -340,6 +368,34 @@ func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
 // here rather than published to a corrupted subject. Legitimate tenants always
 // pass: the same grammar is enforced when a tenant is created.
 func (w *natsWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
+	// A per-device suffix has no meaningful tenant-wide subject: publishing there
+	// would land outside the stream (which captures one more level) and, if it
+	// somehow matched, would broadcast one device's message to every device. Refuse
+	// rather than let the addressing be decided by which method a caller happened to
+	// reach for.
+	if IsPerDeviceSuffix(w.suffix) {
+		return fmt.Errorf("messaging: %q is a per-device subject; use WriteToDevice", w.suffix)
+	}
+	return w.publish(ctx, "", msgs...)
+}
+
+// WriteToDevice publishes to the per-device subject for deviceToken.
+func (w *natsWriter) WriteToDevice(ctx context.Context, deviceToken string, msgs ...Message) error {
+	if deviceToken == "" {
+		return fmt.Errorf("messaging: refusing to publish a device-scoped message with no device token")
+	}
+	// The device token is spliced into the subject, so it gets the same grammar
+	// check the tenant does: a token carrying "." / "*" / ">" would shift subject
+	// levels and could address messages outside its own device (ADR-042 / ADR-025).
+	if err := core.ValidateToken(deviceToken); err != nil {
+		return fmt.Errorf("messaging: refusing to publish to a subject for an invalid device token: %w", err)
+	}
+	return w.publish(ctx, deviceToken, msgs...)
+}
+
+// publish resolves the subject and writes. An empty deviceToken means the
+// tenant-scoped subject.
+func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Message) error {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
 		return core.ErrNoTenant
@@ -348,6 +404,9 @@ func (w *natsWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
 		return fmt.Errorf("messaging: refusing to publish to a subject for an invalid tenant: %w", err)
 	}
 	subject := ScopedSubject(w.nmgr.Microservice.InstanceId, tenant, w.suffix)
+	if deviceToken != "" {
+		subject = DeviceScopedSubject(w.nmgr.Microservice.InstanceId, tenant, w.suffix, deviceToken)
+	}
 	for i := range msgs {
 		nm := &nats.Msg{Subject: subject, Data: msgs[i].Value, Header: nats.Header{}}
 		// Carry the correlation id, generating one when the producer did not

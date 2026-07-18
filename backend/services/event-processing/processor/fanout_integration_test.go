@@ -31,6 +31,12 @@ func (w *captureWriter) WriteMessages(ctx context.Context, msgs ...messaging.Mes
 	w.writes += len(msgs)
 	return nil
 }
+
+// WriteToDevice satisfies MessageWriter. This producer is not per-device, so it
+// records exactly like an ordinary write.
+func (w *captureWriter) WriteToDevice(ctx context.Context, deviceToken string, msgs ...messaging.Message) error {
+	return w.WriteMessages(ctx, msgs...)
+}
 func (w *captureWriter) HandleResponse(error) {}
 
 // measuredMsg builds a consumed resolved measurement message for tenant/device under a

@@ -33,6 +33,12 @@ func (w *captureConnectorWriter) WriteMessages(ctx context.Context, msgs ...mess
 	}
 	return nil
 }
+
+// WriteToDevice satisfies MessageWriter. This producer is not per-device, so it
+// records exactly like an ordinary write.
+func (w *captureConnectorWriter) WriteToDevice(ctx context.Context, deviceToken string, msgs ...messaging.Message) error {
+	return w.WriteMessages(ctx, msgs...)
+}
 func (w *captureConnectorWriter) HandleResponse(error) {}
 
 func connReq(a rules.Action) react.ConnectorRequest {

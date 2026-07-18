@@ -37,6 +37,13 @@ func (writer *MockMessageWriter) WriteMessages(ctx context.Context, msgs ...mess
 	return args.Error(0)
 }
 
+// WriteToDevice records a per-device publish. It defers to the same mock
+// expectation as WriteMessages so existing tests keep working unchanged.
+func (writer *MockMessageWriter) WriteToDevice(ctx context.Context, deviceToken string, msgs ...messaging.Message) error {
+	args := writer.Called()
+	return args.Error(0)
+}
+
 func (writer *MockMessageWriter) HandleResponse(err error) {
 	if err != nil {
 		log.Error().Err(err).Msg("write operation failed")

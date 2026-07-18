@@ -6,6 +6,8 @@ package processor
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,7 +102,12 @@ func TestAuthorizeGrant(t *testing.T) {
 	var gotCred *model.PresentedCredential
 	r, issuerPub := newTestResponder(t, func(_ context.Context, p *model.PresentedCredential) (*model.Device, error) {
 		gotCred = p
-		return &model.Device{}, nil
+		// A real authenticated device always has a token — the grant is now built
+		// from it, so a fixture returning a tokenless device would be a device that
+		// cannot exist, and would test a path production never takes.
+		d := &model.Device{}
+		d.Token = "sensor-001"
+		return d, nil
 	})
 
 	req := testRequest(t, "acme-corp:dev1", "s3cret")
@@ -125,8 +132,63 @@ func TestAuthorizeGrant(t *testing.T) {
 	if uc.Audience != natsauth.AppAccount {
 		t.Errorf("audience = %q, want %q", uc.Audience, natsauth.AppAccount)
 	}
-	if got := []string(uc.Permissions.Pub.Allow); len(got) != 1 || got[0] != "inst-1.acme-corp.>" {
-		t.Errorf("pub allow = %v, want [inst-1.acme-corp.>]", got)
+	// The grant is per-device, not tenant-wide: the device may publish its own events
+	// and command responses, and nothing else.
+	want := []string{
+		"inst-1.acme-corp.devices.sensor-001.events",
+		"inst-1.acme-corp.command-responses",
+	}
+	if got := []string(uc.Permissions.Pub.Allow); !slices.Equal(got, want) {
+		t.Errorf("pub allow = %v, want %v", got, want)
+	}
+}
+
+// The granted JWT is confined to the AUTHENTICATED DEVICE, not its tenant: it may
+// subscribe to its own command subject and nothing that reaches another device's.
+func TestAuthorizeGrantIsPerDevice(t *testing.T) {
+	r, _ := newTestResponder(t, func(_ context.Context, _ *model.PresentedCredential) (*model.Device, error) {
+		d := &model.Device{}
+		d.Token = "sensor-001"
+		return d, nil
+	})
+
+	userJWT, errMsg := r.authorize(testRequest(t, "acme-corp:dev1", "s3cret"))
+	if errMsg != "" {
+		t.Fatalf("expected grant, got denial %q", errMsg)
+	}
+	uc, err := jwt.DecodeUserClaims(userJWT)
+	if err != nil {
+		t.Fatalf("decode user claims: %v", err)
+	}
+
+	var ownCommands bool
+	for _, granted := range uc.Permissions.Sub.Allow {
+		if granted == "inst-1.acme-corp.device-commands.sensor-001" {
+			ownCommands = true
+		}
+		// A grant that reaches another device by wildcard is the failure that
+		// matters; comparing literals alone would not see it.
+		if strings.HasSuffix(granted, ">") && strings.HasPrefix(granted, "inst-1.acme-corp") {
+			t.Errorf("sub grant %q is a tenant-wide wildcard; it reaches other devices", granted)
+		}
+	}
+	if !ownCommands {
+		t.Errorf("sub allow %v is missing this device's own command subject",
+			[]string(uc.Permissions.Sub.Allow))
+	}
+}
+
+// A credential that authenticates but resolves to no device token cannot be given a
+// grant at all: the only grant expressible without a device would be the tenant-wide
+// one this change removes, so it fails closed instead.
+func TestAuthorizeDeniesDeviceWithoutToken(t *testing.T) {
+	r, _ := newTestResponder(t, func(_ context.Context, _ *model.PresentedCredential) (*model.Device, error) {
+		return &model.Device{}, nil
+	})
+
+	userJWT, errMsg := r.authorize(testRequest(t, "acme-corp:dev1", "s3cret"))
+	if errMsg == "" {
+		t.Fatalf("a tokenless device must be denied, got a grant: %q", userJWT)
 	}
 }
 

@@ -4,6 +4,8 @@
 package natsauth
 
 import (
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,34 +56,99 @@ func TestGenerateCredentials(t *testing.T) {
 	}
 }
 
-// DevicePermissions confines a device to its own tenant tree for publish, and for
-// subscribe additionally allows the level-up subject (MQTT `#` filter mapping) and
-// the MQTT QoS-1 delivery subject — but nothing cross-tenant.
+// DevicePermissions confines a device to ITS OWN subjects — not its tenant's. The
+// grant is the only place these properties can be enforced against a device that
+// misbehaves on purpose, so each is asserted as a capability, not as a string shape.
 func TestDevicePermissions(t *testing.T) {
-	p := DevicePermissions("inst-1", "acme-corp")
-	if got := []string(p.Pub.Allow); len(got) != 1 || got[0] != "inst-1.acme-corp.>" {
-		t.Errorf("pub allow = %v, want [inst-1.acme-corp.>]", got)
+	p := DevicePermissions("inst-1", "acme-corp", "sensor-001")
+
+	pub := map[string]bool{}
+	for _, s := range p.Pub.Allow {
+		pub[s] = true
 	}
 	sub := map[string]bool{}
 	for _, s := range p.Sub.Allow {
 		sub[s] = true
 	}
-	for _, want := range []string{"inst-1.acme-corp.>", "inst-1.acme-corp", MqttDeliverySubject} {
+
+	// What the device MUST be able to do.
+	for _, want := range []string{
+		"inst-1.acme-corp.devices.sensor-001.events",
+		"inst-1.acme-corp.command-responses",
+	} {
+		if !pub[want] {
+			t.Errorf("pub allow %v missing %q", []string(p.Pub.Allow), want)
+		}
+	}
+	for _, want := range []string{
+		"inst-1.acme-corp.device-commands.sensor-001",
+		MqttDeliverySubject,
+	} {
 		if !sub[want] {
 			t.Errorf("sub allow %v missing %q", []string(p.Sub.Allow), want)
 		}
 	}
-	// No other tenant's or instance's tree, and the MQTT delivery subject is the
-	// shared internal one (guarded by the MQTT connection-type pin) — no broad
-	// wildcard.
-	for _, s := range p.Sub.Allow {
-		if s == "inst-1.>" || s == "dc.>" || s == ">" {
-			t.Errorf("sub allow %q is too broad", s)
+
+	// The point of the change: another device's commands are unreachable. Asserting
+	// the absence of a literal is not enough — a surviving wildcard would still
+	// cover it — so check that NOTHING granted matches the other device's subject.
+	other := "inst-1.acme-corp.device-commands.sensor-002"
+	for _, granted := range p.Sub.Allow {
+		if natsSubjectMatches(granted, other) {
+			t.Errorf("sub grant %q reaches another device's commands (%q)", granted, other)
 		}
 	}
+
+	// Likewise the device must not be able to publish as another device, or onto an
+	// arbitrary platform topic.
+	for _, forbidden := range []string{
+		"inst-1.acme-corp.devices.sensor-002.events",
+		"inst-1.acme-corp.device-commands.sensor-001",
+		"inst-1.acme-corp.anything-else",
+	} {
+		for _, granted := range p.Pub.Allow {
+			if natsSubjectMatches(granted, forbidden) {
+				t.Errorf("pub grant %q reaches %q", granted, forbidden)
+			}
+		}
+	}
+
+	// Cross-tenant and cross-instance stay closed (ADR-025 / ADR-048).
+	for _, forbidden := range []string{
+		"inst-1.other-tenant.device-commands.sensor-001",
+		"inst-2.acme-corp.device-commands.sensor-001",
+	} {
+		for _, granted := range append(append([]string{}, p.Sub.Allow...), p.Pub.Allow...) {
+			if natsSubjectMatches(granted, forbidden) {
+				t.Errorf("grant %q crosses a boundary to %q", granted, forbidden)
+			}
+		}
+	}
+
 	if len(p.Pub.Deny) != 0 || len(p.Sub.Deny) != 0 {
 		t.Error("no deny rules expected")
 	}
+}
+
+// natsSubjectMatches implements NATS subject matching ("*" = one token, ">" = one
+// or more trailing tokens) so the assertions above test REACHABILITY rather than
+// string equality — a grant that reaches a subject by wildcard is the failure mode
+// that matters, and comparing literals would miss it entirely.
+func natsSubjectMatches(pattern, subject string) bool {
+	p := strings.Split(pattern, ".")
+	sub := strings.Split(subject, ".")
+	for i, tok := range p {
+		if tok == ">" {
+			return i < len(sub)
+		}
+		if i >= len(sub) {
+			return false
+		}
+		if tok != "*" && tok != sub[i] {
+			return false
+		}
+	}
+	return len(p) == len(sub)
 }
 
 // A signed device user JWT decodes, verifies against the issuer, and carries the
@@ -93,7 +160,7 @@ func TestSignDeviceUserJWT(t *testing.T) {
 	userNkey, _ := ukp.PublicKey()
 	now := time.Unix(1_780_000_000, 0)
 
-	token, err := SignDeviceUserJWT(c.IssuerSeed, userNkey, "inst-1", "plant_07", now, DefaultUserJWTTTL)
+	token, err := SignDeviceUserJWT(c.IssuerSeed, userNkey, "inst-1", "plant_07", "sensor-001", now, DefaultUserJWTTTL)
 	if err != nil {
 		t.Fatalf("SignDeviceUserJWT: %v", err)
 	}
@@ -111,8 +178,20 @@ func TestSignDeviceUserJWT(t *testing.T) {
 	if uc.Audience != AppAccount {
 		t.Errorf("audience = %q, want %q", uc.Audience, AppAccount)
 	}
-	if got := []string(uc.Permissions.Pub.Allow); len(got) != 1 || got[0] != "inst-1.plant_07.>" {
-		t.Errorf("pub allow = %v, want [inst-1.plant_07.>]", got)
+	// The signed claim must carry the SAME per-device grant DevicePermissions builds,
+	// so a device's JWT cannot be broader than the policy. Checked by reachability:
+	// nothing in the signed grant may reach another device's command subject.
+	if got := []string(uc.Permissions.Pub.Allow); len(got) != 2 {
+		t.Errorf("pub allow = %v, want the device's events topic and command-responses", got)
+	}
+	for _, granted := range uc.Permissions.Sub.Allow {
+		if natsSubjectMatches(granted, "inst-1.plant_07.device-commands.other-device") {
+			t.Errorf("signed sub grant %q reaches another device's commands", granted)
+		}
+	}
+	if !slices.Contains(uc.Permissions.Sub.Allow, "inst-1.plant_07.device-commands.sensor-001") {
+		t.Errorf("sub allow = %v, missing this device's own command subject",
+			[]string(uc.Permissions.Sub.Allow))
 	}
 	if got := []string(uc.AllowedConnectionTypes); len(got) != 1 || got[0] != jwt.ConnectionTypeMqtt {
 		t.Errorf("allowed connection types = %v, want [MQTT] (device creds must be MQTT-only)", got)

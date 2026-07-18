@@ -105,6 +105,12 @@ func (w *fakeWriter) WriteMessages(ctx context.Context, msgs ...messaging.Messag
 	return nil
 }
 
+// WriteToDevice satisfies MessageWriter. This producer is not per-device, so it
+// records exactly like an ordinary write.
+func (w *fakeWriter) WriteToDevice(ctx context.Context, deviceToken string, msgs ...messaging.Message) error {
+	return w.WriteMessages(ctx, msgs...)
+}
+
 func (w *fakeWriter) HandleResponse(error) {}
 
 func (w *fakeWriter) written() []messaging.Message {
