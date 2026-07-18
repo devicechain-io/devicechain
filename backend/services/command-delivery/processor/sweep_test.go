@@ -80,11 +80,23 @@ func (f *fakeApi) Commands(context.Context, model.CommandSearchCriteria) (*model
 type recordingWriter struct {
 	mu       sync.Mutex
 	messages []messaging.Message
+	devices  []string
 }
 
 func (w *recordingWriter) WriteMessages(_ context.Context, msgs ...messaging.Message) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.messages = append(w.messages, msgs...)
+	return nil
+}
+
+// WriteToDevice is the path commands actually take. It records the target device
+// alongside the message so a test can assert a command went to ONE device rather
+// than merely that something was published.
+func (w *recordingWriter) WriteToDevice(_ context.Context, deviceToken string, msgs ...messaging.Message) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.devices = append(w.devices, deviceToken)
 	w.messages = append(w.messages, msgs...)
 	return nil
 }
@@ -149,6 +161,12 @@ func TestSweepDeliversWhenItHoldsTheLock(t *testing.T) {
 	}
 	if len(api.markedSent) != 2 {
 		t.Fatalf("every published command must be marked sent, got %v", api.markedSent)
+	}
+	// Each command must be addressed to ITS OWN device. Publishing to a tenant-wide
+	// subject would also produce two messages here, so counting messages alone would
+	// not have caught the isolation regression this addressing exists to prevent.
+	if len(writer.devices) != 2 || writer.devices[0] != "dev-c1" || writer.devices[1] != "dev-c2" {
+		t.Fatalf("commands must be published per-device, got %v", writer.devices)
 	}
 }
 

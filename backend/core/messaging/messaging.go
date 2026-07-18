@@ -23,11 +23,52 @@ import (
 // the note on allStreamSuffixes in core/config/instance_test.go, which is a
 // hand-maintained mirror that has already been wrong once.
 const (
-	// SubjectDeviceCommands carries persisted commands OUT to devices.
+	// SubjectDeviceCommands carries persisted commands OUT to devices. It is
+	// PER-DEVICE: the concrete subject carries the target device's token as a final
+	// segment, "{instance}.{tenant}.device-commands.{deviceToken}", so the broker
+	// grant can confine a device to its own commands. See DeviceScopedSubject.
 	SubjectDeviceCommands = "device-commands"
-	// SubjectCommandResponses carries a device's response to a command back IN.
+	// SubjectCommandResponses carries a device's response to a command back IN. It
+	// is tenant-scoped, not per-device: every device publishes to the one subject a
+	// single consumer reads, and a response names its command by token.
 	SubjectCommandResponses = "command-responses"
 )
+
+// perDeviceSuffixes are the subject suffixes whose concrete subject carries a
+// device token as a trailing segment. Their stream must therefore capture one more
+// wildcard level than a tenant-scoped suffix does.
+//
+// This is a set rather than a bool on the writer because the STREAM shape has to
+// agree with the PUBLISH shape, and those are decided in different places — the
+// stream at ensureStream, the subject at write time. Deriving both from one list
+// is what stops them disagreeing, which would show up as publishes silently
+// landing in no stream.
+var perDeviceSuffixes = map[string]struct{}{
+	SubjectDeviceCommands: {},
+}
+
+// IsPerDeviceSuffix reports whether a suffix addresses an individual device.
+func IsPerDeviceSuffix(suffix string) bool {
+	_, found := perDeviceSuffixes[suffix]
+	return found
+}
+
+// DeviceScopedSubject builds the concrete per-device subject a command is
+// published to: "{instance}.{tenant}.{suffix}.{deviceToken}".
+func DeviceScopedSubject(instanceId, tenant, suffix, deviceToken string) string {
+	return fmt.Sprintf("%s.%s.%s.%s", instanceId, tenant, suffix, deviceToken)
+}
+
+// StreamSubject is the subject pattern a suffix's stream captures. A tenant-scoped
+// suffix captures "{instance}.*.{suffix}"; a per-device one captures an extra
+// level, "{instance}.*.{suffix}.*", so every device's subject falls inside one
+// stream while each device is granted only its own.
+func StreamSubject(instanceId, suffix string) string {
+	if IsPerDeviceSuffix(suffix) {
+		return WildcardSubject(instanceId, suffix) + ".*"
+	}
+	return WildcardSubject(instanceId, suffix)
+}
 
 // Message is a transport-neutral message envelope used by producers and
 // consumers across services. It replaces the previous direct dependency on
@@ -160,6 +201,15 @@ type ReplayReader interface {
 // MessageWriter is the producer-side abstraction (kept small for unit testing).
 type MessageWriter interface {
 	WriteMessages(ctx context.Context, msgs ...Message) error
+	// WriteToDevice publishes to a PER-DEVICE subject
+	// ("{instance}.{tenant}.{suffix}.{deviceToken}") rather than the tenant-wide one,
+	// so the broker grant can confine a device to its own messages instead of relying
+	// on every device to filter correctly.
+	//
+	// It is a separate method rather than a field on Message so the compiler finds
+	// every caller if the addressing changes again, and so a per-device suffix cannot
+	// be published to by the tenant-wide path by omission.
+	WriteToDevice(ctx context.Context, deviceToken string, msgs ...Message) error
 	HandleResponse(err error)
 }
 

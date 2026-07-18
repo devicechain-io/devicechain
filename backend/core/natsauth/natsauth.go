@@ -17,6 +17,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"time"
 
 	"github.com/nats-io/jwt/v2"
@@ -119,25 +121,49 @@ func GenerateCredentials() (Credentials, error) {
 // cross-tenant exposure.
 const MqttDeliverySubject = "$MQTT.sub.>"
 
-// DevicePermissions returns the pub/sub subject allow-list for a device bound to
-// tenant within instanceId. A device may only publish and subscribe under its own
-// instance-and-tenant tree (`{instanceId}.{tenant}.>` — the MQTT-topic→subject
-// mapping of `{instanceId}/{tenant}/#`), which is the subject-authorization
-// binding that closes the cross-tenant hole (ADR-025) and, because the tree is
-// prefixed with the instance id rather than a literal, also the cross-instance
-// hole on a shared broker (ADR-048): two instances' devices never share a subject
-// tree even for identically-named tenants. `{instanceId}.{tenant}` (no trailing
-// token) is included because an MQTT `{instanceId}/{tenant}/#` filter maps to a
-// subscription on both the wildcard tree and that level-up subject. Tenant
-// granularity in v1; per-device (`{instanceId}.{tenant}.{token}.>`) is a later
-// refinement.
-func DevicePermissions(instanceId, tenant string) jwt.Permissions {
-	tree := fmt.Sprintf("%s.%s.>", instanceId, tenant)
-	levelUp := fmt.Sprintf("%s.%s", instanceId, tenant)
+// DevicePermissions returns the pub/sub subject allow-list for one device bound to
+// tenant within instanceId.
+//
+// The grant is PER-DEVICE, not per-tenant. It previously allowed pub and sub across
+// the whole `{instanceId}.{tenant}.>` tree, which had two consequences that were
+// enforced by convention rather than by the broker:
+//
+//   - every device received every command issued to every device in its tenant, and
+//     isolation rested on each device choosing to filter on the envelope's
+//     deviceToken. A device that did not filter, or a compromised one, read them all.
+//   - a device could publish anywhere under the tenant tree, including onto topics
+//     the platform gives meaning to.
+//
+// Both are now closed at the authorization layer, which is the only place they can
+// be closed against a device that misbehaves on purpose:
+//
+//   - SUB is the device's OWN command subject, plus the MQTT delivery subject.
+//   - PUB is the device's own events topic and the shared command-responses subject
+//     (one subject, one consumer; a response names its command by token, and the
+//     tenant is derived from the subject rather than the payload).
+//
+// The instance-id prefix still closes the cross-instance hole on a shared broker
+// (ADR-048): two instances' devices never share a subject tree even for
+// identically-named tenants.
+// It returns an error rather than a permission set when the device token is not
+// token-grammar-safe. The token is spliced into three subjects, so one carrying
+// "." / "*" / ">" would mint live wildcards INSIDE a device's own JWT — e.g. a token
+// of `x.*` yields SUB "…device-commands.x.*". The DB grammar guard (ADR-042) should
+// make that unreachable, but the tenant in this same flow gets a local check for
+// exactly this reason rather than resting on a distant invariant, and the signed
+// grant is the higher-blast-radius splice of the two.
+func DevicePermissions(instanceId, tenant, deviceToken string) (jwt.Permissions, error) {
+	if err := core.ValidateToken(deviceToken); err != nil {
+		return jwt.Permissions{}, fmt.Errorf("refusing to build a grant for an invalid device token: %w", err)
+	}
+	events := fmt.Sprintf("%s.%s.devices.%s.events", instanceId, tenant, deviceToken)
+	responses := fmt.Sprintf("%s.%s.%s", instanceId, tenant, messaging.SubjectCommandResponses)
+	commands := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectDeviceCommands, deviceToken)
+
 	var p jwt.Permissions
-	p.Pub.Allow.Add(tree)
-	p.Sub.Allow.Add(tree, levelUp, MqttDeliverySubject)
-	return p
+	p.Pub.Allow.Add(events, responses)
+	p.Sub.Allow.Add(commands, MqttDeliverySubject)
+	return p, nil
 }
 
 // SignDeviceUserJWT builds and signs the user JWT the callout returns for an
@@ -145,7 +171,7 @@ func DevicePermissions(instanceId, tenant string) jwt.Permissions {
 // authorization request (req.UserNkey); the JWT places the user in AppAccount
 // (via aud) with instance-and-tenant-scoped permissions (ADR-048), signed by the
 // issuer account seed.
-func SignDeviceUserJWT(issuerSeed, userNkey, instanceId, tenant string, now time.Time, ttl time.Duration) (string, error) {
+func SignDeviceUserJWT(issuerSeed, userNkey, instanceId, tenant, deviceToken string, now time.Time, ttl time.Duration) (string, error) {
 	akp, err := nkeys.FromSeed([]byte(issuerSeed))
 	if err != nil {
 		return "", fmt.Errorf("loading issuer seed: %w", err)
@@ -153,7 +179,11 @@ func SignDeviceUserJWT(issuerSeed, userNkey, instanceId, tenant string, now time
 	uc := jwt.NewUserClaims(userNkey)
 	uc.Name = tenant
 	uc.Audience = AppAccount
-	uc.Permissions = DevicePermissions(instanceId, tenant)
+	perms, err := DevicePermissions(instanceId, tenant, deviceToken)
+	if err != nil {
+		return "", err
+	}
+	uc.Permissions = perms
 	// Pin the credential to the MQTT connection type: the device plane is MQTT, so
 	// a device credential must not be usable to open a raw NATS connection (which
 	// would let it subscribe to the shared MqttDeliverySubject and read other

@@ -30,9 +30,28 @@ func (reader *MockMessageReader) HandleResponse(err error) {
 // Mock for a message writer.
 type MockMessageWriter struct {
 	mock.Mock
+	// Devices are the targets passed to WriteToDevice, in call order.
+	Devices []string
 }
 
 func (writer *MockMessageWriter) WriteMessages(ctx context.Context, msgs ...messaging.Message) error {
+	args := writer.Called()
+	return args.Error(0)
+}
+
+// WriteToDevice records a per-device publish.
+//
+// NOTE: testify derives the expectation name from the CALLER, so this resolves
+// .On("WriteToDevice") — NOT .On("WriteMessages"). A test whose production path
+// moves onto this method must set its own expectation; it will not inherit the
+// WriteMessages one.
+//
+// Devices records the target of each call so a test can assert a message went to
+// ONE device. Asserting only that something was published cannot distinguish
+// per-device addressing from a tenant-wide broadcast, which is the property the
+// per-device subject exists to provide.
+func (writer *MockMessageWriter) WriteToDevice(ctx context.Context, deviceToken string, msgs ...messaging.Message) error {
+	writer.Devices = append(writer.Devices, deviceToken)
 	args := writer.Called()
 	return args.Error(0)
 }

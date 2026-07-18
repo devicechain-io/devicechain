@@ -141,12 +141,23 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 	// AuthenticateDevice is tenant-scoped via the context tenant (the fail-closed
 	// DB callback), so a credential is only ever resolved within its own tenant.
 	ctx := core.WithTenant(context.Background(), tenant)
-	if _, err := c.api.AuthenticateDevice(ctx, presented, c.now()); err != nil {
+	// The authenticated DEVICE — not just "some device in this tenant" — decides the
+	// grant, so the JWT can confine this connection to its own command subject and its
+	// own events topic. The result was previously discarded, which is why the grant
+	// could only ever be tenant-wide.
+	device, err := c.api.AuthenticateDevice(ctx, presented, c.now())
+	if err != nil {
 		log.Debug().Err(err).Str("tenant", tenant).Msg("Auth-callout rejected a device connection.")
 		return "", genericAuthFailure
 	}
+	if device == nil || device.Token == "" {
+		// Fail closed: without a device token the only grant we could mint would be a
+		// tenant-wide one, which is exactly what this change removes.
+		log.Error().Str("tenant", tenant).Msg("Auth-callout resolved a credential to no device token.")
+		return "", genericAuthFailure
+	}
 
-	signed, err := natsauth.SignDeviceUserJWT(c.issuerSeed, req.UserNkey, c.instanceId, tenant, c.now(), c.ttl)
+	signed, err := natsauth.SignDeviceUserJWT(c.issuerSeed, req.UserNkey, c.instanceId, tenant, device.Token, c.now(), c.ttl)
 	if err != nil {
 		log.Error().Err(err).Msg("Auth-callout failed to sign a device user JWT.")
 		return "", genericAuthFailure

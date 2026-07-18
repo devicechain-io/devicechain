@@ -118,7 +118,14 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 		Key:   []byte(cmd.Token),
 		Value: value,
 	}
-	if err := cproc.DeviceCommandsWriter.WriteMessages(tenantCtx, msg); err != nil {
+	// Published to the TARGET DEVICE's subject, not the tenant's. Before this, every
+	// command went to one tenant-wide subject that every device in the tenant was
+	// granted to subscribe to, so isolation between devices rested entirely on each
+	// device choosing to filter on the envelope's deviceToken. A device that simply
+	// did not filter — or a compromised one — read every command in the tenant,
+	// payloads included. The subject now carries the device, and the broker grant is
+	// narrowed to match, so the isolation is enforced rather than requested.
+	if err := cproc.DeviceCommandsWriter.WriteToDevice(tenantCtx, cmd.DeviceToken, msg); err != nil {
 		cproc.DeviceCommandsWriter.HandleResponse(err)
 		return err
 	}

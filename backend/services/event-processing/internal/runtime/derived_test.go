@@ -41,6 +41,12 @@ func (w *fakeWriter) WriteMessages(ctx context.Context, msgs ...messaging.Messag
 	return nil
 }
 
+// WriteToDevice satisfies MessageWriter; this producer is not per-device, so it
+// simply records like an ordinary write.
+func (w *fakeWriter) WriteToDevice(ctx context.Context, deviceToken string, msgs ...messaging.Message) error {
+	return w.WriteMessages(ctx, msgs...)
+}
+
 func (w *fakeWriter) HandleResponse(error) {}
 
 // fakeMetrics counts publisher outcomes.
