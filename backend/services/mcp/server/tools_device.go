@@ -163,18 +163,34 @@ type MetricCapability struct {
 type CommandCapability struct {
 	CommandKey string `json:"commandKey"`
 	Name       string `json:"name,omitempty"`
+	// Description and ParameterSchema come from the published definition, so an agent
+	// can describe what a command does and what arguments it takes without a second
+	// lookup against the profile.
+	Description     string `json:"description,omitempty"`
+	ParameterSchema string `json:"parameterSchema,omitempty"`
 }
 
 type GetDeviceCapabilitiesOutput struct {
-	DeviceToken   string              `json:"deviceToken"`
-	DeviceType    string              `json:"deviceType,omitempty"`
-	Profile       string              `json:"profile,omitempty"`
-	ActiveVersion *int                `json:"activeVersion,omitempty"`
-	Metrics       []MetricCapability  `json:"metrics"`
-	Commands      []CommandCapability `json:"commands"`
+	DeviceToken   string             `json:"deviceToken"`
+	DeviceType    string             `json:"deviceType,omitempty"`
+	Profile       string             `json:"profile,omitempty"`
+	ActiveVersion *int               `json:"activeVersion,omitempty"`
+	Metrics       []MetricCapability `json:"metrics"`
+	// Commands is the device's PUBLISHED command vocabulary — what it actually
+	// accepts, not what has been authored.
+	Commands []CommandCapability `json:"commands"`
+	// CommandsConstrained reports whether the profile restricts which commands may be
+	// sent. When false the platform accepts ANY command key and Commands is empty, so
+	// an empty list must NOT be read as "this device takes no commands" — it means the
+	// vocabulary is open. This field exists because that is precisely the inference a
+	// reader is most likely to get backwards.
+	CommandsConstrained bool `json:"commandsConstrained"`
 }
 
-const deviceCapabilitiesQuery = `query DeviceCapabilities($tokens: [String!]!) {
+// Metrics still read the profile's DRAFT definitions; commands read the device's
+// published vocabulary, which device-management resolves against the same snapshot the
+// enqueue gate validates against. Both are fetched in one request.
+const deviceCapabilitiesQuery = `query DeviceCapabilities($tokens: [String!]!, $deviceToken: String!) {
   devicesByToken(tokens: $tokens) {
     token
     deviceType {
@@ -182,25 +198,29 @@ const deviceCapabilitiesQuery = `query DeviceCapabilities($tokens: [String!]!) {
       profile {
         token activeVersion
         metricDefinitions { metricKey name unit dataType }
-        commandDefinitions { commandKey name }
       }
     }
   }
+  deviceCommandVocabulary(deviceToken: $deviceToken) {
+    constrained
+    commands { commandKey name description parameterSchema }
+  }
 }`
 
-// GetDeviceCapabilities reports the metric and command definitions declared on a
-// device's profile. These are the profile's DRAFT definitions (the editable working
-// copy), so they may differ from what the device actually resolves: a device resolves
-// the active PUBLISHED version.
+// GetDeviceCapabilities reports what a device can measure and what it can be told to do.
 //
-// For commands, device-management now serves the published vocabulary directly
-// (deviceCommandVocabulary), so this tool should read that instead of the draft list —
-// an agent told a device "has" a command the enqueue gate will reject is exactly the
-// failure that query exists to remove. Tracked as a follow-up; the tool description
-// warns the caller in the meantime. activeVersion is that published version, or null when
-// the profile has never been published — in which case the device currently
-// resolves none of these capabilities. The tool description states this so the
-// caller (an LLM) does not treat a draft definition as an active capability.
+// COMMANDS are the device's PUBLISHED vocabulary — the same resolution the enqueue gate
+// validates against, so a command reported here is one the platform will accept. This
+// tool used to report the profile's DRAFT command definitions and warn the caller they
+// might not be active, which is a warning an agent cannot act on: it could not tell which
+// of the listed commands were real. Reporting what is true beats describing what is
+// uncertain.
+//
+// METRICS are still the profile's DRAFT definitions, so they may name a metric the device
+// does not yet report. activeVersion is the published version a device resolves, or null
+// when the profile has never been published; the tool description tells the caller to read
+// metrics against it. Moving metrics onto the published snapshot is a separate change —
+// there is no published-metric listing yet.
 func (t *Tools) GetDeviceCapabilities(ctx context.Context, req *mcp.CallToolRequest, in GetDeviceCapabilitiesInput) (*mcp.CallToolResult, GetDeviceCapabilitiesOutput, error) {
 	token, _, err := callerToken(req)
 	if err != nil {
@@ -215,18 +235,19 @@ func (t *Tools) GetDeviceCapabilities(ctx context.Context, req *mcp.CallToolRequ
 			DeviceType struct {
 				Token   string `json:"token"`
 				Profile *struct {
-					Token              string             `json:"token"`
-					ActiveVersion      *int               `json:"activeVersion"`
-					MetricDefinitions  []MetricCapability `json:"metricDefinitions"`
-					CommandDefinitions []struct {
-						CommandKey string `json:"commandKey"`
-						Name       string `json:"name"`
-					} `json:"commandDefinitions"`
+					Token             string             `json:"token"`
+					ActiveVersion     *int               `json:"activeVersion"`
+					MetricDefinitions []MetricCapability `json:"metricDefinitions"`
 				} `json:"profile"`
 			} `json:"deviceType"`
 		} `json:"devicesByToken"`
+		DeviceCommandVocabulary *struct {
+			Constrained bool                `json:"constrained"`
+			Commands    []CommandCapability `json:"commands"`
+		} `json:"deviceCommandVocabulary"`
 	}
-	if err := t.gql.Query(ctx, "device-management", token, deviceCapabilitiesQuery, map[string]any{"tokens": []string{in.DeviceToken}}, &resp); err != nil {
+	vars := map[string]any{"tokens": []string{in.DeviceToken}, "deviceToken": in.DeviceToken}
+	if err := t.gql.Query(ctx, "device-management", token, deviceCapabilitiesQuery, vars, &resp); err != nil {
 		return nil, GetDeviceCapabilitiesOutput{}, err
 	}
 	if len(resp.DevicesByToken) == 0 {
@@ -243,8 +264,15 @@ func (t *Tools) GetDeviceCapabilities(ctx context.Context, req *mcp.CallToolRequ
 		out.Profile = p.Token
 		out.ActiveVersion = p.ActiveVersion
 		out.Metrics = p.MetricDefinitions
-		for _, c := range p.CommandDefinitions {
-			out.Commands = append(out.Commands, CommandCapability{CommandKey: c.CommandKey, Name: c.Name})
+	}
+	// A null vocabulary means device-management could not resolve the token. The device
+	// read above already succeeded, so this is a race (deleted mid-query) rather than a
+	// bad request: report an open vocabulary and no commands, which is what the enqueue
+	// gate would say about a device it cannot find.
+	if v := resp.DeviceCommandVocabulary; v != nil {
+		out.CommandsConstrained = v.Constrained
+		if v.Commands != nil {
+			out.Commands = v.Commands
 		}
 	}
 	return nil, out, nil

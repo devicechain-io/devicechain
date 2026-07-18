@@ -21,7 +21,7 @@ The server exposes ten **read** tools. Each one is a query against the same Grap
 
 - `list_devices` — list devices, with filtering.
 - `get_device` — a single device's details.
-- `get_device_capabilities` — the measurements and commands a device's profile defines.
+- `get_device_capabilities` — what a device can measure, and the **published** commands it accepts (with each command's parameter schema).
 
 **Live state & telemetry**
 

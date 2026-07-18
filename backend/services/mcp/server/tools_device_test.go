@@ -90,8 +90,9 @@ func TestGetLatestMeasurements(t *testing.T) {
 
 func TestGetDeviceCapabilities(t *testing.T) {
 	body := `{"data":{"devicesByToken":[{"token":"d1","deviceType":{"token":"truck","profile":{"token":"p1","activeVersion":3,` +
-		`"metricDefinitions":[{"metricKey":"temp","name":"Temperature","unit":"C","dataType":"FLOAT"}],` +
-		`"commandDefinitions":[{"commandKey":"reboot","name":"Reboot"}]}}}]}}`
+		`"metricDefinitions":[{"metricKey":"temp","name":"Temperature","unit":"C","dataType":"FLOAT"}]}}}],` +
+		`"deviceCommandVocabulary":{"constrained":true,"commands":[{"commandKey":"reboot","name":"Reboot",` +
+		`"description":"Restart the unit","parameterSchema":"[{\"name\":\"force\",\"dataType\":\"BOOLEAN\"}]"}]}}}`
 	tools, done := toolsAgainst(t, body)
 	defer done()
 
@@ -105,8 +106,78 @@ func TestGetDeviceCapabilities(t *testing.T) {
 	if len(out.Metrics) != 1 || out.Metrics[0].MetricKey != "temp" {
 		t.Errorf("unexpected metrics: %+v", out.Metrics)
 	}
+	if !out.CommandsConstrained {
+		t.Error("a constrained vocabulary must be reported as constrained")
+	}
+	if len(out.Commands) != 1 || out.Commands[0].CommandKey != "reboot" {
+		t.Fatalf("unexpected commands: %+v", out.Commands)
+	}
+	// The schema is what lets an agent describe a command's arguments without a second
+	// lookup. Dropping it would make the tool describe capabilities it cannot explain.
+	if out.Commands[0].Description == "" || out.Commands[0].ParameterSchema == "" {
+		t.Errorf("command description/schema must survive: %+v", out.Commands[0])
+	}
+}
+
+// The distinction an agent is most likely to get backwards: an OPEN vocabulary reports
+// no commands, but that means anything is accepted — not that nothing can be sent.
+func TestGetDeviceCapabilities_OpenVocabulary(t *testing.T) {
+	body := `{"data":{"devicesByToken":[{"token":"d1","deviceType":{"token":"truck","profile":{"token":"p1","activeVersion":null,` +
+		`"metricDefinitions":[]}}}],"deviceCommandVocabulary":{"constrained":false,"commands":[]}}}`
+	tools, done := toolsAgainst(t, body)
+	defer done()
+
+	_, out, err := tools.GetDeviceCapabilities(context.Background(), authedReq("tok"), GetDeviceCapabilitiesInput{DeviceToken: "d1"})
+	if err != nil {
+		t.Fatalf("GetDeviceCapabilities: %v", err)
+	}
+	if out.CommandsConstrained {
+		t.Error("an unpublished profile must report an OPEN vocabulary")
+	}
+	if out.Commands == nil || len(out.Commands) != 0 {
+		t.Errorf("an open vocabulary lists nothing, as an empty non-nil slice: %+v", out.Commands)
+	}
+}
+
+// A draft command definition must never reach the caller. This is the defect the switch
+// to the published vocabulary exists to remove: an agent told a device "has" a command
+// the enqueue gate would reject.
+func TestGetDeviceCapabilities_IgnoresDrafts(t *testing.T) {
+	body := `{"data":{"devicesByToken":[{"token":"d1","deviceType":{"token":"truck","profile":{"token":"p1","activeVersion":1,` +
+		`"metricDefinitions":[],"commandDefinitions":[{"commandKey":"not-yet-published","name":"Draft"}]}}}],` +
+		`"deviceCommandVocabulary":{"constrained":true,"commands":[{"commandKey":"reboot","name":"Reboot"}]}}}`
+	tools, done := toolsAgainst(t, body)
+	defer done()
+
+	_, out, err := tools.GetDeviceCapabilities(context.Background(), authedReq("tok"), GetDeviceCapabilitiesInput{DeviceToken: "d1"})
+	if err != nil {
+		t.Fatalf("GetDeviceCapabilities: %v", err)
+	}
+	for _, c := range out.Commands {
+		if c.CommandKey == "not-yet-published" {
+			t.Fatal("a draft definition reached the caller")
+		}
+	}
 	if len(out.Commands) != 1 || out.Commands[0].CommandKey != "reboot" {
 		t.Errorf("unexpected commands: %+v", out.Commands)
+	}
+}
+
+// The device read succeeds but the vocabulary comes back null — the device was deleted
+// between the two resolutions inside one query. Report an open vocabulary rather than
+// failing the whole tool call.
+func TestGetDeviceCapabilities_NullVocabulary(t *testing.T) {
+	body := `{"data":{"devicesByToken":[{"token":"d1","deviceType":{"token":"truck","profile":null}}],` +
+		`"deviceCommandVocabulary":null}}`
+	tools, done := toolsAgainst(t, body)
+	defer done()
+
+	_, out, err := tools.GetDeviceCapabilities(context.Background(), authedReq("tok"), GetDeviceCapabilitiesInput{DeviceToken: "d1"})
+	if err != nil {
+		t.Fatalf("a vanished vocabulary should not fail the call: %v", err)
+	}
+	if out.CommandsConstrained || len(out.Commands) != 0 {
+		t.Errorf("expected an open, empty vocabulary: %+v", out)
 	}
 }
 
@@ -121,7 +192,7 @@ func TestGetDeviceCapabilities_NotFound(t *testing.T) {
 // A device whose type has adopted no profile returns empty (non-nil) capability
 // lists and no active version — never a nil-deref.
 func TestGetDeviceCapabilities_NoProfile(t *testing.T) {
-	tools, done := toolsAgainst(t, `{"data":{"devicesByToken":[{"token":"d1","deviceType":{"token":"truck","profile":null}}]}}`)
+	tools, done := toolsAgainst(t, `{"data":{"devicesByToken":[{"token":"d1","deviceType":{"token":"truck","profile":null}}],"deviceCommandVocabulary":{"constrained":false,"commands":[]}}}`)
 	defer done()
 	_, out, err := tools.GetDeviceCapabilities(context.Background(), authedReq("tok"), GetDeviceCapabilitiesInput{DeviceToken: "d1"})
 	if err != nil {
