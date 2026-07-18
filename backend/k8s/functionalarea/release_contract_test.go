@@ -16,8 +16,9 @@ import (
 //
 //   - PUBLISHED (release.yml + hack/list-services.sh): every backend/services/*
 //     directory that has a main.go is ko-built and pushed as
-//     ghcr.io/devicechain-io/<dir-name>:<tag> (via --base-import-paths, so the
-//     image name IS the directory name).
+//     ghcr.io/devicechain-io/<dir-name>:<tag>. release.yml uses `ko --bare` with
+//     an explicit repo == the directory basename (NOT --base-import-paths, which
+//     would name the image after the dc-<name> Go module base and mismatch this).
 //   - EXPECTED (this catalog + the Helm chart): the chart renders each enabled
 //     functional area as "{registry}/{area}:{tag}" (templates/_helpers.tpl,
 //     devicechain.image), where {area} is the FunctionalArea string.
