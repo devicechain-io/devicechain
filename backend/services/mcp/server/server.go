@@ -79,7 +79,7 @@ func registerTools(s *mcp.Server, t *Tools) {
 	}, t.GetLatestMeasurements)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_device_capabilities",
-		Description: "Report the metric and command definitions declared on a device's profile — its DRAFT definitions (key, name, unit/data type). These are the editable working copy; a device resolves the active PUBLISHED profile version, which may differ from these drafts. `activeVersion` is the published version the device currently resolves; when it is null the profile has never been published, so the device currently resolves NONE of these capabilities. Do not assume a listed capability is active unless activeVersion is set.",
+		Description: "Report what a device can measure and what it can be told to do. `commands` is the device's PUBLISHED command vocabulary — the platform accepts exactly these, with `parameterSchema` describing each one's arguments. `commandsConstrained` says whether the vocabulary is enforced at all: when it is false the platform accepts ANY command key and `commands` is empty, so an empty list means the vocabulary is OPEN, not that the device takes no commands. `metrics` are the profile's DRAFT metric definitions (key, name, unit, data type) and may name metrics the device does not yet report; `activeVersion` is the published profile version the device resolves, and when it is null the profile has never been published, so treat the listed metrics as not yet active.",
 	}, t.GetDeviceCapabilities)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "query_measurements",
