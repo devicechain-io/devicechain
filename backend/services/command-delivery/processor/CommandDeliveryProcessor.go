@@ -72,8 +72,8 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 	return cproc
 }
 
-// deliverPendingCommands fetches a bounded batch of still-QUEUED commands across
-// tenants and delivers each one, marking it SENT on a successful publish.
+// deliverPendingCommands fetches the still-QUEUED commands across tenants and
+// delivers each one, marking it SENT on a successful publish.
 // Per-command errors are logged and skipped so one bad command does not abort the
 // batch.
 //
@@ -91,13 +91,6 @@ func (cproc *CommandDeliveryProcessor) deliverPendingCommands(ctx context.Contex
 			log.Error().Err(err).Uint("command", cmd.ID).Str("device", cmd.DeviceToken).
 				Msg("unable to deliver command")
 		}
-	}
-	// A saturated batch means more is queued than one pass drains. Say so: the next
-	// sweep picks up the remainder, but a persistently full batch is a backlog the
-	// operator needs to see rather than infer from delivery latency.
-	if len(pending) == model.PendingCommandBatch {
-		log.Warn().Int("batch", len(pending)).
-			Msg("Command redelivery batch was full; more commands remain queued for the next sweep.")
 	}
 }
 
@@ -217,6 +210,17 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 // The lock covers expiry too. ExpireStale is a conditional UPDATE and safe to race,
 // but holding one lock for the whole sweep keeps the invariant simple — one sweeper —
 // rather than requiring a reader to re-derive which halves are safe to run twice.
+//
+// This makes delivery single-sweeper, NOT exactly-once, and the difference is worth
+// stating because it is easy to over-read. A pg advisory lock is bound to the session
+// holding it, so if this pod's connection dies mid-sweep — a failover, a network blip —
+// Postgres releases the lock immediately and a peer may pick up the same still-QUEUED
+// rows and publish them again. deliverCommand also publishes BEFORE it marks SENT, so a
+// publish that succeeds and a MarkSent that fails leaves the command queued for the next
+// pass. Command delivery is therefore at-least-once, as it was before; what this removes
+// is the guaranteed, every-single-tick duplication of running N sweepers by design.
+// Closing the remaining window needs a from-state-predicated claim before the publish,
+// which needs an intermediate lifecycle state — see the note on TrySweepLock.
 func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) {
 	ran, err := cproc.Api.TrySweepLock(ctx, func() error {
 		if _, err := cproc.Api.ExpireStale(core.WithSystemContext(ctx), time.Now()); err != nil {

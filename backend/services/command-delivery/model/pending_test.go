@@ -26,37 +26,22 @@ func seedQueued(t *testing.T, api *Api, ctx context.Context, n int) []uint {
 	return ids
 }
 
-// PendingCommands feeds the redelivery sweep. Both of its guarantees exist to keep a
-// backlog from turning a delivery problem into a worse one.
+// PendingCommands feeds the redelivery sweep.
 func TestPendingCommands(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 
-	// An unbounded read of every QUEUED command across every tenant is fine on a
-	// healthy instance and a memory hazard on an unhealthy one: a fleet that goes
-	// offline queues without limit, and the sweep would load the whole backlog at once.
-	t.Run("caps a batch at PendingCommandBatch", func(t *testing.T) {
-		api := newTestApi(t)
-		seedQueued(t, api, ctx, PendingCommandBatch+25)
-
-		pending, err := api.PendingCommands(core.WithSystemContext(ctx))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(pending) != PendingCommandBatch {
-			t.Fatalf("expected a batch of %d, got %d", PendingCommandBatch, len(pending))
-		}
-	})
-
-	// Without an explicit order the batch is whatever the planner returns, so under a
-	// backlog larger than one batch a command could be starved indefinitely while newer
-	// ones ship. Oldest-first makes the queue a queue.
+	// Ordering replaces an unordered read, so delivery follows enqueue order rather
+	// than whatever the planner returned.
 	t.Run("returns the oldest commands first", func(t *testing.T) {
 		api := newTestApi(t)
-		ids := seedQueued(t, api, ctx, PendingCommandBatch+10)
+		ids := seedQueued(t, api, ctx, 50)
 
 		pending, err := api.PendingCommands(core.WithSystemContext(ctx))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(pending) != len(ids) {
+			t.Fatalf("expected all %d queued commands, got %d", len(ids), len(pending))
 		}
 		for i, cmd := range pending {
 			if cmd.ID != ids[i] {
@@ -64,11 +49,22 @@ func TestPendingCommands(t *testing.T) {
 					i, ids[i], cmd.ID)
 			}
 		}
-		// The newest commands are the ones deferred to the next pass — not the oldest.
-		last := pending[len(pending)-1].ID
-		if last != ids[PendingCommandBatch-1] {
-			t.Fatalf("batch should end at the %dth enqueued command, got id %d",
-				PendingCommandBatch, last)
+	})
+
+	// The read is deliberately uncapped. A naive LIMIT combined with oldest-first
+	// ordering lets undeliverable commands hold the front of every batch forever, which
+	// wedges delivery platform-wide — strictly worse than the memory cost it saves. See
+	// the note on PendingCommands for what a correct bound requires.
+	t.Run("returns every queued command, not a fixed-size page", func(t *testing.T) {
+		api := newTestApi(t)
+		seedQueued(t, api, ctx, 1200)
+
+		pending, err := api.PendingCommands(core.WithSystemContext(ctx))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(pending) != 1200 {
+			t.Fatalf("expected all 1200 queued commands, got %d", len(pending))
 		}
 	})
 
