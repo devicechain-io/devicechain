@@ -80,3 +80,17 @@ release:
   # Mark the GitHub Release as a prerelease automatically when the tag carries
   # a prerelease segment (e.g. v1.2.3-rc.1). Stable tags publish a full release.
   prerelease: auto
+  # A standing pre-1.0 notice on every release. Before v1.0.0 a PATCH release is
+  # allowed to tighten validation or change a schema, so the version number alone
+  # cannot tell a user whether an upgrade is safe — only the notes can. Putting this
+  # in the goreleaser config rather than writing it per release means it cannot be
+  # forgotten on the one release that needed it most. Any release-specific breaking
+  # changes are added to the notes by hand, under this notice.
+  #
+  # Remove this header at v1.0.0, when a normal semver compatibility promise applies.
+  header: |
+    > [!WARNING]
+    > **Pre-1.0 release.** Until v1.0.0, any release — including a patch — may change
+    > APIs, schemas, or behavior without a compatibility shim. Check for a
+    > "Breaking changes" section below before upgrading.
+    > See [Pre-1.0 stability](https://docs.devicechain.io/deployment/releases-and-upgrades#pre-10-stability).
