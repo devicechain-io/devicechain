@@ -250,6 +250,11 @@ func (api *MockApi) CommandDefinitionsByDeviceType(ctx context.Context, deviceTy
 	return args.Get(0).([]*model.CommandDefinition), args.Error(1)
 }
 
+func (api *MockApi) DeviceCommandVocabulary(ctx context.Context, deviceToken string) (*model.CommandVocabulary, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.CommandVocabulary), args.Error(1)
+}
+
 func (api *MockApi) AlarmsById(ctx context.Context, ids []uint) ([]*model.Alarm, error) {
 	args := api.Mock.Called()
 	return args.Get(0).([]*model.Alarm), args.Error(1)

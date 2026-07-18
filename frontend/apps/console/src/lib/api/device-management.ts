@@ -18,6 +18,7 @@ import type {
   MetricDefinitionsQuery,
   MetricDefinitionCreateRequest,
   CommandDefinitionsQuery,
+  DeviceCommandVocabularyQuery,
   CommandDefinitionCreateRequest,
   DetectionRulesQuery,
   DetectionRuleCreateRequest,
@@ -47,6 +48,12 @@ export type DeviceProfileDetail = NonNullable<DeviceProfileByTokenQuery['deviceP
 export type DeviceProfileVersion = DeviceProfileVersionsQuery['deviceProfileVersions'][number];
 export type MetricDefinition = MetricDefinitionsQuery['metricDefinitions']['results'][number];
 export type CommandDefinition = CommandDefinitionsQuery['commandDefinitions']['results'][number];
+// The published vocabulary a device accepts (ADR-043 decision 3) — distinct from
+// CommandDefinition, which is the authored draft. A PublishedCommand carries no id or
+// token: it is a snapshot copy, and the draft it came from may since have changed.
+// Null when the token resolves to no device — a saved view can outlive its device.
+export type DeviceCommandVocabulary = DeviceCommandVocabularyQuery['deviceCommandVocabulary'];
+export type PublishedCommand = NonNullable<DeviceCommandVocabulary>['commands'][number];
 export type DetectionRule = DetectionRulesQuery['detectionRules']['results'][number];
 
 // Re-export the generated request inputs so forms can type their request objects
@@ -816,11 +823,44 @@ export async function listCommandDefinitions(profileToken: string): Promise<Comm
   return data.commandDefinitions.results;
 }
 
-// listCommandDefinitionsForDevice resolves a device to the command definitions it
-// accepts, following the device → type → profile chain (ADR-045): the definitions live
-// on the device profile, so a device with no type, or a type with no profile, has none.
-// Used by the dashboard command-button authoring UI, which scopes to a device but needs
-// that device's command vocabulary. Returns [] when the chain doesn't resolve.
+const DEVICE_COMMAND_VOCABULARY = graphql(`
+  query DeviceCommandVocabulary($deviceToken: String!) {
+    deviceCommandVocabulary(deviceToken: $deviceToken) {
+      constrained
+      commands {
+        commandKey
+        name
+        description
+        parameterSchema
+      }
+    }
+  }
+`);
+
+// getDeviceCommandVocabulary returns the commands a device ACCEPTS RIGHT NOW — its
+// profile's active PUBLISHED version (ADR-043 decision 3), which is what the enqueue
+// gate validates against. Prefer this over listCommandDefinitionsForDevice anywhere the
+// user is choosing a command to SEND: the draft list can offer commands the server will
+// then reject.
+//
+// `constrained: false` means the profile restricts nothing and the gate accepts any
+// command key, with `commands` empty. Do NOT read an empty list as "this device takes no
+// commands" — check `constrained`.
+export async function getDeviceCommandVocabulary(
+  deviceToken: string,
+): Promise<DeviceCommandVocabulary> {
+  const data = await gql('device-management', DEVICE_COMMAND_VOCABULARY, { deviceToken });
+  return data.deviceCommandVocabulary;
+}
+
+// listCommandDefinitionsForDevice resolves a device to the command definitions AUTHORED
+// on its profile, following the device → type → profile chain (ADR-045): the definitions
+// live on the device profile, so a device with no type, or a type with no profile, has
+// none. Returns [] when the chain doesn't resolve.
+//
+// These are DRAFTS. A definition here is not necessarily one the device accepts — it
+// accepts what was published. Use getDeviceCommandVocabulary to offer a command for
+// sending; use this only to reason about what an author has written down.
 export async function listCommandDefinitionsForDevice(
   deviceToken: string,
 ): Promise<CommandDefinition[]> {

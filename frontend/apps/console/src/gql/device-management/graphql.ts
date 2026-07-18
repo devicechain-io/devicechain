@@ -824,6 +824,13 @@ export type CommandDefinitionsQueryVariables = Exact<{
 
 export type CommandDefinitionsQuery = { commandDefinitions: { results: Array<{ id: string, token: string, name: string | null, description: string | null, commandKey: string, parameterSchema: string | null, metadata: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
+export type DeviceCommandVocabularyQueryVariables = Exact<{
+  deviceToken: string;
+}>;
+
+
+export type DeviceCommandVocabularyQuery = { deviceCommandVocabulary: { constrained: boolean, commands: Array<{ commandKey: string, name: string | null, description: string | null, parameterSchema: string | null }> } | null };
+
 export type CreateCommandDefinitionMutationVariables = Exact<{
   request?: CommandDefinitionCreateRequest | null | undefined;
 }>;
@@ -2063,6 +2070,19 @@ export const CommandDefinitionsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CommandDefinitionsQuery, CommandDefinitionsQueryVariables>;
+export const DeviceCommandVocabularyDocument = new TypedDocumentString(`
+    query DeviceCommandVocabulary($deviceToken: String!) {
+  deviceCommandVocabulary(deviceToken: $deviceToken) {
+    constrained
+    commands {
+      commandKey
+      name
+      description
+      parameterSchema
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceCommandVocabularyQuery, DeviceCommandVocabularyQueryVariables>;
 export const CreateCommandDefinitionDocument = new TypedDocumentString(`
     mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {
   createCommandDefinition(request: $request) {

@@ -71,6 +71,14 @@ not yet published has not been communicated to anything downstream, so enforcing
 reject commands the device actually accepts. Publish the profile to put a new command into
 force.
 
+The published vocabulary is readable, not just enforceable: a device reports which commands
+it currently accepts, and the console uses that to offer them directly — a picker of
+declared commands and a typed form built from the selected command's parameter schema,
+rather than a free-text box. A profile that declares no commands still gets the free-text
+form, matching what the platform will accept. Commands you have authored but not published
+are named alongside the picker as unavailable, so a missing command reads as "not published
+yet" rather than as a missing feature.
+
 ## Identity and credentials
 
 A device has a **stable identity** that everything else references, kept separate from its **credentials** (the material it uses to authenticate). Credentials are pluggable — **access token**, **MQTT-basic** (username + password), and **X.509 certificate** — so a device can rotate or hold multiple credentials without changing its identity. A credential's secret is **write-only**: it is submitted when the credential is registered and never returned on read. See [Device credentials](../guides/device-credentials.md).

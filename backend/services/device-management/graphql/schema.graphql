@@ -190,6 +190,31 @@ type CommandEnqueueVerdict {
     reason: String
 }
 
+# One command a device currently accepts, read from its profile's active PUBLISHED
+# version (ADR-043 decision 3). This is a snapshot copy frozen at publish — deliberately
+# NOT a CommandDefinition, because it has no id or token to address: the draft row it was
+# captured from may since have been edited or deleted. Author against commandDefinitions;
+# read this to know what a device will accept right now.
+type PublishedCommand {
+    commandKey: String!
+    name: String
+    description: String
+    # The ordered []CommandParameter contract as a JSON string, which drives the console
+    # command form. Null when the command takes no structured arguments.
+    parameterSchema: String
+}
+
+# The commands a device currently accepts (ADR-043 decision 3).
+type DeviceCommandVocabulary {
+    # Whether the profile restricts which commands may be sent. When false the enqueue
+    # gate accepts ANY command key (decision 4) and `commands` is empty — so an empty
+    # list does NOT mean "nothing can be sent to this device", it means the vocabulary
+    # is open. Read this field rather than inferring from the list length.
+    constrained: Boolean!
+    # The published vocabulary; empty when not constrained.
+    commands: [PublishedCommand!]!
+}
+
 # Represents a typed command declared on a device profile (ADR-043/ADR-045). parameterSchema
 # is the ordered []CommandParameter argument contract as a JSON string, which drives the
 # console command form and constrains an issued command's payload at enqueue (the
@@ -1191,6 +1216,15 @@ type Query {
     # schema. Answers device existence, unknown command key, and payload validity in
     # one hop. A profile declaring no vocabulary allows free-form payloads (decision 4).
     validateCommandEnqueue(deviceToken: String!, commandKey: String!, payload: String): CommandEnqueueVerdict!
+    # List the commands a device currently accepts (ADR-043 decision 3) — the listing
+    # counterpart of validateCommandEnqueue, which is ask-don't-list. Both are answered
+    # from the same resolution, so what this offers is what the gate accepts.
+    #
+    # Null when the token resolves to no device. That is a normal state rather than a
+    # caller error: a dashboard or saved view can hold a token whose device was since
+    # deleted, and erroring would take the rest of a batched query down with it. It
+    # matches devicesByToken, which omits tokens it cannot resolve.
+    deviceCommandVocabulary(deviceToken: String!): DeviceCommandVocabulary
     # Find detection rules by unique id.
     detectionRulesById(ids: [ID!]!): [DetectionRule!]!
     # Find detection rules by unique token.
