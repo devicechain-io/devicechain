@@ -51,7 +51,9 @@ architecturally complete, and **unmetered all the way to production scale**.
 DeviceChain ships under **Apache License 2.0 with no open-core split**. There is no
 proprietary "Enterprise" edition that gates production-critical capability —
 clustering / high availability, multi-tenant isolation, persistent command
-delivery, OTA updates, and SSO are all part of the open stack.
+delivery, and SSO are all part of the open stack, as are roadmapped capabilities
+like OTA updates when they land. Nothing production-critical is reserved for a
+paid tier.
 
 Every runtime dependency is **OSI-approved** open source (Apache 2.0, MIT, BSD, MPL
 2.0), and nothing in the stack is encumbered by a source-available or
