@@ -34,5 +34,6 @@ var (
 		NewMembershipReadModelSchema(),
 		NewDetectionRuleScopeSchema(),
 		NewDetectionRuleScopeRefSchema(),
+		NewCommandKeyUniqueSchema(),
 	}
 )
