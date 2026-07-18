@@ -399,6 +399,17 @@ const sweepLockName = "command-delivery-sweep"
 // is a model-level one — exactly one writer walking the QUEUED set — and because the
 // processor talks to this API through an interface, so a lock reached around it could
 // not be exercised in a test.
+//
+// Why a LOCK here when notification-management's escalation scheduler solves the same
+// N-replica problem with a per-row CAS claim (ClaimEscalation) and no lock at all:
+// escalation can claim because the claim IS the record it protects — one atomic UPDATE
+// both wins the right to notify and marks the tier consumed. Command delivery cannot,
+// because it must PUBLISH before it can mark. A claim that set SENT up front would lose
+// the command outright whenever the publish then failed, and a claim that set it
+// afterwards would not have prevented the duplicate. Claiming would therefore need a new
+// intermediate state on the command lifecycle; a lock buys the same safety with no model
+// change. Revisit if the sweep ever becomes a throughput bottleneck — the claim approach
+// parallelizes across replicas where this serializes onto one.
 func (api *Api) TrySweepLock(ctx context.Context, fn func() error) (bool, error) {
 	return api.RDB.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(sweepLockName), fn)
 }
