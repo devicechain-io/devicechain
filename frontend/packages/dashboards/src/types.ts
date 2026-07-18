@@ -21,8 +21,8 @@ export interface DeviceSelector {
 }
 
 // The dimension a dashboard aggregates over — a tracked relationship to a
-// customer / area / asset. anchors beat ThingsBoard's opaque aliases: they are
-// the graph edges the platform already resolves events against.
+// customer / area / asset. An anchor is not an opaque alias: it is a graph edge
+// the platform already resolves events against.
 export interface AnchorTarget {
   relationship: string;
   targetType: 'customer' | 'area' | 'asset';
@@ -146,8 +146,8 @@ export interface CanvasBackground {
 }
 
 // The canvas grid (ADR-039 amendment 2026-07-08). `columns` is high-resolution
-// (24–48) so span placement stays near-free (the canvas-first differentiator vs.
-// ThingsBoard's rigid grid); `gap` is the gutter, one value or a {row,col} pair;
+// (24–48) so span placement stays near-free, which is what makes the canvas-first
+// layout possible rather than a fixed grid; `gap` is the gutter, one value or a {row,col} pair;
 // `rowHeight` is the fixed pixel height of each implicit grid row. Columns are
 // fluid (`repeat(columns, 1fr)`) so the board fills its container width; rows are
 // fixed-px (the `aspect` mode — rowHeight = colWidth × ratio — is the documented

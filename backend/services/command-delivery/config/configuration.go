@@ -21,7 +21,7 @@ const (
 )
 
 // CommandDeliveryConfiguration is the microservice configuration. Commands are
-// persisted to the relational store (ADR-012 #4 / ThingsBoard §2.6).
+// persisted to the relational store (ADR-012 #4).
 type CommandDeliveryConfiguration struct {
 	RdbConfiguration config.MicroserviceDatastoreConfiguration
 }

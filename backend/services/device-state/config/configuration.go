@@ -9,7 +9,7 @@ import (
 
 const (
 	// DefaultInactivityTimeout is the per-device inactivity window in seconds
-	// before a device is marked inactive (ThingsBoard default).
+	// before a device is marked inactive.
 	DefaultInactivityTimeout = 600
 	// InactivityRecheckInterval is how often the background monitor re-evaluates
 	// device activity.

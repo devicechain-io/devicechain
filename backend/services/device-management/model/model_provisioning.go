@@ -12,8 +12,8 @@ import (
 
 // ProvisioningStrategy decides whether a self-registration request may bring a
 // brand-new device into existence or must match a device the operator
-// pre-registered (ADR-012 provisioning policy). It mirrors ThingsBoard's
-// allow-new vs. check-pre-provisioned strategies.
+// pre-registered (ADR-012 provisioning policy). The two strategies are
+// allow-new vs. check-pre-provisioned.
 type ProvisioningStrategy string
 
 const (
