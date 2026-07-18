@@ -102,6 +102,33 @@ func tenantFromTopic(topic string) (string, bool) {
 	return parts[1], true
 }
 
+// commandPlaneSuffixes are the device-plane topics that carry COMMAND traffic
+// rather than device events: the platform's downlink to devices, and a device's
+// response to a command. Both are consumed by command-delivery over its own
+// JetStream durable.
+//
+// They sit under the same {instanceId}/{tenant}/… tree this source subscribes to,
+// so a wildcard subscription sees them. They are named here rather than excluded
+// by narrowing the subscription because a device may legitimately publish events
+// on a topic this service has never been told about — the topic segment after the
+// tenant is not constrained anywhere — so an allowlist would silently stop
+// ingesting somebody's telemetry. Naming what is definitely NOT an event cannot.
+var commandPlaneSuffixes = map[string]struct{}{
+	"device-commands":   {},
+	"command-responses": {},
+}
+
+// isCommandPlane reports whether a topic addresses command traffic rather than a
+// device event, by matching the segment immediately after {instanceId}/{tenant}.
+func isCommandPlane(topic string) bool {
+	parts := strings.Split(topic, "/")
+	if len(parts) < 3 {
+		return false
+	}
+	_, found := commandPlaneSuffixes[parts[2]]
+	return found
+}
+
 // Called when message is received from topic.
 func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	if log.Debug().Enabled() {
@@ -121,6 +148,18 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	// segment could seed an unbounded set of limiter buckets.
 	if err := core.ValidateToken(tenant); err != nil {
 		log.Warn().Msg(fmt.Sprintf("Dropping message with invalid tenant %q in MQTT topic: %v", tenant, err))
+		return
+	}
+
+	// Command traffic shares this topic tree but is not telemetry. Drop it BEFORE
+	// the rate limiter, because metering it is the actual harm: the gate below
+	// spends a tenant's ingest budget, so every command the platform sent and every
+	// response a device returned was counted against that tenant's telemetry
+	// ceiling — a busy command session could rate-limit the tenant's real events.
+	// It also counted as an inbound device event in the RED metrics, and then failed
+	// to decode (a command envelope is not an event), so the failure counter rose
+	// too. None of that is a device's doing and none of it is an event.
+	if isCommandPlane(msg.Topic()) {
 		return
 	}
 
