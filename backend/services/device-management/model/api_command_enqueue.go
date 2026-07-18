@@ -27,6 +27,60 @@ type CommandEnqueueVerdict struct {
 	Reason string
 }
 
+// CommandVocabulary is the set of commands a device currently accepts — the
+// device-facing read of the same published vocabulary the enqueue gate decides
+// against (ADR-043 decision 3).
+//
+// It exists so the console can OFFER what the gate will ACCEPT. Before it, the
+// only published-vocabulary surface was ValidateCommandEnqueue, which is
+// ask-don't-list: a user could discover a command key only by guessing it and
+// being rejected.
+type CommandVocabulary struct {
+	// DeviceExists reports whether the token resolved to a live device. False
+	// makes the other two fields meaningless.
+	DeviceExists bool
+	// Constrained reports whether the profile restricts which commands may be
+	// sent. When false the gate accepts ANY command key (decision 4), so an
+	// unconstrained device is NOT a device with nothing to send — it is a device
+	// whose vocabulary is open. Callers must not infer the former from an empty
+	// Commands list; that is exactly the reading this field exists to prevent.
+	Constrained bool
+	// Commands is the published vocabulary, empty when not Constrained. These are
+	// snapshot copies frozen at publish, not the draft rows they were captured
+	// from — the draft may since have been edited or deleted.
+	Commands []*CommandDefinition
+}
+
+// DeviceCommandVocabulary resolves device → type → the profile's active PUBLISHED
+// command vocabulary (ADR-043 decision 3 / ADR-045).
+//
+// ValidateCommandEnqueue is built on this rather than resolving the vocabulary
+// itself, so that what the console lists and what the gate enforces cannot drift:
+// a device offered a command it would then be rejected for is worse than no
+// listing at all, because it moves the failure from "I guessed wrong" to "the
+// platform lied to me".
+func (api *Api) DeviceCommandVocabulary(ctx context.Context, deviceToken string) (*CommandVocabulary, error) {
+	devices, err := api.DevicesByToken(ctx, []string{deviceToken})
+	if err != nil {
+		return nil, err
+	}
+	if len(devices) == 0 {
+		return &CommandVocabulary{DeviceExists: false}, nil
+	}
+
+	definitions, err := api.CommandDefinitionsByDeviceType(ctx, devices[0].DeviceTypeId)
+	if err != nil {
+		return nil, err
+	}
+	// Constrained is derived HERE and only here, from the same list the gate then
+	// matches against, so the two readings are the same reading.
+	return &CommandVocabulary{
+		DeviceExists: true,
+		Constrained:  len(definitions) > 0,
+		Commands:     definitions,
+	}, nil
+}
+
 // allowedVerdict is the accept answer.
 func allowedVerdict() *CommandEnqueueVerdict { return &CommandEnqueueVerdict{Allowed: true} }
 
@@ -65,26 +119,20 @@ func rejectedVerdict(format string, args ...any) *CommandEnqueueVerdict {
 // Blanket strictness would break every device whose profile is unpublished or
 // carries no definitions — which pre-GA is most of them.
 func (api *Api) ValidateCommandEnqueue(ctx context.Context, deviceToken string, commandKey string, payload []byte) (*CommandEnqueueVerdict, error) {
-	devices, err := api.DevicesByToken(ctx, []string{deviceToken})
+	vocab, err := api.DeviceCommandVocabulary(ctx, deviceToken)
 	if err != nil {
 		return nil, err
 	}
-	if len(devices) == 0 {
+	if !vocab.DeviceExists {
 		return rejectedVerdict("device %q does not exist", deviceToken), nil
 	}
-	device := devices[0]
-
-	definitions, err := api.CommandDefinitionsByDeviceType(ctx, device.DeviceTypeId)
-	if err != nil {
-		return nil, err
-	}
 	// Decision 4 backward path: no declared vocabulary ⇒ free-form, as today.
-	if len(definitions) == 0 {
+	if !vocab.Constrained {
 		return allowedVerdict(), nil
 	}
 
 	var matched *CommandDefinition
-	for _, def := range definitions {
+	for _, def := range vocab.Commands {
 		if def != nil && def.CommandKey == commandKey {
 			matched = def
 			break

@@ -31,8 +31,10 @@ import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   listCommandDefinitionsForDevice,
-  type CommandDefinition,
+  getDeviceCommandVocabulary,
+  type PublishedCommand,
 } from '@/lib/api/device-management';
+import { draftOnlyCommandKeys } from '@/routes/devices/commandVocabulary';
 import { EntityPicker, type EntityKind } from './EntityPicker';
 
 // Widgets that carry a datasource (label/image do not). Alarm widgets carry one too —
@@ -558,10 +560,18 @@ function AnchorFields({
 // ---- Command selection (command-button) -------------------------------------
 
 // CommandFields lets the author pick which command the button issues, from the target
-// device's command vocabulary (its profile's command definitions, ADR-043). Picking one
-// bakes its key, label, and parameter schema into the widget's options — so the widget
-// renders its typed form at runtime with no device→profile resolution. Requires a target
-// device to be chosen first (that's where the command list comes from).
+// device's PUBLISHED command vocabulary (ADR-043 decision 3). Picking one bakes its key,
+// label, and parameter schema into the widget's options — so the widget renders its typed
+// form at runtime with no device→profile resolution. Requires a target device to be
+// chosen first (that's where the command list comes from).
+//
+// The picker offers published commands only, because published is what the enqueue gate
+// accepts. Baking a draft would produce a button that looks correct in the editor, renders
+// correctly on the dashboard, and fails only when an operator presses it.
+//
+// Draft-only commands are still NAMED below the picker rather than omitted: an author who
+// just wrote a command definition and can't find it needs to be told it is unpublished,
+// not left to conclude the editor is broken.
 function CommandFields({
   deviceToken,
   commandName,
@@ -569,25 +579,36 @@ function CommandFields({
 }: {
   deviceToken: string | undefined;
   commandName: string;
-  onSelect: (def: CommandDefinition | undefined) => void;
+  onSelect: (def: PublishedCommand | undefined) => void;
 }) {
   const { data, loading, error } = useQuery(
-    () => (deviceToken ? listCommandDefinitionsForDevice(deviceToken) : Promise.resolve([])),
+    async () => {
+      if (!deviceToken) return { published: [], draftOnly: [] };
+      const [vocabulary, drafts] = await Promise.all([
+        getDeviceCommandVocabulary(deviceToken),
+        listCommandDefinitionsForDevice(deviceToken),
+      ]);
+      return {
+        published: vocabulary.commands,
+        draftOnly: draftOnlyCommandKeys(vocabulary.commands, drafts),
+      };
+    },
     [deviceToken],
   );
-  const definitions = data ?? [];
+  const published = data?.published ?? [];
+  const draftOnly = data?.draftOnly ?? [];
 
-  const options: ComboboxOption[] = definitions.map((def) => ({
+  const options: ComboboxOption[] = published.map((def) => ({
     value: def.commandKey,
     label: def.name ? `${def.name} (${def.commandKey})` : def.commandKey,
   }));
 
   // A command baked from a previous target device may not exist on the current one (the
-  // author repointed the device without re-picking). Flag it — non-destructively, since
-  // the datasource and options update through separate handlers — so the author re-picks
-  // rather than silently issuing a command the new device's profile doesn't define.
+  // author repointed the device without re-picking), or may have been unpublished since.
+  // Flag it — non-destructively, since the datasource and options update through separate
+  // handlers — so the author re-picks rather than silently shipping a button that fails.
   const staleSelection =
-    commandName !== '' && !loading && !error && !definitions.some((d) => d.commandKey === commandName);
+    commandName !== '' && !loading && !error && !published.some((d) => d.commandKey === commandName);
 
   return (
     <div className="space-y-3 rounded-md border border-border p-3">
@@ -602,22 +623,36 @@ function CommandFields({
         <>
           {staleSelection && (
             <p className="text-xs text-destructive">
-              “{commandName}” isn’t defined on this device. Pick a command below.
+              “{commandName}” isn’t published on this device. Pick a command below.
             </p>
           )}
-          {definitions.length === 0 ? (
+          {published.length === 0 ? (
             <p className="text-xs text-muted-foreground">
-              This device’s profile defines no commands. Add a command definition to its device profile.
+              This device’s profile publishes no commands. Add a command definition to its device
+              profile, then publish the profile.
             </p>
           ) : (
             <FormField label="Command" description="The command this button issues.">
               <Combobox
                 options={options}
                 value={commandName}
-                onChange={(key) => onSelect(definitions.find((d) => d.commandKey === key))}
+                onChange={(key) => onSelect(published.find((d) => d.commandKey === key))}
                 placeholder="Select a command"
               />
             </FormField>
+          )}
+          {draftOnly.length > 0 && (
+            <div className="space-y-1 rounded-md bg-muted/50 p-2">
+              <p className="text-xs text-muted-foreground">
+                Authored but not published, so not selectable yet:
+              </p>
+              <p className="text-xs font-medium text-muted-foreground">
+                {draftOnly.join(', ')}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Publish the device profile to use {draftOnly.length === 1 ? 'it' : 'them'} here.
+              </p>
+            </div>
           )}
         </>
       )}

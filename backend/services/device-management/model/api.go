@@ -247,6 +247,9 @@ type DeviceManagementApi interface {
 	CommandDefinitionsByToken(ctx context.Context, tokens []string) ([]*CommandDefinition, error)
 	CommandDefinitions(ctx context.Context, criteria CommandDefinitionSearchCriteria) (*CommandDefinitionSearchResults, error)
 	CommandDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*CommandDefinition, error)
+	// DeviceCommandVocabulary is the published vocabulary a device accepts — the
+	// listing counterpart of the ValidateCommandEnqueue gate, which is built on it.
+	DeviceCommandVocabulary(ctx context.Context, deviceToken string) (*CommandVocabulary, error)
 
 	// Alarms (raised, ADR-041). Raised by DETECT's edge-triggered rules through the
 	// contributor-set integrator (ADR-057); the API here is read + the operator transitions.
