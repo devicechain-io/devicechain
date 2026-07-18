@@ -24,17 +24,27 @@ type NatsConfiguration struct {
 	// evicts the OLDEST messages (the same backpressure as the 7-day age window, by
 	// size instead of time), so size these for the retention a busy cluster needs.
 	// Note this is a per-stream bound, not an aggregate-disk guarantee: the true
-	// disk ceiling is (stream count × StreamMaxBytes), which must fit the broker's
-	// JetStream store — the default keeps the ~8 streams within a modest PV. (An
+	// disk ceiling is the SUM of every stream's ceiling (see StreamMaxBytesFor),
+	// which must fit the broker's JetStream store. (An
 	// account-level max_file_store at the broker is the belt to this suspenders;
 	// tracked separately.) StreamMaxMsgSize rejects an oversized single message at
 	// publish. All three are fail-safe (ADR-023 never-unlimited): a zero, negative,
 	// or unset value is coerced to the platform default in ApplyDefaults rather
 	// than left at 0, which JetStream would treat as UNLIMITED. Raise them for a
 	// high-throughput deployment; there is deliberately no unlimited setting.
-	StreamMaxBytes   int64
-	StreamMaxMsgs    int64
-	StreamMaxMsgSize int32
+	//
+	// StreamMaxBytes applies to the HOT streams — those whose volume scales with
+	// device count × message rate (inbound-events, resolved-events, …). The
+	// control-plane streams, whose volume is driven by human/CRUD activity and is
+	// orders of magnitude lower, take StreamMaxBytesCold instead; see
+	// ColdStreamSuffixes for the classification and StreamMaxBytesFor for the
+	// lookup. Splitting them is what keeps the aggregate reservation small: the
+	// ceiling is reserved UP FRONT at stream creation, so a uniform bound sizes
+	// every control-plane stream for a load it will never see.
+	StreamMaxBytes     int64
+	StreamMaxBytesCold int64
+	StreamMaxMsgs      int64
+	StreamMaxMsgSize   int32
 	// Tls, when enabled, makes clients dial the broker over TLS and verify the
 	// server certificate against Ca (ADR-025). The broker terminates TLS on both
 	// the 4222 client listener and the 1883 MQTT gateway with a cert this CA
@@ -295,18 +305,87 @@ type InstanceConfiguration struct {
 	Persistence    PersistenceConfiguration
 }
 
-// Platform-default JetStream stream bounds (ADR-023). Sized so the platform's
-// handful of per-suffix streams (~8) stay within a modest JetStream PV (8 × 1 GiB
-// = 8 GiB) while leaving generous room for a normal 7-day retention window; a
-// high-throughput deployment raises them via config. The message-size default
-// mirrors the broker's default max_payload (1 MiB) so the stream ceiling reflects
-// the limit actually enforced at publish rather than an inert larger value. See
-// NatsConfiguration for the fail-safe rules.
+// Platform-default JetStream stream bounds (ADR-023). JetStream reserves a
+// stream's MaxBytes UP FRONT at creation, so the platform's true disk floor is
+// the SUM of the per-stream ceilings — not what the streams actually hold. The
+// platform creates one stream per suffix (15 today, a fixed set: streams are
+// per-suffix and capture every tenant via the wildcard subject, so this does NOT
+// grow with tenant count).
+//
+// A uniform 1 GiB across all 15 reserved 15 GiB, which forced a 32 GiB PV — and
+// spent most of it on control-plane streams that will never hold more than a few
+// MiB. Splitting hot from cold reserves (7 × 1 GiB) + (8 × 128 MiB) = 8 GiB,
+// which fits a 12 GiB PV at the 90% max_file_store ceiling with the HOT streams
+// keeping their full buffer. Halving the bound uniformly would have hit the same
+// disk target only by halving the ingest buffer — the one place buffering earns
+// its keep.
+//
+// The message-size default mirrors the broker's default max_payload (1 MiB) so
+// the stream ceiling reflects the limit actually enforced at publish rather than
+// an inert larger value. See NatsConfiguration for the fail-safe rules.
 const (
-	DefaultStreamMaxBytes   int64 = 1 << 30   // 1 GiB per stream
-	DefaultStreamMaxMsgs    int64 = 5_000_000 // 5M messages per stream
-	DefaultStreamMaxMsgSize int32 = 1 << 20   // 1 MiB per message (matches default max_payload)
+	DefaultStreamMaxBytes     int64 = 1 << 30   // 1 GiB per hot stream
+	DefaultStreamMaxBytesCold int64 = 128 << 20 // 128 MiB per control-plane stream
+	DefaultStreamMaxMsgs      int64 = 5_000_000 // 5M messages per stream
+	DefaultStreamMaxMsgSize   int32 = 1 << 20   // 1 MiB per message (matches default max_payload)
 )
+
+// ColdStreamSuffixes are the streams whose volume is driven by human/CRUD
+// activity rather than by device traffic, and which therefore take the smaller
+// StreamMaxBytesCold ceiling.
+//
+// The classification is deliberately CONSERVATIVE: a suffix is listed here only
+// when its volume cannot scale with device count × message rate. Anything that
+// rides the device path — including command and connector traffic, which scale
+// with fleet size — is left HOT. StreamMaxBytesFor fails safe to the hot bound
+// for any suffix absent from this map, so a new stream that nobody classifies
+// over-reserves disk (cheap, visible) rather than silently under-buffering and
+// evicting live data via DiscardOld (expensive, silent).
+//
+// Keyed by the literal suffix rather than the SUBJECT_* constants because those
+// live in per-service config packages that core cannot import. TestStreamMaxBytesFor
+// pins the set so a renamed suffix cannot silently fall back to the hot bound.
+//
+// NOTE this map cannot be enumerated from the SUBJECT_* constants even in
+// principle: outbound-connectors derives its dead-letter suffix by CONCATENATION
+// (SUBJECT_CONNECTOR_DISPATCH + ".dead"), so no grep or constant-scan finds the
+// full stream set. Any future derived suffix will likewise default to the hot
+// bound and silently inflate the reservation — visible via the
+// jetstream_stream_limit_bytes metric, but nothing fails. Making the stream set
+// declarable in one place is the durable fix; see TestStreamReservationFitsBudget.
+var ColdStreamSuffixes = map[string]bool{
+	"detection-rules-published": true, // a rule publish — human authoring action
+	"device-roster":             true, // roster projection updates
+	"entity-deleted":            true, // entity lifecycle fan-out
+	"alarm-events":              true, // alarm state changes, not raw telemetry
+	"raise-alarm":               true, // REACT alarm requests
+	"failed-decode":             true, // error path — see the caveat below
+	"failed-events":             true, // error path — see the caveat below
+	"connector-dispatch.dead":   true, // terminal dead-letter sink (ADR-060 SD-2)
+}
+
+// StreamMaxBytesFor returns the byte ceiling for a stream suffix: the cold bound
+// for a control-plane stream, the hot bound otherwise (including for any unknown
+// suffix — see ColdStreamSuffixes for why that direction is the safe one).
+//
+// CAVEAT on the error-path streams (failed-decode / failed-events): these are
+// near-zero in steady state, but a broken decoder or a bad device firmware roll
+// can drive them at the FULL inbound rate. They are cold because dropping the
+// oldest decode failures under a sustained fault is more acceptable than sizing
+// every deployment's disk for one — not because they cannot spike. An operator
+// debugging such a fault should raise StreamMaxBytesCold.
+func (c *NatsConfiguration) StreamMaxBytesFor(suffix string) int64 {
+	if ColdStreamSuffixes[suffix] {
+		if c.StreamMaxBytesCold > 0 {
+			return c.StreamMaxBytesCold
+		}
+		return DefaultStreamMaxBytesCold
+	}
+	if c.StreamMaxBytes > 0 {
+		return c.StreamMaxBytes
+	}
+	return DefaultStreamMaxBytes
+}
 
 // ApplyDefaults fills unset infrastructure fields with their defaults so an
 // instance document that omits them is still well-formed (ADR-022 decision 1 /
@@ -321,6 +400,9 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	// (ADR-023 never-unlimited). An operator raises a bound by setting it explicitly.
 	if nats.StreamMaxBytes <= 0 {
 		nats.StreamMaxBytes = DefaultStreamMaxBytes
+	}
+	if nats.StreamMaxBytesCold <= 0 {
+		nats.StreamMaxBytesCold = DefaultStreamMaxBytesCold
 	}
 	if nats.StreamMaxMsgs <= 0 {
 		nats.StreamMaxMsgs = DefaultStreamMaxMsgs
@@ -378,12 +460,13 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 	return &InstanceConfiguration{
 		Infrastructure: InfrastructureConfiguration{
 			Nats: NatsConfiguration{
-				Hostname:         "dc-nats.dc-system",
-				Port:             4222,
-				StreamReplicas:   1,
-				StreamMaxBytes:   DefaultStreamMaxBytes,
-				StreamMaxMsgs:    DefaultStreamMaxMsgs,
-				StreamMaxMsgSize: DefaultStreamMaxMsgSize,
+				Hostname:           "dc-nats.dc-system",
+				Port:               4222,
+				StreamReplicas:     1,
+				StreamMaxBytes:     DefaultStreamMaxBytes,
+				StreamMaxBytesCold: DefaultStreamMaxBytesCold,
+				StreamMaxMsgs:      DefaultStreamMaxMsgs,
+				StreamMaxMsgSize:   DefaultStreamMaxMsgSize,
 			},
 			Metrics: MetricsConfiguration{
 				Enabled: true,

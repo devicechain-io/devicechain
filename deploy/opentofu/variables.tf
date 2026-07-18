@@ -46,17 +46,34 @@ variable "nats_chart_version" {
 variable "nats_jetstream_storage" {
   description = <<-EOT
     PersistentVolume size for NATS JetStream file storage. The default must fit the
-    platform's OWN stream set on a cold start: every per-suffix stream reserves up to
-    DefaultStreamMaxBytes (1 GiB, core/config) against max_file_store (90% of this),
-    and JetStream reserves that ceiling UP FRONT at stream creation. The platform
-    creates ~13 such streams, so the old 8Gi (→7Gi ceiling, ~7 streams) overflowed on
-    a fresh bring-up — the last stream-creating services (device-management,
-    event-processing, event-sources) crashlooped with "insufficient storage resources
-    available". 32Gi (→~28Gi ceiling) fits every stream at its 1 GiB bound with
-    headroom for data under load. Raise it further for real ingest volume.
+    platform's OWN stream set on a cold start: every per-suffix stream reserves its
+    byte ceiling UP FRONT at creation, against max_file_store (90% of this). The
+    platform creates 15 such streams — a FIXED set (streams are per-suffix and cover
+    every tenant via the wildcard subject), so this does not grow with tenant count.
+
+    Sizing history, because getting this wrong fails in a confusing way: 8Gi (→7Gi
+    ceiling) fit only ~7 streams at the old uniform 1 GiB bound, so a fresh bring-up
+    crashlooped its last stream-creating services (device-management,
+    event-processing, event-sources) with "insufficient storage resources available".
+    That was first fixed by raising the PV to 32Gi, which worked but spent most of it
+    on control-plane streams that never hold more than a few MiB.
+
+    The bound is now split hot/cold in core/config (see ColdStreamSuffixes): 7 hot
+    streams at 1 GiB + 8 control-plane streams at 128 MiB reserve 8Gi, which fits
+    12Gi (→~10.8Gi ceiling) with the ingest streams keeping their FULL buffer.
+
+    NEVER shrink this independently of the stream bounds: the PV must be derived from
+    (sum of stream ceilings) / 0.9, or the crashloop above returns. Raise it for real
+    ingest volume.
+
+    CAVEAT — this 12Gi and the Go-side TestStreamReservationFitsBudget are NOT linked.
+    That test hardcodes its own 12Gi assumption, so lowering the default here will not
+    make it fail; it guards the stream bounds against a fixed budget, not against this
+    variable. Changing this value means updating that constant BY HAND. Wiring the two
+    together (or asserting the reservation at bring-up) is the real fix.
   EOT
   type        = string
-  default     = "32Gi"
+  default     = "12Gi"
 }
 
 variable "nats_jetstream_max_file_store" {
