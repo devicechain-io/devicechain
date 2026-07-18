@@ -40,7 +40,7 @@ type responseEnvelope struct {
 
 // CommandDeliveryProcessor owns the command delivery lifecycle: it delivers
 // queued commands to devices, consumes device responses, and runs a background
-// expiry + redelivery sweep (ADR-012 #4 / ThingsBoard §2.6).
+// expiry + redelivery sweep (ADR-012 #4).
 type CommandDeliveryProcessor struct {
 	Microservice           *core.Microservice
 	CommandResponsesReader messaging.MessageReader

@@ -19,8 +19,7 @@ func NewInitialSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20220701000000",
 		Migrate: func(tx *gorm.DB) error {
-			// A persisted, lifecycle-tracked command to a device (ADR-012 #4 /
-			// ThingsBoard §2.6).
+			// A persisted, lifecycle-tracked command to a device (ADR-012 #4).
 			type Command struct {
 				gorm.Model
 				rdb.TenantScoped

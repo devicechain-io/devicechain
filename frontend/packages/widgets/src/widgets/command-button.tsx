@@ -6,8 +6,8 @@
 // options at author time (its name + parameterSchema); this renders a typed form from
 // that schema, issues via the action seam (gated on command:write), and shows the recent
 // commands for the target device with live status (QUEUED → SENT → DELIVERED →
-// SUCCESSFUL / FAILED …) — the two-way visibility ThingsBoard's fire-and-forget RPC
-// lacks. Bound through the hub's control channel, so it renders identically from live
+// SUCCESSFUL / FAILED …), so an operator can see whether a command was acted on rather
+// than only that it was sent. Bound through the hub's control channel, so it renders identically from live
 // data or the synthetic preview source.
 //
 // The baked schema is a SNAPSHOT taken when the author picked the command: a later edit

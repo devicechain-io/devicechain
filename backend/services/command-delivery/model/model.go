@@ -12,8 +12,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// CommandStatus is the lifecycle state of a persisted command (ADR-012 /
-// ThingsBoard §2.6). A command moves QUEUED -> SENT -> SUCCESSFUL on the happy
+// CommandStatus is the lifecycle state of a persisted command (ADR-012).
+// A command moves QUEUED -> SENT -> SUCCESSFUL on the happy
 // path; the terminal states are SUCCESSFUL / TIMEOUT / EXPIRED / FAILED. No
 // transition is permitted out of a terminal state.
 type CommandStatus string

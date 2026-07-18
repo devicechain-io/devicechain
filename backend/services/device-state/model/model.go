@@ -11,8 +11,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// DeviceState is the live current-state projection for one device (ADR-012 /
-// ThingsBoard §2.8): connectivity + activity timestamps, distinct from the
+// DeviceState is the live current-state projection for one device (ADR-012):
+// connectivity + activity timestamps, distinct from the
 // append-only event history. One row per device.
 type DeviceState struct {
 	gorm.Model
@@ -33,8 +33,8 @@ func (DeviceState) AuditExempt() bool { return true }
 
 // LatestMeasurement is the current (most-recent) value of one named measurement
 // for one device — the O(1) "what is it right now?" projection beside the
-// append-only measurement history in event-management (ThingsBoard's ts_kv_latest
-// analog). One row per (tenant, device, name). Numeric measurements only for v1;
+// append-only measurement history in event-management. One row per
+// (tenant, device, name). Numeric measurements only for v1;
 // a non-numeric reading is skipped upstream. Location gets its own sibling
 // projection later. Bounded by (devices × metrics-per-device), so it never grows
 // with history.

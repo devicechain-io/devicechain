@@ -6,8 +6,8 @@
 // It multiplexes every widget's live telemetry over the SDK's single per-area
 // graphql-ws connection: many widgets bound to the same device share ONE upstream
 // measurementStream subscription (ref-counted), so a crowded dashboard opens one
-// stream per distinct device token, not one per widget — the per-widget-subscription
-// fan-out ThingsBoard collapses under (#3454). The Hub owns the subscription
+// stream per distinct device token, not one per widget. A per-widget subscription
+// model fans out badly on a crowded board. The Hub owns the subscription
 // lifecycle; widgets just hand it a datasource selector and a sink.
 
 import { gql, subscribe, type Area, type SubscriptionSink } from '@devicechain/client';

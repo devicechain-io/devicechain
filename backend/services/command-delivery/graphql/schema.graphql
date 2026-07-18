@@ -30,7 +30,7 @@ type SearchResultsPagination {
     totalRecords: Int
 }
 
-# A persisted, lifecycle-tracked command to a device (ADR-012 / ThingsBoard 2.6).
+# A persisted, lifecycle-tracked command to a device (ADR-012).
 type Command implements Model & TokenReference & MetadataEntity {
     id: ID!
     createdAt: String
