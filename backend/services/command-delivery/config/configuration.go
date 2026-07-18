@@ -5,15 +5,18 @@ package config
 
 import (
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 const (
 	// SUBJECT_DEVICE_COMMANDS is the outbound subject suffix on which persisted
-	// commands are delivered to devices.
-	SUBJECT_DEVICE_COMMANDS = "device-commands"
+	// commands are delivered to devices. Defined in core because event-sources also
+	// has to recognise it (to tell command traffic from device telemetry), and a
+	// second literal is how the two drift apart.
+	SUBJECT_DEVICE_COMMANDS = messaging.SubjectDeviceCommands
 	// SUBJECT_COMMAND_RESPONSES is the inbound subject suffix on which devices
 	// respond to commands.
-	SUBJECT_COMMAND_RESPONSES = "command-responses"
+	SUBJECT_COMMAND_RESPONSES = messaging.SubjectCommandResponses
 
 	// RedeliveryInterval is the cadence (in seconds) of the expiry + redelivery
 	// sweep that times out stale commands and re-publishes still-queued ones.

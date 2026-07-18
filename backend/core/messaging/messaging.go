@@ -11,6 +11,24 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
+// The COMMAND-PLANE subject suffixes. These are declared in core rather than in
+// command-delivery because more than one service needs to reason about them, and a
+// per-service literal is how they drift: event-sources subscribes to the whole
+// device-plane topic tree and must recognise command traffic as NOT being device
+// telemetry, while command-delivery owns the streams themselves. With the names in
+// one place, renaming a subject breaks the build instead of silently turning that
+// recognition off.
+//
+// This is a first step toward hoisting the whole stream/subject set into core — see
+// the note on allStreamSuffixes in core/config/instance_test.go, which is a
+// hand-maintained mirror that has already been wrong once.
+const (
+	// SubjectDeviceCommands carries persisted commands OUT to devices.
+	SubjectDeviceCommands = "device-commands"
+	// SubjectCommandResponses carries a device's response to a command back IN.
+	SubjectCommandResponses = "command-responses"
+)
+
 // Message is a transport-neutral message envelope used by producers and
 // consumers across services. It replaces the previous direct dependency on
 // segmentio/kafka-go's Message type.

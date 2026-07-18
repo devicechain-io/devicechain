@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -113,9 +114,13 @@ func tenantFromTopic(topic string) (string, bool) {
 // on a topic this service has never been told about — the topic segment after the
 // tenant is not constrained anywhere — so an allowlist would silently stop
 // ingesting somebody's telemetry. Naming what is definitely NOT an event cannot.
+//
+// The names come from core, not from literals here: command-delivery owns these
+// subjects, and a copy of the strings in this file would let a rename there turn
+// this recognition off silently, with every test still passing.
 var commandPlaneSuffixes = map[string]struct{}{
-	"device-commands":   {},
-	"command-responses": {},
+	messaging.SubjectDeviceCommands:   {},
+	messaging.SubjectCommandResponses: {},
 }
 
 // isCommandPlane reports whether a topic addresses command traffic rather than a
