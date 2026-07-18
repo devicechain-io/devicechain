@@ -132,17 +132,20 @@ jobs:
           VERSION: ${{ needs.guard.outputs.version }}
           IS_PRERELEASE: ${{ needs.guard.outputs.is_prerelease }}
         run: |
-          # The operator (backend/k8s) must publish as ".../operator", NOT "k8s".
-          # Special-case it by pushing into a fixed repo and using --bare so ko
-          # uses KO_DOCKER_REPO verbatim as the image name. Services publish under
-          # the org repo with --base-import-paths, which yields the directory name
-          # (== the service name, e.g. device-management).
+          # Every image publishes at an EXPLICIT repo via ko --bare (KO_DOCKER_REPO
+          # used verbatim as the image name), matching the names the Helm chart
+          # deploys and dcctl's local --build path produces:
+          #   operator (backend/k8s)      -> ".../operator"  (NOT "k8s")
+          #   service (backend/services/X) -> ".../X"         (the directory basename
+          #                                   == the functional-area name the chart
+          #                                   renders, e.g. device-management)
+          # NOTE: do NOT use --base-import-paths here — it names the image after the
+          # Go MODULE base (dc-<name>, since the modules are dc-device-management etc.),
+          # which the chart does not deploy, yielding an un-deployable release.
           if [ "$MODULE" = "backend/k8s" ]; then
             echo "repo=${REGISTRY}/operator" >> "$GITHUB_OUTPUT"
-            echo "bare=true" >> "$GITHUB_OUTPUT"
           else
-            echo "repo=${REGISTRY}" >> "$GITHUB_OUTPUT"
-            echo "bare=false" >> "$GITHUB_OUTPUT"
+            echo "repo=${REGISTRY}/$(basename "$MODULE")" >> "$GITHUB_OUTPUT"
           fi
           # :latest moves ONLY on stable releases -- never on prereleases.
           if [ "$IS_PRERELEASE" = "false" ]; then
@@ -156,20 +159,14 @@ jobs:
         env:
           KO_DOCKER_REPO: ${{ steps.ko.outputs.repo }}
         run: |
-          # Multi-arch image at the exact required name:
-          #   service  -> ghcr.io/devicechain-io/<service>   (--base-import-paths)
-          #   operator -> ghcr.io/devicechain-io/operator     (--bare, fixed repo)
-          if [ "${{ steps.ko.outputs.bare }}" = "true" ]; then
-            ko build --bare \
-              --platform=linux/amd64,linux/arm64 \
-              --tags="${{ steps.ko.outputs.tags }}" \
-              ./
-          else
-            ko build --base-import-paths \
-              --platform=linux/amd64,linux/arm64 \
-              --tags="${{ steps.ko.outputs.tags }}" \
-              ./
-          fi
+          # Multi-arch image published verbatim at the repo computed above
+          # (--bare names the image exactly from KO_DOCKER_REPO):
+          #   service  -> ghcr.io/devicechain-io/<dir>       (e.g. device-management)
+          #   operator -> ghcr.io/devicechain-io/operator
+          ko build --bare \
+            --platform=linux/amd64,linux/arm64 \
+            --tags="${{ steps.ko.outputs.tags }}" \
+            ./
 
   # ---------------------------------------------------------------------------
   # Package the Helm chart at the release version and push it as an OCI artifact.
