@@ -59,15 +59,15 @@ func TestCanTransition(t *testing.T) {
 		want bool
 	}{
 		{CommandQueued, CommandSent, true},
-		{CommandSent, CommandDelivered, true},
 		{CommandSent, CommandSuccessful, true},
-		{CommandDelivered, CommandSuccessful, true},
-		{CommandDelivered, CommandFailed, true},
 		{CommandQueued, CommandExpired, true},
 		{CommandSent, CommandTimeout, true},
 		// Illegal forward edges.
 		{CommandQueued, CommandDelivered, false},
 		{CommandDelivered, CommandSent, false},
+		// DELIVERED is a reserved state with no emitter (no device delivery-ack
+		// transport): nothing may transition INTO it, including from SENT.
+		{CommandSent, CommandDelivered, false},
 		// No transition out of a terminal state.
 		{CommandSuccessful, CommandSent, false},
 		{CommandExpired, CommandDelivered, false},

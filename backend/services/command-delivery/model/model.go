@@ -13,14 +13,20 @@ import (
 )
 
 // CommandStatus is the lifecycle state of a persisted command (ADR-012 /
-// ThingsBoard §2.6). A command moves QUEUED -> SENT -> DELIVERED -> SUCCESSFUL
-// on the happy path; the terminal states are SUCCESSFUL / TIMEOUT / EXPIRED /
-// FAILED. No transition is permitted out of a terminal state.
+// ThingsBoard §2.6). A command moves QUEUED -> SENT -> SUCCESSFUL on the happy
+// path; the terminal states are SUCCESSFUL / TIMEOUT / EXPIRED / FAILED. No
+// transition is permitted out of a terminal state.
 type CommandStatus string
 
 const (
-	CommandQueued     CommandStatus = "QUEUED"
-	CommandSent       CommandStatus = "SENT"
+	CommandQueued CommandStatus = "QUEUED"
+	CommandSent   CommandStatus = "SENT"
+	// CommandDelivered is a RESERVED state: it models a device-confirmed delivery
+	// distinct from a device response, but nothing emits it today because there is
+	// no device delivery-acknowledgment transport (a device reply lands directly
+	// as SUCCESSFUL/FAILED via MarkResponse). It is retained as a known/valid
+	// status — the schema and read model already carry it — for when such an ack
+	// exists; until then the effective lifecycle skips it (see canTransition).
 	CommandDelivered  CommandStatus = "DELIVERED"
 	CommandSuccessful CommandStatus = "SUCCESSFUL"
 	CommandTimeout    CommandStatus = "TIMEOUT"
