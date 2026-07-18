@@ -793,6 +793,7 @@ CREATE UNIQUE INDEX uix_area_types_tenant_token ON "device-management".area_type
 CREATE UNIQUE INDEX uix_areas_tenant_token ON "device-management".areas USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_asset_types_tenant_token ON "device-management".asset_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_assets_tenant_token ON "device-management".assets USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_command_definitions_tenant_profile_key ON "device-management".command_definitions USING btree (tenant_id, device_profile_id, command_key) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_command_definitions_tenant_token ON "device-management".command_definitions USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_customer_types_tenant_token ON "device-management".customer_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_customers_tenant_token ON "device-management".customers USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
