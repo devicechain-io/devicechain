@@ -20,6 +20,39 @@ reason about: a deployment is one coherent number.
   recent stable release.
 - **Pre-releases** are `vX.Y.Z-rc.N` (e.g. `v1.2.0-rc.1`). These never move `:latest`.
 
+## Pre-1.0 stability
+
+:::warning DeviceChain is pre-1.0
+
+Until **v1.0.0**, any release — including a patch release — may change APIs, schemas, or
+behavior without a compatibility shim. This is deliberate: while the data model is still
+settling, we prefer a clean cutover to carrying a shim we would have to support forever.
+
+**Every breaking change is called out at the top of that release's notes. Read them before
+upgrading.** They are the authoritative list; the version number alone does not tell you
+whether a release is safe for your deployment.
+
+:::
+
+Concretely, before v1.0.0 you should expect that a release may:
+
+- **tighten validation**, so a request that previously succeeded is now rejected — usually
+  because it was being silently accepted or silently discarded
+- **change or remove a GraphQL field**, rather than deprecating it for a cycle
+- **alter database schema** in ways that a downgrade will not undo
+
+The "upgrade in place with zero downtime" property above describes the *mechanics* of a
+rolling upgrade. It is not a promise that your existing API calls keep the same meaning
+across a pre-1.0 version bump.
+
+Once v1.0.0 ships, this section is replaced by a normal semantic-versioning compatibility
+promise: breaking changes only in a major version.
+
+Because releases are frequent before GA, the **minor** version marks a milestone (a
+significant feature or subsystem landing) and the **patch** version carries the ongoing
+cadence of fixes and hardening. A patch release is not automatically a low-risk upgrade
+during this period — again, the release notes are what tell you.
+
 ## Images
 
 Images are published to the public GitHub Container Registry under
