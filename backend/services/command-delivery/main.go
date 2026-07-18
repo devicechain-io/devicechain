@@ -96,27 +96,31 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	return nil
 }
 
-// wireDeviceVerifier installs the W1.1b device-existence check on the Api when the
-// shared service secret is configured, logging the enabled/disabled mode at startup
-// so a misconfigured deploy (empty secret) is visible rather than silently skipping
-// verification at enqueue time.
-func wireDeviceVerifier() {
+// wireEnqueueValidator installs the ADR-043 decision 3 enqueue gate on the Api when
+// the shared service secret is configured, logging the enabled/disabled mode at
+// startup so a misconfigured deploy (empty secret) is visible rather than silently
+// skipping validation at enqueue time.
+//
+// The gate covers device existence (W1.1b) AND command-vocabulary/payload validation
+// in one call, so there is a single switch: either command-delivery can reach
+// device-management and both are enforced, or it cannot and neither is.
+func wireEnqueueValidator() {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" {
-		log.Warn().Msg("Service secret not configured — command-delivery will NOT verify device existence before enqueue (W1.1b disabled).")
+		log.Warn().Msg("Service secret not configured — command-delivery will NOT validate commands before enqueue (device existence and payload schema unchecked).")
 		return
 	}
 	// Guard the device-management coordinate too: a config document predating this
 	// feature carries no deviceManagement block, and building http://:0/graphql
-	// would fail every enqueue. Degrade to no-verification (loudly) rather than trap.
+	// would fail every enqueue. Degrade to no-validation (loudly) rather than trap.
 	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
-		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) — command-delivery will NOT verify device existence before enqueue (W1.1b disabled).")
+		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) — command-delivery will NOT validate commands before enqueue (device existence and payload schema unchecked).")
 		return
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", []string{string(auth.DeviceRead)})
 	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
-	Api.DeviceVerifier = verify.NewDeviceVerifier(client, url)
-	log.Info().Str("deviceManagement", url).Msg("Command enqueue will verify device existence against device-management (W1.1b).")
+	Api.EnqueueValidator = verify.NewEnqueueValidator(client, url)
+	log.Info().Str("deviceManagement", url).Msg("Command enqueue will be validated against device-management (device existence + published command vocabulary + payload schema, ADR-043).")
 }
 
 // Called after microservice has been initialized.
@@ -142,12 +146,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Wrap api around rdb manager.
 	Api = model.NewApi(RdbManager)
 
-	// Wire the device-existence verifier (W1.1b): a synchronous check against
-	// device-management before a command is enqueued (ADR-044 amendment). Enabled
-	// only when the shared service secret is configured; otherwise the enqueue path
-	// runs without verification and we say so loudly rather than fail closed (a
-	// nonexistent-device command is an integrity nuisance, not a security breach).
-	wireDeviceVerifier()
+	// Wire the enqueue gate (ADR-043 decision 3): a synchronous check against
+	// device-management before a command is enqueued (ADR-044 amendment) covering
+	// device existence, the profile's published command vocabulary, and the payload's
+	// conformance to the command's parameter schema. Enabled only when the shared
+	// service secret is configured; otherwise the enqueue path runs unvalidated and we
+	// say so loudly rather than fail closed (an unvalidated command is an integrity
+	// nuisance, not a security breach, and refusing to start would take the whole
+	// service down over an optional collaborator).
+	wireEnqueueValidator()
 
 	// Create and initialize nats manager.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
