@@ -233,6 +233,52 @@ func (rdb *RdbManager) WithAdvisoryLock(ctx context.Context, key int64, fn func(
 	return fn()
 }
 
+// TryAdvisoryLock runs fn while holding a Postgres advisory lock, and reports
+// whether fn ran. Unlike WithAdvisoryLock it does NOT wait: when a peer holds the
+// lock it returns (false, nil) immediately.
+//
+// This is the primitive for a PERIODIC job; WithAdvisoryLock is the one for a
+// startup step. The distinction is not a preference. A blocking acquire on a ticker
+// does not prevent concurrent work, it QUEUES it — every replica still runs the job,
+// just one after another. For a job whose effect is idempotent that is merely
+// wasteful; for one that publishes commands to physical devices it is the difference
+// between one actuation and N.
+//
+// Skipping is the correct behavior for a job that will run again shortly: the pod
+// holding the lock is already doing the work, so a peer has nothing to add. A caller
+// that must know whether the work happened gets that from the bool rather than
+// having to infer it.
+func (rdb *RdbManager) TryAdvisoryLock(ctx context.Context, key int64, fn func() error) (bool, error) {
+	sqldb, err := rdb.Database.DB()
+	if err != nil {
+		return false, err
+	}
+	conn, err := sqldb.Conn(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+
+	var acquired bool
+	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&acquired); err != nil {
+		return false, fmt.Errorf("try advisory lock: %w", err)
+	}
+	if !acquired {
+		return false, nil
+	}
+	// Release on the same session before the connection returns to the pool, on a
+	// fresh short context so the unlock still runs when ctx was cancelled during fn.
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", key); err != nil {
+			log.Warn().Err(err).Msg("Failed to release advisory lock; it clears when the session ends.")
+		}
+	}()
+
+	return true, fn()
+}
+
 // Start component.
 func (rdb *RdbManager) Start(ctx context.Context) error {
 	return rdb.lifecycle.Start(ctx)

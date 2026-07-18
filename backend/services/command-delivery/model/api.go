@@ -93,6 +93,8 @@ type CommandDeliveryApi interface {
 	CommandsByToken(ctx context.Context, tokens []string) ([]*Command, error)
 	Commands(ctx context.Context, criteria CommandSearchCriteria) (*CommandSearchResults, error)
 	PendingCommands(ctx context.Context) ([]*Command, error)
+	// TrySweepLock serializes the expiry + redelivery sweep across replicas.
+	TrySweepLock(ctx context.Context, fn func() error) (bool, error)
 }
 
 // canTransition reports whether a command in state `from` may transition to
@@ -385,11 +387,61 @@ func (api *Api) Commands(ctx context.Context, criteria CommandSearchCriteria) (*
 	}, nil
 }
 
-// PendingCommands returns every still-QUEUED command. It is the redelivery
-// worker's source; the caller passes a system context for the cross-tenant sweep.
+// sweepLockName namespaces the advisory lock that makes the expiry + redelivery
+// sweep single-writer across replicas (distinct from the migration lock, so the two
+// never contend).
+const sweepLockName = "command-delivery-sweep"
+
+// TrySweepLock runs fn while holding the cross-replica sweep lock, reporting whether
+// it ran. It does NOT wait: a replica whose peer is already sweeping skips this pass.
+//
+// The lock lives here rather than in the processor because the invariant it protects
+// is a model-level one — exactly one writer walking the QUEUED set — and because the
+// processor talks to this API through an interface, so a lock reached around it could
+// not be exercised in a test.
+//
+// Why a LOCK here when notification-management's escalation scheduler solves the same
+// N-replica problem with a per-row CAS claim (ClaimEscalation) and no lock at all:
+// escalation can claim because the claim IS the record it protects — one atomic UPDATE
+// both wins the right to notify and marks the tier consumed. Command delivery cannot,
+// because it must PUBLISH before it can mark. A claim that set SENT up front would lose
+// the command outright whenever the publish then failed, and a claim that set it
+// afterwards would not have prevented the duplicate. Claiming would therefore need a new
+// intermediate state on the command lifecycle; a lock buys the same safety with no model
+// change. Revisit if the sweep ever becomes a throughput bottleneck — the claim approach
+// parallelizes across replicas where this serializes onto one.
+func (api *Api) TrySweepLock(ctx context.Context, fn func() error) (bool, error) {
+	return api.RDB.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(sweepLockName), fn)
+}
+
+// PendingCommands returns every still-QUEUED command, oldest first. It is the
+// redelivery worker's source; the caller passes a system context for the
+// cross-tenant sweep.
+//
+// The ORDER BY is a strict improvement over the previous unordered read: delivery
+// now follows enqueue order instead of whatever the planner returned.
+//
+// It is deliberately NOT capped, though the unbounded read is a real memory hazard
+// — a fleet that goes offline queues commands without bound, and this loads the
+// whole backlog into the pod at once. A naive `LIMIT n` makes that worse, not
+// better, and the failure is not obvious: combined with oldest-first ordering, any
+// command that can never be delivered (an oversized payload, a tenant whose stream
+// is gone) keeps the smallest id and therefore occupies a slot in EVERY subsequent
+// batch. Accumulate n of them and delivery stops platform-wide, with nothing in the
+// data model to break the tie — expiry only touches rows with an explicit
+// expires_at, and ExpiresAt is optional. A cap also silently ceilings throughput at
+// n per sweep interval for the whole instance, and global-id ordering lets one
+// tenant's backlog delay every other tenant behind it.
+//
+// A correct bound therefore needs three things this model does not yet have: an
+// attempt count so a poison command can reach a terminal FAILED state, ordering
+// that de-prioritizes what was just tried, and per-tenant fairness so one backlog
+// cannot monopolize a pass. That is its own change; until then an unbounded read
+// that always makes progress beats a bounded one that can wedge.
 func (api *Api) PendingCommands(ctx context.Context) ([]*Command, error) {
 	found := make([]*Command, 0)
-	result := api.RDB.DB(ctx).Where("status = ?", CommandQueued.String()).Find(&found)
+	result := api.RDB.DB(ctx).Where("status = ?", CommandQueued.String()).
+		Order("id ASC").Find(&found)
 	if result.Error != nil {
 		return nil, result.Error
 	}
