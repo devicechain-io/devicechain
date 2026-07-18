@@ -180,7 +180,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Pin Helm for the same reproducibility reason as ko above — and, here,
+      # for correctness: Helm versions after v3.18.6 regressed OCI push to ghcr
+      # (helm/helm#31223), failing with `Tag on destination: <digest>: not found`
+      # AFTER packaging succeeds. The unpinned action installs the latest Helm,
+      # so a tag would package a chart it then cannot publish. v3.18.6 is verified
+      # to push to ghcr; bump deliberately, and re-verify the OCI push when doing so.
       - uses: azure/setup-helm@v5
+        with:
+          version: v3.18.6
 
       - name: Log in to ghcr (helm registry)
         env:
