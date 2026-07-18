@@ -181,7 +181,10 @@ instance:
 # "{registry}/{area}:{tag}" unless overridden under functionalAreas.<area>.image.
 image:
   registry: ghcr.io/devicechain-io
-  tag: "0.0.1"
+  # Empty means "use the chart's appVersion". A release sets appVersion to the
+  # release tag (helm package --app-version), so the packaged chart deploys the
+  # matching images with no override; dcctl sets this explicitly for local/dev.
+  tag: ""
   pullPolicy: IfNotPresent
 
 # GraphQL/HTTP port exposed by every service (also serves /healthz and /readyz).

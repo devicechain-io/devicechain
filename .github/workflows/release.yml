@@ -195,13 +195,14 @@ jobs:
           # OCI tags follow chart version, so strip the prefix for the chart only.
           chart_version="${VERSION#v}"
 
-          # Pin every rendered image to this release tag (image.tag in values).
-          # The chart builds refs as "{registry}/{area}:{image.tag}", so setting
-          # image.tag to the release version keeps the whole deploy coherent.
+          # Pin every rendered image to this release tag. `helm package` cannot
+          # override values, so the chart defaults image.tag to .Chart.AppVersion
+          # (templates/_helpers.tpl); setting --app-version to the release version
+          # therefore makes the packaged chart deploy the matching images by
+          # default, with no value override needed.
           helm package deploy/helm/devicechain \
             --version "$chart_version" \
-            --app-version "$VERSION" \
-            --set-string image.tag="$VERSION"
+            --app-version "$VERSION"
 
           # helm package writes devicechain-<chart_version>.tgz to the cwd.
           helm push "devicechain-${chart_version}.tgz" oci://${REGISTRY}/charts
