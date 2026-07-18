@@ -44,10 +44,20 @@ builds:
       - -X github.com/devicechain-io/dcctl/cmd.gitTreeState={{ if .IsGitDirty }}dirty{{ else }}clean{{ end }}
       # Pin the default image version a released dcctl deploys to this release's
       # tag, so `dcctl bootstrap` (published path) pulls real images instead of
-      # the unpublished ":dev". Unlike the Makefile's dev builds — whose
-      # cmd.Version carries a build stamp naming no pushed image — a release's
-      # version IS its image tag, so both stamps take {{ .Version }} here.
-      - -X github.com/devicechain-io/dcctl/bootstrap.DefaultImageVersion={{ .Version }}
+      # the unpublished ":dev".
+      #
+      # This MUST be {{ .Tag }}, not {{ .Version }}. goreleaser strips the leading
+      # "v" for .Version, but the images ko pushes are tagged with the raw git tag
+      # (the release workflow's ko job uses GITHUB_REF_NAME verbatim), and so is the
+      # chart's appVersion. A released dcctl stamped with .Version therefore went
+      # looking for ghcr.io/devicechain-io/<area>:0.8.2 when the registry only has
+      # :v0.8.2 — every workload ImagePullBackOff, several minutes into a bootstrap
+      # that looked healthy. That shipped in v0.8.1 and v0.8.2.
+      #
+      # IsUnpublishedImageVersion cannot catch this: "0.8.2" is shaped exactly like
+      # a real published tag. The release workflow now verifies the built binary's
+      # tag actually resolves in the registry, which is the only check that can.
+      - -X github.com/devicechain-io/dcctl/bootstrap.DefaultImageVersion={{ .Tag }}
 
 archives:
   - id: dcctl

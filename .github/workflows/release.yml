@@ -263,7 +263,10 @@ jobs:
   # Cross-compile dcctl and create the GitHub Release (goreleaser).
   # ---------------------------------------------------------------------------
   cli:
-    needs: guard
+    # Depends on `images` as well as `guard` so the verification step below runs
+    # against a registry that already has this release's tags. Without that
+    # ordering the check would race the push and fail on a correct release.
+    needs: [guard, images]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -276,6 +279,63 @@ jobs:
           go-version-file: go.work
           cache: true
           cache-dependency-path: "**/go.sum"
+
+      # Build ONE target first, with the same ldflags the release will use, so the
+      # verification below can gate publication. Verifying after `release` would
+      # only tell us the broken release is already public.
+      - name: goreleaser build (verification target)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: build --clean --single-target
+          workdir: backend/cli
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      # The released dcctl deploys ghcr.io/<registry>/<area>:<its stamped tag> when
+      # `dcctl bootstrap` runs with no --version. If that tag does not exist, every
+      # workload lands in ImagePullBackOff several minutes into a bootstrap that
+      # looked healthy — and nothing upstream catches it, because the stamped value
+      # is shaped exactly like a real tag. Only asking the registry can tell.
+      #
+      # This shipped broken in v0.8.1 and v0.8.2: goreleaser's {{ .Version }} strips
+      # the leading "v" while ko tags images with the raw git tag, so a released
+      # dcctl went looking for :0.8.2 against a registry holding :v0.8.2.
+      #
+      # Run the freshly built binary rather than re-deriving the tag from the
+      # workflow: re-deriving would test this file's arithmetic against itself,
+      # which is precisely the check that passed while the bug shipped.
+      - name: Verify the released dcctl deploys a tag that exists
+        env:
+          REGISTRY: ghcr.io/devicechain-io
+        run: |
+          set -euo pipefail
+          binary="$(find backend/cli/dist -type f -name dcctl -path '*linux_amd64*' | head -1)"
+          if [ -z "$binary" ]; then
+            echo "::error::Could not find the built linux/amd64 dcctl to verify."
+            exit 1
+          fi
+          tag="$("$binary" version | awk '$1 == "images:" { print $2 }')"
+          if [ -z "$tag" ]; then
+            echo "::error::Could not read the image tag from 'dcctl version'."
+            "$binary" version
+            exit 1
+          fi
+          echo "Released dcctl would deploy image tag: $tag"
+
+          # device-management stands in for the whole set — every area is pushed by
+          # the same ko job with the same tag list, so one resolving means all do.
+          token="$(curl -fsSL "https://ghcr.io/token?scope=repository:devicechain-io/device-management:pull&service=ghcr.io" | jq -r .token)"
+          code="$(curl -sSL -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://ghcr.io/v2/devicechain-io/device-management/manifests/${tag}")"
+          if [ "$code" != "200" ]; then
+            echo "::error::dcctl would deploy ${REGISTRY}/<area>:${tag}, which does not exist in the registry (HTTP ${code}). A bootstrap from this release would ImagePullBackOff on every workload."
+            exit 1
+          fi
+          echo "OK: ${REGISTRY}/device-management:${tag} resolves."
 
       - name: goreleaser release
         uses: goreleaser/goreleaser-action@v7
@@ -293,3 +353,4 @@ jobs:
           # the prerelease and then try to upload assets to the RC's existing
           # release (422 already_exists). GITHUB_REF_NAME is unambiguous.
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
