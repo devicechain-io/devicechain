@@ -184,6 +184,17 @@ type MetricDefinitionSearchResults {
 # drive the console command form and, once the delivery path is wired (W1.1b), to
 # constrain an issued command's payload. Null when the command declares no
 # structured arguments.
+# The answer to "may this command be enqueued to this device?" — the ADR-043
+# decision 3 enqueue gate, evaluated here because this service owns the command
+# vocabulary. A rejection is a verdict, not a GraphQL error, so a caller can tell an
+# invalid command (relayable to its client) from an unavailable check (fail closed).
+type CommandEnqueueVerdict {
+    # Whether the command may be enqueued.
+    allowed: Boolean!
+    # Why it was rejected, in client-safe terms; null when allowed.
+    reason: String
+}
+
 type CommandDefinition implements Model & TokenReference & NamedEntity & MetadataEntity {
     id: ID!
     createdAt: String
@@ -1175,6 +1186,12 @@ type Query {
     commandDefinitionsByToken(tokens: [String!]!): [CommandDefinition!]!
     # List command definitions that meet criteria.
     commandDefinitions(criteria: CommandDefinitionSearchCriteria!): CommandDefinitionSearchResults!
+    # Decide whether a command may be enqueued to a device (ADR-043 decision 3):
+    # resolves device -> its profile's active PUBLISHED command vocabulary -> the
+    # definition for commandKey, and validates the payload against its parameter
+    # schema. Answers device existence, unknown command key, and payload validity in
+    # one hop. A profile declaring no vocabulary allows free-form payloads (decision 4).
+    validateCommandEnqueue(deviceToken: String!, commandKey: String!, payload: String): CommandEnqueueVerdict!
     # Find detection rules by unique id.
     detectionRulesById(ids: [ID!]!): [DetectionRule!]!
     # Find detection rules by unique token.

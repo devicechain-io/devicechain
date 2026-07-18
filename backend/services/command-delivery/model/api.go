@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -16,21 +17,59 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// DeviceVerifier confirms a target device exists (in the request's tenant) before
-// a command is enqueued against it (ADR-044 amendment / W1.1b). It is
-// dependency-inverted — the model depends only on this narrow interface, never on
-// the sync-call machinery (svcclient) — mirroring device-management's
-// AlarmEventPublisher seam. A nil verifier (unconfigured service secret) skips the
-// check, preserving the prior enqueue-anything behavior; command-delivery logs the
-// disabled mode loudly at startup.
-type DeviceVerifier interface {
-	DeviceExists(ctx context.Context, deviceToken string) (bool, error)
+// EnqueueRejected reports that a command may not be enqueued, and why. It is a
+// distinct type from a transport failure so CreateCommand can relay a rejection to
+// the API client verbatim (it names only tenant-visible things — the device token,
+// the command key, the offending parameter) while a failure to *perform* the check
+// stays sanitized.
+type EnqueueRejected struct {
+	Reason string
+}
+
+func (e *EnqueueRejected) Error() string { return e.Reason }
+
+// payloadBytes renders an optional payload for validation. A nil payload and an
+// explicit JSON null are the same thing to the validator (a command carrying no
+// arguments), which is why the absent case is nil rather than an empty-but-present
+// document — the schema validator treats both as "no arguments supplied" and
+// rejects only if a required parameter is declared.
+func payloadBytes(payload *string) []byte {
+	if payload == nil {
+		return nil
+	}
+	return []byte(*payload)
+}
+
+// CommandEnqueueValidator gates CreateCommand on device-management's answer to
+// "may this command be enqueued to this device?" — the single ADR-043 decision 3
+// enqueue gate. It resolves device → its profile's active PUBLISHED command
+// vocabulary → the definition for the command key, and validates the payload
+// against that definition's parameter schema, so it answers all three of decision
+// 3's rejections at once: a non-existent device, an unknown command key, and a
+// payload that violates the schema.
+//
+// It is dependency-inverted — the model depends only on this narrow interface,
+// never on the sync-call machinery (svcclient) — mirroring device-management's
+// DetectionRuleValidator seam. Validation lives at the OWNER of the vocabulary
+// rather than here so the parameter-schema validator has exactly one
+// implementation; shipping the schema across the module boundary to re-validate it
+// here would guarantee the two copies drift.
+//
+// A nil validator (unconfigured service secret) skips the gate, preserving the
+// prior enqueue-anything behavior; command-delivery logs the disabled mode loudly
+// at startup.
+//
+// Returns *EnqueueRejected when the command is invalid, a plain error when the
+// check could not be performed (which the caller must fail closed on).
+type CommandEnqueueValidator interface {
+	ValidateEnqueue(ctx context.Context, deviceToken string, commandKey string, payload []byte) error
 }
 
 type Api struct {
 	RDB *rdb.RdbManager
-	// DeviceVerifier, when set, gates CreateCommand on the target device existing.
-	DeviceVerifier DeviceVerifier
+	// EnqueueValidator, when set, gates CreateCommand on the target device existing
+	// and on the command matching the device profile's published vocabulary.
+	EnqueueValidator CommandEnqueueValidator
 }
 
 // NewApi creates a new API instance.
@@ -105,22 +144,31 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		expiresAt = sql.NullTime{Time: parsed, Valid: true}
 	}
 
-	// Verify the target device exists before enqueuing (W1.1b) — a synchronous
-	// read against device-management, the authoritative owner. This is a read-time
-	// invariant check (does it exist *now*?), the case the async projection can't
+	// Gate the enqueue on device-management, the authoritative owner of both the
+	// device and the command vocabulary (ADR-043 decision 3): the target device must
+	// exist, the command must be one its profile's PUBLISHED version declares, and
+	// the payload must satisfy that command's parameter schema. This is a read-time
+	// invariant check (is it valid *now*?), the case the async projection can't
 	// answer, so it is the sanctioned sync-call use (ADR-044 decision rule). When no
-	// verifier is wired (service secret unconfigured) the check is skipped. A
-	// verification *failure* (device-management unreachable) fails closed — a ghost
-	// command is never persisted — but the detail is logged, not returned, so the
-	// tenant API client does not learn the in-cluster topology.
-	if api.DeviceVerifier != nil {
-		exists, err := api.DeviceVerifier.DeviceExists(ctx, request.DeviceToken)
-		if err != nil {
-			log.Error().Err(err).Str("deviceToken", request.DeviceToken).Msg("Device existence verification failed; refusing enqueue.")
-			return nil, fmt.Errorf("cannot enqueue command: device verification is unavailable")
-		}
-		if !exists {
-			return nil, fmt.Errorf("cannot enqueue command: device %q does not exist", request.DeviceToken)
+	// validator is wired (service secret unconfigured) the gate is skipped.
+	//
+	// The two outcomes are deliberately NOT collapsed. A rejection is the client's
+	// fault and is relayed verbatim so the caller can fix the command. A failure to
+	// perform the check (device-management unreachable) fails closed — a ghost or
+	// unvalidated command is never persisted — but the detail is logged, not
+	// returned, so the tenant API client does not learn the in-cluster topology.
+	// Were these collapsed, an outage would read to the client as "your command is
+	// invalid" and send them chasing a correct payload.
+	if api.EnqueueValidator != nil {
+		err := api.EnqueueValidator.ValidateEnqueue(ctx, request.DeviceToken, request.Name, payloadBytes(request.Payload))
+		var rejected *EnqueueRejected
+		switch {
+		case errors.As(err, &rejected):
+			return nil, fmt.Errorf("cannot enqueue command: %s", rejected.Reason)
+		case err != nil:
+			log.Error().Err(err).Str("deviceToken", request.DeviceToken).Str("command", request.Name).
+				Msg("Command enqueue validation failed; refusing enqueue.")
+			return nil, fmt.Errorf("cannot enqueue command: validation is unavailable")
 		}
 	}
 
