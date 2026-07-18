@@ -46,7 +46,6 @@ type CommandDeliveryApi interface {
 	CreateCommand(ctx context.Context, request *CommandCreateRequest) (*Command, error)
 
 	MarkSent(ctx context.Context, id uint) (*Command, error)
-	MarkDelivered(ctx context.Context, id uint) (*Command, error)
 	MarkResponse(ctx context.Context, commandToken string, success bool, payload *string, errMsg *string) (*Command, error)
 	CancelCommand(ctx context.Context, token string) (*Command, error)
 	ExpireStale(ctx context.Context, now time.Time) (int64, error)
@@ -59,8 +58,12 @@ type CommandDeliveryApi interface {
 
 // canTransition reports whether a command in state `from` may transition to
 // state `to`. A transition out of a terminal state is never permitted; the
-// allowed forward edges follow the lifecycle QUEUED -> SENT -> DELIVERED ->
-// {SUCCESSFUL,FAILED} with expiry/timeout edges to EXPIRED/TIMEOUT.
+// allowed forward edges follow the lifecycle QUEUED -> SENT -> {SUCCESSFUL,FAILED}
+// with expiry/timeout edges to EXPIRED/TIMEOUT.
+//
+// DELIVERED is deliberately NOT an edge here: there is no device
+// delivery-acknowledgment transport today, so nothing can emit it (see the note
+// on CommandDelivered in model.go). It is reserved for when such an ack exists.
 func canTransition(from, to CommandStatus) bool {
 	if from.Terminal() {
 		return false
@@ -68,11 +71,9 @@ func canTransition(from, to CommandStatus) bool {
 	switch to {
 	case CommandSent:
 		return from == CommandQueued
-	case CommandDelivered:
-		return from == CommandSent
 	case CommandSuccessful, CommandFailed:
-		// A response can arrive after SENT or DELIVERED (and tolerate QUEUED in
-		// races where the response beats the SENT write).
+		// A response can arrive after SENT (and tolerate QUEUED in races where
+		// the response beats the SENT write).
 		return true
 	case CommandExpired, CommandTimeout:
 		// Sweep / cancellation may terminate any non-terminal command.
@@ -192,23 +193,6 @@ func (api *Api) MarkSent(ctx context.Context, id uint) (*Command, error) {
 	}
 	found.Status = CommandSent.String()
 	found.SentTime = sql.NullTime{Time: time.Now(), Valid: true}
-	if result := api.RDB.DB(ctx).Save(found); result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
-}
-
-// MarkDelivered transitions a command SENT -> DELIVERED.
-func (api *Api) MarkDelivered(ctx context.Context, id uint) (*Command, error) {
-	found, err := api.loadCommand(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if !canTransition(CommandStatus(found.Status), CommandDelivered) {
-		return nil, fmt.Errorf("command %d can not transition from %s to %s", id, found.Status, CommandDelivered)
-	}
-	found.Status = CommandDelivered.String()
-	found.DeliveredTime = sql.NullTime{Time: time.Now(), Valid: true}
 	if result := api.RDB.DB(ctx).Save(found); result.Error != nil {
 		return nil, result.Error
 	}
