@@ -179,11 +179,6 @@ type MetricDefinitionSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a typed command declared on a device profile (ADR-043/ADR-045). parameterSchema
-# is the ordered []CommandParameter argument contract as a JSON string, intended to
-# drive the console command form and, once the delivery path is wired (W1.1b), to
-# constrain an issued command's payload. Null when the command declares no
-# structured arguments.
 # The answer to "may this command be enqueued to this device?" — the ADR-043
 # decision 3 enqueue gate, evaluated here because this service owns the command
 # vocabulary. A rejection is a verdict, not a GraphQL error, so a caller can tell an
@@ -195,6 +190,10 @@ type CommandEnqueueVerdict {
     reason: String
 }
 
+# Represents a typed command declared on a device profile (ADR-043/ADR-045). parameterSchema
+# is the ordered []CommandParameter argument contract as a JSON string, which drives the
+# console command form and constrains an issued command's payload at enqueue (the
+# validateCommandEnqueue gate). Null when the command declares no structured arguments.
 type CommandDefinition implements Model & TokenReference & NamedEntity & MetadataEntity {
     id: ID!
     createdAt: String

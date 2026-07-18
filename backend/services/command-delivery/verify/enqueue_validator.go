@@ -57,9 +57,14 @@ func (v *EnqueueValidator) ValidateEnqueue(ctx context.Context, deviceToken stri
 	if !ok {
 		return fmt.Errorf("verify: no tenant in context")
 	}
+	// Allowed is a *bool, not a bool, so a response that omits the field is
+	// distinguishable from an explicit false. The schema declares it non-null, so an
+	// absent value means a broken or intercepted response rather than a verdict —
+	// which must fail closed as an availability error, NOT be reported to the client
+	// as "your command is invalid".
 	var out struct {
 		ValidateCommandEnqueue struct {
-			Allowed bool    `json:"allowed"`
+			Allowed *bool   `json:"allowed"`
 			Reason  *string `json:"reason"`
 		} `json:"validateCommandEnqueue"`
 	}
@@ -78,7 +83,10 @@ func (v *EnqueueValidator) ValidateEnqueue(ctx context.Context, deviceToken stri
 	if err := v.client.Query(ctx, v.url, tenant, validateCommandEnqueue, vars, &out); err != nil {
 		return err
 	}
-	if !out.ValidateCommandEnqueue.Allowed {
+	if out.ValidateCommandEnqueue.Allowed == nil {
+		return fmt.Errorf("verify: device-management returned no enqueue verdict")
+	}
+	if !*out.ValidateCommandEnqueue.Allowed {
 		reason := "command is not valid for this device"
 		if out.ValidateCommandEnqueue.Reason != nil && *out.ValidateCommandEnqueue.Reason != "" {
 			reason = *out.ValidateCommandEnqueue.Reason

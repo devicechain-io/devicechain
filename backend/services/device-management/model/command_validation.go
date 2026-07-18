@@ -335,7 +335,12 @@ func firstRequired(params []CommandParameter) string {
 func decodeObject(raw []byte) (map[string]json.RawMessage, error) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil {
-		return nil, fmt.Errorf("payload is not a JSON object: %w", err)
+		// Deliberately NOT wrapped: since ADR-043's enqueue gate relays a rejection
+		// reason verbatim to the tenant API client, wrapping would put Go type names
+		// ("cannot unmarshal array into Go value of type map[string]json.RawMessage")
+		// in a user-facing message. The only actionable fact is that the payload must
+		// be an object.
+		return nil, fmt.Errorf("payload is not a JSON object")
 	}
 	if obj == nil {
 		return nil, fmt.Errorf("payload is not a JSON object")

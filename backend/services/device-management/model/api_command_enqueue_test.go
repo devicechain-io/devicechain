@@ -231,6 +231,42 @@ func TestValidateCommandEnqueue(t *testing.T) {
 		}
 	})
 
+	// Command-key matching is EXACT, never case-insensitive. A mis-cased key is a
+	// mis-keyed actuation, which is precisely what the strict-validation rationale
+	// exists to stop — and a case-folding match would silently deliver "REBOOT" as
+	// "reboot". (This case was found by an adversarial mutation surviving the suite.)
+	t.Run("command key matching is case-sensitive", func(t *testing.T) {
+		api := newEnqueueTestApi(t)
+		seedDeviceWithCommands(t, api, ctx, "dev-case", []*CommandDefinition{
+			defWithSchema(t, "reboot", nil),
+		})
+		v, err := api.ValidateCommandEnqueue(ctx, "dev-case", "Reboot", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if v.Allowed {
+			t.Fatal("a mis-cased command key must not match a declared command")
+		}
+	})
+
+	// ADR-043 decision 3 names soft-deleted devices explicitly. Nothing else pins
+	// that this gate keeps gorm's default soft-delete scope, so a stray Unscoped()
+	// upstream would silently resurrect deleted devices as valid command targets.
+	t.Run("a soft-deleted device is rejected", func(t *testing.T) {
+		api := newEnqueueTestApi(t)
+		seedDeviceWithCommands(t, api, ctx, "dev-gone", nil)
+		if err := api.RDB.DB(ctx).Where("token = ?", "dev-gone").Delete(&Device{}).Error; err != nil {
+			t.Fatalf("soft-delete device: %v", err)
+		}
+		v, err := api.ValidateCommandEnqueue(ctx, "dev-gone", "reboot", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if v.Allowed {
+			t.Fatal("a soft-deleted device must not accept commands")
+		}
+	})
+
 	// Tenant isolation: the gate must never resolve a device from another tenant,
 	// or one tenant could probe another's fleet through enqueue verdicts.
 	t.Run("a device in another tenant is not visible", func(t *testing.T) {

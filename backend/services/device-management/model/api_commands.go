@@ -13,6 +13,34 @@ import (
 )
 
 // Create a new command definition (ADR-043).
+// assertCommandKeyUnused rejects a second definition of the same command key on one
+// profile. Without this the vocabulary is ambiguous: the enqueue gate (ADR-043
+// decision 3) resolves a command by key and can only honour one definition, so two
+// definitions of "drive" with different parameter schemas would mean a payload's
+// validity depends on which row the publish-time SELECT happened to return first.
+// The ambiguity has to be refused where it is introduced — a gate that picks a
+// winner is just a deterministic coin flip.
+//
+// excludeId (0 for a create) is the definition being updated, so re-saving a
+// definition without changing its key is not a self-collision.
+func (api *Api) assertCommandKeyUnused(ctx context.Context, profileId uint, commandKey string, excludeId uint) error {
+	if profileId == 0 {
+		return nil
+	}
+	existing := make([]*CommandDefinition, 0)
+	query := api.RDB.DB(ctx).Where("device_profile_id = ? AND command_key = ?", profileId, commandKey)
+	if excludeId != 0 {
+		query = query.Where("id <> ?", excludeId)
+	}
+	if err := query.Find(&existing).Error; err != nil {
+		return err
+	}
+	if len(existing) > 0 {
+		return fmt.Errorf("device profile already declares a command %q; command keys must be unique per profile", commandKey)
+	}
+	return nil
+}
+
 func (api *Api) CreateCommandDefinition(ctx context.Context,
 	request *CommandDefinitionCreateRequest) (*CommandDefinition, error) {
 	matches, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
@@ -27,6 +55,10 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 		return nil, err
 	}
 	if err := validateRequestSchema(request.ParameterSchema); err != nil {
+		return nil, err
+	}
+
+	if err := api.assertCommandKeyUnused(ctx, matches[0].ID, request.CommandKey, 0); err != nil {
 		return nil, err
 	}
 
@@ -67,6 +99,27 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 		return nil, err
 	}
 	if err := validateRequestSchema(request.ParameterSchema); err != nil {
+		return nil, err
+	}
+
+	// The profile the definition will belong to AFTER this update — the key must be
+	// unique there, not in the profile it is moving away from.
+	targetProfileId := uint(0)
+	if matches[0].DeviceProfile != nil {
+		targetProfileId = matches[0].DeviceProfile.ID
+	}
+	if request.DeviceProfileToken != "" &&
+		(matches[0].DeviceProfile == nil || request.DeviceProfileToken != matches[0].DeviceProfile.Token) {
+		profiles, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
+		if err != nil {
+			return nil, err
+		}
+		if len(profiles) == 0 {
+			return nil, gorm.ErrRecordNotFound
+		}
+		targetProfileId = profiles[0].ID
+	}
+	if err := api.assertCommandKeyUnused(ctx, targetProfileId, request.CommandKey, matches[0].ID); err != nil {
 		return nil, err
 	}
 
