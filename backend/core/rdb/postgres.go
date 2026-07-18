@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	pgx "github.com/jackc/pgx/v4"
+	pgx "github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
