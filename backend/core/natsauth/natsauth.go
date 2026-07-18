@@ -17,6 +17,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"time"
 
@@ -144,7 +145,17 @@ const MqttDeliverySubject = "$MQTT.sub.>"
 // The instance-id prefix still closes the cross-instance hole on a shared broker
 // (ADR-048): two instances' devices never share a subject tree even for
 // identically-named tenants.
-func DevicePermissions(instanceId, tenant, deviceToken string) jwt.Permissions {
+// It returns an error rather than a permission set when the device token is not
+// token-grammar-safe. The token is spliced into three subjects, so one carrying
+// "." / "*" / ">" would mint live wildcards INSIDE a device's own JWT — e.g. a token
+// of `x.*` yields SUB "…device-commands.x.*". The DB grammar guard (ADR-042) should
+// make that unreachable, but the tenant in this same flow gets a local check for
+// exactly this reason rather than resting on a distant invariant, and the signed
+// grant is the higher-blast-radius splice of the two.
+func DevicePermissions(instanceId, tenant, deviceToken string) (jwt.Permissions, error) {
+	if err := core.ValidateToken(deviceToken); err != nil {
+		return jwt.Permissions{}, fmt.Errorf("refusing to build a grant for an invalid device token: %w", err)
+	}
 	events := fmt.Sprintf("%s.%s.devices.%s.events", instanceId, tenant, deviceToken)
 	responses := fmt.Sprintf("%s.%s.%s", instanceId, tenant, messaging.SubjectCommandResponses)
 	commands := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectDeviceCommands, deviceToken)
@@ -152,7 +163,7 @@ func DevicePermissions(instanceId, tenant, deviceToken string) jwt.Permissions {
 	var p jwt.Permissions
 	p.Pub.Allow.Add(events, responses)
 	p.Sub.Allow.Add(commands, MqttDeliverySubject)
-	return p
+	return p, nil
 }
 
 // SignDeviceUserJWT builds and signs the user JWT the callout returns for an
@@ -168,7 +179,11 @@ func SignDeviceUserJWT(issuerSeed, userNkey, instanceId, tenant, deviceToken str
 	uc := jwt.NewUserClaims(userNkey)
 	uc.Name = tenant
 	uc.Audience = AppAccount
-	uc.Permissions = DevicePermissions(instanceId, tenant, deviceToken)
+	perms, err := DevicePermissions(instanceId, tenant, deviceToken)
+	if err != nil {
+		return "", err
+	}
+	uc.Permissions = perms
 	// Pin the credential to the MQTT connection type: the device plane is MQTT, so
 	// a device credential must not be usable to open a raw NATS connection (which
 	// would let it subscribe to the shared MqttDeliverySubject and read other

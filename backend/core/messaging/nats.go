@@ -571,7 +571,7 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 		nmgr:    nmgr,
 		suffix:  suffix,
 		stream:  stream,
-		subject: WildcardSubject(nmgr.Microservice.InstanceId, suffix),
+		subject: StreamSubject(nmgr.Microservice.InstanceId, suffix),
 		durable: DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix),
 		gate:    nmgr.Microservice.Readiness,
 	}
@@ -632,7 +632,7 @@ func (nmgr *NatsManager) NewReplayReader(suffix string, startSeq uint64) (Replay
 	if startSeq > head {
 		return &natsReplayReader{head: head, doneSeq: head}, head, nil
 	}
-	subject := WildcardSubject(nmgr.Microservice.InstanceId, suffix)
+	subject := StreamSubject(nmgr.Microservice.InstanceId, suffix)
 	sub, err := nmgr.js.PullSubscribe(subject, "", // empty durable => ephemeral consumer
 		nats.BindStream(name),
 		nats.StartSequence(startSeq),
@@ -682,7 +682,7 @@ func (nmgr *NatsManager) NewReplayReaderFromTime(suffix string, startTime time.T
 	if head == 0 || startTime.After(info.State.LastTime) {
 		return &natsReplayReader{head: head, doneSeq: head}, firstTime, nil
 	}
-	subject := WildcardSubject(nmgr.Microservice.InstanceId, suffix)
+	subject := StreamSubject(nmgr.Microservice.InstanceId, suffix)
 	sub, err := nmgr.js.PullSubscribe(subject, "", // empty durable => ephemeral consumer
 		nats.BindStream(name),
 		nats.StartTime(startTime),
@@ -911,7 +911,14 @@ func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffi
 	if err := core.ValidateToken(tenant); err != nil {
 		return nil, fmt.Errorf("messaging: refusing to subscribe to a subject for an invalid tenant: %w", err)
 	}
+	// A per-device suffix has no tenant-scoped subject to listen on: nothing
+	// publishes there, so a live subscription would sit silent forever with no error
+	// — the same silent class the per-device addressing exists to remove. Listen
+	// across that tenant's devices instead.
 	subject := ScopedSubject(nmgr.Microservice.InstanceId, tenant, suffix)
+	if IsPerDeviceSuffix(suffix) {
+		subject += ".*"
+	}
 	raw := make(chan *nats.Msg, liveBuffer)
 	sub, err := nmgr.nc.ChanSubscribe(subject, raw)
 	if err != nil {

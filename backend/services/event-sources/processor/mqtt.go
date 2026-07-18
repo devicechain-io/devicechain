@@ -123,6 +123,21 @@ var commandPlaneSuffixes = map[string]struct{}{
 	messaging.SubjectCommandResponses: {},
 }
 
+// deviceFromTopic returns the device token an events topic addresses, for the
+// documented shape "{instanceId}/{tenant}/devices/{token}/events". The broker grant
+// confines a device to its OWN such topic, so this token is authorized rather than
+// merely asserted — which is what makes it worth checking the payload against.
+//
+// Returns "" for any other topic shape, which means "the transport carried no device
+// identity", not "no check needed" — the caller treats it as nothing to compare.
+func deviceFromTopic(topic string) string {
+	parts := strings.Split(topic, "/")
+	if len(parts) != 5 || parts[2] != "devices" || parts[4] != "events" {
+		return ""
+	}
+	return parts[3]
+}
+
 // isCommandPlane reports whether a topic addresses command traffic rather than a
 // device event, by matching the segment immediately after {instanceId}/{tenant}.
 func isCommandPlane(topic string) bool {
@@ -180,7 +195,11 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	// counted as both inbound and rate-limited (matches the HTTP path, which
 	// accounts after the gate).
 	es.received(es.Id, msg.Payload())
-	es.messages <- rawMessage{tenant: tenant, payload: msg.Payload()}
+	es.messages <- rawMessage{
+		tenant:  tenant,
+		payload: msg.Payload(),
+		device:  deviceFromTopic(msg.Topic()),
+	}
 }
 
 // Called on successful connection.

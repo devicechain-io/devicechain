@@ -60,7 +60,10 @@ func TestGenerateCredentials(t *testing.T) {
 // grant is the only place these properties can be enforced against a device that
 // misbehaves on purpose, so each is asserted as a capability, not as a string shape.
 func TestDevicePermissions(t *testing.T) {
-	p := DevicePermissions("inst-1", "acme-corp", "sensor-001")
+	p, err := DevicePermissions("inst-1", "acme-corp", "sensor-001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	pub := map[string]bool{}
 	for _, s := range p.Pub.Allow {
@@ -245,5 +248,17 @@ func TestEncodeAuthResponse(t *testing.T) {
 	drc, _ := jwt.DecodeAuthorizationResponseClaims(den)
 	if drc.Error != "invalid credentials" || drc.Jwt != "" {
 		t.Errorf("expected error set / jwt empty, got jwt=%q error=%q", drc.Jwt, drc.Error)
+	}
+}
+
+// A device token carrying subject metacharacters would mint live wildcards inside a
+// device's own signed grant — "x.*" yields SUB "…device-commands.x.*", reaching every
+// device whose token starts with "x.". The DB grammar guard should make such a token
+// unreachable, but the grant is the higher-blast-radius splice and gets its own check.
+func TestDevicePermissionsRejectsUnsafeDeviceToken(t *testing.T) {
+	for _, bad := range []string{"x.*", "x.>", "*", ">", "a.b", ""} {
+		if _, err := DevicePermissions("inst-1", "acme-corp", bad); err == nil {
+			t.Errorf("device token %q must be refused, not spliced into a grant", bad)
+		}
 	}
 }
