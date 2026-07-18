@@ -46,6 +46,31 @@ Attributes double as **classification facets** — the axes you browse and filte
 
 A **dynamic group** turns a facet filter into saved, self-updating membership. Its selector is a boolean expression over the members' attributes — for example `attr["climate"] == "arid" && attr["country"] == "US"` — written in [CEL](https://github.com/google/cel-go), the same expression language the detection engine uses. The platform validates and cost-limits the selector when the group is saved, then resolves membership **on read** by lowering the expression to an indexed database query (never by scanning every entity), so a dynamic group always reflects the current attribute state without any materialized cache to keep in sync. A static group, by contrast, holds an explicit member list. The console's **Browse** screen composes a selector from facet axes, previews the matching count live, and saves it as a dynamic group; the **Facets** screen manages the registry.
 
+## Commands and the capability contract
+
+A device profile can declare the **commands** its devices accept, each with a typed
+parameter schema (name, data type, required, min/max, enum). Those declarations are what
+make the profile a contract rather than a label.
+
+When a command is enqueued, it is validated against the **published** profile version — not
+the draft. Three outcomes:
+
+- **The profile declares no commands.** Anything is accepted. Declaring a vocabulary is
+  opt-in, so a profile that has not adopted one keeps working exactly as before.
+- **The profile declares commands, and the key matches one.** The payload is validated
+  against that command's parameter schema: unknown parameters, wrong types, out-of-range
+  values, and missing required parameters are all rejected.
+- **The profile declares commands, and the key matches none.** Rejected — a device cannot
+  be sent a command its capability contract does not include.
+
+Command keys are matched **exactly**, including case. A mis-cased key is a mis-keyed
+actuation, which is the thing this validation exists to stop.
+
+Validation reads the published snapshot deliberately. A definition you have authored but
+not yet published has not been communicated to anything downstream, so enforcing it would
+reject commands the device actually accepts. Publish the profile to put a new command into
+force.
+
 ## Identity and credentials
 
 A device has a **stable identity** that everything else references, kept separate from its **credentials** (the material it uses to authenticate). Credentials are pluggable — **access token**, **MQTT-basic** (username + password), and **X.509 certificate** — so a device can rotate or hold multiple credentials without changing its identity. A credential's secret is **write-only**: it is submitted when the credential is registered and never returned on read. See [Device credentials](../guides/device-credentials.md).

@@ -62,4 +62,26 @@ query {
 - List queries take a search-criteria input with pagination.
 - Mutations follow a `create* / update* / delete*` naming pattern.
 
+## Input validation
+
+**An input field the schema does not define is rejected.** Sending an undeclared field
+fails the whole request with an error naming the offending field, and suggesting the
+declared field you probably meant:
+
+```json
+{
+  "errors": [{
+    "message": "Variable \"request\" has invalid value.\nField \"deviceProfileToken\" is not defined by type \"DeviceTypeCreateRequest\". Did you mean \"profileToken\"?"
+  }]
+}
+```
+
+This holds whether the value is written as a literal in the query or supplied through a
+variable.
+
+It matters more than a typo check. A silently discarded field is indistinguishable from one
+that was applied: the mutation returns success, and you get a partially-configured entity
+with nothing to indicate a value went missing. Rejecting is what makes a success response
+mean the whole input was understood.
+
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.
