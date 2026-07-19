@@ -132,16 +132,24 @@ func infraVars(st *State) []string {
 	// TestCompactReservationFitsItsSmallerVolume checks the sum against it — never
 	// shrink one of these without the other.
 	if st.Compact {
+		// All THREE volumes, not two. The module stands up two Postgres StatefulSets
+		// — the relational store and TimescaleDB — and telemetry lands in the second
+		// one. Setting only postgres_storage shrinks the database that does not grow
+		// and leaves the one that does at its full-size default, which makes the
+		// preset's disk claim describe a fraction of the disk it uses.
 		vars = append(vars,
 			"nats_jetstream_storage="+compact.JetStreamStorage,
 			"postgres_storage="+compact.PostgresStorage,
+			"timescale_storage="+compact.TimescaleStorage,
 		)
 		// cert-manager exists to issue the ingress certificate. Dropping it is only
 		// safe because compact serves plain HTTP; an instance that still terminates
-		// TLS needs it, and the chart would otherwise render a cert-manager Issuer
-		// against a CRD that is not installed — a hard install failure. Keyed on NoTLS
-		// rather than on Compact so `--compact --no-tls=false` keeps a working cert
-		// instead of breaking the install to save three pods.
+		// TLS needs it. With the chart's default self-signed issuer the chart renders
+		// a cert-manager Issuer, so the install fails outright against a CRD that is
+		// not installed; with selfSigned=false and a clusterIssuer it renders only an
+		// annotation, so the install SUCCEEDS and the certificate is simply never
+		// issued — quieter, and worse. Keyed on NoTLS rather than on Compact so
+		// `--compact --no-tls=false` keeps a working cert either way.
 		if st.NoTLS {
 			vars = append(vars, "enable_cert_manager=false")
 		}

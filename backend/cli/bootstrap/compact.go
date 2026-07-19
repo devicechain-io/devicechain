@@ -41,11 +41,52 @@ type compactSizing struct {
 	// smallest magnitude that works, and its floor(2 * 0.9) = 1 -> "1Gi" ceiling
 	// is what compactReservation is checked against.
 	JetStreamStorage string
-	PostgresStorage  string
+
+	// PostgresStorage is the RELATIONAL store (dc-postgresql): devices, types,
+	// profiles, relationships, identities, dashboards. Catalog-scale — it does not
+	// grow with message rate — with two accumulators that do grow with USE rather
+	// than fleet size: one row per command issued and one per alarm, neither of
+	// which is pruned today.
+	//
+	// Unlike JetStreamStorage this number is NOT derived from anything. It is a
+	// judgement that a small fleet's catalog fits comfortably, and it is a TIME
+	// budget rather than a capacity one: nothing here bounds the command and alarm
+	// tables, and the module applies no postgresql.conf tuning, so pg_wal shares
+	// this volume at the stock max_wal_size. C3 measures it; until then it is the
+	// least evidenced value in this struct.
+	PostgresStorage string
+
+	// TimescaleStorage is the TIME-SERIES store (dc-timescaledb-single), which is
+	// where telemetry actually lands — the one volume here that grows with device
+	// count times message rate.
+	//
+	// It is set explicitly, and larger than PostgresStorage, because leaving it out
+	// was a real bug: compact shrank the database that does not grow and left the
+	// one that does at its full-size default, so the preset's disk claim described
+	// a fraction of the disk it used.
+	//
+	// This is a time budget too, and more sharply so. event-management's
+	// RetentionDays defaults to 0, which keeps data FOREVER (compression after 7
+	// days is on, which slows the fill but does not bound it). A compact instance
+	// expecting to run indefinitely wants a retention window set; the volume alone
+	// only decides how long it takes to fill.
+	TimescaleStorage string
 
 	// Scheduling requests. Lowering REQUESTS fixes scheduling — pods sitting
-	// Pending on a small node — and does not lower usage. Lowering LIMITS would
-	// merely convert memory pressure into OOMKills, so the limits are left alone.
+	// Pending on a small node — and does not itself lower usage. The limits are
+	// left alone because lowering them shrinks nothing: a lower MEMORY limit
+	// converts memory pressure into OOMKills, and a lower CPU limit throttles.
+	//
+	// (Strictly, "limits do not affect usage" holds because goMemLimitPercent
+	// defaults to 0. The chart CAN derive GOMEMLIMIT from the memory limit — see
+	// _helpers.tpl — so the statement is about today's default, not about limits in
+	// general.)
+	//
+	// One tradeoff worth knowing, since it is not free: widening the gap between
+	// request and actual usage moves these pods UP the kubelet's eviction ranking,
+	// which sorts Burstable pods by usage above request. On exactly the
+	// memory-pressured small node this preset targets, compact pods are evicted
+	// before they would have been at the default requests.
 	CPURequest    string
 	MemoryRequest string
 }
@@ -64,6 +105,7 @@ var compact = compactSizing{
 
 	JetStreamStorage: "2Gi",
 	PostgresStorage:  "2Gi",
+	TimescaleStorage: "4Gi",
 
 	CPURequest:    "25m",
 	MemoryRequest: "64Mi",
@@ -103,8 +145,8 @@ func (c compactSizing) resourceValues() map[string]interface{} {
 // summary is the one-line resolution printed in the bootstrap report, so an
 // operator can see what was applied without reading the chart.
 func (c compactSizing) summary() string {
-	return fmt.Sprintf("jetstream %s, postgres %s, streams %d/%d MiB, requests %s/%s",
-		c.JetStreamStorage, c.PostgresStorage,
+	return fmt.Sprintf("jetstream %s, postgres %s, timescale %s, streams %d/%d MiB, requests %s/%s",
+		c.JetStreamStorage, c.PostgresStorage, c.TimescaleStorage,
 		c.StreamMaxBytes>>20, c.StreamMaxBytesCold>>20,
 		c.CPURequest, c.MemoryRequest)
 }

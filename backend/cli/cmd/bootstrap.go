@@ -5,6 +5,8 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/spf13/cobra"
@@ -55,6 +57,21 @@ func resolveDevMode(changed func(string) bool, host string, noTLS, build bool) (
 	return devModeResolution{Build: true, Host: "localhost", NoTLS: true, Yes: true}, nil
 }
 
+// The profile catalog, split by size relative to `default`, mirroring
+// devicechain.enabledAreas in the chart's _helpers.tpl (itself a mirror of
+// backend/k8s/functionalarea). `full` is `default` plus the three areas that reach
+// outside the instance; the other two are strict subsets.
+//
+// Split this way rather than compared by name so that adding a profile forces a
+// decision about which side it falls on — a new one that silently defaulted to
+// "acceptable" would quietly widen what the published compact number claims to
+// cover. TestEveryShippedProfileIsClassifiedForCompact reads the chart's own
+// catalog and fails on a profile in neither list.
+var (
+	profilesLargerThanDefault  = []string{"full"}
+	profilesSmallerThanDefault = []string{"telemetry", "ingest-only"}
+)
+
 // compactModeResolution is the set of flag values the --compact preset settles on.
 type compactModeResolution struct {
 	NoTLS        bool
@@ -69,24 +86,40 @@ type compactModeResolution struct {
 // largest consumer) is skipped, and TLS is off — which is what makes dropping
 // cert-manager safe, since cert-manager is what issues the ingress certificate.
 //
-// The two contradictions are treated DIFFERENTLY on purpose:
+// The interactions are treated DIFFERENTLY on purpose, according to whether the
+// two requests can both be honoured:
 //
-//   - --profile full is REJECTED. Compact's storage budget is sized against the
-//     areas `default` deploys; full adds three more that reach outside the instance.
-//     There is no resolution that honours both, so it must not pick one silently.
+//   - A profile LARGER than `default` is REJECTED — which today means only `full`.
+//     `telemetry` and `ingest-only` are strict subsets of `default` and are
+//     accepted: asking for the smallest thing the platform ships is the one request
+//     a small-footprint preset must not refuse.
+//
+//     The reason is NOT the storage budget, though that is the reason the first
+//     draft gave. The JetStream reservation sums streams.Suffixes() and kv.All
+//     unconditionally — the whole inventory, including the streams `full`'s extra
+//     areas create — so the budget holds for every profile and the stated
+//     justification was simply false. What `full` actually breaks is the FOOTPRINT
+//     CLAIM: it adds three more services, and the published compact numbers are
+//     measured on `default`, so the figure would not describe the instance.
+//
+//   - --grafana-sso is REJECTED, but with its escape hatch named. It is not
+//     contradictory in principle — it just needs the monitoring stack compact
+//     removes — and the failure mode without this check is silence, not breakage.
+//
 //   - --no-tls=false is HONOURED. It is not a contradiction, it is a dependency:
 //     TLS stays on, cert-manager stays installed to issue the cert, and every other
 //     compact lever still applies. Erroring here would cost real functionality to
 //     no benefit.
 //
 // `changed` reports whether the user set a given flag explicitly.
-func resolveCompactMode(changed func(string) bool, profile string, noTLS, noMonitoring bool) (compactModeResolution, error) {
-	if changed("profile") && profile != "" && profile != "default" {
+func resolveCompactMode(changed func(string) bool, profile string, noTLS, noMonitoring, grafanaSSO bool) (compactModeResolution, error) {
+	if changed("profile") && slices.Contains(profilesLargerThanDefault, profile) {
 		return compactModeResolution{}, fmt.Errorf(
-			"--compact sizes storage for the %q profile's areas; profile %q deploys a "+
-				"different set, so the budget would not hold. Drop --compact, or use "+
-				"--profile default",
-			"default", profile)
+			"--compact publishes a footprint measured on the `default` profile, and "+
+				"profile %q deploys more than that, so the number would not describe the "+
+				"instance. Use --profile default (or a smaller profile: %s), or drop "+
+				"--compact",
+			profile, strings.Join(profilesSmallerThanDefault, ", "))
 	}
 	res := compactModeResolution{NoTLS: true, NoMonitoring: true}
 	// An explicit --no-tls=false keeps TLS (and therefore cert-manager); an explicit
@@ -97,6 +130,18 @@ func resolveCompactMode(changed func(string) bool, profile string, noTLS, noMoni
 	}
 	if changed("no-monitoring") {
 		res.NoMonitoring = noMonitoring
+	}
+	// Grafana lives IN the monitoring stack compact removes, and the SSO wiring is
+	// silently skipped when that stack is absent — including the warning, which is
+	// itself gated on monitoring being on. Before compact you could only reach that
+	// by typing --no-monitoring --grafana-sso together, which reads as a
+	// contradiction; compact turns monitoring off on the user's behalf, so the
+	// request would be swallowed with nothing printed at all.
+	if grafanaSSO && res.NoMonitoring {
+		return compactModeResolution{}, fmt.Errorf(
+			"--grafana-sso wires login for the Grafana in the monitoring stack, which " +
+				"--compact removes. Add --no-monitoring=false to keep the stack (and pay " +
+				"its footprint), or drop --grafana-sso")
 	}
 	return res, nil
 }
@@ -130,7 +175,7 @@ var bootstrapCmd = &cobra.Command{
 		// preflight, for the same reason as --dev: the pipeline should see settled
 		// values rather than flags that still need interpreting.
 		if bootstrapCompact {
-			res, err := resolveCompactMode(cmd.Flags().Changed, bootstrapProfile, bootstrapNoTLS, bootstrapNoMonitoring)
+			res, err := resolveCompactMode(cmd.Flags().Changed, bootstrapProfile, bootstrapNoTLS, bootstrapNoMonitoring, bootstrapGrafanaSSO)
 			if err != nil {
 				return err
 			}

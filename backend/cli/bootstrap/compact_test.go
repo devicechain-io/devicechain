@@ -5,12 +5,14 @@ package bootstrap
 
 import (
 	"encoding/base64"
+	"io/fs"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
+	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -34,6 +36,17 @@ func compactState(compactOn bool) *State {
 			// The chart refuses to render a secret-store area without a root key
 			// (ADR-059); a throwaway is fine since nothing decrypts anything.
 			"secretsRootKey": base64.StdEncoding.EncodeToString(make([]byte, 32)),
+			// The broker-auth material a real bootstrap has minted by the time the
+			// Helm step runs (ADR-025). It is here, rather than omitted as
+			// irrelevant to sizing, because the compact ceilings are merged into the
+			// SAME nats map: without it that map is empty when the merge happens, and
+			// the difference between merging and assigning — which decides whether an
+			// instance gets its ceilings or its credentials — becomes unobservable.
+			"natsTlsEnabled":         "true",
+			"natsCA":                 "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+			"natsCalloutIssuerSeed":  "SUAtestseedvaluefortestingonly",
+			"natsServicePassword":    "test-service-password",
+			"natsServicePasswordEnc": "unused",
 		},
 	}
 }
@@ -99,6 +112,23 @@ func TestCompactLowersTheCeilingsAServiceReads(t *testing.T) {
 			t.Errorf("the compact %s (%d) is not below the platform default (%d): the "+
 				"preset is not making this instance smaller", tc.key, tc.want, tc.platform)
 		}
+	}
+
+	// The ceilings and the broker credentials share one nats map, so applying the
+	// preset by ASSIGNING that map rather than merging into it would drop whichever
+	// was written first. Both halves are checked here because losing either is
+	// silent: no credentials means a service that never reaches the broker, and no
+	// ceilings means a full-size instance on a compact volume.
+	if n.Auth.CalloutIssuerSeed == "" || n.Auth.Password == "" {
+		t.Error("--compact overwrote the broker credentials instead of merging into " +
+			"them: no service in this instance can authenticate to NATS")
+	}
+	if !n.Tls.Enabled || n.Tls.Ca == "" {
+		t.Error("--compact overwrote the broker TLS material instead of merging into it")
+	}
+	if n.Hostname == "" || n.Port == 0 {
+		t.Error("--compact replaced the chart's nats block rather than merging into it: " +
+			"the broker coordinates are gone")
 	}
 }
 
@@ -185,8 +215,14 @@ func TestCompactReservationFitsItsSmallerVolume(t *testing.T) {
 	// MQTT system streams left deliberately unbounded ($MQTT_sess and $MQTT_rmsgs,
 	// both DiscardOld — a ceiling there would evict live sessions and retained
 	// messages rather than protect anything) plus JetStream's own per-consumer
-	// state. At the default 12Gi this slack is incidental; at 2Gi it is the whole
-	// margin, so it is asserted rather than assumed.
+	// state.
+	//
+	// 192 MiB is a ROUND TRIPWIRE, not a derivation, and the difference matters:
+	// nothing in this repo measures what $MQTT_sess costs per connected session or
+	// what a durable consumer's ack state costs, so no floor here can be honestly
+	// called sized. What it does is fail if a future change eats the margin, which
+	// at the default 12Gi would go unnoticed and at 2Gi would not. C3 replaces it
+	// with a measured number, or explains why the measurement was not worth it.
 	const minHeadroom int64 = 192 << 20
 	if headroom := ceiling - reserved; headroom < minHeadroom {
 		t.Errorf("--compact leaves %d MiB unreserved, below the %d MiB floor: the "+
@@ -248,6 +284,132 @@ func maxFileStoreFor(t *testing.T, size string) int64 {
 	return (magnitude * 9 / 10) * unit
 }
 
+// compactVolumeDecisions records, for every persistent volume the infrastructure
+// provisions, whether --compact sizes it — and when it does not, why not.
+//
+// This map is the point of the test below. The preset originally set
+// postgres_storage and not timescale_storage, which shrank the relational store
+// (catalog-scale, does not grow with traffic) and left TimescaleDB — where
+// telemetry actually lands — at its full-size default. The footprint claim then
+// described a fraction of the disk the instance used, and nothing failed, because
+// the budget test only ever looked at JetStream.
+//
+// A volume is not allowed to be simply absent from this map. Adding one to the
+// infrastructure now forces a decision here about whether the small tier sizes it.
+var compactVolumeDecisions = map[string]string{
+	"nats_jetstream_storage": "", // sized; TestCompactReservationFitsItsSmallerVolume
+	"postgres_storage":       "", // sized
+	"timescale_storage":      "", // sized
+	"monitoring_prometheus_storage": "not sized: --compact removes the monitoring " +
+		"stack outright, so no Prometheus PVC is created. An operator who keeps " +
+		"monitoring with --no-monitoring=false has made that call explicitly and " +
+		"gets the stack's own default.",
+}
+
+// Every volume the infrastructure provisions must have a compact decision, and
+// every volume marked as sized must actually be passed by the apply.
+func TestCompactSizesEveryGrowingVolume(t *testing.T) {
+	raw, err := fs.ReadFile(assets.OpenTofu(), "variables.tf")
+	if err != nil {
+		t.Fatalf("reading embedded variables.tf: %v", err)
+	}
+	// Every `variable "<name>_storage"`, excluding the _storage_class siblings,
+	// which select a StorageClass rather than a size.
+	decl := regexp.MustCompile(`variable\s+"([a-z0-9_]+_storage)"\s*\{`)
+	found := decl.FindAllSubmatch(raw, -1)
+	if len(found) == 0 {
+		t.Fatal("no storage variables found in the embedded variables.tf: this test " +
+			"can no longer see the volumes it is checking, so it must fail rather than " +
+			"pass vacuously")
+	}
+
+	vars := infraVars(compactState(true))
+	for _, m := range found {
+		name := string(m[1])
+		why, known := compactVolumeDecisions[name]
+		if !known {
+			t.Errorf("the infrastructure provisions %q and --compact makes no decision "+
+				"about it. Either size it in compactSizing, or record in "+
+				"compactVolumeDecisions why the small tier leaves it alone — an "+
+				"unsized volume that grows with traffic makes the published footprint "+
+				"describe less disk than the instance actually uses", name)
+			continue
+		}
+		set := slices.ContainsFunc(vars, func(v string) bool {
+			return strings.HasPrefix(v, name+"=")
+		})
+		switch {
+		case why == "" && !set:
+			t.Errorf("%q is recorded as sized by --compact but the infra apply does not "+
+				"pass it: the volume keeps its full-size default", name)
+			continue
+		case why != "" && set:
+			t.Errorf("%q is recorded as NOT sized by --compact (%s) but the apply passes "+
+				"it anyway: the comment and the code disagree", name, why)
+			continue
+		case why != "":
+			continue
+		}
+
+		// Presence is not enough — the magnitude has to be a real one. A sized
+		// volume that is not below the default it overrides shrinks nothing, and one
+		// small enough to be unusable trades a working instance for a smaller
+		// number.
+		got, def := volumeMiB(t, valueOf(t, vars, name)), volumeMiB(t, tofuDefault(t, raw, name))
+		if got >= def {
+			t.Errorf("--compact sets %s to %d MiB, which is not below the %d MiB it "+
+				"overrides: the preset is not making this volume smaller", name, got, def)
+		}
+		// A floor, stated as the tripwire it is rather than a derivation. Only the
+		// JetStream volume is genuinely derived (its reservation is summed and
+		// checked); the database volumes are judgement, so this catches a nonsense
+		// magnitude rather than certifying a right one. 1Gi is where a Postgres data
+		// directory plus the module's stock max_wal_size stops fitting at all.
+		const floorMiB int64 = 1024
+		if got < floorMiB {
+			t.Errorf("--compact sets %s to %d MiB, below the %d MiB floor: at this size "+
+				"the volume is too small to function rather than merely small", name, got, floorMiB)
+		}
+	}
+}
+
+// valueOf returns the value of a "name=value" var, failing if it is absent.
+func valueOf(t *testing.T, vars []string, name string) string {
+	t.Helper()
+
+	i := slices.IndexFunc(vars, func(v string) bool { return strings.HasPrefix(v, name+"=") })
+	if i < 0 {
+		t.Fatalf("no %s among the infra vars", name)
+	}
+	return strings.TrimPrefix(vars[i], name+"=")
+}
+
+// tofuDefault reads a variable's shipped default out of the embedded variables.tf,
+// so the comparison tracks the artifact rather than a copy of it.
+func tofuDefault(t *testing.T, variablesTF []byte, name string) string {
+	t.Helper()
+
+	decl := regexp.MustCompile(`(?s)variable\s+"` + regexp.QuoteMeta(name) + `"\s*\{.*?default\s*=\s*"([^"]+)"`)
+	m := decl.FindSubmatch(variablesTF)
+	if m == nil {
+		t.Fatalf("could not find the %s default in the embedded variables.tf", name)
+	}
+	return string(m[1])
+}
+
+// volumeMiB converts a volume quantity to MiB, failing on a form it does not
+// understand rather than returning a zero that would satisfy every comparison.
+func volumeMiB(t *testing.T, size string) int64 {
+	t.Helper()
+
+	m := regexp.MustCompile(`^([0-9]+)([A-Za-z]+)$`).FindStringSubmatch(size)
+	if m == nil {
+		t.Fatalf("volume size %q is not a whole magnitude + unit; a decimal or unitless "+
+			"value floors differently at the module than it reads here", size)
+	}
+	return mib(t, m[1]+m[2])
+}
+
 // Compact must not deploy a config the services would refuse. The tier-ordering
 // guard (cold <= hot, cache <= state) rejects an inverted pair at startup, and a
 // preset that lowered one side further than the other would ship an instance that
@@ -264,36 +426,108 @@ func TestCompactPassesTheConfigTheServicesEnforce(t *testing.T) {
 
 // Compact lowers scheduling REQUESTS and leaves limits alone.
 //
-// Requests decide whether a pod fits a small node; limits decide what happens when
-// it does not fit its own memory. Lowering limits here would convert a footprint
-// change into OOMKills, which is a different — and much worse — kind of small.
+// Requests decide whether a pod fits a small node; the memory limit decides what
+// happens when a pod outgrows it. Lowering the memory limit here would convert a
+// footprint change into OOMKills, and lowering the CPU limit would throttle — a
+// different, worse kind of small either way.
+//
+// The assertions are on the RENDERED pod spec and against the chart's own
+// defaults, not against the compact struct. Comparing reqs["cpu"] to
+// compact.CPURequest is a tautology: expected and actual are the same variable, so
+// it holds for any value at all — including `memory: 1Gi`, which against the
+// chart's untouched 256Mi limit is a pod spec the API server rejects outright. A
+// preset that made every pod uncreatable would have passed.
 func TestCompactLowersRequestsAndNotLimits(t *testing.T) {
-	res, ok := helmValues(compactState(true))["resources"].(map[string]interface{})
-	if !ok {
+	if _, ok := helmValues(compactState(true))["resources"]; !ok {
 		t.Fatal("--compact set no resources: the pods keep the full-size requests and " +
 			"the preset's whole scheduling claim is unfounded")
 	}
-	if _, ok := res["limits"]; ok {
-		t.Error("--compact set resource limits. A Helm map coalesces, so omitting the " +
-			"key keeps the chart's limits; naming it converts memory pressure into " +
-			"OOMKills instead of shrinking anything")
+
+	shipped := byArea(t, renderContainers(t, nil))
+	small := byArea(t, renderContainers(t, helmValues(compactState(true))))
+
+	for area, got := range small {
+		base, ok := shipped[area]
+		if !ok {
+			t.Errorf("area %q renders only under --compact", area)
+			continue
+		}
+		for _, dim := range []string{"cpu", "memory"} {
+			// Strictly smaller than what the chart ships, or the preset is not a
+			// preset — it is a relabelling of the default.
+			if q(t, dim, got.requests[dim]) >= q(t, dim, base.requests[dim]) {
+				t.Errorf("%s: compact %s request %q is not below the chart's %q: --compact "+
+					"is not making this pod easier to schedule", area, dim,
+					got.requests[dim], base.requests[dim])
+			}
+			// A request above its limit is rejected at admission, so this is not a
+			// sizing preference — it is the difference between a small instance and
+			// one where not a single pod can be created.
+			if q(t, dim, got.requests[dim]) > q(t, dim, got.limits[dim]) {
+				t.Errorf("%s: compact %s request %q exceeds the limit %q; the API server "+
+					"refuses the pod outright", area, dim, got.requests[dim], got.limits[dim])
+			}
+			// The limits must be the chart's, untouched.
+			if got.limits[dim] != base.limits[dim] {
+				t.Errorf("%s: --compact changed the %s limit from %q to %q. A Helm map "+
+					"coalesces, so omitting the key keeps the chart's limits; changing "+
+					"the memory limit converts pressure into OOMKills and changing the "+
+					"CPU limit throttles — neither shrinks anything",
+					area, dim, base.limits[dim], got.limits[dim])
+			}
+		}
 	}
-	reqs, ok := res["requests"].(map[string]interface{})
-	if !ok {
-		t.Fatal("--compact set resources without requests")
+}
+
+// byArea indexes rendered containers by area, skipping the nginx console — it is
+// not a Go service and the preset's scheduling story is about the Go workloads.
+func byArea(t *testing.T, cs []renderedContainer) map[string]renderedContainer {
+	t.Helper()
+
+	out := map[string]renderedContainer{}
+	for _, c := range goContainers(cs) {
+		out[c.area] = c
 	}
-	if reqs["cpu"] != compact.CPURequest || reqs["memory"] != compact.MemoryRequest {
-		t.Errorf("compact requests = %v, want %s/%s", reqs, compact.CPURequest, compact.MemoryRequest)
+	if len(out) == 0 {
+		t.Fatal("no Go containers rendered — every comparison would be vacuous")
 	}
+	return out
+}
+
+// q parses a Kubernetes quantity into a comparable scalar: millicores for cpu,
+// MiB for memory. It fails on a form it does not understand rather than returning
+// a zero, which would silently satisfy every "is smaller" comparison above.
+func q(t *testing.T, dim, quantity string) int64 {
+	t.Helper()
+
+	if quantity == "" {
+		t.Fatalf("no %s quantity rendered: the comparison it feeds would be vacuous", dim)
+	}
+	if dim == "memory" {
+		return mib(t, quantity)
+	}
+	if m, ok := strings.CutSuffix(quantity, "m"); ok {
+		n, err := strconv.ParseInt(m, 10, 64)
+		if err != nil {
+			t.Fatalf("parsing cpu quantity %q: %v", quantity, err)
+		}
+		return n
+	}
+	n, err := strconv.ParseInt(quantity, 10, 64)
+	if err != nil {
+		t.Fatalf("cpu quantity %q uses a form this test cannot convert", quantity)
+	}
+	return n * 1000
 }
 
 // cert-manager is dropped BECAUSE TLS is off, not because the preset is on.
 //
-// The chart renders a cert-manager Issuer whenever ingress TLS is enabled, so an
-// instance that still terminates TLS on a cluster with no cert-manager fails the
-// install outright against a missing CRD. Keying the two together means
-// `--compact --no-tls=false` gives up three pods of footprint and keeps working,
-// instead of giving up the install.
+// An instance that still terminates TLS needs cert-manager. With the chart's
+// default self-signed issuer it renders a cert-manager Issuer, so the install
+// fails outright against a missing CRD; with an external clusterIssuer it renders
+// only an annotation, so the install succeeds and the certificate is never issued.
+// Keying the two together means `--compact --no-tls=false` gives up three pods of
+// footprint and keeps working, instead of giving up the certificate.
 func TestCompactDropsCertManagerOnlyWhenTLSIsOff(t *testing.T) {
 	const off = "enable_cert_manager=false"
 
@@ -305,8 +539,9 @@ func TestCompactDropsCertManagerOnlyWhenTLSIsOff(t *testing.T) {
 	tlsOn := compactState(true)
 	tlsOn.NoTLS = false
 	if slices.Contains(infraVars(tlsOn), off) {
-		t.Error("--compact dropped cert-manager while ingress TLS is on: the chart will " +
-			"render a cert-manager Issuer against a CRD that is not installed, and the " +
-			"install fails outright rather than merely running larger")
+		t.Error("--compact dropped cert-manager while ingress TLS is on: nothing issues " +
+			"the certificate. With the chart's default self-signed issuer the install " +
+			"fails against a missing CRD; with an external issuer it succeeds and serves " +
+			"no cert at all")
 	}
 }
