@@ -45,8 +45,26 @@ type NatsConfiguration struct {
 	// every control-plane stream for a load it will never see.
 	StreamMaxBytes     int64
 	StreamMaxBytesCold int64
-	StreamMaxMsgs      int64
-	StreamMaxMsgSize   int32
+	// MqttStoreMaxBytes bounds each of the MQTT gateway's OWN JetStream streams
+	// ($MQTT_msgs, $MQTT_out). nats-server creates them with no size limit at all
+	// and offers no option to bound them, yet they sit in the same account and
+	// count against the same max_file_store as the platform's streams — so an
+	// unbounded $MQTT_msgs can consume the headroom this budget leaves and produce
+	// the very crashloop the ceilings prevent. Applied by
+	// messaging.ReconcileMqttStores at startup. Fail-safe like the rest: a
+	// non-positive value is coerced to the default rather than left meaning
+	// UNLIMITED.
+	MqttStoreMaxBytes int64
+	// MqttQoS2StoreMaxBytes bounds the gateway's QoS 2 stores ($MQTT_out,
+	// $MQTT_qos2in). Smaller than MqttStoreMaxBytes on purpose: QoS 2 is not the
+	// recommended publish mode, so its buffers should not reserve disk the
+	// recommended configuration never uses. $MQTT_qos2in is the one gateway stream
+	// a device can fill deliberately — a QoS 2 publish is held until its PUBREL
+	// arrives — and it discards NEW on full, so this ceiling turns that from a
+	// disk-exhaustion vector into a refused publish.
+	MqttQoS2StoreMaxBytes int64
+	StreamMaxMsgs         int64
+	StreamMaxMsgSize      int32
 	// Tls, when enabled, makes clients dial the broker over TLS and verify the
 	// server certificate against Ca (ADR-025). The broker terminates TLS on both
 	// the 4222 client listener and the 1883 MQTT gateway with a cert this CA
@@ -330,7 +348,40 @@ const (
 	DefaultStreamMaxBytesCold int64 = 128 << 20 // 128 MiB per control-plane stream
 	DefaultStreamMaxMsgs      int64 = 5_000_000 // 5M messages per stream
 	DefaultStreamMaxMsgSize   int32 = 1 << 20   // 1 MiB per message (matches default max_payload)
+	// DefaultMqttStoreMaxBytes bounds each MQTT gateway stream. Sized as a
+	// working buffer, not a retention window: $MQTT_msgs drains as the QoS-1
+	// subscriber acks, so it holds in-flight messages rather than history. It is
+	// deliberately small — its whole purpose is to cap an otherwise unlimited
+	// store, and every byte reserved here is a byte the platform streams cannot
+	// use.
+	DefaultMqttStoreMaxBytes int64 = 256 << 20 // 256 MiB for the QoS>=1 message store
+	// DefaultMqttQoS2StoreMaxBytes bounds each QoS 2 store. Deliberately small: QoS
+	// 2 is not recommended here, so these are a safety cap on an otherwise
+	// unlimited store rather than a working buffer sized for throughput.
+	DefaultMqttQoS2StoreMaxBytes int64 = 64 << 20 // 64 MiB per QoS 2 store
 )
+
+// MqttGatewayStreamCount is how many MQTT gateway streams
+// messaging.ReconcileMqttStores bounds: one message store plus two QoS 2 stores.
+//
+// It is a count here rather than the stream names themselves because core/config
+// cannot import core/messaging — messaging depends on config, not the reverse.
+// That is the same layering that made the platform's own stream set unknowable
+// from here until core/streams existed, so it gets the same treatment:
+// TestMqttGatewayStreamCountMatchesReconciler in the messaging package asserts
+// this matches the set actually reconciled, and that the reservation below equals
+// the sum of the ceilings actually applied.
+const MqttGatewayStreamCount = 3
+
+const ()
+
+// MqttStoreReservation is the disk the MQTT gateway's bounded streams reserve up
+// front: the message store plus the two QoS 2 stores. Once
+// messaging.ReconcileMqttStores gives them a ceiling, JetStream reserves it like
+// any other stream's — so this belongs in the same budget as the platform's own.
+func (c *NatsConfiguration) MqttStoreReservation() int64 {
+	return c.MqttStoreMaxBytes + 2*c.MqttQoS2StoreMaxBytes
+}
 
 func (c *NatsConfiguration) StreamMaxBytesFor(suffix string) int64 {
 	if streams.TierFor(suffix) == streams.Cold {
@@ -367,6 +418,12 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	}
 	if nats.StreamMaxMsgSize <= 0 {
 		nats.StreamMaxMsgSize = DefaultStreamMaxMsgSize
+	}
+	if nats.MqttStoreMaxBytes <= 0 {
+		nats.MqttStoreMaxBytes = DefaultMqttStoreMaxBytes
+	}
+	if nats.MqttQoS2StoreMaxBytes <= 0 {
+		nats.MqttQoS2StoreMaxBytes = DefaultMqttQoS2StoreMaxBytes
 	}
 	// Default the secret-store selection so an instance document that omits it means
 	// "the zero-infra default" (envelope-in-Postgres, instance KEK), not an invalid
