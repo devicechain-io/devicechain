@@ -13,7 +13,7 @@ The Helm chart renders the per-service workloads and config today. The operator'
 
 ## Deploying with Helm
 
-The chart at `deploy/helm/devicechain` renders one Deployment + Service per **enabled functional area**, along with the instance and per-service config ConfigMaps. Each pod exposes `/healthz` (liveness) and `/readyz` (readiness) so a service that isn't ready is held out of rotation.
+The chart at `deploy/helm/devicechain` renders one Deployment + Service per **enabled functional area**, along with the per-service config ConfigMaps and the instance config Secret (it carries persistence credentials, so it is a Secret rather than a ConfigMap). Each pod exposes `/healthz` (liveness) and `/readyz` (readiness) so a service that isn't ready is held out of rotation.
 
 You choose which services to run with **either** a named profile **or** an explicit set:
 
@@ -61,7 +61,7 @@ DeviceChain deliberately splits each layer:
 | Layer | Tool | Responsibility |
 |---|---|---|
 | Infrastructure | **OpenTofu** | NATS, TimescaleDB, namespaces, ingress, TLS |
-| Workloads | **Helm chart** | Deployments, Services, and config ConfigMaps per functional area |
+| Workloads | **Helm chart** | Deployments, Services, per-area config ConfigMaps, and the instance config Secret |
 | Lifecycle | **Operator** | `DeviceChainInstance` status aggregation and config hot-reload |
 | Business configuration | kubectl / UI | tenants and their settings |
 

@@ -110,11 +110,18 @@ func TestApplyDefaultsStreamBounds(t *testing.T) {
 // reports max_file_store 10Gi against a 12Gi PVC.
 //
 // Modelling it as an exact 90% (10.8 GiB) overstates the real ceiling by 819 MiB.
-// That matters because these tests are the only guard on the reservation: against
-// an inflated ceiling a future increase could pass here while leaving a fresh
-// install 819 MiB less real headroom than the floor below claims to enforce —
-// which, against that floor, is most of it. Integer division floors exactly as the
-// module does.
+// Against an inflated ceiling a future increase could pass here while leaving a
+// fresh install 819 MiB less real headroom than the floor below claims to enforce
+// — which, against that floor, is most of it. Integer division floors exactly as
+// the module does.
+//
+// These tests guard the reservation against a budget they RESTATE. The pvGi below
+// is a copy of the OpenTofu default, so shrinking the real volume does not fail
+// anything here. dcctl's TestRenderedReservationFitsTheJetStreamStore is the half
+// that reads both sides from the shipped artifacts — the chart's ceilings and the
+// tofu variable's actual default — and so catches the PV moving. Keep both: this
+// one pins the arithmetic on values core/config computes for itself, that one
+// pins the seam between the two halves of the deployment.
 const (
 	pvGi               = 12
 	pvBytes      int64 = pvGi << 30

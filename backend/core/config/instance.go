@@ -28,9 +28,10 @@ type NatsConfiguration struct {
 	// size instead of time), so size these for the retention a busy cluster needs.
 	// Note this is a per-stream bound, not an aggregate-disk guarantee: the true
 	// disk ceiling is the SUM of every stream's ceiling (see StreamMaxBytesFor),
-	// which must fit the broker's JetStream store. (An
-	// account-level max_file_store at the broker is the belt to this suspenders;
-	// tracked separately.) StreamMaxMsgSize rejects an oversized single message at
+	// which must fit the broker's JetStream store. The belt to that suspenders is
+	// the account-level max_file_store, which the deployment sets from the PV size
+	// (jetstream_max_file_store in deploy/opentofu/modules/nats/main.tf); this sum
+	// is what has to fit under it. StreamMaxMsgSize rejects an oversized single message at
 	// publish. All three are fail-safe (ADR-023 never-unlimited): a zero, negative,
 	// or unset value is coerced to the platform default in ApplyDefaults rather
 	// than left at 0, which JetStream would treat as UNLIMITED. Raise them for a
@@ -605,8 +606,11 @@ func (c *NatsConfiguration) validateTierOrdering() error {
 		}
 		if p.smallerValue > p.largerValue {
 			return fmt.Errorf(
-				"infrastructure.nats.%s (%d) exceeds %s (%d): %s",
-				p.smaller, p.smallerValue, p.larger, p.largerValue, p.why)
+				"infrastructure.nats.%s (%d) exceeds %s (%d): %s. Raise %s to at least "+
+					"%d, or lower %s — and remember every ceiling here is reserved up "+
+					"front, so raising one may also need a larger JetStream volume",
+				p.smaller, p.smallerValue, p.larger, p.largerValue, p.why,
+				p.larger, p.smallerValue, p.smaller)
 		}
 	}
 	return nil

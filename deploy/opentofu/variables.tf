@@ -77,12 +77,17 @@ variable "nats_jetstream_storage" {
     magnitude where floor(magnitude × 0.9) >= the sum instead. Raise it for real
     ingest volume.
 
-    CAVEAT — this 12Gi and the Go-side budget tests are NOT linked. Those tests carry
-    their own `pvGi` constant (backend/core/config/instance_test.go), which mirrors
-    this default and the flooring rule above, so lowering the default here will not
-    make them fail; they guard the stream bounds against a fixed budget, not against
-    this variable. Changing this value means updating that constant BY HAND. Wiring
-    the two together (or asserting the reservation at bring-up) is the real fix.
+    This value IS linked to a test. dcctl's TestRenderedReservationFitsTheJetStreamStore
+    (backend/cli/bootstrap) reads this default out of the embedded infrastructure
+    config, applies the flooring rule above, and checks the ceilings the Helm chart
+    actually renders against it — so lowering this without lowering the stream bounds
+    fails there rather than on someone's fresh install.
+
+    CAVEAT — one copy is still un-linked. backend/core/config/instance_test.go carries
+    its own `pvGi` constant mirroring this default, and lowering this value will not
+    make those tests fail. They pin the arithmetic on the values core/config computes
+    for itself, which is worth keeping; just do not read them as a guard on THIS
+    variable. Changing this value means updating that constant by hand.
   EOT
   type        = string
   default     = "12Gi"

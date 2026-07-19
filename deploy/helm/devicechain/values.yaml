@@ -75,9 +75,17 @@ instance:
         # streamMaxBytesCold must stay <= streamMaxBytes: lowering only the hot bound
         # (e.g. for a small-footprint deploy) inverts the two and makes control-plane
         # streams the largest on disk. Services REJECT an inverted pair at startup
-        # rather than clamping it, so a partial edit fails loudly here instead of
-        # quietly putting the larger bound on the tier that cannot grow. The same
-        # applies to kvCacheMaxBytes <= kvStateMaxBytes below.
+        # rather than clamping it, and `dcctl bootstrap` runs the same check against
+        # the rendered config BEFORE installing — so a partial edit is reported as a
+        # sentence naming the two keys, not as a ten-minute wait for pods that will
+        # never become ready. The same applies to kvCacheMaxBytes <= kvStateMaxBytes
+        # below.
+        #
+        # NOTE this is enforced on every start, not only on a fresh install: an
+        # existing instance already running an inverted pair will refuse to come back
+        # up on its next restart. That is deliberate pre-GA — it was already running
+        # with the bound on the wrong tier — but it means the fix belongs in the same
+        # change as the upgrade.
         #
         # Raising these REQUIRES raising the PV (nats_jetstream_storage) to match, or
         # the last services to create a stream crashloop with "insufficient storage

@@ -129,6 +129,16 @@ func helmInstall(ctx context.Context, st *State) error {
 		}
 	}
 
+	// Check the instance config the chart is about to render BEFORE handing it to
+	// the cluster. Everything below waits on workload readiness, so a config a
+	// service refuses to load does not surface as a config error at all — it
+	// surfaces as a ten-minute wait that ends in a generic timeout, with the actual
+	// reason only in the logs of pods that are already gone. Rendering costs
+	// milliseconds and turns that into a sentence.
+	if err := validateRenderedInstanceConfig(ctx, ch, vals); err != nil {
+		return err
+	}
+
 	// Upgrade if the release already exists, otherwise install — so a re-run is
 	// idempotent.
 	hist := action.NewHistory(actionConfig)

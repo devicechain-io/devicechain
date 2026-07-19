@@ -5,16 +5,16 @@ package bootstrap
 
 import (
 	"encoding/base64"
-	"encoding/json"
+	"io/fs"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 
+	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/streams"
-	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/chartutil"
-	"helm.sh/helm/v3/pkg/releaseutil"
-	"sigs.k8s.io/yaml"
 )
 
 // The chart writes the instance configuration as a JSON blob into a Secret, and
@@ -65,47 +65,13 @@ func renderInstanceConfig(t *testing.T, natsOverrides map[string]interface{}) *c
 	if err != nil {
 		t.Fatalf("loading embedded chart: %v", err)
 	}
-
-	// ClientOnly renders without a cluster: no kube API, default capabilities.
-	inst := action.NewInstall(&action.Configuration{})
-	inst.ReleaseName = helmReleaseName
-	inst.Namespace = "default"
-	inst.DryRun = true
-	inst.ClientOnly = true
-	inst.APIVersions = chartutil.VersionSet{"monitoring.coreos.com/v1"}
-
-	rel, err := inst.RunWithContext(t.Context(), ch, vals)
+	cfg, err := renderInstanceConfigFromChart(t.Context(), ch, vals)
 	if err != nil {
-		t.Fatalf("rendering chart: %v", err)
+		t.Fatalf("rendering instance config: %v", err)
 	}
-
-	// Find the instance-config Secret among the rendered manifests and pull the
-	// `instance` key — the exact bytes a pod mounts at /etc/dci-config/instance.
-	var found string
-	for _, doc := range releaseutil.SplitManifests(rel.Manifest) {
-		var obj struct {
-			Kind       string            `json:"kind"`
-			StringData map[string]string `json:"stringData"`
-		}
-		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
-			continue
-		}
-		if obj.Kind != "Secret" {
-			continue
-		}
-		if v, ok := obj.StringData["instance"]; ok {
-			found = v
-			break
-		}
-	}
-	if found == "" {
+	if cfg == nil {
 		t.Fatal("no rendered Secret carried an `instance` key: the instance config " +
 			"never reached a pod, so nothing below is measuring the chart")
-	}
-
-	cfg := &config.InstanceConfiguration{}
-	if err := json.Unmarshal([]byte(found), cfg); err != nil {
-		t.Fatalf("decoding rendered instance config: %v", err)
 	}
 	return cfg
 }
@@ -187,16 +153,47 @@ func TestChartOverriddenCeilingsReachTheStruct(t *testing.T) {
 }
 
 // The reservation the chart actually delivers must fit the JetStream store the
-// chart is deployed against.
+// PV the chart is deployed against actually provides.
 //
 // core/config already pins this arithmetic, but against values it computes for
-// itself. This asserts it against the numbers that reach a real pod, which is the
-// only version of the claim a fresh install can falsify: the crashloop this whole
-// budget exists to prevent is caused by what the chart rendered, not by what the
-// Go defaults say.
+// itself. This asserts it across the seam between the two halves of the
+// deployment — Helm states the ceilings, OpenTofu sizes the volume, and nothing
+// but this test reads both. That seam is where the crashloop comes from: the
+// budget is only ever violated by what the chart rendered against the volume tofu
+// provisioned, never by what the Go defaults say.
+//
+// Both sides are read from the shipped artifacts rather than restated here. An
+// earlier draft of this test summed via StreamMaxBytesFor/KvMaxBytesFor and
+// compared against a hardcoded 12Gi, which made it unfalsifiable in both
+// directions at once: those accessors fall back to the Go default on a zero, so a
+// chart that dropped every key would compute the same total, and a hardcoded
+// ceiling cannot notice the PV shrinking underneath it. Both halves have to come
+// from the artifact for the comparison to mean anything.
 func TestRenderedReservationFitsTheJetStreamStore(t *testing.T) {
 	cfg := renderInstanceConfig(t, nil)
 	n := cfg.Infrastructure.Nats
+
+	// Every ceiling must have arrived from the chart. Without this the sum below
+	// silently measures the Go defaults instead: StreamMaxBytesFor and
+	// KvMaxBytesFor both substitute the platform default for a zero, so a chart
+	// that delivered nothing at all would produce an identical — and passing —
+	// total.
+	for _, f := range []struct {
+		key string
+		got int64
+	}{
+		{"streamMaxBytes", n.StreamMaxBytes},
+		{"streamMaxBytesCold", n.StreamMaxBytesCold},
+		{"mqttStoreMaxBytes", n.MqttStoreMaxBytes},
+		{"mqttQoS2StoreMaxBytes", n.MqttQoS2StoreMaxBytes},
+		{"kvCacheMaxBytes", n.KvCacheMaxBytes},
+		{"kvStateMaxBytes", n.KvStateMaxBytes},
+	} {
+		if f.got <= 0 {
+			t.Fatalf("%s did not arrive from the chart: the sum below would fall back "+
+				"to the Go default and measure nothing about the deployment", f.key)
+		}
+	}
 
 	var reserved int64
 	for _, s := range streams.Suffixes() {
@@ -205,16 +202,158 @@ func TestRenderedReservationFitsTheJetStreamStore(t *testing.T) {
 	reserved += n.MqttStoreReservation()
 	reserved += n.KvReservation()
 
-	// The shipped PV is 12Gi and max_file_store floors 90% of the MAGNITUDE — see
-	// the derivation in deploy/opentofu/modules/nats/main.tf and the matching
-	// constants in core/config's instance_test.go. floor(12 * 0.9) = 10 -> "10Gi".
-	const maxFileStore int64 = (12 * 9 / 10) << 30
+	maxFileStore := shippedMaxFileStore(t)
 	if reserved > maxFileStore {
-		t.Errorf("the chart's own ceilings reserve %d B against a %d B store: a fresh "+
-			"bring-up crashloops with \"insufficient storage resources available\"",
-			reserved, maxFileStore)
+		t.Errorf("the chart's ceilings reserve %d B against the %d B store the shipped "+
+			"PV provides: a fresh bring-up crashloops with \"insufficient storage "+
+			"resources available\"", reserved, maxFileStore)
 	}
-	if kv.Count(kv.Cache) == 0 {
-		t.Fatal("no cache buckets declared — the KV half of this sum is vacuous")
+	if kv.Count(kv.Cache) == 0 || len(streams.Suffixes()) == 0 {
+		t.Fatal("an inventory is empty — the sum above is vacuous")
+	}
+}
+
+// shippedMaxFileStore is the JetStream store ceiling the shipped OpenTofu
+// actually provisions, read from the embedded infrastructure config.
+//
+// It is read rather than restated because the alternative had already gone wrong:
+// the PV magnitude was hand-copied into three separate places, and a test holding
+// its own copy keeps asserting against the old volume after the real one changes —
+// passing loudest exactly when the PV shrinks, which is the change most likely to
+// break the budget. That matters immediately: the compact preset drops this PV,
+// and a hardcoded ceiling would wave it through.
+//
+// The derivation must match modules/nats/main.tf exactly. It is NOT 90% of the
+// size: the module splits the value into magnitude and unit, floors 90% of the
+// MAGNITUDE, and reattaches the unit — so 12Gi yields floor(12 * 0.9) = 10 ->
+// "10Gi", not 10.8Gi. Modelling it as a true 90% would overstate the real ceiling
+// by 819 MiB and hand this test headroom that does not exist.
+func shippedMaxFileStore(t *testing.T) int64 {
+	t.Helper()
+
+	raw, err := fs.ReadFile(assets.OpenTofu(), "variables.tf")
+	if err != nil {
+		t.Fatalf("reading embedded variables.tf: %v", err)
+	}
+	// The `default` immediately following the nats_jetstream_storage declaration.
+	decl := regexp.MustCompile(`(?s)variable\s+"nats_jetstream_storage"\s*\{.*?default\s*=\s*"([0-9]+)([A-Za-z]+)"`)
+	m := decl.FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("could not find the nats_jetstream_storage default in the embedded " +
+			"variables.tf: this test can no longer see the PV it is checking against, " +
+			"so it must fail rather than assume one")
+	}
+	magnitude, err := strconv.ParseInt(string(m[1]), 10, 64)
+	if err != nil {
+		t.Fatalf("parsing PV magnitude %q: %v", m[1], err)
+	}
+
+	units := map[string]int64{"Mi": 1 << 20, "Gi": 1 << 30, "Ti": 1 << 40}
+	unit, ok := units[string(m[2])]
+	if !ok {
+		t.Fatalf("PV unit %q is not one this test knows how to convert; add it rather "+
+			"than letting the comparison silently use the wrong scale", m[2])
+	}
+	// floor(90% of the MAGNITUDE), unit reattached — see the doc comment.
+	return (magnitude * 9 / 10) * unit
+}
+
+// dcctl must reject a config the services would refuse, before it starts waiting
+// on workloads.
+//
+// The services already fail closed on this — but everything after the install call
+// waits on readiness, so a rejected config never reaches the operator AS a config
+// error. It reaches them as a ten-minute timeout whose real cause is in the logs of
+// pods that have already been replaced. The gate does not add a rule; it moves an
+// existing rule's verdict to where someone can act on it.
+func TestBootstrapRejectsAConfigTheServicesWouldRefuse(t *testing.T) {
+	ch, err := loadEmbeddedChart()
+	if err != nil {
+		t.Fatalf("loading embedded chart: %v", err)
+	}
+	vals := func(nats map[string]interface{}) map[string]interface{} {
+		infra := map[string]interface{}{
+			"secrets": map[string]interface{}{
+				"rootKey": base64.StdEncoding.EncodeToString(make([]byte, 32)),
+			},
+		}
+		// A nil value here would not mean "no override" — Helm reads an explicit null
+		// as DELETE THIS KEY, which would strip the chart's whole nats block
+		// (hostname and port included) and make the gate reject for the wrong reason.
+		if nats != nil {
+			infra["nats"] = nats
+		}
+		return map[string]interface{}{
+			"instance": map[string]interface{}{
+				"id":     "dctest",
+				"config": map[string]interface{}{"infrastructure": infra},
+			},
+		}
+	}
+
+	// The realistic mistake: lowering the hot bound for a small deployment and
+	// leaving the cold one at its default, which silently makes the control-plane
+	// streams the largest on disk.
+	err = validateRenderedInstanceConfig(t.Context(), ch, vals(map[string]interface{}{
+		"streamMaxBytes": int64(64 << 20),
+	}))
+	if err == nil {
+		t.Fatal("a half-lowered stream bound passed the bootstrap gate: the operator " +
+			"will learn about it as a readiness timeout instead")
+	}
+	if !strings.Contains(err.Error(), "streamMaxBytesCold") {
+		t.Errorf("error %q does not name the offending key, which is the whole reason "+
+			"to check here rather than let the pods report it", err)
+	}
+
+	// The counterweight. A gate that rejects a good configuration is worse than the
+	// timeout it replaces, because it fails a bring-up that would have succeeded.
+	if err := validateRenderedInstanceConfig(t.Context(), ch, vals(map[string]interface{}{
+		"streamMaxBytes":     int64(64 << 20),
+		"streamMaxBytesCold": int64(16 << 20),
+	})); err != nil {
+		t.Errorf("a correctly lowered pair was rejected: %v", err)
+	}
+	if err := validateRenderedInstanceConfig(t.Context(), ch, vals(nil)); err != nil {
+		t.Errorf("the chart's own defaults were rejected: %v", err)
+	}
+}
+
+// The gate has to be WIRED, not merely present.
+//
+// The test above exercises validateRenderedInstanceConfig directly, which means it
+// passes just as happily when helmInstall never calls it — the function is not the
+// risky part, the call site is. This drives the real helmInstall and asserts the
+// failure it reports is the config verdict rather than anything downstream, which
+// is only true if the check runs where it was put: before the install starts
+// waiting on a cluster.
+//
+// The lever is the secret-store root key. The chart's own guard only checks that
+// one is PRESENT (templates/_helpers.tpl), so a malformed key renders cleanly and
+// is caught by config.Validate — reaching the gate through State exactly as a real
+// bootstrap would.
+func TestHelmInstallChecksTheConfigBeforeTouchingTheCluster(t *testing.T) {
+	st := &State{
+		Instance: "dctest",
+		Profile:  "default",
+		// Deliberately unreachable. If the gate does not run first, the error we get
+		// back will be about this rather than about the config.
+		KubeContext:   "dc-nonexistent-context-for-test",
+		ImageRegistry: DefaultImageRegistry,
+		ImageVersion:  "v0.0.0-test",
+		Values: map[string]string{
+			"secretsRootKey": "this is not valid base64 !!!",
+			"ingressHost":    "localhost",
+		},
+	}
+
+	err := helmInstall(t.Context(), st)
+	if err == nil {
+		t.Fatal("helmInstall accepted a malformed secret-store root key")
+	}
+	if !strings.Contains(err.Error(), "the instance configuration this deploy would render") {
+		t.Errorf("helmInstall failed with %q, not the config verdict: the gate either "+
+			"does not run or does not run before the cluster work, which is the only "+
+			"thing that makes it better than a readiness timeout", err)
 	}
 }
