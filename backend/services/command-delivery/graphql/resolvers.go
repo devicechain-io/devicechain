@@ -74,13 +74,6 @@ func (r *CommandResolver) SentTime() *string {
 	return nil
 }
 
-func (r *CommandResolver) DeliveredTime() *string {
-	if r.M.DeliveredTime.Valid {
-		return util.FormatTime(r.M.DeliveredTime.Time)
-	}
-	return nil
-}
-
 func (r *CommandResolver) RespondedTime() *string {
 	if r.M.RespondedTime.Valid {
 		return util.FormatTime(r.M.RespondedTime.Time)

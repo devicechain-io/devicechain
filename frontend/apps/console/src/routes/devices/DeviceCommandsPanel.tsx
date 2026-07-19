@@ -44,7 +44,7 @@ import { getDeviceCommandVocabulary, type PublishedCommand } from '@/lib/api/dev
 const pageSize = 25;
 
 // Commands that have reached a terminal state can no longer be cancelled; the
-// rest (QUEUED / SENT / DELIVERED) are still in flight.
+// rest (QUEUED / SENT) are still in flight.
 const TERMINAL = new Set(['SUCCESSFUL', 'TIMEOUT', 'EXPIRED', 'FAILED']);
 
 function statusVariant(status: string): 'success' | 'destructive' | 'outline' | 'secondary' {
@@ -57,7 +57,7 @@ function statusVariant(status: string): 'success' | 'destructive' | 'outline' | 
     case 'EXPIRED':
       return 'outline';
     default:
-      // QUEUED / SENT / DELIVERED — still in flight.
+      // QUEUED / SENT — still in flight.
       return 'secondary';
   }
 }

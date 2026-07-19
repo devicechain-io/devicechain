@@ -60,7 +60,7 @@ const ALARM_RECONCILE_DEBOUNCE_MS = 800;
 const ALARM_POLL_MS = 30_000;
 
 // Command channel cadence. command-delivery exposes NO subscription, so the control
-// channel is poll-only — but a command's lifecycle (QUEUED→SENT→DELIVERED→SUCCESSFUL)
+// channel is poll-only — but a command's lifecycle (QUEUED→SENT→SUCCESSFUL)
 // resolves in seconds, so it polls far faster than the alarm channel. An issued command
 // reconciles immediately (not on the next tick) so the operator sees it appear at once.
 const COMMAND_POLL_MS = 4_000;

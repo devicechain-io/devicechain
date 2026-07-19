@@ -247,7 +247,7 @@ func (t *Tools) GetAlarm(ctx context.Context, req *mcp.CallToolRequest, in GetAl
 
 type ListCommandsInput struct {
 	DeviceToken string `json:"deviceToken,omitempty" jsonschema:"optional device token to filter commands to one device"`
-	Status      string `json:"status,omitempty" jsonschema:"optional command status filter: one of QUEUED, SENT, DELIVERED, SUCCESSFUL, TIMEOUT, EXPIRED, FAILED"`
+	Status      string `json:"status,omitempty" jsonschema:"optional command status filter: one of QUEUED, SENT, SUCCESSFUL, TIMEOUT, EXPIRED, FAILED"`
 	PageNumber  int    `json:"pageNumber,omitempty" jsonschema:"1-based page number (default 1)"`
 	PageSize    int    `json:"pageSize,omitempty" jsonschema:"commands per page (default 25, max 100)"`
 }
@@ -259,7 +259,6 @@ type CommandSummary struct {
 	Status        string `json:"status"`
 	QueuedTime    string `json:"queuedTime,omitempty"`
 	SentTime      string `json:"sentTime,omitempty"`
-	DeliveredTime string `json:"deliveredTime,omitempty"`
 	RespondedTime string `json:"respondedTime,omitempty"`
 	Error         string `json:"error,omitempty"`
 }
@@ -271,7 +270,7 @@ type ListCommandsOutput struct {
 
 const listCommandsQuery = `query ListCommands($criteria: CommandSearchCriteria!) {
   commands(criteria: $criteria) {
-    results { token deviceToken name status queuedTime sentTime deliveredTime respondedTime error }
+    results { token deviceToken name status queuedTime sentTime respondedTime error }
     pagination { totalRecords }
   }
 }`

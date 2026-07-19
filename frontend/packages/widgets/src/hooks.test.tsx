@@ -234,7 +234,7 @@ describe('useCommandStream', () => {
 
     f.push({
       deviceToken: 'd1',
-      commands: [{ token: 'c-1', name: 'reboot', status: 'SENT', payload: null, responsePayload: null, error: null, queuedTime: null, sentTime: null, deliveredTime: null, respondedTime: null }],
+      commands: [{ token: 'c-1', name: 'reboot', status: 'SENT', payload: null, responsePayload: null, error: null, queuedTime: null, sentTime: null, respondedTime: null }],
       total: 1,
     });
 

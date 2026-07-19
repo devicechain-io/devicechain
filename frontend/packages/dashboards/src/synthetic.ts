@@ -76,7 +76,7 @@ const SYNTHETIC_ALARMS: ReadonlyArray<
 const SYNTHETIC_COMMANDS: ReadonlyArray<Pick<CommandRow, 'name' | 'status' | 'payload' | 'responsePayload' | 'error'>> = [
   { name: 'reboot', status: 'SENT', payload: '{"delaySeconds":5}', responsePayload: null, error: null },
   { name: 'set-interval', status: 'SUCCESSFUL', payload: '{"seconds":30}', responsePayload: '{"ok":true}', error: null },
-  { name: 'calibrate', status: 'DELIVERED', payload: null, responsePayload: null, error: null },
+  { name: 'calibrate', status: 'QUEUED', payload: null, responsePayload: null, error: null },
   { name: 'firmware-update', status: 'FAILED', payload: '{"version":"2.1.0"}', responsePayload: null, error: 'device offline' },
 ];
 
@@ -223,7 +223,6 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
           error: c.error,
           queuedTime: queued,
           sentTime: c.status === 'QUEUED' ? null : queued,
-          deliveredTime: c.status === 'QUEUED' || c.status === 'SENT' ? null : queued,
           respondedTime: terminal ? queued : null,
         };
       });

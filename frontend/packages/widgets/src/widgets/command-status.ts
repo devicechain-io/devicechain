@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command delivery-status presentation for the command-button widget (command-delivery
-// lifecycle: QUEUED → SENT → DELIVERED → SUCCESSFUL, plus TIMEOUT / EXPIRED / FAILED).
+// lifecycle: QUEUED → SENT → SUCCESSFUL | FAILED, plus TIMEOUT / EXPIRED).
 // Status color is SEMANTIC (good/working/bad), deliberately fixed rather than derived
 // from the dashboard accent, so the same status reads the same on every theme — and it
 // mirrors the console's DeviceCommandsPanel status variants (success / destructive /
@@ -13,13 +13,12 @@
 const TERMINAL = new Set(['SUCCESSFUL', 'TIMEOUT', 'EXPIRED', 'FAILED']);
 
 const STATUS_COLORS: Record<string, string> = {
-  SUCCESSFUL: '#16a34a', // green-600 — delivered + acknowledged by the device
+  SUCCESSFUL: '#16a34a', // green-600 — acknowledged by the device
   FAILED: '#dc2626', // red-600
   TIMEOUT: '#dc2626', // red-600 — never acknowledged in time
-  EXPIRED: '#64748b', // slate-500 — cancelled / lapsed before delivery
+  EXPIRED: '#64748b', // slate-500 — cancelled / lapsed before it was sent
   QUEUED: '#0284c7', // sky-600 — in flight
   SENT: '#0284c7',
-  DELIVERED: '#0284c7',
 };
 
 const UNKNOWN_COLOR = '#64748b';

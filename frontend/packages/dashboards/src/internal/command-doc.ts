@@ -46,7 +46,6 @@ export const COMMANDS_QUERY = `
         error
         queuedTime
         sentTime
-        deliveredTime
         respondedTime
       }
       pagination {

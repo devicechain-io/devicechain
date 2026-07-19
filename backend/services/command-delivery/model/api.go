@@ -101,10 +101,6 @@ type CommandDeliveryApi interface {
 // state `to`. A transition out of a terminal state is never permitted; the
 // allowed forward edges follow the lifecycle QUEUED -> SENT -> {SUCCESSFUL,FAILED}
 // with expiry/timeout edges to EXPIRED/TIMEOUT.
-//
-// DELIVERED is deliberately NOT an edge here: there is no device
-// delivery-acknowledgment transport today, so nothing can emit it (see the note
-// on CommandDelivered in model.go). It is reserved for when such an ack exists.
 func canTransition(from, to CommandStatus) bool {
 	if from.Terminal() {
 		return false
@@ -284,7 +280,7 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken string, success b
 }
 
 // CancelCommand cancels a non-terminal command by token, moving it to EXPIRED
-// (QUEUED/SENT/DELIVERED -> EXPIRED). A terminal command is returned unchanged.
+// (QUEUED/SENT -> EXPIRED). A terminal command is returned unchanged.
 func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, error) {
 	matches, err := api.CommandsByToken(ctx, []string{token})
 	if err != nil {
@@ -305,7 +301,7 @@ func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, erro
 }
 
 // ExpireStale times out every non-terminal command whose TTL has elapsed. A
-// QUEUED command that never went out becomes EXPIRED; a SENT/DELIVERED command
+// QUEUED command that never went out becomes EXPIRED; a SENT command
 // that was never answered becomes TIMEOUT. The caller MUST pass a system
 // context (core.WithSystemContext) so the sweep spans all tenants. Returns the
 // number of commands expired.

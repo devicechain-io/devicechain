@@ -44,7 +44,6 @@ type Command implements Model & TokenReference & MetadataEntity {
     status: String!
     queuedTime: String
     sentTime: String
-    deliveredTime: String
     respondedTime: String
     expiresAt: String
     responsePayload: String
