@@ -97,7 +97,8 @@ fast-follow.
   versions for reproducible deploys (the defaults float to latest).
 - **JetStream disk ceiling.** `nats_jetstream_max_file_store` is the hard aggregate
   JetStream file-store bound (ADR-023); it defaults to 90% of `nats_jetstream_storage`
-  for filesystem headroom. Lowering it below a stream's current on-disk usage on an
+  for filesystem headroom, **floored to a whole unit of that size's own magnitude** —
+  a 12Gi PV yields a 10Gi ceiling, not 10.8Gi. Lowering it below a stream's current on-disk usage on an
   existing cluster causes immediate `DiscardOld` eviction of the overflow — a
   non-issue on a fresh bring-up, but size it before a running cluster fills.
 - **Not yet here (next slice):** the ADR-020 HA topology + the broker-enforced

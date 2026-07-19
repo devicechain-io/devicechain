@@ -63,26 +63,30 @@ variable "nats_jetstream_storage" {
     streams at 1 GiB + 8 control-plane streams at 128 MiB reserve 8Gi. The MQTT
     gateway's own streams — which nats-server creates UNBOUNDED, and which the
     platform bounds at startup so they cannot eat the rest — add 384Mi, for ~8.4Gi
-    total. That fits 12Gi (→~10.8Gi ceiling) with the ingest streams keeping their
-    FULL buffer, and ~2.4Gi left for the KV buckets, which reserve nothing up front
-    but grow with fleet size.
+    total. That fits 12Gi (→10Gi ceiling) with the ingest streams keeping their FULL
+    buffer, and ~1.6Gi left for the KV buckets, which reserve nothing up front but
+    grow with fleet size.
 
-    NEVER shrink this independently of the stream bounds: the PV must be derived from
-    (sum of stream ceilings) / 0.9, or the crashloop above returns. Raise it for real
+    NEVER shrink this independently of the stream bounds, and do NOT size the PV as
+    (sum of stream ceilings) / 0.9 — the flooring above makes that formula unsafe.
+    A 9.5Gi sum / 0.9 rounds to an 11Gi PV, whose ceiling is floor(11 × 0.9) = 9Gi,
+    which is BELOW the sum and brings the crashloop back. Pick the smallest whole
+    magnitude where floor(magnitude × 0.9) >= the sum instead. Raise it for real
     ingest volume.
 
-    CAVEAT — this 12Gi and the Go-side TestStreamReservationFitsBudget are NOT linked.
-    That test hardcodes its own 12Gi assumption, so lowering the default here will not
-    make it fail; it guards the stream bounds against a fixed budget, not against this
-    variable. Changing this value means updating that constant BY HAND. Wiring the two
-    together (or asserting the reservation at bring-up) is the real fix.
+    CAVEAT — this 12Gi and the Go-side budget tests are NOT linked. Those tests carry
+    their own `pvGi` constant (backend/core/config/instance_test.go), which mirrors
+    this default and the flooring rule above, so lowering the default here will not
+    make them fail; they guard the stream bounds against a fixed budget, not against
+    this variable. Changing this value means updating that constant BY HAND. Wiring
+    the two together (or asserting the reservation at bring-up) is the real fix.
   EOT
   type        = string
   default     = "12Gi"
 }
 
 variable "nats_jetstream_max_file_store" {
-  description = "Server-level max_file_store — the hard aggregate JetStream disk ceiling (ADR-023). Empty derives it as 90% of nats_jetstream_storage (filesystem headroom); set explicitly to override. Must be <= nats_jetstream_storage."
+  description = "Server-level max_file_store — the hard aggregate JetStream disk ceiling (ADR-023). Empty derives it as 90% of nats_jetstream_storage, FLOORED to a whole unit of that size's own magnitude (12Gi yields 10Gi, not 10.8Gi), leaving filesystem headroom; set explicitly to override. Must be <= nats_jetstream_storage."
   type        = string
   default     = ""
 }
