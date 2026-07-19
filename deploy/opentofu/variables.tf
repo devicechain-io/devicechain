@@ -47,7 +47,8 @@ variable "nats_jetstream_storage" {
   description = <<-EOT
     PersistentVolume size for NATS JetStream file storage. The default must fit the
     platform's OWN stream set on a cold start: every per-suffix stream reserves its
-    byte ceiling UP FRONT at creation, against max_file_store (90% of this). The
+    byte ceiling UP FRONT at creation, against max_file_store (90% of this, FLOORED
+    to whole units of the size's own magnitude — 12Gi yields 10Gi, not 10.8Gi). The
     platform creates 15 such streams — a FIXED set (streams are per-suffix and cover
     every tenant via the wildcard subject), so this does not grow with tenant count.
 

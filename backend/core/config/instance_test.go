@@ -98,11 +98,27 @@ func TestApplyDefaultsStreamBounds(t *testing.T) {
 // stream-creating services with "insufficient storage resources available" when
 // 13 × 1 GiB was pointed at an 8 GiB PV. This pins the arithmetic that makes the
 // PV size safe, which is the invariant the classification exists to serve.
-func TestStreamReservationFitsBudget(t *testing.T) {
-	// The shipped NATS PV is 12Gi and max_file_store derives as 90% of it.
-	const pvBytes = 12 << 30
-	const maxFileStore = pvBytes / 10 * 9
 
+// The shipped NATS PV and the server-level ceiling that derives from it.
+//
+// max_file_store is NOT a plain 90% of the PV. The module splits the size into
+// magnitude and unit, floors 90% of the MAGNITUDE, and reattaches the unit
+// (js_max_file_store in deploy/opentofu/modules/nats/main.tf), so a 12Gi PV
+// yields floor(12 * 0.9) = 10 → "10Gi" — verified against a live cluster, which
+// reports max_file_store 10Gi against a 12Gi PVC.
+//
+// Modelling it as an exact 90% (10.8 GiB) overstates the real ceiling by 819 MiB.
+// That matters because these tests are the only guard on the reservation: against
+// the inflated ceiling, a future increase could pass here while leaving a fresh
+// install ~200 MiB of actual headroom instead of the 1 GiB this file claims to
+// enforce. Integer division below floors exactly as the module does.
+const (
+	pvGi               = 12
+	pvBytes      int64 = pvGi << 30
+	maxFileStore int64 = (pvGi * 9 / 10) << 30
+)
+
+func TestStreamReservationFitsBudget(t *testing.T) {
 	cfg := &InstanceConfiguration{}
 	cfg.ApplyDefaults()
 	n := cfg.Infrastructure.Nats
@@ -122,7 +138,7 @@ func TestStreamReservationFitsBudget(t *testing.T) {
 	if total > maxFileStore {
 		t.Errorf("stream reservation %d B exceeds max_file_store %d B (PV %d B): "+
 			"a fresh bring-up will crashloop once the reservation overruns the store",
-			total, int64(maxFileStore), int64(pvBytes))
+			total, maxFileStore, pvBytes)
 	}
 }
 
@@ -131,9 +147,6 @@ func TestStreamReservationFitsBudget(t *testing.T) {
 // other unaccounted JetStream consumer, so a future ceiling increase that eats it
 // fails here rather than on someone's fresh install.
 func TestBudgetLeavesHeadroomForUnaccountedStreams(t *testing.T) {
-	const pvBytes = 12 << 30
-	const maxFileStore = pvBytes / 10 * 9
-
 	cfg := &InstanceConfiguration{}
 	cfg.ApplyDefaults()
 	n := cfg.Infrastructure.Nats
@@ -149,7 +162,7 @@ func TestBudgetLeavesHeadroomForUnaccountedStreams(t *testing.T) {
 	// count. This is not a precise model of them — it is a floor under how much
 	// room they are left, so the reservation cannot creep up to the ceiling.
 	const headroomFloor = 1 << 30 // 1 GiB
-	if got := int64(maxFileStore) - reserved; got < headroomFloor {
+	if got := maxFileStore - reserved; got < headroomFloor {
 		t.Errorf("only %d B left unreserved, want at least %d B: the KV buckets and "+
 			"MQTT session stores reserve nothing up front but consume this same store, "+
 			"and several KV caches scale with fleet size", got, int64(headroomFloor))
