@@ -64,8 +64,10 @@ instance:
         # classification — it is set in code, not here, so every service agrees on the
         # bound for a given stream). That is 8 GiB; the MQTT gateway's own streams,
         # bounded at startup because nats-server creates them unlimited, add 384 MiB
-        # for ~8.4 GiB total — which fits the 12Gi JetStream PV, whose max_file_store
-        # ceiling is 10Gi, leaving ~1.6 GiB for the KV buckets. Note that ceiling
+        # for ~8.4 GiB total. The KV buckets (device caches, locks, refresh tokens,
+        # OAuth codes) are bounded too and reserve a further 768 MiB, for ~9.1 GiB —
+        # which fits the 12Gi JetStream PV, whose max_file_store ceiling is 10Gi,
+        # leaving ~896 MiB genuinely unreserved. Note that ceiling
         # floors 90% of the PV's MAGNITUDE and reattaches the unit
         # (floor(12 * 0.9) = 10 → "10Gi"), so it is 10Gi and not 10.8 GiB — the
         # difference is 819 MiB of headroom that does not exist.

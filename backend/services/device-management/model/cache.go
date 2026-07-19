@@ -7,16 +7,21 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/config"
+	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
+// Each cache name is its entry in the core kv inventory, which is what selects
+// the bucket's disk ceiling (ADR-023). Naming them here rather than repeating the
+// literals means a rename breaks the build instead of silently detaching a bucket
+// from its ceiling and dropping it out of the disk budget.
 const (
-	CACHE_NAME_DEVICE_BY_TOKEN         = "device-by-token"
-	CACHE_NAME_RELATIONSHIPS_BY_SOURCE = "relationships-by-source"
-	CACHE_NAME_METRIC_DEFS_BY_TYPE     = "metric-defs-by-type"
-	CACHE_NAME_PROFILE_SCOPE_BY_TYPE   = "profile-scope-by-type"
-	CACHE_NAME_MEMBERSHIPS_BY_ENTITY   = "memberships-by-entity"
-	CACHE_NAME_SCOPED_GROUPS_EXIST     = "scoped-groups-exist"
+	CACHE_NAME_DEVICE_BY_TOKEN         = kv.BucketDeviceByToken
+	CACHE_NAME_RELATIONSHIPS_BY_SOURCE = kv.BucketRelationshipsBySource
+	CACHE_NAME_METRIC_DEFS_BY_TYPE     = kv.BucketMetricDefsByType
+	CACHE_NAME_PROFILE_SCOPE_BY_TYPE   = kv.BucketProfileScopeByType
+	CACHE_NAME_MEMBERSHIPS_BY_ENTITY   = kv.BucketMembershipsByEntity
+	CACHE_NAME_SCOPED_GROUPS_EXIST     = kv.BucketScopedGroupsExist
 )
 
 // Caches bundles the caches the cached API decorator reads from and evicts. The

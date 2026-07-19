@@ -32,11 +32,11 @@ type Cache struct {
 func (nmgr *NatsManager) NewCache(name string, ttl time.Duration) (*Cache, error) {
 	bucket := sanitizeName(fmt.Sprintf("%s_%s_%s",
 		nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, name))
-	kv, err := nmgr.KeyValueStore(bucket, ttl)
+	store, err := nmgr.KeyValueStore(name, bucket, ttl)
 	if err != nil {
 		return nil, err
 	}
-	return &Cache{kv: kv}, nil
+	return &Cache{kv: store}, nil
 }
 
 // Set stores value under key, JSON-encoding it. The entry expires after the

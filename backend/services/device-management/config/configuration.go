@@ -30,9 +30,14 @@ const (
 )
 
 // Defaults for the hot-path resolution caches (ADR-022 review B2). A short TTL
-// bounds staleness for entries that change rarely; the caches are NATS JetStream
-// KV buckets (ADR-007), which are server-side and unbounded, so there is no
-// client-side size to configure.
+// bounds staleness for entries that change rarely.
+//
+// The caches are NATS JetStream KV buckets (ADR-007), so their SIZE is a
+// server-side platform concern rather than a per-service one: each bucket carries
+// a byte ceiling from the instance config's cache tier (kv.All / ADR-023), which
+// is why there is no size to configure here. The TTL still matters to the budget
+// even so — it is what bounds the working set, since a bucket only ever holds
+// entries that have not yet expired.
 const (
 	DefaultDeviceCacheTtlSeconds       = 60
 	DefaultRelationshipCacheTtlSeconds = 60

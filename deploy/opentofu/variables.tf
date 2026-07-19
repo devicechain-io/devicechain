@@ -63,9 +63,12 @@ variable "nats_jetstream_storage" {
     streams at 1 GiB + 8 control-plane streams at 128 MiB reserve 8Gi. The MQTT
     gateway's own streams — which nats-server creates UNBOUNDED, and which the
     platform bounds at startup so they cannot eat the rest — add 384Mi, for ~8.4Gi
-    total. That fits 12Gi (→10Gi ceiling) with the ingest streams keeping their FULL
-    buffer, and ~1.6Gi left for the KV buckets, which reserve nothing up front but
-    grow with fleet size.
+    total. The KV buckets are bounded on the same principle (see kv.All) and reserve
+    a further 768Mi, for ~9.1Gi. That fits 12Gi (→10Gi ceiling) with the ingest
+    streams keeping their FULL buffer, and ~896Mi genuinely unreserved — which now
+    covers only the two MQTT stores deliberately left unbounded and JetStream's own
+    per-consumer state, rather than the open-ended KV growth it used to have to
+    absorb.
 
     NEVER shrink this independently of the stream bounds, and do NOT size the PV as
     (sum of stream ceilings) / 0.9 — the flooring above makes that formula unsafe.

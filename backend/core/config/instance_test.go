@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
@@ -134,6 +135,12 @@ func TestStreamReservationFitsBudget(t *testing.T) {
 	// Counting them was the point of bounding them: an unbounded stream cannot be
 	// budgeted for at all, only hoped about.
 	total += n.MqttStoreReservation()
+	// The KV buckets are streams too, backed by KV_-prefixed streams in the same
+	// account, so a bounded bucket reserves its ceiling up front exactly like the
+	// rest. They used to be unbounded and therefore unbudgetable — counted as
+	// "headroom" that anything could eat — which is the same hope-not-arithmetic
+	// gap the MQTT stores had before they were bounded.
+	total += n.KvReservation()
 
 	if total > maxFileStore {
 		t.Errorf("stream reservation %d B exceeds max_file_store %d B (PV %d B): "+
@@ -143,9 +150,16 @@ func TestStreamReservationFitsBudget(t *testing.T) {
 }
 
 // The budget must have room for the streams the platform does NOT create as well
-// as the ones it does. This pins the headroom left for the KV buckets and any
-// other unaccounted JetStream consumer, so a future ceiling increase that eats it
-// fails here rather than on someone's fresh install.
+// as the ones it does, so a future ceiling increase that eats that room fails here
+// rather than on someone's fresh install.
+//
+// What is left over shrank deliberately when the KV buckets were bounded, and the
+// floor below shrank with it. That is not a weakening: before, the buckets were
+// unbounded, so this headroom was covering an OPEN-ENDED consumer — a floor under
+// a quantity nothing capped. Now the buckets reserve a known ceiling that is
+// counted in `reserved`, and what remains covers only genuinely unaccounted
+// things. Trading a larger floor over an unbounded consumer for a smaller one
+// over a bounded set is the entire point of the exercise.
 func TestBudgetLeavesHeadroomForUnaccountedStreams(t *testing.T) {
 	cfg := &InstanceConfiguration{}
 	cfg.ApplyDefaults()
@@ -156,16 +170,71 @@ func TestBudgetLeavesHeadroomForUnaccountedStreams(t *testing.T) {
 		reserved += n.StreamMaxBytesFor(s)
 	}
 	reserved += n.MqttStoreReservation()
+	reserved += n.KvReservation()
 
-	// The KV buckets (device caches, locks, refresh tokens, OAuth codes) reserve
-	// nothing up front but grow with fleet size, and several scale with device
-	// count. This is not a precise model of them — it is a floor under how much
-	// room they are left, so the reservation cannot creep up to the ceiling.
-	const headroomFloor = 1 << 30 // 1 GiB
+	// What is still NOT reserved: the MQTT gateway's $MQTT_sess and $MQTT_rmsgs,
+	// which are deliberately left unbounded (both are DiscardOld, so a ceiling
+	// would evict live sessions and retained messages rather than protect
+	// anything), plus per-consumer state and JetStream's own metadata. None of
+	// those scales with fleet size the way the KV caches do, which is why a floor
+	// half the previous size still covers strictly more than it used to.
+	const headroomFloor = 512 << 20 // 512 MiB
 	if got := maxFileStore - reserved; got < headroomFloor {
-		t.Errorf("only %d B left unreserved, want at least %d B: the KV buckets and "+
-			"MQTT session stores reserve nothing up front but consume this same store, "+
-			"and several KV caches scale with fleet size", got, int64(headroomFloor))
+		t.Errorf("only %d B left unreserved, want at least %d B: $MQTT_sess and "+
+			"$MQTT_rmsgs are deliberately unbounded and consume this same store, "+
+			"as does per-consumer JetStream state", got, int64(headroomFloor))
+	}
+}
+
+// The KV reservation must be derived from the declared inventory, not from a
+// hand-maintained count. core/streams exists because that exact mirror had
+// already gone wrong once for message streams; this pins the same property for
+// buckets, so declaring one without budgeting for it fails here.
+func TestKvReservationCoversEveryDeclaredBucket(t *testing.T) {
+	cfg := &InstanceConfiguration{}
+	cfg.ApplyDefaults()
+	n := cfg.Infrastructure.Nats
+
+	want := int64(kv.Count(kv.Cache))*n.KvCacheMaxBytes + int64(kv.Count(kv.State))*n.KvStateMaxBytes
+	if got := n.KvReservation(); got != want {
+		t.Errorf("KvReservation() = %d, want %d: the reservation has drifted from the "+
+			"declared bucket set, so some bucket reserves disk nothing budgets for", got, want)
+	}
+	if kv.Count(kv.Cache) == 0 || kv.Count(kv.State) == 0 {
+		t.Fatal("both tiers must be populated for this test to mean anything")
+	}
+}
+
+// A cache bucket must take a ceiling no larger than a state bucket's. The tier
+// split only protects the budget while the fleet-scaling buckets are the smaller
+// ones; inverting it would point the larger ceiling at the buckets that grow with
+// device count, which is the shape that made the reservation unaffordable before.
+func TestCacheTierIsNotLargerThanStateTier(t *testing.T) {
+	cfg := &InstanceConfiguration{}
+	cfg.ApplyDefaults()
+	n := cfg.Infrastructure.Nats
+
+	if n.KvCacheMaxBytes > n.KvStateMaxBytes {
+		t.Errorf("cache ceiling %d B exceeds state ceiling %d B: the fleet-scaling "+
+			"buckets are the cache ones, so they must not carry the larger bound",
+			n.KvCacheMaxBytes, n.KvStateMaxBytes)
+	}
+}
+
+// Both KV ceilings are fail-safe: a zero or negative value must become the
+// platform default rather than reaching JetStream, which reads 0 as UNLIMITED
+// (ADR-023 never-unlimited).
+func TestKvCeilingsAreNeverUnlimited(t *testing.T) {
+	for _, tc := range []int64{0, -1} {
+		cfg := &InstanceConfiguration{}
+		cfg.Infrastructure.Nats.KvCacheMaxBytes = tc
+		cfg.Infrastructure.Nats.KvStateMaxBytes = tc
+		cfg.ApplyDefaults()
+		n := cfg.Infrastructure.Nats
+		if n.KvCacheMaxBytes != DefaultKvCacheMaxBytes || n.KvStateMaxBytes != DefaultKvStateMaxBytes {
+			t.Errorf("ceiling %d survived ApplyDefaults as (%d, %d): a non-positive "+
+				"MaxBytes means UNLIMITED to JetStream", tc, n.KvCacheMaxBytes, n.KvStateMaxBytes)
+		}
 	}
 }
 

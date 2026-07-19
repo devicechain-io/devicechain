@@ -19,6 +19,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/branding"
@@ -32,7 +33,7 @@ import (
 
 // RefreshBucket is the NATS KV bucket name backing the server-side refresh-token
 // store. Each live refresh token's jti is a key; deleting it revokes the token.
-const RefreshBucket = "dc_refresh_tokens"
+const RefreshBucket = kv.BucketRefreshTokens
 
 // ErrInvalidCredentials is returned for every login failure (unknown user, bad
 // password, or disabled account). It is deliberately uniform so the API does not
