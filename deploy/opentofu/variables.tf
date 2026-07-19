@@ -59,8 +59,12 @@ variable "nats_jetstream_storage" {
     on control-plane streams that never hold more than a few MiB.
 
     The bound is now split hot/cold in backend/core/streams (see streams.All): 7 hot
-    streams at 1 GiB + 8 control-plane streams at 128 MiB reserve 8Gi, which fits
-    12Gi (→~10.8Gi ceiling) with the ingest streams keeping their FULL buffer.
+    streams at 1 GiB + 8 control-plane streams at 128 MiB reserve 8Gi. The MQTT
+    gateway's own streams — which nats-server creates UNBOUNDED, and which the
+    platform bounds at startup so they cannot eat the rest — add 384Mi, for ~8.4Gi
+    total. That fits 12Gi (→~10.8Gi ceiling) with the ingest streams keeping their
+    FULL buffer, and ~2.4Gi left for the KV buckets, which reserve nothing up front
+    but grow with fleet size.
 
     NEVER shrink this independently of the stream bounds: the PV must be derived from
     (sum of stream ceilings) / 0.9, or the crashloop above returns. Raise it for real

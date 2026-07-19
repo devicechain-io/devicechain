@@ -62,8 +62,10 @@ instance:
         # device count × message rate); streamMaxBytesCold applies to the 8
         # control-plane ones (see streams.All in backend/core/streams for the
         # classification — it is set in code, not here, so every service agrees on the
-        # bound for a given stream). Total = 8 GiB, which fits the 12Gi JetStream PV
-        # at its 90% max_file_store ceiling.
+        # bound for a given stream). That is 8 GiB; the MQTT gateway's own streams,
+        # bounded at startup because nats-server creates them unlimited, add 384 MiB
+        # for ~8.4 GiB total — which fits the 12Gi JetStream PV at its 90%
+        # max_file_store ceiling, leaving ~2.4 GiB for the KV buckets.
         #
         # streamMaxBytesCold should stay <= streamMaxBytes: lowering only the hot bound
         # (e.g. for a small-footprint deploy) inverts the two and makes control-plane

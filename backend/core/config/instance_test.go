@@ -111,10 +111,48 @@ func TestStreamReservationFitsBudget(t *testing.T) {
 	for _, s := range streams.Suffixes() {
 		total += n.StreamMaxBytesFor(s)
 	}
+	// The MQTT gateway's own streams ($MQTT_msgs, $MQTT_out) are created by
+	// nats-server, not by us, and it creates them UNBOUNDED. They share this same
+	// max_file_store, so once messaging.ReconcileMqttStores gives them a ceiling
+	// that ceiling is reserved up front like any other — and belongs in the sum.
+	// Counting them was the point of bounding them: an unbounded stream cannot be
+	// budgeted for at all, only hoped about.
+	total += n.MqttStoreReservation()
+
 	if total > maxFileStore {
 		t.Errorf("stream reservation %d B exceeds max_file_store %d B (PV %d B): "+
 			"a fresh bring-up will crashloop once the reservation overruns the store",
 			total, int64(maxFileStore), int64(pvBytes))
+	}
+}
+
+// The budget must have room for the streams the platform does NOT create as well
+// as the ones it does. This pins the headroom left for the KV buckets and any
+// other unaccounted JetStream consumer, so a future ceiling increase that eats it
+// fails here rather than on someone's fresh install.
+func TestBudgetLeavesHeadroomForUnaccountedStreams(t *testing.T) {
+	const pvBytes = 12 << 30
+	const maxFileStore = pvBytes / 10 * 9
+
+	cfg := &InstanceConfiguration{}
+	cfg.ApplyDefaults()
+	n := cfg.Infrastructure.Nats
+
+	var reserved int64
+	for _, s := range streams.Suffixes() {
+		reserved += n.StreamMaxBytesFor(s)
+	}
+	reserved += n.MqttStoreReservation()
+
+	// The KV buckets (device caches, locks, refresh tokens, OAuth codes) reserve
+	// nothing up front but grow with fleet size, and several scale with device
+	// count. This is not a precise model of them — it is a floor under how much
+	// room they are left, so the reservation cannot creep up to the ceiling.
+	const headroomFloor = 1 << 30 // 1 GiB
+	if got := int64(maxFileStore) - reserved; got < headroomFloor {
+		t.Errorf("only %d B left unreserved, want at least %d B: the KV buckets and "+
+			"MQTT session stores reserve nothing up front but consume this same store, "+
+			"and several KV caches scale with fleet size", got, int64(headroomFloor))
 	}
 }
 

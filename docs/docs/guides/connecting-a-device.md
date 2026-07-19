@@ -47,6 +47,24 @@ mosquitto_pub \
 
 The credential authenticates the connection (broker) and the event (pipeline). The TLS host, CA source, and port exposure depend on how the instance is deployed — see [Deployment](../deployment/kubernetes-operator.md).
 
+### Quality of service
+
+**Publish telemetry at QoS 0 unless you have a specific reason not to.** That is what the examples above do — `mosquitto_pub` defaults to it.
+
+QoS ≥ 1 costs real storage on the server: the broker keeps a **second copy** of every QoS ≥ 1 message in its own internal store, in addition to the copy in the stream that serves it. That store shares the same disk as everything else the instance runs on. The platform gives it a ceiling so it cannot consume the whole volume, which means a sustained QoS ≥ 1 backlog drops its **oldest** undelivered messages rather than taking the instance down.
+
+QoS 1 is fully supported. Use it deliberately if your devices are on links where losing an in-flight publish matters more than the storage, and size the deployment's JetStream volume accordingly.
+
+**If you use QoS 1, set `altId` on your events.** QoS 1 is *at-least-once*, so a missed acknowledgement makes the device retransmit — and by default that stores the event twice, double-counting a measurement. Supplying a stable, device-generated `altId` is what opts an event into de-duplication:
+
+```json
+{"altId":"sensor-001-4417","device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}
+```
+
+A redelivered event carrying an `altId` already seen is detected and skipped. Without one, it is inserted again. This applies to any at-least-once path, not just MQTT QoS 1 — it is the only thing that makes a retry safe.
+
+**QoS 2 is not recommended.** It buys nothing here that `altId` does not give you more cheaply, and it costs more: the broker holds every QoS 2 publish until its PUBREL arrives, so a device that starts the handshake and never finishes it accumulates server-side state. That buffer is capped, and once it fills the broker **refuses** further QoS 2 publishes from that session rather than letting them consume the instance's disk. Publish at QoS 0, or QoS 1 with `altId`.
+
 ## HTTP
 
 `event-sources` also accepts events over HTTP on port **8081**. The instance id and tenant are taken from the path `/{instanceId}/{tenant}/events` (mirroring the MQTT topic convention); the device and its credential ride in the body. `POST` returns **202 Accepted** once the event is queued — or **429 Too Many Requests** if the tenant is over its ingest rate limit (a per-tenant limiter with a platform-default ceiling shields the shared pipeline; the MQTT path drops over-limit messages instead):

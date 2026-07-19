@@ -375,6 +375,28 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		}
 	}
 
+	// Bound the MQTT gateway's own JetStream streams, which nats-server creates
+	// with no size limit at all and offers no option to bound.
+	//
+	// This service is the right owner of that: it IS the MQTT client whose
+	// connection causes the gateway to create those streams in the first place,
+	// so by this point they exist — and it is its own QoS-1 subscription across
+	// the whole device-plane topic tree that keeps $MQTT_msgs interested in every
+	// device subject, which is what makes a QoS>=1 device publish get stored
+	// twice. The service that creates the exposure bounds it.
+	//
+	// Deliberately NOT fatal. An unbounded gateway stream is a disk-budget risk
+	// that shows up under load; refusing to start ingest over it would turn that
+	// risk into an immediate outage, which is the worse trade. It is logged loudly
+	// and retried on the next startup.
+	natscfg := Microservice.InstanceConfiguration.Infrastructure.Nats
+	if err := NatsManager.ReconcileMqttStores(ctx, natscfg.MqttStoreMaxBytes, natscfg.MqttQoS2StoreMaxBytes); err != nil {
+		log.Error().Err(err).Msg(
+			"Could not bound the MQTT gateway's JetStream streams. They are UNBOUNDED as " +
+				"nats-server creates them and share the same max_file_store as the platform's " +
+				"streams, so QoS>=1 traffic can consume the disk budget's headroom. Ingest continues.")
+	}
+
 	return nil
 }
 
