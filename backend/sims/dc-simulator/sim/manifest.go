@@ -278,6 +278,19 @@ func (m SimManifest) Expand(seed int64) []DeviceInstance {
 	return instances
 }
 
+// DeviceCount reports how many devices m expands to, without expanding it.
+//
+// Expand materializes every DeviceInstance and derives a SHA-256 credential per
+// device; callers that only need the SIZE (sizing a connection pool, logging
+// the resolved topology) should not pay for a whole population to learn it.
+func DeviceCount(m SimManifest) int {
+	total := 0
+	for _, pop := range m.Populations {
+		total += pop.Count
+	}
+	return total
+}
+
 // entityAssignmentTargetTypes are the entity-type registry strings (mirrored
 // here as literals — device-management's model.entityref.go is the source of
 // truth — since the sim only ever speaks the wire) a rendered Assignment may

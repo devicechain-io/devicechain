@@ -19,9 +19,11 @@ identity and drives the same tenant-facing surfaces a real integration would.
    type; one device with an `externalId` (ADR-049) and an `ACCESS_TOKEN`
    credential (ADR-014). Every step is create-or-ignore-if-exists, so bootstrap
    (and `reset`, which just re-runs it) is idempotent.
-4. **Emits** a `speed_kph` measurement every ~5s over the real device-plane
-   HTTP ingress (`POST /{instanceId}/{tenant}/events`), authenticated by the
-   provisioned credential — exactly the path a physical device uses.
+4. **Emits** measurements over the real device-plane HTTP ingress
+   (`POST /{instanceId}/{tenant}/events`), authenticated by the provisioned
+   credential — exactly the path a physical device uses. The cadence and
+   population default to the scenario's own demo sizing (~5s) and are
+   overridable — see [Driving load](#driving-load).
 5. Serves a small **control API** (`GET /status`, `POST /start`, `POST /stop`,
    `POST /reset`) and a **presentation page** (`web/index.html`, embedded in
    the binary) that subscribes to event-management's `measurementStream` over
@@ -34,6 +36,80 @@ identity and drives the same tenant-facing surfaces a real integration would.
 go run . --handshake /path/to/handshake.json [--port 8090]
 # or: DC_SIM_HANDSHAKE=/path/to/handshake.json DC_SIM_PORT=8090 go run .
 ```
+
+### Driving load
+
+The built-in scenarios are sized as **demos** — devicepulse is 1 device and
+buildingpulse is 12, both at a 5s cadence (2.4 events/sec), which is the right
+default for watching the presentation page and far too small to measure what an
+instance costs. Three flags override that; each also reads an env var, and each
+defaults to the scenario's own sizing:
+
+| Flag | Env | Purpose |
+|------|-----|---------|
+| `--devices <n>` | `DC_SIM_DEVICES` | Population size (`0` keeps the scenario's own). |
+| `--emit-interval <d>` | `DC_SIM_EMIT_INTERVAL` | Cadence, e.g. `200ms` (`0` keeps 5s). |
+| `--concurrency <n>` | `DC_SIM_CONCURRENCY` | Max emits in flight per tick (`0` derives it). |
+
+```sh
+# 500 devices every 200ms = a 2500 events/sec target
+go run . --handshake ./hs.json --devices 500 --emit-interval 200ms
+```
+
+**Compare `achievedRatePerSec` against `targetRatePerSec`.** A target rate is a
+request; whether the sim reached it depends on emit latency, ingress
+backpressure, and per-tenant rate limiting (ADR-023). `GET /status` reports both,
+so a run can be believed rather than assumed:
+
+```json
+{
+  "deviceCount": 500, "emitIntervalMs": 200, "targetRatePerSec": 2500,
+  "stats": { "emitted": 74812, "failed": 0, "overruns": 0, "ticks": 150,
+             "elapsedSeconds": 30.1, "achievedRatePerSec": 2485.4 }
+}
+```
+
+**Triage in this order.** The order matters, because two of these counters have
+blind spots and the first one does not:
+
+1. **`achievedRatePerSec` vs `targetRatePerSec`** — the shortfall, and the only
+   figure that carries its magnitude. Always start here.
+2. **`failed`** — nonzero means the ingress *rejected* load (per-tenant rate
+   limiting, ADR-023, or backpressure). Rejected load is load the platform never
+   carried, so it is excluded from the achieved rate.
+3. **`overruns`** — nonzero means the ingress was *slow*: ticks were still
+   emitting when the next fired, so the rate is bounded by emit latency rather
+   than by the interval asked for. Lower the device count, lengthen the
+   interval, or raise `--concurrency`.
+4. **`ticks`** — the sample size behind the rate. See the caveat below.
+
+Do not start at `overruns`. It detects a slow ingress and is **structurally
+blind to a fast-rejecting one** — a 429 makes a tick *shorter*, not longer.
+Measured against a 10%-accept ingress: the sim applied a tenth of its target
+with `overruns` at exactly 0 for the whole run, while `failed` and the achieved
+rate both told the truth. It is also an incidence count, not a magnitude: a tick
+running k intervals long drops roughly k−1 ticks for every 1 it counts.
+
+**Give the rate enough ticks to mean anything.** It is discretized — after k
+ticks the numerator is k×devices while the denominator is wall-clock — so a run
+only a few ticks long reports a sawtooth well below the true rate. At a 5s
+cadence sampled over 10s that reads **50% low**; at 200ms over 10s it is within
+2%. Use a short interval and let the run go, and check `ticks` before believing
+the rate.
+
+**Concurrency ceilings the rate.** Emits are bounded to `--concurrency` in
+flight (derived default: the device count, capped at 64), so the ceiling is
+roughly `concurrency / per-emit-latency`. Measured against a local fake ingress:
+~28,600/s at 1ms, ~10,100/s at 5ms, ~2,870/s at 20ms. The 500-device / 200ms
+example above sits comfortably under that at 1–5ms, and within ~13% of it at
+20ms — raise `--concurrency` if the ingress is slower than that. Over-driven,
+the rate pins to the ceiling and holds rather than collapsing.
+
+Two more things to expect at scale: bootstrap provisions each device through the
+tenant GraphQL API **serially**, so a large `--devices` takes a while on first
+run (it is create-or-ignore, so a re-run is fast), and the counters describe the
+**current** run — `POST /start` resets them, and `POST /stop` freezes the
+elapsed window so a stopped run's rate stays what it achieved.
 
 The handshake shape (written by `dcctl sim create`, read by `sim.LoadHandshake`):
 

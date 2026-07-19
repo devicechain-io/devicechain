@@ -41,6 +41,11 @@ type Lifecycle struct {
 	state      State
 	lastError  string
 	cancelTick context.CancelFunc
+	// tickDone is closed by runTickLoop as it exits, so Stop can WAIT for the
+	// loop rather than merely signalling it. Without the join, a Stop/Start
+	// pair resets the counters while the previous run's workers are still
+	// incrementing them, and run 2's window opens holding run 1's emits.
+	tickDone chan struct{}
 }
 
 // NewLifecycle builds a Lifecycle in the CREATED state.
@@ -91,11 +96,14 @@ func (l *Lifecycle) Start(ctx context.Context) error {
 		return fmt.Errorf("cannot start from state %s (bootstrap it first)", s)
 	}
 	tickCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	l.cancelTick = cancel
+	l.tickDone = done
 	l.state = StateRunning
+	l.rt.Stats.Reset(time.Now())
 	l.mu.Unlock()
 
-	go l.runTickLoop(tickCtx)
+	go l.runTickLoop(tickCtx, done)
 	return nil
 }
 
@@ -104,42 +112,81 @@ func (l *Lifecycle) Start(ctx context.Context) error {
 // later Start resumes emitting without re-provisioning.
 func (l *Lifecycle) Stop() error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	if l.state != StateRunning {
-		return fmt.Errorf("cannot stop from state %s", l.state)
+		s := l.state
+		l.mu.Unlock()
+		return fmt.Errorf("cannot stop from state %s", s)
 	}
-	if l.cancelTick != nil {
-		l.cancelTick()
-		l.cancelTick = nil
-	}
+	cancel, done := l.cancelTick, l.tickDone
+	l.cancelTick, l.tickDone = nil, nil
 	l.state = StateStopped
+	// Release the lock BEFORE joining: runTickLoop takes this same mutex to
+	// record a tick error, so waiting for it while holding the lock would
+	// deadlock the two against each other.
+	l.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
+	// Freeze only after the loop has genuinely exited, so the elapsed window
+	// covers every emit that counted toward it.
+	l.rt.Stats.Freeze(time.Now())
 	return nil
 }
 
-func (l *Lifecycle) runTickLoop(ctx context.Context) {
-	ticker := time.NewTicker(EmitInterval)
+func (l *Lifecycle) runTickLoop(ctx context.Context, done chan struct{}) {
+	defer close(done)
+	interval := l.rt.Load.Interval()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			started := time.Now()
+			l.rt.Stats.Ticks.Add(1)
 			if err := l.sim.Tick(ctx, l.rt); err != nil {
 				log.Error().Err(err).Msg("sim tick failed")
 				l.mu.Lock()
 				l.lastError = err.Error()
 				l.mu.Unlock()
 			}
+			// Count a tick that outran the interval it was scheduled on.
+			//
+			// This counts OVERRUNNING TICKS, not dropped ones: the ticker's
+			// channel buffers one, so the first late tick is delayed rather
+			// than dropped, and past that a tick running k intervals long
+			// drops about k-1 for every 1 counted here. So it is a reliable
+			// indicator that the run was over-driven and a poor estimate of by
+			// how much — the shortfall's SIZE is Snapshot.Rate against
+			// Load.TargetRate.
+			if time.Since(started) > interval {
+				l.rt.Stats.Overruns.Add(1)
+			}
 		}
 	}
 }
 
 // statusResponse is the GET /status body.
+//
+// It reports the CONFIGURED load next to the ACHIEVED one deliberately. A run
+// that quotes a footprint against "N devices at X events/sec" is only honest if
+// X was reached, and the two fields together are what let the operator of a
+// measurement see that at a glance instead of assuming it.
 type statusResponse struct {
 	State      State  `json:"state"`
 	Tenant     string `json:"tenant"`
 	InstanceId string `json:"instanceId"`
 	LastError  string `json:"lastError,omitempty"`
+
+	DeviceCount    int      `json:"deviceCount"`
+	EmitIntervalMs int64    `json:"emitIntervalMs"`
+	TargetRate     float64  `json:"targetRatePerSec"`
+	Stats          Snapshot `json:"stats"`
 }
 
 // ControlServer exposes the ADR-035 control-API seam (bootstrap/start/stop/
@@ -166,11 +213,16 @@ func (c *ControlServer) Register(mux *http.ServeMux) {
 }
 
 func (c *ControlServer) handleStatus(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
 	c.lc.mu.Lock()
 	resp := statusResponse{State: c.lc.state, LastError: c.lc.lastError}
+	resp.Stats = c.rt.Stats.Snapshot(now)
 	c.lc.mu.Unlock()
 	resp.Tenant = c.rt.Tenant
 	resp.InstanceId = c.rt.InstanceId
+	resp.DeviceCount = len(c.rt.Devices)
+	resp.EmitIntervalMs = c.rt.Load.Interval().Milliseconds()
+	resp.TargetRate = c.rt.Load.TargetRate(len(c.rt.Devices))
 	writeJSON(w, http.StatusOK, resp)
 }
 
