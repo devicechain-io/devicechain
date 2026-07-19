@@ -25,6 +25,7 @@ var (
 	bootstrapNoMonitoring  bool
 	bootstrapGrafanaSSO    bool
 	bootstrapDev           bool
+	bootstrapCompact       bool
 )
 
 // devModeResolution is the set of flag values the --dev preset settles on.
@@ -54,6 +55,52 @@ func resolveDevMode(changed func(string) bool, host string, noTLS, build bool) (
 	return devModeResolution{Build: true, Host: "localhost", NoTLS: true, Yes: true}, nil
 }
 
+// compactModeResolution is the set of flag values the --compact preset settles on.
+type compactModeResolution struct {
+	NoTLS        bool
+	NoMonitoring bool
+}
+
+// resolveCompactMode expands the --compact small-footprint preset on top of the
+// user's explicit flags.
+//
+// Two of its levers live on flags that already exist, so they are resolved here
+// rather than buried in the pipeline: the monitoring stack (~5 pods, the single
+// largest consumer) is skipped, and TLS is off — which is what makes dropping
+// cert-manager safe, since cert-manager is what issues the ingress certificate.
+//
+// The two contradictions are treated DIFFERENTLY on purpose:
+//
+//   - --profile full is REJECTED. Compact's storage budget is sized against the
+//     areas `default` deploys; full adds three more that reach outside the instance.
+//     There is no resolution that honours both, so it must not pick one silently.
+//   - --no-tls=false is HONOURED. It is not a contradiction, it is a dependency:
+//     TLS stays on, cert-manager stays installed to issue the cert, and every other
+//     compact lever still applies. Erroring here would cost real functionality to
+//     no benefit.
+//
+// `changed` reports whether the user set a given flag explicitly.
+func resolveCompactMode(changed func(string) bool, profile string, noTLS, noMonitoring bool) (compactModeResolution, error) {
+	if changed("profile") && profile != "" && profile != "default" {
+		return compactModeResolution{}, fmt.Errorf(
+			"--compact sizes storage for the %q profile's areas; profile %q deploys a "+
+				"different set, so the budget would not hold. Drop --compact, or use "+
+				"--profile default",
+			"default", profile)
+	}
+	res := compactModeResolution{NoTLS: true, NoMonitoring: true}
+	// An explicit --no-tls=false keeps TLS (and therefore cert-manager); an explicit
+	// --no-monitoring=false keeps the observability stack. Both cost footprint, and
+	// both are the operator's call to make.
+	if changed("no-tls") {
+		res.NoTLS = noTLS
+	}
+	if changed("no-monitoring") {
+		res.NoMonitoring = noMonitoring
+	}
+	return res, nil
+}
+
 // bootstrapCmd provisions a usable DeviceChain instance on a target provider.
 // It is a thin wrapper over the bootstrap engine package (ADR-032).
 var bootstrapCmd = &cobra.Command{
@@ -79,6 +126,18 @@ var bootstrapCmd = &cobra.Command{
 			fmt.Println("dev mode: --build --host localhost --no-tls --yes")
 		}
 
+		// --compact expands to the small-footprint preset. Resolved here, before
+		// preflight, for the same reason as --dev: the pipeline should see settled
+		// values rather than flags that still need interpreting.
+		if bootstrapCompact {
+			res, err := resolveCompactMode(cmd.Flags().Changed, bootstrapProfile, bootstrapNoTLS, bootstrapNoMonitoring)
+			if err != nil {
+				return err
+			}
+			bootstrapNoTLS, bootstrapNoMonitoring = res.NoTLS, res.NoMonitoring
+			fmt.Printf("compact mode: %s\n", bootstrap.CompactSummary())
+		}
+
 		// Diagnose the local system up front so a run fails fast on a missing
 		// tool / low limit / unreachable docker rather than midway through.
 		if !bootstrapSkipPreflight {
@@ -100,6 +159,7 @@ var bootstrapCmd = &cobra.Command{
 			NoTLS:         bootstrapNoTLS,
 			NoMonitoring:  bootstrapNoMonitoring,
 			GrafanaSSO:    bootstrapGrafanaSSO,
+			Compact:       bootstrapCompact,
 		}
 
 		ctx := cmd.Context()
@@ -122,6 +182,7 @@ var bootstrapCmd = &cobra.Command{
 			NoTLS:         opts.NoTLS,
 			NoMonitoring:  opts.NoMonitoring,
 			GrafanaSSO:    opts.GrafanaSSO,
+			Compact:       opts.Compact,
 			Values:        map[string]string{},
 		}
 		return bootstrap.NewDefaultPipeline().Run(ctx, st)
@@ -143,6 +204,8 @@ func init() {
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoMonitoring, "no-monitoring", false, "skip the monitoring stack (Prometheus/Grafana) AND the chart's ServiceMonitors/alerts — for a minimal install or a cluster where you wire metrics separately")
 	bootstrapCmd.Flags().BoolVar(&bootstrapGrafanaSSO, "grafana-sso", false, "wire Grafana login to DeviceChain SSO (ADR-047), operator/superuser-tier only; enables the OAuth AS (needs https, or --host localhost --no-tls for local http)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags. Compose with --grafana-sso for local SSO")
+
+	bootstrapCmd.Flags().BoolVar(&bootstrapCompact, "compact", false, "small-footprint preset: lowered JetStream/KV ceilings with the smaller volumes they permit, lowered scheduling requests, and no monitoring stack. Keeps --profile default (it does not change which services run); rejects a conflicting --profile")
 
 	rootCmd.AddCommand(bootstrapCmd)
 }

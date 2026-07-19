@@ -46,50 +46,9 @@ func applyInfra(ctx context.Context, st *State) error {
 		return fmt.Errorf("tofu init: %w", err)
 	}
 
-	opts := []tfexec.ApplyOption{tfexec.Var("kubeconfig_context=" + st.KubeContext)}
-	// On a kind/minikube node, ingress-nginx must bind the node's 80/443 via
-	// hostPort; a LoadBalancer stays <pending> and times out the apply. The
-	// monitoring stack likewise runs in its slim profile (emptyDir TSDB, smaller
-	// requests) so it fits a local single-node cluster.
-	if looksLocal(st.KubeContext) {
-		opts = append(opts,
-			tfexec.Var("ingress_use_host_port=true"),
-			tfexec.Var("monitoring_slim=true"),
-		)
-	}
-	// The observability stack is default-on (like Postgres/Timescale); --no-monitoring
-	// skips it for a cluster that already has the Prometheus Operator.
-	if st.NoMonitoring {
-		opts = append(opts, tfexec.Var("enable_monitoring=false"))
-	}
-	// Broker authentication (ADR-025): enable auth callout on NATS and pass the
-	// minted public issuer + the bcrypt hash of the service password. The plaintext
-	// password + seed go into the instance config in helmInstall; nats-server
-	// bcrypt-compares the plaintext, so the broker and clients agree. (tfexec passes
-	// vars as argv, no shell — the hash's `$` is literal.)
-	if pub := st.Values["natsCalloutIssuerPublic"]; pub != "" {
-		opts = append(opts,
-			tfexec.Var("nats_enable_auth=true"),
-			tfexec.Var("nats_callout_issuer_public="+pub),
-			tfexec.Var("nats_service_password_bcrypt="+st.Values["natsServicePasswordBcrypt"]),
-		)
-	}
-	// Grafana SSO (ADR-047): configure Grafana's generic_oauth + the /grafana ingress
-	// against the minted client secret and the computed URLs. The browser-facing
-	// authorize URL uses the public host; token/userinfo are in-cluster (Grafana's pod
-	// can't reach the public ingress). user-management gets the matching issuer + the
-	// bcrypt hash of this same secret in helmInstall.
-	if grafanaSSOEnabled(st) {
-		u := grafanaSSOURLsFor(st)
-		opts = append(opts,
-			tfexec.Var("monitoring_grafana_oauth_enabled=true"),
-			tfexec.Var("monitoring_grafana_oauth_client_secret="+st.Values["grafanaOAuthSecret"]),
-			tfexec.Var("monitoring_grafana_oauth_auth_url="+u.AuthURL),
-			tfexec.Var("monitoring_grafana_oauth_token_url="+u.TokenURL),
-			tfexec.Var("monitoring_grafana_oauth_api_url="+u.APIURL),
-			tfexec.Var("monitoring_grafana_root_url="+u.RootURL),
-			tfexec.Var("monitoring_grafana_ingress_host="+u.Host),
-		)
+	opts := make([]tfexec.ApplyOption, 0, 16)
+	for _, v := range infraVars(st) {
+		opts = append(opts, tfexec.Var(v))
 	}
 	if err := tf.Apply(ctx, opts...); err != nil {
 		return fmt.Errorf("tofu apply: %w", err)
@@ -139,6 +98,84 @@ func applyInfra(ctx context.Context, st *State) error {
 		}
 	}
 	return nil
+}
+
+// infraVars builds the `-var` settings the infrastructure apply runs with, as
+// "name=value" strings.
+//
+// Split out of applyInfra so it can be asserted on without a cluster or a tofu
+// binary. The compact preset's volume sizing is checked against the ceilings the
+// Helm step states (TestCompactReservationFitsItsSmallerVolume), and that check
+// only means something if it reads the vars the apply actually passes.
+func infraVars(st *State) []string {
+	vars := []string{"kubeconfig_context=" + st.KubeContext}
+	// On a kind/minikube node, ingress-nginx must bind the node's 80/443 via
+	// hostPort; a LoadBalancer stays <pending> and times out the apply. The
+	// monitoring stack likewise runs in its slim profile (emptyDir TSDB, smaller
+	// requests) so it fits a local single-node cluster.
+	if looksLocal(st.KubeContext) {
+		vars = append(vars,
+			"ingress_use_host_port=true",
+			"monitoring_slim=true",
+		)
+	}
+	// The observability stack is default-on (like Postgres/Timescale); --no-monitoring
+	// skips it for a cluster that already has the Prometheus Operator.
+	if st.NoMonitoring {
+		vars = append(vars, "enable_monitoring=false")
+	}
+	// The compact preset's volumes (compactSizing). The JetStream PV is DERIVED from
+	// the stream ceilings helmInstall states, not chosen alongside them: every
+	// per-stream ceiling is reserved UP FRONT at stream creation, so a volume smaller
+	// than their sum crashloops the last services to start with "insufficient storage
+	// resources available". Both halves come from the same `compact` value and
+	// TestCompactReservationFitsItsSmallerVolume checks the sum against it — never
+	// shrink one of these without the other.
+	if st.Compact {
+		vars = append(vars,
+			"nats_jetstream_storage="+compact.JetStreamStorage,
+			"postgres_storage="+compact.PostgresStorage,
+		)
+		// cert-manager exists to issue the ingress certificate. Dropping it is only
+		// safe because compact serves plain HTTP; an instance that still terminates
+		// TLS needs it, and the chart would otherwise render a cert-manager Issuer
+		// against a CRD that is not installed — a hard install failure. Keyed on NoTLS
+		// rather than on Compact so `--compact --no-tls=false` keeps a working cert
+		// instead of breaking the install to save three pods.
+		if st.NoTLS {
+			vars = append(vars, "enable_cert_manager=false")
+		}
+	}
+	// Broker authentication (ADR-025): enable auth callout on NATS and pass the
+	// minted public issuer + the bcrypt hash of the service password. The plaintext
+	// password + seed go into the instance config in helmInstall; nats-server
+	// bcrypt-compares the plaintext, so the broker and clients agree. (tfexec passes
+	// vars as argv, no shell — the hash's `$` is literal.)
+	if pub := st.Values["natsCalloutIssuerPublic"]; pub != "" {
+		vars = append(vars,
+			"nats_enable_auth=true",
+			"nats_callout_issuer_public="+pub,
+			"nats_service_password_bcrypt="+st.Values["natsServicePasswordBcrypt"],
+		)
+	}
+	// Grafana SSO (ADR-047): configure Grafana's generic_oauth + the /grafana ingress
+	// against the minted client secret and the computed URLs. The browser-facing
+	// authorize URL uses the public host; token/userinfo are in-cluster (Grafana's pod
+	// can't reach the public ingress). user-management gets the matching issuer + the
+	// bcrypt hash of this same secret in helmInstall.
+	if grafanaSSOEnabled(st) {
+		u := grafanaSSOURLsFor(st)
+		vars = append(vars,
+			"monitoring_grafana_oauth_enabled=true",
+			"monitoring_grafana_oauth_client_secret="+st.Values["grafanaOAuthSecret"],
+			"monitoring_grafana_oauth_auth_url="+u.AuthURL,
+			"monitoring_grafana_oauth_token_url="+u.TokenURL,
+			"monitoring_grafana_oauth_api_url="+u.APIURL,
+			"monitoring_grafana_root_url="+u.RootURL,
+			"monitoring_grafana_ingress_host="+u.Host,
+		)
+	}
+	return vars
 }
 
 // findTofu locates the OpenTofu (preferred) or Terraform CLI on PATH. Acquiring

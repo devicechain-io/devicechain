@@ -3,7 +3,10 @@
 
 package cmd
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // changedSet builds a Changed-style predicate from the flags the user set explicitly.
 func changedSet(names ...string) func(string) bool {
@@ -59,6 +62,65 @@ func TestResolveDevMode(t *testing.T) {
 		// host defaults to "" (not localhost) but was NOT set by the user, so no conflict.
 		if _, err := resolveDevMode(changedSet(), "", false, false); err != nil {
 			t.Fatalf("unset host must not conflict: %v", err)
+		}
+	})
+}
+
+func TestResolveCompactMode(t *testing.T) {
+	t.Run("bare --compact turns off TLS and monitoring", func(t *testing.T) {
+		res, err := resolveCompactMode(changedSet(), "", false, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.NoTLS || !res.NoMonitoring {
+			t.Fatalf("preset not fully applied: %+v", res)
+		}
+	})
+
+	t.Run("--profile full is rejected rather than resized", func(t *testing.T) {
+		// full adds the three areas that reach outside the instance, which the
+		// compact storage budget was not sized against. There is no resolution that
+		// honours both flags, so picking one silently is the wrong answer.
+		_, err := resolveCompactMode(changedSet("profile"), "full", false, false)
+		if err == nil {
+			t.Fatal("--compact --profile full was accepted: the instance is sized for a " +
+				"smaller set of areas than it deploys")
+		}
+		if !strings.Contains(err.Error(), "full") {
+			t.Errorf("error %q does not name the offending profile", err)
+		}
+	})
+
+	t.Run("an explicitly redundant --profile default is fine", func(t *testing.T) {
+		if _, err := resolveCompactMode(changedSet("profile"), "default", false, false); err != nil {
+			t.Fatalf("--compact --profile default was rejected: %v", err)
+		}
+	})
+
+	t.Run("an explicit --no-tls=false is honoured, not rejected", func(t *testing.T) {
+		// Keeping TLS is a DEPENDENCY, not a contradiction: cert-manager stays
+		// installed to issue the certificate and every other compact lever still
+		// applies. Erroring here would cost real functionality for no benefit.
+		res, err := resolveCompactMode(changedSet("no-tls"), "", false, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.NoTLS {
+			t.Error("--compact overrode an explicit --no-tls=false and disabled TLS anyway")
+		}
+		if !res.NoMonitoring {
+			t.Error("keeping TLS also kept the monitoring stack: the two levers are " +
+				"independent and only the one the user named should have changed")
+		}
+	})
+
+	t.Run("an explicit --no-monitoring=false is honoured", func(t *testing.T) {
+		res, err := resolveCompactMode(changedSet("no-monitoring"), "", false, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.NoMonitoring {
+			t.Error("--compact overrode an explicit --no-monitoring=false")
 		}
 	})
 }

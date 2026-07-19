@@ -47,6 +47,50 @@ func helmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 
+	vals := helmValues(st)
+
+	// Check the instance config the chart is about to render BEFORE handing it to
+	// the cluster. Everything below waits on workload readiness, so a config a
+	// service refuses to load does not surface as a config error at all — it
+	// surfaces as a ten-minute wait that ends in a generic timeout, with the actual
+	// reason only in the logs of pods that are already gone. Rendering costs
+	// milliseconds and turns that into a sentence.
+	if err := validateRenderedInstanceConfig(ctx, ch, vals); err != nil {
+		return err
+	}
+
+	// Upgrade if the release already exists, otherwise install — so a re-run is
+	// idempotent.
+	hist := action.NewHistory(actionConfig)
+	hist.Max = 1
+	if _, err := hist.Run(helmReleaseName); err == driver.ErrReleaseNotFound {
+		inst := action.NewInstall(actionConfig)
+		inst.ReleaseName = helmReleaseName
+		inst.Namespace = releaseNamespace
+		inst.Wait = true
+		inst.Timeout = helmTimeout
+		_, err := inst.RunWithContext(ctx, ch, vals)
+		return err
+	} else if err != nil {
+		return err
+	}
+
+	upg := action.NewUpgrade(actionConfig)
+	upg.Namespace = releaseNamespace
+	upg.Wait = true
+	upg.Timeout = helmTimeout
+	_, err = upg.RunWithContext(ctx, helmReleaseName, ch, vals)
+	return err
+}
+
+// helmValues builds the value map the chart is installed with.
+//
+// Split out of helmInstall so it can be rendered and inspected without a cluster:
+// the sizing this map carries is checked against the volume the infra step
+// provisions (TestCompactReservationFitsItsSmallerVolume), and that check is only
+// worth anything if it reads the map the install actually uses rather than a
+// restatement of it.
+func helmValues(st *State) map[string]interface{} {
 	// Thread the broker-auth material into the instance config (ADR-025): the CA +
 	// TLS flag, plus the shared service credential every service presents and the
 	// callout issuer seed device-management signs with. Built as one nats map and
@@ -64,6 +108,16 @@ func helmInstall(ctx context.Context, st *State) error {
 			"user":              natsauth.ServiceUser,
 			"password":          st.Values["natsServicePassword"],
 			"calloutIssuerSeed": seed,
+		}
+	}
+	// The compact preset's JetStream/KV ceilings (compactSizing). Merged into the
+	// SAME nats map as the broker-auth material above rather than assigned over it:
+	// assigning would drop whichever block was written first, and the loser would be
+	// either the ceilings (a silently full-size instance) or the credentials (a
+	// service that cannot reach the broker at all).
+	if st.Compact {
+		for k, v := range compact.natsValues() {
+			natsVals[k] = v
 		}
 	}
 	infraVals := map[string]interface{}{}
@@ -105,6 +159,12 @@ func helmInstall(ctx context.Context, st *State) error {
 		"metrics": map[string]interface{}{"enabled": !st.NoMonitoring},
 	}
 
+	// Compact lowers the SCHEDULING requests so the pods fit a small node. It does
+	// not touch limits — see compactSizing.CPURequest.
+	if st.Compact {
+		vals["resources"] = compact.resourceValues()
+	}
+
 	// Grafana SSO (ADR-047): turn on user-management's OAuth AS (the issuer) and seed
 	// the confidential Grafana client. The bcrypt hash is the SAME secret whose
 	// cleartext went to Grafana's config in the tofu step (one mint, both sides). The
@@ -129,38 +189,7 @@ func helmInstall(ctx context.Context, st *State) error {
 		}
 	}
 
-	// Check the instance config the chart is about to render BEFORE handing it to
-	// the cluster. Everything below waits on workload readiness, so a config a
-	// service refuses to load does not surface as a config error at all — it
-	// surfaces as a ten-minute wait that ends in a generic timeout, with the actual
-	// reason only in the logs of pods that are already gone. Rendering costs
-	// milliseconds and turns that into a sentence.
-	if err := validateRenderedInstanceConfig(ctx, ch, vals); err != nil {
-		return err
-	}
-
-	// Upgrade if the release already exists, otherwise install — so a re-run is
-	// idempotent.
-	hist := action.NewHistory(actionConfig)
-	hist.Max = 1
-	if _, err := hist.Run(helmReleaseName); err == driver.ErrReleaseNotFound {
-		inst := action.NewInstall(actionConfig)
-		inst.ReleaseName = helmReleaseName
-		inst.Namespace = releaseNamespace
-		inst.Wait = true
-		inst.Timeout = helmTimeout
-		_, err := inst.RunWithContext(ctx, ch, vals)
-		return err
-	} else if err != nil {
-		return err
-	}
-
-	upg := action.NewUpgrade(actionConfig)
-	upg.Namespace = releaseNamespace
-	upg.Wait = true
-	upg.Timeout = helmTimeout
-	_, err = upg.RunWithContext(ctx, helmReleaseName, ch, vals)
-	return err
+	return vals
 }
 
 // helmUninstall removes the per-instance chart release, deleting every resource

@@ -37,6 +37,11 @@ type Options struct {
 	// OAuth AS (sets the issuer), seeds a confidential Grafana client, and configures
 	// Grafana's generic_oauth + /grafana ingress — operator/superuser-tier only.
 	GrafanaSSO bool
+	// Compact applies the small-footprint preset: lowered JetStream/KV ceilings, the
+	// smaller volumes those permit, and lowered scheduling requests. It is a preset
+	// over levers that already exist and does NOT change which services run (that
+	// stays on Profile). See compactSizing.
+	Compact bool
 }
 
 // Provider abstracts the target environment (local cluster today; cloud later)

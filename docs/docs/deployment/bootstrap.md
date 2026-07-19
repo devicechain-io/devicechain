@@ -90,8 +90,36 @@ pipeline, chart, and operator are identical.
 | `--registry` / `--version` | Override the image registry / tag (defaults: published `ghcr.io/devicechain-io`, or `localhost:5000` + `dev` with `--build`). |
 | `--host <name>` | Ingress host to expose the instance on (default `devicechain.local`). Use `localhost` on a local cluster to reach the console with **no `/etc/hosts` edit**. |
 | `--no-tls` | Serve plain HTTP instead of a self-signed cert. With `--host localhost`, a zero-config `http://localhost/` (no cert warning). |
+| `--compact` | Small-footprint preset — see below. |
 | `--dry-run` | Print what each step would do without changing anything. |
 | `--skip-preflight` | Skip the environment checks. |
+
+### `--compact`
+
+A preset for small clusters. It composes levers that already exist rather than adding a
+tuning axis of its own:
+
+- lower JetStream and KV per-stream ceilings, and the smaller volumes those permit
+  (2Gi for JetStream, 2Gi for Postgres);
+- lower scheduling **requests** (25m / 64Mi), so pods fit a small node — limits are
+  untouched, since lowering those converts memory pressure into OOMKills rather than
+  shrinking anything;
+- no monitoring stack, the single largest consumer;
+- no cert-manager, because compact serves plain HTTP.
+
+It does **not** change which services run — that stays on `--profile`, where it is named
+and visible. `--compact` with a `--profile` other than `default` is rejected rather than
+resized, because the storage budget is sized against the areas `default` deploys.
+
+Both TLS and monitoring can be kept: an explicit `--no-tls=false` or `--no-monitoring=false`
+is honoured, and every other compact lever still applies. Keeping TLS also keeps
+cert-manager, which is what issues the certificate.
+
+:::caution Apply it to a fresh cluster
+Lowering a ceiling below what a stream or KV bucket already holds succeeds silently,
+truncates nothing, and refuses writes until the data ages out. `--compact` is safe on a
+first bring-up; it is not the same operation applied to a running instance.
+:::
 
 :::tip Zero-config local URL
 `dcctl bootstrap local my-instance --build --host localhost --no-tls` exposes the
