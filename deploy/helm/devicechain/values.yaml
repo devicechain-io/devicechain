@@ -349,6 +349,49 @@ resources:
     cpu: 500m
     memory: 256Mi
 
+# GOMEMLIMIT, as a percentage of each container's own memory LIMIT.
+#
+# DEFAULT OFF, deliberately, and the reason is worth reading before turning it on.
+#
+# Go does not read the container's memory limit. Measured on Go 1.26: a process in a
+# container limited to 128m reports GOMEMLIMIT as unlimited, while GOMAXPROCS *is*
+# derived from the cgroup CPU limit. Memory is the half the runtime leaves
+# unmanaged. (That asymmetry is also why there is no GOMAXPROCS setting here —
+# adding one would override the runtime's own container awareness with a worse
+# guess.)
+#
+# The obvious conclusion — that setting GOMEMLIMIT therefore shrinks a service's
+# memory — did not survive measurement. Across four workload shapes in a limited
+# container (churn over a small live set, churn over a large one, and a live set
+# sized so that GOGC's 2x pacing would exceed the container limit), a soft limit
+# produced NO reduction in heap_sys and cost GC CPU. At a 64MiB limit against a
+# 60 MiB live set, heap_sys was slightly HIGHER. Steady-state footprint is governed
+# by the live set, and GOMEMLIMIT cannot go below it.
+#
+# What it genuinely offers is a ceiling, not a reduction: during a spike in LIVE
+# heap it makes the collector work harder instead of letting the heap double past
+# the cgroup limit and be OOMKilled. That is death-versus-degradation, and it
+# matters most where limits are tight. It is a survivability property, not a
+# footprint one — so it must never be quoted as part of a published footprint
+# number.
+#
+# It is off until that ceiling is shown to be worth its GC cost on real services
+# under real load. Turning it on is one number.
+#
+# When enabled: 75 is a sensible value. NOT 100 — the cgroup limit also covers
+# goroutine stacks, mmap'd regions and runtime bookkeeping that sit outside the Go
+# heap, so aiming at the full limit OOMKills instead of collecting (the schema
+# rejects >= 100). The value is DERIVED from each area's own limit, so raising a
+# limit raises its GOMEMLIMIT with it; a pinned value would keep throttling a
+# service whose limit had since been raised, and GC thrash with no visible cause is
+# a miserable thing to debug. An area with no memory limit gets no GOMEMLIMIT —
+# there is nothing to derive from, and guessing is worse than leaving it to Go.
+goMemLimitPercent: 0
+
+# An explicit GOMEMLIMIT for every area, bypassing goMemLimitPercent. Go's own
+# syntax (e.g. "192MiB"). Prefer the percentage, and read the note above first.
+goMemLimit: ""
+
 # Replica count per area (override per area under functionalAreas.<area>.replicas).
 # Recommend >= 2 in production for true zero-downtime rollouts (a single replica
 # still has a brief gap while its one pod is replaced) and node-failure survival.
