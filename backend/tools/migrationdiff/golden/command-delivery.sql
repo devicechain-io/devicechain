@@ -56,7 +56,6 @@ CREATE TABLE "command-delivery".commands (
  status character varying(32) NOT NULL,
  queued_time timestamp with time zone,
  sent_time timestamp with time zone,
- delivered_time timestamp with time zone,
  responded_time timestamp with time zone,
  expires_at timestamp with time zone,
  response_payload jsonb,

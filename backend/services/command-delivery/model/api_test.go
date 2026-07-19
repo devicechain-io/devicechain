@@ -17,7 +17,7 @@ import (
 // TestCommandStatusValid verifies the known-state predicate.
 func TestCommandStatusValid(t *testing.T) {
 	valid := []CommandStatus{
-		CommandQueued, CommandSent, CommandDelivered,
+		CommandQueued, CommandSent,
 		CommandSuccessful, CommandTimeout, CommandExpired, CommandFailed,
 	}
 	for _, s := range valid {
@@ -27,6 +27,13 @@ func TestCommandStatusValid(t *testing.T) {
 	}
 	if CommandStatus("BOGUS").Valid() {
 		t.Fatalf("expected BOGUS to be invalid")
+	}
+	// DELIVERED was carried for a long time as a valid-but-unemittable status,
+	// which made the lifecycle look like it confirmed delivery when it never
+	// could. It is gone, and a persisted row still carrying it must now read as
+	// unknown rather than as a state the platform recognizes.
+	if CommandStatus("DELIVERED").Valid() {
+		t.Fatalf("DELIVERED was removed; it must no longer be a known status")
 	}
 	if CommandStatus("").Valid() {
 		t.Fatalf("expected empty status to be invalid")
@@ -38,7 +45,6 @@ func TestCommandStatusTerminal(t *testing.T) {
 	terminal := map[CommandStatus]bool{
 		CommandQueued:     false,
 		CommandSent:       false,
-		CommandDelivered:  false,
 		CommandSuccessful: true,
 		CommandTimeout:    true,
 		CommandExpired:    true,
@@ -47,6 +53,15 @@ func TestCommandStatusTerminal(t *testing.T) {
 	for s, want := range terminal {
 		if s.Terminal() != want {
 			t.Fatalf("Terminal(%s) = %v, want %v", s, s.Terminal(), want)
+		}
+	}
+	// An unrecognized status must read as non-terminal. This is what keeps a row
+	// left over from a removed state (a hand-written DELIVERED, say) reachable by
+	// the expiry sweep and by CancelCommand instead of stranded in flight
+	// forever. If Terminal() ever defaulted to true, such a row would be frozen.
+	for _, unknown := range []CommandStatus{"DELIVERED", "BOGUS", ""} {
+		if unknown.Terminal() {
+			t.Fatalf("Terminal(%q) = true; an unknown status must be non-terminal so it stays sweepable", unknown)
 		}
 	}
 }
@@ -62,15 +77,15 @@ func TestCanTransition(t *testing.T) {
 		{CommandSent, CommandSuccessful, true},
 		{CommandQueued, CommandExpired, true},
 		{CommandSent, CommandTimeout, true},
-		// Illegal forward edges.
-		{CommandQueued, CommandDelivered, false},
-		{CommandDelivered, CommandSent, false},
-		// DELIVERED is a reserved state with no emitter (no device delivery-ack
-		// transport): nothing may transition INTO it, including from SENT.
-		{CommandSent, CommandDelivered, false},
+		// Illegal forward edges. An unknown target state is refused rather than
+		// waved through — this is the guard that keeps a status the model no
+		// longer defines (DELIVERED, until it was removed) from being written by
+		// anything that still names it.
+		{CommandQueued, CommandStatus("DELIVERED"), false},
+		{CommandSent, CommandStatus("DELIVERED"), false},
+		{CommandSent, CommandStatus("BOGUS"), false},
 		// No transition out of a terminal state.
 		{CommandSuccessful, CommandSent, false},
-		{CommandExpired, CommandDelivered, false},
 		{CommandFailed, CommandSuccessful, false},
 		{CommandTimeout, CommandExpired, false},
 	}

@@ -15,12 +15,12 @@ import * as types from './graphql';
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
-    "\n  query Commands($criteria: CommandSearchCriteria!) {\n    commands(criteria: $criteria) {\n      results {\n        id\n        token\n        deviceToken\n        name\n        payload\n        status\n        queuedTime\n        sentTime\n        deliveredTime\n        respondedTime\n        expiresAt\n        responsePayload\n        error\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.CommandsDocument,
+    "\n  query Commands($criteria: CommandSearchCriteria!) {\n    commands(criteria: $criteria) {\n      results {\n        id\n        token\n        deviceToken\n        name\n        payload\n        status\n        queuedTime\n        sentTime\n        respondedTime\n        expiresAt\n        responsePayload\n        error\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.CommandsDocument,
     "\n  mutation CreateCommand($request: CommandCreateRequest!) {\n    createCommand(request: $request) {\n      id\n      token\n      status\n    }\n  }\n": typeof types.CreateCommandDocument,
     "\n  mutation CancelCommand($token: String!) {\n    cancelCommand(token: $token) {\n      id\n      token\n      status\n    }\n  }\n": typeof types.CancelCommandDocument,
 };
 const documents: Documents = {
-    "\n  query Commands($criteria: CommandSearchCriteria!) {\n    commands(criteria: $criteria) {\n      results {\n        id\n        token\n        deviceToken\n        name\n        payload\n        status\n        queuedTime\n        sentTime\n        deliveredTime\n        respondedTime\n        expiresAt\n        responsePayload\n        error\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.CommandsDocument,
+    "\n  query Commands($criteria: CommandSearchCriteria!) {\n    commands(criteria: $criteria) {\n      results {\n        id\n        token\n        deviceToken\n        name\n        payload\n        status\n        queuedTime\n        sentTime\n        respondedTime\n        expiresAt\n        responsePayload\n        error\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.CommandsDocument,
     "\n  mutation CreateCommand($request: CommandCreateRequest!) {\n    createCommand(request: $request) {\n      id\n      token\n      status\n    }\n  }\n": types.CreateCommandDocument,
     "\n  mutation CancelCommand($token: String!) {\n    cancelCommand(token: $token) {\n      id\n      token\n      status\n    }\n  }\n": types.CancelCommandDocument,
 };
@@ -28,7 +28,7 @@ const documents: Documents = {
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query Commands($criteria: CommandSearchCriteria!) {\n    commands(criteria: $criteria) {\n      results {\n        id\n        token\n        deviceToken\n        name\n        payload\n        status\n        queuedTime\n        sentTime\n        deliveredTime\n        respondedTime\n        expiresAt\n        responsePayload\n        error\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').CommandsDocument;
+export function graphql(source: "\n  query Commands($criteria: CommandSearchCriteria!) {\n    commands(criteria: $criteria) {\n      results {\n        id\n        token\n        deviceToken\n        name\n        payload\n        status\n        queuedTime\n        sentTime\n        respondedTime\n        expiresAt\n        responsePayload\n        error\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').CommandsDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

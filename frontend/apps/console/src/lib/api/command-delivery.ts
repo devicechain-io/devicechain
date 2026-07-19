@@ -28,7 +28,6 @@ const COMMANDS = graphql(`
         status
         queuedTime
         sentTime
-        deliveredTime
         respondedTime
         expiresAt
         responsePayload

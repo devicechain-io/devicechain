@@ -304,20 +304,19 @@ export interface AlarmRow {
 
 // A device command as the command-button widget sees it (command-delivery). Mirrors
 // the stored Command row: `token` is the client-minted dispatch id (also the cancel
-// handle); `status` carries the lifecycle enum (QUEUED → SENT → DELIVERED →
-// SUCCESSFUL, plus TIMEOUT/EXPIRED/FAILED) as a plain string — the service declares
+// handle); `status` carries the lifecycle enum (QUEUED → SENT →
+// SUCCESSFUL | FAILED, plus TIMEOUT/EXPIRED) as a plain string — the service declares
 // no GraphQL enum. Kept decoupled from command-delivery's GraphQL types so the widget
 // layer carries no service coupling.
 export interface CommandRow {
   token: string;
   name: string;
-  status: string; // QUEUED | SENT | DELIVERED | SUCCESSFUL | TIMEOUT | EXPIRED | FAILED
+  status: string; // QUEUED | SENT | SUCCESSFUL | FAILED | TIMEOUT | EXPIRED
   payload: string | null; // request JSON (as issued)
   responsePayload: string | null; // device response JSON
   error: string | null;
   queuedTime: string | null;
   sentTime: string | null;
-  deliveredTime: string | null;
   respondedTime: string | null;
 }
 

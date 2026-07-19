@@ -5,7 +5,7 @@
 // lifecycle (command-delivery). The console bakes a command definition into the widget's
 // options at author time (its name + parameterSchema); this renders a typed form from
 // that schema, issues via the action seam (gated on command:write), and shows the recent
-// commands for the target device with live status (QUEUED → SENT → DELIVERED →
+// commands for the target device with live status (QUEUED → SENT →
 // SUCCESSFUL / FAILED …), so an operator can see whether a command was acted on rather
 // than only that it was sent. Bound through the hub's control channel, so it renders identically from live
 // data or the synthetic preview source.

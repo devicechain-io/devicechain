@@ -27,7 +27,6 @@ function commandRow(over: Partial<CommandRow> = {}): CommandRow {
     error: null,
     queuedTime: '2026-07-06T00:00:00Z',
     sentTime: null,
-    deliveredTime: null,
     respondedTime: null,
     ...over,
   };
