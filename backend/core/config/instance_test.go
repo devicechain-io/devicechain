@@ -110,9 +110,10 @@ func TestApplyDefaultsStreamBounds(t *testing.T) {
 //
 // Modelling it as an exact 90% (10.8 GiB) overstates the real ceiling by 819 MiB.
 // That matters because these tests are the only guard on the reservation: against
-// the inflated ceiling, a future increase could pass here while leaving a fresh
-// install ~200 MiB of actual headroom instead of the 1 GiB this file claims to
-// enforce. Integer division below floors exactly as the module does.
+// an inflated ceiling a future increase could pass here while leaving a fresh
+// install 819 MiB less real headroom than the floor below claims to enforce —
+// which, against that floor, is most of it. Integer division floors exactly as the
+// module does.
 const (
 	pvGi               = 12
 	pvBytes      int64 = pvGi << 30
@@ -186,10 +187,16 @@ func TestBudgetLeavesHeadroomForUnaccountedStreams(t *testing.T) {
 	}
 }
 
-// The KV reservation must be derived from the declared inventory, not from a
-// hand-maintained count. core/streams exists because that exact mirror had
-// already gone wrong once for message streams; this pins the same property for
-// buckets, so declaring one without budgeting for it fails here.
+// The KV reservation must be derived from the declared inventory rather than from
+// a hand-maintained count, the way core/streams exists because that exact mirror
+// had already gone wrong once for message streams.
+//
+// Note what this can and cannot catch. Both sides iterate kv.All, so DECLARING a
+// bucket raises both in lockstep and cannot fail here — that direction is the
+// point, since deriving from the inventory is what makes a new bucket budgeted
+// automatically. What it does catch is the reservation drifting away from the
+// inventory: a KvReservation that skips a tier, applies the wrong ceiling, or
+// stops walking kv.All at all.
 func TestKvReservationCoversEveryDeclaredBucket(t *testing.T) {
 	cfg := &InstanceConfiguration{}
 	cfg.ApplyDefaults()

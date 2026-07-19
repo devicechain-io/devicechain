@@ -27,6 +27,16 @@
 // still gets a ceiling — TierFor falls back to State, the larger and safer of the
 // two — but it is absent from the reservation the budget test checks, which is
 // the understatement this package exists to prevent.
+//
+// One gap to know about, because nothing here can close it: messaging.NewCache
+// takes an arbitrary string, so a service that creates a cache with a literal
+// rather than a constant from this file gets the State ceiling by fallback and is
+// missing from the reservation entirely. The tripwire that catches this
+// (TestEveryCacheIsDeclaredInTheKvInventory) lives in device-management, the only
+// service that creates caches today, and structurally cannot see any other — the
+// same hand-maintained-mirror shape this package exists to end, one level up. If
+// a second service ever creates a cache, give it the same tripwire, or lift the
+// check somewhere that can see every caller.
 package kv
 
 // Tier is a KV bucket's disk-budget class. The two tiers are distinguished by

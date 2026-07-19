@@ -5,6 +5,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -286,5 +287,87 @@ func TestKeyValueBucketsDiscardNewSoACeilingRefusesRatherThanEvicts(t *testing.T
 		t.Errorf("KV bucket discard policy = %v, want DiscardNew: a full bucket would "+
 			"EVICT live entries rather than refuse the write, which invalidates the "+
 			"tier reasoning in core/kv", info.Config.Discard)
+	}
+}
+
+// Applying a ceiling BELOW a bucket's current size is the live-upgrade case, and
+// JetStream handles it in the worst possible way: the update succeeds, nothing is
+// truncated, reads keep working, and every WRITE is refused until the entries age
+// out. A state bucket must therefore be left alone rather than bounded into that
+// window — a refresh-token bucket with a multi-day TTL would refuse every login
+// for days while reporting that it had been bounded successfully.
+func TestReconcileLeavesAnOversizedStateBucketUnbounded(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	const bucket = "oversized_state_bucket"
+	store, err := nmgr.js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket, TTL: time.Hour})
+	if err != nil {
+		t.Fatalf("seed bucket: %v", err)
+	}
+	// Push it past the state ceiling it would otherwise be given.
+	val := make([]byte, 64*1024)
+	for i := 0; int64(i)*64*1024 < config.DefaultKvStateMaxBytes+(8<<20); i++ {
+		if _, err := store.Put(fmt.Sprintf("key%05d", i), val); err != nil {
+			t.Fatalf("seed put %d: %v", i, err)
+		}
+	}
+	before, err := nmgr.js.StreamInfo(kvStreamPrefix + bucket)
+	if err != nil {
+		t.Fatalf("StreamInfo: %v", err)
+	}
+	if int64(before.State.Bytes) <= config.DefaultKvStateMaxBytes {
+		t.Fatalf("precondition failed: bucket is %d B, not over the %d B ceiling; this test "+
+			"is not exercising the shrink path at all", before.State.Bytes, config.DefaultKvStateMaxBytes)
+	}
+
+	nmgr.reconcileKvBucket(bucket, config.DefaultKvStateMaxBytes, kv.State)
+
+	after, err := nmgr.js.StreamInfo(kvStreamPrefix + bucket)
+	if err != nil {
+		t.Fatalf("StreamInfo after: %v", err)
+	}
+	if after.Config.MaxBytes == config.DefaultKvStateMaxBytes {
+		t.Error("an oversized STATE bucket was bounded below its current size: JetStream does not " +
+			"truncate, so this refuses every write to it until its entries age out — failed logins " +
+			"for the length of the refresh-token TTL")
+	}
+	// And the bucket must still be writable, which is the whole point of skipping.
+	if _, err := store.Put("stillwritable", []byte("x")); err != nil {
+		t.Errorf("bucket is no longer writable after reconcile: %v", err)
+	}
+}
+
+// The same shrink is SAFE for a cache bucket and must still be applied: a refused
+// write there is a miss, and the short entry TTL clears the overage in about a
+// minute. Skipping it would leave the fleet-scaling buckets — the ones the budget
+// most needs bounded — permanently unbounded once they grew past the ceiling.
+func TestReconcileStillBoundsAnOversizedCacheBucket(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	const bucket = "oversized_cache_bucket"
+	store, err := nmgr.js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket, TTL: time.Hour})
+	if err != nil {
+		t.Fatalf("seed bucket: %v", err)
+	}
+	val := make([]byte, 64*1024)
+	for i := 0; int64(i)*64*1024 < config.DefaultKvCacheMaxBytes+(8<<20); i++ {
+		if _, err := store.Put(fmt.Sprintf("key%05d", i), val); err != nil {
+			t.Fatalf("seed put %d: %v", i, err)
+		}
+	}
+
+	nmgr.reconcileKvBucket(bucket, config.DefaultKvCacheMaxBytes, kv.Cache)
+
+	after, err := nmgr.js.StreamInfo(kvStreamPrefix + bucket)
+	if err != nil {
+		t.Fatalf("StreamInfo after: %v", err)
+	}
+	if after.Config.MaxBytes != config.DefaultKvCacheMaxBytes {
+		t.Errorf("oversized CACHE bucket left at MaxBytes %d, want %d: a cache is safe to shrink "+
+			"(refused write = miss, entries age out in ~60s), so skipping it would leave the "+
+			"fleet-scaling buckets unbounded exactly when they most need a ceiling",
+			after.Config.MaxBytes, config.DefaultKvCacheMaxBytes)
 	}
 }

@@ -37,8 +37,33 @@ variable "chart_version" {
 }
 
 variable "jetstream_storage" {
-  type    = string
-  default = "8Gi"
+  description = <<-EOT
+    Size of the JetStream PV.
+
+    This default is NOT a free choice — it must hold the platform's whole
+    reservation. JetStream reserves each stream's MaxBytes UP FRONT at creation,
+    so the disk floor is the SUM of the ceilings, and today that sum is ~9.1Gi:
+    8Gi of platform streams, 384Mi of MQTT gateway stores, and 768Mi of KV
+    buckets. The ceiling that has to hold it is max_file_store, which is 90% of
+    this value FLOORED to a whole unit of its own magnitude.
+
+    It was 8Gi, which no longer fits: floor(8 × 0.9) = 7Gi, well under the ~9.1Gi
+    reserved, so a consumer using this module directly with its defaults would hit
+    the "insufficient storage resources available" crashloop on the last services
+    to create a stream. The root module always passes 12Gi explicitly, so the
+    shipped path was never exposed — but a default that only works because every
+    caller overrides it is a trap, not a default.
+
+    Raising this REQUIRES checking the reservation still fits, and lowering it
+    REQUIRES lowering the stream bounds first. Do NOT derive the PV as
+    (sum of ceilings) / 0.9: the flooring makes that unsafe, since a 9.5Gi sum
+    yields an 11Gi PV whose ceiling is floor(11 × 0.9) = 9Gi — below the sum, and
+    back to the crashloop. Pick the smallest whole magnitude where
+    floor(magnitude × 0.9) >= the sum. See nats_jetstream_storage in the root
+    variables.tf for the full sizing history.
+  EOT
+  type        = string
+  default     = "12Gi"
   validation {
     # Integer magnitude + unit only. The max_file_store headroom default floors 90%
     # of the magnitude, so a fractional value like "1.5Gi" would drop to "1Gi" (a

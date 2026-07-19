@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/kv"
 	nats "github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
 )
@@ -58,15 +59,15 @@ func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration
 	}
 	maxBytes := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.KvMaxBytesFor(logical)
 	if maxBytes <= 0 {
-		// Fail closed rather than create an unlimited bucket: 0 means UNLIMITED to
-		// JetStream, so a misconfiguration that reached here would silently undo the
-		// ceiling for this bucket (ADR-023 never-unlimited). ApplyDefaults already
-		// coerces non-positive values, so reaching this is a bug rather than an
-		// operator error — which is why it is an error and not a coercion.
+		// Unreachable today: KvMaxBytesFor returns a positive constant on every path,
+		// whether or not ApplyDefaults has run. It is kept because it is the last
+		// gate before a MaxBytes reaches JetStream, which reads 0 as UNLIMITED — so
+		// the day KvMaxBytesFor grows a path that can return 0, this fails loudly
+		// instead of silently creating an unbounded bucket (ADR-023 never-unlimited).
 		return nil, fmt.Errorf("messaging: non-positive ceiling %d for KV bucket %q", maxBytes, bucket)
 	}
 	if existing, err := nmgr.js.KeyValue(bucket); err == nil {
-		nmgr.reconcileKvBucket(bucket, maxBytes)
+		nmgr.reconcileKvBucket(bucket, maxBytes, kv.TierFor(logical))
 		return existing, nil
 	} else if !errors.Is(err, nats.ErrBucketNotFound) {
 		return nil, err
@@ -96,7 +97,22 @@ func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration
 // worse than never having tried — failing service startup over it would turn a
 // disk-safety improvement into an availability regression. The next restart
 // retries. The warning is the signal that the budget is running ahead of reality.
-func (nmgr *NatsManager) reconcileKvBucket(bucket string, maxBytes int64) {
+//
+// The tier is what decides whether a SHRINK is safe, and it has to, because
+// JetStream will not decide for us: applying a ceiling below a bucket's current
+// size succeeds, truncates NOTHING, and simply starts refusing writes — reads
+// keep working, so the bucket looks healthy while every write fails. That state
+// persists until MaxAge drains the bucket under the new ceiling.
+//
+// For a Cache bucket that is harmless and self-healing: a refused write is a
+// miss, and a ~60s entry TTL clears the overage in about a minute. For a State
+// bucket it is an outage measured in the entry TTL — a refresh-token bucket with
+// a multi-day TTL would refuse every login for DAYS, while logging that it had
+// successfully bounded the bucket. So a State bucket that is already over the
+// ceiling is left alone and reported loudly instead. It stays unbounded, which is
+// exactly where it was before this ran; the disk budget is optimistic by that
+// bucket's ceiling until an operator raises the bound or the bucket drains.
+func (nmgr *NatsManager) reconcileKvBucket(bucket string, maxBytes int64, tier kv.Tier) {
 	stream := kvStreamPrefix + bucket
 	info, err := nmgr.js.StreamInfo(stream)
 	if err != nil {
@@ -105,6 +121,16 @@ func (nmgr *NatsManager) reconcileKvBucket(bucket string, maxBytes int64) {
 		return
 	}
 	if info.Config.MaxBytes == maxBytes {
+		return
+	}
+	if tier == kv.State && int64(info.State.Bytes) > maxBytes {
+		log.Warn().Str("bucket", bucket).Int64("maxBytes", maxBytes).Uint64("currentBytes", info.State.Bytes).
+			Msg("KV bucket already exceeds the ceiling it would be given; leaving it UNBOUNDED rather than " +
+				"applying it. JetStream does not truncate on shrink — it would refuse every write to this " +
+				"bucket until its entries age out, which for a state bucket means failed logins, token " +
+				"exchanges or lock acquisitions for the length of its TTL. Raise the ceiling for this " +
+				"instance, or let the bucket drain. The disk budget is optimistic by this bucket's ceiling " +
+				"until then.")
 		return
 	}
 	cfg := info.Config

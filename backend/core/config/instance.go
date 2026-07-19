@@ -448,8 +448,6 @@ func (c *NatsConfiguration) KvReservation() int64 {
 // the sum of the ceilings actually applied.
 const MqttGatewayStreamCount = 3
 
-const ()
-
 // MqttStoreReservation is the disk the MQTT gateway's bounded streams reserve up
 // front: the message store plus the two QoS 2 stores. Once
 // messaging.ReconcileMqttStores gives them a ceiling, JetStream reserves it like
