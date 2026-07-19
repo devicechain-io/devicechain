@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-event-processing/internal/preview"
 	tracepkg "github.com/devicechain-io/dc-event-processing/internal/preview/trace"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
@@ -18,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/auth"
 	core "github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/streams"
 )
 
 // maxConcurrentPreviewsPerTenant bounds how many replay previews one tenant may run at once (ADR-023):
@@ -139,7 +139,7 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	}})
 
 	startedAt := time.Now()
-	res, err := preview.Run(ctx, r.GetNats(ctx), dmconfig.SUBJECT_RESOLVED_EVENTS, reg,
+	res, err := preview.Run(ctx, r.GetNats(ctx), streams.ResolvedEvents, reg,
 		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan, preview.DefaultMaxRead)
 	if err != nil {
 		return nil, err

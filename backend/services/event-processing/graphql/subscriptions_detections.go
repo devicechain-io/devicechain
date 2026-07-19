@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 )
 
@@ -49,7 +49,7 @@ func (r *SchemaResolver) DetectionStream(ctx context.Context, args struct {
 
 	// SubscribeLive scopes to "{instance}.{tenant}.derived-events", so every delivered event is
 	// already this tenant's — the per-event filter narrows to the requested profile only.
-	live, err := r.GetNats(ctx).SubscribeLive(ctx, tenant, config.SUBJECT_DERIVED_EVENTS)
+	live, err := r.GetNats(ctx).SubscribeLive(ctx, tenant, streams.DerivedEvents)
 	if err != nil {
 		return nil, err
 	}

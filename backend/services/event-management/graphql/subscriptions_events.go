@@ -8,13 +8,13 @@ import (
 	"database/sql"
 	"strconv"
 
-	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 )
 
@@ -37,7 +37,7 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 		return nil, core.ErrNoTenant
 	}
 
-	live, err := r.GetNats(ctx).SubscribeLive(ctx, tenant, dmconfig.SUBJECT_RESOLVED_EVENTS)
+	live, err := r.GetNats(ctx).SubscribeLive(ctx, tenant, streams.ResolvedEvents)
 	if err != nil {
 		return nil, err
 	}

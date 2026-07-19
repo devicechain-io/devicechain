@@ -8,6 +8,8 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+
+	"github.com/devicechain-io/dc-microservice/streams"
 )
 
 // NATS configuration parameters
@@ -37,8 +39,8 @@ type NatsConfiguration struct {
 	// device count × message rate (inbound-events, resolved-events, …). The
 	// control-plane streams, whose volume is driven by human/CRUD activity and is
 	// orders of magnitude lower, take StreamMaxBytesCold instead; see
-	// ColdStreamSuffixes for the classification and StreamMaxBytesFor for the
-	// lookup. Splitting them is what keeps the aggregate reservation small: the
+	// streams.All in core/streams for the classification, and StreamMaxBytesFor
+	// for the lookup. Splitting them is what keeps the aggregate reservation small: the
 	// ceiling is reserved UP FRONT at stream creation, so a uniform bound sizes
 	// every control-plane stream for a load it will never see.
 	StreamMaxBytes     int64
@@ -330,52 +332,8 @@ const (
 	DefaultStreamMaxMsgSize   int32 = 1 << 20   // 1 MiB per message (matches default max_payload)
 )
 
-// ColdStreamSuffixes are the streams whose volume is driven by human/CRUD
-// activity rather than by device traffic, and which therefore take the smaller
-// StreamMaxBytesCold ceiling.
-//
-// The classification is deliberately CONSERVATIVE: a suffix is listed here only
-// when its volume cannot scale with device count × message rate. Anything that
-// rides the device path — including command and connector traffic, which scale
-// with fleet size — is left HOT. StreamMaxBytesFor fails safe to the hot bound
-// for any suffix absent from this map, so a new stream that nobody classifies
-// over-reserves disk (cheap, visible) rather than silently under-buffering and
-// evicting live data via DiscardOld (expensive, silent).
-//
-// Keyed by the literal suffix rather than the SUBJECT_* constants because those
-// live in per-service config packages that core cannot import. TestStreamMaxBytesFor
-// pins the set so a renamed suffix cannot silently fall back to the hot bound.
-//
-// NOTE this map cannot be enumerated from the SUBJECT_* constants even in
-// principle: outbound-connectors derives its dead-letter suffix by CONCATENATION
-// (SUBJECT_CONNECTOR_DISPATCH + ".dead"), so no grep or constant-scan finds the
-// full stream set. Any future derived suffix will likewise default to the hot
-// bound and silently inflate the reservation — visible via the
-// jetstream_stream_limit_bytes metric, but nothing fails. Making the stream set
-// declarable in one place is the durable fix; see TestStreamReservationFitsBudget.
-var ColdStreamSuffixes = map[string]bool{
-	"detection-rules-published": true, // a rule publish — human authoring action
-	"device-roster":             true, // roster projection updates
-	"entity-deleted":            true, // entity lifecycle fan-out
-	"alarm-events":              true, // alarm state changes, not raw telemetry
-	"raise-alarm":               true, // REACT alarm requests
-	"failed-decode":             true, // error path — see the caveat below
-	"failed-events":             true, // error path — see the caveat below
-	"connector-dispatch.dead":   true, // terminal dead-letter sink (ADR-060 SD-2)
-}
-
-// StreamMaxBytesFor returns the byte ceiling for a stream suffix: the cold bound
-// for a control-plane stream, the hot bound otherwise (including for any unknown
-// suffix — see ColdStreamSuffixes for why that direction is the safe one).
-//
-// CAVEAT on the error-path streams (failed-decode / failed-events): these are
-// near-zero in steady state, but a broken decoder or a bad device firmware roll
-// can drive them at the FULL inbound rate. They are cold because dropping the
-// oldest decode failures under a sustained fault is more acceptable than sizing
-// every deployment's disk for one — not because they cannot spike. An operator
-// debugging such a fault should raise StreamMaxBytesCold.
 func (c *NatsConfiguration) StreamMaxBytesFor(suffix string) int64 {
-	if ColdStreamSuffixes[suffix] {
+	if streams.TierFor(suffix) == streams.Cold {
 		if c.StreamMaxBytesCold > 0 {
 			return c.StreamMaxBytesCold
 		}

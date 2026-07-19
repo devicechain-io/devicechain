@@ -17,6 +17,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
 )
@@ -73,14 +74,14 @@ func parseConfiguration() error {
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for inbound device responses (wildcard across tenants).
-	responses, err := nmgr.NewReader(config.SUBJECT_COMMAND_RESPONSES)
+	responses, err := nmgr.NewReader(streams.CommandResponses)
 	if err != nil {
 		return err
 	}
 	CommandResponsesReader = responses
 
 	// Create writer for outbound device commands.
-	commands, err := nmgr.NewWriter(config.SUBJECT_DEVICE_COMMANDS)
+	commands, err := nmgr.NewWriter(streams.DeviceCommands)
 	if err != nil {
 		return err
 	}

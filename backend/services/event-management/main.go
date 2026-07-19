@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-event-management/config"
 	"github.com/devicechain-io/dc-event-management/graphql"
 	"github.com/devicechain-io/dc-event-management/model"
@@ -18,6 +17,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
 )
@@ -79,14 +79,14 @@ func parseConfiguration() error {
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for resolved events (wildcard across tenants).
-	revents, err := nmgr.NewReader(dmconfig.SUBJECT_RESOLVED_EVENTS)
+	revents, err := nmgr.NewReader(streams.ResolvedEvents)
 	if err != nil {
 		return err
 	}
 	ResolvedEventsReader = revents
 
 	// Add and initialize failed events writer.
-	fevents, err := nmgr.NewWriter(dmconfig.SUBJECT_FAILED_EVENTS)
+	fevents, err := nmgr.NewWriter(streams.FailedEvents)
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 
 	// Reader + reconciler for entity-deletion events (ADR-044): drops event_anchors
 	// rows referencing an entity deleted in device-management. Durable, idempotent.
-	dentity, err := nmgr.NewReader(dmconfig.SUBJECT_ENTITY_DELETED)
+	dentity, err := nmgr.NewReader(streams.EntityDeleted)
 	if err != nil {
 		return err
 	}

@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"time"
 
-	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	util "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/streams"
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -109,7 +109,7 @@ func (r *SchemaResolver) AlarmStream(ctx context.Context, args struct {
 		filter.originatorId = &id
 	}
 
-	live, err := r.GetNats(ctx).SubscribeLive(ctx, tenant, dmconfig.SUBJECT_ALARM_EVENTS)
+	live, err := r.GetNats(ctx).SubscribeLive(ctx, tenant, streams.AlarmEvents)
 	if err != nil {
 		return nil, err
 	}

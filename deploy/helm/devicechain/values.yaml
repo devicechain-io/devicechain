@@ -60,7 +60,7 @@ instance:
         # uniform 1 GiB, most of it on control-plane streams that never hold more than
         # a few MiB. streamMaxBytes applies to the 7 HOT streams (volume scales with
         # device count × message rate); streamMaxBytesCold applies to the 8
-        # control-plane ones (see ColdStreamSuffixes in core/config for the
+        # control-plane ones (see streams.All in backend/core/streams for the
         # classification — it is set in code, not here, so every service agrees on the
         # bound for a given stream). Total = 8 GiB, which fits the 12Gi JetStream PV
         # at its 90% max_file_store ceiling.

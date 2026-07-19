@@ -137,3 +137,21 @@ func splitTokens(subject string) []string {
 	}
 	return append(out, cur)
 }
+
+// An undeclared suffix must not produce a stream. JetStream reserves MaxBytes UP
+// FRONT, so a stream outside core/streams reserves disk the budget never counted
+// — and the budget is what sizes the PV. Before this guard, the only thing
+// keeping the declaration complete was that someone remembered to update a list.
+func TestEnsureStreamRefusesUndeclaredSuffix(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	if _, err := nmgr.NewWriter("a-suffix-nobody-declared"); err == nil {
+		t.Fatal("creating a stream for an undeclared suffix must fail; " +
+			"an unbudgeted stream is exactly what crashloops a fresh bring-up")
+	}
+	// A declared one still works — the guard must not be a blanket refusal.
+	if _, err := nmgr.NewWriter(SubjectDeviceCommands); err != nil {
+		t.Fatalf("a declared suffix must still create its stream: %v", err)
+	}
+}
