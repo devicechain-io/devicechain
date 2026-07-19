@@ -50,7 +50,7 @@ variable "jetstream_storage" {
 }
 
 variable "jetstream_max_file_store" {
-  description = "Server-level max_file_store — the hard aggregate JetStream disk ceiling (ADR-023). Empty (default) derives it as 90% of jetstream_storage, leaving filesystem headroom so JetStream errors cleanly before the volume is 100% full. Set explicitly (e.g. \"6Gi\") to override; must be <= jetstream_storage."
+  description = "Server-level max_file_store — the hard aggregate JetStream disk ceiling (ADR-023). Empty (default) derives it as 90% of jetstream_storage, FLOORED to a whole unit of that size's own magnitude (12Gi yields 10Gi, not 10.8Gi), leaving filesystem headroom so JetStream errors cleanly before the volume is 100% full. Set explicitly (e.g. \"6Gi\") to override; must be <= jetstream_storage."
   type        = string
   default     = ""
 }

@@ -335,10 +335,15 @@ type InstanceConfiguration struct {
 // A uniform 1 GiB across all 15 reserved 15 GiB, which forced a 32 GiB PV — and
 // spent most of it on control-plane streams that will never hold more than a few
 // MiB. Splitting hot from cold reserves (7 × 1 GiB) + (8 × 128 MiB) = 8 GiB,
-// which fits a 12 GiB PV at the 90% max_file_store ceiling with the HOT streams
-// keeping their full buffer. Halving the bound uniformly would have hit the same
-// disk target only by halving the ingest buffer — the one place buffering earns
-// its keep.
+// which fits a 12 GiB PV with the HOT streams keeping their full buffer. Halving
+// the bound uniformly would have hit the same disk target only by halving the
+// ingest buffer — the one place buffering earns its keep.
+//
+// The ceiling that has to hold is max_file_store, which is 10 GiB on that 12 GiB
+// PV — the deployment floors 90% of the PV's MAGNITUDE and reattaches the unit
+// (floor(12 * 0.9) = 10 → "10Gi"), so it is NOT 10.8 GiB. See the shared
+// constants in instance_test.go, which pin the arithmetic against that real
+// ceiling rather than a nominal 90%.
 //
 // The message-size default mirrors the broker's default max_payload (1 MiB) so
 // the stream ceiling reflects the limit actually enforced at publish rather than
