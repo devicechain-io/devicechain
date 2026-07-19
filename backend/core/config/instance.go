@@ -546,6 +546,69 @@ func (c *InstanceConfiguration) Validate() error {
 			return err
 		}
 	}
+	if err := c.Infrastructure.Nats.validateTierOrdering(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateTierOrdering rejects a JetStream ceiling pair whose two tiers have been
+// inverted.
+//
+// Both splits below exist to make the disk reservation affordable, and both do it
+// the same way: the tier that grows — with device traffic, with fleet size — takes
+// the SMALLER ceiling, and the tier that cannot grow takes the larger one. That
+// ordering is not a stylistic preference, it is the entire mechanism. Invert it
+// and the bound sits on the wrong side of the thing it is meant to bound: the
+// control-plane streams become the largest on disk, or the fleet-scaling caches do
+// — and in both cases the reservation the budget test checks is still satisfied,
+// because the SUM barely moves. Nothing else would notice.
+//
+// The realistic way to get here is not a typo but a partial edit: lowering
+// streamMaxBytes for a small-footprint deployment and leaving streamMaxBytesCold
+// at its default silently makes every control-plane stream the biggest one in the
+// instance. That is exactly what the compact preset does to the hot bound, which
+// is why this guard lands before it.
+//
+// It rejects rather than clamping. A silent clamp is server-side inference of an
+// operator's intent, which this codebase does not do (CLAUDE.md fail-closed): an
+// operator who writes two numbers meant both of them, and the one to correct is
+// theirs to choose.
+//
+// The MQTT pair (MqttQoS2StoreMaxBytes vs MqttStoreMaxBytes) is deliberately NOT
+// guarded here. Those two are sized by which publish mode is recommended, not by
+// which one scales, so inverting them wastes disk on a discouraged path without
+// putting the smaller bound on the growing side. There is no invariant to break.
+func (c *NatsConfiguration) validateTierOrdering() error {
+	for _, p := range []struct {
+		smaller, larger           string
+		smallerValue, largerValue int64
+		why                       string
+	}{
+		{
+			smaller: "streamMaxBytesCold", smallerValue: c.StreamMaxBytesCold,
+			larger: "streamMaxBytes", largerValue: c.StreamMaxBytes,
+			why: "the cold bound applies to control-plane streams, whose volume cannot " +
+				"scale with device count, so it must not exceed the hot bound",
+		},
+		{
+			smaller: "kvCacheMaxBytes", smallerValue: c.KvCacheMaxBytes,
+			larger: "kvStateMaxBytes", largerValue: c.KvStateMaxBytes,
+			why: "the cache ceiling applies to the KV buckets that scale with fleet " +
+				"size, so it must not exceed the state ceiling",
+		},
+	} {
+		// A zero on either side means the value has not been defaulted yet; leave it
+		// to ApplyDefaults rather than reporting an inversion against an unset field.
+		if p.smallerValue <= 0 || p.largerValue <= 0 {
+			continue
+		}
+		if p.smallerValue > p.largerValue {
+			return fmt.Errorf(
+				"infrastructure.nats.%s (%d) exceeds %s (%d): %s",
+				p.smaller, p.smallerValue, p.larger, p.largerValue, p.why)
+		}
+	}
 	return nil
 }
 

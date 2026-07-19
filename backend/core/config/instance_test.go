@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -358,6 +359,79 @@ func TestInstanceConfigurationValidateFailsClosed(t *testing.T) {
 		if err := cfg.Validate(); err == nil {
 			t.Errorf("%s: expected validation error, got nil", name)
 		}
+	}
+}
+
+// Validate rejects a ceiling pair whose tiers have been inverted.
+//
+// Both splits put the SMALLER ceiling on the tier that grows, which is the only
+// reason the reservation is affordable at all. Inverting one keeps the sum almost
+// unchanged, so the budget tests above stay green while the bound now sits on the
+// side that cannot grow — the failure is invisible everywhere else, which is why
+// it is worth a startup error.
+func TestValidateRejectsInvertedTierCeilings(t *testing.T) {
+	cases := map[string]struct {
+		mutate func(*NatsConfiguration)
+		want   string
+	}{
+		"cold stream bound above hot": {
+			mutate: func(n *NatsConfiguration) {
+				n.StreamMaxBytes = 64 << 20
+				n.StreamMaxBytesCold = 128 << 20
+			},
+			want: "streamMaxBytesCold",
+		},
+		"kv cache ceiling above state": {
+			mutate: func(n *NatsConfiguration) {
+				n.KvCacheMaxBytes = 256 << 20
+				n.KvStateMaxBytes = 128 << 20
+			},
+			want: "kvCacheMaxBytes",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := NewDefaultInstanceConfiguration()
+			cfg.ApplyDefaults()
+			tc.mutate(&cfg.Infrastructure.Nats)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("inverted ceilings validated cleanly: the bound is now on the "+
+					"tier that grows and nothing else reports it (%s)", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not name %s, so it cannot tell an operator "+
+					"which of the two numbers to change", err, tc.want)
+			}
+		})
+	}
+}
+
+// The guard must not fire on a legitimately small deployment: lowering BOTH
+// ceilings together — which is what the compact preset does — is the supported way
+// to shrink the reservation, and equal ceilings are fine too. This is the
+// counterweight to the test above; a guard that rejects valid configurations is a
+// worse bug than the one it prevents, because it fails a bring-up that would have
+// worked.
+func TestValidateAcceptsProportionallyLoweredCeilings(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		cold, hot        int64
+		kvCache, kvState int64
+	}{
+		{"lowered together", 16 << 20, 64 << 20, 8 << 20, 16 << 20},
+		{"equal ceilings", 64 << 20, 64 << 20, 16 << 20, 16 << 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := NewDefaultInstanceConfiguration()
+			cfg.ApplyDefaults()
+			n := &cfg.Infrastructure.Nats
+			n.StreamMaxBytesCold, n.StreamMaxBytes = tc.cold, tc.hot
+			n.KvCacheMaxBytes, n.KvStateMaxBytes = tc.kvCache, tc.kvState
+			if err := cfg.Validate(); err != nil {
+				t.Errorf("valid small-footprint sizing rejected: %v", err)
+			}
+		})
 	}
 }
 
