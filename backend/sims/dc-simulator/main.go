@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -51,18 +52,29 @@ func main() {
 	bind := flag.String("bind", envOr("DC_SIM_BIND", "127.0.0.1"),
 		"address to bind the control API + presentation page. Defaults to loopback because "+
 			"/config.json serves a live tenant access token; only widen this on a trusted host.")
+	devices := flag.Int("devices", envIntOr("DC_SIM_DEVICES", 0),
+		"override the scenario's device count (0 keeps its own demo sizing)")
+	emitInterval := flag.Duration("emit-interval", envDurationOr("DC_SIM_EMIT_INTERVAL", 0),
+		"override the telemetry cadence, e.g. 200ms (0 keeps the 5s demo cadence)")
+	concurrency := flag.Int("concurrency", envIntOr("DC_SIM_CONCURRENCY", 0),
+		"max emits in flight per tick (0 derives it from the device count)")
 	flag.Parse()
 
 	if *handshakePath == "" {
 		log.Fatal().Msg("--handshake (or DC_SIM_HANDSHAKE) is required")
 	}
 
-	if err := run(*handshakePath, *bind, *port); err != nil {
+	load := sim.Load{
+		DeviceCount:  *devices,
+		EmitInterval: *emitInterval,
+		Concurrency:  *concurrency,
+	}
+	if err := run(*handshakePath, *bind, *port, load); err != nil {
 		log.Fatal().Err(err).Msg("dc-simulator exited")
 	}
 }
 
-func run(handshakePath, bind, port string) error {
+func run(handshakePath, bind, port string, load sim.Load) error {
 	hs, err := sim.LoadHandshake(handshakePath)
 	if err != nil {
 		return err
@@ -74,18 +86,29 @@ func run(handshakePath, bind, port string) error {
 	if manifestId == "" {
 		manifestId = "devicepulse"
 	}
-	newDriver, ok := sim.Registry[manifestId]
-	if !ok {
-		log.Fatal().Str("manifestId", manifestId).Strs("known", sim.ManifestIds()).
-			Msg("unknown manifest id")
-	}
-
-	rt, err := sim.NewRuntime(hs)
+	// NewSim resolves the scenario AND checks the load profile is legal against
+	// its manifest, so an impossible run is refused here rather than discovered
+	// as a wrong number at the end of a measurement.
+	driver, err := sim.NewSim(manifestId, hs.Seed, load)
 	if err != nil {
 		return err
 	}
 
-	driver := newDriver(hs.Seed)
+	// The device count the client's connection pool is sized against is the
+	// RESOLVED one — after any override — not the flag, which is 0 whenever the
+	// scenario's own sizing is in use.
+	//
+	// Summed from the populations rather than measured with Expand: Expand
+	// materializes every DeviceInstance (deriving a SHA-256 credential per
+	// device), and Provision expands again a moment later. Paying for a whole
+	// extra population just to learn its size is a poor look in a tool whose
+	// entire purpose is measuring memory.
+	deviceCount := sim.DeviceCount(driver.Manifest())
+	rt, err := sim.NewRuntime(hs, load, deviceCount)
+	if err != nil {
+		return err
+	}
+
 	lc := sim.NewLifecycle(driver, rt)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -99,7 +122,10 @@ func run(handshakePath, bind, port string) error {
 	if err := lc.Start(ctx); err != nil {
 		return err
 	}
-	log.Info().Int("deviceCount", len(rt.Devices)).Msg("sim running")
+	log.Info().Int("deviceCount", len(rt.Devices)).
+		Dur("emitInterval", load.Interval()).
+		Float64("targetRatePerSec", load.TargetRate(len(rt.Devices))).
+		Msg("sim running")
 
 	webRoot, err := fs.Sub(webFiles, "web")
 	if err != nil {
@@ -133,4 +159,32 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// envIntOr and envDurationOr FAIL on a malformed value rather than falling back
+// to it. Silently treating DC_SIM_DEVICES=1OO (letter O) as "use the scenario
+// default" would run a measurement at 12 devices while its operator believed it
+// was running at 100 — a wrong published number, from a typo, with no symptom.
+func envIntOr(key string, fallback int) int {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		log.Fatal().Str(key, v).Msg("not an integer")
+	}
+	return n
+}
+
+func envDurationOr(key string, fallback time.Duration) time.Duration {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		log.Fatal().Str(key, v).Msg("not a duration (want e.g. 200ms, 5s)")
+	}
+	return d
 }

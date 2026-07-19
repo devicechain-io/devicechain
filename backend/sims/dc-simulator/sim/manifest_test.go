@@ -118,7 +118,7 @@ func TestManifestValidate(t *testing.T) {
 // the spec: exactly one population with Count 1, one profile with one numeric
 // metric, one device type.
 func TestDevicepulseManifestShape(t *testing.T) {
-	m := NewDevicepulse(1).Manifest()
+	m := NewDevicepulse(1, Load{}).Manifest()
 
 	if len(m.Populations) != 1 || m.Populations[0].Count != 1 {
 		t.Fatalf("expected exactly one population with Count 1, got %+v", m.Populations)
@@ -292,7 +292,7 @@ func TestValidateRejectsUnsupportedAssignmentTargetType(t *testing.T) {
 // assets, one customer, one profile with 4 metrics, one dashboard — and that it
 // passes Validate end to end.
 func TestBuildingpulseManifestShape(t *testing.T) {
-	m := NewBuildingpulse(1).Manifest()
+	m := NewBuildingpulse(1, Load{}).Manifest()
 
 	if len(m.Populations) != 1 || m.Populations[0].Count != 12 {
 		t.Fatalf("expected exactly one population with Count 12, got %+v", m.Populations)
@@ -336,7 +336,7 @@ func TestRegistry(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected manifest id %q to be registered", id)
 		}
-		s := ctor(1)
+		s := ctor(1, Load{})
 		if s == nil {
 			t.Fatalf("constructor for %q returned a nil Sim", id)
 		}

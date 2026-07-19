@@ -50,19 +50,23 @@ type devicepulse struct {
 	// derivation), threaded from the handshake so a given (sim, seed) always
 	// renders the same topology and reset is reproducible.
 	seed int64
+	// load carries the run-time device-count/cadence overrides. A zero Load
+	// leaves the scenario at its own demo sizing.
+	load Load
 	// ticks counts Tick calls since process start, driving a smooth synthetic
 	// speed curve. Atomic since the control API and the tick loop are on
 	// different goroutines even though only one ever calls Tick.
 	ticks atomic.Int64
 }
 
-// NewDevicepulse returns the devicepulse reference Sim seeded from the handshake.
-func NewDevicepulse(seed int64) Sim {
-	return &devicepulse{seed: seed}
+// NewDevicepulse returns the devicepulse reference Sim seeded from the
+// handshake. Prefer NewSim, which validates load against the manifest.
+func NewDevicepulse(seed int64, load Load) Sim {
+	return &devicepulse{seed: seed, load: load}
 }
 
 func (s *devicepulse) Manifest() SimManifest {
-	return SimManifest{
+	return resize(s.load, SimManifest{
 		Name: "devicepulse",
 		Seed: s.seed,
 		Profiles: []ProfileSpec{
@@ -86,7 +90,7 @@ func (s *devicepulse) Manifest() SimManifest {
 				ExternalIdPattern: "VIN-DEVICEPULSE-{n:05d}",
 			},
 		},
-	}
+	})
 }
 
 func (s *devicepulse) Bootstrap(ctx context.Context, rt *Runtime) error {
@@ -101,13 +105,14 @@ func (s *devicepulse) Tick(ctx context.Context, rt *Runtime) error {
 	n := s.ticks.Add(1)
 	speed := 50 + 20*math.Sin(float64(n)*0.3)
 
-	for _, d := range rt.Devices {
-		if err := EmitMeasurement(ctx, rt, d, DevicepulseMetricKey, speed); err != nil {
-			log.Error().Err(err).Str("device", d.Token).Msg("emit measurement failed")
-			return err
-		}
+	err := EmitAll(ctx, rt, rt.Load.Workers(len(rt.Devices)),
+		func(int, DeviceInstance) map[string]float64 {
+			return map[string]float64{DevicepulseMetricKey: speed}
+		})
+	if err != nil {
+		log.Error().Err(err).Msg("emit measurement failed")
 	}
-	return nil
+	return err
 }
 
 // Buildingpulse sizing + tokens (sim-slice2-buildingpulse-spec.md): a modest
@@ -144,14 +149,17 @@ type buildingpulse struct {
 	// seed drives all deterministic generation, threaded from the handshake —
 	// see devicepulse's identical field for the reset/idempotency rationale.
 	seed int64
+	// load carries the run-time device-count/cadence overrides, same role as
+	// devicepulse's.
+	load Load
 	// ticks counts Tick calls since process start, same role as devicepulse's.
 	ticks atomic.Int64
 }
 
 // NewBuildingpulse returns the buildingpulse reference Sim seeded from the
-// handshake.
-func NewBuildingpulse(seed int64) Sim {
-	return &buildingpulse{seed: seed}
+// handshake. Prefer NewSim, which validates load against the manifest.
+func NewBuildingpulse(seed int64, load Load) Sim {
+	return &buildingpulse{seed: seed, load: load}
 }
 
 func (s *buildingpulse) Manifest() SimManifest {
@@ -215,6 +223,18 @@ func (s *buildingpulse) Manifest() SimManifest {
 		},
 	}
 
+	// Resize BEFORE expanding, so the dashboard below is built from the topology
+	// this scenario will actually run.
+	//
+	// Today the two orders happen to agree: the dashboard binds devices[0], and
+	// device 1 exists at every count >= 1. That equivalence is a property of the
+	// current dashboard, not of the code — a hero device picked from the END of
+	// the population would silently bind to a device a smaller run does not have.
+	// Ordering it correctly costs nothing and does not depend on that holding.
+	// (Manifest.Validate does NOT check dashboard bindings, so nothing downstream
+	// would catch it.)
+	manifest = resize(s.load, manifest)
+
 	// The dashboard binds to a concrete device token, so it is built here from
 	// this same manifest's own (pure, deterministic) Expand() output — not
 	// handed rt.Devices later — keeping Manifest() a single source of truth
@@ -260,27 +280,27 @@ func (s *buildingpulse) Tick(ctx context.Context, rt *Runtime) error {
 	}
 	offset := 2 * math.Pi / float64(len(rt.Devices))
 
-	for i, d := range rt.Devices {
-		phase := float64(n)*0.3 + float64(i)*offset
-		metrics := map[string]float64{
-			BuildingpulseTemperatureKey: 24 + 8*math.Sin(phase),
-			BuildingpulseHumidityKey:    45 + 10*math.Sin(phase+1),
-			BuildingpulseSetpointKey:    22,
-			BuildingpulseCO2Key:         600 + 150*math.Sin(phase+2),
-		}
-		if err := EmitMeasurements(ctx, rt, d, metrics); err != nil {
-			log.Error().Err(err).Str("device", d.Token).Msg("emit measurements failed")
-			return err
-		}
+	err := EmitAll(ctx, rt, rt.Load.Workers(len(rt.Devices)),
+		func(i int, _ DeviceInstance) map[string]float64 {
+			phase := float64(n)*0.3 + float64(i)*offset
+			return map[string]float64{
+				BuildingpulseTemperatureKey: 24 + 8*math.Sin(phase),
+				BuildingpulseHumidityKey:    45 + 10*math.Sin(phase+1),
+				BuildingpulseSetpointKey:    22,
+				BuildingpulseCO2Key:         600 + 150*math.Sin(phase+2),
+			}
+		})
+	if err != nil {
+		log.Error().Err(err).Msg("emit measurements failed")
 	}
-	return nil
+	return err
 }
 
 // Registry maps a manifest id (Handshake.ManifestId) to its Sim constructor.
 // main.go looks up the handshake's ManifestId here to pick a driver, defaulting
 // to "devicepulse" when the field is empty (a pre-slice-2 handshake never set
 // it) so existing sim records keep working unchanged.
-var Registry = map[string]func(int64) Sim{
+var Registry = map[string]func(int64, Load) Sim{
 	"devicepulse":   NewDevicepulse,
 	"buildingpulse": NewBuildingpulse,
 }

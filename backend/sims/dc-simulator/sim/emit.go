@@ -11,16 +11,84 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/processor"
 )
 
-// EmitInterval is the sim's telemetry cadence (contract: "~5s").
-const EmitInterval = 5 * time.Second
-
 // maxIngressResponseBytes bounds how much of an unexpected error body is read.
 const maxIngressResponseBytes = 4096
+
+// MetricsFunc returns the metrics device d (the i-th in rt.Devices) emits on
+// the current tick. It is pure per-device value generation — EmitAll owns the
+// wire path, the concurrency, and the accounting.
+type MetricsFunc func(i int, d DeviceInstance) map[string]float64
+
+// EmitAll emits one Measurement per device concurrently, bounded to workers,
+// and records the result in rt.Stats.
+//
+// It does NOT stop at the first failure. A load generator that halts a tick
+// because one device got a 503 under-applies exactly the load the run is trying
+// to measure, and does it most at the moment the platform is most stressed —
+// which would bias the measurement toward looking cheaper than it is. Every
+// device is attempted; failures are counted and summarized.
+func EmitAll(ctx context.Context, rt *Runtime, workers int, metrics MetricsFunc) error {
+	devices := rt.Devices
+	if len(devices) == 0 {
+		return nil
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	var (
+		mu       sync.Mutex
+		failed   int
+		firstErr error
+	)
+
+	idx := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range idx {
+				err := EmitMeasurements(ctx, rt, devices[i], metrics(i, devices[i]))
+				if err != nil {
+					rt.Stats.Failed.Add(1)
+					mu.Lock()
+					failed++
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
+					continue
+				}
+				rt.Stats.Emitted.Add(1)
+			}
+		}()
+	}
+
+	for i := range devices {
+		select {
+		case <-ctx.Done():
+			// Stop feeding work; the workers drain and exit on the closed channel.
+			close(idx)
+			wg.Wait()
+			return ctx.Err()
+		case idx <- i:
+		}
+	}
+	close(idx)
+	wg.Wait()
+
+	if failed > 0 {
+		return fmt.Errorf("%d of %d emits failed (first: %w)", failed, len(devices), firstErr)
+	}
+	return nil
+}
 
 // EmitMeasurement posts one Measurement event carrying a single metric. It
 // delegates to EmitMeasurements so devicepulse (one metric per device) and
