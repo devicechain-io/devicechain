@@ -91,6 +91,17 @@
       "minimum": 0,
       "description": "§10.2: app-side readiness-drain window before the server stops (DC_SHUTDOWN_DRAIN_SECONDS)."
     },
+    "goMemLimitPercent": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 99,
+      "description": "GOMEMLIMIT as a percentage of each container's own memory LIMIT. Go derives GOMAXPROCS from the cgroup CPU limit but does NOT derive GOMEMLIMIT from the memory limit. This is a CEILING against an OOMKill during a live-heap spike, not a footprint reduction — measurement found no heap reduction and a GC CPU cost — so it defaults to 0 (off). Capped below 100 deliberately: the cgroup limit also covers goroutine stacks and runtime bookkeeping outside the Go heap, so aiming at the full limit OOMKills instead of collecting.",
+      "default": 0
+    },
+    "goMemLimit": {
+      "type": "string",
+      "description": "An explicit GOMEMLIMIT for every area, bypassing goMemLimitPercent. Go's own syntax (e.g. \"192MiB\"). Prefer the percentage — a pinned value keeps throttling a service whose memory limit was later raised."
+    },
     "resources": {
       "type": "object",
       "minProperties": 1,
@@ -234,6 +245,7 @@
             "description": "Deployment rollout strategy for this area. Default RollingUpdate. Recreate stops all old pods before starting new ones (no old+new overlap) — required for a single-writer stream processor like event-processing (ADR-051 DETECT), which must also stay at replicas:1."
           },
           "resources": { "type": "object" },
+          "goMemLimit": { "type": "string", "description": "GOMEMLIMIT for this area only, overriding the derivation. Use for a service whose working set genuinely differs (e.g. event-processing holds more live state than the CRUD areas)." },
           "config": { "type": "object" },
           "extraPorts": {
             "type": "array",

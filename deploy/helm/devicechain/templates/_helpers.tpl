@@ -258,3 +258,95 @@ set is safe for both metadata labels and selector matchLabels.
 devicechain.io/instance: {{ .root.Values.instance.id }}
 devicechain.io/functional-area: {{ .area }}
 {{- end -}}
+
+{{/*
+devicechain.memoryQuantityMiB converts a Kubernetes memory quantity to a whole
+number of MiB.
+
+The conversion has to happen BEFORE any percentage is applied, and that ordering
+is the entire reason this helper exists. Helm arithmetic is integer, so taking a
+percentage of a MAGNITUDE and reattaching the unit turns a "1Gi" limit into
+floor(1 * 0.75) = "0Gi" — the identical trap that made sizing the JetStream PV as
+(sum / 0.9) unsafe, where flooring 90% of the magnitude silently produced a
+ceiling below the sum it was meant to cover. Normalising to MiB first means 1Gi
+becomes 1024, and 75% of it is 768.
+
+Only the binary suffixes are accepted. A decimal quantity (1G, 500M) or a bare
+byte count would each need a different conversion, and guessing wrong here does
+not fail — it silently sets a memory limit off by a factor of 1.07 or 1048576. So
+an unrecognised unit is an error rather than a default.
+*/}}
+{{- define "devicechain.memoryQuantityMiB" -}}
+{{- $q := . | toString -}}
+{{- $mag := regexFind "^[0-9]+" $q -}}
+{{- $unit := regexFind "[A-Za-z]*$" $q -}}
+{{- if not $mag -}}
+  {{- fail (printf "memory quantity %q has no numeric magnitude" $q) -}}
+{{- end -}}
+{{- if eq $unit "Mi" -}}
+{{- $mag -}}
+{{- else if eq $unit "Gi" -}}
+{{- mul (int64 $mag) 1024 -}}
+{{- else if eq $unit "Ki" -}}
+{{- div (int64 $mag) 1024 -}}
+{{- else -}}
+  {{- fail (printf "memory quantity %q must use a binary suffix (Ki/Mi/Gi) so GOMEMLIMIT can be derived from it; a decimal or unitless quantity would be converted wrongly and silently" $q) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.goMemLimit resolves the GOMEMLIMIT for one functional area, or "" to
+leave it unset.
+
+Go does not read the container's memory limit. Measured on Go 1.26: a process in a
+container limited to 128m reports GOMEMLIMIT as math.MaxInt64 — no soft limit at
+all — while GOMAXPROCS IS derived from the cgroup CPU limit. That asymmetry is why
+this helper exists and why there is deliberately no GOMAXPROCS counterpart:
+setting one would override the runtime's own container awareness with a worse
+guess, while memory is genuinely unmanaged.
+
+Note what this does NOT do. It does not shrink a service's footprint: measurement
+across four workload shapes in a limited container found no reduction in heap_sys
+and a GC CPU cost, because steady-state memory is governed by the live set and a
+soft limit cannot go below it. What it offers is a CEILING — during a spike in live
+heap the collector works harder instead of the heap doubling past the cgroup limit
+and the pod being OOMKilled. Death versus degradation. That is why the default is
+off (goMemLimitPercent: 0) and why this must never be quoted as part of a published
+footprint number.
+
+It is DERIVED from the area's own memory limit rather than configured
+independently, because the two must move together. A hardcoded value keeps
+throttling a service whose limit an operator later raises, and the symptom is GC
+thrash with no visible cause: nothing connects the latency to a number set once
+in a values file. Deriving it means there is one number.
+
+The percentage leaves room for what the limit covers but GOMEMLIMIT does not —
+goroutine stacks, mmap'd regions, and the runtime's own bookkeeping all count
+against the cgroup while sitting outside the Go heap the limit governs. Aiming
+GOMEMLIMIT at 100% of the container limit would OOMKill rather than collect.
+
+Resolution order: an explicit per-area goMemLimit, then an explicit global one,
+then the derivation. Setting goMemLimitPercent to 0 disables it everywhere and
+restores Go's default behaviour, which is the escape hatch for a service that
+turns out to want an unbounded heap more than a small one.
+*/}}
+{{- define "devicechain.goMemLimit" -}}
+{{- $root := .root -}}
+{{- $areaCfg := .areaCfg -}}
+{{- $explicit := get $areaCfg "goMemLimit" | default $root.Values.goMemLimit -}}
+{{- if $explicit -}}
+{{- $explicit -}}
+{{- else -}}
+{{- $pct := $root.Values.goMemLimitPercent | default 0 | int -}}
+{{- $res := get $areaCfg "resources" | default $root.Values.resources -}}
+{{- $limit := dig "limits" "memory" "" $res -}}
+{{- if and (gt $pct 0) $limit -}}
+{{- $mib := include "devicechain.memoryQuantityMiB" $limit | int64 -}}
+{{- $derived := div (mul $mib $pct) 100 -}}
+{{- if lt $derived 1 -}}
+  {{- fail (printf "GOMEMLIMIT derived from a %s memory limit at %d%% rounds to zero; raise the limit or set goMemLimit explicitly" $limit $pct) -}}
+{{- end -}}
+{{- printf "%dMiB" $derived -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

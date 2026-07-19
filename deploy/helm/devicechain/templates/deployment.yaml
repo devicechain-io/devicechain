@@ -121,6 +121,17 @@ spec:
             the server stops, so endpoints drain first. */}}
             - name: DC_SHUTDOWN_DRAIN_SECONDS
               value: {{ $root.Values.shutdownDrainSeconds | quote }}
+            {{/* Go does not read the container's memory limit — a Go 1.26 process
+            in a 128m container reports no soft limit at all. Setting one is a
+            CEILING against an OOMKill during a live-heap spike, not a way to shrink
+            the footprint (measurement found no heap reduction); it is off by
+            default. Derived from THIS area's own limit so the two cannot drift; see
+            devicechain.goMemLimit. Omitted entirely when the area has no memory
+            limit to derive from, rather than guessed. */}}
+            {{- with include "devicechain.goMemLimit" (dict "areaCfg" $areaCfg "root" $root) }}
+            - name: GOMEMLIMIT
+              value: {{ . | quote }}
+            {{- end }}
           ports:
             - name: graphql
               containerPort: {{ $root.Values.service.port }}
