@@ -484,6 +484,12 @@ func stepReport(ctx context.Context, st *State) error {
 	fmt.Printf("  %s %s\n", color.WhiteString("Instance:"), color.GreenString(st.Values["instance"]))
 	fmt.Printf("  %s %s\n", color.WhiteString("Namespace:"), color.GreenString(st.Values["namespace"]))
 	fmt.Printf("  %s %s\n", color.WhiteString("Profile:"), color.GreenString(st.Values["profile"]))
+	// Print the resolved footprint next to the profile, so the sizing a run applied
+	// is visible without reading the chart. Only when compact — the default sizing
+	// is the one the docs describe.
+	if st.Compact {
+		fmt.Printf("  %s %s\n", color.WhiteString("Footprint:"), color.GreenString(compact.summary()))
+	}
 	fmt.Printf("  %s %s\n", color.WhiteString("Images:"), color.GreenString(st.Values["imageSource"]))
 	fmt.Printf("  %s %s\n", color.WhiteString("Kube context:"), color.GreenString(st.KubeContext))
 	if host := st.Values["ingressHost"]; host != "" {

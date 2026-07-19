@@ -90,8 +90,48 @@ pipeline, chart, and operator are identical.
 | `--registry` / `--version` | Override the image registry / tag (defaults: published `ghcr.io/devicechain-io`, or `localhost:5000` + `dev` with `--build`). |
 | `--host <name>` | Ingress host to expose the instance on (default `devicechain.local`). Use `localhost` on a local cluster to reach the console with **no `/etc/hosts` edit**. |
 | `--no-tls` | Serve plain HTTP instead of a self-signed cert. With `--host localhost`, a zero-config `http://localhost/` (no cert warning). |
+| `--compact` | Small-footprint preset — see below. |
 | `--dry-run` | Print what each step would do without changing anything. |
 | `--skip-preflight` | Skip the environment checks. |
+
+### `--compact`
+
+A preset for small clusters. It composes levers that already exist rather than adding a
+tuning axis of its own:
+
+- lower JetStream and KV per-stream ceilings, and the smaller volumes those permit
+  (2Gi JetStream, 2Gi relational Postgres, 4Gi TimescaleDB);
+- lower scheduling **requests** (25m / 64Mi), so pods fit a small node — limits are
+  untouched, since lowering the memory limit converts pressure into OOMKills and lowering
+  the CPU limit throttles, neither of which shrinks anything;
+- no monitoring stack, the single largest consumer;
+- no cert-manager, since with TLS off nothing needs a certificate issued (keep TLS and
+  cert-manager stays — see below).
+
+It does **not** change which services run — that stays on `--profile`, where it is named
+and visible. A profile *larger* than `default` — today only `full` — is rejected: the
+published compact numbers are measured on `default`, so they would not describe an
+instance running three more services. The smaller profiles (`telemetry`, `ingest-only`)
+are accepted.
+
+Both TLS and monitoring can be kept: an explicit `--no-tls=false` or `--no-monitoring=false`
+is honoured, and every other compact lever still applies. Keeping TLS also keeps
+cert-manager, which is what issues the certificate. `--grafana-sso` needs the monitoring
+stack Grafana lives in, so it is rejected unless you keep it with `--no-monitoring=false`.
+
+:::caution Volume sizes are a time budget, not a capacity budget
+The JetStream volume is derived: the per-stream ceilings are reserved up front, so it is
+sized to hold their sum. The two database volumes are not. Nothing prunes the command or
+alarm tables, and `retentionDays` defaults to `0` — keep data forever — so on a compact
+instance meant to run indefinitely, set a retention window rather than relying on the
+volume size.
+:::
+
+:::caution Apply it to a fresh cluster
+Lowering a ceiling below what a stream or KV bucket already holds succeeds silently,
+truncates nothing, and refuses writes until the data ages out. `--compact` is safe on a
+first bring-up; it is not the same operation applied to a running instance.
+:::
 
 :::tip Zero-config local URL
 `dcctl bootstrap local my-instance --build --host localhost --no-tls` exposes the

@@ -31,6 +31,11 @@ type renderedContainer struct {
 	area        string
 	memoryLimit string
 	goMemLimit  string // "" when the env var was not rendered
+	// requests/limits as rendered, for the compact preset's scheduling assertions
+	// (compact_test.go). Kept here so both tests read one rendering of the pod spec
+	// rather than each modelling the chart's resource block separately.
+	requests map[string]string
+	limits   map[string]string
 }
 
 // renderContainers renders the chart and returns one entry per container in every
@@ -86,7 +91,8 @@ func renderContainers(t *testing.T, vals map[string]interface{}) []renderedConta
 								Value string `json:"value"`
 							} `json:"env"`
 							Resources struct {
-								Limits map[string]string `json:"limits"`
+								Limits   map[string]string `json:"limits"`
+								Requests map[string]string `json:"requests"`
 							} `json:"resources"`
 						} `json:"containers"`
 					} `json:"spec"`
@@ -97,7 +103,12 @@ func renderContainers(t *testing.T, vals map[string]interface{}) []renderedConta
 			continue
 		}
 		for _, c := range obj.Spec.Template.Spec.Containers {
-			rc := renderedContainer{area: c.Name, memoryLimit: c.Resources.Limits["memory"]}
+			rc := renderedContainer{
+				area:        c.Name,
+				memoryLimit: c.Resources.Limits["memory"],
+				requests:    c.Resources.Requests,
+				limits:      c.Resources.Limits,
+			}
 			for _, e := range c.Env {
 				if e.Name == "GOMEMLIMIT" {
 					rc.goMemLimit = e.Value
