@@ -28,9 +28,10 @@ type NatsConfiguration struct {
 	// size instead of time), so size these for the retention a busy cluster needs.
 	// Note this is a per-stream bound, not an aggregate-disk guarantee: the true
 	// disk ceiling is the SUM of every stream's ceiling (see StreamMaxBytesFor),
-	// which must fit the broker's JetStream store. (An
-	// account-level max_file_store at the broker is the belt to this suspenders;
-	// tracked separately.) StreamMaxMsgSize rejects an oversized single message at
+	// which must fit the broker's JetStream store. The belt to that suspenders is
+	// the account-level max_file_store, which the deployment sets from the PV size
+	// (jetstream_max_file_store in deploy/opentofu/modules/nats/main.tf); this sum
+	// is what has to fit under it. StreamMaxMsgSize rejects an oversized single message at
 	// publish. All three are fail-safe (ADR-023 never-unlimited): a zero, negative,
 	// or unset value is coerced to the platform default in ApplyDefaults rather
 	// than left at 0, which JetStream would treat as UNLIMITED. Raise them for a
@@ -544,6 +545,72 @@ func (c *InstanceConfiguration) Validate() error {
 	if c.Infrastructure.Secrets.RootKey != "" {
 		if _, err := c.Infrastructure.Secrets.DecodedRootKey(); err != nil {
 			return err
+		}
+	}
+	if err := c.Infrastructure.Nats.validateTierOrdering(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateTierOrdering rejects a JetStream ceiling pair whose two tiers have been
+// inverted.
+//
+// Both splits below exist to make the disk reservation affordable, and both do it
+// the same way: the tier that grows — with device traffic, with fleet size — takes
+// the SMALLER ceiling, and the tier that cannot grow takes the larger one. That
+// ordering is not a stylistic preference, it is the entire mechanism. Invert it
+// and the bound sits on the wrong side of the thing it is meant to bound: the
+// control-plane streams become the largest on disk, or the fleet-scaling caches do
+// — and in both cases the reservation the budget test checks is still satisfied,
+// because the SUM barely moves. Nothing else would notice.
+//
+// The realistic way to get here is not a typo but a partial edit: lowering
+// streamMaxBytes for a small-footprint deployment and leaving streamMaxBytesCold
+// at its default silently makes every control-plane stream the biggest one in the
+// instance. That is exactly what the compact preset does to the hot bound, which
+// is why this guard lands before it.
+//
+// It rejects rather than clamping. A silent clamp is server-side inference of an
+// operator's intent, which this codebase does not do (CLAUDE.md fail-closed): an
+// operator who writes two numbers meant both of them, and the one to correct is
+// theirs to choose.
+//
+// The MQTT pair (MqttQoS2StoreMaxBytes vs MqttStoreMaxBytes) is deliberately NOT
+// guarded here. Those two are sized by which publish mode is recommended, not by
+// which one scales, so inverting them wastes disk on a discouraged path without
+// putting the smaller bound on the growing side. There is no invariant to break.
+func (c *NatsConfiguration) validateTierOrdering() error {
+	for _, p := range []struct {
+		smaller, larger           string
+		smallerValue, largerValue int64
+		why                       string
+	}{
+		{
+			smaller: "streamMaxBytesCold", smallerValue: c.StreamMaxBytesCold,
+			larger: "streamMaxBytes", largerValue: c.StreamMaxBytes,
+			why: "the cold bound applies to control-plane streams, whose volume cannot " +
+				"scale with device count, so it must not exceed the hot bound",
+		},
+		{
+			smaller: "kvCacheMaxBytes", smallerValue: c.KvCacheMaxBytes,
+			larger: "kvStateMaxBytes", largerValue: c.KvStateMaxBytes,
+			why: "the cache ceiling applies to the KV buckets that scale with fleet " +
+				"size, so it must not exceed the state ceiling",
+		},
+	} {
+		// A zero on either side means the value has not been defaulted yet; leave it
+		// to ApplyDefaults rather than reporting an inversion against an unset field.
+		if p.smallerValue <= 0 || p.largerValue <= 0 {
+			continue
+		}
+		if p.smallerValue > p.largerValue {
+			return fmt.Errorf(
+				"infrastructure.nats.%s (%d) exceeds %s (%d): %s. Raise %s to at least "+
+					"%d, or lower %s — and remember every ceiling here is reserved up "+
+					"front, so raising one may also need a larger JetStream volume",
+				p.smaller, p.smallerValue, p.larger, p.largerValue, p.why,
+				p.larger, p.smallerValue, p.smaller)
 		}
 	}
 	return nil

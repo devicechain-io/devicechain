@@ -210,8 +210,16 @@ var All = []Stream{
 // near-zero in steady state, but a broken decoder or a bad firmware roll can
 // drive them at the FULL inbound rate. They are Cold because dropping the oldest
 // decode failures under a sustained fault is more acceptable than sizing every
-// deployment's disk for one — not because they cannot spike. An operator
-// debugging such a fault should raise StreamMaxBytesCold.
+// deployment's disk for one — not because they cannot spike.
+//
+// An operator debugging such a fault should raise StreamMaxBytesCold — but not on
+// its own. The cold bound may not exceed the hot bound (config.Validate rejects an
+// inverted pair at startup, so raising only this one locks the instance out rather
+// than widening the capture window), and every ceiling here is reserved UP FRONT,
+// so raising a bound that applies to eight streams also needs the JetStream PV to
+// grow with it. Raise StreamMaxBytes, StreamMaxBytesCold and
+// nats_jetstream_storage together, and size the PV by the rule in that variable's
+// own comment rather than by a percentage.
 
 // bySuffix indexes All for lookup. Built once at init rather than scanned per
 // call, since TierFor sits on the stream-creation path.

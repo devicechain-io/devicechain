@@ -72,9 +72,20 @@ instance:
         # (floor(12 * 0.9) = 10 → "10Gi"), so it is 10Gi and not 10.8 GiB — the
         # difference is 819 MiB of headroom that does not exist.
         #
-        # streamMaxBytesCold should stay <= streamMaxBytes: lowering only the hot bound
+        # streamMaxBytesCold must stay <= streamMaxBytes: lowering only the hot bound
         # (e.g. for a small-footprint deploy) inverts the two and makes control-plane
-        # streams the largest on disk. Nothing enforces this today.
+        # streams the largest on disk. Services REJECT an inverted pair at startup
+        # rather than clamping it, and `dcctl bootstrap` runs the same check against
+        # the rendered config BEFORE installing — so a partial edit is reported as a
+        # sentence naming the two keys, not as a ten-minute wait for pods that will
+        # never become ready. The same applies to kvCacheMaxBytes <= kvStateMaxBytes
+        # below.
+        #
+        # NOTE this is enforced on every start, not only on a fresh install: an
+        # existing instance already running an inverted pair will refuse to come back
+        # up on its next restart. That is deliberate pre-GA — it was already running
+        # with the bound on the wrong tier — but it means the fix belongs in the same
+        # change as the upgrade.
         #
         # Raising these REQUIRES raising the PV (nats_jetstream_storage) to match, or
         # the last services to create a stream crashloop with "insufficient storage
@@ -83,6 +94,31 @@ instance:
         streamMaxBytesCold: 134217728 # 128 MiB per control-plane stream
         streamMaxMsgs: 5000000 # 5M messages per stream
         streamMaxMsgSize: 1048576 # 1 MiB per message
+        # The MQTT gateway's own streams. nats-server creates $MQTT_msgs, $MQTT_out
+        # and $MQTT_qos2in with NO size limit and offers no setting to bound them,
+        # yet they sit in the same account and draw on the same max_file_store as
+        # everything above — so the platform bounds them itself at startup
+        # (messaging.ReconcileMqttStores). Sized as working buffers, not retention
+        # windows: $MQTT_msgs drains as QoS-1 subscribers ack. The QoS 2 pair is
+        # smaller on purpose, since QoS 2 is refused by default and its buffers
+        # should not reserve disk the recommended configuration never uses.
+        mqttStoreMaxBytes: 268435456 # 256 MiB for the QoS>=1 message store
+        mqttQoS2StoreMaxBytes: 67108864 # 64 MiB per QoS 2 store ($MQTT_out, $MQTT_qos2in)
+        # The JetStream KV buckets (device caches, locks, refresh tokens, OAuth
+        # codes). They are streams too — backed by KV_-prefixed streams in the same
+        # account — so a bounded bucket reserves its ceiling up front like any other.
+        #
+        # The split keys on what a FULL bucket costs, not on how much it holds.
+        # nats.go creates every KV bucket with DiscardNew, so a full one REFUSES
+        # writes rather than evicting: a cache bucket degrades to a miss and the read
+        # falls through to the database, while a state bucket fails the login, token
+        # exchange, or lock acquisition that needed it. That is why the state tier
+        # takes the LARGER ceiling despite holding far fewer entries — and why
+        # kvCacheMaxBytes must stay <= kvStateMaxBytes: the cache buckets are the ones
+        # that scale with fleet size, so they are the ones that must carry the smaller
+        # bound. See kv.All in backend/core/kv for the per-bucket classification.
+        kvCacheMaxBytes: 67108864 # 64 MiB per cache bucket (6 buckets)
+        kvStateMaxBytes: 134217728 # 128 MiB per state bucket (3 buckets)
         # Client-side TLS to the broker (ADR-025). MUST match the broker: the
         # OpenTofu nats module terminates TLS on the 4222 + 1883 listeners and
         # emits its CA as the `nats_ca` output, which the bring-up threads in here
