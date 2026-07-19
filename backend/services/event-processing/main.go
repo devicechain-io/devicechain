@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-event-processing/graphql"
 	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
@@ -23,6 +22,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
 )
@@ -95,7 +95,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Reader for resolved events (wildcard across tenants). This is a third,
 	// independent consumer fanning out alongside event-management (persistence) and
 	// device-state (projection) — event-processing's DETECT tap (ADR-051).
-	revents, err := nmgr.NewReader(dmconfig.SUBJECT_RESOLVED_EVENTS)
+	revents, err := nmgr.NewReader(streams.ResolvedEvents)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// "{instanceId}.{tenant}.derived-events" subject as a subscribe-able product
 	// (ADR-037); the writer scopes the subject to the tenant supplied in context, which
 	// the publisher's tenant backstop validates against the rule's owning tenant.
-	derivedWriter, err := nmgr.NewWriter(config.SUBJECT_DERIVED_EVENTS)
+	derivedWriter, err := nmgr.NewWriter(streams.DerivedEvents)
 	if err != nil {
 		return err
 	}
@@ -118,7 +118,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// not the finite-retention fact stream — so a rule survives a restart however long ago it
 	// was published; the fact stream is only the live delta transport. A re-seen fact is an
 	// idempotent upsert, so any replay/live overlap is harmless.
-	ruleReader, err := nmgr.NewReader(dmconfig.SUBJECT_DETECTION_RULES_PUBLISHED)
+	ruleReader, err := nmgr.NewReader(streams.DetectionRulesPublished)
 	if err != nil {
 		return err
 	}
@@ -128,18 +128,18 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// event-management's) removes a deleted device's roster entry. Each consumer persists to its
 	// durable projection before acking, so the arming survives a restart independent of the
 	// finite-retention fact streams. This slice lands the projections; slice 4c-2b-2 arms off them.
-	rosterReader, err := nmgr.NewReader(dmconfig.SUBJECT_DEVICE_ROSTER)
+	rosterReader, err := nmgr.NewReader(streams.DeviceRoster)
 	if err != nil {
 		return err
 	}
-	entityDeletedReader, err := nmgr.NewReader(dmconfig.SUBJECT_ENTITY_DELETED)
+	entityDeletedReader, err := nmgr.NewReader(streams.EntityDeleted)
 	if err != nil {
 		return err
 	}
 	// Dynamic-threshold fact reader (ADR-051 slice 4c-3): the numeric, platform-set device
 	// attributes a detection rule can read a threshold from. Its consumer persists each into the
 	// DeviceAttribute projection before acking; the eval that reads it is slice 4c-3b-2.
-	attributeReader, err := nmgr.NewReader(dmconfig.SUBJECT_DEVICE_ATTRIBUTE)
+	attributeReader, err := nmgr.NewReader(streams.DeviceAttribute)
 	if err != nil {
 		return err
 	}
@@ -164,7 +164,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	idleGuard := time.Duration(Configuration.IdleAdvanceGuardSeconds) * time.Second
 	cfg := processor.Config{
 		PartitionId:          singletonPartition,
-		Suffix:               dmconfig.SUBJECT_RESOLVED_EVENTS,
+		Suffix:               streams.ResolvedEvents,
 		CheckpointEvents:     Configuration.CheckpointEvents,
 		CheckpointInterval:   time.Duration(Configuration.CheckpointIntervalSeconds) * time.Second,
 		MaxFutureSkew:        time.Duration(Configuration.MaxEventFutureSkewSeconds) * time.Second,
@@ -238,7 +238,7 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	// measurement-driven evaluator, so it is always wired — there is no longer a peer to double-raise
 	// against. A NATS writer is always available (unlike send-command, which needs an external
 	// coordinate), so raise-alarm has no disabled state.
-	writer, err := nmgr.NewWriter(dmconfig.SUBJECT_RAISE_ALARM)
+	writer, err := nmgr.NewWriter(streams.RaiseAlarm)
 	if err != nil {
 		return err
 	}
@@ -250,7 +250,7 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	// Like raise-alarm, a NATS writer is always available, so it is always wired — no external
 	// coordinate needed. Creating the writer auto-provisions the connector-dispatch stream, so it is
 	// safe to publish before the C3 consumer exists (that consumer will DeliverNew past any backlog).
-	connectorWriter, err := nmgr.NewWriter(config.SUBJECT_CONNECTOR_DISPATCH)
+	connectorWriter, err := nmgr.NewWriter(streams.ConnectorDispatch)
 	if err != nil {
 		return err
 	}
@@ -263,7 +263,7 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	// platform default when per-tenant overrides are not wired) — never unlimited.
 	connectorRate := buildEgressLimiter()
 
-	reader, err := nmgr.NewReader(config.SUBJECT_DERIVED_EVENTS, messaging.ReaderWithDeliverNew())
+	reader, err := nmgr.NewReader(streams.DerivedEvents, messaging.ReaderWithDeliverNew())
 	if err != nil {
 		return err
 	}

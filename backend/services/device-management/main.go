@@ -13,12 +13,12 @@ import (
 	"github.com/devicechain-io/dc-device-management/processor"
 	"github.com/devicechain-io/dc-device-management/ruleverify"
 	"github.com/devicechain-io/dc-device-management/schema"
-	esconfig "github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
 )
@@ -94,21 +94,21 @@ func parseConfiguration() error {
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for inbound events (wildcard across tenants).
-	ievents, err := nmgr.NewReader(esconfig.SUBJECT_INBOUND_EVENTS)
+	ievents, err := nmgr.NewReader(streams.InboundEvents)
 	if err != nil {
 		return err
 	}
 	InboundEventsReader = ievents
 
 	// Add and initialize resolved events writer.
-	revents, err := nmgr.NewWriter(config.SUBJECT_RESOLVED_EVENTS)
+	revents, err := nmgr.NewWriter(streams.ResolvedEvents)
 	if err != nil {
 		return err
 	}
 	ResolvedEventsWriter = revents
 
 	// Add and initialize failed events writer.
-	fevents, err := nmgr.NewWriter(config.SUBJECT_FAILED_EVENTS)
+	fevents, err := nmgr.NewWriter(streams.FailedEvents)
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Add the alarm-events writer and inject a publisher over it into the shared Api
 	// (ADR-041). CachedApi embeds this same *Api, so both the DETECT edge integrator and
 	// the GraphQL operator mutations emit alarm state-change events through it.
-	aevents, err := nmgr.NewWriter(config.SUBJECT_ALARM_EVENTS)
+	aevents, err := nmgr.NewWriter(streams.AlarmEvents)
 	if err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Add the entity-deleted writer and inject a publisher over it into the shared
 	// Api (ADR-044): the delete paths (deleteEdgeEntity) emit an entity-deletion
 	// event so event-management can reconcile dangling event_anchors.
-	devents, err := nmgr.NewWriter(config.SUBJECT_ENTITY_DELETED)
+	devents, err := nmgr.NewWriter(streams.EntityDeleted)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Add the detection-rules-published writer and inject a publisher into the shared
 	// Api (ADR-051 slice 4b-3): PublishDeviceProfile emits the enabled detection rules
 	// frozen into a new version so event-processing's DETECT engine runs them.
-	drpub, err := nmgr.NewWriter(config.SUBJECT_DETECTION_RULES_PUBLISHED)
+	drpub, err := nmgr.NewWriter(streams.DetectionRulesPublished)
 	if err != nil {
 		return err
 	}
@@ -145,7 +145,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Add the device-roster writer and inject a publisher into the shared Api (ADR-051
 	// slice 4c-2): device create/re-type emit a roster fact so event-processing's DETECT
 	// engine can arm absence for a device that has never reported (the dead-man roster).
-	rosterpub, err := nmgr.NewWriter(config.SUBJECT_DEVICE_ROSTER)
+	rosterpub, err := nmgr.NewWriter(streams.DeviceRoster)
 	if err != nil {
 		return err
 	}
@@ -155,7 +155,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// slice 4c-3): a numeric, platform-set device attribute upsert/delete emits a fact so
 	// event-processing can resolve a dynamic detection threshold from the device's own
 	// attribute instead of a compile-time literal.
-	attrpub, err := nmgr.NewWriter(config.SUBJECT_DEVICE_ATTRIBUTE)
+	attrpub, err := nmgr.NewWriter(streams.DeviceAttribute)
 	if err != nil {
 		return err
 	}
@@ -172,7 +172,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Reader + consumer for REACT raise-alarm requests (ADR-051 slice 5c / ADR-057): the raise-alarm
 	// subject is the sole alarm-raise path since the 6d cutover retired the measurement evaluator. It
 	// uses the cached Api so device-token resolution hits the by-token cache.
-	rareader, err := nmgr.NewReader(config.SUBJECT_RAISE_ALARM)
+	rareader, err := nmgr.NewReader(streams.RaiseAlarm)
 	if err != nil {
 		return err
 	}

@@ -41,17 +41,22 @@ const (
 	AiInference      FunctionalArea = "ai-inference"
 )
 
-// Manifest is a functional area's deployment contract (ADR-022 decision 2): the
-// messaging subjects it produces and consumes, and its dependencies on other
-// areas classified Hard (cannot function without — the gate rejects an enabled
-// set missing one) vs Soft (degrades or sits idle without — always allowed, made
-// safe by NATS pub/sub, ADR-003). Core marks the required base every deployment
-// runs: event resolution (device-management) and auth (user-management).
+// Manifest is a functional area's deployment contract (ADR-022 decision 2): its
+// dependencies on other areas, classified Hard (cannot function without — the
+// gate rejects an enabled set missing one) vs Soft (degrades or sits idle
+// without — always allowed, made safe by NATS pub/sub, ADR-003). Core marks the
+// required base every deployment runs: event resolution (device-management) and
+// auth (user-management).
+//
+// This deliberately carries no Produces/Consumes subject lists. It used to. They
+// were read by nothing — the gate has always worked off HardDeps/SoftDeps — and
+// as unenforced documentation they had silently drifted to naming 7 of the
+// platform's 15 streams, while still reading as an authoritative wiring map. The
+// stream set has one home now, core/streams; a second enumeration here could only
+// ever drift away from it again.
 type Manifest struct {
 	Area     FunctionalArea
 	Core     bool
-	Produces []string
-	Consumes []string
 	HardDeps []FunctionalArea
 	SoftDeps []FunctionalArea
 }
@@ -70,25 +75,20 @@ var catalog = map[FunctionalArea]Manifest{
 	DeviceManagement: {
 		Area:     DeviceManagement,
 		Core:     true,
-		Produces: []string{"resolved-events", "failed-events", "alarm-events"},
-		Consumes: []string{"inbound-events"},
 		SoftDeps: []FunctionalArea{UserManagement, EventSources},
 	},
 	EventSources: {
 		Area:     EventSources,
-		Produces: []string{"inbound-events"},
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
 	EventManagement: {
 		Area:     EventManagement,
-		Consumes: []string{"resolved-events"},
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
 	DeviceState: {
 		Area:     DeviceState,
-		Consumes: []string{"resolved-events"},
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
@@ -103,8 +103,6 @@ var catalog = map[FunctionalArea]Manifest{
 	},
 	CommandDelivery: {
 		Area:     CommandDelivery,
-		Produces: []string{"device-commands"},
-		Consumes: []string{"command-responses"},
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
@@ -114,7 +112,6 @@ var catalog = map[FunctionalArea]Manifest{
 		// notification channels. Functionally dead without the area producing what it
 		// consumes, so device-management is a Hard dep.
 		Area:     NotificationMgmt,
-		Consumes: []string{"alarm-events"},
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
@@ -124,8 +121,6 @@ var catalog = map[FunctionalArea]Manifest{
 		// conditions and dispatches actions. Functionally dead without the area
 		// producing what it consumes, so device-management is a Hard dep.
 		Area:     EventProcessing,
-		Produces: []string{"connector-dispatch"},
-		Consumes: []string{"resolved-events"},
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
@@ -139,7 +134,6 @@ var catalog = map[FunctionalArea]Manifest{
 		// connectors open an EGRESS surface, so a deployment opts in deliberately, either
 		// via ProfileFull or by naming it in enabledFunctionalAreas.
 		Area:     OutboundConn,
-		Consumes: []string{"connector-dispatch"},
 		HardDeps: []FunctionalArea{EventProcessing},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},

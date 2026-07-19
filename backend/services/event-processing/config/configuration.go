@@ -79,29 +79,6 @@ const (
 	DefaultOutboundBurst             = 200
 )
 
-// Messaging subjects this service PRODUCES (ADR-051). Consumed subjects
-// (resolved-events) are owned by device-management's config; these are
-// event-processing's own emitted products, so the suffix constants live here.
-const (
-	// SUBJECT_DERIVED_EVENTS carries DETECT's first-class derived signal events —
-	// one per detection — as a subscribe-able product (ADR-037). Published on the
-	// per-tenant scoped subject "{instanceId}.{tenant}.derived-events"; the client
-	// live-subscribes by tenant like any other event feed.
-	SUBJECT_DERIVED_EVENTS = "derived-events"
-
-	// SUBJECT_CONNECTOR_DISPATCH carries REACT's outbound-connector dispatch requests
-	// (ADR-060): one per fired httpCall/publish action, published on the per-tenant
-	// scoped subject "{instanceId}.{tenant}.connector-dispatch". The dedicated
-	// outbound-connectors service (slice C3) is the durable consumer that executes them
-	// (the HTTP call / broker publish, secret resolution, egress rate-limiting). The
-	// stream is auto-provisioned when this service creates the writer, so publishing is
-	// safe before the consumer exists: a DeliverNew consumer skips the pre-consumer
-	// BACKLOG. (It does not follow that a pre-C3 detection can never execute late — a
-	// DETECT replay after C3 deploys re-publishes detections as NEW messages the consumer
-	// will run; C3 owns treating a stale OccurredTime as a drop/flag signal if that matters.)
-	SUBJECT_CONNECTOR_DISPATCH = "connector-dispatch"
-)
-
 // EventProcessingConfiguration is the typed configuration for the event-processing
 // service (ADR-051): the DETECT + REACT pipeline extracted from device-management.
 // It is loaded fail-closed (unknown keys rejected) via core.LoadConfiguration.

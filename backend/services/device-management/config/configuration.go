@@ -9,54 +9,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 )
 
-const (
-	SUBJECT_FAILED_EVENTS   = "failed-events"
-	SUBJECT_RESOLVED_EVENTS = "resolved-events"
-	// SUBJECT_ALARM_EVENTS carries alarm state-change events (ADR-041) re-emitted on
-	// each alarm transition — the substrate for graphql-ws subscriptions (ADR-037)
-	// and notifications (ADR-017).
-	SUBJECT_ALARM_EVENTS = "alarm-events"
-	// SUBJECT_ENTITY_DELETED carries entity-deletion events (ADR-044): emitted when an
-	// edge entity (device, customer, area, asset, and their groups) is deleted, so
-	// cross-service reference holders (event-management's event_anchors) can reconcile
-	// dangling references. At-least-once, idempotent, tenant on the subject.
-	SUBJECT_ENTITY_DELETED = "entity-deleted"
-	// SUBJECT_DETECTION_RULES_PUBLISHED carries detection-rules-published events (ADR-051
-	// slice 4b-3): emitted post-commit when a device profile is published, carrying the
-	// ENABLED detection rules frozen into the new version so event-processing's DETECT engine
-	// can run them (keyed on the profile-version token). The emit is at-most-once; the
-	// consumer persists each delivered fact into a durable projection it rebuilds from on
-	// restart (the finite-retention stream is only the live delta transport). Tenant on the
-	// subject.
-	SUBJECT_DETECTION_RULES_PUBLISHED = "detection-rules-published"
-	// SUBJECT_DEVICE_ROSTER carries device-roster events (ADR-051 slice 4c-2): emitted
-	// post-commit when a device is created or re-typed, naming the device and the stable
-	// profile token its type adopts so event-processing's DETECT engine can arm absence
-	// for a device that has NEVER reported (the dead-man roster). Removal rides the
-	// existing entity-deleted fact (a deleted device leaves the roster). The emit is
-	// at-most-once; the consumer persists each delivered fact into a durable projection
-	// it rebuilds from on restart. Tenant on the subject.
-	SUBJECT_DEVICE_ROSTER = "device-roster"
-	// SUBJECT_DEVICE_ATTRIBUTE carries device-attribute events (ADR-051 slice 4c-3):
-	// emitted post-commit when a numeric, platform-set attribute (ADR-012 scope SHARED or
-	// SERVER, value type DOUBLE or LONG) of a device is upserted or deleted, so
-	// event-processing can resolve a DYNAMIC detection threshold from it (a rule reads the
-	// device's own attribute instead of a compile-time literal). The emit is at-most-once;
-	// the consumer persists each delivered fact into a durable projection it rebuilds from
-	// on restart. Tenant on the subject.
-	SUBJECT_DEVICE_ATTRIBUTE = "device-attribute"
-	// SUBJECT_RAISE_ALARM carries raise-alarm requests (ADR-051 slice 5c / ADR-054): emitted by
-	// event-processing's REACT dispatcher when a detection rule's raiseAlarm action fires, so
-	// device-management raises/escalates the alarm through its existing alarm engine (the Alarm
-	// object, ack/clear, graph rollup, and alarm-events→notification last mile all stay here,
-	// ADR-041/017). The message is a JSON RaiseAlarmRequest (device token + alarm key + metric +
-	// severity + value + occurred time). At-least-once: ApplyAlarmContributorEdge (ADR-057) is an
-	// idempotent contributor-set fold keyed on (device, alarmKey) with a per-contributor monotonic
-	// decision-ts, so a redelivery is safe. Tenant on the subject. Since the 6d cutover retired the
-	// measurement evaluator, this is the sole alarm-raise path — there is no peer to double-raise against.
-	SUBJECT_RAISE_ALARM = "raise-alarm"
-)
-
 // Device authentication policy applied to inbound events (transport security,
 // ADR-014).
 const (

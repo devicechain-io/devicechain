@@ -9,48 +9,35 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/streams"
 )
 
-// The COMMAND-PLANE subject suffixes. These are declared in core rather than in
-// command-delivery because more than one service needs to reason about them, and a
-// per-service literal is how they drift: event-sources subscribes to the whole
-// device-plane topic tree and must recognise command traffic as NOT being device
-// telemetry, while command-delivery owns the streams themselves. With the names in
-// one place, renaming a subject breaks the build instead of silently turning that
-// recognition off.
-//
-// This is a first step toward hoisting the whole stream/subject set into core — see
-// the note on allStreamSuffixes in core/config/instance_test.go, which is a
-// hand-maintained mirror that has already been wrong once.
+// The COMMAND-PLANE subject suffixes, re-exported from the single stream
+// declaration in core/streams so transport call sites can name them without
+// reaching past the messaging layer. They are aliases, not copies: a rename in
+// the declaration breaks the build here rather than leaving a stale literal that
+// silently stops matching.
 const (
 	// SubjectDeviceCommands carries persisted commands OUT to devices. It is
 	// PER-DEVICE: the concrete subject carries the target device's token as a final
 	// segment, "{instance}.{tenant}.device-commands.{deviceToken}", so the broker
 	// grant can confine a device to its own commands. See DeviceScopedSubject.
-	SubjectDeviceCommands = "device-commands"
+	SubjectDeviceCommands = streams.DeviceCommands
 	// SubjectCommandResponses carries a device's response to a command back IN. It
 	// is tenant-scoped, not per-device: every device publishes to the one subject a
 	// single consumer reads, and a response names its command by token.
-	SubjectCommandResponses = "command-responses"
+	SubjectCommandResponses = streams.CommandResponses
 )
 
-// perDeviceSuffixes are the subject suffixes whose concrete subject carries a
-// device token as a trailing segment. Their stream must therefore capture one more
-// wildcard level than a tenant-scoped suffix does.
-//
-// This is a set rather than a bool on the writer because the STREAM shape has to
-// agree with the PUBLISH shape, and those are decided in different places — the
-// stream at ensureStream, the subject at write time. Deriving both from one list
-// is what stops them disagreeing, which would show up as publishes silently
-// landing in no stream.
-var perDeviceSuffixes = map[string]struct{}{
-	SubjectDeviceCommands: {},
-}
-
 // IsPerDeviceSuffix reports whether a suffix addresses an individual device.
+//
+// The answer comes from the stream declaration rather than a set kept here,
+// because the STREAM shape and the PUBLISH shape are decided in different places
+// — the stream at ensureStream, the subject at write time. Deriving both from one
+// declaration is what stops them disagreeing, which would show up as publishes
+// silently landing in no stream at all.
 func IsPerDeviceSuffix(suffix string) bool {
-	_, found := perDeviceSuffixes[suffix]
-	return found
+	return streams.IsPerDevice(suffix)
 }
 
 // DeviceScopedSubject builds the concrete per-device subject a command is

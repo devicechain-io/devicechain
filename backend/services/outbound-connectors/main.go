@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	epconfig "github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -16,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-outbound-connectors/config"
 	"github.com/devicechain-io/dc-outbound-connectors/graphql"
@@ -24,11 +24,6 @@ import (
 	"github.com/devicechain-io/dc-outbound-connectors/schema"
 	"github.com/rs/zerolog/log"
 )
-
-// deadLetterSuffix is the terminal dead-letter subject suffix (ADR-060 SD-2): a connector dispatch
-// that exhausts the redelivery cap or is terminally undeliverable is written to
-// "{instance}.{tenant}.connector-dispatch.dead" and never retried forever.
-const deadLetterSuffix = epconfig.SUBJECT_CONNECTOR_DISPATCH + ".dead"
 
 var (
 	Microservice  *core.Microservice
@@ -114,7 +109,7 @@ func buildSecretStore() (secrets.SecretStore, error) {
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Dead-letter writer: a terminal sink for a dispatch that exhausts the redelivery cap or is
 	// terminally undeliverable (SD-2). Creating the writer auto-provisions its stream.
-	dead, err := nmgr.NewWriter(deadLetterSuffix)
+	dead, err := nmgr.NewWriter(streams.ConnectorDispatchDead)
 	if err != nil {
 		return err
 	}
@@ -124,7 +119,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// a running fleet does NOT replay the backlog of dispatch requests event-processing has published
 	// since the C2b sink went live — replaying that history would flood stale outbound calls. Once
 	// the durable exists its ack cursor persists, so a restart resumes from the last ack.
-	reader, err := nmgr.NewReader(epconfig.SUBJECT_CONNECTOR_DISPATCH, messaging.ReaderWithDeliverNew())
+	reader, err := nmgr.NewReader(streams.ConnectorDispatch, messaging.ReaderWithDeliverNew())
 	if err != nil {
 		return err
 	}

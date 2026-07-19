@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-event-sources/config"
@@ -282,13 +283,13 @@ func onEventDecodeFailed(source string, tenant string, raw []byte, err error) {
 
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
-	ievents, err := nmgr.NewWriter(config.SUBJECT_INBOUND_EVENTS)
+	ievents, err := nmgr.NewWriter(streams.InboundEvents)
 	if err != nil {
 		return err
 	}
 	InboundEventsWriter = ievents
 
-	failed, err := nmgr.NewWriter(config.SUBJECT_FAILED_DECODE)
+	failed, err := nmgr.NewWriter(streams.FailedDecode)
 	if err != nil {
 		return err
 	}

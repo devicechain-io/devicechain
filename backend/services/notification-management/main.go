@@ -7,12 +7,12 @@ import (
 	"context"
 	"fmt"
 
-	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-notification-management/config"
 	"github.com/devicechain-io/dc-notification-management/graphql"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -120,7 +120,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// streamMaxAge still drops unseen events — "briefly down" is safe, a week is not.)
 	// N.B created this durable with the default DeliverAll; the policy change rides a
 	// fresh bring-up, per the pre-GA decisive-cutover convention.
-	aevents, err := nmgr.NewReader(dmconfig.SUBJECT_ALARM_EVENTS, messaging.ReaderWithDeliverNew())
+	aevents, err := nmgr.NewReader(streams.AlarmEvents, messaging.ReaderWithDeliverNew())
 	if err != nil {
 		return err
 	}

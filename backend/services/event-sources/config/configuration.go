@@ -8,9 +8,6 @@ import (
 )
 
 const (
-	SUBJECT_INBOUND_EVENTS = "inbound-events"
-	SUBJECT_FAILED_DECODE  = "failed-decode"
-
 	// DefaultIngestMessagesPerSecond and DefaultIngestBurst are the platform
 	// per-tenant ingest ceiling applied when none is configured. They are a
 	// generous safety ceiling — high enough not to shed a normally busy fleet,

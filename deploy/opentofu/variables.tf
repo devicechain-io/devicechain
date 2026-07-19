@@ -58,7 +58,7 @@ variable "nats_jetstream_storage" {
     That was first fixed by raising the PV to 32Gi, which worked but spent most of it
     on control-plane streams that never hold more than a few MiB.
 
-    The bound is now split hot/cold in core/config (see ColdStreamSuffixes): 7 hot
+    The bound is now split hot/cold in backend/core/streams (see streams.All): 7 hot
     streams at 1 GiB + 8 control-plane streams at 128 MiB reserve 8Gi, which fits
     12Gi (→~10.8Gi ceiling) with the ingest streams keeping their FULL buffer.
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
@@ -227,6 +228,19 @@ func applyStreamSubjects(cfg *nats.StreamConfig, subjects []string) bool {
 // tenant's subjects for the suffix, so a single stream backs both the scoped
 // producers and the shared wildcard consumer.
 func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
+	// Refuse a suffix core/streams does not declare. This is the guard that makes
+	// the disk budget trustworthy: JetStream reserves each stream's MaxBytes UP
+	// FRONT, so a stream nobody declared reserves real disk that the budget never
+	// counted — and the budget is what keeps the broker from crashlooping with
+	// "insufficient storage resources available" on a fresh bring-up.
+	//
+	// Failing here is deliberately loud and early. The alternative is what used to
+	// happen: the stream is created, works fine in a dev cluster, and the shortfall
+	// only appears as a crashloop on an install whose PV was sized from the budget.
+	if !streams.IsDeclared(suffix) {
+		return "", fmt.Errorf("stream suffix %q is not declared in core/streams: "+
+			"add it to streams.All (with its disk tier) so the reservation budget accounts for it", suffix)
+	}
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	bounds := nmgr.streamBounds(suffix)
 	subjects := []string{StreamSubject(nmgr.Microservice.InstanceId, suffix)}
