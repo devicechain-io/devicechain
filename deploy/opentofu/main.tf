@@ -18,6 +18,7 @@ module "nats" {
   jetstream_max_file_store = var.nats_jetstream_max_file_store
   ha                       = var.ha
   enable_tls               = var.nats_enable_tls
+  reject_qos2_publish      = var.nats_mqtt_reject_qos2_publish
   enable_auth              = var.nats_enable_auth
   callout_issuer_public    = var.nats_callout_issuer_public
   service_password_bcrypt  = var.nats_service_password_bcrypt

@@ -94,6 +94,12 @@ variable "nats_jetstream_max_file_store" {
   default     = ""
 }
 
+variable "nats_mqtt_reject_qos2_publish" {
+  description = "Refuse MQTT QoS 2 PUBLISH at the broker (ADR-023). QoS 2 buys nothing over the platform's own event de-duplication and is the one gateway store a device can fill on purpose. Note the rejection tears down the CONNECTION rather than NACKing the message, so a device that publishes QoS 2 in a loop reconnects in a loop; QoS 0/1 are unaffected. See the nats module variable for the full rationale."
+  type        = bool
+  default     = true
+}
+
 variable "nats_enable_tls" {
   description = "Terminate TLS on the NATS client + MQTT listeners (ADR-025). Keep in sync with the services' instance config: when true the bring-up must thread the nats_ca output into infrastructure.nats.tls so clients dial over TLS. Set false only for plaintext debugging."
   type        = bool

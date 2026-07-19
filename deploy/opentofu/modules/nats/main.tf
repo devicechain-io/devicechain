@@ -72,6 +72,32 @@ variable "enable_auth" {
   default     = false
 }
 
+variable "reject_qos2_publish" {
+  description = <<-EOT
+    Refuse MQTT QoS 2 PUBLISH at the broker (nats-server `reject_qos2_publish`).
+
+    QoS 2 buys nothing here: the platform has its own opt-in event de-duplication,
+    and the exactly-once handshake costs two extra round trips per message. It also
+    carries the one gateway stream a DEVICE can fill on purpose — $MQTT_qos2in
+    holds an inbound QoS 2 message until its PUBREL arrives, so firmware that opens
+    QoS 2 publishes and never completes the handshake accumulates up to 65,535
+    messages per session with nothing reclaiming them. That store is bounded
+    (ADR-023), so this is defense in depth rather than the only guard: bounding
+    stops the disk-exhaustion crashloop, and this stops the traffic that fills it.
+
+    BE DELIBERATE ABOUT TURNING THIS ON with firmware you do not control. The
+    rejection is NOT a graceful per-message NACK: nats-server returns an error from
+    its PUBLISH parse path, which tears down the client CONNECTION, so a device
+    that publishes QoS 2 in a loop will reconnect in a loop. A QoS 2 Will is
+    refused earlier and more cleanly, at CONNECT, with its own return code.
+
+    Devices publishing QoS 0 or 1 — the recommended modes — are unaffected either
+    way.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "callout_issuer_public" {
   description = "Public account nkey (A...) the auth-callout responder signs device user JWTs with — the server's trust anchor. Required when enable_auth is true."
   type        = string
@@ -201,6 +227,13 @@ locals {
         tls = {
           enabled    = var.enable_tls
           secretName = var.enable_tls ? local.tls_secret_name : null
+        }
+        # `merge` is the chart's escape hatch for mqtt{} keys it exposes no field
+        # for. Safe to set unconditionally: the value is already a bool, so there
+        # is no HCL ternary here to coerce it to a string the way the tls blocks
+        # above have to work around.
+        merge = {
+          reject_qos2_publish = var.reject_qos2_publish
         }
       }
       cluster = {

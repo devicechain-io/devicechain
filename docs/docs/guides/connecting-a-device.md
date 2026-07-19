@@ -63,7 +63,11 @@ QoS 1 is fully supported. Use it deliberately if your devices are on links where
 
 A redelivered event carrying an `altId` already seen is detected and skipped. Without one, it is inserted again. This applies to any at-least-once path, not just MQTT QoS 1 — it is the only thing that makes a retry safe.
 
-**QoS 2 is not recommended.** It buys nothing here that `altId` does not give you more cheaply, and it costs more: the broker holds every QoS 2 publish until its PUBREL arrives, so a device that starts the handshake and never finishes it accumulates server-side state. That buffer is capped, and once it fills the broker **refuses** further QoS 2 publishes from that session rather than letting them consume the instance's disk. Publish at QoS 0, or QoS 1 with `altId`.
+**QoS 2 is refused by default.** It buys nothing here that `altId` does not give you more cheaply, and it costs more: the broker holds every QoS 2 publish until its PUBREL arrives, so a device that starts the handshake and never finishes it accumulates server-side state that nothing reclaims. Rather than leave that open, the broker rejects QoS 2 publishes outright.
+
+Be aware of *how* it rejects, because it is not gentle: the broker tears down the **connection** rather than declining the single message, so firmware that publishes at QoS 2 in a loop will reconnect in a loop. A QoS 2 Will is refused earlier, at CONNECT. If you see a device reconnecting for no apparent reason, check the QoS it publishes at first.
+
+Publish at QoS 0, or QoS 1 with `altId`. An operator who genuinely needs QoS 2 can turn the rejection off with the `nats_mqtt_reject_qos2_publish` deployment variable; the buffer it fills stays capped either way, so the instance's disk is protected regardless.
 
 ## HTTP
 
