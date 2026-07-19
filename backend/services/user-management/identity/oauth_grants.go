@@ -15,6 +15,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/google/uuid"
@@ -29,7 +30,7 @@ import (
 // revision-checked delete, like the refresh-token rotation) so a code cannot be
 // replayed. The authorize endpoint (Slice C) writes codes here; the token endpoint
 // redeems them.
-const AuthCodeBucket = "dc_oauth_codes"
+const AuthCodeBucket = kv.BucketOAuthCodes
 
 // AuthCodeTTL bounds how long an issued authorization code is redeemable. Kept
 // short per RFC 6749 §4.1.2 ("codes MUST be short-lived") — the code is exchanged

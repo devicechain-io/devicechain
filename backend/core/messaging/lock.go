@@ -9,14 +9,16 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
 )
 
 const (
-	// lockBucket is the JetStream KV bucket holding lock keys for an instance.
-	lockBucket = "dc_locks"
+	// lockBucket is the JetStream KV bucket holding lock keys for an instance. It
+	// names its entry in the kv inventory, which is what selects its disk ceiling.
+	lockBucket = kv.BucketLocks
 	// lockRetries bounds how many times an acquire is retried before giving up,
 	// and lockBackoff is the wait between attempts. Together they reproduce the
 	// former redislock LimitRetry(LinearBackoff(5s), 5) behavior (ADR-007).
@@ -39,11 +41,11 @@ type DistributedLock struct {
 // exceed the guarded critical section.
 func (nmgr *NatsManager) NewDistributedLock(ttl time.Duration) (*DistributedLock, error) {
 	bucket := sanitizeName(fmt.Sprintf("%s_%s", nmgr.Microservice.InstanceId, lockBucket))
-	kv, err := nmgr.KeyValueStore(bucket, ttl)
+	store, err := nmgr.KeyValueStore(lockBucket, bucket, ttl)
 	if err != nil {
 		return nil, err
 	}
-	return &DistributedLock{kv: kv}, nil
+	return &DistributedLock{kv: store}, nil
 }
 
 // WithLock acquires the named lock, runs logic while holding it, and releases

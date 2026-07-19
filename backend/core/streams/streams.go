@@ -6,12 +6,16 @@
 // from.
 //
 // It is deliberately not a census of everything occupying JetStream storage. KV
-// buckets (messaging.KeyValueStore) are JetStream streams too, as are the MQTT
-// gateway's own session and message stores, and neither is declared here or
-// bounded by the reservation budget below. They share whatever headroom the PV
-// has left over. So the guarantee this package provides is precise: the budget
-// cannot be incomplete over the streams ensureStream creates. It says nothing
-// about the rest, which is tracked separately.
+// buckets and the MQTT gateway's own stores are JetStream streams too, and
+// neither is declared here. So the guarantee this package provides is precise:
+// the budget cannot be incomplete over the streams ensureStream creates. It says
+// nothing about the rest, which is tracked separately — and by now the rest is
+// mostly tracked rather than merely hoped about. KV buckets are declared in
+// core/kv and bounded through messaging.KeyValueStore; the gateway's message and
+// QoS 2 stores are bounded by messaging.ReconcileMqttStores. Both are counted in
+// the same reservation (config.KvReservation, config.MqttStoreReservation). What
+// genuinely remains unaccounted is $MQTT_sess and $MQTT_rmsgs, left unbounded on
+// purpose because they discard OLD and a ceiling would evict live sessions.
 //
 // It exists because the set used to be unknowable. Suffixes were declared as
 // literals in per-service config packages, and core — which owns the disk-budget

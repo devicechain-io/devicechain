@@ -5,10 +5,13 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/kv"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 )
@@ -186,5 +189,185 @@ func TestDistributedLockReleasesOnError(t *testing.T) {
 	}
 	if !ran {
 		t.Fatal("lock was not released after the guarded logic errored")
+	}
+}
+
+// The reconcile path is the whole reason KeyValueStore does not just pass
+// MaxBytes to CreateKeyValue: the create path runs only when a bucket is absent,
+// so without this a ceiling would reach fresh installs and NOTHING else. Every
+// cluster that had already run would keep its unbounded bucket and look healthy.
+func TestKeyValueStoreBoundsAnAlreadyUnboundedBucket(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	const bucket = "preexisting_bucket"
+	// Create it the way a previous release did: no MaxBytes at all, which JetStream
+	// stores as unlimited.
+	if _, err := nmgr.js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket, TTL: time.Minute}); err != nil {
+		t.Fatalf("seed unbounded bucket: %v", err)
+	}
+	info, err := nmgr.js.StreamInfo(kvStreamPrefix + bucket)
+	if err != nil {
+		t.Fatalf("seed StreamInfo: %v", err)
+	}
+	if info.Config.MaxBytes > 0 {
+		t.Fatalf("precondition failed: seeded bucket already bounded at %d B; this test "+
+			"can no longer distinguish a working reconcile from a lucky default", info.Config.MaxBytes)
+	}
+
+	// dc_locks is a State bucket, so it takes the state ceiling.
+	if _, err := nmgr.KeyValueStore(kv.BucketLocks, bucket, time.Minute); err != nil {
+		t.Fatalf("KeyValueStore: %v", err)
+	}
+
+	info, err = nmgr.js.StreamInfo(kvStreamPrefix + bucket)
+	if err != nil {
+		t.Fatalf("StreamInfo after reconcile: %v", err)
+	}
+	if want := config.DefaultKvStateMaxBytes; info.Config.MaxBytes != want {
+		t.Errorf("existing bucket left at MaxBytes %d, want %d: an already-created "+
+			"bucket never receives the ceiling, so only fresh installs are bounded",
+			info.Config.MaxBytes, want)
+	}
+}
+
+// A newly created bucket must carry its ceiling too, and a cache bucket must get
+// the SMALLER one — the tier split is the thing that keeps the fleet-scaling
+// buckets from eating the headroom the budget leaves.
+func TestKeyValueStoreBoundsNewBucketsByTier(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	for _, tc := range []struct {
+		name    string
+		logical string
+		bucket  string
+		want    int64
+	}{
+		{"cache tier", kv.BucketDeviceByToken, "new_cache_bucket", config.DefaultKvCacheMaxBytes},
+		{"state tier", kv.BucketRefreshTokens, "new_state_bucket", config.DefaultKvStateMaxBytes},
+		// An unregistered bucket takes the STATE ceiling, not the cache one: the
+		// tiers rank by what a refused write costs, so the unknown case has to
+		// assume the expensive one.
+		{"unregistered", "not-in-the-inventory", "new_unknown_bucket", config.DefaultKvStateMaxBytes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := nmgr.KeyValueStore(tc.logical, tc.bucket, time.Minute); err != nil {
+				t.Fatalf("KeyValueStore: %v", err)
+			}
+			info, err := nmgr.js.StreamInfo(kvStreamPrefix + tc.bucket)
+			if err != nil {
+				t.Fatalf("StreamInfo: %v", err)
+			}
+			if info.Config.MaxBytes != tc.want {
+				t.Errorf("MaxBytes = %d, want %d", info.Config.MaxBytes, tc.want)
+			}
+		})
+	}
+}
+
+// Bounding a KV bucket is only safe because JetStream refuses the write instead
+// of evicting an older entry. That is a property of nats.go's bucket creation,
+// not of anything this repo controls, and the tier classification in kv.All is
+// built entirely on it — so it is pinned here rather than assumed. If a future
+// nats.go created buckets with DiscardOld, every cache bucket would start
+// silently dropping live entries under its new ceiling.
+func TestKeyValueBucketsDiscardNewSoACeilingRefusesRatherThanEvicts(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	if _, err := nmgr.KeyValueStore(kv.BucketDeviceByToken, "discard_policy_bucket", time.Minute); err != nil {
+		t.Fatalf("KeyValueStore: %v", err)
+	}
+	info, err := nmgr.js.StreamInfo(kvStreamPrefix + "discard_policy_bucket")
+	if err != nil {
+		t.Fatalf("StreamInfo: %v", err)
+	}
+	if info.Config.Discard != nats.DiscardNew {
+		t.Errorf("KV bucket discard policy = %v, want DiscardNew: a full bucket would "+
+			"EVICT live entries rather than refuse the write, which invalidates the "+
+			"tier reasoning in core/kv", info.Config.Discard)
+	}
+}
+
+// Applying a ceiling BELOW a bucket's current size is the live-upgrade case, and
+// JetStream handles it in the worst possible way: the update succeeds, nothing is
+// truncated, reads keep working, and every WRITE is refused until the entries age
+// out. A state bucket must therefore be left alone rather than bounded into that
+// window — a refresh-token bucket with a multi-day TTL would refuse every login
+// for days while reporting that it had been bounded successfully.
+func TestReconcileLeavesAnOversizedStateBucketUnbounded(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	const bucket = "oversized_state_bucket"
+	store, err := nmgr.js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket, TTL: time.Hour})
+	if err != nil {
+		t.Fatalf("seed bucket: %v", err)
+	}
+	// Push it past the state ceiling it would otherwise be given.
+	val := make([]byte, 64*1024)
+	for i := 0; int64(i)*64*1024 < config.DefaultKvStateMaxBytes+(8<<20); i++ {
+		if _, err := store.Put(fmt.Sprintf("key%05d", i), val); err != nil {
+			t.Fatalf("seed put %d: %v", i, err)
+		}
+	}
+	before, err := nmgr.js.StreamInfo(kvStreamPrefix + bucket)
+	if err != nil {
+		t.Fatalf("StreamInfo: %v", err)
+	}
+	if int64(before.State.Bytes) <= config.DefaultKvStateMaxBytes {
+		t.Fatalf("precondition failed: bucket is %d B, not over the %d B ceiling; this test "+
+			"is not exercising the shrink path at all", before.State.Bytes, config.DefaultKvStateMaxBytes)
+	}
+
+	nmgr.reconcileKvBucket(bucket, config.DefaultKvStateMaxBytes, kv.State)
+
+	after, err := nmgr.js.StreamInfo(kvStreamPrefix + bucket)
+	if err != nil {
+		t.Fatalf("StreamInfo after: %v", err)
+	}
+	if after.Config.MaxBytes == config.DefaultKvStateMaxBytes {
+		t.Error("an oversized STATE bucket was bounded below its current size: JetStream does not " +
+			"truncate, so this refuses every write to it until its entries age out — failed logins " +
+			"for the length of the refresh-token TTL")
+	}
+	// And the bucket must still be writable, which is the whole point of skipping.
+	if _, err := store.Put("stillwritable", []byte("x")); err != nil {
+		t.Errorf("bucket is no longer writable after reconcile: %v", err)
+	}
+}
+
+// The same shrink is SAFE for a cache bucket and must still be applied: a refused
+// write there is a miss, and the short entry TTL clears the overage in about a
+// minute. Skipping it would leave the fleet-scaling buckets — the ones the budget
+// most needs bounded — permanently unbounded once they grew past the ceiling.
+func TestReconcileStillBoundsAnOversizedCacheBucket(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	const bucket = "oversized_cache_bucket"
+	store, err := nmgr.js.CreateKeyValue(&nats.KeyValueConfig{Bucket: bucket, TTL: time.Hour})
+	if err != nil {
+		t.Fatalf("seed bucket: %v", err)
+	}
+	val := make([]byte, 64*1024)
+	for i := 0; int64(i)*64*1024 < config.DefaultKvCacheMaxBytes+(8<<20); i++ {
+		if _, err := store.Put(fmt.Sprintf("key%05d", i), val); err != nil {
+			t.Fatalf("seed put %d: %v", i, err)
+		}
+	}
+
+	nmgr.reconcileKvBucket(bucket, config.DefaultKvCacheMaxBytes, kv.Cache)
+
+	after, err := nmgr.js.StreamInfo(kvStreamPrefix + bucket)
+	if err != nil {
+		t.Fatalf("StreamInfo after: %v", err)
+	}
+	if after.Config.MaxBytes != config.DefaultKvCacheMaxBytes {
+		t.Errorf("oversized CACHE bucket left at MaxBytes %d, want %d: a cache is safe to shrink "+
+			"(refused write = miss, entries age out in ~60s), so skipping it would leave the "+
+			"fleet-scaling buckets unbounded exactly when they most need a ceiling",
+			after.Config.MaxBytes, config.DefaultKvCacheMaxBytes)
 	}
 }

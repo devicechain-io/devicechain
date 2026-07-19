@@ -37,8 +37,33 @@ variable "chart_version" {
 }
 
 variable "jetstream_storage" {
-  type    = string
-  default = "8Gi"
+  description = <<-EOT
+    Size of the JetStream PV.
+
+    This default is NOT a free choice — it must hold the platform's whole
+    reservation. JetStream reserves each stream's MaxBytes UP FRONT at creation,
+    so the disk floor is the SUM of the ceilings, and today that sum is ~9.1Gi:
+    8Gi of platform streams, 384Mi of MQTT gateway stores, and 768Mi of KV
+    buckets. The ceiling that has to hold it is max_file_store, which is 90% of
+    this value FLOORED to a whole unit of its own magnitude.
+
+    It was 8Gi, which no longer fits: floor(8 × 0.9) = 7Gi, well under the ~9.1Gi
+    reserved, so a consumer using this module directly with its defaults would hit
+    the "insufficient storage resources available" crashloop on the last services
+    to create a stream. The root module always passes 12Gi explicitly, so the
+    shipped path was never exposed — but a default that only works because every
+    caller overrides it is a trap, not a default.
+
+    Raising this REQUIRES checking the reservation still fits, and lowering it
+    REQUIRES lowering the stream bounds first. Do NOT derive the PV as
+    (sum of ceilings) / 0.9: the flooring makes that unsafe, since a 9.5Gi sum
+    yields an 11Gi PV whose ceiling is floor(11 × 0.9) = 9Gi — below the sum, and
+    back to the crashloop. Pick the smallest whole magnitude where
+    floor(magnitude × 0.9) >= the sum. See nats_jetstream_storage in the root
+    variables.tf for the full sizing history.
+  EOT
+  type        = string
+  default     = "12Gi"
   validation {
     # Integer magnitude + unit only. The max_file_store headroom default floors 90%
     # of the magnitude, so a fractional value like "1.5Gi" would drop to "1Gi" (a
@@ -70,6 +95,32 @@ variable "enable_auth" {
   description = "Enable broker authentication (ADR-025): an APP account with a shared service login + an auth_callout that delegates device connects to device-management. Requires callout_issuer_public + service_password_bcrypt (minted out-of-band, since nkeys aren't a TF primitive), with the plaintext password threaded into the services' instance config."
   type        = bool
   default     = false
+}
+
+variable "reject_qos2_publish" {
+  description = <<-EOT
+    Refuse MQTT QoS 2 PUBLISH at the broker (nats-server `reject_qos2_publish`).
+
+    QoS 2 buys nothing here: the platform has its own opt-in event de-duplication,
+    and the exactly-once handshake costs two extra round trips per message. It also
+    carries the one gateway stream a DEVICE can fill on purpose — $MQTT_qos2in
+    holds an inbound QoS 2 message until its PUBREL arrives, so firmware that opens
+    QoS 2 publishes and never completes the handshake accumulates up to 65,535
+    messages per session with nothing reclaiming them. That store is bounded
+    (ADR-023), so this is defense in depth rather than the only guard: bounding
+    stops the disk-exhaustion crashloop, and this stops the traffic that fills it.
+
+    BE DELIBERATE ABOUT TURNING THIS ON with firmware you do not control. The
+    rejection is NOT a graceful per-message NACK: nats-server returns an error from
+    its PUBLISH parse path, which tears down the client CONNECTION, so a device
+    that publishes QoS 2 in a loop will reconnect in a loop. A QoS 2 Will is
+    refused earlier and more cleanly, at CONNECT, with its own return code.
+
+    Devices publishing QoS 0 or 1 — the recommended modes — are unaffected either
+    way.
+  EOT
+  type        = bool
+  default     = true
 }
 
 variable "callout_issuer_public" {
@@ -201,6 +252,13 @@ locals {
         tls = {
           enabled    = var.enable_tls
           secretName = var.enable_tls ? local.tls_secret_name : null
+        }
+        # `merge` is the chart's escape hatch for mqtt{} keys it exposes no field
+        # for. Safe to set unconditionally: the value is already a bool, so there
+        # is no HCL ternary here to coerce it to a string the way the tls blocks
+        # above have to work around.
+        merge = {
+          reject_qos2_publish = var.reject_qos2_publish
         }
       }
       cluster = {

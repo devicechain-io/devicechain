@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
@@ -63,8 +64,26 @@ type NatsConfiguration struct {
 	// arrives — and it discards NEW on full, so this ceiling turns that from a
 	// disk-exhaustion vector into a refused publish.
 	MqttQoS2StoreMaxBytes int64
-	StreamMaxMsgs         int64
-	StreamMaxMsgSize      int32
+	// KvCacheMaxBytes / KvStateMaxBytes bound each JetStream KV bucket
+	// (messaging.KeyValueStore). KV buckets are backed by KV_-prefixed streams in
+	// the same account and draw on the same max_file_store, but until now nothing
+	// bounded or counted them — they shared whatever headroom was left over.
+	//
+	// The split keys on what a FULL bucket costs, not on how much it holds. nats.go
+	// creates every KV bucket with DiscardNew, so a full one refuses writes rather
+	// than evicting: a cache bucket degrades to a miss and the read falls through
+	// to the database, while a state bucket fails the login, token exchange, or
+	// lock acquisition that needed it. So the state tier takes the LARGER ceiling
+	// even though the cache tier holds far more entries — see kv.All for the
+	// per-bucket classification and kv.TierFor for the lookup.
+	//
+	// Fail-safe like the rest (ADR-023 never-unlimited): a non-positive value is
+	// coerced to the platform default rather than left at 0, which JetStream would
+	// read as UNLIMITED.
+	KvCacheMaxBytes  int64
+	KvStateMaxBytes  int64
+	StreamMaxMsgs    int64
+	StreamMaxMsgSize int32
 	// Tls, when enabled, makes clients dial the broker over TLS and verify the
 	// server certificate against Ca (ADR-025). The broker terminates TLS on both
 	// the 4222 client listener and the 1883 MQTT gateway with a cert this CA
@@ -364,7 +383,58 @@ const (
 	// 2 is not recommended here, so these are a safety cap on an otherwise
 	// unlimited store rather than a working buffer sized for throughput.
 	DefaultMqttQoS2StoreMaxBytes int64 = 64 << 20 // 64 MiB per QoS 2 store
+	// DefaultKvCacheMaxBytes bounds each cache bucket. These are the KV buckets
+	// that scale with fleet size, so they are the ones that would otherwise consume
+	// the headroom — and they are also the ones where hitting the ceiling is
+	// cheapest, since a refused write is a cache miss and the next read falls
+	// through to the database. Sizing them below the state tier is therefore the
+	// safe direction, not a compromise: the cost of being wrong here is latency.
+	DefaultKvCacheMaxBytes int64 = 64 << 20 // 64 MiB per cache bucket
+	// DefaultKvStateMaxBytes bounds each state bucket. Larger than a cache bucket
+	// because a refused write here fails a login, an OAuth code exchange, or a lock
+	// acquisition rather than degrading to a database read. What makes that bound
+	// safe at all is that none of these scales with fleet size — they scale with
+	// concurrent humans and concurrent reconcilers, and every entry carries a TTL,
+	// so the working set is bounded by activity rather than by device count.
+	DefaultKvStateMaxBytes int64 = 128 << 20 // 128 MiB per state bucket
 )
+
+// KvMaxBytesFor is the ceiling for the named KV bucket, keyed on its declared
+// tier (kv.All). An unregistered bucket takes the state ceiling — see kv.TierFor
+// for why the unknown case takes the larger one.
+func (c *NatsConfiguration) KvMaxBytesFor(bucket string) int64 {
+	if kv.TierFor(bucket) == kv.Cache {
+		if c.KvCacheMaxBytes > 0 {
+			return c.KvCacheMaxBytes
+		}
+		return DefaultKvCacheMaxBytes
+	}
+	if c.KvStateMaxBytes > 0 {
+		return c.KvStateMaxBytes
+	}
+	return DefaultKvStateMaxBytes
+}
+
+// KvReservation is the disk every declared KV bucket reserves up front.
+//
+// A KV bucket is a stream, so its MaxBytes is reserved at creation exactly like a
+// message stream's — which is what makes bounding them an accounting improvement
+// and not merely a safety cap. Before this existed the buckets were unbounded, so
+// they could not appear in the budget at all: the reservation understated the
+// true floor and the difference was tracked as "headroom" that anything could
+// eat. Counting them converts that hope into arithmetic.
+//
+// It derives from kv.All rather than a hand-maintained count, so declaring a new
+// bucket raises the reservation automatically. That is the same failure this
+// codebase already hit when the platform's own stream set was mirrored by hand
+// (see core/streams), and it is not worth hitting twice.
+func (c *NatsConfiguration) KvReservation() int64 {
+	var total int64
+	for _, b := range kv.All {
+		total += c.KvMaxBytesFor(b.Name)
+	}
+	return total
+}
 
 // MqttGatewayStreamCount is how many MQTT gateway streams
 // messaging.ReconcileMqttStores bounds: one message store plus two QoS 2 stores.
@@ -377,8 +447,6 @@ const (
 // this matches the set actually reconciled, and that the reservation below equals
 // the sum of the ceilings actually applied.
 const MqttGatewayStreamCount = 3
-
-const ()
 
 // MqttStoreReservation is the disk the MQTT gateway's bounded streams reserve up
 // front: the message store plus the two QoS 2 stores. Once
@@ -429,6 +497,12 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	}
 	if nats.MqttQoS2StoreMaxBytes <= 0 {
 		nats.MqttQoS2StoreMaxBytes = DefaultMqttQoS2StoreMaxBytes
+	}
+	if nats.KvCacheMaxBytes <= 0 {
+		nats.KvCacheMaxBytes = DefaultKvCacheMaxBytes
+	}
+	if nats.KvStateMaxBytes <= 0 {
+		nats.KvStateMaxBytes = DefaultKvStateMaxBytes
 	}
 	// Default the secret-store selection so an instance document that omits it means
 	// "the zero-infra default" (envelope-in-Postgres, instance KEK), not an invalid

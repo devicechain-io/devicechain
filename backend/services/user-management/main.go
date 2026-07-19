@@ -95,7 +95,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// store, and seed the bootstrap admin (ADR-008).
 	accessTTL := time.Duration(Configuration.Auth.AccessTokenTtlSeconds) * time.Second
 	refreshTTL := time.Duration(Configuration.Auth.RefreshTokenTtlSeconds) * time.Second
-	refreshKV, err := NatsManager.KeyValueStore(identity.RefreshBucket, refreshTTL)
+	// These two buckets pass their name twice because KeyValueStore takes the
+	// LOGICAL name (its entry in the kv inventory, which selects the disk ceiling)
+	// and the CONCRETE bucket name separately. They differ for the caches and the
+	// lock, which are prefixed per instance and functional area; these two are
+	// already instance-global, so the two names coincide.
+	refreshKV, err := NatsManager.KeyValueStore(identity.RefreshBucket, identity.RefreshBucket, refreshTTL)
 	if err != nil {
 		return err
 	}
@@ -103,7 +108,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// (ADR-047); nil otherwise, leaving the token endpoint's code path off.
 	var codesKV nats.KeyValue
 	if Configuration.OAuthEnabled() {
-		codesKV, err = NatsManager.KeyValueStore(identity.AuthCodeBucket, identity.AuthCodeTTL)
+		codesKV, err = NatsManager.KeyValueStore(identity.AuthCodeBucket, identity.AuthCodeBucket, identity.AuthCodeTTL)
 		if err != nil {
 			return err
 		}
