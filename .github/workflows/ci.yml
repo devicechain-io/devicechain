@@ -352,22 +352,18 @@ jobs:
       - name: helm lint
         run: helm lint deploy/helm/devicechain
 
-      - name: helm template
-        # Catch template render errors without keeping the output. The chart REQUIRES an
-        # instance root key (ADR-059) for any profile carrying a secret-store area —
-        # notification-management is in the default profile — so mint a throwaway one:
-        # it is render-only, never leaves this step, and encrypts nothing.
-        run: |
-          key="$(openssl rand -base64 32)"
-          # The default profile: the standard system.
-          helm template deploy/helm/devicechain \
-            --set "instance.config.infrastructure.secrets.rootKey=$key" >/dev/null
-          # And the full profile, which additionally ships ai-inference,
-          # outbound-connectors, and mcp — the last deriving its required URLs from the
-          # ingress, so render it with one rather than let "everything" break unnoticed.
-          helm template deploy/helm/devicechain --set profile=full \
-            --set ingress.enabled=true --set ingress.host=localhost --set ingress.tls.enabled=false \
-            --set "instance.config.infrastructure.secrets.rootKey=$key" >/dev/null
+      - name: profile workloads
+        # Renders EVERY profile and pins the workloads each one produces.
+        #
+        # This replaces a pair of render-to-/dev/null calls that caught template
+        # errors and asserted nothing about the output. It still catches render
+        # errors — a failed render fails the diff — but it also pins what an install
+        # actually runs, which is what the published footprint measurement is taken
+        # against. Moving a functional area into a profile used to invalidate that
+        # number silently; now it fails here with instructions.
+        #
+        # It also covers telemetry and ingest-only, which were rendered by nothing.
+        run: hack/check-profile-workloads.sh
 
   # ---------------------------------------------------------------------------
   # OpenTofu: format, init (no backend), validate.
