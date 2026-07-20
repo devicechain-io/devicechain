@@ -241,17 +241,25 @@ func TestAllowAtTreatsAZeroSendTimeAsNow(t *testing.T) {
 
 // A send time in the FUTURE is clamped to now, so a broker with a fast clock
 // cannot mint tokens by claiming its messages were sent later than they were.
+//
+// The timestamps must ADVANCE through the future, not sit at a constant one. A
+// constant future time accrues nothing after the first call whether or not the
+// clamp exists, so a version of this test using one passes against an
+// implementation with no clamp at all — verified by mutation, which is how it was
+// caught. Only a spread makes the clamp observable: unclamped, these 500 messages
+// accrue eight minutes of tokens and all pass.
 func TestAllowAtClampsAFutureSendTimeToNow(t *testing.T) {
 	l := NewTenantRateLimiter(func(string) (float64, int) { return 100, 10 })
 
 	future := time.Now().Add(24 * time.Hour)
 	admitted := 0
 	for i := 0; i < 500; i++ {
-		if l.AllowAt("acme", future) {
+		if l.AllowAt("acme", future.Add(time.Duration(i)*time.Second)) {
 			admitted++
 		}
 	}
-	if admitted > 20 {
-		t.Errorf("a future send time must be clamped to now; admitted %d/500", admitted)
+	if admitted > 12 {
+		t.Errorf("a future send time must be clamped to now, admitting only the burst; "+
+			"admitted %d/500", admitted)
 	}
 }

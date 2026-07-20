@@ -125,9 +125,10 @@ type Message struct {
 	// checkpoint are unaffected.
 	StreamSeq uint64
 	// AppendTime is the broker's timestamp for when a consumed message was written
-	// to the stream. For the ingest capture stream (ADR-030) the write happens
-	// before the device is PUBACKed, so this is when the DEVICE SENT the message,
-	// not when we got round to reading it.
+	// to the stream — server-assigned, never supplied by the publisher. For the
+	// ingest capture stream (ADR-030) the write happens before the device is
+	// PUBACKed, so it marks when the message REACHED the platform, not when we got
+	// round to reading it.
 	//
 	// That distinction only matters when a consumer is behind, and then it matters
 	// a great deal: a per-tenant rate gate fed arrival time meters how fast WE are

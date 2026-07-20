@@ -243,8 +243,14 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	// spin — and on a SHARED consumer it would wedge the tenants behind it too.
 	//
 	// The message is metered at its CAPTURE APPEND TIME, not at now (ADR-030 I4).
-	// The broker stamps that before it PUBACKs the device, so it is the device's own
-	// send time, and metering against it is what makes a recovered backlog survive.
+	//
+	// That is the BROKER's timestamp, assigned when it wrote the message — not a
+	// value the device supplies. The distinction cuts both ways and both are wanted:
+	// nothing device-controlled reaches the gate, so there is no device-clock
+	// exploit; and a device that buffers locally for an hour then dumps on reconnect
+	// gets append times of NOW and is metered as the burst it actually is. What is
+	// recovered is a backlog that built up on OUR side, which is the failure this
+	// source exists to survive.
 	// Metered at now, an hour of a tenant's perfectly compliant traffic all "arrives"
 	// within the seconds it takes to drain and is almost entirely shed — the platform
 	// discarding messages it had already told the devices were safe, which would make

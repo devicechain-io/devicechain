@@ -114,16 +114,24 @@ func (l *TenantRateLimiter) Allow(tenant string) bool {
 // backlog at a 100/s ceiling: at-ceiling traffic admits 1000/1000, while 10x
 // traffic admits 109 — the same as live.
 //
-// # Out-of-order send times
+// # A bucket must be fed ONE clock — this is a caller obligation
 //
-// Send times are monotonic per tenant within one stream, but a tenant ingesting
-// over two transports at once (a live HTTP post while their MQTT backlog drains)
-// can interleave a current timestamp into a replay of older ones. The underlying
-// limiter tolerates this: an older timestamp simply accrues nothing for that step
-// and then continues from the earlier timeline. The one asymmetry is that the
-// jump forward can refill the bucket before the rewind, which can admit up to
-// `burst` extra messages — bounded, one-off, and in the over-admitting direction
-// only for a tenant already spending their allowance on two transports at once.
+// Do not route both wall-clock arrivals and old send times to the same tenant's
+// bucket. A token bucket accrues from the last timestamp it saw, and the
+// underlying limiter rewinds that mark when handed an older time. So every jump
+// forward to now re-accrues from a stale mark and refills to `burst`, which the
+// following rewind then spends — minting roughly `burst` admissions per
+// interleave.
+//
+// That is not a bounded rounding error, and it was measured rather than reasoned
+// about: interleaving live traffic with a draining backlog on one bucket admitted
+// 900 of a 1000-message flood that the ceiling permitted 109 of, and the minting
+// scaled with lag until, at one second of consumer lag, a 100/s ceiling admitted
+// ~2000. Any caller mixing timelines must give each its own limiter instance —
+// see processor.NewRateGate in event-sources, which routes on exactly this basis.
+//
+// Within one stream, send times are monotonic per tenant, so a caller that meters
+// only a drain is safe by construction.
 //
 // A `when` in the future is clamped to now, so a broker with a skewed clock
 // cannot mint tokens by claiming its messages were sent later than they were.

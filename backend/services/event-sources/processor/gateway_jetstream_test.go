@@ -510,14 +510,13 @@ func TestRecoveredBacklogAboveTheCeilingIsStillShed(t *testing.T) {
 func TestCapturedMessageWithNoAppendTimeIsStillMetered(t *testing.T) {
 	h := backlogHarness(t, 100, 10)
 
-	admitted := 0
 	for i := 0; i < 1000; i++ {
 		h.source.handle(capturedMsgAt(captureSubject, validEvent, uint64(i+1),
 			time.Time{}, &recordingAck{}))
 	}
-	_, _, admitted, _ = h.counts()
+	_, _, admitted, _ := h.counts()
 
-	require.LessOrEqual(t, admitted, 20,
+	require.LessOrEqual(t, admitted, 12,
 		"a message with no send time must meter at now, not bypass the ceiling")
 }
 
@@ -527,13 +526,17 @@ func TestCapturedMessageWithNoAppendTimeIsStillMetered(t *testing.T) {
 func TestFutureAppendTimeCannotMintTokens(t *testing.T) {
 	h := backlogHarness(t, 100, 10)
 
+	// ADVANCING through the future, not a constant future time. A constant one
+	// accrues nothing after the first call with or without the clamp, so it cannot
+	// distinguish the two implementations — this test used one and passed against a
+	// build with the clamp deleted.
 	future := time.Now().Add(24 * time.Hour)
 	for i := 0; i < 1000; i++ {
 		h.source.handle(capturedMsgAt(captureSubject, validEvent, uint64(i+1),
-			future, &recordingAck{}))
+			future.Add(time.Duration(i)*time.Second), &recordingAck{}))
 	}
 	_, _, admitted, _ := h.counts()
 
-	require.LessOrEqual(t, admitted, 20,
+	require.LessOrEqual(t, admitted, 12,
 		"a future send time must be clamped to now, not accrue a day's worth of tokens")
 }

@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
@@ -34,8 +33,35 @@ var (
 	NatsManager    *messaging.NatsManager
 
 	// RateLimiter meters inbound events per tenant against the platform ingest
-	// ceiling; over-limit events are shed at the receive point before decode.
+	// ceiling; over-limit events are shed at the receive point before decode. It
+	// meters on WALL-CLOCK arrival and serves every source that is keeping up.
 	RateLimiter *core.TenantRateLimiter
+
+	// BacklogRateLimiter meters events being drained from the capture stream well
+	// after they were sent, on the SEND timeline rather than on arrival (ADR-030 I4).
+	//
+	// It is a second limiter rather than a second clock on the first one, and that
+	// separation is load-bearing rather than tidiness. A token bucket accrues from
+	// the last timestamp it saw, so feeding ONE bucket both wall-clock arrivals and
+	// hours-old send times makes every jump forward to now re-accrue from a stale
+	// mark and refill to burst, which the following rewind then spends. That is not
+	// a bounded rounding error: it mints roughly `burst` admissions per interleave,
+	// so a tenant ingesting over HTTP while their capture backlog drains can pace
+	// live posts against the drain and bypass their ceiling entirely. Measured on
+	// the shared-bucket design this replaces, one second of consumer lag was enough
+	// to turn a 100/s ceiling into ~2000 admissions.
+	//
+	// Keeping each bucket on exactly ONE clock removes the whole category: the live
+	// bucket only ever sees now, the backlog bucket only ever sees send times (which
+	// are monotonic in stream order), so neither can rewind and neither can mint.
+	//
+	// The cost is that a tenant who is simultaneously live AND draining a real
+	// backlog can be admitted up to twice their ceiling for the duration of the
+	// drain. That is bounded, predictable, and strictly smaller than the exposure
+	// the platform already carries from running N replicas with independent
+	// limiters — where an unbounded, lag-scaled bypass is a different category of
+	// problem entirely.
+	BacklogRateLimiter *core.TenantRateLimiter
 
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
@@ -122,15 +148,19 @@ func buildRateLimiter() {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant ingest overrides disabled; metering every tenant at the platform default.")
-		RateLimiter = core.NewTenantRateLimiter(func(string) (float64, int) {
-			return def.MessagesPerSecond, def.Burst
-		})
+		flat := func(string) (float64, int) { return def.MessagesPerSecond, def.Burst }
+		RateLimiter = core.NewTenantRateLimiter(flat)
+		BacklogRateLimiter = core.NewTenantRateLimiter(flat)
 		return
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest)
+	// Both limiters share one resolver, so a tenant's override applies to their live
+	// traffic and their backlog alike — the ceiling is the same, only the timeline
+	// each bucket measures against differs.
 	RateLimiter = core.NewTenantRateLimiter(resolver.Resolve)
+	BacklogRateLimiter = core.NewTenantRateLimiter(resolver.Resolve)
 	log.Info().Str("userManagement", umURL).Msg("Per-tenant ingest overrides enabled (fail-open to platform default).")
 }
 
@@ -199,7 +229,8 @@ func buildEventSources() error {
 				}
 				gatewaySourceBuilt = true
 				gateway := processor.NewGatewayJetStreamSource(source.Id, CaptureReader, decoder,
-					onMessageReceived, onEventDecoded, onEventDecodeFailed, onRateAllow)
+					onMessageReceived, onEventDecoded, onEventDecodeFailed,
+					processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed))
 				created = append(created, gateway)
 				continue
 			}
@@ -208,14 +239,16 @@ func buildEventSources() error {
 			// its own credentials. Per-source TLS for external brokers is a later
 			// concern, so this dials plaintext and anonymous.
 			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, nil, "", "",
-				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed, onRateAllow)
+				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
+				processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed))
 			if err != nil {
 				return err
 			}
 			created = append(created, mqtt)
 		case processor.TYPE_HTTP:
 			http, err := processor.NewHttpEventSource(source.Id, source.Configuration, Microservice.InstanceId,
-				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed, onRateAllow)
+				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
+				processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed))
 			if err != nil {
 				return err
 			}
@@ -239,13 +272,9 @@ func onMessageReceived(source string, raw []byte) {
 // recording the shed against the per-(source, tenant) metric so a noisy tenant is
 // observable. Called at the receive point of each transport, before decode.
 //
-// sentAt is when the tenant sent the message, which is what the ceiling governs —
-// see processor.RateGate for why metering a durable backlog on arrival instead
-// would shed the entire recovery. A zero sentAt means now.
-func onRateAllow(source string, tenant string, sentAt time.Time) bool {
-	if RateLimiter.AllowAt(tenant, sentAt) {
-		return true
-	}
+// The admission decision itself — including which timeline a message is metered
+// on — lives in processor.NewRateGate; this is only the shed accounting.
+func onRateShed(source string, tenant string) {
 	RateLimitedCounter.WithLabelValues(source).Inc()
 	// Per-tenant attribution is logged (debug) rather than carried as a metric
 	// label: this service does not verify tenant existence, so a tenant label would
@@ -255,7 +284,6 @@ func onRateAllow(source string, tenant string, sentAt time.Time) bool {
 		log.Debug().Str("source", source).Str("tenant", tenant).
 			Msg("Shed inbound event exceeding per-tenant ingest rate limit")
 	}
-	return false
 }
 
 // Called by event sources when an event is successfully decoded. The tenant is
