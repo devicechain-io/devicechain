@@ -85,9 +85,13 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 					// Device-plane topic (ADR-006): "{instanceId}/{tenant}/...". The
 					// first level is the instance id and the second carries the tenant
 					// the producer scopes on. For the gateway source this value is
-					// replaced at bind time with the instance-scoped wildcard
-					// "{instanceId}/+/#" (ADR-048); the placeholder here documents the
-					// shape and applies only to an external-broker source.
+					// IGNORED and replaced at bind time with the device-events filter
+					// "{instanceId}/+/devices/+/events" (processor.GatewayTopic) — the
+					// same shape the broker grants a device (ADR-025/ADR-048), and
+					// deliberately not the whole "{instanceId}/+/#" tree, which would
+					// also cover the subjects event-sources itself publishes to.
+					// This placeholder documents the shape and applies only to an
+					// external-broker source.
 					"topic": "+/#",
 				},
 				Decoder: EventDecoder{

@@ -29,10 +29,16 @@ func (m *fakeMqttMessage) Ack()              {}
 // newTestMqttSource builds an MQTT source with a buffered message channel (no
 // decode workers drain it, so the test inspects what onMessage enqueued) and the
 // given allow gate. received counts are captured.
+//
+// These tests call onMessage DIRECTLY, so they exercise topic shapes the gateway
+// subscription would never deliver — which is the external-broker source's case,
+// where the topic is operator-configured and arbitrary. What the gateway itself
+// receives is a property of the broker, and is pinned against a live MQTT gateway
+// in gateway_topic_test.go rather than asserted here.
 func newTestMqttSource(t *testing.T, allow func(string, string) bool) (*MqttEventSource, *int) {
 	t.Helper()
 	receivedCount := 0
-	es, err := NewMqttEventSource("mqtt-test", map[string]string{"host": "h", "port": "1883", "topic": "inst-1/+/#"},
+	es, err := NewMqttEventSource("mqtt-test", map[string]string{"host": "h", "port": "1883", "topic": GatewayTopic("inst-1")},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) { receivedCount++ },
 		func(string, string, *model.UnresolvedEvent, interface{}) {},
