@@ -102,7 +102,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.work
           cache: true
@@ -274,7 +274,7 @@ jobs:
           # goreleaser needs full history (tags + commits) for changelog/version.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.work
           cache: true
