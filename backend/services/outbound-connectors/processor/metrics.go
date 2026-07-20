@@ -14,7 +14,7 @@ const (
 	// outcomeSent — the outbound send succeeded (a 2xx for httpCall).
 	outcomeSent = "sent"
 	// outcomeRetry — a transient failure (send error/non-2xx, or a secret-resolve error that may be
-	// a DB blip); the message was naked for redelivery, bounded by the redelivery cap.
+	// a DB blip); the message was left unacked for AckWait-paced redelivery, bounded by the redelivery cap.
 	outcomeRetry = "retry"
 	// outcomeDead — the message exhausted the redelivery cap and was written to the terminal
 	// dead-letter subject (a permanently-failing send), never retried forever.

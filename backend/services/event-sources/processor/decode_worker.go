@@ -63,7 +63,7 @@ func (r rawMessage) settle(err error) {
 //
 // The distinction matters because the source's terminal step is itself "route to
 // failed-decode and ack". Without it, a payload that fails to DECODE while the
-// failed-decode stream is unavailable is routed there once by the worker, naked,
+// failed-decode stream is unavailable is routed there once by the worker, left unacked,
 // redelivered, routed again on every attempt, and then routed a final time by the
 // terminal step — six publishes of one payload, most of them to a stream that is
 // already failing. Marking the failure lets the source skip a route it knows has

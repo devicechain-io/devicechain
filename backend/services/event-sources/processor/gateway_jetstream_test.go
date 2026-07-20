@@ -18,10 +18,13 @@ import (
 )
 
 // recordingAck stands in for the broker's acknowledgement of a consumed message.
+// There is no Nak: a transient failure is retried by leaving the message UNACKED
+// (acks stays 0), so acks==0 is how a test asserts "left for AckWait-paced
+// redelivery" — the disposition the messaging layer no longer lets a consumer nak
+// away (ADR-030).
 type recordingAck struct {
 	mu     sync.Mutex
 	acks   int
-	naks   int
 	ackErr error
 }
 
@@ -32,28 +35,20 @@ func (a *recordingAck) Ack() error {
 	return a.ackErr
 }
 
-func (a *recordingAck) Nak() error {
+func (a *recordingAck) counts() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.naks++
-	return nil
+	return a.acks
 }
 
-func (a *recordingAck) counts() (int, int) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.acks, a.naks
-}
-
-// settled blocks until the message has been acked or naked, so a test never
-// races the decode worker. Returns false on timeout, which reads as "the message
-// was left in limbo" — itself a defect worth reporting distinctly from a wrong
-// decision.
+// settled blocks until the message has been acked, so a test never races the decode
+// worker. Returns false on timeout, which reads as "the message was left unacked" —
+// either a deliberate AckWait-paced retry or a defect, which the caller distinguishes.
 func (a *recordingAck) settled(t *testing.T) bool {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if acks, naks := a.counts(); acks+naks > 0 {
+		if acks := a.counts(); acks > 0 {
 			return true
 		}
 		time.Sleep(time.Millisecond)
@@ -203,11 +198,10 @@ func TestEveryDeliberateDropAcknowledgesTheCaptureStream(t *testing.T) {
 			require.True(t, ack.settled(t),
 				"the message was neither acked nor naked: it stays unacknowledged until AckWait "+
 					"expires and is then redelivered, forever")
-			acks, naks := ack.counts()
+			acks := ack.counts()
 			require.Equal(t, 1, acks,
 				"a deliberate drop MUST ack; leaving it unacked redelivers the same message to be "+
 					"dropped identically, forever, at fetch rate — the ACK TRAP")
-			require.Zero(t, naks, "a drop is terminal and must not request redelivery")
 		})
 	}
 }
@@ -222,9 +216,8 @@ func TestASuccessfulPublishIsAckedAndCarriesTheCaptureSequence(t *testing.T) {
 	h.source.handle(capturedMsg(captureSubject, validEvent, 1, 4242, ack))
 
 	require.True(t, ack.settled(t), "message never settled")
-	acks, naks := ack.counts()
+	acks := ack.counts()
 	require.Equal(t, 1, acks)
-	require.Zero(t, naks)
 
 	published, failed, received, seq := h.counts()
 	require.Equal(t, 1, published)
@@ -236,19 +229,14 @@ func TestASuccessfulPublishIsAckedAndCarriesTheCaptureSequence(t *testing.T) {
 }
 
 // A publish failure must NOT be acked — that is the whole point of consuming a
-// durable stream — and must ALSO not be naked.
+// durable stream. It must instead be left unacked so AckWait (60s) paces the retry,
+// making MaxDeliver span five minutes rather than the ~1.4ms an immediate nak would
+// burn (all five attempts arrive within one RTT each), which would exhaust the fuse
+// INSIDE the very downstream outage the capture stream exists to ride out.
 //
-// Nak means redeliver IMMEDIATELY, which makes MaxDeliver a millisecond-scale
-// fuse: measured against a real broker, all five attempts burn about 1.4ms after
-// the first Nak, because each redelivery costs one round trip. The failure this
-// path actually sees is a DOWNSTREAM outage — message-independent and lasting
-// minutes — so retrying at RTT speed exhausts the fuse INSIDE the outage and then
-// strands or mass-dead-letters everything that flowed through it. The capture
-// stream's hour-long recovery envelope would never engage at all.
-//
-// Saying nothing lets AckWait (60s) pace the retry, so MaxDeliver spans five
-// minutes instead of milliseconds. This test pins the ABSENCE of a nak, which is
-// easy to reintroduce as an apparent improvement.
+// The absence of a nak is now guaranteed structurally — the messaging layer exposes
+// no Nak (ADR-030) — so what this test still owns is the other half: that a failed
+// publish is NOT acked, i.e. never silently dropped.
 func TestAPublishFailureIsLeftUnackedForAckWaitPacedRedelivery(t *testing.T) {
 	h := newCaptureHarness(t)
 	h.publishErr = errors.New("jetstream unavailable")
@@ -259,13 +247,9 @@ func TestAPublishFailureIsLeftUnackedForAckWaitPacedRedelivery(t *testing.T) {
 	require.Eventually(t, func() bool { published, _, _, _ := h.counts(); return published == 1 },
 		2*time.Second, time.Millisecond, "the publish was never attempted")
 
-	acks, naks := ack.counts()
+	acks := ack.counts()
 	require.Zero(t, acks,
 		"acking a message whose publish FAILED discards it silently — the exact loss ADR-030 removes")
-	require.Zero(t, naks,
-		"a nak redelivers in ~one RTT, so MaxDeliver burns through in milliseconds and the "+
-			"message is stranded or dead-lettered INSIDE the very outage the capture stream "+
-			"exists to ride out; leaving it unacked lets AckWait pace the retry instead")
 }
 
 // After MaxDeliver attempts the message is poison, not unlucky. It must be routed
@@ -278,9 +262,8 @@ func TestAPoisonMessageIsDeadLetteredAndAckedAtMaxDeliver(t *testing.T) {
 	h.source.handle(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, 11, ack))
 
 	require.True(t, ack.settled(t), "message never settled")
-	acks, naks := ack.counts()
+	acks := ack.counts()
 	require.Equal(t, 1, acks, "a poison message must be acked once dead-lettered, or it redelivers forever")
-	require.Zero(t, naks)
 
 	_, failed, _, _ := h.counts()
 	require.Equal(t, 1, failed, "the payload must reach failed-decode before being acked, or it is lost silently")
@@ -299,7 +282,7 @@ func TestAPoisonMessageIsNotAckedWhenDeadLetteringAlsoFails(t *testing.T) {
 	// Give the worker time to run; the assertion is that NOTHING was acked.
 	require.Eventually(t, func() bool { _, failed, _, _ := h.counts(); return failed == 1 },
 		2*time.Second, time.Millisecond, "dead-letter route was never attempted")
-	acks, _ := ack.counts()
+	acks := ack.counts()
 	require.Zero(t, acks,
 		"acking after the dead-letter route failed discards the payload with no record anywhere")
 }
@@ -605,9 +588,8 @@ func TestARedeliveryIsNotMeteredASecondTime(t *testing.T) {
 		"a redelivery was re-metered and shed; it had already been admitted, so this is "+
 			"permanent loss of a message the broker PUBACKed — the at-least-once hole")
 
-	acks, naks := ack.counts()
+	acks := ack.counts()
 	require.Equal(t, 1, acks, "a successfully republished redelivery must be acked")
-	require.Zero(t, naks)
 }
 
 // The counterweight: a FIRST delivery is still metered. Without this, "skip the
@@ -623,6 +605,6 @@ func TestAFirstDeliveryIsStillMetered(t *testing.T) {
 	require.True(t, ack.settled(t), "message never settled")
 	published, _, _, _ := h.counts()
 	require.Zero(t, published, "a first delivery over the ceiling must be shed, not admitted")
-	acks, _ := ack.counts()
+	acks := ack.counts()
 	require.Equal(t, 1, acks, "a shed message is a deliberate drop and must ack")
 }

@@ -17,13 +17,19 @@ import (
 )
 
 // reactFakeResolver returns a canned rule / not-found / error for the dispatcher under test.
+// calls, when non-nil, counts Resolve invocations so a test can corroborate that the resolve
+// path was actually reached (a value receiver still shares the pointed-at counter).
 type reactFakeResolver struct {
 	rule  rules.Rule
 	found bool
 	err   error
+	calls *int
 }
 
 func (r reactFakeResolver) Resolve(context.Context, string) (rules.Rule, bool, error) {
+	if r.calls != nil {
+		*r.calls++
+	}
 	return r.rule, r.found, r.err
 }
 
@@ -83,19 +89,20 @@ func TestReactHandleDispatchesAndAcks(t *testing.T) {
 	if len(sink.sent) != 1 || sink.sent[0].DeviceToken != "device-1" || sink.sent[0].Command != "setMode" {
 		t.Fatalf("expected one command dispatched to device-1: %+v", sink.sent)
 	}
-	if ack.acks != 1 || ack.naks != 0 {
-		t.Fatalf("a dispatched event must ack once, no nak: acks=%d naks=%d", ack.acks, ack.naks)
+	if ack.acks != 1 {
+		t.Fatalf("a dispatched event must ack once: acks=%d", ack.acks)
 	}
 }
 
-// TestReactHandleNaksOnTransientFailureBelowCap proves a sink failure below the redelivery cap Naks
-// (redeliver), not ack.
-func TestReactHandleNaksOnTransientFailureBelowCap(t *testing.T) {
+// TestReactHandleLeavesTransientFailureUnackedBelowCap proves a sink failure below the redelivery cap
+// is left UNACKED (AckWait-paced retry, never an immediate nak that would burn MaxDeliver in ~1.4ms),
+// not acked.
+func TestReactHandleLeavesTransientFailureUnackedBelowCap(t *testing.T) {
 	rd := newTestReactDispatcher(reactFakeResolver{rule: sendCmdRule(), found: true}, &reactFakeSink{fail: true})
 	ack := &fakeAck{}
 	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), 1, ack))
-	if ack.naks != 1 || ack.acks != 0 {
-		t.Fatalf("a transient failure below the cap must nak, not ack: acks=%d naks=%d", ack.acks, ack.naks)
+	if ack.acks != 0 {
+		t.Fatalf("a transient failure below the cap must be left unacked (AckWait retry), not acked: acks=%d", ack.acks)
 	}
 }
 
@@ -105,8 +112,8 @@ func TestReactHandleDropsPoisonAtCap(t *testing.T) {
 	rd := newTestReactDispatcher(reactFakeResolver{rule: sendCmdRule(), found: true}, &reactFakeSink{fail: true})
 	ack := &fakeAck{}
 	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), messaging.MaxDeliver, ack))
-	if ack.acks != 1 || ack.naks != 0 {
-		t.Fatalf("at the redelivery cap a failing event must be dropped (acked): acks=%d naks=%d", ack.acks, ack.naks)
+	if ack.acks != 1 {
+		t.Fatalf("at the redelivery cap a failing event must be dropped (acked): acks=%d", ack.acks)
 	}
 }
 
@@ -156,18 +163,24 @@ func TestReactHandleOrphanAcks(t *testing.T) {
 	rd := newTestReactDispatcher(reactFakeResolver{found: false}, sink)
 	ack := &fakeAck{}
 	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), 0, ack))
-	if ack.acks != 1 || ack.naks != 0 || len(sink.sent) != 0 {
-		t.Fatalf("an orphan event must ack without dispatch: acks=%d naks=%d sent=%d", ack.acks, ack.naks, len(sink.sent))
+	if ack.acks != 1 || len(sink.sent) != 0 {
+		t.Fatalf("an orphan event must ack without dispatch: acks=%d sent=%d", ack.acks, len(sink.sent))
 	}
 }
 
-// TestReactHandleNaksOnResolverError proves a transient store failure Naks (retry), never dropping
-// the event's actions.
-func TestReactHandleNaksOnResolverError(t *testing.T) {
-	rd := newTestReactDispatcher(reactFakeResolver{err: errors.New("store down")}, &reactFakeSink{})
+// TestReactHandleLeavesResolverErrorUnacked proves a transient store failure is left UNACKED for
+// AckWait-paced retry, never dropping the event's actions.
+func TestReactHandleLeavesResolverErrorUnacked(t *testing.T) {
+	calls := 0
+	rd := newTestReactDispatcher(reactFakeResolver{err: errors.New("store down"), calls: &calls}, &reactFakeSink{})
 	ack := &fakeAck{}
 	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), 0, ack))
-	if ack.naks != 1 || ack.acks != 0 {
-		t.Fatalf("a resolver error must nak (retry): acks=%d naks=%d", ack.acks, ack.naks)
+	// Corroborate that the resolve path was actually reached, so acks==0 means "reached the
+	// transient arm and deliberately left unacked", not "early-returned without touching the message".
+	if calls != 1 {
+		t.Fatalf("the resolver was invoked %d times, want 1: the failure path was not reached", calls)
+	}
+	if ack.acks != 0 {
+		t.Fatalf("a resolver error must be left unacked (retry), not acked: acks=%d", ack.acks)
 	}
 }

@@ -22,7 +22,7 @@ import (
 // worker-pooled JetStream reader, so:
 //
 //   - At-least-once, not exactly-once. Notify may be re-invoked with the same event
-//     after a nak (a returned error) or a crash before ack. A multi-channel Notifier
+//     after a redelivery (a returned error left the message unacked) or a crash before ack. A multi-channel Notifier
 //     that returns an error after PARTIAL success (email sent, Slack timed out) gets
 //     the WHOLE event redelivered and will double-send the channel that succeeded —
 //     so per-channel delivery must be idempotent, or per-channel completion tracked,
@@ -37,8 +37,8 @@ import (
 //     it must bound its own duration; a hung channel call stalls graceful shutdown.
 //
 // Error contract: a returned error is treated as TRANSIENT by the processor and the
-// message is naked for redelivery — but redelivery today has no backoff and a finite
-// MaxDeliver cap, after which the notification is DROPPED (there is no dead-letter
+// message is left unacked for AckWait-paced redelivery — but redelivery today has a
+// finite MaxDeliver cap, after which the notification is DROPPED (there is no dead-letter
 // path yet). Return an error only for a genuinely retryable failure; log-and-swallow
 // a permanent one (a malformed policy) so a poison notification does not loop. A real
 // channel adapter should own its own retry/backoff/durability rather than rely on

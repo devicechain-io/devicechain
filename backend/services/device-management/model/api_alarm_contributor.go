@@ -75,7 +75,7 @@ func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
 	// Retry the read-modify-write IN PROCESS on a CAS conflict so a lost race does not consume a
 	// delivery attempt: re-reading picks up the winner's version, and the fold is idempotent +
 	// order-independent so it converges. A persistent conflict past this cap still surfaces the
-	// conflict error, which naks to the consumer's redelivery cap as the outer backstop — but under
+	// conflict error, which is left unacked to the consumer's redelivery cap as the outer backstop — but under
 	// the realistic "one message per rule edge" volume a single in-process retry almost always wins.
 	const maxCASAttempts = 5
 	var err error
@@ -84,7 +84,7 @@ func (api *Api) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint,
 			return err // success (nil), an idempotent no-op (nil), or a non-conflict error
 		}
 	}
-	return err // exhausted in-process retries under sustained contention: nak for redelivery
+	return err // exhausted in-process retries under sustained contention: left unacked for redelivery
 }
 
 // applyContributorEdgeOnce is one read-modify-write attempt of the contributor fold; it returns
@@ -160,7 +160,7 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 		created.ClearedTime = sql.NullTime{Time: occurredTime, Valid: true}
 	}
 	// A concurrent create loses the per-(originator, alarmKey) partial unique index → a duplicate-key
-	// error → the consumer naks and the redelivery folds into the winner's row. So a create race
+	// error → the consumer leaves it unacked and the redelivery folds into the winner's row. So a create race
 	// self-heals; it is the fold-into-an-existing-row race that needs the version CAS below.
 	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
 		return err
@@ -172,8 +172,8 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 }
 
 // errAlarmContributorConflict is returned when the CAS write loses to a concurrent modification (a
-// racing fold on another replica, or an operator ack/clear) — a RETRYABLE signal: the consumer naks
-// and the redelivery re-reads the moved row and re-folds. The fold (contributorSet.apply) is
+// racing fold on another replica, or an operator ack/clear) — a RETRYABLE signal: the consumer leaves
+// it unacked and the redelivery re-reads the moved row and re-folds. The fold (contributorSet.apply) is
 // idempotent and order-independent, so the retry re-derives the correct state by construction.
 var errAlarmContributorConflict = errors.New("alarm-edge: concurrent contributor modification, retry")
 
@@ -183,7 +183,7 @@ var errAlarmContributorConflict = errors.New("alarm-edge: concurrent contributor
 // once and DETECT never re-emits it). The predicate therefore guards BOTH the state (a concurrent
 // operator ack/clear) AND the version this fold read (a concurrent fold on another HA replica that
 // shares the raise-alarm durable consumer). A RowsAffected 0 is a CONFLICT → errAlarmContributorConflict
-// → nak-retry, NOT a silent drop. It handles the four transitions to {ACTIVE, CLEARED}: reactivate
+// → retry (left unacked), NOT a silent drop. It handles the four transitions to {ACTIVE, CLEARED}: reactivate
 // (CLEARED→ACTIVE, resets ack), escalate/de-escalate or value-update (ACTIVE→ACTIVE), clear
 // (ACTIVE→CLEARED), and a tombstone-only contributor update that leaves the row CLEARED.
 func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm,

@@ -21,14 +21,14 @@ import (
 const testAlarmSubject = "instance1.tenant1.alarm-events"
 
 // recordingAck records the A3 disposition applied to a message so a test can assert
-// whether the worker acked (handled / dropped) or naked (redeliver) it.
+// whether the worker acked (handled / dropped) it. A transient failure is retried by
+// leaving the message UNACKED (acked stays 0), so acked==0 means "left for
+// AckWait-paced redelivery" (ADR-030).
 type recordingAck struct {
 	acked int
-	naked int
 }
 
 func (r *recordingAck) Ack() error { r.acked++; return nil }
-func (r *recordingAck) Nak() error { r.naked++; return nil }
 
 // fakeNotifier records the events handed to it and can be told to fail.
 type fakeNotifier struct {
@@ -86,7 +86,6 @@ func TestDispatchDeliversAndAcks(t *testing.T) {
 
 	assert.Equal(t, 1, n.calls, "notifier should be invoked once")
 	assert.Equal(t, 1, ack.acked, "delivered event should be acked")
-	assert.Equal(t, 0, ack.naked)
 	if assert.Len(t, n.events, 1) {
 		assert.Equal(t, "alarm-1", n.events[0].AlarmToken)
 		assert.Equal(t, dmmodel.AlarmEventRaised, n.events[0].EventType)
@@ -104,7 +103,6 @@ func TestDispatchDropsUnparseableTenant(t *testing.T) {
 
 	assert.Equal(t, 0, n.calls, "notifier must not run without a tenant")
 	assert.Equal(t, 1, ack.acked, "poison message should be dropped (acked)")
-	assert.Equal(t, 0, ack.naked)
 }
 
 // An undecodable payload is a poison message: dropped (acked), never dispatched.
@@ -117,11 +115,11 @@ func TestDispatchDropsUndecodablePayload(t *testing.T) {
 
 	assert.Equal(t, 0, n.calls, "notifier must not run on an undecodable event")
 	assert.Equal(t, 1, ack.acked, "poison message should be dropped (acked)")
-	assert.Equal(t, 0, ack.naked)
 }
 
-// A transient dispatch failure below the redelivery cap is naked for redelivery.
-func TestDispatchNaksTransientFailure(t *testing.T) {
+// A transient dispatch failure below the redelivery cap is left UNACKED for
+// AckWait-paced redelivery (never an immediate nak that would burn MaxDeliver in ~1.4ms).
+func TestDispatchLeavesTransientFailureUnacked(t *testing.T) {
 	n := &fakeNotifier{err: errors.New("smtp timeout")}
 	np := newTestProcessor(n)
 	ack := &recordingAck{}
@@ -129,8 +127,7 @@ func TestDispatchNaksTransientFailure(t *testing.T) {
 	np.dispatchOne(context.Background(), msgWith(testAlarmSubject, validEventBytes(t), 1, ack))
 
 	assert.Equal(t, 1, n.calls)
-	assert.Equal(t, 1, ack.naked, "a transient failure should request redelivery")
-	assert.Equal(t, 0, ack.acked)
+	assert.Equal(t, 0, ack.acked, "a transient failure below the cap must be left unacked (AckWait retry), not acked")
 }
 
 // A dispatch failure that has exhausted the redelivery cap is given up on (acked)
@@ -144,7 +141,6 @@ func TestDispatchGivesUpAtMaxDeliver(t *testing.T) {
 
 	assert.Equal(t, 1, n.calls)
 	assert.Equal(t, 1, ack.acked, "an event past the redelivery cap should be given up (acked)")
-	assert.Equal(t, 0, ack.naked)
 }
 
 // The LogNotifier is the always-succeeding baseline: it never fails, so it never

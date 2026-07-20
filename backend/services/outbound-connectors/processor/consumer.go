@@ -27,8 +27,8 @@ const deadLetterWriteBackoff = 100 * time.Millisecond
 // DispatchConsumer is the outbound-connectors service's durable consumer of the connector-dispatch
 // stream (ADR-060 §4 / slice C3). It mirrors the notification-management dispatch model: a single
 // read loop hands each message to a bounded worker pool, and the worker that dispatches a message is
-// the one that acks (success/poison), naks (transient, redeliver), or dead-letters it (cap
-// exhausted / terminal). The pool width is the outbound concurrency ceiling — SD-2's back-pressure:
+// the one that acks (success/poison), leaves it unacked (transient, redeliver after AckWait), or
+// dead-letters it (cap exhausted / terminal). The pool width is the outbound concurrency ceiling — SD-2's back-pressure:
 // once every worker is busy on a slow target, the loop stops pulling and unacked work stays durable
 // on the (per-tenant bounded) stream rather than growing an in-memory queue.
 //
@@ -90,7 +90,7 @@ func (c *DispatchConsumer) Start(ctx context.Context) error {
 		go func() {
 			defer c.workerWG.Done()
 			// Workers run on a background context so that on shutdown they drain the buffered
-			// messages to completion (ack/nak) rather than aborting an in-flight send.
+			// messages to completion (ack or leave-unacked) rather than aborting an in-flight send.
 			for msg := range c.messages {
 				c.handle(context.Background(), msg)
 			}
@@ -146,11 +146,11 @@ func (c *DispatchConsumer) run() {
 	}
 }
 
-// handle processes one dispatch message end-to-end and applies its ack/nak/dead-letter disposition.
-// A message with no parseable tenant, an undecodable body, a failed structural validation, or a
-// payload/subject tenant mismatch is POISON (a redelivery cannot fix it) — dropped (acked) and
-// counted invalid. A well-formed message is executed; the outcome decides ack (sent), nak (transient,
-// until the cap), or dead-letter (cap exhausted / terminal).
+// handle processes one dispatch message end-to-end and applies its ack/leave-unacked/dead-letter
+// disposition. A message with no parseable tenant, an undecodable body, a failed structural validation,
+// or a payload/subject tenant mismatch is POISON (a redelivery cannot fix it) — dropped (acked) and
+// counted invalid. A well-formed message is executed; the outcome decides ack (sent), leave-unacked
+// (transient, redeliver after AckWait until the cap), or dead-letter (cap exhausted / terminal).
 func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 	tctx, tenant, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
 	if !ok {
@@ -207,7 +207,7 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 	// The worker blocks up to waitBudget for a token: a brief burst just over the tenant's rate is
 	// smoothed into pacing and admitted; a dispatch that cannot get a token within the budget is a
 	// tenant sustained over quota (a brief burst would have been admitted) and is SHED to the
-	// dead-letter subject. It never naks for rate, so rate-limiting can never churn the redelivery
+	// dead-letter subject. It never leaves a rate-shed message unacked, so rate-limiting can never churn the redelivery
 	// (poison) cap; and because reaching the budget means sustained-over-quota, a redelivery would not
 	// help either. The wait runs on ctx (a background context, per the worker) bounded by waitBudget,
 	// so it aborts on its own deadline; a shed consumes no token, so it does not deepen the deficit.
@@ -257,10 +257,11 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 			c.deadLetter(tctx, msg, action, outcomeDead)
 			return
 		}
+		// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery — an
+		// immediate nak would burn MaxDeliver in ~1.4ms inside an outage (ADR-030).
 		log.Warn().Err(res.err).Str("rule", req.RuleID).Str("tenant", tenant).Int("attempt", msg.NumDelivered).
-			Msg("Connector dispatch failed; naking for redelivery.")
+			Msg("Connector dispatch failed; leaving unacked for redelivery.")
 		c.metrics.recordOutcome(action, outcomeRetry)
-		c.nak(msg)
 	default:
 		// Terminal (unsupported kind / malformed config that bypassed the publish gate): a redelivery
 		// cannot help, so dead-letter it visibly rather than churn the cap or silently drop it.
@@ -271,7 +272,7 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 }
 
 // deadLetterWriteAttempts bounds the in-process retries of the dead-letter write on the final
-// delivery, where a plain nak could not redeliver (see deadLetter).
+// delivery, where leaving the message unacked could not redeliver it (past the cap; see deadLetter).
 const deadLetterWriteAttempts = 3
 
 // headerDeadReason is the message-header key stamped on a dead-lettered dispatch recording WHY it was
@@ -285,12 +286,13 @@ const headerDeadReason = "Dc-Dead-Reason"
 // none).
 //
 // The write-failure path must not silently lose the request. Its handling turns on whether the
-// broker will still redeliver this message: BELOW the redelivery cap a nak redelivers it and we
-// retry dead-lettering on the next attempt; AT/ABOVE the cap a nak does NOTHING (JetStream is done
-// redelivering after MaxDeliver), so a bare nak there would strand the message forever — never
-// executed, never dead-lettered. So on the final delivery we retry the write a bounded number of
-// times in-process, and if it still fails we record an explicit, alertable LOSS (never the false
-// "will retry") so an operator sees a dispatch that could be neither delivered nor dead-lettered.
+// broker will still redeliver this message: BELOW the redelivery cap leaving it unacked redelivers
+// it (after AckWait) and we retry dead-lettering on the next attempt; AT/ABOVE the cap no redelivery
+// follows (JetStream is done redelivering after MaxDeliver), so simply leaving it unacked there would
+// strand the message forever — never executed, never dead-lettered. So on the final delivery we retry
+// the write a bounded number of times in-process, and if it still fails we record an explicit,
+// alertable LOSS (never the false "will retry") so an operator sees a dispatch that could be neither
+// delivered nor dead-lettered.
 func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Message, action, outcome string) {
 	// Stamp the disposition on the dead-lettered message (not just the metric/log) so an operator or a
 	// future replay tool can tell a healthy-but-rate-shed dispatch (replayable) apart from genuine
@@ -321,30 +323,23 @@ func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Messag
 
 	if finalDelivery {
 		// No redelivery will follow; the write failed after retries — record an explicit LOSS rather
-		// than pretend a nak will retry. Ack so the (already terminal) message is not left dangling.
+		// than pretend leaving it unacked will retry. Ack so the (already terminal) message is not left dangling.
 		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("action", action).
 			Msg("LOST connector dispatch: dead-letter write failed on the final delivery; it could be neither delivered nor dead-lettered.")
 		c.metrics.recordOutcome(action, outcomeDeadWriteFailed)
 		c.ack(msg)
 		return
 	}
-	// Below the cap: nak so JetStream redelivers and we retry dead-lettering on the next attempt.
+	// Below the cap: leave it unacked so JetStream redelivers (after AckWait) and we retry
+	// dead-lettering on the next attempt.
 	log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
-		Msg("Failed to write connector dispatch to the dead-letter subject; naking to retry (not yet at the cap).")
-	c.nak(msg)
+		Msg("Failed to write connector dispatch to the dead-letter subject; leaving unacked to retry (not yet at the cap).")
 }
 
 // ack best-effort acks; a failed ack redelivers, and the idempotency key makes the re-run safe.
 func (c *DispatchConsumer) ack(msg messaging.Message) {
 	if err := msg.Ack(); err != nil {
 		log.Warn().Err(err).Msg("Failed to ack a connector dispatch; it will redeliver (idempotent).")
-	}
-}
-
-// nak best-effort naks for redelivery.
-func (c *DispatchConsumer) nak(msg messaging.Message) {
-	if err := msg.Nak(); err != nil {
-		log.Warn().Err(err).Msg("Failed to nak a connector dispatch; it will redeliver on ack timeout.")
 	}
 }
 

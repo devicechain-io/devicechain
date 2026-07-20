@@ -665,7 +665,9 @@ func (rez *EventResolver) Process(ctx context.Context) {
 					_ = unresolved.Ack()
 					done(core.ResultFailed)
 				} else {
-					_ = unresolved.Nak()
+					// Transient: leave it UNACKED (do not nak) so AckWait paces
+					// redelivery — an immediate nak would burn MaxDeliver in ~1.4ms
+					// inside an outage. Reference: event-sources' settler (ADR-030).
 					done(core.ResultRetry)
 				}
 			} else {

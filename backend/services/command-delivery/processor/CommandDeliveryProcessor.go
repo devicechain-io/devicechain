@@ -177,8 +177,8 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 
 	if _, err := cproc.Api.MarkResponse(tenantCtx, response.CommandToken,
 		response.Success, response.Payload, response.Error); err != nil {
-		// Treat a failed persist as transient. Nak to retry until the
-		// redelivery cap, then ack to give up (the device can resend and the
+		// Treat a failed persist as transient. Leave it unacked to retry until
+		// the redelivery cap, then ack to give up (the device can resend and the
 		// command sweep handles redelivery of the command itself).
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Err(err).Str("command", response.CommandToken).Str("correlation", msg.CorrelationID()).Int("attempts", msg.NumDelivered).
@@ -186,8 +186,10 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 			_ = msg.Ack()
 			done(core.ResultFailed)
 		} else {
+			// Leave it UNACKED (do not nak) so AckWait paces redelivery — an
+			// immediate nak would burn MaxDeliver in ~1.4ms inside an outage.
+			// Reference disposition: event-sources' settler (ADR-030).
 			log.Error().Err(err).Str("command", response.CommandToken).Str("correlation", msg.CorrelationID()).Msg("unable to record command response")
-			_ = msg.Nak()
 			done(core.ResultRetry)
 		}
 		return false
