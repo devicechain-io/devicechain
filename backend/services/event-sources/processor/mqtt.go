@@ -23,6 +23,21 @@ const (
 	DECODE_WORKER_COUNT = 5
 )
 
+// GatewayTopic is the MQTT topic filter the NATS-gateway event source subscribes
+// to for an instance: the device EVENTS shape, and nothing else.
+//
+// It matches the grant natsauth mints for a device (both are built from
+// messaging's one declaration), which is the property that matters: the gateway
+// ingests exactly what a device can be authorized to publish, so no subject the
+// platform publishes internally can arrive here as telemetry.
+//
+// It lives in this package, rather than being assembled at the one call site in
+// main.go, so the string that actually ships is the string under test — main.go
+// is package main and its wiring is not reachable from a test.
+func GatewayTopic(instanceId string) string {
+	return messaging.SubjectToMqttTopic(messaging.DeviceEventsWildcard(instanceId))
+}
+
 type MqttEventSource struct {
 	Id         string
 	BrokerHost string
@@ -108,12 +123,19 @@ func tenantFromTopic(topic string) (string, bool) {
 // response to a command. Both are consumed by command-delivery over its own
 // JetStream durable.
 //
-// They sit under the same {instanceId}/{tenant}/… tree this source subscribes to,
-// so a wildcard subscription sees them. They are named here rather than excluded
-// by narrowing the subscription because a device may legitimately publish events
-// on a topic this service has never been told about — the topic segment after the
-// tenant is not constrained anywhere — so an allowlist would silently stop
-// ingesting somebody's telemetry. Naming what is definitely NOT an event cannot.
+// The gateway source no longer needs this: its subscription is now the device
+// EVENTS shape (messaging.DeviceEventsWildcard), which command topics cannot
+// match. It is kept for the EXTERNAL-broker source, whose topic is operator-
+// configured and defaults to the permissive "+/#" — there, this service genuinely
+// has not been told the topic shape, so a denylist of what is definitely not an
+// event is the only exclusion available.
+//
+// Treat it as a second line of defence, not the mechanism. A denylist can only
+// exclude what it has been told to name: this one named the two command suffixes
+// and stayed silent about the other thirteen internal ones, which is how the
+// gateway ended up re-ingesting its own traffic. The subscription is what closes
+// that class; this only narrows the one case where a narrow subscription is not
+// available.
 //
 // The names come from core, not from literals here: command-delivery owns these
 // subjects, and a copy of the strings in this file would let a rename there turn
@@ -130,12 +152,18 @@ var commandPlaneSuffixes = map[string]struct{}{
 //
 // Returns "" for any other topic shape, which means "the transport carried no device
 // identity", not "no check needed" — the caller treats it as nothing to compare.
+// The segment literals come from core (messaging.SegmentDevices / SegmentEvents),
+// which is the same declaration the broker grant and the gateway subscription are
+// built from — so this parser cannot recognise a shape the subscription no longer
+// delivers, or miss one it does.
 func deviceFromTopic(topic string) string {
 	parts := strings.Split(topic, "/")
-	if len(parts) != 5 || parts[2] != "devices" || parts[4] != "events" {
+	if len(parts) != messaging.DeviceEventsSegmentCount ||
+		parts[messaging.DeviceEventsDevicesIndex] != messaging.SegmentDevices ||
+		parts[messaging.DeviceEventsEventsIndex] != messaging.SegmentEvents {
 		return ""
 	}
-	return parts[3]
+	return parts[messaging.DeviceEventsTokenIndex]
 }
 
 // isCommandPlane reports whether a topic addresses command traffic rather than a

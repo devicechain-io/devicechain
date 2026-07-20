@@ -156,7 +156,11 @@ func DevicePermissions(instanceId, tenant, deviceToken string) (jwt.Permissions,
 	if err := core.ValidateToken(deviceToken); err != nil {
 		return jwt.Permissions{}, fmt.Errorf("refusing to build a grant for an invalid device token: %w", err)
 	}
-	events := fmt.Sprintf("%s.%s.devices.%s.events", instanceId, tenant, deviceToken)
+	// Built from the shared declaration, not a literal: the gateway subscribes to
+	// the matching wildcard, so a shape written twice could let the grant and the
+	// subscription drift apart — which is exactly how internal subjects ended up
+	// inside the ingest subscription. See messaging.DeviceEventsWildcard.
+	events := messaging.DeviceEventsSubject(instanceId, tenant, deviceToken)
 	responses := fmt.Sprintf("%s.%s.%s", instanceId, tenant, messaging.SubjectCommandResponses)
 	commands := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectDeviceCommands, deviceToken)
 

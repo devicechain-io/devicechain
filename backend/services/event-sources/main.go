@@ -168,15 +168,21 @@ func buildEventSources() error {
 				// The gateway source authenticates as the shared service user when
 				// broker auth is on; an external-broker source keeps its own creds.
 				user, pass = natscfg.Auth.User, natscfg.Auth.Password
-				// Scope the gateway subscription to THIS instance's device-plane tree
-				// (ADR-048): the topic's first level is the instance id, so the
-				// MQTT-topic→NATS-subject mapping ({instanceId}.{tenant}.…) matches the
-				// permission tree minted for device connections. On a shared broker one
-				// instance therefore never receives another instance's device traffic.
-				// The topic is fully derived from the instance id (not the configured
-				// value) since it is structural; a configured "topic" applies only to an
-				// external-broker source, which is not instance-scoped.
-				source.Configuration["topic"] = fmt.Sprintf("%s/+/#", Microservice.InstanceId)
+				// Scope the gateway subscription to exactly the device EVENTS topic
+				// this instance grants devices (ADR-025/ADR-048), derived from the one
+				// declaration the grant itself is built from rather than written as a
+				// literal here. The topic is structural, so it is derived from the
+				// instance id and not from the configured value; a configured "topic"
+				// applies only to an external-broker source, which is not
+				// instance-scoped.
+				//
+				// It subscribes to the device-events shape and NOT to the whole
+				// "{instanceId}/+/#" tree, because that tree also contains the subjects
+				// event-sources itself publishes to — so the service received its own
+				// internal traffic back and metered it twice against the publishing
+				// tenant's ingest bucket. Matching the grant means only what a device
+				// can actually be authorized to publish is ingested.
+				source.Configuration["topic"] = processor.GatewayTopic(Microservice.InstanceId)
 			}
 			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, tlsConfig, user, pass,
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed, onRateAllow)

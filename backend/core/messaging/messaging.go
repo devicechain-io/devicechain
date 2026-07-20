@@ -245,6 +245,77 @@ func WildcardSubject(instanceId, suffix string) string {
 	return fmt.Sprintf("%s.*.%s", instanceId, suffix)
 }
 
+// The device-events subject is the ONE subject a device may publish telemetry to:
+// "{instance}.{tenant}.devices.{deviceToken}.events" (MQTT topic
+// "{instance}/{tenant}/devices/{deviceToken}/events").
+//
+// Its shape is declared here, once, because three places must agree on it and they
+// live in different modules: the broker grant that confines a device to its own
+// topic (core/natsauth), the gateway subscription that ingests telemetry
+// (event-sources), and the parser that recovers the device token from a delivered
+// topic (event-sources/processor). They previously carried three independent
+// copies of the literals, and the copies drifted — see DeviceEventsWildcard.
+const (
+	// SegmentDevices and SegmentEvents bracket the device token, which is what
+	// makes the shape distinguishable from every internal subject: no suffix in
+	// streams.All is named "devices", so nothing internal can match this pattern.
+	SegmentDevices = "devices"
+	SegmentEvents  = "events"
+
+	// Segment count and the position of each fixed segment within a well-formed
+	// device events subject/topic: {instance}/{tenant}/devices/{token}/events.
+	DeviceEventsSegmentCount = 5
+	DeviceEventsDevicesIndex = 2
+	DeviceEventsTokenIndex   = 3
+	DeviceEventsEventsIndex  = 4
+)
+
+// DeviceEventsSubject builds the concrete subject a single device publishes its
+// telemetry to. The broker grant is minted from this, so a device is confined to
+// exactly the subject this returns.
+func DeviceEventsSubject(instanceId, tenant, deviceToken string) string {
+	return fmt.Sprintf("%s.%s.%s.%s.%s", instanceId, tenant, SegmentDevices, deviceToken, SegmentEvents)
+}
+
+// DeviceEventsWildcard is the subject pattern covering every device's telemetry
+// for an instance: "{instance}.*.devices.*.events".
+//
+// This is deliberately NARROW, and the narrowness is the point. The gateway
+// subscription used to be "{instance}.*.>", which also covered the subjects
+// event-sources itself publishes to ("{instance}.{tenant}.inbound-events",
+// ".failed-decode", …). The service therefore received its own internal traffic
+// back, metered it a SECOND time against the publishing tenant's ingest bucket,
+// failed to decode it as device telemetry, and dead-lettered it — so a tenant
+// configured for 1000 msg/s got roughly 600 with no burst at all, and the
+// failed-decode stream filled with internal envelopes.
+//
+// The earlier fix denylisted the two command-plane suffixes it knew about, which
+// closed that instance and left the class: every other internal suffix was still
+// caught. Matching the grant exactly is what closes the class — an internal
+// subject cannot be granted to a device, so it cannot be ingested as telemetry.
+func DeviceEventsWildcard(instanceId string) string {
+	return fmt.Sprintf("%s.*.%s.*.%s", instanceId, SegmentDevices, SegmentEvents)
+}
+
+// SubjectToMqttTopic maps a NATS subject (or subject pattern) to the MQTT topic
+// the NATS MQTT gateway exposes it as: "." becomes "/", and the NATS wildcards
+// "*" and ">" become their MQTT equivalents "+" and "#".
+//
+// The gateway subscribes over MQTT while every other producer and consumer speaks
+// subjects, so a topic literal written by hand would be a fourth copy of the shape
+// with no compiler or test tying it to the other three. Deriving it instead means
+// the subscription cannot drift from the grant.
+//
+// PRECONDITION: no segment may itself contain "." or "/". This is a simplified
+// mapping, not the gateway's full codec — the server also escapes a literal "."
+// inside an MQTT topic level as "//", which this does not reproduce. Every segment
+// used here is an instance id, tenant or device token, all constrained to
+// [A-Za-z0-9][A-Za-z0-9_-]* by core.ValidateToken, so the escape case cannot
+// arise. Do not reach for this on operator- or device-supplied strings.
+func SubjectToMqttTopic(subject string) string {
+	return strings.NewReplacer(".", "/", "*", "+", ">", "#").Replace(subject)
+}
+
 // JetStream stream and durable-consumer names share the subject token space but
 // disallow ".", "*", ">", "/", "\\" and whitespace. sanitizeName replaces any
 // such character with "_" so an instance id / suffix can seed a valid name.
