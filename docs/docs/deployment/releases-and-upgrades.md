@@ -115,6 +115,36 @@ replaced. Set it globally with `--set replicas=2`, or per area under
 area with more than one replica, so node drains can't evict every replica at once.
 :::
 
+### The one-time durable-ingest cutover
+
+The release that introduces **durable MQTT ingest** changes how `event-sources` receives
+device telemetry: instead of subscribing to the broker as an MQTT client, it consumes a
+durable capture stream that the broker writes to before it acknowledges the device. This
+is what stops telemetry being lost when `event-sources` is down.
+
+Crossing that release once is a normal `helm upgrade` — but expect a **brief window of
+duplicated telemetry**, and plan for it:
+
+- During the rollout the outgoing pod is still ingesting over MQTT while the incoming pod
+  has already begun consuming the capture stream, so messages published in that overlap are
+  ingested by both. The window is bounded by how long the two pods coexist — the incoming
+  pod's startup plus the outgoing pod's drain.
+- Devices that set `altId` on their events are unaffected: events carrying an `altId` are
+  deduplicated on write, so the duplicates collapse. Telemetry without an `altId` is not
+  deduplicated and will produce two rows.
+- The overlap is preferred deliberately. The alternative ordering — stopping the old pod
+  before the capture stream exists — loses every message the broker acknowledges in the gap,
+  and that loss is silent: the device is told the message was accepted and it is never
+  stored. A duplicate reading is visible and correctable; a missing one is neither.
+
+:::danger Do not set `event-sources` to `Recreate`
+`strategy: Recreate` on `event-sources` produces exactly the lossy ordering above, because
+it terminates the old pod before the new one creates the capture stream. The chart refuses
+to render this configuration rather than let it drop telemetry silently. `event-sources`
+is not a single-writer service and gains nothing from `Recreate` — once cut over it can run
+multiple replicas, which the MQTT-client path it replaces could not.
+:::
+
 ## Data durability
 
 The database tier is intentionally **lifecycle-independent** from the application: the

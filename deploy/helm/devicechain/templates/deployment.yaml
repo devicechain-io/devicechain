@@ -64,10 +64,32 @@ spec:
 
   Such an area MUST also stay at replicas:1 (a Recreate with 2 replicas runs 2 PERMANENT
   writers — strictly worse than a rolling overlap); the guard below fails the render if not.
+
+  event-sources is the INVERSE case, and the guard below refuses Recreate there (ADR-030 I5).
+  It ingests device telemetry from a JetStream capture stream that it ensures at startup,
+  before it reports ready — and a JetStream stream captures nothing published before it
+  existed, even though the broker already PUBACKed it. RollingUpdate (maxUnavailable:0,
+  maxSurge:1) is therefore load-bearing rather than merely preferred: the incoming pod
+  creates the stream and goes Ready while the outgoing pod is still ingesting, so capture
+  is live before the last ingester dies and nothing the broker accepted is dropped.
+  Recreate reverses exactly that order — all old pods terminate BEFORE any new pod starts,
+  so no stream exists for the whole gap and every message the broker PUBACKs during it is
+  accepted and written nowhere. The loss is silent on both sides: the device is told its
+  message is safe and the platform never sees it. Pinned by
+  TestCaptureBeginsOnlyWhenTheStreamExists in event-sources/processor/cutover_test.go.
+
+  Nor does event-sources need Recreate: unlike the DETECT engine it is not a single writer.
+  Its capture consumer is a durable scoped to instance+area+suffix, so every replica shares
+  one consumer and each message is delivered to exactly one of them (core/messaging NewReader)
+  — which is also why event-sources may scale past one replica once cut over, something the
+  MQTT-client path it replaces could never do.
   */}}
   {{- $strategy := get $areaCfg "strategy" | default "RollingUpdate" }}
   {{- if and (eq $strategy "Recreate") (gt (int (get $areaCfg "replicas" | default $root.Values.replicas)) 1) }}
   {{- fail (printf "functionalAreas.%s: strategy Recreate is a single-writer guarantee and requires replicas:1 (got %v)" $area (get $areaCfg "replicas" | default $root.Values.replicas)) }}
+  {{- end }}
+  {{- if and (eq $strategy "Recreate") (eq $area "event-sources") }}
+  {{- fail "functionalAreas.event-sources: strategy Recreate would silently DROP device telemetry (ADR-030). It terminates the old pod before the new one creates the ingest capture stream, so everything the broker PUBACKs in the gap is accepted and stored nowhere. event-sources is not a single writer and must stay on RollingUpdate." }}
   {{- end }}
   strategy:
     type: {{ $strategy }}
