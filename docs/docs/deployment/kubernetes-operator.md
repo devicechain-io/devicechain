@@ -26,7 +26,7 @@ You choose which services to run with **either** a named profile **or** an expli
 
 ```bash
 helm install dc deploy/helm/devicechain --set instance.id=devicechain
-# pick a smaller footprint:
+# run a smaller set of services:
 helm install dc deploy/helm/devicechain --set profile=telemetry
 ```
 
