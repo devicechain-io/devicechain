@@ -573,3 +573,56 @@ func TestStartingWithoutACaptureReaderFailsLoudly(t *testing.T) {
 	require.Contains(t, err.Error(), "without a capture-stream reader",
 		"the error must name the missing dependency: a bare nil-deref names neither the source nor the reader")
 }
+
+// A REDELIVERY MUST NOT BE RE-METERED. Admission was paid on the first delivery;
+// charging it again turns a transient downstream failure into permanent loss.
+//
+// The sequence this pins: a message is admitted, its publish to inbound-events
+// fails transiently, the settler correctly leaves it UNACKED, and 60s later the
+// broker redelivers it. If the gate meters it a second time it can be shed — and a
+// shed message is ack-DROPPED, so telemetry the broker already PUBACKed is gone.
+// The window where this bites is exactly the one the capture stream exists for: a
+// post-outage drain runs the tenant's bucket at the ceiling, so the redelivery of a
+// failed publish arrives precisely when there is no token to pay with.
+//
+// It also removes the only way a non-monotonic send time can reach the backlog
+// limiter. Stream order is monotonic in AppendTime; DELIVERY order is not, because
+// a redelivery carries an older AppendTime than messages already admitted. Feeding
+// that to the bucket rewinds its mark and re-accrues on the next forward jump —
+// the same minting the two-limiter split was introduced to close.
+func TestARedeliveryIsNotMeteredASecondTime(t *testing.T) {
+	h := newCaptureHarness(t)
+	// The gate refuses everything: the tenant's bucket is empty, as it is mid-drain.
+	h.allowResult = false
+
+	ack := &recordingAck{}
+	// NumDelivered 2 => the broker is redelivering; admission was paid on delivery 1.
+	h.source.handle(capturedMsg(captureSubject, validEvent, 2, 99, ack))
+
+	require.True(t, ack.settled(t), "message never settled")
+	published, _, _, _ := h.counts()
+	require.Equal(t, 1, published,
+		"a redelivery was re-metered and shed; it had already been admitted, so this is "+
+			"permanent loss of a message the broker PUBACKed — the at-least-once hole")
+
+	acks, naks := ack.counts()
+	require.Equal(t, 1, acks, "a successfully republished redelivery must be acked")
+	require.Zero(t, naks)
+}
+
+// The counterweight: a FIRST delivery is still metered. Without this, "skip the
+// gate on redelivery" could be implemented as "skip the gate", and the ADR-023
+// ceiling would be unenforced with every rate-limit test still passing.
+func TestAFirstDeliveryIsStillMetered(t *testing.T) {
+	h := newCaptureHarness(t)
+	h.allowResult = false
+
+	ack := &recordingAck{}
+	h.source.handle(capturedMsg(captureSubject, validEvent, 1, 100, ack))
+
+	require.True(t, ack.settled(t), "message never settled")
+	published, _, _, _ := h.counts()
+	require.Zero(t, published, "a first delivery over the ceiling must be shed, not admitted")
+	acks, _ := ack.counts()
+	require.Equal(t, 1, acks, "a shed message is a deliberate drop and must ack")
+}

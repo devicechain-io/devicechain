@@ -257,8 +257,11 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	// subject filter IS the device-events shape, which a command subject cannot
 	// match. The exclusion moved from a denylist that had to name every internal
 	// suffix — and had already gone stale once, naming two of them — into the
-	// stream's own filter, where it cannot go stale. TestCaptureStreamCannotDeliver
-	// CommandPlaneSubjects pins it.
+	// stream's own filter, where it cannot go stale. TestCaptureStreamFilterCannot
+	// MatchInternalSubjects pins our side of it, and TestGatewaySubscriptionExcludes
+	// InternalSubjects pins that a REAL broker agrees — the first checks the shape
+	// arithmetic with a test-local matcher, so on its own it would only confirm that
+	// our idea of subject matching agrees with itself.
 
 	// Meter against the tenant's ingest ceiling before enqueue, so a tenant over its
 	// limit spends no decode CPU.
@@ -287,7 +290,24 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	//
 	// A message with no append time (metadata unavailable) meters at now, which is
 	// the pre-I4 behaviour — degraded to over-shedding a backlog, never to unmetered.
-	if es.allow != nil && !es.allow(es.Id, tenant, msg.AppendTime) {
+	// ONLY FIRST DELIVERIES ARE METERED. A redelivery already paid for its admission
+	// on delivery 1 — the broker is re-offering it because the publish failed and the
+	// settler deliberately left it unacked, not because the tenant sent anything new.
+	//
+	// Metering it again is not merely double-charging. A shed message is ack-DROPPED
+	// just below, so re-metering converts a TRANSIENT downstream failure into
+	// permanent loss of a message the broker already PUBACKed — the exact hole this
+	// arc exists to close, reopened on the retry path. And it bites in the window
+	// that matters most: a post-outage drain runs the tenant's bucket at the ceiling,
+	// so a redelivery arrives precisely when there is no token left to pay with.
+	//
+	// It is also what keeps the backlog limiter's one-clock invariant true. Stream
+	// order is monotonic in AppendTime, but DELIVERY order is not — a redelivery
+	// carries an older append time than messages already admitted. Feeding that back
+	// into the bucket rewinds its mark and lets the next forward jump re-accrue to
+	// burst, which is the same minting the live/backlog split was introduced to close.
+	// Skipping redeliveries removes the only way a backward timestamp can reach it.
+	if es.allow != nil && msg.NumDelivered <= 1 && !es.allow(es.Id, tenant, msg.AppendTime) {
 		ackDrop(msg, "over the tenant ingest rate limit")
 		return
 	}

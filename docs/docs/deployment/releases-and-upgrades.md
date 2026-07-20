@@ -129,9 +129,12 @@ duplicated telemetry**, and plan for it:
   has already begun consuming the capture stream, so messages published in that overlap are
   ingested by both. The window is bounded by how long the two pods coexist — the incoming
   pod's startup plus the outgoing pod's drain.
-- Devices that set `altId` on their events are unaffected: events carrying an `altId` are
-  deduplicated on write, so the duplicates collapse. Telemetry without an `altId` is not
-  deduplicated and will produce two rows.
+- Events that carry **both** an `altId` **and** a device-supplied `occurredTime` are unaffected:
+  the write-side dedup key is `(tenant, altId, occurredTime)`, so those duplicates collapse. An
+  event with an `altId` but no `occurredTime` does **not** collapse — the decoder stamps the
+  current time when the device omits one, and the two copies are decoded in different pods at
+  different instants, so they get different timestamps and land as two rows. Telemetry with no
+  `altId` is not deduplicated at all.
 - The overlap is preferred deliberately. The alternative ordering — stopping the old pod
   before the capture stream exists — loses every message the broker acknowledges in the gap,
   and that loss is silent: the device is told the message was accepted and it is never
