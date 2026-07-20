@@ -56,20 +56,78 @@ const (
 	Cold
 )
 
+// Shape names how a stream's concrete subject is built. It replaced a
+// PerDevice bool once a third shape existed: a bool alongside a shape is two
+// encodings of the same fact, and the failure mode when they disagree is a
+// publish that matches no stream at all — no error, no delivery, nothing to say
+// the addressing was wrong.
+type Shape int
+
+const (
+	// ShapeTenant is the ordinary internal subject: "{instance}.{tenant}.{suffix}",
+	// captured as "{instance}.*.{suffix}".
+	ShapeTenant Shape = iota
+	// ShapeTenantDevice appends a device token to the internal subject:
+	// "{instance}.{tenant}.{suffix}.{device}". The broker grant uses it to confine a
+	// device to its own messages, so the stream captures one more wildcard level.
+	ShapeTenantDevice
+	// ShapeDeviceEvents is the INBOUND device telemetry shape,
+	// "{instance}.{tenant}.devices.{device}.events" — the one subject a device is
+	// granted to publish to. It is unlike the other two in a way that matters: the
+	// suffix does not appear in the subject at all, because the subject shape is
+	// fixed by the grant rather than named by us. The suffix is purely the stream's
+	// identity (its name and its budget key).
+	//
+	// A stream of this shape is a CAPTURE stream: nothing in the platform publishes
+	// to it. The producer is the device, via the broker's MQTT gateway, which is the
+	// entire point — the message is durable before any of our code runs.
+	ShapeDeviceEvents
+)
+
 // Stream is one JetStream stream's declaration: the subject suffix that names
-// it, its disk-budget tier, and whether its concrete subject carries a device
-// token as a trailing segment.
+// it, its disk-budget tier, and how its concrete subject is shaped.
 type Stream struct {
-	// Suffix is the subject suffix. The concrete subject is
-	// "{instance}.{tenant}.{suffix}", and the stream captures
-	// "{instance}.*.{suffix}" — one more wildcard level when PerDevice.
+	// Suffix is the subject suffix, and always the stream's identity. For
+	// ShapeTenant and ShapeTenantDevice it also appears in the subject; for
+	// ShapeDeviceEvents it does not (see Shape).
 	Suffix string
 	// Tier selects the disk ceiling. Anything riding the device path is Hot.
 	Tier Tier
-	// PerDevice marks a suffix whose concrete subject appends a device token, so
-	// the broker grant can confine a device to its own messages. The stream must
-	// capture an extra wildcard level to match.
-	PerDevice bool
+	// Shape decides the subject the stream captures and that producers publish to.
+	Shape Shape
+	// MaxBytesCap, when positive, is an upper bound on this stream's disk ceiling,
+	// applied ON TOP of its tier's rather than instead of it. It exists for a stream
+	// whose tier is right but whose tier ceiling does not fit the budget — see
+	// DeviceEventsCapture, where taking the Hot ceiling in full would overrun
+	// max_file_store.
+	//
+	// A cap, specifically, and not an absolute size. The tier ceilings are what an
+	// operator sizes a deployment with, and --compact sets them far below the
+	// defaults (64 MiB Hot against a 2Gi volume). An absolute ceiling would ignore
+	// that entirely and claim four times the largest other stream in a compact
+	// install — the deployment profile would stop meaning anything for this stream.
+	// Taking the smaller of the two keeps the operator's sizing authoritative and
+	// lets the cap bind only where it is actually needed.
+	//
+	// config.StreamMaxBytesFor applies it, so a capped ceiling flows into the
+	// reservation arithmetic — and so into both the default and the --compact budget
+	// tests — automatically rather than needing to be remembered twice.
+	MaxBytesCap int64
+	// DuplicateWindowSeconds, when positive, is how long JetStream remembers a
+	// published message's "Nats-Msg-Id" and suppresses a repeat of it. Zero means
+	// the stream is not managed for dedup at all — which is NOT the same as a
+	// window of zero, and the difference matters: writing 0 into a StreamConfig
+	// would reset a window the broker already has, so ensureStream only ever
+	// widens/narrows a window that was declared here.
+	//
+	// It is seconds rather than a time.Duration to keep this package a LEAF with no
+	// imports at all, which is what lets both core/config and core/messaging depend
+	// on it. messaging converts at the one place it is applied.
+	//
+	// The window is a MEMORY cost on the broker — it holds every id seen within it —
+	// so it is sized to the redelivery gap it must cover, not to how long duplicates
+	// are conceivable.
+	DuplicateWindowSeconds int
 	// Why records what drives this stream's volume. It is the reasoning behind
 	// the tier, kept next to the tier so a reclassification has to confront it.
 	Why string
@@ -86,6 +144,11 @@ const (
 	DeviceCommands    = "device-commands"
 	CommandResponses  = "command-responses"
 	ConnectorDispatch = "connector-dispatch"
+
+	// DeviceEventsCapture is the durable capture of raw inbound device telemetry
+	// (ADR-030 amendment). It backs the ShapeDeviceEvents subject, so its suffix
+	// names the stream but never appears in a subject.
+	DeviceEventsCapture = "device-events-capture"
 
 	DetectionRulesPublished = "detection-rules-published"
 	DeviceRoster            = "device-roster"
@@ -106,6 +169,52 @@ const (
 const ConnectorDispatchDead = ConnectorDispatch + deadLetterSuffix
 
 const deadLetterSuffix = ".dead"
+
+// The fixed segments bracketing the device token in the device-events subject,
+// "{instance}.{tenant}.devices.{device}.events".
+//
+// They live in this package — the leaf everything else may import — because FOUR
+// things must agree on this shape and they live in different modules: the broker
+// grant that confines a device to its own topic (core/natsauth), the MQTT topic
+// the gateway exposes it as, the parser that recovers the device token from a
+// delivered subject (event-sources), and now the capture stream that stores it
+// (DeviceEventsCapture). core/messaging held them while three of the four were
+// downstream of it; the stream declaration is not, and a leaf is the only place
+// all four can reach without a cycle.
+//
+// Bracketing the token is what makes the shape distinguishable from every
+// internal subject: no suffix in All is named "devices", which
+// messaging.TestNoStreamSuffixCollidesWithDeviceEventsShape pins.
+const (
+	SegmentDevices = "devices"
+	SegmentEvents  = "events"
+)
+
+// deviceEventsCaptureMaxBytesCap caps DeviceEventsCapture below the Hot tier
+// ceiling, because taking the Hot ceiling in full does not fit the disk budget.
+//
+// The arithmetic, at the shipped defaults: the declared streams reserve 8 GiB
+// (7 Hot x 1 GiB + 8 Cold x 128 MiB), the MQTT gateway stores 384 MiB and the KV
+// buckets 768 MiB, against a 10 GiB max_file_store — leaving 896 MiB over a
+// headroom floor of 512 MiB, so only 384 MiB is actually free. Every ceiling is
+// reserved UP FRONT, so an uncapped capture stream does not merely overcommit, it
+// crashloops every stream-creating service at upgrade with "insufficient storage
+// resources available".
+//
+// 256 MiB rather than the whole 384: at ~250 B per raw device publish it buys
+// roughly an hour of capture at 250 events/s, which is a real outage-recovery
+// envelope, and it leaves the headroom floor with slack rather than sitting
+// exactly on it.
+//
+// Being a CAP is what keeps this honest under --compact, whose Hot ceiling is
+// 64 MiB against a 2Gi volume: there the tier binds and this number never applies.
+// An absolute 256 MiB would have overrun the compact budget outright — it did,
+// which is how the cap semantics were arrived at rather than assumed.
+//
+// If it proves tight at the default size, the space to take is $MQTT_msgs: 256 MiB
+// reserved for a gateway store that stops buffering telemetry entirely once
+// nothing subscribes to it over MQTT (ADR-030 slice I7).
+const deviceEventsCaptureMaxBytesCap = 256 << 20
 
 // DeadLetter returns the dead-letter suffix derived from a base suffix.
 //
@@ -139,7 +248,37 @@ func DeadLetter(base string) string {
 var All = []Stream{
 	// ---- Device path (Hot): volume scales with fleet size x message rate ----
 
-	{Suffix: InboundEvents, Tier: Hot, Why: "raw device telemetry — the primary ingest path"},
+	// The dedup window makes ingest idempotent (ADR-030 amendment). It suppresses a
+	// re-publish of a capture message event-sources had already forwarded before it
+	// died — the gap between "published to inbound-events" and "acked to the capture
+	// stream". The message is only redelivered once a consumer next fetches it, so
+	// the gap to cover is a POD RESTART, and the restart worth sizing for is not the
+	// healthy one but the bad one: an image-pull backoff or a failing rollout, tens
+	// of minutes rather than seconds.
+	//
+	// Thirty minutes, then. The cost is broker MEMORY — every id seen in the window
+	// is held — and it is affordable only because the ids are small and fixed-size
+	// (tenant plus a capture sequence, ~25 bytes; see processor.DedupID for why
+	// nothing device-controlled may enter them). An id family with device-supplied
+	// content would make this window a memory-exhaustion vector, which is one of the
+	// reasons there isn't one.
+	//
+	// The cost scales with the AGGREGATE admitted rate across every tenant, not with
+	// any one tenant's: at 250 events/s the table is ~450k entries, tens of MB, but
+	// the per-tenant ingest ceiling (ADR-023) defaults well above that and nothing
+	// caps the instance-wide sum, so a busy deployment should read this as low
+	// hundreds of MB. That lands on a broker pod which neither the chart nor the
+	// tofu module gives a memory limit. Widening the window multiplies it linearly.
+	//
+	// RESIDUAL, stated plainly because it is easy to assume otherwise: a restart
+	// longer than the window leaves the messages that were in flight at the crash
+	// duplicated, with no second line of defence for most events. event-management's
+	// unique index on (tenant_id, alt_id, occurred_time) is PARTIAL — "WHERE alt_id
+	// IS NOT NULL" — and alternate ids are optional and usually absent, so it
+	// backstops only the events that carry one. Widening the window trades memory
+	// for a longer covered outage; it does not remove the residual.
+	{Suffix: InboundEvents, Tier: Hot, DuplicateWindowSeconds: 1800,
+		Why: "raw device telemetry — the primary ingest path"},
 	{Suffix: ResolvedEvents, Tier: Hot, Why: "every ingested event after resolution; fans out to four consumers"},
 
 	// One message per detection, and a subscribe-able product in its own right
@@ -157,7 +296,22 @@ var All = []Stream{
 	// event-sources also has to recognize this suffix — to tell command traffic
 	// from device telemetry — which is the case that first motivated centralizing
 	// these names: a second literal is how the two drift apart.
-	{Suffix: DeviceCommands, Tier: Hot, PerDevice: true, Why: "outbound commands — scale with fleet size"},
+	{Suffix: DeviceCommands, Tier: Hot, Shape: ShapeTenantDevice, Why: "outbound commands — scale with fleet size"},
+
+	// ADR-030 amendment. The durable capture of raw device telemetry, and the
+	// reason the gateway is no longer an MQTT client: the broker writes a device's
+	// publish here before it PUBACKs, so the message is durable BEFORE our code
+	// runs. The previous design acked the device from an in-memory channel, so
+	// anything buffered at SIGKILL was silently lost — and could not be fixed by
+	// manual acking, because NATS speaks MQTT 3.1.1, where a CleanSession
+	// disconnect discards the session and shared subscriptions do not exist at all.
+	//
+	// Nothing in the platform publishes here; the producer is the device. Writers
+	// are refused (messaging.WriteMessages) rather than allowed to publish to a
+	// subject that matches no stream.
+	{Suffix: DeviceEventsCapture, Tier: Hot, Shape: ShapeDeviceEvents,
+		MaxBytesCap: deviceEventsCaptureMaxBytesCap,
+		Why:         "raw device publishes, captured before PUBACK — the ingest durability floor"},
 
 	// Deliberately NOT per-device: every device publishes to the one subject a
 	// single consumer reads, and a response names its command by token.
@@ -241,14 +395,34 @@ func TierFor(suffix string) Tier {
 	return Hot
 }
 
-// IsPerDevice reports whether a suffix's concrete subject carries a device token.
+// ShapeOf returns a suffix's subject shape, defaulting to ShapeTenant for one
+// this package does not declare.
 //
 // The STREAM shape and the PUBLISH shape are decided in different places — the
 // stream when it is created, the subject at write time — so both derive from this
 // one answer. If they disagreed, publishes would land in no stream at all: no
 // error, no delivery, nothing to indicate the addressing was wrong.
+func ShapeOf(suffix string) Shape {
+	return bySuffix[suffix].Shape
+}
+
+// IsPerDevice reports whether a suffix's concrete subject appends a device token.
 func IsPerDevice(suffix string) bool {
-	return bySuffix[suffix].PerDevice
+	return ShapeOf(suffix) == ShapeTenantDevice
+}
+
+// DuplicateWindowSecondsFor returns a suffix's declared dedup window in seconds,
+// or 0 when the stream declares none. See Stream.DuplicateWindowSeconds for why
+// "declares none" must not be applied as a window of zero.
+func DuplicateWindowSecondsFor(suffix string) int {
+	return bySuffix[suffix].DuplicateWindowSeconds
+}
+
+// MaxBytesCapFor returns a suffix's declared ceiling cap, or 0 when it declares
+// none. It is an upper bound on the tier ceiling, not a replacement for it; see
+// config.StreamMaxBytesFor, which is the single place the two are reconciled.
+func MaxBytesCapFor(suffix string) int64 {
+	return bySuffix[suffix].MaxBytesCap
 }
 
 // IsDeclared reports whether a suffix names a declared stream.

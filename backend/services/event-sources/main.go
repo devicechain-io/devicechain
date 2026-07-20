@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -34,12 +33,49 @@ var (
 	NatsManager    *messaging.NatsManager
 
 	// RateLimiter meters inbound events per tenant against the platform ingest
-	// ceiling; over-limit events are shed at the receive point before decode.
+	// ceiling; over-limit events are shed at the receive point before decode. It
+	// meters on WALL-CLOCK arrival and serves every source that is keeping up.
 	RateLimiter *core.TenantRateLimiter
+
+	// BacklogRateLimiter meters events being drained from the capture stream well
+	// after they were sent, on the SEND timeline rather than on arrival (ADR-030 I4).
+	//
+	// It is a second limiter rather than a second clock on the first one, and that
+	// separation is load-bearing rather than tidiness. A token bucket accrues from
+	// the last timestamp it saw, so feeding ONE bucket both wall-clock arrivals and
+	// hours-old send times makes every jump forward to now re-accrue from a stale
+	// mark and refill to burst, which the following rewind then spends. That is not
+	// a bounded rounding error: it mints roughly `burst` admissions per interleave,
+	// so a tenant ingesting over HTTP while their capture backlog drains can pace
+	// live posts against the drain and bypass their ceiling entirely. Measured on
+	// the shared-bucket design this replaces, one second of consumer lag was enough
+	// to turn a 100/s ceiling into ~2000 admissions.
+	//
+	// Keeping each bucket on exactly ONE clock removes the whole category: the live
+	// bucket only ever sees now, the backlog bucket only ever sees send times (which
+	// are monotonic in stream order), so neither can rewind and neither can mint.
+	//
+	// The cost is that a tenant who is simultaneously live AND draining a real
+	// backlog can be admitted up to twice their ceiling for the duration of the
+	// drain. That is bounded, predictable, and strictly smaller than the exposure
+	// the platform already carries from running N replicas with independent
+	// limiters — where an unbounded, lag-scaled bypass is a different category of
+	// problem entirely.
+	BacklogRateLimiter *core.TenantRateLimiter
 
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
 	FailedDecodeWriter  messaging.MessageWriter
+	// CaptureReader is the durable consumer of raw device telemetry (ADR-030
+	// amendment). It is the gateway's ingest path: the broker persists a device's
+	// publish here before it PUBACKs, so the message is durable before our code
+	// runs. Shared across pods — one durable, messages distributed — which is what
+	// lets event-sources scale past a single replica at all.
+	CaptureReader messaging.MessageReader
+	// GatewaySource is the capture-stream source, held from the INITIALIZE phase
+	// (where sources are built) so that START (where readers are created) can hand
+	// it CaptureReader. nil when no source is pointed at the platform broker.
+	GatewaySource *processor.GatewayJetStreamSource
 
 	// Metrics
 	MessagesCounter     *prometheus.CounterVec
@@ -116,15 +152,19 @@ func buildRateLimiter() {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant ingest overrides disabled; metering every tenant at the platform default.")
-		RateLimiter = core.NewTenantRateLimiter(func(string) (float64, int) {
-			return def.MessagesPerSecond, def.Burst
-		})
+		flat := func(string) (float64, int) { return def.MessagesPerSecond, def.Burst }
+		RateLimiter = core.NewTenantRateLimiter(flat)
+		BacklogRateLimiter = core.NewTenantRateLimiter(flat)
 		return
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest)
+	// Both limiters share one resolver, so a tenant's override applies to their live
+	// traffic and their backlog alike — the ceiling is the same, only the timeline
+	// each bucket measures against differs.
 	RateLimiter = core.NewTenantRateLimiter(resolver.Resolve)
+	BacklogRateLimiter = core.NewTenantRateLimiter(resolver.Resolve)
 	log.Info().Str("userManagement", umURL).Msg("Per-tenant ingest overrides enabled (fail-open to platform default).")
 }
 
@@ -141,6 +181,7 @@ func createDecoder(source config.EventSource) (processor.Decoder, error) {
 // Use configuration to build event sources.
 func buildEventSources() error {
 	created := make([]core.LifecycleComponent, 0)
+	gatewaySourceBuilt := false
 	for _, source := range Configuration.EventSources {
 		// Create decoder.
 		decoder, err := createDecoder(source)
@@ -151,48 +192,71 @@ func buildEventSources() error {
 		// Create event source.
 		switch source.Type {
 		case processor.TYPE_MQTT:
-			// The broker's TLS material (ADR-025) belongs to the NATS MQTT gateway,
-			// so only apply it to a source that actually dials the gateway. A source
-			// pointed at some other MQTT broker must NOT be forced to verify against
-			// the NATS CA (it would dial ssl:// at a plaintext port or fail
-			// verification); per-source TLS for external brokers is a later concern.
-			// When applied, serverName is the dialed host, matched against the SANs.
+			// THE GATEWAY SOURCE IS NO LONGER AN MQTT CLIENT (ADR-030 amendment). A
+			// source pointed at our OWN broker consumes the durable capture stream the
+			// broker writes every device publish into before it PUBACKs the device, so
+			// the message is durable before any of our code runs.
+			//
+			// An MQTT client could not have been made durable here at all, which is why
+			// this is a replacement rather than a fix. NATS discards a CleanSession
+			// session and every unacked message on disconnect — exactly the SIGKILL case
+			// — and it speaks MQTT 3.1.1, where shared subscriptions do not exist: a
+			// "$share" subscribe is accepted and then delivers nothing, so that design
+			// could never have exceeded one replica either.
+			//
+			// With the gateway off this path, everything the MQTT client needed for it
+			// goes too: the NATS TLS material, the shared service credential, and the
+			// derived device-events topic filter. What remains below is the
+			// EXTERNAL-broker source, which keeps paho and stays at-most-once by
+			// decision — on a broker we do not own, session and retention are the
+			// operator's configuration, so a durability claim would be unenforceable.
+			//
+			// The dispatch is exact string equality against the configured NATS
+			// hostname. A source that names the same broker by IP, by an FQDN alias, or
+			// past a hostname override therefore falls through to the paho branch and
+			// silently gets the OLD architecture — at-most-once, plaintext, anonymous,
+			// and subscribed to "+/#", which re-ingests the service's own internal
+			// traffic (the PR #458 defect, whose denylist names only two of the internal
+			// suffixes). With broker auth on this fails loudly at connect; with auth off
+			// it is silent. Worth tightening, but the comparison predates this change
+			// and the shipped defaults match on both sides.
 			natscfg := Microservice.InstanceConfiguration.Infrastructure.Nats
-			var tlsConfig *tls.Config
-			var user, pass string
 			if source.Configuration["host"] == natscfg.Hostname {
-				tlsConfig, err = natscfg.TLSConfig(source.Configuration["host"])
-				if err != nil {
-					return err
+				// One gateway source only. Every gateway source would wrap the SAME
+				// CaptureReader, and a natsReader is single-consumer by construction —
+				// its pending buffer and timeout counter are mutated without a lock — so
+				// a second read loop on it is a data race, not merely redundant work.
+				if gatewaySourceBuilt {
+					return fmt.Errorf("event source %q is a second source pointed at the platform broker %q: "+
+						"the capture-stream consumer is single-reader, so only one gateway source may be configured",
+						source.Id, natscfg.Hostname)
 				}
-				// The gateway source authenticates as the shared service user when
-				// broker auth is on; an external-broker source keeps its own creds.
-				user, pass = natscfg.Auth.User, natscfg.Auth.Password
-				// Scope the gateway subscription to exactly the device EVENTS topic
-				// this instance grants devices (ADR-025/ADR-048), derived from the one
-				// declaration the grant itself is built from rather than written as a
-				// literal here. The topic is structural, so it is derived from the
-				// instance id and not from the configured value; a configured "topic"
-				// applies only to an external-broker source, which is not
-				// instance-scoped.
-				//
-				// It subscribes to the device-events shape and NOT to the whole
-				// "{instanceId}/+/#" tree, because that tree also contains the subjects
-				// event-sources itself publishes to — so the service received its own
-				// internal traffic back and metered it twice against the publishing
-				// tenant's ingest bucket. Matching the grant means only what a device
-				// can actually be authorized to publish is ingested.
-				source.Configuration["topic"] = processor.GatewayTopic(Microservice.InstanceId)
+				gatewaySourceBuilt = true
+				gateway := processor.NewGatewayJetStreamSource(source.Id, decoder,
+					onMessageReceived, onEventDecoded, onEventDecodeFailed,
+					processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed))
+				// Held so createNatsComponents can hand it the capture reader once that
+				// reader exists. Sources are built in the INITIALIZE phase and readers are
+				// created in START, so there is nothing to wire here yet.
+				GatewaySource = gateway
+				created = append(created, gateway)
+				continue
 			}
-			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, tlsConfig, user, pass,
-				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed, onRateAllow)
+			// An external broker must NOT be forced to verify against the NATS CA (it
+			// would dial ssl:// at a plaintext port, or fail verification), and keeps
+			// its own credentials. Per-source TLS for external brokers is a later
+			// concern, so this dials plaintext and anonymous.
+			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, nil, "", "",
+				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
+				processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed))
 			if err != nil {
 				return err
 			}
 			created = append(created, mqtt)
 		case processor.TYPE_HTTP:
 			http, err := processor.NewHttpEventSource(source.Id, source.Configuration, Microservice.InstanceId,
-				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed, onRateAllow)
+				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
+				processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed))
 			if err != nil {
 				return err
 			}
@@ -215,10 +279,10 @@ func onMessageReceived(source string, raw []byte) {
 // returns true when the message may proceed and false when it must be shed,
 // recording the shed against the per-(source, tenant) metric so a noisy tenant is
 // observable. Called at the receive point of each transport, before decode.
-func onRateAllow(source string, tenant string) bool {
-	if RateLimiter.Allow(tenant) {
-		return true
-	}
+//
+// The admission decision itself — including which timeline a message is metered
+// on — lives in processor.NewRateGate; this is only the shed accounting.
+func onRateShed(source string, tenant string) {
 	RateLimitedCounter.WithLabelValues(source).Inc()
 	// Per-tenant attribution is logged (debug) rather than carried as a metric
 	// label: this service does not verify tenant existence, so a tenant label would
@@ -228,14 +292,23 @@ func onRateAllow(source string, tenant string) bool {
 		log.Debug().Str("source", source).Str("tenant", tenant).
 			Msg("Shed inbound event exceeding per-tenant ingest rate limit")
 	}
-	return false
 }
 
 // Called by event sources when an event is successfully decoded. The tenant is
 // derived by the source from its own addressing (MQTT topic / HTTP path) before
 // the event reaches here; an empty tenant cannot be published to a tenant-scoped
 // subject, so the event is dropped (fail-closed) rather than published unscoped.
-func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{}) {
+// It returns whether the event was DURABLY published. A source consuming a
+// durable capture stream acknowledges its broker on this answer (ADR-030
+// amendment), so a swallowed error here would ack a message that was never
+// forwarded — reintroducing exactly the silent loss the capture stream exists to
+// remove. Sources with nothing to acknowledge ignore the result.
+//
+// A nil error means "do not send this again", so the two fail-closed drops below
+// return nil: they are terminal decisions, and reporting them as failures would
+// ask the broker to redeliver a message that will be dropped identically forever.
+func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
+	captureSeq uint64) error {
 	// Increment counter for metrics.
 	DecodedCounter.WithLabelValues(source).Inc()
 
@@ -244,7 +317,7 @@ func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, 
 
 	if tenant == "" {
 		log.Warn().Msg(fmt.Sprintf("Dropping decoded event from source %q with no tenant", source))
-		return
+		return nil
 	}
 	ctx := core.WithTenant(context.Background(), tenant)
 
@@ -252,29 +325,38 @@ func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, 
 	bytes, err := esproto.MarshalUnresolvedEvent(event)
 	if err != nil {
 		log.Error().Err(err).Msg("unable to marshal event to protobuf")
-		return
+		return nil
 	}
 
 	// Create and deliver message (writer derives the scoped subject from ctx).
+	//
+	// DedupID makes the publish idempotent within the stream's duplicate window, so
+	// a capture message redelivered after a crash between publish and ack is stored
+	// once rather than twice. It is empty for a transport with no capture sequence
+	// (HTTP, external MQTT), which publishes no dedup header at all.
 	msg := messaging.Message{
-		Key:   []byte(event.Device),
-		Value: bytes,
+		Key:     []byte(event.Device),
+		Value:   bytes,
+		DedupID: processor.DedupID(tenant, captureSeq),
 	}
 	err = InboundEventsWriter.WriteMessages(ctx, msg)
 	InboundEventsWriter.HandleResponse(err)
+	return err
 }
 
-// Handle failed decoding.
-func onEventDecodeFailed(source string, tenant string, raw []byte, err error) {
+// Handle failed decoding. It returns whether the undecodable payload was durably
+// routed to the failed-decode path, so a source consuming a durable stream can
+// acknowledge on the real outcome rather than on having tried.
+func onEventDecodeFailed(source string, tenant string, raw []byte, err error) error {
 	// Increment counter for metrics.
 	FailedDecodeCounter.WithLabelValues(source).Inc()
 
 	// A message that could not be decoded is still routed to the failed-decode
 	// subject for the originating tenant; without a tenant it cannot be scoped, so
-	// it is dropped fail-closed.
+	// it is dropped fail-closed — terminally, hence a nil error.
 	if tenant == "" {
 		log.Warn().Msg(fmt.Sprintf("Dropping failed-decode message from source %q with no tenant", source))
-		return
+		return nil
 	}
 	ctx := core.WithTenant(context.Background(), tenant)
 
@@ -285,6 +367,7 @@ func onEventDecodeFailed(source string, tenant string, raw []byte, err error) {
 	}
 	senderr := FailedDecodeWriter.WriteMessages(ctx, msg)
 	FailedDecodeWriter.HandleResponse(senderr)
+	return senderr
 }
 
 // Create messaging components used by this microservice.
@@ -294,6 +377,24 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	InboundEventsWriter = ievents
+
+	// The capture stream's durable consumer. Created here rather than inside the
+	// source so the stream is ensured at startup even before any device publishes:
+	// the stream must EXIST before the broker can write a device's message into it,
+	// so a fresh instance whose first device connects before event-sources starts
+	// would otherwise lose exactly the messages this is meant to make durable.
+	capture, err := nmgr.NewReader(streams.DeviceEventsCapture)
+	if err != nil {
+		return err
+	}
+	CaptureReader = capture
+	// Wire the reader into the source that consumes it. This is the phase peer
+	// consumers do the same in (command-delivery, event-processing), and it is the
+	// earliest point at which the reader exists at all — buildEventSources ran back
+	// in INITIALIZE, when there was nothing to give it.
+	if GatewaySource != nil {
+		GatewaySource.SetReader(capture)
+	}
 
 	failed, err := nmgr.NewWriter(streams.FailedDecode)
 	if err != nil {

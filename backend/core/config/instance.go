@@ -458,6 +458,29 @@ func (c *NatsConfiguration) MqttStoreReservation() int64 {
 }
 
 func (c *NatsConfiguration) StreamMaxBytesFor(suffix string) int64 {
+	tier := c.tierMaxBytesFor(suffix)
+	// A stream may cap itself BELOW its tier — for one whose tier is right but whose
+	// tier ceiling does not fit the budget. The tier says what drives the volume,
+	// which is a different question from how much disk there is to give it.
+	//
+	// The smaller of the two wins, so the cap can only ever lower a ceiling. That
+	// direction is the whole point: the tier ceilings are what an operator sizes a
+	// deployment with (--compact runs them far below the defaults), and a cap that
+	// could RAISE one would silently overrun a budget the volume was sized from.
+	//
+	// Because the reservation is summed through this function, a capped ceiling is
+	// counted automatically; there is no second place to remember it. It is
+	// deliberately not operator-tunable — an operator raises StreamMaxBytes /
+	// StreamMaxBytesCold and the PV together, as those fields' own comments describe.
+	if cap := streams.MaxBytesCapFor(suffix); cap > 0 && cap < tier {
+		return cap
+	}
+	return tier
+}
+
+// tierMaxBytesFor is the ceiling a suffix's TIER alone would give it, before any
+// per-stream cap.
+func (c *NatsConfiguration) tierMaxBytesFor(suffix string) int64 {
 	if streams.TierFor(suffix) == streams.Cold {
 		if c.StreamMaxBytesCold > 0 {
 			return c.StreamMaxBytesCold

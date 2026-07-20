@@ -4,6 +4,7 @@
 package processor
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -24,7 +25,50 @@ type rawMessage struct {
 	// broker-authorized identity — a device may only publish to its own events
 	// topic — so it is checked against the device the PAYLOAD claims to be.
 	device string
+	// captureSeq is the JetStream sequence of the capture-stream message this
+	// payload came from, and 0 for a transport that has none (HTTP, and the
+	// external-broker MQTT source). It becomes the publish dedup id, so a
+	// redelivery of the same captured message is stored once — see
+	// processor.DedupID (ADR-030 amendment).
+	captureSeq uint64
+	// done reports the outcome of handling this message back to the source that
+	// produced it, so the source can acknowledge the broker only once the payload
+	// is durably forwarded. nil for a fire-and-forget transport, which is why every
+	// call site must go through settle rather than invoking it directly.
+	//
+	// This is the seam ADR-030 turns on. Before it, the MQTT source acked the
+	// device as soon as the payload was on this channel — well before the decode
+	// worker published anything — so everything buffered here at SIGKILL was
+	// silently lost.
+	done func(error)
 }
+
+// settle reports the handling outcome for a raw message, tolerating a transport
+// that has no acknowledgement (HTTP, external MQTT).
+//
+// A nil error means "durably handled, do not send it again"; a non-nil error means
+// the message was NOT durably handled and the source decides whether to retry it.
+// A DROP is a nil error: the message is terminally, deliberately not wanted, and
+// reporting it as a failure would ask the broker to redeliver something that will
+// be dropped identically every time — the ACK TRAP that turns a fail-closed drop
+// into an infinite redelivery loop.
+func (r rawMessage) settle(err error) {
+	if r.done != nil {
+		r.done(err)
+	}
+}
+
+// ErrDeadLetterUnavailable marks a handling failure whose payload the worker
+// ALREADY tried and failed to route to the failed-decode path.
+//
+// The distinction matters because the source's terminal step is itself "route to
+// failed-decode and ack". Without it, a payload that fails to DECODE while the
+// failed-decode stream is unavailable is routed there once by the worker, naked,
+// redelivered, routed again on every attempt, and then routed a final time by the
+// terminal step — six publishes of one payload, most of them to a stream that is
+// already failing. Marking the failure lets the source skip a route it knows has
+// just failed and leave the message unacked instead.
+var ErrDeadLetterUnavailable = errors.New("failed-decode route unavailable")
 
 // Worker used to decode event payloads.
 type DecodeWorker struct {
@@ -32,14 +76,20 @@ type DecodeWorker struct {
 	SourceId    string
 	Decoder     Decoder
 	RawMessages <-chan rawMessage
-	Callback    func(string, string, *model.UnresolvedEvent, interface{})
-	Failed      func(string, string, []byte, error)
+	// Callback publishes a decoded event and reports whether the publish DURABLY
+	// succeeded. It returns an error so the worker can settle the source's message
+	// on the real outcome: a transport that acknowledges its broker must not do so
+	// on the strength of having merely attempted the publish.
+	Callback func(string, string, *model.UnresolvedEvent, interface{}, uint64) error
+	// Failed routes an undecodable payload to the failed-decode path, likewise
+	// reporting whether that routing itself succeeded.
+	Failed func(string, string, []byte, error) error
 }
 
 // Create a new decode worker.
 func NewDecodeWorker(workerId int, sourceId string, decoder Decoder, rawMessages <-chan rawMessage,
-	callback func(string, string, *model.UnresolvedEvent, interface{}),
-	failed func(string, string, []byte, error)) *DecodeWorker {
+	callback func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
+	failed func(string, string, []byte, error) error) *DecodeWorker {
 	worker := &DecodeWorker{
 		WorkerId:    workerId,
 		SourceId:    sourceId,
@@ -58,12 +108,27 @@ func (wrk *DecodeWorker) Process() {
 		if more {
 			log.Debug().Msg(fmt.Sprintf("Decode handled by worker id %d", wrk.WorkerId))
 			event, payload, err := wrk.Decoder.Decode(raw.payload)
+			if err == nil {
+				err = checkDeviceMatchesTransport(raw, event)
+			}
 			if err != nil {
-				wrk.Failed(wrk.SourceId, raw.tenant, raw.payload, err)
-			} else if err := checkDeviceMatchesTransport(raw, event); err != nil {
-				wrk.Failed(wrk.SourceId, raw.tenant, raw.payload, err)
+				// A payload that cannot be decoded, or whose claimed device contradicts
+				// the transport it was authorized on, is TERMINAL — the same input
+				// produces the same rejection every time. So the message is settled on
+				// whether it reached the FAILED-DECODE path, not on the rejection
+				// itself: settling on the rejection would ask the broker to redeliver a
+				// payload that can never succeed, until it gave up and the diagnostic
+				// was lost with it.
+				//
+				// When that route ITSELF fails the message is still unhandled, but it is
+				// marked so the source does not re-attempt a route that has just failed.
+				if routeErr := wrk.Failed(wrk.SourceId, raw.tenant, raw.payload, err); routeErr != nil {
+					raw.settle(fmt.Errorf("%w: %w", ErrDeadLetterUnavailable, routeErr))
+				} else {
+					raw.settle(nil)
+				}
 			} else {
-				wrk.Callback(wrk.SourceId, raw.tenant, event, payload)
+				raw.settle(wrk.Callback(wrk.SourceId, raw.tenant, event, payload, raw.captureSeq))
 			}
 		} else {
 			log.Debug().Msg("Decode worker received shutdown signal.")

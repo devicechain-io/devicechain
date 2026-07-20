@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -46,15 +47,45 @@ func DeviceScopedSubject(instanceId, tenant, suffix, deviceToken string) string 
 	return fmt.Sprintf("%s.%s.%s.%s", instanceId, tenant, suffix, deviceToken)
 }
 
-// StreamSubject is the subject pattern a suffix's stream captures. A tenant-scoped
-// suffix captures "{instance}.*.{suffix}"; a per-device one captures an extra
-// level, "{instance}.*.{suffix}.*", so every device's subject falls inside one
-// stream while each device is granted only its own.
-func StreamSubject(instanceId, suffix string) string {
-	if IsPerDeviceSuffix(suffix) {
-		return WildcardSubject(instanceId, suffix) + ".*"
+// ConcreteSubjectFor builds the concrete subject a declared stream's producer
+// publishes to, dispatching on the stream's shape.
+//
+// It exists because callers were reconstructing this by hand — "ScopedSubject,
+// unless IsPerDeviceSuffix, then DeviceScopedSubject" — which is a copy of the
+// shape arithmetic that does not fail when a new shape appears; it just quietly
+// returns a subject the stream does not have. Both subject-disjointness tests
+// were doing exactly that, and both would have gone on passing about a fiction
+// when the capture stream landed. One constructor means a new shape breaks the
+// build at every site instead.
+//
+// deviceToken is used only by the shapes that carry one.
+func ConcreteSubjectFor(instanceId, tenant, suffix, deviceToken string) string {
+	switch streams.ShapeOf(suffix) {
+	case streams.ShapeTenantDevice:
+		return DeviceScopedSubject(instanceId, tenant, suffix, deviceToken)
+	case streams.ShapeDeviceEvents:
+		return DeviceEventsSubject(instanceId, tenant, deviceToken)
+	default:
+		return ScopedSubject(instanceId, tenant, suffix)
 	}
-	return WildcardSubject(instanceId, suffix)
+}
+
+// StreamSubject is the subject pattern a suffix's stream captures, per its
+// declared shape. A tenant-scoped suffix captures "{instance}.*.{suffix}"; a
+// per-device one captures an extra level, "{instance}.*.{suffix}.*", so every
+// device's subject falls inside one stream while each device is granted only its
+// own; a device-events CAPTURE stream captures the inbound telemetry shape,
+// "{instance}.*.devices.*.events", where the suffix names the stream but appears
+// nowhere in the subject.
+func StreamSubject(instanceId, suffix string) string {
+	switch streams.ShapeOf(suffix) {
+	case streams.ShapeTenantDevice:
+		return WildcardSubject(instanceId, suffix) + ".*"
+	case streams.ShapeDeviceEvents:
+		return DeviceEventsWildcard(instanceId)
+	default:
+		return WildcardSubject(instanceId, suffix)
+	}
 }
 
 // Message is a transport-neutral message envelope used by producers and
@@ -93,6 +124,42 @@ type Message struct {
 	// whose broker metadata is unavailable (non-JetStream), so consumers that don't
 	// checkpoint are unaffected.
 	StreamSeq uint64
+	// AppendTime is the broker's timestamp for when a consumed message was written
+	// to the stream — server-assigned, never supplied by the publisher. For the
+	// ingest capture stream (ADR-030) the write happens before the device is
+	// PUBACKed, so it marks when the message REACHED the platform, not when we got
+	// round to reading it.
+	//
+	// That distinction only matters when a consumer is behind, and then it matters
+	// a great deal: a per-tenant rate gate fed arrival time meters how fast WE are
+	// draining, so a recovered backlog — which drains at fetch speed by definition —
+	// looks like one enormous burst and is shed, discarding messages the device was
+	// already told were safe. Fed this instead, the same backlog is metered against
+	// the timeline it was actually produced on (core.TenantRateLimiter.AllowAt).
+	//
+	// It is the zero time for produced/synthetic messages and for a consumed message
+	// whose broker metadata is unavailable (non-JetStream), which AllowAt reads as
+	// "now" — the correct default for any path that is not replaying a backlog.
+	AppendTime time.Time
+	// DedupID, when non-empty, is published as the JetStream "Nats-Msg-Id" header,
+	// making the write idempotent within the target stream's DuplicateWindow: a
+	// second publish carrying an id already seen is acknowledged as success and
+	// stored ONCE (ADR-030 amendment).
+	//
+	// Two properties of the mechanism decide how an id may be built, and both have
+	// already produced defects here. It is STREAM-scoped, not tenant-scoped, so an
+	// id that is not unique across tenants makes one tenant's message suppress
+	// another's — a silent, unrecoverable loss that is worse than the duplicate it
+	// was meant to prevent. And it dedups only what it can RECOGNIZE, so an id that
+	// is not byte-identical across a redelivery of the same message silently does
+	// nothing at all. An id must therefore be both tenant-scoped and derived only
+	// from values that survive a redelivery unchanged.
+	//
+	// It is 0-cost when unset: no header, no dedup, and the stream's window is
+	// irrelevant. That is the correct posture for a producer whose duplicates are
+	// prevented some other way — the HTTP ingest path has no broker redelivery at
+	// all, so it sets none.
+	DedupID string
 	// Headers carries transport metadata across the pipeline (E15). Today it holds
 	// the correlation id used to follow a message through event-sources ->
 	// device-management -> event-management/device-state. It is transmitted via
@@ -259,8 +326,13 @@ const (
 	// SegmentDevices and SegmentEvents bracket the device token, which is what
 	// makes the shape distinguishable from every internal subject: no suffix in
 	// streams.All is named "devices", so nothing internal can match this pattern.
-	SegmentDevices = "devices"
-	SegmentEvents  = "events"
+	//
+	// They are declared in core/streams and re-exported here. The capture stream
+	// (streams.DeviceEventsCapture) became a fourth agreeing party to this shape,
+	// and its declaration is upstream of this package — so the literals moved to
+	// the leaf, which is the only place all four can reach without a cycle.
+	SegmentDevices = streams.SegmentDevices
+	SegmentEvents  = streams.SegmentEvents
 
 	// Segment count and the position of each fixed segment within a well-formed
 	// device events subject/topic: {instance}/{tenant}/devices/{token}/events.

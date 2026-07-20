@@ -5,6 +5,7 @@ package processor
 
 import (
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -35,14 +36,14 @@ func (m *fakeMqttMessage) Ack()              {}
 // where the topic is operator-configured and arbitrary. What the gateway itself
 // receives is a property of the broker, and is pinned against a live MQTT gateway
 // in gateway_topic_test.go rather than asserted here.
-func newTestMqttSource(t *testing.T, allow func(string, string) bool) (*MqttEventSource, *int) {
+func newTestMqttSource(t *testing.T, allow RateGate) (*MqttEventSource, *int) {
 	t.Helper()
 	receivedCount := 0
 	es, err := NewMqttEventSource("mqtt-test", map[string]string{"host": "h", "port": "1883", "topic": GatewayTopic("inst-1")},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) { receivedCount++ },
-		func(string, string, *model.UnresolvedEvent, interface{}) {},
-		func(string, string, []byte, error) {},
+		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
+		func(string, string, []byte, error) error { return nil },
 		allow)
 	assert.NoError(t, err)
 	es.messages = make(chan rawMessage, 8)
@@ -52,7 +53,7 @@ func newTestMqttSource(t *testing.T, allow func(string, string) bool) (*MqttEven
 // A message on a well-formed topic whose tenant is within its limit is enqueued
 // for decode and counted as received.
 func TestMqttOnMessage_Allowed(t *testing.T) {
-	es, received := newTestMqttSource(t, func(string, string) bool { return true })
+	es, received := newTestMqttSource(t, func(string, string, time.Time) bool { return true })
 
 	es.onMessage(nil, &fakeMqttMessage{topic: "inst-1/acme/events", payload: []byte(`{"device":"d1"}`)})
 
@@ -65,7 +66,7 @@ func TestMqttOnMessage_Allowed(t *testing.T) {
 // A message whose tenant is over its limit is shed: nothing is enqueued and it is
 // not counted as received (accounting happens after the gate).
 func TestMqttOnMessage_RateLimited(t *testing.T) {
-	es, received := newTestMqttSource(t, func(string, string) bool { return false })
+	es, received := newTestMqttSource(t, func(string, string, time.Time) bool { return false })
 
 	es.onMessage(nil, &fakeMqttMessage{topic: "inst-1/acme/events", payload: []byte(`{"device":"d1"}`)})
 
@@ -77,7 +78,7 @@ func TestMqttOnMessage_RateLimited(t *testing.T) {
 // it can seed a limiter bucket — the allow gate is never even consulted.
 func TestMqttOnMessage_InvalidTenantDropped(t *testing.T) {
 	allowCalls := 0
-	es, _ := newTestMqttSource(t, func(string, string) bool { allowCalls++; return true })
+	es, _ := newTestMqttSource(t, func(string, string, time.Time) bool { allowCalls++; return true })
 
 	// A space is outside the tenant token grammar (core.ValidateToken).
 	es.onMessage(nil, &fakeMqttMessage{topic: "inst-1/bad tenant/events", payload: []byte(`{}`)})
@@ -89,7 +90,7 @@ func TestMqttOnMessage_InvalidTenantDropped(t *testing.T) {
 // A topic with no parseable tenant segment is dropped and never metered.
 func TestMqttOnMessage_NoTenantDropped(t *testing.T) {
 	allowCalls := 0
-	es, _ := newTestMqttSource(t, func(string, string) bool { allowCalls++; return true })
+	es, _ := newTestMqttSource(t, func(string, string, time.Time) bool { allowCalls++; return true })
 
 	es.onMessage(nil, &fakeMqttMessage{topic: "inst-1", payload: []byte(`{}`)})
 
@@ -109,7 +110,7 @@ func TestMqttOnMessage_CommandPlaneIgnored(t *testing.T) {
 	} {
 		t.Run(topic, func(t *testing.T) {
 			allowCalls := 0
-			es, received := newTestMqttSource(t, func(string, string) bool { allowCalls++; return true })
+			es, received := newTestMqttSource(t, func(string, string, time.Time) bool { allowCalls++; return true })
 
 			es.onMessage(nil, &fakeMqttMessage{
 				topic:   topic,
@@ -133,7 +134,7 @@ func TestMqttOnMessage_CommandPlaneMatchIsExact(t *testing.T) {
 		"inst-1/acme/device-commands-extra",
 	} {
 		t.Run(topic, func(t *testing.T) {
-			es, _ := newTestMqttSource(t, func(string, string) bool { return true })
+			es, _ := newTestMqttSource(t, func(string, string, time.Time) bool { return true })
 
 			es.onMessage(nil, &fakeMqttMessage{topic: topic, payload: []byte(`{"device":"d1"}`)})
 

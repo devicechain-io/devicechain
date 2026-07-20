@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -21,10 +22,22 @@ import (
 const (
 	TYPE_MQTT           = "mqtt"
 	DECODE_WORKER_COUNT = 5
+	// DECODE_CHANNEL_DEPTH bounds the in-flight decode queue. On the capture-stream
+	// source this is also the maximum number of messages that can be UNACKED and
+	// therefore redelivered after a crash — bounded loss became bounded REDELIVERY.
+	DECODE_CHANNEL_DEPTH = 100
 )
 
 // GatewayTopic is the MQTT topic filter the NATS-gateway event source subscribes
 // to for an instance: the device EVENTS shape, and nothing else.
+//
+// NOTE (ADR-030 amendment): the gateway no longer subscribes over MQTT at all —
+// it consumes the capture stream (GatewayJetStreamSource) — so nothing in
+// production calls this any more. It is retained deliberately, as the topic half
+// of the subject/topic mapping that the broker-interop pin (slice I6) asserts:
+// the property that a device's MQTT publish and our JetStream subject filter
+// describe the same messages is now load-bearing for ingest and is exactly what a
+// nats-server upgrade could break silently. Delete it only together with that pin.
 //
 // It matches the grant natsauth mints for a device (both are built from
 // messaging's one declaration), which is the property that matters: the gateway
@@ -63,12 +76,12 @@ type MqttEventSource struct {
 	workers   []*DecodeWorker
 	lifecycle core.LifecycleManager
 	received  func(string, []byte)
-	decoded   func(string, string, *model.UnresolvedEvent, interface{})
-	failed    func(string, string, []byte, error)
+	decoded   func(string, string, *model.UnresolvedEvent, interface{}, uint64) error
+	failed    func(string, string, []byte, error) error
 	// allow meters an inbound message against its tenant's ingest rate limit
 	// before it is queued for decode; a false return sheds the message. nil
 	// disables metering (used by tests that exercise decoding in isolation).
-	allow func(string, string) bool
+	allow RateGate
 }
 
 // Create a new MQTT event source based on the given configuration. tlsConfig is
@@ -78,9 +91,9 @@ type MqttEventSource struct {
 // (empty = anonymous).
 func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Config, username, password string, decoder Decoder,
 	received func(string, []byte),
-	decoded func(string, string, *model.UnresolvedEvent, interface{}),
-	failed func(string, string, []byte, error),
-	allow func(string, string) bool) (*MqttEventSource, error) {
+	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
+	failed func(string, string, []byte, error) error,
+	allow RateGate) (*MqttEventSource, error) {
 	port, err := strconv.Atoi(config["port"])
 	if err != nil {
 		return nil, err
@@ -215,7 +228,7 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	// its limit sheds here, spending no decode CPU. MQTT has no per-message
 	// acknowledgement back to the publisher, so an over-limit message is simply
 	// dropped (the HTTP path returns 429 instead).
-	if es.allow != nil && !es.allow(es.Id, tenant) {
+	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}) {
 		return
 	}
 
@@ -283,7 +296,7 @@ func (es *MqttEventSource) Start(ctx context.Context) error {
 // Initialize pool of workers for decoding raw messages.
 func (es *MqttEventSource) initializeDecodeWorkers() {
 	// Make channels and workers for distributed processing.
-	es.messages = make(chan rawMessage, 100)
+	es.messages = make(chan rawMessage, DECODE_CHANNEL_DEPTH)
 	es.workers = make([]*DecodeWorker, 0)
 	for w := 1; w <= DECODE_WORKER_COUNT; w++ {
 		worker := NewDecodeWorker(w, es.Id, es.Decoder, es.messages, es.decoded, es.failed)

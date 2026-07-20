@@ -84,14 +84,19 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 					"port": "1883",
 					// Device-plane topic (ADR-006): "{instanceId}/{tenant}/...". The
 					// first level is the instance id and the second carries the tenant
-					// the producer scopes on. For the gateway source this value is
-					// IGNORED and replaced at bind time with the device-events filter
-					// "{instanceId}/+/devices/+/events" (processor.GatewayTopic) — the
-					// same shape the broker grants a device (ADR-025/ADR-048), and
-					// deliberately not the whole "{instanceId}/+/#" tree, which would
-					// also cover the subjects event-sources itself publishes to.
-					// This placeholder documents the shape and applies only to an
-					// external-broker source.
+					// the producer scopes on.
+					//
+					// This applies ONLY to an external-broker source. A source whose
+					// host is the platform's own broker is not an MQTT client at all
+					// any more (ADR-030 amendment) — it consumes the device-events
+					// capture stream, whose subject filter is structural — so this
+					// value is not read for it, at bind time or ever.
+					//
+					// Note "+/#" is deliberately permissive and is only defensible
+					// against a broker we do not own, where the topic shape is the
+					// operator's to choose. It will also match anything else on that
+					// broker, so an external source pointed at a busy broker should be
+					// narrowed.
 					"topic": "+/#",
 				},
 				Decoder: EventDecoder{
