@@ -49,8 +49,8 @@ const (
 	// DefaultEgressWaitBudgetMs is how long a worker will BLOCK waiting for a token before a dispatch
 	// is admitted, so a brief burst just over a tenant's rate is smoothed into pacing rather than
 	// shed. A dispatch that cannot get a token within this budget is sustained over quota (a brief
-	// burst would have been admitted) and is shed to the dead-letter subject — the wait never naks
-	// for rate, so rate-limiting can never churn the redelivery/poison cap. See MaxEgressWaitBudgetMs
+	// burst would have been admitted) and is shed to the dead-letter subject — the wait never leaves a
+	// rate-shed message unacked, so rate-limiting can never churn the redelivery/poison cap. See MaxEgressWaitBudgetMs
 	// for the AckWait-safety bound this default sits comfortably inside.
 	DefaultEgressWaitBudgetMs = 5_000
 

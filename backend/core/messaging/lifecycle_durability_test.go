@@ -5,7 +5,9 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -321,5 +323,92 @@ func TestTrafficPublishedWhileTheConsumerIsDownSurvives(t *testing.T) {
 	if got, _ := read("replacement"); got != "after" {
 		t.Fatalf("replacement read %q, want %q: an already-acked message came back, "+
 			"so the durable's position did not survive the restart", got, "after")
+	}
+}
+
+// TestAnUnackedMessageIsNotRedeliveredImmediately pins the premise the whole Nak
+// removal rests on: a fetched-but-unacked message is redelivered only after AckWait
+// (60s), never in ~one round trip.
+//
+// Every consumer now retries a transient failure by leaving the message UNACKED and
+// letting AckWait pace the retry, so MaxDeliver spans five minutes. That is correct
+// ONLY because the broker holds an unacked message for AckWait instead of handing it
+// straight back — the immediate redelivery an explicit Nak forced, which is what turned
+// MaxDeliver into a ~1.4ms fuse (ADR-030). If AckWait were ever driven toward zero the
+// "leave it unacked" fix would silently become the very fuse it removed, and nothing
+// else would notice; this is the test that fails. It is the broker-contract half that
+// the messaging-layer removal of Nak (a compile-time guarantee) cannot itself prove.
+func TestAnUnackedMessageIsNotRedeliveredImmediately(t *testing.T) {
+	const (
+		suffix = streams.InboundEvents
+		tenant = "acme"
+	)
+	srv := startEmbeddedServer(t)
+	ctx := core.WithTenant(context.Background(), tenant)
+
+	var writer MessageWriter
+	producer := NewNatsManager(testMicroservice(t, srv, uniqueArea("nak-premise-producer")),
+		core.NewNoOpLifecycleCallbacks(), func(n *NatsManager) error {
+			w, err := n.NewWriter(suffix)
+			writer = w
+			return err
+		})
+	if err := producer.Initialize(ctx); err != nil {
+		t.Fatalf("producer initialize: %v", err)
+	}
+	if err := producer.Start(ctx); err != nil {
+		t.Fatalf("producer start: %v", err)
+	}
+	t.Cleanup(func() { _ = producer.Stop(ctx) })
+
+	var reader MessageReader
+	consumer := NewNatsManager(testMicroservice(t, srv, uniqueArea("nak-premise-consumer")),
+		core.NewNoOpLifecycleCallbacks(), func(n *NatsManager) error {
+			r, err := n.NewReader(suffix)
+			reader = r
+			return err
+		})
+	if err := consumer.Initialize(ctx); err != nil {
+		t.Fatalf("consumer initialize: %v", err)
+	}
+	if err := consumer.Start(ctx); err != nil {
+		t.Fatalf("consumer start: %v", err)
+	}
+	t.Cleanup(func() { _ = consumer.Stop(ctx) })
+
+	if err := writer.WriteMessages(ctx, Message{Value: []byte("transient")}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// First delivery: fetch the message but neither Ack nor Nak it — the exact
+	// disposition a consumer now applies to a transient downstream failure.
+	rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	first, err := reader.ReadMessage(rctx)
+	if err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	if string(first.Value) != "transient" {
+		t.Fatalf("first read %q, want %q", first.Value, "transient")
+	}
+	if first.NumDelivered != 1 {
+		t.Fatalf("first delivery NumDelivered=%d, want 1", first.NumDelivered)
+	}
+
+	// The unacked message must NOT come back within a window that is many round trips
+	// wide but far below AckWait. A broker that redelivers immediately (or a
+	// reintroduced Nak) hands it straight back and this read RETURNS it; the correct
+	// behaviour is that the fetch finds nothing and the read times out (io.EOF).
+	redeliverCtx, cancelR := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelR()
+	again, err := reader.ReadMessage(redeliverCtx)
+	if err == nil {
+		t.Fatalf("the unacked message was redelivered within 2s (NumDelivered=%d): redelivery is "+
+			"NOT paced by AckWait, so leaving a transient failure unacked would burn MaxDeliver in "+
+			"milliseconds — the fuse this design removes", again.NumDelivered)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second read failed for an unexpected reason (want the io.EOF of a timed-out, "+
+			"empty fetch): %v", err)
 	}
 }

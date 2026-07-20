@@ -239,8 +239,8 @@ func (suite *InboundEventsProcessorTestSuite) TestUnresolvableLocationsEvent() {
 	assert.Nil(suite.T(), err)
 
 	// A device that can not be resolved routes to the failed-events stream only
-	// after the delivery cap is reached (earlier attempts are Nak'd for redelivery,
-	// A4), so simulate the final delivery attempt.
+	// after the delivery cap is reached (earlier attempts are left unacked for
+	// AckWait-paced redelivery, A4), so simulate the final delivery attempt.
 	key := []byte(loc.Device)
 	msg := messaging.Message{Subject: testTenantSubject, Key: key, Value: bytes, NumDelivered: messaging.MaxDeliver}
 

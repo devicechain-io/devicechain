@@ -18,11 +18,12 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// stubAck records Ack/Nak so a test can assert a message's disposition.
-type stubAck struct{ acked, naked int }
+// stubAck records how many times a message was acked so a test can assert its
+// disposition. A transient failure is retried by leaving the message UNACKED (acked
+// stays 0), so acked==0 means "left for AckWait-paced redelivery" (ADR-030).
+type stubAck struct{ acked int }
 
 func (s *stubAck) Ack() error { s.acked++; return nil }
-func (s *stubAck) Nak() error { s.naked++; return nil }
 
 func deletedMsg(t *testing.T, subject string, event *dmodel.EntityDeletedEvent, numDelivered int, ack messaging.Acknowledger) messaging.Message {
 	t.Helper()
@@ -45,7 +46,6 @@ func TestReconciler_DeletesAndAcks(t *testing.T) {
 
 	api.Mock.AssertCalled(t, "DeleteAnchorsForEntity", "device", "dev-4", mock.Anything)
 	assert.Equal(t, 1, ack.acked)
-	assert.Equal(t, 0, ack.naked)
 }
 
 // An unparseable payload is dropped (acked) without a cleanup attempt.
@@ -74,8 +74,9 @@ func TestReconciler_NoTenantDropped(t *testing.T) {
 	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything, mock.Anything)
 }
 
-// A transient DB error naks for redelivery while below the poison ceiling.
-func TestReconciler_TransientErrorNaks(t *testing.T) {
+// A transient DB error is left UNACKED for AckWait-paced redelivery while below the
+// poison ceiling (never an immediate nak that would burn MaxDeliver in ~1.4ms).
+func TestReconciler_TransientErrorLeftUnacked(t *testing.T) {
 	api := new(emtest.MockApi)
 	api.Mock.On("DeleteAnchorsForEntity", "customer", "cust-3", mock.Anything).Return(0, errors.New("db down"))
 	r := &EntityAnchorReconciler{Api: api}
@@ -84,12 +85,14 @@ func TestReconciler_TransientErrorNaks(t *testing.T) {
 	r.handle(context.Background(), deletedMsg(t, reconcilerSubject,
 		&dmodel.EntityDeletedEvent{EntityType: entity.TypeCustomer, EntityId: 3, EntityToken: "cust-3", DeletedTime: time.Now().UTC()}, 1, ack))
 
-	assert.Equal(t, 1, ack.naked)
-	assert.Equal(t, 0, ack.acked)
+	// Corroborate that the DB call was attempted (and failed), so acked==0 means "reached the
+	// transient arm and deliberately left unacked", not "early-returned without touching the message".
+	api.Mock.AssertCalled(t, "DeleteAnchorsForEntity", "customer", "cust-3", mock.Anything)
+	assert.Equal(t, 0, ack.acked, "a transient failure below the cap must be left unacked, not acked")
 }
 
 // At the delivery ceiling a persistently failing message is dropped (acked) rather
-// than naked forever.
+// than left unacked forever.
 func TestReconciler_PoisonCeilingDrops(t *testing.T) {
 	api := new(emtest.MockApi)
 	api.Mock.On("DeleteAnchorsForEntity", "customer", "cust-3", mock.Anything).Return(0, errors.New("db down"))
@@ -100,5 +103,4 @@ func TestReconciler_PoisonCeilingDrops(t *testing.T) {
 		&dmodel.EntityDeletedEvent{EntityType: entity.TypeCustomer, EntityId: 3, EntityToken: "cust-3", DeletedTime: time.Now().UTC()}, messaging.MaxDeliver, ack))
 
 	assert.Equal(t, 1, ack.acked)
-	assert.Equal(t, 0, ack.naked)
 }

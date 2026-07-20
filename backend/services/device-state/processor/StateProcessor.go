@@ -37,7 +37,7 @@ const (
 // messages and hands them to a pool of workers (E6); the workers run the actual
 // MergeDeviceState merge in parallel so projection throughput is not serialized.
 // Per-device coalescing across workers is safe because MergeDeviceState is
-// idempotent. Each message carries its own NATS ack handle, so the ack/nak
+// idempotent. Each message carries its own NATS ack handle, so the ack/leave-unacked
 // disposition (A3) is performed by the worker that merges it.
 type StateProcessor struct {
 	Microservice         *core.Microservice
@@ -141,9 +141,9 @@ func (sp *StateProcessor) ProcessMessage(ctx context.Context) bool {
 }
 
 // processMessages is the worker loop: it drains the messages channel and merges
-// each event's originating device state. The A3 ack/nak contract rides on each
+// each event's originating device state. The A3 ack contract rides on each
 // messaging.Message, so the worker that performs the merge is the one that acks
-// (success / poison) or naks (transient) it.
+// (success / poison) or leaves it unacked for redelivery (transient).
 func (sp *StateProcessor) processMessages(ctx context.Context) {
 	for msg := range sp.messages {
 		sp.mergeOne(ctx, msg)
@@ -193,7 +193,9 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 			msg.Ack()
 			done(core.ResultFailed)
 		} else {
-			msg.Nak()
+			// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery —
+			// an immediate nak would burn MaxDeliver in ~1.4ms inside an outage.
+			// Reference disposition: event-sources' settler (ADR-030).
 			done(core.ResultRetry)
 		}
 	}

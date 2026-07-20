@@ -111,10 +111,10 @@ func (rc *RaiseAlarmConsumer) readMessage(ctx context.Context) bool {
 	return ctx.Err() != nil
 }
 
-// handle applies one raise-alarm request and acks/naks it. A no-tenant subject, an unparseable
-// body, a missing/invalid field, or a device that no longer exists is poison (redelivery cannot
-// help) — acked and dropped. A transient store failure is naked for redelivery up to the cap, then
-// dropped (a lost REACT alarm re-raises on the next firing of the rule).
+// handle applies one raise-alarm request and acks or leaves it unacked. A no-tenant subject, an
+// unparseable body, a missing/invalid field, or a device that no longer exists is poison (redelivery
+// cannot help) — acked and dropped. A transient store failure is left unacked for AckWait-paced
+// redelivery up to the cap, then dropped (a lost REACT alarm re-raises on the next firing of the rule).
 func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message) {
 	done := rc.metrics.Start()
 
@@ -195,7 +195,7 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 	done(core.ResultOK)
 }
 
-// retryOrDrop naks a transiently-failed request for redelivery, or acks (drops) it once the
+// retryOrDrop leaves a transiently-failed request unacked for redelivery, or acks (drops) it once the
 // redelivery cap is reached so one persistently-failing request cannot redeliver forever.
 func (rc *RaiseAlarmConsumer) retryOrDrop(msg messaging.Message, done func(string), err error, what string) {
 	if msg.NumDelivered >= messaging.MaxDeliver {
@@ -209,8 +209,10 @@ func (rc *RaiseAlarmConsumer) retryOrDrop(msg messaging.Message, done func(strin
 		done(core.ResultFailed)
 		return
 	}
+	// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery — an
+	// immediate nak would burn MaxDeliver in ~1.4ms inside a downstream outage.
+	// Reference disposition: event-sources' settler (ADR-030).
 	log.Warn().Err(err).Str("what", what).Msg("Raise-alarm failed; will retry on redelivery")
-	msg.Nak()
 	done(core.ResultRetry)
 }
 

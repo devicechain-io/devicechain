@@ -31,7 +31,7 @@ const retryBackoffBase = 500 * time.Millisecond
 // scheduler (N.D) reads. It satisfies the Notifier contract (notifier.go) by owning a
 // bounded per-channel retry loop rather than leaning on the processor's crude
 // redelivery, and by returning an error to the processor ONLY when nothing was
-// attempted (so a nak/redelivery can never double-send a channel that already
+// attempted (so a redelivery can never double-send a channel that already
 // succeeded).
 type PolicyNotifier struct {
 	api      *model.Api
@@ -88,7 +88,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 
 	policies, err := n.api.EnabledNotificationPolicies(ctx)
 	if err != nil {
-		// Nothing attempted yet: safe to nak for redelivery.
+		// Nothing attempted yet: safe to leave unacked for redelivery.
 		return fmt.Errorf("loading notification policies: %w", err)
 	}
 	if len(policies) == 0 {
@@ -117,7 +117,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		if err != nil {
 			// A store error (not "no secret") is transient infra: skip this channel, so
 			// it counts as not-delivered. If EVERY delivery is skipped/fails the event is
-			// naked for redelivery (delivered == 0 below); if another channel already
+			// left unacked for redelivery (delivered == 0 below); if another channel already
 			// delivered, the event is acked and this channel's page is dropped — matching
 			// the Notifier at-least-once contract (a partial failure is not redelivered,
 			// to avoid double-sending the channels that succeeded).
@@ -141,8 +141,8 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	}
 
 	// At least one channel delivered: record the notification so the throttle/escalation
-	// state reflects it. A failure here is logged, not naked — the sends already
-	// happened, and redelivery would double-send them.
+	// state reflects it. A failure here is logged, not left for redelivery — the sends
+	// already happened, and redelivery would double-send them.
 	if err := n.api.RecordNotification(ctx, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime); err != nil {
 		log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
 			Msg("Delivered notification but failed to record notification state")
@@ -361,8 +361,8 @@ func effectiveMaxEscalations(p *model.NotificationPolicy, defaultMax int) int {
 // deliverWithRetry sends one delivery, retrying up to n.attempts with a short linear
 // backoff and bounding each attempt by n.timeout. It returns true on success. The
 // adapter, not the processor, owns retry here (Notifier contract), so a final failure
-// is logged and dropped rather than naked — a nak would redeliver the whole event and
-// double-send the channels that already succeeded.
+// is logged and dropped rather than left for redelivery — a redelivery would resend the
+// whole event and double-send the channels that already succeeded.
 func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rendered *RenderedNotification) bool {
 	adapter := n.adapters[d.channel.ChannelType]
 	for attempt := 1; attempt <= n.attempts; attempt++ {

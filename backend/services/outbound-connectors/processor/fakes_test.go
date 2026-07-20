@@ -50,14 +50,14 @@ func (s *fakeSecretStore) Rotate(context.Context, secrets.SecretRef, []byte) err
 func (s *fakeSecretStore) Delete(context.Context, secrets.SecretRef) error         { return nil }
 func (s *fakeSecretStore) Exists(context.Context, secrets.SecretRef) (bool, error) { return false, nil }
 
-// fakeAck captures the ack/nak disposition of one consumed message.
+// fakeAck captures the disposition of one consumed message. There is no Nak: a
+// transient failure is retried by leaving the message UNACKED (acked stays false),
+// so acked==false means "left for AckWait-paced redelivery" (ADR-030).
 type fakeAck struct {
 	acked bool
-	naked bool
 }
 
 func (a *fakeAck) Ack() error { a.acked = true; return nil }
-func (a *fakeAck) Nak() error { a.naked = true; return nil }
 
 // fakeReader yields a fixed queue of messages then blocks until the context is cancelled (mirroring a
 // live durable reader that has drained its backlog and awaits new messages).

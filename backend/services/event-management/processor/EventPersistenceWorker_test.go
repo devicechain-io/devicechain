@@ -11,7 +11,7 @@ import (
 // A non-numeric measurement/location value is a deterministic persistence failure
 // (it can never be stored in the numeric column), so parseNullableFloat64 wraps it
 // as ErrDeterministic — the signal the worker uses to dead-letter on the first
-// failure rather than NAK-retry to the delivery cap (ADR-024). A nil or numeric
+// failure rather than unacked-retry to the delivery cap (ADR-024). A nil or numeric
 // value is not an error.
 func TestParseNullableFloat64Deterministic(t *testing.T) {
 	bad := "not-a-number"

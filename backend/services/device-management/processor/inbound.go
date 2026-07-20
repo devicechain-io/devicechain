@@ -29,8 +29,8 @@ const (
 
 // ackCoord coordinates acknowledgement of one source message across the 1->N
 // resolved-event fan-out it produced. The source is acked once every resolved
-// event has been durably published, or Nak'd (once) if any publish fails so the
-// whole message is redelivered (ADR-022 review A3). It is only ever touched by
+// event has been durably published, or left unacked if any publish fails so the
+// whole message is redelivered after AckWait (ADR-022 review A3). It is only ever touched by
 // the single ProcessResolvedEvent goroutine, so no locking is required.
 type ackCoord struct {
 	src       messaging.Message
@@ -163,7 +163,7 @@ func (iproc *InboundEventsProcessor) OnUnresolvedEvent(tenant string, reason uin
 
 // Handle case where event was successfully resolved. The source message is acked
 // only after the last resolved event it produced has been durably published, and
-// Nak'd (once) if any publish fails so the whole message is redelivered (A3).
+// left unacked if any publish fails so AckWait redelivers the whole message (A3).
 func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) bool {
 	item, more := <-iproc.resolved
 	if more {
@@ -189,18 +189,19 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 }
 
 // settleResolved records the outcome of publishing one resolved event against
-// its source's ack coordinator: a publish failure Naks the source once (whole
-// message redelivers); success decrements the outstanding count and acks the
-// source when the last resolved event has been published.
+// its source's ack coordinator: a publish failure latches failure so the source
+// is left unacked (AckWait redelivers the whole message); success decrements the
+// outstanding count and acks the source when the last resolved event has been
+// published.
 func (iproc *InboundEventsProcessor) settleResolved(coord *ackCoord, err error) {
 	if coord == nil {
 		return
 	}
 	if err != nil {
-		if !coord.failed {
-			coord.failed = true
-			_ = coord.src.Nak()
-		}
+		// A publish failed: latch failure so the source is never acked, which leaves
+		// the whole message for AckWait-paced redelivery. Do NOT nak — an immediate
+		// nak would burn MaxDeliver in ~1.4ms inside a downstream outage (ADR-030).
+		coord.failed = true
 		return
 	}
 	coord.remaining--

@@ -57,14 +57,14 @@ func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
 
 // ErrDeterministic marks a persistence failure that no amount of redelivery can
 // fix — bad data, such as a non-numeric measurement or location value — so the
-// event is dead-lettered on the first failure rather than NAK-retried to the
-// delivery cap (ADR-024). A transient failure (e.g. a DB blip) is not wrapped and
+// event is dead-lettered on the first failure rather than retried (left unacked) to
+// the delivery cap (ADR-024). A transient failure (e.g. a DB blip) is not wrapped and
 // keeps the retry path.
 var ErrDeterministic = errors.New("deterministic persistence failure")
 
 // Parse a (possibly null) string into a float64. A non-numeric value is a
 // deterministic failure (the value can never be stored in the numeric column), so
-// the error is wrapped as such rather than left to NAK-retry pointlessly.
+// the error is wrapped as such rather than left to retry (unacked) pointlessly.
 func parseNullableFloat64(val *string) (*float64, error) {
 	if val == nil {
 		return nil, nil
@@ -342,7 +342,9 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 					unpersisted.Ack()
 					done(core.ResultFailed)
 				default:
-					unpersisted.Nak()
+					// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery —
+					// an immediate nak would burn MaxDeliver in ~1.4ms inside a Postgres
+					// outage. Reference disposition: event-sources' settler (ADR-030).
 					done(core.ResultRetry)
 				}
 			} else {

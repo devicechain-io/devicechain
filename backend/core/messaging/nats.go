@@ -89,7 +89,6 @@ const (
 type natsAck struct{ nm *nats.Msg }
 
 func (a natsAck) Ack() error { return a.nm.Ack() }
-func (a natsAck) Nak() error { return a.nm.Nak() }
 
 // NatsManager manages the lifecycle of NATS JetStream interactions for a
 // microservice. It mirrors the former KafkaManager's lifecycle shape so the
@@ -867,10 +866,11 @@ func (r *natsReader) rebindWithBackoff(ctx context.Context) error {
 // context is cancelled, or the subscription closes. Messages are fetched in
 // batches (B1) and buffered, so most calls return from the buffer without a
 // round trip. The message is NOT acked here (A3): its ack handle rides the
-// returned envelope so the consumer can Ack only after durably handling it, or
-// Nak to request redelivery. On shutdown (ctx cancelled or subscription/
-// connection closed) it returns io.EOF so the existing processor EOF handling
-// applies.
+// returned envelope so the consumer can Ack only after durably handling it. A
+// transient failure is retried by NOT acking, so AckWait paces redelivery (there
+// is deliberately no Nak — see Message). On shutdown (ctx cancelled or
+// subscription/connection closed) it returns io.EOF so the existing processor EOF
+// handling applies.
 func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 	for {
 		if err := ctx.Err(); err != nil {

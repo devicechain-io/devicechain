@@ -53,8 +53,8 @@ func TestHandleSuccessAcks(t *testing.T) {
 		HTTPCall: &connectorwire.HTTPCallDispatch{URL: srv.URL}}, ack)
 
 	c.handle(context.Background(), msg)
-	if !ack.acked || ack.naked {
-		t.Fatalf("want acked, got acked=%v naked=%v", ack.acked, ack.naked)
+	if !ack.acked {
+		t.Fatalf("want acked, got acked=%v", ack.acked)
 	}
 	if len(dead.written()) != 0 {
 		t.Fatalf("a successful send must not dead-letter")
@@ -112,8 +112,9 @@ func TestHandleTenantMismatchDropped(t *testing.T) {
 	}
 }
 
-// TestHandleTransientNaksBelowCap naks a transient failure below the redelivery cap (no dead-letter).
-func TestHandleTransientNaksBelowCap(t *testing.T) {
+// TestHandleTransientLeftUnackedBelowCap leaves a transient failure below the redelivery cap UNACKED
+// (AckWait-paced retry, never an immediate nak that would burn MaxDeliver in ~1.4ms; no dead-letter).
+func TestHandleTransientLeftUnackedBelowCap(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(503) }))
 	defer srv.Close()
 	dead := &fakeWriter{}
@@ -123,8 +124,8 @@ func TestHandleTransientNaksBelowCap(t *testing.T) {
 		Kind: connectorwire.ConnectorKindHTTPCall, Tenant: "acme",
 		HTTPCall: &connectorwire.HTTPCallDispatch{URL: srv.URL}}, ack)
 	c.handle(context.Background(), msg)
-	if !ack.naked || ack.acked {
-		t.Fatalf("transient below cap should nak, got acked=%v naked=%v", ack.acked, ack.naked)
+	if ack.acked {
+		t.Fatalf("transient below cap should be left unacked (AckWait retry), not acked: acked=%v", ack.acked)
 	}
 	if len(dead.written()) != 0 {
 		t.Fatalf("must not dead-letter below the cap")
@@ -143,8 +144,8 @@ func TestHandleTransientDeadLettersAtCap(t *testing.T) {
 		Kind: connectorwire.ConnectorKindHTTPCall, Tenant: "acme",
 		HTTPCall: &connectorwire.HTTPCallDispatch{URL: srv.URL}}, ack)
 	c.handle(context.Background(), msg)
-	if !ack.acked || ack.naked {
-		t.Fatalf("at the cap the message should be acked after dead-lettering, got acked=%v naked=%v", ack.acked, ack.naked)
+	if !ack.acked {
+		t.Fatalf("at the cap the message should be acked after dead-lettering, got acked=%v", ack.acked)
 	}
 	w := dead.written()
 	if len(w) != 1 {
@@ -169,10 +170,10 @@ func TestHandleUnsupportedDeadLetters(t *testing.T) {
 	}
 }
 
-// TestHandleDeadLetterWriteFailureNaksBelowCap does NOT ack (avoids silent loss) when the dead-letter
-// write fails BELOW the redelivery cap — the message naks so JetStream redelivers and dead-lettering
-// is retried on the next attempt.
-func TestHandleDeadLetterWriteFailureNaksBelowCap(t *testing.T) {
+// TestHandleDeadLetterWriteFailureLeftUnackedBelowCap does NOT ack (avoids silent loss) when the
+// dead-letter write fails BELOW the redelivery cap — the message is left unacked so JetStream
+// redelivers (after AckWait) and dead-lettering is retried on the next attempt.
+func TestHandleDeadLetterWriteFailureLeftUnackedBelowCap(t *testing.T) {
 	dead := &fakeWriter{fail: context.DeadlineExceeded}
 	c := newTestConsumer(dead, &fakeSecretStore{})
 	ack := &fakeAck{}
@@ -180,14 +181,14 @@ func TestHandleDeadLetterWriteFailureNaksBelowCap(t *testing.T) {
 		Kind: connectorwire.ConnectorKindPublish, Tenant: "acme",
 		Publish: &connectorwire.PublishDispatch{ConnectorRef: "kafka-main"}}, ack)
 	c.handle(context.Background(), msg)
-	if ack.acked || !ack.naked {
-		t.Fatalf("below the cap a failed dead-letter write must nak (retry later), got acked=%v naked=%v", ack.acked, ack.naked)
+	if ack.acked {
+		t.Fatalf("below the cap a failed dead-letter write must be left unacked (retry later), got acked=%v", ack.acked)
 	}
 }
 
 // TestHandleDeadLetterWriteFailureAtCapAcksAsLoss records an explicit LOSS (and acks, since no
-// redelivery will follow) rather than a bare nak that JetStream would ignore past the cap — the
-// message must never be stranded forever.
+// redelivery will follow) rather than leaving it unacked, which JetStream would not redeliver past
+// the cap — the message must never be stranded forever.
 func TestHandleDeadLetterWriteFailureAtCapAcksAsLoss(t *testing.T) {
 	dead := &fakeWriter{fail: context.DeadlineExceeded}
 	c := newTestConsumer(dead, &fakeSecretStore{})
@@ -196,8 +197,8 @@ func TestHandleDeadLetterWriteFailureAtCapAcksAsLoss(t *testing.T) {
 		Kind: connectorwire.ConnectorKindPublish, Tenant: "acme",
 		Publish: &connectorwire.PublishDispatch{ConnectorRef: "kafka-main"}}, ack)
 	c.handle(context.Background(), msg)
-	if !ack.acked || ack.naked {
-		t.Fatalf("at the cap a failed dead-letter write must ack-as-loss (nak would strand it), got acked=%v naked=%v", ack.acked, ack.naked)
+	if !ack.acked {
+		t.Fatalf("at the cap a failed dead-letter write must ack-as-loss (leaving it unacked would strand it), got acked=%v", ack.acked)
 	}
 }
 
@@ -209,8 +210,8 @@ func TestHandleMalformedTenantDropped(t *testing.T) {
 	ack := &fakeAck{}
 	// A subject whose tenant segment contains an illegal token character.
 	c.handle(context.Background(), messaging.NewConsumedMessage("inst.bad tenant!.connector-dispatch", []byte("{}"), 1, nil, ack))
-	if !ack.acked || ack.naked {
-		t.Fatalf("a malformed-tenant dispatch must be dropped (acked), got acked=%v naked=%v", ack.acked, ack.naked)
+	if !ack.acked {
+		t.Fatalf("a malformed-tenant dispatch must be dropped (acked), got acked=%v", ack.acked)
 	}
 	if len(dead.written()) != 0 {
 		t.Fatalf("a malformed-tenant poison drop must not dead-letter")
@@ -231,8 +232,8 @@ func TestHandleRateAdmitSends(t *testing.T) {
 		HTTPCall: &connectorwire.HTTPCallDispatch{URL: srv.URL}}, ack)
 
 	c.handle(context.Background(), msg)
-	if !ack.acked || ack.naked {
-		t.Fatalf("an admitted dispatch must send + ack, got acked=%v naked=%v", ack.acked, ack.naked)
+	if !ack.acked {
+		t.Fatalf("an admitted dispatch must send + ack, got acked=%v", ack.acked)
 	}
 	if len(dead.written()) != 0 {
 		t.Fatalf("an admitted dispatch must not dead-letter")
@@ -240,7 +241,7 @@ func TestHandleRateAdmitSends(t *testing.T) {
 }
 
 // TestHandleRateShedDeadLetters sheds a dispatch whose tenant cannot get a token within the wait
-// budget: it is dead-lettered (not naked, so no poison-cap churn) and acked. The rate gate returns
+// budget: it is dead-lettered (not left for redelivery, so no poison-cap churn) and acked. The rate gate returns
 // before the executor, so no outbound send occurs (the URL is unreachable, proving it is never
 // dialed).
 func TestHandleRateShedDeadLetters(t *testing.T) {
@@ -262,18 +263,18 @@ func TestHandleRateShedDeadLetters(t *testing.T) {
 	if time.Since(start) > time.Second {
 		t.Fatalf("shed should be fast (bounded by the wait budget), took %v", time.Since(start))
 	}
-	if !ack.acked || ack.naked {
-		t.Fatalf("a rate-shed dispatch must be acked after dead-letter (never naked, to avoid poison-cap churn), got acked=%v naked=%v", ack.acked, ack.naked)
+	if !ack.acked {
+		t.Fatalf("a rate-shed dispatch must be acked after dead-letter (never left for redelivery, to avoid poison-cap churn), got acked=%v", ack.acked)
 	}
 	if len(dead.written()) != 1 {
 		t.Fatalf("a rate-shed dispatch must be written to the dead-letter subject once, got %d", len(dead.written()))
 	}
 }
 
-// TestHandleRateShedBelowCapNaksOnDeadLetterWriteFailure confirms the shed reuses the terminal
-// dead-letter path: below the redelivery cap, a dead-letter WRITE failure naks for a later retry
-// (rather than stranding the shed message).
-func TestHandleRateShedBelowCapNaksOnDeadLetterWriteFailure(t *testing.T) {
+// TestHandleRateShedBelowCapLeftUnackedOnDeadLetterWriteFailure confirms the shed reuses the terminal
+// dead-letter path: below the redelivery cap, a dead-letter WRITE failure leaves the message unacked
+// for a later (AckWait-paced) retry rather than stranding the shed message.
+func TestHandleRateShedBelowCapLeftUnackedOnDeadLetterWriteFailure(t *testing.T) {
 	rl := core.NewTenantRateLimiter(func(string) (float64, int) { return 0.001, 1 })
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	_ = rl.Wait(ctx, "acme")
@@ -287,7 +288,7 @@ func TestHandleRateShedBelowCapNaksOnDeadLetterWriteFailure(t *testing.T) {
 		HTTPCall: &connectorwire.HTTPCallDispatch{URL: "http://127.0.0.1:0/never-dialed"}}, ack)
 
 	c.handle(context.Background(), msg)
-	if !ack.naked || ack.acked {
-		t.Fatalf("below the cap a failed dead-letter write on a shed must nak to retry, got acked=%v naked=%v", ack.acked, ack.naked)
+	if ack.acked {
+		t.Fatalf("below the cap a failed dead-letter write on a shed must be left unacked to retry, got acked=%v", ack.acked)
 	}
 }

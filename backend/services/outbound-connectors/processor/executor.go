@@ -25,7 +25,7 @@ import (
 const secretResolveTimeout = 5 * time.Second
 
 // execOutcome is the executor's classification of one dispatch, driving the consumer's
-// ack/nak/dead-letter decision and the bounded metric. err is nil only for a successful send.
+// ack/leave-unacked/dead-letter decision and the bounded metric. err is nil only for a successful send.
 type execOutcome struct {
 	// outcome is one of the outcome* metric enum values.
 	outcome string
@@ -39,7 +39,7 @@ type execOutcome struct {
 
 // Executor performs the bounded outbound send for one connector-dispatch request (ADR-060 §4). It
 // owns the credential resolution (fail-closed) and the shared SSRF hardening (core/httpsink); the
-// consumer owns the ack/nak/dead-letter lifecycle around it. It executes both httpCall (core/httpsink)
+// consumer owns the ack/leave-unacked/dead-letter lifecycle around it. It executes both httpCall (core/httpsink)
 // and publish (resolve the versioned Connector → generate the Bento output → bounded single-message
 // send via the publish sink, slice C4b).
 type Executor struct {

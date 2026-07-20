@@ -52,13 +52,14 @@ func (f *fakeAlarmApi) ApplyAlarmContributorEdge(_ context.Context, deviceId uin
 	return f.edgeErr
 }
 
-// fakeAck records ack/nak counts.
+// fakeAck records how many times a message was acked. There is no Nak: a transient
+// failure is retried by leaving the message UNACKED (acks stays 0), so acks==0 is the
+// assertion that a message was left for AckWait-paced redelivery (ADR-030).
 type fakeAck struct {
-	acks, naks int
+	acks int
 }
 
 func (a *fakeAck) Ack() error { a.acks++; return nil }
-func (a *fakeAck) Nak() error { a.naks++; return nil }
 
 func newTestConsumer(api model.DeviceManagementApi) *RaiseAlarmConsumer {
 	rc := &RaiseAlarmConsumer{Api: api, metrics: nil}
@@ -102,8 +103,8 @@ func TestRaiseAlarmConsumerApplies(t *testing.T) {
 	if e.value == nil || *e.value != 91 {
 		t.Fatalf("the triggering value must flow through; got %v", e.value)
 	}
-	if ack.acks != 1 || ack.naks != 0 {
-		t.Fatalf("a successful apply must ack once: acks=%d naks=%d", ack.acks, ack.naks)
+	if ack.acks != 1 {
+		t.Fatalf("a successful apply must ack once: acks=%d", ack.acks)
 	}
 
 	// A value-less request (a silence-driven fire) carries a nil value through unchanged.
@@ -133,8 +134,8 @@ func TestRaiseAlarmConsumerRoutesResolvedEdge(t *testing.T) {
 	if api.edgeCalls != 1 || api.lastEdge.edge != model.AlarmEdgeResolved {
 		t.Fatalf("a resolved edge must reach the integrator with edge=resolved; got calls=%d edge=%q", api.edgeCalls, api.lastEdge.edge)
 	}
-	if ack.acks != 1 || ack.naks != 0 {
-		t.Fatalf("a successful resolve must ack: acks=%d naks=%d", ack.acks, ack.naks)
+	if ack.acks != 1 {
+		t.Fatalf("a successful resolve must ack: acks=%d", ack.acks)
 	}
 }
 
@@ -163,8 +164,8 @@ func TestRaiseAlarmConsumerPoison(t *testing.T) {
 			if api.edgeCalls != 0 {
 				t.Fatalf("poison request must not apply an edge")
 			}
-			if ack.acks != 1 || ack.naks != 0 {
-				t.Fatalf("poison must ack-drop: acks=%d naks=%d", ack.acks, ack.naks)
+			if ack.acks != 1 {
+				t.Fatalf("poison must ack-drop: acks=%d", ack.acks)
 			}
 		})
 	}
@@ -194,33 +195,33 @@ func TestRaiseAlarmConsumerUndecodable(t *testing.T) {
 	}
 }
 
-// TestRaiseAlarmConsumerTransientRetry proves a store failure below the cap naks (retry), and at the
-// cap acks (drops).
+// TestRaiseAlarmConsumerTransientRetry proves a store failure below the cap is left UNACKED (retry via
+// AckWait, never an immediate nak that would burn MaxDeliver in ~1.4ms), and at the cap acks (drops).
 func TestRaiseAlarmConsumerTransientRetry(t *testing.T) {
 	api := &fakeAlarmApi{devices: []*model.Device{{}}, edgeErr: errors.New("db down")}
 	rc := newTestConsumer(api)
 
 	below := &fakeAck{}
 	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), 1, below))
-	if below.naks != 1 || below.acks != 0 {
-		t.Fatalf("a transient failure below the cap must nak: acks=%d naks=%d", below.acks, below.naks)
+	if below.acks != 0 {
+		t.Fatalf("a transient failure below the cap must be left unacked (AckWait-paced retry), not acked: acks=%d", below.acks)
 	}
 
 	atcap := &fakeAck{}
 	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), messaging.MaxDeliver, atcap))
-	if atcap.acks != 1 || atcap.naks != 0 {
-		t.Fatalf("at the redelivery cap a failing request must ack-drop: acks=%d naks=%d", atcap.acks, atcap.naks)
+	if atcap.acks != 1 {
+		t.Fatalf("at the redelivery cap a failing request must ack-drop: acks=%d", atcap.acks)
 	}
 }
 
-// TestRaiseAlarmConsumerResolveErrorRetries proves a device-resolution STORE error naks (retry) —
-// distinct from a device-gone (empty result), which drops.
+// TestRaiseAlarmConsumerResolveErrorRetries proves a device-resolution STORE error is left UNACKED
+// (retry via AckWait) — distinct from a device-gone (empty result), which drops.
 func TestRaiseAlarmConsumerResolveErrorRetries(t *testing.T) {
 	api := &fakeAlarmApi{devErr: errors.New("db down")}
 	rc := newTestConsumer(api)
 	ack := &fakeAck{}
 	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), 0, ack))
-	if ack.naks != 1 || ack.acks != 0 || api.edgeCalls != 0 {
-		t.Fatalf("a resolve error must nak (retry): acks=%d naks=%d edgeCalls=%d", ack.acks, ack.naks, api.edgeCalls)
+	if ack.acks != 0 || api.edgeCalls != 0 {
+		t.Fatalf("a resolve error must be left unacked (retry): acks=%d edgeCalls=%d", ack.acks, api.edgeCalls)
 	}
 }

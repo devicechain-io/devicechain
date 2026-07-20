@@ -107,9 +107,17 @@ func StreamSubject(instanceId, suffix string) string {
 // dead-letter path (see MaxDeliver).
 //
 // A consumed message also carries an opaque acknowledger (set by the reader) so
-// the consumer can Ack it only after the message has been durably handled, or
-// Nak it to request redelivery. Produced and synthetic messages carry none, so
-// Ack/Nak are no-ops on them — tests and producers need not change.
+// the consumer can Ack it only after the message has been durably handled.
+// Produced and synthetic messages carry none, so Ack is a no-op on them — tests
+// and producers need not change.
+//
+// There is deliberately NO Nak: a transient handling failure is retried by simply
+// NOT acking, which lets the consumer's AckWait (60s) pace redelivery so MaxDeliver
+// spans minutes. An explicit Nak asks the broker to redeliver IMMEDIATELY (~1 RTT),
+// which turns MaxDeliver into a ~1.4ms fuse that blows INSIDE any downstream outage
+// and dead-letters the whole flow — the platform-wide bug this type no longer lets a
+// consumer wire. The reference disposition, with the full rationale, is the settler
+// in event-sources' gateway_jetstream.go (ADR-030).
 type Message struct {
 	Subject      string
 	Key          []byte
@@ -200,12 +208,11 @@ func (m Message) WithCorrelationID(id string) Message {
 // MessageReader can be mocked without one.
 type Acknowledger interface {
 	Ack() error
-	Nak() error
 }
 
 // NewConsumedMessage builds a consumed message carrying its delivery count,
 // headers, and ack handle. Only message readers construct these; producers and
-// tests use the plain struct literal (no acknowledger, so Ack/Nak are no-ops).
+// tests use the plain struct literal (no acknowledger, so Ack is a no-op).
 func NewConsumedMessage(subject string, value []byte, numDelivered int, headers map[string]string, ack Acknowledger) Message {
 	return Message{Subject: subject, Value: value, NumDelivered: numDelivered, Headers: headers, ack: ack}
 }
@@ -218,16 +225,6 @@ func (m Message) Ack() error {
 		return nil
 	}
 	return m.ack.Ack()
-}
-
-// Nak negatively-acknowledges the message, asking the broker to redeliver it
-// later (for a transient handling failure). It is a no-op when the message
-// carries no acknowledger.
-func (m Message) Nak() error {
-	if m.ack == nil {
-		return nil
-	}
-	return m.ack.Nak()
 }
 
 // MessageReader is the consumer-side abstraction (kept small for unit testing).

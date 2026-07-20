@@ -83,7 +83,6 @@ func (r *fakeReader) Backlog(context.Context) (uint64, uint64, error) {
 // checkpoint actually acknowledged (a plain struct-literal Message's Ack is a no-op).
 type fakeAck struct {
 	acks int
-	naks int
 	// acked, when non-nil, receives once per Ack so a test that drives a consumer with no other
 	// sync point (the roster/entity-deleted consumers hand nothing to the loop) can wait for the
 	// ack BEFORE cancelling — cancelling first would fail the persist against a cancelled context.
@@ -99,7 +98,6 @@ func (a *fakeAck) Ack() error {
 	}
 	return nil
 }
-func (a *fakeAck) Nak() error { a.naks++; return nil }
 
 // fakeReplayOpener yields a preset, ordered set of messages as a bounded replay from
 // startSeq up to head — the in-order prefix the engine missed. It records the start
@@ -244,8 +242,8 @@ func TestCheckpointCommitsThenAcks(t *testing.T) {
 		t.Fatalf("expected checkpoint at seq 3, got %d", snap.StreamSeq)
 	}
 	for i, a := range acks {
-		if a.acks != 1 || a.naks != 0 {
-			t.Fatalf("message %d not acked exactly once after checkpoint: acks=%d naks=%d", i+1, a.acks, a.naks)
+		if a.acks != 1 {
+			t.Fatalf("message %d not acked exactly once after checkpoint: acks=%d", i+1, a.acks)
 		}
 	}
 	if len(rp.pendingAcks) != 0 || rp.dirty {

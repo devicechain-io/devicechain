@@ -26,8 +26,8 @@ import (
 // deterministic command token, slice 5b-1). It owns its own reader goroutine and lifecycle, wired in
 // main.go alongside the DETECT processor.
 //
-// Failure handling is classification-free: any dispatch failure Naks the message for redelivery
-// (the dispatcher never acks a partially-dispatched event), and a persistently-failing event is
+// Failure handling is classification-free: any dispatch failure leaves the message unacked for
+// AckWait-paced redelivery (the dispatcher never acks a partially-dispatched event), and a persistently-failing event is
 // bounded by the JetStream redelivery cap (messaging.MaxDeliver), after which it is dropped as
 // poison and counted — the same transient-then-give-up idiom every cross-service consumer here uses,
 // rather than fragile per-error interpretation.
@@ -103,10 +103,11 @@ func (rd *ReactDispatcher) run() {
 	}
 }
 
-// handle dispatches one derived event and acks/naks it. An undecodable or tenant-inconsistent
-// payload is poison (a retry cannot fix it) — acked so it stops redelivering. A dispatch that
-// returns Retry Naks for redelivery, unless the redelivery cap is exhausted, in which case the event
-// is dropped (acked) and counted as poison so a persistently-failing dispatch cannot redeliver
+// handle dispatches one derived event and acks it or leaves it unacked. An undecodable or
+// tenant-inconsistent payload is poison (a retry cannot fix it) — acked so it stops redelivering. A
+// dispatch that returns Retry is left unacked for AckWait-paced redelivery, unless the redelivery cap
+// is exhausted, in which case the event is dropped (acked) and counted as poison so a
+// persistently-failing dispatch cannot redeliver
 // forever. A Done dispatch is acked.
 func (rd *ReactDispatcher) handle(msg messaging.Message) {
 	tctx, tenant, ok := messaging.TenantContextFromSubject(rd.procCtx, msg.Subject)
@@ -158,9 +159,10 @@ func (rd *ReactDispatcher) handle(msg messaging.Message) {
 		rd.ack(msg)
 		return
 	}
-	if err := msg.Nak(); err != nil {
-		log.Warn().Err(err).Str("rule", ev.RuleID).Msg("Failed to nak a derived event; it will redeliver on ack timeout.")
-	}
+	// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery — an
+	// immediate nak would burn MaxDeliver in ~1.4ms inside an outage, and the
+	// derived event redelivers on ack timeout. Reference: event-sources' settler
+	// (ADR-030).
 }
 
 // ack best-effort acks, logging a failed ack (a redelivery re-dispatches idempotently).

@@ -115,8 +115,8 @@ func (r *EntityAnchorReconciler) processOne(ctx context.Context) bool {
 
 // handle reconciles a single entity-deletion event: it stamps the tenant carried on
 // the subject, deletes the referencing anchors, and acks. Poison (no tenant /
-// unparseable payload) is acked to drop it; a transient DB error is naked for
-// redelivery until the poison ceiling, then dropped.
+// unparseable payload) is acked to drop it; a transient DB error is left unacked for
+// AckWait-paced redelivery until the poison ceiling, then dropped.
 func (r *EntityAnchorReconciler) handle(ctx context.Context, msg messaging.Message) {
 	tctx, tenant, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
 	if !ok {
@@ -140,8 +140,10 @@ func (r *EntityAnchorReconciler) handle(ctx context.Context, msg messaging.Messa
 			_ = msg.Ack()
 			return
 		}
-		log.Warn().Err(err).Str("entity", event.EntityToken).Msg("Anchor cleanup failed; will retry")
-		_ = msg.Nak()
+		// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery — an
+		// immediate nak would burn MaxDeliver in ~1.4ms inside an outage. Reference
+		// disposition: event-sources' settler (ADR-030).
+		log.Warn().Err(err).Str("entity", event.EntityToken).Msg("Anchor cleanup failed; will retry on redelivery")
 		return
 	}
 	log.Debug().Str("tenant", tenant).Str("entityType", string(event.EntityType)).
