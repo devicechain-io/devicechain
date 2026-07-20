@@ -45,8 +45,8 @@ type HttpEventSource struct {
 	server    *http.Server
 	lifecycle core.LifecycleManager
 	received  func(string, []byte)
-	decoded   func(string, string, *model.UnresolvedEvent, interface{})
-	failed    func(string, string, []byte, error)
+	decoded   func(string, string, *model.UnresolvedEvent, interface{}, uint64) error
+	failed    func(string, string, []byte, error) error
 	// allow meters an inbound request against its tenant's ingest rate limit
 	// before the body is read/decoded; a false return sheds the request with a
 	// 429. nil disables metering (used by tests that exercise decoding directly).
@@ -57,8 +57,8 @@ type HttpEventSource struct {
 // the literal first path segment the ingest route is scoped under (ADR-048).
 func NewHttpEventSource(id string, config map[string]string, instanceId string, decoder Decoder,
 	received func(string, []byte),
-	decoded func(string, string, *model.UnresolvedEvent, interface{}),
-	failed func(string, string, []byte, error),
+	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
+	failed func(string, string, []byte, error) error,
 	allow func(string, string) bool) (*HttpEventSource, error) {
 	port := DEFAULT_HTTP_PORT
 	if raw, ok := config["port"]; ok && raw != "" {
@@ -137,7 +137,18 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("unable to decode event: %v", err), http.StatusBadRequest)
 		return
 	}
-	es.decoded(es.Id, tenant, event, payload)
+	// HTTP carries no capture sequence — there is no broker redelivery to dedup on
+	// this path — so it publishes no dedup id (see processor.DedupID).
+	//
+	// The publish result is now reported to the CLIENT rather than swallowed. 202
+	// means "accepted", and returning it for an event that never reached the stream
+	// told the caller its data was safe when it had been dropped — the same silent
+	// loss ADR-030 removes from the MQTT path, on the one transport that can
+	// actually say so. A client that retries on 503 now loses nothing.
+	if err := es.decoded(es.Id, tenant, event, payload, 0); err != nil {
+		http.Error(w, "unable to accept event: downstream unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 

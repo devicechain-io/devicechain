@@ -41,8 +41,8 @@ func newTestMqttSource(t *testing.T, allow func(string, string) bool) (*MqttEven
 	es, err := NewMqttEventSource("mqtt-test", map[string]string{"host": "h", "port": "1883", "topic": GatewayTopic("inst-1")},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) { receivedCount++ },
-		func(string, string, *model.UnresolvedEvent, interface{}) {},
-		func(string, string, []byte, error) {},
+		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
+		func(string, string, []byte, error) error { return nil },
 		allow)
 	assert.NoError(t, err)
 	es.messages = make(chan rawMessage, 8)
