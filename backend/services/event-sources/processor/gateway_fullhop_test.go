@@ -127,6 +127,13 @@ func startCaptureSource(t *testing.T, id string, reader messaging.MessageReader)
 	require.NoError(t, src.Initialize(ctx))
 	src.SetReader(reader)
 	require.NoError(t, src.Start(ctx))
+	// Registered here, not left to the caller: if an assertion between Start and the
+	// caller's own Stop fails, the read loop and DECODE_WORKER_COUNT decode workers
+	// would otherwise leak — and a worker blocked forever on the unclosed channel
+	// could run the failed-decode t.Errorf after the test returns, panicking the
+	// binary. A redundant second Stop just returns an already-stopped state error,
+	// which the caller discards.
+	t.Cleanup(func() { _ = src.Stop(context.Background()) })
 	return src, out
 }
 
@@ -189,8 +196,7 @@ func TestCaptureSurvivesASourceRestartEndToEnd(t *testing.T) {
 	// A replacement source binds the SAME durable, the way a replacement pod does,
 	// and drains the gap.
 	replacement := captureReader(t, nc, consumerArea)
-	src2, out2 := startCaptureSource(t, "gw-fullhop-2", replacement)
-	t.Cleanup(func() { _ = src2.Stop(context.Background()) })
+	_, out2 := startCaptureSource(t, "gw-fullhop-2", replacement)
 
 	seen := map[uint64]bool{before.seq: true}
 	for i := 0; i < gap; i++ {

@@ -112,8 +112,13 @@ func TestTheRealLifecycleConnectsThenCreates(t *testing.T) {
 	if err := nmgr.Initialize(ctx); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
-	if nmgr.Conn() == nil {
-		t.Fatal("Initialize reported success but never connected")
+	// IsConnected, not a nil check. ExecuteInitialize connects with
+	// RetryOnFailedConnect(true), under which nats.Connect returns a non-nil conn and
+	// a nil error even when NO broker is reachable — so Conn()==nil can essentially
+	// never fire, and the assertion would pass while pointed at nothing. IsConnected
+	// is what actually distinguishes a live connection from a retrying stub.
+	if c := nmgr.Conn(); c == nil || !c.IsConnected() {
+		t.Fatalf("Initialize reported success but the connection is not live (conn=%v)", c)
 	}
 	if created != 0 {
 		t.Fatalf("oncreate ran %d times during Initialize, want 0: anything it builds "+
@@ -124,10 +129,12 @@ func TestTheRealLifecycleConnectsThenCreates(t *testing.T) {
 	if err := nmgr.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	// Registered before the assertion below, not after: a failed assertion must still
+	// tear down the sampler goroutine and the connection.
+	t.Cleanup(func() { _ = nmgr.Stop(ctx) })
 	if created != 1 {
 		t.Fatalf("oncreate ran %d times on Start, want 1", created)
 	}
-	t.Cleanup(func() { _ = nmgr.Stop(ctx) })
 }
 
 // TestTrafficPublishedWhileTheConsumerIsDownSurvives is the durability property the
@@ -165,6 +172,21 @@ func TestTrafficPublishedWhileTheConsumerIsDownSurvives(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = producer.Stop(ctx) })
 
+	write := func(body string) {
+		t.Helper()
+		if err := writer.WriteMessages(ctx, Message{Value: []byte(body)}); err != nil {
+			t.Fatalf("write %q: %v", body, err)
+		}
+	}
+
+	// Published BEFORE the consumer's durable exists at all. The producer's Start has
+	// already ensured the stream, so this is retained in it. A durable created with
+	// DeliverNew instead of DeliverAll would silently skip everything that predates
+	// its first bind — exactly the cutover-window backlog the capture stream exists
+	// to drain — so the first read below must return "pre", not the first message
+	// that arrives after the bind.
+	write("pre")
+
 	// The first consumer, built and started the way a service main does.
 	var reader MessageReader
 	// Taken once and reused: the replacement must land on the SAME durable, and
@@ -183,13 +205,17 @@ func TestTrafficPublishedWhileTheConsumerIsDownSurvives(t *testing.T) {
 		t.Fatalf("consumer start: %v", err)
 	}
 
-	write := func(body string) {
-		t.Helper()
-		if err := writer.WriteMessages(ctx, Message{Value: []byte(body)}); err != nil {
-			t.Fatalf("write %q: %v", body, err)
-		}
-	}
-	read := func(who string) string {
+	// The stream and durable names the consumer's reader is bound to, rebuilt from the
+	// same exported constructors NewReader uses, so the ack floor can be inspected
+	// directly on the broker below.
+	streamName := StreamName("test", suffix)
+	durableName := DurableName("test", consumerArea, suffix)
+
+	// read returns the value AND the broker's stream sequence, and it ACKS — the ack
+	// is the half of the durable contract these tests exist to prove, so it must
+	// actually happen rather than be described. HandleResponse only logs; Ack is what
+	// advances the consumer's position.
+	read := func(who string) (string, uint64) {
 		t.Helper()
 		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
@@ -197,14 +223,45 @@ func TestTrafficPublishedWhileTheConsumerIsDownSurvives(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s read: %v", who, err)
 		}
-		reader.HandleResponse(nil)
-		return string(m.Value)
+		if err := m.Ack(); err != nil {
+			t.Fatalf("%s ack: %v", who, err)
+		}
+		return string(m.Value), m.StreamSeq
+	}
+	// waitAckFloor blocks until the consumer's acknowledged position has advanced to
+	// cover seq, or fails. If Ack were a no-op — a broker whose ack does nothing, the
+	// failure mode that would make a rollout redeliver everything forever — the floor
+	// never reaches seq and this fails in seconds rather than the assertion being
+	// invisible until AckWait (60s) elapses, which is past any read horizon here.
+	waitAckFloor := func(seq uint64) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			info, err := consumer.js.ConsumerInfo(streamName, durableName)
+			if err != nil {
+				t.Fatalf("consumer info: %v", err)
+			}
+			if info.AckFloor.Stream >= seq {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("ack floor did not reach seq %d (stuck at %d); the consumer's Ack "+
+					"is not advancing its durable position", seq, info.AckFloor.Stream)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 
-	write("before")
-	if got := read("first consumer"); got != "before" {
-		t.Fatalf("first consumer read %q, want %q", got, "before")
+	if got, _ := read("first consumer / pre"); got != "pre" {
+		t.Fatalf("first consumer read %q, want %q: a message retained before the durable "+
+			"was bound was skipped, so a cutover-window backlog would be lost", got, "pre")
 	}
+	write("before")
+	_, beforeSeq := read("first consumer")
+
+	// The ack must have landed on the broker before the consumer goes down: this is
+	// what makes the anti-replay assertion at the end meaningful rather than a race.
+	waitAckFloor(beforeSeq)
 
 	// The consumer goes down — the rollout / crash / outage window.
 	if err := consumer.Stop(ctx); err != nil {
@@ -244,21 +301,24 @@ func TestTrafficPublishedWhileTheConsumerIsDownSurvives(t *testing.T) {
 	}
 	reader = r
 
-	// Everything published during the gap is delivered, in order, exactly once.
+	// Everything published during the gap is delivered, in order, exactly once. The
+	// first gap read being "during-0" (not "pre"/"before") is what pins RESUME over
+	// replay: a recreated or DeliverAll-fresh durable would hand back the already-acked
+	// prefix here instead.
 	for i := 0; i < gapCount; i++ {
 		want := fmt.Sprintf("during-%d", i)
-		if got := read("replacement"); got != want {
+		if got, _ := read("replacement"); got != want {
 			t.Fatalf("replacement read %q, want %q: traffic published while the "+
 				"consumer was down was lost, reordered, or the durable restarted "+
 				"from the wrong position", got, want)
 		}
 	}
 
-	// The message the first consumer already acked is NOT redelivered. Without this
+	// The messages already acked before the restart are NOT redelivered. Without this
 	// the test would also pass on a consumer that simply replays the stream from the
 	// beginning, which loses nothing but duplicates everything.
 	write("after")
-	if got := read("replacement"); got != "after" {
+	if got, _ := read("replacement"); got != "after" {
 		t.Fatalf("replacement read %q, want %q: an already-acked message came back, "+
 			"so the durable's position did not survive the restart", got, "after")
 	}
