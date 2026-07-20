@@ -55,3 +55,6 @@ crash.*.log
 *.tfvars
 *.tfvars.json
 !*.tfvars.example
+
+# Build artifacts left by "go build ./backend/tools/..." from the repo root.
+dc-migrationdiff

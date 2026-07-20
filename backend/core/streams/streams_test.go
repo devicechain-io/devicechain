@@ -87,6 +87,52 @@ func TestIsPerDevice(t *testing.T) {
 	}
 }
 
+func TestShapeOf(t *testing.T) {
+	cases := map[string]Shape{
+		InboundEvents:       ShapeTenant,
+		DeviceCommands:      ShapeTenantDevice,
+		DeviceEventsCapture: ShapeDeviceEvents,
+		// An unknown suffix must default to the ordinary tenant shape. The other two
+		// shapes each imply a subject level no publish would ever fill, so guessing
+		// either for an undeclared suffix builds a stream nothing lands in.
+		"a-suffix-nobody-declared": ShapeTenant,
+	}
+	for suffix, want := range cases {
+		if got := ShapeOf(suffix); got != want {
+			t.Errorf("ShapeOf(%q) = %v, want %v", suffix, got, want)
+		}
+	}
+}
+
+// The cap must be declared on the capture stream and on nothing else — an
+// accidental cap on a stream meant to track its tier would pin it below the
+// ceiling an operator sized the deployment with, and nothing would report it.
+func TestMaxBytesCapIsDeclaredOnlyWhereIntended(t *testing.T) {
+	if got := MaxBytesCapFor(DeviceEventsCapture); got != deviceEventsCaptureMaxBytesCap {
+		t.Errorf("MaxBytesCapFor(%q) = %d, want %d: the capture stream is capped because the "+
+			"Hot tier ceiling does not fit the disk budget",
+			DeviceEventsCapture, got, int64(deviceEventsCaptureMaxBytesCap))
+	}
+	// The cap must stay under the free space the default budget actually has. That
+	// is enforced end-to-end by config's reservation tests (and, at the far smaller
+	// --compact size, by dcctl's); this pins the intent at the declaration, where
+	// the number is chosen.
+	if deviceEventsCaptureMaxBytesCap > 384<<20 {
+		t.Errorf("capture cap %d B exceeds the 384 MiB the default budget leaves free above "+
+			"its headroom floor; see config.TestBudgetLeavesHeadroomForUnaccountedStreams",
+			int64(deviceEventsCaptureMaxBytesCap))
+	}
+	for _, s := range All {
+		if s.Suffix == DeviceEventsCapture {
+			continue
+		}
+		if got := MaxBytesCapFor(s.Suffix); got != 0 {
+			t.Errorf("stream %q declares a ceiling cap of %d; only the capture stream should, "+
+				"since every other stream is meant to track its tier's ceiling", s.Suffix, got)
+		}
+	}
+}
+
 func TestSuffixesCoversAll(t *testing.T) {
 	if got, want := len(Suffixes()), len(All); got != want {
 		t.Errorf("Suffixes() returned %d entries for %d declared streams", got, want)

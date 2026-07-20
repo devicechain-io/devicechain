@@ -257,6 +257,40 @@ func TestKvCeilingsAreNeverUnlimited(t *testing.T) {
 // the HOT (larger) bound. That direction is the safe one: over-reserving disk is
 // cheap and visible, while under-bounding a busy stream silently evicts live data
 // via DiscardOld. A regression here is invisible in a dev cluster.
+// A per-stream cap must only ever LOWER a ceiling. If it could raise one it would
+// silently overrun the budget the PV was sized from — and the case that matters
+// is --compact, whose Hot ceiling (64 MiB) is far below the capture stream's cap
+// (256 MiB), so the tier must win there and the cap must not apply at all.
+func TestStreamMaxBytesForAppliesACapOnlyDownward(t *testing.T) {
+	capped := streams.MaxBytesCapFor(streams.DeviceEventsCapture)
+	if capped <= 0 {
+		t.Fatal("the capture stream declares no cap — this test would assert nothing")
+	}
+
+	// A default-sized deployment: the Hot tier exceeds the cap, so the cap binds.
+	big := &InstanceConfiguration{}
+	big.ApplyDefaults()
+	if got := big.Infrastructure.Nats.StreamMaxBytesFor(streams.DeviceEventsCapture); got != capped {
+		t.Errorf("at the default Hot ceiling the capture stream got %d B, want its cap %d B", got, capped)
+	}
+
+	// A --compact-sized deployment: the Hot tier is BELOW the cap, so the tier must
+	// win. A cap that applied here would claim four times the largest other stream
+	// in a 2Gi store and crashloop the bring-up.
+	small := &InstanceConfiguration{}
+	small.Infrastructure.Nats.StreamMaxBytes = 64 << 20
+	small.Infrastructure.Nats.StreamMaxBytesCold = 16 << 20
+	small.ApplyDefaults()
+	if got := small.Infrastructure.Nats.StreamMaxBytesFor(streams.DeviceEventsCapture); got != 64<<20 {
+		t.Errorf("at a compact Hot ceiling of 64 MiB the capture stream got %d B, want 64 MiB: "+
+			"a cap must never raise a ceiling above the tier an operator configured", got)
+	}
+	// And it must not disturb an uncapped stream on the same config.
+	if got := small.Infrastructure.Nats.StreamMaxBytesFor(streams.InboundEvents); got != 64<<20 {
+		t.Errorf("uncapped Hot stream got %d B, want the configured 64 MiB", got)
+	}
+}
+
 func TestStreamMaxBytesFor(t *testing.T) {
 	cfg := &InstanceConfiguration{}
 	cfg.ApplyDefaults()

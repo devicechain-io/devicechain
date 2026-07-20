@@ -51,7 +51,7 @@ const (
 // This deliberately carries no Produces/Consumes subject lists. It used to. They
 // were read by nothing — the gate has always worked off HardDeps/SoftDeps — and
 // as unenforced documentation they had silently drifted to naming 7 of the
-// platform's 15 streams, while still reading as an authoritative wiring map. The
+// platform's streams, while still reading as an authoritative wiring map. The
 // stream set has one home now, core/streams; a second enumeration here could only
 // ever drift away from it again.
 type Manifest struct {

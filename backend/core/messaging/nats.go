@@ -223,6 +223,24 @@ func applyStreamSubjects(cfg *nats.StreamConfig, subjects []string) bool {
 	return true
 }
 
+// applyStreamDuplicateWindow reconciles a stream's dedup window to what
+// core/streams declares, reporting whether it changed.
+//
+// The zero check is the whole point, and it is not a micro-optimization. A suffix
+// that declares NO window must leave the broker's setting alone rather than write
+// 0 into it: those are different statements, and conflating them means every
+// service that ensures the stream would fight over it — one build reconciling a
+// window on, the next reconciling it back off, an UpdateStream per pod per
+// restart forever. Reconciling only a DECLARED window makes the operation
+// idempotent across pods, which is the property ensureStream depends on.
+func applyStreamDuplicateWindow(cfg *nats.StreamConfig, window time.Duration) bool {
+	if window == 0 || cfg.Duplicates == window {
+		return false
+	}
+	cfg.Duplicates = window
+	return true
+}
+
 // ensureStream creates the per-suffix stream if it does not already exist, and
 // reconciles its size ceilings and subjects if it does. The stream captures every
 // tenant's subjects for the suffix, so a single stream backs both the scoped
@@ -244,6 +262,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	bounds := nmgr.streamBounds(suffix)
 	subjects := []string{StreamSubject(nmgr.Microservice.InstanceId, suffix)}
+	dupWindow := time.Duration(streams.DuplicateWindowSecondsFor(suffix)) * time.Second
 	// Retry on connection/server errors so a few seconds of NATS lag on a cluster
 	// restart degrades into a retry rather than a crash-loop (A6). A stream that
 	// does not yet exist (ErrStreamNotFound) is the normal first-run case and is
@@ -264,13 +283,15 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			cfg := info.Config
 			boundsChanged := applyStreamBounds(&cfg, bounds)
 			subjectsChanged := applyStreamSubjects(&cfg, subjects)
-			if boundsChanged || subjectsChanged {
+			dupChanged := applyStreamDuplicateWindow(&cfg, dupWindow)
+			if boundsChanged || subjectsChanged || dupChanged {
 				if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
 					return err
 				}
 				log.Info().Str("stream", name).Int64("maxBytes", bounds.maxBytes).
 					Int64("maxMsgs", bounds.maxMsgs).Int32("maxMsgSize", bounds.maxMsgSize).
 					Strs("subjects", cfg.Subjects).Bool("subjectsChanged", subjectsChanged).
+					Dur("duplicateWindow", cfg.Duplicates).Bool("duplicateWindowChanged", dupChanged).
 					Msg("Reconciled JetStream stream configuration")
 			}
 			return nil
@@ -287,6 +308,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			Replicas:  nmgr.streamReplicas(),
 		}
 		applyStreamBounds(cfg, bounds)
+		applyStreamDuplicateWindow(cfg, dupWindow)
 		if _, err := nmgr.js.AddStream(cfg); err != nil {
 			return err
 		}
@@ -390,6 +412,16 @@ func (w *natsWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
 	if IsPerDeviceSuffix(w.suffix) {
 		return fmt.Errorf("messaging: %q is a per-device subject; use WriteToDevice", w.suffix)
 	}
+	// A capture stream's producer is the DEVICE, via the broker's MQTT gateway
+	// (ADR-030 amendment). Its suffix appears in no subject, so publishing here
+	// would address "{instance}.{tenant}.{suffix}" — a subject that matches no
+	// stream, which JetStream reports as a publish error only because the stream
+	// lookup fails, and which a caller ignoring the error would lose silently.
+	// Refuse it outright: there is no correct way to write to this stream.
+	if streams.ShapeOf(w.suffix) == streams.ShapeDeviceEvents {
+		return fmt.Errorf("messaging: %q is a device-events capture stream written by the broker's "+
+			"MQTT gateway, not by the platform; it has no publish path", w.suffix)
+	}
 	return w.publish(ctx, "", msgs...)
 }
 
@@ -430,8 +462,14 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 			cid = uuid.NewString()
 		}
 		nm.Header.Set(HeaderCorrelationID, cid)
+		// The dedup id goes on before the caller's own headers are copied, and the
+		// copy skips it, so a producer cannot set Nats-Msg-Id by hand through the
+		// Headers map and bypass the reasoning on Message.DedupID.
+		if msgs[i].DedupID != "" {
+			nm.Header.Set(nats.MsgIdHdr, msgs[i].DedupID)
+		}
 		for k, v := range msgs[i].Headers {
-			if k != HeaderCorrelationID {
+			if k != HeaderCorrelationID && k != nats.MsgIdHdr {
 				nm.Header.Set(k, v)
 			}
 		}

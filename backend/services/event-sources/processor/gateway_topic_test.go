@@ -103,10 +103,14 @@ func TestGatewaySubscriptionExcludesInternalSubjects(t *testing.T) {
 
 	published := make([]string, 0, len(streams.All))
 	for _, s := range streams.All {
-		subject := messaging.ScopedSubject(testInstance, tenant, s.Suffix)
-		if messaging.IsPerDeviceSuffix(s.Suffix) {
-			subject = messaging.DeviceScopedSubject(testInstance, tenant, s.Suffix, device)
+		// A device-events capture stream is not INTERNAL traffic — its subject is
+		// the telemetry subject this subscription exists to receive. Publishing it
+		// here would assert the opposite of the truth and fail. The canonical
+		// publish below is what covers it.
+		if s.Shape == streams.ShapeDeviceEvents {
+			continue
 		}
+		subject := messaging.ConcreteSubjectFor(testInstance, tenant, s.Suffix, device)
 		require.NoError(t, nc.Publish(subject, []byte(`{"internal":true}`)))
 		published = append(published, subject)
 	}
