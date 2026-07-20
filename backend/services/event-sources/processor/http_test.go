@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/stretchr/testify/assert"
@@ -17,7 +18,7 @@ import (
 // newTestHttpSource builds an HTTP event source over a real JSON decoder with
 // capturing callbacks, returning the source plus pointers to what the callbacks
 // observed. allow is the rate-limit gate; a nil allow leaves ingest unmetered.
-func newTestHttpSource(t *testing.T, allow func(string, string) bool) (*HttpEventSource, *capturedDecode, *capturedFailure) {
+func newTestHttpSource(t *testing.T, allow RateGate) (*HttpEventSource, *capturedDecode, *capturedFailure) {
 	t.Helper()
 	dec := &capturedDecode{}
 	fail := &capturedFailure{}
@@ -133,7 +134,7 @@ func TestHttpEventSource_MissingTenant(t *testing.T) {
 // A request whose tenant is over its ingest rate limit is shed with 429 before
 // the body is decoded — neither callback fires.
 func TestHttpEventSource_RateLimited(t *testing.T) {
-	es, dec, fail := newTestHttpSource(t, func(string, string) bool { return false })
+	es, dec, fail := newTestHttpSource(t, func(string, string, time.Time) bool { return false })
 
 	body := `{"device":"sensor-001","eventType":"Measurement","payload":{"measurements":{"temp":21.5}}}`
 	req := httptest.NewRequest(http.MethodPost, "/inst-1/acme/events", strings.NewReader(body))

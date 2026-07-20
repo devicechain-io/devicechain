@@ -65,7 +65,7 @@ type GatewayJetStreamSource struct {
 	failed   func(string, string, []byte, error) error
 	// allow meters an inbound message against its tenant's ingest ceiling before it
 	// is queued for decode; a false return sheds the message. nil disables metering.
-	allow func(string, string) bool
+	allow RateGate
 }
 
 // NewGatewayJetStreamSource builds the capture-stream source. reader must be a
@@ -74,7 +74,7 @@ func NewGatewayJetStreamSource(id string, reader messaging.MessageReader, decode
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
 	failed func(string, string, []byte, error) error,
-	allow func(string, string) bool) *GatewayJetStreamSource {
+	allow RateGate) *GatewayJetStreamSource {
 	es := &GatewayJetStreamSource{
 		Id:       id,
 		Decoder:  decoder,
@@ -242,11 +242,21 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	// redeliver it into the same over-limit gate, which is not backpressure but a
 	// spin — and on a SHARED consumer it would wedge the tenants behind it too.
 	//
-	// This is where slice I4 lands: metering a recovered backlog against wall-clock
-	// arrival sheds messages the device was already PUBACKed for, which would make
-	// the recovery story this source exists to provide false. Until then the gate
-	// behaves exactly as it did on the MQTT path.
-	if es.allow != nil && !es.allow(es.Id, tenant) {
+	// The message is metered at its CAPTURE APPEND TIME, not at now (ADR-030 I4).
+	// The broker stamps that before it PUBACKs the device, so it is the device's own
+	// send time, and metering against it is what makes a recovered backlog survive.
+	// Metered at now, an hour of a tenant's perfectly compliant traffic all "arrives"
+	// within the seconds it takes to drain and is almost entirely shed — the platform
+	// discarding messages it had already told the devices were safe, which would make
+	// this source's whole reason for existing false. Metered at append time the same
+	// backlog replays against the timeline it was produced on and is admitted in
+	// full, while a tenant who genuinely exceeded their ceiling carries that burst in
+	// their timestamps and is shed by exactly the amount they would have been had
+	// there been no outage at all. Nothing is traded away for the recovery.
+	//
+	// A message with no append time (metadata unavailable) meters at now, which is
+	// the pre-I4 behaviour — degraded to over-shedding a backlog, never to unmetered.
+	if es.allow != nil && !es.allow(es.Id, tenant, msg.AppendTime) {
 		ackDrop(msg, "over the tenant ingest rate limit")
 		return
 	}

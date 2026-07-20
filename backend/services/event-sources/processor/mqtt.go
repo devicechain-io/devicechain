@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -80,7 +81,7 @@ type MqttEventSource struct {
 	// allow meters an inbound message against its tenant's ingest rate limit
 	// before it is queued for decode; a false return sheds the message. nil
 	// disables metering (used by tests that exercise decoding in isolation).
-	allow func(string, string) bool
+	allow RateGate
 }
 
 // Create a new MQTT event source based on the given configuration. tlsConfig is
@@ -92,7 +93,7 @@ func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Conf
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
 	failed func(string, string, []byte, error) error,
-	allow func(string, string) bool) (*MqttEventSource, error) {
+	allow RateGate) (*MqttEventSource, error) {
 	port, err := strconv.Atoi(config["port"])
 	if err != nil {
 		return nil, err
@@ -227,7 +228,7 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	// its limit sheds here, spending no decode CPU. MQTT has no per-message
 	// acknowledgement back to the publisher, so an over-limit message is simply
 	// dropped (the HTTP path returns 429 instead).
-	if es.allow != nil && !es.allow(es.Id, tenant) {
+	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}) {
 		return
 	}
 

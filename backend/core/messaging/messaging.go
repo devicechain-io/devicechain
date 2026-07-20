@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -123,6 +124,22 @@ type Message struct {
 	// whose broker metadata is unavailable (non-JetStream), so consumers that don't
 	// checkpoint are unaffected.
 	StreamSeq uint64
+	// AppendTime is the broker's timestamp for when a consumed message was written
+	// to the stream. For the ingest capture stream (ADR-030) the write happens
+	// before the device is PUBACKed, so this is when the DEVICE SENT the message,
+	// not when we got round to reading it.
+	//
+	// That distinction only matters when a consumer is behind, and then it matters
+	// a great deal: a per-tenant rate gate fed arrival time meters how fast WE are
+	// draining, so a recovered backlog — which drains at fetch speed by definition —
+	// looks like one enormous burst and is shed, discarding messages the device was
+	// already told were safe. Fed this instead, the same backlog is metered against
+	// the timeline it was actually produced on (core.TenantRateLimiter.AllowAt).
+	//
+	// It is the zero time for produced/synthetic messages and for a consumed message
+	// whose broker metadata is unavailable (non-JetStream), which AllowAt reads as
+	// "now" — the correct default for any path that is not replaying a backlog.
+	AppendTime time.Time
 	// DedupID, when non-empty, is published as the JetStream "Nats-Msg-Id" header,
 	// making the write idempotent within the target stream's DuplicateWindow: a
 	// second publish carrying an id already seen is acknowledged as success and

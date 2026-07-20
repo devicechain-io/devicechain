@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-event-sources/model"
+	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -72,6 +73,10 @@ type captureHarness struct {
 	lastSeq     uint64
 	received    int
 	allowResult bool
+	// gate, when set, replaces the flat allowResult so a test can drive the real
+	// per-tenant limiter and observe what admission actually depends on. Set it
+	// before the first handle call.
+	gate RateGate
 }
 
 func newCaptureHarness(t *testing.T) *captureHarness {
@@ -96,7 +101,12 @@ func newCaptureHarness(t *testing.T) *captureHarness {
 			h.mu.Unlock()
 			return h.failedErr
 		},
-		func(string, string) bool { return h.allowResult })
+		func(src string, tenant string, sentAt time.Time) bool {
+			if h.gate != nil {
+				return h.gate(src, tenant, sentAt)
+			}
+			return h.allowResult
+		})
 
 	// Start only the decode side; the read loop is bypassed so tests drive handle
 	// directly with the exact message they mean to exercise.
@@ -121,6 +131,15 @@ const captureSubject = "inst-1.acme.devices.sensor-001.events"
 func capturedMsg(subject string, body string, numDelivered int, seq uint64, ack messaging.Acknowledger) messaging.Message {
 	m := messaging.NewConsumedMessage(subject, []byte(body), numDelivered, nil, ack)
 	m.StreamSeq = seq
+	return m
+}
+
+// capturedMsgAt is capturedMsg with the broker append time the message would
+// carry — the time the device SENT it, which is what admission is metered on.
+func capturedMsgAt(subject string, body string, seq uint64, appendTime time.Time,
+	ack messaging.Acknowledger) messaging.Message {
+	m := capturedMsg(subject, body, 1, seq, ack)
+	m.AppendTime = appendTime
 	return m
 }
 
@@ -399,3 +418,122 @@ func (r *blockingReader) ReadMessage(ctx context.Context) (messaging.Message, er
 }
 
 func (r *blockingReader) HandleResponse(error) {}
+
+// ==================== DRAIN ADMISSION (ADR-030 I4) ====================
+//
+// These exercise the gate through a REAL core.TenantRateLimiter rather than a
+// stubbed allow, because the defect I4 fixes is not in the gate's plumbing — the
+// plumbing was always correct — but in WHICH CLOCK the bucket is fed. A stubbed
+// gate cannot see the difference, which is exactly why the original design walked
+// past it.
+
+// backlogHarness wires the capture source to a real per-tenant limiter at the
+// given ceiling, and reports how many messages the gate admitted.
+func backlogHarness(t *testing.T, rps float64, burst int) *captureHarness {
+	t.Helper()
+	h := newCaptureHarness(t)
+	limiter := core.NewTenantRateLimiter(func(string) (float64, int) { return rps, burst })
+	h.gate = func(_ string, tenant string, sentAt time.Time) bool {
+		return limiter.AllowAt(tenant, sentAt)
+	}
+	return h
+}
+
+// drain feeds count messages whose send times are `spacing` apart ending an hour
+// ago — a backlog that accumulated during an outage and is now arriving all at
+// once — and returns how many the gate admitted.
+func drain(t *testing.T, h *captureHarness, count int, spacing time.Duration) int {
+	t.Helper()
+	base := time.Now().Add(-time.Hour)
+	for i := 0; i < count; i++ {
+		h.source.handle(capturedMsgAt(captureSubject, validEvent, uint64(i+1),
+			base.Add(time.Duration(i)*spacing), &recordingAck{}))
+	}
+	_, _, received, _ := h.counts()
+	return received
+}
+
+// THE I4 PROPERTY: a tenant who sent at or below their ceiling loses nothing to
+// the gate, no matter how far behind the drain is.
+//
+// This is the whole point of the capture stream. The broker PUBACKed every one of
+// these messages — it told the device they were safe — so shedding them on the way
+// back up would make the durability guarantee false in exactly the situation the
+// guarantee exists for. Metered on ARRIVAL all 1000 land in the same instant and
+// ~990 are shed; metered on SEND time they replay against the timeline the tenant
+// actually produced them on.
+//
+// Mutation-checked: reverting AllowAt to Allow (metering at now) drops this from
+// 1000 to 10 — the burst and nothing else.
+func TestRecoveredBacklogAtTheCeilingIsAdmittedInFull(t *testing.T) {
+	const count = 1000
+	h := backlogHarness(t, 100, 10)
+
+	// Exactly the ceiling: 100/s == one message every 10ms.
+	admitted := drain(t, h, count, 10*time.Millisecond)
+
+	require.Equal(t, count, admitted,
+		"a compliant tenant's recovered backlog must not be shed; the broker already PUBACKed it")
+}
+
+// THE COUNTERWEIGHT, and the reason this slice gives nothing away.
+//
+// Admitting the backlog would be trivial to achieve by weakening the gate, and a
+// test suite that only pinned the property above would be satisfied by exactly
+// that mistake. So: the same drain, from a tenant who genuinely sent at 10x their
+// ceiling, must still be shed — and shed by the amount the LIVE path would have
+// shed, not merely by some amount. A tenant cannot buy extra throughput by
+// arranging to be replayed.
+func TestRecoveredBacklogAboveTheCeilingIsStillShed(t *testing.T) {
+	const count = 1000
+	const rps, burst = 100.0, 10
+
+	// 10x the ceiling: 1000/s == one message every 1ms.
+	const spacing = time.Millisecond
+	drained := drain(t, backlogHarness(t, rps, burst), count, spacing)
+
+	// What the same traffic costs live: the burst, plus the ceiling applied across
+	// the span the messages were actually sent over. That span is (count-1)*spacing,
+	// not count*spacing — the first message is sent at the start of the window and
+	// accrues nothing. Derived rather than hardcoded, so this stays a statement about
+	// the ceiling instead of a number tuned until it matched.
+	span := time.Duration(count-1) * spacing
+	wantLive := burst + int(rps*span.Seconds())
+	require.InDelta(t, wantLive, drained, 1,
+		"an over-ceiling backlog must be shed to the same volume the live path would admit")
+	require.Less(t, drained, count/2, "an over-ceiling tenant must not be admitted wholesale")
+}
+
+// A message with no broker metadata (AppendTime zero) must degrade to metering at
+// now — the pre-I4 behaviour — rather than to unmetered. Getting this backwards
+// would turn a metadata gap into a free pass past the tenant's ceiling.
+func TestCapturedMessageWithNoAppendTimeIsStillMetered(t *testing.T) {
+	h := backlogHarness(t, 100, 10)
+
+	admitted := 0
+	for i := 0; i < 1000; i++ {
+		h.source.handle(capturedMsgAt(captureSubject, validEvent, uint64(i+1),
+			time.Time{}, &recordingAck{}))
+	}
+	_, _, admitted, _ = h.counts()
+
+	require.LessOrEqual(t, admitted, 20,
+		"a message with no send time must meter at now, not bypass the ceiling")
+}
+
+// A broker whose clock runs fast must not be able to mint tokens by stamping
+// messages as sent in the future. The send time is clamped to now, so a future
+// append time buys at most the burst that was already available.
+func TestFutureAppendTimeCannotMintTokens(t *testing.T) {
+	h := backlogHarness(t, 100, 10)
+
+	future := time.Now().Add(24 * time.Hour)
+	for i := 0; i < 1000; i++ {
+		h.source.handle(capturedMsgAt(captureSubject, validEvent, uint64(i+1),
+			future, &recordingAck{}))
+	}
+	_, _, admitted, _ := h.counts()
+
+	require.LessOrEqual(t, admitted, 20,
+		"a future send time must be clamped to now, not accrue a day's worth of tokens")
+}

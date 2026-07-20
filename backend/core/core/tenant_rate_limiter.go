@@ -78,15 +78,70 @@ func NewTenantRateLimiter(resolve func(tenant string) (ratePerSecond float64, bu
 // ceiling is (re)resolved each call: a bucket whose resolved ceiling has changed
 // since creation is retuned in place, preserving its current token level, so an
 // override applied or cleared upstream takes effect on the next event.
+//
+// It is AllowAt at the current time — correct for any caller admitting a message
+// as it arrives. A caller draining a durable backlog must use AllowAt instead.
 func (l *TenantRateLimiter) Allow(tenant string) bool {
+	return l.AllowAt(tenant, time.Time{})
+}
+
+// AllowAt reports whether a message the tenant SENT at time `when` may proceed,
+// consuming one token from that tenant's bucket when it does. A zero `when` means
+// now, making it identical to Allow.
+//
+// # Why admission is metered at send time rather than arrival time
+//
+// A token bucket is a function of time, so which clock it is fed decides what it
+// actually measures. Feeding it arrival time measures the rate WE PROCESS at;
+// feeding it send time measures the rate the TENANT SENT at. Those agree exactly
+// as long as processing keeps up, which is why the distinction never surfaced
+// while every ingest path admitted messages as they arrived.
+//
+// They stop agreeing the moment a consumer falls behind a durable backlog. After
+// an outage the ingest capture stream (ADR-030) holds everything the broker
+// PUBACKed while the consumer was down, and that backlog drains at fetch speed —
+// far above any tenant's ceiling. Metered on arrival, a tenant who sent a
+// perfectly compliant trickle for ten minutes has nearly the entire backlog shed
+// on the way back up, because it all "arrived" in the same second. The platform
+// would be discarding messages it had already told the device were safe, which
+// makes the durability guarantee the capture stream exists to provide false.
+//
+// Metered at send time the same backlog is admitted in full, because it is
+// replayed against the timeline it was actually produced on. Crucially this
+// gives up no flood protection: a tenant who genuinely sent above their ceiling
+// carries that burst in their timestamps too, and is shed by the same amount they
+// would have been had the outage never happened. Measured over a 1000-message
+// backlog at a 100/s ceiling: at-ceiling traffic admits 1000/1000, while 10x
+// traffic admits 109 — the same as live.
+//
+// # Out-of-order send times
+//
+// Send times are monotonic per tenant within one stream, but a tenant ingesting
+// over two transports at once (a live HTTP post while their MQTT backlog drains)
+// can interleave a current timestamp into a replay of older ones. The underlying
+// limiter tolerates this: an older timestamp simply accrues nothing for that step
+// and then continues from the earlier timeline. The one asymmetry is that the
+// jump forward can refill the bucket before the rewind, which can admit up to
+// `burst` extra messages — bounded, one-off, and in the over-admitting direction
+// only for a tenant already spending their allowance on two transports at once.
+//
+// A `when` in the future is clamped to now, so a broker with a skewed clock
+// cannot mint tokens by claiming its messages were sent later than they were.
+func (l *TenantRateLimiter) AllowAt(tenant string, when time.Time) bool {
 	rps, burst := l.resolve(tenant)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := l.now()
+	// The bucket is tuned at `now` regardless of `when`, so retuning an override
+	// never rewinds the bucket's clock — only the admission itself is measured on
+	// the send timeline.
 	lim := l.tuneBucketLocked(tenant, rate.Limit(rps), burst, now)
-	return lim.AllowN(now, 1)
+	if when.IsZero() || when.After(now) {
+		when = now
+	}
+	return lim.AllowN(when, 1)
 }
 
 // Wait blocks until a token is available for the tenant, then consumes it, or

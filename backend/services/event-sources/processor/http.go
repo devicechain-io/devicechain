@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -50,7 +51,7 @@ type HttpEventSource struct {
 	// allow meters an inbound request against its tenant's ingest rate limit
 	// before the body is read/decoded; a false return sheds the request with a
 	// 429. nil disables metering (used by tests that exercise decoding directly).
-	allow func(string, string) bool
+	allow RateGate
 }
 
 // Create a new HTTP event source based on the given configuration. instanceId is
@@ -59,7 +60,7 @@ func NewHttpEventSource(id string, config map[string]string, instanceId string, 
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
 	failed func(string, string, []byte, error) error,
-	allow func(string, string) bool) (*HttpEventSource, error) {
+	allow RateGate) (*HttpEventSource, error) {
 	port := DEFAULT_HTTP_PORT
 	if raw, ok := config["port"]; ok && raw != "" {
 		parsed, err := strconv.Atoi(raw)
@@ -118,7 +119,7 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// body, so a tenant over its limit is shed with a 429 having spent no decode
 	// CPU. Advise a Retry-After (RFC 6585 §4) so a well-behaved client backs off
 	// rather than immediately re-hitting the gate.
-	if es.allow != nil && !es.allow(es.Id, tenant) {
+	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}) {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "ingest rate limit exceeded for tenant", http.StatusTooManyRequests)
 		return

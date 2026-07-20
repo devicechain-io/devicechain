@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
@@ -237,8 +238,12 @@ func onMessageReceived(source string, raw []byte) {
 // returns true when the message may proceed and false when it must be shed,
 // recording the shed against the per-(source, tenant) metric so a noisy tenant is
 // observable. Called at the receive point of each transport, before decode.
-func onRateAllow(source string, tenant string) bool {
-	if RateLimiter.Allow(tenant) {
+//
+// sentAt is when the tenant sent the message, which is what the ceiling governs —
+// see processor.RateGate for why metering a durable backlog on arrival instead
+// would shed the entire recovery. A zero sentAt means now.
+func onRateAllow(source string, tenant string, sentAt time.Time) bool {
+	if RateLimiter.AllowAt(tenant, sentAt) {
 		return true
 	}
 	RateLimitedCounter.WithLabelValues(source).Inc()

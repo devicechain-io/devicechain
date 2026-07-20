@@ -185,3 +185,73 @@ func TestTenantRateLimiter_ConcurrentAllow(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// AllowAt meters a message against the time the tenant SENT it, so a consumer
+// replaying a durable backlog admits what the tenant actually sent rather than
+// what its own drain rate looks like (ADR-030 I4).
+func TestAllowAtMetersOnSendTimeNotArrivalTime(t *testing.T) {
+	l := NewTenantRateLimiter(func(string) (float64, int) { return 100, 10 })
+
+	// An hour-old backlog the tenant sent at exactly its ceiling, arriving at once.
+	base := time.Now().Add(-time.Hour)
+	admitted := 0
+	for i := 0; i < 500; i++ {
+		if l.AllowAt("acme", base.Add(time.Duration(i)*10*time.Millisecond)) {
+			admitted++
+		}
+	}
+	if admitted != 500 {
+		t.Errorf("a compliant backlog must be admitted in full, got %d/500", admitted)
+	}
+}
+
+// The counterweight: metering on send time must not become a way to exceed the
+// ceiling. A tenant who genuinely sent above it is shed by the same amount the
+// live path would shed, so being replayed buys nothing.
+func TestAllowAtStillShedsTrafficSentAboveTheCeiling(t *testing.T) {
+	l := NewTenantRateLimiter(func(string) (float64, int) { return 100, 10 })
+
+	base := time.Now().Add(-time.Hour)
+	admitted := 0
+	for i := 0; i < 500; i++ { // 1000/s against a 100/s ceiling
+		if l.AllowAt("acme", base.Add(time.Duration(i)*time.Millisecond)) {
+			admitted++
+		}
+	}
+	if admitted > 70 {
+		t.Errorf("over-ceiling traffic must still be shed, admitted %d/500", admitted)
+	}
+}
+
+// A zero send time means "now", so a caller with no send time to offer degrades
+// to the live behaviour rather than to unmetered.
+func TestAllowAtTreatsAZeroSendTimeAsNow(t *testing.T) {
+	l := NewTenantRateLimiter(func(string) (float64, int) { return 100, 10 })
+
+	admitted := 0
+	for i := 0; i < 500; i++ {
+		if l.AllowAt("acme", time.Time{}) {
+			admitted++
+		}
+	}
+	if admitted > 20 {
+		t.Errorf("a zero send time must meter at now, not bypass the ceiling; admitted %d/500", admitted)
+	}
+}
+
+// A send time in the FUTURE is clamped to now, so a broker with a fast clock
+// cannot mint tokens by claiming its messages were sent later than they were.
+func TestAllowAtClampsAFutureSendTimeToNow(t *testing.T) {
+	l := NewTenantRateLimiter(func(string) (float64, int) { return 100, 10 })
+
+	future := time.Now().Add(24 * time.Hour)
+	admitted := 0
+	for i := 0; i < 500; i++ {
+		if l.AllowAt("acme", future) {
+			admitted++
+		}
+	}
+	if admitted > 20 {
+		t.Errorf("a future send time must be clamped to now; admitted %d/500", admitted)
+	}
+}

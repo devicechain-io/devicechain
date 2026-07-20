@@ -795,7 +795,7 @@ func (r *natsReplayReader) Read(ctx context.Context) (Message, error) {
 		}
 		nm := r.pending[0]
 		r.pending = r.pending[1:]
-		seq, deliv := msgMeta(nm)
+		seq, deliv, appended := msgMeta(nm)
 		if seq > r.head {
 			// A live message past the captured head: stop replay here and leave it (and
 			// everything after) to the durable reader. Do not ack — it is not ours.
@@ -807,6 +807,7 @@ func (r *natsReplayReader) Read(ctx context.Context) (Message, error) {
 		r.doneSeq = seq
 		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), nil)
 		msg.StreamSeq = seq
+		msg.AppendTime = appended
 		return msg, nil
 	}
 }
@@ -937,9 +938,10 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 		}
 		nm := r.pending[0]
 		r.pending = r.pending[1:]
-		seq, deliv := msgMeta(nm)
+		seq, deliv, appended := msgMeta(nm)
 		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), natsAck{nm: nm})
 		msg.StreamSeq = seq
+		msg.AppendTime = appended
 		return msg, nil
 	}
 }
@@ -1019,21 +1021,27 @@ func natsHeaders(nm *nats.Msg) map[string]string {
 	return headers
 }
 
-// msgMeta returns the JetStream stream sequence and delivery-attempt count of a
-// consumed message in a single metadata parse (the reply subject is parsed once,
-// not once per field). Both are 0 when metadata is unavailable — a non-JetStream
-// message — which callers treat as "no durable position / first delivery".
+// msgMeta returns the JetStream stream sequence, delivery-attempt count and
+// append time of a consumed message in a single metadata parse (the reply subject
+// is parsed once, not once per field). All three are zero when metadata is
+// unavailable — a non-JetStream message — which callers treat as "no durable
+// position / first delivery / no send time".
 //
 // The stream sequence is the durable, gapless position a checkpointing consumer
 // records to dedup replays (ADR-051); a 0 never matches a real stream sequence, so
 // a metadata-less message is treated by the DETECT consumer as unprocessable rather
 // than as a valid checkpoint.
-func msgMeta(nm *nats.Msg) (streamSeq uint64, numDelivered int) {
+//
+// The append time is the broker's own timestamp for when the message was written
+// to the stream, which for the ingest capture stream is when the device published
+// it — so it is the tenant's SEND time, and the clock a drain-admission gate must
+// meter against rather than the time we got round to reading it (ADR-030 I4).
+func msgMeta(nm *nats.Msg) (streamSeq uint64, numDelivered int, appendTime time.Time) {
 	md, err := nm.Metadata()
 	if err != nil {
-		return 0, 0
+		return 0, 0, time.Time{}
 	}
-	return md.Sequence.Stream, int(md.NumDelivered)
+	return md.Sequence.Stream, int(md.NumDelivered), md.Timestamp
 }
 
 // HandleResponse logs the result of a read operation.
