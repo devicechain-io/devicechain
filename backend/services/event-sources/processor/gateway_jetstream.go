@@ -68,9 +68,10 @@ type GatewayJetStreamSource struct {
 	allow RateGate
 }
 
-// NewGatewayJetStreamSource builds the capture-stream source. reader must be a
-// durable reader over streams.DeviceEventsCapture.
-func NewGatewayJetStreamSource(id string, reader messaging.MessageReader, decoder Decoder,
+// NewGatewayJetStreamSource builds the capture-stream source. The reader is
+// supplied separately by SetReader, because at the point sources are built there
+// is no reader to pass — see SetReader.
+func NewGatewayJetStreamSource(id string, decoder Decoder,
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
 	failed func(string, string, []byte, error) error,
@@ -78,7 +79,6 @@ func NewGatewayJetStreamSource(id string, reader messaging.MessageReader, decode
 	es := &GatewayJetStreamSource{
 		Id:       id,
 		Decoder:  decoder,
-		reader:   reader,
 		received: received,
 		decoded:  decoded,
 		failed:   failed,
@@ -86,6 +86,22 @@ func NewGatewayJetStreamSource(id string, reader messaging.MessageReader, decode
 	}
 	es.lifecycle = core.NewLifecycleManager("gateway-jetstream-event-source", es, core.NewNoOpLifecycleCallbacks())
 	return es
+}
+
+// SetReader supplies the durable reader over streams.DeviceEventsCapture. It must
+// be called before Start.
+//
+// The reader is NOT a constructor argument, and that is deliberate. Sources are
+// built during the microservice's INITIALIZE phase, while every NATS reader is
+// created during START — so at construction time the reader genuinely does not
+// exist yet and any value passed for it can only be nil. Taking it as a parameter
+// invited exactly that: the service passed a package-level reader variable that
+// was still nil, built a source that looked correctly wired, and segfaulted in the
+// read loop on the first startup after the capture path went live. Peer consumers
+// (command-delivery, event-processing) already assign their readers inside the
+// NATS oncreate callback for this reason; this makes that the only way to do it.
+func (es *GatewayJetStreamSource) SetReader(reader messaging.MessageReader) {
+	es.reader = reader
 }
 
 func (es *GatewayJetStreamSource) Initialize(ctx context.Context) error {
@@ -100,6 +116,15 @@ func (es *GatewayJetStreamSource) Start(ctx context.Context) error {
 
 // ExecuteStart brings up the decode workers and the read loop.
 func (es *GatewayJetStreamSource) ExecuteStart(ctx context.Context) error {
+	// Refuse to start unwired. Without this the nil reader is not touched until the
+	// read loop's first fetch, on a goroutine, where it panics the process with a
+	// bare SIGSEGV that names neither the source nor the missing dependency. This
+	// is the point of consumption, and it is the only place the wiring can be
+	// checked at all: the service's own wiring lives in main.go, which no test runs.
+	if es.reader == nil {
+		return fmt.Errorf("event source %q was started without a capture-stream reader: "+
+			"SetReader must be called during NATS component creation, before start", es.Id)
+	}
 	// Per-Start, not per-construction: the lifecycle explicitly permits Start after
 	// Stop, and a channel closed by the previous ExecuteStop would make the next one
 	// return instantly — racing a live read loop into a closed message channel.

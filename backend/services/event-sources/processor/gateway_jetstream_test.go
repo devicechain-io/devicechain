@@ -82,7 +82,7 @@ type captureHarness struct {
 func newCaptureHarness(t *testing.T) *captureHarness {
 	t.Helper()
 	h := &captureHarness{allowResult: true}
-	h.source = NewGatewayJetStreamSource("gw-test", nil, NewJsonDecoder(map[string]string{}),
+	h.source = NewGatewayJetStreamSource("gw-test", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
@@ -539,4 +539,37 @@ func TestFutureAppendTimeCannotMintTokens(t *testing.T) {
 
 	require.LessOrEqual(t, admitted, 12,
 		"a future send time must be clamped to now, not accrue a day's worth of tokens")
+}
+
+// Starting the source without a capture reader must fail startup with a message
+// that names the problem, rather than segfaulting the process.
+//
+// This is a REGRESSION PIN, and the regression it pins shipped. The reader used to
+// be a constructor argument, so the service passed a package-level variable that
+// is not populated until a later lifecycle phase — it was always nil — and the
+// source looked correctly wired right up until the read loop dereferenced it on a
+// goroutine and killed the pod with a bare SIGSEGV on its first startup.
+//
+// Every unit test passed throughout, because the tests drive handle() directly and
+// never run the read loop, and the wiring itself lives in main.go, which no test
+// runs. So this asserts the one thing that was actually checkable: that the source
+// refuses to start unwired, at the point of consumption.
+func TestStartingWithoutACaptureReaderFailsLoudly(t *testing.T) {
+	source := NewGatewayJetStreamSource("gw-unwired", NewJsonDecoder(map[string]string{}),
+		func(string, []byte) {},
+		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
+		func(string, string, []byte, error) error { return nil },
+		nil)
+
+	// Driven through the real lifecycle, in the order the service uses it: sources
+	// are Initialized in one phase and Started in a later one, and it is exactly
+	// that gap the reader has to be supplied across.
+	ctx := context.Background()
+	require.NoError(t, source.Initialize(ctx))
+
+	err := source.Start(ctx)
+
+	require.Error(t, err, "an unwired source started successfully; the nil reader would panic the read loop")
+	require.Contains(t, err.Error(), "without a capture-stream reader",
+		"the error must name the missing dependency: a bare nil-deref names neither the source nor the reader")
 }

@@ -72,6 +72,10 @@ var (
 	// runs. Shared across pods — one durable, messages distributed — which is what
 	// lets event-sources scale past a single replica at all.
 	CaptureReader messaging.MessageReader
+	// GatewaySource is the capture-stream source, held from the INITIALIZE phase
+	// (where sources are built) so that START (where readers are created) can hand
+	// it CaptureReader. nil when no source is pointed at the platform broker.
+	GatewaySource *processor.GatewayJetStreamSource
 
 	// Metrics
 	MessagesCounter     *prometheus.CounterVec
@@ -228,9 +232,13 @@ func buildEventSources() error {
 						source.Id, natscfg.Hostname)
 				}
 				gatewaySourceBuilt = true
-				gateway := processor.NewGatewayJetStreamSource(source.Id, CaptureReader, decoder,
+				gateway := processor.NewGatewayJetStreamSource(source.Id, decoder,
 					onMessageReceived, onEventDecoded, onEventDecodeFailed,
 					processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed))
+				// Held so createNatsComponents can hand it the capture reader once that
+				// reader exists. Sources are built in the INITIALIZE phase and readers are
+				// created in START, so there is nothing to wire here yet.
+				GatewaySource = gateway
 				created = append(created, gateway)
 				continue
 			}
@@ -380,6 +388,13 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	CaptureReader = capture
+	// Wire the reader into the source that consumes it. This is the phase peer
+	// consumers do the same in (command-delivery, event-processing), and it is the
+	// earliest point at which the reader exists at all — buildEventSources ran back
+	// in INITIALIZE, when there was nothing to give it.
+	if GatewaySource != nil {
+		GatewaySource.SetReader(capture)
+	}
 
 	failed, err := nmgr.NewWriter(streams.FailedDecode)
 	if err != nil {
