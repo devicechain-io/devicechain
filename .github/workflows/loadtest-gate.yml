@@ -1,7 +1,7 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# ADR-064 correctness-under-load release gate -- L5, iteration 2d.
+# ADR-064 correctness-under-load release gate -- L5, iteration 2e.
 #
 # Iteration 1 (run 29856919636: 120s bring-up) proved the `--compact` stack
 # cold-boots green on a hosted `ubuntu-latest` runner. On top of that proven
@@ -11,14 +11,17 @@
 #            the device-plane HTTP ingress, reconcile PERSISTED == ACCEPTED.
 #   - L2d-1 detection -> durable alarm: safety/edge/background populations through
 #            an authored raiseAlarm rule; gate on the durable CLEARED+MAJOR alarm.
+#   - L2d-3 command round-trip: authored threshold->sendCommand rule enqueues a
+#            command that a real MQTT cmdreceiver cohort answers; gate on durable
+#            SUCCESSFUL. This is the ONLY oracle that dials the NATS MQTT gateway --
+#            it needs its own port-forward (see the command port-forward step for why
+#            the kind host-port map is a dead route and cannot be used here).
 #   - L3  -- ADR-063 tiered contention (the acceptance test for preferential
 #            shedding): TWO probe tenants (gold + best-effort) at the same load,
 #            first at floor 0 (negative control -- neither may shed), then at an
 #            operator-set floor (gold rides through zero-loss, the best-effort probe
 #            sheds yet loses only what it was told). The floor is set live between
 #            the two regimes by patching event-sources' config + a rollout.
-# Deferred: L2d-3 command round-trip (MQTT device CONNECT issue on the compact
-# runner, pending a local repro).
 # Reports -> step summary + artifacts, plus a consolidated baseline.json (the
 # ADR-064 "target numbers" record) at the end of a run.
 #
@@ -277,7 +280,7 @@ jobs:
             | awk '{ split($5, a, " "); s += a[1] } END { print s+0 }')
 
           {
-            echo "## ADR-064 L5 iteration 2d -- cold --compact bring-up on ubuntu-latest"
+            echo "## ADR-064 L5 iteration 2e -- cold --compact bring-up on ubuntu-latest"
             echo ""
             echo "| metric | value |"
             echo "| --- | --- |"
@@ -328,14 +331,27 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           go build -o "$RUNNER_TEMP/bin/dc-loadtest" ./cmd/loadtest
           go build -o "$RUNNER_TEMP/bin/dc-loadtest-detection" ./cmd/loadtest-detection
+          go build -o "$RUNNER_TEMP/bin/dc-loadtest-command" ./cmd/loadtest-command
           go build -o "$RUNNER_TEMP/bin/dc-loadtest-contention" ./cmd/loadtest-contention
 
       # One shared port-forward for the device-plane ingest, used by every probe
-      # (L1, detection, ... later command/contention). Opened once here, closed at
-      # the end. Device-plane HTTP ingest (:8081) is NOT a kind host-port map (only
-      # 80/443/1883 are), so it needs a forward -- the coordinate dc-loadtest*
-      # resolve from the handshake by default (http://localhost:8081). The tenant
-      # GraphQL / durable-oracle read-backs are on the ingress (:80), no forward.
+      # (L1, detection, command, contention). Opened once here, closed at the end.
+      # Device-plane HTTP ingest (:8081) is NOT a kind host-port map, so it needs a
+      # forward -- the coordinate dc-loadtest* resolve from the handshake by default
+      # (http://localhost:8081). The tenant GraphQL / durable-oracle read-backs are
+      # on the ingress (:80), no forward.
+      #
+      # MQTT (:1883) is NOT reachable at the host either, despite the kind config
+      # mapping host 1883 -> node 31883: that mapping is a DEAD route. dcctl embeds
+      # deploy/local/kind-cluster.yaml (assets.KindClusterConfig), whose 1883->31883
+      # entry is a NodePort slot from the legacy up.sh topology -- but the dcctl
+      # opentofu deploy exposes the MQTT gateway as a ClusterIP Service ONLY and never
+      # creates a NodePort on 31883, so the docker-proxy accepts the TCP connection and
+      # forwards it to an empty node port, which resets: the paho client sees
+      # "network Error: EOF" before the auth callout. (Contrast :80/:443, whose kind
+      # host-port maps DO land on ingress-nginx's real NodePort.) The command step
+      # therefore opens its OWN port-forward on a fresh host port -- NOT 1883, which
+      # the dead docker-proxy already holds -- and points the driver at it.
       - name: Open device-plane ingress (shared port-forward)
         id: ingress
         run: |
@@ -461,10 +477,123 @@ jobs:
           if-no-files-found: warn
           overwrite: true
 
-      # NOTE: L2d-3 command round-trip (MQTT) is deferred -- the device MQTT CONNECT
-      # is rejected by the NATS MQTT gateway before the auth callout on the compact
-      # runner cluster (responder subscribed, credential valid via HTTP, TLS fine),
-      # pending a local --compact repro. It slots in here once resolved.
+      # ---------------------------------------------------------------------
+      # L2d-3 -- command round-trip over real MQTT.
+      # ---------------------------------------------------------------------
+      # This is the one oracle that dials the NATS MQTT gateway (a cmdreceiver cohort
+      # subscribes, and a dispatched command must reach durable SUCCESSFUL through
+      # enqueue -> 30s sweep -> dispatch -> MQTT -> device respond). MQTT is a ClusterIP
+      # Service with no usable host route (see the shared-forward step for why the kind
+      # 1883 host map is dead), so this opens its OWN forward on a fresh port. It runs
+      # BEFORE L3, while the shared ingress forward (the probes' HTTP emit path) is
+      # still up and before L3's floor rollout replaces the event-sources pod.
+      - name: Open MQTT gateway (command port-forward)
+        id: mqtt
+        run: |
+          # 18831, deliberately NOT 1883: dcctl's kind topology maps host 1883 to a
+          # NodePort (31883) the deploy never creates, so a docker-proxy already holds
+          # 1883 as a dead route -- binding a forward there would fail or, worse, the
+          # driver's default ssl://127.0.0.1:1883 would hit the dead route and EOF. A
+          # fresh port forwards straight to the ClusterIP MQTT listener.
+          kubectl port-forward -n dc-system svc/dc-nats 18831:1883 \
+            >"$RUNNER_TEMP/pf-mqtt.log" 2>&1 &
+          pf_pid=$!
+          echo "pf_pid=$pf_pid" >> "$GITHUB_OUTPUT"
+
+          # Ready when a TLS handshake returns the gateway's (self-signed) cert -- the
+          # real protocol layer, like the ingress step's curl, proving the tunnel
+          # reaches the MQTT listener end to end and not just an open local socket.
+          connected=0
+          for _ in $(seq 1 30); do
+            if echo | timeout 3 openssl s_client -connect 127.0.0.1:18831 2>/dev/null \
+                 | grep -q "BEGIN CERTIFICATE"; then
+              connected=1
+              echo "MQTT gateway reachable at ssl://127.0.0.1:18831"
+              break
+            fi
+            if ! kill -0 "$pf_pid" 2>/dev/null; then
+              echo "::error::MQTT gateway port-forward exited before it became reachable"
+              cat "$RUNNER_TEMP/pf-mqtt.log" || true
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$connected" -ne 1 ]; then
+            echo "::error::MQTT gateway port-forward never became reachable after 30 attempts (~60s); the tunnel, not the platform, is the cause."
+            cat "$RUNNER_TEMP/pf-mqtt.log" || true
+            exit 1
+          fi
+
+      - name: L2d-3 command -- create tenant, drive round-trip over MQTT (the gate)
+        run: |
+          # Fresh tenant: the command harness AUTHORS a threshold->sendCommand rule and
+          # a command definition on a dedicated profile; the authoring guard REFUSES if
+          # they pre-exist, so every run needs a fresh sim. Three populations through
+          # ONE rule: safety (emit below -> must NEVER enqueue a command), command
+          # (cross up K cycles -> exactly K commands each, all driven to durable
+          # SUCCESSFUL), background (saturate). The gate reconciles DURABLE command
+          # state over the tenant GraphQL (:80); the MQTT receive tally is non-gating
+          # evidence. --mqtt-insecure (default) skips the self-signed gateway cert whose
+          # SAN a 127.0.0.1 forward cannot match. Non-zero exit on any failed invariant
+          # IS the gate.
+          "$RUNNER_TEMP/dcctl" sim create cmdprobe -s localhost
+          "$RUNNER_TEMP/bin/dc-loadtest-command" \
+            --handshake "$HOME/.devicechain/sims/cmdprobe.json" \
+            --mqtt-broker "ssl://127.0.0.1:18831" \
+            --bg-devices 40 --bg-interval 500ms \
+            --safety-probes 3 --command-probes 3 --cycles 3 --probe-interval 2s \
+            --min-accepted 600 \
+            --report "$RUNNER_TEMP/command-report.json"
+
+      - name: Command report -> summary
+        if: always()
+        run: |
+          report="$RUNNER_TEMP/command-report.json"
+          printf '\n### ADR-064 L2d-3 -- command round-trip over MQTT\n' >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$report" ]; then
+            { printf '\n```json\n'; jq . "$report" 2>/dev/null || cat "$report"; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f "$report" ]; then
+            printf '_report written but empty -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '_no report produced -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload command report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: command-report
+          path: ${{ runner.temp }}/command-report.json
+          if-no-files-found: warn
+          overwrite: true
+
+      - name: Stop MQTT gateway forward (+ attribute the command round-trip)
+        if: always()
+        env:
+          PF_PID: ${{ steps.mqtt.outputs.pf_pid }}
+        run: |
+          # This forward is the MOST drop-prone tunnel in the job: unlike the HTTP
+          # forwards (short requests), it carries the cmdreceiver cohort's long-lived
+          # paho connections for the whole drive, and the receiver auto-reconnects to
+          # 127.0.0.1:18831 forever if the pf process dies -- so a tunnel drop shows up
+          # as commands stuck in SENT and a red command-roundtrip invariant with NO hint
+          # it was the tunnel. That is precisely the misdiagnosis ("compact MQTT bug")
+          # that deferred this oracle, so attribute it explicitly: died, or stayed alive
+          # while logging per-stream forwarding errors. PF_PID is passed via env (the
+          # file's convention) rather than interpolated into the script.
+          pf_errors=""
+          if grep -qiE 'error forwarding|lost connection|an error occurred' "$RUNNER_TEMP/pf-mqtt.log" 2>/dev/null; then
+            pf_errors=1
+          fi
+          if [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && [ -z "$pf_errors" ]; then
+            echo "MQTT gateway port-forward survived the command round-trip cleanly (pid $PF_PID)."
+          else
+            echo "::warning::MQTT gateway port-forward did not survive cleanly -- a command-roundtrip red may be a kubectl port-forward drop, not a platform correctness failure. Log tail:"
+            tail -30 "$RUNNER_TEMP/pf-mqtt.log" 2>/dev/null || true
+          fi
+          # L3 does not use MQTT and nothing later rebinds 18831, so no need to poll for
+          # exit (unlike the shared :8081 forward, which must free the port for reopen).
+          kill "$PF_PID" 2>/dev/null || true
 
       # =====================================================================
       # ADR-064 L3 -- tiered contention: the acceptance test for ADR-063
@@ -517,19 +646,20 @@ jobs:
             printf '_no report produced -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Stop shared device-plane forward (+ attribute L1/detection/L3-neg)
+      - name: Stop shared device-plane forward (+ attribute L1/detection/command/L3-neg)
         if: always()
         env:
           PF_PID: ${{ steps.ingress.outputs.pf_pid }}
         run: |
-          # This forward carried EVERY floor-0 probe (L1 + detection + L3 negative
-          # control). It can drop under sustained req/s -- which surfaces SAFELY as a
-          # red (failed emits / accepted skew), never a false green -- but a red must
-          # be ATTRIBUTED to the tunnel vs the platform. Two failure shapes: the forward
-          # died, OR it stayed alive but logged per-connection forwarding errors (kubectl
-          # pf often keeps listening while failing every new stream). It is stopped here
-          # (not at job end) because the coming rollout would drop it anyway, and 8081
-          # must be free for the fresh forward.
+          # This forward carried EVERY floor-0 probe's HTTP emit path (L1 + detection +
+          # the command round-trip's bg/probe emits + L3 negative control). It can drop
+          # under sustained req/s -- which surfaces SAFELY as a red (failed emits /
+          # accepted skew), never a false green -- but a red must be ATTRIBUTED to the
+          # tunnel vs the platform. Two failure shapes: the forward died, OR it stayed
+          # alive but logged per-connection forwarding errors (kubectl pf often keeps
+          # listening while failing every new stream). It is stopped here (not at job
+          # end) because the coming rollout would drop it anyway, and 8081 must be free
+          # for the fresh forward.
           pf_errors=""
           if grep -qiE 'error forwarding|lost connection|an error occurred' "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null; then
             pf_errors=1
@@ -537,7 +667,7 @@ jobs:
           if [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && [ -z "$pf_errors" ]; then
             echo "shared device-plane port-forward survived the floor-0 probes cleanly (pid $PF_PID)."
           else
-            echo "::warning::shared device-plane port-forward did not survive cleanly -- an L1/detection/L3-neg red may be a kubectl port-forward drop, not a platform correctness failure. Log tail:"
+            echo "::warning::shared device-plane port-forward did not survive cleanly -- an L1/detection/command/L3-neg red may be a kubectl port-forward drop, not a platform correctness failure. Log tail:"
             tail -30 "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || true
           fi
           kill "$PF_PID" 2>/dev/null || true
@@ -708,6 +838,7 @@ jobs:
           read_json() { if [ -s "$1" ]; then cat "$1"; else echo 'null'; fi; }
           l1="$(read_json "$RUNNER_TEMP/l1-report.json")"
           det="$(read_json "$RUNNER_TEMP/detection-report.json")"
+          cmd="$(read_json "$RUNNER_TEMP/command-report.json")"
           pos="$(read_json "$RUNNER_TEMP/l3-pos-report.json")"
 
           # `passed` per probe mirrors Report.Passed(): an EMPTY invariant set is a
@@ -716,6 +847,7 @@ jobs:
           jq -n \
             --argjson l1 "$l1" \
             --argjson det "$det" \
+            --argjson cmd "$cmd" \
             --argjson pos "$pos" '
             def verdict: ((.invariants | length) > 0) and all(.invariants[]; .passed);
             {
@@ -736,6 +868,14 @@ jobs:
                 edgeProbes:         .edgeProbes,
                 safetyProbes:       .safetyProbes,
                 alarmSettleSeconds: .alarmSettleSeconds,
+                passed:             verdict
+              } end),
+              command: ($cmd | if . == null then null else {
+                achievedRatePerSec: .drive.achievedRatePerSec,
+                accepted:           .drive.accepted,
+                commandProbes:      .commandProbes,
+                cycles:             .cycles,
+                commandsReached:    .commandsReachedTarget,
                 passed:             verdict
               } end),
               contentionFloor1: ($pos | if . == null then null else {
@@ -764,6 +904,9 @@ jobs:
                 row("detection";
                     (.detection.achievedRatePerSec | if . then (.*10|round/10) else null end);
                     .detection.accepted; null; null; .detection.passed),
+                row("command round-trip";
+                    (.command.achievedRatePerSec | if . then (.*10|round/10) else null end);
+                    .command.accepted; null; null; .command.passed),
                 row("L3 floor1 gold";
                     null; .contentionFloor1.goldAccepted; .contentionFloor1.goldPersisted;
                     .contentionFloor1.goldShed; .contentionFloor1.passed),
@@ -833,8 +976,11 @@ jobs:
 
           # The device-plane port-forwards are the load path; if one dropped, a red is a
           # tunnel artifact, not a platform fault. Their logs are the only place that shows.
-          # (The shared forward carried the floor-0 probes; the second carried L3-positive.)
+          # (The shared forward carried the floor-0 probes; the second carried L3-positive;
+          # the MQTT forward carried the command round-trip's paho cohort.)
           echo "=== device-plane port-forward log (shared, floor-0 probes) ==="
           cat "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || echo "(no shared port-forward log)"
           echo "=== device-plane port-forward log (post-rollout, L3-positive) ==="
           cat "$RUNNER_TEMP/pf-eventsources-2.log" 2>/dev/null || echo "(no post-rollout port-forward log)"
+          echo "=== MQTT gateway port-forward log (command round-trip) ==="
+          cat "$RUNNER_TEMP/pf-mqtt.log" 2>/dev/null || echo "(no MQTT port-forward log)"
