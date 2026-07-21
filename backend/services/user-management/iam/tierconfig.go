@@ -36,18 +36,28 @@ type tierConfigKey struct {
 	validate func(v any) error
 }
 
+// ShedPriorityConfigKey is the tier config key carrying the tier's ADR-063
+// shed-priority default (ADR-065 S6) — the int 1–100 a tenant at this tier inherits
+// unless it carries its own override. It is registered OUTSIDE the dimension loop
+// below because it is a scalar preference, not a rate+burst governance dimension:
+// forcing it into a Dimension would fabricate a meaningless burst field and a bogus
+// rate unit. This is the shed priority the TenantTier doc comment and the
+// display_order warning both reserve as "a separate field with its own meaning".
+const ShedPriorityConfigKey = "shedPriority"
+
 // tierConfigKeys is the registry, keyed by config-blob key name.
 var tierConfigKeys = buildTierConfigKeys()
 
 // buildTierConfigKeys registers, for every governance dimension, its rate key (a
-// positive number) and its burst key (a positive integer). Both are the dimension's
-// own field names.
+// positive number) and its burst key (a positive integer) — both the dimension's own
+// field names — plus the standalone ADR-063 shedPriority key.
 func buildTierConfigKeys() map[string]tierConfigKey {
 	keys := make(map[string]tierConfigKey)
 	for _, d := range governance.AllDimensions() {
 		keys[d.RateField] = tierConfigKey{validate: validatePositiveRate}
 		keys[d.BurstField] = tierConfigKey{validate: validatePositiveBurst}
 	}
+	keys[ShedPriorityConfigKey] = tierConfigKey{validate: validateShedPriority}
 	return keys
 }
 
@@ -174,6 +184,42 @@ func validatePositiveBurst(v any) error {
 		return fmt.Errorf("must be positive (got %v); omit it to inherit the platform default", f)
 	}
 	return nil
+}
+
+// validateShedPriority accepts a whole number in [1, 100] — the ADR-063 shed-priority
+// band. Unlike a rate/burst ceiling, zero is not "inherit the default" here (an
+// omitted key is); a shed priority is a point on a fixed 1–100 scale, and a value
+// outside it names no band. Held to the same "reject at write" bar as the ceilings so
+// a typo is an error the operator sees, not a silent inherit.
+func validateShedPriority(v any) error {
+	f, ok := toFloat(v)
+	if !ok {
+		return fmt.Errorf("must be a number (got %T)", v)
+	}
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return fmt.Errorf("must be a finite number (got %v)", f)
+	}
+	if f != math.Trunc(f) {
+		return fmt.Errorf("must be a whole number (got %v)", f)
+	}
+	if f < 1 || f > 100 {
+		return fmt.Errorf("must be between 1 and 100 (got %v); omit it to inherit the platform default", f)
+	}
+	return nil
+}
+
+// ShedPriority returns the tier's ADR-063 shed-priority default (1–100), or nil if
+// the tier declares none (inherit the platform fail-safe). Nil for a nil tier, like
+// RateFor/BurstFor, so a caller need not special-case an unloaded association. Read
+// defensively through the same validator the write path uses — an out-of-band DB
+// write parking a junk value here inherits rather than banding to a wrong class.
+func (t *TenantTier) ShedPriority() *int {
+	f := t.positiveNumber(ShedPriorityConfigKey, validateShedPriority)
+	if f == nil {
+		return nil
+	}
+	i := int(*f)
+	return &i
 }
 
 // RateFor returns the tier's rate ceiling for a dimension, or nil if the tier

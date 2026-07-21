@@ -210,7 +210,8 @@ CREATE TABLE "user-management".iam_tenants (
  branding_accent text,
  ai_external_enabled boolean,
  ai_inference_requests_per_minute numeric,
- ai_inference_burst bigint
+ ai_inference_burst bigint,
+ shed_priority bigint
 );
 CREATE TABLE "user-management".signing_keys (
  id bigint NOT NULL,

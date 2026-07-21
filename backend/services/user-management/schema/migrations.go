@@ -32,5 +32,9 @@ var (
 		NewBaselineSchema(),
 		// ADR-065 S5c: display_order + color on iam_tenant_tiers (presentation only).
 		NewTierPresentationSchema(),
+		// ADR-063 decision 1: per-tenant shed-priority override column on iam_tenants.
+		NewShedPrioritySchema(),
+		// ADR-065 S6: seed the shedPriority default onto the gold/silver/bronze tiers.
+		NewTierShedPrioritySeed(),
 	}
 )

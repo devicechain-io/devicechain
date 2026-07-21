@@ -76,6 +76,46 @@ func TestGovernanceCascadeTierBelowOverride(t *testing.T) {
 	})
 }
 
+// goldTierWithShedPriority is the seeded gold shape once ADR-065 S6 seeds a shed
+// priority onto it (the never-shed band).
+func goldTierWithShedPriority() *iam.TenantTier {
+	return &iam.TenantTier{Token: iam.TierGoldToken, Config: map[string]any{"shedPriority": float64(90)}}
+}
+
+// TestShedPriorityCascadeOnTheWire pins that the data-plane tenantGovernance surface
+// resolves shedPriority down the same cascade — override → tier → null — that
+// event-sources reads it through. Null means the reader substitutes the fail-safe.
+func TestShedPriorityCascadeOnTheWire(t *testing.T) {
+	t.Run("override wins over the tier", func(t *testing.T) {
+		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: goldTierWithShedPriority(), ShedPriority: ip(10)}}
+		require.EqualValues(t, 10, *r.ShedPriority())
+	})
+	t.Run("tier supplies it when the tenant declares none", func(t *testing.T) {
+		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: goldTierWithShedPriority()}}
+		require.EqualValues(t, 90, *r.ShedPriority())
+	})
+	t.Run("null when neither declares — the reader applies the fail-safe", func(t *testing.T) {
+		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: &iam.TenantTier{Token: iam.TierSilverToken}}}
+		require.Nil(t, r.ShedPriority())
+	})
+}
+
+// TestAdminShedPriorityIsReadable is the H1 regression: the per-tenant shedPriority
+// override MUST be readable back on the admin plane. updateTenant is a full REPLACE of
+// the mutable fields (applyTo writes every override, nil clearing it), so a console
+// that could not read the current override would null an operator's "degrades last"
+// placement on any unrelated edit. Every other override is readable; this one must be.
+func TestAdminShedPriorityIsReadable(t *testing.T) {
+	// A set override reads back as itself.
+	r := &AdminTenantResolver{M: iam.Tenant{ShedPriority: ip(95)}}
+	got := r.ShedPriority()
+	require.NotNil(t, got, "the shedPriority override must be readable on AdminTenant (else an edit silently nulls it)")
+	require.EqualValues(t, 95, *got)
+
+	// An unset override reads back as null (inherit), like every other override.
+	require.Nil(t, (&AdminTenantResolver{M: iam.Tenant{}}).ShedPriority())
+}
+
 // TestUnusableOverrideFallsThroughToTheTierNotPastIt pins the one case where "the
 // consumer already folds onto the platform default, so the composition is
 // equivalent" is NOT equivalent to ADR-065 D5's cascade.

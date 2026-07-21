@@ -257,6 +257,19 @@ type Tenant struct {
 	// be positive.
 	AiInferenceRequestsPerMinute *float64
 	AiInferenceBurst             *int
+
+	// Per-tenant ADR-063 shed-priority override — the stored int 1–100 that decision 1
+	// preserves as "this ADR's own operational override" over the tier-derived
+	// shed-priority default. A SCALAR, deliberately NOT a rate+burst governance
+	// dimension: it is a contention PREFERENCE (who degrades last), not a consumption
+	// ceiling (how much), so it carries no burst and no rate unit and does not ride the
+	// Dimension machinery. nil means "inherit" — the tenant's tier decides, and failing
+	// that the platform fail-safe (governance.DefaultShedPriority, a bronze-band value,
+	// never gold). The band (80–100 gold · 50–79 silver · 20–49 bronze · 1–19
+	// best-effort) is read at admission by event-sources over the TenantGovernance
+	// query; nothing durable is keyed on it (ADR-063 invariant), so a change converges
+	// on core/governance's 60s TTL like every other cascade value.
+	ShedPriority *int
 }
 
 func (Tenant) TableName() string { return "iam_tenants" }

@@ -76,6 +76,21 @@ func (r *AdminTenantResolver) AiInferenceBurst() *int32 {
 	return &v
 }
 
+// ShedPriority resolves the per-tenant ADR-063 shed-priority override (1–100) for the
+// operator's visibility/edit — the RAW nullable column, null when the tenant inherits
+// its tier's shedPriority. This read-back is load-bearing: updateTenant is a
+// full-REPLACE of the mutable fields (applyTo writes every override, nil clearing it),
+// so a console that could not read the current override back would null it on any
+// unrelated edit — silently erasing an operator's "degrades last" placement. Every
+// other override is readable here for the same reason; this one must be too.
+func (r *AdminTenantResolver) ShedPriority() *int32 {
+	if r.M.ShedPriority == nil {
+		return nil
+	}
+	v := int32(*r.M.ShedPriority)
+	return &v
+}
+
 // Config resolves the AdminTenant.config field: the freeform config map as a
 // JSON object string, or null when unset.
 func (r *AdminTenantResolver) Config() (*string, error) { return marshalConfig(r.M.Config) }
@@ -221,6 +236,7 @@ type adminTenantCreateInput struct {
 	AiExternalEnabled            *bool
 	AiInferenceRequestsPerMinute *float64
 	AiInferenceBurst             *int32
+	ShedPriority                 *int32
 }
 
 // adminTenantUpdateInput mirrors AdminTenantUpdateRequest.
@@ -235,6 +251,7 @@ type adminTenantUpdateInput struct {
 	AiExternalEnabled            *bool
 	AiInferenceRequestsPerMinute *float64
 	AiInferenceBurst             *int32
+	ShedPriority                 *int32
 }
 
 // intPtr adapts an optional GraphQL Int (*int32) to the model's *int, preserving
@@ -268,6 +285,7 @@ func (r *AdminResolver) CreateTenant(ctx context.Context, args struct {
 			OutboundBurst:                intPtr(args.Request.OutboundBurst),
 			AiInferenceRequestsPerMinute: args.Request.AiInferenceRequestsPerMinute,
 			AiInferenceBurst:             intPtr(args.Request.AiInferenceBurst),
+			ShedPriority:                 intPtr(args.Request.ShedPriority),
 		},
 		AiExternalEnabled: args.Request.AiExternalEnabled,
 	})
@@ -295,6 +313,7 @@ func (r *AdminResolver) UpdateTenant(ctx context.Context, args struct {
 			OutboundBurst:                intPtr(args.Request.OutboundBurst),
 			AiInferenceRequestsPerMinute: args.Request.AiInferenceRequestsPerMinute,
 			AiInferenceBurst:             intPtr(args.Request.AiInferenceBurst),
+			ShedPriority:                 intPtr(args.Request.ShedPriority),
 		},
 		AiExternalEnabled: args.Request.AiExternalEnabled,
 	})

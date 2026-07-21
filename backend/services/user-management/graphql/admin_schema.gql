@@ -123,6 +123,12 @@ type AdminTenant {
     # routed externally, these gate HOW OFTEN.
     aiInferenceRequestsPerMinute: Float
     aiInferenceBurst: Int
+    # Per-tenant ADR-063 shed-priority override (1–100), a contention preference (who
+    # degrades last). Null means the tenant inherits its tier's shedPriority, then the
+    # platform fail-safe. Readable here — like every override above — so the console can
+    # round-trip it on an unrelated edit rather than nulling it (updateTenant is a full
+    # replace of these fields).
+    shedPriority: Int
     # What this tenant is ACTUALLY metered at for every governance dimension, and
     # WHY (ADR-065 decision 7): the cascade above resolved down to one value per
     # dimension, carrying the level that produced it and the levels it beat.
@@ -246,6 +252,11 @@ input AdminTenantCreateRequest {
     # routed externally, these gate HOW OFTEN.
     aiInferenceRequestsPerMinute: Float
     aiInferenceBurst: Int
+    # Per-tenant ADR-063 shed-priority override (1–100). NOT a ceiling but a contention
+    # PREFERENCE (who degrades last): 80–100 gold · 50–79 silver · 20–49 bronze · 1–19
+    # best-effort. Null inherits the tenant's tier shedPriority, then the platform
+    # fail-safe (a bronze-band value), never gold.
+    shedPriority: Int
 }
 
 # Data to update a tenant (its token is fixed). A null ingest* / outbound* override
@@ -270,6 +281,9 @@ input AdminTenantUpdateRequest {
     # routed externally, these gate HOW OFTEN.
     aiInferenceRequestsPerMinute: Float
     aiInferenceBurst: Int
+    # Per-tenant ADR-063 shed-priority override (1–100), a contention preference. Null
+    # clears it, reverting to the tier's shedPriority then the platform fail-safe.
+    shedPriority: Int
 }
 
 # Data required to create a global identity. Each system role must name an
