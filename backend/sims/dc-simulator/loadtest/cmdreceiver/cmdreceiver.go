@@ -158,10 +158,15 @@ func (r *Receiver) Subscribe(ctx context.Context, deviceToken, credentialId stri
 	// tenant's run resume the PRIOR tenant's persisted session — whose stored
 	// subscription names the old tenant's subject, now a permission violation under
 	// the new JWT — and let two runs fight via MQTT session takeover. Qualifying with
-	// the tenant makes each run's session id unique. CleanSession false + auto-
-	// reconnect keeps the session so a brief blip does not lose a QoS-1 command (the
-	// broker queues it) — the receiver is load-bearing, so it favors delivery.
-	opts.SetClientID(r.tenant + "." + deviceToken)
+	// the tenant makes each run's session id unique. The separator is a HYPHEN, not a
+	// dot: NATS embeds the client id in a "$MQTT.sess.<id>" subject and rejects a "."
+	// (or " "/"*"/">") in it at CONNECT parse — before the auth callout even runs — so
+	// a dot-separated id fails the connection outright. Tenant and token are both ADR-042
+	// tokens (hyphen-safe, dot-free), so a hyphen join stays a valid client id.
+	// CleanSession false + auto-reconnect keeps the session so a brief blip does not
+	// lose a QoS-1 command (the broker queues it) — the receiver is load-bearing, so
+	// it favors delivery.
+	opts.SetClientID(r.tenant + "-" + deviceToken)
 	opts.SetUsername(fmt.Sprintf("%s:%s", r.tenant, credentialId))
 	opts.SetPassword("")
 	opts.SetCleanSession(false)
