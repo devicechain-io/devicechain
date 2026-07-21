@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -302,26 +301,6 @@ func (c DetectionConfig) ruleDefinitionJSON() (string, error) {
 	return string(raw), nil
 }
 
-// partitionHarnessDevices splits Provision's rendered device set into the three
-// roles by token prefix. It returns an error if a device matches none — a rendered
-// token that fell outside every population prefix means the manifest and this
-// partition disagree, and silently dropping it would understate the probe set.
-func partitionHarnessDevices(devices []sim.DeviceInstance) (safety, edge, background []sim.DeviceInstance, err error) {
-	for _, d := range devices {
-		switch {
-		case strings.HasPrefix(d.Token, safetyTokenPrefix):
-			safety = append(safety, d)
-		case strings.HasPrefix(d.Token, edgeTokenPrefix):
-			edge = append(edge, d)
-		case strings.HasPrefix(d.Token, bgTokenPrefix):
-			background = append(background, d)
-		default:
-			return nil, nil, nil, fmt.Errorf("device %q matches no harness population prefix", d.Token)
-		}
-	}
-	return safety, edge, background, nil
-}
-
 // --- detection rule authoring -------------------------------------------------
 
 const queryDetectionRulesByToken = `query($tokens:[String!]!){detectionRulesByToken(tokens:$tokens){token}}`
@@ -599,116 +578,6 @@ func (o *alarmOracle) awaitAlarmsDrained(ctx context.Context, edge []sim.DeviceI
 	}
 }
 
-// --- driving ------------------------------------------------------------------
-
-// probeStats accumulates the probe-emit accounting. Probe emits are the oracle, so
-// unlike the background fleet a probe emit that the ingress does NOT accept (non-202)
-// is a run-integrity failure (the planted signal never entered the pipeline), not a
-// count to reconcile — surfaced as the probe-delivery invariant.
-type probeStats struct {
-	mu       sync.Mutex
-	failures int
-	firstErr error
-}
-
-func (s *probeStats) fail(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.failures++
-	if s.firstErr == nil {
-		s.firstErr = err
-	}
-}
-
-func (s *probeStats) snapshot() (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.failures, s.firstErr
-}
-
-// driveBackground emits a threshold-crossing sine of the temp metric across the
-// background fleet every BackgroundInterval until ctx is cancelled, reusing
-// sim.EmitAll (which owns the worker pool + Stats accounting). rt.Devices has been
-// set to the background slice by the caller. The sine spans 15–45 C so background
-// devices genuinely raise and resolve the rule — and therefore genuinely churn
-// durable alarm rows — putting the detection+alarm path under real load.
-func driveBackground(ctx context.Context, rt *sim.Runtime, cfg DetectionConfig) {
-	if len(rt.Devices) == 0 {
-		return
-	}
-	offset := 2 * math.Pi / float64(len(rt.Devices))
-	tick := int64(0)
-	emit := func() {
-		n := tick
-		_ = sim.EmitAll(ctx, rt, rt.Load.Workers(len(rt.Devices)),
-			func(i int, _ sim.DeviceInstance) map[string]float64 {
-				phase := float64(n)*0.3 + float64(i)*offset
-				return map[string]float64{HarnessMetricKey: 30 + 15*math.Sin(phase)}
-			})
-	}
-	emit() // immediate first tick
-	ticker := time.NewTicker(cfg.BackgroundInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			tick++
-			emit()
-		}
-	}
-}
-
-// driveProbes runs the scripted probe emits to completion: 2K steps at ProbeInterval.
-// On even steps the edge probes emit ABOVE (a raise), on odd steps BELOW (a resolve);
-// the safety probes emit BELOW on every step (never a raise). Starting on an even
-// step and ending on the last odd step means each edge probe does exactly K
-// [above, below] cycles, ending on a resolve — so its durable alarm ends CLEARED
-// after having been raised. A probe emit the ingress rejects is recorded in
-// probeStats (a run-integrity failure), not retried.
-//
-// It respects ctx: an aborted run returns early (the caller turns that into an error,
-// not a verdict). It returns when all 2K steps have been emitted.
-func driveProbes(ctx context.Context, rt *sim.Runtime, safety, edge []sim.DeviceInstance, cfg DetectionConfig, ps *probeStats) {
-	steps := 2 * cfg.Cycles
-	emitStep := func(step int) {
-		above := step%2 == 0
-		var wg sync.WaitGroup
-		emit := func(d sim.DeviceInstance, value float64) {
-			defer wg.Done()
-			if err := sim.EmitMeasurement(ctx, rt, d, HarnessMetricKey, value); err != nil {
-				ps.fail(err)
-			}
-		}
-		for _, d := range edge {
-			wg.Add(1)
-			value := harnessBelowValue
-			if above {
-				value = harnessAboveValue
-			}
-			go emit(d, value)
-		}
-		for _, d := range safety {
-			wg.Add(1)
-			go emit(d, harnessBelowValue)
-		}
-		wg.Wait()
-	}
-
-	emitStep(0) // immediate first step so the first raise lands promptly
-	ticker := time.NewTicker(cfg.ProbeInterval)
-	defer ticker.Stop()
-	for step := 1; step < steps; step++ {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			emitStep(step)
-		}
-	}
-}
-
 // --- classification (pure) ----------------------------------------------------
 
 // classifyAlarms turns the settled DURABLE alarm snapshots into the gated
@@ -901,7 +770,7 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 		return nil, fmt.Errorf("author detection rule: %w", err)
 	}
 
-	safety, edge, background, err := partitionHarnessDevices(rt.Devices)
+	safety, edge, background, err := partitionByPrefix(rt.Devices, safetyTokenPrefix, edgeTokenPrefix, bgTokenPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -965,11 +834,11 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		driveBackground(runCtx, rt, cfg)
+		driveBackground(runCtx, rt, cfg.BackgroundInterval)
 	}()
 
 	ps := &probeStats{}
-	driveProbes(ctx, rt, safety, edge, cfg, ps)
+	driveProbes(ctx, rt, safety, edge, cfg.Cycles, cfg.ProbeInterval, ps)
 	if ctx.Err() != nil {
 		cancel()
 		bgWg.Wait()
@@ -1078,13 +947,4 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 		},
 	}
 	return report, nil
-}
-
-// tokensOf extracts the device tokens from a device slice.
-func tokensOf(devices []sim.DeviceInstance) []string {
-	out := make([]string, len(devices))
-	for i, d := range devices {
-		out[i] = d.Token
-	}
-	return out
 }

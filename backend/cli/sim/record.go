@@ -30,6 +30,7 @@ type Endpoints struct {
 	Ingress              string `json:"ingress"`
 	EventMgmtWS          string `json:"eventMgmtWS"`
 	EventProcessingWS    string `json:"eventProcessingWS"`
+	CommandMgmtGraphQL   string `json:"commandMgmtGraphQL"`
 }
 
 // Record is dcctl's local record for one sim. It is written verbatim as the
@@ -217,5 +218,6 @@ func ResolveEndpoints(server, ingress string, tls bool) Endpoints {
 		Ingress:              ingress,
 		EventMgmtWS:          fmt.Sprintf("%s://%s/api/event-management/graphql", ws, server),
 		EventProcessingWS:    fmt.Sprintf("%s://%s/api/event-processing/graphql", ws, server),
+		CommandMgmtGraphQL:   fmt.Sprintf("%s://%s/api/command-delivery/graphql", h, server),
 	}
 }

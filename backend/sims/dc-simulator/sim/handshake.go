@@ -43,6 +43,14 @@ type Endpoints struct {
 	// never carried the field still loads and runs; the harness enforces it lazily
 	// at dial time rather than Validate rejecting every sim record without it.
 	EventProcessingWS string `json:"eventProcessingWS"`
+	// CommandMgmtGraphQL is command-delivery's tenant-scoped GraphQL endpoint,
+	// carrying the durable command-status query (commands/commandsByToken) the
+	// ADR-064 load-test command round-trip probes reconcile against. Optional in
+	// the handshake, like EventProcessingWS — only the load-test command harness
+	// needs it, so a pre-L2d-3 handshake that never carried the field still loads
+	// and runs; the harness enforces it lazily rather than Validate rejecting every
+	// sim record without it.
+	CommandMgmtGraphQL string `json:"commandMgmtGraphQL"`
 }
 
 // Handshake is the local sim record dcctl (Lane B) writes and dc-simulator (Lane
