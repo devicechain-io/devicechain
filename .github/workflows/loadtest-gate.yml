@@ -30,12 +30,6 @@
 name: loadtest-gate
 
 on:
-  # TEMPORARY (remove before the final iteration-2 PR): auto-run on push to the dev
-  # branch so the experimental gate can be iterated without a merge-to-main per cycle
-  # (workflow_dispatch requires the file on the default branch; push runs the file
-  # from the pushed ref). The real triggers stay dispatch-only until 2d wires the tag.
-  push:
-    branches: [ci/loadtest-gate-dev]
   workflow_dispatch:
     inputs:
       build:
