@@ -39,7 +39,7 @@ func frame(t *testing.T, token, device, name string) []byte {
 // The topics are the subject↔MQTT map (dots→slashes) the gateway expects: a wrong
 // topic means the device subscribes to nothing and every command "drops".
 func TestReceiverTopics(t *testing.T) {
-	r := New("inst-1", "acme", "tcp://127.0.0.1:1883")
+	r := New("inst-1", "acme", "tcp://127.0.0.1:1883", nil)
 	assert.Equal(t, "inst-1/acme/device-commands/sensor-1", r.commandTopic("sensor-1"))
 	assert.Equal(t, "inst-1/acme/command-responses", r.responseTopic())
 }
@@ -48,7 +48,7 @@ func TestReceiverTopics(t *testing.T) {
 // but NOT distinct — the at-least-once de-dup that keeps a redelivered command from
 // looking like two commands.
 func TestRecordFrameDedupsByToken(t *testing.T) {
-	r := New("inst-1", "acme", "tcp://x:1883")
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
 	ds := r.newTestDevice("harness-cmd-probe-001")
 
 	tok, ok := r.recordFrame(ds, frame(t, "cmd-A", "harness-cmd-probe-001", "harness-reset"))
@@ -75,7 +75,7 @@ func TestRecordFrameDedupsByToken(t *testing.T) {
 // advances NEITHER the raw nor the distinct tally — miscounting it as a command
 // would corrupt the redelivery measurement.
 func TestRecordFrameMalformed(t *testing.T) {
-	r := New("inst-1", "acme", "tcp://x:1883")
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
 	ds := r.newTestDevice("harness-cmd-probe-001")
 
 	tok, ok := r.recordFrame(ds, []byte("{not json"))
@@ -89,11 +89,27 @@ func TestRecordFrameMalformed(t *testing.T) {
 	assert.Equal(t, 1, dr.Malformed)
 }
 
+// A decodable frame with an EMPTY token is malformed, not a command: answering it
+// with CommandToken:"" would drive command-delivery's response consumer through a
+// retry-to-poison on a row that never matches.
+func TestRecordFrameEmptyTokenIsMalformed(t *testing.T) {
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
+	ds := r.newTestDevice("harness-cmd-probe-001")
+
+	tok, ok := r.recordFrame(ds, frame(t, "", "harness-cmd-probe-001", "harness-reset"))
+	assert.False(t, ok)
+	assert.Empty(t, tok)
+	rep := r.Report()
+	dr := rep.Devices["harness-cmd-probe-001"]
+	assert.Equal(t, 0, dr.Raw)
+	assert.Equal(t, 1, dr.Malformed)
+}
+
 // A device that never got a confirmed SUBACK is reported un-subscribed and listed
 // Blind — its silence is never read as a clean "no command arrived" (the L2c
 // fail-closed-about-own-blindness discipline). Distinct on an unknown device is 0.
 func TestReceiverBlindDeviceSurfaced(t *testing.T) {
-	r := New("inst-1", "acme", "tcp://x:1883")
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
 	// A device that connected but never acked its subscription: subscribed stays false.
 	ds := r.newTestDevice("harness-cmd-probe-001")
 	ds.subscribed = false

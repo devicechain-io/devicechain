@@ -33,6 +33,7 @@ package cmdreceiver
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -97,20 +98,23 @@ type deviceState struct {
 type Receiver struct {
 	instanceId string
 	tenant     string
-	broker     string // e.g. tcp://127.0.0.1:1883
+	broker     string      // e.g. ssl://127.0.0.1:1883
+	tlsConfig  *tls.Config // non-nil ⇒ TLS; required for an ssl://‑scheme broker
 
 	mu      sync.Mutex
 	devices map[string]*deviceState
 }
 
 // New builds a receiver for one instance/tenant against the MQTT broker (the NATS
-// MQTT gateway, e.g. a port-forward of dc-nats:1883). It opens no connection until
-// Subscribe.
-func New(instanceId, tenant, broker string) *Receiver {
+// MQTT gateway, e.g. a port-forward of dc-nats:1883). The NATS MQTT listener
+// terminates server-side TLS, so an ssl://-scheme broker needs a non-nil tlsConfig;
+// pass nil for a plaintext tcp:// broker. It opens no connection until Subscribe.
+func New(instanceId, tenant, broker string, tlsConfig *tls.Config) *Receiver {
 	return &Receiver{
 		instanceId: instanceId,
 		tenant:     tenant,
 		broker:     broker,
+		tlsConfig:  tlsConfig,
 		devices:    make(map[string]*deviceState),
 	}
 }
@@ -147,17 +151,29 @@ func (r *Receiver) Subscribe(ctx context.Context, deviceToken, credentialId stri
 
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(r.broker)
-	// The device token is a stable, per-device-unique MQTT client id. CleanSession
-	// false + auto-reconnect keeps a persistent session so a brief blip does not lose
-	// a QoS-1 command (the broker queues it for our session) — the receiver is
-	// load-bearing (its miss becomes a round-trip failure), so it favors delivery.
-	opts.SetClientID(deviceToken)
+	// The MQTT client id must be TENANT-QUALIFIED, not the bare device token. NATS
+	// keys a persistent MQTT session by (account, client id) and every tenant on an
+	// instance shares one NATS account, while device tokens are deterministic and
+	// identical across runs (harness-cmd-probe-001…). A bare token would make a fresh
+	// tenant's run resume the PRIOR tenant's persisted session — whose stored
+	// subscription names the old tenant's subject, now a permission violation under
+	// the new JWT — and let two runs fight via MQTT session takeover. Qualifying with
+	// the tenant makes each run's session id unique. CleanSession false + auto-
+	// reconnect keeps the session so a brief blip does not lose a QoS-1 command (the
+	// broker queues it) — the receiver is load-bearing, so it favors delivery.
+	opts.SetClientID(r.tenant + "." + deviceToken)
 	opts.SetUsername(fmt.Sprintf("%s:%s", r.tenant, credentialId))
 	opts.SetPassword("")
 	opts.SetCleanSession(false)
 	opts.SetAutoReconnect(true)
 	opts.SetConnectTimeout(connectTimeout)
 	opts.SetOrderMatters(false)
+	// The NATS MQTT gateway terminates TLS; paho does TLS only for an ssl://-scheme
+	// broker, and then needs a config (a nil one verifies against the system roots,
+	// which a dev/self-signed gateway cert fails). The harness supplies the config.
+	if r.tlsConfig != nil {
+		opts.SetTLSConfig(r.tlsConfig)
+	}
 	opts.OnConnect = r.onConnect(ds)
 	opts.OnConnectionLost = r.onConnectionLost(ds)
 
@@ -245,7 +261,11 @@ func (r *Receiver) onMessage(ds *deviceState) mqtt.MessageHandler {
 // mutation-verifiable without a live gateway.
 func (r *Receiver) recordFrame(ds *deviceState, payload []byte) (token string, ok bool) {
 	var env deliveryEnvelope
-	if err := json.Unmarshal(payload, &env); err != nil {
+	// A frame that does not decode, OR decodes with an empty token, is malformed: an
+	// empty token is not a real command (every dispatched command carries its unique
+	// token), and answering with CommandToken:"" would drive command-delivery's
+	// response consumer through a retry-to-poison on a row that never matches.
+	if err := json.Unmarshal(payload, &env); err != nil || env.Token == "" {
 		ds.mu.Lock()
 		ds.malformed++
 		ds.mu.Unlock()

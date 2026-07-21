@@ -5,6 +5,7 @@ package loadtest
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -97,9 +98,10 @@ const (
 	cmdStatusSuccessful = "SUCCESSFUL"
 
 	// defaultMqttBroker is the NATS MQTT gateway address the cmdreceiver dials. It
-	// defaults to a local port-forward of dc-nats:1883 (the load-test client runs
-	// outside the cluster, like dc-loadtest against the HTTP ingress).
-	defaultMqttBroker = "tcp://127.0.0.1:1883"
+	// defaults to a local port-forward of dc-nats:1883 over TLS (the NATS MQTT
+	// listener terminates server-side TLS), since the load-test client runs outside
+	// the cluster like dc-loadtest against the HTTP ingress.
+	defaultMqttBroker = "ssl://127.0.0.1:1883"
 )
 
 // Command-harness defaults.
@@ -153,8 +155,13 @@ type CommandConfig struct {
 	CommandSettle  time.Duration
 
 	// MqttBroker is the NATS MQTT gateway the cmdreceiver dials (default a local
-	// port-forward of dc-nats:1883).
-	MqttBroker string
+	// port-forward of dc-nats:1883 over TLS). MqttTLSInsecure skips the gateway's
+	// server-cert verification for an ssl:// broker — the default for a load-test run
+	// against a kind/dev cluster, whose gateway cert is self-signed AND whose SAN is
+	// the in-cluster DNS name (dc-nats.dc-system), which a 127.0.0.1 port-forward
+	// cannot match either way.
+	MqttBroker      string
+	MqttTLSInsecure bool
 }
 
 func (c CommandConfig) withDefaults() CommandConfig {
@@ -484,31 +491,40 @@ func (o *commandOracle) snapshotAll(ctx context.Context, tokens []string) (map[s
 // treating that poll as "not settled yet" and retrying within the deadline. A
 // timeout without every probe reaching K successful is NOT concluded as reached — it
 // is a real dropped or unanswered command the classifier fails as a liveness finding.
-func (o *commandOracle) awaitCommandsSettled(ctx context.Context, probes []sim.DeviceInstance, cfg CommandConfig) (reached bool, elapsed time.Duration) {
+func (o *commandOracle) awaitCommandsSettled(ctx context.Context, probes []sim.DeviceInstance, cfg CommandConfig) (reached, sawCleanRead bool, elapsed time.Duration) {
 	start := time.Now()
 	deadline := start.Add(cfg.CommandTimeout)
 	for {
 		allSettled := true
+		cleanRead := true // every device snapshot in THIS poll succeeded
 		for _, d := range probes {
 			snap, serr := o.snapshot(ctx, d.Token)
 			if serr != nil {
 				log.Warn().Err(serr).Str("device", d.Token).Msg("transient command read during settle-await; retrying")
 				allSettled = false
+				cleanRead = false
 				break
 			}
 			if snap.Successful < cfg.Cycles {
 				allSettled = false
 			}
 		}
+		// sawCleanRead records whether the cohort was EVER fully readable. If it never
+		// was, a non-reached verdict is an oracle outage (inconclusive), not a platform
+		// liveness defect — the report distinguishes the two rather than blaming the
+		// dispatch path for the gate's own blindness.
+		if cleanRead {
+			sawCleanRead = true
+		}
 		if allSettled {
-			return true, time.Since(start)
+			return true, sawCleanRead, time.Since(start)
 		}
 		if time.Now().After(deadline) {
-			return false, time.Since(start)
+			return false, sawCleanRead, time.Since(start)
 		}
 		select {
 		case <-ctx.Done():
-			return false, time.Since(start)
+			return false, sawCleanRead, time.Since(start)
 		case <-time.After(cfg.CommandPoll):
 		}
 	}
@@ -592,10 +608,13 @@ func classifyCommands(safetyStates, probeStates map[string]commandSnapshot, reac
 		invs = append(invs, Invariant{Name: "command-roundtrip", Passed: false,
 			Detail: fmt.Sprintf("%d command probe(s) did not complete the round-trip to SUCCESSFUL (first: %s)", notComplete, firstNotComplete)})
 	case !reached:
-		// Defensive: every snapshot looks complete but the await timed out — treat the
-		// disagreement as a failure rather than trust the later snapshot.
+		// Defensive: every final snapshot looks complete but the await never confirmed
+		// it — treat the disagreement as a failure rather than trust the later snapshot.
+		// Worded cause-neutral: it is EITHER a dropped/unanswered command OR the durable
+		// oracle was unreadable through the deadline (oracleReadOK in the report says
+		// which — the gate stays fail-closed either way).
 		invs = append(invs, Invariant{Name: "command-roundtrip", Passed: false,
-			Detail: "durable command await timed out before every probe reached K SUCCESSFUL (dropped or unanswered command under load)"})
+			Detail: "durable command await did not confirm every probe reached K SUCCESSFUL within the timeout (a dropped/unanswered command, or an unreadable oracle — see oracleReadOK)"})
 	default:
 		invs = append(invs, Invariant{Name: "command-roundtrip", Passed: true,
 			Detail: fmt.Sprintf("all %d command probe(s) drove every command to durable SUCCESSFUL", len(probeStates))})
@@ -620,6 +639,7 @@ type CommandReport struct {
 	SafetyProbes    int                `json:"safetyProbes"`
 	CommandProbes   int                `json:"commandProbes"`
 	CommandsReached bool               `json:"commandsReachedTarget"`
+	OracleReadOK    bool               `json:"oracleReadOK"` // durable command query was fully readable ≥once (distinguishes a real miss from an oracle outage)
 	CommandSecs     float64            `json:"commandSettleSeconds"`
 	ProbeFailures   int                `json:"probeEmitFailures"`
 	SafetyCommands  map[string]string  `json:"safetyCommandStates"` // token → durable summary
@@ -654,8 +674,8 @@ func (r *CommandReport) Human() string {
 	fmt.Fprintf(&b, "command-roundtrip-probes %s (seed %d, tenant %s)\n", verdict, r.Seed, r.Tenant)
 	fmt.Fprintf(&b, "  drive: %d bg devices, achieved %.1f ev/s over %.0fs — accepted %d, failed %d\n",
 		r.Drive.Devices, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.Accepted, r.Drive.Failed)
-	fmt.Fprintf(&b, "  probes: %d safety, %d command × K=%d cycles, %d emit failure(s); commands reached-target %v in %.0fs\n",
-		r.SafetyProbes, r.CommandProbes, r.Cycles, r.ProbeFailures, r.CommandsReached, r.CommandSecs)
+	fmt.Fprintf(&b, "  probes: %d safety, %d command × K=%d cycles, %d emit failure(s); commands reached-target %v in %.0fs (oracle readable: %v)\n",
+		r.SafetyProbes, r.CommandProbes, r.Cycles, r.ProbeFailures, r.CommandsReached, r.CommandSecs, r.OracleReadOK)
 	fmt.Fprintf(&b, "  mqtt receive (NON-authoritative evidence): %d raw / %d distinct across cohort, %d blind device(s)\n",
 		r.Receiver.TotalRaw, r.Receiver.TotalDistinct, len(r.Receiver.Blind))
 	for _, inv := range r.Invariants {
@@ -753,7 +773,14 @@ func RunCommandProbes(ctx context.Context, hs *sim.Handshake, cfg CommandConfig)
 	// reach SUCCESSFUL; the safety probes are the direct wire witness for no-spurious.
 	// A device that cannot subscribe fails the run setup with a clear error rather
 	// than producing a confusing round-trip failure later.
-	receiver := cmdreceiver.New(rt.InstanceId, rt.Tenant, cfg.MqttBroker)
+	var mqttTLS *tls.Config
+	if strings.HasPrefix(cfg.MqttBroker, "ssl://") || strings.HasPrefix(cfg.MqttBroker, "tls://") {
+		// #nosec G402 — a load-test client against a kind/dev gateway whose cert SAN is
+		// the in-cluster DNS name, unmatchable by a 127.0.0.1 port-forward; opt-in via
+		// MqttTLSInsecure, off for a real deployment reachable at its cert's SAN.
+		mqttTLS = &tls.Config{InsecureSkipVerify: cfg.MqttTLSInsecure}
+	}
+	receiver := cmdreceiver.New(rt.InstanceId, rt.Tenant, cfg.MqttBroker, mqttTLS)
 	defer receiver.Close()
 	for _, d := range append(append([]sim.DeviceInstance{}, safety...), probes...) {
 		if serr := receiver.Subscribe(ctx, d.Token, d.CredentialId); serr != nil {
@@ -799,7 +826,7 @@ func RunCommandProbes(ctx context.Context, hs *sim.Handshake, cfg CommandConfig)
 	// Wait for the command probes' durable commands to settle to SUCCESSFUL against
 	// the quiesced tenant (dispatch is on a 30s sweep, so this covers the sweep +
 	// MQTT round-trip + response).
-	reached, cmdElapsed := oracle.awaitCommandsSettled(ctx, probes, cfg)
+	reached, oracleReadOK, cmdElapsed := oracle.awaitCommandsSettled(ctx, probes, cfg)
 
 	// Extra settle before the authoritative read so a late spurious safety command
 	// (created near end-of-run) has landed. BOUNDED OBSERVATION: a spurious command
@@ -858,6 +885,7 @@ func RunCommandProbes(ctx context.Context, hs *sim.Handshake, cfg CommandConfig)
 		SafetyProbes:    len(safety),
 		CommandProbes:   len(probes),
 		CommandsReached: reached,
+		OracleReadOK:    oracleReadOK,
 		CommandSecs:     cmdElapsed.Seconds(),
 		ProbeFailures:   probeFailures,
 		SafetyCommands:  summarizeCommands(safetyStates),

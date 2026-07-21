@@ -43,7 +43,9 @@ func main() {
 	handshakePath := flag.String("handshake", envOr("DC_SIM_HANDSHAKE", ""),
 		"path to the handshake JSON written by `dcctl sim create` (or set DC_SIM_HANDSHAKE)")
 	mqttBroker := flag.String("mqtt-broker", envOr("DC_LOADTEST_MQTT_BROKER", ""),
-		"NATS MQTT gateway address for the command receiver, e.g. tcp://127.0.0.1:1883 (port-forward dc-nats:1883)")
+		"NATS MQTT gateway address for the command receiver, e.g. ssl://127.0.0.1:1883 (port-forward dc-nats:1883; the listener is TLS)")
+	mqttInsecure := flag.Bool("mqtt-insecure", true,
+		"skip the gateway server-cert verification for an ssl:// broker (default true — a kind/dev cert's SAN is the in-cluster DNS name, unmatchable by a 127.0.0.1 port-forward)")
 	bgDevices := flag.Int("bg-devices", envIntOr("DC_LOADTEST_BG_DEVICES", 0),
 		"background fleet size that saturates the enqueue/dispatch path (0 = default)")
 	bgInterval := flag.Duration("bg-interval", envDurationOr("DC_LOADTEST_BG_INTERVAL", 0),
@@ -84,6 +86,7 @@ func main() {
 		ProbeInterval:      *probeInterval,
 		MinAccepted:        *minAccepted,
 		MqttBroker:         *mqttBroker,
+		MqttTLSInsecure:    *mqttInsecure,
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
