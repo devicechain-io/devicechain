@@ -572,3 +572,14 @@ jobs:
           cat "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || echo "(no port-forward log)"
           echo "=== NATS MQTT port-forward log ==="
           cat "$RUNNER_TEMP/pf-nats.log" 2>/dev/null || echo "(no MQTT port-forward log)"
+
+          # MQTT command round-trip depends on the device-management auth-callout
+          # responder (does it subscribe at start?) and the NATS broker (does it accept
+          # or reject the device CONNECT?). These pods are Ready, so the generic dumps
+          # above skip them -- surface their MQTT/auth lines explicitly.
+          echo "=== device-management: auth-callout responder + MQTT/auth lines ==="
+          kubectl logs -n devicechain deploy/device-management --tail=400 2>/dev/null \
+            | grep -iE 'callout|auth|mqtt|subscrib|nats' | tail -40 || echo "(none)"
+          echo "=== dc-nats: MQTT / auth / connect lines ==="
+          kubectl logs -n dc-system dc-nats-0 --all-containers --tail=600 2>/dev/null \
+            | grep -iE 'mqtt|auth|callout|connect|error|denied|1883' | tail -40 || echo "(none)"
