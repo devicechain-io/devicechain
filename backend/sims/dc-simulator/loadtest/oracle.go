@@ -12,14 +12,20 @@ import (
 	"github.com/devicechain-io/dc-microservice/userclient"
 )
 
-// measurementEventType is the base-event enum value for a Measurement
+// MeasurementEventType is the base-event enum value for a Measurement
 // (esmodel.EventType Measurement == 2). The oracle counts base Event rows of
 // this type, not measurement_events rows: one device POST becomes exactly one
 // base Event row regardless of how many metrics it carries, while it becomes one
 // measurement_events row PER metric — so base events are the reconciliation unit
 // that matches the driver's per-POST ledger (a 4-metric buildingpulse emit is
 // one accepted event, one base row, four measurement rows).
-const measurementEventType = 2
+//
+// It is exported so the one other place that must agree on this enum — the
+// self-test's out-of-band perturber, which deletes a row of this exact type —
+// shares the single definition rather than a copy that could drift under a
+// pre-GA enum renumber (a drift would delete the wrong type, leave the count
+// unchanged, and silently corrupt a non-measurement row).
+const MeasurementEventType = 2
 
 // Window bounds the reconciliation query by occurred_time — the emit instant the
 // driver controls (set client-side in EmitMeasurements), NOT processed_time — so
@@ -58,7 +64,7 @@ func (g *graphqlEventCounter) Count(ctx context.Context, w Window) (int64, error
 		"c": map[string]any{
 			"pageNumber": 1,
 			"pageSize":   1,
-			"eventTypes": []int{measurementEventType},
+			"eventTypes": []int{MeasurementEventType},
 			"startTime":  w.Start.UTC().Format(time.RFC3339),
 			"endTime":    w.End.UTC().Format(time.RFC3339),
 		},
