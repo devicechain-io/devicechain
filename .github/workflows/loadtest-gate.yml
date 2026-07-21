@@ -1,7 +1,7 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# ADR-064 correctness-under-load release gate -- L5, iteration 2b.
+# ADR-064 correctness-under-load release gate -- L5, iteration 2c.
 #
 # Iteration 1 (run 29856919636: 120s bring-up) proved the `--compact` stack
 # cold-boots green on a hosted `ubuntu-latest` runner. On top of that proven
@@ -11,8 +11,14 @@
 #            the device-plane HTTP ingress, reconcile PERSISTED == ACCEPTED.
 #   - L2d-1 detection -> durable alarm: safety/edge/background populations through
 #            an authored raiseAlarm rule; gate on the durable CLEARED+MAJOR alarm.
+#   - L3  -- ADR-063 tiered contention (the acceptance test for preferential
+#            shedding): TWO probe tenants (gold + best-effort) at the same load,
+#            first at floor 0 (negative control -- neither may shed), then at an
+#            operator-set floor (gold rides through zero-loss, the best-effort probe
+#            sheds yet loses only what it was told). The floor is set live between
+#            the two regimes by patching event-sources' config + a rollout.
 # Deferred: L2d-3 command round-trip (MQTT device CONNECT issue on the compact
-# runner, pending a local repro) and L3 ADR-063 tiered contention.
+# runner, pending a local repro).
 # Reports -> step summary + artifacts.
 #
 # Deliberately NOT wired to the release/tag path yet, and deliberately NOT per-PR
@@ -230,7 +236,7 @@ jobs:
             | awk '{ split($5, a, " "); s += a[1] } END { print s+0 }')
 
           {
-            echo "## ADR-064 L5 iteration 2a -- cold --compact bring-up on ubuntu-latest"
+            echo "## ADR-064 L5 iteration 2c -- cold --compact bring-up on ubuntu-latest"
             echo ""
             echo "| metric | value |"
             echo "| --- | --- |"
@@ -281,6 +287,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           go build -o "$RUNNER_TEMP/bin/dc-loadtest" ./cmd/loadtest
           go build -o "$RUNNER_TEMP/bin/dc-loadtest-detection" ./cmd/loadtest-detection
+          go build -o "$RUNNER_TEMP/bin/dc-loadtest-contention" ./cmd/loadtest-contention
 
       # One shared port-forward for the device-plane ingest, used by every probe
       # (L1, detection, ... later command/contention). Opened once here, closed at
@@ -418,26 +425,215 @@ jobs:
       # runner cluster (responder subscribed, credential valid via HTTP, TLS fine),
       # pending a local --compact repro. It slots in here once resolved.
 
-      - name: Stop device-plane port-forward (+ attribute a drop)
+      # =====================================================================
+      # ADR-064 L3 -- tiered contention: the acceptance test for ADR-063
+      # preferential shedding. Two probe tenants drive the SAME scenario at the
+      # SAME rate over the shared platform, distinguished ONLY by shed priority --
+      # gold (90, never-shed band) and best-effort (10, shed-first band). Run in
+      # two regimes on the one cluster:
+      #   1. NEGATIVE CONTROL at floor 0 (the default): neither tenant may shed. A
+      #      shed here would be an ADR-023 base-ceiling artifact and would falsify
+      #      the positive run's attribution ("the floor caused the sheds").
+      #   2. POSITIVE at floor 1: gold rides through (zero sheds, zero loss) while
+      #      the best-effort probe sheds (429) yet persists everything it accepted.
+      # The floor is event-sources instance config, set LIVE between the regimes by
+      # patching the per-service ConfigMap + a rollout (the GA "static floor" path;
+      # the NATS-KV runtime knob is the deferred auto path). The rollout replaces the
+      # event-sources pod, which drops the shared device-plane port-forward -- so the
+      # shared forward is stopped before the floor change and a fresh one opened after.
+      # dc-loadtest-contention's exit code IS the gate; --expect-floor states the regime.
+      # =====================================================================
+
+      - name: L3 -- provision gold + best-effort probe tenants
+        run: |
+          # Two distinct tenants at different shed bands (ADR-063). --shed-priority
+          # overrides the tier's default band so each probe lands exactly where the
+          # test needs it: gold in the never-shed 80-100 band, the shed probe in the
+          # best-effort 1-19 band.
+          "$RUNNER_TEMP/dcctl" sim create l3gold -s localhost --shed-priority 90
+          "$RUNNER_TEMP/dcctl" sim create l3shed -s localhost --shed-priority 10
+
+      - name: L3 negative control -- floor 0, neither may shed (the gate)
+        run: |
+          # Runs BEFORE any floor change, over the still-open shared forward. At floor
+          # 0 ShedFactor is 1.0 for every class, so with both tenants driven below the
+          # base ceiling neither may shed. This proves the positive run's sheds are
+          # floor-caused, not a base-ceiling artifact. Non-zero exit IS the gate.
+          "$RUNNER_TEMP/bin/dc-loadtest-contention" \
+            --gold-handshake "$HOME/.devicechain/sims/l3gold.json" \
+            --shed-handshake "$HOME/.devicechain/sims/l3shed.json" \
+            --expect-floor 0 \
+            --report "$RUNNER_TEMP/l3-neg-report.json"
+
+      - name: L3 negative-control report -> summary
+        if: always()
+        run: |
+          report="$RUNNER_TEMP/l3-neg-report.json"
+          printf '\n### ADR-064 L3 -- contention negative control (floor 0)\n' >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$report" ]; then
+            { printf '\n```json\n'; jq . "$report" 2>/dev/null || cat "$report"; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '_no report produced -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Stop shared device-plane forward (+ attribute L1/detection/L3-neg)
         if: always()
         env:
           PF_PID: ${{ steps.ingress.outputs.pf_pid }}
         run: |
-          # kubectl port-forward is the shared load path for EVERY probe (L1 + detection;
-          # :8081 is not a kind host port). It can drop under sustained req/s -- which
-          # surfaces SAFELY as a red (failed emits / accepted skew), never a false green.
-          # But a red must be ATTRIBUTED to the tunnel vs the platform. Two failure shapes:
-          # the forward died, OR it stayed alive but logged per-connection forwarding
-          # errors (kubectl pf often keeps listening while failing every new stream).
+          # This forward carried EVERY floor-0 probe (L1 + detection + L3 negative
+          # control). It can drop under sustained req/s -- which surfaces SAFELY as a
+          # red (failed emits / accepted skew), never a false green -- but a red must
+          # be ATTRIBUTED to the tunnel vs the platform. Two failure shapes: the forward
+          # died, OR it stayed alive but logged per-connection forwarding errors (kubectl
+          # pf often keeps listening while failing every new stream). It is stopped here
+          # (not at job end) because the coming rollout would drop it anyway, and 8081
+          # must be free for the fresh forward.
           pf_errors=""
           if grep -qiE 'error forwarding|lost connection|an error occurred' "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null; then
             pf_errors=1
           fi
           if [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && [ -z "$pf_errors" ]; then
-            echo "device-plane port-forward survived every probe cleanly (pid $PF_PID)."
+            echo "shared device-plane port-forward survived the floor-0 probes cleanly (pid $PF_PID)."
           else
-            echo "::warning::device-plane port-forward did not survive cleanly -- an L1/detection red may be a kubectl port-forward drop, not a platform correctness failure. Log tail:"
+            echo "::warning::shared device-plane port-forward did not survive cleanly -- an L1/detection/L3-neg red may be a kubectl port-forward drop, not a platform correctness failure. Log tail:"
             tail -30 "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || true
+          fi
+          kill "$PF_PID" 2>/dev/null || true
+          # Confirm it actually exited so local :8081 is free before the reopened forward
+          # binds it -- a lingering pf would either block the new bind or answer the
+          # reopen readiness curl against the old (floor-0) tunnel. It is not a child of
+          # this step's shell (started in an earlier step), so poll rather than `wait`.
+          if [ -n "$PF_PID" ]; then
+            for _ in $(seq 1 10); do kill -0 "$PF_PID" 2>/dev/null || break; sleep 1; done
+          fi
+
+      - name: L3 -- set contention floor to 1 (patch event-sources + rollout)
+        run: |
+          set -o pipefail
+          # ADR-063 GA static-floor path: the floor is event-sources instance config.
+          # READ-MODIFY-WRITE the per-service ConfigMap key so ONLY the contention floor
+          # changes. A blind `--type merge` on the JSON-STRING value would REPLACE the
+          # whole event-sources config, silently wiping any other config the chart renders
+          # there (e.g. ingestRateLimit) and breaking the "only the floor changed between
+          # the two regimes" premise the attribution rests on -- a merge patch cannot merge
+          # INSIDE a string. jq folds the floor into whatever is there (default {}).
+          before=$(kubectl get configmap dct-devicechain-config -n devicechain \
+            -o jsonpath='{.data.event-sources}')
+          echo "event-sources config before: ${before:-<empty>}"
+          # NB: a literal {} default must NOT be inlined as ${before:-{}} -- the shell
+          # reads the first } as the end of the expansion, leaving a stray } that makes
+          # jq choke ("Unmatched '}'"). Assign the default on its own line instead.
+          if [ -z "$before" ]; then before='{}'; fi
+          updated=$(printf '%s' "$before" | jq -c '. + {contention: {manualFloor: 1}}')
+          kubectl patch configmap dct-devicechain-config -n devicechain --type merge \
+            -p "$(jq -nc --arg v "$updated" '{data: {"event-sources": $v}}')"
+          # rollout restart forces new pods regardless of the config-checksum annotation,
+          # and a fresh pod always mounts the current ConfigMap -- so this needs no helm.
+          kubectl rollout restart deployment/event-sources -n devicechain
+          kubectl rollout status deployment/event-sources -n devicechain --timeout=120s
+          echo "event-sources config after:"
+          kubectl get configmap dct-devicechain-config -n devicechain \
+            -o jsonpath='{.data.event-sources}'; echo
+
+      - name: L3 -- reopen device-plane forward (post-rollout)
+        id: ingress2
+        run: |
+          # The rollout replaced the event-sources pod. Forward to the NEW pod BY NAME,
+          # not the Service: `rollout status` returns when the new pod is Ready, but the
+          # old (floor-0) pod may still be Terminating and briefly in the Service's
+          # endpoints, so `port-forward svc/` could bind the old pod and run the positive
+          # drive against floor 0 -- a misattributed red flake. The newest pod by creation
+          # time is the floor-1 pod. (A fresh forward is needed regardless: kubectl
+          # port-forward binds one pod and does not follow a rollout.)
+          newpod=$(kubectl get pods -n devicechain \
+            -l devicechain.io/functional-area=event-sources \
+            --field-selector=status.phase=Running \
+            --sort-by=.metadata.creationTimestamp \
+            -o jsonpath='{.items[-1:].metadata.name}')
+          if [ -z "$newpod" ]; then
+            echo "::error::no Running event-sources pod found after the rollout"
+            kubectl get pods -n devicechain -l devicechain.io/functional-area=event-sources -o wide || true
+            exit 1
+          fi
+          echo "forwarding device-plane ingress to the post-rollout pod $newpod"
+          # Same readiness discipline as the shared forward: a 404 from `/` proves a full
+          # round trip through the new pod, not just an open local socket.
+          kubectl port-forward -n devicechain "pod/$newpod" 8081:8081 \
+            >"$RUNNER_TEMP/pf-eventsources-2.log" 2>&1 &
+          pf_pid=$!
+          echo "pf_pid=$pf_pid" >> "$GITHUB_OUTPUT"
+          connected=0
+          for _ in $(seq 1 30); do
+            if curl -sS -o /dev/null --max-time 2 http://localhost:8081/ 2>/dev/null; then
+              connected=1
+              echo "device-plane ingress reachable again at http://localhost:8081 (post-rollout pod $newpod)"
+              break
+            fi
+            if ! kill -0 "$pf_pid" 2>/dev/null; then
+              echo "::error::reopened event-sources port-forward exited before the ingress became reachable"
+              cat "$RUNNER_TEMP/pf-eventsources-2.log" || true
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$connected" -ne 1 ]; then
+            echo "::error::reopened device-plane port-forward never became reachable after 30 attempts (~60s); the tunnel, not the platform, is the cause."
+            cat "$RUNNER_TEMP/pf-eventsources-2.log" || true
+            exit 1
+          fi
+
+      - name: L3 positive test -- floor 1, gold rides / best-effort sheds (the gate)
+        run: |
+          # Same drive as the negative control, now at floor 1. The classifier expects:
+          # gold zero sheds + zero loss; the best-effort probe SHEDS (>0, else "gold rode
+          # through" is vacuous) yet persists everything it accepted (shedding drops, it
+          # must never corrupt). At the 1000/s base ceiling, 100 devices x 200ms ~= 500/s
+          # per tenant sits in the sweet spot: above the shed probe's floor-1 ceiling
+          # (0.25 x 1000 = 250/s, so it sheds) yet below gold's untouched base (so gold
+          # never hits its own ADR-023 limit). Non-zero exit IS the gate.
+          "$RUNNER_TEMP/bin/dc-loadtest-contention" \
+            --gold-handshake "$HOME/.devicechain/sims/l3gold.json" \
+            --shed-handshake "$HOME/.devicechain/sims/l3shed.json" \
+            --expect-floor 1 \
+            --report "$RUNNER_TEMP/l3-pos-report.json"
+
+      - name: L3 positive report -> summary
+        if: always()
+        run: |
+          report="$RUNNER_TEMP/l3-pos-report.json"
+          printf '\n### ADR-064 L3 -- contention positive test (floor 1)\n' >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$report" ]; then
+            { printf '\n```json\n'; jq . "$report" 2>/dev/null || cat "$report"; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '_no report produced -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload L3 reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: l3-reports
+          path: ${{ runner.temp }}/l3-*-report.json
+          if-no-files-found: warn
+          overwrite: true
+
+      - name: Stop device-plane forward (post-rollout) (+ attribute L3-pos)
+        if: always()
+        env:
+          PF_PID: ${{ steps.ingress2.outputs.pf_pid }}
+        run: |
+          # The reopened forward carried only the L3 positive test. Same attribution as
+          # the shared forward: a drop surfaces as a red, attributed to the tunnel here.
+          pf_errors=""
+          if grep -qiE 'error forwarding|lost connection|an error occurred' "$RUNNER_TEMP/pf-eventsources-2.log" 2>/dev/null; then
+            pf_errors=1
+          fi
+          if [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && [ -z "$pf_errors" ]; then
+            echo "post-rollout device-plane port-forward survived the L3 positive test cleanly (pid $PF_PID)."
+          else
+            echo "::warning::post-rollout device-plane port-forward did not survive cleanly -- an L3-positive red may be a kubectl port-forward drop, not a platform correctness failure. Log tail:"
+            tail -30 "$RUNNER_TEMP/pf-eventsources-2.log" 2>/dev/null || true
           fi
           kill "$PF_PID" 2>/dev/null || true
 
@@ -480,7 +676,10 @@ jobs:
           echo "=== recent Warning events ==="
           kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp 2>/dev/null | tail -50 || true
 
-          # The device-plane port-forward is the L1 load path; if it dropped, a red is a
-          # tunnel artifact, not a platform fault. Its log is the only place that shows.
-          echo "=== device-plane port-forward log ==="
-          cat "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || echo "(no port-forward log)"
+          # The device-plane port-forwards are the load path; if one dropped, a red is a
+          # tunnel artifact, not a platform fault. Their logs are the only place that shows.
+          # (The shared forward carried the floor-0 probes; the second carried L3-positive.)
+          echo "=== device-plane port-forward log (shared, floor-0 probes) ==="
+          cat "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || echo "(no shared port-forward log)"
+          echo "=== device-plane port-forward log (post-rollout, L3-positive) ==="
+          cat "$RUNNER_TEMP/pf-eventsources-2.log" 2>/dev/null || echo "(no post-rollout port-forward log)"
