@@ -577,9 +577,13 @@ jobs:
           # responder (does it subscribe at start?) and the NATS broker (does it accept
           # or reject the device CONNECT?). These pods are Ready, so the generic dumps
           # above skip them -- surface their MQTT/auth lines explicitly.
-          echo "=== device-management: auth-callout responder + MQTT/auth lines ==="
-          kubectl logs -n devicechain deploy/device-management --tail=400 2>/dev/null \
-            | grep -iE 'callout|auth|mqtt|subscrib|nats' | tail -40 || echo "(none)"
+          echo "=== device-management: auth-callout responder subscribe + deny reason ==="
+          # Big tail + a narrow grep (NOT 'nats'/'auth', which match the measurement
+          # write-debug flood): capture the pod-start "responder subscribed" line and any
+          # per-connect callout deny reason -- the two things that explain a device EOF.
+          kubectl logs -n devicechain deploy/device-management --tail=100000 2>/dev/null \
+            | grep -iE 'callout|responder|authenticate|denied|deny|reject|subscribed|credential|access.?token' \
+            | grep -viE 'nats write operation' | tail -60 || echo "(none)"
           echo "=== dc-nats: MQTT / auth / connect lines ==="
           kubectl logs -n dc-system dc-nats-0 --all-containers --tail=600 2>/dev/null \
             | grep -iE 'mqtt|auth|callout|connect|error|denied|1883' | tail -40 || echo "(none)"
