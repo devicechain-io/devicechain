@@ -507,34 +507,62 @@ jobs:
             tail -30 "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || true
           fi
           kill "$PF_PID" 2>/dev/null || true
+          # Confirm it actually exited so local :8081 is free before the reopened forward
+          # binds it -- a lingering pf would either block the new bind or answer the
+          # reopen readiness curl against the old (floor-0) tunnel. It is not a child of
+          # this step's shell (started in an earlier step), so poll rather than `wait`.
+          if [ -n "$PF_PID" ]; then
+            for _ in $(seq 1 10); do kill -0 "$PF_PID" 2>/dev/null || break; sleep 1; done
+          fi
 
       - name: L3 -- set contention floor to 1 (patch event-sources + rollout)
         run: |
           set -o pipefail
           # ADR-063 GA static-floor path: the floor is event-sources instance config.
-          # Patch the per-service ConfigMap key (a JSON-string value the pod reads at
-          # /etc/dct-config/event-sources on startup) to manualFloor 1, then rollout-
-          # restart the deployment so a fresh pod picks it up. `rollout restart` forces
-          # new pods regardless of the config-checksum annotation, and a fresh pod always
-          # mounts the current ConfigMap -- so this needs no helm, just kubectl.
+          # READ-MODIFY-WRITE the per-service ConfigMap key so ONLY the contention floor
+          # changes. A blind `--type merge` on the JSON-STRING value would REPLACE the
+          # whole event-sources config, silently wiping any other config the chart renders
+          # there (e.g. ingestRateLimit) and breaking the "only the floor changed between
+          # the two regimes" premise the attribution rests on -- a merge patch cannot merge
+          # INSIDE a string. jq folds the floor into whatever is there (default {}).
+          before=$(kubectl get configmap dct-devicechain-config -n devicechain \
+            -o jsonpath='{.data.event-sources}')
+          echo "event-sources config before: ${before:-<empty>}"
+          updated=$(printf '%s' "${before:-{}}" | jq -c '. + {contention: {manualFloor: 1}}')
           kubectl patch configmap dct-devicechain-config -n devicechain --type merge \
-            -p '{"data":{"event-sources":"{\"contention\":{\"manualFloor\":1}}"}}'
+            -p "$(jq -nc --arg v "$updated" '{data: {"event-sources": $v}}')"
+          # rollout restart forces new pods regardless of the config-checksum annotation,
+          # and a fresh pod always mounts the current ConfigMap -- so this needs no helm.
           kubectl rollout restart deployment/event-sources -n devicechain
           kubectl rollout status deployment/event-sources -n devicechain --timeout=120s
-          # Confirm the new pod actually loaded floor 1 (a config it silently ignored
-          # would make the positive test vacuous -- gold "rides through" but so does shed).
-          echo "event-sources config now:"
+          echo "event-sources config after:"
           kubectl get configmap dct-devicechain-config -n devicechain \
             -o jsonpath='{.data.event-sources}'; echo
 
       - name: L3 -- reopen device-plane forward (post-rollout)
         id: ingress2
         run: |
-          # The rollout replaced the event-sources pod, so a fresh forward is needed
-          # (kubectl port-forward binds one pod and does not follow a rollout). Same
-          # readiness discipline as the shared forward: a 404 from `/` proves a full
+          # The rollout replaced the event-sources pod. Forward to the NEW pod BY NAME,
+          # not the Service: `rollout status` returns when the new pod is Ready, but the
+          # old (floor-0) pod may still be Terminating and briefly in the Service's
+          # endpoints, so `port-forward svc/` could bind the old pod and run the positive
+          # drive against floor 0 -- a misattributed red flake. The newest pod by creation
+          # time is the floor-1 pod. (A fresh forward is needed regardless: kubectl
+          # port-forward binds one pod and does not follow a rollout.)
+          newpod=$(kubectl get pods -n devicechain \
+            -l devicechain.io/functional-area=event-sources \
+            --field-selector=status.phase=Running \
+            --sort-by=.metadata.creationTimestamp \
+            -o jsonpath='{.items[-1:].metadata.name}')
+          if [ -z "$newpod" ]; then
+            echo "::error::no Running event-sources pod found after the rollout"
+            kubectl get pods -n devicechain -l devicechain.io/functional-area=event-sources -o wide || true
+            exit 1
+          fi
+          echo "forwarding device-plane ingress to the post-rollout pod $newpod"
+          # Same readiness discipline as the shared forward: a 404 from `/` proves a full
           # round trip through the new pod, not just an open local socket.
-          kubectl port-forward -n devicechain svc/event-sources 8081:8081 \
+          kubectl port-forward -n devicechain "pod/$newpod" 8081:8081 \
             >"$RUNNER_TEMP/pf-eventsources-2.log" 2>&1 &
           pf_pid=$!
           echo "pf_pid=$pf_pid" >> "$GITHUB_OUTPUT"
@@ -542,7 +570,7 @@ jobs:
           for _ in $(seq 1 30); do
             if curl -sS -o /dev/null --max-time 2 http://localhost:8081/ 2>/dev/null; then
               connected=1
-              echo "device-plane ingress reachable again at http://localhost:8081 (post-rollout)"
+              echo "device-plane ingress reachable again at http://localhost:8081 (post-rollout pod $newpod)"
               break
             fi
             if ! kill -0 "$pf_pid" 2>/dev/null; then
