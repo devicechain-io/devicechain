@@ -260,13 +260,52 @@ jobs:
           tags: ${{ steps.tags.outputs.tags }}
 
   # ---------------------------------------------------------------------------
+  # ADR-064 correctness-under-load gate. Reuses the loadtest-gate workflow on its
+  # PULL path (build=false, version=<this tag>): it bootstraps a throwaway
+  # --compact kind cluster from the images `images` just pushed and drives the
+  # L1-L3 oracles, each of which fails the job on any correctness violation.
+  #
+  # `needs` on the image-publishing jobs is load-bearing -- the pull path can only
+  # bootstrap tags that already exist in ghcr, so the gate must run AFTER the push,
+  # not beside it. That means BOTH `images` (the ko service/operator matrix) AND
+  # `frontend` (the console image, built in parallel and cross-compiled arm64 under
+  # QEMU, so it can finish well after `images`): the --compact bootstrap deploys the
+  # console by default (chart `frontend.enabled: true`, which dcctl never overrides),
+  # so a gate that waited only on `images` could ImagePullBackOff on `frontend:<tag>`
+  # and go red for a pure orchestration race. `chart` is deliberately NOT needed --
+  # dcctl bootstraps from its embedded chart, not the pushed OCI artifact.
+  #
+  # The gate then blocks `cli` (below), so a red gate means no GitHub Release for this
+  # tag even though the raw images are already on ghcr; a human investigates rather
+  # than an unvalidated build becoming an official release. Runs on every release
+  # tag including -rc.N (a pre-release-tag gate, ADR-064 decision 1); it is never
+  # invoked per-PR (this workflow has no push/pull_request trigger).
+  #
+  # The in-cluster pull is ANONYMOUS, so the tag's ghcr packages must be public. Every
+  # existing area package is already public; the first release that adds a NEW service
+  # module pushes it private (ghcr default, see the header) and the gate will red on
+  # the pull until it is flipped public once -- that is now release-blocking, not just
+  # a post-release nuisance.
+  loadtest-gate:
+    needs: [guard, images, frontend]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/loadtest-gate.yml
+    with:
+      build: false
+      version: ${{ needs.guard.outputs.version }}
+      skip_preflight: true
+
+  # ---------------------------------------------------------------------------
   # Cross-compile dcctl and create the GitHub Release (goreleaser).
   # ---------------------------------------------------------------------------
   cli:
     # Depends on `images` as well as `guard` so the verification step below runs
     # against a registry that already has this release's tags. Without that
     # ordering the check would race the push and fail on a correct release.
-    needs: [guard, images]
+    # Also gated on `loadtest-gate`: the GitHub Release is the auditable release
+    # artifact, so it is not created unless the correctness-under-load gate passed.
+    needs: [guard, images, loadtest-gate]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
