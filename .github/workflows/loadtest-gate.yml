@@ -1,22 +1,24 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# ADR-064 correctness-under-load release gate -- L5, iteration 1.
+# ADR-064 correctness-under-load release gate -- L5, iteration 2a.
 #
-# This is the FIRST L5 iteration: the real-runner confirmation. The feasibility
-# spike (memory: project_loadtest_l5_runner_spike) MEASURED that the `--compact`
-# stack fits a GitHub-hosted `ubuntu-latest` runner (2 vCPU / 7 GB), with 2x+
-# headroom on RAM and disk -- the binding constraint is wall-clock on 2 cores,
-# which the spike could only extrapolate. This job runs the cold `--compact`
-# bootstrap on a real hosted runner so we read the ACTUAL 2-core wall-clock and
-# confirm the stack comes up green there. Nothing here drives load or asserts an
-# oracle yet -- that is the next L5 iteration, layered on top of a proven bring-up.
+# Iteration 1 (confirmed green, run 29856919636: 120s bring-up) proved the
+# `--compact` stack cold-boots green on a hosted `ubuntu-latest` runner and
+# measured the 2-core wall-clock. This iteration adds the actual point of the
+# gate on top of that proven bring-up: it DRIVES LOAD and asserts a correctness
+# oracle. Stage 2a wires L1 -- aggregate reconciliation: drive the seeded
+# devicepulse scenario over the real device-plane HTTP ingress, then reconcile
+# the PERSISTED base-event count against the driver's ACCEPTED ledger. The
+# dc-loadtest binary exits non-zero on any failed invariant, so its exit code IS
+# the gate. Later stages layer L2 (detection / command probes) and L3 (ADR-063
+# tiered contention) into the same job. Baseline numbers -> step summary + artifact.
 #
 # Deliberately NOT wired to the release/tag path yet, and deliberately NOT per-PR
 # (ADR-064 decision 1 is a pre-release-TAG gate; per-PR keeps only the pure
-# oracle/harness unit tests already in `go test ./...`). Once this proves green
-# on a real runner, a follow-up adds the tag trigger with `needs: [images]` on
-# release.yml's published images, and the L1-L3 drive + oracle + baseline capture.
+# oracle/harness unit tests already in `go test ./...`). A later stage adds the
+# tag trigger with `needs: [images]` on release.yml's published images once the
+# full L1-L3 drive is proven green on a real runner.
 #
 # Tools the PULL path needs beyond the runner defaults (docker + kubectl are
 # preinstalled): `kind` (dcctl creates the cluster from its embedded topology)
@@ -36,6 +38,15 @@ on:
         description: 'Skip dcctl preflight doctor checks (runner limits differ from a dev box)'
         type: boolean
         default: true
+      devices:
+        description: 'L1 load: device count (throughput = devices / emit_interval)'
+        default: '80'
+      emit_interval:
+        description: 'L1 load: per-device emit interval (sub-second keeps exercising the #471 fix)'
+        default: '500ms'
+      hold:
+        description: 'L1 load: how long to hold at load before reconciling'
+        default: '20s'
 
 # Read-only: the gate bootstraps a throwaway kind cluster on the runner and
 # pulls PUBLIC ghcr images -- it neither pushes images nor writes to the repo.
@@ -172,7 +183,7 @@ jobs:
             | awk '{ split($5, a, " "); s += a[1] } END { print s+0 }')
 
           {
-            echo "## ADR-064 L5 iteration 1 -- cold --compact bring-up on ubuntu-latest"
+            echo "## ADR-064 L5 iteration 2a -- cold --compact bring-up on ubuntu-latest"
             echo ""
             echo "| metric | value |"
             echo "| --- | --- |"
@@ -206,6 +217,133 @@ jobs:
             fail=1
           fi
           exit $fail
+
+      # =====================================================================
+      # ADR-064 L1 -- aggregate reconciliation under load (iteration 2a).
+      # The bring-up above proved the stack comes up green; these steps prove it
+      # is CORRECT UNDER LOAD, which is the actual point of the gate.
+      # =====================================================================
+
+      - name: Build load-test driver
+        working-directory: backend/sims/dc-simulator
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          go build -o "$RUNNER_TEMP/bin/dc-loadtest" ./cmd/loadtest
+
+      - name: Create probe tenant + open device-plane ingress
+        id: probe
+        run: |
+          # dcctl mints a scoped tenant identity as the seeded superuser (the compact
+          # bootstrap seeds superuser@devicechain.local / devicechain, which are the
+          # `dcctl sim` defaults) and writes ~/.devicechain/sims/l1probe.json -- the
+          # handshake dc-loadtest reads for its tenant token + resolved endpoints.
+          "$RUNNER_TEMP/dcctl" sim create l1probe -s localhost
+
+          # Device-plane HTTP ingest (:8081) is NOT one of the kind host-port maps
+          # (only 80/443/1883 are), so reach it via a port-forward -- the same coordinate
+          # dc-loadtest resolves from the handshake by default (http://localhost:8081).
+          # The tenant GraphQL read-back path the oracle reconciles against IS on the
+          # ingress (localhost/api/<area>, host port 80), so it needs no forward.
+          kubectl port-forward -n devicechain svc/event-sources 8081:8081 \
+            >"$RUNNER_TEMP/pf-eventsources.log" 2>&1 &
+          pf_pid=$!
+          echo "pf_pid=$pf_pid" >> "$GITHUB_OUTPUT"
+
+          # Don't drive until the forward actually accepts a connection. A 404 from `/`
+          # is success here -- curl exits 0 only on a real HTTP response, which
+          # kubectl port-forward returns only after the pod-side stream is established
+          # end to end (a bind-only listener with a failed pod dial closes → curl
+          # nonzero), so this proves a full round trip, not just an open socket.
+          connected=0
+          for _ in $(seq 1 30); do
+            if curl -sS -o /dev/null --max-time 2 http://localhost:8081/ 2>/dev/null; then
+              connected=1
+              echo "device-plane ingress reachable at http://localhost:8081"
+              break
+            fi
+            if ! kill -0 "$pf_pid" 2>/dev/null; then
+              echo "::error::event-sources port-forward exited before the ingress became reachable"
+              cat "$RUNNER_TEMP/pf-eventsources.log" || true
+              exit 1
+            fi
+            sleep 2
+          done
+          # Explicit failure if the loop exhausted without connecting -- otherwise the
+          # step would exit 0 and the drive would fail as an opaque "load-test invariant"
+          # red instead of naming the real cause (the tunnel never came up).
+          if [ "$connected" -ne 1 ]; then
+            echo "::error::device-plane port-forward never became reachable after 30 attempts (~60s); the tunnel, not the platform, is the cause."
+            cat "$RUNNER_TEMP/pf-eventsources.log" || true
+            exit 1
+          fi
+
+      - name: L1 -- drive load + reconcile (the gate)
+        env:
+          DEVICES: ${{ inputs.devices }}
+          EMIT_INTERVAL: ${{ inputs.emit_interval }}
+          HOLD: ${{ inputs.hold }}
+        run: |
+          # dc-loadtest drives the seeded scenario over the real ingress, then
+          # reconciles persisted==accepted (plus clean-drive and load-floor). It exits
+          # non-zero on any failed invariant -- that exit code is the gate. Reading the
+          # handshake by explicit path (env HOME isn't expanded inside a YAML `env:`).
+          "$RUNNER_TEMP/bin/dc-loadtest" \
+            --handshake "$HOME/.devicechain/sims/l1probe.json" \
+            --devices "$DEVICES" \
+            --emit-interval "$EMIT_INTERVAL" \
+            --hold "$HOLD" \
+            --report "$RUNNER_TEMP/l1-report.json"
+
+      - name: L1 report -> summary
+        if: always()
+        run: |
+          report="$RUNNER_TEMP/l1-report.json"
+          {
+            echo ""
+            echo "### ADR-064 L1 -- aggregate reconciliation (${DEVICES:-?} devices @ ${EMIT_INTERVAL:-?}, hold ${HOLD:-?})"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$report" ]; then
+            {
+              echo ""
+              echo '```json'
+              jq . "$report" 2>/dev/null || cat "$report"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f "$report" ]; then
+            echo "_L1 report was written but empty -- see the drive step log_" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_no L1 report produced (the drive step failed before writing one -- see its log)_" >> "$GITHUB_STEP_SUMMARY"
+          fi
+        env:
+          DEVICES: ${{ inputs.devices }}
+          EMIT_INTERVAL: ${{ inputs.emit_interval }}
+          HOLD: ${{ inputs.hold }}
+
+      - name: Upload L1 report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: l1-report
+          path: ${{ runner.temp }}/l1-report.json
+          if-no-files-found: warn
+
+      - name: Stop device-plane port-forward (+ attribute a drop)
+        if: always()
+        env:
+          PF_PID: ${{ steps.probe.outputs.pf_pid }}
+        run: |
+          # kubectl port-forward is the load path here (device-plane :8081 is not a
+          # kind host port). It can drop under sustained req/s -- which surfaces SAFELY
+          # as a red (failed emits → clean-drive, or accepted skew → reconcile), never a
+          # false green. But a red must be ATTRIBUTED: if the forward did not survive the
+          # drive, the fault is the tunnel, not the platform. Report that before killing.
+          if [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null; then
+            echo "device-plane port-forward survived the drive (pid $PF_PID)."
+          else
+            echo "::warning::device-plane port-forward did NOT survive the drive -- an L1 red is likely a kubectl port-forward drop, not a platform correctness failure. Log tail:"
+            tail -30 "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || true
+          fi
+          kill "$PF_PID" 2>/dev/null || true
 
       # Diagnostics only when something went wrong -- keeps green runs quiet while
       # giving a red run enough to see the cause without a re-run.
@@ -245,3 +383,8 @@ jobs:
 
           echo "=== recent Warning events ==="
           kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp 2>/dev/null | tail -50 || true
+
+          # The device-plane port-forward is the L1 load path; if it dropped, a red is a
+          # tunnel artifact, not a platform fault. Its log is the only place that shows.
+          echo "=== device-plane port-forward log ==="
+          cat "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || echo "(no port-forward log)"
