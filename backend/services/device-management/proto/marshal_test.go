@@ -14,13 +14,19 @@ import (
 )
 
 // A resolved event's OccurredTime/ProcessedTime must survive the marshal/unmarshal
-// round-trip: they cross the messaging hop to every downstream consumer
-// (event-management persistence, device-state's latest-value + connectivity
-// projections), and a dropped timestamp lands as the zero time (0001-01-01),
-// corrupting the hypertable partition key and the last-activity/updated columns.
+// round-trip WITH SUB-SECOND PRECISION: they cross the messaging hop to every
+// downstream consumer (event-management persistence, device-state's latest-value +
+// connectivity projections), and a dropped timestamp lands as the zero time
+// (0001-01-01), corrupting the hypertable partition key and the last-activity/updated
+// columns. Precision is load-bearing, not cosmetic: the event natural key is
+// (tenant, device, event_type, occurred_time), so truncating occurred_time to the
+// whole second silently collapses two distinct sub-second readings from one device
+// into one persisted event (and orphans the second's child rows). The literals below
+// carry distinct nanoseconds so a marshal that truncated to RFC3339 would fail the
+// Equal() assertions below — the check that catches the regression.
 func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
-	occurred := time.Now().UTC().Truncate(time.Second)
-	processed := occurred.Add(50 * time.Millisecond).Truncate(time.Second)
+	occurred := time.Date(2026, 7, 20, 10, 30, 15, 111222333, time.UTC)
+	processed := time.Date(2026, 7, 20, 10, 30, 15, 444555666, time.UTC)
 
 	classifier := uint64(42)
 	unit := "Cel"
