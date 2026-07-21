@@ -37,13 +37,6 @@
 name: loadtest-gate
 
 on:
-  # TEMPORARY dev-loop trigger: auto-run the gate on every push to the dev branch
-  # so an iteration does not need a merge to main first (workflow_dispatch resolves
-  # the workflow from the default branch; a push runs it from the pushed ref). On a
-  # push there are NO inputs, so every step shell-defaults its inputs and the ko step
-  # uses an event-name-aware `if`. REMOVE this block before landing to main.
-  push:
-    branches: [ci/loadtest-gate-dev]
   workflow_dispatch:
     inputs:
       build:
