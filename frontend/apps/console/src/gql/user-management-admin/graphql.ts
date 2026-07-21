@@ -48,6 +48,7 @@ export type AdminTenantCreateRequest = {
   name?: string | null | undefined;
   outboundBurst?: number | null | undefined;
   outboundMessagesPerSecond?: number | null | undefined;
+  shedPriority?: number | null | undefined;
   tierToken: string;
   token: string;
 };
@@ -77,6 +78,7 @@ export type AdminTenantUpdateRequest = {
   name?: string | null | undefined;
   outboundBurst?: number | null | undefined;
   outboundMessagesPerSecond?: number | null | undefined;
+  shedPriority?: number | null | undefined;
   tierToken: string;
 };
 
