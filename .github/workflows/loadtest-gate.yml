@@ -1,7 +1,7 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# ADR-064 correctness-under-load release gate -- L5, iteration 2c.
+# ADR-064 correctness-under-load release gate -- L5, iteration 2d.
 #
 # Iteration 1 (run 29856919636: 120s bring-up) proved the `--compact` stack
 # cold-boots green on a hosted `ubuntu-latest` runner. On top of that proven
@@ -19,24 +19,30 @@
 #            the two regimes by patching event-sources' config + a rollout.
 # Deferred: L2d-3 command round-trip (MQTT device CONNECT issue on the compact
 # runner, pending a local repro).
-# Reports -> step summary + artifacts.
+# Reports -> step summary + artifacts, plus a consolidated baseline.json (the
+# ADR-064 "target numbers" record) at the end of a run.
 #
-# Deliberately NOT wired to the release/tag path yet, and deliberately NOT per-PR
-# (ADR-064 decision 1 is a pre-release-TAG gate; per-PR keeps only the pure
-# oracle/harness unit tests already in `go test ./...`). A later stage adds the
-# tag trigger with `needs: [images]` on release.yml's published images once the
-# full L1-L3 drive is proven green on a real runner.
+# TWO ways in, and NEVER per-PR (ADR-064 decision 1 is a pre-release-TAG gate;
+# per-PR keeps only the pure oracle/harness unit tests already in `go test ./...`):
+#   - workflow_dispatch -- manual, default --build (skew-free HEAD test).
+#   - workflow_call     -- release.yml invokes this AFTER its `images` job has
+#                          pushed the tag's images, on the PULL path (build=false,
+#                          version=<the tag>), so the gate validates the very images
+#                          the release published. A red gate blocks the GitHub
+#                          Release (release.yml's `cli` job needs this one).
+# Both triggers always supply `inputs`, so every step reads `inputs.*` directly;
+# the shell-defaulting below is belt-and-suspenders, not a push-event workaround.
 #
 # Tools needed beyond the runner defaults (docker + kubectl are preinstalled):
 # `kind` (dcctl creates the cluster from its embedded topology) and `tofu` (dcctl's
-# infra step shells out to it), always; plus `ko` on the --build path (dcctl builds
-# each service image into a local registry). helm + kubectl access are Go libraries
-# inside dcctl. The default here is --build (skew-free HEAD test); flip the `build`
-# input off for the pull path, which the eventual tag trigger uses.
+# infra step shells out to it), always; plus `ko` on the --build path only (dcctl
+# builds each service image into a local registry; the pull path needs no builder).
+# helm + kubectl access are Go libraries inside dcctl.
 
 name: loadtest-gate
 
 on:
+  # Manual runs: default to --build (skew-free HEAD test of the checked-out code).
   workflow_dispatch:
     inputs:
       build:
@@ -59,6 +65,40 @@ on:
         default: '500ms'
       hold:
         description: 'L1 load: how long to hold at load before reconciling'
+        default: '20s'
+  # Reusable entry point for release.yml. Same input names as workflow_dispatch so
+  # every step's `inputs.*` reads work identically under either trigger. The caller
+  # passes build=false + version=<the released tag> (the pull path); the string
+  # inputs fall back to the same L1 defaults the manual path uses.
+  workflow_call:
+    inputs:
+      build:
+        description: 'Build HEAD images (--build) vs pull `version`. Release passes false.'
+        type: boolean
+        default: true
+      version:
+        description: 'Published image tag to bootstrap when build is false.'
+        type: string
+        required: false
+        default: 'v0.8.5'
+      skip_preflight:
+        description: 'Skip dcctl preflight doctor checks.'
+        type: boolean
+        default: true
+      devices:
+        description: 'L1 load: device count.'
+        type: string
+        required: false
+        default: '80'
+      emit_interval:
+        description: 'L1 load: per-device emit interval.'
+        type: string
+        required: false
+        default: '500ms'
+      hold:
+        description: 'L1 load: how long to hold at load before reconciling.'
+        type: string
+        required: false
         default: '20s'
 
 # Read-only: the gate bootstraps a throwaway kind cluster on the runner and either
@@ -120,11 +160,12 @@ jobs:
       # pull path. On the pull path the images are prebuilt (ghcr / the release
       # `images` job) so no builder is needed.
       - name: Install ko (build path only)
-        # Install ko UNLESS build was explicitly turned off on a dispatch. On a push
-        # event there are no inputs, so the build path (the default) applies and ko is
-        # needed. (`inputs.build` is empty on push -> a bare `if: inputs.build` would
-        # wrongly skip it; hence the explicit event-name form.)
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build }}
+        # Only the --build path shells out to ko; the pull path (release.yml's
+        # workflow_call, build=false) has prebuilt images and needs no builder. Both
+        # triggers always supply `inputs.build`, so this reads it directly -- note
+        # `github.event_name` is `push` under workflow_call (the caller's tag event),
+        # so an event-name test would WRONGLY install ko on the release pull path.
+        if: ${{ inputs.build }}
         uses: ko-build/setup-ko@v0.10
         with:
           version: v0.19.1
@@ -140,8 +181,8 @@ jobs:
       - name: Bootstrap --compact (timed)
         id: bootstrap
         env:
-          # Raw inputs (empty on a push event); shell-defaulted below so the same file
-          # works for both push (dev-branch auto-run) and workflow_dispatch.
+          # Both triggers (dispatch + release's workflow_call) always supply inputs;
+          # the shell-defaulting below is belt-and-suspenders, not a push workaround.
           BUILD_IN: ${{ inputs.build }}
           VERSION_IN: ${{ inputs.version }}
           SKIP_PREFLIGHT_IN: ${{ inputs.skip_preflight }}
@@ -236,7 +277,7 @@ jobs:
             | awk '{ split($5, a, " "); s += a[1] } END { print s+0 }')
 
           {
-            echo "## ADR-064 L5 iteration 2c -- cold --compact bring-up on ubuntu-latest"
+            echo "## ADR-064 L5 iteration 2d -- cold --compact bring-up on ubuntu-latest"
             echo ""
             echo "| metric | value |"
             echo "| --- | --- |"
@@ -636,6 +677,120 @@ jobs:
             tail -30 "$RUNNER_TEMP/pf-eventsources-2.log" 2>/dev/null || true
           fi
           kill "$PF_PID" 2>/dev/null || true
+
+      # =====================================================================
+      # Baseline capture (ADR-064 "target numbers"). Consolidate the per-probe
+      # reports into ONE baseline.json + a headline table -- the measured record
+      # of what this stack sustained (L1 achieved rate + reconcile, detection
+      # settle, L3 gold-rides / best-effort-sheds), so a release has a durable,
+      # comparable number rather than only scattered per-step artifacts.
+      # =====================================================================
+      - name: Capture load-test baseline
+        # always(): a green run records the baseline; a red run still records
+        # whatever numbers it reached (useful evidence). Pure reporting -- it must
+        # never turn a green gate red or mask a red one, so continue-on-error makes
+        # that STRUCTURAL, not just intended: a truncated/malformed report (e.g. a
+        # driver OOM-killed mid-write leaves non-empty invalid JSON that read_json
+        # can't screen and `jq --argjson` rejects) fails only this step, never the job.
+        if: always()
+        continue-on-error: true
+        env:
+          BUILD_IN: ${{ inputs.build }}
+          VERSION_IN: ${{ inputs.version }}
+        run: |
+          BUILD="${BUILD_IN:-true}"
+          VERSION="${VERSION_IN:-v0.8.5}"
+          export BUILD VERSION
+
+          # Emit a file's JSON if it is non-empty, else the literal `null`, so a probe
+          # that never produced a report folds into the baseline as null rather than
+          # aborting the jq assembly (--argjson rejects an empty string).
+          read_json() { if [ -s "$1" ]; then cat "$1"; else echo 'null'; fi; }
+          l1="$(read_json "$RUNNER_TEMP/l1-report.json")"
+          det="$(read_json "$RUNNER_TEMP/detection-report.json")"
+          pos="$(read_json "$RUNNER_TEMP/l3-pos-report.json")"
+
+          # `passed` per probe mirrors Report.Passed(): an EMPTY invariant set is a
+          # fail, not a vacuous pass, so a truncated report can't read as green here.
+          baseline="$RUNNER_TEMP/loadtest-baseline.json"
+          jq -n \
+            --argjson l1 "$l1" \
+            --argjson det "$det" \
+            --argjson pos "$pos" '
+            def verdict: ((.invariants | length) > 0) and all(.invariants[]; .passed);
+            {
+              runId:       env.GITHUB_RUN_ID,
+              runAttempt:  env.GITHUB_RUN_ATTEMPT,
+              ref:         env.GITHUB_SHA,
+              imageSource: (if env.BUILD == "true" then "HEAD (--build)" else ("pull " + env.VERSION) end),
+              l1: ($l1 | if . == null then null else {
+                achievedRatePerSec: .drive.achievedRatePerSec,
+                accepted:  .drive.accepted,
+                persisted: .persistedEvents,
+                failed:    .drive.failed,
+                passed:    verdict
+              } end),
+              detection: ($det | if . == null then null else {
+                achievedRatePerSec: .drive.achievedRatePerSec,
+                accepted:           .drive.accepted,
+                edgeProbes:         .edgeProbes,
+                safetyProbes:       .safetyProbes,
+                alarmSettleSeconds: .alarmSettleSeconds,
+                passed:             verdict
+              } end),
+              contentionFloor1: ($pos | if . == null then null else {
+                goldAccepted:  .gold.Accepted,
+                goldShed:      .gold.Shed,
+                goldPersisted: .gold.Persisted,
+                shedAccepted:  .shed.Accepted,
+                shedShed:      .shed.Shed,
+                shedPersisted: .shed.Persisted,
+                passed:        verdict
+              } end)
+            }' > "$baseline"
+
+          {
+            echo ""
+            echo "## ADR-064 load-test baseline (run ${GITHUB_RUN_ID})"
+            echo ""
+            echo "| probe | achieved ev/s | accepted | persisted | shed | verdict |"
+            echo "| --- | ---: | ---: | ---: | ---: | :---: |"
+            jq -r '
+              def row($name; $rate; $acc; $per; $shed; $ok):
+                "| \($name) | \($rate // "-") | \($acc // "-") | \($per // "-") | \($shed // "-") | \(if $ok == true then "PASS" elif $ok == false then "FAIL" else "-" end) |";
+              [ row("L1 aggregate";
+                    (.l1.achievedRatePerSec | if . then (.*10|round/10) else null end);
+                    .l1.accepted; .l1.persisted; null; .l1.passed),
+                row("detection";
+                    (.detection.achievedRatePerSec | if . then (.*10|round/10) else null end);
+                    .detection.accepted; null; null; .detection.passed),
+                row("L3 floor1 gold";
+                    null; .contentionFloor1.goldAccepted; .contentionFloor1.goldPersisted;
+                    .contentionFloor1.goldShed; .contentionFloor1.passed),
+                row("L3 floor1 best-effort";
+                    null; .contentionFloor1.shedAccepted; .contentionFloor1.shedPersisted;
+                    .contentionFloor1.shedShed; .contentionFloor1.passed)
+              ] | .[]' "$baseline"
+            echo ""
+            if [ "$BUILD" = "true" ]; then
+              echo "_image source: HEAD (\`--build\`)_"
+            else
+              echo "_image source: \`${VERSION}\` (pull)_"
+            fi
+            echo ""
+            echo '<details><summary>baseline.json</summary>'
+            printf '\n```json\n'; cat "$baseline"; printf '\n```\n'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload load-test baseline
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loadtest-baseline
+          path: ${{ runner.temp }}/loadtest-baseline.json
+          if-no-files-found: warn
+          overwrite: true
 
       # Diagnostics only when something went wrong -- keeps green runs quiet while
       # giving a red run enough to see the cause without a re-run.
