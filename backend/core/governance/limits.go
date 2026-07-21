@@ -24,10 +24,7 @@ package governance
 
 import (
 	"context"
-	"sync"
 	"time"
-
-	"github.com/rs/zerolog/log"
 )
 
 // Limits is a tenant's effective ceiling for one governance dimension.
@@ -60,30 +57,14 @@ const (
 	maxConcurrentRefreshes = 8
 )
 
-// TenantLimitResolver serves per-tenant limits for one dimension to the rate
-// limiter from an in-memory cache, refreshing entries out of band. It is fail-open
-// to the platform default: a tenant with no cached entry (or whose refresh is
-// failing) is metered at the platform default rather than unmetered — the default
-// is itself a limit, so "fail open" never means "unlimited".
+// TenantLimitResolver serves per-tenant limits for one dimension to the rate limiter
+// from the shared tenantResolver cache (out-of-band refresh, inflight dedupe,
+// concurrency-capped, fail-open to the platform default — the default is itself a
+// limit, so "fail open" never means "unlimited"). This type is the Limits-shaped face
+// of that cache: it adapts the dimension Fetcher to the generic fetch signature and
+// unpacks the cached Limits into the (rate, burst) pair the limiter wants.
 type TenantLimitResolver struct {
-	fetch Fetcher
-	def   Limits
-	ttl   time.Duration
-	now   func() time.Time
-	// dimension labels this resolver's logs, so a service governing more than one
-	// dimension reports which one failed to refresh.
-	dimension string
-
-	mu       sync.Mutex
-	cache    map[string]entry
-	inflight map[string]struct{}
-	// sem bounds concurrent refreshes (see maxConcurrentRefreshes).
-	sem chan struct{}
-}
-
-type entry struct {
-	limits    Limits
-	fetchedAt time.Time
+	*tenantResolver[Limits]
 }
 
 // NewTenantLimitResolver builds a resolver over fetch, defaulting an uncached or
@@ -93,75 +74,15 @@ type entry struct {
 // non-GraphQL authority.
 func NewTenantLimitResolver(fetch Fetcher, def Limits, dimension string) *TenantLimitResolver {
 	return &TenantLimitResolver{
-		fetch:     fetch,
-		def:       def,
-		ttl:       defaultCacheTTL,
-		now:       time.Now,
-		dimension: dimension,
-		cache:     make(map[string]entry),
-		inflight:  make(map[string]struct{}),
-		sem:       make(chan struct{}, maxConcurrentRefreshes),
+		tenantResolver: newTenantResolver(
+			func(ctx context.Context, tenant string) (Limits, error) { return fetch.Fetch(ctx, tenant) },
+			def, dimension),
 	}
 }
 
-// Resolve returns the tenant's effective (ratePerSecond, burst) without blocking.
-// A fresh cache entry is served directly; a missing or stale entry triggers an
-// out-of-band refresh and serves the last-known value (or the platform default if
-// none). It is the hot-path function handed to core.TenantRateLimiter.
+// Resolve returns the tenant's effective (ratePerSecond, burst) without blocking —
+// the hot-path function handed to core.TenantRateLimiter.
 func (r *TenantLimitResolver) Resolve(tenant string) (float64, int) {
-	r.mu.Lock()
-	e, ok := r.cache[tenant]
-	fresh := ok && r.now().Sub(e.fetchedAt) < r.ttl
-	if !fresh {
-		r.triggerRefreshLocked(tenant)
-	}
-	r.mu.Unlock()
-
-	if ok {
-		return e.limits.MessagesPerSecond, e.limits.Burst
-	}
-	return r.def.MessagesPerSecond, r.def.Burst
-}
-
-// triggerRefreshLocked starts at most one background refresh per tenant (deduped
-// by the inflight set) and only while a global concurrency slot is free — so a
-// flood of distinct tenants cannot spawn unbounded lookups. When the cap is full
-// the refresh is skipped (the caller serves the default and a later call retries).
-// The caller must hold r.mu; the non-blocking send never blocks under the lock.
-func (r *TenantLimitResolver) triggerRefreshLocked(tenant string) {
-	if _, running := r.inflight[tenant]; running {
-		return
-	}
-	select {
-	case r.sem <- struct{}{}:
-	default:
-		return // at the concurrency cap; serve default and retry on a later call
-	}
-	r.inflight[tenant] = struct{}{}
-	go r.refresh(tenant)
-}
-
-// refresh fetches a tenant's limits and updates the cache. On error it leaves the
-// cache untouched (fail open to last-known or default) rather than caching a
-// sentinel that would drop the tenant to unmetered.
-func (r *TenantLimitResolver) refresh(tenant string) {
-	defer func() {
-		r.mu.Lock()
-		delete(r.inflight, tenant)
-		r.mu.Unlock()
-		<-r.sem
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
-	defer cancel()
-
-	limits, err := r.fetch.Fetch(ctx, tenant)
-	if err != nil {
-		log.Warn().Err(err).Str("tenant", tenant).Str("dimension", r.dimension).
-			Msg("Failed to refresh per-tenant limits; keeping last-known (or platform default)")
-		return
-	}
-	r.mu.Lock()
-	r.cache[tenant] = entry{limits: limits, fetchedAt: r.now()}
-	r.mu.Unlock()
+	l := r.resolve(tenant)
+	return l.MessagesPerSecond, l.Burst
 }

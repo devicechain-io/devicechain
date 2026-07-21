@@ -125,3 +125,36 @@ func (t *Tenant) EffectiveBurst(dim governance.Dimension) (*int, SettingSource) 
 	}
 	return nil, SourcePlatformDefault
 }
+
+// UsableShedPriority reports whether a per-tenant shed-priority override is a live
+// value (a whole 1–100), by the same rule a tier's shedPriority is held to. Like
+// UsableRate it lets the cascade tell an override that MEANS something from one that
+// does not, so an unusable override falls through to the tier rather than past it.
+func UsableShedPriority(v int) bool { return validateShedPriority(v) == nil }
+
+// OverrideShedPriority returns the tenant's own ADR-063 shed-priority override, or nil
+// when it declares none (or declares an unusable one — see EffectiveShedPriority).
+// A scalar, so it takes no dimension, unlike OverrideRate/OverrideBurst.
+func (t *Tenant) OverrideShedPriority() *int {
+	if t.ShedPriority == nil || !UsableShedPriority(*t.ShedPriority) {
+		return nil
+	}
+	return t.ShedPriority
+}
+
+// EffectiveShedPriority resolves the tenant's ADR-063 shed priority down the same
+// cascade the ceilings use — tenant override → tier → nil (SourcePlatformDefault).
+// A nil value means the enforcing service substitutes governance.DefaultShedPriority
+// (a bronze-band fail-safe, never gold): an unclassifiable tenant degrades before the
+// premium ones, mirroring how an absent ceiling falls to a real limit, never
+// unlimited. The value is a point on the 1–100 band scale, NOT a rate, so it never
+// passes through overridesFor / PerSecond — it is its own scalar path end to end.
+func (t *Tenant) EffectiveShedPriority() (*int, SettingSource) {
+	if v := t.OverrideShedPriority(); v != nil {
+		return v, SourceOverride
+	}
+	if v := t.Tier.ShedPriority(); v != nil {
+		return v, SourceTier
+	}
+	return nil, SourcePlatformDefault
+}

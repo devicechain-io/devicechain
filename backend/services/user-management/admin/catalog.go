@@ -134,6 +134,12 @@ type GovernanceOverrides struct {
 	// device-traffic dimensions above: drafting is a human-paced authoring action.
 	AiInferenceRequestsPerMinute *float64
 	AiInferenceBurst             *int
+	// ShedPriority is the per-tenant ADR-063 shed-priority override (1–100) — NOT a
+	// ceiling like the fields above but a contention PREFERENCE (who degrades last). A
+	// scalar with its own band scale, carried here only because it is the same kind of
+	// per-tenant override an admin declares once and it embeds in both tenant inputs.
+	// nil means "inherit" — the tier's shedPriority, then the platform fail-safe.
+	ShedPriority *int
 }
 
 // validate rejects a non-positive override on any governance dimension. A nil field
@@ -167,6 +173,9 @@ func (g GovernanceOverrides) validate() error {
 			return err
 		}
 	}
+	if err := validateShedPriorityOverride("shedPriority", g.ShedPriority); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -181,6 +190,7 @@ func (g GovernanceOverrides) applyTo(t *iam.Tenant) {
 	t.OutboundBurst = g.OutboundBurst
 	t.AiInferenceRequestsPerMinute = g.AiInferenceRequestsPerMinute
 	t.AiInferenceBurst = g.AiInferenceBurst
+	t.ShedPriority = g.ShedPriority
 }
 
 // TenantInput is the data to create a tenant.
@@ -227,6 +237,17 @@ func validateRateOverride(field string, v *float64) error {
 func validateBurstOverride(field string, v *int) error {
 	if v != nil && *v <= 0 {
 		return fmt.Errorf("%s override must be positive (got %d); omit it to inherit the platform default", field, *v)
+	}
+	return nil
+}
+
+// validateShedPriorityOverride bounds a per-tenant ADR-063 shed-priority override to
+// the 1–100 band scale (ADR-063 decision 1). Unlike a ceiling, it is not "positive or
+// inherit": it names a point on a fixed scale, so a value outside [1,100] names no
+// band and is rejected. nil is inherit.
+func validateShedPriorityOverride(field string, v *int) error {
+	if v != nil && (*v < 1 || *v > 100) {
+		return fmt.Errorf("%s override must be between 1 and 100 (got %d); omit it to inherit the platform default", field, *v)
 	}
 	return nil
 }

@@ -502,6 +502,11 @@ functionalAreas:
       deviceAuthMode: required
   event-sources:
     config: {}
+    # ADR-063 preferential shedding. Set an operator floor to shed the lowest tiers
+    # first under contention (gold is never shed). 0 (the default) = off.
+    #   config:
+    #     contention:
+    #       manualFloor: 0   # 0..3 — 1 sheds best-effort, 2 adds bronze, 3 adds silver
     # HTTP device-ingest listener (PR #38): event-sources serves
     # POST /{instanceId}/{tenant}/events on 8081, in addition to the 8080 GraphQL/management
     # port. Exposed as an extra Service/container port so devices can reach it.

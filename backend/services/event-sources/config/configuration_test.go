@@ -68,3 +68,27 @@ func TestDefaultConfigurationValid(t *testing.T) {
 	assert.Len(t, cfg.EventSources, 2)
 	assert.NoError(t, cfg.Validate())
 }
+
+// TestContentionManualFloorValidation pins the ADR-063 floor is a fail-closed [0,3]
+// level. 0 is the intended default AND an explicit legal value — crucially it is NOT
+// defaulted away, so "contention off" stays expressible; a value outside the ladder
+// fails the load closed rather than being silently clamped.
+func TestContentionManualFloorValidation(t *testing.T) {
+	// Default (omitted) is 0 and valid — contention off, and ApplyDefaults must NOT
+	// rewrite it (a "<=0 → default" clause would make an explicit 0 unreachable).
+	def := &EventSourcesConfiguration{}
+	def.ApplyDefaults()
+	assert.Equal(t, 0, def.Contention.ManualFloor)
+	assert.NoError(t, def.Validate())
+
+	for _, level := range []int{0, 1, 2, 3} {
+		cfg := NewEventSourcesConfiguration()
+		cfg.Contention.ManualFloor = level
+		assert.NoError(t, cfg.Validate(), "level %d is on the ladder", level)
+	}
+	for _, bad := range []int{-1, 4, 7} {
+		cfg := NewEventSourcesConfiguration()
+		cfg.Contention.ManualFloor = bad
+		assert.Error(t, cfg.Validate(), "level %d is off the ladder and must fail closed", bad)
+	}
+}

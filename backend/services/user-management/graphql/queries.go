@@ -137,6 +137,21 @@ func (r *TenantGovernanceResolver) AiInferenceBurst() *int32 {
 	return r.burst(governance.AIInference)
 }
 
+// ShedPriority resolves the tenant's ADR-063 shed priority (1–100) down the same
+// cascade the ceilings use — override, else tier, else null. Null means "no priority
+// resolved from the tenant or its tier"; the reader (event-sources) substitutes the
+// platform fail-safe (governance.DefaultShedPriority, a bronze-band value), never
+// gold. A scalar preference, not a ceiling — the provenance is dropped here like the
+// rates, since a service acting on it has no business knowing which level won.
+func (r *TenantGovernanceResolver) ShedPriority() *int32 {
+	v, _ := r.t.EffectiveShedPriority()
+	if v == nil {
+		return nil
+	}
+	i := int32(*v)
+	return &i
+}
+
 // TierToken resolves the tenant's ADR-065 tier token — the tenant's packaging
 // identity, not any value derived from it. ai-inference reads it over a service token
 // and joins its own tier↔provider grants against it to resolve which AI models the

@@ -54,9 +54,15 @@ func (a *Admin) EnsureSuperuser(ctx context.Context) error {
 // the right failure — loud, and naming the tier.
 const simTenantTier = "silver"
 
+// DefaultTenantTier is the tier a sim tenant is packaged at unless --tier overrides
+// it. Silver is the neutral middle of the seeded vocabulary (see the note above):
+// a sim is a demo, not a customer, so it should exercise the typical packaging, not
+// the most privileged.
+const DefaultTenantTier = simTenantTier
+
 const (
-	createTenantMutation = `mutation($token:String!,$name:String,$tier:String!){` +
-		`createTenant(request:{token:$token,name:$name,tierToken:$tier}){token}}`
+	createTenantMutation = `mutation($token:String!,$name:String,$tier:String!,$shedPriority:Int){` +
+		`createTenant(request:{token:$token,name:$name,tierToken:$tier,shedPriority:$shedPriority}){token}}`
 	createIdentityMutation = `mutation($email:String!,$password:String!){` +
 		`createIdentity(request:{email:$email,password:$password,enabled:true,systemRoles:[]}){email}}`
 	addMembershipMutation = `mutation($email:String!,$tenant:String!){` +
@@ -69,11 +75,15 @@ const (
 	deleteTenantMutation   = `mutation($token:String!){deleteTenant(token:$token)}`
 )
 
-// CreateTenant creates the sim's tenant. Idempotent: an already-existing tenant is
-// tolerated so a re-run of create (ADR-035 idempotent bootstrap) succeeds.
-func (a *Admin) CreateTenant(ctx context.Context, token, name string) error {
+// CreateTenant creates the sim's tenant at the given tier, optionally with an ADR-063
+// shed-priority override (nil = inherit the tier's). Idempotent: an already-existing
+// tenant is tolerated so a re-run of create (ADR-035 idempotent bootstrap) succeeds —
+// but note a re-run does NOT re-tier or re-prioritize an existing tenant, since
+// createTenant tolerates-exists rather than updates; a load-test harness that needs a
+// specific tier/priority should use a fresh sim name.
+func (a *Admin) CreateTenant(ctx context.Context, token, name, tier string, shedPriority *int) error {
 	err := a.session.Query(ctx, a.adminURL, createTenantMutation,
-		map[string]any{"token": token, "name": name, "tier": simTenantTier}, nil)
+		map[string]any{"token": token, "name": name, "tier": tier, "shedPriority": shedPriority}, nil)
 	return tolerateExists(fmt.Errorf("create tenant %q: %w", token, err), err)
 }
 

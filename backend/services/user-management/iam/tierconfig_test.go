@@ -25,7 +25,10 @@ func TestTierConfigKeysCoverEveryDimension(t *testing.T) {
 		require.NoError(t, ValidateTierConfig(map[string]any{d.BurstField: float64(10)}),
 			"burst key for dimension %q must be registered", d.Name)
 	}
-	require.Len(t, TierConfigKeys(), len(dims)*2)
+	// Two keys per dimension (rate + burst), plus the one standalone non-dimension key
+	// (ADR-063 shedPriority). This +1 is the guard that the standalone key is neither
+	// dropped nor accidentally duplicated per dimension.
+	require.Len(t, TierConfigKeys(), len(dims)*2+1)
 }
 
 // TestTierConfigKeysMatchTheKnownDimensions is the half the test above cannot do.
@@ -43,6 +46,9 @@ func TestTierConfigKeysMatchTheKnownDimensions(t *testing.T) {
 		"ingestMessagesPerSecond", "ingestBurst",
 		"outboundMessagesPerSecond", "outboundBurst",
 		"aiInferenceRequestsPerMinute", "aiInferenceBurst",
+		// The ADR-063 shed priority — a standalone key, NOT a dimension (it has no
+		// burst and no rate unit), registered outside the dimension loop.
+		"shedPriority",
 	}, TierConfigKeys())
 }
 
@@ -60,9 +66,9 @@ func TestValidateTierConfigRejectsUnknownKeys(t *testing.T) {
 	// The error names the real keys: the operator needs the right spelling.
 	require.Contains(t, err.Error(), "ingestMessagesPerSecond")
 
-	// A key from a subsystem that has not registered one yet is equally unknown —
-	// no key gets in ahead of its validator.
-	require.Error(t, ValidateTierConfig(map[string]any{"shedPriority": float64(80)}))
+	// A key no subsystem has registered is equally unknown — no key gets in ahead of
+	// its validator.
+	require.Error(t, ValidateTierConfig(map[string]any{"retentionWindowDays": float64(30)}))
 
 	// An empty or nil config is valid: a tier that declares nothing inherits the
 	// platform default everywhere, which is exactly what the standard tier does.

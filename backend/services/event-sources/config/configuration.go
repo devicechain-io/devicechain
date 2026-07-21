@@ -5,6 +5,8 @@ package config
 
 import (
 	"fmt"
+
+	"github.com/devicechain-io/dc-microservice/governance"
 )
 
 const (
@@ -55,10 +57,28 @@ type IngestRateLimit struct {
 	Burst int
 }
 
+// Contention is the ADR-063 preferential-shedding control. At GA the whole trigger
+// surface is one operator knob, ManualFloor: the composite level L = max(auto, manual)
+// collapses to L = manualFloor because the automatic saturation controller is deferred
+// post-GA (it would make the load-test gate's verdict flaky — ADR-063 amendment
+// 2026-07-20). At the active level, event-sources lowers the effective ingest ceiling
+// of the shed classes (best-effort first, then bronze, then silver; gold is never
+// shed) so a premium tenant rides through while a lower-tier one sheds at the same 429
+// path — reusing the ADR-023 limiter, never a new drop.
+type Contention struct {
+	// ManualFloor is the shed level L ∈ {0..3}. 0 (the default) sheds nothing —
+	// preferential shedding is off. 1 sheds best-effort, 2 adds bronze, 3 adds silver.
+	// Deliberately NOT defaulted through ApplyDefaults: 0 is the intended resting value
+	// AND a legal explicit setting, so a "<=0 → default" clause would only make an
+	// explicit floor of 0 impossible to express. Range-enforced in Validate.
+	ManualFloor int
+}
+
 type EventSourcesConfiguration struct {
 	EventSources         []EventSource
 	InboundEventBatching KafkaEventBatching
 	IngestRateLimit      IngestRateLimit
+	Contention           Contention
 }
 
 // Creates the default event sources configuration
@@ -149,6 +169,12 @@ func (c *EventSourcesConfiguration) Validate() error {
 	}
 	if c.InboundEventBatching.BatchTimeoutMs <= 0 {
 		return fmt.Errorf("inboundEventBatching.batchTimeoutMs must be positive (got %d)", c.InboundEventBatching.BatchTimeoutMs)
+	}
+	// The shed floor names a level on the ADR-063 ladder (0..3); a value outside it
+	// names no level. Fail the load closed rather than clamp — a floor of 7 is a
+	// misconfiguration the operator must see, not one to silently reinterpret.
+	if c.Contention.ManualFloor < 0 || c.Contention.ManualFloor > governance.MaxShedLevel {
+		return fmt.Errorf("contention.manualFloor must be between 0 and %d (got %d)", governance.MaxShedLevel, c.Contention.ManualFloor)
 	}
 	return nil
 }

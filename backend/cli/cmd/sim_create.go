@@ -32,6 +32,8 @@ func init() {
 	simCreateCmd.Flags().Int64("seed", 1, "deterministic generation seed for the sim's populations")
 	simCreateCmd.Flags().String("ingress", "", "device-plane HTTP ingress base URL (default http(s)://<server>:8081)")
 	simCreateCmd.Flags().String("manifest", "devicepulse", "built-in scenario to run (devicepulse, buildingpulse)")
+	simCreateCmd.Flags().String("tier", sim.DefaultTenantTier, "tenant tier to package the sim at (ADR-065)")
+	simCreateCmd.Flags().Int("shed-priority", 0, "ADR-063 shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band")
 	simCmd.AddCommand(simCreateCmd)
 }
 
@@ -52,6 +54,16 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	manifestId, _ := cmd.Flags().GetString("manifest")
 	if err := sim.ValidateManifestId(manifestId); err != nil {
 		return err
+	}
+	tier, _ := cmd.Flags().GetString("tier")
+	// shed-priority is an optional override: a 1-100 value places the tenant in a
+	// specific band; 0 (the default, and an explicit 0) means inherit the tier's
+	// shedPriority. Pass nil rather than 0 in the inherit case, since 0 is not a valid
+	// band (the API rejects it) — keying on the value rather than Changed() keeps an
+	// explicit `--shed-priority 0` matching the "0 = inherit" help instead of erroring.
+	var shedPriority *int
+	if v, _ := cmd.Flags().GetInt("shed-priority"); v > 0 {
+		shedPriority = &v
 	}
 
 	tenant := sim.DeriveTenant(name)
@@ -79,7 +91,7 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	if err := admin.EnsureSuperuser(ctx); err != nil {
 		return err
 	}
-	if err := admin.CreateTenant(ctx, tenant, name+" (sim)"); err != nil {
+	if err := admin.CreateTenant(ctx, tenant, name+" (sim)", tier, shedPriority); err != nil {
 		return err
 	}
 	if err := admin.CreateIdentity(ctx, email, password); err != nil {

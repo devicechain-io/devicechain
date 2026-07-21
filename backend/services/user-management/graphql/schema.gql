@@ -103,6 +103,12 @@ type TenantGovernance {
     # "0.5 a second". Null inherits the platform default, never unlimited.
     aiInferenceRequestsPerMinute: Float
     aiInferenceBurst: Int
+    # This tenant's ADR-063 shed priority (1–100), resolved down the cascade (override,
+    # else tier, else null). Read by event-sources over a service token: it bands the
+    # value (80–100 gold · 50–79 silver · 20–49 bronze · 1–19 best-effort) and, under a
+    # contention floor, lowers the affected classes' effective ingest ceiling. Null ⇒
+    # the reader substitutes the platform fail-safe (a bronze-band value), never gold.
+    shedPriority: Int
     # This tenant's ADR-065 packaging tier — its identity, not a value derived from it.
     # Read by ai-inference, which joins its own tier↔provider grants against it to
     # resolve which AI models the tenant may use (decision 10). It is here rather than

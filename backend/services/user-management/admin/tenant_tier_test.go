@@ -189,10 +189,19 @@ func TestTierConfigIsValidatedAtTheDoor(t *testing.T) {
 
 	_, err = s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{
 		Name:   "Gold",
-		Config: &map[string]any{"shedPriority": float64(80)},
+		Config: &map[string]any{"retentionWindowDays": float64(30)},
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown tier setting")
+
+	// shedPriority (ADR-063) IS a registered key, held to its 1–100 band: an
+	// out-of-band value is rejected at the door, a valid one lands.
+	_, err = s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{
+		Name:   "Gold",
+		Config: &map[string]any{"shedPriority": float64(200)},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "between 1 and 100")
 
 	// A valid config passes both doors and lands.
 	got, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{

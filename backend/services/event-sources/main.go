@@ -63,6 +63,13 @@ var (
 	// problem entirely.
 	BacklogRateLimiter *core.TenantRateLimiter
 
+	// ShedPriorityResolver resolves a tenant's ADR-063 shed priority (band) from
+	// user-management, cached like the ingest ceiling. It is what turns the contention
+	// floor into a per-tenant shed factor and what labels a shed by its class. nil when
+	// user-management is not configured (the degenerate no-overrides path), in which
+	// case every tenant resolves to the fail-safe bronze band.
+	ShedPriorityResolver *governance.ShedPriorityResolver
+
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
 	FailedDecodeWriter  messaging.MessageWriter
@@ -134,16 +141,63 @@ func initializeMetrics() {
 		[]string{"source"})
 	RateLimitedCounter = Microservice.NewCounterVec(
 		"total_msg_rate_limited",
-		"Count of inbound messages shed for exceeding the per-tenant ingest rate limit",
-		[]string{"source"})
+		"Count of inbound messages shed at the per-tenant ingest ceiling, by ADR-063 shed class",
+		// shed_class is the ADR-063 P4 bounded label — a shed is attributed to the
+		// tenant's class (gold/silver/bronze/best-effort), NOT the tenant (which is an
+		// unbounded, attacker-influenceable cardinality vector, ADR-023 G.3). It lets an
+		// operator see WHICH tier is being shed under a contention floor without leaking
+		// per-tenant cardinality into the metric.
+		[]string{"source", "shed_class"})
+}
+
+// contentionLevel is the effective ADR-063 shed level. At GA it is just the operator
+// manual floor (the composite L = max(auto, manual) collapses to manual because the
+// auto controller is deferred). A function so the deferred runtime signal can slot in
+// without touching the shed path.
+func contentionLevel() int { return Configuration.Contention.ManualFloor }
+
+// shedAdjusted wraps a base ceiling resolver with the ADR-063 shed factor: at the
+// active contention level, a shed class's effective ceiling is lowered (best-effort
+// first, then bronze, then silver; gold's factor is always 1.0, so gold's ceiling is
+// never touched — the promise). The existing ADR-023 limiter then sheds the overflow
+// at its normal 429 path; this adds no new drop, it only tightens the ceiling.
+//
+// Level 0 (the resting default, contention off) is a fast path: base is returned
+// untouched and the shed priority is never resolved, so the whole mechanism is
+// zero-cost until an operator sets a floor.
+func shedAdjusted(base func(string) (float64, int), shedPriority func(string) (int, bool)) func(string) (float64, int) {
+	return func(tenant string) (float64, int) {
+		rps, burst := base(tenant)
+		level := contentionLevel()
+		if level <= 0 {
+			return rps, burst
+		}
+		prio, resolved := shedPriority(tenant)
+		if !resolved {
+			// Do NOT shed a tenant whose priority has not resolved yet — the cold-cache
+			// window right after a floor-activation restart, or user-management
+			// transiently unreachable. Its default is a bronze band, and shedding an
+			// unclassified tenant on it could shed a GOLD tenant (ADR-063 "gold is never
+			// shed" would hold only once fetched, and the restart that activates a floor
+			// is exactly what empties the cache). An unresolved tenant is admitted at its
+			// base ADR-023 ceiling — still metered, never unlimited — until its priority
+			// is known (within the 60s TTL). This is the one place the fail-safe direction
+			// is "don't shed the unknown" rather than "shed the unknown as bronze".
+			return rps, burst
+		}
+		class := governance.ShedClassOf(prio)
+		l := governance.Limits{MessagesPerSecond: rps, Burst: burst}.Shed(governance.ShedFactor(class, level))
+		return l.MessagesPerSecond, l.Burst
+	}
 }
 
 // buildRateLimiter constructs the per-tenant ingest limiter. When the service
 // secret and user-management endpoint are configured, per-tenant overrides
-// (ADR-023) are fetched from user-management over a service token and cached,
-// failing open to the platform default; otherwise every tenant is metered at the
-// platform default. Either way the ceiling is a real limit — never unlimited —
-// since ApplyDefaults guarantees positive platform defaults.
+// (ADR-023) and shed priorities (ADR-063) are fetched from user-management over a
+// service token and cached, failing open to the platform default; otherwise every
+// tenant is metered at the platform default and resolves to the fail-safe shed band.
+// Either way the ceiling is a real limit — never unlimited — since ApplyDefaults
+// guarantees positive platform defaults.
 func buildRateLimiter() {
 	def := governance.Limits{
 		MessagesPerSecond: Configuration.IngestRateLimit.MessagesPerSecond,
@@ -153,19 +207,38 @@ func buildRateLimiter() {
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant ingest overrides disabled; metering every tenant at the platform default.")
 		flat := func(string) (float64, int) { return def.MessagesPerSecond, def.Burst }
-		RateLimiter = core.NewTenantRateLimiter(flat)
+		// No user-management ⇒ no shed priorities to differentiate tenants; everyone
+		// resolves to the fail-safe bronze band. Still honor the floor on the LIVE
+		// limiter so a drill in a no-UM dev instance behaves, but nothing here reads a
+		// tenant's tier. The backlog limiter is NOT shed (see below).
+		// No user-management ⇒ no per-tenant priorities. Everyone resolves to the
+		// fail-safe bronze band, and it IS resolved (there is no authority to be
+		// transiently down, so the default is the real answer here — unlike the
+		// UM-backed path, where an unfetched tenant is genuinely unresolved).
+		shedPrio := func(string) (int, bool) { return governance.DefaultShedPriority, true }
+		RateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio))
 		BacklogRateLimiter = core.NewTenantRateLimiter(flat)
 		return
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest)
-	// Both limiters share one resolver, so a tenant's override applies to their live
-	// traffic and their backlog alike — the ceiling is the same, only the timeline
-	// each bucket measures against differs.
-	RateLimiter = core.NewTenantRateLimiter(resolver.Resolve)
+	ShedPriorityResolver = governance.NewShedPriorityResolver(client, umURL)
+	// Both limiters share the ceiling resolver, so a tenant's ADR-023 override applies
+	// to their live traffic and their backlog alike — the ceiling is the same, only the
+	// timeline each bucket measures against differs.
+	//
+	// The ADR-063 shed factor rides on the LIVE limiter ONLY. The backlog limiter meters
+	// the capture-stream drain — messages the broker already PUBACKed (ADR-030), i.e.
+	// DURABLY ACCEPTED. ADR-063's invariant is that priority acts only at ADMISSION,
+	// "before an event is durably accepted into the log", never on an accepted stream;
+	// shedding the backlog would retroactively discard already-accepted, already-durable
+	// data — a violation of that invariant AND of ADR-030's durability promise. So the
+	// backlog drains un-shed: contention shapes new ingress, never recovery of committed data.
+	RateLimiter = core.NewTenantRateLimiter(shedAdjusted(resolver.Resolve, ShedPriorityResolver.Resolve))
 	BacklogRateLimiter = core.NewTenantRateLimiter(resolver.Resolve)
-	log.Info().Str("userManagement", umURL).Msg("Per-tenant ingest overrides enabled (fail-open to platform default).")
+	log.Info().Str("userManagement", umURL).Int("contentionFloor", contentionLevel()).
+		Msg("Per-tenant ingest overrides + ADR-063 shed priorities enabled (fail-open to platform default).")
 }
 
 // Create decoder based on event source configuration.
@@ -275,23 +348,38 @@ func onMessageReceived(source string, raw []byte) {
 	MessagesCounter.WithLabelValues(source).Inc()
 }
 
-// onRateAllow meters one inbound message against its tenant's ingest ceiling. It
-// returns true when the message may proceed and false when it must be shed,
-// recording the shed against the per-(source, tenant) metric so a noisy tenant is
-// observable. Called at the receive point of each transport, before decode.
+// onRateShed accounts for one shed inbound message, recording it against the
+// per-(source, shed_class) metric so an operator can see WHICH tier is being shed
+// under a contention floor. Called at the receive point of each transport, before
+// decode.
 //
-// The admission decision itself — including which timeline a message is metered
-// on — lives in processor.NewRateGate; this is only the shed accounting.
+// The admission decision itself — including which timeline a message is metered on —
+// lives in processor.NewRateGate; this is only the shed accounting.
 func onRateShed(source string, tenant string) {
-	RateLimitedCounter.WithLabelValues(source).Inc()
-	// Per-tenant attribution is logged (debug) rather than carried as a metric
-	// label: this service does not verify tenant existence, so a tenant label would
-	// be an unbounded, attacker-influenceable cardinality vector. A safe per-tenant
-	// shed metric belongs with the bounded, known-tenant registry a later slice adds.
+	RateLimitedCounter.WithLabelValues(source, shedClassOf(tenant)).Inc()
+	// Per-tenant attribution is logged (debug) rather than carried as a metric label:
+	// this service does not verify tenant existence, so a tenant label would be an
+	// unbounded, attacker-influenceable cardinality vector (ADR-023 G.3). The metric
+	// carries the BOUNDED shed class instead (ADR-063 P4).
 	if log.Debug().Enabled() {
 		log.Debug().Str("source", source).Str("tenant", tenant).
 			Msg("Shed inbound event exceeding per-tenant ingest rate limit")
 	}
+}
+
+// shedClassOf resolves a tenant's ADR-063 shed class for the bounded shed metric. It
+// serves off the same cached resolver the shed factor uses, so it costs a cached
+// lookup, not a query. When user-management is not configured (no resolver) every
+// tenant reads as the fail-safe bronze band — the same class the flat limiter sheds by.
+func shedClassOf(tenant string) string {
+	prio := governance.DefaultShedPriority
+	if ShedPriorityResolver != nil {
+		// The metric labels every shed by class, including a not-yet-resolved tenant's
+		// (banded from the fail-safe default) — a shed of an unresolved tenant is a
+		// base-ceiling shed, and bronze is a fine label for the rare cold-cache case.
+		prio, _ = ShedPriorityResolver.Resolve(tenant)
+	}
+	return governance.ShedClassOf(prio).String()
 }
 
 // Called by event sources when an event is successfully decoded. The tenant is
