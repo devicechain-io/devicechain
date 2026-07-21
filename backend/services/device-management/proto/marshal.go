@@ -283,12 +283,12 @@ func UnmarshalResolvedPayload(etype esmodel.EventType, payload []byte) (interfac
 }
 
 // Marshal an alarm state-change event to protobuf bytes (ADR-041). Timestamps use
-// RFC3339Nano — unlike the resolved-event stream (whole-second RFC3339, telemetry
-// keyed by a hypertable partition), this stream drives ordered live UI updates and an
-// operator ack/clear stamps a sub-second time.Now() into the row, so preserving that
-// precision keeps the event's timeline consistent with the row and lets two same-tick
-// transitions order. The optional scalar fields map to protobuf's optional (pointer)
-// encoding so a subscriber can distinguish "absent" from a zero value.
+// RFC3339Nano to preserve sub-second precision (as every event stream now does): this
+// stream drives ordered live UI updates and an operator ack/clear stamps a sub-second
+// time.Now() into the row, so preserving that precision keeps the event's timeline
+// consistent with the row and lets two same-tick transitions order. The optional scalar
+// fields map to protobuf's optional (pointer) encoding so a subscriber can distinguish
+// "absent" from a zero value.
 func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, error) {
 	pbevent := &PAlarmStateChangeEvent{
 		EventType:      string(event.EventType),
@@ -539,8 +539,8 @@ func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 		DeviceTypeToken:     optionalString(event.DeviceTypeToken),
 		ProfileVersionToken: optionalString(event.ProfileVersionToken),
 		ScopeMemberships:    memberships,
-		OccurredTime:        event.OccurredTime.Format(time.RFC3339),
-		ProcessedTime:       event.ProcessedTime.Format(time.RFC3339),
+		OccurredTime:        event.OccurredTime.Format(time.RFC3339Nano),
+		ProcessedTime:       event.ProcessedTime.Format(time.RFC3339Nano),
 		EventType:           int64(event.EventType),
 		Payload:             pybytes,
 	}
@@ -569,11 +569,11 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 		return nil, err
 	}
 
-	occurred, err := time.Parse(time.RFC3339, pbevent.OccurredTime)
+	occurred, err := time.Parse(time.RFC3339Nano, pbevent.OccurredTime)
 	if err != nil {
 		return nil, err
 	}
-	processed, err := time.Parse(time.RFC3339, pbevent.ProcessedTime)
+	processed, err := time.Parse(time.RFC3339Nano, pbevent.ProcessedTime)
 	if err != nil {
 		return nil, err
 	}

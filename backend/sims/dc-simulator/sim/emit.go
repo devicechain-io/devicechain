@@ -106,7 +106,16 @@ func EmitMeasurement(ctx context.Context, rt *Runtime, d DeviceInstance, metricK
 // HTTP 202 (accepted into the pipeline; persistence/resolution happen
 // asynchronously downstream).
 func EmitMeasurements(ctx context.Context, rt *Runtime, d DeviceInstance, metrics map[string]float64) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	// Sub-second precision is load-bearing, not cosmetic. The pipeline dedups on
+	// the natural key (tenant, device, event_type, occurred_time), so two emits
+	// from one device within the same wall-clock SECOND collapse to a single
+	// persisted event. At the demo's 5s cadence that never bites, but a load run
+	// emitting faster than 1/device/sec would see the platform correctly dedup
+	// its second-identical events — indistinguishable from a drop to a
+	// count-reconciling oracle. RFC3339Nano stamps every emit distinctly, so a
+	// device may emit at any rate and each reading is its own event (which is
+	// also just true — a device sampling sub-second carries sub-second times).
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	credType := credentialTypeAccessToken
 	credId := d.CredentialId
 

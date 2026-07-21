@@ -62,3 +62,31 @@ func TestMarshalRoundTripWithoutCredential(t *testing.T) {
 	assert.Nil(t, got.CredentialId)
 	assert.Nil(t, got.CredentialSecret)
 }
+
+// The inbound event's OccurredTime/ProcessedTime must survive the marshal/unmarshal
+// round-trip with SUB-SECOND precision. event-sources marshals every device POST here
+// on the first pipeline hop, and the persisted event's natural key is
+// (tenant, device, event_type, occurred_time): truncating occurred_time to the whole
+// second silently collapses two distinct sub-second readings from one device into one
+// persisted event. The distinct nanoseconds below fail an Equal() assertion if the
+// marshal ever truncated to RFC3339 again — the check that catches the regression.
+func TestMarshalUnresolvedEventCarriesSubSecondTimestamps(t *testing.T) {
+	occurred := time.Date(2026, 7, 20, 10, 30, 15, 123456789, time.UTC)
+	processed := time.Date(2026, 7, 20, 10, 30, 15, 987654321, time.UTC)
+	event := &model.UnresolvedEvent{
+		Source:        "http1",
+		Device:        "TEST-123",
+		OccurredTime:  occurred,
+		ProcessedTime: processed,
+		EventType:     model.Location,
+		Payload:       &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
+	}
+
+	bytes, err := MarshalUnresolvedEvent(event)
+	assert.NoError(t, err)
+
+	got, err := UnmarshalUnresolvedEvent(bytes)
+	assert.NoError(t, err)
+	assert.True(t, got.OccurredTime.Equal(occurred), "occurred time sub-second round-trip: got %s want %s", got.OccurredTime, occurred)
+	assert.True(t, got.ProcessedTime.Equal(processed), "processed time sub-second round-trip: got %s want %s", got.ProcessedTime, processed)
+}

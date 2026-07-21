@@ -217,8 +217,8 @@ func MarshalUnresolvedEvent(event *model.UnresolvedEvent) ([]byte, error) {
 		AltId:            event.AltId,
 		Device:           event.Device,
 		Relationship:     event.Relationship,
-		OccurredTime:     event.OccurredTime.Format(time.RFC3339),
-		ProcessedTime:    event.ProcessedTime.Format(time.RFC3339),
+		OccurredTime:     event.OccurredTime.Format(time.RFC3339Nano),
+		ProcessedTime:    event.ProcessedTime.Format(time.RFC3339Nano),
 		EventType:        int64(event.EventType),
 		Payload:          plbytes,
 		CredentialType:   event.CredentialType,
@@ -253,11 +253,11 @@ func UnmarshalUnresolvedEvent(encoded []byte) (*model.UnresolvedEvent, error) {
 		return nil, err
 	}
 
-	occtime, err := time.Parse(time.RFC3339, pbevent.OccurredTime)
+	occtime, err := time.Parse(time.RFC3339Nano, pbevent.OccurredTime)
 	if err != nil {
 		return nil, err
 	}
-	proctime, err := time.Parse(time.RFC3339, pbevent.ProcessedTime)
+	proctime, err := time.Parse(time.RFC3339Nano, pbevent.ProcessedTime)
 	if err != nil {
 		return nil, err
 	}
