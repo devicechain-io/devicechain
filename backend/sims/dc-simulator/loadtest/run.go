@@ -41,8 +41,20 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
+	counter := &graphqlEventCounter{session: rt.Session, endpoint: eventEndpoint}
 
-	// Provision the topology (idempotent create-or-get); fills rt.Devices.
+	// Fresh-tenant precondition. The window reconciliation assumes this tenant is
+	// ours exclusively for the run; a persistent sim on the same tenant (dcctl sim
+	// start emits the same type-2 events from the same devices) or a prior run
+	// still draining would land inside the window and contaminate the count —
+	// normally a false FAIL, but a false PASS if the contamination happens to mask
+	// a real drop. Refuse to run rather than reconcile against a shared tenant.
+	if err := requireCleanTenant(ctx, counter); err != nil {
+		return nil, err
+	}
+
+	// Provision the topology (idempotent create-or-get); fills rt.Devices. Bootstrap
+	// emits no events, so it cannot dirty the tenant the precheck just cleared.
 	if err := driver.Bootstrap(ctx, rt); err != nil {
 		return nil, fmt.Errorf("bootstrap: %w", err)
 	}
@@ -56,14 +68,10 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 	}
 	snap := rt.Stats.Snapshot(end)
 
-	// Reconcile against settled platform truth.
-	oracle := &Oracle{
-		Counter: &graphqlEventCounter{session: rt.Session, endpoint: eventEndpoint},
-		Poll:    p.QuiescePoll,
-		Stable:  p.QuiesceStable,
-		Timeout: p.QuiesceTimeout,
-	}
-	qr, err := oracle.Await(ctx, deriveWindow(start, end))
+	// Reconcile against settled platform truth: poll until the persisted count
+	// reaches the accepted target or the timeout backstops.
+	oracle := &Oracle{Counter: counter, Poll: p.QuiescePoll, Timeout: p.QuiesceTimeout}
+	qr, err := oracle.Await(ctx, deriveWindow(start, end), snap.Emitted)
 	if err != nil {
 		return nil, fmt.Errorf("oracle read-back: %w", err)
 	}
@@ -84,11 +92,36 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 			HoldSeconds:    end.Sub(start).Seconds(),
 		},
 		PersistedSeen: qr.Persisted,
-		Quiesced:      qr.Settled,
+		Reached:       qr.Reached,
 		QuiesceSecs:   qr.Elapsed.Seconds(),
-		Invariants:    Reconcile(snap.Emitted, qr.Persisted, qr.Settled),
+		Invariants:    Reconcile(snap.Emitted, snap.Failed, qr.Persisted, p.MinAccepted),
 	}
 	return report, nil
+}
+
+// cleanTenantLookback is how far back requireCleanTenant looks for a competing
+// producer's events. It only needs to span "is something emitting right now"
+// (a running persistent sim, a just-finished prior run); the drive's own window
+// is separate.
+const cleanTenantLookback = 30 * time.Second
+
+// requireCleanTenant fails the run if the tenant already carries recent
+// measurement events — the window math (deriveWindow) assumes no other producer
+// lands events in-window, and a shared tenant breaks that assumption in a way
+// that can, at worst, mask a real drop with matching contamination.
+func requireCleanTenant(ctx context.Context, c eventCounter) error {
+	now := time.Now()
+	// End is padded ahead of now so an event a competing producer stamps with a
+	// slightly-future occurred_time (clock skew) is still seen.
+	recent := Window{Start: now.Add(-cleanTenantLookback), End: now.Add(5 * time.Second)}
+	n, err := c.Count(ctx, recent)
+	if err != nil {
+		return fmt.Errorf("clean-tenant precheck: %w", err)
+	}
+	if n > 0 {
+		return fmt.Errorf("tenant is not clean: %d measurement event(s) in the last %s — stop any running sim on this tenant (dcctl sim stop) or use a fresh tenant; the reconciliation window assumes exclusive ownership", n, cleanTenantLookback)
+	}
+	return nil
 }
 
 // drive runs the emit loop for hold, then stops BETWEEN ticks. It deliberately

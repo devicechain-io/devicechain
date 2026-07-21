@@ -45,6 +45,8 @@ func main() {
 		"max emits in flight per tick (0 derives it from the device count)")
 	hold := flag.Duration("hold", envDurationOr("DC_LOADTEST_HOLD", loadtest.DefaultHold),
 		"how long to hold at load before reconciling")
+	minAccepted := flag.Int64("min-accepted", int64(envIntOr("DC_LOADTEST_MIN_ACCEPTED", loadtest.DefaultMinAccepted)),
+		"floor of accepted events the run must apply for its verdict to count (a gate must exercise real load)")
 	quiesceTimeout := flag.Duration("quiesce-timeout", envDurationOr("DC_LOADTEST_QUIESCE_TIMEOUT", loadtest.DefaultQuiesceTimeout),
 		"max time to wait for the persisted count to settle after the drive stops")
 	reportPath := flag.String("report", envOr("DC_LOADTEST_REPORT", ""),
@@ -77,6 +79,7 @@ func main() {
 		EmitInterval:   *emitInterval,
 		Concurrency:    *concurrency,
 		Hold:           *hold,
+		MinAccepted:    *minAccepted,
 		QuiesceTimeout: *quiesceTimeout,
 	}
 

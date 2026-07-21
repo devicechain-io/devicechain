@@ -44,7 +44,7 @@ type Report struct {
 	FinishedAt    time.Time   `json:"finishedAt"`
 	Drive         DriveStats  `json:"drive"`
 	PersistedSeen int64       `json:"persistedEvents"`
-	Quiesced      bool        `json:"quiesced"`
+	Reached       bool        `json:"reachedTarget"`
 	QuiesceSecs   float64     `json:"quiesceSeconds"`
 	Invariants    []Invariant `json:"invariants"`
 }
@@ -81,7 +81,7 @@ func (r *Report) Human() string {
 	fmt.Fprintf(&b, "  drive: %d devices, target %.1f ev/s, achieved %.1f ev/s over %.0fs — accepted %d, failed %d, ticks %d\n",
 		r.Drive.Devices, r.Drive.TargetRatePS, r.Drive.AchievedRatePS, r.Drive.HoldSeconds,
 		r.Drive.Accepted, r.Drive.Failed, r.Drive.Ticks)
-	fmt.Fprintf(&b, "  oracle: persisted %d, quiesced %v in %.0fs\n", r.PersistedSeen, r.Quiesced, r.QuiesceSecs)
+	fmt.Fprintf(&b, "  oracle: persisted %d, reached-target %v in %.0fs\n", r.PersistedSeen, r.Reached, r.QuiesceSecs)
 	for _, inv := range r.Invariants {
 		mark := "FAIL"
 		if inv.Passed {

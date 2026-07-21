@@ -27,15 +27,19 @@ import (
 
 // Default quiesce parameters. After the driver stops emitting, persisted rows
 // keep landing as the pipeline drains its lag; the oracle polls the windowed
-// event count until it stops growing (StableRounds consecutive equal reads),
-// then reconciles. QuiesceTimeout backstops a lag that never settles — itself a
-// scale finding, not a pass (research/load-test-harness.md §4, §9).
+// event count until it reaches the accepted target, then reconciles.
+// QuiesceTimeout backstops a count that never reaches the target — a drop, or
+// lag that never drained; itself a finding, not a pass (research/load-test-harness.md §4).
 const (
 	DefaultQuiescePoll    = 2 * time.Second
-	DefaultQuiesceStable  = 3
 	DefaultQuiesceTimeout = 2 * time.Minute
 	// DefaultHold is the steady-state emit window for a modest CI-tier run.
 	DefaultHold = 30 * time.Second
+	// DefaultMinAccepted is the floor of accepted events a run must apply before
+	// its verdict counts — a release GATE must exercise real load, so a job that
+	// lost its load flags and drove a handful of events fails rather than
+	// certifying "correctness under load" it never tested.
+	DefaultMinAccepted = 1000
 )
 
 // Profile is one load-test run's configuration. Manifest/Seed/Devices/
@@ -63,10 +67,15 @@ type Profile struct {
 	// Hold is how long to emit at steady state before stopping and reconciling.
 	Hold time.Duration
 
-	// QuiescePoll/QuiesceStable/QuiesceTimeout tune the oracle's settle
-	// detection (see the Default* constants).
+	// MinAccepted is the floor of accepted events the run must apply for its
+	// verdict to count (0 = DefaultMinAccepted). Below it the run fails as a
+	// trivial smoke rather than certifying load it never applied.
+	MinAccepted int64
+
+	// QuiescePoll/QuiesceTimeout tune the oracle's read-back cadence and the
+	// backstop for a count that never reaches the accepted target (see the
+	// Default* constants).
 	QuiescePoll    time.Duration
-	QuiesceStable  int
 	QuiesceTimeout time.Duration
 }
 
@@ -85,11 +94,11 @@ func (p Profile) withDefaults() Profile {
 	if p.Hold <= 0 {
 		p.Hold = DefaultHold
 	}
+	if p.MinAccepted <= 0 {
+		p.MinAccepted = DefaultMinAccepted
+	}
 	if p.QuiescePoll <= 0 {
 		p.QuiescePoll = DefaultQuiescePoll
-	}
-	if p.QuiesceStable <= 0 {
-		p.QuiesceStable = DefaultQuiesceStable
 	}
 	if p.QuiesceTimeout <= 0 {
 		p.QuiesceTimeout = DefaultQuiesceTimeout
@@ -110,8 +119,8 @@ func (p Profile) Validate() error {
 	if p.QuiescePoll < 0 || p.QuiesceTimeout < 0 {
 		return fmt.Errorf("quiesce poll/timeout must not be negative")
 	}
-	if p.QuiesceStable < 0 {
-		return fmt.Errorf("quiesce stable rounds %d is negative", p.QuiesceStable)
+	if p.MinAccepted < 0 {
+		return fmt.Errorf("min accepted %d is negative", p.MinAccepted)
 	}
 	return p.Load().Validate()
 }

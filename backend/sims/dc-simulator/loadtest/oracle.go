@@ -116,36 +116,45 @@ func deriveWindow(start, end time.Time) Window {
 }
 
 // Oracle owns the aggregate-reconciliation strategy: poll the windowed persisted
-// count until it settles (quiesce), then hand the settled count to Reconcile.
+// count until it converges on the target (the accepted ledger) or the timeout
+// elapses, then hand the observed count to Reconcile.
 type Oracle struct {
 	Counter eventCounter
 	Poll    time.Duration
-	Stable  int
 	Timeout time.Duration
 }
 
-// QuiesceResult is what Await observed: the settled (or last-seen) persisted
-// count, whether it actually settled within the timeout, and how long it took.
+// QuiesceResult is what Await observed: the last-seen persisted count, whether it
+// reached the target within the timeout, and how long it took.
 type QuiesceResult struct {
 	Persisted int64
-	Settled   bool
+	Reached   bool
 	Elapsed   time.Duration
 	Polls     int
 }
 
-// Await polls the persisted count over the window until it has been unchanged
-// for Stable consecutive reads (quiesced) or Timeout elapses. It returns the
-// last-seen count either way; a timeout with the count still moving is a
-// "lag never settled" finding the caller turns into a failed invariant, not a
-// silent pass.
+// Await polls the persisted count over the window until it REACHES the target
+// (the accepted count) or the timeout elapses. The count is monotone under a
+// clean drive (append-only + dedup, no window contamination), so:
+//   - reaching the target means every accepted event landed — done, early exit;
+//   - a count below the target is NOT concluded as settled — it may still be
+//     draining (post-Nak-fix redelivery is AckWait-paced, ~tens of seconds), so
+//     Await keeps polling until the target is reached or the timeout is hit.
 //
-// A Poll of 0 disables the inter-poll sleep (tight loop) — used by tests to
-// exercise the settle logic deterministically without wall-clock waits.
-func (o *Oracle) Await(ctx context.Context, w Window) (QuiesceResult, error) {
+// That is deliberately more conservative than an "unchanged for N reads" plateau,
+// which would flake a FAIL on a pipeline that was merely lagging and would have
+// caught up. A timeout below the target is a real finding (drop, or lag that
+// never drained) the caller turns into a failed invariant — never a silent pass.
+// A count ABOVE the target (contamination/duplication) also reaches the exit and
+// is caught by Reconcile.
+//
+// A Poll of 0 disables the inter-poll sleep (tight loop) — used by tests to run
+// the loop deterministically without wall-clock waits.
+func (o *Oracle) Await(ctx context.Context, w Window, target int64) (QuiesceResult, error) {
 	start := time.Now()
 	deadline := start.Add(o.Timeout)
-	var st plateau
 	polls := 0
+	var last int64
 	for {
 		count, err := o.Counter.Count(ctx, w)
 		if err != nil {
@@ -154,109 +163,89 @@ func (o *Oracle) Await(ctx context.Context, w Window) (QuiesceResult, error) {
 			return QuiesceResult{Polls: polls, Elapsed: time.Since(start)}, err
 		}
 		polls++
-		settled := st.observe(count, o.Stable)
-		if settled {
-			return QuiesceResult{Persisted: count, Settled: true, Elapsed: time.Since(start), Polls: polls}, nil
+		last = count
+		if count >= target {
+			return QuiesceResult{Persisted: count, Reached: true, Elapsed: time.Since(start), Polls: polls}, nil
 		}
 		if time.Now().After(deadline) {
-			return QuiesceResult{Persisted: count, Settled: false, Elapsed: time.Since(start), Polls: polls}, nil
+			return QuiesceResult{Persisted: last, Reached: false, Elapsed: time.Since(start), Polls: polls}, nil
 		}
 		if o.Poll > 0 {
 			select {
 			case <-ctx.Done():
-				return QuiesceResult{Persisted: count, Elapsed: time.Since(start), Polls: polls}, ctx.Err()
+				return QuiesceResult{Persisted: last, Elapsed: time.Since(start), Polls: polls}, ctx.Err()
 			case <-time.After(o.Poll):
 			}
 		} else if ctx.Err() != nil {
-			return QuiesceResult{Persisted: count, Elapsed: time.Since(start), Polls: polls}, ctx.Err()
+			return QuiesceResult{Persisted: last, Elapsed: time.Since(start), Polls: polls}, ctx.Err()
 		}
 	}
-}
-
-// plateau tracks how many consecutive reads have held the same value — the pure
-// settle-detection core of Await, separated so it is trivially testable.
-type plateau struct {
-	last   int64
-	streak int
-	primed bool
-}
-
-// observe records one reading and reports whether the value has now been stable
-// for stableTarget consecutive reads. A changed value resets the streak.
-func (p *plateau) observe(v int64, stableTarget int) bool {
-	if p.primed && v == p.last {
-		p.streak++
-	} else {
-		p.streak = 1
-		p.last = v
-		p.primed = true
-	}
-	return p.streak >= stableTarget
 }
 
 // Invariant names — the machine-readable keys in the report.
 const (
 	InvLoadApplied  = "load-applied"
-	InvQuiesced     = "pipeline-quiesced"
+	InvCleanDrive   = "clean-drive"
 	InvCompleteness = "ingest-completeness"
 )
 
 // Reconcile is the pure aggregate-reconciliation verdict: given the driver's
-// accepted-event ledger and the oracle's settled persisted count, it decides the
-// L1 invariants. It is deliberately total and side-effect-free so every branch
-// is unit-tested and mutation-verified.
+// accepted/failed ledger and the oracle's observed persisted count, it decides
+// the L1 invariants. It is deliberately total and side-effect-free so every
+// branch is unit-tested and mutation-verified.
 //
 // The three invariants, and why each exists:
-//   - load-applied: accepted > 0. Without it the whole reconcile is vacuous —
-//     0 persisted == 0 accepted would "pass" a run that emitted nothing (a broken
-//     driver, a dead cluster). This is the guard that stops the check that
-//     cannot fail. (verify-the-thing-that-matters)
-//   - pipeline-quiesced: the count settled within the timeout. If it never
-//     settled, the completeness comparison is against a still-moving number and
-//     means nothing; an unsettled pipeline is itself a scale failure.
+//   - load-applied: accepted >= minAccepted. `> 0` alone stops the vacuous
+//     0 == 0 pass, but a release GATE must also refuse to certify a trivial run:
+//     if a CI job lost its load flags and drove 7 events, "correctness UNDER LOAD"
+//     was never exercised, and a green there is false confidence. minAccepted is
+//     the floor the run had to actually apply.
+//   - clean-drive: failed == 0. The accepted ledger counts HTTP 202s; a failed
+//     emit is either a definitive rejection (4xx/429 — never accepted, correctly
+//     absent) OR a transport timeout/reset, where the server may have accepted and
+//     PERSISTED the event anyway. That second class makes the ledger ambiguous in
+//     the +direction, and a coincident real drop in the −direction could then net
+//     to persisted == accepted — a false pass at the worst moment. L1 refuses to
+//     reconcile a drive that was not clean; the shed-counter reconciliation that
+//     admits governed 429s is a later slice (ADR-063 contention profile).
 //   - ingest-completeness: persisted == accepted. persisted < accepted is the
-//     at-most-once dropped-event class (ADR-030) — the failure this layer
-//     exists to catch. persisted > accepted is duplication or window
-//     contamination — also a failure, never quietly tolerated.
-func Reconcile(accepted, persisted int64, settled bool) []Invariant {
-	loadApplied := accepted > 0
+//     at-most-once dropped-event class (ADR-030) — the failure this layer exists
+//     to catch — OR lag that never drained within the timeout; either fails.
+//     persisted > accepted is duplication or window contamination — also a fail,
+//     never quietly tolerated.
+func Reconcile(accepted, failed, persisted, minAccepted int64) []Invariant {
+	loadApplied := accepted >= minAccepted
+	cleanDrive := failed == 0
 	inv := []Invariant{{
 		Name:   InvLoadApplied,
 		Passed: loadApplied,
-		Detail: fmt.Sprintf("driver accepted %d events (must be > 0 or the run is vacuous)", accepted),
+		Detail: fmt.Sprintf("driver accepted %d events (floor %d — a gate must apply real load, not a trivial smoke)", accepted, minAccepted),
 	}, {
-		Name:   InvQuiesced,
-		Passed: settled,
-		Detail: quiesceDetail(settled, persisted),
+		Name:   InvCleanDrive,
+		Passed: cleanDrive,
+		Detail: fmt.Sprintf("%d emits failed — L1 needs 0: a transport timeout may have persisted server-side, making the accepted ledger ambiguous (governed-shed reconciliation is a later slice)", failed),
 	}}
 
-	// Completeness is only meaningful once load was applied AND the pipeline
-	// settled; otherwise report it as failed-because-inconclusive rather than
-	// letting a coincidental equality read as a pass.
+	// Completeness is only meaningful once real load was applied AND the drive was
+	// clean; otherwise report it as failed-because-inconclusive rather than letting
+	// a coincidental equality read as a pass.
 	comp := Invariant{Name: InvCompleteness}
 	switch {
 	case !loadApplied:
 		comp.Passed = false
-		comp.Detail = "inconclusive: no load was applied"
-	case !settled:
+		comp.Detail = fmt.Sprintf("inconclusive: load floor not met (accepted %d < %d)", accepted, minAccepted)
+	case !cleanDrive:
 		comp.Passed = false
-		comp.Detail = fmt.Sprintf("inconclusive: pipeline never quiesced (persisted still moving at %d, accepted %d)", persisted, accepted)
+		comp.Detail = fmt.Sprintf("inconclusive: %d failed emits make the accepted ledger ambiguous", failed)
 	case persisted == accepted:
 		comp.Passed = true
 		comp.Detail = fmt.Sprintf("persisted == accepted == %d (no events dropped)", accepted)
 	case persisted < accepted:
 		comp.Passed = false
-		comp.Detail = fmt.Sprintf("DROPPED: persisted %d < accepted %d (%d events lost — at-most-once hole, ADR-030)", persisted, accepted, accepted-persisted)
+		comp.Detail = fmt.Sprintf("DROPPED: persisted %d < accepted %d (%d events lost or never drained within the timeout — at-most-once hole, ADR-030)", persisted, accepted, accepted-persisted)
 	default:
 		comp.Passed = false
 		comp.Detail = fmt.Sprintf("UNEXPECTED: persisted %d > accepted %d (%d extra — duplication or window contamination)", persisted, accepted, persisted-accepted)
 	}
 	return append(inv, comp)
-}
-
-func quiesceDetail(settled bool, persisted int64) string {
-	if settled {
-		return fmt.Sprintf("persisted count settled at %d", persisted)
-	}
-	return fmt.Sprintf("pipeline did not quiesce within the timeout (last count %d, still moving)", persisted)
 }
