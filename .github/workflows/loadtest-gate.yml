@@ -528,7 +528,11 @@ jobs:
           before=$(kubectl get configmap dct-devicechain-config -n devicechain \
             -o jsonpath='{.data.event-sources}')
           echo "event-sources config before: ${before:-<empty>}"
-          updated=$(printf '%s' "${before:-{}}" | jq -c '. + {contention: {manualFloor: 1}}')
+          # NB: a literal {} default must NOT be inlined as ${before:-{}} -- the shell
+          # reads the first } as the end of the expansion, leaving a stray } that makes
+          # jq choke ("Unmatched '}'"). Assign the default on its own line instead.
+          if [ -z "$before" ]; then before='{}'; fi
+          updated=$(printf '%s' "$before" | jq -c '. + {contention: {manualFloor: 1}}')
           kubectl patch configmap dct-devicechain-config -n devicechain --type merge \
             -p "$(jq -nc --arg v "$updated" '{data: {"event-sources": $v}}')"
           # rollout restart forces new pods regardless of the config-checksum annotation,
