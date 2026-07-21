@@ -36,7 +36,7 @@ func TestHarnessManifestShape(t *testing.T) {
 
 	require.NoError(t, m.Validate())
 
-	safety, edge, background, err := partitionHarnessDevices(m.Expand(m.Seed))
+	safety, edge, background, err := partitionByPrefix(m.Expand(m.Seed), safetyTokenPrefix, edgeTokenPrefix, bgTokenPrefix)
 	require.NoError(t, err)
 	assert.Len(t, safety, 3)
 	assert.Len(t, edge, 2)
@@ -44,7 +44,7 @@ func TestHarnessManifestShape(t *testing.T) {
 }
 
 func TestPartitionRejectsUnknownPrefix(t *testing.T) {
-	_, _, _, err := partitionHarnessDevices([]sim.DeviceInstance{{Token: "not-a-harness-device"}})
+	_, _, _, err := partitionByPrefix([]sim.DeviceInstance{{Token: "not-a-harness-device"}}, safetyTokenPrefix, edgeTokenPrefix, bgTokenPrefix)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "matches no harness population prefix")
 }
