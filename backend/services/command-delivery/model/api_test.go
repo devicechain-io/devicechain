@@ -66,36 +66,6 @@ func TestCommandStatusTerminal(t *testing.T) {
 	}
 }
 
-// TestCanTransition exercises the transition guard directly.
-func TestCanTransition(t *testing.T) {
-	cases := []struct {
-		from CommandStatus
-		to   CommandStatus
-		want bool
-	}{
-		{CommandQueued, CommandSent, true},
-		{CommandSent, CommandSuccessful, true},
-		{CommandQueued, CommandExpired, true},
-		{CommandSent, CommandTimeout, true},
-		// Illegal forward edges. An unknown target state is refused rather than
-		// waved through — this is the guard that keeps a status the model no
-		// longer defines (DELIVERED, until it was removed) from being written by
-		// anything that still names it.
-		{CommandQueued, CommandStatus("DELIVERED"), false},
-		{CommandSent, CommandStatus("DELIVERED"), false},
-		{CommandSent, CommandStatus("BOGUS"), false},
-		// No transition out of a terminal state.
-		{CommandSuccessful, CommandSent, false},
-		{CommandFailed, CommandSuccessful, false},
-		{CommandTimeout, CommandExpired, false},
-	}
-	for _, c := range cases {
-		if got := canTransition(c.from, c.to); got != c.want {
-			t.Fatalf("canTransition(%s, %s) = %v, want %v", c.from, c.to, got, c.want)
-		}
-	}
-}
-
 // newTestApi spins up an in-memory sqlite database with the tenant-scope
 // callbacks registered and the Command table migrated.
 func newTestApi(t *testing.T) *Api {
@@ -210,8 +180,10 @@ func TestCreateCommandIdempotentOnToken(t *testing.T) {
 	}
 }
 
-// TestMarkSentRejectedOnTerminal verifies the transition guard at the API level.
-func TestMarkSentRejectedOnTerminal(t *testing.T) {
+// TestMarkSentNoOpOnTerminal verifies MarkSent is a no-op on a command that has
+// already left QUEUED, leaving it unchanged rather than forcing it to SENT. This is
+// the from-state-predicated guard: MarkSent only advances a still-QUEUED row.
+func TestMarkSentNoOpOnTerminal(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 
@@ -229,8 +201,55 @@ func TestMarkSentRejectedOnTerminal(t *testing.T) {
 		t.Fatalf("CancelCommand failed: %v", err)
 	}
 
-	if _, err := api.MarkSent(ctx, created.ID); err == nil {
-		t.Fatalf("expected MarkSent on a terminal command to be rejected")
+	// MarkSent must NOT error and must NOT drag the terminal command to SENT.
+	got, err := api.MarkSent(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("MarkSent on a terminal command should be a no-op, got error: %v", err)
+	}
+	if got.Status != CommandExpired.String() {
+		t.Fatalf("MarkSent clobbered a terminal command: status=%s, want %s", got.Status, CommandExpired)
+	}
+}
+
+// TestMarkSentDoesNotClobberResponse is the regression test for the lost-update
+// race: a device response can drive a command to SUCCESSFUL before the sweep's
+// MarkSent write lands (the sweep publishes BEFORE marking SENT). MarkSent must not
+// revert that SUCCESSFUL back to SENT and wipe the response. Because MarkSent is now
+// a conditional UPDATE ... WHERE status='QUEUED', a MarkSent that runs after the row
+// has advanced to SUCCESSFUL matches zero rows and leaves it intact — which is
+// exactly what a full-row Save of a stale QUEUED snapshot would NOT do.
+func TestMarkSentDoesNotClobberResponse(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+
+	created, err := api.CreateCommand(ctx, &CommandCreateRequest{
+		Token:       "cmd-race",
+		DeviceToken: "device-1",
+		Name:        "reboot",
+	})
+	if err != nil {
+		t.Fatalf("CreateCommand failed: %v", err)
+	}
+
+	// The response beats the SENT write (the row goes QUEUED -> SUCCESSFUL).
+	payload := `{"ok":true}`
+	if _, err := api.MarkResponse(ctx, "cmd-race", true, &payload, nil); err != nil {
+		t.Fatalf("MarkResponse failed: %v", err)
+	}
+
+	// The now-late MarkSent must be a no-op — not a revert to SENT.
+	got, err := api.MarkSent(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("MarkSent failed: %v", err)
+	}
+	if got.Status != CommandSuccessful.String() {
+		t.Fatalf("MarkSent clobbered a completed response: status=%s, want SUCCESSFUL", got.Status)
+	}
+	if !got.RespondedTime.Valid {
+		t.Fatalf("MarkSent wiped RespondedTime on a completed command")
+	}
+	if got.ResponsePayload == nil {
+		t.Fatalf("MarkSent wiped ResponsePayload on a completed command")
 	}
 }
 

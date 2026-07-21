@@ -97,28 +97,6 @@ type CommandDeliveryApi interface {
 	TrySweepLock(ctx context.Context, fn func() error) (bool, error)
 }
 
-// canTransition reports whether a command in state `from` may transition to
-// state `to`. A transition out of a terminal state is never permitted; the
-// allowed forward edges follow the lifecycle QUEUED -> SENT -> {SUCCESSFUL,FAILED}
-// with expiry/timeout edges to EXPIRED/TIMEOUT.
-func canTransition(from, to CommandStatus) bool {
-	if from.Terminal() {
-		return false
-	}
-	switch to {
-	case CommandSent:
-		return from == CommandQueued
-	case CommandSuccessful, CommandFailed:
-		// A response can arrive after SENT (and tolerate QUEUED in races where
-		// the response beats the SENT write).
-		return true
-	case CommandExpired, CommandTimeout:
-		// Sweep / cancellation may terminate any non-terminal command.
-		return true
-	}
-	return false
-}
-
 // CreateCommand persists a new command in the QUEUED state.
 func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest) (*Command, error) {
 	// Reject a malformed JSON payload rather than silently persisting NULL (the
@@ -228,27 +206,54 @@ func (api *Api) loadCommand(ctx context.Context, id uint) (*Command, error) {
 	return found, nil
 }
 
+// terminalStatusStrings is the wire form of the four terminal states, for a
+// "status NOT IN (…)" guard. One definition shared by every from-state-predicated
+// update below and by ExpireStale, so the set the sweep skips and the set a
+// transition guards against can never drift.
+func terminalStatusStrings() []string {
+	return []string{
+		CommandSuccessful.String(), CommandTimeout.String(),
+		CommandExpired.String(), CommandFailed.String(),
+	}
+}
+
 // MarkSent transitions a command QUEUED -> SENT.
+//
+// It is a from-state-predicated conditional UPDATE, not a load-modify-Save: only a
+// still-QUEUED row advances, and only the status/sent_time columns are touched. A
+// full-row Save would LOSE-UPDATE a response that raced in between the load and the
+// write — the sweep publishes BEFORE marking SENT, so a device answering in
+// milliseconds can drive the row to SUCCESSFUL (MarkResponse) while this write is
+// delayed under load; a Save of the stale QUEUED snapshot would then clobber it back
+// to SENT, wiping RespondedTime/ResponsePayload. That is permanent: PendingCommands
+// redelivers only QUEUED rows, the response was already consumed, and a REACT command
+// carries no TTL so it never times out. RowsAffected==0 means the row already left
+// QUEUED (a fast response, a concurrent sweep) — a benign race, not an error; the
+// current row is returned. (A deleted row surfaces as loadCommand's not-found.)
 func (api *Api) MarkSent(ctx context.Context, id uint) (*Command, error) {
-	found, err := api.loadCommand(ctx, id)
-	if err != nil {
-		return nil, err
+	res := api.RDB.DB(ctx).Model(&Command{}).
+		Where("id = ? AND status = ?", id, CommandQueued.String()).
+		Updates(map[string]any{
+			"status":    CommandSent.String(),
+			"sent_time": sql.NullTime{Time: time.Now(), Valid: true},
+		})
+	if res.Error != nil {
+		return nil, res.Error
 	}
-	if !canTransition(CommandStatus(found.Status), CommandSent) {
-		return nil, fmt.Errorf("command %d can not transition from %s to %s", id, found.Status, CommandSent)
-	}
-	found.Status = CommandSent.String()
-	found.SentTime = sql.NullTime{Time: time.Now(), Valid: true}
-	if result := api.RDB.DB(ctx).Save(found); result.Error != nil {
-		return nil, result.Error
-	}
-	return found, nil
+	return api.loadCommand(ctx, id)
 }
 
 // MarkResponse records a device response against a command, looked up by its
 // token. If the command is already terminal the response is ignored (the
 // current command is returned). On success the command becomes SUCCESSFUL,
 // otherwise FAILED with the error message recorded.
+//
+// The write is a from-state-predicated conditional UPDATE guarded on the row still
+// being non-terminal (the same shape ExpireStale uses), touching only the response
+// columns — so a response and a racing MarkSent / expire / cancel never clobber each
+// other via a stale full-row Save. RowsAffected==0 means the row went terminal
+// between the read and the write (a late/duplicate response); the current row is
+// returned unchanged.
 func (api *Api) MarkResponse(ctx context.Context, commandToken string, success bool,
 	payload *string, errMsg *string) (*Command, error) {
 	matches, err := api.CommandsByToken(ctx, []string{commandToken})
@@ -260,27 +265,34 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken string, success b
 	}
 	found := matches[0]
 
-	// Ignore responses to already-terminal commands (idempotent / late).
+	// Fast-path: ignore responses to already-terminal commands (idempotent / late).
+	// The conditional WHERE below is the authoritative guard if it races.
 	if CommandStatus(found.Status).Terminal() {
 		return found, nil
 	}
 
-	found.RespondedTime = sql.NullTime{Time: time.Now(), Valid: true}
-	found.ResponsePayload = rdb.MetadataStrOf(payload)
+	updates := map[string]any{
+		"responded_time":   sql.NullTime{Time: time.Now(), Valid: true},
+		"response_payload": rdb.MetadataStrOf(payload),
+	}
 	if success {
-		found.Status = CommandSuccessful.String()
+		updates["status"] = CommandSuccessful.String()
 	} else {
-		found.Status = CommandFailed.String()
-		found.Error = rdb.NullStrOf(errMsg)
+		updates["status"] = CommandFailed.String()
+		updates["error"] = rdb.NullStrOf(errMsg)
 	}
-	if result := api.RDB.DB(ctx).Save(found); result.Error != nil {
-		return nil, result.Error
+	if res := api.RDB.DB(ctx).Model(&Command{}).
+		Where("id = ? AND status NOT IN ?", found.ID, terminalStatusStrings()).
+		Updates(updates); res.Error != nil {
+		return nil, res.Error
 	}
-	return found, nil
+	return api.loadCommand(ctx, found.ID)
 }
 
 // CancelCommand cancels a non-terminal command by token, moving it to EXPIRED
-// (QUEUED/SENT -> EXPIRED). A terminal command is returned unchanged.
+// (QUEUED/SENT -> EXPIRED). A terminal command is returned unchanged. Like the other
+// transitions it is a from-state-predicated conditional UPDATE so a cancel racing a
+// device response does not clobber the response.
 func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, error) {
 	matches, err := api.CommandsByToken(ctx, []string{token})
 	if err != nil {
@@ -293,11 +305,12 @@ func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, erro
 	if CommandStatus(found.Status).Terminal() {
 		return found, nil
 	}
-	found.Status = CommandExpired.String()
-	if result := api.RDB.DB(ctx).Save(found); result.Error != nil {
-		return nil, result.Error
+	if res := api.RDB.DB(ctx).Model(&Command{}).
+		Where("id = ? AND status NOT IN ?", found.ID, terminalStatusStrings()).
+		Updates(map[string]any{"status": CommandExpired.String()}); res.Error != nil {
+		return nil, res.Error
 	}
-	return found, nil
+	return api.loadCommand(ctx, found.ID)
 }
 
 // ExpireStale times out every non-terminal command whose TTL has elapsed. A
@@ -307,10 +320,7 @@ func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, erro
 // number of commands expired.
 func (api *Api) ExpireStale(ctx context.Context, now time.Time) (int64, error) {
 	stale := make([]*Command, 0)
-	terminal := []string{
-		CommandSuccessful.String(), CommandTimeout.String(),
-		CommandExpired.String(), CommandFailed.String(),
-	}
+	terminal := terminalStatusStrings()
 	result := api.RDB.DB(ctx).
 		Where("status NOT IN ?", terminal).
 		Where("expires_at IS NOT NULL AND expires_at < ?", now).
