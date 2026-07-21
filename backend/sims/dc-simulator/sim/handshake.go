@@ -36,6 +36,13 @@ type Endpoints struct {
 	// EventMgmtWS is event-management's graphql-ws endpoint (ws:// or wss://),
 	// carrying the measurementStream subscription the presentation page uses.
 	EventMgmtWS string `json:"eventMgmtWS"`
+	// EventProcessingWS is event-processing's graphql-ws endpoint (ws:// or
+	// wss://), carrying the detectionStream subscription the ADR-064 load-test
+	// detection probes watch. Optional in the handshake, like DashboardMgmtGraphQL
+	// — only the load-test detection harness needs it, so a pre-L2d handshake that
+	// never carried the field still loads and runs; the harness enforces it lazily
+	// at dial time rather than Validate rejecting every sim record without it.
+	EventProcessingWS string `json:"eventProcessingWS"`
 }
 
 // Handshake is the local sim record dcctl (Lane B) writes and dc-simulator (Lane
