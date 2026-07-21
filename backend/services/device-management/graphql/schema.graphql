@@ -540,6 +540,22 @@ input DeviceCreateRequest {
     metadata: String
 }
 
+# Templated bulk device creation. The server renders `count` devices (indices
+# startIndex .. startIndex+count-1) from the templates and creates them in one
+# transaction. Templates understand `{n}` / `{n:0Wd}` (the 1-based index,
+# optionally zero-padded to width W) and, for externalIdTemplate, `{random}`
+# (a fresh random token per device). tokenTemplate MUST contain an index
+# placeholder so every device gets a distinct token.
+input DeviceBulkCreateRequest {
+    deviceTypeToken: String!
+    count: Int!
+    startIndex: Int
+    tokenTemplate: String!
+    nameTemplate: String
+    externalIdTemplate: String
+    metadata: String
+}
+
 # Criteria used when searching for devices.
 input DeviceSearchCriteria {
     pageNumber: Int!
@@ -1389,6 +1405,10 @@ type Mutation {
     deleteEntityAttribute(entityType: String!, entity: String!, scope: String!, attrKey: String!): Boolean!
     # Create a new device.
     createDevice(request: DeviceCreateRequest): Device!
+    # Create many devices in one transaction from a template (bulk fleet
+    # provisioning): the server renders count devices from the token/name/
+    # external-id templates and creates them all-or-nothing.
+    createDevices(request: DeviceBulkCreateRequest!): [Device!]!
     # Update an existing device.
     updateDevice(token: String!, request: DeviceCreateRequest): Device!
     # Delete a device, cascade-removing its credentials and relationship edges.

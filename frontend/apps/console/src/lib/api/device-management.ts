@@ -9,6 +9,7 @@ import type {
   DeviceTypesQuery,
   DeviceTypeCreateRequest,
   DeviceCreateRequest,
+  DeviceBulkCreateRequest,
   EntityGroupsQuery,
   EntityGroupCreateRequest,
   DeviceProfilesQuery,
@@ -61,6 +62,7 @@ export type DetectionRule = DetectionRulesQuery['detectionRules']['results'][num
 export type {
   DeviceTypeCreateRequest,
   DeviceCreateRequest,
+  DeviceBulkCreateRequest,
   EntityGroupCreateRequest,
   DeviceProfileCreateRequest,
   MetricDefinitionCreateRequest,
@@ -163,6 +165,24 @@ const CREATE_DEVICE = graphql(`
 export async function createDevice(request: DeviceCreateRequest): Promise<Device> {
   const data = await gql('device-management', CREATE_DEVICE, { request });
   return data.createDevice;
+}
+
+const CREATE_DEVICES = graphql(`
+  mutation CreateDevices($request: DeviceBulkCreateRequest!) {
+    createDevices(request: $request) {
+      id
+      token
+      name
+    }
+  }
+`);
+
+// createDevices renders and creates a whole fleet from a template in one
+// transaction (server-side expansion). Returns the created devices; the whole
+// batch fails if any rendered token collides or the request is malformed.
+export async function createDevices(request: DeviceBulkCreateRequest): Promise<{ token: string }[]> {
+  const data = await gql('device-management', CREATE_DEVICES, { request });
+  return data.createDevices;
 }
 
 const UPDATE_DEVICE = graphql(`

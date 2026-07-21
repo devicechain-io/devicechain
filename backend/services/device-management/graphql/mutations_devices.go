@@ -80,6 +80,30 @@ func (r *SchemaResolver) CreateDevice(ctx context.Context, args struct {
 	return dt, nil
 }
 
+// Create many devices in one transaction from a template (bulk fleet
+// provisioning). The server renders the batch from the request's templates and
+// creates them all-or-nothing — an invalid template, a rendered token that
+// collides within the batch or with an existing device, or an unknown device
+// type fails them all.
+func (r *SchemaResolver) CreateDevices(ctx context.Context, args struct {
+	Request model.DeviceBulkCreateRequest
+}) ([]*DeviceResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
+	api := r.GetApi(ctx)
+	created, err := api.CreateDevicesFromTemplate(ctx, &args.Request)
+	if err != nil {
+		return nil, err
+	}
+	resolvers := make([]*DeviceResolver, 0, len(created))
+	for _, c := range created {
+		resolvers = append(resolvers, &DeviceResolver{M: *c, S: r, C: ctx})
+	}
+	return resolvers, nil
+}
+
 // Update an existing device.
 func (r *SchemaResolver) UpdateDevice(ctx context.Context, args struct {
 	Token   string

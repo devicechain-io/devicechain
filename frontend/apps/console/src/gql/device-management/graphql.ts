@@ -156,6 +156,16 @@ export type DetectionRuleSearchCriteria = {
   pageSize: number;
 };
 
+export type DeviceBulkCreateRequest = {
+  count: number;
+  deviceTypeToken: string;
+  externalIdTemplate?: string | null | undefined;
+  metadata?: string | null | undefined;
+  nameTemplate?: string | null | undefined;
+  startIndex?: number | null | undefined;
+  tokenTemplate: string;
+};
+
 export type DeviceCreateRequest = {
   description?: string | null | undefined;
   deviceTypeToken: string;
@@ -633,6 +643,13 @@ export type CreateDeviceMutationVariables = Exact<{
 
 
 export type CreateDeviceMutation = { createDevice: { id: string, token: string, name: string | null, description: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+
+export type CreateDevicesMutationVariables = Exact<{
+  request: DeviceBulkCreateRequest;
+}>;
+
+
+export type CreateDevicesMutation = { createDevices: Array<{ id: string, token: string, name: string | null }> };
 
 export type UpdateDeviceMutationVariables = Exact<{
   token: string;
@@ -1708,6 +1725,15 @@ export const CreateDeviceDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CreateDeviceMutation, CreateDeviceMutationVariables>;
+export const CreateDevicesDocument = new TypedDocumentString(`
+    mutation CreateDevices($request: DeviceBulkCreateRequest!) {
+  createDevices(request: $request) {
+    id
+    token
+    name
+  }
+}
+    `) as unknown as TypedDocumentString<CreateDevicesMutation, CreateDevicesMutationVariables>;
 export const UpdateDeviceDocument = new TypedDocumentString(`
     mutation UpdateDevice($token: String!, $request: DeviceCreateRequest) {
   updateDevice(token: $token, request: $request) {
