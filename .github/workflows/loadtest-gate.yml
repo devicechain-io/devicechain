@@ -30,6 +30,10 @@
 name: loadtest-gate
 
 on:
+  # TEMPORARY (remove before the final iteration-2 PR): auto-run on push to the dev
+  # branch so the experimental gate can be iterated without a merge-to-main per cycle.
+  push:
+    branches: [ci/loadtest-gate-dev]
   workflow_dispatch:
     inputs:
       build:
@@ -274,36 +278,31 @@ jobs:
       # is CORRECT UNDER LOAD, which is the actual point of the gate.
       # =====================================================================
 
-      - name: Build load-test driver
+      - name: Build load-test drivers
         working-directory: backend/sims/dc-simulator
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
           go build -o "$RUNNER_TEMP/bin/dc-loadtest" ./cmd/loadtest
+          go build -o "$RUNNER_TEMP/bin/dc-loadtest-detection" ./cmd/loadtest-detection
 
-      - name: Create probe tenant + open device-plane ingress
-        id: probe
+      # One shared port-forward for the device-plane ingest, used by every probe
+      # (L1, detection, ... later command/contention). Opened once here, closed at
+      # the end. Device-plane HTTP ingest (:8081) is NOT a kind host-port map (only
+      # 80/443/1883 are), so it needs a forward -- the coordinate dc-loadtest*
+      # resolve from the handshake by default (http://localhost:8081). The tenant
+      # GraphQL / durable-oracle read-backs are on the ingress (:80), no forward.
+      - name: Open device-plane ingress (shared port-forward)
+        id: ingress
         run: |
-          # dcctl mints a scoped tenant identity as the seeded superuser (the compact
-          # bootstrap seeds superuser@devicechain.local / devicechain, which are the
-          # `dcctl sim` defaults) and writes ~/.devicechain/sims/l1probe.json -- the
-          # handshake dc-loadtest reads for its tenant token + resolved endpoints.
-          "$RUNNER_TEMP/dcctl" sim create l1probe -s localhost
-
-          # Device-plane HTTP ingest (:8081) is NOT one of the kind host-port maps
-          # (only 80/443/1883 are), so reach it via a port-forward -- the same coordinate
-          # dc-loadtest resolves from the handshake by default (http://localhost:8081).
-          # The tenant GraphQL read-back path the oracle reconciles against IS on the
-          # ingress (localhost/api/<area>, host port 80), so it needs no forward.
           kubectl port-forward -n devicechain svc/event-sources 8081:8081 \
             >"$RUNNER_TEMP/pf-eventsources.log" 2>&1 &
           pf_pid=$!
           echo "pf_pid=$pf_pid" >> "$GITHUB_OUTPUT"
 
-          # Don't drive until the forward actually accepts a connection. A 404 from `/`
-          # is success here -- curl exits 0 only on a real HTTP response, which
-          # kubectl port-forward returns only after the pod-side stream is established
-          # end to end (a bind-only listener with a failed pod dial closes → curl
-          # nonzero), so this proves a full round trip, not just an open socket.
+          # Don't proceed until the forward accepts a connection. A 404 from `/` is
+          # success -- curl exits 0 only on a real HTTP response, which kubectl
+          # port-forward returns only after the pod-side stream is established end to
+          # end, so it proves a full round trip, not just an open socket.
           connected=0
           for _ in $(seq 1 30); do
             if curl -sS -o /dev/null --max-time 2 http://localhost:8081/ 2>/dev/null; then
@@ -318,26 +317,28 @@ jobs:
             fi
             sleep 2
           done
-          # Explicit failure if the loop exhausted without connecting -- otherwise the
-          # step would exit 0 and the drive would fail as an opaque "load-test invariant"
-          # red instead of naming the real cause (the tunnel never came up).
           if [ "$connected" -ne 1 ]; then
             echo "::error::device-plane port-forward never became reachable after 30 attempts (~60s); the tunnel, not the platform, is the cause."
             cat "$RUNNER_TEMP/pf-eventsources.log" || true
             exit 1
           fi
 
-      - name: L1 -- drive load + reconcile (the gate)
+      # ---------------------------------------------------------------------
+      # L1 -- aggregate reconciliation.
+      # ---------------------------------------------------------------------
+      - name: L1 -- create tenant, drive load + reconcile (the gate)
         env:
           DEVICES_IN: ${{ inputs.devices }}
           EMIT_INTERVAL_IN: ${{ inputs.emit_interval }}
           HOLD_IN: ${{ inputs.hold }}
         run: |
-          # dc-loadtest drives the seeded scenario over the real ingress, then
-          # reconciles persisted==accepted (plus clean-drive and load-floor). It exits
-          # non-zero on any failed invariant -- that exit code is the gate. Reading the
-          # handshake by explicit path (env HOME isn't expanded inside a YAML `env:`).
-          # Inputs are empty on a push event -> shell-default to the dispatch defaults.
+          # dcctl mints a scoped tenant identity as the seeded superuser (compact seeds
+          # superuser@devicechain.local / devicechain -- the `dcctl sim` defaults) and
+          # writes ~/.devicechain/sims/l1probe.json (the handshake dc-loadtest reads).
+          "$RUNNER_TEMP/dcctl" sim create l1probe -s localhost
+          # dc-loadtest drives the seeded scenario over the ingress, then reconciles
+          # persisted==accepted (plus clean-drive and load-floor); non-zero exit on any
+          # failed invariant IS the gate. Inputs are empty on a push event -> defaulted.
           "$RUNNER_TEMP/bin/dc-loadtest" \
             --handshake "$HOME/.devicechain/sims/l1probe.json" \
             --devices "${DEVICES_IN:-80}" \
@@ -347,28 +348,21 @@ jobs:
 
       - name: L1 report -> summary
         if: always()
-        run: |
-          report="$RUNNER_TEMP/l1-report.json"
-          {
-            echo ""
-            echo "### ADR-064 L1 -- aggregate reconciliation (${DEVICES_IN:-80} devices @ ${EMIT_INTERVAL_IN:-500ms}, hold ${HOLD_IN:-20s})"
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ -s "$report" ]; then
-            {
-              echo ""
-              echo '```json'
-              jq . "$report" 2>/dev/null || cat "$report"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-          elif [ -f "$report" ]; then
-            echo "_L1 report was written but empty -- see the drive step log_" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "_no L1 report produced (the drive step failed before writing one -- see its log)_" >> "$GITHUB_STEP_SUMMARY"
-          fi
         env:
           DEVICES_IN: ${{ inputs.devices }}
           EMIT_INTERVAL_IN: ${{ inputs.emit_interval }}
           HOLD_IN: ${{ inputs.hold }}
+        run: |
+          report="$RUNNER_TEMP/l1-report.json"
+          printf '\n### ADR-064 L1 -- aggregate reconciliation (%s devices @ %s, hold %s)\n' \
+            "${DEVICES_IN:-80}" "${EMIT_INTERVAL_IN:-500ms}" "${HOLD_IN:-20s}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$report" ]; then
+            { printf '\n```json\n'; jq . "$report" 2>/dev/null || cat "$report"; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f "$report" ]; then
+            printf '_report written but empty -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '_no report produced -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload L1 report
         if: always()
@@ -378,10 +372,52 @@ jobs:
           path: ${{ runner.temp }}/l1-report.json
           if-no-files-found: warn
 
+      # ---------------------------------------------------------------------
+      # L2d-1 -- detection edges -> durable alarm state.
+      # ---------------------------------------------------------------------
+      - name: L2 detection -- create tenant, drive, reconcile durable alarms (the gate)
+        run: |
+          # Fresh tenant: the detection harness AUTHORS a threshold+raiseAlarm rule on a
+          # dedicated profile, and the authoring guard REFUSES if the rule pre-exists, so
+          # every run needs a fresh sim. Three populations through ONE rule: safety
+          # (emit below -> must NEVER raise), edge (cross up/down K cycles -> alarm must
+          # go ACTIVE then settle CLEARED), background (saturate). The gate reconciles the
+          # DURABLE alarm row (CLEARED + MAJOR tier -- not the vacuous raisedTime) over
+          # DeviceMgmtGraphQL (:80); detectionStream is non-gating live evidence. Non-zero
+          # exit on any failed invariant IS the gate.
+          "$RUNNER_TEMP/dcctl" sim create detprobe -s localhost
+          "$RUNNER_TEMP/bin/dc-loadtest-detection" \
+            --handshake "$HOME/.devicechain/sims/detprobe.json" \
+            --bg-devices 40 --bg-interval 500ms \
+            --safety-probes 6 --edge-probes 6 --cycles 3 --probe-interval 2s \
+            --min-accepted 300 \
+            --report "$RUNNER_TEMP/detection-report.json"
+
+      - name: Detection report -> summary
+        if: always()
+        run: |
+          report="$RUNNER_TEMP/detection-report.json"
+          printf '\n### ADR-064 L2d-1 -- detection -> durable alarm\n' >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$report" ]; then
+            { printf '\n```json\n'; jq . "$report" 2>/dev/null || cat "$report"; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f "$report" ]; then
+            printf '_report written but empty -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '_no report produced -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload detection report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: detection-report
+          path: ${{ runner.temp }}/detection-report.json
+          if-no-files-found: warn
+
       - name: Stop device-plane port-forward (+ attribute a drop)
         if: always()
         env:
-          PF_PID: ${{ steps.probe.outputs.pf_pid }}
+          PF_PID: ${{ steps.ingress.outputs.pf_pid }}
         run: |
           # kubectl port-forward is the load path here (device-plane :8081 is not a
           # kind host port). It can drop under sustained req/s -- which surfaces SAFELY
