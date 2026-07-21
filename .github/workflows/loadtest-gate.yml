@@ -1,18 +1,19 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# ADR-064 correctness-under-load release gate -- L5, iteration 2a.
+# ADR-064 correctness-under-load release gate -- L5, iteration 2b.
 #
-# Iteration 1 (confirmed green, run 29856919636: 120s bring-up) proved the
-# `--compact` stack cold-boots green on a hosted `ubuntu-latest` runner and
-# measured the 2-core wall-clock. This iteration adds the actual point of the
-# gate on top of that proven bring-up: it DRIVES LOAD and asserts a correctness
-# oracle. Stage 2a wires L1 -- aggregate reconciliation: drive the seeded
-# devicepulse scenario over the real device-plane HTTP ingress, then reconcile
-# the PERSISTED base-event count against the driver's ACCEPTED ledger. The
-# dc-loadtest binary exits non-zero on any failed invariant, so its exit code IS
-# the gate. Later stages layer L2 (detection / command probes) and L3 (ADR-063
-# tiered contention) into the same job. Baseline numbers -> step summary + artifact.
+# Iteration 1 (run 29856919636: 120s bring-up) proved the `--compact` stack
+# cold-boots green on a hosted `ubuntu-latest` runner. On top of that proven
+# bring-up this job DRIVES LOAD and asserts correctness oracles, each a
+# dc-loadtest* binary whose non-zero exit IS the gate:
+#   - L1  -- aggregate reconciliation: drive the seeded devicepulse scenario over
+#            the device-plane HTTP ingress, reconcile PERSISTED == ACCEPTED.
+#   - L2d-1 detection -> durable alarm: safety/edge/background populations through
+#            an authored raiseAlarm rule; gate on the durable CLEARED+MAJOR alarm.
+# Deferred: L2d-3 command round-trip (MQTT device CONNECT issue on the compact
+# runner, pending a local repro) and L3 ADR-063 tiered contention.
+# Reports -> step summary + artifacts.
 #
 # Deliberately NOT wired to the release/tag path yet, and deliberately NOT per-PR
 # (ADR-064 decision 1 is a pre-release-TAG gate; per-PR keeps only the pure
@@ -30,10 +31,6 @@
 name: loadtest-gate
 
 on:
-  # TEMPORARY (remove before the final iteration-2 PR): auto-run on push to the dev
-  # branch so the experimental gate can be iterated without a merge-to-main per cycle.
-  push:
-    branches: [ci/loadtest-gate-dev]
   workflow_dispatch:
     inputs:
       build:
@@ -284,7 +281,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           go build -o "$RUNNER_TEMP/bin/dc-loadtest" ./cmd/loadtest
           go build -o "$RUNNER_TEMP/bin/dc-loadtest-detection" ./cmd/loadtest-detection
-          go build -o "$RUNNER_TEMP/bin/dc-loadtest-command" ./cmd/loadtest-command
 
       # One shared port-forward for the device-plane ingest, used by every probe
       # (L1, detection, ... later command/contention). Opened once here, closed at
@@ -372,6 +368,7 @@ jobs:
           name: l1-report
           path: ${{ runner.temp }}/l1-report.json
           if-no-files-found: warn
+          overwrite: true
 
       # ---------------------------------------------------------------------
       # L2d-1 -- detection edges -> durable alarm state.
@@ -391,7 +388,7 @@ jobs:
             --handshake "$HOME/.devicechain/sims/detprobe.json" \
             --bg-devices 40 --bg-interval 500ms \
             --safety-probes 6 --edge-probes 6 --cycles 3 --probe-interval 2s \
-            --min-accepted 300 \
+            --min-accepted 600 \
             --report "$RUNNER_TEMP/detection-report.json"
 
       - name: Detection report -> summary
@@ -414,115 +411,32 @@ jobs:
           name: detection-report
           path: ${{ runner.temp }}/detection-report.json
           if-no-files-found: warn
+          overwrite: true
 
-      # ---------------------------------------------------------------------
-      # L2d-3 -- command round-trip -> durable command state.
-      # Adds MQTT: the device-plane command RECEIVER connects to the NATS MQTT
-      # gateway (TLS on :1883) as the device, so QUEUED->SENT->SUCCESSFUL is only
-      # reachable if the device genuinely received AND answered over MQTT. The
-      # auth-callout responder that authenticates the device's ACCESS_TOKEN is
-      # configured at pod-start on a fresh bootstrap (calloutIssuerSeed is minted
-      # by the bootstrap), so no rollout is needed here.
-      # ---------------------------------------------------------------------
-      - name: Open NATS MQTT (port-forward dc-nats:1883)
-        id: mqtt
-        run: |
-          # NATS MQTT (:1883) terminates TLS; the kind config does not expose it as a
-          # host port that reaches a Service, so reach it via a port-forward. The dev
-          # cert's SAN is the in-cluster DNS name, unmatchable from 127.0.0.1, hence
-          # dc-loadtest-command's --mqtt-insecure default.
-          kubectl port-forward -n dc-system svc/dc-nats 1883:1883 \
-            >"$RUNNER_TEMP/pf-nats.log" 2>&1 &
-          mqtt_pid=$!
-          echo "mqtt_pid=$mqtt_pid" >> "$GITHUB_OUTPUT"
-
-          # Wait for the TLS listener's TCP socket to accept (a plain curl won't speak
-          # TLS; a bare TCP connect is the right readiness probe for an MQTT-over-TLS port).
-          connected=0
-          for _ in $(seq 1 30); do
-            if timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/1883' 2>/dev/null; then
-              connected=1
-              echo "NATS MQTT reachable at 127.0.0.1:1883"
-              break
-            fi
-            if ! kill -0 "$mqtt_pid" 2>/dev/null; then
-              echo "::error::dc-nats MQTT port-forward exited before the listener became reachable"
-              cat "$RUNNER_TEMP/pf-nats.log" || true
-              exit 1
-            fi
-            sleep 2
-          done
-          if [ "$connected" -ne 1 ]; then
-            echo "::error::NATS MQTT port-forward never became reachable after 30 attempts (~60s); the tunnel, not the platform, is the cause."
-            cat "$RUNNER_TEMP/pf-nats.log" || true
-            exit 1
-          fi
-
-      - name: L2 command -- create tenant, drive, reconcile durable commands (the gate)
-        run: |
-          # Fresh tenant: the command harness authors a threshold+sendCommand rule on a
-          # dedicated profile (fresh-tenant guard, same as detection). Three populations:
-          # safety (below -> enqueue NO command), command (cross up K times -> exactly K
-          # commands, each -> durable SUCCESSFUL), background (saturate). SUCCESSFUL is an
-          # authoritative non-lossy round-trip proof (device received over MQTT AND
-          # answered), read over commandMgmtGraphQL (:80). The MQTT receive tally is
-          # non-gating. Non-zero exit on any failed invariant IS the gate.
-          "$RUNNER_TEMP/dcctl" sim create cmdprobe -s localhost
-          "$RUNNER_TEMP/bin/dc-loadtest-command" \
-            --handshake "$HOME/.devicechain/sims/cmdprobe.json" \
-            --bg-devices 30 --safety-probes 5 --command-probes 5 --cycles 3 \
-            --min-accepted 300 \
-            --mqtt-broker ssl://127.0.0.1:1883 \
-            --report "$RUNNER_TEMP/command-report.json"
-
-      - name: Command report -> summary
-        if: always()
-        run: |
-          report="$RUNNER_TEMP/command-report.json"
-          printf '\n### ADR-064 L2d-3 -- command round-trip -> durable command\n' >> "$GITHUB_STEP_SUMMARY"
-          if [ -s "$report" ]; then
-            { printf '\n```json\n'; jq . "$report" 2>/dev/null || cat "$report"; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
-          elif [ -f "$report" ]; then
-            printf '_report written but empty -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
-          else
-            printf '_no report produced -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Upload command report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: command-report
-          path: ${{ runner.temp }}/command-report.json
-          if-no-files-found: warn
-
-      - name: Stop NATS MQTT port-forward (+ attribute a drop)
-        if: always()
-        env:
-          MQTT_PID: ${{ steps.mqtt.outputs.mqtt_pid }}
-        run: |
-          if [ -n "$MQTT_PID" ] && kill -0 "$MQTT_PID" 2>/dev/null; then
-            echo "NATS MQTT port-forward survived the run (pid $MQTT_PID)."
-          else
-            echo "::warning::NATS MQTT port-forward did NOT survive the run -- a command red is likely a port-forward drop, not a platform failure. Log tail:"
-            tail -30 "$RUNNER_TEMP/pf-nats.log" 2>/dev/null || true
-          fi
-          kill "$MQTT_PID" 2>/dev/null || true
+      # NOTE: L2d-3 command round-trip (MQTT) is deferred -- the device MQTT CONNECT
+      # is rejected by the NATS MQTT gateway before the auth callout on the compact
+      # runner cluster (responder subscribed, credential valid via HTTP, TLS fine),
+      # pending a local --compact repro. It slots in here once resolved.
 
       - name: Stop device-plane port-forward (+ attribute a drop)
         if: always()
         env:
           PF_PID: ${{ steps.ingress.outputs.pf_pid }}
         run: |
-          # kubectl port-forward is the load path here (device-plane :8081 is not a
-          # kind host port). It can drop under sustained req/s -- which surfaces SAFELY
-          # as a red (failed emits → clean-drive, or accepted skew → reconcile), never a
-          # false green. But a red must be ATTRIBUTED: if the forward did not survive the
-          # drive, the fault is the tunnel, not the platform. Report that before killing.
-          if [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null; then
-            echo "device-plane port-forward survived the drive (pid $PF_PID)."
+          # kubectl port-forward is the shared load path for EVERY probe (L1 + detection;
+          # :8081 is not a kind host port). It can drop under sustained req/s -- which
+          # surfaces SAFELY as a red (failed emits / accepted skew), never a false green.
+          # But a red must be ATTRIBUTED to the tunnel vs the platform. Two failure shapes:
+          # the forward died, OR it stayed alive but logged per-connection forwarding
+          # errors (kubectl pf often keeps listening while failing every new stream).
+          pf_errors=""
+          if grep -qiE 'error forwarding|lost connection|an error occurred' "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null; then
+            pf_errors=1
+          fi
+          if [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && [ -z "$pf_errors" ]; then
+            echo "device-plane port-forward survived every probe cleanly (pid $PF_PID)."
           else
-            echo "::warning::device-plane port-forward did NOT survive the drive -- an L1 red is likely a kubectl port-forward drop, not a platform correctness failure. Log tail:"
+            echo "::warning::device-plane port-forward did not survive cleanly -- an L1/detection red may be a kubectl port-forward drop, not a platform correctness failure. Log tail:"
             tail -30 "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || true
           fi
           kill "$PF_PID" 2>/dev/null || true
@@ -570,21 +484,3 @@ jobs:
           # tunnel artifact, not a platform fault. Its log is the only place that shows.
           echo "=== device-plane port-forward log ==="
           cat "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || echo "(no port-forward log)"
-          echo "=== NATS MQTT port-forward log ==="
-          cat "$RUNNER_TEMP/pf-nats.log" 2>/dev/null || echo "(no MQTT port-forward log)"
-
-          # MQTT command round-trip depends on the device-management auth-callout
-          # responder (does it subscribe at start?) and the NATS broker (does it accept
-          # or reject the device CONNECT?). These pods are Ready, so the generic dumps
-          # above skip them -- surface their MQTT/auth lines explicitly.
-          echo "=== device-management: auth-callout responder subscribe + deny reason ==="
-          # Match ONLY the exact callout log phrases (callout.go) -- these never appear
-          # in the measurement/write debug flood, so no tail is needed and the signal is
-          # clean. Distinguishes: responder-subscribed present? (startup) and whether a
-          # device connect was rejected (deny, with reason) vs never reached the callout.
-          kubectl logs -n devicechain deploy/device-management --tail=100000 2>/dev/null \
-            | grep -iE 'auth-callout|responder subscribed|resolved a credential to no device' \
-            | head -40 || echo "(none)"
-          echo "=== dc-nats: MQTT / auth / connect lines ==="
-          kubectl logs -n dc-system dc-nats-0 --all-containers --tail=600 2>/dev/null \
-            | grep -iE 'mqtt|auth|callout|connect|error|denied|1883' | tail -40 || echo "(none)"
