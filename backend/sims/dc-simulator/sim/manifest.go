@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -171,23 +170,19 @@ type SimManifest struct {
 	Dashboards    []DashboardSpec
 }
 
-// placeholderPattern matches "{n}" or "{n:0Wd}" (W one or more digits).
+// placeholderPattern matches "{n}" or "{n:0Wd}" (W one or more digits). The
+// RENDERING of these placeholders now lives in core.RenderTemplate (shared with
+// device-management's bulk device create, so the two never drift); this regex
+// remains only for structurally SPLITTING a pattern into its literal segments,
+// which a test does to derive the fixed prefix/suffix around the index.
 var placeholderPattern = regexp.MustCompile(`\{n(?::0(\d+)d)?\}`)
 
 // renderPattern fills a TokenPattern/ExternalIdPattern's "{n}"/"{n:0Wd}"
-// placeholder with a 1-based index. Pure string formatting — no randomness.
+// placeholder with a 1-based index. The sim's populations never use "{random}",
+// so it renders through core.RenderTemplate with no random source — pure string
+// formatting, deterministic given (pattern, n).
 func renderPattern(pattern string, n int) string {
-	return placeholderPattern.ReplaceAllStringFunc(pattern, func(match string) string {
-		sub := placeholderPattern.FindStringSubmatch(match)
-		if sub[1] == "" {
-			return strconv.Itoa(n)
-		}
-		width, err := strconv.Atoi(sub[1])
-		if err != nil {
-			return strconv.Itoa(n)
-		}
-		return fmt.Sprintf("%0*d", width, n)
-	})
+	return core.RenderTemplate(pattern, n, nil)
 }
 
 // deriveCredential deterministically derives an ACCESS_TOKEN credential's own

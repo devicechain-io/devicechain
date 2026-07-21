@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Layers } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listDevices } from '@/lib/api/device-management';
@@ -19,6 +19,7 @@ import { useToast } from '@/components/ui/toast';
 import { rowLinkProps, useReload } from '@/routes/common';
 import { FormDrawer } from '@/components/registry';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
+import { DeviceBulkForm } from '@/routes/devices/DeviceBulkForm';
 import {
   DataTable,
   DataTableBody,
@@ -50,6 +51,7 @@ export default function DevicesPage() {
   const { toast } = useToast();
   const [pageNumber, setPageNumber] = useState(1);
   const [creating, setCreating] = useState(false);
+  const [bulkCreating, setBulkCreating] = useState(false);
   const [version, reload] = useReload();
   const { data, loading, error } = useQuery(
     () => listDevices({ pageNumber, pageSize }),
@@ -69,9 +71,14 @@ export default function DevicesPage() {
       description="Devices registered in this tenant"
       banner="devices"
       action={
-        <Button onClick={() => setCreating(true)}>
-          <Plus size={16} /> New device
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setBulkCreating(true)}>
+            <Layers size={16} /> Bulk create
+          </Button>
+          <Button onClick={() => setCreating(true)}>
+            <Plus size={16} /> New device
+          </Button>
+        </div>
       }
     >
       <FormDrawer open={creating} onOpenChange={setCreating} title="New device">
@@ -79,6 +86,15 @@ export default function DevicesPage() {
           onDone={(m) => {
             toast(m);
             setCreating(false);
+            reload();
+          }}
+        />
+      </FormDrawer>
+      <FormDrawer open={bulkCreating} onOpenChange={setBulkCreating} title="Bulk create devices">
+        <DeviceBulkForm
+          onDone={(m) => {
+            toast(m);
+            setBulkCreating(false);
             reload();
           }}
         />

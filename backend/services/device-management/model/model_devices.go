@@ -85,6 +85,29 @@ type DeviceCreateRequest struct {
 	Metadata        *string
 }
 
+// MaxBulkDeviceCount bounds how many devices one CreateDevices call renders and
+// creates in a single transaction. A cap is not optional: the whole batch is one
+// DB transaction held open for the duration, so an unbounded count would let a
+// single request pin locks and memory across the fleet. Larger fleets are created
+// with repeated calls (bumping StartIndex).
+const MaxBulkDeviceCount = 1000
+
+// DeviceBulkCreateRequest is a templated bulk-provisioning request: render Count
+// devices from the templates (indices StartIndex .. StartIndex+Count-1) and create
+// them in one transaction. Templates use the core placeholder grammar — "{n}" /
+// "{n:0Wd}" for the index, plus "{random}" in ExternalIdTemplate for a fresh random
+// business id per device. TokenTemplate must carry an index placeholder so every
+// device gets a distinct token.
+type DeviceBulkCreateRequest struct {
+	DeviceTypeToken    string
+	Count              int32
+	StartIndex         *int32
+	TokenTemplate      string
+	NameTemplate       *string
+	ExternalIdTemplate *string
+	Metadata           *string
+}
+
 // Represents a device.
 type Device struct {
 	gorm.Model
