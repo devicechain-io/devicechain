@@ -1,0 +1,247 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# ADR-064 correctness-under-load release gate -- L5, iteration 1.
+#
+# This is the FIRST L5 iteration: the real-runner confirmation. The feasibility
+# spike (memory: project_loadtest_l5_runner_spike) MEASURED that the `--compact`
+# stack fits a GitHub-hosted `ubuntu-latest` runner (2 vCPU / 7 GB), with 2x+
+# headroom on RAM and disk -- the binding constraint is wall-clock on 2 cores,
+# which the spike could only extrapolate. This job runs the cold `--compact`
+# bootstrap on a real hosted runner so we read the ACTUAL 2-core wall-clock and
+# confirm the stack comes up green there. Nothing here drives load or asserts an
+# oracle yet -- that is the next L5 iteration, layered on top of a proven bring-up.
+#
+# Deliberately NOT wired to the release/tag path yet, and deliberately NOT per-PR
+# (ADR-064 decision 1 is a pre-release-TAG gate; per-PR keeps only the pure
+# oracle/harness unit tests already in `go test ./...`). Once this proves green
+# on a real runner, a follow-up adds the tag trigger with `needs: [images]` on
+# release.yml's published images, and the L1-L3 drive + oracle + baseline capture.
+#
+# Tools the PULL path needs beyond the runner defaults (docker + kubectl are
+# preinstalled): `kind` (dcctl creates the cluster from its embedded topology)
+# and `tofu` (dcctl's infra step shells out to it). helm + kubectl access are Go
+# libraries inside dcctl; `ko`/local-registry are `--build`-only and unused here.
+
+name: loadtest-gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Published image tag to bootstrap (must already exist in ghcr.io/devicechain-io)'
+        required: true
+        default: 'v0.8.5'
+      skip_preflight:
+        description: 'Skip dcctl preflight doctor checks (runner limits differ from a dev box)'
+        type: boolean
+        default: true
+
+# Read-only: the gate bootstraps a throwaway kind cluster on the runner and
+# pulls PUBLIC ghcr images -- it neither pushes images nor writes to the repo.
+permissions:
+  contents: read
+
+concurrency:
+  group: loadtest-gate-${{ github.ref }}
+  # This is a MEASUREMENT run, not PR CI: a second dispatch should queue behind the
+  # first, not cancel a mid-flight ~15 min bring-up and throw its numbers away.
+  cancel-in-progress: false
+
+jobs:
+  bringup:
+    runs-on: ubuntu-latest
+    # Spike extrapolation was ~15-20 min end to end; 30 gives generous headroom
+    # so a genuine hang trips the timeout rather than running the runner to its cap.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Build dcctl from the checked-out ref. On this manual path dcctl carries the
+      # HEAD chart while pulling a published `version`'s images; the two are close
+      # (the spike proved v0.8.5 images + a HEAD-ish dcctl come up clean). The
+      # eventual tag-triggered gate eliminates even that skew: dcctl and the images
+      # are built from the SAME commit.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # kind: install ONLY the binary, pinned. dcctl runs `kind create cluster`
+      # itself from its embedded topology (ingress-ready node + host ports 80/443/
+      # 1883), so this job must never `kind create` -- that would fight dcctl for
+      # the cluster name. Bump deliberately; a newer kind means a newer default
+      # node image (k8s version), which the chart must still deploy on.
+      - name: Install kind
+        run: |
+          curl -fsSL -o kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          sudo install -m 0755 kind /usr/local/bin/kind
+          rm -f kind
+          kind version
+
+      # OpenTofu: dcctl's "Apply infrastructure" step shells out to `tofu`
+      # (preferred over terraform) for the postgres/timescale modules. tofu_wrapper
+      # off so `exec.LookPath("tofu")` finds the real binary, not the action's shim.
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: 1.9.1
+          tofu_wrapper: false
+
+      - name: Build dcctl
+        working-directory: backend/cli
+        run: go build -o "$RUNNER_TEMP/dcctl" .
+
+      # The one number the spike could not measure: cold `--compact` bring-up
+      # wall-clock on a real 2-core hosted runner. dcctl's pipeline ends in a
+      # "Wait for readiness" step, so a zero exit here already means green; the
+      # independent oracle below re-checks that from kubectl rather than trusting it.
+      - name: Bootstrap --compact (timed)
+        id: bootstrap
+        env:
+          VERSION: ${{ inputs.version }}
+          SKIP_PREFLIGHT: ${{ inputs.skip_preflight }}
+        run: |
+          set -o pipefail
+          preflight=""
+          if [ "$SKIP_PREFLIGHT" = "true" ]; then preflight="--skip-preflight"; fi
+
+          # The default step shell runs with `-e`, so capture dcctl's exit via `|| rc=$?`
+          # rather than a bare `rc=$?` -- otherwise a failed bring-up aborts the script
+          # before `end`/`elapsed_s` are recorded, and the summary loses the very number
+          # this job exists to measure (how long it ran before dying = timeout vs crash).
+          start=$(date +%s)
+          rc=0
+          "$RUNNER_TEMP/dcctl" bootstrap local devicechain \
+            --compact --host localhost -y $preflight --version "$VERSION" || rc=$?
+          end=$(date +%s)
+
+          elapsed=$((end - start))
+          echo "elapsed_s=$elapsed" >> "$GITHUB_OUTPUT"
+          echo "Cold --compact bring-up wall-clock: ${elapsed}s (rc=$rc) on a 2-core ubuntu-latest runner."
+          exit $rc
+
+      # Independent oracle: re-derive green-ness straight from the cluster rather
+      # than trusting the bootstrap's own readiness wait. Also captures the #381
+      # cold-start signal (NATS "insufficient storage" reservation crash) that a
+      # warm cluster masks. Runs on failure too, so a red bring-up still reports
+      # WHY. This is the seed of the L1-L3 oracle a later iteration grows here.
+      - name: Verify green (independent oracle)
+        if: always()
+        env:
+          ELAPSED: ${{ steps.bootstrap.outputs.elapsed_s }}
+          # Via env, never interpolated straight into the script -- a dispatch input
+          # is attacker-shaped text even when only a maintainer can set it.
+          VERSION: ${{ inputs.version }}
+        run: |
+          kubectl get pods -A -o wide || true
+
+          total=$(kubectl get pods -A --no-headers 2>/dev/null | wc -l)
+
+          # A pod is healthy iff Completed, OR Running with READY n/m where n==m.
+          # STATUS alone (the first draft) passed a Running-but-0/1 pod whose
+          # readiness probe is failing -- so this reads READY too, making the oracle
+          # genuinely independent of dcctl's own "Available" wait rather than a
+          # weaker restatement of it. Completed Jobs read 0/1 READY by design and
+          # are exempted first.
+          not_ready=$(kubectl get pods -A --no-headers 2>/dev/null | awk '
+            {
+              status=$4; ready=$3
+              if (status=="Completed") next
+              if (status=="Running") {
+                split(ready, rc, "/")
+                if (rc[1]==rc[2]) next
+              }
+              c++
+            }
+            END { print c+0 }')
+
+          # Restart gate = the REAL #381 detector. The cold-start "insufficient
+          # storage" crash surfaces only in service/NATS LOGS, never as a k8s Event
+          # (there is no EventRecorder in backend/k8s), so grepping events for it is a
+          # check that cannot fail. But any crash-then-recover -- #381 or otherwise --
+          # leaves RESTARTS > 0 even after the pod goes green, so gating restarts
+          # catches the whole class without needing to know the error string. Scoped
+          # to non-kube-system: the instance + infra pods (where #381 lives) must cold-
+          # boot with zero restarts, matching the spike's "0 restarts" ground truth,
+          # while a control-plane liveness hiccup under 2-core pressure can't flake the
+          # gate. RESTARTS renders as "2 (5m ago)"; the leading token is the count.
+          restarts=$(kubectl get pods -A --no-headers 2>/dev/null \
+            | awk '$1 != "kube-system" { split($5, a, " "); s += a[1] } END { print s+0 }')
+          restarts_all=$(kubectl get pods -A --no-headers 2>/dev/null \
+            | awk '{ split($5, a, " "); s += a[1] } END { print s+0 }')
+
+          {
+            echo "## ADR-064 L5 iteration 1 -- cold --compact bring-up on ubuntu-latest"
+            echo ""
+            echo "| metric | value |"
+            echo "| --- | --- |"
+            echo "| version bootstrapped | \`${VERSION}\` |"
+            echo "| wall-clock to green | ${ELAPSED:-unknown}s |"
+            echo "| pods total (-A) | ${total} |"
+            echo "| pods not ready | ${not_ready} |"
+            echo "| restarts (non-kube-system) | ${restarts} |"
+            echo "| restarts (all namespaces) | ${restarts_all} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          fail=0
+          # Anti-vacuous-pass floor (NOT a health threshold): if kubectl is absent
+          # or aimed at an empty/wrong context, every count below reads 0 and the
+          # gate would go green having verified NOTHING. A healthy `-A` compact
+          # cluster is ~25 pods (kube-system ~10 + the instance); 15 sits safely
+          # above a kube-system-only read and below the real stack, so "0 or only
+          # kube-system" trips here instead of passing silently. If a legitimate
+          # compact stack ever drops below this, that is itself worth a look --
+          # raise the floor deliberately, don't lower it to paper over a drop.
+          if [ "${total:-0}" -lt 15 ]; then
+            echo "::error::Only ${total} pods visible cluster-wide -- a green compact stack is ~25. kubectl is missing, or aimed at an empty/wrong context, or the instance never installed. Refusing to report green off an empty read."
+            fail=1
+          fi
+          if [ "${not_ready:-1}" -ne 0 ]; then
+            echo "::error::${not_ready} pod(s) not ready (not Completed, and not Running with all containers ready) after bring-up."
+            fail=1
+          fi
+          if [ "${restarts:-1}" -ne 0 ]; then
+            echo "::error::${restarts} restart(s) among non-kube-system pods -- a clean cold --compact boot has zero (spike ground truth). A crash-then-recover (e.g. the #381 'insufficient storage' class) leaves restarts even after the pod goes green; see the diagnostics step for which pod and why."
+            fail=1
+          fi
+          exit $fail
+
+      # Diagnostics only when something went wrong -- keeps green runs quiet while
+      # giving a red run enough to see the cause without a re-run.
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          echo "=== not-ready pods ==="
+          kubectl get pods -A --no-headers 2>/dev/null \
+            | awk '
+                { status=$4; ready=$3 }
+                status=="Completed" { next }
+                status=="Running" { split(ready, rc, "/"); if (rc[1]==rc[2]) next }
+                { print $1, $2 }' \
+            | while read -r ns pod; do
+                echo "--- describe $ns/$pod ---"
+                kubectl describe pod -n "$ns" "$pod" 2>/dev/null | tail -40
+                echo "--- logs $ns/$pod (previous, then current) ---"
+                kubectl logs -n "$ns" "$pod" --previous --tail=60 2>/dev/null || true
+                kubectl logs -n "$ns" "$pod" --tail=60 2>/dev/null || true
+              done
+
+          # A pod that crashed on cold start then RECOVERED is Running/ready now, so it
+          # is absent above -- but its restart count tripped the gate. Surface those
+          # separately and grep their pre-restart logs for the #381 string, so a red
+          # run says whether the crash-then-recover was the "insufficient storage" class.
+          echo "=== pods that restarted (non-kube-system) ==="
+          kubectl get pods -A --no-headers 2>/dev/null \
+            | awk '$1 != "kube-system" { split($5, a, " "); if (a[1]+0 > 0) print $1, $2 }' \
+            | while read -r ns pod; do
+                echo "--- $ns/$pod restarted; pre-restart log tail ---"
+                prev="$(kubectl logs -n "$ns" "$pod" --previous --tail=80 2>/dev/null || true)"
+                echo "$prev" | tail -40
+                if echo "$prev" | grep -qi 'insufficient storage'; then
+                  echo "::warning::$ns/$pod hit 'insufficient storage' before restarting -- the #381 cold-start reservation class recurred on compact."
+                fi
+              done
+
+          echo "=== recent Warning events ==="
+          kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp 2>/dev/null | tail -50 || true
