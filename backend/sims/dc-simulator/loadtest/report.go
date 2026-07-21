@@ -28,9 +28,14 @@ type DriveStats struct {
 	TargetRatePS   float64 `json:"targetRatePerSec"`
 	AchievedRatePS float64 `json:"achievedRatePerSec"`
 	Accepted       int64   `json:"accepted"`
-	Failed         int64   `json:"failed"`
-	Ticks          int64   `json:"ticks"`
-	HoldSeconds    float64 `json:"holdSeconds"`
+	// Shed counts emits the ingress rejected at the per-tenant ceiling (429). It is
+	// distinct from Failed (real errors / indeterminate outcomes): a shed is a clean
+	// non-accept. 0 for a run with no contention floor; the L3 contention profile is
+	// where it is non-zero and gated.
+	Shed        int64   `json:"shed"`
+	Failed      int64   `json:"failed"`
+	Ticks       int64   `json:"ticks"`
+	HoldSeconds float64 `json:"holdSeconds"`
 }
 
 // Report is the machine- and human-readable result of one load-test run: the
@@ -78,9 +83,9 @@ func (r *Report) Human() string {
 		verdict = "PASS"
 	}
 	fmt.Fprintf(&b, "load-test %s — %s (seed %d, tenant %s)\n", verdict, r.Manifest, r.Seed, r.Tenant)
-	fmt.Fprintf(&b, "  drive: %d devices, target %.1f ev/s, achieved %.1f ev/s over %.0fs — accepted %d, failed %d, ticks %d\n",
+	fmt.Fprintf(&b, "  drive: %d devices, target %.1f ev/s, achieved %.1f ev/s over %.0fs — accepted %d, shed %d, failed %d, ticks %d\n",
 		r.Drive.Devices, r.Drive.TargetRatePS, r.Drive.AchievedRatePS, r.Drive.HoldSeconds,
-		r.Drive.Accepted, r.Drive.Failed, r.Drive.Ticks)
+		r.Drive.Accepted, r.Drive.Shed, r.Drive.Failed, r.Drive.Ticks)
 	fmt.Fprintf(&b, "  oracle: persisted %d, reached-target %v in %.0fs\n", r.PersistedSeen, r.Reached, r.QuiesceSecs)
 	for _, inv := range r.Invariants {
 		mark := "FAIL"

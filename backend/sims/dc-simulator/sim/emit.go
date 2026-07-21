@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,14 @@ import (
 
 // maxIngressResponseBytes bounds how much of an unexpected error body is read.
 const maxIngressResponseBytes = 4096
+
+// ErrShed marks an emit the ingress REJECTED at the per-tenant rate limit (HTTP 429,
+// ADR-023/063). It is a definitive, clean non-accept — the ingress returns 429 before
+// reading the body, so the event provably never entered the pipeline — which is what
+// lets a governed run distinguish an EXPECTED shed from a real failure and reconcile
+// persisted == emitted with the shed events correctly absent. EmitMeasurements wraps
+// it so callers test with errors.Is(err, ErrShed); EmitAll routes it to Stats.Shed.
+var ErrShed = errors.New("emit shed at ingress rate limit (HTTP 429)")
 
 // MetricsFunc returns the metrics device d (the i-th in rt.Devices) emits on
 // the current tick. It is pure per-device value generation — EmitAll owns the
@@ -56,7 +65,16 @@ func EmitAll(ctx context.Context, rt *Runtime, workers int, metrics MetricsFunc)
 			defer wg.Done()
 			for i := range idx {
 				err := EmitMeasurements(ctx, rt, devices[i], metrics(i, devices[i]))
-				if err != nil {
+				switch {
+				case err == nil:
+					rt.Stats.Emitted.Add(1)
+				case errors.Is(err, ErrShed):
+					// A governed shed (429) is a clean non-accept, NOT a failure: it is
+					// counted separately so a run under a contention floor stays
+					// reconcilable (persisted == emitted, shed events absent). It does not
+					// set firstErr — EmitAll only "fails" on real errors.
+					rt.Stats.Shed.Add(1)
+				default:
 					rt.Stats.Failed.Add(1)
 					mu.Lock()
 					failed++
@@ -64,9 +82,7 @@ func EmitAll(ctx context.Context, rt *Runtime, workers int, metrics MetricsFunc)
 						firstErr = err
 					}
 					mu.Unlock()
-					continue
 				}
-				rt.Stats.Emitted.Add(1)
 			}
 		}()
 	}
@@ -158,6 +174,12 @@ func EmitMeasurements(ctx context.Context, rt *Runtime, d DeviceInstance, metric
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// A governed shed. Drain a bounded prefix so the connection can be reused, but
+		// wrap ErrShed so EmitAll routes it to Stats.Shed rather than Stats.Failed.
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxIngressResponseBytes))
+		return fmt.Errorf("ingress %s returned 429 (%s): %w", url, strings.TrimSpace(string(raw)), ErrShed)
+	}
 	if resp.StatusCode != http.StatusAccepted {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxIngressResponseBytes))
 		return fmt.Errorf("ingress %s returned %d: %s", url, resp.StatusCode, strings.TrimSpace(string(raw)))

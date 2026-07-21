@@ -25,8 +25,20 @@ const httpTimeout = 15 * time.Second
 // exactly that much. These counters are what let a run state the load it
 // actually applied instead of the one it asked for.
 type Stats struct {
-	// Emitted/Failed count individual device emits (HTTP 202 vs anything else).
+	// Emitted counts accepted emits (HTTP 202). Shed counts emits rejected at the
+	// per-tenant ingest ceiling (HTTP 429, ADR-023/063) — a DEFINITIVE clean
+	// non-accept: the ingress returns it before reading the body, so the event
+	// provably never entered the pipeline and is not persisted. Failed counts every
+	// OTHER non-202 (a 400, a 503, a transport error) — outcomes that are
+	// INDETERMINATE (a timeout may have persisted server-side) or are real errors.
+	//
+	// Separating shed from failed is what makes a governed run reconcilable (ADR-064
+	// L3): under a contention floor a best-effort tenant is EXPECTED to shed, and a
+	// shed is not a failure — persisted == emitted still holds, with the shed events
+	// correctly absent. A run that must be clean asserts Failed == 0; it may still
+	// carry sheds.
 	Emitted atomic.Int64
+	Shed    atomic.Int64
 	Failed  atomic.Int64
 	// Overruns counts ticks that took LONGER than the interval they were
 	// scheduled on. Two things it is NOT, both measured:
@@ -77,6 +89,7 @@ type Stats struct {
 // nothing wants the latter.
 func (s *Stats) Reset(now time.Time) {
 	s.Emitted.Store(0)
+	s.Shed.Store(0)
 	s.Failed.Store(0)
 	s.Overruns.Store(0)
 	s.Ticks.Store(0)
@@ -106,6 +119,7 @@ func (s *Stats) Freeze(now time.Time) {
 // achieved rate over the run so far, alongside the raw totals.
 type Snapshot struct {
 	Emitted  int64   `json:"emitted"`
+	Shed     int64   `json:"shed"`
 	Failed   int64   `json:"failed"`
 	Overruns int64   `json:"overruns"`
 	Ticks    int64   `json:"ticks"`
@@ -119,6 +133,7 @@ type Snapshot struct {
 func (s *Stats) Snapshot(now time.Time) Snapshot {
 	snap := Snapshot{
 		Emitted:  s.Emitted.Load(),
+		Shed:     s.Shed.Load(),
 		Failed:   s.Failed.Load(),
 		Overruns: s.Overruns.Load(),
 		Ticks:    s.Ticks.Load(),

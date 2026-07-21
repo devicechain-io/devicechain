@@ -259,8 +259,9 @@ func TestStopWaitsForTheTickLoopToExit(t *testing.T) {
 // So triage cannot start at `overruns`. The test exists to keep that true in
 // the docs: if someone later "fixes" overruns to fire here, or drops the
 // failure counter, this fails and points at the reasoning.
-func TestAFastRejectingIngressShowsUpInFailedNotOverruns(t *testing.T) {
-	// Reject everything, immediately — the fastest possible tick.
+func TestAFastRejectingIngressShowsUpInShedNotOverruns(t *testing.T) {
+	// Reject everything with a 429 (a per-tenant rate-limit shed), immediately — the
+	// fastest possible tick.
 	rt := fakeIngress(t, 20, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	})
@@ -279,10 +280,17 @@ func TestAFastRejectingIngressShowsUpInFailedNotOverruns(t *testing.T) {
 	}
 
 	snap := rt.Stats.Snapshot(time.Now())
-	if snap.Failed == 0 {
-		t.Error("a fully-rejecting ingress recorded no failures: the ONLY counter " +
-			"that can see fast rejection is blind to it too, which would leave a " +
-			"run under-applying load with every signal reading healthy")
+	// A 429 is a governed shed, not a failure — but it must still be VISIBLE (the point
+	// of this test: fast rejection must show up in a counter, unlike Overruns, which is
+	// blind to it). It shows up in Shed.
+	if snap.Shed == 0 {
+		t.Error("a fully-rejecting (429) ingress recorded no sheds: fast rejection is " +
+			"invisible, which would leave a run under-applying load with every signal " +
+			"reading healthy")
+	}
+	if snap.Failed != 0 {
+		t.Errorf("failed = %d against a 429-only ingress: a governed shed is a clean "+
+			"non-accept, not a failure", snap.Failed)
 	}
 	if snap.Emitted != 0 {
 		t.Errorf("emitted = %d against an ingress that accepted nothing", snap.Emitted)

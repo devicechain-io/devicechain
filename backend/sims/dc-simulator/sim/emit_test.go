@@ -186,6 +186,32 @@ func TestEmitAllKeepsGoingPastAFailure(t *testing.T) {
 	}
 }
 
+// TestEmitAllRoutesShedApartFromFailure pins that a 429 is a governed SHED — routed to
+// Stats.Shed, NOT Stats.Failed — and, crucially, does NOT make the tick fail: a run
+// under a contention floor is EXPECTED to shed, so EmitAll returns nil. A 503 stays a
+// failure (covered above); this is the other side of the split.
+func TestEmitAllRoutesShedApartFromFailure(t *testing.T) {
+	rt := fakeIngress(t, 20, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+
+	err := EmitAll(context.Background(), rt, 4, constantMetrics)
+	if err != nil {
+		t.Errorf("a tick that only SHED (429) reported failure: %v — a governed shed is not a run failure", err)
+	}
+
+	emitted, shed, failed := rt.Stats.Emitted.Load(), rt.Stats.Shed.Load(), rt.Stats.Failed.Load()
+	if shed != 20 {
+		t.Errorf("shed = %d, want 20 (every 429 counted as a shed)", shed)
+	}
+	if failed != 0 {
+		t.Errorf("failed = %d, want 0 (a 429 is a clean shed, not a failure)", failed)
+	}
+	if emitted != 0 {
+		t.Errorf("emitted = %d, want 0 (nothing was accepted)", emitted)
+	}
+}
+
 // Per-device metric values must reach the device they were computed for.
 //
 // buildingpulse gives each device a distinct phase offset by index; a worker
