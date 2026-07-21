@@ -20,18 +20,24 @@
 # tag trigger with `needs: [images]` on release.yml's published images once the
 # full L1-L3 drive is proven green on a real runner.
 #
-# Tools the PULL path needs beyond the runner defaults (docker + kubectl are
-# preinstalled): `kind` (dcctl creates the cluster from its embedded topology)
-# and `tofu` (dcctl's infra step shells out to it). helm + kubectl access are Go
-# libraries inside dcctl; `ko`/local-registry are `--build`-only and unused here.
+# Tools needed beyond the runner defaults (docker + kubectl are preinstalled):
+# `kind` (dcctl creates the cluster from its embedded topology) and `tofu` (dcctl's
+# infra step shells out to it), always; plus `ko` on the --build path (dcctl builds
+# each service image into a local registry). helm + kubectl access are Go libraries
+# inside dcctl. The default here is --build (skew-free HEAD test); flip the `build`
+# input off for the pull path, which the eventual tag trigger uses.
 
 name: loadtest-gate
 
 on:
   workflow_dispatch:
     inputs:
+      build:
+        description: 'Build HEAD images from source (--build) -- skew-free test of the checked-out code. Uncheck to PULL `version` instead (the tag-path mode, where checkout==images==tag).'
+        type: boolean
+        default: true
       version:
-        description: 'Published image tag to bootstrap (must already exist in ghcr.io/devicechain-io)'
+        description: 'Published image tag to bootstrap when build is OFF (must exist in ghcr.io/devicechain-io AND its admin schema must match the checked-out dcctl)'
         required: true
         default: 'v0.8.5'
       skip_preflight:
@@ -48,8 +54,9 @@ on:
         description: 'L1 load: how long to hold at load before reconciling'
         default: '20s'
 
-# Read-only: the gate bootstraps a throwaway kind cluster on the runner and
-# pulls PUBLIC ghcr images -- it neither pushes images nor writes to the repo.
+# Read-only: the gate bootstraps a throwaway kind cluster on the runner and either
+# builds HEAD images locally or pulls PUBLIC ghcr images -- it never pushes an image
+# or writes to the repo.
 permissions:
   contents: read
 
@@ -62,17 +69,18 @@ concurrency:
 jobs:
   bringup:
     runs-on: ubuntu-latest
-    # Spike extrapolation was ~15-20 min end to end; 30 gives generous headroom
-    # so a genuine hang trips the timeout rather than running the runner to its cap.
-    timeout-minutes: 30
+    # Pull path is ~4 min end to end (iter 1 measured 120s bring-up). The --build
+    # path additionally ko-builds ~14 service images + the frontend on 2 cores, so
+    # allow more headroom; a genuine hang still trips the timeout well before the cap.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
-      # Build dcctl from the checked-out ref. On this manual path dcctl carries the
-      # HEAD chart while pulling a published `version`'s images; the two are close
-      # (the spike proved v0.8.5 images + a HEAD-ish dcctl come up clean). The
-      # eventual tag-triggered gate eliminates even that skew: dcctl and the images
-      # are built from the SAME commit.
+      # Build dcctl (and later the driver) from the checked-out ref. With the default
+      # --build image source, the server images are ALSO built from this same ref, so
+      # dcctl, server, and driver are one consistent commit -- no admin-schema skew
+      # (a HEAD dcctl sending shedPriority to a pre-#480 published server is the skew
+      # this avoids). On the pull path, consistency instead comes from checkout==tag.
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.work
@@ -99,6 +107,21 @@ jobs:
           tofu_version: 1.9.1
           tofu_wrapper: false
 
+      # ko: only the --build path needs it (dcctl shells out to ko to build each
+      # service image into the local registry). Pinned to match release.yml so a
+      # HEAD build here uses the same builder a real release would. Skipped on the
+      # pull path. On the pull path the images are prebuilt (ghcr / the release
+      # `images` job) so no builder is needed.
+      - name: Install ko (build path only)
+        # Install ko UNLESS build was explicitly turned off on a dispatch. On a push
+        # event there are no inputs, so the build path (the default) applies and ko is
+        # needed. (`inputs.build` is empty on push -> a bare `if: inputs.build` would
+        # wrongly skip it; hence the explicit event-name form.)
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build }}
+        uses: ko-build/setup-ko@v0.10
+        with:
+          version: v0.19.1
+
       - name: Build dcctl
         working-directory: backend/cli
         run: go build -o "$RUNNER_TEMP/dcctl" .
@@ -110,12 +133,31 @@ jobs:
       - name: Bootstrap --compact (timed)
         id: bootstrap
         env:
-          VERSION: ${{ inputs.version }}
-          SKIP_PREFLIGHT: ${{ inputs.skip_preflight }}
+          # Raw inputs (empty on a push event); shell-defaulted below so the same file
+          # works for both push (dev-branch auto-run) and workflow_dispatch.
+          BUILD_IN: ${{ inputs.build }}
+          VERSION_IN: ${{ inputs.version }}
+          SKIP_PREFLIGHT_IN: ${{ inputs.skip_preflight }}
         run: |
           set -o pipefail
+          BUILD="${BUILD_IN:-true}"
+          VERSION="${VERSION_IN:-v0.8.5}"
+          SKIP_PREFLIGHT="${SKIP_PREFLIGHT_IN:-true}"
           preflight=""
           if [ "$SKIP_PREFLIGHT" = "true" ]; then preflight="--skip-preflight"; fi
+
+          # Image source: --build (HEAD images from source, so dcctl + server + driver
+          # are all the checked-out commit -- no admin-schema skew) vs --version (pull a
+          # published tag; only skew-free when the checked-out dcctl's schema matches that
+          # release, i.e. the tag-triggered path). A HEAD dcctl sending shedPriority to a
+          # pre-#480 v0.8.5 server is exactly the skew --build avoids.
+          if [ "$BUILD" = "true" ]; then
+            imgargs="--build"
+            echo "image source: --build (HEAD from source)"
+          else
+            imgargs="--version $VERSION"
+            echo "image source: --version $VERSION (pull)"
+          fi
 
           # The default step shell runs with `-e`, so capture dcctl's exit via `|| rc=$?`
           # rather than a bare `rc=$?` -- otherwise a failed bring-up aborts the script
@@ -123,8 +165,9 @@ jobs:
           # this job exists to measure (how long it ran before dying = timeout vs crash).
           start=$(date +%s)
           rc=0
+          # shellcheck disable=SC2086
           "$RUNNER_TEMP/dcctl" bootstrap local devicechain \
-            --compact --host localhost -y $preflight --version "$VERSION" || rc=$?
+            --compact --host localhost -y $preflight $imgargs || rc=$?
           end=$(date +%s)
 
           elapsed=$((end - start))
@@ -143,8 +186,11 @@ jobs:
           ELAPSED: ${{ steps.bootstrap.outputs.elapsed_s }}
           # Via env, never interpolated straight into the script -- a dispatch input
           # is attacker-shaped text even when only a maintainer can set it.
-          VERSION: ${{ inputs.version }}
+          VERSION_IN: ${{ inputs.version }}
+          BUILD_IN: ${{ inputs.build }}
         run: |
+          BUILD="${BUILD_IN:-true}"
+          VERSION="${VERSION_IN:-v0.8.5}"
           kubectl get pods -A -o wide || true
 
           total=$(kubectl get pods -A --no-headers 2>/dev/null | wc -l)
@@ -187,7 +233,11 @@ jobs:
             echo ""
             echo "| metric | value |"
             echo "| --- | --- |"
-            echo "| version bootstrapped | \`${VERSION}\` |"
+            if [ "$BUILD" = "true" ]; then
+              echo "| image source | HEAD (\`--build\`) |"
+            else
+              echo "| image source | \`${VERSION}\` (pull) |"
+            fi
             echo "| wall-clock to green | ${ELAPSED:-unknown}s |"
             echo "| pods total (-A) | ${total} |"
             echo "| pods not ready | ${not_ready} |"
@@ -279,19 +329,20 @@ jobs:
 
       - name: L1 -- drive load + reconcile (the gate)
         env:
-          DEVICES: ${{ inputs.devices }}
-          EMIT_INTERVAL: ${{ inputs.emit_interval }}
-          HOLD: ${{ inputs.hold }}
+          DEVICES_IN: ${{ inputs.devices }}
+          EMIT_INTERVAL_IN: ${{ inputs.emit_interval }}
+          HOLD_IN: ${{ inputs.hold }}
         run: |
           # dc-loadtest drives the seeded scenario over the real ingress, then
           # reconciles persisted==accepted (plus clean-drive and load-floor). It exits
           # non-zero on any failed invariant -- that exit code is the gate. Reading the
           # handshake by explicit path (env HOME isn't expanded inside a YAML `env:`).
+          # Inputs are empty on a push event -> shell-default to the dispatch defaults.
           "$RUNNER_TEMP/bin/dc-loadtest" \
             --handshake "$HOME/.devicechain/sims/l1probe.json" \
-            --devices "$DEVICES" \
-            --emit-interval "$EMIT_INTERVAL" \
-            --hold "$HOLD" \
+            --devices "${DEVICES_IN:-80}" \
+            --emit-interval "${EMIT_INTERVAL_IN:-500ms}" \
+            --hold "${HOLD_IN:-20s}" \
             --report "$RUNNER_TEMP/l1-report.json"
 
       - name: L1 report -> summary
@@ -300,7 +351,7 @@ jobs:
           report="$RUNNER_TEMP/l1-report.json"
           {
             echo ""
-            echo "### ADR-064 L1 -- aggregate reconciliation (${DEVICES:-?} devices @ ${EMIT_INTERVAL:-?}, hold ${HOLD:-?})"
+            echo "### ADR-064 L1 -- aggregate reconciliation (${DEVICES_IN:-80} devices @ ${EMIT_INTERVAL_IN:-500ms}, hold ${HOLD_IN:-20s})"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ -s "$report" ]; then
             {
@@ -315,9 +366,9 @@ jobs:
             echo "_no L1 report produced (the drive step failed before writing one -- see its log)_" >> "$GITHUB_STEP_SUMMARY"
           fi
         env:
-          DEVICES: ${{ inputs.devices }}
-          EMIT_INTERVAL: ${{ inputs.emit_interval }}
-          HOLD: ${{ inputs.hold }}
+          DEVICES_IN: ${{ inputs.devices }}
+          EMIT_INTERVAL_IN: ${{ inputs.emit_interval }}
+          HOLD_IN: ${{ inputs.hold }}
 
       - name: Upload L1 report
         if: always()
