@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command sparkplug-ingest is the DeviceChain Sparkplug B Host Application
-// (ADR-069): a stateful adapter that connects to DeviceChain's own MQTT gateway,
-// announces its Sparkplug 3.0 STATE, subscribes to the configured Sparkplug
-// groups, and decodes edge-node / device telemetry. At SP1 it terminates and logs
-// that traffic; identity mapping, presence emission, and leader-elected failover
-// arrive in SP3/SP4.
+// (ADR-069): a stateful adapter that connects OUT to one or more per-tenant
+// customer MQTT brokers, announces its Sparkplug 3.0 STATE on each, subscribes to
+// the configured Sparkplug groups, and decodes edge-node / device telemetry.
+// Tenancy is connection-scoped (M7): every message is attributed to the tenant
+// configured for the broker it arrived on, never parsed from the untrusted
+// Sparkplug topic. At SP3a it terminates and logs that traffic, tenant-tagged;
+// identity mapping, presence emission, and leader-elected failover arrive in
+// SP3b/SP4.
 package main
 
 import (
@@ -14,28 +17,24 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
-	coreconfig "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-sparkplug-ingest/config"
 	"github.com/devicechain-io/dc-sparkplug-ingest/host"
 )
 
-const (
-	httpPort = 8080
-	// mqttGatewayPort is the fixed MQTT listener on the NATS broker (the 1883
-	// gateway alongside the 4222 client listener); it is not a config field.
-	mqttGatewayPort = 1883
-)
+const httpPort = 8080
 
 var (
 	Microservice  *core.Microservice
 	Configuration *config.SparkplugConfiguration
-	HostClient    *host.Client
+	Manager       *host.Manager
 	httpServer    *http.Server
 )
 
@@ -72,33 +71,37 @@ func parseConfiguration() error {
 	return nil
 }
 
-// afterMicroserviceInitialized parses config, builds the Host Application client
-// against the MQTT gateway, and registers the HTTP surface (probes + metrics).
-// It does NOT start an auth gate: this service validates no bearer tokens — it is
-// a transport that connects to the broker with the service credential — so
-// readiness is gated on the MQTT connection instead, opened from the connect
-// handler.
+// afterMicroserviceInitialized parses config, builds one tenant-bound Host
+// Application client per configured source, and registers the HTTP surface
+// (probes + metrics). It starts no auth gate: this service validates no bearer
+// tokens — it is a transport that connects out to customer brokers — so readiness
+// is opened by the Manager once it is supervising (afterMicroserviceStarted).
 func afterMicroserviceInitialized(_ context.Context) error {
 	if err := parseConfiguration(); err != nil {
 		return err
 	}
 
-	messages := Microservice.NewCounterVec("messages_total",
-		"Sparkplug messages received, by message type.", []string{"type"})
-	decodeErrors := Microservice.NewCounter("decode_errors_total",
-		"Sparkplug messages that failed topic parse or payload decode.", nil)
-	rebirthRequests := Microservice.NewCounter("rebirth_requests_total",
-		"Sparkplug node rebirth commands emitted by the session machine.", nil)
+	// Metrics are shared across every source. They are intentionally NOT labeled by
+	// tenant: a per-tenant label on a counter driven by broker traffic is a
+	// cardinality risk (the governance lesson) and the aggregate is enough here —
+	// per-source attribution lives in the (cardinality-safe) logs.
+	metrics := host.Metrics{
+		Messages: Microservice.NewCounterVec("messages_total",
+			"Sparkplug messages received, by message type.", []string{"type"}),
+		DecodeErrors: Microservice.NewCounter("decode_errors_total",
+			"Sparkplug messages that failed topic parse or payload decode.", nil),
+		RebirthRequests: Microservice.NewCounter("rebirth_requests_total",
+			"Sparkplug node rebirth commands emitted by the session machine.", nil),
+		ConnectFailures: Microservice.NewCounter("connect_failures_total",
+			"Failed broker connect attempts across all sources (readiness is not broker-gated; this is how a broken source config surfaces).", nil),
+	}
 
-	broker, err := resolveBroker(Microservice.InstanceConfiguration.Infrastructure.Nats)
+	clients, err := resolveSources(Configuration, Microservice.InstanceId, metrics)
 	if err != nil {
 		return err
 	}
-	// Readiness opens once the host connects to the gateway. No JWT validator is
-	// involved, so the gate is opened with a nil validator.
-	onReady := func() { Microservice.MarkReady(nil) }
-	HostClient = host.NewClient(*Configuration, broker, time.Now, onReady,
-		host.Metrics{Messages: messages, DecodeErrors: decodeErrors, RebirthRequests: rebirthRequests})
+	Manager = host.NewManager(clients)
+	log.Info().Int("sources", len(clients)).Msg("Built Sparkplug source connections.")
 
 	http.Handle("/metrics", promhttp.Handler())
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -112,37 +115,71 @@ func afterMicroserviceInitialized(_ context.Context) error {
 	return nil
 }
 
-// resolveBroker derives the MQTT gateway connection from the instance's NATS
-// configuration (ADR-025): the same host as the 4222 client listener, on the
-// 1883 gateway port, with TLS and the service credential when configured. A
-// Sparkplug Host connects as the callout-exempt dc_service login. A
-// configured-but-unusable CA fails closed (returns an error) — repo convention is
-// to reject bad config at startup rather than dial a TLS listener with no
-// verification material and retry-loop silently.
-func resolveBroker(natscfg coreconfig.NatsConfiguration) (host.Broker, error) {
-	scheme := "tcp"
-	var tlsCfg *tls.Config
-	if natscfg.Tls.Enabled {
-		scheme = "ssl"
-		cfg, err := natscfg.TLSConfig(natscfg.Hostname)
+// resolveSources turns each configured source into a resolved Host Application
+// client. Failing here (bad scheme, an intended-but-empty password env) fails the
+// service closed at startup rather than dialing a mis-authenticated broker and
+// retry-looping silently — repo convention (ADR-022).
+func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, metrics host.Metrics) ([]*host.Client, error) {
+	clients := make([]*host.Client, 0, len(cfg.Sources))
+	for i := range cfg.Sources {
+		src := cfg.Sources[i]
+		broker, err := resolveBroker(src, instanceId, i)
 		if err != nil {
-			return host.Broker{}, fmt.Errorf("build MQTT gateway TLS config from instance NATS CA: %w", err)
+			return nil, err
 		}
-		tlsCfg = cfg
+		clients = append(clients, host.NewClient(src, broker, time.Now, metrics))
 	}
+	return clients, nil
+}
+
+// resolveBroker builds one source's MQTT connection: TLS is selected by the URL
+// scheme (ssl:// ⇒ TLS with the system root CAs; custom-CA / mutual-TLS to a
+// private broker is a post-GA follow-up), the password is read once from the named
+// environment variable (a Kubernetes Secret projected by the chart, never
+// cleartext in config), and the client id is made unique per source so two sources
+// on one broker cannot race for the same id.
+func resolveBroker(src config.SparkplugSource, instanceId string, index int) (host.Broker, error) {
+	// The URL was already parsed + scheme-validated by config.Validate; parse again
+	// only to derive the transport. Keep the switch to the schemes Validate accepts
+	// (tcp / ssl / tls) so the two cannot drift.
+	u, err := url.Parse(src.Broker.URL)
+	if err != nil {
+		return host.Broker{}, fmt.Errorf("sources[%d]: broker.url %q is not a valid URL: %w", index, src.Broker.URL, err)
+	}
+	var tlsCfg *tls.Config
+	switch u.Scheme {
+	case "ssl", "tls":
+		tlsCfg = &tls.Config{MinVersion: tls.VersionTLS12}
+	case "tcp":
+		// plaintext transport; no TLS config
+	default:
+		return host.Broker{}, fmt.Errorf("sources[%d]: unsupported broker URL scheme %q (want tcp:// or ssl://)", index, u.Scheme)
+	}
+
+	var password string
+	if src.Broker.PasswordEnv != "" {
+		password = os.Getenv(src.Broker.PasswordEnv)
+		if password == "" {
+			return host.Broker{}, fmt.Errorf("sources[%d]: passwordEnv %q is set but that environment variable is empty (the broker Secret was not projected)", index, src.Broker.PasswordEnv)
+		}
+	}
+
 	return host.Broker{
-		URL:      fmt.Sprintf("%s://%s:%d", scheme, natscfg.Hostname, mqttGatewayPort),
-		ClientID: fmt.Sprintf("dc-sparkplug-host-%s", Microservice.InstanceId),
-		Username: natscfg.Auth.User,
-		Password: natscfg.Auth.Password,
+		URL:      src.Broker.URL,
+		ClientID: fmt.Sprintf("dc-sparkplug-host-%s-%d", instanceId, index),
+		Username: src.Broker.Username,
+		Password: password,
 		TLS:      tlsCfg,
 	}, nil
 }
 
-// afterMicroserviceStarted connects the Host Application and starts the HTTP
-// server.
+// afterMicroserviceStarted starts the Manager (which connects every source in the
+// background) and opens readiness, then starts the HTTP server. Readiness is not
+// gated on any broker being reachable — a customer broker being down degrades that
+// one source, never the pod.
 func afterMicroserviceStarted(_ context.Context) error {
-	HostClient.Connect()
+	Manager.Start()
+	Microservice.MarkReady(nil)
 
 	httpServer = &http.Server{Addr: fmt.Sprintf(":%d", httpPort)}
 	go func() {
@@ -154,12 +191,12 @@ func afterMicroserviceStarted(_ context.Context) error {
 	return nil
 }
 
-// beforeMicroserviceStopped announces OFFLINE, disconnects the Host, and shuts
-// the HTTP server down.
+// beforeMicroserviceStopped announces OFFLINE on every source, disconnects them,
+// and shuts the HTTP server down.
 func beforeMicroserviceStopped(ctx context.Context) error {
 	Microservice.Readiness.BeginDrain()
-	if HostClient != nil {
-		HostClient.Stop()
+	if Manager != nil {
+		Manager.Stop()
 	}
 	if httpServer == nil {
 		return nil

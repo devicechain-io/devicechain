@@ -1,13 +1,17 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package host is the SP1 Sparkplug B Host Application runtime (ADR-069): it
-// connects to DeviceChain's own MQTT gateway, announces its Sparkplug 3.0 STATE
-// (with a per-session, timestamp-matched OFFLINE Last-Will), subscribes to the
-// configured Sparkplug groups, and decodes + logs the edge-node/device traffic it
-// receives. It emits nothing downstream yet — identity mapping and
-// presence/measurement emission arrive in SP3/SP4 — so it is a pure, side-effect-
-// light terminator that proves the transport and the STATE handshake.
+// Package host is the Sparkplug B Host Application runtime (ADR-069). A Client is
+// one tenant-bound connection: it connects OUT to a customer's MQTT broker,
+// announces its Sparkplug 3.0 STATE (with a per-session, timestamp-matched OFFLINE
+// Last-Will), subscribes to the configured Sparkplug groups, validates each
+// edge-node/device stream through the SP2 session machine, and decodes + logs the
+// traffic it receives. A Manager runs one Client per configured source and
+// attributes every message on a connection to that source's tenant
+// (connection-scoped tenancy, ADR-069 M7 — the tenant is fixed by which broker the
+// message arrived on, never parsed from the untrusted Sparkplug topic). It emits
+// nothing downstream yet — identity mapping and presence/measurement emission
+// arrive in SP3b/SP4.
 package host
 
 import (
@@ -45,12 +49,13 @@ const (
 	rebirthQueueDepth = 256
 )
 
-// Broker is the resolved MQTT connection to DeviceChain's NATS-MQTT gateway.
+// Broker is the resolved MQTT connection for one source: a customer-operated
+// Sparkplug broker the adapter connects OUT to.
 type Broker struct {
-	URL      string // e.g. tcp://dc-nats.dc-system:1883 or ssl://... for TLS
-	ClientID string // unique per Host Application connection (NATS drops a dup id)
-	Username string // the dc_service login (callout-exempt); empty ⇒ anonymous
-	Password string
+	URL      string      // e.g. tcp://broker.plant-a.example:1883 or ssl://... for TLS
+	ClientID string      // unique per Host Application connection (a broker drops a dup id)
+	Username string      // MQTT login; empty ⇒ anonymous
+	Password string      // resolved from SourceBroker.PasswordEnv; empty ⇒ none
 	TLS      *tls.Config // non-nil ⇒ the URL uses the ssl:// scheme
 }
 
@@ -60,11 +65,21 @@ type Metrics struct {
 	Messages        *prometheus.CounterVec // labeled "type" (NBIRTH/NDATA/STATE/…)
 	DecodeErrors    prometheus.Counter
 	RebirthRequests prometheus.Counter // rebirth NCMDs the session machine emitted
+	// ConnectFailures counts failed broker connect attempts across all sources.
+	// Readiness is intentionally NOT gated on broker reachability (a customer broker
+	// outage must not kill the pod), so this counter is the machine-readable signal
+	// that distinguishes a broken config (a bad host or rejected credential makes it
+	// climb) from a healthy but idle deployment (it stays flat, as does Messages).
+	ConnectFailures prometheus.Counter
 }
 
-// Client is the Sparkplug Host Application. Build it with NewClient, then Connect
-// / Stop it from the service lifecycle.
+// Client is a single tenant-bound Sparkplug Host Application connection. Build it
+// with NewClient, then Connect / Stop it (the Manager owns one Client per
+// configured source). Every message this connection receives is attributed to
+// tenant — connection-scoped tenancy (ADR-069 M7): the tenant is fixed here, never
+// derived from the untrusted, non-unique Sparkplug topic.
 type Client struct {
+	tenant  string
 	broker  Broker
 	groups  []string
 	metrics Metrics
@@ -84,11 +99,6 @@ type Client struct {
 	// fake without a broker.
 	newClient func(*mqtt.ClientOptions) mqtt.Client
 
-	// onReady is invoked once, on the first successful connect, to open the
-	// service readiness gate. once guards the single call across reconnects.
-	onReady   func()
-	readyOnce sync.Once
-
 	mu        sync.Mutex
 	mc        mqtt.Client
 	sessionTs int64 // the current session's STATE timestamp (for a graceful OFFLINE)
@@ -96,20 +106,21 @@ type Client struct {
 	wg        sync.WaitGroup
 }
 
-// NewClient builds a Host Application client. now is the clock supplying each
+// NewClient builds a tenant-bound Host Application client from one configured
+// source and its resolved broker connection. now is the clock supplying each
 // session's STATE timestamp (pass time.Now in production); nil defaults to it.
-func NewClient(cfg config.SparkplugConfiguration, broker Broker, now func() time.Time, onReady func(), metrics Metrics) *Client {
+func NewClient(source config.SparkplugSource, broker Broker, now func() time.Time, metrics Metrics) *Client {
 	if now == nil {
 		now = time.Now
 	}
 	c := &Client{
+		tenant:     source.Tenant,
 		broker:     broker,
-		groups:     append([]string(nil), cfg.Groups...),
+		groups:     append([]string(nil), source.Groups...),
 		metrics:    metrics,
-		stateTopic: StateTopic(cfg.HostId),
+		stateTopic: StateTopic(source.HostId),
 		now:        now,
 		newClient:  func(o *mqtt.ClientOptions) mqtt.Client { return mqtt.NewClient(o) },
-		onReady:    onReady,
 		rebirthCh:  make(chan nodeKey, rebirthQueueDepth),
 	}
 	c.sessions = NewSessionTracker(now, defaultRebirthBackoff, c.enqueueRebirth)
@@ -136,9 +147,10 @@ func statePayload(online bool, sessionTs int64) []byte {
 }
 
 // Connect starts the reconnect loop and returns immediately. It does NOT block on
-// the broker being reachable: the loop retries with backoff and readiness opens
-// from the connect handler, so a briefly-absent broker degrades this service
-// rather than failing its startup.
+// the broker being reachable: the loop retries with backoff, so a briefly-absent
+// (or permanently misconfigured) broker degrades this one source rather than
+// failing startup. Service readiness is owned by the Manager, not gated on any
+// broker connecting.
 func (c *Client) Connect() {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.mu.Lock()
@@ -166,8 +178,11 @@ func (c *Client) runLoop(ctx context.Context) {
 		client := c.newClient(c.sessionOptions(sessionTs, lost))
 
 		if err := mqtt.WaitTokenTimeout(client.Connect(), connectTimeout); err != nil {
-			log.Warn().Err(err).Str("broker", c.broker.URL).Dur("retry_in", backoff).
-				Msg("MQTT gateway connect failed; retrying.")
+			if c.metrics.ConnectFailures != nil {
+				c.metrics.ConnectFailures.Inc()
+			}
+			log.Warn().Err(err).Str("tenant", c.tenant).Str("broker", c.broker.URL).Dur("retry_in", backoff).
+				Msg("Broker connect failed; retrying.")
 			client.Disconnect(0)
 			if !sleep(ctx, backoff) {
 				return
@@ -175,14 +190,14 @@ func (c *Client) runLoop(ctx context.Context) {
 			backoff = nextBackoff(backoff)
 			continue
 		}
-		// Connected: the OnConnect handler (in the options) has subscribed,
-		// announced ONLINE, and opened readiness.
+		// Connected: the OnConnect handler (in the options) has subscribed and
+		// announced ONLINE.
 		c.setSession(client, sessionTs)
 		backoff = minReconnectBackoff
 
 		select {
 		case <-lost:
-			log.Warn().Msg("MQTT gateway connection lost; reconnecting with a fresh session.")
+			log.Warn().Str("tenant", c.tenant).Str("broker", c.broker.URL).Msg("Broker connection lost; reconnecting with a fresh session.")
 		case <-ctx.Done():
 			return
 		}
@@ -223,7 +238,7 @@ func (c *Client) sessionOptions(sessionTs int64, lost chan struct{}) *mqtt.Clien
 	opts.SetBinaryWill(c.stateTopic, statePayload(false, sessionTs), 1, true)
 	opts.SetOnConnectHandler(func(client mqtt.Client) { c.onConnected(client, sessionTs) })
 	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
-		log.Warn().Err(err).Msg("MQTT connection to the gateway dropped.")
+		log.Warn().Err(err).Str("tenant", c.tenant).Str("broker", c.broker.URL).Msg("MQTT connection to the broker dropped.")
 		select {
 		case lost <- struct{}{}:
 		default:
@@ -235,8 +250,7 @@ func (c *Client) sessionOptions(sessionTs int64, lost chan struct{}) *mqtt.Clien
 // onConnected fires on each successful connection. It subscribes BEFORE
 // announcing ONLINE (Sparkplug session order is subscribe-then-birth: an edge
 // node that sees us go online may flush buffered data immediately, which a
-// clean-session client with no live subscription would lose), then opens the
-// readiness gate exactly once.
+// clean-session client with no live subscription would lose).
 func (c *Client) onConnected(client mqtt.Client, sessionTs int64) {
 	// Record the live client before any traffic can arrive, so a rebirth triggered
 	// by the first inbound message publishes over this connection rather than a
@@ -245,23 +259,17 @@ func (c *Client) onConnected(client mqtt.Client, sessionTs int64) {
 	c.setSession(client, sessionTs)
 	for _, filter := range c.subscriptions() {
 		if err := mqtt.WaitTokenTimeout(client.Subscribe(filter, 1, c.onMessage), subscribeTimeout); err != nil {
-			log.Error().Err(err).Str("filter", filter).Msg("Failed to subscribe to Sparkplug group traffic.")
+			log.Error().Err(err).Str("tenant", c.tenant).Str("filter", filter).Msg("Failed to subscribe to Sparkplug group traffic.")
 			continue
 		}
-		log.Info().Str("filter", filter).Msg("Subscribed to Sparkplug group traffic.")
+		log.Info().Str("tenant", c.tenant).Str("filter", filter).Msg("Subscribed to Sparkplug group traffic.")
 	}
 
 	if err := mqtt.WaitTokenTimeout(client.Publish(c.stateTopic, 1, true, statePayload(true, sessionTs)), publishTimeout); err != nil {
-		log.Error().Err(err).Str("topic", c.stateTopic).Msg("Failed to publish ONLINE STATE.")
+		log.Error().Err(err).Str("tenant", c.tenant).Str("topic", c.stateTopic).Msg("Failed to publish ONLINE STATE.")
 	} else {
-		log.Info().Str("topic", c.stateTopic).Int64("timestamp", sessionTs).Msg("Announced Host Application ONLINE.")
+		log.Info().Str("tenant", c.tenant).Str("topic", c.stateTopic).Int64("timestamp", sessionTs).Msg("Announced Host Application ONLINE.")
 	}
-
-	c.readyOnce.Do(func() {
-		if c.onReady != nil {
-			c.onReady()
-		}
-	})
 }
 
 // onMessage decodes and logs one received Sparkplug message. A parse/decode
@@ -291,7 +299,7 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	if !rec.Topic.IsState && rec.Payload != nil {
 		c.sessions.Observe(rec.Topic, rec.Payload)
 	}
-	logRecord(rec)
+	c.logRecord(rec)
 }
 
 // enqueueRebirth is the session machine's rebirth callback. It runs on paho's
@@ -303,7 +311,7 @@ func (c *Client) enqueueRebirth(group, node string) {
 	select {
 	case c.rebirthCh <- nodeKey{group, node}:
 	default:
-		log.Warn().Str("group", group).Str("node", node).Msg("Rebirth queue full; dropping request.")
+		log.Warn().Str("tenant", c.tenant).Str("group", group).Str("node", node).Msg("Rebirth queue full; dropping request.")
 	}
 }
 
@@ -333,7 +341,7 @@ func (c *Client) publishRebirth(group, node string) {
 	client := c.mc
 	c.mu.Unlock()
 	if client == nil || !client.IsConnected() {
-		log.Warn().Str("group", group).Str("node", node).Msg("Not connected; dropping rebirth command.")
+		log.Warn().Str("tenant", c.tenant).Str("group", group).Str("node", node).Msg("Not connected; dropping rebirth command.")
 		return
 	}
 	topic := Namespace + "/" + group + "/" + string(NCMD) + "/" + node
@@ -349,20 +357,21 @@ func (c *Client) publishRebirth(group, node string) {
 	if c.metrics.RebirthRequests != nil {
 		c.metrics.RebirthRequests.Inc()
 	}
-	log.Warn().Str("group", group).Str("node", node).Msg("Commanded Sparkplug node rebirth.")
+	log.Warn().Str("tenant", c.tenant).Str("group", group).Str("node", node).Msg("Commanded Sparkplug node rebirth.")
 }
 
-// logRecord emits the structured per-message log line for SP1's decode+log scope.
-func logRecord(rec Record) {
+// logRecord emits the structured per-message log line for the decode+log scope,
+// tagged with the source's tenant so attribution is visible per connection.
+func (c *Client) logRecord(rec Record) {
 	if rec.Topic.IsState {
-		e := log.Info().Str("type", rec.Label()).Str("host", rec.Topic.HostID)
+		e := log.Info().Str("tenant", c.tenant).Str("type", rec.Label()).Str("host", rec.Topic.HostID)
 		if rec.StateOnline != nil {
 			e = e.Bool("online", *rec.StateOnline)
 		}
 		e.Int64("timestamp", int64(rec.PayloadTimestamp)).Msg("Received Host STATE.")
 		return
 	}
-	e := log.Info().Str("type", rec.Label()).Str("group", rec.Topic.GroupID).Str("node", rec.Topic.EdgeNodeID)
+	e := log.Info().Str("tenant", c.tenant).Str("type", rec.Label()).Str("group", rec.Topic.GroupID).Str("node", rec.Topic.EdgeNodeID)
 	if rec.Topic.IsDevice() {
 		e = e.Str("device", rec.Topic.DeviceID)
 	}
