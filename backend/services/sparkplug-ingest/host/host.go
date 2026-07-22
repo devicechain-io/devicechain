@@ -90,12 +90,14 @@ type Metrics struct {
 }
 
 // SampleIngester turns an accepted message's samples into durable telemetry
-// (resolve/register the device, then emit). The Client depends on the interface so
-// a host test can drive the full receive→ingest path with a fake, asserting what
-// would be ingested without a device-management or a NATS. A nil ingester makes the
-// receive path decode+log only (the SP1/SP2 behavior).
+// (resolve/register the device, then emit) and its presence transitions into durable
+// StateChange events (ADR-067). The Client depends on the interface so a host test
+// can drive the full receive→ingest path with a fake, asserting what would be
+// ingested without a device-management or a NATS. A nil ingester makes the receive
+// path decode+log only (the SP1/SP2 behavior).
 type SampleIngester interface {
 	Ingest(ctx context.Context, tenant string, policy IngestPolicy, externalId string, samples []Sample) error
+	IngestPresence(ctx context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) error
 }
 
 // Client is a single tenant-bound Sparkplug Host Application connection. Build it
@@ -337,12 +339,20 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	}
 	// Advance the SP2 session machine; it may command the node to rebirth (fired
 	// via enqueueRebirth, outside its lock) and returns the numeric samples the
-	// message contributes. STATE has no node session.
-	if !rec.Topic.IsState && rec.Payload != nil {
-		samples := c.sessions.Observe(rec.Topic, rec.Payload)
-		if len(samples) > 0 && c.ingester != nil {
-			c.ingestSamples(SparkplugExternalId(rec.Topic), samples)
+	// message contributes plus any presence transitions it asserts (ADR-067). STATE
+	// has no node session.
+	if !rec.Topic.IsState && rec.Payload != nil && c.ingester != nil {
+		obs := c.sessions.Observe(rec.Topic, rec.Payload)
+		if len(obs.Samples) > 0 {
+			c.ingestSamples(SparkplugExternalId(rec.Topic), obs.Samples)
 		}
+		if len(obs.Presence) > 0 {
+			c.ingestPresence(obs.Presence)
+		}
+	} else if !rec.Topic.IsState && rec.Payload != nil {
+		// Decode-only (nil ingester, the SP1/SP2 posture): still advance the session
+		// machine so rebirth decisions and logging are unchanged.
+		c.sessions.Observe(rec.Topic, rec.Payload)
 	}
 	c.logRecord(rec)
 }
@@ -355,25 +365,58 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 // the Sparkplug host-offline path rather than blocking receive forever. On budget
 // exhaustion the samples are dropped and counted.
 func (c *Client) ingestSamples(externalId string, samples []Sample) {
+	c.ingestWithRetry(
+		func(ctx context.Context) error {
+			return c.ingester.Ingest(ctx, c.tenant, c.policy, externalId, samples)
+		},
+		func(reason string, err error) {
+			log.Warn().Err(err).Str("tenant", c.tenant).Str("externalId", externalId).Int("samples", len(samples)).
+				Str("reason", reason).Msg("Dropping Sparkplug samples (a clean-session Host gets no broker redelivery).")
+		},
+	)
+}
+
+// ingestPresence emits the presence transitions an accepted message asserted, on the
+// same bounded-retry contract as ingestSamples: a clean-session Host gets no broker
+// redelivery, so a brief device-management/NATS blip is retried, but a prolonged
+// outage is left to the host-offline path rather than blocking receive. The whole
+// batch is re-tried; the DedupID makes an already-emitted transition idempotent.
+func (c *Client) ingestPresence(events []PresenceEvent) {
+	c.ingestWithRetry(
+		func(ctx context.Context) error {
+			return c.ingester.IngestPresence(ctx, c.tenant, c.policy, events)
+		},
+		func(reason string, err error) {
+			log.Warn().Err(err).Str("tenant", c.tenant).Int("presence", len(events)).
+				Str("reason", reason).Msg("Dropping Sparkplug presence (a clean-session Host gets no broker redelivery).")
+		},
+	)
+}
+
+// ingestWithRetry runs one bounded, in-handler retry loop shared by the sample and
+// presence paths. It runs ON paho's ordered receive goroutine (by design — the
+// session machine needs strict ordering), so it must return in bounded time: a
+// clean-session Host gets no broker redelivery, so a short retry saves work across a
+// brief blip, but a prolonged outage is left to the Sparkplug host-offline path
+// rather than blocking receive forever. EVERY abandonment path routes through onDrop
+// so a drop (real, bounded loss) is never silent; onDrop also increments the shared
+// IngestFailures counter.
+func (c *Client) ingestWithRetry(attempt func(ctx context.Context) error, onDrop func(reason string, err error)) {
 	c.mu.Lock()
 	ctx := c.runCtx
 	c.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// drop counts + logs a dropped batch. EVERY abandonment path routes through here
-	// so a drop is never silent — a clean-session Host gets no broker redelivery, so
-	// each of these is real (bounded) loss, including a shutdown mid-backoff.
 	drop := func(reason string, err error) {
 		if c.metrics.IngestFailures != nil {
 			c.metrics.IngestFailures.Inc()
 		}
-		log.Warn().Err(err).Str("tenant", c.tenant).Str("externalId", externalId).Int("samples", len(samples)).
-			Str("reason", reason).Msg("Dropping Sparkplug samples (a clean-session Host gets no broker redelivery).")
+		onDrop(reason, err)
 	}
-	for attempt := 1; ; attempt++ {
+	for n := 1; ; n++ {
 		attemptCtx, cancel := context.WithTimeout(ctx, ingestAttemptTimeout)
-		err := c.ingester.Ingest(attemptCtx, c.tenant, c.policy, externalId, samples)
+		err := attempt(attemptCtx)
 		cancel()
 		if err == nil {
 			return
@@ -382,7 +425,7 @@ func (c *Client) ingestSamples(externalId string, samples []Sample) {
 			drop("connection shutting down", err)
 			return
 		}
-		if attempt >= ingestMaxAttempts {
+		if n >= ingestMaxAttempts {
 			drop("ingest retry budget exhausted", err)
 			return
 		}

@@ -171,9 +171,11 @@ func TestRegistrarReturnsTransportErrorForRetry(t *testing.T) {
 // TestEmitterProducesResolverReadableEvent is the durable-emit pin: the bytes the
 // emitter writes must round-trip through the event-sources unmarshaller (the exact
 // contract the device-management resolver reads), carry the resolved token, the
-// stringified measurement at its own timestamp, a NIL AltId and an empty DedupID
-// (the at-least-once posture), a non-zero ProcessedTime (a zero time marshals to
-// year 0001, not an error), and be published under the connection's tenant.
+// stringified measurement at its own timestamp, a NIL AltId (so event-management's
+// alt_id dedup index does not collapse distinct messages — the B2 fix) alongside a
+// non-empty producer-stable DedupID (M12, dedup at the Nats-Msg-Id layer instead), a
+// non-zero ProcessedTime (a zero time marshals to year 0001, not an error), and be
+// published under the connection's tenant.
 func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 	w := &fakeWriter{}
 	e := NewEmitter(w, fixedNow)
@@ -184,7 +186,7 @@ func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 	require.Len(t, w.msgs, 1)
 
 	msg := w.msgs[0]
-	assert.Equal(t, "", msg.DedupID, "external-broker source publishes DedupID='' (HTTP-ingest posture)")
+	assert.NotEmpty(t, msg.DedupID, "SP4 sets a producer-stable DedupID so a retry dedups at JetStream (M12)")
 	assert.Equal(t, []byte("dev-1"), msg.Key)
 
 	ev, err := esproto.UnmarshalUnresolvedEvent(msg.Value)
@@ -229,6 +231,64 @@ func TestEmitterFormatsLargeIntegersWithoutExponent(t *testing.T) {
 	got := payload.Entries[0].Measurements["count"]
 	assert.Equal(t, "12345678", got)
 	assert.NotContains(t, got, "e", "must not use exponent notation (Int-declared ParseInt would reject it)")
+}
+
+// TestEmitPresenceProducesResolverReadableStateChange pins the presence emit: the
+// bytes round-trip through the resolver's decoder as a StateChange carrying the
+// state, the reason, the SessionId (string-on-wire, so an epoch-sized value survives)
+// and a receipt-clock OccurredTime — under the connection's tenant, with a non-empty
+// DedupID.
+func TestEmitPresenceProducesResolverReadableStateChange(t *testing.T) {
+	w := &fakeWriter{}
+	e := NewEmitter(w, fixedNow)
+	occurred := time.UnixMilli(1_700_000_000_500).UTC()
+	epoch := uint64(1_799_000_000_123_456_789) // an epoch-sized UnixNano
+
+	require.NoError(t, e.EmitPresence(context.Background(), "acme", "sparkplug:h1", "dev-1",
+		PresenceEvent{ExternalId: "g/n", Connected: false, Reason: "ndeath-will", SessionId: epoch, OccurredAt: occurred}))
+	require.Len(t, w.msgs, 1)
+	assert.NotEmpty(t, w.msgs[0].DedupID)
+	assert.Equal(t, []byte("dev-1"), w.msgs[0].Key)
+
+	ev, err := esproto.UnmarshalUnresolvedEvent(w.msgs[0].Value)
+	require.NoError(t, err)
+	assert.Equal(t, esmodel.StateChange, ev.EventType)
+	assert.Equal(t, "dev-1", ev.Device)
+	assert.False(t, ev.ProcessedTime.IsZero())
+	p, ok := ev.Payload.(*esmodel.UnresolvedStateChangePayload)
+	require.True(t, ok)
+	assert.Equal(t, esmodel.PresenceDisconnected, p.State)
+	assert.Equal(t, "ndeath-will", p.Reason)
+	assert.Equal(t, "1799000000123456789", p.SessionId, "SessionId rides the wire as a string with full precision")
+
+	tenant, ok := core.TenantFromContext(w.ctxs[0])
+	assert.True(t, ok)
+	assert.Equal(t, "acme", tenant)
+}
+
+// TestDedupIDStableAndDistinct is the M12 pin: the same logical event re-emitted (a
+// retry, or a failover re-derivation) carries the SAME DedupID so JetStream dedups
+// it, while genuinely-different events carry DISTINCT ids so nothing is silently
+// dropped — for BOTH measurements (the B2 collision must NOT reappear at this layer)
+// and presence.
+func TestDedupIDStableAndDistinct(t *testing.T) {
+	// Measurements: identical batch → identical id; a different value at the SAME
+	// occurred-time → different id (the B2 case); a different time → different id.
+	base := []Sample{{Name: "t", Value: 21.5, Time: 1000}}
+	id := func(samples []Sample) string { return measurementDedupID("acme", "dev-1", 1000, samples) }
+	assert.Equal(t, id(base), id([]Sample{{Name: "t", Value: 21.5, Time: 1000}}), "identical batch dedups")
+	assert.NotEqual(t, id(base), id([]Sample{{Name: "t", Value: 99.0, Time: 1000}}), "a distinct value at the same time must stay distinct (B2)")
+	assert.NotEqual(t, id(base), measurementDedupID("acme", "dev-1", 2000, base), "a distinct occurred-time must stay distinct")
+	assert.NotEqual(t, id(base), measurementDedupID("acme", "dev-2", 1000, base), "a distinct device must stay distinct")
+
+	// Presence: stable per (device, session, state); distinct across state and session.
+	ev := PresenceEvent{ExternalId: "g/n", Connected: true, SessionId: 5, OccurredAt: time.Unix(1, 0)}
+	pid := func(e PresenceEvent) string { return presenceDedupID("acme", "dev-1", e) }
+	// OccurredAt is deliberately NOT in the key — a retry re-stamps a fresh receipt
+	// clock, so keying on it would defeat the dedup.
+	assert.Equal(t, pid(ev), pid(PresenceEvent{Connected: true, SessionId: 5, OccurredAt: time.Unix(9, 0)}), "same (device,session,state) dedups regardless of receipt time")
+	assert.NotEqual(t, pid(ev), pid(PresenceEvent{Connected: false, SessionId: 5}), "CONNECTED and DISCONNECTED stay distinct")
+	assert.NotEqual(t, pid(ev), pid(PresenceEvent{Connected: true, SessionId: 6}), "a new session stays distinct")
 }
 
 // --- Ingester ---------------------------------------------------------------

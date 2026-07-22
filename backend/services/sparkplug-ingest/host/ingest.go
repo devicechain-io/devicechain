@@ -5,6 +5,8 @@ package host
 
 import (
 	"context"
+	"hash/fnv"
+	"sort"
 	"strconv"
 	"time"
 
@@ -48,8 +50,9 @@ type EventWriter interface {
 // nil field is skipped so the ingester is usable in tests without a registry.
 type IngestMetrics struct {
 	MeasurementsEmitted prometheus.Counter // individual samples durably written
+	PresenceEmitted     prometheus.Counter // presence StateChange events durably written
 	DevicesRegistered   prometheus.Counter // devices auto-created on first sight
-	UnknownDropped      prometheus.Counter // samples dropped: unknown device, auto-register off
+	UnknownDropped      prometheus.Counter // samples/presence dropped: unknown device, auto-register off
 }
 
 // resolveOutcome distinguishes how a device external id resolved, so the ingester
@@ -229,9 +232,89 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 	}
 	tctx := core.WithTenant(ctx, tenant)
 	return e.writer.WriteMessages(tctx, messaging.Message{
-		Key:   []byte(deviceToken),
-		Value: encoded,
+		Key:     []byte(deviceToken),
+		Value:   encoded,
+		DedupID: measurementDedupID(tenant, deviceToken, latest, samples),
 	})
+}
+
+// EmitPresence writes one presence transition as a StateChange UnresolvedEvent
+// (ADR-067) under the connection's tenant. OccurredTime is the receipt-clock time
+// the session machine stamped (never the Sparkplug payload ts). SessionId rides the
+// wire as a string (an epoch-sized UnixNano would lose precision through a JSON hop).
+// The DedupID makes a retry — or a failover re-derivation — of the same (device,
+// session, state) transition idempotent at JetStream (M12).
+func (e *Emitter) EmitPresence(ctx context.Context, tenant, source, deviceToken string, ev PresenceEvent) error {
+	state := esmodel.PresenceDisconnected
+	if ev.Connected {
+		state = esmodel.PresenceConnected
+	}
+	occurred := ev.OccurredAt.UTC()
+	occStr := occurred.Format(time.RFC3339Nano)
+	uev := &esmodel.UnresolvedEvent{
+		Source:        source,
+		Device:        deviceToken,
+		EventType:     esmodel.StateChange,
+		OccurredTime:  occurred,
+		ProcessedTime: e.now().UTC(),
+		Payload: &esmodel.UnresolvedStateChangePayload{
+			State:        state,
+			Reason:       ev.Reason,
+			SessionId:    strconv.FormatUint(ev.SessionId, 10),
+			OccurredTime: &occStr,
+		},
+	}
+	encoded, err := esproto.MarshalUnresolvedEvent(uev)
+	if err != nil {
+		return err
+	}
+	tctx := core.WithTenant(ctx, tenant)
+	return e.writer.WriteMessages(tctx, messaging.Message{
+		Key:     []byte(deviceToken),
+		Value:   encoded,
+		DedupID: presenceDedupID(tenant, deviceToken, ev),
+	})
+}
+
+// dedupID builds a compact, deterministic JetStream Nats-Msg-Id from its parts. It
+// is a fixed-width fnv-64a over NUL-separated parts (base36 ≈ 13 chars), so a
+// device-controlled input can never inflate the id — the InboundEvents dedup window
+// holds these in memory for its full window, so id size is a memory cost. Stable for
+// a retry of the same logical event, distinct for genuinely different content.
+func dedupID(parts ...string) string {
+	h := fnv.New64a()
+	for _, p := range parts {
+		_, _ = h.Write([]byte(p))
+		_, _ = h.Write([]byte{0})
+	}
+	return "sp" + strconv.FormatUint(h.Sum64(), 36)
+}
+
+// presenceDedupID keys a StateChange on (tenant, device, session, state): a given
+// session's CONNECTED and DISCONNECTED are each emitted once, so a retry or a
+// failover re-derivation dedups, while a genuinely new session (new epoch) or the
+// opposite transition is distinct.
+func presenceDedupID(tenant, deviceToken string, ev PresenceEvent) string {
+	state := "0"
+	if ev.Connected {
+		state = "1"
+	}
+	return dedupID("sc", tenant, deviceToken, strconv.FormatUint(ev.SessionId, 10), state)
+}
+
+// measurementDedupID keys a measurement batch on (tenant, device, occurred-time, and
+// the batch's sorted name=value=time content), so an emit-retry of the identical
+// batch dedups but two distinct batches sharing an occurred-time stay distinct (the
+// content hash keeps them apart — the SP3b B2 collision moved to the id layer would
+// otherwise silently drop a distinct reading).
+func measurementDedupID(tenant, deviceToken string, occurredMillis int64, samples []Sample) string {
+	pairs := make([]string, 0, len(samples))
+	for _, s := range samples {
+		pairs = append(pairs, s.Name+"="+strconv.FormatFloat(s.Value, 'f', -1, 64)+"@"+strconv.FormatInt(s.Time, 10))
+	}
+	sort.Strings(pairs)
+	parts := append([]string{"m", tenant, deviceToken, strconv.FormatInt(occurredMillis, 10)}, pairs...)
+	return dedupID(parts...)
 }
 
 // Ingester turns an accepted Sparkplug message's samples into durable DeviceChain
@@ -282,6 +365,35 @@ func (ing *Ingester) Ingest(ctx context.Context, tenant string, policy IngestPol
 		return err
 	}
 	incr(ing.metrics.MeasurementsEmitted, len(samples))
+	return nil
+}
+
+// IngestPresence resolves each presence event's device (auto-registering it under the
+// source's policy — ASSERTED-on-first-sight happens in the projection when the
+// StateChange lands) and emits a StateChange. It returns nil when every event was
+// fully handled (emitted or definitively dropped) and an error for a retryable
+// failure. The whole slice is re-processed on a retry; the DedupID makes an
+// already-emitted event idempotent, so re-running is safe.
+func (ing *Ingester) IngestPresence(ctx context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) error {
+	for _, ev := range events {
+		token, outcome, err := ing.registrar.Resolve(ctx, tenant, ev.ExternalId, policy)
+		if err != nil {
+			return err
+		}
+		if outcome == resolveDropped {
+			incr(ing.metrics.UnknownDropped, 1)
+			log.Debug().Str("tenant", tenant).Str("externalId", ev.ExternalId).
+				Msg("Dropping Sparkplug presence for an unregistered device (auto-registration is off for this source).")
+			continue
+		}
+		if outcome == resolveCreated {
+			incr(ing.metrics.DevicesRegistered, 1)
+		}
+		if err := ing.emitter.EmitPresence(ctx, tenant, policy.Source, token, ev); err != nil {
+			return err
+		}
+		incr(ing.metrics.PresenceEmitted, 1)
+	}
 	return nil
 }
 

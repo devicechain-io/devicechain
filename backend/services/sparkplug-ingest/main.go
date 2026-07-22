@@ -202,10 +202,12 @@ func buildIngester(writer messaging.MessageWriter) (*host.Ingester, error) {
 	ingestMetrics := host.IngestMetrics{
 		MeasurementsEmitted: Microservice.NewCounter("measurements_emitted_total",
 			"Numeric Sparkplug samples durably written to the inbound-events stream.", nil),
+		PresenceEmitted: Microservice.NewCounter("presence_emitted_total",
+			"Presence StateChange events (ADR-067) durably written on a Sparkplug BIRTH/DEATH.", nil),
 		DevicesRegistered: Microservice.NewCounter("devices_registered_total",
 			"Devices auto-registered on first sight of their Sparkplug identity.", nil),
 		UnknownDropped: Microservice.NewCounter("unknown_device_dropped_total",
-			"Samples dropped for an unregistered device on a source with auto-registration off.", nil),
+			"Samples/presence dropped for an unregistered device on a source with auto-registration off.", nil),
 	}
 	registrar := host.NewRegistrar(client, graphqlURL)
 	emitter := host.NewEmitter(writer, time.Now)
