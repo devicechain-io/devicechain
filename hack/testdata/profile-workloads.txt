@@ -29,6 +29,7 @@ frontend
 mcp
 notification-management
 outbound-connectors
+sparkplug-ingest
 user-management
 
 [telemetry]

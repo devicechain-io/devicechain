@@ -650,3 +650,30 @@ functionalAreas:
       #                                  # human-paced authoring action. One draft costs up to 3 provider calls
       #                                  # (the bounded repair loop), so 30/min is ~10 drafts a minute sustained.
       # inferenceBurst: 15               # tokens a tenant may spend back-to-back before the rate binds (~5 drafts)
+  sparkplug-ingest:
+    # The Sparkplug ingest service (ADR-069): a stateful Sparkplug B Host Application
+    # that connects to DeviceChain's own MQTT gateway, announces its Sparkplug 3.0
+    # STATE, subscribes to the configured Sparkplug groups, and terminates edge-node /
+    # device telemetry onto inbound-events (the ingest path lands in SP3; SP1 decodes
+    # and logs) — a parallel inbound transport to event-sources. OPT-IN edge area:
+    # held back from `default` (a Sparkplug topology
+    # is a deliberate choice), shipped by `full`, or named explicitly
+    # (enabledFunctionalAreas: [..., sparkplug-ingest]). It hard-depends on
+    # device-management (which resolves what it produces).
+    #
+    # It is a STATEFUL single-owner service (ADR-069 / ADR-070): a Sparkplug Host owns
+    # per-node alias/seq/session state, so two instances would each see half the
+    # traffic and publish a duplicate STATE. Until the ADR-070 fenced lease lands (SP4)
+    # it MUST run as ONE instance — so it deploys with strategy Recreate (a rollout
+    # stops the old pod before starting the new one, avoiding two concurrent Host
+    # Applications) and stays at replicas:1. Do NOT raise replicas past 1 until the
+    # lease-elected failover lands (a Recreate with 2 replicas runs two permanent
+    # Hosts; the template fails the render), mirroring event-processing above.
+    replicas: 1
+    strategy: Recreate
+    config: {}
+      # hostId: devicechain          # Sparkplug Host Application id; the STATE topic is spBv1.0/STATE/{hostId}.
+      #                              # Must be unique among Host Applications on the broker. Defaults to "devicechain".
+      # groups:                      # Sparkplug Group IDs to subscribe (spBv1.0/{group}/#, one per entry).
+      #   - plant-a                  # Empty (the default) subscribes to ALL groups (spBv1.0/#) — group→tenant
+      #   - plant-b                  # attribution that will scope this arrives in SP3.

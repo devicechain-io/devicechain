@@ -26,7 +26,8 @@
           "event-processing",
           "outbound-connectors",
           "mcp",
-          "ai-inference"
+          "ai-inference",
+          "sparkplug-ingest"
         ]
       },
       "uniqueItems": true,
@@ -224,7 +225,8 @@
               "event-processing",
               "outbound-connectors",
               "mcp",
-              "ai-inference"
+              "ai-inference",
+              "sparkplug-ingest"
             ]
           },
           "uniqueItems": true,
