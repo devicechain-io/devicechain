@@ -7,20 +7,25 @@
 // the configured Sparkplug groups, and decodes edge-node / device telemetry.
 // Tenancy is connection-scoped (M7): every message is attributed to the tenant
 // configured for the broker it arrived on, never parsed from the untrusted
-// Sparkplug topic. At SP3a it terminates and logs that traffic, tenant-tagged;
-// identity mapping, presence emission, and leader-elected failover arrive in
-// SP3b/SP4.
+// Sparkplug topic. It maps each edge-node/device identity to a DeviceChain device
+// (SP3b), emits measurements and presence StateChange events (SP4a), and elects a
+// single leader via a core/lease so only one replica connects as the Host
+// Application (SP4b — ADR-070; two would publish duplicate STATE). Reconcile-on-
+// acquire (rebirth-all + probe against the device-state presence projection) is the
+// remaining SP4b step.
 package main
 
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
@@ -36,12 +41,34 @@ import (
 
 const httpPort = 8080
 
+const (
+	// leasePartition names this service's single ownership lease within the shared
+	// instance lease bucket (ADR-070). The Sparkplug adapter is one Class-3 owner per
+	// instance (GA is one shard; the key is instance-unique so N-shard later is config,
+	// not a rewrite).
+	leasePartition = "sparkplug"
+	// leaseRenewInterval renews well inside the TTL (<= TTL/3) on the KeepAlive
+	// goroutine, decoupled from any processing loop (ADR-070 M4).
+	leaseRenewInterval = messaging.DefaultLeaseTTL / 3
+	// standbyRetryInterval is how often a warm standby re-attempts acquisition.
+	standbyRetryInterval = 5 * time.Second
+)
+
 var (
 	Microservice  *core.Microservice
 	Configuration *config.SparkplugConfiguration
 	Manager       *host.Manager
 	NatsManager   *messaging.NatsManager
+	Lease         *messaging.DistributedLease
 	httpServer    *http.Server
+
+	// leaderGauge is 1 while this replica holds the lease and is connecting sources,
+	// 0 while it is a warm standby (ADR-070 A6 observability).
+	leaderGauge prometheus.Gauge
+	// leadershipCancel stops the leadership loop on shutdown; leadershipDone closes
+	// when it has fully unwound (Manager stopped, lease released).
+	leadershipCancel context.CancelFunc
+	leadershipDone   chan struct{}
 )
 
 func main() {
@@ -281,7 +308,31 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := NatsManager.Start(ctx); err != nil {
 		return err
 	}
-	Manager.Start()
+
+	// The Sparkplug adapter is a Class-3 single-owner operator (ADR-070): two replicas
+	// connecting as the same Host Application would publish duplicate STATE and emit
+	// duplicate telemetry/presence. So a leader-election lease gates the WHOLE Client
+	// lifecycle — only the holder connects; a warm standby binds nothing. Readiness is
+	// opened regardless: a standby is "ready" to take over (its /readyz must pass so it
+	// is not killed while waiting). With no sources there is nothing to lead.
+	if len(Configuration.Sources) > 0 {
+		leaderGauge = Microservice.NewGauge("is_leader",
+			"1 when this replica holds the Sparkplug leadership lease and is connecting sources, else 0 (warm standby).", nil)
+		lease, err := NatsManager.NewDistributedLease(messaging.DefaultLeaseTTL)
+		if err != nil {
+			return err
+		}
+		Lease = lease
+		lctx, cancel := context.WithCancel(context.Background())
+		leadershipCancel = cancel
+		leadershipDone = make(chan struct{})
+		go func() {
+			defer close(leadershipDone)
+			runLeadership(lctx, lease)
+		}()
+	} else {
+		Manager.Start()
+	}
 	Microservice.MarkReady(nil)
 
 	httpServer = &http.Server{Addr: fmt.Sprintf(":%d", httpPort)}
@@ -294,13 +345,97 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	return nil
 }
 
+// runLeadership is the acquire/serve/standby loop. It repeatedly tries to acquire the
+// single ownership lease; while another replica holds it, this replica is a warm
+// standby that connects nothing and retries. On acquisition it serves as leader until
+// the lease is lost or the service is shutting down, then loops to re-acquire.
+func runLeadership(ctx context.Context, lease *messaging.DistributedLease) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		held, err := lease.Acquire(leasePartition)
+		if err != nil {
+			if errors.Is(err, messaging.ErrLeaseHeld) {
+				log.Info().Msg("Another replica holds the Sparkplug lease; standing by.")
+			} else {
+				log.Warn().Err(err).Msg("Failed to acquire the Sparkplug leadership lease; retrying as standby.")
+			}
+			setLeader(false)
+			if !sleepCtx(ctx, standbyRetryInterval) {
+				return
+			}
+			continue
+		}
+		serveAsLeader(ctx, held)
+	}
+}
+
+// serveAsLeader connects every source and holds them until the lease is definitively
+// lost (KeepAlive returns ErrNotHolder) or the service is shutting down (ctx). On
+// either it self-evicts: stop the sources (announcing OFFLINE, firing the wills) and
+// release the lease so a standby can take over. KeepAlive runs on its OWN goroutine so
+// no processing stall can starve renewal (ADR-070 M4).
+func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
+	log.Info().Uint64("epoch", lease.Epoch()).Msg("Acquired Sparkplug leadership; connecting sources.")
+	setLeader(true)
+
+	leaderCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		if errors.Is(lease.KeepAlive(leaderCtx, leaseRenewInterval), messaging.ErrNotHolder) {
+			log.Error().Msg("Lost the Sparkplug leadership lease; self-evicting.")
+			cancel()
+		}
+	}()
+
+	Manager.Start()
+	<-leaderCtx.Done()
+
+	setLeader(false)
+	Manager.Stop()
+	if err := lease.Release(); err != nil {
+		log.Warn().Err(err).Msg("Error releasing the Sparkplug lease (it will age out via its TTL).")
+	}
+	log.Info().Msg("Released Sparkplug leadership; returning to standby.")
+}
+
+// setLeader records leadership on the gauge (0/1), tolerating a nil gauge.
+func setLeader(leader bool) {
+	if leaderGauge == nil {
+		return
+	}
+	if leader {
+		leaderGauge.Set(1)
+	} else {
+		leaderGauge.Set(0)
+	}
+}
+
+// sleepCtx waits for d or ctx cancellation; it returns false if ctx was cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 // beforeMicroserviceStopped announces OFFLINE on every source, disconnects them,
 // and shuts the HTTP server down.
 func beforeMicroserviceStopped(ctx context.Context) error {
 	Microservice.Readiness.BeginDrain()
 	// Stop the sources first (announce OFFLINE, disconnect) so no further message can
-	// be emitted, THEN stop the writer.
-	if Manager != nil {
+	// be emitted, THEN stop the writer. When leadership is running, cancelling it makes
+	// the loop self-evict (Manager.Stop + lease Release) and exit; we wait for that to
+	// unwind. With no sources there is no leadership loop, so stop the Manager directly.
+	if leadershipCancel != nil {
+		leadershipCancel()
+		<-leadershipDone
+	} else if Manager != nil {
 		Manager.Stop()
 	}
 	if NatsManager != nil {

@@ -63,8 +63,15 @@ const (
 // Broker is the resolved MQTT connection for one source: a customer-operated
 // Sparkplug broker the adapter connects OUT to.
 type Broker struct {
-	URL      string      // e.g. tcp://broker.plant-a.example:1883 or ssl://... for TLS
-	ClientID string      // unique per Host Application connection (a broker drops a dup id)
+	URL string // e.g. tcp://broker.plant-a.example:1883 or ssl://... for TLS
+	// ClientID is stable per (instance, source) and therefore IDENTICAL across every
+	// replica of the instance — a deliberate leader-election invariant, not just
+	// per-source uniqueness. Only the lease holder connects (ADR-070), but in the
+	// brief handover window the new leader's connect carries the same ClientID as the
+	// old leader's lingering connection, so the broker's dup-id takeover-kick
+	// disconnects the zombie (and fires its will) before the new ONLINE lands. A
+	// per-pod-unique id would DEFEAT that kick — do not make it unique per replica.
+	ClientID string
 	Username string      // MQTT login; empty ⇒ anonymous
 	Password string      // resolved from SourceBroker.PasswordEnv; empty ⇒ none
 	TLS      *tls.Config // non-nil ⇒ the URL uses the ssl:// scheme
