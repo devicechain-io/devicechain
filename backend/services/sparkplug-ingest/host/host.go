@@ -89,12 +89,12 @@ type Metrics struct {
 	IngestFailures prometheus.Counter
 }
 
-// sampleIngester turns an accepted message's samples into durable telemetry
+// SampleIngester turns an accepted message's samples into durable telemetry
 // (resolve/register the device, then emit). The Client depends on the interface so
 // a host test can drive the full receive→ingest path with a fake, asserting what
 // would be ingested without a device-management or a NATS. A nil ingester makes the
 // receive path decode+log only (the SP1/SP2 behavior).
-type sampleIngester interface {
+type SampleIngester interface {
 	Ingest(ctx context.Context, tenant string, policy IngestPolicy, externalId string, samples []Sample) error
 }
 
@@ -112,7 +112,7 @@ type Client struct {
 	// ingester + policy turn accepted messages into durable telemetry. ingester is
 	// shared across all connections; policy is this source's (tenant is attributed
 	// per connection, ADR-069 M7). A nil ingester leaves the receive path decode-only.
-	ingester sampleIngester
+	ingester SampleIngester
 	policy   IngestPolicy
 
 	stateTopic string
@@ -143,7 +143,7 @@ type Client struct {
 // durable telemetry (nil ⇒ decode+log only, the SP1/SP2 behavior). now is the clock
 // supplying each session's STATE timestamp (pass time.Now in production); nil
 // defaults to it.
-func NewClient(source config.SparkplugSource, broker Broker, ingester sampleIngester, now func() time.Time, metrics Metrics) *Client {
+func NewClient(source config.SparkplugSource, broker Broker, ingester SampleIngester, now func() time.Time, metrics Metrics) *Client {
 	if now == nil {
 		now = time.Now
 	}
@@ -361,6 +361,16 @@ func (c *Client) ingestSamples(externalId string, samples []Sample) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// drop counts + logs a dropped batch. EVERY abandonment path routes through here
+	// so a drop is never silent — a clean-session Host gets no broker redelivery, so
+	// each of these is real (bounded) loss, including a shutdown mid-backoff.
+	drop := func(reason string, err error) {
+		if c.metrics.IngestFailures != nil {
+			c.metrics.IngestFailures.Inc()
+		}
+		log.Warn().Err(err).Str("tenant", c.tenant).Str("externalId", externalId).Int("samples", len(samples)).
+			Str("reason", reason).Msg("Dropping Sparkplug samples (a clean-session Host gets no broker redelivery).")
+	}
 	for attempt := 1; ; attempt++ {
 		attemptCtx, cancel := context.WithTimeout(ctx, ingestAttemptTimeout)
 		err := c.ingester.Ingest(attemptCtx, c.tenant, c.policy, externalId, samples)
@@ -368,15 +378,16 @@ func (c *Client) ingestSamples(externalId string, samples []Sample) {
 		if err == nil {
 			return
 		}
-		if ctx.Err() != nil || attempt >= ingestMaxAttempts {
-			if c.metrics.IngestFailures != nil {
-				c.metrics.IngestFailures.Inc()
-			}
-			log.Warn().Err(err).Str("tenant", c.tenant).Str("externalId", externalId).Int("samples", len(samples)).
-				Msg("Dropping Sparkplug samples after the ingest retry budget was exhausted (a clean-session Host gets no broker redelivery).")
+		if ctx.Err() != nil {
+			drop("connection shutting down", err)
+			return
+		}
+		if attempt >= ingestMaxAttempts {
+			drop("ingest retry budget exhausted", err)
 			return
 		}
 		if !sleep(ctx, ingestRetryBackoff) {
+			drop("connection shutting down", err)
 			return
 		}
 	}

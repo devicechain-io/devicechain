@@ -211,6 +211,26 @@ func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 	assert.Equal(t, "acme", tenant)
 }
 
+// TestEmitterFormatsLargeIntegersWithoutExponent pins the 'f' formatting: a large
+// magnitude must serialize as a plain decimal, never exponent notation. An Int-
+// declared metric downstream is validated with strconv.ParseInt, which rejects
+// "1.2345678e+07" and dead-letters the whole event — so this is a correctness pin,
+// not cosmetics.
+func TestEmitterFormatsLargeIntegersWithoutExponent(t *testing.T) {
+	w := &fakeWriter{}
+	e := NewEmitter(w, fixedNow)
+	require.NoError(t, e.Emit(context.Background(), "acme", "s", "dev-1",
+		[]Sample{{Name: "count", Value: 12345678, Time: 1}}))
+	require.Len(t, w.msgs, 1)
+
+	ev, err := esproto.UnmarshalUnresolvedEvent(w.msgs[0].Value)
+	require.NoError(t, err)
+	payload := ev.Payload.(*esmodel.UnresolvedMeasurementsPayload)
+	got := payload.Entries[0].Measurements["count"]
+	assert.Equal(t, "12345678", got)
+	assert.NotContains(t, got, "e", "must not use exponent notation (Int-declared ParseInt would reject it)")
+}
+
 // --- Ingester ---------------------------------------------------------------
 
 func newIngestMetrics() (IngestMetrics, func(string) float64) {

@@ -37,12 +37,11 @@ import (
 const httpPort = 8080
 
 var (
-	Microservice        *core.Microservice
-	Configuration       *config.SparkplugConfiguration
-	Manager             *host.Manager
-	NatsManager         *messaging.NatsManager
-	InboundEventsWriter messaging.MessageWriter
-	httpServer          *http.Server
+	Microservice  *core.Microservice
+	Configuration *config.SparkplugConfiguration
+	Manager       *host.Manager
+	NatsManager   *messaging.NatsManager
+	httpServer    *http.Server
 )
 
 func main() {
@@ -105,9 +104,14 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			"Accepted messages whose samples were dropped after the in-handler ingest retry budget was exhausted (device-management or NATS unreachable).", nil),
 	}
 
-	// Bring up the durable emit path (the inbound-events writer) BEFORE building the
-	// sources, so the writer is live when the first message arrives after Start.
-	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
+	// Bring up the durable emit path. The writer is created SYNCHRONOUSLY here, right
+	// after Initialize sets the JetStream context — NOT in the NatsManager's oncreate
+	// callback, which does not run until Start. Capturing the oncreate-populated
+	// global at this point would hand the emitter a nil writer and panic the receive
+	// goroutine on the first message; NewWriter only needs the JS context, so it is
+	// safe (and correct) to build the writer now and pass it in by value.
+	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(),
+		func(*messaging.NatsManager) error { return nil })
 	if err := NatsManager.Initialize(ctx); err != nil {
 		return err
 	}
@@ -119,7 +123,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// will never use.
 	var ingester *host.Ingester
 	if len(Configuration.Sources) > 0 {
-		built, err := buildIngester()
+		writer, err := NatsManager.NewWriter(streams.InboundEvents)
+		if err != nil {
+			return err
+		}
+		built, err := buildIngester(writer)
 		if err != nil {
 			return err
 		}
@@ -150,6 +158,16 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 // service closed at startup rather than dialing a mis-authenticated broker and
 // retry-looping silently — repo convention (ADR-022).
 func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, ingester *host.Ingester, metrics host.Metrics) ([]*host.Client, error) {
+	// Convert a possibly-nil *Ingester into the interface as a real nil rather than a
+	// typed nil: passing a nil *Ingester directly would wrap into a NON-nil interface,
+	// so the Client's `ingester != nil` guard would pass and Ingest would panic. This
+	// makes the "non-nil whenever there are sources" invariant structural, not a
+	// comment. (In production the caller only builds an ingester when Sources is
+	// non-empty, so this stays nil only for the zero-source case.)
+	var si host.SampleIngester
+	if ingester != nil {
+		si = ingester
+	}
 	clients := make([]*host.Client, 0, len(cfg.Sources))
 	for i := range cfg.Sources {
 		src := cfg.Sources[i]
@@ -157,36 +175,22 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 		if err != nil {
 			return nil, err
 		}
-		// ingester is non-nil whenever the loop runs (afterMicroserviceInitialized
-		// builds it before calling this if there is any source), so a Client is never
-		// handed a nil concrete pointer wrapped in a non-nil interface.
-		clients = append(clients, host.NewClient(src, broker, ingester, time.Now, metrics))
+		clients = append(clients, host.NewClient(src, broker, si, time.Now, metrics))
 	}
 	return clients, nil
 }
 
-// createNatsComponents wires the durable inbound-events writer once the NATS manager
-// is initializing. sparkplug-ingest is a new PRODUCER on the existing telemetry
-// stream (streams.InboundEvents): it emits the same UnresolvedEvent envelope
-// event-sources does, so the device-management resolver ingests it unchanged. No new
-// stream is declared — the stream already exists in streams.All and ensureStream is
-// idempotent.
-func createNatsComponents(nmgr *messaging.NatsManager) error {
-	writer, err := nmgr.NewWriter(streams.InboundEvents)
-	if err != nil {
-		return err
+// buildIngester assembles the device-resolution + durable-emit pipeline around a
+// live inbound-events writer. It fails closed when the ingest path is not configured
+// (or the writer is nil): a Sparkplug adapter that cannot reach device-management or
+// NATS would resolve no devices / emit nothing and silently drop every measurement,
+// so a misconfigured deploy or a wiring-order regression must be visible at startup,
+// not at runtime (ADR-022). The service token carries device:read (lookup by
+// external id) and device:write (auto-registration) only — least privilege.
+func buildIngester(writer messaging.MessageWriter) (*host.Ingester, error) {
+	if writer == nil {
+		return nil, fmt.Errorf("inbound-events writer is nil — the durable emit path was not wired before the ingester was built")
 	}
-	InboundEventsWriter = writer
-	return nil
-}
-
-// buildIngester assembles the device-resolution + durable-emit pipeline. It fails
-// closed when the ingest path is not configured: a Sparkplug adapter that cannot
-// reach device-management would resolve no devices and silently drop every
-// measurement, so a misconfigured deploy must be visible at startup, not at runtime
-// (ADR-022). The service token carries device:read (lookup by external id) and
-// device:write (auto-registration) only — least privilege.
-func buildIngester() (*host.Ingester, error) {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	graphqlURL, err := ingestEndpoint(infra)
 	if err != nil {
@@ -204,7 +208,7 @@ func buildIngester() (*host.Ingester, error) {
 			"Samples dropped for an unregistered device on a source with auto-registration off.", nil),
 	}
 	registrar := host.NewRegistrar(client, graphqlURL)
-	emitter := host.NewEmitter(InboundEventsWriter, time.Now)
+	emitter := host.NewEmitter(writer, time.Now)
 	log.Info().Str("deviceManagement", graphqlURL).Msg("Sparkplug ingest will resolve + emit telemetry via device-management (ADR-044).")
 	return host.NewIngester(registrar, emitter, ingestMetrics), nil
 }

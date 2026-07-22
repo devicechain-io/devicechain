@@ -115,6 +115,11 @@ func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, poli
 	}
 
 	token := DeriveDeviceToken(externalId)
+	// TODO (follow-up): a persistently-failing create (e.g. a deviceTypeToken that
+	// passes the grammar check but names no existing type) is retried by the caller on
+	// every message from that device, spending the full bounded budget each time. It is
+	// visible (device-management errors + IngestFailures), but a short per-externalId
+	// negative backoff here would keep one config mistake from throttling a source.
 	if err := r.create(ctx, tenant, token, externalId, policy.DeviceTypeToken); err != nil {
 		// A create can fail because a concurrent burst already registered this device
 		// (the deterministic token collides on the unique index). Re-look-up: if the
@@ -197,7 +202,13 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 		}
 		occurred := time.UnixMilli(s.Time).UTC().Format(time.RFC3339Nano)
 		entries = append(entries, esmodel.UnresolvedMeasurementsEntry{
-			Measurements: map[string]string{s.Name: strconv.FormatFloat(s.Value, 'g', -1, 64)},
+			// Format 'f', not 'g': 'g' switches to exponent notation for large
+			// magnitudes (1e6 → "1e+06"), which the resolver's Int-declared metric
+			// validation (strconv.ParseInt) rejects — dead-lettering the WHOLE event,
+			// every sibling sample with it. 'f' with -1 precision still yields the
+			// shortest round-tripping decimal, but never an exponent, so an integer
+			// like 12345678 arrives as "12345678" and parses as both Int and Double.
+			Measurements: map[string]string{s.Name: strconv.FormatFloat(s.Value, 'f', -1, 64)},
 			OccurredTime: &occurred,
 		})
 	}
@@ -227,6 +238,14 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 // telemetry: resolve (and if needed register) the device, then emit. It is shared
 // across all sources; the per-connection tenant and IngestPolicy are passed in on
 // every call. It owns the ingest metrics so the registrar and emitter stay pure.
+//
+// NOTE (ADR-023 governance, deferred): this ingress path is NOT yet behind the
+// per-tenant ingest rate gate that event-sources applies before InboundEvents, so a
+// misbehaving/compromised customer broker can exceed a tenant's ingest ceiling. It
+// is an OPT-IN source an operator deliberately connects to (not open-internet device
+// ingest), which bounds the exposure, but a per-tenant limiter here is owed —
+// tracked as a follow-up. Any limiter added here MUST stay label-free per tenant (no
+// per-tenant metric labels — the ADR-023 cardinality lesson), as these counters do.
 type Ingester struct {
 	registrar *Registrar
 	emitter   *Emitter

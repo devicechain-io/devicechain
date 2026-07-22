@@ -43,6 +43,17 @@ func TestLoadConfigurationParsesRenderedChartDocument(t *testing.T) {
 	require.NoError(t, cfg.Validate(), "the rendered document must also pass Validate")
 }
 
+// TestBuildIngesterRejectsNilWriter pins the BLOCKER fix: the durable writer is
+// created synchronously after NatsManager.Initialize (the oncreate callback that
+// would otherwise populate it does not run until Start), so a wiring-order regression
+// that hands buildIngester a nil writer must FAIL CLOSED at startup rather than build
+// an emitter that nil-panics the receive goroutine on the first message. The nil
+// check precedes any Microservice access, so this needs no lifecycle setup.
+func TestBuildIngesterRejectsNilWriter(t *testing.T) {
+	_, err := buildIngester(nil)
+	require.Error(t, err, "a nil inbound-events writer must fail closed")
+}
+
 // TestIngestEndpointFailsClosed pins that the ingest path refuses to come up half-
 // configured: with no service secret or no device-management coordinate it returns
 // an error (a startup failure) rather than a URL that would resolve no devices and
