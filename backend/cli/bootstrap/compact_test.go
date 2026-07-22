@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"sigs.k8s.io/yaml"
 )
 
 // compactState is a State shaped like the one a real `--compact` bootstrap hands
@@ -544,4 +545,64 @@ func TestCompactDropsCertManagerOnlyWhenTLSIsOff(t *testing.T) {
 			"fails against a missing CRD; with an external issuer it succeeds and serves " +
 			"no cert at all")
 	}
+}
+
+// The MQTT NodePort is a LOCAL-only exposure: it must be set on a kind context (so a
+// host device reaches the broker through the kind host:1883 -> node port map) and
+// MUST NOT be set on a cloud context, where a NodePort would publish MQTT on every
+// node IP.
+//
+// The expected value is READ FROM the embedded kind config, not a second copy of the
+// literal 31883: the NodePort dcctl asks tofu to create must equal the node port the
+// kind config maps host 1883 to, or the host route is dead again with the exact
+// paho-EOF symptom this whole change exists to bury. Deriving it here means editing
+// one without the other fails this test instead of shipping a silent dead route.
+func TestMqttNodePortIsLocalOnly(t *testing.T) {
+	nodePort := kindHostPortMapping(t, 1883)
+	want := "nats_mqtt_node_port=" + strconv.Itoa(nodePort)
+
+	local := compactState(true) // KubeContext "kind-dctest" -> looksLocal
+	if !slices.Contains(infraVars(local), want) {
+		t.Errorf("local kind context did not set %q; the kind host 1883 -> node %d map "+
+			"needs a Service on node %d or host:1883 is a dead route (device clients see "+
+			"EOF). infraVars: %v", want, nodePort, nodePort, infraVars(local))
+	}
+
+	cloud := compactState(true)
+	cloud.KubeContext = "prod-eks" // not a local heuristic match
+	for _, v := range infraVars(cloud) {
+		if strings.HasPrefix(v, "nats_mqtt_node_port=") {
+			t.Errorf("cloud context set %q: a NodePort would publish MQTT on every "+
+				"node IP; it must stay ClusterIP-only off a local box", v)
+		}
+	}
+}
+
+// kindHostPortMapping returns the containerPort (node port) the embedded kind config
+// maps the given host port to. It fails the test if no such mapping exists — the kind
+// host map and the NodePort dcctl provisions are two ends of one route, and this is
+// the join that keeps them from drifting apart.
+func kindHostPortMapping(t *testing.T, hostPort int) int {
+	t.Helper()
+	var cfg struct {
+		Nodes []struct {
+			ExtraPortMappings []struct {
+				ContainerPort int `json:"containerPort"`
+				HostPort      int `json:"hostPort"`
+			} `json:"extraPortMappings"`
+		} `json:"nodes"`
+	}
+	if err := yaml.Unmarshal(assets.KindClusterConfig(), &cfg); err != nil {
+		t.Fatalf("parsing embedded kind config: %v", err)
+	}
+	for _, n := range cfg.Nodes {
+		for _, m := range n.ExtraPortMappings {
+			if m.HostPort == hostPort {
+				return m.ContainerPort
+			}
+		}
+	}
+	t.Fatalf("embedded kind config maps no node port to host %d; the MQTT host route "+
+		"cannot work without it", hostPort)
+	return 0
 }

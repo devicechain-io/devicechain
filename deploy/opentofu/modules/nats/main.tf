@@ -136,6 +136,33 @@ variable "service_password_bcrypt" {
   sensitive   = true
 }
 
+variable "mqtt_node_port" {
+  description = <<-EOT
+    Local-kind only: expose the MQTT gateway as a NodePort on this node port so a
+    device or MQTT tool on the HOST can reach the broker at ssl://127.0.0.1:1883.
+
+    The nats chart ships a ClusterIP Service only. A local kind cluster maps host
+    1883 -> node 31883 (deploy/local/kind-cluster.yaml, embedded by dcctl), but with
+    no Service claiming node port 31883 that host map forwards to an empty node port
+    and resets — a device client sees "network Error: EOF". Setting this to that node
+    port creates a dedicated NodePort Service for :1883 so the host map lands on the
+    broker, exactly as :80/:443 land on ingress-nginx's NodePort.
+
+    0 = disabled (the CLOUD default): a NodePort would publish MQTT on every node IP,
+    which is not wanted off a single-node dev box. dcctl sets 31883 on a local
+    context (mirroring ingress_use_host_port), matching the kind host map; leave it 0
+    everywhere else. The broker still terminates TLS and runs the auth callout, so
+    the port is not an open relay even when exposed.
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.mqtt_node_port == 0 || (var.mqtt_node_port >= 30000 && var.mqtt_node_port <= 32767)
+    error_message = "mqtt_node_port must be 0 (disabled) or in the default NodePort range 30000-32767."
+  }
+}
+
 locals {
   # Service name the internal services present (see natsauth.ServiceUser). Kept in
   # sync with the Go constant; a mismatch would lock every service out.
@@ -408,6 +435,56 @@ resource "helm_release" "nats" {
       error_message = "nats enable_auth=true requires non-empty callout_issuer_public and service_password_bcrypt (mint them via dcctl / the genauth helper)."
     }
   }
+}
+
+# Optional NodePort so a LOCAL kind cluster's host-port map (host 1883 -> node
+# 31883) actually lands on the MQTT gateway. See var.mqtt_node_port. Disabled (count
+# 0) on any cloud deploy, where a NodePort would publish MQTT on every node IP. It is
+# a SEPARATE Service from the chart's ClusterIP one — only :1883 is exposed, never
+# the 4222 client listener — and selects the same server pods.
+#
+# Two couplings to know, both of which fail as empty endpoints (a reset -> paho EOF,
+# the pre-fix dead-route symptom), so verify host:1883 after a chart bump:
+#   - The selector + target_port name below mirror the nats chart's own pod labels
+#     (component=nats) and container-port name ("mqtt"). var.chart_version defaults to
+#     latest; a future chart that relabels the pods or renames the port would leave
+#     this Service with no endpoints. Pinning chart_version is the durable guard.
+#   - node_port is FIXED (it must equal the kind host map). ingress-nginx also takes
+#     NodePorts but lets the API server assign them dynamically from 30000-32767, so
+#     there is a small chance it grabs this port first on a fresh cluster and this
+#     apply fails "already allocated". Rare, but if it recurs, pin ingress's NodePorts.
+resource "kubernetes_service_v1" "mqtt_nodeport" {
+  count = var.mqtt_node_port > 0 ? 1 : 0
+
+  metadata {
+    name      = "${var.release_name}-mqtt-nodeport"
+    namespace = var.namespace
+    labels = {
+      "app.kubernetes.io/name"      = "nats"
+      "app.kubernetes.io/instance"  = var.release_name
+      "app.kubernetes.io/component" = "mqtt-nodeport"
+    }
+  }
+
+  spec {
+    type = "NodePort"
+    # The chart's own pod selector, so this routes to the same nats-server pods the
+    # ClusterIP Service does. target_port names the "mqtt" container port (1883).
+    selector = {
+      "app.kubernetes.io/name"      = "nats"
+      "app.kubernetes.io/instance"  = var.release_name
+      "app.kubernetes.io/component" = "nats"
+    }
+    port {
+      name        = "mqtt"
+      port        = 1883
+      target_port = "mqtt"
+      node_port   = var.mqtt_node_port
+      protocol    = "TCP"
+    }
+  }
+
+  depends_on = [helm_release.nats]
 }
 
 output "client_url" {

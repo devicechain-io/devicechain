@@ -117,6 +117,18 @@ func infraVars(st *State) []string {
 		vars = append(vars,
 			"ingress_use_host_port=true",
 			"monitoring_slim=true",
+			// Expose MQTT as a NodePort on the port the embedded kind config maps
+			// host 1883 to (deploy/local/kind-cluster.yaml: host 1883 -> node 31883),
+			// so a device/tool on the host reaches the broker at ssl://127.0.0.1:1883
+			// out of the box — the same host-port treatment :80/:443 already get.
+			// Cloud leaves this 0 (ClusterIP only); a NodePort there would publish
+			// MQTT on every node IP. The gate is looksLocal — the same context-NAME
+			// heuristic that already sets ingress_use_host_port above, so a
+			// false-positive here also visibly breaks ingress (a louder signal); and
+			// the broker still terminates TLS + runs the auth callout, so an exposed
+			// listener is not an open relay. A provider-based gate would be a stronger
+			// signal than the name if this heuristic is ever tightened.
+			"nats_mqtt_node_port=31883",
 		)
 	}
 	// The observability stack is default-on (like Postgres/Timescale); --no-monitoring
