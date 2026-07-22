@@ -246,6 +246,15 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 				return fmt.Errorf("non-alert payload in alert event")
 			}
 			results, perr = ep.PersistAlertEvents(ctx, tx, pevent, *payload)
+		case esmodel.StateChange:
+			// ADR-067 presence: the authoritative write is device-state's projection,
+			// not event history. The append-only, queryable StateChange history that
+			// DETECT reacts to (ADR-067 decision 5) lands with S3; until then a
+			// StateChange is an explicit no-op here so it acks cleanly instead of
+			// dead-lettering. Return before persistEventAnchors — there is no base
+			// event row for the anchors to reference yet.
+			results = &EventPersistenceResults{}
+			return nil
 		default:
 			return fmt.Errorf("unhandled event type in persistence: %s", event.EventType.String())
 		}

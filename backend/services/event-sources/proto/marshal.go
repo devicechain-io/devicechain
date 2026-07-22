@@ -81,6 +81,21 @@ func MarshalPayloadForAlertsEvent(payload *model.UnresolvedAlertsPayload) ([]byt
 	return bytes, nil
 }
 
+// Marshal payload for a state-change (presence) event.
+func MarshalPayloadForStateChangeEvent(payload *model.UnresolvedStateChangePayload) ([]byte, error) {
+	pbpayload := &PUnresolvedStateChangePayload{
+		State:        string(payload.State),
+		Reason:       payload.Reason,
+		SessionId:    payload.SessionId,
+		OccurredTime: payload.OccurredTime,
+	}
+	bytes, err := proto.Marshal(pbpayload)
+	if err != nil {
+		return nil, err
+	}
+	return bytes, nil
+}
+
 // Unmarshal a payload into a new relationship event.
 func UnmarshalPayloadForNewRelationshipEvent(payload []byte) (*model.UnresolvedNewRelationshipPayload, error) {
 	pbassn := &PUnresolvedNewRelationshipPayload{}
@@ -160,6 +175,21 @@ func UnmarshalPayloadForAlertsEvent(encoded []byte) (*model.UnresolvedAlertsPayl
 	return payload, nil
 }
 
+// Unmarshal a payload into a state-change (presence) event.
+func UnmarshalPayloadForStateChangeEvent(encoded []byte) (*model.UnresolvedStateChangePayload, error) {
+	pbpayload := &PUnresolvedStateChangePayload{}
+	err := proto.Unmarshal(encoded, pbpayload)
+	if err != nil {
+		return nil, err
+	}
+	return &model.UnresolvedStateChangePayload{
+		State:        model.PresenceState(pbpayload.State),
+		Reason:       pbpayload.Reason,
+		SessionId:    pbpayload.SessionId,
+		OccurredTime: pbpayload.OccurredTime,
+	}, nil
+}
+
 // Marshal unresolved payload based on event type.
 func MarshalUnresolvedPayload(etype model.EventType, payload interface{}) ([]byte, error) {
 	switch etype {
@@ -183,6 +213,11 @@ func MarshalUnresolvedPayload(etype model.EventType, payload interface{}) ([]byt
 			return MarshalPayloadForAlertsEvent(apayload)
 		}
 		return nil, fmt.Errorf("invalid location payload: %+v", payload)
+	case model.StateChange:
+		if scpayload, ok := payload.(*model.UnresolvedStateChangePayload); ok {
+			return MarshalPayloadForStateChangeEvent(scpayload)
+		}
+		return nil, fmt.Errorf("invalid state-change payload: %+v", payload)
 	default:
 		return nil, fmt.Errorf("unable to marshal unresolved payload for event type: %s", etype.String())
 	}
@@ -199,6 +234,8 @@ func UnmarshalUnresolvedPayload(etype model.EventType, payload []byte) (interfac
 		return UnmarshalPayloadForMeasurementsEvent(payload)
 	case model.Alert:
 		return UnmarshalPayloadForAlertsEvent(payload)
+	case model.StateChange:
+		return UnmarshalPayloadForStateChangeEvent(payload)
 	default:
 		return nil, fmt.Errorf("unable to unmarshal unresolved payload for event type: %s", etype.String())
 	}

@@ -115,6 +115,19 @@ func (jd *JsonDecoder) BuildAlertsPayload(source *JsonEvent) (*model.UnresolvedA
 	return payload, nil
 }
 
+// Parses a state-change (presence) event.
+func (jd *JsonDecoder) BuildStateChangePayload(source *JsonEvent) (*model.UnresolvedStateChangePayload, error) {
+	locbytes, err := json.Marshal(source.Payload)
+	if err != nil {
+		return nil, err
+	}
+	payload := &model.UnresolvedStateChangePayload{}
+	if err := json.Unmarshal(locbytes, payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
 // Parse json event payload.
 func (jd *JsonDecoder) ParseEvent(payload []byte) (*JsonEvent, error) {
 	jevent := &JsonEvent{}
@@ -188,6 +201,12 @@ func (jd *JsonDecoder) Decode(payload []byte) (*model.UnresolvedEvent, interface
 		return event, payload, nil
 	case model.Alert:
 		payload, err := jd.BuildAlertsPayload(jevent)
+		if err != nil {
+			return nil, nil, err
+		}
+		return event, payload, nil
+	case model.StateChange:
+		payload, err := jd.BuildStateChangePayload(jevent)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -166,6 +166,17 @@ message PResolvedAlertsPayload {
 }
 
 /**
+ * Payload for a resolved device presence state-change event (ADR-067). Distinct
+ * from PAlarmStateChangeEvent (ADR-041), which is an alarm transition envelope.
+ */
+message PResolvedStateChangePayload {
+    string state = 1;
+    string reason = 2;
+    uint64 session_id = 3;
+    optional string occurred_time = 4;
+}
+
+/**
  * Alarm state-change event (ADR-041): re-emitted whenever a raised alarm
  * transitions (raised/escalated/de-escalated/cleared/acknowledged). It is a
  * snapshot of the alarm after the transition plus the transition kind and the

@@ -238,6 +238,36 @@ func UnmarshalPayloadForAlertsEvent(encoded []byte) (*model.ResolvedAlertsPayloa
 	return payload, nil
 }
 
+// Marshal payload for a state-change (presence) event.
+func MarshalPayloadForStateChangeEvent(payload *model.ResolvedStateChangePayload) ([]byte, error) {
+	pbpayload := &PResolvedStateChangePayload{
+		State:        payload.State,
+		Reason:       payload.Reason,
+		SessionId:    payload.SessionId,
+		OccurredTime: payload.OccurredTime,
+	}
+	bytes, err := proto.Marshal(pbpayload)
+	if err != nil {
+		return nil, err
+	}
+	return bytes, nil
+}
+
+// Unmarshal a payload into a state-change (presence) event.
+func UnmarshalPayloadForStateChangeEvent(encoded []byte) (*model.ResolvedStateChangePayload, error) {
+	pbpayload := &PResolvedStateChangePayload{}
+	err := proto.Unmarshal(encoded, pbpayload)
+	if err != nil {
+		return nil, err
+	}
+	return &model.ResolvedStateChangePayload{
+		State:        pbpayload.State,
+		Reason:       pbpayload.Reason,
+		SessionId:    pbpayload.SessionId,
+		OccurredTime: pbpayload.OccurredTime,
+	}, nil
+}
+
 // Marshal unresolved payload based on event type.
 func MarshalResolvedPayload(etype esmodel.EventType, payload interface{}) ([]byte, error) {
 	switch etype {
@@ -261,6 +291,11 @@ func MarshalResolvedPayload(etype esmodel.EventType, payload interface{}) ([]byt
 			return MarshalPayloadForAlertsEvent(apayload)
 		}
 		return nil, fmt.Errorf("invalid location payload: %+v", payload)
+	case esmodel.StateChange:
+		if scpayload, ok := payload.(*model.ResolvedStateChangePayload); ok {
+			return MarshalPayloadForStateChangeEvent(scpayload)
+		}
+		return nil, fmt.Errorf("invalid state-change payload: %+v", payload)
 	default:
 		return nil, fmt.Errorf("unable to marshal unresolved payload for event type: %s", etype.String())
 	}
@@ -277,6 +312,8 @@ func UnmarshalResolvedPayload(etype esmodel.EventType, payload []byte) (interfac
 		return UnmarshalPayloadForMeasurementsEvent(payload)
 	case esmodel.Alert:
 		return UnmarshalPayloadForAlertsEvent(payload)
+	case esmodel.StateChange:
+		return UnmarshalPayloadForStateChangeEvent(payload)
 	default:
 		return nil, fmt.Errorf("unable to unmarshal resolved payload for event type: %s", etype.String())
 	}

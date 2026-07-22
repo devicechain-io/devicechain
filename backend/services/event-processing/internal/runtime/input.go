@@ -16,6 +16,7 @@ import (
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
 
 // BuildInputs projects a resolved event onto one predicate.Input PER measurement sample it
@@ -31,7 +32,16 @@ import (
 // A non-measurement event (location/relationship/alert) or an empty batch yields a single
 // heartbeat Input with nil M: it carries no metric (matching no metric-gated rule) but is still a
 // heartbeat for an absence rule. The common one-sample event yields exactly one Input.
+//
+// A presence StateChange (ADR-067) is the exception: it is authoritative connectivity, not a data
+// heartbeat, so it yields NO input. Feeding it as a heartbeat would let a DISCONNECTED silently
+// reset an absence/dead-man timer — masking the very disconnect it reports. It stays inert for
+// DETECT until the S3 connectivity trigger lands; the caller still advances the frontier on its
+// sequence, it just feeds no rule.
 func BuildInputs(ev *dmmodel.ResolvedEvent, occurred time.Time) []predicate.Input {
+	if ev.EventType == esmodel.StateChange {
+		return nil
+	}
 	anchors := make(map[string]string, len(ev.Anchors))
 	for _, a := range ev.Anchors {
 		if _, seen := anchors[a.AnchorType]; !seen {

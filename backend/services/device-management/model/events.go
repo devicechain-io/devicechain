@@ -68,6 +68,18 @@ type ResolvedAlertsPayload struct {
 	Entries []ResolvedAlertEntry
 }
 
+// Payload with a resolved device presence transition (ADR-067). State is a
+// validated PresenceState (CONNECTED|DISCONNECTED); SessionId is the parsed
+// producer-supplied monotonic session id (a host-observed connect epoch). The
+// device-state projection applies the transition under a monotonic
+// (SessionId, OccurredTime) guard (ADR-067 decision 4).
+type ResolvedStateChangePayload struct {
+	State        string
+	Reason       string
+	SessionId    uint64
+	OccurredTime *string
+}
+
 // Event with token references resolved and the originating device's tracked
 // relationships merged onto it as a set of anchors (ADR-013). The set is empty
 // when the device has no tracked relationship (it still resolves and persists).

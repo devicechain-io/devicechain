@@ -87,3 +87,15 @@ message PUnresolvedAlertEntry {
 message PUnresolvedAlertsPayload {
     repeated PUnresolvedAlertEntry entries = 1;
 }
+
+/**
+ * Payload for a device presence state-change event (ADR-067). session_id is a
+ * producer-supplied monotonic session id (a host-observed connect epoch) carried
+ * as a string to survive a JSON decode without precision loss.
+ */
+message PUnresolvedStateChangePayload {
+    string state = 1;
+    string reason = 2;
+    string session_id = 3;
+    optional string occurred_time = 4;
+}

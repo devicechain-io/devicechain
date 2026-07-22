@@ -91,6 +91,28 @@ type UnresolvedAlertsPayload struct {
 	Entries []UnresolvedAlertEntry
 }
 
+// Presence state carried by a StateChange event (ADR-067). A closed enum: a
+// connectivity transition, not a free-form status.
+type PresenceState string
+
+const (
+	PresenceConnected    PresenceState = "CONNECTED"
+	PresenceDisconnected PresenceState = "DISCONNECTED"
+)
+
+// Payload for a transport-level device presence transition (ADR-067). SessionId
+// is a producer-supplied monotonic session id (a host-observed connect epoch, not
+// e.g. a raw Sparkplug bdSeq). It rides the wire as a string so an epoch-sized
+// value (UnixNano) survives a JSON decode without float64 precision loss; the
+// resolver parses it to a uint64. Reason is descriptive metadata only, never an
+// ordering or authorization input.
+type UnresolvedStateChangePayload struct {
+	State        PresenceState
+	Reason       string
+	SessionId    string
+	OccurredTime *string
+}
+
 // Initializer.
 func init() {
 	EventTypesByName = make(map[string]EventType)
