@@ -17,7 +17,9 @@ package host
 import (
 	"context"
 	"crypto/tls"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -58,6 +60,12 @@ const (
 	ingestAttemptTimeout = 3 * time.Second
 	ingestMaxAttempts    = 3
 	ingestRetryBackoff   = 500 * time.Millisecond
+	// reconcileProbeWindow is how long the failover reconciliation waits after
+	// rebirthing a tenant's asserted-active nodes before it declares the still-silent
+	// ones dead (ADR-067 SP4b). It must comfortably exceed a healthy node's
+	// rebirth→NBIRTH round-trip so a live-but-slow node is not falsely disconnected
+	// (and if one is, its later NBIRTH — a higher epoch — supersedes the timeout).
+	reconcileProbeWindow = 10 * time.Second
 )
 
 // Broker is the resolved MQTT connection for one source: a customer-operated
@@ -107,6 +115,13 @@ type SampleIngester interface {
 	IngestPresence(ctx context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) error
 }
 
+// reconcileSource reads the device-state presence projection for the failover
+// reconciliation (ADR-067 SP4b). *Reconciler implements it; the Client depends on the
+// interface so a host test can drive reconcile with a fake, without a device-state.
+type reconcileSource interface {
+	AssertedActive(ctx context.Context, tenant string) ([]AssertedDevice, uint64, error)
+}
+
 // Client is a single tenant-bound Sparkplug Host Application connection. Build it
 // with NewClient, then Connect / Stop it (the Manager owns one Client per
 // configured source). Every message this connection receives is attributed to
@@ -123,6 +138,20 @@ type Client struct {
 	// per connection, ADR-069 M7). A nil ingester leaves the receive path decode-only.
 	ingester SampleIngester
 	policy   IngestPolicy
+
+	// reconciler reads the device-state presence projection to repopulate presence on
+	// (re)connect (ADR-067 SP4b failover reconciliation). Nil disables reconciliation
+	// (decode-only tests, or a build without the device-state coordinate); shared across
+	// connections. reconciling guards against overlapping reconcile goroutines when the
+	// connection flaps. seen (guarded by seenMu) records the external ids observed since
+	// the current reconcile began, so the probe can tell a live node from a dead one.
+	reconciler  reconcileSource
+	reconciling atomic.Bool
+	seenMu      sync.Mutex
+	seen        map[string]struct{}
+	// probeWindow is how long reconcile waits before declaring silent nodes dead;
+	// defaulted to reconcileProbeWindow, overridable in tests.
+	probeWindow time.Duration
 
 	stateTopic string
 	// sessions is the SP2 per-node Sparkplug session machine; it validates the
@@ -167,13 +196,21 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 			DeviceTypeToken: source.DeviceTypeToken,
 			AutoRegister:    source.AutoRegister,
 		},
-		stateTopic: StateTopic(source.HostId),
-		now:        now,
-		newClient:  func(o *mqtt.ClientOptions) mqtt.Client { return mqtt.NewClient(o) },
-		rebirthCh:  make(chan nodeKey, rebirthQueueDepth),
+		stateTopic:  StateTopic(source.HostId),
+		now:         now,
+		newClient:   func(o *mqtt.ClientOptions) mqtt.Client { return mqtt.NewClient(o) },
+		rebirthCh:   make(chan nodeKey, rebirthQueueDepth),
+		probeWindow: reconcileProbeWindow,
 	}
 	c.sessions = NewSessionTracker(now, defaultRebirthBackoff, c.enqueueRebirth)
 	return c
+}
+
+// SetReconciler binds the device-state reconciler that repopulates presence on
+// (re)connect (ADR-067 SP4b). It is shared across connections and set once at wiring
+// time before Connect; a nil reconciler (the default) disables reconciliation.
+func (c *Client) SetReconciler(r reconcileSource) {
+	c.reconciler = r
 }
 
 // subscriptions is the set of topic filters this host subscribes to: one per
@@ -307,6 +344,13 @@ func (c *Client) onConnected(client mqtt.Client, sessionTs int64) {
 	// stale one (runLoop also sets it once Connect returns — this just closes the
 	// window between subscribe and that assignment).
 	c.setSession(client, sessionTs)
+	// Begin a fresh reconciliation window BEFORE subscribing, so every birth/data on
+	// this session (including a retained NBIRTH that flushes the instant we subscribe)
+	// counts toward liveness. Resetting here rather than inside reconcile is deliberate:
+	// a node that re-births between connect and the reconcile probe is genuinely alive,
+	// and wiping its signal at reconcile-start would wrongly declare a quiet-but-alive
+	// node dead.
+	c.resetSeen()
 	for _, filter := range c.subscriptions() {
 		if err := mqtt.WaitTokenTimeout(client.Subscribe(filter, 1, c.onMessage), subscribeTimeout); err != nil {
 			log.Error().Err(err).Str("tenant", c.tenant).Str("filter", filter).Msg("Failed to subscribe to Sparkplug group traffic.")
@@ -319,6 +363,24 @@ func (c *Client) onConnected(client mqtt.Client, sessionTs int64) {
 		log.Error().Err(err).Str("tenant", c.tenant).Str("topic", c.stateTopic).Msg("Failed to publish ONLINE STATE.")
 	} else {
 		log.Info().Str("tenant", c.tenant).Str("topic", c.stateTopic).Int64("timestamp", sessionTs).Msg("Announced Host Application ONLINE.")
+	}
+
+	// Reconcile presence against the device-state projection (ADR-067 SP4b). This runs
+	// on every (re)connect — covering not just a failover handover but any mid-term
+	// broker blip during which a node could have died unseen — because an ASSERTED
+	// device skips the inactivity sweep, so a missed NDEATH would otherwise strand it
+	// CONNECTED forever. It runs in its own goroutine (the probe waits out a window)
+	// and is guarded so overlapping reconnects never run two at once.
+	if c.reconciler != nil {
+		c.mu.Lock()
+		ctx := c.runCtx
+		c.mu.Unlock()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if c.reconciling.CompareAndSwap(false, true) {
+			go c.reconcile(ctx)
+		}
 	}
 }
 
@@ -343,6 +405,13 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	}
 	if c.metrics.Messages != nil {
 		c.metrics.Messages.WithLabelValues(rec.Label()).Inc()
+	}
+	// Record that this external id produced traffic, so an in-flight reconciliation
+	// probe (ADR-067 SP4b) knows the node/device is alive and does not force it
+	// DISCONNECTED. Any node/device message counts — a DEATH included, since the node
+	// answered and its own signal already drove the projection.
+	if !rec.Topic.IsState {
+		c.markSeen(SparkplugExternalId(rec.Topic))
 	}
 	// Advance the SP2 session machine; it may command the node to rebirth (fired
 	// via enqueueRebirth, outside its lock) and returns the numeric samples the
@@ -398,6 +467,145 @@ func (c *Client) ingestPresence(events []PresenceEvent) {
 				Str("reason", reason).Msg("Dropping Sparkplug presence (a clean-session Host gets no broker redelivery).")
 		},
 	)
+}
+
+// reconcile repopulates presence from the device-state projection after a (re)connect
+// (ADR-067 SP4b). It closes the missed-death hole: an ASSERTED device skips the
+// inactivity sweep, so a node that dies while no Host is connected (a failover window
+// or any broker blip) would sit CONNECTED forever. The sequence:
+//  1. Enumerate the tenant's asserted-active devices (the projection's belief).
+//  2. Floor the epoch generator above their max session, then mint ONE stale epoch —
+//     minted BEFORE the probe so any genuine re-birth during the window gets a LATER
+//     (higher) epoch and supersedes a racily-emitted timeout, i.e. a slow node self-heals.
+//  3. Rebirth every distinct node in scope (the Sparkplug re-announce mechanism).
+//  4. Wait the probe window; any expected external id that produced no traffic is
+//     declared dead — emit a DISCONNECTED at the stale epoch (always accepted, since it
+//     exceeds the stored session).
+//
+// It fails safe: a device-state read error aborts the reconcile (the next reconnect
+// retries) rather than guessing; the run holds the reconciling guard so a flapping
+// connection never runs two probes at once. It runs off the receive path in its own
+// goroutine.
+func (c *Client) reconcile(ctx context.Context) {
+	defer c.reconciling.Store(false)
+
+	// The seen set was reset in onConnected at the start of this session, so it already
+	// records any birth/data that arrived since we connected; do NOT reset it here (that
+	// would wipe a legitimate pre-probe re-birth and strand a quiet-but-alive node).
+	devices, maxSession, err := c.reconciler.AssertedActive(ctx, c.tenant)
+	if err != nil {
+		log.Warn().Err(err).Str("tenant", c.tenant).Msg("Presence reconciliation could not read device-state; will retry on the next reconnect.")
+		return
+	}
+	if len(devices) == 0 {
+		return // cold/empty: nothing the platform believes is online
+	}
+
+	// Floor the generator above every stored session, then mint the one epoch the
+	// timeout-DISCONNECTs will carry (see the ordering guarantee in the doc comment).
+	c.sessions.SetEpochFloor(maxSession + 1)
+	staleEpoch := c.sessions.MintEpoch()
+
+	// Rebirth every distinct in-scope node behind the asserted devices.
+	nodes := make(map[nodeKey]struct{})
+	for _, d := range devices {
+		key, ok := parseReconcileNodeKey(d.ExternalId)
+		if !ok || !c.inScope(key.group) {
+			continue
+		}
+		nodes[key] = struct{}{}
+	}
+	for key := range nodes {
+		c.enqueueRebirth(key.group, key.node)
+	}
+	log.Info().Str("tenant", c.tenant).Int("assertedDevices", len(devices)).Int("nodes", len(nodes)).
+		Uint64("epochFloor", maxSession+1).Msg("Reconciling Sparkplug presence: rebirthing asserted nodes and probing for liveness.")
+
+	// Wait out the probe window; a clean shutdown aborts before declaring anyone dead.
+	if !sleep(ctx, c.probeWindow) {
+		return
+	}
+
+	now := c.now()
+	stale := make([]PresenceEvent, 0)
+	for _, d := range devices {
+		key, ok := parseReconcileNodeKey(d.ExternalId)
+		if !ok || !c.inScope(key.group) {
+			continue
+		}
+		if c.sawExternalId(d.ExternalId) {
+			continue // produced traffic → alive (or drove its own DEATH); leave it
+		}
+		stale = append(stale, PresenceEvent{
+			ExternalId: d.ExternalId,
+			Connected:  false,
+			Reason:     "reconcile-timeout",
+			SessionId:  staleEpoch,
+			OccurredAt: now,
+		})
+	}
+	if len(stale) > 0 {
+		log.Warn().Str("tenant", c.tenant).Int("disconnected", len(stale)).
+			Msg("Presence reconciliation declaring unresponsive asserted devices DISCONNECTED (missed death during a no-host window).")
+		c.ingestPresence(stale)
+	}
+}
+
+// resetSeen begins a fresh reconciliation window: it clears the observed-id set so
+// only traffic from here on counts toward liveness.
+func (c *Client) resetSeen() {
+	c.seenMu.Lock()
+	c.seen = make(map[string]struct{})
+	c.seenMu.Unlock()
+}
+
+// markSeen records that an external id produced traffic during the current
+// reconciliation window (no-op when no reconcile has begun — seen is nil).
+func (c *Client) markSeen(externalId string) {
+	c.seenMu.Lock()
+	if c.seen != nil {
+		c.seen[externalId] = struct{}{}
+	}
+	c.seenMu.Unlock()
+}
+
+// sawExternalId reports whether an external id has produced traffic since the current
+// reconciliation window began.
+func (c *Client) sawExternalId(externalId string) bool {
+	c.seenMu.Lock()
+	defer c.seenMu.Unlock()
+	_, ok := c.seen[externalId]
+	return ok
+}
+
+// inScope reports whether a Sparkplug group is one this source covers. A source with
+// no configured groups subscribes to the all-groups wildcard, so every group is in
+// scope; otherwise only the configured groups are. This keeps two Sparkplug sources on
+// ONE tenant from cross-disconnecting each other's devices during reconciliation (the
+// probe only force-disconnects devices whose group this source actually subscribes to).
+func (c *Client) inScope(group string) bool {
+	if len(c.groups) == 0 {
+		return true
+	}
+	for _, g := range c.groups {
+		if g == group {
+			return true
+		}
+	}
+	return false
+}
+
+// parseReconcileNodeKey extracts the edge node ({group}, {node}) from a device's
+// external id — "{group}/{node}" for a node or "{group}/{node}/{device}" for a leaf,
+// the slash-joined form SparkplugExternalId builds. It returns false for anything that
+// is not a Sparkplug node/device identity (a device asserted by some other transport),
+// which the reconcile then skips.
+func parseReconcileNodeKey(externalId string) (nodeKey, bool) {
+	parts := strings.SplitN(externalId, "/", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return nodeKey{}, false
+	}
+	return nodeKey{group: parts[0], node: parts[1]}, true
 }
 
 // ingestWithRetry runs one bounded, in-handler retry loop shared by the sample and

@@ -163,6 +163,13 @@ instance:
         # uncompilable rule fails closed (ADR-051 slice 4b).
         hostname: event-processing
         port: 8080
+      deviceState:
+        # device-state is reached in-cluster by its instance-namespace Service name for
+        # the Sparkplug adapter's failover reconciliation (ADR-044 amendment / ADR-067
+        # SP4b): on winning leadership it enumerates a tenant's asserted-active devices
+        # to floor its epoch generator and probe them for liveness.
+        hostname: device-state
+        port: 8080
       commandDelivery:
         # command-delivery is reached in-cluster by its instance-namespace Service name
         # for event-processing's REACT dispatcher to enqueue a command when a detection

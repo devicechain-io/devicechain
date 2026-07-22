@@ -28,8 +28,10 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 
 // Interface for device state API (used for mocking)
 type DeviceStateApi interface {
-	MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time, pt *PresenceTransition) (*DeviceState, error)
+	MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time, pt *PresenceTransition, externalId string) (*DeviceState, error)
 	DeviceStatesByDeviceToken(ctx context.Context, deviceTokens []string) ([]*DeviceState, error)
+	DeviceStatesByExternalId(ctx context.Context, externalIds []string) ([]*DeviceState, error)
+	AssertedActiveDeviceStates(ctx context.Context) ([]*DeviceState, error)
 	DeviceStates(ctx context.Context, criteria DeviceStateSearchCriteria) (*DeviceStateSearchResults, error)
 	SweepInactive(ctx context.Context, now time.Time) (int64, error)
 	MergeLatestMeasurements(ctx context.Context, deviceToken string, inputs []LatestMeasurementInput) error
@@ -77,9 +79,10 @@ func presenceApplies(curSession uint64, curTime sql.NullTime, curConnected bool,
 // data event creates it active (today's behavior); an authoritative presence
 // transition creates it ASSERTED with Active set to exactly the transition — so a
 // first-ever DISCONNECT records a dead device, never a connected one (ADR-067).
-func newDeviceState(deviceToken string, occurredAt time.Time, pt *PresenceTransition) *DeviceState {
+func newDeviceState(deviceToken string, occurredAt time.Time, pt *PresenceTransition, externalId string) *DeviceState {
 	ds := &DeviceState{
 		DeviceToken:       deviceToken,
+		ExternalId:        externalId,
 		PresenceSource:    PresenceSourceInferred,
 		InactivityTimeout: config.DefaultInactivityTimeout,
 	}
@@ -109,7 +112,7 @@ func newDeviceState(deviceToken string, occurredAt time.Time, pt *PresenceTransi
 // nil pt is a plain data event: for an INFERRED device it is an implicit heartbeat
 // (unchanged); for an ASSERTED device it advances activity but NEVER flips Active —
 // a stray data event can't resurrect a device the platform knows is dead.
-func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time, pt *PresenceTransition) (*DeviceState, error) {
+func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time, pt *PresenceTransition, externalId string) (*DeviceState, error) {
 	// The 5 decode workers can process two events for the same device
 	// concurrently. Read-modify-write the row inside a transaction that takes a
 	// row lock (SELECT … FOR UPDATE), so same-device merges serialize and a later
@@ -123,10 +126,17 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 				// First event seen for this device: create a new row. A concurrent
 				// first event loses the (tenant_id, device_token) unique index race
 				// and errors out (redelivered), rather than producing a duplicate.
-				found = newDeviceState(deviceToken, occurredAt, pt)
+				found = newDeviceState(deviceToken, occurredAt, pt, externalId)
 				return tx.Create(found).Error
 			}
 			return result.Error
+		}
+
+		// Keep the denormalized external id fresh (it is stable per device, but a
+		// device could be assigned one after its first event). Only overwrite with a
+		// non-empty value so a rare event that resolves without one can't blank it.
+		if externalId != "" && found.ExternalId != externalId {
+			found.ExternalId = externalId
 		}
 
 		if pt != nil {
@@ -240,6 +250,30 @@ func (api *Api) LatestMeasurementsByDeviceToken(ctx context.Context, deviceToken
 func (api *Api) DeviceStatesByDeviceToken(ctx context.Context, deviceTokens []string) ([]*DeviceState, error) {
 	found := make([]*DeviceState, 0)
 	result := api.RDB.DB(ctx).Find(&found, "device_token in ?", deviceTokens)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return found, nil
+}
+
+// DeviceStatesByExternalId returns the device states for the given external ids.
+func (api *Api) DeviceStatesByExternalId(ctx context.Context, externalIds []string) ([]*DeviceState, error) {
+	found := make([]*DeviceState, 0)
+	result := api.RDB.DB(ctx).Find(&found, "external_id in ?", externalIds)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return found, nil
+}
+
+// AssertedActiveDeviceStates returns every ASSERTED + active device state (ADR-067
+// SP4b failover reconciliation). It is tenant-scoped by the RDB callback from the
+// caller's context, so it returns only that tenant's asserted-online devices.
+func (api *Api) AssertedActiveDeviceStates(ctx context.Context) ([]*DeviceState, error) {
+	found := make([]*DeviceState, 0)
+	result := api.RDB.DB(ctx).
+		Where("active = ? AND presence_source = ?", true, PresenceSourceAsserted).
+		Find(&found)
 	if result.Error != nil {
 		return nil, result.Error
 	}

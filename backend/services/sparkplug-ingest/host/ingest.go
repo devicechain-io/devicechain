@@ -173,6 +173,75 @@ func (r *Registrar) create(ctx context.Context, tenant, token, externalId, devic
 	return r.client.Query(ctx, r.url, tenant, createDeviceMutation, vars, &out)
 }
 
+// assertedActiveQuery asks device-state for every ASSERTED + active device the
+// calling tenant owns (ADR-067 SP4b). The response is tenant-scoped by the caller's
+// token, so a source only ever sees its own tenant's asserted-online devices.
+const assertedActiveQuery = `query {
+  assertedActiveDeviceStates { externalId sessionId }
+}`
+
+// AssertedDevice is one asserted-active device the failover reconciliation must
+// account for: its external id (the Sparkplug "{group}/{node}[/{device}]" identity to
+// probe) and the presence SessionId last applied to it (the projection's ordering
+// epoch, which floors the adapter's epoch generator).
+type AssertedDevice struct {
+	ExternalId string
+	SessionId  uint64
+}
+
+// Reconciler reads the device-state presence projection — the authoritative source of
+// which devices the platform believes are online (ADR-067 SP4b) — over the same
+// cross-service GraphQL client the registrar uses (a state:read-scoped service token).
+// It is the failover repopulation input: a newly-elected leader enumerates the
+// asserted-active devices, floors its epoch generator from them, and probes each.
+type Reconciler struct {
+	client GraphQLClient
+	url    string
+}
+
+// NewReconciler binds a reconciler to a GraphQL client and device-state's endpoint URL.
+func NewReconciler(client GraphQLClient, deviceStateURL string) *Reconciler {
+	return &Reconciler{client: client, url: deviceStateURL}
+}
+
+// AssertedActive returns the tenant's asserted-active devices and the maximum
+// SessionId among them (0 when there are none) — the floor input for the adapter's
+// epoch generator so a fresh emission always supersedes any stored session. A device
+// whose external id is null is skipped: it cannot be reconciled against a Sparkplug
+// topic (and only a Sparkplug producer sets one at GA).
+func (r *Reconciler) AssertedActive(ctx context.Context, tenant string) ([]AssertedDevice, uint64, error) {
+	var out struct {
+		AssertedActiveDeviceStates []struct {
+			ExternalId *string `json:"externalId"`
+			SessionId  string  `json:"sessionId"`
+		} `json:"assertedActiveDeviceStates"`
+	}
+	if err := r.client.Query(ctx, r.url, tenant, assertedActiveQuery, nil, &out); err != nil {
+		return nil, 0, err
+	}
+	devices := make([]AssertedDevice, 0, len(out.AssertedActiveDeviceStates))
+	var max uint64
+	for _, d := range out.AssertedActiveDeviceStates {
+		if d.ExternalId == nil || *d.ExternalId == "" {
+			continue
+		}
+		session, err := strconv.ParseUint(d.SessionId, 10, 64)
+		if err != nil {
+			// A malformed sessionId would poison the floor; skip the row and let the
+			// probe still cover its external id (fail toward reconciling, not toward a
+			// bad epoch floor).
+			log.Warn().Str("tenant", tenant).Str("externalId", *d.ExternalId).Str("sessionId", d.SessionId).
+				Msg("Skipping an asserted device with an unparseable sessionId during reconciliation.")
+			continue
+		}
+		if session > max {
+			max = session
+		}
+		devices = append(devices, AssertedDevice{ExternalId: *d.ExternalId, SessionId: session})
+	}
+	return devices, max, nil
+}
+
 // Emitter builds an UnresolvedEvent from a device's samples and writes it durably
 // to the shared inbound-events stream, reusing the event-sources wire contract so
 // the device-management resolver ingests it unchanged.

@@ -33,6 +33,17 @@ type DeviceState implements Model {
     lastActivityTime: String
     inactivityAlarmTime: String
     inactivityTimeout: Int!
+    # externalId is the device's transport-native identity, denormalized from the
+    # resolved event (ADR-049); null when the device has no external id.
+    externalId: String
+    # presenceSource discriminates authoritative presence from inferred (ADR-067):
+    # INFERRED (activity + inactivity sweep) or ASSERTED (Active driven only by a
+    # StateChange). sessionId is the last-applied transition's ordering epoch, returned
+    # as a String because it is a UnixNano value that overflows a 32-bit GraphQL Int
+    # (0 until the first StateChange). presenceTime is that transition's time.
+    presenceSource: String!
+    sessionId: String!
+    presenceTime: String
 }
 
 # Current (most-recent) value of a single named measurement for a device — the
@@ -74,6 +85,13 @@ type DeviceStateSearchResults {
 type Query {
     # Get device states for one or more devices by device token.
     deviceStatesByDeviceToken(deviceTokens: [String!]!): [DeviceState!]!
+    # Get device states for one or more devices by their (denormalized) external id.
+    deviceStatesByExternalId(externalIds: [String!]!): [DeviceState!]!
+    # All ASSERTED + active device states for the calling tenant — the source the
+    # Sparkplug adapter reconciles against on failover (ADR-067 SP4b): it enumerates
+    # the devices the platform believes are authoritatively online, floors its epoch
+    # generator from the max sessionId here, and probes each for liveness.
+    assertedActiveDeviceStates: [DeviceState!]!
     # Search for device states that match the given criteria.
     deviceStates(criteria: DeviceStateSearchCriteria!): DeviceStateSearchResults!
     # Current value of every measurement name for a device (live readings).

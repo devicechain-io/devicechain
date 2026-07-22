@@ -80,10 +80,15 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 // device-management and never reaches event-management / device-state.
 func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []model.ResolvedAnchor,
 	memberships []model.GroupRef, event *esmodel.UnresolvedEvent, rezPayload interface{}, scope *model.ProfileScope) *EventResolutionResults {
+	externalId := ""
+	if device.ExternalId.Valid {
+		externalId = device.ExternalId.String
+	}
 	resolved := &model.ResolvedEvent{
 		Source:              event.Source,
 		AltId:               event.AltId,
 		SourceDeviceToken:   device.Token,
+		ExternalId:          externalId,
 		DeviceTypeToken:     scope.DeviceTypeToken,
 		ProfileVersionToken: scope.ProfileVersionToken,
 		Anchors:             anchors,

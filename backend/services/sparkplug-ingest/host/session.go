@@ -169,6 +169,19 @@ func (tr *SessionTracker) SetEpochFloor(floor uint64) {
 	}
 }
 
+// MintEpoch mints a fresh strictly-monotone epoch above the current floor, for the
+// failover reconciliation to stamp its timeout-DISCONNECTED transitions (ADR-067
+// SP4b). Called AFTER SetEpochFloor(max+1), so the minted epoch exceeds every stored
+// session and the reconcile-DISCONNECT supersedes them — while a genuine re-birth
+// during the probe window mints a LATER (higher) epoch via nextEpoch and thus
+// supersedes the reconcile-DISCONNECT, so a slow-but-alive node self-heals regardless
+// of the race between its birth and the probe timeout.
+func (tr *SessionTracker) MintEpoch() uint64 {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return tr.nextEpoch()
+}
+
 // NewSessionTracker builds a tracker. now supplies the clock for backoff (pass
 // time.Now in production); rebirth is invoked to command a node to re-emit its
 // births (nil is allowed — the decision still updates backoff state). The rebirth

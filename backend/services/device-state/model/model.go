@@ -26,7 +26,12 @@ const (
 type DeviceState struct {
 	gorm.Model
 	rdb.TenantScoped
-	DeviceToken         string
+	DeviceToken string
+	// ExternalId denormalizes the device's external id (ADR-049) from the resolved
+	// event so the projection is queryable by transport-native identity (ADR-067 SP4b
+	// failover reconciliation enumerates asserted-active devices by their Sparkplug
+	// "{group}/{node}[/{device}]" external id). Empty when the device has no external id.
+	ExternalId          string `gorm:"type:text"`
 	Active              bool
 	LastConnectTime     sql.NullTime
 	LastDisconnectTime  sql.NullTime

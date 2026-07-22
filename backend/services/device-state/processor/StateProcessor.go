@@ -215,7 +215,7 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 	}
 
 	// Update the originating device's live connectivity projection for every event.
-	if _, err := sp.Api.MergeDeviceState(msgctx, event.SourceDeviceToken, event.OccurredTime, pt); err != nil {
+	if _, err := sp.Api.MergeDeviceState(msgctx, event.SourceDeviceToken, event.OccurredTime, pt, event.ExternalId); err != nil {
 		disposeTransient(err, fmt.Sprintf("device state projection update for device %s", event.SourceDeviceToken))
 		return
 	}

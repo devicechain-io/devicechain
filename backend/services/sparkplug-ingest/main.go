@@ -10,9 +10,10 @@
 // Sparkplug topic. It maps each edge-node/device identity to a DeviceChain device
 // (SP3b), emits measurements and presence StateChange events (SP4a), and elects a
 // single leader via a core/lease so only one replica connects as the Host
-// Application (SP4b — ADR-070; two would publish duplicate STATE). Reconcile-on-
-// acquire (rebirth-all + probe against the device-state presence projection) is the
-// remaining SP4b step.
+// Application (SP4b — ADR-070; two would publish duplicate STATE). On every (re)connect
+// the leader reconciles presence against the device-state projection (rebirth-all +
+// liveness probe) so a node that died while no Host was connected is not stranded
+// CONNECTED — the authoritative-presence correctness guarantee (ADR-067 SP4b).
 package main
 
 import (
@@ -149,19 +150,21 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// sources so an inert (empty-sources) deployment does not demand service auth it
 	// will never use.
 	var ingester *host.Ingester
+	var reconciler *host.Reconciler
 	if len(Configuration.Sources) > 0 {
 		writer, err := NatsManager.NewWriter(streams.InboundEvents)
 		if err != nil {
 			return err
 		}
-		built, err := buildIngester(writer)
+		built, rec, err := buildIngester(writer)
 		if err != nil {
 			return err
 		}
 		ingester = built
+		reconciler = rec
 	}
 
-	clients, err := resolveSources(Configuration, Microservice.InstanceId, ingester, metrics)
+	clients, err := resolveSources(Configuration, Microservice.InstanceId, ingester, reconciler, metrics)
 	if err != nil {
 		return err
 	}
@@ -184,7 +187,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 // client. Failing here (bad scheme, an intended-but-empty password env) fails the
 // service closed at startup rather than dialing a mis-authenticated broker and
 // retry-looping silently — repo convention (ADR-022).
-func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, ingester *host.Ingester, metrics host.Metrics) ([]*host.Client, error) {
+func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, ingester *host.Ingester, reconciler *host.Reconciler, metrics host.Metrics) ([]*host.Client, error) {
 	// Convert a possibly-nil *Ingester into the interface as a real nil rather than a
 	// typed nil: passing a nil *Ingester directly would wrap into a NON-nil interface,
 	// so the Client's `ingester != nil` guard would pass and Ingest would panic. This
@@ -202,7 +205,13 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 		if err != nil {
 			return nil, err
 		}
-		clients = append(clients, host.NewClient(src, broker, si, time.Now, metrics))
+		client := host.NewClient(src, broker, si, time.Now, metrics)
+		// The reconciler is shared across sources; a nil one (no ingest path) leaves
+		// reconciliation off. Set before Connect so the first onConnected can use it.
+		if reconciler != nil {
+			client.SetReconciler(reconciler)
+		}
+		clients = append(clients, client)
 	}
 	return clients, nil
 }
@@ -212,19 +221,24 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 // (or the writer is nil): a Sparkplug adapter that cannot reach device-management or
 // NATS would resolve no devices / emit nothing and silently drop every measurement,
 // so a misconfigured deploy or a wiring-order regression must be visible at startup,
-// not at runtime (ADR-022). The service token carries device:read (lookup by
-// external id) and device:write (auto-registration) only — least privilege.
-func buildIngester(writer messaging.MessageWriter) (*host.Ingester, error) {
+// not at runtime (ADR-022). The service token carries device:read (lookup by external
+// id), device:write (auto-registration), and state:read (failover reconciliation reads
+// the device-state presence projection, ADR-067 SP4b) only — least privilege.
+func buildIngester(writer messaging.MessageWriter) (*host.Ingester, *host.Reconciler, error) {
 	if writer == nil {
-		return nil, fmt.Errorf("inbound-events writer is nil — the durable emit path was not wired before the ingester was built")
+		return nil, nil, fmt.Errorf("inbound-events writer is nil — the durable emit path was not wired before the ingester was built")
 	}
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	graphqlURL, err := ingestEndpoint(infra)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	deviceStateURL, err := deviceStateEndpoint(infra)
+	if err != nil {
+		return nil, nil, err
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest",
-		[]string{string(auth.DeviceRead), string(auth.DeviceWrite)})
+		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead)})
 
 	ingestMetrics := host.IngestMetrics{
 		MeasurementsEmitted: Microservice.NewCounter("measurements_emitted_total",
@@ -238,8 +252,22 @@ func buildIngester(writer messaging.MessageWriter) (*host.Ingester, error) {
 	}
 	registrar := host.NewRegistrar(client, graphqlURL)
 	emitter := host.NewEmitter(writer, time.Now)
-	log.Info().Str("deviceManagement", graphqlURL).Msg("Sparkplug ingest will resolve + emit telemetry via device-management (ADR-044).")
-	return host.NewIngester(registrar, emitter, ingestMetrics), nil
+	reconciler := host.NewReconciler(client, deviceStateURL)
+	log.Info().Str("deviceManagement", graphqlURL).Str("deviceState", deviceStateURL).
+		Msg("Sparkplug ingest will resolve + emit telemetry via device-management and reconcile presence via device-state (ADR-044/067).")
+	return host.NewIngester(registrar, emitter, ingestMetrics), reconciler, nil
+}
+
+// deviceStateEndpoint validates the infrastructure the failover reconciliation needs
+// and returns device-state's GraphQL URL. It fails closed: reconciliation is the
+// authoritative-presence correctness guarantee (ADR-067 SP4b) — an adapter that cannot
+// reach device-state on failover would leave devices stranded CONNECTED after a missed
+// death — so a missing coordinate must surface at startup, not as a silent gap.
+func deviceStateEndpoint(infra mscfg.InfrastructureConfiguration) (string, error) {
+	if infra.DeviceState.Hostname == "" || infra.DeviceState.Port == 0 {
+		return "", fmt.Errorf("device-state endpoint not configured (infrastructure.deviceState) — sparkplug-ingest cannot reconcile presence on failover and would strand devices connected after a missed death")
+	}
+	return fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port), nil
 }
 
 // ingestEndpoint validates the infrastructure the ingest path needs and returns

@@ -13,5 +13,6 @@ var (
 		NewLatestMeasurementSchema(),
 		NewLatestMeasurementBindingColumns(),
 		NewPresenceColumns(),
+		NewExternalIdColumn(),
 	}
 )

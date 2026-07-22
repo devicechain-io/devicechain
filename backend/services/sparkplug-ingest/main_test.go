@@ -50,7 +50,7 @@ func TestLoadConfigurationParsesRenderedChartDocument(t *testing.T) {
 // an emitter that nil-panics the receive goroutine on the first message. The nil
 // check precedes any Microservice access, so this needs no lifecycle setup.
 func TestBuildIngesterRejectsNilWriter(t *testing.T) {
-	_, err := buildIngester(nil)
+	_, _, err := buildIngester(nil)
 	require.Error(t, err, "a nil inbound-events writer must fail closed")
 }
 
@@ -76,6 +76,22 @@ func TestIngestEndpointFailsClosed(t *testing.T) {
 	noDM.DeviceManagement = mscfg.DeviceManagementConfiguration{}
 	_, err = ingestEndpoint(noDM)
 	require.Error(t, err, "no device-management coordinate must fail closed")
+}
+
+// TestDeviceStateEndpointFailsClosed pins that failover reconciliation refuses to come
+// up unconfigured (ADR-067 SP4b): with no device-state coordinate it errors at startup
+// rather than silently disabling the reconciliation that keeps a missed death from
+// stranding a device CONNECTED. A configured coordinate yields the GraphQL URL.
+func TestDeviceStateEndpointFailsClosed(t *testing.T) {
+	full := mscfg.InfrastructureConfiguration{
+		DeviceState: mscfg.DeviceStateConfiguration{Hostname: "device-state", Port: 8080},
+	}
+	url, err := deviceStateEndpoint(full)
+	require.NoError(t, err)
+	assert.Equal(t, "http://device-state:8080/graphql", url)
+
+	_, err = deviceStateEndpoint(mscfg.InfrastructureConfiguration{})
+	require.Error(t, err, "no device-state coordinate must fail closed")
 }
 
 // src is a minimal valid source for resolveBroker tests.
@@ -151,11 +167,11 @@ func TestResolveSourcesBuildsOnePerSource(t *testing.T) {
 	cfg := &config.SparkplugConfiguration{Sources: []config.SparkplugSource{
 		src("tcp://a:1883"), src("ssl://b:8883"),
 	}}
-	clients, err := resolveSources(cfg, "inst", nil, host.Metrics{})
+	clients, err := resolveSources(cfg, "inst", nil, nil, host.Metrics{})
 	require.NoError(t, err)
 	assert.Len(t, clients, 2)
 
-	empty, err := resolveSources(&config.SparkplugConfiguration{}, "inst", nil, host.Metrics{})
+	empty, err := resolveSources(&config.SparkplugConfiguration{}, "inst", nil, nil, host.Metrics{})
 	require.NoError(t, err)
 	assert.Empty(t, empty)
 }
