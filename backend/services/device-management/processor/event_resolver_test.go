@@ -135,14 +135,46 @@ func (suite *EventResolverTestSuite) TestDisabledIgnoresCredential() {
 }
 
 // An unresolvable device token (no credential, optional mode) reports DeviceNotFound.
+// The lookup returns ([], nil) — gorm's Find reports NO error for an absent token —
+// so this pins that resolveDevice synthesizes the error itself rather than passing
+// the lookup's (nil) error through. Mocking an error here would test a contract
+// DevicesByToken never produces.
 func (suite *EventResolverTestSuite) TestUnknownDeviceToken() {
-	suite.API.Mock.On("DevicesByToken").Return([]*dmodel.Device{}, errors.New("not found"))
+	suite.API.Mock.On("DevicesByToken").Return([]*dmodel.Device{}, nil)
 
 	event := &esmodel.UnresolvedEvent{Device: "MISSING", EventType: esmodel.Location}
 	_, reason, err := suite.resolver(config.AuthModeOptional).resolveDevice(context.Background(), event)
 
 	assert.Error(suite.T(), err)
 	assert.Equal(suite.T(), uint(dmproto.FailureReason_DeviceNotFound), reason)
+}
+
+// A genuine lookup error (the DB is unreachable) is classified ApiCallFailed, not
+// DeviceNotFound — the two dispositions differ (infra failure vs a real absence),
+// even though both retry via redelivery.
+func (suite *EventResolverTestSuite) TestDeviceLookupErrorIsApiCallFailed() {
+	suite.API.Mock.On("DevicesByToken").Return(([]*dmodel.Device)(nil), errors.New("db unreachable"))
+
+	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: esmodel.Location}
+	_, reason, err := suite.resolver(config.AuthModeOptional).resolveDevice(context.Background(), event)
+
+	assert.Error(suite.T(), err)
+	assert.Equal(suite.T(), uint(dmproto.FailureReason_ApiCallFailed), reason)
+}
+
+// The end-to-end pin for the crash-loop: a missing device must surface as an error
+// from ResolveEvent, NOT a nil *Device handed on to HandleEvent (which nil-derefs
+// and, because JetStream redelivers, crash-loops on a single unknown-token event).
+// Exercises the actual dangerous path, not resolveDevice in isolation.
+func (suite *EventResolverTestSuite) TestUnknownDeviceDoesNotReachHandleEvent() {
+	suite.API.Mock.On("DevicesByToken").Return([]*dmodel.Device{}, nil)
+
+	event := &esmodel.UnresolvedEvent{Device: "MISSING", EventType: esmodel.Measurement}
+	assert.NotPanics(suite.T(), func() {
+		_, reason, err := suite.resolver(config.AuthModeOptional).ResolveEvent(context.Background(), event)
+		assert.Error(suite.T(), err)
+		assert.Equal(suite.T(), uint(dmproto.FailureReason_DeviceNotFound), reason)
+	})
 }
 
 // A measurement event for the given key/value.

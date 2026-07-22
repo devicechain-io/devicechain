@@ -592,8 +592,19 @@ func (rez *EventResolver) resolveDevice(ctx context.Context, unrez *esmodel.Unre
 	}
 
 	matches, err := rez.Api.DevicesByToken(ctx, []string{unrez.Device})
-	if err != nil || len(matches) == 0 {
-		return nil, uint(dmproto.FailureReason_DeviceNotFound), err
+	if err != nil {
+		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
+	}
+	if len(matches) == 0 {
+		// A missing token is DevicesByToken returning ([], nil): gorm's Find reports
+		// no error on an empty result set, so this branch MUST synthesize the error
+		// itself. Without it resolveDevice returns a nil *Device AND a nil error;
+		// ResolveEvent only checks err != nil, hands the nil device to HandleEvent,
+		// and the resolver nil-derefs — which JetStream then crash-loops on
+		// redelivery. Returning an error routes it to the designed retry-then-
+		// dead-letter path (Process loop: a not-yet-registered device may appear).
+		return nil, uint(dmproto.FailureReason_DeviceNotFound),
+			fmt.Errorf("event device token %q is not registered", unrez.Device)
 	}
 	return matches[0], 0, nil
 }
