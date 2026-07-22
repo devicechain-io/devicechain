@@ -22,6 +22,7 @@ use (
 	./backend/services/mcp
 	./backend/services/notification-management
 	./backend/services/outbound-connectors
+	./backend/services/sparkplug-ingest
 	./backend/services/user-management
 	./backend/sims/dc-simulator
 	./backend/tools/migrationdiff
