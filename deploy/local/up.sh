@@ -140,6 +140,11 @@ kubeconfig_context = "$CONTEXT"
 # kind recipe: ingress binds node 80/443 via hostPort + NodePort (no LoadBalancer,
 # which stays <pending> on kind and times out the apply). See the ingress-nginx module.
 ingress_use_host_port = true
+# Expose MQTT as a NodePort on the port the kind config maps host 1883 to
+# (kind-cluster.yaml: host 1883 -> node 31883), so host tools reach the broker at
+# ssl://127.0.0.1:1883 — matching dcctl's local bring-up. Without it that host map
+# lands on an empty node port and resets (device clients see EOF).
+nats_mqtt_node_port = 31883
 EOF
 fi
 # Broker authentication (ADR-025): mint the NATS auth-callout credentials — the

@@ -130,6 +130,18 @@ variable "nats_service_password_bcrypt" {
   sensitive   = true
 }
 
+variable "nats_mqtt_node_port" {
+  description = <<-EOT
+    Local-kind only: expose the MQTT gateway as a NodePort on this node port so a
+    host device/tool reaches the broker at ssl://127.0.0.1:1883 through the kind
+    1883->31883 host map. 0 = ClusterIP only (the cloud default; a NodePort would
+    publish MQTT on every node IP). dcctl sets 31883 on a local context, matching the
+    kind map; leave it 0 on real clouds. See the nats module var for the full story.
+  EOT
+  type        = number
+  default     = 0
+}
+
 # --- Relational Postgres (control-plane RDB) ------------------------------------
 
 variable "postgres_image" {

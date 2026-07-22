@@ -13,9 +13,9 @@
 #            an authored raiseAlarm rule; gate on the durable CLEARED+MAJOR alarm.
 #   - L2d-3 command round-trip: authored threshold->sendCommand rule enqueues a
 #            command that a real MQTT cmdreceiver cohort answers; gate on durable
-#            SUCCESSFUL. This is the ONLY oracle that dials the NATS MQTT gateway --
-#            it needs its own port-forward (see the command port-forward step for why
-#            the kind host-port map is a dead route and cannot be used here).
+#            SUCCESSFUL. The ONLY oracle that dials the NATS MQTT gateway -- reached at
+#            its default ssl://127.0.0.1:1883 via the local MQTT NodePort (dcctl's
+#            nats_mqtt_node_port, which the kind 1883->31883 host map lands on).
 #   - L3  -- ADR-063 tiered contention (the acceptance test for preferential
 #            shedding): TWO probe tenants (gold + best-effort) at the same load,
 #            first at floor 0 (negative control -- neither may shed), then at an
@@ -341,17 +341,12 @@ jobs:
       # (http://localhost:8081). The tenant GraphQL / durable-oracle read-backs are
       # on the ingress (:80), no forward.
       #
-      # MQTT (:1883) is NOT reachable at the host either, despite the kind config
-      # mapping host 1883 -> node 31883: that mapping is a DEAD route. dcctl embeds
-      # deploy/local/kind-cluster.yaml (assets.KindClusterConfig), whose 1883->31883
-      # entry is a NodePort slot from the legacy up.sh topology -- but the dcctl
-      # opentofu deploy exposes the MQTT gateway as a ClusterIP Service ONLY and never
-      # creates a NodePort on 31883, so the docker-proxy accepts the TCP connection and
-      # forwards it to an empty node port, which resets: the paho client sees
-      # "network Error: EOF" before the auth callout. (Contrast :80/:443, whose kind
-      # host-port maps DO land on ingress-nginx's real NodePort.) The command step
-      # therefore opens its OWN port-forward on a fresh host port -- NOT 1883, which
-      # the dead docker-proxy already holds -- and points the driver at it.
+      # MQTT (:1883) needs NO forward: on a local context dcctl exposes the gateway as
+      # a NodePort on 31883 (nats_mqtt_node_port), which the kind config's host
+      # 1883 -> node 31883 map lands on -- the same host-port treatment :80/:443 get,
+      # so the command driver reaches the broker at its default ssl://127.0.0.1:1883.
+      # (This used to be a dead route -- the map with no Service behind it reset every
+      # connect, which is what deferred the command oracle; see nats_mqtt_node_port.)
       - name: Open device-plane ingress (shared port-forward)
         id: ingress
         run: |
@@ -482,50 +477,28 @@ jobs:
       # ---------------------------------------------------------------------
       # This is the one oracle that dials the NATS MQTT gateway (a cmdreceiver cohort
       # subscribes, and a dispatched command must reach durable SUCCESSFUL through
-      # enqueue -> 30s sweep -> dispatch -> MQTT -> device respond). MQTT is a ClusterIP
-      # Service with no usable host route (see the shared-forward step for why the kind
-      # 1883 host map is dead), so this opens its OWN forward on a fresh port. It runs
-      # BEFORE L3, while the shared ingress forward (the probes' HTTP emit path) is
-      # still up and before L3's floor rollout replaces the event-sources pod.
-      - name: Open MQTT gateway (command port-forward)
-        id: mqtt
+      # enqueue -> 30s sweep -> dispatch -> MQTT -> device respond). It needs NO
+      # port-forward: dcctl exposes MQTT as a NodePort on a local context, which the
+      # kind host 1883 map lands on, so the driver's default ssl://127.0.0.1:1883
+      # reaches the broker (see the shared-forward step + nats_mqtt_node_port). That is
+      # a kernel kube-proxy route reached through docker's loopback proxy -- still a
+      # userspace hop, but far more robust than a SPDY kubectl port-forward through the
+      # apiserver, and with no long-lived tunnel to drop mid-drive. It runs BEFORE L3,
+      # while the shared ingress forward (the HTTP emit path) is up and before L3's
+      # floor rollout replaces the pod.
+      - name: L2d-3 command -- create tenant, drive round-trip over MQTT (the gate)
         run: |
-          # 18831, deliberately NOT 1883: dcctl's kind topology maps host 1883 to a
-          # NodePort (31883) the deploy never creates, so a docker-proxy already holds
-          # 1883 as a dead route -- binding a forward there would fail or, worse, the
-          # driver's default ssl://127.0.0.1:1883 would hit the dead route and EOF. A
-          # fresh port forwards straight to the ClusterIP MQTT listener.
-          kubectl port-forward -n dc-system svc/dc-nats 18831:1883 \
-            >"$RUNNER_TEMP/pf-mqtt.log" 2>&1 &
-          pf_pid=$!
-          echo "pf_pid=$pf_pid" >> "$GITHUB_OUTPUT"
-
-          # Ready when a TLS handshake returns the gateway's (self-signed) cert -- the
-          # real protocol layer, like the ingress step's curl, proving the tunnel
-          # reaches the MQTT listener end to end and not just an open local socket.
-          connected=0
-          for _ in $(seq 1 30); do
-            if echo | timeout 3 openssl s_client -connect 127.0.0.1:18831 2>/dev/null \
-                 | grep -q "BEGIN CERTIFICATE"; then
-              connected=1
-              echo "MQTT gateway reachable at ssl://127.0.0.1:18831"
-              break
-            fi
-            if ! kill -0 "$pf_pid" 2>/dev/null; then
-              echo "::error::MQTT gateway port-forward exited before it became reachable"
-              cat "$RUNNER_TEMP/pf-mqtt.log" || true
-              exit 1
-            fi
-            sleep 2
-          done
-          if [ "$connected" -ne 1 ]; then
-            echo "::error::MQTT gateway port-forward never became reachable after 30 attempts (~60s); the tunnel, not the platform, is the cause."
-            cat "$RUNNER_TEMP/pf-mqtt.log" || true
+          # Attribute a broken route BEFORE the driver: without this, a missing NodePort
+          # (dcctl didn't provision it, chart relabel, port collision) would first show
+          # as a red command-roundtrip invariant with no hint it was the route, not the
+          # pipeline -- the exact misdiagnosis that deferred this oracle. A one-shot TLS
+          # handshake returning the gateway cert proves host:1883 lands on the broker.
+          if ! echo | timeout 5 openssl s_client -connect 127.0.0.1:1883 2>/dev/null \
+               | grep -q "BEGIN CERTIFICATE"; then
+            echo "::error::MQTT gateway not reachable at ssl://127.0.0.1:1883 -- the local MQTT NodePort (nats_mqtt_node_port) / kind host map is the cause, NOT a command-pipeline fault."
             exit 1
           fi
 
-      - name: L2d-3 command -- create tenant, drive round-trip over MQTT (the gate)
-        run: |
           # Fresh tenant: the command harness AUTHORS a threshold->sendCommand rule and
           # a command definition on a dedicated profile; the authoring guard REFUSES if
           # they pre-exist, so every run needs a fresh sim. Three populations through
@@ -534,12 +507,12 @@ jobs:
           # SUCCESSFUL), background (saturate). The gate reconciles DURABLE command
           # state over the tenant GraphQL (:80); the MQTT receive tally is non-gating
           # evidence. --mqtt-insecure (default) skips the self-signed gateway cert whose
-          # SAN a 127.0.0.1 forward cannot match. Non-zero exit on any failed invariant
-          # IS the gate.
+          # SAN a 127.0.0.1 host route cannot match. Non-zero exit on any failed
+          # invariant IS the gate.
           "$RUNNER_TEMP/dcctl" sim create cmdprobe -s localhost
           "$RUNNER_TEMP/bin/dc-loadtest-command" \
             --handshake "$HOME/.devicechain/sims/cmdprobe.json" \
-            --mqtt-broker "ssl://127.0.0.1:18831" \
+            --mqtt-broker "ssl://127.0.0.1:1883" \
             --bg-devices 40 --bg-interval 500ms \
             --safety-probes 3 --command-probes 3 --cycles 3 --probe-interval 2s \
             --min-accepted 600 \
@@ -566,34 +539,6 @@ jobs:
           path: ${{ runner.temp }}/command-report.json
           if-no-files-found: warn
           overwrite: true
-
-      - name: Stop MQTT gateway forward (+ attribute the command round-trip)
-        if: always()
-        env:
-          PF_PID: ${{ steps.mqtt.outputs.pf_pid }}
-        run: |
-          # This forward is the MOST drop-prone tunnel in the job: unlike the HTTP
-          # forwards (short requests), it carries the cmdreceiver cohort's long-lived
-          # paho connections for the whole drive, and the receiver auto-reconnects to
-          # 127.0.0.1:18831 forever if the pf process dies -- so a tunnel drop shows up
-          # as commands stuck in SENT and a red command-roundtrip invariant with NO hint
-          # it was the tunnel. That is precisely the misdiagnosis ("compact MQTT bug")
-          # that deferred this oracle, so attribute it explicitly: died, or stayed alive
-          # while logging per-stream forwarding errors. PF_PID is passed via env (the
-          # file's convention) rather than interpolated into the script.
-          pf_errors=""
-          if grep -qiE 'error forwarding|lost connection|an error occurred' "$RUNNER_TEMP/pf-mqtt.log" 2>/dev/null; then
-            pf_errors=1
-          fi
-          if [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && [ -z "$pf_errors" ]; then
-            echo "MQTT gateway port-forward survived the command round-trip cleanly (pid $PF_PID)."
-          else
-            echo "::warning::MQTT gateway port-forward did not survive cleanly -- a command-roundtrip red may be a kubectl port-forward drop, not a platform correctness failure. Log tail:"
-            tail -30 "$RUNNER_TEMP/pf-mqtt.log" 2>/dev/null || true
-          fi
-          # L3 does not use MQTT and nothing later rebinds 18831, so no need to poll for
-          # exit (unlike the shared :8081 forward, which must free the port for reopen).
-          kill "$PF_PID" 2>/dev/null || true
 
       # =====================================================================
       # ADR-064 L3 -- tiered contention: the acceptance test for ADR-063
@@ -976,11 +921,9 @@ jobs:
 
           # The device-plane port-forwards are the load path; if one dropped, a red is a
           # tunnel artifact, not a platform fault. Their logs are the only place that shows.
-          # (The shared forward carried the floor-0 probes; the second carried L3-positive;
-          # the MQTT forward carried the command round-trip's paho cohort.)
+          # (The shared forward carried the floor-0 probes; the second carried L3-positive.
+          # The command oracle uses no forward -- it reaches MQTT via the local NodePort.)
           echo "=== device-plane port-forward log (shared, floor-0 probes) ==="
           cat "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || echo "(no shared port-forward log)"
           echo "=== device-plane port-forward log (post-rollout, L3-positive) ==="
           cat "$RUNNER_TEMP/pf-eventsources-2.log" 2>/dev/null || echo "(no post-rollout port-forward log)"
-          echo "=== MQTT gateway port-forward log (command round-trip) ==="
-          cat "$RUNNER_TEMP/pf-mqtt.log" 2>/dev/null || echo "(no MQTT port-forward log)"
