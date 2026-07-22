@@ -39,6 +39,10 @@ const (
 	// session gets a fresh STATE timestamp — see sessionOptions.
 	minReconnectBackoff = 1 * time.Second
 	maxReconnectBackoff = 30 * time.Second
+	// rebirthQueueDepth bounds the buffered rebirth requests awaiting publish. The
+	// per-node backoff already collapses storms, so this only absorbs a fan-out
+	// across many nodes at once; a full queue drops (re-requested next window).
+	rebirthQueueDepth = 256
 )
 
 // Broker is the resolved MQTT connection to DeviceChain's NATS-MQTT gateway.
@@ -53,8 +57,9 @@ type Broker struct {
 // Metrics are the optional Prometheus counters the receive path updates. Any nil
 // field is skipped, so the host is usable in tests without a registry.
 type Metrics struct {
-	Messages     *prometheus.CounterVec // labeled "type" (NBIRTH/NDATA/STATE/…)
-	DecodeErrors prometheus.Counter
+	Messages        *prometheus.CounterVec // labeled "type" (NBIRTH/NDATA/STATE/…)
+	DecodeErrors    prometheus.Counter
+	RebirthRequests prometheus.Counter // rebirth NCMDs the session machine emitted
 }
 
 // Client is the Sparkplug Host Application. Build it with NewClient, then Connect
@@ -65,6 +70,13 @@ type Client struct {
 	metrics Metrics
 
 	stateTopic string
+	// sessions is the SP2 per-node Sparkplug session machine; it validates the
+	// stream and enqueues a rebirth when a node must re-emit its births.
+	sessions *SessionTracker
+	// rebirthCh carries rebirth requests from the (ordered, must-not-block) message
+	// handler to the async publisher goroutine. Buffered so a burst never blocks
+	// receive; a full channel drops (the per-node backoff re-requests next window).
+	rebirthCh chan nodeKey
 	// now supplies the session timestamp; injected so the STATE timestamp is
 	// deterministic under test.
 	now func() time.Time
@@ -90,7 +102,7 @@ func NewClient(cfg config.SparkplugConfiguration, broker Broker, now func() time
 	if now == nil {
 		now = time.Now
 	}
-	return &Client{
+	c := &Client{
 		broker:     broker,
 		groups:     append([]string(nil), cfg.Groups...),
 		metrics:    metrics,
@@ -98,7 +110,10 @@ func NewClient(cfg config.SparkplugConfiguration, broker Broker, now func() time
 		now:        now,
 		newClient:  func(o *mqtt.ClientOptions) mqtt.Client { return mqtt.NewClient(o) },
 		onReady:    onReady,
+		rebirthCh:  make(chan nodeKey, rebirthQueueDepth),
 	}
+	c.sessions = NewSessionTracker(now, defaultRebirthBackoff, c.enqueueRebirth)
+	return c
 }
 
 // subscriptions is the set of topic filters this host subscribes to: one per
@@ -129,8 +144,9 @@ func (c *Client) Connect() {
 	c.mu.Lock()
 	c.cancel = cancel
 	c.mu.Unlock()
-	c.wg.Add(1)
+	c.wg.Add(2)
 	go c.runLoop(ctx)
+	go c.rebirthWorker(ctx)
 }
 
 // runLoop owns the connection lifecycle. Each iteration is one MQTT session with
@@ -196,7 +212,13 @@ func (c *Client) sessionOptions(sessionTs int64, lost chan struct{}) *mqtt.Clien
 	opts.SetAutoReconnect(false)
 	opts.SetConnectRetry(false)
 	opts.SetConnectTimeout(connectTimeout)
-	opts.SetOrderMatters(false)
+	// Ordered delivery is REQUIRED by the SP2 session machine: it validates a
+	// strict per-node seq (next == last+1), so paho's unordered mode (a goroutine
+	// per message) would reorder a healthy stream into a false gap and rebirth a
+	// healthy node. With ordering on, handlers run sequentially on paho's receive
+	// goroutine — which is why the rebirth publish MUST be async (rebirthCh), never
+	// blocking that goroutine on a broker round-trip.
+	opts.SetOrderMatters(true)
 	// B4: OFFLINE STATE Last-Will, retained + QoS 1, timestamp-matched to ONLINE.
 	opts.SetBinaryWill(c.stateTopic, statePayload(false, sessionTs), 1, true)
 	opts.SetOnConnectHandler(func(client mqtt.Client) { c.onConnected(client, sessionTs) })
@@ -216,6 +238,11 @@ func (c *Client) sessionOptions(sessionTs int64, lost chan struct{}) *mqtt.Clien
 // clean-session client with no live subscription would lose), then opens the
 // readiness gate exactly once.
 func (c *Client) onConnected(client mqtt.Client, sessionTs int64) {
+	// Record the live client before any traffic can arrive, so a rebirth triggered
+	// by the first inbound message publishes over this connection rather than a
+	// stale one (runLoop also sets it once Connect returns — this just closes the
+	// window between subscribe and that assignment).
+	c.setSession(client, sessionTs)
 	for _, filter := range c.subscriptions() {
 		if err := mqtt.WaitTokenTimeout(client.Subscribe(filter, 1, c.onMessage), subscribeTimeout); err != nil {
 			log.Error().Err(err).Str("filter", filter).Msg("Failed to subscribe to Sparkplug group traffic.")
@@ -249,10 +276,80 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 		log.Warn().Err(err).Str("topic", msg.Topic()).Msg("Dropping undecodable Sparkplug message.")
 		return
 	}
+	// A Host issues commands (NCMD/DCMD), it never consumes them; the group
+	// wildcard subscription echoes the Host's own rebirth commands back (MQTT
+	// 3.1.1 has no NoLocal), so drop them rather than count/log them as inbound
+	// device traffic (the same self-ingest class as event-sources #458).
+	if rec.Topic.MessageType == NCMD || rec.Topic.MessageType == DCMD {
+		return
+	}
 	if c.metrics.Messages != nil {
 		c.metrics.Messages.WithLabelValues(rec.Label()).Inc()
 	}
+	// Advance the SP2 session machine; it may command the node to rebirth (fired
+	// via requestRebirth, outside its lock). STATE has no node session.
+	if !rec.Topic.IsState && rec.Payload != nil {
+		c.sessions.Observe(rec.Topic, rec.Payload)
+	}
 	logRecord(rec)
+}
+
+// enqueueRebirth is the session machine's rebirth callback. It runs on paho's
+// ordered receive goroutine, so it must NOT block: it hands the request to the
+// async publisher via a buffered channel and returns. A full channel is dropped
+// (the per-node backoff re-requests on the next window), logged so saturation is
+// visible.
+func (c *Client) enqueueRebirth(group, node string) {
+	select {
+	case c.rebirthCh <- nodeKey{group, node}:
+	default:
+		log.Warn().Str("group", group).Str("node", node).Msg("Rebirth queue full; dropping request.")
+	}
+}
+
+// rebirthWorker drains the rebirth channel and publishes each command, off the
+// receive goroutine, until the context is cancelled.
+func (c *Client) rebirthWorker(ctx context.Context) {
+	defer c.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case key := <-c.rebirthCh:
+			c.publishRebirth(key.group, key.node)
+		}
+	}
+}
+
+// publishRebirth publishes an NCMD "Node Control/Rebirth"=true to an edge node,
+// the Sparkplug mechanism for asking a node to re-emit its NBIRTH (and DBIRTHs)
+// after the Host detects a gap it cannot reconcile. Per Sparkplug B 3.0, NCMD is
+// QoS 0, retain false (only STATE is QoS 1 + retained). A rebirth for a node the
+// Host is not currently connected to is dropped (the node is re-validated on its
+// next birth after reconnect). The metric counts commands actually put on the
+// wire.
+func (c *Client) publishRebirth(group, node string) {
+	c.mu.Lock()
+	client := c.mc
+	c.mu.Unlock()
+	if client == nil || !client.IsConnected() {
+		log.Warn().Str("group", group).Str("node", node).Msg("Not connected; dropping rebirth command.")
+		return
+	}
+	topic := Namespace + "/" + group + "/" + string(NCMD) + "/" + node
+	payload, err := rebirthCommand(c.now().UnixMilli())
+	if err != nil {
+		log.Error().Err(err).Str("group", group).Str("node", node).Msg("Failed to encode rebirth command.")
+		return
+	}
+	if err := mqtt.WaitTokenTimeout(client.Publish(topic, 0, false, payload), publishTimeout); err != nil {
+		log.Error().Err(err).Str("topic", topic).Msg("Failed to publish rebirth command.")
+		return
+	}
+	if c.metrics.RebirthRequests != nil {
+		c.metrics.RebirthRequests.Inc()
+	}
+	log.Warn().Str("group", group).Str("node", node).Msg("Commanded Sparkplug node rebirth.")
 }
 
 // logRecord emits the structured per-message log line for SP1's decode+log scope.

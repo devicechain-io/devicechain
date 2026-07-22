@@ -87,6 +87,8 @@ func afterMicroserviceInitialized(_ context.Context) error {
 		"Sparkplug messages received, by message type.", []string{"type"})
 	decodeErrors := Microservice.NewCounter("decode_errors_total",
 		"Sparkplug messages that failed topic parse or payload decode.", nil)
+	rebirthRequests := Microservice.NewCounter("rebirth_requests_total",
+		"Sparkplug node rebirth commands emitted by the session machine.", nil)
 
 	broker, err := resolveBroker(Microservice.InstanceConfiguration.Infrastructure.Nats)
 	if err != nil {
@@ -96,7 +98,7 @@ func afterMicroserviceInitialized(_ context.Context) error {
 	// involved, so the gate is opened with a nil validator.
 	onReady := func() { Microservice.MarkReady(nil) }
 	HostClient = host.NewClient(*Configuration, broker, time.Now, onReady,
-		host.Metrics{Messages: messages, DecodeErrors: decodeErrors})
+		host.Metrics{Messages: messages, DecodeErrors: decodeErrors, RebirthRequests: rebirthRequests})
 
 	http.Handle("/metrics", promhttp.Handler())
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })

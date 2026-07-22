@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-sparkplug-ingest/codec"
+	sppb "github.com/devicechain-io/dc-sparkplug-ingest/proto"
 )
 
 // Record is the parsed, decoded description of one received Sparkplug message —
@@ -32,6 +33,12 @@ type Record struct {
 
 	// MetricCount is the number of metrics in a node/device payload.
 	MetricCount int
+
+	// Payload is the decoded Sparkplug B payload for a node/device message, nil
+	// for a STATE message. It is the seam the SP2 session machine consumes (seq,
+	// aliases, bdSeq live in it) — kept on the Record so the receive path decodes
+	// exactly once.
+	Payload *sppb.Payload
 }
 
 // Label is the metric label for this record's message type — STATE, or the
@@ -73,5 +80,6 @@ func Describe(topic string, payload []byte) (Record, error) {
 	rec.Seq = p.GetSeq()
 	rec.PayloadTimestamp = p.GetTimestamp()
 	rec.MetricCount = len(p.GetMetrics())
+	rec.Payload = p
 	return rec, nil
 }
