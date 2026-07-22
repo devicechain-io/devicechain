@@ -10,6 +10,7 @@ toolchain go1.26.5
 use (
 	./backend/cli
 	./backend/core
+	./backend/edge/dc-edge-agent
 	./backend/k8s
 	./backend/services/ai-inference
 	./backend/services/command-delivery
