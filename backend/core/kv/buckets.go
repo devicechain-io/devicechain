@@ -100,6 +100,15 @@ var All = []Bucket{
 			"DistributedLock.WithLock is fail-closed, so guarded reconcilers stop.",
 	},
 	{
+		Name: BucketLeases,
+		Tier: State,
+		Why: "One entry per HELD partition lease (ADR-070) — a handful at a time, one " +
+			"per Class-3 partition (DETECT per tenant, Sparkplug per Instance), TTL'd " +
+			"so a crashed owner's partition fails over. A full bucket fails Acquire, " +
+			"so a standby cannot take a partition: it degrades to no active owner, " +
+			"never two — the same fail-closed shape as the lock bucket above.",
+	},
+	{
 		Name: BucketDeviceByToken,
 		Tier: Cache,
 		Why: "One entry per device resolved on the hot ingest path. Scales directly " +
@@ -145,6 +154,7 @@ const (
 	BucketRefreshTokens         = "dc_refresh_tokens"
 	BucketOAuthCodes            = "dc_oauth_codes"
 	BucketLocks                 = "dc_locks"
+	BucketLeases                = "dc_leases"
 	BucketDeviceByToken         = "device-by-token"
 	BucketRelationshipsBySource = "relationships-by-source"
 	BucketMembershipsByEntity   = "memberships-by-entity"
