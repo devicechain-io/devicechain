@@ -63,6 +63,8 @@ func main() {
 		"oracle read-back cadence (0 = default)")
 	quiesceTimeout := flag.Duration("quiesce-timeout", envDurationOr("DC_LOADTEST_QUIESCE_TIMEOUT", 0),
 		"backstop for a persisted count that never reaches its target (0 = default)")
+	quiesceSettle := flag.Duration("quiesce-settle", envDurationOr("DC_LOADTEST_QUIESCE_SETTLE", 0),
+		"how long to keep watching after the count reaches its target, to catch a late over-persist (0 = default)")
 	reportPath := flag.String("report", envOr("DC_LOADTEST_REPORT", ""),
 		"write the JSON contention report to this path (also printed to stderr)")
 	flag.Parse()
@@ -90,6 +92,7 @@ func main() {
 			MinAccepted:    *minAccepted,
 			QuiescePoll:    *quiescePoll,
 			QuiesceTimeout: *quiesceTimeout,
+			QuiesceSettle:  *quiesceSettle,
 		},
 		ExpectFloor: *expectFloor,
 	}

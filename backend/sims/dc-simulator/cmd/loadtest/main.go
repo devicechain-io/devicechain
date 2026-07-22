@@ -49,6 +49,8 @@ func main() {
 		"floor of accepted events the run must apply for its verdict to count (a gate must exercise real load)")
 	quiesceTimeout := flag.Duration("quiesce-timeout", envDurationOr("DC_LOADTEST_QUIESCE_TIMEOUT", loadtest.DefaultQuiesceTimeout),
 		"max time to wait for the persisted count to settle after the drive stops")
+	quiesceSettle := flag.Duration("quiesce-settle", envDurationOr("DC_LOADTEST_QUIESCE_SETTLE", loadtest.DefaultQuiesceSettle),
+		"how long to keep watching the count after it reaches the target, to catch a late over-persist (duplicate)")
 	reportPath := flag.String("report", envOr("DC_LOADTEST_REPORT", ""),
 		"write the JSON correctness report to this path (also printed to stderr)")
 	flag.Parse()
@@ -81,6 +83,7 @@ func main() {
 		Hold:           *hold,
 		MinAccepted:    *minAccepted,
 		QuiesceTimeout: *quiesceTimeout,
+		QuiesceSettle:  *quiesceSettle,
 	}
 
 	// SIGINT/SIGTERM abort the run (drive returns an error, no verdict) rather

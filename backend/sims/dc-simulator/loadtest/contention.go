@@ -134,7 +134,7 @@ func runOneTenant(ctx context.Context, role string, hs *sim.Handshake, p Profile
 	}
 	snap := rt.Stats.Snapshot(end)
 
-	oracle := &Oracle{Counter: counter, Poll: p.QuiescePoll, Timeout: p.QuiesceTimeout}
+	oracle := &Oracle{Counter: counter, Poll: p.QuiescePoll, Timeout: p.QuiesceTimeout, Settle: p.QuiesceSettle}
 	qr, err := oracle.Await(ctx, deriveWindow(start, end), snap.Emitted)
 	if err != nil {
 		return nil, fmt.Errorf("%s oracle read-back: %w", role, err)

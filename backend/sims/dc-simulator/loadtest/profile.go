@@ -33,6 +33,19 @@ import (
 const (
 	DefaultQuiescePoll    = 2 * time.Second
 	DefaultQuiesceTimeout = 2 * time.Minute
+	// DefaultQuiesceSettle is how long the oracle keeps watching the count after it
+	// first reaches the accepted target, to catch a PROMPT over-persist (e.g. a
+	// resolve/detect/dispatch path that double-writes within a few seconds) that
+	// exit-on-first-reach would otherwise miss as a false completeness pass. It is
+	// deliberately NOT sized to the redelivery window: a redelivery double-persist
+	// lands up to ackWait (60s, core/messaging) after the lost ack, and that
+	// induced-redelivery exactly-once class is owned by the durability rig
+	// (ADR-030, core/messaging lifecycle_durability_test) which deliberately forces
+	// the restart/gap — paying a flat 60s settle on every run to re-prove it here
+	// would only duplicate that coverage. 5s matches the alarm/command settle and
+	// keeps local iteration cheap; a longer watch is available via --quiesce-settle.
+	// (BOUNDED OBSERVATION: an over-persist beyond this window is out of scope.)
+	DefaultQuiesceSettle = 5 * time.Second
 	// DefaultHold is the steady-state emit window for a modest CI-tier run.
 	DefaultHold = 30 * time.Second
 	// DefaultMinAccepted is the floor of accepted events a run must apply before
@@ -73,10 +86,12 @@ type Profile struct {
 	MinAccepted int64
 
 	// QuiescePoll/QuiesceTimeout tune the oracle's read-back cadence and the
-	// backstop for a count that never reaches the accepted target (see the
-	// Default* constants).
+	// backstop for a count that never reaches the accepted target; QuiesceSettle is
+	// how long the oracle keeps watching after first-reach to catch a late
+	// over-persist (see the Default* constants).
 	QuiescePoll    time.Duration
 	QuiesceTimeout time.Duration
+	QuiesceSettle  time.Duration
 }
 
 // Load returns the sim load profile this run drives with.
@@ -103,6 +118,9 @@ func (p Profile) withDefaults() Profile {
 	if p.QuiesceTimeout <= 0 {
 		p.QuiesceTimeout = DefaultQuiesceTimeout
 	}
+	if p.QuiesceSettle <= 0 {
+		p.QuiesceSettle = DefaultQuiesceSettle
+	}
 	return p
 }
 
@@ -116,8 +134,8 @@ func (p Profile) Validate() error {
 	if p.Hold < 0 {
 		return fmt.Errorf("hold %s is negative", p.Hold)
 	}
-	if p.QuiescePoll < 0 || p.QuiesceTimeout < 0 {
-		return fmt.Errorf("quiesce poll/timeout must not be negative")
+	if p.QuiescePoll < 0 || p.QuiesceTimeout < 0 || p.QuiesceSettle < 0 {
+		return fmt.Errorf("quiesce poll/timeout/settle must not be negative")
 	}
 	if p.MinAccepted < 0 {
 		return fmt.Errorf("min accepted %d is negative", p.MinAccepted)

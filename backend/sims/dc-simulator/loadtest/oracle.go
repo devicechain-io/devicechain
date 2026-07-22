@@ -128,6 +128,10 @@ type Oracle struct {
 	Counter eventCounter
 	Poll    time.Duration
 	Timeout time.Duration
+	// Settle is how long Await keeps watching the count AFTER it first reaches the
+	// target, to catch a late over-persist (see Await). 0 disables the settle phase
+	// — Await exits on first-reach, the historic behaviour.
+	Settle time.Duration
 }
 
 // QuiesceResult is what Await observed: the last-seen persisted count, whether it
@@ -142,7 +146,9 @@ type QuiesceResult struct {
 // Await polls the persisted count over the window until it REACHES the target
 // (the accepted count) or the timeout elapses. The count is monotone under a
 // clean drive (append-only + dedup, no window contamination), so:
-//   - reaching the target means every accepted event landed — done, early exit;
+//   - reaching the target means every accepted event landed — but Await does NOT
+//     stop there: it watches a bounded settle window for a late over-persist
+//     (below), then returns the MAXIMUM count seen;
 //   - a count below the target is NOT concluded as settled — it may still be
 //     draining (post-Nak-fix redelivery is AckWait-paced, ~tens of seconds), so
 //     Await keeps polling until the target is reached or the timeout is hit.
@@ -151,11 +157,27 @@ type QuiesceResult struct {
 // which would flake a FAIL on a pipeline that was merely lagging and would have
 // caught up. A timeout below the target is a real finding (drop, or lag that
 // never drained) the caller turns into a failed invariant — never a silent pass.
-// A count ABOVE the target (contamination/duplication) also reaches the exit and
-// is caught by Reconcile.
+//
+// The settle re-count closes a false-PASS blind spot on the OTHER side. Without
+// it, Await concluded the instant the count equalled the accepted target — so a
+// PROMPT duplicate that over-persisted a moment after first-reach was never
+// observed, and Reconcile saw persisted == accepted and passed while the true
+// state carried an extra row (the no-duplication half of ingest-completeness /
+// gold-zero-loss / shed-no-corruption). After first-reach Await keeps polling for
+// o.Settle and returns the maximum count seen, so such an over-persist surfaces
+// as persisted > accepted and Reconcile flags it. Reporting the max is
+// fail-closed: it can only turn a pass into a fail, and a real drop never reaches
+// the target so it never enters the settle phase.
+//
+// BOUNDED OBSERVATION: this catches a prompt over-persist, NOT the full
+// redelivery-window class — a redelivery double-persist lands up to ackWait (60s)
+// later, and that induced-redelivery exactly-once proof is the durability rig's
+// job (ADR-030), not this settle (see DefaultQuiesceSettle). The same
+// bounded-window caveat the detection/command settles carry.
 //
 // A Poll of 0 disables the inter-poll sleep (tight loop) — used by tests to run
-// the loop deterministically without wall-clock waits.
+// the loop deterministically without wall-clock waits. A Settle of 0 skips the
+// settle phase entirely (exit on first-reach, the historic behaviour).
 func (o *Oracle) Await(ctx context.Context, w Window, target int64) (QuiesceResult, error) {
 	start := time.Now()
 	deadline := start.Add(o.Timeout)
@@ -171,7 +193,12 @@ func (o *Oracle) Await(ctx context.Context, w Window, target int64) (QuiesceResu
 		polls++
 		last = count
 		if count >= target {
-			return QuiesceResult{Persisted: count, Reached: true, Elapsed: time.Since(start), Polls: polls}, nil
+			maxSeen, settlePolls, serr := o.awaitSettle(ctx, w, count)
+			polls += settlePolls
+			if serr != nil {
+				return QuiesceResult{Polls: polls, Elapsed: time.Since(start)}, serr
+			}
+			return QuiesceResult{Persisted: maxSeen, Reached: true, Elapsed: time.Since(start), Polls: polls}, nil
 		}
 		if time.Now().After(deadline) {
 			return QuiesceResult{Persisted: last, Reached: false, Elapsed: time.Since(start), Polls: polls}, nil
@@ -184,6 +211,48 @@ func (o *Oracle) Await(ctx context.Context, w Window, target int64) (QuiesceResu
 			}
 		} else if ctx.Err() != nil {
 			return QuiesceResult{Persisted: last, Elapsed: time.Since(start), Polls: polls}, ctx.Err()
+		}
+	}
+}
+
+// awaitSettle watches the persisted count for a bounded window (o.Settle) AFTER it
+// first reached the target and returns the MAXIMUM count observed (>= reached),
+// plus how many extra reads it made. It is the fail-closed catch for a late
+// over-persist Await would otherwise miss (see Await). Settle <= 0 does no extra
+// reads and returns the reached count unchanged.
+//
+// It always makes at least one confirming read when Settle > 0 (the deadline is
+// checked AFTER a read, so a Settle shorter than one Poll still confirms once
+// rather than degrading to a no-op), paces re-reads on o.Poll like the reach loop
+// (Poll 0 tight-loops for tests), and fails closed on a read error just as the
+// reach loop does — a read error during settle is a run error, never a silent
+// "no overshoot".
+func (o *Oracle) awaitSettle(ctx context.Context, w Window, reached int64) (maxSeen int64, polls int, err error) {
+	maxSeen = reached
+	if o.Settle <= 0 {
+		return maxSeen, 0, nil
+	}
+	settleDeadline := time.Now().Add(o.Settle)
+	for {
+		if o.Poll > 0 {
+			select {
+			case <-ctx.Done():
+				return maxSeen, polls, ctx.Err()
+			case <-time.After(o.Poll):
+			}
+		} else if ctx.Err() != nil {
+			return maxSeen, polls, ctx.Err()
+		}
+		count, err := o.Counter.Count(ctx, w)
+		if err != nil {
+			return maxSeen, polls, err
+		}
+		polls++
+		if count > maxSeen {
+			maxSeen = count
+		}
+		if time.Now().After(settleDeadline) {
+			return maxSeen, polls, nil
 		}
 	}
 }
