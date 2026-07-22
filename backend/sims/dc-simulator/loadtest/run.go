@@ -70,7 +70,7 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 
 	// Reconcile against settled platform truth: poll until the persisted count
 	// reaches the accepted target or the timeout backstops.
-	oracle := &Oracle{Counter: counter, Poll: p.QuiescePoll, Timeout: p.QuiesceTimeout}
+	oracle := &Oracle{Counter: counter, Poll: p.QuiescePoll, Timeout: p.QuiesceTimeout, Settle: p.QuiesceSettle}
 	qr, err := oracle.Await(ctx, deriveWindow(start, end), snap.Emitted)
 	if err != nil {
 		return nil, fmt.Errorf("oracle read-back: %w", err)

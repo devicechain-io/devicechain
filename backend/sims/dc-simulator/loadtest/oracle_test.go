@@ -169,6 +169,121 @@ func TestAwaitReadErrorFailsClosed(t *testing.T) {
 	}
 }
 
+func TestAwaitSettleCatchesLateOvershoot(t *testing.T) {
+	// The blind spot the settle re-count closes: the count reaches the target, then
+	// a late duplicate over-persists it. Without the settle phase Await would exit at
+	// first-reach reporting 1000 == accepted — a false completeness pass while the
+	// true state carries an extra row. With Settle > 0 it keeps watching and returns
+	// the MAX (1001), which Reconcile flags as persisted > accepted.
+	//
+	// Poll 0 makes the outcome timing-independent: the tight settle loop consumes
+	// the scripted 1001 in microseconds, and the counter plateaus there, so the
+	// returned value is 1001 no matter how many spins the wall-clock window allows.
+	o := &Oracle{
+		Counter: &scriptedCounter{values: []int64{1000, 1000, 1001}},
+		Poll:    0, Timeout: time.Second, Settle: 20 * time.Millisecond,
+	}
+	qr, err := o.Await(context.Background(), Window{}, 1000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !qr.Reached {
+		t.Fatalf("expected reached, got %+v", qr)
+	}
+	if qr.Persisted != 1001 {
+		t.Fatalf("settle must surface the late over-persist as 1001, got %d", qr.Persisted)
+	}
+	// Mutation guard: comp must FAIL on the settled count (1001 > 1000 accepted).
+	comp := findInvariant(t, Reconcile(1000, 0, qr.Persisted, 10), InvCompleteness)
+	if comp.Passed {
+		t.Fatalf("completeness must fail on a late over-persist, got pass: %s", comp.Detail)
+	}
+}
+
+func TestAwaitSettleTracksMaxNotLast(t *testing.T) {
+	// The settle reports the MAXIMUM count seen, not the last read. A transient
+	// overshoot that later reads lower (e.g. an out-of-band delete after a duplicate
+	// landed) must still be surfaced — a duplicate that briefly existed is a real
+	// corruption finding. Pins the max-tracking against a `maxSeen = count`
+	// regression that a monotone-only script would not catch.
+	o := &Oracle{
+		Counter: &scriptedCounter{values: []int64{1000, 1001, 1000}},
+		Poll:    0, Timeout: time.Second, Settle: 20 * time.Millisecond,
+	}
+	qr, err := o.Await(context.Background(), Window{}, 1000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !qr.Reached || qr.Persisted != 1001 {
+		t.Fatalf("settle must report the max (1001) even though the count read back down to 1000, got %+v", qr)
+	}
+}
+
+func TestAwaitSettleConfirmsWhenShorterThanPoll(t *testing.T) {
+	// A settle shorter than one poll interval must still make ONE confirming read
+	// rather than degrading to a no-op: the deadline is checked AFTER the read. Here
+	// Settle (1ns) << Poll (1ms), so the loop sleeps one poll, reads the late 1001,
+	// then exits — the over-persist is still caught. Pins that the deadline check
+	// stays after the read.
+	o := &Oracle{
+		Counter: &scriptedCounter{values: []int64{1000, 1001}},
+		Poll:    time.Millisecond, Timeout: time.Second, Settle: time.Nanosecond,
+	}
+	qr, err := o.Await(context.Background(), Window{}, 1000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !qr.Reached || qr.Persisted != 1001 {
+		t.Fatalf("a sub-poll settle must still confirm once and catch 1001, got %+v", qr)
+	}
+}
+
+func TestAwaitSettleStableReturnsTarget(t *testing.T) {
+	// The healthy case: the count reaches the target and stays there through the
+	// settle window. The re-count must not invent an overshoot — it returns exactly
+	// the target so completeness passes.
+	o := &Oracle{
+		Counter: &scriptedCounter{values: []int64{1000}},
+		Poll:    0, Timeout: time.Second, Settle: 20 * time.Millisecond,
+	}
+	qr, err := o.Await(context.Background(), Window{}, 1000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !qr.Reached || qr.Persisted != 1000 {
+		t.Fatalf("expected a stable reach at 1000, got %+v", qr)
+	}
+}
+
+func TestAwaitZeroSettleExitsOnFirstReach(t *testing.T) {
+	// Settle == 0 preserves the historic exit-on-first-reach: the count reaches the
+	// target and Await returns immediately, so a duplicate that would land AFTER
+	// (1002, never read) is deliberately out of scope. This pins that a zero settle
+	// is a true no-op — the mode selftest's controls run in (they construct the
+	// Oracle without a Settle).
+	o := &Oracle{Counter: &scriptedCounter{values: []int64{1000, 1002}}, Poll: 0, Timeout: time.Second}
+	qr, err := o.Await(context.Background(), Window{}, 1000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !qr.Reached || qr.Persisted != 1000 {
+		t.Fatalf("zero settle must exit at the first reach (1000), got %+v", qr)
+	}
+}
+
+func TestAwaitSettleReadErrorFailsClosed(t *testing.T) {
+	// A read-back error DURING the settle phase must surface as a run error too —
+	// never be swallowed into a quiet "no overshoot" that would let a duplicate hide
+	// behind a failed read.
+	o := &Oracle{
+		Counter: &scriptedCounter{values: []int64{1000, 1000}, errAt: 2},
+		Poll:    0, Timeout: time.Second, Settle: 20 * time.Millisecond,
+	}
+	if _, err := o.Await(context.Background(), Window{}, 1000); err == nil {
+		t.Fatal("expected a settle-phase read error to propagate, got nil")
+	}
+}
+
 func TestHTTPGraphQLFromWS(t *testing.T) {
 	cases := map[string]string{
 		"ws://host:8080/api/event-management/graphql": "http://host:8080/api/event-management/graphql",
