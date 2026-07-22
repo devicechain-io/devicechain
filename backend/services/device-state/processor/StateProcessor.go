@@ -200,8 +200,22 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 		}
 	}
 
+	// A StateChange (ADR-067) carries an authoritative presence transition; every
+	// other event type is a plain activity heartbeat (nil transition). The transition
+	// time is the event's occurred time — one canonical clock, set by the producer.
+	var pt *model.PresenceTransition
+	if event.EventType == esmodel.StateChange {
+		if p, ok := event.Payload.(*dmmodel.ResolvedStateChangePayload); ok {
+			pt = &model.PresenceTransition{
+				Connected:  p.State == string(esmodel.PresenceConnected),
+				SessionId:  p.SessionId,
+				OccurredAt: event.OccurredTime,
+			}
+		}
+	}
+
 	// Update the originating device's live connectivity projection for every event.
-	if _, err := sp.Api.MergeDeviceState(msgctx, event.SourceDeviceToken, event.OccurredTime); err != nil {
+	if _, err := sp.Api.MergeDeviceState(msgctx, event.SourceDeviceToken, event.OccurredTime, pt); err != nil {
 		disposeTransient(err, fmt.Sprintf("device state projection update for device %s", event.SourceDeviceToken))
 		return
 	}

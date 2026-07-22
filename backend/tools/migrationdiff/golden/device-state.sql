@@ -62,7 +62,10 @@ CREATE TABLE "device-state".device_states (
  last_disconnect_time timestamp with time zone,
  last_activity_time timestamp with time zone,
  inactivity_alarm_time timestamp with time zone,
- inactivity_timeout bigint DEFAULT 600 NOT NULL
+ inactivity_timeout bigint DEFAULT 600 NOT NULL,
+ presence_source character varying(16) DEFAULT 'INFERRED'::character varying NOT NULL,
+ session_id bigint DEFAULT 0 NOT NULL,
+ presence_time timestamp with time zone
 );
 CREATE TABLE "device-state".latest_measurements (
  id bigint NOT NULL,
