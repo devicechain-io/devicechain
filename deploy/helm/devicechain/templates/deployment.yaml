@@ -154,6 +154,14 @@ spec:
             - name: GOMEMLIMIT
               value: {{ . | quote }}
             {{- end }}
+            {{/* Per-area extra environment, passed through verbatim as core-v1
+            EnvVar entries. This is how a Secret is projected into an env var:
+            sparkplug-ingest reads each per-tenant broker password from the env var
+            its source's broker.passwordEnv names (never cleartext in config), so an
+            operator adds an entry here with valueFrom.secretKeyRef. */}}
+            {{- with get $areaCfg "extraEnv" }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           ports:
             - name: graphql
               containerPort: {{ $root.Values.service.port }}

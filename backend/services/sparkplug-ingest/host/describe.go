@@ -11,10 +11,10 @@ import (
 )
 
 // Record is the parsed, decoded description of one received Sparkplug message —
-// the structured form the SP1 slice logs. It is the seam a later slice replaces
-// with a session-machine update and a StateChange/measurement emission; here it
-// exists so the receive path is a pure, testable function rather than logging
-// buried inside the MQTT callback.
+// the structured form the decode+log scope emits. It is the seam a later slice
+// (SP3b) consumes for a StateChange/measurement emission; here it exists so the
+// receive path is a pure, testable function rather than logging buried inside the
+// MQTT callback.
 type Record struct {
 	Topic Topic
 

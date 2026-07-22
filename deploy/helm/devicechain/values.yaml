@@ -652,14 +652,20 @@ functionalAreas:
       # inferenceBurst: 15               # tokens a tenant may spend back-to-back before the rate binds (~5 drafts)
   sparkplug-ingest:
     # The Sparkplug ingest service (ADR-069): a stateful Sparkplug B Host Application
-    # that connects to DeviceChain's own MQTT gateway, announces its Sparkplug 3.0
-    # STATE, subscribes to the configured Sparkplug groups, and terminates edge-node /
-    # device telemetry onto inbound-events (the ingest path lands in SP3; SP1 decodes
-    # and logs) — a parallel inbound transport to event-sources. OPT-IN edge area:
-    # held back from `default` (a Sparkplug topology
+    # that connects OUT to one or more per-tenant customer MQTT brokers, announces its
+    # Sparkplug 3.0 STATE on each, subscribes to the configured Sparkplug groups, and
+    # terminates edge-node / device telemetry onto inbound-events (the ingest path lands
+    # in SP3b; SP3a decodes and logs, tenant-tagged) — a parallel inbound transport to
+    # event-sources. OPT-IN edge area: held back from `default` (a Sparkplug topology
     # is a deliberate choice), shipped by `full`, or named explicitly
     # (enabledFunctionalAreas: [..., sparkplug-ingest]). It hard-depends on
     # device-management (which resolves what it produces).
+    #
+    # TENANCY IS CONNECTION-SCOPED (ADR-069 M7). A Sparkplug topic carries no tenant and
+    # its Group ID is a customer's own label — not globally unique, and spoofable by any
+    # publisher — so a tenant is NEVER derived from the topic. Instead each source below
+    # binds one broker connection to one tenant; every message received on that
+    # connection is attributed to it.
     #
     # It is a STATEFUL single-owner service (ADR-069 / ADR-070): a Sparkplug Host owns
     # per-node alias/seq/session state, so two instances would each see half the
@@ -672,8 +678,22 @@ functionalAreas:
     replicas: 1
     strategy: Recreate
     config: {}
-      # hostId: devicechain          # Sparkplug Host Application id; the STATE topic is spBv1.0/STATE/{hostId}.
-      #                              # Must be unique among Host Applications on the broker. Defaults to "devicechain".
-      # groups:                      # Sparkplug Group IDs to subscribe (spBv1.0/{group}/#, one per entry).
-      #   - plant-a                  # Empty (the default) subscribes to ALL groups (spBv1.0/#) — group→tenant
-      #   - plant-b                  # attribution that will scope this arrives in SP3.
+      # sources:                       # One entry per tenant broker connection. Empty (the default) connects to nothing.
+      #   - tenant: acme               # REQUIRED. The DeviceChain tenant every message on this broker is attributed to.
+      #     hostId: devicechain        # Sparkplug Host Application id; STATE topic is spBv1.0/STATE/{hostId}. Unique per
+      #                                # broker. Defaults to "devicechain".
+      #     broker:
+      #       url: ssl://broker.acme.example:8883   # REQUIRED. tcp:// (plaintext) or ssl:// (TLS, system root CAs).
+      #       username: devicechain                 # MQTT login; omit for anonymous.
+      #       passwordEnv: SPARKPLUG_ACME_PW        # NAMES the env var holding the password (never inline). Project a
+      #                                             # Secret into it via extraEnv below.
+      #     groups:                    # Sparkplug Group IDs to subscribe (spBv1.0/{group}/#, one per entry).
+      #       - plant-a                # Empty subscribes to ALL groups (spBv1.0/#) on this broker.
+      #       - plant-b
+    # Project each broker password Secret into the env var its source names:
+    # extraEnv:
+    #   - name: SPARKPLUG_ACME_PW
+    #     valueFrom:
+    #       secretKeyRef:
+    #         name: sparkplug-acme-broker
+    #         key: password

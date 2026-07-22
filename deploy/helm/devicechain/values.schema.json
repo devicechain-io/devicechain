@@ -260,6 +260,19 @@
                 "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
               }
             }
+          },
+          "extraEnv": {
+            "type": "array",
+            "description": "Extra container environment variables for this area, passed through verbatim as core-v1 EnvVar entries. Used to project a Secret into an env var — e.g. sparkplug-ingest reads each per-tenant broker password from the env var its source's broker.passwordEnv names, so an operator sets an entry here with valueFrom.secretKeyRef.",
+            "items": {
+              "type": "object",
+              "required": ["name"],
+              "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "value": { "type": "string" },
+                "valueFrom": { "type": "object" }
+              }
+            }
           }
         }
       }
