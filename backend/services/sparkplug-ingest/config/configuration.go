@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/devicechain-io/dc-microservice/core"
 )
 
 // DefaultHostId is the Sparkplug Host Application identity used when a source
@@ -62,6 +64,19 @@ type SparkplugSource struct {
 	// EVERY group on the broker (spBv1.0/#). Each entry must be a single MQTT topic
 	// level with no wildcard.
 	Groups []string
+
+	// DeviceTypeToken is the device type stamped on a device this source
+	// auto-registers. createDevice requires an existing device type and a Sparkplug
+	// NBIRTH carries no DeviceChain type, so the operator names one here; it must be
+	// a device type they created up front. Required when AutoRegister is true.
+	DeviceTypeToken string
+
+	// AutoRegister decides what happens the first time this source sees a Sparkplug
+	// identity with no matching DeviceChain device (matched by external id, ADR-049).
+	// True: the adapter creates the device (stamped DeviceTypeToken) and ingests it.
+	// False: the identity is dropped — counted, never silently created — until an
+	// operator pre-registers it (the curated-roster / CHECK_PRE_PROVISIONED posture).
+	AutoRegister bool
 }
 
 // SourceBroker is the MQTT connection detail for one customer broker.
@@ -137,6 +152,19 @@ func (c *SparkplugConfiguration) Validate() error {
 		for j, g := range s.Groups {
 			if err := validateTopicToken(fmt.Sprintf("sources[%d].groups[%d]", i, j), g); err != nil {
 				return err
+			}
+		}
+		// A source that auto-registers MUST name the device type to stamp — a device
+		// cannot be created without one, and defaulting a type would silently file a
+		// tenant's whole fleet under a placeholder. When a type is named (registering
+		// or not) it must satisfy the global token grammar so a malformed value fails
+		// the load rather than every createDevice at runtime.
+		if s.AutoRegister && strings.TrimSpace(s.DeviceTypeToken) == "" {
+			return fmt.Errorf("sources[%d]: deviceTypeToken is required when autoRegister is true (a device cannot be created without a device type)", i)
+		}
+		if s.DeviceTypeToken != "" {
+			if err := core.ValidateToken(s.DeviceTypeToken); err != nil {
+				return fmt.Errorf("sources[%d].deviceTypeToken: %w", i, err)
 			}
 		}
 		// One broker, one tenant. Two tenants on one broker would either both receive

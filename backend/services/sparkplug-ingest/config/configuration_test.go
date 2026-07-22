@@ -112,6 +112,38 @@ func TestValidateRejectsHostCollisionOnOneBroker(t *testing.T) {
 	require.NoError(t, ok.Validate())
 }
 
+// TestValidateAutoRegisterRequiresDeviceType proves a source that auto-registers
+// must name the device type to stamp: a device cannot be created without one, and
+// silently defaulting a type would file a tenant's whole fleet under a placeholder.
+// A source with auto-registration OFF needs no device type.
+func TestValidateAutoRegisterRequiresDeviceType(t *testing.T) {
+	missing := &SparkplugConfiguration{Sources: []SparkplugSource{
+		{Tenant: "acme", HostId: "h", Broker: SourceBroker{URL: "tcp://b:1883"}, AutoRegister: true},
+	}}
+	require.Error(t, missing.Validate(), "autoRegister with no deviceTypeToken must be rejected")
+
+	present := &SparkplugConfiguration{Sources: []SparkplugSource{
+		{Tenant: "acme", HostId: "h", Broker: SourceBroker{URL: "tcp://b:1883"}, AutoRegister: true, DeviceTypeToken: "sp-node"},
+	}}
+	require.NoError(t, present.Validate())
+
+	off := &SparkplugConfiguration{Sources: []SparkplugSource{
+		{Tenant: "acme", HostId: "h", Broker: SourceBroker{URL: "tcp://b:1883"}, AutoRegister: false},
+	}}
+	require.NoError(t, off.Validate(), "auto-register off needs no device type")
+}
+
+// TestValidateRejectsMalformedDeviceType proves a device-type token that violates
+// the global grammar (ADR-042) fails the load, not every createDevice at runtime.
+func TestValidateRejectsMalformedDeviceType(t *testing.T) {
+	for _, bad := range []string{"has space", "slash/type", "bad#type"} {
+		cfg := &SparkplugConfiguration{Sources: []SparkplugSource{
+			{Tenant: "acme", HostId: "h", Broker: SourceBroker{URL: "tcp://b:1883"}, AutoRegister: true, DeviceTypeToken: bad},
+		}}
+		require.Errorf(t, cfg.Validate(), "device type %q must be rejected", bad)
+	}
+}
+
 // TestValidateRejectsBadBrokerURL proves a scheme-less or unsupported-scheme URL is
 // rejected at config time (not deferred to dial), keeping config validity
 // self-contained for a lint tool or authoring API.

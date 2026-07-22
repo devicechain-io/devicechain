@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-sparkplug-ingest/config"
 	"github.com/devicechain-io/dc-sparkplug-ingest/host"
@@ -21,8 +22,10 @@ import (
 // that hand-builds the struct. This feeds the literal rendered bytes through the
 // real loader.
 func TestLoadConfigurationParsesRenderedChartDocument(t *testing.T) {
-	// Verbatim from `helm template` of a one-source sparkplug-ingest config.
-	rendered := `{"sources":[{"broker":{"passwordEnv":"SPARKPLUG_ACME_PW","url":"ssl://broker.acme.example:8883","username":"devicechain"},"groups":["plant-a","plant-b"],"hostId":"dc-acme","tenant":"acme"}]}`
+	// Verbatim from `helm template` of a one-source sparkplug-ingest config, including
+	// the SP3b auto-registration keys (autoRegister/deviceTypeToken) — the seam that
+	// crash-loops on a chart↔struct drift.
+	rendered := `{"sources":[{"autoRegister":true,"broker":{"passwordEnv":"SPARKPLUG_ACME_PW","url":"ssl://broker.acme.example:8883","username":"devicechain"},"deviceTypeToken":"sparkplug-node","groups":["plant-a","plant-b"],"hostId":"dc-acme","tenant":"acme"}]}`
 
 	var cfg config.SparkplugConfiguration
 	require.NoError(t, core.LoadConfiguration([]byte(rendered), &cfg))
@@ -34,6 +37,34 @@ func TestLoadConfigurationParsesRenderedChartDocument(t *testing.T) {
 	assert.Equal(t, "devicechain", s.Broker.Username)
 	assert.Equal(t, "SPARKPLUG_ACME_PW", s.Broker.PasswordEnv)
 	assert.Equal(t, []string{"plant-a", "plant-b"}, s.Groups)
+	assert.True(t, s.AutoRegister)
+	assert.Equal(t, "sparkplug-node", s.DeviceTypeToken)
+
+	require.NoError(t, cfg.Validate(), "the rendered document must also pass Validate")
+}
+
+// TestIngestEndpointFailsClosed pins that the ingest path refuses to come up half-
+// configured: with no service secret or no device-management coordinate it returns
+// an error (a startup failure) rather than a URL that would resolve no devices and
+// silently drop all telemetry. A fully-configured infra yields the GraphQL URL.
+func TestIngestEndpointFailsClosed(t *testing.T) {
+	full := mscfg.InfrastructureConfiguration{
+		ServiceAuth:      mscfg.ServiceAuthConfiguration{Secret: "s3cret"},
+		DeviceManagement: mscfg.DeviceManagementConfiguration{Hostname: "device-management", Port: 8080},
+	}
+	url, err := ingestEndpoint(full)
+	require.NoError(t, err)
+	assert.Equal(t, "http://device-management:8080/graphql", url)
+
+	noSecret := full
+	noSecret.ServiceAuth.Secret = ""
+	_, err = ingestEndpoint(noSecret)
+	require.Error(t, err, "no service secret must fail closed")
+
+	noDM := full
+	noDM.DeviceManagement = mscfg.DeviceManagementConfiguration{}
+	_, err = ingestEndpoint(noDM)
+	require.Error(t, err, "no device-management coordinate must fail closed")
 }
 
 // src is a minimal valid source for resolveBroker tests.
@@ -109,11 +140,11 @@ func TestResolveSourcesBuildsOnePerSource(t *testing.T) {
 	cfg := &config.SparkplugConfiguration{Sources: []config.SparkplugSource{
 		src("tcp://a:1883"), src("ssl://b:8883"),
 	}}
-	clients, err := resolveSources(cfg, "inst", host.Metrics{})
+	clients, err := resolveSources(cfg, "inst", nil, host.Metrics{})
 	require.NoError(t, err)
 	assert.Len(t, clients, 2)
 
-	empty, err := resolveSources(&config.SparkplugConfiguration{}, "inst", host.Metrics{})
+	empty, err := resolveSources(&config.SparkplugConfiguration{}, "inst", nil, host.Metrics{})
 	require.NoError(t, err)
 	assert.Empty(t, empty)
 }
