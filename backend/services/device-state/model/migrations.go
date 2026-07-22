@@ -12,5 +12,8 @@ var (
 		NewInitialSchema(),
 		NewLatestMeasurementSchema(),
 		NewLatestMeasurementBindingColumns(),
+		NewPresenceColumns(),
+		NewExternalIdColumn(),
+		NewSourceColumn(),
 	}
 )

@@ -7,20 +7,26 @@
 // the configured Sparkplug groups, and decodes edge-node / device telemetry.
 // Tenancy is connection-scoped (M7): every message is attributed to the tenant
 // configured for the broker it arrived on, never parsed from the untrusted
-// Sparkplug topic. At SP3a it terminates and logs that traffic, tenant-tagged;
-// identity mapping, presence emission, and leader-elected failover arrive in
-// SP3b/SP4.
+// Sparkplug topic. It maps each edge-node/device identity to a DeviceChain device
+// (SP3b), emits measurements and presence StateChange events (SP4a), and elects a
+// single leader via a core/lease so only one replica connects as the Host
+// Application (SP4b — ADR-070; two would publish duplicate STATE). On every (re)connect
+// the leader reconciles presence against the device-state projection (rebirth-all +
+// liveness probe) so a node that died while no Host was connected is not stranded
+// CONNECTED — the authoritative-presence correctness guarantee (ADR-067 SP4b).
 package main
 
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
@@ -36,12 +42,34 @@ import (
 
 const httpPort = 8080
 
+const (
+	// leasePartition names this service's single ownership lease within the shared
+	// instance lease bucket (ADR-070). The Sparkplug adapter is one Class-3 owner per
+	// instance (GA is one shard; the key is instance-unique so N-shard later is config,
+	// not a rewrite).
+	leasePartition = "sparkplug"
+	// leaseRenewInterval renews well inside the TTL (<= TTL/3) on the KeepAlive
+	// goroutine, decoupled from any processing loop (ADR-070 M4).
+	leaseRenewInterval = messaging.DefaultLeaseTTL / 3
+	// standbyRetryInterval is how often a warm standby re-attempts acquisition.
+	standbyRetryInterval = 5 * time.Second
+)
+
 var (
 	Microservice  *core.Microservice
 	Configuration *config.SparkplugConfiguration
 	Manager       *host.Manager
 	NatsManager   *messaging.NatsManager
+	Lease         *messaging.DistributedLease
 	httpServer    *http.Server
+
+	// leaderGauge is 1 while this replica holds the lease and is connecting sources,
+	// 0 while it is a warm standby (ADR-070 A6 observability).
+	leaderGauge prometheus.Gauge
+	// leadershipCancel stops the leadership loop on shutdown; leadershipDone closes
+	// when it has fully unwound (Manager stopped, lease released).
+	leadershipCancel context.CancelFunc
+	leadershipDone   chan struct{}
 )
 
 func main() {
@@ -122,19 +150,21 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// sources so an inert (empty-sources) deployment does not demand service auth it
 	// will never use.
 	var ingester *host.Ingester
+	var reconciler *host.Reconciler
 	if len(Configuration.Sources) > 0 {
 		writer, err := NatsManager.NewWriter(streams.InboundEvents)
 		if err != nil {
 			return err
 		}
-		built, err := buildIngester(writer)
+		built, rec, err := buildIngester(writer)
 		if err != nil {
 			return err
 		}
 		ingester = built
+		reconciler = rec
 	}
 
-	clients, err := resolveSources(Configuration, Microservice.InstanceId, ingester, metrics)
+	clients, err := resolveSources(Configuration, Microservice.InstanceId, ingester, reconciler, metrics)
 	if err != nil {
 		return err
 	}
@@ -157,7 +187,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 // client. Failing here (bad scheme, an intended-but-empty password env) fails the
 // service closed at startup rather than dialing a mis-authenticated broker and
 // retry-looping silently — repo convention (ADR-022).
-func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, ingester *host.Ingester, metrics host.Metrics) ([]*host.Client, error) {
+func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, ingester *host.Ingester, reconciler *host.Reconciler, metrics host.Metrics) ([]*host.Client, error) {
 	// Convert a possibly-nil *Ingester into the interface as a real nil rather than a
 	// typed nil: passing a nil *Ingester directly would wrap into a NON-nil interface,
 	// so the Client's `ingester != nil` guard would pass and Ingest would panic. This
@@ -175,7 +205,13 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 		if err != nil {
 			return nil, err
 		}
-		clients = append(clients, host.NewClient(src, broker, si, time.Now, metrics))
+		client := host.NewClient(src, broker, si, time.Now, metrics)
+		// The reconciler is shared across sources; a nil one (no ingest path) leaves
+		// reconciliation off. Set before Connect so the first onConnected can use it.
+		if reconciler != nil {
+			client.SetReconciler(reconciler)
+		}
+		clients = append(clients, client)
 	}
 	return clients, nil
 }
@@ -185,32 +221,53 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 // (or the writer is nil): a Sparkplug adapter that cannot reach device-management or
 // NATS would resolve no devices / emit nothing and silently drop every measurement,
 // so a misconfigured deploy or a wiring-order regression must be visible at startup,
-// not at runtime (ADR-022). The service token carries device:read (lookup by
-// external id) and device:write (auto-registration) only — least privilege.
-func buildIngester(writer messaging.MessageWriter) (*host.Ingester, error) {
+// not at runtime (ADR-022). The service token carries device:read (lookup by external
+// id), device:write (auto-registration), and state:read (failover reconciliation reads
+// the device-state presence projection, ADR-067 SP4b) only — least privilege.
+func buildIngester(writer messaging.MessageWriter) (*host.Ingester, *host.Reconciler, error) {
 	if writer == nil {
-		return nil, fmt.Errorf("inbound-events writer is nil — the durable emit path was not wired before the ingester was built")
+		return nil, nil, fmt.Errorf("inbound-events writer is nil — the durable emit path was not wired before the ingester was built")
 	}
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	graphqlURL, err := ingestEndpoint(infra)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	deviceStateURL, err := deviceStateEndpoint(infra)
+	if err != nil {
+		return nil, nil, err
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest",
-		[]string{string(auth.DeviceRead), string(auth.DeviceWrite)})
+		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead)})
 
 	ingestMetrics := host.IngestMetrics{
 		MeasurementsEmitted: Microservice.NewCounter("measurements_emitted_total",
 			"Numeric Sparkplug samples durably written to the inbound-events stream.", nil),
+		PresenceEmitted: Microservice.NewCounter("presence_emitted_total",
+			"Presence StateChange events (ADR-067) durably written on a Sparkplug BIRTH/DEATH.", nil),
 		DevicesRegistered: Microservice.NewCounter("devices_registered_total",
 			"Devices auto-registered on first sight of their Sparkplug identity.", nil),
 		UnknownDropped: Microservice.NewCounter("unknown_device_dropped_total",
-			"Samples dropped for an unregistered device on a source with auto-registration off.", nil),
+			"Samples/presence dropped for an unregistered device on a source with auto-registration off.", nil),
 	}
 	registrar := host.NewRegistrar(client, graphqlURL)
 	emitter := host.NewEmitter(writer, time.Now)
-	log.Info().Str("deviceManagement", graphqlURL).Msg("Sparkplug ingest will resolve + emit telemetry via device-management (ADR-044).")
-	return host.NewIngester(registrar, emitter, ingestMetrics), nil
+	reconciler := host.NewReconciler(client, deviceStateURL)
+	log.Info().Str("deviceManagement", graphqlURL).Str("deviceState", deviceStateURL).
+		Msg("Sparkplug ingest will resolve + emit telemetry via device-management and reconcile presence via device-state (ADR-044/067).")
+	return host.NewIngester(registrar, emitter, ingestMetrics), reconciler, nil
+}
+
+// deviceStateEndpoint validates the infrastructure the failover reconciliation needs
+// and returns device-state's GraphQL URL. It fails closed: reconciliation is the
+// authoritative-presence correctness guarantee (ADR-067 SP4b) — an adapter that cannot
+// reach device-state on failover would leave devices stranded CONNECTED after a missed
+// death — so a missing coordinate must surface at startup, not as a silent gap.
+func deviceStateEndpoint(infra mscfg.InfrastructureConfiguration) (string, error) {
+	if infra.DeviceState.Hostname == "" || infra.DeviceState.Port == 0 {
+		return "", fmt.Errorf("device-state endpoint not configured (infrastructure.deviceState) — sparkplug-ingest cannot reconcile presence on failover and would strand devices connected after a missed death")
+	}
+	return fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port), nil
 }
 
 // ingestEndpoint validates the infrastructure the ingest path needs and returns
@@ -279,7 +336,31 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := NatsManager.Start(ctx); err != nil {
 		return err
 	}
-	Manager.Start()
+
+	// The Sparkplug adapter is a Class-3 single-owner operator (ADR-070): two replicas
+	// connecting as the same Host Application would publish duplicate STATE and emit
+	// duplicate telemetry/presence. So a leader-election lease gates the WHOLE Client
+	// lifecycle — only the holder connects; a warm standby binds nothing. Readiness is
+	// opened regardless: a standby is "ready" to take over (its /readyz must pass so it
+	// is not killed while waiting). With no sources there is nothing to lead.
+	if len(Configuration.Sources) > 0 {
+		leaderGauge = Microservice.NewGauge("is_leader",
+			"1 when this replica holds the Sparkplug leadership lease and is connecting sources, else 0 (warm standby).", nil)
+		lease, err := NatsManager.NewDistributedLease(messaging.DefaultLeaseTTL)
+		if err != nil {
+			return err
+		}
+		Lease = lease
+		lctx, cancel := context.WithCancel(context.Background())
+		leadershipCancel = cancel
+		leadershipDone = make(chan struct{})
+		go func() {
+			defer close(leadershipDone)
+			runLeadership(lctx, lease)
+		}()
+	} else {
+		Manager.Start()
+	}
 	Microservice.MarkReady(nil)
 
 	httpServer = &http.Server{Addr: fmt.Sprintf(":%d", httpPort)}
@@ -292,13 +373,97 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	return nil
 }
 
+// runLeadership is the acquire/serve/standby loop. It repeatedly tries to acquire the
+// single ownership lease; while another replica holds it, this replica is a warm
+// standby that connects nothing and retries. On acquisition it serves as leader until
+// the lease is lost or the service is shutting down, then loops to re-acquire.
+func runLeadership(ctx context.Context, lease *messaging.DistributedLease) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		held, err := lease.Acquire(leasePartition)
+		if err != nil {
+			if errors.Is(err, messaging.ErrLeaseHeld) {
+				log.Info().Msg("Another replica holds the Sparkplug lease; standing by.")
+			} else {
+				log.Warn().Err(err).Msg("Failed to acquire the Sparkplug leadership lease; retrying as standby.")
+			}
+			setLeader(false)
+			if !sleepCtx(ctx, standbyRetryInterval) {
+				return
+			}
+			continue
+		}
+		serveAsLeader(ctx, held)
+	}
+}
+
+// serveAsLeader connects every source and holds them until the lease is definitively
+// lost (KeepAlive returns ErrNotHolder) or the service is shutting down (ctx). On
+// either it self-evicts: stop the sources (announcing OFFLINE, firing the wills) and
+// release the lease so a standby can take over. KeepAlive runs on its OWN goroutine so
+// no processing stall can starve renewal (ADR-070 M4).
+func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
+	log.Info().Uint64("epoch", lease.Epoch()).Msg("Acquired Sparkplug leadership; connecting sources.")
+	setLeader(true)
+
+	leaderCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		if errors.Is(lease.KeepAlive(leaderCtx, leaseRenewInterval), messaging.ErrNotHolder) {
+			log.Error().Msg("Lost the Sparkplug leadership lease; self-evicting.")
+			cancel()
+		}
+	}()
+
+	Manager.Start()
+	<-leaderCtx.Done()
+
+	setLeader(false)
+	Manager.Stop()
+	if err := lease.Release(); err != nil {
+		log.Warn().Err(err).Msg("Error releasing the Sparkplug lease (it will age out via its TTL).")
+	}
+	log.Info().Msg("Released Sparkplug leadership; returning to standby.")
+}
+
+// setLeader records leadership on the gauge (0/1), tolerating a nil gauge.
+func setLeader(leader bool) {
+	if leaderGauge == nil {
+		return
+	}
+	if leader {
+		leaderGauge.Set(1)
+	} else {
+		leaderGauge.Set(0)
+	}
+}
+
+// sleepCtx waits for d or ctx cancellation; it returns false if ctx was cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 // beforeMicroserviceStopped announces OFFLINE on every source, disconnects them,
 // and shuts the HTTP server down.
 func beforeMicroserviceStopped(ctx context.Context) error {
 	Microservice.Readiness.BeginDrain()
 	// Stop the sources first (announce OFFLINE, disconnect) so no further message can
-	// be emitted, THEN stop the writer.
-	if Manager != nil {
+	// be emitted, THEN stop the writer. When leadership is running, cancelling it makes
+	// the loop self-evict (Manager.Stop + lease Release) and exit; we wait for that to
+	// unwind. With no sources there is no leadership loop, so stop the Manager directly.
+	if leadershipCancel != nil {
+		leadershipCancel()
+		<-leadershipDone
+	} else if Manager != nil {
 		Manager.Stop()
 	}
 	if NatsManager != nil {

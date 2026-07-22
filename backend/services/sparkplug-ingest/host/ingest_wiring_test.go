@@ -35,21 +35,27 @@ func TestObserveAcceptedDataYieldsSamples(t *testing.T) {
 	h := newHarness(defaultRebirthBackoff)
 	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), valuedBirth("temperature", 1, 20)))
 	out := h.tr.Observe(nTop(NDATA), pl(1, valuedData(1, 21.5)))
-	if assert.Len(t, out, 1, "accepted data yields its numeric sample") {
-		assert.Equal(t, "temperature", out[0].Name)
-		assert.Equal(t, 21.5, out[0].Value)
+	if assert.Len(t, out.Samples, 1, "accepted data yields its numeric sample") {
+		assert.Equal(t, "temperature", out.Samples[0].Name)
+		assert.Equal(t, 21.5, out.Samples[0].Value)
 	}
+	assert.Empty(t, out.Presence, "a data message asserts no presence transition")
 }
 
 // TestObserveDuplicateBirthEmitsSamplesOnlyOnce is the double-count negative
-// control: a redelivered NBIRTH (same bdSeq) must ingest NOTHING the second time.
+// control: a redelivered NBIRTH (same bdSeq) must ingest NOTHING the second time —
+// no re-ingested samples AND no re-emitted CONNECTED.
 func TestObserveDuplicateBirthEmitsSamplesOnlyOnce(t *testing.T) {
 	h := newHarness(defaultRebirthBackoff)
-	birth := func() []Sample {
+	birth := func() Observation {
 		return h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), valuedBirth("temperature", 1, 20)))
 	}
-	assert.Len(t, birth(), 1, "the first birth ingests its metric values")
-	assert.Empty(t, birth(), "a duplicate birth must not re-ingest (no double-count)")
+	first := birth()
+	assert.Len(t, first.Samples, 1, "the first birth ingests its metric values")
+	assert.Len(t, first.Presence, 1, "the first birth asserts CONNECTED")
+	dup := birth()
+	assert.Empty(t, dup.Samples, "a duplicate birth must not re-ingest (no double-count)")
+	assert.Empty(t, dup.Presence, "a duplicate birth must not re-emit CONNECTED")
 }
 
 func TestObserveRejectedMessageYieldsNoSamples(t *testing.T) {
@@ -57,23 +63,28 @@ func TestObserveRejectedMessageYieldsNoSamples(t *testing.T) {
 	h.tr.Observe(nTop(NBIRTH), pl(0, valuedBirth("temperature", 1, 20)))
 	h.tr.Observe(nTop(NDATA), pl(1, valuedData(1, 21)))
 	out := h.tr.Observe(nTop(NDATA), pl(3, valuedData(1, 22))) // seq 2 skipped
-	assert.Empty(t, out, "a rejected (gapped) message yields no samples")
+	assert.Empty(t, out.Samples, "a rejected (gapped) message yields no samples")
+	assert.Empty(t, out.Presence, "a rejected message asserts no presence")
 	assert.Equal(t, 1, h.rec.count(), "and still asks for a rebirth")
 }
 
 func TestObserveDeathYieldsNoSamples(t *testing.T) {
 	h := newHarness(defaultRebirthBackoff)
 	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(9), valuedBirth("t", 1, 1)))
-	assert.Empty(t, h.tr.Observe(nTop(NDEATH), pl(-1, bdSeqM(9))), "a death carries no measurements")
+	out := h.tr.Observe(nTop(NDEATH), pl(-1, bdSeqM(9)))
+	assert.Empty(t, out.Samples, "a death carries no measurements")
+	assert.Len(t, out.Presence, 1, "a node death asserts a DISCONNECTED")
+	assert.False(t, out.Presence[0].Connected)
 }
 
 // --- receive → ingest wiring -------------------------------------------------
 
 type fakeIngester struct {
-	mu    sync.Mutex
-	calls []ingestCall
-	err   error
-	failN int // fail (transiently) the first failN calls, then honor err
+	mu       sync.Mutex
+	calls    []ingestCall
+	presence []PresenceEvent
+	err      error
+	failN    int // fail (transiently) the first failN calls, then honor err
 }
 
 type ingestCall struct {
@@ -91,6 +102,19 @@ func (f *fakeIngester) Ingest(_ context.Context, tenant string, policy IngestPol
 		return errors.New("transient")
 	}
 	return f.err
+}
+
+func (f *fakeIngester) IngestPresence(_ context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.presence = append(f.presence, events...)
+	return f.err
+}
+
+func (f *fakeIngester) presenceCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.presence)
 }
 
 func (f *fakeIngester) count() int {
@@ -137,6 +161,49 @@ func TestOnMessageIngestsWithConnectionTenant(t *testing.T) {
 	require.Len(t, call.samples, 1)
 	assert.Equal(t, "temperature", call.samples[0].Name)
 	assert.Equal(t, float64(20), call.samples[0].Value)
+}
+
+// TestOnMessageEmitsPresence pins the full receive→presence wiring: an NBIRTH driven
+// through onMessage reaches the ingester as a CONNECTED presence for the node's
+// external id, under the connection tenant — the first-real-producer path end to end.
+func TestOnMessageEmitsPresence(t *testing.T) {
+	fake := &fakeIngester{}
+	src := config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp-node"}
+	c := NewClient(src, Broker{}, fake, fixedNow, Metrics{})
+
+	enc, err := codec.Encode(&sppb.Payload{
+		Seq:     proto.Uint64(0),
+		Metrics: []*sppb.Payload_Metric{bdSeqM(1), valuedBirth("temperature", 1, 20)},
+	})
+	require.NoError(t, err)
+	c.onMessage(nil, fakeMessage{topic: "spBv1.0/plant-a/NBIRTH/node-3", payload: enc})
+
+	require.Equal(t, 1, fake.presenceCount(), "an NBIRTH emits exactly one presence transition")
+	fake.mu.Lock()
+	ev := fake.presence[0]
+	fake.mu.Unlock()
+	assert.True(t, ev.Connected, "an NBIRTH is CONNECTED")
+	assert.Equal(t, "plant-a/node-3", ev.ExternalId, "keyed by the node external id from the topic")
+	assert.Greater(t, ev.SessionId, uint64(0))
+}
+
+// TestOnMessageDoesNotMarkSeenForEchoedRebirth is the reconcile-probe linchpin pin: the
+// group wildcard subscription echoes the Host's OWN rebirth NCMDs back (MQTT 3.1.1 has no
+// NoLocal), and SparkplugExternalId of "spBv1.0/g/NCMD/n" is "g/n" — the very node the
+// probe is waiting to hear from. onMessage MUST drop NCMD/DCMD BEFORE marking seen, else
+// a dead node's echoed rebirth command would mark it "seen" and the probe would never
+// declare it dead. Mutation control: move the markSeen call above the NCMD/DCMD drop and
+// this turns red.
+func TestOnMessageDoesNotMarkSeenForEchoedRebirth(t *testing.T) {
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1"}, Broker{}, &fakeIngester{}, fixedNow, Metrics{})
+	c.resetSeen()
+
+	payload, err := rebirthCommand(fixedNow().UnixMilli())
+	require.NoError(t, err)
+	c.onMessage(nil, fakeMessage{topic: "spBv1.0/g/NCMD/n", payload: payload})
+
+	assert.False(t, c.sawExternalId("g/n"),
+		"the host's own echoed rebirth NCMD must not mark a node seen (it would defeat the reconcile probe)")
 }
 
 func TestIngestSamplesRetriesThenSucceeds(t *testing.T) {

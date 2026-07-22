@@ -36,6 +36,51 @@ func (r *SchemaResolver) DeviceStatesByDeviceToken(ctx context.Context, args str
 	return result, nil
 }
 
+// Find device states by the device's (denormalized) external id.
+func (r *SchemaResolver) DeviceStatesByExternalId(ctx context.Context, args struct {
+	ExternalIds []string
+}) ([]*DeviceStateResolver, error) {
+	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
+		return nil, err
+	}
+
+	api := r.GetApi(ctx)
+	found, err := api.DeviceStatesByExternalId(ctx, args.ExternalIds)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*DeviceStateResolver, 0)
+	for _, ds := range found {
+		result = append(result, &DeviceStateResolver{M: *ds, S: r, C: ctx})
+	}
+	return result, nil
+}
+
+// AssertedActiveDeviceStates returns every ASSERTED + active device state for the
+// calling tenant — the failover-reconciliation source (ADR-067 SP4b). Tenant scope
+// is enforced by the RDB callback from the caller's token, so a Sparkplug adapter
+// only ever sees its own tenant's asserted devices.
+func (r *SchemaResolver) AssertedActiveDeviceStates(ctx context.Context, args struct {
+	Source string
+}) ([]*DeviceStateResolver, error) {
+	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
+		return nil, err
+	}
+
+	api := r.GetApi(ctx)
+	found, err := api.AssertedActiveDeviceStates(ctx, args.Source)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*DeviceStateResolver, 0)
+	for _, ds := range found {
+		result = append(result, &DeviceStateResolver{M: *ds, S: r, C: ctx})
+	}
+	return result, nil
+}
+
 // List all device states that match the given criteria.
 func (r *SchemaResolver) DeviceStates(ctx context.Context, args struct {
 	Criteria model.DeviceStateSearchCriteria

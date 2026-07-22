@@ -74,7 +74,7 @@ func TestMergeAndSweep(t *testing.T) {
 	base := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
 
 	// First event creates an active row.
-	ds, err := api.MergeDeviceState(ctx, "device-100", base)
+	ds, err := api.MergeDeviceState(ctx, "device-100", base, nil, DeviceIdentity{})
 	if err != nil {
 		t.Fatalf("initial merge failed: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestMergeAndSweep(t *testing.T) {
 	}
 
 	// A later event advances last-activity time but does not re-connect.
-	ds, err = api.MergeDeviceState(ctx, "device-100", base.Add(1*time.Minute))
+	ds, err = api.MergeDeviceState(ctx, "device-100", base.Add(1*time.Minute), nil, DeviceIdentity{})
 	if err != nil {
 		t.Fatalf("second merge failed: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestMergeAndSweep(t *testing.T) {
 	}
 
 	// An older event must NOT roll last-activity time backward.
-	ds, err = api.MergeDeviceState(ctx, "device-100", base.Add(-1*time.Hour))
+	ds, err = api.MergeDeviceState(ctx, "device-100", base.Add(-1*time.Hour), nil, DeviceIdentity{})
 	if err != nil {
 		t.Fatalf("stale merge failed: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestMergeAndSweep(t *testing.T) {
 	}
 
 	// A new event reconnects the device and clears the inactivity alarm.
-	ds, err = api.MergeDeviceState(ctx, "device-100", now.Add(1*time.Minute))
+	ds, err = api.MergeDeviceState(ctx, "device-100", now.Add(1*time.Minute), nil, DeviceIdentity{})
 	if err != nil {
 		t.Fatalf("reconnect merge failed: %v", err)
 	}
@@ -143,6 +143,171 @@ func TestMergeAndSweep(t *testing.T) {
 	}
 	if flipped != 0 {
 		t.Fatalf("expected 0 flips right after reconnect, got %d", flipped)
+	}
+}
+
+// TestPresenceApplies is the pure monotonic guard's table test (ADR-067 decision 4,
+// mirroring alarm_contributor.apply). Each row is a mutation control: break the guard
+// and exactly one row flips.
+func TestPresenceApplies(t *testing.T) {
+	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	valid := func(tm time.Time) sql.NullTime { return sql.NullTime{Time: tm, Valid: true} }
+	conn := func(s uint64, tm time.Time) PresenceTransition {
+		return PresenceTransition{Connected: true, SessionId: s, OccurredAt: tm}
+	}
+	disc := func(s uint64, tm time.Time) PresenceTransition {
+		return PresenceTransition{Connected: false, SessionId: s, OccurredAt: tm}
+	}
+
+	cases := []struct {
+		name         string
+		curSession   uint64
+		curTime      sql.NullTime
+		curConnected bool
+		pt           PresenceTransition
+		want         bool
+	}{
+		{"first transition ever applies", 0, sql.NullTime{}, false, conn(100, t0), true},
+		{"newer session supersedes even an earlier ts", 100, valid(t0), true, conn(200, t0.Add(-time.Hour)), true},
+		{"newer session disconnect supersedes", 100, valid(t0), true, disc(200, t0), true},
+		{"stale session disconnect rejected (stale-will guard)", 200, valid(t0), true, disc(100, t0.Add(time.Hour)), false},
+		{"same session newer time applies", 100, valid(t0), true, disc(100, t0.Add(time.Minute)), true},
+		{"same session older time rejected", 100, valid(t0), true, disc(100, t0.Add(-time.Minute)), false},
+		{"equal stamp: disconnect beats connect", 100, valid(t0), true, disc(100, t0), true},
+		{"equal stamp: connect does NOT beat disconnect", 100, valid(t0), false, conn(100, t0), false},
+		{"equal stamp: same-state connect is a no-op", 100, valid(t0), true, conn(100, t0), false},
+		{"equal stamp: same-state disconnect is a no-op", 100, valid(t0), false, disc(100, t0), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := presenceApplies(tc.curSession, tc.curTime, tc.curConnected, tc.pt)
+			if got != tc.want {
+				t.Fatalf("presenceApplies = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAssertedPresenceProjection exercises the authoritative-presence write path end
+// to end on the DB: assert-on-first-sight, the resurrection guard (data can't revive
+// a known-dead asserted device), and the stale-will guard (an old session's
+// disconnect can't un-set a fresh connect — the SP4 leader-kill invariant, M17).
+func TestAssertedPresenceProjection(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	conn := func(s uint64, tm time.Time) *PresenceTransition {
+		return &PresenceTransition{Connected: true, SessionId: s, OccurredAt: tm}
+	}
+	disc := func(s uint64, tm time.Time) *PresenceTransition {
+		return &PresenceTransition{Connected: false, SessionId: s, OccurredAt: tm}
+	}
+
+	// A CONNECTED StateChange creates an ASSERTED, active device.
+	ds, err := api.MergeDeviceState(ctx, "sp-node", t0, conn(100, t0), DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("connect merge: %v", err)
+	}
+	if ds.PresenceSource != PresenceSourceAsserted || !ds.Active || ds.SessionId != 100 {
+		t.Fatalf("connect did not assert/activate: %+v", ds)
+	}
+
+	// A DISCONNECTED (same session, later) marks it inactive.
+	ds, err = api.MergeDeviceState(ctx, "sp-node", t0.Add(2*time.Minute), disc(100, t0.Add(2*time.Minute)), DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("disconnect merge: %v", err)
+	}
+	if ds.Active || !ds.LastDisconnectTime.Valid {
+		t.Fatalf("disconnect did not deactivate: %+v", ds)
+	}
+
+	// RESURRECTION GUARD: a data event on an ASSERTED-dead device advances activity but
+	// must NOT flip Active back on.
+	ds, err = api.MergeDeviceState(ctx, "sp-node", t0.Add(3*time.Minute), nil, DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("post-death data merge: %v", err)
+	}
+	if ds.Active {
+		t.Fatalf("data event resurrected a known-dead asserted device: %+v", ds)
+	}
+	if !ds.LastActivityTime.Time.Equal(t0.Add(3 * time.Minute)) {
+		t.Fatalf("data event did not advance activity on a dead device: %+v", ds)
+	}
+
+	// A CONNECTED with a NEWER session reactivates.
+	ds, err = api.MergeDeviceState(ctx, "sp-node", t0.Add(4*time.Minute), conn(200, t0.Add(4*time.Minute)), DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("reconnect merge: %v", err)
+	}
+	if !ds.Active || ds.SessionId != 200 {
+		t.Fatalf("newer-session connect did not reactivate: %+v", ds)
+	}
+
+	// STALE-WILL GUARD (M17): a stale DISCONNECTED from the OLD session must NOT un-set
+	// the freshly-connected device, even though it arrives later in wall-clock time.
+	ds, err = api.MergeDeviceState(ctx, "sp-node", t0.Add(5*time.Minute), disc(100, t0.Add(5*time.Minute)), DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("stale disconnect merge: %v", err)
+	}
+	if !ds.Active {
+		t.Fatalf("a stale-session disconnect wrongly deactivated a fresh connect: %+v", ds)
+	}
+	if ds.SessionId != 200 {
+		t.Fatalf("stale disconnect clobbered the session marker: %+v", ds)
+	}
+}
+
+// TestFirstEventDisconnectRecordsDead covers Fable Major 5: the very first event for a
+// device being a DISCONNECTED StateChange must create a DEAD row, not an active one.
+func TestFirstEventDisconnectRecordsDead(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	ds, err := api.MergeDeviceState(ctx, "sp-dead", t0, &PresenceTransition{SessionId: 1, OccurredAt: t0}, DeviceIdentity{})
+	if err != nil {
+		t.Fatalf("first-disconnect merge: %v", err)
+	}
+	if ds.Active {
+		t.Fatalf("first-ever DISCONNECT created an active device: %+v", ds)
+	}
+	if ds.PresenceSource != PresenceSourceAsserted || !ds.LastDisconnectTime.Valid {
+		t.Fatalf("first-ever DISCONNECT did not record a dead asserted device: %+v", ds)
+	}
+}
+
+// TestSweepSkipsAsserted: the inactivity sweep flips a silent INFERRED device but
+// never an ASSERTED one (its offline is a DEATH/LWT, not a data-silence timeout).
+func TestSweepSkipsAsserted(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+
+	if _, err := api.MergeDeviceState(ctx, "inferred-1", t0, nil, DeviceIdentity{}); err != nil {
+		t.Fatalf("inferred merge: %v", err)
+	}
+	if _, err := api.MergeDeviceState(ctx, "asserted-1", t0, &PresenceTransition{Connected: true, SessionId: 1, OccurredAt: t0}, DeviceIdentity{}); err != nil {
+		t.Fatalf("asserted merge: %v", err)
+	}
+
+	flipped, err := api.SweepInactive(core.WithSystemContext(ctx), t0.Add(2*time.Hour))
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if flipped != 1 {
+		t.Fatalf("expected exactly the INFERRED device flipped, got %d", flipped)
+	}
+	states, _ := api.DeviceStatesByDeviceToken(ctx, []string{"inferred-1", "asserted-1"})
+	for _, s := range states {
+		switch s.DeviceToken {
+		case "inferred-1":
+			if s.Active {
+				t.Fatalf("inferred device should be swept inactive: %+v", s)
+			}
+		case "asserted-1":
+			if !s.Active {
+				t.Fatalf("asserted device must NOT be swept: %+v", s)
+			}
+		}
 	}
 }
 

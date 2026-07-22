@@ -68,6 +68,18 @@ type ResolvedAlertsPayload struct {
 	Entries []ResolvedAlertEntry
 }
 
+// Payload with a resolved device presence transition (ADR-067). State is a
+// validated PresenceState (CONNECTED|DISCONNECTED); SessionId is the parsed
+// producer-supplied monotonic session id (a host-observed connect epoch). The
+// device-state projection applies the transition under a monotonic
+// (SessionId, OccurredTime) guard (ADR-067 decision 4).
+type ResolvedStateChangePayload struct {
+	State        string
+	Reason       string
+	SessionId    uint64
+	OccurredTime *string
+}
+
 // Event with token references resolved and the originating device's tracked
 // relationships merged onto it as a set of anchors (ADR-013). The set is empty
 // when the device has no tracked relationship (it still resolves and persists).
@@ -88,6 +100,12 @@ type ResolvedEvent struct {
 	// unpublished (no active version) — the device has no resolvable rules.
 	DeviceTypeToken     string
 	ProfileVersionToken string
+	// ExternalId denormalizes the reporting device's external id (ADR-049) at resolve
+	// time, mirroring the ADR-016 unit/dataType denormalization onto measurements: the
+	// device-state presence projection stores it so a consumer can key a device by its
+	// transport-native identity (the Sparkplug "{group}/{node}[/{device}]" external id)
+	// without a hop back into device-management. Empty when the device has no external id.
+	ExternalId string
 	// ScopeMemberships denormalizes, at resolve time, the rule-scoped dynamic-group
 	// versions the reporting device AND its anchors currently belong to (ADR-062): the
 	// union of MembershipsForEntity over the device and each anchor. event-processing's

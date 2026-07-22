@@ -72,14 +72,32 @@ type nodeSession struct {
 	// Host missed the birth that defined it → rebirth.
 	aliases map[uint64]string
 
-	// devices is the set of child devices that have sent a DBIRTH. DDATA for a
-	// device not in this set is a protocol violation (data before birth), not
-	// device liveness → rebirth.
-	devices map[string]bool
+	// devices maps each child device that has sent a DBIRTH to its own per-device
+	// session epoch (minted at that DBIRTH). Membership is the born-set (DDATA for a
+	// device not present is data-before-birth → rebirth); the epoch is the device's
+	// presence SessionId (ADR-067). It is PER-DEVICE, not the node's, so a device
+	// re-homed under an older-born node is not ordered stale, and a device that flaps
+	// within one node session re-emits a fresh SessionId (and a fresh dedup id).
+	devices map[string]uint64
+
+	// sessionEpoch is this node session's host-observed connect epoch, minted at the
+	// accepted NBIRTH. It is the node's presence SessionId and is carried by the
+	// node's matching NDEATH.
+	sessionEpoch uint64
 
 	// lastRebirth is when the Host last commanded this node to rebirth; the zero
 	// value permits an immediate request. It drives the per-node backoff.
 	lastRebirth time.Time
+
+	// rebirthPending is set whenever the Host commands this node to rebirth (a gap the
+	// backoff let through, or a failover reconcile), and cleared by the NBIRTH that
+	// answers it. It disambiguates the two same-bdSeq births the Host can see: a
+	// commanded rebirth (rebirthPending) re-announces with the SAME bdSeq and seq reset
+	// to 0, and MUST re-adopt that seq baseline or the node's next message reads as a
+	// gap and re-triggers a rebirth forever (the SP2 livelock); an UNsolicited same-bdSeq
+	// birth is a QoS-1 redelivery that must be skipped so it can't reset a baseline the
+	// live DATA stream has already advanced.
+	rebirthPending bool
 }
 
 // SessionTracker validates the Sparkplug session for every edge node it observes
@@ -95,6 +113,83 @@ type SessionTracker struct {
 	now     func() time.Time
 	backoff time.Duration
 	rebirth func(group, node string)
+
+	// lastEpoch is the high-water of every SessionId this tracker has minted. It
+	// makes nextEpoch strictly monotone within the process even across a wall-clock
+	// step-back; SetEpochFloor raises it from the persisted read-model on leader
+	// acquisition so a fresh leader (or a restart) never mints an epoch the
+	// projection would reject as stale (ADR-067 cross-process monotonicity).
+	lastEpoch uint64
+}
+
+// PresenceEvent is an authoritative connectivity transition (ADR-067) the session
+// machine derives from a Sparkplug BIRTH/DEATH. ExternalId is the DeviceChain
+// external id of the node ("{group}/{node}") or a child device
+// ("{group}/{node}/{device}"). SessionId is a host-observed connect epoch — the node
+// session's epoch for a node event, the device's own DBIRTH epoch for a device event
+// (ADR-067 per-device ordering). OccurredAt is the host RECEIPT clock, never the
+// Sparkplug payload timestamp: an NDEATH is the MQTT will, built at CONNECT time, so
+// its payload ts predates the death and would read as stale.
+type PresenceEvent struct {
+	ExternalId string
+	Connected  bool
+	Reason     string
+	SessionId  uint64
+	OccurredAt time.Time
+}
+
+// Observation is everything a single decoded Sparkplug message contributes to the
+// pipeline: the numeric samples to ingest and any presence transitions it asserts. A
+// message yields at most one node-or-device transition, except an NDEATH, which
+// cascades a DISCONNECTED to the node AND every known child device.
+type Observation struct {
+	Samples  []Sample
+	Presence []PresenceEvent
+}
+
+// nodeExternalId / deviceExternalId build the ADR-049 external id the projection keys
+// on, matching SparkplugExternalId's slash-joined form (identity.go).
+func nodeExternalId(key nodeKey) string { return key.group + "/" + key.node }
+func deviceExternalId(key nodeKey, device string) string {
+	return key.group + "/" + key.node + "/" + device
+}
+
+// nextEpoch mints a strictly-monotone host-observed connect epoch (the wall-clock
+// UnixNano floored to lastEpoch+1, so an in-process clock step-back can't invert
+// ordering against an already-issued epoch). The caller holds tr.mu.
+func (tr *SessionTracker) nextEpoch() uint64 {
+	e := uint64(tr.now().UnixNano())
+	if e <= tr.lastEpoch {
+		e = tr.lastEpoch + 1
+	}
+	tr.lastEpoch = e
+	return e
+}
+
+// SetEpochFloor raises the epoch generator's floor so every subsequently-minted
+// SessionId exceeds any already persisted for this source's devices (ADR-067). A
+// fresh leader calls it on lease acquisition with max(session_id)+1 from the
+// device-state read model, so a handover (or a restart across a wall-clock step-back)
+// can never mint an epoch the projection rejects as stale. Lowering is a no-op.
+func (tr *SessionTracker) SetEpochFloor(floor uint64) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if floor > tr.lastEpoch {
+		tr.lastEpoch = floor
+	}
+}
+
+// MintEpoch mints a fresh strictly-monotone epoch above the current floor, for the
+// failover reconciliation to stamp its timeout-DISCONNECTED transitions (ADR-067
+// SP4b). Called AFTER SetEpochFloor(max+1), so the minted epoch exceeds every stored
+// session and the reconcile-DISCONNECT supersedes them — while a genuine re-birth
+// during the probe window mints a LATER (higher) epoch via nextEpoch and thus
+// supersedes the reconcile-DISCONNECT, so a slow-but-alive node self-heals regardless
+// of the race between its birth and the probe timeout.
+func (tr *SessionTracker) MintEpoch() uint64 {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return tr.nextEpoch()
 }
 
 // NewSessionTracker builds a tracker. now supplies the clock for backoff (pass
@@ -139,23 +234,25 @@ func isTrackedType(mt MessageType) bool {
 // resolves a DATA metric's name are both known only here, under the one lock — the
 // samples and the rebirth decision come from the same step. The rebirth callback
 // fires OUTSIDE the lock.
-func (tr *SessionTracker) Observe(top Topic, p *sppb.Payload) []Sample {
+func (tr *SessionTracker) Observe(top Topic, p *sppb.Payload) Observation {
 	if top.IsState || !isTrackedType(top.MessageType) {
-		return nil
+		return Observation{}
 	}
 	key := nodeKey{top.GroupID, top.EdgeNodeID}
-	samples, rebirth := tr.step(key, top, p)
+	samples, presence, rebirth := tr.step(key, top, p)
 	if rebirth && tr.rebirth != nil {
 		tr.rebirth(key.group, key.node)
 	}
-	return samples
+	return Observation{Samples: samples, Presence: presence}
 }
 
-// step applies one message under the lock and returns the samples to ingest and
-// whether a rebirth command should be emitted (already backoff-gated, so at most
-// one per window per node). Samples are non-nil only for an accepted BIRTH or DATA
-// message; a rejected message yields nil samples and (subject to backoff) a rebirth.
-func (tr *SessionTracker) step(key nodeKey, top Topic, p *sppb.Payload) ([]Sample, bool) {
+// step applies one message under the lock and returns the samples to ingest, the
+// presence transitions it asserts, and whether a rebirth command should be emitted
+// (already backoff-gated, so at most one per window per node). Samples are non-nil
+// only for an accepted BIRTH or DATA message; presence is non-nil for an accepted
+// BIRTH (CONNECTED) or DEATH (DISCONNECTED); a rejected message yields neither and
+// (subject to backoff) a rebirth.
+func (tr *SessionTracker) step(key nodeKey, top Topic, p *sppb.Payload) ([]Sample, []PresenceEvent, bool) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 
@@ -163,7 +260,8 @@ func (tr *SessionTracker) step(key nodeKey, top Topic, p *sppb.Payload) ([]Sampl
 	// it never needs a prior session and never triggers a rebirth (a replayed
 	// retained BIRTH just re-initialises cleanly — no double-count).
 	if top.MessageType == NBIRTH {
-		return tr.onNBirth(key, p), false
+		samples, presence := tr.onNBirth(key, p)
+		return samples, presence, false
 	}
 
 	// Every other tracked message needs a session to validate against; create an
@@ -171,23 +269,27 @@ func (tr *SessionTracker) step(key nodeKey, top Topic, p *sppb.Payload) ([]Sampl
 	// yet seen a birth from (else a storm of pre-birth data cannot be throttled).
 	s := tr.sessions[key]
 	if s == nil {
-		s = &nodeSession{aliases: map[uint64]string{}, devices: map[string]bool{}}
+		s = &nodeSession{aliases: map[uint64]string{}, devices: map[string]uint64{}}
 		tr.sessions[key] = s
 	}
 
 	switch top.MessageType {
 	case NDEATH:
-		return nil, tr.onNDeath(s, p)
+		presence, rebirth := tr.onNDeath(key, s, p)
+		return nil, presence, rebirth
 	case DBIRTH:
 		return tr.onDBirth(key, s, top.DeviceID, p)
 	case DDEATH:
-		return nil, tr.onDDeath(key, s, top.DeviceID, p)
+		presence, rebirth := tr.onDDeath(key, s, top.DeviceID, p)
+		return nil, presence, rebirth
 	case NDATA:
-		return tr.onNData(key, s, p)
+		samples, rebirth := tr.onNData(key, s, p)
+		return samples, nil, rebirth
 	case DDATA:
-		return tr.onDData(key, s, top.DeviceID, p)
+		samples, rebirth := tr.onDData(key, s, top.DeviceID, p)
+		return samples, nil, rebirth
 	}
-	return nil, false
+	return nil, nil, false
 }
 
 // onNBirth rebuilds the node session from the birth certificate: it resets the
@@ -200,40 +302,66 @@ func (tr *SessionTracker) step(key nodeKey, top Topic, p *sppb.Payload) ([]Sampl
 // is at-least-once). Rebuilding on it would reset the seq baseline and clear the
 // device table, spuriously gapping the next real message — so a same-bdSeq birth
 // for a live session is left untouched.
-func (tr *SessionTracker) onNBirth(key nodeKey, p *sppb.Payload) []Sample {
+func (tr *SessionTracker) onNBirth(key nodeKey, p *sppb.Payload) ([]Sample, []PresenceEvent) {
 	bd, hasBd := bdSeqOf(p)
 	if prev := tr.sessions[key]; prev != nil && prev.online && prev.hasBdSeq && hasBd && prev.bdSeq == bd {
-		// duplicate/redelivered birth — keep the live session intact and emit NOTHING
-		// (its metrics were already ingested at the first birth; re-ingesting would
-		// double-count).
-		return nil
+		if !prev.rebirthPending {
+			// Unsolicited same-bdSeq birth = a QoS-1 redelivery: keep the live session
+			// intact and emit NOTHING (its metrics were already ingested and its CONNECTED
+			// already emitted at the first birth; repeating either would double-count /
+			// re-emit a stale epoch, and re-adopting its seq would reset a baseline the
+			// live DATA stream has already advanced).
+			return nil, nil
+		}
+		// Commanded rebirth (we asked for it): the node re-announced with the SAME bdSeq
+		// and seq reset. Re-adopt the seq baseline and refresh the node's alias table so
+		// its following DATA validates again — this is what breaks the rebirth livelock —
+		// but keep the SAME session (epoch + born devices) and do NOT re-emit CONNECTED:
+		// the node never disconnected. Re-ingest the birth's current values (a redelivery
+		// dedups by content downstream; a genuine rebirth carries fresh values).
+		prev.rebirthPending = false
+		prev.lastSeq = uint8(p.GetSeq())
+		addAliases(prev.aliases, p)
+		return samplesFrom(p, prev.aliases, tr.now), nil
 	}
+	epoch := tr.nextEpoch()
 	s := &nodeSession{
-		online:   true,
-		bdSeq:    bd,
-		hasBdSeq: hasBd,
-		aliases:  map[uint64]string{},
-		devices:  map[string]bool{},
+		online:       true,
+		bdSeq:        bd,
+		hasBdSeq:     hasBd,
+		aliases:      map[uint64]string{},
+		devices:      map[string]uint64{},
+		sessionEpoch: epoch,
 	}
 	// A conformant NBIRTH declares seq 0; adopt whatever it declares as the
 	// baseline so the following seq lines up rather than reading as a gap.
 	s.lastSeq = uint8(p.GetSeq())
 	addAliases(s.aliases, p)
 	tr.sessions[key] = s
+	presence := []PresenceEvent{{
+		ExternalId: nodeExternalId(key),
+		Connected:  true,
+		Reason:     "nbirth",
+		SessionId:  epoch,
+		OccurredAt: tr.now(),
+	}}
 	// A birth carries the node's current metric values (Sparkplug is report-by-
 	// exception, so the birth is the ONLY place a rarely-changing metric appears) —
 	// ingest them.
-	return samplesFrom(p, s.aliases, tr.now)
+	return samplesFrom(p, s.aliases, tr.now), presence
 }
 
 // onNDeath applies an edge-node death, guarded by bdSeq (B3): the will is
 // accepted only when it carries the SAME bdSeq as the birth that opened the live
 // session. A death for a node with no live session, or one carrying a stale
 // bdSeq from a prior connection, is ignored so it cannot tear down a session that
-// a newer birth already re-established. NDEATH is exempt from the seq counter.
-func (tr *SessionTracker) onNDeath(s *nodeSession, p *sppb.Payload) bool {
+// a newer birth already re-established. NDEATH is exempt from the seq counter. On
+// accept it emits a DISCONNECTED for the node AND cascades one to every known child
+// device (a node death implies all its devices are offline in Sparkplug), each
+// carrying its own per-device epoch.
+func (tr *SessionTracker) onNDeath(key nodeKey, s *nodeSession, p *sppb.Payload) ([]PresenceEvent, bool) {
 	if !s.online {
-		return false
+		return nil, false
 	}
 	// Fail closed: when the live session carries a bdSeq, accept the death only if
 	// it carries a MATCHING one. A death that is absent a bdSeq, or carries a
@@ -242,42 +370,69 @@ func (tr *SessionTracker) onNDeath(s *nodeSession, p *sppb.Payload) bool {
 	// non-conformant node) cannot be correlated at all, so its death is accepted.
 	if s.hasBdSeq {
 		if bd, ok := bdSeqOf(p); !ok || bd != s.bdSeq {
-			return false
+			return nil, false
 		}
+	}
+	now := tr.now()
+	presence := make([]PresenceEvent, 0, len(s.devices)+1)
+	presence = append(presence, PresenceEvent{
+		ExternalId: nodeExternalId(key), Connected: false, Reason: "ndeath-will",
+		SessionId: s.sessionEpoch, OccurredAt: now,
+	})
+	for device, epoch := range s.devices {
+		presence = append(presence, PresenceEvent{
+			ExternalId: deviceExternalId(key, device), Connected: false, Reason: "ndeath-will",
+			SessionId: epoch, OccurredAt: now,
+		})
 	}
 	s.online = false
 	s.aliases = map[uint64]string{}
-	s.devices = map[string]bool{}
-	return false
+	s.devices = map[string]uint64{}
+	return presence, false
 }
 
 // onDBirth records a device birth. It requires a live node session (a device
 // birth with no node birth means the Host missed the NBIRTH → rebirth), advances
-// the seq, and extends the node's alias table with the device's metrics.
-func (tr *SessionTracker) onDBirth(key nodeKey, s *nodeSession, device string, p *sppb.Payload) ([]Sample, bool) {
+// the seq, extends the node's alias table, and mints a fresh per-device epoch — so
+// each (re)birth is a new presence session (a new SessionId + a new dedup id).
+func (tr *SessionTracker) onDBirth(key nodeKey, s *nodeSession, device string, p *sppb.Payload) ([]Sample, []PresenceEvent, bool) {
 	if !s.online {
-		return nil, tr.wantRebirth(s)
+		return nil, nil, tr.wantRebirth(s)
 	}
 	if !tr.advanceSeq(s, p) {
-		return nil, tr.wantRebirth(s)
+		return nil, nil, tr.wantRebirth(s)
 	}
 	addAliases(s.aliases, p)
-	s.devices[device] = true
-	return samplesFrom(p, s.aliases, tr.now), false
+	epoch := tr.nextEpoch()
+	s.devices[device] = epoch
+	presence := []PresenceEvent{{
+		ExternalId: deviceExternalId(key, device), Connected: true, Reason: "dbirth",
+		SessionId: epoch, OccurredAt: tr.now(),
+	}}
+	return samplesFrom(p, s.aliases, tr.now), presence, false
 }
 
 // onDDeath applies a device death: requires a live node, advances the seq, and
-// removes the device from the born set. A death for an unknown device is a no-op
-// after the seq check (liveness, not a protocol violation).
-func (tr *SessionTracker) onDDeath(key nodeKey, s *nodeSession, device string, p *sppb.Payload) bool {
+// removes the device from the born set, emitting a DISCONNECTED carrying that
+// device's own epoch. A death for an unknown device is a no-op after the seq check
+// (it was never CONNECTED, and has no epoch to order it).
+func (tr *SessionTracker) onDDeath(key nodeKey, s *nodeSession, device string, p *sppb.Payload) ([]PresenceEvent, bool) {
 	if !s.online {
-		return tr.wantRebirth(s)
+		return nil, tr.wantRebirth(s)
 	}
 	if !tr.advanceSeq(s, p) {
-		return tr.wantRebirth(s)
+		return nil, tr.wantRebirth(s)
 	}
+	epoch, known := s.devices[device]
 	delete(s.devices, device)
-	return false
+	if !known {
+		return nil, false
+	}
+	presence := []PresenceEvent{{
+		ExternalId: deviceExternalId(key, device), Connected: false, Reason: "ddeath",
+		SessionId: epoch, OccurredAt: tr.now(),
+	}}
+	return presence, false
 }
 
 // onNData validates node data against the live session: it requires a birth,
@@ -301,7 +456,7 @@ func (tr *SessionTracker) onDData(key nodeKey, s *nodeSession, device string, p 
 	if !s.online {
 		return nil, tr.wantRebirth(s)
 	}
-	if !s.devices[device] {
+	if _, born := s.devices[device]; !born {
 		return nil, tr.wantRebirth(s) // data before birth — protocol violation, not liveness
 	}
 	if !tr.advanceSeq(s, p) || !tr.aliasesResolve(s, p) {
@@ -353,7 +508,24 @@ func (tr *SessionTracker) wantRebirth(s *nodeSession) bool {
 		return false // within the backoff window — collapse the storm
 	}
 	s.lastRebirth = now
+	// We are about to command a rebirth: expect a same-bdSeq NBIRTH (seq reset to 0)
+	// answering it, and mark it so onNBirth re-adopts the seq baseline rather than
+	// skipping it as a redelivery (the livelock fix).
+	s.rebirthPending = true
 	return true
+}
+
+// MarkRebirthPending records that the Host has commanded a node to rebirth OUTSIDE the
+// session machine's own gap detection — the failover reconcile publishes rebirths
+// directly (ADR-067 SP4b) — so the NBIRTH answering it is treated as a commanded
+// rebirth (seq-baseline re-adopted), not skipped as a redelivery. A node with no live
+// session yet is a no-op: its next NBIRTH takes the normal full-rebuild path.
+func (tr *SessionTracker) MarkRebirthPending(group, node string) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if s := tr.sessions[nodeKey{group, node}]; s != nil {
+		s.rebirthPending = true
+	}
 }
 
 // bdSeqOf returns the bdSeq metric value from a payload, if present.

@@ -28,17 +28,105 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 
 // Interface for device state API (used for mocking)
 type DeviceStateApi interface {
-	MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time) (*DeviceState, error)
+	MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time, pt *PresenceTransition, id DeviceIdentity) (*DeviceState, error)
 	DeviceStatesByDeviceToken(ctx context.Context, deviceTokens []string) ([]*DeviceState, error)
+	DeviceStatesByExternalId(ctx context.Context, externalIds []string) ([]*DeviceState, error)
+	AssertedActiveDeviceStates(ctx context.Context, source string) ([]*DeviceState, error)
 	DeviceStates(ctx context.Context, criteria DeviceStateSearchCriteria) (*DeviceStateSearchResults, error)
 	SweepInactive(ctx context.Context, now time.Time) (int64, error)
 	MergeLatestMeasurements(ctx context.Context, deviceToken string, inputs []LatestMeasurementInput) error
 	LatestMeasurementsByDeviceToken(ctx context.Context, deviceToken string) ([]*LatestMeasurement, error)
 }
 
-// MergeDeviceState updates (or creates) the live state projection for a device
-// in response to a resolved event. It is the write path of the projection.
-func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time) (*DeviceState, error) {
+// PresenceTransition is an authoritative connectivity edge (ADR-067) carried by a
+// StateChange event from a presence-asserting transport. It is nil for a plain data
+// event. Connected true = CONNECTED, false = DISCONNECTED. SessionId is the
+// producer's monotone per-session id (a host-observed connect epoch, not e.g. a raw
+// Sparkplug bdSeq). OccurredAt is the transition's event time.
+type PresenceTransition struct {
+	Connected  bool
+	SessionId  uint64
+	OccurredAt time.Time
+}
+
+// DeviceIdentity carries the denormalized identity fields the projection stores from
+// the resolved event: the device's external id (ADR-049) and the event Source that
+// last drove it (e.g. "sparkplug:{hostId}"). Both let the projection be queried by
+// transport-native identity for SP4b failover reconciliation without a hop into
+// device-management — externalId to key a device to a Sparkplug topic, Source to scope
+// the reconciliation to its own adapter. Empty fields are never written over a
+// non-empty stored value (they are stable per device; a rare source-less event must not
+// blank them).
+type DeviceIdentity struct {
+	ExternalId string
+	Source     string
+}
+
+// presenceApplies reports whether an incoming transition is not older than the
+// last-applied one, mirroring the alarm integrator's monotonic guard
+// (device-management alarm_contributor.apply): a newer session always supersedes;
+// within the same session the newer OccurredAt wins; at an equal (session, time)
+// DISCONNECTED wins over CONNECTED (a session that births and dies at one instant
+// is net-dead) and a same-state re-apply is a no-op. curConnected is the device's
+// current Active state (for an ASSERTED device this is exactly its last presence).
+// It is a pure function so it is order-independent and unit-testable off the DB.
+func presenceApplies(curSession uint64, curTime sql.NullTime, curConnected bool, pt PresenceTransition) bool {
+	if pt.SessionId != curSession {
+		return pt.SessionId > curSession
+	}
+	if !curTime.Valid {
+		return true // first transition applied in this session
+	}
+	if pt.OccurredAt.After(curTime.Time) {
+		return true
+	}
+	if pt.OccurredAt.Equal(curTime.Time) {
+		// Equal stamp: only a DISCONNECTED over a currently-CONNECTED device applies;
+		// CONNECTED-over-DISCONNECTED and any same-state re-apply are no-ops.
+		return !pt.Connected && curConnected
+	}
+	return false // strictly older within the session
+}
+
+// newDeviceState builds the row for the first event ever seen for a device. A plain
+// data event creates it active (today's behavior); an authoritative presence
+// transition creates it ASSERTED with Active set to exactly the transition — so a
+// first-ever DISCONNECT records a dead device, never a connected one (ADR-067).
+func newDeviceState(deviceToken string, occurredAt time.Time, pt *PresenceTransition, id DeviceIdentity) *DeviceState {
+	ds := &DeviceState{
+		DeviceToken:       deviceToken,
+		ExternalId:        id.ExternalId,
+		Source:            id.Source,
+		PresenceSource:    PresenceSourceInferred,
+		InactivityTimeout: config.DefaultInactivityTimeout,
+	}
+	if pt != nil {
+		ds.PresenceSource = PresenceSourceAsserted
+		ds.SessionId = pt.SessionId
+		ds.PresenceTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+		ds.Active = pt.Connected
+		if pt.Connected {
+			ds.LastConnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+			ds.LastActivityTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+		} else {
+			ds.LastDisconnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+		}
+		return ds
+	}
+	ds.Active = true
+	ds.LastActivityTime = sql.NullTime{Time: occurredAt, Valid: true}
+	ds.LastConnectTime = sql.NullTime{Time: occurredAt, Valid: true}
+	return ds
+}
+
+// MergeDeviceState updates (or creates) the live state projection for a device in
+// response to a resolved event. It is the write path of the projection. A non-nil
+// pt is an authoritative presence transition (ADR-067): it promotes the device to
+// ASSERTED and drives Active under the monotonic (SessionId, OccurredTime) guard. A
+// nil pt is a plain data event: for an INFERRED device it is an implicit heartbeat
+// (unchanged); for an ASSERTED device it advances activity but NEVER flips Active —
+// a stray data event can't resurrect a device the platform knows is dead.
+func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time, pt *PresenceTransition, id DeviceIdentity) (*DeviceState, error) {
 	// The 5 decode workers can process two events for the same device
 	// concurrently. Read-modify-write the row inside a transaction that takes a
 	// row lock (SELECT … FOR UPDATE), so same-device merges serialize and a later
@@ -49,34 +137,61 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 			Where("device_token = ?", deviceToken).First(found)
 		if result.Error != nil {
 			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-				// First event seen for this device: create a new active row. A
-				// concurrent first event loses the (tenant_id, device_token) unique
-				// index race and errors out (redelivered), rather than producing a
-				// duplicate.
-				found = &DeviceState{
-					DeviceToken:       deviceToken,
-					Active:            true,
-					LastActivityTime:  sql.NullTime{Time: occurredAt, Valid: true},
-					LastConnectTime:   sql.NullTime{Time: occurredAt, Valid: true},
-					InactivityTimeout: config.DefaultInactivityTimeout,
-				}
+				// First event seen for this device: create a new row. A concurrent
+				// first event loses the (tenant_id, device_token) unique index race
+				// and errors out (redelivered), rather than producing a duplicate.
+				found = newDeviceState(deviceToken, occurredAt, pt, id)
 				return tx.Create(found).Error
 			}
 			return result.Error
 		}
 
-		// Existing row: a previously-inactive device reconnecting.
-		if !found.Active {
+		// Keep the denormalized identity fresh (both are stable per device, but a device
+		// could be assigned an external id, or first produce via a given source, after its
+		// first event). Only overwrite with a non-empty value so a rare event that resolves
+		// without one can't blank it.
+		if id.ExternalId != "" && found.ExternalId != id.ExternalId {
+			found.ExternalId = id.ExternalId
+		}
+		if id.Source != "" && found.Source != id.Source {
+			found.Source = id.Source
+		}
+
+		if pt != nil {
+			// Authoritative presence transition: promote to ASSERTED (first-sight) and
+			// apply the connectivity edge under the monotonic guard.
+			found.PresenceSource = PresenceSourceAsserted
+			if presenceApplies(found.SessionId, found.PresenceTime, found.Active, *pt) {
+				found.SessionId = pt.SessionId
+				found.PresenceTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+				if pt.Connected {
+					found.Active = true
+					found.LastConnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+					found.InactivityAlarmTime = sql.NullTime{}
+				} else {
+					found.Active = false
+					found.LastDisconnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+				}
+			}
+			// A CONNECTED is also activity; a DISCONNECTED is the opposite of activity,
+			// so it must not advance LastActivityTime.
+			if pt.Connected && (!found.LastActivityTime.Valid || pt.OccurredAt.After(found.LastActivityTime.Time)) {
+				found.LastActivityTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+			}
+			return tx.Save(found).Error
+		}
+
+		// Plain data event. An ASSERTED device takes Active ONLY from a StateChange, so
+		// a data event must not flip it (it still advances activity below); an INFERRED
+		// device treats every event as an implicit heartbeat (unchanged behavior).
+		if found.PresenceSource != PresenceSourceAsserted && !found.Active {
 			found.Active = true
 			found.LastConnectTime = sql.NullTime{Time: occurredAt, Valid: true}
 			found.InactivityAlarmTime = sql.NullTime{}
 		}
-
-		// Advance last-activity time only when this event is newer than what we have.
 		if !found.LastActivityTime.Valid || occurredAt.After(found.LastActivityTime.Time) {
 			found.LastActivityTime = sql.NullTime{Time: occurredAt, Valid: true}
 		}
-
 		return tx.Save(found).Error
 	})
 	if err != nil {
@@ -159,6 +274,32 @@ func (api *Api) DeviceStatesByDeviceToken(ctx context.Context, deviceTokens []st
 	return found, nil
 }
 
+// DeviceStatesByExternalId returns the device states for the given external ids.
+func (api *Api) DeviceStatesByExternalId(ctx context.Context, externalIds []string) ([]*DeviceState, error) {
+	found := make([]*DeviceState, 0)
+	result := api.RDB.DB(ctx).Find(&found, "external_id in ?", externalIds)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return found, nil
+}
+
+// AssertedActiveDeviceStates returns every ASSERTED + active device state for the given
+// event source (ADR-067 SP4b failover reconciliation). It is tenant-scoped by the RDB
+// callback from the caller's context, and additionally source-scoped so a Sparkplug
+// adapter reconciling one broker never sees — and so can never cross-disconnect — a
+// sibling source's devices on the same tenant.
+func (api *Api) AssertedActiveDeviceStates(ctx context.Context, source string) ([]*DeviceState, error) {
+	found := make([]*DeviceState, 0)
+	result := api.RDB.DB(ctx).
+		Where("active = ? AND presence_source = ? AND source = ?", true, PresenceSourceAsserted, source).
+		Find(&found)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return found, nil
+}
+
 // Search for device states that meet criteria.
 func (api *Api) DeviceStates(ctx context.Context, criteria DeviceStateSearchCriteria) (*DeviceStateSearchResults, error) {
 	results := make([]DeviceState, 0)
@@ -185,8 +326,12 @@ func (api *Api) DeviceStates(ctx context.Context, criteria DeviceStateSearchCrit
 // tenant_id on Save. It marks every active device whose last activity is older
 // than its inactivity timeout as inactive and returns how many were flipped.
 func (api *Api) SweepInactive(ctx context.Context, now time.Time) (int64, error) {
+	// Only INFERRED devices are swept: an ASSERTED device's offline is an
+	// authoritative DEATH/LWT, never a data-silence timeout (ADR-067 decision 6), so
+	// the sweep must not flip it. The predicate is applied at the scan so an asserted
+	// device is never even considered.
 	active := make([]DeviceState, 0)
-	result := api.RDB.DB(ctx).Where("active = ?", true).Find(&active)
+	result := api.RDB.DB(ctx).Where("active = ? AND presence_source <> ?", true, PresenceSourceAsserted).Find(&active)
 	if result.Error != nil {
 		return 0, result.Error
 	}

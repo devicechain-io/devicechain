@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/devicechain-io/dc-device-state/model"
 	util "github.com/devicechain-io/dc-microservice/graphql"
@@ -76,6 +77,34 @@ func (r *DeviceStateResolver) InactivityAlarmTime() *string {
 
 func (r *DeviceStateResolver) InactivityTimeout() int32 {
 	return int32(r.M.InactivityTimeout)
+}
+
+// ExternalId is the device's transport-native identity, denormalized (ADR-049); nil
+// when the device has no external id.
+func (r *DeviceStateResolver) ExternalId() *string {
+	if r.M.ExternalId == "" {
+		return nil
+	}
+	return &r.M.ExternalId
+}
+
+// PresenceSource is INFERRED or ASSERTED (ADR-067).
+func (r *DeviceStateResolver) PresenceSource() string {
+	return r.M.PresenceSource
+}
+
+// SessionId is the last-applied presence transition's ordering epoch, returned as a
+// String because it is a UnixNano value that overflows a 32-bit GraphQL Int.
+func (r *DeviceStateResolver) SessionId() string {
+	return strconv.FormatUint(r.M.SessionId, 10)
+}
+
+// PresenceTime is the last-applied presence transition's time; nil until the first.
+func (r *DeviceStateResolver) PresenceTime() *string {
+	if r.M.PresenceTime.Valid {
+		return util.FormatTime(r.M.PresenceTime.Time)
+	}
+	return nil
 }
 
 // --------------------------

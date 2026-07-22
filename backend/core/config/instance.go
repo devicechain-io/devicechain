@@ -202,6 +202,18 @@ type CommandDeliveryConfiguration struct {
 	Port     uint32
 }
 
+// DeviceStateConfiguration locates the device-state GraphQL endpoint for synchronous
+// cross-service reads (ADR-044 amendment) — the Sparkplug adapter enumerating a
+// tenant's asserted-active devices on failover to reconcile presence (ADR-067 SP4b).
+// Only that caller consumes it, and only when the service secret is also set, so it is
+// neither required by Validate nor filled by ApplyDefaults; sparkplug-ingest guards on
+// it at startup (fail-closed if unset, since reconciliation is a correctness guarantee,
+// not a degrade). The Helm chart supplies the in-cluster coordinate for a normal deploy.
+type DeviceStateConfiguration struct {
+	Hostname string
+	Port     uint32
+}
+
 // AiInferenceConfiguration locates the ai-inference GraphQL endpoint for the
 // synchronous cross-service call event-processing makes to draft a detection rule
 // from natural language (ADR-056 slice 1): event-processing carries the human's
@@ -321,6 +333,7 @@ type InfrastructureConfiguration struct {
 	DeviceManagement DeviceManagementConfiguration
 	EventProcessing  EventProcessingConfiguration
 	CommandDelivery  CommandDeliveryConfiguration
+	DeviceState      DeviceStateConfiguration
 	AiInference      AiInferenceConfiguration
 	ServiceAuth      ServiceAuthConfiguration
 	Secrets          SecretsConfiguration
@@ -665,6 +678,10 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 			},
 			EventProcessing: EventProcessingConfiguration{
 				Hostname: "dc-event-processing.dc-system",
+				Port:     8080,
+			},
+			DeviceState: DeviceStateConfiguration{
+				Hostname: "dc-device-state.dc-system",
 				Port:     8080,
 			},
 			Secrets: SecretsConfiguration{

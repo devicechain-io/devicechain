@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/devicechain-io/dc-sparkplug-ingest/codec"
@@ -94,6 +95,110 @@ func bdSeqM(v uint64) *sppb.Payload_Metric {
 	}
 }
 
+// presenceFor returns the presence event for a given external id, or nil.
+func presenceFor(obs Observation, externalId string) *PresenceEvent {
+	for i := range obs.Presence {
+		if obs.Presence[i].ExternalId == externalId {
+			return &obs.Presence[i]
+		}
+	}
+	return nil
+}
+
+// TestPresenceBirthDeathEdges pins the first-real-producer edges (ADR-067): an NBIRTH
+// asserts CONNECTED for the node with a receipt-clock timestamp; an NDEATH asserts
+// DISCONNECTED. The OccurredAt is the host receipt clock (h.now), NEVER the payload —
+// the load-bearing Blocker-2 guard (a will's payload ts predates the death).
+func TestPresenceBirthDeathEdges(t *testing.T) {
+	h := newHarness(defaultRebirthBackoff)
+	h.now = time.Unix(1_700_000_100, 0)
+	birth := h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), birthMetric("temperature", 1)))
+	node := presenceFor(birth, "g/n")
+	if assert.NotNil(t, node, "an NBIRTH asserts node presence") {
+		assert.True(t, node.Connected)
+		assert.Equal(t, h.now, node.OccurredAt, "OccurredAt is the receipt clock, not the payload ts")
+		assert.Greater(t, node.SessionId, uint64(0))
+	}
+
+	h.now = time.Unix(1_700_000_200, 0)
+	death := h.tr.Observe(nTop(NDEATH), pl(-1, bdSeqM(1)))
+	nodeDeath := presenceFor(death, "g/n")
+	if assert.NotNil(t, nodeDeath, "an NDEATH asserts node presence") {
+		assert.False(t, nodeDeath.Connected)
+		assert.Equal(t, h.now, nodeDeath.OccurredAt, "the death carries the receipt clock, not the will's birth-era payload ts")
+		assert.Equal(t, node.SessionId, nodeDeath.SessionId, "the death carries the same session epoch as its birth")
+	}
+}
+
+// TestPresencePerDeviceEpochsAndFlap is the Blocker-1 pin: a child device carries its
+// OWN epoch (not the node's), and a device that flaps within one node session
+// re-emits a FRESH SessionId on its second birth — so the recovery CONNECTED is not
+// silently deduped away (identical ids) and is not ordered stale.
+func TestPresencePerDeviceEpochsAndFlap(t *testing.T) {
+	h := newHarness(defaultRebirthBackoff)
+	nodeBirth := h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), birthMetric("t", 1)))
+	nodeEpoch := presenceFor(nodeBirth, "g/n").SessionId
+
+	h.now = h.now.Add(time.Second)
+	d1 := h.tr.Observe(dTop(DBIRTH, "sensor-7"), pl(1, birthMetric("flow", 10)))
+	dev1 := presenceFor(d1, "g/n/sensor-7")
+	require.NotNilf(t, dev1, "a DBIRTH asserts device presence")
+	assert.True(t, dev1.Connected)
+	assert.NotEqual(t, nodeEpoch, dev1.SessionId, "a device carries its OWN epoch, not the node's")
+
+	// The device flaps: DDEATH then DBIRTH again, within the same node session.
+	h.now = h.now.Add(time.Second)
+	h.tr.Observe(dTop(DDEATH, "sensor-7"), pl(2))
+	h.now = h.now.Add(time.Second)
+	d2 := h.tr.Observe(dTop(DBIRTH, "sensor-7"), pl(3, birthMetric("flow", 10)))
+	dev2 := presenceFor(d2, "g/n/sensor-7")
+	require.NotNilf(t, dev2, "the device's second birth asserts presence again")
+	assert.Greater(t, dev2.SessionId, dev1.SessionId, "a re-birth mints a FRESH epoch (distinct SessionId AND dedup id)")
+}
+
+// TestPresenceNDeathCascade is the Q1 pin: a node death cascades a DISCONNECTED to the
+// node AND every known child device, each carrying its own epoch — otherwise the
+// children stay stuck CONNECTED (they skip the sweep, being ASSERTED).
+func TestPresenceNDeathCascade(t *testing.T) {
+	h := newHarness(defaultRebirthBackoff)
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), birthMetric("t", 1)))
+	h.tr.Observe(dTop(DBIRTH, "sensor-7"), pl(1, birthMetric("a", 10)))
+	h.tr.Observe(dTop(DBIRTH, "sensor-8"), pl(2, birthMetric("b", 20)))
+
+	death := h.tr.Observe(nTop(NDEATH), pl(-1, bdSeqM(1)))
+	assert.Len(t, death.Presence, 3, "the node death cascades to the node + both children")
+	for _, ext := range []string{"g/n", "g/n/sensor-7", "g/n/sensor-8"} {
+		if ev := presenceFor(death, ext); assert.NotNilf(t, ev, "cascade includes %s", ext) {
+			assert.False(t, ev.Connected)
+		}
+	}
+}
+
+// TestPresenceEpochMonotoneAcrossClockStepBack is the Major-4 pin: nextEpoch is
+// strictly monotone even when the wall clock steps BACKWARD between sessions, so a
+// fresh session can never mint an epoch that the projection would reject as stale.
+func TestPresenceEpochMonotoneAcrossClockStepBack(t *testing.T) {
+	h := newHarness(defaultRebirthBackoff)
+	h.now = time.Unix(1_700_000_500, 0)
+	e1 := presenceFor(h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1))), "g/n").SessionId
+
+	// The clock steps BACK before the next session (an NTP correction).
+	h.now = time.Unix(1_700_000_400, 0)
+	h.tr.Observe(nTop(NDEATH), pl(-1, bdSeqM(1)))
+	e2 := presenceFor(h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(2))), "g/n").SessionId
+	assert.Greater(t, e2, e1, "a step-back clock must NOT mint a lower epoch (the floor holds)")
+}
+
+// TestSetEpochFloor pins the cross-process floor: after SetEpochFloor (the read-model
+// max+1 a fresh leader applies on acquisition), the next minted epoch exceeds it.
+func TestSetEpochFloor(t *testing.T) {
+	h := newHarness(defaultRebirthBackoff)
+	floor := uint64(9_000_000_000_000_000_000)
+	h.tr.SetEpochFloor(floor)
+	e := presenceFor(h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1))), "g/n").SessionId
+	assert.Greater(t, e, floor, "a minted epoch must exceed the read-model floor")
+}
+
 // Case 1: a dropped sequence number produces exactly one rebirth.
 func TestAdversarialSeqGapTriggersOneRebirth(t *testing.T) {
 	h := newHarness(defaultRebirthBackoff)
@@ -147,7 +252,8 @@ func TestAdversarialDataBeforeDeviceBirthRebirthsNotLiveness(t *testing.T) {
 
 	assert.Equal(t, 1, h.rec.count(), "data before device birth must rebirth")
 	if s := h.sess(); assert.NotNil(t, s) {
-		assert.False(t, s.devices["sensor-7"], "a violating DDATA must not register the device as alive")
+		_, born := s.devices["sensor-7"]
+		assert.False(t, born, "a violating DDATA must not register the device as alive")
 	}
 }
 
@@ -214,7 +320,8 @@ func TestDuplicateBirthMidSessionIsIdempotent(t *testing.T) {
 
 	// The live session is intact: device still born, seq baseline still at 2.
 	if s := h.sess(); assert.NotNil(t, s) {
-		assert.True(t, s.devices["sensor-7"], "a duplicate birth must not clear the device table")
+		_, born := s.devices["sensor-7"]
+		assert.True(t, born, "a duplicate birth must not clear the device table")
 		assert.Equal(t, uint8(2), s.lastSeq, "a duplicate birth must not reset the seq baseline")
 	}
 	// The next in-order message continues cleanly — no gap, no rebirth.
@@ -284,4 +391,60 @@ func TestRebirthCommandEncodesNodeControlRebirth(t *testing.T) {
 		assert.Equal(t, nodeControlRebirthMetric, p.GetMetrics()[0].GetName())
 		assert.True(t, p.GetMetrics()[0].GetBooleanValue())
 	}
+}
+
+// --- commanded-rebirth livelock (F2) ---------------------------------------
+
+// TestCommandedRebirthReadoptsSeqBaseline is the livelock fix: after the Host commands a
+// rebirth (a gap the backoff let through), the node re-announces with the SAME bdSeq and
+// seq reset to 0. onNBirth MUST re-adopt that seq baseline — otherwise the node's next
+// DATA reads as a gap and re-triggers a rebirth forever. Mutation control: skip the
+// re-adopt (the pre-fix behavior) and the post-rebirth DATA gaps → the rebirth count
+// climbs → the final assertion fails.
+func TestCommandedRebirthReadoptsSeqBaseline(t *testing.T) {
+	h := newHarness(0) // no backoff: every genuine gap may command a rebirth
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), valuedBirth("t", 1, 20)))
+	h.tr.Observe(nTop(NDATA), pl(1, valuedData(1, 21)))
+	h.tr.Observe(nTop(NDATA), pl(2, valuedData(1, 22)))
+	require.Equal(t, 0, h.rec.count(), "a clean stream needs no rebirth")
+
+	// A gap (seq 5, expected 3) commands a rebirth and marks it pending.
+	h.tr.Observe(nTop(NDATA), pl(5, valuedData(1, 25)))
+	require.Equal(t, 1, h.rec.count(), "the gap commands a rebirth")
+	require.True(t, h.sess().rebirthPending, "the commanded rebirth is pending")
+
+	// The node answers: a SAME-bdSeq NBIRTH with seq reset to 0.
+	out := h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), valuedBirth("t", 1, 30)))
+	assert.Empty(t, out.Presence, "a commanded rebirth must not re-emit CONNECTED (the node never disconnected)")
+	assert.False(t, h.sess().rebirthPending, "the answering birth clears the pending flag")
+	assert.Equal(t, uint8(0), h.sess().lastSeq, "the seq baseline is re-adopted from the rebirth")
+
+	// The node's following DATA (seq 1) now validates — no further rebirth (livelock broken).
+	out = h.tr.Observe(nTop(NDATA), pl(1, valuedData(1, 31)))
+	assert.Len(t, out.Samples, 1, "post-rebirth DATA is accepted")
+	assert.Equal(t, 1, h.rec.count(), "no rebirth storm after the commanded rebirth")
+}
+
+// TestRedeliveredBirthStillSkipped is the negative control the fix must not break: an
+// UNsolicited same-bdSeq birth (a QoS-1 redelivery, no rebirth pending) is still skipped
+// — it must NOT reset the seq baseline the live DATA stream has already advanced, or the
+// stream would false-gap. Mutation control: drop the rebirthPending check (re-adopt
+// always) and the redelivery resets lastSeq → the next DATA gaps.
+func TestRedeliveredBirthStillSkipped(t *testing.T) {
+	h := newHarness(0)
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), valuedBirth("t", 1, 20)))
+	h.tr.Observe(nTop(NDATA), pl(1, valuedData(1, 21)))
+	h.tr.Observe(nTop(NDATA), pl(2, valuedData(1, 22)))
+	require.False(t, h.sess().rebirthPending, "no rebirth was commanded")
+
+	// A stale redelivery of the birth (same bdSeq, seq 0) with NO pending rebirth.
+	out := h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), valuedBirth("t", 1, 20)))
+	assert.Empty(t, out.Presence, "a redelivered birth re-emits no CONNECTED")
+	assert.Empty(t, out.Samples, "a redelivered birth re-ingests nothing")
+	assert.Equal(t, uint8(2), h.sess().lastSeq, "the seq baseline is NOT reset by a redelivery")
+
+	// The live stream continues from seq 3 without a gap.
+	out = h.tr.Observe(nTop(NDATA), pl(3, valuedData(1, 23)))
+	assert.Len(t, out.Samples, 1, "the live DATA stream is uninterrupted")
+	assert.Equal(t, 0, h.rec.count(), "no rebirth")
 }

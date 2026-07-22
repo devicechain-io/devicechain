@@ -80,10 +80,15 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 // device-management and never reaches event-management / device-state.
 func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []model.ResolvedAnchor,
 	memberships []model.GroupRef, event *esmodel.UnresolvedEvent, rezPayload interface{}, scope *model.ProfileScope) *EventResolutionResults {
+	externalId := ""
+	if device.ExternalId.Valid {
+		externalId = device.ExternalId.String
+	}
 	resolved := &model.ResolvedEvent{
 		Source:              event.Source,
 		AltId:               event.AltId,
 		SourceDeviceToken:   device.Token,
+		ExternalId:          externalId,
 		DeviceTypeToken:     scope.DeviceTypeToken,
 		ProfileVersionToken: scope.ProfileVersionToken,
 		Anchors:             anchors,
@@ -394,6 +399,37 @@ func (rez *EventResolver) ResolveAlertsEventPayload(ctx context.Context, device 
 	return nil, fmt.Errorf("can not resolve alerts payload. invalid unresolved payload type")
 }
 
+// Resolve a state-change (presence) event payload (ADR-067). Validates the state
+// enum and parses the producer-supplied session id into a uint64. A malformed
+// payload is a deterministic failure (a bad producer), surfaced as an error so
+// the caller dead-letters it rather than retrying it forever.
+func (rez *EventResolver) ResolveStateChangeEventPayload(ctx context.Context, device *model.Device,
+	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
+	payload, ok := event.Payload.(*esmodel.UnresolvedStateChangePayload)
+	if !ok {
+		return nil, fmt.Errorf("can not resolve state-change payload. invalid unresolved payload type")
+	}
+	switch payload.State {
+	case esmodel.PresenceConnected, esmodel.PresenceDisconnected:
+	default:
+		return nil, fmt.Errorf("invalid presence state %q in state-change event", payload.State)
+	}
+	var sessionId uint64
+	if payload.SessionId != "" {
+		parsed, err := strconv.ParseUint(payload.SessionId, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid session id %q in state-change event: %w", payload.SessionId, err)
+		}
+		sessionId = parsed
+	}
+	return &model.ResolvedStateChangePayload{
+		State:        string(payload.State),
+		Reason:       payload.Reason,
+		SessionId:    sessionId,
+		OccurredTime: payload.OccurredTime,
+	}, nil
+}
+
 // Convert an unresolved event payload into a resolved payload.
 func (rez *EventResolver) ResolveEventPayload(ctx context.Context, device *model.Device,
 	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
@@ -404,6 +440,8 @@ func (rez *EventResolver) ResolveEventPayload(ctx context.Context, device *model
 		return rez.ResolveMeasurementsEventPayload(ctx, device, relation, event)
 	case esmodel.Alert:
 		return rez.ResolveAlertsEventPayload(ctx, device, relation, event)
+	case esmodel.StateChange:
+		return rez.ResolveStateChangeEventPayload(ctx, device, relation, event)
 	default:
 		return nil, fmt.Errorf("unable to handle resolution for payload type: %s", event.EventType.String())
 	}
@@ -540,7 +578,7 @@ func (rez *EventResolver) HandleEvent(ctx context.Context,
 	switch unresolved.EventType {
 	case esmodel.NewRelationship:
 		return rez.HandleNewRelationshipEvent(ctx, device, unresolved)
-	case esmodel.Location, esmodel.Measurement, esmodel.Alert:
+	case esmodel.Location, esmodel.Measurement, esmodel.Alert, esmodel.StateChange:
 		return rez.HandleStandardEvent(ctx, device, unresolved)
 	default:
 		return nil, uint(dmproto.FailureReason_Invalid), fmt.Errorf("unhandled event type: %s", unresolved.EventType.String())

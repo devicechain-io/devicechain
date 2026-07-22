@@ -87,6 +87,10 @@ message PScopeMembership {
 	// The rule-scoped dynamic-group versions the device + its anchors belong to
 	// (ADR-062), stamped at resolve time; empty when no rule references such a group.
 	repeated PScopeMembership scope_memberships = 13;
+	// external_id denormalizes the reporting device's external id (ADR-049) at resolve
+	// time so the device-state presence projection can key a device by its transport-
+	// native identity without a hop back into device-management; empty when unset.
+	optional string external_id = 14;
 }
 
 /**
@@ -163,6 +167,17 @@ message PResolvedAlertEntry {
  */
 message PResolvedAlertsPayload {
     repeated PResolvedAlertEntry entries = 1;
+}
+
+/**
+ * Payload for a resolved device presence state-change event (ADR-067). Distinct
+ * from PAlarmStateChangeEvent (ADR-041), which is an alarm transition envelope.
+ */
+message PResolvedStateChangePayload {
+    string state = 1;
+    string reason = 2;
+    uint64 session_id = 3;
+    optional string occurred_time = 4;
 }
 
 /**
