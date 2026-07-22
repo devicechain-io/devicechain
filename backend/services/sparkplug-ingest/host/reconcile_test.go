@@ -17,13 +17,16 @@ import (
 
 // --- Reconciler.AssertedActive (device-state read → floor input) ------------
 
-// TestAssertedActiveParsesFloorsAndSkips pins the reconcile read: sessionId arrives as
-// a String (a UnixNano that overflows a 32-bit Int), the max across the set is the
-// epoch-floor input, and a row that cannot anchor the reconcile — a null external id
-// (no Sparkplug identity) or an unparseable sessionId (would poison the floor) — is
-// dropped rather than allowed to corrupt the result.
-func TestAssertedActiveParsesFloorsAndSkips(t *testing.T) {
-	gql := &fakeGraphQL{responder: func(_ string, _ map[string]any) (any, error) {
+// TestAssertedActiveParsesFloorsSkipsAndScopesBySource pins the reconcile read: it is
+// source-scoped (the query carries the caller's source so a sibling source's devices are
+// never returned — the cross-disconnect guard, F4); sessionId arrives as a String (a
+// UnixNano that overflows a 32-bit Int); the max across the kept set is the epoch-floor
+// input; and a row that cannot anchor the reconcile — a null external id or an
+// unparseable sessionId — is dropped rather than corrupting the result.
+func TestAssertedActiveParsesFloorsSkipsAndScopesBySource(t *testing.T) {
+	var gotSource any
+	gql := &fakeGraphQL{responder: func(_ string, vars map[string]any) (any, error) {
+		gotSource = vars["source"]
 		return map[string]any{"assertedActiveDeviceStates": []map[string]any{
 			{"externalId": "plant-a/n1", "sessionId": "100"},
 			{"externalId": "plant-a/n1/d1", "sessionId": "250"},
@@ -33,8 +36,9 @@ func TestAssertedActiveParsesFloorsAndSkips(t *testing.T) {
 	}}
 	r := NewReconciler(gql, "http://device-state/graphql")
 
-	devices, max, err := r.AssertedActive(context.Background(), "acme")
+	devices, max, err := r.AssertedActive(context.Background(), "acme", "sparkplug:h1")
 	require.NoError(t, err)
+	assert.Equal(t, "sparkplug:h1", gotSource, "the read must be scoped to the caller's source (F4 cross-disconnect guard)")
 	assert.Equal(t, uint64(250), max, "the floor is the max sessionId among the kept rows")
 	require.Len(t, devices, 2, "the null-externalId and bad-session rows are dropped")
 	assert.Equal(t, "plant-a/n1", devices[0].ExternalId)
@@ -48,149 +52,148 @@ func TestAssertedActivePropagatesReadError(t *testing.T) {
 		return nil, errors.New("device-state unreachable")
 	}}
 	r := NewReconciler(gql, "http://device-state/graphql")
-	_, _, err := r.AssertedActive(context.Background(), "acme")
+	_, _, err := r.AssertedActive(context.Background(), "acme", "sparkplug:h1")
 	require.Error(t, err, "a read failure must surface so reconcile aborts rather than guessing")
 }
 
-// --- Client.reconcile (probe → force-disconnect) ----------------------------
+// --- fakes + helpers --------------------------------------------------------
 
-// fakeReconciler is a canned device-state read for the reconcile probe tests.
+// fakeReconciler is a canned device-state read; it records the tenant + source it was
+// asked for so a test can pin the source scoping.
 type fakeReconciler struct {
-	devices []AssertedDevice
-	max     uint64
-	err     error
+	devices   []AssertedDevice
+	max       uint64
+	err       error
+	gotTenant string
+	gotSource string
+	callCount int
 }
 
-func (f *fakeReconciler) AssertedActive(_ context.Context, _ string) ([]AssertedDevice, uint64, error) {
+func (f *fakeReconciler) AssertedActive(_ context.Context, tenant, source string) ([]AssertedDevice, uint64, error) {
+	f.callCount++
+	f.gotTenant = tenant
+	f.gotSource = source
 	return f.devices, f.max, f.err
 }
 
-// reconcileClient builds a client wired with a fake ingester + reconciler and a tiny
-// probe window, ready for a direct reconcile() call.
-func reconcileClient(fake *fakeIngester, rec reconcileSource, groups ...string) *Client {
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h", Groups: groups},
-		Broker{}, fake, fixedNow, Metrics{})
+// reconcileClient builds a client wired with a fake ingester + reconciler, a tiny probe
+// window, and a rebirth publisher captured into rebirthed (all succeed by default), ready
+// for a direct establishEpochFloor / reconcileProbe call.
+func reconcileClient(fake *fakeIngester, rec reconcileSource) (*Client, *[]nodeKey) {
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1"}, Broker{}, fake, fixedNow, Metrics{})
 	c.SetReconciler(rec)
 	c.probeWindow = 5 * time.Millisecond
-	return c
-}
-
-func drainRebirths(c *Client) []nodeKey {
-	out := make([]nodeKey, 0)
-	for {
-		select {
-		case k := <-c.rebirthCh:
-			out = append(out, k)
-		default:
-			return out
-		}
+	rebirthed := &[]nodeKey{}
+	c.rebirthPub = func(g, n string) bool {
+		*rebirthed = append(*rebirthed, nodeKey{group: g, node: n})
+		return true
 	}
+	return c, rebirthed
 }
 
-// TestReconcileDisconnectsOnlyUnseenAssertedDevices is the check-that-cannot-fail for
-// the missed-death hole (ADR-067 SP4b): a device that produced traffic this session is
-// left alone; a device that stayed silent through the probe is declared DISCONNECTED.
-// The mutation control is the "alive" device — if the seen guard were dropped, it too
-// would be disconnected and presenceCount would be 2, not 1. maxSession is chosen ABOVE
-// the receipt clock's nanoseconds so the epoch floor is load-bearing: without
-// SetEpochFloor the minted stale epoch would be BELOW maxSession and the projection
-// guard would reject the DISCONNECT — so the `> maxSession` assertion fails if the floor
-// is ever removed.
-func TestReconcileDisconnectsOnlyUnseenAssertedDevices(t *testing.T) {
-	const bigSession = uint64(5_000_000_000_000_000_000) // > fixedNow (≈1.7e18): the floor must lift past it
+// --- establishEpochFloor (phase 1: floor before births) ---------------------
+
+// TestEstablishEpochFloorRaisesFloorAndScopes proves phase 1 reads the projection for
+// THIS source, raises the epoch floor above the max stored session (so a later birth can
+// never mint a stale-rejected epoch — F3/Major-4), and returns the asserted set. The
+// floor is load-bearing: max is chosen above the receipt clock's nanoseconds, so if
+// SetEpochFloor were removed the next minted epoch would be BELOW max and this fails.
+func TestEstablishEpochFloorRaisesFloorAndScopes(t *testing.T) {
+	const bigSession = uint64(5_000_000_000_000_000_000) // > fixedNow (≈1.7e18)
+	rec := &fakeReconciler{
+		devices: []AssertedDevice{{ExternalId: "plant-a/n1", SessionId: bigSession}},
+		max:     bigSession,
+	}
+	c, _ := reconcileClient(&fakeIngester{}, rec)
+
+	devices := c.establishEpochFloor(context.Background())
+	require.Len(t, devices, 1, "the asserted set is returned for the probe")
+	assert.Equal(t, "acme", rec.gotTenant)
+	assert.Equal(t, "sparkplug:h1", rec.gotSource, "phase 1 reads are scoped to this source")
+	assert.Greater(t, c.sessions.MintEpoch(), bigSession,
+		"the generator must be floored above the max stored session (a removed SetEpochFloor fails this)")
+}
+
+func TestEstablishEpochFloorReadErrorReturnsNil(t *testing.T) {
+	c, _ := reconcileClient(&fakeIngester{}, &fakeReconciler{err: errors.New("device-state down")})
+	assert.Nil(t, c.establishEpochFloor(context.Background()), "a read error yields no probe set (retried next reconnect)")
+}
+
+func TestEstablishEpochFloorEmptyReturnsNil(t *testing.T) {
+	c, _ := reconcileClient(&fakeIngester{}, &fakeReconciler{devices: nil, max: 0})
+	assert.Nil(t, c.establishEpochFloor(context.Background()))
+}
+
+// --- reconcileProbe (phase 2: probe → force-disconnect) ---------------------
+
+// TestReconcileProbeDisconnectsOnlyRebirthedUnseen is the check-that-cannot-fail for the
+// missed-death hole (ADR-067 SP4b): among the nodes it actually rebirthed, a device that
+// produced traffic is left alone and a silent one is DISCONNECTED. The mutation control
+// is the "alive" device — drop the seen guard and presenceCount becomes 2. The floor is
+// set (as phase 1 would) above the receipt clock so the stale epoch exceeds the stored
+// session and the projection guard accepts the DISCONNECT.
+func TestReconcileProbeDisconnectsOnlyRebirthedUnseen(t *testing.T) {
+	const bigSession = uint64(5_000_000_000_000_000_000)
 	fake := &fakeIngester{}
-	c := reconcileClient(fake, &fakeReconciler{
-		devices: []AssertedDevice{
-			{ExternalId: "plant-a/alive", SessionId: bigSession},
-			{ExternalId: "plant-a/dead", SessionId: bigSession},
-		},
-		max: bigSession,
-	})
+	c, rebirthed := reconcileClient(fake, &fakeReconciler{})
+	c.sessions.SetEpochFloor(bigSession + 1) // phase 1 would have done this
 
+	devices := []AssertedDevice{
+		{ExternalId: "plant-a/alive", SessionId: bigSession},
+		{ExternalId: "plant-a/dead", SessionId: bigSession},
+	}
 	c.resetSeen()
-	c.markSeen("plant-a/alive") // this node re-birthed / kept talking this session
-	c.reconcile(context.Background())
+	c.markSeen("plant-a/alive")
+	c.reconcileProbe(context.Background(), devices)
 
-	require.Equal(t, 1, fake.presenceCount(), "only the silent device is force-disconnected")
+	assert.ElementsMatch(t, []nodeKey{{group: "plant-a", node: "alive"}, {group: "plant-a", node: "dead"}}, *rebirthed,
+		"both nodes are rebirthed before the probe")
+	require.Equal(t, 1, fake.presenceCount(), "only the silent, rebirthed device is force-disconnected")
 	ev := fake.presence[0]
 	assert.Equal(t, "plant-a/dead", ev.ExternalId)
-	assert.False(t, ev.Connected, "a reconcile timeout is a DISCONNECTED")
+	assert.False(t, ev.Connected)
 	assert.Equal(t, "reconcile-timeout", ev.Reason)
-	assert.Greater(t, ev.SessionId, bigSession,
-		"the stale epoch must exceed every stored session (SetEpochFloor) so the projection guard accepts it")
-	assert.Equal(t, fixedNow(), ev.OccurredAt, "stamped with the host receipt clock, not a payload ts")
+	assert.Greater(t, ev.SessionId, bigSession, "the stale epoch must exceed the stored session so the guard accepts it")
+	assert.Equal(t, fixedNow(), ev.OccurredAt, "stamped with the host receipt clock")
 }
 
-// TestReconcileRebirthsDistinctInScopeNodes proves the rebirth-all step collapses the
-// asserted devices to their distinct edge nodes (a leaf device folds onto its node) and
-// commands each in-scope node to rebirth, while an out-of-scope group is skipped.
-func TestReconcileRebirthsDistinctInScopeNodes(t *testing.T) {
+// TestReconcileProbeSkipsUnrebirthedNodes proves F7: a node whose rebirth never reached
+// the wire is NOT force-disconnected for staying silent — we never asked it to speak.
+func TestReconcileProbeSkipsUnrebirthedNodes(t *testing.T) {
 	fake := &fakeIngester{}
-	c := reconcileClient(fake, &fakeReconciler{
-		devices: []AssertedDevice{
-			{ExternalId: "plant-a/n1", SessionId: 10},
-			{ExternalId: "plant-a/n1/d1", SessionId: 20}, // same node n1
-			{ExternalId: "plant-a/n2", SessionId: 30},
-			{ExternalId: "plant-b/n9", SessionId: 40}, // out of scope
-		},
-		max: 40,
-	}, "plant-a")
+	c, _ := reconcileClient(fake, &fakeReconciler{})
+	c.sessions.SetEpochFloor(1000)
+	// Rebirth publishing FAILS (e.g. queue/broker issue) for every node.
+	c.rebirthPub = func(_, _ string) bool { return false }
 
 	c.resetSeen()
-	// Mark every in-scope id seen so this test isolates the rebirth behavior (nobody
-	// gets force-disconnected).
-	c.markSeen("plant-a/n1")
-	c.markSeen("plant-a/n1/d1")
-	c.markSeen("plant-a/n2")
-	c.reconcile(context.Background())
-
-	nodes := drainRebirths(c)
-	set := map[nodeKey]bool{}
-	for _, n := range nodes {
-		set[n] = true
-	}
-	assert.Len(t, nodes, 2, "the two distinct in-scope nodes each get one rebirth")
-	assert.True(t, set[nodeKey{group: "plant-a", node: "n1"}], "node n1 rebirthed")
-	assert.True(t, set[nodeKey{group: "plant-a", node: "n2"}], "node n2 rebirthed")
-	assert.False(t, set[nodeKey{group: "plant-b", node: "n9"}], "an out-of-scope group is never rebirthed")
-	assert.Equal(t, 0, fake.presenceCount(), "all in-scope devices were seen — nobody disconnected")
+	c.reconcileProbe(context.Background(), []AssertedDevice{{ExternalId: "plant-a/n1", SessionId: 10}})
+	assert.Equal(t, 0, fake.presenceCount(), "a node whose rebirth never went out must not be declared dead")
 }
 
-// TestReconcileSkipsOutOfScopeGroup proves a device belonging to a group this source
-// does NOT subscribe to (another Sparkplug source on the same tenant owns it) is
-// neither rebirthed nor force-disconnected — the two sources cannot cross-disconnect.
-func TestReconcileSkipsOutOfScopeGroup(t *testing.T) {
+// TestReconcileProbeAbortsOnConnectionLoss is the BLOCKER (F1) guard: if the broker
+// connection drops during the probe, the probe must abort WITHOUT force-disconnecting
+// anyone — a probe that went deaf must never declare a mass death. Here the rebirth
+// publisher cancels the session context as its side effect, so by the time the probe
+// reaches its window the connection is "gone".
+func TestReconcileProbeAbortsOnConnectionLoss(t *testing.T) {
 	fake := &fakeIngester{}
-	c := reconcileClient(fake, &fakeReconciler{
-		devices: []AssertedDevice{{ExternalId: "plant-b/n9", SessionId: 40}},
-		max:     40,
-	}, "plant-a")
+	c, _ := reconcileClient(fake, &fakeReconciler{})
+	c.sessions.SetEpochFloor(1000)
+	c.probeWindow = 10 * time.Second // long — the abort, not the timer, must end it
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c.rebirthPub = func(_, _ string) bool { cancel(); return true } // connection drops mid-reconcile
 
 	c.resetSeen()
-	c.reconcile(context.Background())
-
-	assert.Equal(t, 0, fake.presenceCount(), "an out-of-scope device is never force-disconnected")
-	assert.Empty(t, drainRebirths(c), "and never rebirthed")
+	c.reconcileProbe(ctx, []AssertedDevice{{ExternalId: "plant-a/dead", SessionId: 10}})
+	assert.Equal(t, 0, fake.presenceCount(), "a probe whose connection dropped must declare nobody dead")
 }
 
-// TestReconcileEmptyIsNoOp proves a cold/empty projection (nothing believed online)
-// does nothing: no rebirths, no disconnects.
-func TestReconcileEmptyIsNoOp(t *testing.T) {
+func TestReconcileProbeEmptyIsNoOp(t *testing.T) {
 	fake := &fakeIngester{}
-	c := reconcileClient(fake, &fakeReconciler{devices: nil, max: 0})
+	c, _ := reconcileClient(fake, &fakeReconciler{})
 	c.resetSeen()
-	c.reconcile(context.Background())
+	c.reconcileProbe(context.Background(), nil)
 	assert.Equal(t, 0, fake.presenceCount())
-	assert.Empty(t, drainRebirths(c))
-}
-
-// TestReconcileReadErrorFailsSafe proves a device-state read error aborts the reconcile
-// — it force-disconnects NOBODY (the next reconnect retries) rather than guessing.
-func TestReconcileReadErrorFailsSafe(t *testing.T) {
-	fake := &fakeIngester{}
-	c := reconcileClient(fake, &fakeReconciler{err: errors.New("device-state down")})
-	c.resetSeen()
-	c.reconcile(context.Background())
-	assert.Equal(t, 0, fake.presenceCount(), "a read error must abort, never guess-disconnect")
-	assert.Empty(t, drainRebirths(c))
 }

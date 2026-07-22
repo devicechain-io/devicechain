@@ -14,5 +14,6 @@ var (
 		NewLatestMeasurementBindingColumns(),
 		NewPresenceColumns(),
 		NewExternalIdColumn(),
+		NewSourceColumn(),
 	}
 )

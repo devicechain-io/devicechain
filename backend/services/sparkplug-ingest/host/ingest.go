@@ -173,11 +173,12 @@ func (r *Registrar) create(ctx context.Context, tenant, token, externalId, devic
 	return r.client.Query(ctx, r.url, tenant, createDeviceMutation, vars, &out)
 }
 
-// assertedActiveQuery asks device-state for every ASSERTED + active device the
-// calling tenant owns (ADR-067 SP4b). The response is tenant-scoped by the caller's
-// token, so a source only ever sees its own tenant's asserted-online devices.
-const assertedActiveQuery = `query {
-  assertedActiveDeviceStates { externalId sessionId }
+// assertedActiveQuery asks device-state for every ASSERTED + active device the calling
+// tenant owns FOR THIS SOURCE (ADR-067 SP4b). The response is tenant-scoped by the
+// caller's token and source-scoped by the argument, so a source only ever sees — and so
+// can only reconcile — its own asserted-online devices, never a sibling source's.
+const assertedActiveQuery = `query($source: String!) {
+  assertedActiveDeviceStates(source: $source) { externalId sessionId }
 }`
 
 // AssertedDevice is one asserted-active device the failover reconciliation must
@@ -209,14 +210,15 @@ func NewReconciler(client GraphQLClient, deviceStateURL string) *Reconciler {
 // epoch generator so a fresh emission always supersedes any stored session. A device
 // whose external id is null is skipped: it cannot be reconciled against a Sparkplug
 // topic (and only a Sparkplug producer sets one at GA).
-func (r *Reconciler) AssertedActive(ctx context.Context, tenant string) ([]AssertedDevice, uint64, error) {
+func (r *Reconciler) AssertedActive(ctx context.Context, tenant, source string) ([]AssertedDevice, uint64, error) {
 	var out struct {
 		AssertedActiveDeviceStates []struct {
 			ExternalId *string `json:"externalId"`
 			SessionId  string  `json:"sessionId"`
 		} `json:"assertedActiveDeviceStates"`
 	}
-	if err := r.client.Query(ctx, r.url, tenant, assertedActiveQuery, nil, &out); err != nil {
+	vars := map[string]any{"source": source}
+	if err := r.client.Query(ctx, r.url, tenant, assertedActiveQuery, vars, &out); err != nil {
 		return nil, 0, err
 	}
 	devices := make([]AssertedDevice, 0, len(out.AssertedActiveDeviceStates))

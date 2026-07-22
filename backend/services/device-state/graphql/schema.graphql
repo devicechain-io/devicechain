@@ -87,11 +87,13 @@ type Query {
     deviceStatesByDeviceToken(deviceTokens: [String!]!): [DeviceState!]!
     # Get device states for one or more devices by their (denormalized) external id.
     deviceStatesByExternalId(externalIds: [String!]!): [DeviceState!]!
-    # All ASSERTED + active device states for the calling tenant — the source the
-    # Sparkplug adapter reconciles against on failover (ADR-067 SP4b): it enumerates
-    # the devices the platform believes are authoritatively online, floors its epoch
-    # generator from the max sessionId here, and probes each for liveness.
-    assertedActiveDeviceStates: [DeviceState!]!
+    # All ASSERTED + active device states for the calling tenant AND the given event
+    # source — the set the Sparkplug adapter reconciles against on failover (ADR-067
+    # SP4b): it enumerates the devices the platform believes that source has online,
+    # floors its epoch generator from the max sessionId here, and probes each for
+    # liveness. The source scope stops two Sparkplug sources on one tenant from
+    # cross-disconnecting each other's devices.
+    assertedActiveDeviceStates(source: String!): [DeviceState!]!
     # Search for device states that match the given criteria.
     deviceStates(criteria: DeviceStateSearchCriteria!): DeviceStateSearchResults!
     # Current value of every measurement name for a device (live readings).

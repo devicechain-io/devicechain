@@ -187,6 +187,25 @@ func TestOnMessageEmitsPresence(t *testing.T) {
 	assert.Greater(t, ev.SessionId, uint64(0))
 }
 
+// TestOnMessageDoesNotMarkSeenForEchoedRebirth is the reconcile-probe linchpin pin: the
+// group wildcard subscription echoes the Host's OWN rebirth NCMDs back (MQTT 3.1.1 has no
+// NoLocal), and SparkplugExternalId of "spBv1.0/g/NCMD/n" is "g/n" — the very node the
+// probe is waiting to hear from. onMessage MUST drop NCMD/DCMD BEFORE marking seen, else
+// a dead node's echoed rebirth command would mark it "seen" and the probe would never
+// declare it dead. Mutation control: move the markSeen call above the NCMD/DCMD drop and
+// this turns red.
+func TestOnMessageDoesNotMarkSeenForEchoedRebirth(t *testing.T) {
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1"}, Broker{}, &fakeIngester{}, fixedNow, Metrics{})
+	c.resetSeen()
+
+	payload, err := rebirthCommand(fixedNow().UnixMilli())
+	require.NoError(t, err)
+	c.onMessage(nil, fakeMessage{topic: "spBv1.0/g/NCMD/n", payload: payload})
+
+	assert.False(t, c.sawExternalId("g/n"),
+		"the host's own echoed rebirth NCMD must not mark a node seen (it would defeat the reconcile probe)")
+}
+
 func TestIngestSamplesRetriesThenSucceeds(t *testing.T) {
 	fake := &fakeIngester{failN: 1}
 	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, fake, fixedNow, Metrics{})

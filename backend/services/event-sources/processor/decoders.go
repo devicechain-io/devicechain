@@ -115,19 +115,6 @@ func (jd *JsonDecoder) BuildAlertsPayload(source *JsonEvent) (*model.UnresolvedA
 	return payload, nil
 }
 
-// Parses a state-change (presence) event.
-func (jd *JsonDecoder) BuildStateChangePayload(source *JsonEvent) (*model.UnresolvedStateChangePayload, error) {
-	locbytes, err := json.Marshal(source.Payload)
-	if err != nil {
-		return nil, err
-	}
-	payload := &model.UnresolvedStateChangePayload{}
-	if err := json.Unmarshal(locbytes, payload); err != nil {
-		return nil, err
-	}
-	return payload, nil
-}
-
 // Parse json event payload.
 func (jd *JsonDecoder) ParseEvent(payload []byte) (*JsonEvent, error) {
 	jevent := &JsonEvent{}
@@ -206,11 +193,14 @@ func (jd *JsonDecoder) Decode(payload []byte) (*model.UnresolvedEvent, interface
 		}
 		return event, payload, nil
 	case model.StateChange:
-		payload, err := jd.BuildStateChangePayload(jevent)
-		if err != nil {
-			return nil, nil, err
-		}
-		return event, payload, nil
+		// StateChange (presence, ADR-067) is a PLATFORM-PRODUCER event: a presence-
+		// asserting adapter (the Sparkplug host) emits it directly over the wire
+		// contract (proto), never through this device-facing JSON decoder. Accepting it
+		// here would let any device credential forge its own presence — assert itself
+		// permanently CONNECTED with an unbeatable session id, which the projection can
+		// never supersede (the sweep skips ASSERTED and no data event flips it), hiding
+		// the device's own death from monitoring. Reject it as an unsupported device event.
+		return nil, nil, fmt.Errorf("state-change (presence) events are platform-produced and not accepted from device ingest")
 	}
 
 	return nil, nil, fmt.Errorf("unhandled event type: %s", jevent.EventType)

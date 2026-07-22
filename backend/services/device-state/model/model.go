@@ -31,7 +31,13 @@ type DeviceState struct {
 	// event so the projection is queryable by transport-native identity (ADR-067 SP4b
 	// failover reconciliation enumerates asserted-active devices by their Sparkplug
 	// "{group}/{node}[/{device}]" external id). Empty when the device has no external id.
-	ExternalId          string `gorm:"type:text"`
+	ExternalId string `gorm:"type:text"`
+	// Source denormalizes the event Source that last drove this device (e.g.
+	// "sparkplug:{hostId}"). SP4b failover reconciliation scopes its asserted-active
+	// enumeration to its OWN source, so two Sparkplug sources on one tenant (distinct
+	// brokers) can never cross-disconnect each other's devices (ADR-067 SP4b). Empty for
+	// a device that has never produced an event carrying a source.
+	Source              string `gorm:"type:text"`
 	Active              bool
 	LastConnectTime     sql.NullTime
 	LastDisconnectTime  sql.NullTime

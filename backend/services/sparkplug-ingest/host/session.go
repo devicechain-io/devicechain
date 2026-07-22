@@ -88,6 +88,16 @@ type nodeSession struct {
 	// lastRebirth is when the Host last commanded this node to rebirth; the zero
 	// value permits an immediate request. It drives the per-node backoff.
 	lastRebirth time.Time
+
+	// rebirthPending is set whenever the Host commands this node to rebirth (a gap the
+	// backoff let through, or a failover reconcile), and cleared by the NBIRTH that
+	// answers it. It disambiguates the two same-bdSeq births the Host can see: a
+	// commanded rebirth (rebirthPending) re-announces with the SAME bdSeq and seq reset
+	// to 0, and MUST re-adopt that seq baseline or the node's next message reads as a
+	// gap and re-triggers a rebirth forever (the SP2 livelock); an UNsolicited same-bdSeq
+	// birth is a QoS-1 redelivery that must be skipped so it can't reset a baseline the
+	// live DATA stream has already advanced.
+	rebirthPending bool
 }
 
 // SessionTracker validates the Sparkplug session for every edge node it observes
@@ -295,10 +305,24 @@ func (tr *SessionTracker) step(key nodeKey, top Topic, p *sppb.Payload) ([]Sampl
 func (tr *SessionTracker) onNBirth(key nodeKey, p *sppb.Payload) ([]Sample, []PresenceEvent) {
 	bd, hasBd := bdSeqOf(p)
 	if prev := tr.sessions[key]; prev != nil && prev.online && prev.hasBdSeq && hasBd && prev.bdSeq == bd {
-		// duplicate/redelivered birth — keep the live session intact and emit NOTHING
-		// (its metrics were already ingested and its CONNECTED already emitted at the
-		// first birth; repeating either would double-count / re-emit a stale epoch).
-		return nil, nil
+		if !prev.rebirthPending {
+			// Unsolicited same-bdSeq birth = a QoS-1 redelivery: keep the live session
+			// intact and emit NOTHING (its metrics were already ingested and its CONNECTED
+			// already emitted at the first birth; repeating either would double-count /
+			// re-emit a stale epoch, and re-adopting its seq would reset a baseline the
+			// live DATA stream has already advanced).
+			return nil, nil
+		}
+		// Commanded rebirth (we asked for it): the node re-announced with the SAME bdSeq
+		// and seq reset. Re-adopt the seq baseline and refresh the node's alias table so
+		// its following DATA validates again — this is what breaks the rebirth livelock —
+		// but keep the SAME session (epoch + born devices) and do NOT re-emit CONNECTED:
+		// the node never disconnected. Re-ingest the birth's current values (a redelivery
+		// dedups by content downstream; a genuine rebirth carries fresh values).
+		prev.rebirthPending = false
+		prev.lastSeq = uint8(p.GetSeq())
+		addAliases(prev.aliases, p)
+		return samplesFrom(p, prev.aliases, tr.now), nil
 	}
 	epoch := tr.nextEpoch()
 	s := &nodeSession{
@@ -484,7 +508,24 @@ func (tr *SessionTracker) wantRebirth(s *nodeSession) bool {
 		return false // within the backoff window — collapse the storm
 	}
 	s.lastRebirth = now
+	// We are about to command a rebirth: expect a same-bdSeq NBIRTH (seq reset to 0)
+	// answering it, and mark it so onNBirth re-adopts the seq baseline rather than
+	// skipping it as a redelivery (the livelock fix).
+	s.rebirthPending = true
 	return true
+}
+
+// MarkRebirthPending records that the Host has commanded a node to rebirth OUTSIDE the
+// session machine's own gap detection — the failover reconcile publishes rebirths
+// directly (ADR-067 SP4b) — so the NBIRTH answering it is treated as a commanded
+// rebirth (seq-baseline re-adopted), not skipped as a redelivery. A node with no live
+// session yet is a no-op: its next NBIRTH takes the normal full-rebuild path.
+func (tr *SessionTracker) MarkRebirthPending(group, node string) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if s := tr.sessions[nodeKey{group, node}]; s != nil {
+		s.rebirthPending = true
+	}
 }
 
 // bdSeqOf returns the bdSeq metric value from a payload, if present.

@@ -392,3 +392,59 @@ func TestRebirthCommandEncodesNodeControlRebirth(t *testing.T) {
 		assert.True(t, p.GetMetrics()[0].GetBooleanValue())
 	}
 }
+
+// --- commanded-rebirth livelock (F2) ---------------------------------------
+
+// TestCommandedRebirthReadoptsSeqBaseline is the livelock fix: after the Host commands a
+// rebirth (a gap the backoff let through), the node re-announces with the SAME bdSeq and
+// seq reset to 0. onNBirth MUST re-adopt that seq baseline — otherwise the node's next
+// DATA reads as a gap and re-triggers a rebirth forever. Mutation control: skip the
+// re-adopt (the pre-fix behavior) and the post-rebirth DATA gaps → the rebirth count
+// climbs → the final assertion fails.
+func TestCommandedRebirthReadoptsSeqBaseline(t *testing.T) {
+	h := newHarness(0) // no backoff: every genuine gap may command a rebirth
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), valuedBirth("t", 1, 20)))
+	h.tr.Observe(nTop(NDATA), pl(1, valuedData(1, 21)))
+	h.tr.Observe(nTop(NDATA), pl(2, valuedData(1, 22)))
+	require.Equal(t, 0, h.rec.count(), "a clean stream needs no rebirth")
+
+	// A gap (seq 5, expected 3) commands a rebirth and marks it pending.
+	h.tr.Observe(nTop(NDATA), pl(5, valuedData(1, 25)))
+	require.Equal(t, 1, h.rec.count(), "the gap commands a rebirth")
+	require.True(t, h.sess().rebirthPending, "the commanded rebirth is pending")
+
+	// The node answers: a SAME-bdSeq NBIRTH with seq reset to 0.
+	out := h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), valuedBirth("t", 1, 30)))
+	assert.Empty(t, out.Presence, "a commanded rebirth must not re-emit CONNECTED (the node never disconnected)")
+	assert.False(t, h.sess().rebirthPending, "the answering birth clears the pending flag")
+	assert.Equal(t, uint8(0), h.sess().lastSeq, "the seq baseline is re-adopted from the rebirth")
+
+	// The node's following DATA (seq 1) now validates — no further rebirth (livelock broken).
+	out = h.tr.Observe(nTop(NDATA), pl(1, valuedData(1, 31)))
+	assert.Len(t, out.Samples, 1, "post-rebirth DATA is accepted")
+	assert.Equal(t, 1, h.rec.count(), "no rebirth storm after the commanded rebirth")
+}
+
+// TestRedeliveredBirthStillSkipped is the negative control the fix must not break: an
+// UNsolicited same-bdSeq birth (a QoS-1 redelivery, no rebirth pending) is still skipped
+// — it must NOT reset the seq baseline the live DATA stream has already advanced, or the
+// stream would false-gap. Mutation control: drop the rebirthPending check (re-adopt
+// always) and the redelivery resets lastSeq → the next DATA gaps.
+func TestRedeliveredBirthStillSkipped(t *testing.T) {
+	h := newHarness(0)
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), valuedBirth("t", 1, 20)))
+	h.tr.Observe(nTop(NDATA), pl(1, valuedData(1, 21)))
+	h.tr.Observe(nTop(NDATA), pl(2, valuedData(1, 22)))
+	require.False(t, h.sess().rebirthPending, "no rebirth was commanded")
+
+	// A stale redelivery of the birth (same bdSeq, seq 0) with NO pending rebirth.
+	out := h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), valuedBirth("t", 1, 20)))
+	assert.Empty(t, out.Presence, "a redelivered birth re-emits no CONNECTED")
+	assert.Empty(t, out.Samples, "a redelivered birth re-ingests nothing")
+	assert.Equal(t, uint8(2), h.sess().lastSeq, "the seq baseline is NOT reset by a redelivery")
+
+	// The live stream continues from seq 3 without a gap.
+	out = h.tr.Observe(nTop(NDATA), pl(3, valuedData(1, 23)))
+	assert.Len(t, out.Samples, 1, "the live DATA stream is uninterrupted")
+	assert.Equal(t, 0, h.rec.count(), "no rebirth")
+}

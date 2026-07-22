@@ -61,13 +61,15 @@ func (r *SchemaResolver) DeviceStatesByExternalId(ctx context.Context, args stru
 // calling tenant — the failover-reconciliation source (ADR-067 SP4b). Tenant scope
 // is enforced by the RDB callback from the caller's token, so a Sparkplug adapter
 // only ever sees its own tenant's asserted devices.
-func (r *SchemaResolver) AssertedActiveDeviceStates(ctx context.Context) ([]*DeviceStateResolver, error) {
+func (r *SchemaResolver) AssertedActiveDeviceStates(ctx context.Context, args struct {
+	Source string
+}) ([]*DeviceStateResolver, error) {
 	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	found, err := api.AssertedActiveDeviceStates(ctx)
+	found, err := api.AssertedActiveDeviceStates(ctx, args.Source)
 	if err != nil {
 		return nil, err
 	}
