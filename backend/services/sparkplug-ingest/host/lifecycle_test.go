@@ -69,7 +69,7 @@ func (f *fakeClient) OptionsReader() mqtt.ClientOptionsReader { return mqtt.Clie
 // If a change froze the timestamp for the client's lifetime, the two sessions'
 // ONLINE stamps would collide and this test goes red.
 func TestStateTimestampIsFreshPerSession(t *testing.T) {
-	c := NewClient(config.SparkplugSource{Tenant: "t", HostId: "h"}, Broker{}, nil, Metrics{})
+	c := NewClient(config.SparkplugSource{Tenant: "t", HostId: "h"}, Broker{}, nil, nil, Metrics{})
 
 	// Session A at timestamp 1000: the will (from the options) and the ONLINE
 	// birth (published by onConnected) must both carry 1000.

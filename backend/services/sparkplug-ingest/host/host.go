@@ -47,6 +47,17 @@ const (
 	// per-node backoff already collapses storms, so this only absorbs a fan-out
 	// across many nodes at once; a full queue drops (re-requested next window).
 	rebirthQueueDepth = 256
+	// ingestAttemptTimeout bounds a single resolve+emit attempt (a device-management
+	// lookup/create plus the JetStream write). ingestMaxAttempts / ingestRetryBackoff
+	// bound the in-handler retry: a transient device-management or NATS blip is
+	// retried so a clean-session Host (which gets NO broker redelivery) does not lose
+	// the sample, but the total is bounded so a prolonged outage degrades into the
+	// Sparkplug host-offline path (a stalled handler starves paho's keepalive → the
+	// broker fires the OFFLINE will → edge nodes store-and-forward) instead of
+	// blocking the ordered receive goroutine forever.
+	ingestAttemptTimeout = 3 * time.Second
+	ingestMaxAttempts    = 3
+	ingestRetryBackoff   = 500 * time.Millisecond
 )
 
 // Broker is the resolved MQTT connection for one source: a customer-operated
@@ -71,6 +82,20 @@ type Metrics struct {
 	// that distinguishes a broken config (a bad host or rejected credential makes it
 	// climb) from a healthy but idle deployment (it stays flat, as does Messages).
 	ConnectFailures prometheus.Counter
+	// IngestFailures counts accepted messages whose samples were dropped after the
+	// in-handler retry budget was exhausted (device-management or NATS unreachable).
+	// A clean-session Host gets no broker redelivery, so this is real (bounded) loss —
+	// the signal that ingest, not just connectivity, is degraded.
+	IngestFailures prometheus.Counter
+}
+
+// SampleIngester turns an accepted message's samples into durable telemetry
+// (resolve/register the device, then emit). The Client depends on the interface so
+// a host test can drive the full receive→ingest path with a fake, asserting what
+// would be ingested without a device-management or a NATS. A nil ingester makes the
+// receive path decode+log only (the SP1/SP2 behavior).
+type SampleIngester interface {
+	Ingest(ctx context.Context, tenant string, policy IngestPolicy, externalId string, samples []Sample) error
 }
 
 // Client is a single tenant-bound Sparkplug Host Application connection. Build it
@@ -83,6 +108,12 @@ type Client struct {
 	broker  Broker
 	groups  []string
 	metrics Metrics
+
+	// ingester + policy turn accepted messages into durable telemetry. ingester is
+	// shared across all connections; policy is this source's (tenant is attributed
+	// per connection, ADR-069 M7). A nil ingester leaves the receive path decode-only.
+	ingester SampleIngester
+	policy   IngestPolicy
 
 	stateTopic string
 	// sessions is the SP2 per-node Sparkplug session machine; it validates the
@@ -103,21 +134,30 @@ type Client struct {
 	mc        mqtt.Client
 	sessionTs int64 // the current session's STATE timestamp (for a graceful OFFLINE)
 	cancel    context.CancelFunc
+	runCtx    context.Context // the Connect lifecycle context; bounds the ingest retry
 	wg        sync.WaitGroup
 }
 
 // NewClient builds a tenant-bound Host Application client from one configured
-// source and its resolved broker connection. now is the clock supplying each
-// session's STATE timestamp (pass time.Now in production); nil defaults to it.
-func NewClient(source config.SparkplugSource, broker Broker, now func() time.Time, metrics Metrics) *Client {
+// source and its resolved broker connection. ingester turns accepted messages into
+// durable telemetry (nil ⇒ decode+log only, the SP1/SP2 behavior). now is the clock
+// supplying each session's STATE timestamp (pass time.Now in production); nil
+// defaults to it.
+func NewClient(source config.SparkplugSource, broker Broker, ingester SampleIngester, now func() time.Time, metrics Metrics) *Client {
 	if now == nil {
 		now = time.Now
 	}
 	c := &Client{
-		tenant:     source.Tenant,
-		broker:     broker,
-		groups:     append([]string(nil), source.Groups...),
-		metrics:    metrics,
+		tenant:   source.Tenant,
+		broker:   broker,
+		groups:   append([]string(nil), source.Groups...),
+		metrics:  metrics,
+		ingester: ingester,
+		policy: IngestPolicy{
+			Source:          "sparkplug:" + source.HostId,
+			DeviceTypeToken: source.DeviceTypeToken,
+			AutoRegister:    source.AutoRegister,
+		},
 		stateTopic: StateTopic(source.HostId),
 		now:        now,
 		newClient:  func(o *mqtt.ClientOptions) mqtt.Client { return mqtt.NewClient(o) },
@@ -155,6 +195,7 @@ func (c *Client) Connect() {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.mu.Lock()
 	c.cancel = cancel
+	c.runCtx = ctx
 	c.mu.Unlock()
 	c.wg.Add(2)
 	go c.runLoop(ctx)
@@ -295,11 +336,61 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 		c.metrics.Messages.WithLabelValues(rec.Label()).Inc()
 	}
 	// Advance the SP2 session machine; it may command the node to rebirth (fired
-	// via requestRebirth, outside its lock). STATE has no node session.
+	// via enqueueRebirth, outside its lock) and returns the numeric samples the
+	// message contributes. STATE has no node session.
 	if !rec.Topic.IsState && rec.Payload != nil {
-		c.sessions.Observe(rec.Topic, rec.Payload)
+		samples := c.sessions.Observe(rec.Topic, rec.Payload)
+		if len(samples) > 0 && c.ingester != nil {
+			c.ingestSamples(SparkplugExternalId(rec.Topic), samples)
+		}
 	}
 	c.logRecord(rec)
+}
+
+// ingestSamples resolves the device and emits its samples, retrying a transient
+// device-management/NATS failure within a bounded budget. It runs ON paho's ordered
+// receive goroutine (by design — the session machine needs strict ordering), so it
+// must return in bounded time: a clean-session Host gets no broker redelivery, so a
+// short retry saves a sample across a brief blip, but a prolonged outage is left to
+// the Sparkplug host-offline path rather than blocking receive forever. On budget
+// exhaustion the samples are dropped and counted.
+func (c *Client) ingestSamples(externalId string, samples []Sample) {
+	c.mu.Lock()
+	ctx := c.runCtx
+	c.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// drop counts + logs a dropped batch. EVERY abandonment path routes through here
+	// so a drop is never silent — a clean-session Host gets no broker redelivery, so
+	// each of these is real (bounded) loss, including a shutdown mid-backoff.
+	drop := func(reason string, err error) {
+		if c.metrics.IngestFailures != nil {
+			c.metrics.IngestFailures.Inc()
+		}
+		log.Warn().Err(err).Str("tenant", c.tenant).Str("externalId", externalId).Int("samples", len(samples)).
+			Str("reason", reason).Msg("Dropping Sparkplug samples (a clean-session Host gets no broker redelivery).")
+	}
+	for attempt := 1; ; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, ingestAttemptTimeout)
+		err := c.ingester.Ingest(attemptCtx, c.tenant, c.policy, externalId, samples)
+		cancel()
+		if err == nil {
+			return
+		}
+		if ctx.Err() != nil {
+			drop("connection shutting down", err)
+			return
+		}
+		if attempt >= ingestMaxAttempts {
+			drop("ingest retry budget exhausted", err)
+			return
+		}
+		if !sleep(ctx, ingestRetryBackoff) {
+			drop("connection shutting down", err)
+			return
+		}
+	}
 }
 
 // enqueueRebirth is the session machine's rebirth callback. It runs on paho's

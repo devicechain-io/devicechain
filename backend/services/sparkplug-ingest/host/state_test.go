@@ -68,9 +68,9 @@ func TestStateTopicIsOutsideGroupTree(t *testing.T) {
 // never the wildcard (which would over-subscribe past the intended groups).
 func TestSubscriptionsFollowGroups(t *testing.T) {
 	clk := func() time.Time { return time.UnixMilli(0) }
-	all := NewClient(config.SparkplugSource{Tenant: "t", HostId: "h"}, Broker{}, clk, Metrics{})
+	all := NewClient(config.SparkplugSource{Tenant: "t", HostId: "h"}, Broker{}, nil, clk, Metrics{})
 	assert.Equal(t, []string{"spBv1.0/#"}, all.subscriptions())
 
-	scoped := NewClient(config.SparkplugSource{Tenant: "t", HostId: "h", Groups: []string{"plant-a", "plant-b"}}, Broker{}, clk, Metrics{})
+	scoped := NewClient(config.SparkplugSource{Tenant: "t", HostId: "h", Groups: []string{"plant-a", "plant-b"}}, Broker{}, nil, clk, Metrics{})
 	assert.Equal(t, []string{"spBv1.0/plant-a/#", "spBv1.0/plant-b/#"}, scoped.subscriptions())
 }

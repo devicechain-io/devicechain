@@ -653,10 +653,10 @@ functionalAreas:
   sparkplug-ingest:
     # The Sparkplug ingest service (ADR-069): a stateful Sparkplug B Host Application
     # that connects OUT to one or more per-tenant customer MQTT brokers, announces its
-    # Sparkplug 3.0 STATE on each, subscribes to the configured Sparkplug groups, and
-    # terminates edge-node / device telemetry onto inbound-events (the ingest path lands
-    # in SP3b; SP3a decodes and logs, tenant-tagged) — a parallel inbound transport to
-    # event-sources. OPT-IN edge area: held back from `default` (a Sparkplug topology
+    # Sparkplug 3.0 STATE on each, subscribes to the configured Sparkplug groups, resolves
+    # each edge-node / device to a DeviceChain device (by external id, auto-registering
+    # when configured), and emits its numeric metrics as measurements onto inbound-events —
+    # a parallel inbound transport to event-sources. OPT-IN edge area: held back from `default` (a Sparkplug topology
     # is a deliberate choice), shipped by `full`, or named explicitly
     # (enabledFunctionalAreas: [..., sparkplug-ingest]). It hard-depends on
     # device-management (which resolves what it produces).
@@ -690,6 +690,10 @@ functionalAreas:
       #     groups:                    # Sparkplug Group IDs to subscribe (spBv1.0/{group}/#, one per entry).
       #       - plant-a                # Empty subscribes to ALL groups (spBv1.0/#) on this broker.
       #       - plant-b
+      #     autoRegister: true         # On first sight of a Sparkplug identity with no matching device, create one.
+      #                                # false: drop its telemetry (counted) until an operator pre-registers it.
+      #     deviceTypeToken: sparkplug-node   # REQUIRED when autoRegister is true — the device type stamped on a
+      #                                # created device (a Sparkplug birth carries no DeviceChain type). Must exist.
     # Project each broker password Secret into the env var its source names:
     # extraEnv:
     #   - name: SPARKPLUG_ACME_PW
