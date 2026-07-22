@@ -1,0 +1,168 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Package config holds the dc-edge-agent's typed, fail-closed configuration
+// (ADR-022 posture, reused via core.LoadConfiguration): unknown/invalid keys are
+// rejected at startup, defaults are authoritative, and Validate moves errors from
+// pod runtime to load time. The agent is NOT an Instance — this config carries only
+// what a store-and-forward edge box needs (a local device listener + a cloud
+// uplink), never a tenant registry, database, or NATS-cluster coordinates.
+package config
+
+import (
+	"fmt"
+	"net/url"
+	"regexp"
+)
+
+// instanceIdPattern mirrors the platform's instance-id grammar (values.schema.json):
+// the id is the first segment of every device-plane MQTT topic and messaging
+// subject, so it is constrained to the token-safe alphabet and cannot inject a
+// subject/topic metacharacter. The edge agent must forward on the SAME instance
+// namespace as the cloud it feeds, so it enforces the same grammar.
+var instanceIdPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// Configuration is the whole dc-edge-agent config document.
+type Configuration struct {
+	// InstanceId is the cloud Instance this agent forwards to. It is the first
+	// segment of the golden-MQTT topic on BOTH planes (device→agent and
+	// agent→cloud), so it must match the target Instance exactly or every forward
+	// silently addresses a namespace nothing consumes.
+	InstanceId string `json:"instanceId"`
+
+	// AgentId uniquely identifies THIS edge box among all agents feeding the same
+	// Instance. It is the tail of the uplink MQTT client id: two sites on one
+	// Instance is the normal Tier-1 topology, and MQTT client-id takeover would
+	// otherwise make each agent's connect boot the other in a permanent mutual-kick
+	// loop. Required, and token-safe so it is a clean client-id segment.
+	AgentId string `json:"agentId"`
+
+	// Local configures the device-facing MQTT listener the agent terminates.
+	Local LocalConfiguration `json:"local"`
+
+	// Uplink configures the cloud-facing MQTT connection the agent forwards to.
+	Uplink UplinkConfiguration `json:"uplink"`
+}
+
+// LocalConfiguration is the device-facing side: an embedded nats-server MQTT
+// gateway that terminates the golden path byte-identically (ADR-006), backed by a
+// JetStream file store under StoreDir.
+type LocalConfiguration struct {
+	// ListenHost is the bind address for the local device MQTT listener. Defaults
+	// to 0.0.0.0 (devices on the site LAN connect to it). NOTE (E1): the listener
+	// carries no local device auth yet — it is trusted-LAN-only; see the module
+	// README. Cloud event attribution rides on the per-event payload credential
+	// (ADR-014), not this connection.
+	ListenHost string `json:"listenHost"`
+
+	// ListenPort is the local device MQTT port. Defaults to 1883.
+	ListenPort int `json:"listenPort"`
+
+	// StoreDir is the on-disk directory for the embedded JetStream file store (the
+	// durable local spool). Required: an in-memory spool would lose everything on
+	// an agent restart during an outage (spec decision 3).
+	StoreDir string `json:"storeDir"`
+}
+
+// UplinkConfiguration is the cloud-facing side: a paho MQTT client publishing the
+// golden path to the cloud broker, authenticated per ADR-025. The credential is
+// referenced (never inline): the edge box has no ADR-059 secret store, so the
+// working precedent is the sparkplug env/projected-Secret pattern.
+type UplinkConfiguration struct {
+	// BrokerURL is the cloud MQTT broker, scheme-selected for transport: tcp://
+	// (plaintext) or ssl:// / tls:// (TLS with system roots). Required.
+	BrokerURL string `json:"brokerUrl"`
+
+	// Username is the uplink MQTT login (may be empty for anonymous brokers).
+	Username string `json:"username"`
+
+	// PasswordEnv names the environment variable holding the uplink password (a
+	// projected Secret, never cleartext in this document). Empty means no password.
+	PasswordEnv string `json:"passwordEnv"`
+
+	// ConnectTimeoutSeconds bounds a single connect attempt. Defaults to 30.
+	ConnectTimeoutSeconds int `json:"connectTimeoutSeconds"`
+
+	// BackoffMinSeconds / BackoffMaxSeconds bound the reconnect backoff so a
+	// flapping WAN is not hammered. Default 1 / 60.
+	BackoffMinSeconds int `json:"backoffMinSeconds"`
+	BackoffMaxSeconds int `json:"backoffMaxSeconds"`
+}
+
+// ApplyDefaults fills zero-valued fields with authoritative defaults (runs before
+// Validate, regardless of which keys the document supplied).
+func (c *Configuration) ApplyDefaults() {
+	if c.Local.ListenHost == "" {
+		c.Local.ListenHost = "0.0.0.0"
+	}
+	if c.Local.ListenPort == 0 {
+		c.Local.ListenPort = 1883
+	}
+	if c.Uplink.ConnectTimeoutSeconds == 0 {
+		c.Uplink.ConnectTimeoutSeconds = 30
+	}
+	if c.Uplink.BackoffMinSeconds == 0 {
+		c.Uplink.BackoffMinSeconds = 1
+	}
+	if c.Uplink.BackoffMaxSeconds == 0 {
+		c.Uplink.BackoffMaxSeconds = 60
+	}
+}
+
+// Validate enforces the semantic constraints, failing the load closed.
+func (c *Configuration) Validate() error {
+	if c.InstanceId == "" {
+		return fmt.Errorf("instanceId is required")
+	}
+	if !instanceIdPattern.MatchString(c.InstanceId) {
+		return fmt.Errorf("instanceId %q is not token-safe (want %s)", c.InstanceId, instanceIdPattern)
+	}
+	if c.AgentId == "" {
+		return fmt.Errorf("agentId is required (it makes the uplink client id unique so two sites on one Instance do not kick each other)")
+	}
+	if !instanceIdPattern.MatchString(c.AgentId) {
+		return fmt.Errorf("agentId %q is not token-safe (want %s)", c.AgentId, instanceIdPattern)
+	}
+	if c.Local.StoreDir == "" {
+		return fmt.Errorf("local.storeDir is required (the durable spool must survive a restart)")
+	}
+	if c.Local.ListenPort < 1 || c.Local.ListenPort > 65535 {
+		return fmt.Errorf("local.listenPort %d out of range 1..65535", c.Local.ListenPort)
+	}
+	if c.Uplink.BrokerURL == "" {
+		return fmt.Errorf("uplink.brokerUrl is required")
+	}
+	u, err := url.Parse(c.Uplink.BrokerURL)
+	if err != nil {
+		return fmt.Errorf("uplink.brokerUrl %q is not a valid URL: %w", c.Uplink.BrokerURL, err)
+	}
+	switch u.Scheme {
+	case "tcp", "ssl", "tls":
+		// supported: tcp = plaintext, ssl/tls = TLS with system roots.
+	default:
+		return fmt.Errorf("uplink.brokerUrl scheme %q unsupported (want tcp://, ssl://, or tls://)", u.Scheme)
+	}
+	if u.User != nil {
+		// Credentials must come from username + passwordEnv, never the URL: the
+		// TLS path rebuilds the URL and would silently drop URL userinfo, so a
+		// credential-in-URL "works" on tcp:// and vanishes on ssl:// — reject both.
+		return fmt.Errorf("uplink.brokerUrl must not embed credentials; use username + passwordEnv")
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("uplink.brokerUrl %q has no host", c.Uplink.BrokerURL)
+	}
+	if u.Port() == "" {
+		return fmt.Errorf("uplink.brokerUrl %q has no port", c.Uplink.BrokerURL)
+	}
+	if c.Uplink.BackoffMinSeconds < 1 {
+		return fmt.Errorf("uplink.backoffMinSeconds must be >= 1")
+	}
+	if c.Uplink.BackoffMaxSeconds < c.Uplink.BackoffMinSeconds {
+		return fmt.Errorf("uplink.backoffMaxSeconds (%d) must be >= backoffMinSeconds (%d)",
+			c.Uplink.BackoffMaxSeconds, c.Uplink.BackoffMinSeconds)
+	}
+	if c.Uplink.ConnectTimeoutSeconds < 1 {
+		return fmt.Errorf("uplink.connectTimeoutSeconds must be >= 1")
+	}
+	return nil
+}
