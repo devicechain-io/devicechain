@@ -39,6 +39,7 @@ const (
 	OutboundConn     FunctionalArea = "outbound-connectors"
 	Mcp              FunctionalArea = "mcp"
 	AiInference      FunctionalArea = "ai-inference"
+	SparkplugIngest  FunctionalArea = "sparkplug-ingest"
 )
 
 // Manifest is a functional area's deployment contract (ADR-022 decision 2): its
@@ -164,6 +165,22 @@ var catalog = map[FunctionalArea]Manifest{
 		Area:     AiInference,
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
+	SparkplugIngest: {
+		// The Sparkplug ingest service (ADR-069): a stateful Sparkplug B Host
+		// Application that terminates edge-node telemetry over the MQTT gateway onto
+		// inbound-events (the ingest path lands in SP3; SP1 decodes and logs) — a
+		// parallel inbound transport to event-sources, so like it it is functionally
+		// dead without the area that RESOLVES what it produces (device-management,
+		// Hard, its designed contract). It is an OPT-IN edge
+		// area — held back from ProfileDefault (a Sparkplug deployment is a
+		// deliberate topology choice, and until the ADR-070 lease lands it runs as a
+		// single non-HA instance), shipped by ProfileFull, or named explicitly in
+		// enabledFunctionalAreas. It produces onto inbound-events and consumes
+		// nothing, so it declares no consumer of its own as a Hard edge.
+		Area:     SparkplugIngest,
+		HardDeps: []FunctionalArea{DeviceManagement},
+		SoftDeps: []FunctionalArea{UserManagement},
+	},
 }
 
 // Profile names a curated, valid enabled set (ADR-022 decision 2). Every profile
@@ -201,7 +218,7 @@ var standardAreas = []FunctionalArea{
 
 var profiles = map[Profile][]FunctionalArea{
 	ProfileDefault: standardAreas,
-	ProfileFull:    append(append([]FunctionalArea{}, standardAreas...), AiInference, OutboundConn, Mcp),
+	ProfileFull:    append(append([]FunctionalArea{}, standardAreas...), AiInference, OutboundConn, Mcp, SparkplugIngest),
 	ProfileTelemetry: {
 		UserManagement, DeviceManagement, EventSources, EventManagement, DeviceState, DashboardMgmt,
 	},

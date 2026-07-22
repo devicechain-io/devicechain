@@ -77,7 +77,11 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
+          {{- /* sparkplug-ingest serves no external API (only /metrics + probes on
+                 the default mux), so it gets no public /api route — otherwise the
+                 loop would expose its Prometheus endpoint unauthenticated. */ -}}
           {{- range $area := splitList "," (include "devicechain.enabledAreas" $root) }}
+          {{- if ne $area "sparkplug-ingest" }}
           - path: /api/{{ $area }}(/|$)(.*)
             pathType: ImplementationSpecific
             backend:
@@ -85,6 +89,7 @@ spec:
                 name: {{ $area }}
                 port:
                   name: graphql
+          {{- end }}
           {{- end }}
 {{- if .Values.frontend.enabled }}
 ---
