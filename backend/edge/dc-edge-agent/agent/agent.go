@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -150,6 +151,13 @@ type Agent struct {
 	healthy        atomic.Bool
 	sampleFailures atomic.Int64
 
+	// localPassword is the resolved shared secret the local MQTT listener requires,
+	// read once from cfg.Local.PasswordEnv in New (eagerly, like the uplink credential, so
+	// a missing projected Secret fails at startup — before any disk state is written —
+	// rather than silently degrading the gate to open). Empty when local auth is not
+	// configured (cfg.Local.Username == ""); newServer then leaves the listener open.
+	localPassword string
+
 	// counters — basic observability so "is my edge working?" is answerable at a glance;
 	// also the source of truth behind the Prometheus *_total counters (metrics.go).
 	received      atomic.Int64
@@ -166,7 +174,30 @@ func New(cfg config.Configuration, log *slog.Logger) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Agent{cfg: cfg, log: log, uplink: up, ready: make(chan struct{})}, nil
+
+	// Resolve the local MQTT password eagerly (config already enforces username and
+	// passwordEnv are both-or-neither). Fail CLOSED on an empty resolved value: an empty
+	// MQTT password is not "no auth" — nats-server still requires the username but then
+	// compares the password against "", which any client can present, so a Secret that
+	// failed to project would leave a listener that CLAIMS to be gated but accepts an
+	// empty password. Refusing to start is the only thing between a missing mount and a
+	// silently-open gate. (Resolved here, not in newServer, so this fails before phase 1
+	// mints any durable identity/stream state.)
+	var localPassword string
+	if cfg.Local.Username != "" {
+		localPassword = os.Getenv(cfg.Local.PasswordEnv)
+		if localPassword == "" {
+			return nil, fmt.Errorf("local.passwordEnv %q is set but that environment variable is empty (the local-auth Secret was not projected); refusing to start with an effectively-open listener", cfg.Local.PasswordEnv)
+		}
+		// A password minted with `echo` carries a trailing newline that becomes part of the
+		// secret, so devices presenting the trimmed value are rejected. Fail-closed and
+		// discoverable, but warn — it is a classic provisioning footgun.
+		if strings.TrimSpace(localPassword) != localPassword {
+			log.Warn("local.passwordEnv value has leading/trailing whitespace — it is used verbatim; devices must present the exact same bytes (a trailing newline from `echo` is the usual cause)", "env", cfg.Local.PasswordEnv)
+		}
+	}
+
+	return &Agent{cfg: cfg, log: log, uplink: up, localPassword: localPassword, ready: make(chan struct{})}, nil
 }
 
 // Run brings the agent up and blocks until ctx is cancelled, then shuts down cleanly.
@@ -185,6 +216,13 @@ func (a *Agent) Run(ctx context.Context) error {
 		return fmt.Errorf("resolve install id: %w", err)
 	}
 	a.installId = installId
+
+	// StoreDir now exists (loadOrCreateInstallId created it). Close a world-readable spool:
+	// it holds buffered telemetry, which can carry payload credentials in flight (ADR-014),
+	// plus the identity tokens. A store an operator pre-created with `mkdir -p` (or a
+	// container named volume) is 0755 by default — world-readable — and nats-server's
+	// MkdirAll(0700) is a no-op on an existing directory, so nothing else tightens it (E4-B).
+	a.hardenStoreDirPerms()
 
 	// Phase 1 (bootstrap): create/adopt the capture stream with MQTT disabled, and
 	// resolve the stream-incarnation epoch it is (re)minted/read against — folded into
@@ -261,6 +299,19 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.watchInstanceMismatch()
 
 	go a.sampleLoop(ctx)
+
+	// Announce the local-auth posture loudly so an unintentionally open listener is
+	// visible in the log at every boot (and continuously in metrics via
+	// local_auth_enabled). New already fail-closed on a configured-but-empty secret, so
+	// reaching here with a username means the gate is genuinely on. Emitted BEFORE
+	// close(a.ready) so a test that waits on readiness is guaranteed to observe it (the
+	// close is the happens-before barrier).
+	if a.cfg.Local.Username == "" {
+		a.log.Warn("local MQTT listener is UNAUTHENTICATED — any client on the LAN can publish and subscribe; deploy only on a trusted device network, or set local.username + local.passwordEnv",
+			"mqtt_listen", fmt.Sprintf("%s:%d", a.cfg.Local.ListenHost, a.cfg.Local.ListenPort))
+	} else {
+		a.log.Info("local MQTT listener requires a shared-secret credential", "local_user", a.cfg.Local.Username)
+	}
 
 	close(a.ready) // substrate is up; a device publish is now guaranteed captured
 
@@ -359,6 +410,16 @@ func (a *Agent) newServer(mqttEnabled bool) (*natsserver.Server, error) {
 		opts.MQTT = natsserver.MQTTOpts{
 			Host: a.cfg.Local.ListenHost,
 			Port: a.cfg.Local.ListenPort,
+		}
+		// Optional shared-secret gate on the device MQTT surface (E4). MQTTOpts.Username/
+		// Password override authorization for MQTT clients ONLY: the in-process drain and
+		// bootstrap clients use the regular (open, no global Users) auth path, so they need
+		// no credentials threaded in. Set both together or neither — an empty password with
+		// a username is fail-open (nats-server compares against ""), which New already
+		// refused to reach by requiring a non-empty resolved secret.
+		if a.cfg.Local.Username != "" {
+			opts.MQTT.Username = a.cfg.Local.Username
+			opts.MQTT.Password = a.localPassword
 		}
 	}
 	srv, err := natsserver.NewServer(opts)
@@ -476,6 +537,43 @@ func (a *Agent) warnIfDiskUndersized() {
 			"store_dir", a.cfg.Local.StoreDir, "free_bytes", free, "spool_bytes", spoolBytes,
 			"spool_max_bytes", a.cfg.Local.SpoolMaxBytes, "reserved_bytes", need)
 	}
+}
+
+// hardenStoreDirPerms removes the WORLD bits from the store directory when present, and
+// logs that it did. The spool holds buffered telemetry at rest, which per ADR-014 can
+// carry payload credentials in flight, plus the identity tokens — so a world-traversable
+// store is a real exposure, and the common provisioning defaults (`mkdir -p`, a container
+// named volume) leave it 0755. Stripping ONLY the world bits (mode &^ 0o007) closes that
+// without touching the GROUP bits: a deliberate group-shared setup (Kubernetes fsGroup
+// mounts the volume group-owned + setgid, and the agent reaches it via that group, NOT as
+// owner) must keep working — forcing 0700 there would lock the agent out of its own store.
+//
+// Best-effort and never fatal: in the fsGroup case the directory is root-owned (chmod
+// would EPERM) but also already has no world bits (nothing to do); in the self-owned case
+// (systemd, a chowned volume, bare metal) the chmod succeeds. A stat/chmod error is warned,
+// not fatal — a genuinely missing/unwritable store surfaces at the server start below.
+func (a *Agent) hardenStoreDirPerms() {
+	fi, err := os.Stat(a.cfg.Local.StoreDir)
+	if err != nil {
+		return
+	}
+	perm := fi.Mode().Perm()
+	if perm&0o007 == 0 {
+		return // already not world-accessible (private 0700 or a group-shared 0770)
+	}
+	// Strip ONLY the world bits, and carry the setuid/setgid/sticky bits through unchanged:
+	// Perm() masks them off, so a naive Chmod(perm&^0o007) would silently CLEAR setgid — the
+	// bit a group-shared store often sets so JetStream-created files inherit the group. That
+	// would rot the very group access this preserves group bits to protect.
+	newPerm := perm &^ 0o007
+	special := fi.Mode() & (os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+	if err := os.Chmod(a.cfg.Local.StoreDir, special|newPerm); err != nil {
+		a.log.Warn("store directory is world-accessible and could not be tightened — it holds buffered telemetry (which can carry in-flight credentials) and identity tokens; remove other-access manually (chmod o-rwx)",
+			"store_dir", a.cfg.Local.StoreDir, "mode", fmt.Sprintf("%#o", perm), "err", err)
+		return
+	}
+	a.log.Warn("store directory was world-accessible; removed other-access (a spool carries in-flight credentials) — provision it 0700 (or group-shared, e.g. a container fsGroup) to avoid this",
+		"store_dir", a.cfg.Local.StoreDir, "was", fmt.Sprintf("%#o", perm), "now", fmt.Sprintf("%#o", newPerm))
 }
 
 // drain pulls captured events FIFO and forwards each to the cloud, until ctx ends.

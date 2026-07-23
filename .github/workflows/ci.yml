@@ -62,10 +62,15 @@ jobs:
         id: smoke
         run: |
           # ko-buildable image modules = each discovered service (mapped to its
-          # backend/services/<name> dir) PLUS the operator at backend/k8s.
+          # backend/services/<name> dir) PLUS the operator at backend/k8s PLUS the Tier-1
+          # edge agent at backend/edge/dc-edge-agent (a standalone image, not a service —
+          # list-services.sh globs backend/services/* only, so it is added explicitly).
+          # Keep this list in step with release.yml's guard job (they are two textual
+          # copies of the same set).
           smoke="$(
             { hack/list-services.sh | jq -r '.[] | "backend/services/" + .'
               echo "backend/k8s"
+              echo "backend/edge/dc-edge-agent"
             } | jq -R . | jq -s -c .
           )"
           echo "smoke=$smoke" >> "$GITHUB_OUTPUT"

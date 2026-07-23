@@ -44,7 +44,35 @@ message's local store-time, so the *same* buffered event carries the *same* key 
 every delivery. This exactly-once property is per-decoder: it applies to **JSON**
 payloads; any non-JSON payload is forwarded verbatim and is **at-least-once**.
 
-## Slice status — **E3 (bounded buffer + observability).**
+## Slice status — **E4 (shippable GA artifact: local auth, at-rest hardening, packaging).**
+
+E4 makes the agent deployable and securable at a site — the demoable GA artifact — on top
+of E3's bounded, observable buffer:
+
+- **Opt-in local device auth.** The device MQTT listener takes an optional shared-secret
+  credential (`local.username` + `local.passwordEnv`). Unset, the listener is open (the
+  trusted-LAN default) and the agent logs a loud `UNAUTHENTICATED` warning at every boot and
+  exports `local_auth_enabled 0`, so "open" is a visible, auditable choice — never a silent
+  default. Set, the embedded MQTT gateway rejects any CONNECT without the credential (it
+  gates the device surface only; the in-process drain is unaffected). A configured username
+  whose password env is empty (a Secret that didn't project) **fails the agent closed**
+  rather than degrading to an open listener.
+- **Store-at-rest hardening.** The agent removes world-access from `storeDir` on startup
+  (the `0755` `mkdir -p`/volume default becomes `0750`, logged) while preserving group bits
+  for a deliberate group-shared setup (a container `fsGroup`). The spool carries buffered
+  telemetry — which can include in-flight payload credentials — and the identity tokens
+  (already `0600`).
+- **Packaging.** Published as a distroless container image
+  (`ghcr.io/devicechain-io/dc-edge-agent`, non-root `65532`, read-only rootfs) and as static
+  `linux`/`darwin` × `amd64`/`arm64` binaries attached to each GitHub Release. `dc-edge-agent
+  version` reports the build.
+- **Operator runbook.** Deploy (container + systemd), secure, operate, and upgrade — see
+  [RUNBOOK.md](RUNBOOK.md).
+
+It retains E1–E3's guarantees (store-and-forward across a WAN outage + agent restart;
+cloud-side exactly-once for JSON; the two-phase start; the bounded, observable ring buffer).
+
+### E3 (bounded buffer + observability)
 
 E3 makes the agent's behaviour under an arbitrarily long outage **bounded and
 observable**, on top of E2's durable store-and-forward buffer:
@@ -67,10 +95,6 @@ observable**, on top of E2's durable store-and-forward buffer:
   sample succeeded) and does **not** gate on the uplink — surviving a down uplink is
   the point, so uplink state is a metric, never a readiness failure.
 
-It retains E2's guarantees (store-and-forward across a WAN outage + agent restart;
-cloud-side exactly-once for JSON via replay-stable minted `altId` + stamped
-`occurredTime`; the two-phase start that closes the startup durability window).
-
 ### Overflow policy — why `DiscardOld`, not `DiscardNew`
 
 On a finite disk an unbounded outage must eventually shed data — the only choice is
@@ -92,11 +116,7 @@ evictions) / `uplink_connected`, plus `received_total` / `forwarded_total` /
 `forward_errors_total` / `malformed_total` / `instance_mismatched_total`. `dropped_total`
 does not reset across a restart (both its operands are durable); the other `_total`
 counters are per-process. `GET /healthz` → `200` when up and healthy, else `503`.
-
-### Remaining before the agent is a GA artifact
-
-- **E4** packages it (container + static binary), settles the local-auth posture, and
-  ships an operator runbook — the demoable GA artifact.
+`local_auth_enabled` (E4) is `1` when the local listener requires a credential, else `0`.
 
 ### Known gaps / accepted risks (tracked)
 
@@ -119,13 +139,15 @@ counters are per-process. `GET /healthz` → `200` when up and healthy, else `50
   is future work. (`spoolMaxBytes` and `metricsPort`, by contrast, *are* changeable over
   an existing store.)
 
-- **No local device authentication (trusted-LAN only).** The local MQTT listener
-  accepts any connection on the site LAN. Cloud event *attribution* does not depend
-  on this connection — it rides on the per-event payload credential (ADR-014) — so a
-  forged connection cannot forge attributed events. But an unauthenticated LAN client
-  can still subscribe to `+/+/devices/+/events` and observe telemetry (including
-  credentials in flight), so the listener must be on a trusted network. A local-auth
-  posture is decided before E4 declares the agent shippable.
+- **Local device auth is opt-in shared-secret (E4), default trusted-LAN.** With
+  `local.username`/`passwordEnv` unset the local MQTT listener accepts any LAN connection
+  (open) — logged loudly at boot and exported as `local_auth_enabled 0` — so it must be on
+  a trusted network. Set the credential to require it (a single shared secret, not
+  per-device identity; over plaintext MQTT it is sniffable on the LAN — local MQTT TLS is
+  future work). Cloud event *attribution* does not depend on this connection — it rides on
+  the per-event payload credential (ADR-014) — so a forged local connection cannot forge
+  attributed events. Enabling auth on a live site is a breaking change for connected
+  devices; sequence it (see [RUNBOOK.md](RUNBOOK.md#4-secure)).
 - **The plain NATS client port is unbound** (`DontListen`) so the MQTT gateway is the
   only exposed surface — this is enforced and tested, not incidental.
 - **A config `instanceId` typo forwards nothing.** The agent only captures/forwards
@@ -145,7 +167,9 @@ Typed and fail-closed: unknown/invalid keys are rejected at startup. JSON:
     "listenPort": 1883,
     "storeDir": "/var/lib/dc-edge-agent",
     "spoolMaxBytes": 1073741824,
-    "metricsPort": 9090
+    "metricsPort": 9090,
+    "username": "site42-devices",
+    "passwordEnv": "DC_EDGE_LOCAL_PASSWORD"
   },
   "uplink": {
     "brokerUrl": "ssl://cloud.example.com:8883",
@@ -177,6 +201,11 @@ Typed and fail-closed: unknown/invalid keys are rejected at startup. JSON:
   after the spool has drained; graceful in-place reconfiguration is future work.
 - `local.metricsPort` is the loopback Prometheus/health port (default 9090; `0` disables
   the endpoint). It always binds `127.0.0.1` — never the LAN.
+- `local.username` + `local.passwordEnv` (both or neither) require a shared-secret
+  credential on the local MQTT listener. Omitted → open (trusted-LAN default, logged loudly).
+  `passwordEnv` names an environment variable holding the password (a projected Secret,
+  never cleartext); a configured username with an empty resolved password **fails the agent
+  closed**. See [RUNBOOK.md](RUNBOOK.md#4-secure) before enabling on a live site.
 
 ## Run
 

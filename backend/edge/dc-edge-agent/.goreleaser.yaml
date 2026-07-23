@@ -1,0 +1,70 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# goreleaser config for the DeviceChain Tier-1 edge agent (dc-edge-agent).
+#
+# Cross-compiles static `dc-edge-agent` binaries for bare-metal / systemd edge installs
+# (an industrial PC without a container runtime) and attaches them, archived + checksummed,
+# to the GitHub Release created for a vX.Y.Z tag. The release workflow runs this from the
+# backend/edge/dc-edge-agent directory, so this module IS the project root and `main: .`
+# resolves to backend/edge/dc-edge-agent/main.go.
+#
+# It does NOT create or publish the GitHub Release itself (release.disable: true): dcctl's
+# goreleaser owns the single Release for the tag, and two goreleasers both running `release`
+# on one tag would collide (duplicate-asset / release-ownership races). This one only builds
+# the archives + a UNIQUELY NAMED checksum file; the release workflow uploads them onto the
+# existing Release with `gh release upload`.
+
+version: 2
+
+project_name: dc-edge-agent
+
+# No `go mod tidy` before-hook: this module depends on sibling modules (core) via go.work +
+# a relative `replace ../../core`, and tidying outside the workspace rewrites go.mod/go.sum
+# incorrectly. The committed go.mod is already tidy. (Same trap dcctl's config documents.)
+
+builds:
+  - id: dc-edge-agent
+    binary: dc-edge-agent
+    main: .
+    env:
+      - CGO_ENABLED=0
+    goos:
+      # linux is the edge target; darwin is a developer convenience. NOT windows: the agent
+      # reads free disk with syscall.Statfs (agent.go), which does not exist on windows.
+      - linux
+      - darwin
+    goarch:
+      # arm64 is a first-class edge target (industrial gateways, Raspberry-Pi-class boxes),
+      # not an afterthought, so it is built alongside amd64.
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.gitCommit={{ .FullCommit }}
+      - -X main.buildDate={{ .Date }}
+
+archives:
+  - id: dc-edge-agent
+    ids:
+      - dc-edge-agent
+    name_template: >-
+      dc-edge-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats:
+      - tar.gz
+
+checksum:
+  # UNIQUE name (not the default "checksums.txt"): dcctl's goreleaser publishes its own
+  # checksums.txt onto the SAME Release, and `gh release upload --clobber` would otherwise
+  # silently replace dcctl's checksums with this one. Namespacing the file avoids the clash.
+  name_template: "dc-edge-agent_checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+# This goreleaser never owns the GitHub Release (dcctl's does); it only produces the
+# artifacts, which the release workflow uploads onto the existing Release. Disabling the
+# release step keeps the build+archive+checksum pipeline while skipping any GitHub write.
+release:
+  disable: true
