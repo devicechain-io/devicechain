@@ -19,7 +19,10 @@ import (
 func validConfig() Lwm2mConfiguration {
 	return Lwm2mConfiguration{
 		Security: SecurityConfiguration{
-			Identities: []PskIdentity{{Identity: "dev-1", PskEnv: "DC_LWM2M_PSK_DEV1"}},
+			Identities: []PskIdentity{{
+				Identity: "dev-1", PskEnv: "DC_LWM2M_PSK_DEV1",
+				Tenant: "acme", ExternalId: "plant-a/sensor-1",
+			}},
 		},
 	}
 }
@@ -96,6 +99,11 @@ func TestValidateRejects(t *testing.T) {
 		{"duplicate identity", func(c *Lwm2mConfiguration) {
 			c.Security.Identities = append(c.Security.Identities, PskIdentity{Identity: "dev-1", PskEnv: "DC_LWM2M_PSK_DEV1B"})
 		}, "duplicate PSK identity"},
+		{"missing tenant", func(c *Lwm2mConfiguration) { c.Security.Identities[0].Tenant = "" }, "tenant is required"},
+		{"missing externalId", func(c *Lwm2mConfiguration) { c.Security.Identities[0].ExternalId = "" }, "externalId is required"},
+		{"autoRegister without deviceTypeToken", func(c *Lwm2mConfiguration) {
+			c.Security.Identities[0].AutoRegister = true // DeviceTypeToken left empty
+		}, "deviceTypeToken is required when autoRegister is set"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,6 +116,43 @@ func TestValidateRejects(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.want)
 		})
 	}
+}
+
+// A duplicate (tenant, externalId) across two DISTINCT identities is deliberately
+// allowed — it is the credential-rotation overlap (two live PSKs for one device while a
+// new key is provisioned). The presence epoch guard converges it (whichever registers
+// later supersedes). This pins that the config does NOT reject it, so nobody "fixes" the
+// overlap with a uniqueness check.
+func TestValidateAllowsDuplicateTenantExternalIdAcrossIdentities(t *testing.T) {
+	c := validConfig()
+	c.Security.Identities = append(c.Security.Identities, PskIdentity{
+		Identity: "dev-1-newkey", PskEnv: "DC_LWM2M_PSK_DEV1_NEW",
+		Tenant: "acme", ExternalId: "plant-a/sensor-1", // SAME tenant + externalId, different identity
+	})
+	require.NoError(t, loaded(c), "an overlapping (tenant, externalId) across two identities must be accepted")
+}
+
+// AutoRegister WITH a deviceTypeToken is accepted (the happy path for the ALLOW_NEW
+// posture) — the counterweight to the missing-deviceTypeToken rejection.
+func TestValidateAcceptsAutoRegisterWithDeviceType(t *testing.T) {
+	c := validConfig()
+	c.Security.Identities[0].AutoRegister = true
+	c.Security.Identities[0].DeviceTypeToken = "sensor"
+	require.NoError(t, loaded(c))
+}
+
+// Bindings maps each identity to its resolved tenancy binding — what a registration
+// handler resolves through after recovering the authenticated PSK identity (ADR-075 D1).
+func TestBindingsResolveEachIdentity(t *testing.T) {
+	c := validConfig()
+	c.Security.Identities[0].AutoRegister = true
+	c.Security.Identities[0].DeviceTypeToken = "sensor"
+	require.NoError(t, loaded(c))
+	b := c.Bindings()
+	require.Len(t, b, 1)
+	got, ok := b["dev-1"]
+	require.True(t, ok, "the authenticated identity must have a binding")
+	assert.Equal(t, PskBinding{Tenant: "acme", ExternalId: "plant-a/sensor-1", DeviceTypeToken: "sensor", AutoRegister: true}, got)
 }
 
 // The port range check must fire on the DEFAULTED value too: a document that omits the
@@ -173,7 +218,7 @@ func TestResolveCredentialsEmptyIdentitiesIsNonNilMap(t *testing.T) {
 // seam). This pins the JSON field names the chart emits against the struct tags; a
 // drift crash-loops the pod, invisible to a hand-built struct.
 func TestJsonFieldNamesMatchRenderedShape(t *testing.T) {
-	rendered := `{"listen":{"host":"0.0.0.0","port":5684},"security":{"connectionIdLength":8,"handshakeTimeoutSeconds":10,"idleTimeoutSeconds":0,"maxSessions":50000,"identities":[{"identity":"dev-1","pskEnv":"DC_LWM2M_PSK_DEV1"}]}}`
+	rendered := `{"listen":{"host":"0.0.0.0","port":5684},"security":{"connectionIdLength":8,"handshakeTimeoutSeconds":10,"idleTimeoutSeconds":0,"maxSessions":50000,"identities":[{"identity":"dev-1","pskEnv":"DC_LWM2M_PSK_DEV1","tenant":"acme","externalId":"plant-a/sensor-1","deviceTypeToken":"sensor","autoRegister":true}]}}`
 	// Reject unknown fields the way core.LoadConfiguration does, so a stray key fails.
 	dec := json.NewDecoder(strings.NewReader(rendered))
 	dec.DisallowUnknownFields()
@@ -186,4 +231,8 @@ func TestJsonFieldNamesMatchRenderedShape(t *testing.T) {
 	require.Len(t, c.Security.Identities, 1)
 	assert.Equal(t, "dev-1", c.Security.Identities[0].Identity)
 	assert.Equal(t, "DC_LWM2M_PSK_DEV1", c.Security.Identities[0].PskEnv)
+	assert.Equal(t, "acme", c.Security.Identities[0].Tenant)
+	assert.Equal(t, "plant-a/sensor-1", c.Security.Identities[0].ExternalId)
+	assert.Equal(t, "sensor", c.Security.Identities[0].DeviceTypeToken)
+	assert.True(t, c.Security.Identities[0].AutoRegister)
 }

@@ -3,7 +3,7 @@ module github.com/devicechain-io/dc-lwm2m-ingest
 go 1.26.0
 
 require (
-	github.com/devicechain-io/dc-microservice v0.0.0-00010101000000-000000000000
+	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/pion/dtls/v3 v3.1.5
 	github.com/plgd-dev/go-coap/v3 v3.5.4
 	github.com/prometheus/client_golang v1.24.0
@@ -12,9 +12,18 @@ require (
 )
 
 require (
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/klauspost/compress v1.19.0 // indirect
+	github.com/nats-io/nats.go v1.52.0 // indirect
+	github.com/nats-io/nkeys v0.4.16 // indirect
+	github.com/nats-io/nuid v1.0.1 // indirect
+)
+
+require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/devicechain-io/dc-event-sources v0.0.0-00010101000000-000000000000
 	github.com/dsnet/golib/memfile v1.0.0 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
@@ -44,3 +53,5 @@ replace github.com/devicechain-io/dc-microservice => ../../core
 replace github.com/devicechain-io/dc-k8s => ../../k8s
 
 replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql-go v1.10.2-dc.2
+
+replace github.com/devicechain-io/dc-event-sources => ../event-sources

@@ -169,7 +169,7 @@ spec:
             {{- range $port := get $areaCfg "extraPorts" | default list }}
             - name: {{ $port.name }}
               containerPort: {{ $port.port }}
-              protocol: TCP
+              protocol: {{ $port.protocol | default "TCP" }}
             {{- end }}
           {{/*
           E7: a startupProbe with a generous failureThreshold gives a slow JWKS/DB

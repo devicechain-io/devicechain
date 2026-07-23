@@ -721,10 +721,17 @@ functionalAreas:
     # would spray datagrams across replicas, and a standby would drop half). GA is ONE
     # serving replica; it deploys strategy Recreate + replicas:1 (a rollout stops the old
     # binder before the new one binds). Do NOT raise replicas past 1 until the ADR-070
-    # fenced lease lands. This L0 slice exposes only its metrics/probes; the device-facing
-    # UDP CoAPS port (5684) + the PSK credential Secret are wired with the L1 handlers.
+    # fenced lease lands. L1 adds the /rd registration + presence handlers and exposes the
+    # device-facing CoAPS port below.
     replicas: 1
     strategy: Recreate
+    # The device-facing CoAPS port is UDP (CoAP over DTLS), so it is declared with an
+    # explicit protocol (extraPorts default to TCP). Devices reach this via the Service;
+    # external exposure (NodePort/LoadBalancer) is an operator/ingress decision (ADR-048).
+    extraPorts:
+      - name: coaps
+        port: 5684
+        protocol: UDP
     config: {}
       # listen:
       #   host: 0.0.0.0
@@ -733,9 +740,13 @@ functionalAreas:
       #   connectionIdLength: 8            # DTLS Connection ID length (RFC 9146); 0 disables. Default 8.
       #   maxSessions: 100000              # live-session ceiling (memory bound).
       #   idleTimeoutSeconds: 0            # reap idle sessions after N seconds; 0 = never (set above the queue-mode wake interval).
-      #   identities:                      # provisioned PSK credentials; empty (default) authenticates no one.
-      #     - identity: opaque-handle-1    # the DTLS PSK identity the device presents (prefer an opaque handle).
+      #   identities:                      # provisioned PSK credentials + their tenancy binding (ADR-075 D1); empty (default) authenticates no one.
+      #     - identity: opaque-handle-1    # the DTLS PSK identity the device presents (prefer an opaque handle; sent in the clear).
       #       pskEnv: DC_LWM2M_PSK_DEV1    # NAMES the env var holding the base64 pre-shared key (never inline). Project a Secret below.
+      #       tenant: acme                 # REQUIRED. The DeviceChain tenant this credential belongs to — tenancy is bound to the CREDENTIAL, never the device's untrusted registration payload (D1).
+      #       externalId: plant-a/sensor-1 # REQUIRED. The device external id device-management keys on (explicit, distinct from the opaque wire identity).
+      #       deviceTypeToken: sensor      # Device type stamped on the device row when autoRegister creates it. Required when autoRegister is true.
+      #       autoRegister: true           # Create the device row on first registration (ALLOW_NEW). An unknown device never reaches here — it has no PSK.
     # Project each device PSK Secret into the env var its identity names:
     # extraEnv:
     #   - name: DC_LWM2M_PSK_DEV1

@@ -27,7 +27,8 @@
           "outbound-connectors",
           "mcp",
           "ai-inference",
-          "sparkplug-ingest"
+          "sparkplug-ingest",
+          "lwm2m-ingest"
         ]
       },
       "uniqueItems": true,
@@ -255,9 +256,11 @@
             "items": {
               "type": "object",
               "required": ["name", "port"],
+              "additionalProperties": false,
               "properties": {
                 "name": { "type": "string", "minLength": 1, "maxLength": 15 },
-                "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+                "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                "protocol": { "type": "string", "enum": ["TCP", "UDP", "SCTP"], "description": "Port protocol; defaults to TCP. lwm2m-ingest sets UDP for its CoAPS port." }
               }
             }
           },

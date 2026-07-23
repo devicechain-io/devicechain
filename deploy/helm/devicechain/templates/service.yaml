@@ -21,7 +21,7 @@ spec:
       targetPort: graphql
     {{- range $port := get $areaCfg "extraPorts" | default list }}
     - name: {{ $port.name }}
-      protocol: TCP
+      protocol: {{ $port.protocol | default "TCP" }}
       port: {{ $port.port }}
       targetPort: {{ $port.name }}
     {{- end }}

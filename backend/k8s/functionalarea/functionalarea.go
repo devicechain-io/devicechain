@@ -191,9 +191,9 @@ var catalog = map[FunctionalArea]Manifest{
 		// registration/measurement handlers land in L1). It is an OPT-IN edge area held
 		// back from ProfileDefault — a deliberate topology choice, and (like Sparkplug)
 		// it runs as a single inbound-UDP binder (ADR-075 HA posture: an inbound socket
-		// cannot warm-standby; GA is one serving replica). At L0 it exposes only its
-		// metrics/probes (the device-facing UDP ingress is wired with the L1 handlers);
-		// it consumes nothing, so it declares no consumer of its own as a Hard edge.
+		// cannot warm-standby; GA is one serving replica). L1 wires the /rd registration +
+		// presence handlers and exposes the device-facing CoAPS/UDP port (5684); it
+		// consumes nothing, so it declares no consumer of its own as a Hard edge.
 		Area:     Lwm2mIngest,
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
