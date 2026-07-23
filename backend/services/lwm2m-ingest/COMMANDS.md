@@ -1,4 +1,4 @@
-# LwM2M downlink commands (ADR-075 L4a)
+# LwM2M downlink commands (ADR-075 L4a + L4b)
 
 The LwM2M ingest adapter dispatches platform-originated commands **down** to a connected LwM2M
 device: a command created in `command-delivery` is consumed by the adapter (only on the serving
@@ -32,18 +32,39 @@ A device's CoAP response class decides the outcome: `2.xx` → `SUCCESSFUL`; `4.
 with the code; no response within the timeout → `FAILED` (timeout). A `lwm2m.read` returns the
 response body in the command's `responsePayload`.
 
-## Connected-only semantics (this slice)
+## Queue-mode hold-and-drain (L4b)
 
-The adapter dispatches **only to a device it is currently connected to**. If the target device is not
-connected right now (a queue-mode sleeper, or offline), the command is left to `command-delivery`'s
-TTL and terminates as **`TIMEOUT`** — it is not queued. Durable **hold-and-drain-on-wake** (real
-LwM2M queue mode) is the follow-up slice **L4b**.
+A command for a device that is **connected right now** is dispatched immediately (the live path). A
+command for a device that is **offline** — a queue-mode sleeper, or a device between sessions — is
+**held**, and **drained to the device on its next wake**.
+
+The hold is not new machinery: `command-delivery` already persists every command as a durable row and
+leaves it in the `SENT` state after publishing. When a device next **Registers** or sends a
+re-handshake **Update** (the LwM2M queue-mode wake signals), the serving leader queries
+`command-delivery` for that device's still-`SENT` commands and dispatches them **oldest-first** over
+the freshly live session — the same CoAP Read/Write/Execute mapping as the live path, on the same
+per-device worker (so a drain never races or reorders the device's live commands).
+
+A held command that is **never** delivered — the device never wakes before its horizon — reaches
+**`TIMEOUT`**. Every command now carries a horizon: `command-delivery` stamps a **default TTL of 7
+days** (aligned with the command-stream retention) on any command whose creator supplies no explicit
+`expiresAt`, so a command can no longer sit in `SENT` forever. Tune it with
+`command-delivery`'s `defaultCommandTtlSeconds`, or set a per-command `expiresAt` at enqueue.
 
 Because a physical actuation firing twice is worse than a lost status report, the adapter **seals a
 command's fate after the CoAP op runs**: if the device acted but the response could not be published
-(a NATS blip), the command is *not* redelivered — it will `TIMEOUT` rather than re-actuate the
-device. A leadership handover likewise `TIMEOUT`s in-flight commands (the new leader takes over before
-the device re-registers); L4b's durable queue is the fix.
+(a NATS blip), the command is *not* redelivered — it will `TIMEOUT` rather than re-actuate the device.
+A command dispatched by the live path and a drain that fetches its still-`SENT` row are de-duplicated
+within a short wake window (best-effort — a recently-dispatched command token is suppressed on the
+other path), so the overlap does not double-actuate; the platform's underlying posture remains
+at-least-once.
+
+**Boundaries (named):** the drain delivers a bounded batch per wake (the oldest ~32 held commands);
+the rest drain on subsequent wakes. If the leader crashes *after* a drained op is issued but *before*
+its response publishes, the command stays `SENT` and re-dispatches on the next wake — the platform's
+documented at-least-once actuation posture, bounded by the horizon. A distinct `DELIVERED` state is
+deliberately **not** reintroduced: CoAP is synchronous, so a Read/Write/Execute lands directly on
+`SUCCESSFUL`/`FAILED`; "held for an offline device" is derivable from `SENT` + the device's presence.
 
 ## Firmware update over the air (Object 5) — a runbook
 

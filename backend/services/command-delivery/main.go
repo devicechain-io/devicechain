@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/config"
 	"github.com/devicechain-io/dc-command-delivery/graphql"
@@ -144,8 +145,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Create RDB caches.
 	model.InitializeCaches(RdbManager)
 
-	// Wrap api around rdb manager.
+	// Wrap api around rdb manager. The default command TTL (floored positive in
+	// ApplyDefaults) gives every enqueued command a terminal horizon when its creator
+	// supplies no explicit expiresAt (ADR-075 L4b).
 	Api = model.NewApi(RdbManager)
+	Api.DefaultCommandTTL = time.Duration(Configuration.DefaultCommandTTLSeconds) * time.Second
 
 	// Wire the enqueue gate (ADR-043 decision 3): a synchronous check against
 	// device-management before a command is enqueued (ADR-044 amendment) covering

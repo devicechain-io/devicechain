@@ -68,6 +68,13 @@ type ConnTable struct {
 	// keys are authenticated PSK identities, which are config-bounded (one per provisioned
 	// credential), so it cannot grow without bound.
 	ended map[string]uint64 // identity -> highest ENDED session epoch
+	// onLive, when set, is invoked (outside mu) after a device becomes reachable on a FRESH conn — a
+	// winning Bind (Register) or a Refresh that heals onto a new conn (a queue-mode sleeper's
+	// re-handshake). These are exactly the LwM2M wake signals, so it drives the L4b wake-drain
+	// (wired to Dispatcher.Drain). It is deliberately NOT fired on a keepalive no-op Refresh: a
+	// device that stayed live got its commands via the live dispatch path, so re-draining every
+	// keepalive would be pure query load. Set once before serving; read on handler goroutines.
+	onLive func(tenant, deviceToken string)
 }
 
 // NewConnTable builds an empty table.
@@ -77,6 +84,13 @@ func NewConnTable() *ConnTable {
 		byDevice:   map[deviceKey]string{},
 		ended:      map[string]uint64{},
 	}
+}
+
+// SetOnLive installs the wake hook invoked when a device becomes reachable on a fresh conn (Register,
+// or an Update that re-handshakes). It must be called before serving begins (single-threaded wiring),
+// since Bind/Refresh read it on handler goroutines with no lock.
+func (t *ConnTable) SetOnLive(fn func(tenant, deviceToken string)) {
+	t.onLive = fn
 }
 
 // Bind records an identity's live conn for a session (epoch) and claims its (tenant,
@@ -106,6 +120,9 @@ func (t *ConnTable) Bind(tenant, deviceToken, identity string, epoch uint64, con
 	if session.ConnDead(conn) {
 		t.reap(identity, epoch, conn)
 	}
+	// A fresh registration is a wake signal: drain any commands held while the device was offline.
+	// The drain re-checks liveness, so a bind that raced a conn death (reaped above) is a safe no-op.
+	t.fireOnLive(tenant, deviceToken)
 }
 
 // Refresh heals an identity's conn onto a new one after an Update, reusing the entry's stored
@@ -142,11 +159,24 @@ func (t *ConnTable) Refresh(identity string, conn mux.Conn) {
 	}
 	cur.conn = conn
 	epoch := cur.epoch
+	tenant, deviceToken := cur.tenant, cur.deviceToken
 	t.mu.Unlock()
 
 	conn.AddOnClose(func() { t.reap(identity, epoch, conn) })
 	if session.ConnDead(conn) {
 		t.reap(identity, epoch, conn)
+	}
+	// This Refresh HEALED onto a fresh conn — a queue-mode sleeper's re-handshake, i.e. a wake.
+	// Drain any commands held while it was offline. (The common keepalive on an unchanged live conn
+	// took the early return above and does NOT fire — it never went offline.)
+	t.fireOnLive(tenant, deviceToken)
+}
+
+// fireOnLive invokes the wake hook (if set) outside t.mu. It must never be called under the lock —
+// the hook enqueues a drain, and mu is a leaf.
+func (t *ConnTable) fireOnLive(tenant, deviceToken string) {
+	if t.onLive != nil {
+		t.onLive(tenant, deviceToken)
 	}
 }
 
@@ -160,8 +190,9 @@ const (
 	// ReachNotServed — no (tenant, deviceToken) index entry: this adapter does not serve the device
 	// (it belongs to another protocol adapter, or nothing). The command is ack-dropped with no response.
 	ReachNotServed Reach = iota
-	// ReachOffline — a served device with no live conn right now (parked or dead). The command is
-	// ack-dropped and rides command-delivery's TTL to TIMEOUT (connected-only, L4a; L4b holds+drains).
+	// ReachOffline — a served device with no live conn right now (parked or dead). The live command
+	// is ack-dropped; it stays held in command-delivery (SENT) and is drained to the device on its
+	// next Register/Update wake (L4b), or reaches TIMEOUT at its TTL if it never wakes.
 	ReachOffline
 	// ReachLive — a served device with a live conn: dispatch.
 	ReachLive

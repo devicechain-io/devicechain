@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"hash/fnv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/mux"
@@ -83,6 +84,15 @@ type connLookup interface {
 	Lookup(tenant, deviceToken string) (mux.Conn, Reach)
 }
 
+// drainFetcher reads a waking device's still-SENT commands from command-delivery
+// (*CommandFetcher satisfies it). It is the read side of the durable hold (ADR-075 L4b,
+// Architecture D): the command a live-path offline ack-drop left in command-delivery's
+// Postgres SENT row is pulled here at the device's next wake. nil disables draining (an
+// inert or pre-L4b-wiring build, and the disposition unit tests).
+type drainFetcher interface {
+	Pending(ctx context.Context, tenant, deviceToken string, now time.Time) ([]DrainCommand, error)
+}
+
 // Metrics are the optional Prometheus instruments the dispatcher updates; any nil field is
 // skipped. Label-free except the bounded op label (read/write/execute/other), per the ADR-023
 // cardinality lesson — never a per-tenant or per-device or raw-command-name label.
@@ -91,9 +101,15 @@ type Metrics struct {
 	Succeeded     *prometheus.CounterVec // commands the device acknowledged 2.xx, by op
 	Failed        *prometheus.CounterVec // commands the device rejected (4.xx/5.xx), timed out, or failed local validation, by op
 	NotServed     prometheus.Counter     // ack-dropped: no index entry (another protocol's device, or none)
-	ServedOffline prometheus.Counter     // ack-dropped: a served device with no live conn (rides TTL to TIMEOUT)
+	ServedOffline prometheus.Counter     // ack-dropped: a served device with no live conn (held in command-delivery, drained on its next wake — L4b)
 	Poison        prometheus.Counter     // ack-dropped: unparseable subject tenant or envelope
 	ResponseFails prometheus.Counter     // a command response we could not publish after local retries (outcome lost to TTL)
+	// L4b wake-drain instruments (ADR-075). Drained/DrainErrors are the operationally interesting
+	// signals; DrainDropped/DrainDedup are load/health signals.
+	Drained      prometheus.Counter // a held command dispatched to a device on its Register/Update wake
+	DrainErrors  prometheus.Counter // a wake-drain fetch that failed (retried on the device's next wake)
+	DrainDropped prometheus.Counter // a wake-drain trigger dropped because the device's shard was busy (next wake re-triggers)
+	DrainDedup   prometheus.Counter // a command skipped because it was already dispatched (drain/live overlap) — a re-actuation avoided
 }
 
 // Default tuning for the dispatcher. Each is overridable via Options.
@@ -122,6 +138,16 @@ const (
 	// readErrorBackoff paces the command-reader loop after a read error, so a persistent failure is
 	// a slow retry rather than a tight busy-loop.
 	readErrorBackoff = time.Second
+	// dedupeTTL bounds how long a just-dispatched (deviceToken, commandToken) suppresses a
+	// re-dispatch of the SAME command by the other path (a wake drain fetching a SENT row the live
+	// stream also just delivered, or vice versa). It only needs to cover the window between an op
+	// issuing and its command-responses reply terminalizing the row (after which the drain no longer
+	// fetches it), so a modest TTL a few times the op timeout is ample.
+	dedupeTTL = 60 * time.Second
+	// dedupeMax caps the dedup set; beyond it the set is pruned/cleared. The dedup is a re-actuation
+	// OPTIMIZATION, not a correctness guarantee (seal-fate and the SENT-row source already bound
+	// re-fire), so clearing under a pathological burst degrades to the documented at-least-once.
+	dedupeMax = 8192
 )
 
 // Dispatcher consumes device-commands and, for a command addressed to a device this adapter serves
@@ -134,9 +160,22 @@ type Dispatcher struct {
 	responses responsePublisher
 	conns     connLookup
 	exec      executor
+	fetcher   drainFetcher
 	metrics   Metrics
 	workers   int
 	opTimeout time.Duration
+	dedupe    *dedupe
+	// queuesPtr publishes the CURRENT leadership term's worker channels so Drain (called from the
+	// /rd handler goroutine, off the Run loop) can enqueue a wake-drain onto a device's shard. It is
+	// nil whenever this replica is not the serving leader (before Run, and after it returns), so a
+	// Drain on a standby is a safe no-op. atomic so the handler goroutine reads it without a lock.
+	queuesPtr atomic.Pointer[[]chan task]
+	// ready is closed by Run once queuesPtr is published and the workers are started. The leader waits
+	// on it BEFORE serving the transport, so the first Register (which fires Drain) never lands in a
+	// serve-before-Run window where Drain would no-op and silently defer the wake-drain to the device's
+	// next Update — a real gap at failover, when the whole fleet re-Registers at once. One-shot per
+	// Dispatcher; the Dispatcher is rebuilt per leadership term.
+	ready chan struct{}
 }
 
 // Options configures a Dispatcher. Zero-valued fields take their package defaults.
@@ -146,8 +185,8 @@ type Options struct {
 }
 
 // NewDispatcher builds a Dispatcher over the durable command reader, the command-responses writer,
-// the conn table, and the CoAP op executor.
-func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, exec executor, metrics Metrics, opts Options) *Dispatcher {
+// the conn table, the CoAP op executor, and the wake-drain fetcher (nil disables draining).
+func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, exec executor, fetcher drainFetcher, metrics Metrics, opts Options) *Dispatcher {
 	if opts.Workers <= 0 {
 		opts.Workers = DefaultWorkers
 	}
@@ -159,17 +198,41 @@ func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, ex
 		responses: responses,
 		conns:     conns,
 		exec:      exec,
+		fetcher:   fetcher,
 		metrics:   metrics,
 		workers:   opts.Workers,
 		opTimeout: opts.OpTimeout,
+		dedupe:    newDedupe(dedupeTTL, dedupeMax),
+		ready:     make(chan struct{}),
 	}
 }
 
-// work is one parsed command routed to a device-sharded worker.
+// Ready returns a channel closed once Run has published this term's worker queues — the leader waits
+// on it before serving the transport so no wake-drain is lost to a serve-before-Run window.
+func (d *Dispatcher) Ready() <-chan struct{} { return d.ready }
+
+// work is one parsed live command (a consumed device-commands message) routed to a device-sharded
+// worker.
 type work struct {
 	msg    messaging.Message
 	tenant string
 	env    deliveryEnvelope
+}
+
+// drainJob is a wake-drain trigger for one device, routed to that device's shard so it serializes
+// with the device's live commands (no reorder, no concurrent double-dispatch).
+type drainJob struct {
+	tenant      string
+	deviceToken string
+}
+
+// task is the union a shard worker processes: a live command OR a wake-drain. Both carry the device
+// token so Run and Drain route them to the same shard(deviceToken) worker — the seam that makes a
+// device's drain and live dispatch strictly serial.
+type task struct {
+	deviceToken string
+	live        *work
+	drain       *drainJob
 }
 
 // Run consumes and dispatches until ctx is cancelled (leadership eviction / shutdown). It is the
@@ -179,18 +242,34 @@ type work struct {
 // evicted replica stops pulling promptly; the durable consumer is bound (not owned), so its cursor
 // survives the term and the next leader resumes from the last ack.
 func (d *Dispatcher) Run(ctx context.Context) {
-	queues := make([]chan work, d.workers)
+	queues := make([]chan task, d.workers)
 	var wg sync.WaitGroup
 	for i := range queues {
-		queues[i] = make(chan work, workerQueueDepth)
+		queues[i] = make(chan task, workerQueueDepth)
 		wg.Add(1)
-		go func(ch chan work) {
+		go func(ch chan task) {
 			defer wg.Done()
-			for w := range ch {
-				d.dispatch(ctx, w)
+			// A ctx-select worker (not `range ch`) so an evicted term stops immediately and the
+			// channels are never closed — Drain, called from the /rd handler goroutine, can then
+			// send without racing a close(). A live command left buffered at eviction is simply
+			// unprocessed (unacked → redelivers to the next leader); a drain trigger left buffered
+			// is re-fired by the next wake. Either is safe.
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case t := <-ch:
+					d.process(ctx, t)
+				}
 			}
 		}(queues[i])
 	}
+	// Publish this term's queues so Drain (handler goroutine) can enqueue; clear on return so a
+	// post-eviction Drain is a no-op rather than feeding channels whose workers have exited. Signal
+	// ready AFTER the publish so the leader only starts serving once wake-drains can be accepted.
+	d.queuesPtr.Store(&queues)
+	close(d.ready)
+	defer d.queuesPtr.Store(nil)
 
 	for ctx.Err() == nil {
 		msg, err := d.reader.ReadMessage(ctx)
@@ -218,23 +297,59 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		// does not serve — the DOMINANT case, since this cross-tenant consumer sees every other
 		// protocol adapter's device-commands too — or one that is offline is ack-dropped HERE, so it
 		// never occupies a per-device worker slot. Only a live-dispatchable command is routed to a
-		// shard; the worker re-checks reachability (the device may drop in between).
+		// shard; the worker re-checks reachability (the device may drop in between). An OFFLINE served
+		// device's command is held in command-delivery (SENT) and delivered by the drain on the
+		// device's next wake (L4b) — dropNonLive just advances our own cursor, it does not lose it.
 		if _, reach := d.conns.Lookup(w.tenant, w.env.DeviceToken); reach != ReachLive {
 			d.dropNonLive(reach, w.msg)
 			continue
 		}
+		// The live-command send BLOCKS on a full shard (the named head-of-line convoy, L4a S4) — a
+		// live command must not be dropped. The drain send (Drain) is non-blocking by contrast, so a
+		// wake never stalls the handler.
 		select {
-		case queues[d.shard(w.env.DeviceToken)] <- w:
+		case queues[d.shard(w.env.DeviceToken)] <- task{deviceToken: w.env.DeviceToken, live: &w}:
 		case <-ctx.Done():
 			// Evicted before we could route: do NOT ack, so the message redelivers to the next
 			// leader rather than being dropped by a replica that is no longer serving.
 		}
 	}
 
-	for _, ch := range queues {
-		close(ch)
-	}
 	wg.Wait()
+}
+
+// Drain enqueues a wake-drain for a device onto its shard worker, so the leader pulls that device's
+// still-SENT commands from command-delivery and dispatches them to the now-live conn (ADR-075 L4b).
+// The /rd handler calls it after a device becomes live (Register/Update) — the LwM2M queue-mode wake
+// signal. It is NON-BLOCKING: a wake must never stall the CoAP read loop, so a full shard drops the
+// trigger (counted) and the device's next Update re-triggers. A call on a standby (no active term)
+// is a no-op. Draining and live dispatch for the same device share one shard worker, so they never
+// run concurrently or reorder.
+func (d *Dispatcher) Drain(tenant, deviceToken string) {
+	if d.fetcher == nil {
+		return // draining disabled (inert / pre-wiring build)
+	}
+	p := d.queuesPtr.Load()
+	if p == nil {
+		return // not the serving leader right now
+	}
+	queues := *p
+	t := task{deviceToken: deviceToken, drain: &drainJob{tenant: tenant, deviceToken: deviceToken}}
+	select {
+	case queues[d.shard(deviceToken)] <- t:
+	default:
+		incr(d.metrics.DrainDropped, 1) // shard busy — the next wake re-triggers
+	}
+}
+
+// process dispatches one shard-worker task: a live command or a wake-drain.
+func (d *Dispatcher) process(ctx context.Context, t task) {
+	switch {
+	case t.live != nil:
+		d.dispatch(ctx, *t.live)
+	case t.drain != nil:
+		d.drain(ctx, *t.drain)
+	}
 }
 
 // parse derives the tenant from the command subject and decodes the delivery envelope. A message
@@ -273,8 +388,19 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 	conn, reach := d.conns.Lookup(w.tenant, w.env.DeviceToken)
 	if reach != ReachLive {
 		// A device we do not serve, or that dropped between the reader's route-time pre-filter and
-		// now, is ack-dropped (no dispatch, no response) — connected-only rides TTL to TIMEOUT.
+		// now, is ack-dropped (no dispatch, no response). A served-but-offline device's command is
+		// held in command-delivery (SENT) and drained on its next wake (L4b); a not-served one is
+		// another protocol's (or none) and just advances our cursor.
 		d.dropNonLive(reach, w.msg)
+		return
+	}
+	// Drain/live dedup (L4b): this command may already have been dispatched by a wake drain that
+	// fetched its still-SENT row moments ago (drain and live share this device's one worker, but a
+	// fetch can still overlap a stream delivery). Re-running it would re-actuate the device, so skip
+	// the op and ACK (seal-fate — it was actuated, must not redeliver).
+	if d.dedupe.recentlyDispatched(w.tenant, w.env.DeviceToken, w.env.Token) {
+		incr(d.metrics.DrainDedup, 1)
+		ackDrop(w.msg)
 		return
 	}
 
@@ -282,39 +408,80 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 	if w.env.Payload != nil {
 		payload = *w.env.Payload
 	}
-	opCtx, cancel := context.WithTimeout(ctx, d.opTimeout)
-	res := d.exec.Execute(opCtx, conn, w.env.Name, payload)
-	cancel()
+	// executeAndReport issues the op and, unless the term was evicted mid-op, publishes the response.
+	// Either way the op is ISSUED, so the fate is sealed below: this message must NEVER redeliver
+	// (that would re-actuate a physical device). On a mid-op eviction the publish is skipped (the
+	// result is an unreliable artifact of losing the conn — a spurious FAILED) and the command rides
+	// SENT→TIMEOUT; only the PRE-op eviction check (top of dispatch) redelivers, where the op never ran.
+	d.executeAndReport(ctx, conn, w.tenant, w.env.Name, w.env.Token, payload)
+	d.dedupe.mark(w.tenant, w.env.DeviceToken, w.env.Token)
+	// Seal fate: the CoAP op already ran, so ack whether or not the response published — a publish we
+	// could not land leaves the command to TIMEOUT, which is the correct terminal for a lost outcome
+	// and strictly safer than a second actuation.
+	ackDrop(w.msg)
+}
 
-	// The CoAP op was ISSUED. Seal its fate (S1): this message must NEVER redeliver — that would
-	// re-actuate a physical device — even if the term was evicted mid-op. So on an eviction here,
-	// SKIP the response publish (the op result is an unreliable artifact of losing the conn/ctx — a
-	// spurious FAILED) but still ACK: the true outcome is unknown, so the command rides SENT→TIMEOUT,
-	// exactly the terminal S1 sanctions for a lost outcome and strictly safer than a second
-	// actuation. Only the PRE-op eviction check (top of dispatch) redelivers, where the op never ran.
-	if ctx.Err() != nil {
-		ackDrop(w.msg)
+// drain pulls a waking device's still-SENT commands from command-delivery and dispatches them to its
+// now-live conn, oldest-first (ADR-075 L4b). It runs on the device's shard worker (so it never races
+// or reorders the device's live commands), leader-only (Drain no-ops on a standby). A fetch failure
+// is counted and retried on the device's next wake; the device dropping or the term being evicted
+// mid-drain stops cleanly, leaving the remaining rows SENT for the next wake (never a partial ack of
+// something not dispatched).
+func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
+	if ctx.Err() != nil || d.fetcher == nil {
 		return
 	}
+	cmds, err := d.fetcher.Pending(ctx, job.tenant, job.deviceToken, time.Now())
+	if err != nil {
+		if ctx.Err() == nil { // a fetch aborted by eviction is not a drain error
+			incr(d.metrics.DrainErrors, 1)
+			log.Debug().Err(err).Str("tenant", job.tenant).Str("device", job.deviceToken).
+				Msg("Could not fetch held LwM2M commands at wake; retrying on the device's next Register/Update.")
+		}
+		return
+	}
+	for _, c := range cmds {
+		if ctx.Err() != nil {
+			return // evicted mid-drain: the remaining rows stay SENT for the next leader's wake
+		}
+		conn, reach := d.conns.Lookup(job.tenant, job.deviceToken)
+		if reach != ReachLive {
+			return // the device dropped mid-drain: the remaining rows stay SENT for the next wake
+		}
+		if d.dedupe.recentlyDispatched(job.tenant, job.deviceToken, c.Token) {
+			continue // already fired by the live path or a prior drain — do not re-actuate
+		}
+		d.executeAndReport(ctx, conn, job.tenant, c.Name, c.Token, c.Payload)
+		d.dedupe.mark(job.tenant, job.deviceToken, c.Token)
+		incr(d.metrics.Drained, 1)
+	}
+}
 
+// executeAndReport runs one command's CoAP op on a live conn and, unless the term was evicted mid-op,
+// records metrics and publishes the outcome on command-responses. It is the shared core of the live
+// (dispatch) and wake-drain (drain) paths — the ONLY difference between them is what seals the
+// command's fate afterward (the live path acks its JetStream message; the drain has none — the
+// command's fate rides its command-delivery row: a response terminalizes it, else it stays SENT for
+// the next wake or reaches TIMEOUT). It never acks or redelivers anything itself.
+func (d *Dispatcher) executeAndReport(ctx context.Context, conn mux.Conn, tenant, name, token string, payload []byte) {
+	opCtx, cancel := context.WithTimeout(ctx, d.opTimeout)
+	res := d.exec.Execute(opCtx, conn, name, payload)
+	cancel()
+	if ctx.Err() != nil {
+		return // evicted mid-op: skip the publish (a spurious FAILED); the true outcome is unknown
+	}
 	labelInc(d.metrics.Attempted, res.Op, 1)
 	if res.Success {
 		labelInc(d.metrics.Succeeded, res.Op, 1)
 	} else {
 		labelInc(d.metrics.Failed, res.Op, 1)
 	}
-
-	_ = d.publishResponse(w.tenant, responseEnvelope{
-		CommandToken: w.env.Token,
+	_ = d.publishResponse(tenant, responseEnvelope{
+		CommandToken: token,
 		Success:      res.Success,
 		Payload:      res.Payload,
 		Error:        res.Err,
 	})
-	// Seal fate: the CoAP op already ran, so this command must NEVER redeliver (that would
-	// re-actuate the device). Ack whether or not the response published — a publish we could not
-	// land leaves the command to TIMEOUT, which is the correct terminal for a lost outcome and is
-	// strictly safer than a second actuation.
-	ackDrop(w.msg)
 }
 
 // publishResponse publishes one command outcome to the tenant's command-responses subject, with a
@@ -399,5 +566,65 @@ func incr(c prometheus.Counter, n int) {
 func labelInc(v *prometheus.CounterVec, op string, n int) {
 	if v != nil && n > 0 {
 		v.WithLabelValues(op).Add(float64(n))
+	}
+}
+
+// dedupe is a small time-bounded set of recently-dispatched (deviceToken, commandToken) keys that
+// suppresses a re-dispatch of the same command by the OTHER path (a wake drain fetching a SENT row
+// the live stream just delivered, or vice versa) — a re-actuation avoided. It is an optimization,
+// NOT a correctness guarantee: seal-fate and the fact that the drain only ever reads still-SENT rows
+// already bound re-fire, so under a pathological burst the set may be cleared, degrading to the
+// platform's documented at-least-once actuation posture rather than growing without bound. Safe for
+// concurrent use (different devices dispatch on different shard workers).
+type dedupe struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+	ttl  time.Duration
+	max  int
+}
+
+func newDedupe(ttl time.Duration, max int) *dedupe {
+	return &dedupe{seen: make(map[string]time.Time), ttl: ttl, max: max}
+}
+
+// dedupeKey includes the TENANT: device tokens AND command tokens are only per-tenant unique
+// (ADR-042), so two tenants can each legitimately have device "pump-1" carrying command "cmd-1".
+// Keying without the tenant would let one tenant's dispatch suppress the other's — the live path
+// would ack the second tenant's message without executing OR publishing, silently losing the command
+// (it stays SENT with no wake to drain it on an always-connected device). This is the ADR-044 "every
+// key adds tenant_id" shape.
+func dedupeKey(tenant, deviceToken, commandToken string) string {
+	return tenant + "\x00" + deviceToken + "\x00" + commandToken
+}
+
+// recentlyDispatched reports whether (tenant, deviceToken, commandToken) was marked within the TTL.
+func (d *dedupe) recentlyDispatched(tenant, deviceToken, commandToken string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	t, ok := d.seen[dedupeKey(tenant, deviceToken, commandToken)]
+	return ok && time.Since(t) < d.ttl
+}
+
+// mark records (tenant, deviceToken, commandToken) as dispatched now, pruning first if at capacity.
+func (d *dedupe) mark(tenant, deviceToken, commandToken string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.seen) >= d.max {
+		d.pruneLocked()
+	}
+	d.seen[dedupeKey(tenant, deviceToken, commandToken)] = time.Now()
+}
+
+// pruneLocked drops expired keys; if the set is still at capacity (a pathological burst of distinct
+// live commands within the TTL) it is cleared wholesale — the dedup is best-effort, so shedding it
+// degrades to at-least-once rather than leaking memory. The caller holds d.mu.
+func (d *dedupe) pruneLocked() {
+	for k, t := range d.seen {
+		if time.Since(t) >= d.ttl {
+			delete(d.seen, k)
+		}
+	}
+	if len(d.seen) >= d.max {
+		d.seen = make(map[string]time.Time)
 	}
 }

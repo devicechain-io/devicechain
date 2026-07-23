@@ -138,6 +138,56 @@ func TestCreateSentResponseLifecycle(t *testing.T) {
 	}
 }
 
+// TestCreateCommandDefaultTTL proves the ADR-075 L4b horizon: a command whose creator omits
+// expiresAt is stamped with the Api's default TTL so it reaches a terminal state instead of sitting
+// in SENT forever; a caller-supplied expiresAt always wins; and a zero default disables stamping
+// (the pre-config behavior every existing direct-construction test relies on).
+func TestCreateCommandDefaultTTL(t *testing.T) {
+	ctx := core.WithTenant(context.Background(), "A")
+
+	t.Run("default stamped when caller omits expiresAt", func(t *testing.T) {
+		api := newTestApi(t)
+		api.DefaultCommandTTL = 48 * time.Hour
+		before := time.Now()
+		created, err := api.CreateCommand(ctx, &CommandCreateRequest{Token: "cmd-ttl", DeviceToken: "d1", Name: "reboot"})
+		if err != nil {
+			t.Fatalf("CreateCommand failed: %v", err)
+		}
+		if !created.ExpiresAt.Valid {
+			t.Fatalf("expected a stamped expires_at, got NULL — the stuck-in-SENT-forever gap is back")
+		}
+		want := before.Add(48 * time.Hour)
+		if delta := created.ExpiresAt.Time.Sub(want); delta < -time.Minute || delta > time.Minute {
+			t.Fatalf("expires_at = %v, want ~%v (now+TTL)", created.ExpiresAt.Time, want)
+		}
+	})
+
+	t.Run("caller-supplied expiresAt wins over the default", func(t *testing.T) {
+		api := newTestApi(t)
+		api.DefaultCommandTTL = 48 * time.Hour
+		explicit := time.Now().Add(3 * time.Hour).UTC().Truncate(time.Second)
+		exp := explicit.Format(time.RFC3339)
+		created, err := api.CreateCommand(ctx, &CommandCreateRequest{Token: "cmd-explicit", DeviceToken: "d1", Name: "reboot", ExpiresAt: &exp})
+		if err != nil {
+			t.Fatalf("CreateCommand failed: %v", err)
+		}
+		if !created.ExpiresAt.Valid || !created.ExpiresAt.Time.Equal(explicit) {
+			t.Fatalf("expires_at = %v (valid=%v), want the caller's %v", created.ExpiresAt.Time, created.ExpiresAt.Valid, explicit)
+		}
+	})
+
+	t.Run("zero default disables stamping", func(t *testing.T) {
+		api := newTestApi(t) // DefaultCommandTTL left at 0
+		created, err := api.CreateCommand(ctx, &CommandCreateRequest{Token: "cmd-nottl", DeviceToken: "d1", Name: "reboot"})
+		if err != nil {
+			t.Fatalf("CreateCommand failed: %v", err)
+		}
+		if created.ExpiresAt.Valid {
+			t.Fatalf("expected NO stamp with a zero default, got %v", created.ExpiresAt.Time)
+		}
+	})
+}
+
 // TestCreateCommandIdempotentOnToken proves a repeat createCommand with a token that already names a
 // live command returns the ORIGINAL command (not a second row, not an error) — the safe-retry
 // property the REACT dispatcher's at-least-once redelivery depends on.
