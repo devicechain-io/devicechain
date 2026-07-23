@@ -102,22 +102,54 @@ type SecurityConfiguration struct {
 	Identities []PskIdentity `json:"identities"`
 }
 
-// PskIdentity is one provisioned DTLS pre-shared-key credential.
+// PskIdentity is one provisioned DTLS pre-shared-key credential and the tenancy binding
+// every registration on it resolves through (ADR-075 D1). The binding — tenant +
+// external id — is fixed by which CREDENTIAL authenticated, never parsed from the
+// device's own registration payload (the untrusted `ep`): a device connecting IN over
+// the shared socket cannot assert its own tenant.
 type PskIdentity struct {
 	// Identity is the DTLS PSK identity the client presents in its ClientHello. It is
 	// sent in the clear on the wire (DTLS-PSK does not encrypt the identity), so an
 	// OPAQUE, non-semantic handle is recommended over a "tenant:device" string, which
-	// would leak fleet inventory to a passive observer (ADR-075 minor). At L0 it is the
-	// sole identity axis; L1 maps it to (tenant, externalId). It must be globally
-	// unique across the adapter — at PSK-callback time there is no tenant context, so a
-	// duplicate identity across two tenants would be ambiguous (ADR-075 M8), which is
-	// why Validate rejects a duplicate here.
+	// would leak fleet inventory to a passive observer (ADR-075 minor). It must be
+	// globally unique across the adapter — at PSK-callback time there is no tenant
+	// context, so a duplicate identity across two tenants would be ambiguous (ADR-075
+	// M8), which is why Validate rejects a duplicate here.
 	Identity string `json:"identity"`
 	// PskEnv NAMES the environment variable holding the base64-encoded pre-shared key —
 	// never the cleartext (a key written into the mounted config document would be a
 	// plaintext-at-rest credential). The Helm chart projects a Kubernetes Secret into
 	// this variable; the adapter reads and base64-decodes it once at startup. Required.
 	PskEnv string `json:"pskEnv"`
+	// Tenant is the DeviceChain tenant this credential belongs to (ADR-075 D1). Every
+	// registration authenticated by this identity is attributed here; the device never
+	// names its own tenant. Required.
+	Tenant string `json:"tenant"`
+	// ExternalId is the device external id device-management keys on (ADR-049). It is
+	// EXPLICIT and distinct from the opaque wire Identity: an operator picks a meaningful
+	// id ("plant-a/sensor-42") while the Identity stays a rotatable opaque handle —
+	// defaulting one to the other would couple the device's stable id to a credential
+	// rotation. One credential = one external id: an LwM2M client endpoint holds exactly
+	// one registration, and its objects/instances live under it. Required.
+	ExternalId string `json:"externalId"`
+	// DeviceTypeToken is the device type stamped on the device row when AutoRegister
+	// creates it on first registration. Required when AutoRegister is set; ignored
+	// otherwise.
+	DeviceTypeToken string `json:"deviceTypeToken"`
+	// AutoRegister creates the device row in device-management on first registration
+	// (ALLOW_NEW): a provisioned credential is meant to become a device. When false the
+	// device must already exist or its registration is dropped (counted). An unknown
+	// device never reaches here — it has no PSK, so its handshake fails first.
+	AutoRegister bool `json:"autoRegister"`
+}
+
+// PskBinding is the resolved tenancy binding for one authenticated PSK identity — what a
+// registration handler needs after recovering the identity from the DTLS connection.
+type PskBinding struct {
+	Tenant          string
+	ExternalId      string
+	DeviceTypeToken string
+	AutoRegister    bool
 }
 
 // NewLwm2mConfiguration builds a defaulted configuration.
@@ -186,8 +218,43 @@ func (c *Lwm2mConfiguration) Validate() error {
 			return fmt.Errorf("security.identities[%d]: duplicate PSK identity %q — an identity must be globally unique across the adapter (there is no tenant context at DTLS-handshake time to disambiguate)", i, id.Identity)
 		}
 		seen[id.Identity] = struct{}{}
+		if strings.TrimSpace(id.Tenant) == "" {
+			return fmt.Errorf("security.identities[%d]: tenant is required (ADR-075 D1 — tenancy is bound to the credential, never the device's untrusted registration payload)", i)
+		}
+		if strings.TrimSpace(id.ExternalId) == "" {
+			return fmt.Errorf("security.identities[%d]: externalId is required (the device external id device-management keys on; explicit, distinct from the opaque wire identity)", i)
+		}
+		if id.AutoRegister && strings.TrimSpace(id.DeviceTypeToken) == "" {
+			return fmt.Errorf("security.identities[%d]: deviceTypeToken is required when autoRegister is set (it is stamped on the auto-created device row)", i)
+		}
+		// NOTE: a duplicate (tenant, externalId) across two identities is DELIBERATELY
+		// allowed — it is the credential-rotation overlap (two live PSKs for one device
+		// while a new key is being provisioned). The presence epoch guard (ADR-067)
+		// converges the common case: whichever credential registers later mints the higher
+		// SessionId and supersedes. (A pathological interleaving — the newer credential
+		// deregistering while the older is kept alive by Updates, which emit nothing — can
+		// still show DISCONNECTED until the older re-Registers; that needs both credentials
+		// concurrently active and resolves on the next register.) Do NOT add a uniqueness
+		// check here.
 	}
 	return nil
+}
+
+// Bindings returns the identity -> tenancy binding map a registration handler resolves
+// through after recovering the authenticated PSK identity from the DTLS connection
+// (ADR-075 D1). It is built from the same identities the credential map authenticates,
+// so an authenticated identity always has a binding. Call after Validate.
+func (c *Lwm2mConfiguration) Bindings() map[string]PskBinding {
+	bindings := make(map[string]PskBinding, len(c.Security.Identities))
+	for _, id := range c.Security.Identities {
+		bindings[id.Identity] = PskBinding{
+			Tenant:          id.Tenant,
+			ExternalId:      id.ExternalId,
+			DeviceTypeToken: id.DeviceTypeToken,
+			AutoRegister:    id.AutoRegister,
+		}
+	}
+	return bindings
 }
 
 // ConnectionIdLengthOrDefault returns the configured CID length, or the default when

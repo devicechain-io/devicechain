@@ -99,13 +99,20 @@ type Server struct {
 	stopOnce sync.Once
 }
 
+// RouteMount registers additional CoAP handlers on the transport router. The LwM2M
+// semantic layer (the /rd registration handlers, L1) is passed to New as one of these, so
+// the server stays transport-only — it owns the mux and the DTLS posture, but knows
+// nothing of registration or presence.
+type RouteMount func(*mux.Router) error
+
 // New builds the CoAP/DTLS server: it resolves the bind address, constructs the
 // DTLS-PSK (and optionally CID) listener over the exact config buildServerDTLSConfig
-// produces, and wires the CoAP mux plus the session-accounting hooks. It does NOT
-// begin accepting — call Serve for that. A bad bind address or listener construction
-// fails here so a misconfiguration crashes startup rather than a silent non-serving
-// pod.
-func New(cfg Config, metrics Metrics) (*Server, error) {
+// produces, and wires the CoAP mux plus the session-accounting hooks. Any RouteMounts are
+// applied to the router after the health handler, so a caller mounts the LwM2M semantic
+// layer without this package importing it. It does NOT begin accepting — call Serve for
+// that. A bad bind address, listener construction, or mount fails here so a
+// misconfiguration crashes startup rather than a silent non-serving pod.
+func New(cfg Config, metrics Metrics, mounts ...RouteMount) (*Server, error) {
 	if cfg.MaxSessions < 1 {
 		return nil, fmt.Errorf("server: MaxSessions must be >= 1 (got %d)", cfg.MaxSessions)
 	}
@@ -122,6 +129,12 @@ func New(cfg Config, metrics Metrics) (*Server, error) {
 	if err := router.Handle(healthPath, mux.HandlerFunc(s.handleHealth)); err != nil {
 		_ = listener.Close()
 		return nil, fmt.Errorf("server: cannot register health handler: %w", err)
+	}
+	for _, mount := range mounts {
+		if err := mount(router); err != nil {
+			_ = listener.Close()
+			return nil, fmt.Errorf("server: cannot mount a route: %w", err)
+		}
 	}
 
 	opts := []dtlsserver.Option{

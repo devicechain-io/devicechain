@@ -19,7 +19,7 @@ import (
 // chart/struct drift) is a startup crash-loop, invisible to a test that hand-builds the
 // struct. This feeds the literal rendered bytes through the real loader.
 func TestLoadConfigurationParsesRenderedChartDocument(t *testing.T) {
-	rendered := `{"listen":{"host":"0.0.0.0","port":5684},"security":{"connectionIdLength":8,"handshakeTimeoutSeconds":10,"idleTimeoutSeconds":0,"maxSessions":50000,"identities":[{"identity":"dev-1","pskEnv":"DC_LWM2M_PSK_DEV1"}]}}`
+	rendered := `{"listen":{"host":"0.0.0.0","port":5684},"security":{"connectionIdLength":8,"handshakeTimeoutSeconds":10,"idleTimeoutSeconds":0,"maxSessions":50000,"identities":[{"identity":"dev-1","pskEnv":"DC_LWM2M_PSK_DEV1","tenant":"acme","externalId":"plant-a/sensor-1","deviceTypeToken":"sensor","autoRegister":true}]}}`
 
 	var cfg config.Lwm2mConfiguration
 	require.NoError(t, core.LoadConfiguration([]byte(rendered), &cfg))
@@ -31,6 +31,9 @@ func TestLoadConfigurationParsesRenderedChartDocument(t *testing.T) {
 	require.Len(t, cfg.Security.Identities, 1)
 	assert.Equal(t, "dev-1", cfg.Security.Identities[0].Identity)
 	assert.Equal(t, "DC_LWM2M_PSK_DEV1", cfg.Security.Identities[0].PskEnv)
+	assert.Equal(t, "acme", cfg.Security.Identities[0].Tenant)
+	assert.Equal(t, "plant-a/sensor-1", cfg.Security.Identities[0].ExternalId)
+	assert.True(t, cfg.Security.Identities[0].AutoRegister)
 }
 
 // The default (empty) configuration must load and validate — a bare render with no
