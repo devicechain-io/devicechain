@@ -29,15 +29,22 @@ func newAck() *fakeAck         { return &fakeAck{} }
 func (a *fakeAck) acked() bool { return a.count() > 0 }
 
 // cmdMsg builds a consumed device-commands message: subject {inst}.{tenant}.device-commands.{token}
-// carrying a delivery envelope, with a fake ack handle.
+// carrying a delivery envelope, with a fake ack handle. The command token defaults to "cmd-"+token
+// (fine for a single command per device); a test issuing MULTIPLE distinct commands to the SAME
+// device must use cmdMsgTok with distinct command tokens, exactly as production does (commands are
+// per-tenant unique, ADR-042) — otherwise the drain/live dedup correctly treats them as one command.
 func cmdMsg(tenant, token, name, payload string, ack messaging.Acknowledger) messaging.Message {
-	env := deliveryEnvelope{Token: "cmd-" + token, DeviceToken: token, Name: name}
+	return cmdMsgTok(tenant, token, "cmd-"+token, name, payload, ack)
+}
+
+func cmdMsgTok(tenant, deviceToken, cmdToken, name, payload string, ack messaging.Acknowledger) messaging.Message {
+	env := deliveryEnvelope{Token: cmdToken, DeviceToken: deviceToken, Name: name}
 	if payload != "" {
 		raw := json.RawMessage(payload)
 		env.Payload = &raw
 	}
 	value, _ := json.Marshal(env)
-	subject := "inst." + tenant + ".device-commands." + token
+	subject := "inst." + tenant + ".device-commands." + deviceToken
 	return messaging.NewConsumedMessage(subject, value, 1, nil, ack)
 }
 
@@ -117,7 +124,175 @@ func (e *fakeExecutor) callCount() int {
 }
 
 func newDispatcher(rdr reader, pub responsePublisher, look connLookup, exec executor) *Dispatcher {
-	return NewDispatcher(rdr, pub, look, exec, Metrics{}, Options{})
+	return NewDispatcher(rdr, pub, look, exec, nil, Metrics{}, Options{})
+}
+
+// fakeFetcher is a stand-in wake-drain source: it returns a canned command list (or an error).
+type fakeFetcher struct {
+	mu    sync.Mutex
+	cmds  []DrainCommand
+	err   error
+	calls int
+}
+
+func (f *fakeFetcher) Pending(_ context.Context, _, _ string, _ time.Time) ([]DrainCommand, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]DrainCommand(nil), f.cmds...), nil
+}
+
+func (f *fakeFetcher) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+// liveWorkTok builds a live work item with an explicit command token (production commands are
+// per-tenant unique, ADR-042).
+func liveWorkTok(tenant, deviceToken, cmdToken, name, payload string, ack messaging.Acknowledger) work {
+	msg := cmdMsgTok(tenant, deviceToken, cmdToken, name, payload, ack)
+	var env deliveryEnvelope
+	_ = json.Unmarshal(msg.Value, &env)
+	return work{msg: msg, tenant: tenant, env: env}
+}
+
+// flakyLookup returns ReachLive for the first `liveFor` lookups of the device, then ReachOffline —
+// modeling a device that drops mid-drain.
+type flakyLookup struct {
+	mu      sync.Mutex
+	conn    mux.Conn
+	liveFor int
+	calls   int
+}
+
+func (l *flakyLookup) Lookup(_, _ string) (mux.Conn, Reach) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls++
+	if l.calls <= l.liveFor {
+		return l.conn, ReachLive
+	}
+	return nil, ReachOffline
+}
+
+// --- drain() disposition (ADR-075 L4b) --------------------------------------
+
+// TestDrainDispatchesHeldCommands proves the core wake-drain: held commands are dispatched to the
+// now-live device, in fetch order (the fetcher already sorts oldest-first), each publishing a response.
+func TestDrainDispatchesHeldCommands(t *testing.T) {
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	pub := &fakePublisher{}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	ff := &fakeFetcher{cmds: []DrainCommand{
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`)},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`)},
+	}}
+	d := NewDispatcher(nil, pub, look, exec, ff, Metrics{}, Options{})
+
+	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
+
+	assert.Equal(t, 2, exec.callCount(), "both held commands are dispatched")
+	resp := pub.responses()
+	require.Len(t, resp, 2)
+	assert.Equal(t, "c1", resp[0].CommandToken, "in fetch (oldest-first) order")
+	assert.Equal(t, "c2", resp[1].CommandToken)
+}
+
+// TestDrainSkipsCommandAlreadyDispatchedLive is the drain/live dedup guard: a command the live path
+// just dispatched must NOT be re-actuated when a drain fetches its still-SENT row moments later.
+func TestDrainSkipsCommandAlreadyDispatchedLive(t *testing.T) {
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	pub := &fakePublisher{}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	ff := &fakeFetcher{cmds: []DrainCommand{
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`)}, // already fired live
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`)},           // fresh
+	}}
+	d := NewDispatcher(nil, pub, look, exec, ff, Metrics{}, Options{})
+
+	// The live path dispatches c1 first (marks it dispatched).
+	d.dispatch(context.Background(), liveWorkTok("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"u"}`, newAck()))
+	// Then a wake drain fetches c1 + c2: c1 must be skipped, only c2 dispatched.
+	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
+
+	assert.Equal(t, 2, exec.callCount(), "live c1 (1) + drain c2 (1); c1 is NOT re-actuated by the drain")
+}
+
+// TestDrainStopsWhenDeviceDropsMidDrain proves a device dropping mid-drain stops the drain cleanly —
+// the remaining held commands stay SENT (unfetched-again) for the next wake, never dispatched to a
+// dead conn.
+func TestDrainStopsWhenDeviceDropsMidDrain(t *testing.T) {
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	pub := &fakePublisher{}
+	look := &flakyLookup{conn: &fakeConn{}, liveFor: 1} // live for c1 only, offline thereafter
+	ff := &fakeFetcher{cmds: []DrainCommand{
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`)},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`)},
+		{Token: "c3", Name: CommandRead, Payload: []byte(`{"path":"/3/0/0"}`)},
+	}}
+	d := NewDispatcher(nil, pub, look, exec, ff, Metrics{}, Options{})
+
+	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
+
+	assert.Equal(t, 1, exec.callCount(), "only c1 dispatched; c2/c3 not sent to a dropped device")
+}
+
+// TestDrainStopsOnEviction: a term lost mid-drain stops after the in-flight op, leaving the rest for
+// the next leader's wake (mirrors the live path's post-op eviction).
+func TestDrainStopsOnEviction(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}, cancelOnCall: cancel}
+	pub := &fakePublisher{}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	ff := &fakeFetcher{cmds: []DrainCommand{
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`)},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`)},
+	}}
+	d := NewDispatcher(nil, pub, look, exec, ff, Metrics{}, Options{})
+
+	d.drain(ctx, drainJob{tenant: "acme", deviceToken: "pump-1"})
+
+	assert.Equal(t, 1, exec.callCount(), "c1's op ran; the eviction stops the drain before c2")
+	assert.Empty(t, pub.responses(), "no response from the evicted term (the c1 result is unreliable)")
+}
+
+// TestDrainFetchErrorNoDispatch: a fetch failure dispatches nothing and is retried on the next wake.
+func TestDrainFetchErrorNoDispatch(t *testing.T) {
+	exec := &fakeExecutor{}
+	ff := &fakeFetcher{err: errors.New("command-delivery unreachable")}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	d := NewDispatcher(nil, &fakePublisher{}, look, exec, ff, Metrics{}, Options{})
+
+	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
+
+	assert.Equal(t, 0, exec.callCount(), "a failed fetch dispatches nothing")
+}
+
+// TestDrainDisabledWhenFetcherNil: with no fetcher (command-delivery endpoint unset) the drain is a
+// safe no-op — offline commands ride TTL to TIMEOUT (the L4a behavior).
+func TestDrainDisabledWhenFetcherNil(t *testing.T) {
+	exec := &fakeExecutor{}
+	d := newDispatcher(nil, &fakePublisher{}, &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}, exec)
+
+	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
+	d.Drain("acme", "pump-1") // also a no-op via the public trigger
+
+	assert.Equal(t, 0, exec.callCount())
+}
+
+// TestDrainTriggerNoOpOnStandby: Drain called when this replica is not the serving leader (Run not
+// active, so no published queues) is a no-op and never panics.
+func TestDrainTriggerNoOpOnStandby(t *testing.T) {
+	ff := &fakeFetcher{cmds: []DrainCommand{{Token: "c1", Name: CommandRead, Payload: []byte(`{"path":"/3/0/0"}`)}}}
+	d := NewDispatcher(nil, &fakePublisher{}, &fakeLookup{}, &fakeExecutor{}, ff, Metrics{}, Options{})
+
+	d.Drain("acme", "pump-1") // no active term → no-op
+
+	assert.Equal(t, 0, ff.callCount(), "a standby (no serving term) does not fetch")
 }
 
 // --- dispatch() disposition (deterministic, no Run loop) --------------------
@@ -297,8 +472,8 @@ func TestRunProcessesAndAcksEachMessage(t *testing.T) {
 func TestPerDeviceCommandsAreSerialized(t *testing.T) {
 	a1, a2 := newAck(), newAck()
 	rdr := &scriptReader{msgs: []messaging.Message{
-		cmdMsg("acme", "pump-1", CommandWrite, `{"path":"/5/0/1","value":"a"}`, a1),
-		cmdMsg("acme", "pump-1", CommandExecute, `{"path":"/5/0/2"}`, a2),
+		cmdMsgTok("acme", "pump-1", "cmd-fw-1", CommandWrite, `{"path":"/5/0/1","value":"a"}`, a1),
+		cmdMsgTok("acme", "pump-1", "cmd-fw-2", CommandExecute, `{"path":"/5/0/2"}`, a2),
 	}}
 	exec := &fakeExecutor{
 		result:  OpResult{Op: labelWrite, Success: true},
@@ -327,6 +502,43 @@ func TestPerDeviceCommandsAreSerialized(t *testing.T) {
 	assert.Equal(t, "/5/0/2", second)
 
 	require.Eventually(t, func() bool { return a1.acked() && a2.acked() }, 2*time.Second, 5*time.Millisecond)
+	cancel()
+	<-done
+}
+
+// TestWakeDrainEndToEnd wires the WHOLE L4b chain in-process: a real ConnTable is the Dispatcher's
+// conn lookup, SetOnLive is wired to Dispatcher.Drain, and Run's workers are live. Binding a device
+// (a Register wake) must, with no live-stream command at all, drain the device's held commands from
+// command-delivery (faked) and dispatch them to the now-live conn, oldest-first. This is the seam the
+// per-unit drain()/onLive() tests do not exercise together: trigger → enqueue → worker → drain → op.
+func TestWakeDrainEndToEnd(t *testing.T) {
+	connTable := NewConnTable()
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	pub := &fakePublisher{}
+	ff := &fakeFetcher{cmds: []DrainCommand{
+		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"coaps://fw"}`)},
+		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`)},
+	}}
+	// An empty reader so Run's consume loop just parks on ctx — the drain is driven purely by the wake.
+	d := NewDispatcher(&scriptReader{}, pub, connTable, exec, ff, Metrics{}, Options{})
+	connTable.SetOnLive(d.Drain)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { d.Run(ctx); close(done) }()
+	// Wait until Run has published its queues, so the wake's Drain is not a standby no-op.
+	require.Eventually(t, func() bool { return d.queuesPtr.Load() != nil }, 2*time.Second, 5*time.Millisecond)
+
+	// A Register wake: Bind installs the live conn AND fires onLive → Drain.
+	connTable.Bind("acme", "pump-1", "id-1", 100, newFakeConn(1))
+
+	require.Eventually(t, func() bool { return exec.callCount() == 2 }, 2*time.Second, 5*time.Millisecond,
+		"both held commands are drained to the device on its wake")
+	resp := pub.responses()
+	require.Len(t, resp, 2)
+	assert.Equal(t, "c1", resp[0].CommandToken, "drained oldest-first")
+	assert.Equal(t, "c2", resp[1].CommandToken)
+
 	cancel()
 	<-done
 }

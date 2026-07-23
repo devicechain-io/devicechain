@@ -128,6 +128,33 @@ func TestConnUnknownDeviceNotServed(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// TestOnLiveFiresAtBindAndHealNotKeepalive is the L4b wake-trigger guard: the drain fires when a
+// device becomes reachable on a FRESH conn — a Register (Bind) or an Update that re-handshakes
+// (Refresh onto a new conn) — but NOT on a keepalive Update on the SAME live conn (which never went
+// offline and got its commands via the live path). Firing on every keepalive would be pure query load.
+func TestOnLiveFiresAtBindAndHealNotKeepalive(t *testing.T) {
+	tbl := NewConnTable()
+	var mu sync.Mutex
+	var fired [][2]string
+	tbl.SetOnLive(func(tenant, deviceToken string) {
+		mu.Lock()
+		fired = append(fired, [2]string{tenant, deviceToken})
+		mu.Unlock()
+	})
+
+	c1 := newFakeConn(1)
+	tbl.Bind(tnA, tok, "id-1", 100, c1) // Register → fire
+	tbl.Refresh("id-1", c1)             // keepalive on the SAME live conn → NO fire
+	c2 := newFakeConn(2)
+	tbl.Refresh("id-1", c2) // re-handshake onto a NEW conn → fire
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, fired, 2, "onLive fires on Bind and on a conn-healing Refresh, but not on a keepalive")
+	assert.Equal(t, [2]string{tnA, tok}, fired[0], "Bind fires with (tenant, deviceToken)")
+	assert.Equal(t, [2]string{tnA, tok}, fired[1], "the heal fires with (tenant, deviceToken)")
+}
+
 // Tombstone guard: a Bind for a session at or below a recorded End must not resurrect a conn for
 // a device presence already called DISCONNECTED.
 func TestBindTombstonedSessionRefused(t *testing.T) {

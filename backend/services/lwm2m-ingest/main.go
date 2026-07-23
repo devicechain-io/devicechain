@@ -362,11 +362,20 @@ func buildMetrics() {
 		NotServed: Microservice.NewCounter("commands_not_served_total",
 			"Commands ack-dropped because no device this adapter serves matches (another protocol's device, or none) — a mirror of the instance's command traffic, not an anomaly.", nil),
 		ServedOffline: Microservice.NewCounter("commands_served_offline_total",
-			"Commands ack-dropped because a device this adapter serves had no live connection (the command rides its TTL to TIMEOUT).", nil),
+			"Commands ack-dropped because a device this adapter serves had no live connection (held in command-delivery, drained on the device's next wake — L4b; or TIMEOUT at its TTL if it never wakes).", nil),
 		Poison: Microservice.NewCounter("commands_poison_total",
 			"Commands dropped as unprocessable (no parseable tenant in the subject, or an undecodable envelope).", nil),
 		ResponseFails: Microservice.NewCounter("command_response_publish_failures_total",
 			"Command outcomes that could not be published to command-responses after local retries (the op already ran, so the command is not redelivered; it will TIMEOUT).", nil),
+		// L4b wake-drain (ADR-075): commands held for an offline device and delivered on its wake.
+		Drained: Microservice.NewCounter("commands_drained_total",
+			"Held commands dispatched to a device on its Register/Update wake (LwM2M queue-mode drain).", nil),
+		DrainErrors: Microservice.NewCounter("command_drain_errors_total",
+			"Wake-drain fetches that failed (retried on the device's next Register/Update).", nil),
+		DrainDropped: Microservice.NewCounter("command_drain_dropped_total",
+			"Wake-drain triggers dropped because the device's shard worker was busy (the next wake re-triggers).", nil),
+		DrainDedup: Microservice.NewCounter("command_drain_dedup_total",
+			"Commands skipped because they were already dispatched (drain/live overlap) — a re-actuation avoided.", nil),
 	}
 }
 
@@ -400,8 +409,13 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// the same client resolves devices (device:read/write), floors the epoch (state:read), and
 	// reads tenantGovernance (tenant:read). Without the scope the override fetch fails and every
 	// tenant meters at the platform default — fail-open-to-default, but overrides go dead.
+	// CommandRead is added for the L4b wake-drain (ADR-075): the same client reads a waking device's
+	// still-SENT commands from command-delivery (command:read) so the dispatcher can deliver commands
+	// held while the device was offline. Without the scope the drain query is forbidden and offline
+	// commands ride their TTL to TIMEOUT (the L4a behavior) — degraded, not broken.
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest",
-		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead), string(auth.TenantRead)})
+		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead),
+			string(auth.TenantRead), string(auth.CommandRead)})
 
 	registrar := adapter.NewRegistrar(client, ingestURL, "lw-")
 	emitter := adapter.NewEmitter(Writer, time.Now, "lw")
@@ -443,16 +457,38 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	})
 	handlers := registry.NewHandlers(reg, bindings, registryMetrics, obsManager, connTable, decode.DefaultObjectAllowlist, limiter, leaderCtx)
 
-	// The command dispatcher (L4a): it consumes device-commands (leader-only) and dispatches to the
-	// term's conn table. Built only when the shared command reader/writer exist (they do whenever
+	// The L4b wake-drain fetcher reads a waking device's still-SENT commands from command-delivery so
+	// the dispatcher can deliver commands held while the device was offline. It needs the
+	// command-delivery GraphQL coordinate; without it draining is DISABLED (offline commands ride
+	// their TTL to TIMEOUT — the L4a behavior) rather than failing the service. Kept as the concrete
+	// type so a nil is passed to NewDispatcher as a true nil interface (below), not a typed nil.
+	var fetcher *downlink.CommandFetcher
+	if cdURL, ok := commandDeliveryEndpoint(infra); ok {
+		fetcher = downlink.NewCommandFetcher(client, cdURL)
+	} else {
+		log.Warn().Msg("command-delivery endpoint not configured (infrastructure.commandDelivery) — LwM2M queue-mode drain disabled; a command to an offline device rides its TTL to TIMEOUT instead of draining on the device's next wake.")
+	}
+
+	// The command dispatcher (L4a/L4b): it consumes device-commands (leader-only) and dispatches to
+	// the term's conn table, plus drains commands held for a device while it was offline on the
+	// device's next wake. Built only when the shared command reader/writer exist (they do whenever
 	// there are credentials — the same condition as this presence layer); an inert deployment never
 	// reaches here. The Ops executor is stateless.
 	var dispatcher *downlink.Dispatcher
 	if CommandReader != nil && ResponseWriter != nil {
-		dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), downlinkMetrics, downlink.Options{
+		opts := downlink.Options{
 			Workers:   Configuration.Downlink.Concurrency,
 			OpTimeout: durationSeconds(Configuration.Downlink.TimeoutSeconds),
-		})
+		}
+		if fetcher != nil {
+			dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), fetcher, downlinkMetrics, opts)
+		} else {
+			dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), nil, downlinkMetrics, opts)
+		}
+		// Wire the wake-drain: a device becoming reachable on a fresh conn (Register / re-handshake
+		// Update) triggers a drain of its held commands. A no-op when draining is disabled or on a
+		// standby (Drain guards both). Set before serving begins.
+		connTable.SetOnLive(dispatcher.Drain)
 	}
 	return handlers, reg, epoch, reconciler, dispatcher, nil
 }
@@ -643,6 +679,17 @@ func deviceStateEndpoint(infra mscfg.InfrastructureConfiguration) (string, error
 		return "", fmt.Errorf("device-state endpoint not configured (infrastructure.deviceState) — lwm2m-ingest cannot floor its presence epoch and a restart across a clock step-back could mint stale-rejected epochs")
 	}
 	return fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port), nil
+}
+
+// commandDeliveryEndpoint returns the command-delivery GraphQL URL and whether it is configured.
+// Unlike the two above it is fail-OPEN (returns ok=false rather than an error): the L4b wake-drain it
+// feeds is an enhancement over connected-only dispatch, so a missing coordinate disables draining
+// (offline commands ride their TTL to TIMEOUT) rather than refusing to serve.
+func commandDeliveryEndpoint(infra mscfg.InfrastructureConfiguration) (string, bool) {
+	if infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
+		return "", false
+	}
+	return fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port), true
 }
 
 // afterMicroserviceStarted starts NATS (so the presence emitter can publish) and, when the
