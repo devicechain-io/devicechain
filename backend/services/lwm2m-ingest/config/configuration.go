@@ -80,6 +80,17 @@ const (
 	// clamp (raise-to-min then cap-below-min), so the config refuses it rather than clamp to
 	// a self-contradictory window.
 	MinMaxLifetimeSeconds = 60
+	// DefaultDownlinkTimeoutSeconds bounds ONE CoAP command exchange to a device (ADR-075 L4a):
+	// a Read/Write/Execute CON to a possibly-marginal radio. On expiry the command is reported
+	// FAILED (device did not respond) rather than left hanging.
+	DefaultDownlinkTimeoutSeconds = 10
+	// DefaultDownlinkConcurrency is the number of device-sharded command-dispatch workers. A
+	// device's commands hash to one worker so they run in stream order (a firmware write then
+	// execute must not reorder); distinct devices spread across workers for concurrency.
+	DefaultDownlinkConcurrency = 16
+	// MinDownlinkConcurrency floors the worker count at 1 (a zero pool would dispatch nothing —
+	// every command would sit undispatched, a silent command black-hole).
+	MinDownlinkConcurrency = 1
 )
 
 // Lwm2mConfiguration is the top-level configuration for the adapter.
@@ -101,6 +112,20 @@ type Lwm2mConfiguration struct {
 	// non-positive) defaults to DefaultMaxLifetimeSeconds; a fleet using a longer `lt` MUST
 	// raise it above that `lt` or those devices are expired on every handover.
 	MaxLifetimeSeconds int `json:"maxLifetimeSeconds"`
+	// Downlink tunes the command-dispatch path (ADR-075 L4a): the per-command CoAP timeout and
+	// the device-sharded worker concurrency. Both fail safe to positive platform defaults.
+	Downlink DownlinkConfiguration `json:"downlink"`
+}
+
+// DownlinkConfiguration tunes the LwM2M command-dispatch path (ADR-075 L4a).
+type DownlinkConfiguration struct {
+	// TimeoutSeconds bounds one CoAP command exchange to a device; 0 defaults to
+	// DefaultDownlinkTimeoutSeconds. A fleet of slow cellular sleepers may raise it.
+	TimeoutSeconds int `json:"timeoutSeconds"`
+	// Concurrency is the number of device-sharded dispatch workers; 0 defaults to
+	// DefaultDownlinkConcurrency. Per-device ordering is preserved regardless of the count (a
+	// device always hashes to one worker); the count only sets cross-device parallelism.
+	Concurrency int `json:"concurrency"`
 }
 
 // IngestRateLimit is the platform-default, per-tenant ingest ceiling every device is metered
@@ -249,6 +274,16 @@ func (c *Lwm2mConfiguration) ApplyDefaults() {
 	if c.MaxLifetimeSeconds <= 0 {
 		c.MaxLifetimeSeconds = DefaultMaxLifetimeSeconds
 	}
+	// Fail safe: a non-positive command timeout would bound each CoAP exchange to zero — every
+	// command would instantly TIMEOUT — so it takes the positive platform default.
+	if c.Downlink.TimeoutSeconds <= 0 {
+		c.Downlink.TimeoutSeconds = DefaultDownlinkTimeoutSeconds
+	}
+	// Fail safe: a non-positive worker count would dispatch NOTHING (a command black-hole), so it
+	// takes the positive platform default.
+	if c.Downlink.Concurrency <= 0 {
+		c.Downlink.Concurrency = DefaultDownlinkConcurrency
+	}
 }
 
 // Validate fails the load closed on a configuration that would bind an out-of-range
@@ -276,6 +311,12 @@ func (c *Lwm2mConfiguration) Validate() error {
 	}
 	if c.MaxLifetimeSeconds < MinMaxLifetimeSeconds {
 		return fmt.Errorf("maxLifetimeSeconds %d must be >= %d (the registration lifetime ceiling must not fall below the min-lifetime clamp, ADR-075 L3b F2)", c.MaxLifetimeSeconds, MinMaxLifetimeSeconds)
+	}
+	if c.Downlink.TimeoutSeconds < 1 {
+		return fmt.Errorf("downlink.timeoutSeconds %d must be >= 1 (the per-command CoAP exchange timeout, ADR-075 L4a)", c.Downlink.TimeoutSeconds)
+	}
+	if c.Downlink.Concurrency < MinDownlinkConcurrency {
+		return fmt.Errorf("downlink.concurrency %d must be >= %d (the command-dispatch worker count; 0 would dispatch nothing)", c.Downlink.Concurrency, MinDownlinkConcurrency)
 	}
 	seen := make(map[string]struct{}, len(c.Security.Identities))
 	for i := range c.Security.Identities {

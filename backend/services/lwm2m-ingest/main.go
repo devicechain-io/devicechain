@@ -7,8 +7,11 @@
 // device-management model. Slice L0 stood up the transport (a DTLS-PSK CoAP server, CID
 // on by default); L0.5 extracted the shared ingest adapter; L1 added the /rd registration
 // interface and the device-presence it drives; L2 added the Observe/Notify telemetry
-// lifecycle and the per-tenant ingest limiter; L3a (this) elects a single leader via a
-// fenced ownership lease (ADR-070) so only one replica serves.
+// lifecycle and the per-tenant ingest limiter; L3 elects a single leader via a fenced
+// ownership lease (ADR-070) so only one replica serves, and reconstructs presence on a
+// leadership handover; L4a (this) dispatches platform commands DOWN to devices —
+// consuming device-commands (leader-only), mapping each to a CoAP Read/Write/Execute on
+// the device's live session, and reporting the outcome on command-responses.
 //
 // Tenancy is bound to the AUTHENTICATED DTLS PSK identity, never the device's own
 // registration payload (ADR-075 D1): the handler recovers the identity from the
@@ -45,6 +48,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/adapter"
 	"github.com/devicechain-io/dc-lwm2m-ingest/config"
 	"github.com/devicechain-io/dc-lwm2m-ingest/decode"
+	"github.com/devicechain-io/dc-lwm2m-ingest/downlink"
 	"github.com/devicechain-io/dc-lwm2m-ingest/observe"
 	"github.com/devicechain-io/dc-lwm2m-ingest/registry"
 	"github.com/devicechain-io/dc-lwm2m-ingest/server"
@@ -95,6 +99,13 @@ var (
 	// Writer is the durable inbound-events publish handle, built once after NatsManager
 	// Initialize and reused by every leadership term's presence layer.
 	Writer messaging.MessageWriter
+	// CommandReader is the durable device-commands consumer (ADR-075 L4a), built once with
+	// DeliverNew so a fresh durable never replays the stream's retained history into live
+	// actuations. Only the LEADER's Dispatcher pulls from it (Run under the term ctx); a standby
+	// builds+binds the shared durable but never reads it, so a non-serving replica cannot drain
+	// commands the leader needs. ResponseWriter publishes command outcomes to command-responses.
+	CommandReader  messaging.MessageReader
+	ResponseWriter messaging.MessageWriter
 	// ingestURL / deviceStateURL are validated once at Init (fail closed on a misconfiguration)
 	// and reused by each term's presence layer.
 	ingestURL      string
@@ -109,6 +120,7 @@ var (
 	ingestMetrics   adapter.IngestMetrics
 	obsMetrics      observe.Metrics
 	limiterMetrics  adapter.IngestLimiterMetrics
+	downlinkMetrics downlink.Metrics
 	leaderGauge     prometheus.Gauge
 
 	Lease      *messaging.DistributedLease
@@ -213,8 +225,24 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			return err
 		}
 		Writer = writer
+		// The downlink command path (ADR-075 L4a): a durable consumer of device-commands and a
+		// writer for command-responses, both built once and shared across leadership terms. The
+		// reader MUST use DeliverNew — a brand-new durable created at a fresh install would otherwise
+		// replay the stream's up-to-7-day retained backlog and dispatch already-TIMEOUT commands as
+		// live actuations (B1). Only the leader's Dispatcher pulls from it; a standby binds it (a
+		// harmless idempotent AddConsumer) but never reads.
+		commandReader, err := NatsManager.NewReader(streams.DeviceCommands, messaging.ReaderWithDeliverNew())
+		if err != nil {
+			return err
+		}
+		CommandReader = commandReader
+		responseWriter, err := NatsManager.NewWriter(streams.CommandResponses)
+		if err != nil {
+			return err
+		}
+		ResponseWriter = responseWriter
 		log.Info().Str("deviceManagement", ingestURL).Str("deviceState", deviceStateURL).
-			Msg("LwM2M ingest will resolve + emit presence via device-management and floor its epoch via device-state (ADR-044/067).")
+			Msg("LwM2M ingest will resolve + emit presence via device-management and floor its epoch via device-state (ADR-044/067), and dispatch commands over device-commands→CoAP→command-responses (ADR-075 L4a).")
 	} else {
 		// Inert deployment: a single always-on health-only transport, no lease (nothing to own).
 		srv, err := server.New(serverConfig(), serverMetrics)
@@ -318,6 +346,28 @@ func buildMetrics() {
 		SamplesShed: Microservice.NewCounter("ingest_samples_shed_total",
 			"Decoded measurement samples shed at the per-tenant ingest sample-rate ceiling.", nil),
 	}
+
+	// Downlink command dispatch (ADR-075 L4a). The op label is a BOUNDED set (read/write/execute/
+	// other), never the raw operator-authored command name (ADR-023 cardinality). No tenant/device
+	// label. not_served vs served_offline are split: the first is a mirror of the whole instance's
+	// command traffic (commands for other protocols' devices), the second is the operationally
+	// interesting signal (a served device offline when a command arrived).
+	downlinkMetrics = downlink.Metrics{
+		Attempted: Microservice.NewCounterVec("commands_attempted_total",
+			"LwM2M commands dispatched to a live device (= succeeded + failed), by operation.", []string{"op"}),
+		Succeeded: Microservice.NewCounterVec("commands_succeeded_total",
+			"LwM2M commands the device acknowledged with a 2.xx, by operation.", []string{"op"}),
+		Failed: Microservice.NewCounterVec("commands_failed_total",
+			"LwM2M commands the device rejected (4.xx/5.xx), timed out, or that failed local validation, by operation.", []string{"op"}),
+		NotServed: Microservice.NewCounter("commands_not_served_total",
+			"Commands ack-dropped because no device this adapter serves matches (another protocol's device, or none) — a mirror of the instance's command traffic, not an anomaly.", nil),
+		ServedOffline: Microservice.NewCounter("commands_served_offline_total",
+			"Commands ack-dropped because a device this adapter serves had no live connection (the command rides its TTL to TIMEOUT).", nil),
+		Poison: Microservice.NewCounter("commands_poison_total",
+			"Commands dropped as unprocessable (no parseable tenant in the subject, or an undecodable envelope).", nil),
+		ResponseFails: Microservice.NewCounter("command_response_publish_failures_total",
+			"Command outcomes that could not be published to command-responses after local retries (the op already ran, so the command is not redelivered; it will TIMEOUT).", nil),
+	}
 }
 
 // serverConfig builds the transport configuration from the parsed config. It is called per
@@ -341,9 +391,9 @@ func serverConfig() server.Config {
 // Observe/Notify manager, the Registry, and its CoAP handlers. It is rebuilt per term so each
 // leadership tenure starts with an empty registration table; leaderCtx gates the /rd handlers
 // (5.03) the instant the term is evicted.
-func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.PskBinding) (*registry.Handlers, *registry.Registry, *adapter.EpochSource, *adapter.Reconciler, error) {
+func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.PskBinding) (*registry.Handlers, *registry.Registry, *adapter.EpochSource, *adapter.Reconciler, *downlink.Dispatcher, error) {
 	if Writer == nil {
-		return nil, nil, nil, nil, fmt.Errorf("inbound-events writer is nil — the durable emit path was not wired before the presence layer was built")
+		return nil, nil, nil, nil, nil, fmt.Errorf("inbound-events writer is nil — the durable emit path was not wired before the presence layer was built")
 	}
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	// TenantRead is added for the ADR-023 governance fetch (per-tenant ingest overrides, L2c):
@@ -371,19 +421,40 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	limiter := buildIngestLimiter(client, infra, Configuration.IngestRateLimit)
 	obsManager := observe.NewManager(ingester, limiter, obsMetrics, observe.Options{})
 
+	// The downlink command conn table (ADR-075 L4a): the /rd handler records each device's live
+	// conn here on Register/Update; the Dispatcher looks it up to dispatch a command. Rebuilt per
+	// term with the rest of the presence layer, so a fresh tenure starts with an empty table.
+	connTable := downlink.NewConnTable()
+
 	reg := registry.New(registrar, emitter, epoch, registryMetrics, registry.Options{
 		Source: registry.SourceLwM2M,
 		// The registration lifetime ceiling (ADR-075 L3b / F2): live registrations are clamped
 		// down to it, and failover-reconstruction shadow timers are armed at it. Equal by
 		// construction, so a shadow-expiry DISCONNECT is only ever late-true, never false.
 		MaxLife: durationSeconds(Configuration.MaxLifetimeSeconds),
-		// The registry ends a session (Deregister/expiry) → the observe manager cancels that
-		// session's observations. This is the ONE hook that keeps the registry a pure presence
-		// machine while the manager owns all conn/observation state (L2b).
-		OnSessionEnd: obsManager.Cancel,
+		// A session end (Deregister/expiry) fans out to BOTH the observe manager (cancel that
+		// session's observations, L2b) AND the downlink conn table (drop that session's conn so no
+		// command is dispatched to a DISCONNECTED device, L4a). This is the ONE hook that keeps the
+		// registry a pure presence machine while the two managers own all conn/observation state.
+		OnSessionEnd: func(identity string, epoch uint64) {
+			obsManager.Cancel(identity, epoch)
+			connTable.End(identity, epoch)
+		},
 	})
-	handlers := registry.NewHandlers(reg, bindings, registryMetrics, obsManager, decode.DefaultObjectAllowlist, limiter, leaderCtx)
-	return handlers, reg, epoch, reconciler, nil
+	handlers := registry.NewHandlers(reg, bindings, registryMetrics, obsManager, connTable, decode.DefaultObjectAllowlist, limiter, leaderCtx)
+
+	// The command dispatcher (L4a): it consumes device-commands (leader-only) and dispatches to the
+	// term's conn table. Built only when the shared command reader/writer exist (they do whenever
+	// there are credentials — the same condition as this presence layer); an inert deployment never
+	// reaches here. The Ops executor is stateless.
+	var dispatcher *downlink.Dispatcher
+	if CommandReader != nil && ResponseWriter != nil {
+		dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), downlinkMetrics, downlink.Options{
+			Workers:   Configuration.Downlink.Concurrency,
+			OpTimeout: durationSeconds(Configuration.Downlink.TimeoutSeconds),
+		})
+	}
+	return handlers, reg, epoch, reconciler, dispatcher, nil
 }
 
 // buildIngestLimiter constructs the shared two-stage per-tenant ingest limiter (ADR-023 /
@@ -679,7 +750,7 @@ func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
 		}
 	}
 
-	srv, reg, err := buildTerm(leaderCtx, Configuration.Bindings())
+	srv, reg, dispatcher, err := buildTerm(leaderCtx, Configuration.Bindings())
 	if err != nil {
 		// A term build that fails (e.g. the transport cannot bind) cannot serve. Release the lease
 		// and back off before returning to the acquire loop, so a TRANSIENT local fault is a slow
@@ -708,11 +779,26 @@ func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
 		log.Fatal().Err(err).Msg("LwM2M CoAP/DTLS transport exited unexpectedly; terminating so the pod is restarted.")
 	})
 
+	// Start the command dispatcher for THIS term (ADR-075 L4a): it pulls device-commands and
+	// dispatches to this term's conn table, only while leaderCtx is live. Leader-only pull is what
+	// keeps a standby (which never runs this) from draining the shared durable. It returns when
+	// leaderCtx is cancelled; dispatcherDone lets the unwind wait for its workers to finish.
+	dispatcherDone := make(chan struct{})
+	if dispatcher != nil {
+		go func() {
+			defer close(dispatcherDone)
+			dispatcher.Run(leaderCtx)
+		}()
+	} else {
+		close(dispatcherDone)
+	}
+
 	<-leaderCtx.Done() // eviction (lease lost) or shutdown (parent ctx cancelled)
 
 	setLeader(false)
-	stopServing() // records intent, THEN Stops the socket, so the ensuing Serve return is graceful
-	reg.Stop()    // terminal: refuse further work + stop this term's lifetime timers (no presence emitted — a handover is not a device disconnect)
+	stopServing()    // records intent, THEN Stops the socket, so the ensuing Serve return is graceful
+	reg.Stop()       // terminal: refuse further work + stop this term's lifetime timers (no presence emitted — a handover is not a device disconnect)
+	<-dispatcherDone // wait for the dispatcher's reader + workers to unwind (in-flight command ops abort on the cancelled leaderCtx and are left unacked to redeliver to the next leader)
 	evict()
 	log.Info().Msg("Released LwM2M leadership; returning to standby.")
 }
@@ -731,10 +817,10 @@ const maxConsecutiveTermBuildFailures = 5
 // buildTerm assembles a leadership term: the presence layer, the epoch floor read from
 // device-state (on every acquisition, ADR-075 L3a/F4), and a freshly-bound transport with the /rd
 // handlers mounted. The returned Server is not yet serving.
-func buildTerm(leaderCtx context.Context, bindings map[string]config.PskBinding) (*server.Server, *registry.Registry, error) {
-	handlers, reg, epoch, reconciler, err := buildPresenceLayer(leaderCtx, bindings)
+func buildTerm(leaderCtx context.Context, bindings map[string]config.PskBinding) (*server.Server, *registry.Registry, *downlink.Dispatcher, error) {
+	handlers, reg, epoch, reconciler, dispatcher, err := buildPresenceLayer(leaderCtx, bindings)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Bind the transport BEFORE reconstruction. server.New binds the socket but does NOT serve
 	// (Serve starts the read loop later, in serveAsLeader), and binding is the anticipated transient
@@ -745,7 +831,7 @@ func buildTerm(leaderCtx context.Context, bindings map[string]config.PskBinding)
 	// bind failure returns before any timer is armed.
 	srv, err := server.New(serverConfig(), serverMetrics, handlers.Mount)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Reconstruct presence after the bind succeeds but BEFORE serving (ADR-075 L3b): read each bound
 	// tenant's asserted-active LwM2M devices from device-state, floor the epoch above the maximum
@@ -761,7 +847,7 @@ func buildTerm(leaderCtx context.Context, bindings map[string]config.PskBinding)
 
 	log.Info().Str("addr", srv.Addr().String()).Int("cidLength", Configuration.ConnectionIdLengthOrDefault()).
 		Int("credentials", len(Credentials)).Msg("Built the LwM2M CoAP/DTLS transport for this leadership term.")
-	return srv, reg, nil
+	return srv, reg, dispatcher, nil
 }
 
 // serveServer is the minimal transport surface superviseServe drives (*server.Server satisfies

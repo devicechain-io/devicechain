@@ -53,6 +53,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
 	"github.com/devicechain-io/dc-lwm2m-ingest/decode"
+	"github.com/devicechain-io/dc-lwm2m-ingest/session"
 )
 
 // Default lifecycle timeouts. Each downlink exchange is bounded so a queue-mode sleeper that
@@ -227,7 +228,7 @@ func (m *Manager) Establish(identity string, epoch uint64, conn mux.Conn, target
 	// go-coap AddOnClose registered after the conn's shutdown never fires, so if the conn
 	// already died in the I/O window, reap inline.
 	conn.AddOnClose(func() { m.reap(identity, epoch, conn) })
-	if connDead(conn) {
+	if session.ConnDead(conn) {
 		m.reap(identity, epoch, conn)
 	}
 
@@ -300,7 +301,7 @@ func (m *Manager) canWinLocked(epoch uint64, cur *slot, newConn mux.Conn, identi
 		// sleeper, or a parked slot whose conn is nil), OR the current conn is dead. The
 		// !connDead(newConn) qualifier stops a LATE establish arriving on an already-dead older
 		// conn from evicting a live successor at the same epoch (equal-epoch ABA).
-		return (cur.conn != newConn && !connDead(newConn)) || connDead(cur.conn)
+		return (cur.conn != newConn && !session.ConnDead(newConn)) || session.ConnDead(cur.conn)
 	}
 	return false
 }
@@ -475,30 +476,6 @@ func (m *Manager) recomputeGaugeLocked() {
 		total += len(s.obs)
 	}
 	m.metrics.ActiveObservations.Set(float64(total))
-}
-
-// connDead reports whether a conn is closed (or nil — a parked slot's conn). Non-blocking. It
-// checks BOTH Done() and Context().Done(): go-coap tears a session down as Close()→cancel(ctx)
-// FIRST, then runs the AddOnClose callbacks, then close(Done()) LAST (dtls/server/session.go).
-// So there is a window — a conn dying between an Establish commit and its AddOnClose — where the
-// onClose callback is registered into an already-consumed list (never fires) yet Done() is still
-// open. Context().Done() has already closed by then, so checking it lets the inline reap catch
-// that window instead of leaking a slot pinned to a dead conn until the next Update/session end.
-func connDead(c mux.Conn) bool {
-	if c == nil {
-		return true
-	}
-	select {
-	case <-c.Done():
-		return true
-	default:
-	}
-	select {
-	case <-c.Context().Done():
-		return true
-	default:
-		return false
-	}
 }
 
 // incr adds n to a counter, tolerating a nil counter (tests) and n <= 0.

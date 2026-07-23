@@ -1,0 +1,93 @@
+# LwM2M downlink commands (ADR-075 L4a)
+
+The LwM2M ingest adapter dispatches platform-originated commands **down** to a connected LwM2M
+device: a command created in `command-delivery` is consumed by the adapter (only on the serving
+leader), mapped to a CoAP **Read / Write / Execute** on the device's live DTLS session, and its
+outcome is reported back on `command-responses`.
+
+This is the *first* true downlink adapter in the platform: an MQTT/NATS device subscribes to its own
+command subject directly, but a CoAP device cannot, so the adapter stands in for it.
+
+## The three command keys
+
+Commands are **generic and path-addressed**: the profile declares three `CommandDefinition`s, and the
+LwM2M object/instance/resource path (and, for a write, the value) rides in the command **payload**.
+The adapter needs no per-device-type mapping.
+
+| Command key      | CoAP op | Payload                                   | Success → `command-responses` |
+|------------------|---------|-------------------------------------------|-------------------------------|
+| `lwm2m.read`     | GET     | `{"path":"/3/0/9"}`                        | `success:true`, `payload` = the device's response body (text; base64 if opaque) |
+| `lwm2m.write`    | PUT     | `{"path":"/5/0/1","value":<scalar>}`      | `success:true` |
+| `lwm2m.execute`  | POST    | `{"path":"/5/0/2","args":"<optional>"}`   | `success:true` |
+
+- **`path`** is an absolute LwM2M path with 1–4 numeric segments (`/objectId[/instanceId[/resourceId
+  [/resourceInstanceId]]]`), each a 16-bit id. A malformed path is refused locally (the command
+  reports `FAILED` without touching the wire).
+- **`value`** (write) is a single JSON **scalar**: a string is written as-is, a number by its exact
+  literal, a boolean as `1`/`0` (LwM2M text/plain). Object/array/null and multi-resource
+  (SenML/TLV) writes are **not** supported in this slice.
+- **`args`** (execute) is the optional LwM2M execute-argument string; omit it for a bare Execute.
+
+A device's CoAP response class decides the outcome: `2.xx` → `SUCCESSFUL`; `4.xx`/`5.xx` → `FAILED`
+with the code; no response within the timeout → `FAILED` (timeout). A `lwm2m.read` returns the
+response body in the command's `responsePayload`.
+
+## Connected-only semantics (this slice)
+
+The adapter dispatches **only to a device it is currently connected to**. If the target device is not
+connected right now (a queue-mode sleeper, or offline), the command is left to `command-delivery`'s
+TTL and terminates as **`TIMEOUT`** — it is not queued. Durable **hold-and-drain-on-wake** (real
+LwM2M queue mode) is the follow-up slice **L4b**.
+
+Because a physical actuation firing twice is worse than a lost status report, the adapter **seals a
+command's fate after the CoAP op runs**: if the device acted but the response could not be published
+(a NATS blip), the command is *not* redelivered — it will `TIMEOUT` rather than re-actuate the
+device. A leadership handover likewise `TIMEOUT`s in-flight commands (the new leader takes over before
+the device re-registers); L4b's durable queue is the fix.
+
+## Firmware update over the air (Object 5) — a runbook
+
+L4a does **not** add a firmware mechanism; FOTA is composed from the three primitives plus the
+Firmware Update object (`/5`). Drive the steps **in order, waiting for each command to reach
+`SUCCESSFUL` before issuing the next** — the adapter serializes a single device's commands, but the
+firmware state machine itself requires ordering:
+
+1. **Set the package URI** — write the image location to Firmware Package URI (`/5/0/1`):
+   ```
+   createCommand(name:"lwm2m.write", payload:{"path":"/5/0/1","value":"coaps://fw.example/image.bin"})
+   ```
+   The device begins downloading. (For inline delivery, `/5/0/0` Package is a large opaque write and
+   is out of this slice's single-resource text/plain scope — prefer the URI method.)
+
+2. **Trigger the update** — execute Firmware Update (`/5/0/2`) once the download has completed:
+   ```
+   createCommand(name:"lwm2m.execute", payload:{"path":"/5/0/2"})
+   ```
+
+3. **Watch progress / outcome** — read Firmware State (`/5/0/3`, `0`=idle … `3`=updating) and Update
+   Result (`/5/0/5`, `0`=initial, `1`=success, `≥2`=an error):
+   ```
+   createCommand(name:"lwm2m.read", payload:{"path":"/5/0/3"})
+   createCommand(name:"lwm2m.read", payload:{"path":"/5/0/5"})
+   ```
+   For **push** progress instead of polling, an operator may include Object 5 in the observe
+   allowlist so `/5/0/3` and `/5/0/5` surface as numeric measurements (they are numeric enums); the
+   GA-minimal path is read-on-demand.
+
+## Interop
+
+Validate against Eclipse **Leshan (pin the client to LwM2M 1.1)**: register a device, then a Read of a
+resource, a Write of a resource, an Execute, and the FOTA sequence above. A conformant 1.0-only client
+is served for presence and commands (Read sends no `Accept`, so it is not rejected), but its SenML
+telemetry Observe is 4.06'd until the TLV decode follow-up.
+
+## Tuning
+
+`downlink.timeoutSeconds` (default 10) bounds one CoAP command exchange; raise it for slow cellular
+radios. `downlink.concurrency` (default 16) sets cross-device dispatch parallelism; a single device's
+commands always run in stream order regardless of the count.
+
+---
+
+*Follow-up: a Docusaurus `docs/` concept + command-reference page for LwM2M (mirroring
+`concepts/sparkplug.md`) is a documentation task tracked separately from this backend slice.*

@@ -293,3 +293,25 @@ func TestValidateRejectsSubFloorMaxLifetime(t *testing.T) {
 	c.MaxLifetimeSeconds = MinMaxLifetimeSeconds
 	require.NoError(t, loaded(c), "a ceiling at the floor is accepted")
 }
+
+// TestDownlinkDefaulting pins the L4a command-dispatch fail-safe defaults: a zero timeout (every
+// command instantly TIMEOUTs) and a zero concurrency (a command black-hole) both floor to positive
+// platform defaults; explicit values are preserved.
+func TestDownlinkDefaulting(t *testing.T) {
+	zeroed := &Lwm2mConfiguration{}
+	zeroed.ApplyDefaults()
+	assert.Equal(t, DefaultDownlinkTimeoutSeconds, zeroed.Downlink.TimeoutSeconds)
+	assert.Equal(t, DefaultDownlinkConcurrency, zeroed.Downlink.Concurrency)
+	assert.Positive(t, zeroed.Downlink.TimeoutSeconds, "a zero command timeout would instantly TIMEOUT every command")
+	assert.Positive(t, zeroed.Downlink.Concurrency, "a zero worker count would dispatch nothing")
+
+	explicit := &Lwm2mConfiguration{Downlink: DownlinkConfiguration{TimeoutSeconds: 30, Concurrency: 4}}
+	explicit.ApplyDefaults()
+	assert.Equal(t, 30, explicit.Downlink.TimeoutSeconds)
+	assert.Equal(t, 4, explicit.Downlink.Concurrency)
+
+	bad := &Lwm2mConfiguration{Downlink: DownlinkConfiguration{TimeoutSeconds: -1, Concurrency: -1}}
+	bad.ApplyDefaults()
+	assert.Equal(t, DefaultDownlinkTimeoutSeconds, bad.Downlink.TimeoutSeconds)
+	assert.Equal(t, DefaultDownlinkConcurrency, bad.Downlink.Concurrency)
+}

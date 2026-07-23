@@ -1010,3 +1010,29 @@ func TestShadowRegIdIsNotServable(t *testing.T) {
 	require.NotNil(t, e)
 	assert.True(t, e.shadow)
 }
+
+// TestDeviceTokenAfterRegister pins the downlink conn-index seam (ADR-075 L4a): after a live
+// Register the resolved device token is readable from the entry, without a second resolve.
+func TestDeviceTokenAfterRegister(t *testing.T) {
+	r := newTestRegistry(okResolver(), &fakeEmitter{}, &testClock{t: time.Unix(1_700_000_000, 0)}, nil)
+	result, _, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
+	require.Equal(t, RegisterOK, result)
+
+	token, ok := r.DeviceToken("dev-1")
+	require.True(t, ok)
+	assert.Equal(t, "tok-1", token)
+
+	_, ok = r.DeviceToken("never-registered")
+	assert.False(t, ok, "an unknown identity has no token")
+}
+
+// TestDeviceTokenShadowHasNone pins that a reconstruction shadow yields no token (it carries none
+// — the token is resolved lazily only at its expiry), so the handler never Binds a downlink conn
+// under a shadow's empty token.
+func TestDeviceTokenShadowHasNone(t *testing.T) {
+	r := newTestRegistry(okResolver(), &fakeEmitter{}, &testClock{t: time.Unix(1_700_000_000, 0)}, nil)
+	require.True(t, r.ReconstructShadow("dev-1", testBinding))
+
+	_, ok := r.DeviceToken("dev-1")
+	assert.False(t, ok, "a shadow entry exposes no device token")
+}

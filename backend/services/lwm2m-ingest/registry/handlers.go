@@ -28,6 +28,20 @@ type observer interface {
 	Reestablish(identity string, conn mux.Conn, target observe.Target)
 }
 
+// connBinder is the downlink command seam (*downlink.ConnTable satisfies it, ADR-075 L4a): it
+// records the device's live conn by (tenant, deviceToken) so a command can later be dispatched to
+// it. It is INDEPENDENT of the observer — an actuator-only device with no telemetry still needs
+// its conn tracked for commands — so the handler drives it whenever a session installs/heals a
+// conn, whether or not obs is present. A nil binder (a presence-only test / a deployment with no
+// command consumer) simply skips it. End-of-session teardown is wired through the Registry's
+// OnSessionEnd hook (fanned out to the ConnTable in main), not the handler. Bind/Refresh do no
+// network I/O (they only touch the in-memory table + register an AddOnClose reap), so unlike the
+// observer's Observe GETs they run synchronously in the handler.
+type connBinder interface {
+	Bind(tenant, deviceToken, identity string, epoch uint64, conn mux.Conn)
+	Refresh(identity string, conn mux.Conn)
+}
+
 // messageLimiter is the narrow slice of *adapter.IngestLimiter the /rd path uses to gate a
 // device message against its tenant's ADR-023 ingest ceiling (ADR-075 L2c). A Register or an
 // Update is a device message that does real work — mint an epoch + durably emit presence, and
@@ -55,6 +69,7 @@ type Handlers struct {
 	bindings map[string]config.PskBinding
 	metrics  Metrics
 	obs      observer               // nil ⇒ presence-only (no telemetry observations)
+	conns    connBinder             // nil ⇒ no downlink command tracking (presence-only test / no command consumer)
 	allow    decode.ObjectAllowlist // which objects in a registration are telemetry to observe
 	limit    messageLimiter         // nil ⇒ /rd ungated (presence-only test / inert deployment)
 	// leaderCtx is the leadership term's context (ADR-075 L3a): while this replica holds the
@@ -75,8 +90,8 @@ type Handlers struct {
 // registered object instances are observed. limit is the per-tenant ingest gate (L2c) applied to
 // Register/Update and may be nil (ungated). leaderCtx is the leadership term's context (L3a): the
 // handlers refuse 5.03 once it is cancelled; a nil leaderCtx means always-serving (inert / test).
-func NewHandlers(reg *Registry, bindings map[string]config.PskBinding, metrics Metrics, obs observer, allow decode.ObjectAllowlist, limit messageLimiter, leaderCtx context.Context) *Handlers {
-	return &Handlers{reg: reg, bindings: bindings, metrics: metrics, obs: obs, allow: allow, limit: limit, leaderCtx: leaderCtx}
+func NewHandlers(reg *Registry, bindings map[string]config.PskBinding, metrics Metrics, obs observer, conns connBinder, allow decode.ObjectAllowlist, limit messageLimiter, leaderCtx context.Context) *Handlers {
+	return &Handlers{reg: reg, bindings: bindings, metrics: metrics, obs: obs, conns: conns, allow: allow, limit: limit, leaderCtx: leaderCtx}
 }
 
 // notLeading reports whether this replica has stopped being the serving leader — its leadership
@@ -153,16 +168,29 @@ func (h *Handlers) handleRd(w mux.ResponseWriter, r *mux.Message) {
 	switch result {
 	case RegisterOK:
 		h.respondCreated(w, regId)
-		if h.obs != nil && establish {
-			// Select the telemetry object instances and (re)establish observations on THIS conn,
-			// off the handler goroutine — go-coap writes the 2.01 only after the handler returns,
-			// so a synchronous Observe would GET a client still awaiting its 2.01.
-			paths, overflow := decode.Observations(body, h.allow)
-			if overflow > 0 {
-				incr(h.metrics.ObservationOverflow, overflow)
-			}
+		if establish {
 			conn := w.Conn()
-			go h.obs.Establish(identity, epoch, conn, targetFrom(binding), paths)
+			// Record the device's live conn for downlink commands (L4a), keyed by (tenant,
+			// deviceToken). This is INDEPENDENT of telemetry — an actuator-only device with no
+			// observed objects still must be reachable for commands — so it runs even when obs is
+			// nil. The token is the one Register already resolved (read from the entry, no fresh
+			// resolve); a device gone in the meantime yields no token and the Bind is skipped.
+			// Synchronous: Bind does no network I/O (it only touches the table + an AddOnClose).
+			if h.conns != nil {
+				if token, ok := h.reg.DeviceToken(identity); ok {
+					h.conns.Bind(binding.Tenant, token, identity, epoch, conn)
+				}
+			}
+			if h.obs != nil {
+				// Select the telemetry object instances and (re)establish observations on THIS conn,
+				// off the handler goroutine — go-coap writes the 2.01 only after the handler returns,
+				// so a synchronous Observe would GET a client still awaiting its 2.01.
+				paths, overflow := decode.Observations(body, h.allow)
+				if overflow > 0 {
+					incr(h.metrics.ObservationOverflow, overflow)
+				}
+				go h.obs.Establish(identity, epoch, conn, targetFrom(binding), paths)
+			}
 		}
 	case RegisterUnknownDevice:
 		h.respond(w, codes.Forbidden) // 4.03 — device not provisioned, this credential does not auto-register
@@ -201,11 +229,18 @@ func (h *Handlers) handleRdItem(w mux.ResponseWriter, r *mux.Message) {
 		}
 		if h.reg.Update(identity, regId, parseLifetime(parseQueries(r))) == UpdateOK {
 			h.respond(w, codes.Changed) // 2.04
+			conn := w.Conn()
+			// Heal the downlink conn onto THIS conn (L4a): a queue-mode sleeper that re-handshaked
+			// Updates rather than re-Registers, so its command conn must follow it or the device is
+			// CONNECTED but command-dark until its lifetime lapses. Synchronous (no network I/O);
+			// independent of telemetry, so it runs even when obs is nil.
+			if h.conns != nil {
+				h.conns.Refresh(identity, conn)
+			}
 			if h.obs != nil {
 				// Heal observations onto THIS conn: a queue-mode sleeper that re-handshaked on a
 				// new conn Updates rather than re-Registers, so its observations must follow it
 				// (a cheap no-op when they already ride this live conn). Off the handler goroutine.
-				conn := w.Conn()
 				go h.obs.Reestablish(identity, conn, targetFrom(binding))
 			}
 			return
