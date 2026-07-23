@@ -14,6 +14,7 @@ import (
 	coapdtls "github.com/plgd-dev/go-coap/v3/dtls"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/mux"
 	udpclient "github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,13 +47,14 @@ func startIntegration(t *testing.T) (string, *fakeResolver, *fakeEmitter) {
 // startIntegrationWith is startIntegration with a caller-supplied ingest limiter (nil ⇒
 // ungated) so the L2c /rd gating test can drive a shedding limiter over the real wire.
 func startIntegrationWith(t *testing.T, limit messageLimiter) (string, *fakeResolver, *fakeEmitter) {
-	return startIntegrationOpts(t, limit, nil)
+	return startIntegrationOpts(t, limit, nil, nil)
 }
 
-// startIntegrationOpts is the base harness: a caller-supplied ingest limiter (nil ⇒ ungated) and
-// leadership-term context (nil ⇒ always-serving) so the L2c gating and L3a self-eviction tests can
-// each drive the real /rd path over a real DTLS handshake.
-func startIntegrationOpts(t *testing.T, limit messageLimiter, leaderCtx context.Context) (string, *fakeResolver, *fakeEmitter) {
+// startIntegrationOpts is the base harness: a caller-supplied ingest limiter (nil ⇒ ungated),
+// leadership-term context (nil ⇒ always-serving), and downlink conn binder (nil ⇒ no command
+// tracking) so the L2c gating, L3a self-eviction, and L4a downlink-seam tests can each drive the
+// real /rd path over a real DTLS handshake.
+func startIntegrationOpts(t *testing.T, limit messageLimiter, leaderCtx context.Context, conns connBinder) (string, *fakeResolver, *fakeEmitter) {
 	t.Helper()
 	res := &fakeResolver{token: "tok-1", outcome: adapter.ResolveCreated}
 	em := &fakeEmitter{}
@@ -60,7 +62,7 @@ func startIntegrationOpts(t *testing.T, limit messageLimiter, leaderCtx context.
 	// Presence-only over the wire (nil observer): this test pins the CoAP code mapping and the
 	// D1 tenancy recovery; the Observe/Notify telemetry lifecycle is exercised by the observe
 	// package's own tests against a fake conn.
-	handlers := NewHandlers(reg, itBindings, Metrics{}, nil, decode.DefaultObjectAllowlist, limit, leaderCtx)
+	handlers := NewHandlers(reg, itBindings, Metrics{}, nil, conns, decode.DefaultObjectAllowlist, limit, leaderCtx)
 
 	srv, err := server.New(server.Config{
 		Addr:        "127.0.0.1:0",
@@ -200,7 +202,7 @@ func TestForeignIdentityCannotDeregisterOverTheWire(t *testing.T) {
 // presence in the eviction window. While the term is live the same requests succeed.
 func TestEvictedLeaderRefusesRegistration(t *testing.T) {
 	leaderCtx, evict := context.WithCancel(context.Background())
-	addr, _, em := startIntegrationOpts(t, nil, leaderCtx)
+	addr, _, em := startIntegrationOpts(t, nil, leaderCtx, nil)
 	conn := dial(t, addr, "dev-1")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -227,6 +229,75 @@ func TestEvictedLeaderRefusesRegistration(t *testing.T) {
 
 	assert.Len(t, em.connects(), 1, "no presence emitted after eviction")
 	assert.Empty(t, em.disconnects(), "the gate emits nothing, it only refuses")
+}
+
+// fakeConnBinder records the downlink conn-table calls the /rd handler makes (ADR-075 L4a), so a
+// test can prove THIS handler binds the resolved (tenant, deviceToken) on Register and heals the
+// conn on Update over the real wire — the host-wiring guard: the ConnTable is unit-tested
+// separately, but only an end-to-end test proves the handler passes it the right identity+token.
+type fakeConnBinder struct {
+	mu        sync.Mutex
+	binds     []bindCall
+	refreshes int
+}
+
+type bindCall struct {
+	tenant, deviceToken, identity string
+	epoch                         uint64
+}
+
+func (f *fakeConnBinder) Bind(tenant, deviceToken, identity string, epoch uint64, _ mux.Conn) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.binds = append(f.binds, bindCall{tenant, deviceToken, identity, epoch})
+}
+
+func (f *fakeConnBinder) Refresh(_ string, _ mux.Conn) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refreshes++
+}
+
+func (f *fakeConnBinder) bindCalls() []bindCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bindCall(nil), f.binds...)
+}
+
+func (f *fakeConnBinder) refreshCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.refreshes
+}
+
+// TestRegisterBindsDownlinkConnUpdateRefreshes pins the L4a handler seam over the real wire: a
+// Register binds the device's live conn under its authenticated tenant and the token Register
+// resolved (acme / tok-1 for dev-1 — NOT the hostile ep), at a non-zero session epoch; an Update
+// heals (Refreshes) the conn. If the handler ever stopped feeding the conn table, a provisioned
+// device would silently become command-unreachable — this reddens instead.
+func TestRegisterBindsDownlinkConnUpdateRefreshes(t *testing.T) {
+	binder := &fakeConnBinder{}
+	addr, _, _ := startIntegrationOpts(t, nil, nil, binder)
+	conn := dial(t, addr, "dev-1")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := conn.Post(ctx, "/rd", message.TextPlain, nil, query("ep=beta/plant-b/sensor-9", "lt=300")...)
+	require.NoError(t, err)
+	require.Equal(t, codes.Created, resp.Code())
+	regId := locationRegID(t, resp)
+
+	binds := binder.bindCalls()
+	require.Len(t, binds, 1, "Register must bind the downlink conn exactly once")
+	assert.Equal(t, "acme", binds[0].tenant, "the bind tenant is the credential's, not the ep's")
+	assert.Equal(t, "tok-1", binds[0].deviceToken, "the bind token is the one Register resolved")
+	assert.Equal(t, "dev-1", binds[0].identity)
+	assert.NotZero(t, binds[0].epoch, "the bind carries the session epoch")
+
+	upd, err := conn.Post(ctx, "/rd/"+regId, message.TextPlain, nil, query("lt=300")...)
+	require.NoError(t, err)
+	require.Equal(t, codes.Changed, upd.Code())
+	assert.GreaterOrEqual(t, binder.refreshCount(), 1, "an Update heals (Refreshes) the downlink conn")
 }
 
 // fakeMessageLimiter is a scriptable ADR-023 message gate for the /rd tests: allow controls

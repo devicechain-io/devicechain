@@ -401,6 +401,25 @@ func (r *Registry) installLocked(regId, identity string, binding config.PskBindi
 	setGauge(r.metrics.ActiveRegistrations, len(r.byRegId))
 }
 
+// DeviceToken returns the resolved device token for an identity's current live registration,
+// for the downlink command conn index (ADR-075 L4a). It is ok=false when there is no live
+// registration, or the entry is a reconstruction shadow (which carries no token, resolved lazily
+// only at its expiry). The token is the one Resolve already produced at Register and stored on
+// the entry — read from memory here, never a second network resolve — so it is correct on every
+// Register branch: a fresh install and a storm-collapse both leave a non-shadow entry holding it,
+// and a compare-on-epoch loss (the handler does not Bind there) would read the winner's identical
+// token. A device gone between Register returning and this read simply yields ok=false (the
+// handler skips the Bind; a command then rides TTL to TIMEOUT).
+func (r *Registry) DeviceToken(identity string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e := r.byIdentity[identity]
+	if e == nil || e.shadow || e.token == "" {
+		return "", false
+	}
+	return e.token, true
+}
+
 // recentRegistration reports the live location for an identity whose registration is
 // younger than the replace backoff (R5 storm control), so a rapid re-Register is
 // idempotent rather than a fresh session.
