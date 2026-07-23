@@ -1,20 +1,20 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package host
+package adapter
 
 import "sync"
 
-// tokenCache memoizes the (tenant, external id) → device token resolution so that
-// only the FIRST sight of a device calls device-management; every subsequent DATA
-// message for it resolves in memory. It caches only POSITIVE resolutions: an
-// unknown device (auto-register off) or a failed lookup is not stored, so an
-// operator registering the device later, or device-management recovering, is picked
-// up on the next message rather than being permanently shadowed.
+// tokenCache memoizes the (tenant, external id) → device token resolution so that only
+// the FIRST sight of a device calls device-management; every subsequent message for it
+// resolves in memory. It caches only POSITIVE resolutions: an unknown device
+// (auto-register off) or a failed lookup is not stored, so an operator registering the
+// device later, or device-management recovering, is picked up on the next message
+// rather than being permanently shadowed.
 //
-// It is unbounded for GA — bounded by the tenant's device count, the same profile
-// as SP2's session map — and eviction is a post-GA concern (a deleted device leaves
-// a stale entry whose now-unknown token the resolver handles gracefully, PR #497).
+// It is unbounded for GA — bounded by the tenant's device count, the same profile as a
+// source's session map — and eviction is a post-GA concern (a deleted device leaves a
+// stale entry whose now-unknown token the resolver handles gracefully).
 type tokenCache struct {
 	mu sync.RWMutex
 	m  map[string]string

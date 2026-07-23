@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package host
+package adapter
 
 import (
 	"context"
@@ -18,12 +18,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// IngestPolicy is the per-source parameters the shared ingester needs on every
-// call: the event Source stamp and how (or whether) to auto-register a device the
-// source has not seen before. It is fixed per connection (a Client holds its own).
+// IngestPolicy is the per-source parameters the shared ingester needs on every call:
+// the event Source stamp and how (or whether) to auto-register a device the source has
+// not seen before. It is fixed per connection (a source's client holds its own).
 type IngestPolicy struct {
 	// Source is stamped onto every emitted UnresolvedEvent (carried through to each
-	// resolved event), e.g. "sparkplug:{hostId}".
+	// resolved event), e.g. "sparkplug:{hostId}" or "lwm2m:{serverId}".
 	Source string
 	// DeviceTypeToken is the device type stamped on an auto-registered device.
 	DeviceTypeToken string
@@ -32,22 +32,22 @@ type IngestPolicy struct {
 	AutoRegister bool
 }
 
-// GraphQLClient is the narrow slice of svcclient.Client the registrar needs. host
-// depends on the interface so the registrar is testable without a live
-// device-management or a minted service token.
+// GraphQLClient is the narrow slice of svcclient.Client the registrar/reconciler need.
+// adapter depends on the interface so they are testable without a live
+// device-management/device-state or a minted service token.
 type GraphQLClient interface {
 	Query(ctx context.Context, baseURL, tenant, query string, variables map[string]any, out any) error
 }
 
 // EventWriter is the durable JetStream write the emitter needs (satisfied by
-// messaging.MessageWriter). host depends on the interface so the emitter is
-// testable without a live NATS.
+// messaging.MessageWriter). adapter depends on the interface so the emitter is testable
+// without a live NATS.
 type EventWriter interface {
 	WriteMessages(ctx context.Context, msgs ...messaging.Message) error
 }
 
-// IngestMetrics are the optional Prometheus counters the ingest path updates; any
-// nil field is skipped so the ingester is usable in tests without a registry.
+// IngestMetrics are the optional Prometheus counters the ingest path updates; any nil
+// field is skipped so the ingester is usable in tests without a registry.
 type IngestMetrics struct {
 	MeasurementsEmitted prometheus.Counter // individual samples durably written
 	PresenceEmitted     prometheus.Counter // presence StateChange events durably written
@@ -55,20 +55,23 @@ type IngestMetrics struct {
 	UnknownDropped      prometheus.Counter // samples/presence dropped: unknown device, auto-register off
 }
 
-// resolveOutcome distinguishes how a device external id resolved, so the ingester
-// can meter registrations and drops without the registrar owning a metrics handle.
-type resolveOutcome int
+// ResolveOutcome distinguishes how a device external id resolved, so the ingester can
+// meter registrations and drops without the registrar owning a metrics handle, and so a
+// direct caller (e.g. an LwM2M /rd registration) can choose its protocol reply from the
+// outcome. Exported because Registrar.Resolve is a public registration API a
+// non-emitting caller uses.
+type ResolveOutcome int
 
 const (
-	resolveDropped resolveOutcome = iota // unknown device + auto-register off — do not ingest
-	resolveFound                         // the device already existed
-	resolveCreated                       // the device was auto-registered on this call
+	ResolveDropped ResolveOutcome = iota // unknown device + auto-register off — do not ingest
+	ResolveFound                         // the device already existed
+	ResolveCreated                       // the device was auto-registered on this call
 )
 
 // The device-management GraphQL operations. Field names are pinned to the schema
-// (DeviceCreateRequest.token/externalId/deviceTypeToken); the graphql-go fork
-// rejects an unknown field sent through a variable, so a typo here fails the call
-// loudly rather than silently creating a half-formed device.
+// (DeviceCreateRequest.token/externalId/deviceTypeToken); the graphql-go fork rejects
+// an unknown field sent through a variable, so a typo here fails the call loudly rather
+// than silently creating a half-formed device.
 const (
 	lookupByExternalId = `query($externalIds: [String!]!) {
   devicesByExternalId(externalIds: $externalIds) { token externalId }
@@ -78,46 +81,47 @@ const (
 }`
 )
 
-// Registrar resolves a Sparkplug external id to a DeviceChain device token over the
-// cross-service GraphQL client (ADR-044), auto-registering the device when the
-// source's policy allows. A resolved token is cached per (tenant, external id) so
-// steady-state DATA messages never re-hit device-management — only the first sight
-// of a device does.
+// Registrar resolves a source external id to a DeviceChain device token over the
+// cross-service GraphQL client (ADR-044), auto-registering the device when the source's
+// policy allows. A resolved token is cached per (tenant, external id) so steady-state
+// telemetry never re-hits device-management — only the first sight of a device does.
+// tokenPrefix namespaces every auto-derived token to the origin protocol ("sp-"/"lw-").
 type Registrar struct {
-	client GraphQLClient
-	url    string
+	client      GraphQLClient
+	url         string
+	tokenPrefix string
 
 	cache *tokenCache
 }
 
-// NewRegistrar binds a registrar to a GraphQL client and device-management's
-// endpoint URL.
-func NewRegistrar(client GraphQLClient, graphqlURL string) *Registrar {
-	return &Registrar{client: client, url: graphqlURL, cache: newTokenCache()}
+// NewRegistrar binds a registrar to a GraphQL client, device-management's endpoint URL,
+// and the origin protocol's token prefix (e.g. "sp-", "lw-").
+func NewRegistrar(client GraphQLClient, graphqlURL, tokenPrefix string) *Registrar {
+	return &Registrar{client: client, url: graphqlURL, tokenPrefix: tokenPrefix, cache: newTokenCache()}
 }
 
-// Resolve maps tenant + external id to a device token. It returns the token and how
-// it resolved (found / created / dropped) on success, or an error for a RETRYABLE
-// failure (device-management unreachable, a transient create failure). A
-// resolveDropped outcome (unknown device, auto-register off) is a definitive skip,
-// not an error — the caller counts it and moves on.
-func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, policy IngestPolicy) (string, resolveOutcome, error) {
+// Resolve maps tenant + external id to a device token. It returns the token and how it
+// resolved (found / created / dropped) on success, or an error for a RETRYABLE failure
+// (device-management unreachable, a transient create failure). A ResolveDropped outcome
+// (unknown device, auto-register off) is a definitive skip, not an error — the caller
+// counts it and moves on.
+func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, policy IngestPolicy) (string, ResolveOutcome, error) {
 	if tok, ok := r.cache.get(tenant, externalId); ok {
-		return tok, resolveFound, nil
+		return tok, ResolveFound, nil
 	}
 	tok, found, err := r.lookup(ctx, tenant, externalId)
 	if err != nil {
-		return "", resolveDropped, err
+		return "", ResolveDropped, err
 	}
 	if found {
 		r.cache.put(tenant, externalId, tok)
-		return tok, resolveFound, nil
+		return tok, ResolveFound, nil
 	}
 	if !policy.AutoRegister {
-		return "", resolveDropped, nil
+		return "", ResolveDropped, nil
 	}
 
-	token := DeriveDeviceToken(externalId)
+	token := DeriveDeviceToken(externalId, r.tokenPrefix)
 	// TODO (follow-up): a persistently-failing create (e.g. a deviceTypeToken that
 	// passes the grammar check but names no existing type) is retried by the caller on
 	// every message from that device, spending the full bounded budget each time. It is
@@ -131,16 +135,16 @@ func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, poli
 		// the caller to retry.
 		if again, found2, lerr := r.lookup(ctx, tenant, externalId); lerr == nil && found2 {
 			r.cache.put(tenant, externalId, again)
-			return again, resolveFound, nil
+			return again, ResolveFound, nil
 		}
-		return "", resolveDropped, err
+		return "", ResolveDropped, err
 	}
 	r.cache.put(tenant, externalId, token)
-	return token, resolveCreated, nil
+	return token, ResolveCreated, nil
 }
 
-// lookup asks device-management for a device carrying externalId, returning its
-// token and whether one was found.
+// lookup asks device-management for a device carrying externalId, returning its token
+// and whether one was found.
 func (r *Registrar) lookup(ctx context.Context, tenant, externalId string) (string, bool, error) {
 	var out struct {
 		DevicesByExternalId []struct {
@@ -174,24 +178,24 @@ func (r *Registrar) create(ctx context.Context, tenant, token, externalId, devic
 }
 
 // assertedActiveQuery asks device-state for every ASSERTED + active device the calling
-// tenant owns FOR THIS SOURCE (ADR-067 SP4b). The response is tenant-scoped by the
-// caller's token and source-scoped by the argument, so a source only ever sees — and so
-// can only reconcile — its own asserted-online devices, never a sibling source's.
+// tenant owns FOR THIS SOURCE (ADR-067). The response is tenant-scoped by the caller's
+// token and source-scoped by the argument, so a source only ever sees — and so can only
+// reconcile — its own asserted-online devices, never a sibling source's.
 const assertedActiveQuery = `query($source: String!) {
   assertedActiveDeviceStates(source: $source) { externalId sessionId }
 }`
 
-// AssertedDevice is one asserted-active device the failover reconciliation must
-// account for: its external id (the Sparkplug "{group}/{node}[/{device}]" identity to
-// probe) and the presence SessionId last applied to it (the projection's ordering
-// epoch, which floors the adapter's epoch generator).
+// AssertedDevice is one asserted-active device the failover reconciliation must account
+// for: its external id (the source identity to probe) and the presence SessionId last
+// applied to it (the projection's ordering epoch, which floors the adapter's epoch
+// generator).
 type AssertedDevice struct {
 	ExternalId string
 	SessionId  uint64
 }
 
 // Reconciler reads the device-state presence projection — the authoritative source of
-// which devices the platform believes are online (ADR-067 SP4b) — over the same
+// which devices the platform believes are online (ADR-067) — over the same
 // cross-service GraphQL client the registrar uses (a state:read-scoped service token).
 // It is the failover repopulation input: a newly-elected leader enumerates the
 // asserted-active devices, floors its epoch generator from them, and probes each.
@@ -205,11 +209,11 @@ func NewReconciler(client GraphQLClient, deviceStateURL string) *Reconciler {
 	return &Reconciler{client: client, url: deviceStateURL}
 }
 
-// AssertedActive returns the tenant's asserted-active devices and the maximum
-// SessionId among them (0 when there are none) — the floor input for the adapter's
-// epoch generator so a fresh emission always supersedes any stored session. A device
-// whose external id is null is skipped: it cannot be reconciled against a Sparkplug
-// topic (and only a Sparkplug producer sets one at GA).
+// AssertedActive returns the tenant's asserted-active devices and the maximum SessionId
+// among them (0 when there are none) — the floor input for the adapter's epoch
+// generator so a fresh emission always supersedes any stored session. A device whose
+// external id is null is skipped: it cannot be reconciled against a source identity (a
+// row with no external id is not one this adapter emitted).
 func (r *Reconciler) AssertedActive(ctx context.Context, tenant, source string) ([]AssertedDevice, uint64, error) {
 	var out struct {
 		AssertedActiveDeviceStates []struct {
@@ -244,29 +248,30 @@ func (r *Reconciler) AssertedActive(ctx context.Context, tenant, source string) 
 	return devices, max, nil
 }
 
-// Emitter builds an UnresolvedEvent from a device's samples and writes it durably
-// to the shared inbound-events stream, reusing the event-sources wire contract so
-// the device-management resolver ingests it unchanged.
+// Emitter builds an UnresolvedEvent from a device's samples and writes it durably to the
+// shared inbound-events stream, reusing the event-sources wire contract so the
+// device-management resolver ingests it unchanged. dedupPrefix namespaces every emitted
+// dedup id to the origin protocol ("sp"/"lw") so two protocols' ids never collide in the
+// shared InboundEvents dedup window.
 type Emitter struct {
-	writer EventWriter
-	now    func() time.Time
+	writer      EventWriter
+	now         func() time.Time
+	dedupPrefix string
 }
 
-// NewEmitter binds an emitter to a durable message writer and a clock (nil ⇒
-// time.Now).
-func NewEmitter(writer EventWriter, now func() time.Time) *Emitter {
+// NewEmitter binds an emitter to a durable message writer, a clock (nil ⇒ time.Now),
+// and the origin protocol's dedup-id prefix (e.g. "sp", "lw").
+func NewEmitter(writer EventWriter, now func() time.Time, dedupPrefix string) *Emitter {
 	if now == nil {
 		now = time.Now
 	}
-	return &Emitter{writer: writer, now: now}
+	return &Emitter{writer: writer, now: now, dedupPrefix: dedupPrefix}
 }
 
-// Emit writes the samples for one device as a measurements UnresolvedEvent under
-// the connection's tenant. The tenant flows through core.WithTenant into the
-// message subject (never from the Sparkplug topic — the SP3a connection-scoped
-// invariant). DedupID is empty and AltId is nil: an external-broker source has no
-// DeviceChain capture sequence, so this is the HTTP-ingest at-least-once posture;
-// producer-stable exactly-once identity is SP4/M12 work.
+// Emit writes the samples for one device as a measurements UnresolvedEvent under the
+// connection's tenant. The tenant flows through core.WithTenant into the message subject
+// (never from the source's own addressing — the connection-scoped tenancy invariant).
+// The DedupID makes a retry of the identical batch idempotent at JetStream.
 func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, samples []Sample) error {
 	entries := make([]esmodel.UnresolvedMeasurementsEntry, 0, len(samples))
 	var latest int64
@@ -280,8 +285,8 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 			// magnitudes (1e6 → "1e+06"), which the resolver's Int-declared metric
 			// validation (strconv.ParseInt) rejects — dead-lettering the WHOLE event,
 			// every sibling sample with it. 'f' with -1 precision still yields the
-			// shortest round-tripping decimal, but never an exponent, so an integer
-			// like 12345678 arrives as "12345678" and parses as both Int and Double.
+			// shortest round-tripping decimal, but never an exponent, so an integer like
+			// 12345678 arrives as "12345678" and parses as both Int and Double.
 			Measurements: map[string]string{s.Name: strconv.FormatFloat(s.Value, 'f', -1, 64)},
 			OccurredTime: &occurred,
 		})
@@ -305,16 +310,16 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 	return e.writer.WriteMessages(tctx, messaging.Message{
 		Key:     []byte(deviceToken),
 		Value:   encoded,
-		DedupID: measurementDedupID(tenant, deviceToken, latest, samples),
+		DedupID: measurementDedupID(e.dedupPrefix, tenant, deviceToken, latest, samples),
 	})
 }
 
-// EmitPresence writes one presence transition as a StateChange UnresolvedEvent
-// (ADR-067) under the connection's tenant. OccurredTime is the receipt-clock time
-// the session machine stamped (never the Sparkplug payload ts). SessionId rides the
-// wire as a string (an epoch-sized UnixNano would lose precision through a JSON hop).
-// The DedupID makes a retry — or a failover re-derivation — of the same (device,
-// session, state) transition idempotent at JetStream (M12).
+// EmitPresence writes one presence transition as a StateChange UnresolvedEvent (ADR-067)
+// under the connection's tenant. OccurredTime is the receipt-clock time the source's
+// session/lifetime logic stamped (never a device payload ts). SessionId rides the wire
+// as a string (an epoch-sized UnixNano would lose precision through a JSON hop). The
+// DedupID makes a retry — or a failover re-derivation — of the same (device, session,
+// state) transition idempotent at JetStream.
 func (e *Emitter) EmitPresence(ctx context.Context, tenant, source, deviceToken string, ev PresenceEvent) error {
 	state := esmodel.PresenceDisconnected
 	if ev.Connected {
@@ -343,63 +348,64 @@ func (e *Emitter) EmitPresence(ctx context.Context, tenant, source, deviceToken 
 	return e.writer.WriteMessages(tctx, messaging.Message{
 		Key:     []byte(deviceToken),
 		Value:   encoded,
-		DedupID: presenceDedupID(tenant, deviceToken, ev),
+		DedupID: presenceDedupID(e.dedupPrefix, tenant, deviceToken, ev),
 	})
 }
 
-// dedupID builds a compact, deterministic JetStream Nats-Msg-Id from its parts. It
-// is a fixed-width fnv-64a over NUL-separated parts (base36 ≈ 13 chars), so a
-// device-controlled input can never inflate the id — the InboundEvents dedup window
-// holds these in memory for its full window, so id size is a memory cost. Stable for
-// a retry of the same logical event, distinct for genuinely different content.
-func dedupID(parts ...string) string {
+// dedupID builds a compact, deterministic JetStream Nats-Msg-Id from its parts. It is a
+// fixed-width fnv-64a over NUL-separated parts (base36 ≈ 13 chars) behind the origin
+// prefix, so a device-controlled input can never inflate the id — the InboundEvents
+// dedup window holds these in memory for its full window, so id size is a memory cost.
+// Stable for a retry of the same logical event, distinct for genuinely different content.
+func dedupID(prefix string, parts ...string) string {
 	h := fnv.New64a()
 	for _, p := range parts {
 		_, _ = h.Write([]byte(p))
 		_, _ = h.Write([]byte{0})
 	}
-	return "sp" + strconv.FormatUint(h.Sum64(), 36)
+	return prefix + strconv.FormatUint(h.Sum64(), 36)
 }
 
 // presenceDedupID keys a StateChange on (tenant, device, session, state): a given
-// session's CONNECTED and DISCONNECTED are each emitted once, so a retry or a
-// failover re-derivation dedups, while a genuinely new session (new epoch) or the
-// opposite transition is distinct.
-func presenceDedupID(tenant, deviceToken string, ev PresenceEvent) string {
+// session's CONNECTED and DISCONNECTED are each emitted once, so a retry or a failover
+// re-derivation dedups, while a genuinely new session (new epoch) or the opposite
+// transition is distinct.
+func presenceDedupID(prefix, tenant, deviceToken string, ev PresenceEvent) string {
 	state := "0"
 	if ev.Connected {
 		state = "1"
 	}
-	return dedupID("sc", tenant, deviceToken, strconv.FormatUint(ev.SessionId, 10), state)
+	return dedupID(prefix, "sc", tenant, deviceToken, strconv.FormatUint(ev.SessionId, 10), state)
 }
 
-// measurementDedupID keys a measurement batch on (tenant, device, occurred-time, and
-// the batch's sorted name=value=time content), so an emit-retry of the identical
-// batch dedups but two distinct batches sharing an occurred-time stay distinct (the
-// content hash keeps them apart — the SP3b B2 collision moved to the id layer would
-// otherwise silently drop a distinct reading).
-func measurementDedupID(tenant, deviceToken string, occurredMillis int64, samples []Sample) string {
+// measurementDedupID keys a measurement batch on (tenant, device, occurred-time, and the
+// batch's sorted name=value=time content), so an emit-retry of the identical batch dedups
+// but two distinct batches sharing an occurred-time stay distinct (the content hash keeps
+// them apart — a collision moved to the id layer would otherwise silently drop a distinct
+// reading).
+func measurementDedupID(prefix, tenant, deviceToken string, occurredMillis int64, samples []Sample) string {
 	pairs := make([]string, 0, len(samples))
 	for _, s := range samples {
 		pairs = append(pairs, s.Name+"="+strconv.FormatFloat(s.Value, 'f', -1, 64)+"@"+strconv.FormatInt(s.Time, 10))
 	}
 	sort.Strings(pairs)
 	parts := append([]string{"m", tenant, deviceToken, strconv.FormatInt(occurredMillis, 10)}, pairs...)
-	return dedupID(parts...)
+	return dedupID(prefix, parts...)
 }
 
-// Ingester turns an accepted Sparkplug message's samples into durable DeviceChain
-// telemetry: resolve (and if needed register) the device, then emit. It is shared
-// across all sources; the per-connection tenant and IngestPolicy are passed in on
-// every call. It owns the ingest metrics so the registrar and emitter stay pure.
+// Ingester turns an accepted source message's samples into durable DeviceChain
+// telemetry: resolve (and if needed register) the device, then emit. It is shared across
+// all sources; the per-connection tenant and IngestPolicy are passed in on every call.
+// It owns the ingest metrics so the registrar and emitter stay pure.
 //
-// NOTE (ADR-023 governance, deferred): this ingress path is NOT yet behind the
-// per-tenant ingest rate gate that event-sources applies before InboundEvents, so a
-// misbehaving/compromised customer broker can exceed a tenant's ingest ceiling. It
-// is an OPT-IN source an operator deliberately connects to (not open-internet device
-// ingest), which bounds the exposure, but a per-tenant limiter here is owed —
-// tracked as a follow-up. Any limiter added here MUST stay label-free per tenant (no
-// per-tenant metric labels — the ADR-023 cardinality lesson), as these counters do.
+// NOTE (ADR-023 governance, deferred): this ingress path is NOT yet behind the per-tenant
+// ingest rate gate that event-sources applies before InboundEvents. For a Sparkplug
+// source the exposure is bounded — it is an opt-in broker an operator deliberately
+// connects to, not open-internet device ingest — but for a device-facing source (LwM2M),
+// where authenticated devices reach the socket directly, a per-tenant limiter here is an
+// L1 GA question, not a vague follow-up. Any limiter added here MUST stay label-free per
+// tenant (no per-tenant metric labels — the ADR-023 cardinality lesson), as these
+// counters do.
 type Ingester struct {
 	registrar *Registrar
 	emitter   *Emitter
@@ -411,26 +417,25 @@ func NewIngester(registrar *Registrar, emitter *Emitter, metrics IngestMetrics) 
 	return &Ingester{registrar: registrar, emitter: emitter, metrics: metrics}
 }
 
-// Ingest resolves the device for externalId and emits its samples. It returns nil
-// when the message was fully handled — whether emitted OR definitively dropped
-// (unknown device, auto-register off) — and an error ONLY for a retryable failure
-// (device-management or NATS unreachable), which the caller may retry within the
-// session.
+// Ingest resolves the device for externalId and emits its samples. It returns nil when
+// the message was fully handled — whether emitted OR definitively dropped (unknown
+// device, auto-register off) — and an error ONLY for a retryable failure
+// (device-management or NATS unreachable), which the caller may retry within the session.
 func (ing *Ingester) Ingest(ctx context.Context, tenant string, policy IngestPolicy, externalId string, samples []Sample) error {
 	token, outcome, err := ing.registrar.Resolve(ctx, tenant, externalId, policy)
 	if err != nil {
 		return err
 	}
-	if outcome == resolveDropped {
+	if outcome == ResolveDropped {
 		incr(ing.metrics.UnknownDropped, len(samples))
 		log.Debug().Str("tenant", tenant).Str("externalId", externalId).Int("samples", len(samples)).
-			Msg("Dropping Sparkplug samples for an unregistered device (auto-registration is off for this source).")
+			Msg("Dropping samples for an unregistered device (auto-registration is off for this source).")
 		return nil
 	}
-	if outcome == resolveCreated {
+	if outcome == ResolveCreated {
 		incr(ing.metrics.DevicesRegistered, 1)
 		log.Info().Str("tenant", tenant).Str("externalId", externalId).Str("token", token).
-			Msg("Auto-registered a Sparkplug device.")
+			Msg("Auto-registered a device on first sight.")
 	}
 	if err := ing.emitter.Emit(ctx, tenant, policy.Source, token, samples); err != nil {
 		return err
@@ -441,23 +446,23 @@ func (ing *Ingester) Ingest(ctx context.Context, tenant string, policy IngestPol
 
 // IngestPresence resolves each presence event's device (auto-registering it under the
 // source's policy — ASSERTED-on-first-sight happens in the projection when the
-// StateChange lands) and emits a StateChange. It returns nil when every event was
-// fully handled (emitted or definitively dropped) and an error for a retryable
-// failure. The whole slice is re-processed on a retry; the DedupID makes an
-// already-emitted event idempotent, so re-running is safe.
+// StateChange lands) and emits a StateChange. It returns nil when every event was fully
+// handled (emitted or definitively dropped) and an error for a retryable failure. The
+// whole slice is re-processed on a retry; the DedupID makes an already-emitted event
+// idempotent, so re-running is safe.
 func (ing *Ingester) IngestPresence(ctx context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) error {
 	for _, ev := range events {
 		token, outcome, err := ing.registrar.Resolve(ctx, tenant, ev.ExternalId, policy)
 		if err != nil {
 			return err
 		}
-		if outcome == resolveDropped {
+		if outcome == ResolveDropped {
 			incr(ing.metrics.UnknownDropped, 1)
 			log.Debug().Str("tenant", tenant).Str("externalId", ev.ExternalId).
-				Msg("Dropping Sparkplug presence for an unregistered device (auto-registration is off for this source).")
+				Msg("Dropping presence for an unregistered device (auto-registration is off for this source).")
 			continue
 		}
-		if outcome == resolveCreated {
+		if outcome == ResolveCreated {
 			incr(ing.metrics.DevicesRegistered, 1)
 		}
 		if err := ing.emitter.EmitPresence(ctx, tenant, policy.Source, token, ev); err != nil {

@@ -119,23 +119,16 @@ type SessionTracker struct {
 	// step-back; SetEpochFloor raises it from the persisted read-model on leader
 	// acquisition so a fresh leader (or a restart) never mints an epoch the
 	// projection would reject as stale (ADR-067 cross-process monotonicity).
+	//
+	// L0.5 EXTRACTION NOTE: nextEpoch/SetEpochFloor/MintEpoch are the ADR-067 epoch
+	// invariant — the subtlest logic under presence. They stayed with the Sparkplug
+	// session machine (they are called under tr.mu on the connect hot path) rather than
+	// moving to the shared adapter, because LwM2M's lifetime-timer presence has not yet
+	// defined what it needs from an epoch source. When L1 builds LwM2M presence, extract
+	// this into a shared adapter.EpochSource (its own mutex, taken as a leaf under tr.mu)
+	// and have both protocols consume it — do NOT reimplement the floor+monotonicity from
+	// scratch (that is exactly the silent-duplication trap this note exists to prevent).
 	lastEpoch uint64
-}
-
-// PresenceEvent is an authoritative connectivity transition (ADR-067) the session
-// machine derives from a Sparkplug BIRTH/DEATH. ExternalId is the DeviceChain
-// external id of the node ("{group}/{node}") or a child device
-// ("{group}/{node}/{device}"). SessionId is a host-observed connect epoch — the node
-// session's epoch for a node event, the device's own DBIRTH epoch for a device event
-// (ADR-067 per-device ordering). OccurredAt is the host RECEIPT clock, never the
-// Sparkplug payload timestamp: an NDEATH is the MQTT will, built at CONNECT time, so
-// its payload ts predates the death and would read as stale.
-type PresenceEvent struct {
-	ExternalId string
-	Connected  bool
-	Reason     string
-	SessionId  uint64
-	OccurredAt time.Time
 }
 
 // Observation is everything a single decoded Sparkplug message contributes to the

@@ -22,17 +22,6 @@ const (
 	datatypeInt64 = 4
 )
 
-// Sample is one resolved numeric metric ready to become a DeviceChain measurement:
-// a name (alias-resolved for DATA messages), a numeric value, and a per-metric
-// timestamp in milliseconds since the Unix epoch. Non-numeric Sparkplug metrics
-// (boolean/string/dataset/…) never become Samples — DeviceChain measurements are
-// numeric by design (ADR-016).
-type Sample struct {
-	Name  string
-	Value float64
-	Time  int64
-}
-
 // samplesFrom extracts the numeric measurements from an ACCEPTED Sparkplug payload:
 // one Sample per numeric, non-null, non-reserved metric. It is called only for a
 // message the session machine accepted (valid seq, aliases resolve), under the
