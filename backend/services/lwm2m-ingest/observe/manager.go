@@ -90,6 +90,15 @@ type ingester interface {
 	Ingest(ctx context.Context, tenant string, policy adapter.IngestPolicy, externalId string, samples []adapter.Sample) error
 }
 
+// ingestLimiter is the narrow slice of *adapter.IngestLimiter onNotify uses to gate a Notify
+// against the tenant's ADR-023 ingest ceiling (ADR-075 L2c): AllowMessage before decode,
+// AllowSamples after. A nil limiter (an inert/presence-only deployment or a test) skips
+// gating.
+type ingestLimiter interface {
+	AllowMessage(tenant string) bool
+	AllowSamples(tenant string, n int) bool
+}
+
 // Metrics are the optional Prometheus instruments the Manager updates; any nil field is
 // skipped so it is usable in tests without a registry. NONE is labeled by tenant/identity — a
 // per-tenant label on a device-driven counter is the cardinality risk the governance lesson
@@ -100,6 +109,7 @@ type Metrics struct {
 	UnknownContentFormat    prometheus.Counter // a Notify in a content format this slice does not decode (e.g. TLV)
 	ObserveEstablishRefused prometheus.Counter // an Observe GET refused/failed (dominant cause: a 1.0-only client's 4.06)
 	TerminalNotifications   prometheus.Counter // a non-2.05 notification that terminated an observation (RFC 7641)
+	SamplesTruncated        prometheus.Counter // samples dropped from a single Notify past decode.MaxSamplesPerNotify
 	IngestDropped           prometheus.Counter // a Notify dropped on a retryable ingest error (no retry in the callback)
 	ActiveObservations      prometheus.Gauge   // live observations currently held across all sessions
 }
@@ -123,6 +133,7 @@ type Manager struct {
 	ended map[string]uint64 // identity -> highest ENDED session epoch (tombstone; set only by Cancel)
 
 	ingester ingester
+	limiter  ingestLimiter // nil ⇒ ungated (inert/presence-only or test)
 	metrics  Metrics
 
 	now            func() time.Time
@@ -139,8 +150,10 @@ type Options struct {
 	IngestTimeout  time.Duration
 }
 
-// NewManager builds a Manager over the shared ingester.
-func NewManager(ing ingester, metrics Metrics, opts Options) *Manager {
+// NewManager builds a Manager over the shared ingester and the per-tenant ingest limiter
+// (ADR-075 L2c). A nil limiter leaves the Notify path ungated (an inert/presence-only
+// deployment or a test).
+func NewManager(ing ingester, limiter ingestLimiter, metrics Metrics, opts Options) *Manager {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
@@ -157,6 +170,7 @@ func NewManager(ing ingester, metrics Metrics, opts Options) *Manager {
 		slots:          map[string]*slot{},
 		ended:          map[string]uint64{},
 		ingester:       ing,
+		limiter:        limiter,
 		metrics:        metrics,
 		now:            opts.Now,
 		observeTimeout: opts.ObserveTimeout,
@@ -340,6 +354,15 @@ func (m *Manager) onNotify(identity string, epoch uint64, conn mux.Conn, path st
 		go m.dropObservation(identity, epoch, conn, path)
 		return
 	}
+	// STAGE 1 (ADR-075 L2c): the per-tenant message-rate gate, charged once per Notify BEFORE
+	// decode so a message flood is shed before it costs a parse. It runs AFTER the terminal
+	// branch above: a terminal notification is our protocol state machine, not tenant telemetry,
+	// so it must be neither charged nor shed — gating it would strand the dead observation
+	// (dropObservation would never run). Everything past here — including an undecodable or
+	// zero-sample Notify — is a message the tenant sent, and this is the only meter that sees it.
+	if m.limiter != nil && !m.limiter.AllowMessage(target.Tenant) {
+		return
+	}
 	cf, err := msg.ContentFormat()
 	if err != nil {
 		incr(m.metrics.UnknownContentFormat, 1) // no content format ⇒ nothing to decode against
@@ -350,7 +373,7 @@ func (m *Manager) onNotify(identity string, epoch uint64, conn mux.Conn, path st
 		incr(m.metrics.DecodeFailures, 1)
 		return
 	}
-	samples, err := decode.Samples(cf, body, m.now)
+	samples, truncated, err := decode.Samples(cf, body, m.now)
 	if err != nil {
 		if errors.Is(err, decode.ErrUnsupportedContentFormat) {
 			incr(m.metrics.UnknownContentFormat, 1)
@@ -359,8 +382,16 @@ func (m *Manager) onNotify(identity string, epoch uint64, conn mux.Conn, path st
 		}
 		return
 	}
+	incr(m.metrics.SamplesTruncated, truncated) // a single Notify's samples past decode.MaxSamplesPerNotify
 	if len(samples) == 0 {
 		return // a well-formed but non-numeric batch (e.g. a boolean IPSO object) — nothing to measure
+	}
+	// STAGE 2 (ADR-075 L2c): the per-tenant sample-rate budget, charged with the decoded sample
+	// COUNT AFTER decode. It bounds measurement VOLUME — a slow trickle of enormous packs sails
+	// through the per-message gate but is shed here. A shed batch is dropped whole (best-effort
+	// telemetry; the next Notify supersedes).
+	if m.limiter != nil && !m.limiter.AllowSamples(target.Tenant, len(samples)) {
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), m.ingestTimeout)
 	defer cancel()

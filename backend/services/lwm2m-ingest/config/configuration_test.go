@@ -44,6 +44,33 @@ func TestApplyDefaultsFillsZeroValues(t *testing.T) {
 	assert.Equal(t, DefaultMaxSessions, c.Security.MaxSessions)
 }
 
+// The check-that-cannot-fail (ADR-075 L2c): a default-constructed config MUST yield a POSITIVE
+// per-tenant ingest ceiling. A zero here would hand core.TenantRateLimiter a bucket that admits
+// nothing, silently blacking out every device's telemetry while presence kept working.
+func TestIngestRateLimitDefaulting(t *testing.T) {
+	// A zeroed config defaults to the positive platform ceiling.
+	zeroed := &Lwm2mConfiguration{}
+	zeroed.ApplyDefaults()
+	assert.Equal(t, float64(DefaultIngestMessagesPerSecond), zeroed.IngestRateLimit.MessagesPerSecond)
+	assert.Equal(t, DefaultIngestBurst, zeroed.IngestRateLimit.Burst)
+	assert.Positive(t, zeroed.IngestRateLimit.MessagesPerSecond, "a zero ceiling would admit nothing")
+	assert.Positive(t, zeroed.IngestRateLimit.Burst)
+
+	// NewLwm2mConfiguration (which runs ApplyDefaults) is positive too.
+	assert.Positive(t, NewLwm2mConfiguration().IngestRateLimit.MessagesPerSecond)
+
+	// An explicit ceiling is preserved; a non-positive one floors to the default.
+	explicit := &Lwm2mConfiguration{IngestRateLimit: IngestRateLimit{MessagesPerSecond: 5, Burst: 10}}
+	explicit.ApplyDefaults()
+	assert.Equal(t, float64(5), explicit.IngestRateLimit.MessagesPerSecond)
+	assert.Equal(t, 10, explicit.IngestRateLimit.Burst)
+
+	bad := &Lwm2mConfiguration{IngestRateLimit: IngestRateLimit{MessagesPerSecond: -1, Burst: -1}}
+	bad.ApplyDefaults()
+	assert.Equal(t, float64(DefaultIngestMessagesPerSecond), bad.IngestRateLimit.MessagesPerSecond)
+	assert.Equal(t, DefaultIngestBurst, bad.IngestRateLimit.Burst)
+}
+
 func TestApplyDefaultsDoesNotOverrideSetValues(t *testing.T) {
 	c := validConfig()
 	c.Listen.Host = "127.0.0.1"

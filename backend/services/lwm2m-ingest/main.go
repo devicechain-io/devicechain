@@ -43,6 +43,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
@@ -212,8 +213,12 @@ func buildRegistry(writer messaging.MessageWriter, bindings map[string]config.Ps
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	// TenantRead is added for the ADR-023 governance fetch (per-tenant ingest overrides, L2c):
+	// the same client resolves devices (device:read/write), floors the epoch (state:read), and
+	// now reads tenantGovernance (tenant:read). Without the scope the override fetch fails and
+	// every tenant meters at the platform default — fail-open-to-default, but overrides go dead.
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest",
-		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead)})
+		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead), string(auth.TenantRead)})
 
 	metrics := registry.Metrics{
 		Registrations: Microservice.NewCounter("registrations_total",
@@ -247,8 +252,8 @@ func buildRegistry(writer messaging.MessageWriter, bindings map[string]config.Ps
 
 	// L2b telemetry: the shared ingester (REUSING the same registrar + emitter the presence
 	// path uses) behind the Observe/Notify manager. A Notify's samples flow through the same
-	// durable emit Sparkplug uses. NOTE (ADR-023): this device-facing ingest is not yet behind
-	// the per-tenant rate gate — that is L2c (the shared limiter in the adapter package).
+	// durable emit Sparkplug uses, and are gated by the per-tenant ingest limiter built below
+	// (ADR-023 / ADR-075 L2c) before they reach it.
 	ingester := adapter.NewIngester(registrar, emitter, adapter.IngestMetrics{
 		MeasurementsEmitted: Microservice.NewCounter("measurements_emitted_total",
 			"Individual measurement samples durably written from LwM2M Observe/Notify.", nil),
@@ -268,12 +273,27 @@ func buildRegistry(writer messaging.MessageWriter, bindings map[string]config.Ps
 			"Observe requests refused or failed (dominant cause: a conformant LwM2M 1.0-only client answering the SenML Observe with 4.06).", nil),
 		TerminalNotifications: Microservice.NewCounter("observe_terminal_notifications_total",
 			"Notifications that terminated an observation (RFC 7641, e.g. 4.04 after the observed instance was deleted).", nil),
+		SamplesTruncated: Microservice.NewCounter("notify_samples_truncated_total",
+			"Samples dropped from a single Notify past the per-message cap (decode.MaxSamplesPerNotify).", nil),
 		IngestDropped: Microservice.NewCounter("notify_ingest_dropped_total",
 			"LwM2M Notify samples dropped on a retryable ingest error (no retry in the notify path; the next Notify supersedes).", nil),
 		ActiveObservations: Microservice.NewGauge("active_observations",
 			"Live LwM2M observations currently held across all sessions.", nil),
 	}
-	obsManager := observe.NewManager(ingester, obsMetrics, observe.Options{})
+
+	// The shared per-tenant ingest limiter (ADR-023 / ADR-075 L2c): STAGE 1 gates every device
+	// message (Register/Update/Notify) at the tenant's message-rate ceiling before decode; STAGE 2
+	// gates the decoded sample volume. Fail-safe (fail-open to the positive platform default) and
+	// label-free (no per-tenant metric labels). Wired into both the /rd handlers and the Notify
+	// manager below so one limiter meters the whole device-facing surface.
+	limiter := buildIngestLimiter(client, infra, Configuration.IngestRateLimit, adapter.IngestLimiterMetrics{
+		MessagesShed: Microservice.NewCounter("ingest_messages_shed_total",
+			"Device messages shed at the per-tenant ingest message-rate ceiling (Register/Update/Notify).", nil),
+		SamplesShed: Microservice.NewCounter("ingest_samples_shed_total",
+			"Decoded measurement samples shed at the per-tenant ingest sample-rate ceiling.", nil),
+	})
+
+	obsManager := observe.NewManager(ingester, limiter, obsMetrics, observe.Options{})
 
 	reg := registry.New(registrar, emitter, epoch, metrics, registry.Options{
 		Source: registry.SourceLwM2M,
@@ -282,10 +302,36 @@ func buildRegistry(writer messaging.MessageWriter, bindings map[string]config.Ps
 		// machine while the manager owns all conn/observation state (L2b).
 		OnSessionEnd: obsManager.Cancel,
 	})
-	handlers := registry.NewHandlers(reg, bindings, metrics, obsManager, decode.DefaultObjectAllowlist)
+	handlers := registry.NewHandlers(reg, bindings, metrics, obsManager, decode.DefaultObjectAllowlist, limiter)
 	log.Info().Str("deviceManagement", graphqlURL).Str("deviceState", deviceStateURL).
 		Msg("LwM2M ingest will resolve + emit presence via device-management and floor its epoch via device-state (ADR-044/067).")
 	return handlers, reg, epoch, reconciler, nil
+}
+
+// buildIngestLimiter constructs the shared two-stage per-tenant ingest limiter (ADR-023 /
+// ADR-075 L2c). When user-management is configured, per-tenant overrides are fetched over the
+// service token (the same client, now tenant:read-scoped) and cached, failing open to the
+// platform default; otherwise every tenant meters at the platform default. Either way the
+// ceiling is a real limit — ApplyDefaults guarantees the platform default is positive, and a
+// zero bucket admits nothing. It mirrors event-sources' buildRateLimiter, minus the two-clock
+// backlog split: the device-facing LwM2M path has no durable capture backlog to drain.
+func buildIngestLimiter(client *svcclient.Client, infra mscfg.InfrastructureConfiguration,
+	cfg config.IngestRateLimit, metrics adapter.IngestLimiterMetrics) *adapter.IngestLimiter {
+	def := governance.Limits{MessagesPerSecond: cfg.MessagesPerSecond, Burst: cfg.Burst}
+	var resolve func(string) (float64, int)
+	if infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("user-management endpoint not configured — per-tenant LwM2M ingest overrides disabled; metering every tenant at the platform default.")
+		resolve = func(string) (float64, int) { return def.MessagesPerSecond, def.Burst }
+	} else {
+		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+		resolve = governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest).Resolve
+		log.Info().Str("userManagement", umURL).
+			Msg("Per-tenant LwM2M ingest overrides enabled (ADR-023, fail-open to platform default).")
+	}
+	// The sample budget is the message ceiling scaled by DefaultSamplesPerMessage, with its burst
+	// floored at decode.MaxSamplesPerNotify — the SAME symbol the decoder caps a single Notify at,
+	// so a compliant batch always fits the bucket and is shed only on sustained rate.
+	return adapter.NewIngestLimiter(resolve, adapter.DefaultSamplesPerMessage, decode.MaxSamplesPerNotify, metrics)
 }
 
 // establishEpochFloor reads every bound tenant's asserted-active LwM2M devices from the

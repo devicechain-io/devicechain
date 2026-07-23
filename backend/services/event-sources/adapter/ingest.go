@@ -398,14 +398,17 @@ func measurementDedupID(prefix, tenant, deviceToken string, occurredMillis int64
 // all sources; the per-connection tenant and IngestPolicy are passed in on every call.
 // It owns the ingest metrics so the registrar and emitter stay pure.
 //
-// NOTE (ADR-023 governance, deferred): this ingress path is NOT yet behind the per-tenant
-// ingest rate gate that event-sources applies before InboundEvents. For a Sparkplug
-// source the exposure is bounded — it is an opt-in broker an operator deliberately
-// connects to, not open-internet device ingest — but for a device-facing source (LwM2M),
-// where authenticated devices reach the socket directly, a per-tenant limiter here is an
-// L1 GA question, not a vague follow-up. Any limiter added here MUST stay label-free per
-// tenant (no per-tenant metric labels — the ADR-023 cardinality lesson), as these
-// counters do.
+// NOTE (ADR-023 governance): the Ingester itself does NOT gate — it is the emit engine, and
+// the per-tenant ingest gate belongs at the receive point, BEFORE decode, so a flood costs no
+// parse. That gate is IngestLimiter in this package (ADR-075 L2c): a two-stage, label-free,
+// fail-safe per-tenant limiter — a coarse message-rate ceiling charged before decode and a
+// sample-rate budget charged with the decoded sample count. The LwM2M adapter, the
+// device-facing source where authenticated devices reach the socket directly, wires it around
+// this Ingester on its Register/Update and Notify paths. The Sparkplug source does NOT yet
+// gate: its exposure is bounded (an opt-in broker an operator deliberately connects to, not
+// open-internet device ingest), and it can adopt IngestLimiter unchanged when that changes.
+// Any gate here MUST stay label-free per tenant (no per-tenant metric labels — the ADR-023
+// cardinality lesson), as these counters and IngestLimiter's do.
 type Ingester struct {
 	registrar *Registrar
 	emitter   *Emitter
