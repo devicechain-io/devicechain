@@ -58,6 +58,10 @@ const (
 	NodeDeltaRate   NodeType = "deltaRate"
 	NodeRepeating   NodeType = "repeating"
 	NodeCorrelation NodeType = "correlation"
+	// NodeConnectivity raises a "device offline" alarm on an authoritative DISCONNECT and resolves
+	// it on the next CONNECT (ADR-067 S3b). Like NodeAbsence it is leaf-less (the presence edge IS
+	// the signal), so it exposes no `value` input.
+	NodeConnectivity NodeType = "connectivity"
 	// NodeBranch is a REACT-side router (ADR-053 slice 9c): a signal→signal node carrying a CEL
 	// boolean that gates the actions downstream of it. It lowers to NO runtime node — its predicate
 	// is folded onto the Guard of every action reachable through it (see lower.go), so a branch is
@@ -114,6 +118,12 @@ var catalog = map[NodeType]struct {
 	// condition, whose leaf can be raw-CEL). This keeps a compute→absence wire from type-checking into
 	// an unsatisfiable "give this a CEL leaf" diagnostic.
 	NodeAbsence: {catCondition, ports{
+		in:  map[string]PortType{"in": PortStream},
+		out: map[string]PortType{"signal": PortSignal},
+	}},
+	// Connectivity is leaf-less like Absence (the presence edge is the signal), so it exposes no
+	// `value` input — a compute→connectivity wire cannot type-check into an unsatisfiable CEL leaf.
+	NodeConnectivity: {catCondition, ports{
 		in:  map[string]PortType{"in": PortStream},
 		out: map[string]PortType{"signal": PortSignal},
 	}},

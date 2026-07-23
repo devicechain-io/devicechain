@@ -148,6 +148,19 @@ type absenceConfig struct {
 	TimeoutMs int64 `json:"timeoutMs"`
 }
 
+// connectivityConfig is the "device offline" edge trigger (ADR-067 S3b): leaf-less and
+// config-less, it carries only the common ruleMeta (id/key/actions). The presence StateChange is
+// the whole signal — there is nothing else to configure.
+type connectivityConfig struct {
+	ruleMeta
+}
+
+func (c connectivityConfig) build() (rules.Rule, error) {
+	r := rules.Rule{Type: rules.TypeConnectivity}
+	c.applyTo(&r)
+	return r, nil
+}
+
 func (c absenceConfig) build() (rules.Rule, error) {
 	ttl, err := ms("timeoutMs", c.TimeoutMs)
 	if err != nil {
@@ -301,6 +314,12 @@ func buildRule(n Node) (rules.Rule, error) {
 		return c.build()
 	case NodeAbsence:
 		var c absenceConfig
+		if err := decodeConfig(n.Config, &c); err != nil {
+			return rules.Rule{}, err
+		}
+		return c.build()
+	case NodeConnectivity:
+		var c connectivityConfig
 		if err := decodeConfig(n.Config, &c); err != nil {
 			return rules.Rule{}, err
 		}

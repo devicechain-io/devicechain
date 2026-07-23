@@ -198,6 +198,36 @@ func TestAbsence(t *testing.T) {
 	d.assertFires(core.Absence, at(10))
 }
 
+func TestConnectivityLowersToCore(t *testing.T) {
+	cr, err := Compile(Rule{ID: "off", Name: "offline", Type: TypeConnectivity}, Limits{})
+	if err != nil {
+		t.Fatalf("connectivity compile: %v", err)
+	}
+	if cr.Core.Kind != core.Connectivity {
+		t.Fatalf("want core.Connectivity, got %v", cr.Core.Kind)
+	}
+	// Leaf-less: no metric gate, so it is never metric-scoped in the feed.
+	if cr.GateMetric != "" || cr.ValueMetric != "" || len(cr.FeedMetrics) != 0 {
+		t.Fatalf("connectivity must carry no metric scope: %+v", cr)
+	}
+}
+
+// A connectivity rule is leaf-less and config-less; every authorable field is rejected so a
+// misauthored rule fails at compile rather than silently doing nothing.
+func TestConnectivityForbidsConfigFields(t *testing.T) {
+	cases := map[string]Rule{
+		"leaf":    {ID: "off", Name: "x", Type: TypeConnectivity, When: Condition{Metric: "t", Op: OpGt, Threshold: ptr(1)}},
+		"timeout": {ID: "off", Name: "x", Type: TypeConnectivity, Ttl: Duration(10 * time.Second)},
+		"count":   {ID: "off", Name: "x", Type: TypeConnectivity, Count: 3},
+		"window":  {ID: "off", Name: "x", Type: TypeConnectivity, Window: Duration(time.Second)},
+	}
+	for name, r := range cases {
+		if _, err := Compile(r, Limits{}); err == nil {
+			t.Fatalf("connectivity must reject a %s field", name)
+		}
+	}
+}
+
 func TestAggregateTumbling(t *testing.T) {
 	d := newDriver(t, Rule{ID: "ag", Name: "avg", Type: TypeAggregate, Mode: ModeTumbling,
 		Metric: "t", Agg: AggAvg, Op: OpGt, Threshold: ptr(30), Window: Duration(10 * time.Second)})

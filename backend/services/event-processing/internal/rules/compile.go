@@ -193,6 +193,8 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 		leafSrc, err = compileAggregate(r, cr)
 	case TypeCorrelation:
 		leafSrc, err = compileCorrelation(r, cr, limits)
+	case TypeConnectivity:
+		leafSrc, err = compileConnectivity(r, cr)
 	default:
 		return nil, invalid(r.ID, "type", "unknown rule type %q", r.Type)
 	}
@@ -612,6 +614,18 @@ func compileAbsence(r Rule, cr *CompiledRule) (string, error) {
 	cr.Core.Kind = core.Absence
 	cr.Core.Timeout = r.Ttl.D()
 	return matchAll, nil // heartbeats: every event counts
+}
+
+func compileConnectivity(r Rule, cr *CompiledRule) (string, error) {
+	// A leaf-less, config-less edge trigger: the presence StateChange IS the signal, so every
+	// authorable field is forbidden (a leaf would silently do nothing — the engine reads the typed
+	// edge, never Match). It carries no CEL, but the pipeline still compiles matchAll below; the
+	// leaf is never evaluated (planConnectivity builds the event directly, not via BuildEvent).
+	if err := forbid(r, "connectivity", forbidden{leaf: true, value: true, window: true, hold: true, timeout: true, gap: true, count: true, rate: true, mode: true, agg: true, op: true, threshold: true, anchor: true, memberCap: true}); err != nil {
+		return "", err
+	}
+	cr.Core.Kind = core.Connectivity
+	return matchAll, nil
 }
 
 func compileAggregate(r Rule, cr *CompiledRule) (string, error) {

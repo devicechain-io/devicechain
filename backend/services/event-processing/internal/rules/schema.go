@@ -67,6 +67,12 @@ const (
 	// TypeCorrelation fires when the number of distinct members (devices) reporting under
 	// an anchor (AnchorType) within Window reaches Count — area/fleet correlation.
 	TypeCorrelation RuleType = "correlation"
+	// TypeConnectivity raises a "device offline" alarm on an authoritative DISCONNECT and
+	// resolves it on the next CONNECT (ADR-067 S3b). It is a leaf-less, config-less EDGE
+	// trigger (no metric, no timeout): the presence StateChange itself is the signal. It
+	// complements TypeAbsence — DEATH is instant and authoritative, absence is the
+	// data-silence timeout fallback — and operators pair the two for full coverage.
+	TypeConnectivity RuleType = "connectivity"
 )
 
 // WindowMode selects the windowed-aggregate shape for TypeAggregate.

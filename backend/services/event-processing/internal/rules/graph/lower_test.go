@@ -206,6 +206,21 @@ func TestByteIdentity(t *testing.T) {
 			},
 		},
 		{
+			name: "connectivity (leaf-less, config-less offline trigger)",
+			canvas: canvas(
+				[]Node{
+					src("s"),
+					{ID: "c", Type: NodeConnectivity, Config: cfg(map[string]interface{}{
+						"name": "went-offline", "severity": "major",
+					})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+			),
+			want: rules.Rule{
+				Name: "went-offline", Type: rules.TypeConnectivity, Severity: rules.SeverityMajor,
+			},
+		},
+		{
 			name: "aggregate tumbling avg",
 			canvas: canvas(
 				[]Node{
