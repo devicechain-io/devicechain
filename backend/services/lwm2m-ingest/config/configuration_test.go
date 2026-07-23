@@ -263,3 +263,33 @@ func TestJsonFieldNamesMatchRenderedShape(t *testing.T) {
 	assert.Equal(t, "sensor", c.Security.Identities[0].DeviceTypeToken)
 	assert.True(t, c.Security.Identities[0].AutoRegister)
 }
+
+// The failover-reconstruction lifetime ceiling (ADR-075 L3b / F2) defaults to a POSITIVE value.
+// A zero here would arm every reconstruction shadow with a zero+grace timer — an immediate-expiry
+// DISCONNECT storm the instant a leader takes over — and cap every live registration to nothing.
+func TestMaxLifetimeDefaulting(t *testing.T) {
+	zeroed := &Lwm2mConfiguration{}
+	zeroed.ApplyDefaults()
+	assert.Equal(t, DefaultMaxLifetimeSeconds, zeroed.MaxLifetimeSeconds)
+	assert.Positive(t, zeroed.MaxLifetimeSeconds, "a zero ceiling would storm-DISCONNECT on every failover")
+
+	// An explicit value is preserved; a non-positive one floors to the default.
+	explicit := &Lwm2mConfiguration{MaxLifetimeSeconds: 3600}
+	explicit.ApplyDefaults()
+	assert.Equal(t, 3600, explicit.MaxLifetimeSeconds)
+
+	bad := &Lwm2mConfiguration{MaxLifetimeSeconds: -5}
+	bad.ApplyDefaults()
+	assert.Equal(t, DefaultMaxLifetimeSeconds, bad.MaxLifetimeSeconds)
+}
+
+// A ceiling below the min-lifetime clamp is a self-contradictory window (raise-to-min then
+// cap-below-min) and is refused at load. An omitted ceiling defaults and validates cleanly.
+func TestValidateRejectsSubFloorMaxLifetime(t *testing.T) {
+	c := validConfig()
+	c.MaxLifetimeSeconds = MinMaxLifetimeSeconds - 1
+	require.Error(t, loaded(c), "a ceiling below the min-lifetime clamp must be rejected")
+
+	c.MaxLifetimeSeconds = MinMaxLifetimeSeconds
+	require.NoError(t, loaded(c), "a ceiling at the floor is accepted")
+}

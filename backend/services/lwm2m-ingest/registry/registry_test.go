@@ -651,3 +651,362 @@ func TestOnSessionEndHook(t *testing.T) {
 	assert.Equal(t, epoch3, ended[0].epoch)
 	mu.Unlock()
 }
+
+// --- L3b failover reconstruction -------------------------------------------
+
+// entrySnapshot reads the fields of an installed entry under the lock (tests inspect shadow
+// installs without racing the timer goroutines).
+func (r *Registry) entrySnapshot(regId string) (e entry, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cur := r.byRegId[regId]
+	if cur == nil {
+		return entry{}, false
+	}
+	return *cur, true
+}
+
+func (r *Registry) shadowRegIDFor(identity string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e := r.byIdentity[identity]
+	if e == nil {
+		return "", false
+	}
+	return e.regId, true
+}
+
+// A reconstruction shadow installs into BOTH indexes at a fresh PRE-MINTED epoch, armed for the
+// MAX lifetime (F2), with an empty token (resolved lazily at expiry). When its timer lapses with
+// no re-Register, it DISCONNECTS the device at that pre-minted epoch. The epoch is pinned to an
+// ABSOLUTE value (the L1a lesson: a relative assert.Greater would hide a severed epoch clock).
+func TestReconstructShadowExpiryDisconnectsAtFreshEpoch(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, func(o *Options) { o.MaxLife = 2 * time.Hour })
+
+	require.True(t, r.ReconstructShadow("dev-1", testBinding))
+	regId, ok := r.shadowRegIDFor("dev-1")
+	require.True(t, ok)
+
+	snap, ok := r.entrySnapshot(regId)
+	require.True(t, ok)
+	assert.True(t, snap.shadow, "a reconstructed entry is a shadow")
+	assert.Empty(t, snap.token, "a shadow carries no token (resolved lazily at expiry)")
+	assert.Equal(t, 2*time.Hour, snap.lifetime, "a shadow is armed for the MAX lifetime (F2), not a per-device lt")
+
+	// The pre-minted epoch is the clock's UnixNano (no floor set): an ABSOLUTE pin.
+	const wantEpoch = uint64(1_700_000_000_000_000_000)
+	assert.Equal(t, wantEpoch, snap.epoch, "the shadow epoch is pre-minted from the epoch source")
+
+	// The timer lapses with no re-Register (drive it directly, generation 0).
+	r.onExpiry(regId, 0)
+
+	dis := em.disconnects()
+	require.Len(t, dis, 1)
+	assert.Equal(t, wantEpoch, dis[0].ev.SessionId, "the shadow DISCONNECT carries the pre-minted fresh epoch (F6)")
+	assert.Equal(t, "reconstruct-expiry", dis[0].ev.Reason)
+	assert.Equal(t, "tok-1", dis[0].token, "the token is lazily resolved at expiry")
+	assert.Equal(t, adapter.ResolveFound, res.outcome)
+	assert.False(t, res.lastCall().policy.AutoRegister, "the lazy resolve is LOOKUP-ONLY (F5-1): a deleted device is not re-created to mark it offline")
+	// The shadow is gone after it disconnected.
+	_, ok = r.entrySnapshot(regId)
+	assert.False(t, ok)
+}
+
+// A shadow NEVER replaces a live registration (B1): a device that is already CONNECTED is always
+// fresher than the device-state snapshot the reconstruction reads. Load-bearing because the
+// in-term retry (F4) can run reconstruction WHILE the term serves, so a device may have
+// re-Registered between the failed first read and the retry.
+func TestReconstructShadowSkipsLiveEntry(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil)
+
+	_, liveRegId, liveEpoch, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
+
+	assert.False(t, r.ReconstructShadow("dev-1", testBinding), "a shadow must not replace a live entry")
+	snap, ok := r.entrySnapshot(liveRegId)
+	require.True(t, ok, "the live entry is untouched")
+	assert.False(t, snap.shadow)
+	assert.Equal(t, liveEpoch, snap.epoch, "the live entry keeps its own epoch, not a shadow's")
+}
+
+// A re-Register supersedes a shadow: the device's real registration mints a HIGHER epoch,
+// installLocked drops the shadow (cancelling its timer), and no DISCONNECT is ever emitted for the
+// shadow. The device is CONNECTED at the higher epoch — presence AND (on the live conn)
+// observations re-establish.
+func TestReconstructShadowSupersededByReRegister(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil)
+
+	require.True(t, r.ReconstructShadow("dev-1", testBinding))
+	shadowRegId, ok := r.shadowRegIDFor("dev-1")
+	require.True(t, ok)
+	shadowSnap, _ := r.entrySnapshot(shadowRegId)
+
+	// The device comes back and re-Registers.
+	result, liveRegId, liveEpoch, establish := r.Register(context.Background(), "dev-1", testBinding, 300)
+	require.Equal(t, RegisterOK, result)
+	assert.True(t, establish, "a real re-Register establishes observations")
+	assert.NotEqual(t, shadowRegId, liveRegId, "the live registration has its own location")
+	assert.Greater(t, liveEpoch, shadowSnap.epoch, "the live re-Register mints a higher epoch than the shadow")
+	require.Len(t, em.connects(), 1, "the re-Register emits a fresh CONNECTED")
+
+	// The shadow was dropped; firing its (already-cancelled) timer does nothing.
+	_, ok = r.entrySnapshot(shadowRegId)
+	assert.False(t, ok, "the shadow is dropped by the re-Register")
+	r.onExpiry(shadowRegId, 0)
+	assert.Empty(t, em.disconnects(), "a superseded shadow never emits a DISCONNECT")
+}
+
+// Storm control must NOT collapse a genuine re-Register onto a shadow (B3): a shadow never emitted
+// a CONNECTED, so handing back its regId+epoch (as recentRegistration does for a young live entry)
+// would leave the device with no presence at all. The shadow's connectedAt is backdated past the
+// replace backoff so recentRegistration never matches it.
+func TestStormControlDoesNotCollapseOntoShadow(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil) // ReplaceBackoff = 5s
+
+	require.True(t, r.ReconstructShadow("dev-1", testBinding))
+	shadowRegId, _ := r.shadowRegIDFor("dev-1")
+
+	// Re-Register immediately (no clock advance): well inside the replace backoff. It must NOT be
+	// collapsed onto the shadow — it mints a fresh session and emits a real CONNECTED.
+	result, liveRegId, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
+	assert.Equal(t, RegisterOK, result)
+	assert.NotEqual(t, shadowRegId, liveRegId, "a re-Register onto a shadow must not be storm-collapsed")
+	assert.Len(t, em.connects(), 1, "the re-Register emits a CONNECTED (a collapse would emit none)")
+}
+
+// At shadow expiry the lazy lookup-only resolve returning not-found (the device was deleted during
+// the failover blackout) drops the shadow SILENTLY — no DISCONNECT for a device that no longer
+// exists (F5-1).
+func TestReconstructShadowExpiryResolveNotFoundDropsSilently(t *testing.T) {
+	res := &fakeResolver{outcome: adapter.ResolveDropped}
+	em := &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil)
+
+	require.True(t, r.ReconstructShadow("dev-1", testBinding))
+	regId, _ := r.shadowRegIDFor("dev-1")
+
+	r.onExpiry(regId, 0)
+	assert.Empty(t, em.all(), "a deleted device produces no DISCONNECT")
+	_, ok := r.entrySnapshot(regId)
+	assert.False(t, ok, "the shadow is dropped")
+}
+
+// The reconstruction path is its OWN backstop, so a shadow whose expiry-DISCONNECT cannot be
+// emitted (durable store down) RE-ARMS rather than dropping (F5-2) — otherwise a genuinely-dead
+// device would sit CONNECTED until the next failover. Once the store recovers, the re-armed timer
+// completes the DISCONNECT.
+func TestReconstructShadowExpiryReArmsOnEmitFailure(t *testing.T) {
+	res := okResolver()
+	em := &fakeEmitter{failFirst: 100} // every emit fails
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil)
+
+	require.True(t, r.ReconstructShadow("dev-1", testBinding))
+	regId, _ := r.shadowRegIDFor("dev-1")
+
+	r.onExpiry(regId, 0)
+	assert.Empty(t, em.disconnects(), "the emit failed")
+	snap, ok := r.entrySnapshot(regId)
+	require.True(t, ok, "a failed shadow DISCONNECT must RE-ARM, not drop (F5-2)")
+	assert.True(t, snap.shadow)
+
+	// The store recovers; the re-armed timer fires and completes the DISCONNECT.
+	em.mu.Lock()
+	em.failFirst = 0
+	em.mu.Unlock()
+	r.onExpiry(regId, 0)
+	assert.Len(t, em.disconnects(), 1, "once the store recovers the re-armed shadow DISCONNECTS")
+	_, ok = r.entrySnapshot(regId)
+	assert.False(t, ok, "the shadow is removed after a successful DISCONNECT")
+}
+
+// A DISCONNECT epoch is minted ABOVE the floor at reconstruction and stored on the shadow, so even
+// if the wall clock steps BACK between install and expiry the DISCONNECT still carries a session
+// number that exceeds every stored one and wins by session (F6) — immune to the OccurredAt
+// fragility a same-session DISCONNECT inherits. Absolute pin on the stored session.
+func TestReconstructShadowStepBackStillDisconnects(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil)
+
+	// A high stored session (as if device-state held a large epoch); the reconstruction floors
+	// above it, so the shadow's pre-minted epoch exceeds it.
+	const storedSession = uint64(1_900_000_000_000_000_000)
+	r.epoch.SetFloor(storedSession)
+	require.True(t, r.ReconstructShadow("dev-1", testBinding))
+	regId, _ := r.shadowRegIDFor("dev-1")
+	snap, _ := r.entrySnapshot(regId)
+	require.Equal(t, storedSession+1, snap.epoch, "the shadow epoch is minted above the floor")
+
+	// The clock steps far back (an NTP correction across the failover); the DISCONNECT still
+	// carries the pre-minted high epoch.
+	clk.set(time.Unix(1_600_000_000, 0))
+	r.onExpiry(regId, 0)
+	dis := em.disconnects()
+	require.Len(t, dis, 1)
+	assert.Equal(t, storedSession+1, dis[0].ev.SessionId,
+		"the shadow DISCONNECT wins by session number regardless of the stepped-back clock (F6)")
+	assert.Greater(t, dis[0].ev.SessionId, storedSession, "and exceeds the stored session it supersedes")
+}
+
+// An asserted device whose credential was decommissioned (no current binding) is DISCONNECTED now
+// (B6): it can never re-handshake, so a shadow timer would only delay the honest terminal state.
+// The epoch is minted fresh (above the floor) and the resolve is lookup-only.
+func TestReconstructDisconnectEmitsOrphanAtFreshEpoch(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil)
+
+	r.ReconstructDisconnect(context.Background(), "acme", "plant-a/orphan-9")
+
+	dis := em.disconnects()
+	require.Len(t, dis, 1)
+	assert.Equal(t, "reconstruct-orphan", dis[0].ev.Reason)
+	assert.Equal(t, uint64(1_700_000_000_000_000_000), dis[0].ev.SessionId, "the orphan DISCONNECT is at a fresh minted epoch")
+	assert.Equal(t, "plant-a/orphan-9", dis[0].ev.ExternalId)
+	assert.False(t, res.lastCall().policy.AutoRegister, "the orphan resolve is LOOKUP-ONLY (F5-1)")
+}
+
+// An orphan resolve returning not-found emits nothing — the device no longer exists.
+func TestReconstructDisconnectResolveNotFoundNoEmit(t *testing.T) {
+	res := &fakeResolver{outcome: adapter.ResolveDropped}
+	em := &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil)
+
+	r.ReconstructDisconnect(context.Background(), "acme", "plant-a/gone")
+	assert.Empty(t, em.all(), "a deleted orphan produces no DISCONNECT")
+}
+
+// clampLifetime caps a too-long lifetime at the MAX ceiling (F2) — including the absent-lt default
+// when the ceiling is tightened below it — so no live registration can outlast the shadow timer.
+func TestClampLifetimeCeiling(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, func(o *Options) {
+		o.MinLifetime = 60 * time.Second
+		o.DefaultLife = 24 * time.Hour
+		o.MaxLife = time.Hour
+	})
+	assert.Equal(t, time.Hour, r.clampLifetime(0), "an absent lt defaults then caps at the ceiling")
+	assert.Equal(t, time.Hour, r.clampLifetime(7*24*3600), "a too-long lt is capped at the ceiling")
+	assert.Equal(t, 300*time.Second, r.clampLifetime(300), "an lt under the ceiling is kept")
+	assert.Equal(t, 60*time.Second, r.clampLifetime(5), "a too-short lt is still raised to the floor")
+}
+
+// A Stopped (evicted) registry refuses reconstruction too: a shadow install or an orphan
+// DISCONNECT in a dead term must not arm a timer or emit on a standby.
+func TestReconstructRefusedAfterStop(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil)
+	r.Stop()
+
+	assert.False(t, r.ReconstructShadow("dev-1", testBinding), "a stopped registry installs no shadow")
+	r.ReconstructDisconnect(context.Background(), "acme", "plant-a/x")
+	assert.Empty(t, em.all(), "a stopped registry emits no orphan DISCONNECT")
+}
+
+// A real Register must UNCONDITIONALLY supersede a reconstruction shadow — even one whose
+// pre-minted epoch is HIGHER than the Register's. The in-term retry (F4) installs a shadow while
+// serving and mints UNDER the lock, so it can out-mint a racing Register that minted (outside the
+// lock) first: without the shadow exemption in compare-on-epoch, the live device would be handed
+// the shadow's regId (an empty-token entry) and end up stuck CONNECTED. The gated emitter forces
+// the exact interleaving deterministically (Register minted E1 and is blocked in its emit → shadow
+// mints E2>E1 → Register unblocks and reaches compare-on-epoch with cur = shadow@E2 >= E1).
+func TestReRegisterSupersedesHigherEpochShadow(t *testing.T) {
+	res := okResolver()
+	em := newGatedEmitter()
+	r := New(res, em, adapter.NewEpochSource(nil), Metrics{}, Options{ReplaceBackoff: time.Nanosecond})
+
+	type regRet struct {
+		result    RegisterResult
+		regId     string
+		epoch     uint64
+		establish bool
+	}
+	retCh := make(chan regRet, 1)
+	go func() {
+		result, rid, ep, est := r.Register(context.Background(), "dev-1", testBinding, 300)
+		retCh <- regRet{result, rid, ep, est}
+	}()
+	e1 := <-em.arrived // the Register minted E1 and is blocked in the emitter, before the table lock
+
+	// While the Register is blocked, the in-term retry installs a shadow — it mints E2 > E1.
+	require.True(t, r.ReconstructShadow("dev-1", testBinding))
+	r.mu.Lock()
+	shadow := r.byIdentity["dev-1"]
+	shadowRegId, shadowEpoch, isShadow := shadow.regId, shadow.epoch, shadow.shadow
+	r.mu.Unlock()
+	require.True(t, isShadow)
+	require.Greater(t, shadowEpoch, e1, "the shadow must mint a HIGHER epoch than the blocked Register")
+
+	// Release the Register; it reaches compare-on-epoch with cur = shadow@E2 >= E1.
+	em.release(e1)
+	got := <-retCh
+
+	assert.Equal(t, RegisterOK, got.result)
+	assert.NotEqual(t, shadowRegId, got.regId, "the live device must get its OWN location, never the shadow's")
+	assert.True(t, got.establish, "a real Register establishes observations; it did not lose to the shadow")
+
+	r.mu.Lock()
+	live := r.byIdentity["dev-1"]
+	var liveShadow bool
+	var liveToken, liveRegId string
+	if live != nil {
+		liveShadow, liveToken, liveRegId = live.shadow, live.token, live.regId
+	}
+	_, shadowStillPresent := r.byRegId[shadowRegId]
+	r.mu.Unlock()
+	require.NotNil(t, live)
+	assert.False(t, liveShadow, "the stored entry is the live registration, not the shadow")
+	assert.Equal(t, got.regId, liveRegId)
+	assert.NotEmpty(t, liveToken, "the live entry carries a real token (a shadow's is empty)")
+	assert.False(t, shadowStillPresent, "the shadow is dropped by the superseding Register")
+
+	// Firing the shadow's cancelled timer must not DISCONNECT the now-live device.
+	r.onExpiry(shadowRegId, 0)
+	em.mu.Lock()
+	var disconnects int
+	for _, e := range em.events {
+		if !e.ev.Connected {
+			disconnects++
+		}
+	}
+	em.mu.Unlock()
+	assert.Zero(t, disconnects, "the superseded shadow never DISCONNECTS the live device")
+}
+
+// A shadow's regId is never servable (defense-in-depth for the compare-on-epoch exemption): an
+// Update or Deregister naming a shadow's regId gets a uniform not-found — so a shadow's day-long
+// timer can never be kept alive by an Update, nor its EMPTY token ever reach a Deregister emit.
+// The reconstruction counter also increments per shadow (a takeover marker, NIT 6).
+func TestShadowRegIdIsNotServable(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	shadows := prometheus.NewCounter(prometheus.CounterOpts{Name: "shadows_total"})
+	epoch := adapter.NewEpochSource(clk.now)
+	r := New(res, em, epoch, Metrics{ShadowsReconstructed: shadows}, Options{Now: clk.now, NewRegID: func() string { return "shadow-reg" }})
+
+	require.True(t, r.ReconstructShadow("dev-1", testBinding))
+	assert.Equal(t, float64(1), testutil.ToFloat64(shadows), "each shadow increments the takeover counter")
+
+	assert.Equal(t, UpdateUnknown, r.Update("dev-1", "shadow-reg", 300), "a shadow's regId is not Updatable")
+	assert.False(t, r.Deregister("dev-1", "shadow-reg"), "a shadow's regId is not Deregisterable")
+	assert.Empty(t, em.all(), "a rejected shadow Deregister emits nothing (never its empty token)")
+
+	// The shadow is intact and still expires on its own timer.
+	r.mu.Lock()
+	e := r.byIdentity["dev-1"]
+	r.mu.Unlock()
+	require.NotNil(t, e)
+	assert.True(t, e.shadow)
+}

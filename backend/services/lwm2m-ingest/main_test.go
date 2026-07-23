@@ -4,15 +4,21 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/devicechain-io/dc-event-sources/adapter"
 	"github.com/devicechain-io/dc-lwm2m-ingest/config"
+	"github.com/devicechain-io/dc-lwm2m-ingest/registry"
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
@@ -106,4 +112,143 @@ func TestSuperviseServeUnexpectedDeathFatals(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("an unexpected Serve return must trigger the fatal path")
 	}
+}
+
+// --- L3b failover reconstruction orchestration -----------------------------
+
+type mainReconciler struct {
+	mu       sync.Mutex
+	devices  map[string][]adapter.AssertedDevice
+	maxByTen map[string]uint64
+	failN    int // fail the first N reads (across all tenants), then succeed
+	calls    int
+}
+
+func (m *mainReconciler) AssertedActive(_ context.Context, tenant, _ string) ([]adapter.AssertedDevice, uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	if m.failN > 0 {
+		m.failN--
+		return nil, 0, errors.New("device-state down")
+	}
+	return m.devices[tenant], m.maxByTen[tenant], nil
+}
+
+type mainResolver struct {
+	mu      sync.Mutex
+	token   string
+	outcome adapter.ResolveOutcome
+	calls   int
+}
+
+func (m *mainResolver) Resolve(_ context.Context, _, _ string, _ adapter.IngestPolicy) (string, adapter.ResolveOutcome, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	return m.token, m.outcome, nil
+}
+
+type mainEmitter struct {
+	mu     sync.Mutex
+	events []adapter.PresenceEvent
+}
+
+func (m *mainEmitter) EmitPresence(_ context.Context, _, _, _ string, ev adapter.PresenceEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events = append(m.events, ev)
+	return nil
+}
+
+func (m *mainEmitter) disconnects() []adapter.PresenceEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []adapter.PresenceEvent
+	for _, e := range m.events {
+		if !e.Connected {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func newReconTestRegistry(res *mainResolver, em *mainEmitter, epoch *adapter.EpochSource, gauge prometheus.Gauge) *registry.Registry {
+	return registry.New(res, em, epoch, registry.Metrics{ActiveRegistrations: gauge}, registry.Options{Source: registry.SourceLwM2M})
+}
+
+// buildReverseBindings resolves a duplicate (tenant, externalId) across two identities
+// deterministically — the LOWEST identity wins — so the reconstruction installs exactly one shadow
+// and is stable run-to-run (B8).
+func TestBuildReverseBindingsDedup(t *testing.T) {
+	bindings := map[string]config.PskBinding{
+		"id-b": {Tenant: "acme", ExternalId: "plant-a/sensor-1"},
+		"id-a": {Tenant: "acme", ExternalId: "plant-a/sensor-1"}, // collides with id-b
+		"id-c": {Tenant: "acme", ExternalId: "plant-a/sensor-2"},
+	}
+	rev := buildReverseBindings(bindings)
+	require.Contains(t, rev, "acme")
+	assert.Equal(t, "id-a", rev["acme"]["plant-a/sensor-1"].identity, "the lower identity wins the collision")
+	assert.Equal(t, "id-c", rev["acme"]["plant-a/sensor-2"].identity)
+}
+
+// reconstructPresence installs a shadow for an asserted device that still has a binding, and
+// DISCONNECTS one whose credential was decommissioned (B6). The floor is raised above the stored
+// sessions, so the orphan DISCONNECT is minted at an epoch that exceeds them (the end-to-end F6
+// pin at the orchestration seam).
+func TestReconstructPresenceInstallsShadowsAndDisconnectsOrphans(t *testing.T) {
+	const storedMax = uint64(1_900_000_000_000_000_000)
+	rec := &mainReconciler{
+		devices: map[string][]adapter.AssertedDevice{"acme": {
+			{ExternalId: "plant-a/sensor-1", SessionId: storedMax},
+			{ExternalId: "plant-a/orphan-9", SessionId: storedMax - 10},
+		}},
+		maxByTen: map[string]uint64{"acme": storedMax},
+	}
+	res := &mainResolver{token: "tok-1", outcome: adapter.ResolveFound}
+	em := &mainEmitter{}
+	epoch := adapter.NewEpochSource(nil)
+	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "active"})
+	reg := newReconTestRegistry(res, em, epoch, gauge)
+
+	bindings := map[string]config.PskBinding{
+		"id-1": {Tenant: "acme", ExternalId: "plant-a/sensor-1", DeviceTypeToken: "sensor"},
+	}
+	reconstructPresence(context.Background(), epoch, rec, reg, bindings)
+
+	assert.Equal(t, float64(1), testutil.ToFloat64(gauge), "the matched device gets one shadow registration")
+	// The orphan DISCONNECT runs on a background goroutine.
+	require.Eventually(t, func() bool { return len(em.disconnects()) == 1 }, 2*time.Second, 5*time.Millisecond,
+		"the unmatched (decommissioned-credential) device is DISCONNECTED (B6)")
+	dis := em.disconnects()
+	assert.Equal(t, "plant-a/orphan-9", dis[0].ExternalId)
+	assert.Equal(t, "reconstruct-orphan", dis[0].Reason)
+	assert.Greater(t, dis[0].SessionId, storedMax, "the orphan DISCONNECT epoch is floored above the stored sessions (F6)")
+}
+
+// A tenant whose FIRST device-state read fails is retried IN-TERM (F4): once the read succeeds the
+// shadow is installed, without waiting for the next leadership acquisition.
+func TestReconstructPresenceRetriesFailedRead(t *testing.T) {
+	prev := reconstructReadRetryInterval
+	reconstructReadRetryInterval = 10 * time.Millisecond
+	defer func() { reconstructReadRetryInterval = prev }()
+
+	rec := &mainReconciler{
+		devices:  map[string][]adapter.AssertedDevice{"acme": {{ExternalId: "plant-a/sensor-1", SessionId: 5}}},
+		maxByTen: map[string]uint64{"acme": 5},
+		failN:    1, // the first read fails; the in-term retry succeeds
+	}
+	res := &mainResolver{token: "tok-1", outcome: adapter.ResolveFound}
+	em := &mainEmitter{}
+	epoch := adapter.NewEpochSource(nil)
+	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "active"})
+	reg := newReconTestRegistry(res, em, epoch, gauge)
+
+	bindings := map[string]config.PskBinding{"id-1": {Tenant: "acme", ExternalId: "plant-a/sensor-1"}}
+	reconstructPresence(context.Background(), epoch, rec, reg, bindings)
+
+	// The first pass read failed → no shadow yet; the retry goroutine installs it.
+	assert.Equal(t, float64(0), testutil.ToFloat64(gauge), "the failed first read installs no shadow")
+	require.Eventually(t, func() bool { return testutil.ToFloat64(gauge) == 1 }, 2*time.Second, 5*time.Millisecond,
+		"the in-term retry installs the shadow once device-state recovers (F4)")
 }

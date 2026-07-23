@@ -46,6 +46,11 @@ const (
 	// DefaultLifetime is used when a Register omits `lt`. LwM2M's own default registration
 	// lifetime is 86400s (one day).
 	DefaultLifetime = 86400 * time.Second
+	// DefaultMaxLifetime is the ceiling a registration lifetime is clamped DOWN to, and the
+	// lifetime a failover-reconstruction shadow timer is armed for (ADR-075 L3b / F2). It
+	// equals DefaultLifetime so an out-of-the-box fleet using LwM2M's own default `lt` is
+	// clamped to exactly that; the config knob (maxLifetimeSeconds) tightens it per fleet.
+	DefaultMaxLifetime = 86400 * time.Second
 	// DefaultExpiryGrace is slack added to a registration's lifetime before the timer
 	// declares it lapsed, absorbing network/scheduling jitter so a device that refreshes
 	// slightly late is not falsely DISCONNECTED.
@@ -63,6 +68,13 @@ const (
 	registerAttempts   = 2
 	disconnectAttempts = 5
 	retryBackoff       = 750 * time.Millisecond
+	// reconstructRetryInterval is how long a reconstruction shadow whose expiry-DISCONNECT
+	// could not be completed — device-management unreachable for the lazy token resolve, or
+	// the durable emit budget exhausted — waits before retrying (ADR-075 L3b / F5-2). The live
+	// path drops on exhaustion because "L3 reconstruction is the backstop"; the reconstruction
+	// path IS that backstop, so it re-arms instead of dropping, or a genuinely-dead device
+	// stays CONNECTED until the next failover.
+	reconstructRetryInterval = 30 * time.Second
 )
 
 // deviceResolver resolves a source external id to a DeviceChain device token,
@@ -83,17 +95,18 @@ type presenceEmitter interface {
 // tenant — a per-tenant label on a device-driven counter is the cardinality risk the
 // governance lesson (ADR-023) warns against.
 type Metrics struct {
-	Registrations       prometheus.Counter // successful Registers (a CONNECTED was emitted)
-	Updates             prometheus.Counter // lifetime refreshes
-	Deregistrations     prometheus.Counter // explicit DELETE /rd/{id}
-	Expiries            prometheus.Counter // lifetime lapses → DISCONNECTED
-	ActiveRegistrations prometheus.Gauge   // live registrations held
-	DevicesRegistered   prometheus.Counter // devices auto-created on first registration
-	PresenceEmitted     prometheus.Counter // presence StateChange events durably written
-	Dropped             prometheus.Counter // unknown device (auto-register off) OR emit budget exhausted
-	AuthErrors          prometheus.Counter // identity un-recoverable / no binding (handler layer)
-	BadRequests         prometheus.Counter // malformed /rd request (handler layer)
-	ObservationOverflow prometheus.Counter // telemetry instances a registration declared beyond the per-registration observe cap (L2b)
+	Registrations        prometheus.Counter // successful Registers (a CONNECTED was emitted)
+	Updates              prometheus.Counter // lifetime refreshes
+	Deregistrations      prometheus.Counter // explicit DELETE /rd/{id}
+	Expiries             prometheus.Counter // lifetime lapses → DISCONNECTED
+	ActiveRegistrations  prometheus.Gauge   // registrations held (INCLUDES failover-reconstruction shadows, L3b)
+	ShadowsReconstructed prometheus.Counter // shadow registrations rebuilt on a leadership acquisition (L3b) — a takeover marker
+	DevicesRegistered    prometheus.Counter // devices auto-created on first registration
+	PresenceEmitted      prometheus.Counter // presence StateChange events durably written
+	Dropped              prometheus.Counter // unknown device (auto-register off) OR emit budget exhausted
+	AuthErrors           prometheus.Counter // identity un-recoverable / no binding (handler layer)
+	BadRequests          prometheus.Counter // malformed /rd request (handler layer)
+	ObservationOverflow  prometheus.Counter // telemetry instances a registration declared beyond the per-registration observe cap (L2b)
 }
 
 // entry is one live registration. It is mutated only under Registry.mu.
@@ -110,6 +123,12 @@ type entry struct {
 	// a timer that already slipped past Stop sees the mismatch and does nothing.
 	generation uint64
 	timer      *time.Timer
+	// shadow marks an entry rebuilt by failover reconstruction (ADR-075 L3b), not by a live
+	// Register: it never had a device connection, its token is resolved LAZILY at expiry
+	// (lookup-only), and its lifetime timer's job is to DISCONNECT a device that stayed silent
+	// across the leadership handover. A live Register for the identity supersedes it (the fresh
+	// higher epoch wins) before the timer ever fires, in the common case.
+	shadow bool
 }
 
 // Registry is the in-memory active-registration table and the presence logic over it.
@@ -133,6 +152,7 @@ type Registry struct {
 	source         string
 	minLifetime    time.Duration
 	defaultLife    time.Duration
+	maxLife        time.Duration
 	grace          time.Duration
 	replaceBackoff time.Duration
 
@@ -149,9 +169,15 @@ type Registry struct {
 // Options configures a Registry. Zero-valued durations take their package defaults, so a
 // caller sets only what it overrides (tests pin the clock, regId, and short windows).
 type Options struct {
-	Source         string // the event Source stamp (ADR-067); L3 reconcile reads it back
-	MinLifetime    time.Duration
-	DefaultLife    time.Duration
+	Source      string // the event Source stamp (ADR-067); L3 reconcile reads it back
+	MinLifetime time.Duration
+	DefaultLife time.Duration
+	// MaxLife is the ceiling a registration lifetime is clamped DOWN to, and identically the
+	// lifetime a failover-reconstruction shadow timer is armed for (ADR-075 L3b / F2). Zero
+	// takes the package default; a value below MinLifetime is raised to it (the ceiling can
+	// never fall below the floor). Setting the shadow lifetime equal to the Register ceiling
+	// is what makes a shadow-expiry DISCONNECT only ever late-true, never false.
+	MaxLife        time.Duration
 	Grace          time.Duration
 	ReplaceBackoff time.Duration
 	// OnSessionEnd, when set, is called (outside the table lock) when a session ends by
@@ -181,6 +207,16 @@ func New(resolver deviceResolver, emitter presenceEmitter, epoch *adapter.EpochS
 	if opts.DefaultLife <= 0 {
 		opts.DefaultLife = DefaultLifetime
 	}
+	if opts.MaxLife <= 0 {
+		opts.MaxLife = DefaultMaxLifetime
+	}
+	// The ceiling can never fall below the floor: a MaxLife below MinLifetime would make
+	// clampLifetime raise a short lt to the floor and then cap it back below the floor — a
+	// self-contradictory window. Raise it to the floor (config.Validate refuses this at the
+	// config layer; this keeps a directly-constructed registry coherent too).
+	if opts.MaxLife < opts.MinLifetime {
+		opts.MaxLife = opts.MinLifetime
+	}
 	if opts.Grace <= 0 {
 		opts.Grace = DefaultExpiryGrace
 	}
@@ -197,6 +233,7 @@ func New(resolver deviceResolver, emitter presenceEmitter, epoch *adapter.EpochS
 		source:         opts.Source,
 		minLifetime:    opts.MinLifetime,
 		defaultLife:    opts.DefaultLife,
+		maxLife:        opts.MaxLife,
 		grace:          opts.Grace,
 		replaceBackoff: opts.ReplaceBackoff,
 		onSessionEnd:   opts.OnSessionEnd,
@@ -312,12 +349,22 @@ func (r *Registry) Register(ctx context.Context, identity string, binding config
 		r.mu.Unlock()
 		return RegisterUnavailable, "", 0, false
 	}
-	// Compare-on-epoch (R1): if a concurrent Register already installed an equal-or-higher
+	// Compare-on-epoch (R1): if a concurrent REAL Register already installed an equal-or-higher
 	// epoch, it won — discard this one. Our just-emitted CONNECTED@epoch is stale but
 	// harmless (the projection holds the higher session). Hand back the winner's location and
 	// its epoch; establish=false because the winning Register establishes the observations
 	// (our conn is superseded — observing on it would only lose the manager's CAS).
-	if cur := r.byIdentity[identity]; cur != nil && cur.epoch >= epoch {
+	//
+	// A SHADOW is never a peer here (ADR-075 L3b): a real Register proves the device is alive, so
+	// it must supersede a reconstruction shadow UNCONDITIONALLY — even one whose pre-minted epoch
+	// is HIGHER than ours. The in-term retry (F4) can install a shadow WHILE serving, and it mints
+	// under the lock AFTER a racing Register minted (outside the lock), so cur.epoch >= epoch is
+	// reachable with cur a shadow; treating it as a compare-on-epoch winner would hand this live
+	// device the shadow's regId (an empty-token entry it would then keep alive by Update, whose
+	// Deregister emits an empty-token DISCONNECT → stuck CONNECTED). Falling through to
+	// installLocked drops the shadow (cancelling its timer) and installs this live entry; the
+	// shadow never emitted a CONNECTED, so no DISCONNECT is owed.
+	if cur := r.byIdentity[identity]; cur != nil && !cur.shadow && cur.epoch >= epoch {
 		winner, winnerEpoch := cur.regId, cur.epoch
 		r.mu.Unlock()
 		return RegisterOK, winner, winnerEpoch, false
@@ -393,7 +440,12 @@ func (r *Registry) Update(identity, regId string, ltSeconds int) UpdateResult {
 		return UpdateUnknown
 	}
 	e := r.byRegId[regId]
-	if e == nil || e.identity != identity {
+	// A shadow is never servable (ADR-075 L3b): its opaque regId is not one any device was ever
+	// handed (the compare-on-epoch exemption guarantees a real Register supersedes a shadow rather
+	// than returning its regId), so an Update naming a shadow's regId cannot be legitimate. Treat it
+	// as unknown → 4.04 → re-Register — defense-in-depth so a shadow's day-long timer can never be
+	// kept alive by an Update, nor its empty token ever reach a Deregister emit.
+	if e == nil || e.identity != identity || e.shadow {
 		return UpdateUnknown
 	}
 	if ltSeconds > 0 {
@@ -422,7 +474,9 @@ func (r *Registry) Deregister(identity, regId string) bool {
 		return false
 	}
 	e := r.byRegId[regId]
-	if e == nil || e.identity != identity {
+	// A shadow's regId is never servable (see Update): a Deregister naming one cannot be legitimate,
+	// and honoring it would emit a DISCONNECT with the shadow's EMPTY token. Uniform not-found.
+	if e == nil || e.identity != identity || e.shadow {
 		r.mu.Unlock()
 		return false
 	}
@@ -453,6 +507,11 @@ func (r *Registry) onExpiry(regId string, gen uint64) {
 		r.mu.Unlock()
 		return // stale fire: already removed, or refreshed by an Update
 	}
+	if e.shadow {
+		r.mu.Unlock()
+		r.onShadowExpiry(regId, gen) // reconstruction path: lazy-resolve the token, then DISCONNECT
+		return
+	}
 	r.removeLocked(e)
 	identity, tenant, token, externalId, epoch, connectedAt := e.identity, e.tenant, e.token, e.externalId, e.epoch, e.connectedAt
 	r.mu.Unlock()
@@ -468,6 +527,168 @@ func (r *Registry) onExpiry(regId string, gen uint64) {
 	// This runs on a dedicated timer goroutine (it blocks no request), so it gets the
 	// GENEROUS retry budget: it is the only actor that re-drives this DISCONNECT.
 	r.emitDisconnect(tenant, token, externalId, epoch, r.disconnectStamp(connectedAt), "lifetime-expiry", disconnectAttempts)
+}
+
+// ReconstructShadow installs a SHADOW registration for an asserted-active device recovered
+// from the device-state projection on a leadership acquisition (ADR-075 L3b failover
+// reconstruction). A shadow occupies both indexes under a fresh random regId, so a device
+// that stayed silent across the handover is DISCONNECTED when its lifetime timer lapses,
+// while a surviving device's Update to the (unknowable) regId 4.04s → re-Register → a fresh
+// higher-epoch CONNECTED supersedes the shadow (installLocked drops it, its timer cancelled).
+//
+// It returns whether a shadow was installed. It SKIPS unconditionally when a live entry for
+// the identity already exists (B1): a live registration is always fresher than the device-
+// state snapshot, and the in-term retry (F4) can run this while the term already serves, so a
+// device may have re-Registered between the failed first read and the retry.
+//
+// The epoch is PRE-MINTED here (F6) — above the floor the caller already raised from the same
+// asserted set — and stored as the entry's epoch, so the eventual onExpiry → emitDisconnect
+// carries a session number that exceeds every stored one and wins by session (immune to the
+// wall-clock step-back that makes a same-session, OccurredAt-ordered DISCONNECT fragile).
+func (r *Registry) ReconstructShadow(identity string, binding config.PskBinding) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopped {
+		return false
+	}
+	if _, live := r.byIdentity[identity]; live {
+		return false // B1: never replace a live entry with a stale snapshot
+	}
+	epoch := r.epoch.Mint() // F6: above the floor; the DISCONNECT wins by session number
+	regId := r.newRegID()
+	now := r.now()
+	// Backdate connectedAt past the replace backoff so a genuine re-Register is NOT collapsed
+	// onto the shadow by storm control (B3): recentRegistration would otherwise hand back the
+	// shadow's regId+epoch WITHOUT ever emitting a CONNECTED, leaving the device with no
+	// presence at all. A shadow never emitted a CONNECT, so it must never satisfy storm control.
+	e := &entry{
+		regId: regId, identity: identity, tenant: binding.Tenant,
+		externalId: binding.ExternalId, token: "", epoch: epoch,
+		connectedAt: now.Add(-r.replaceBackoff - time.Second),
+		lifetime:    r.maxLife, generation: 0, shadow: true,
+	}
+	// The shadow timer is armed for the MAX lifetime (F2), never a per-device `lt` (unknown —
+	// device-state does not persist it). Equalling the Register ceiling is what guarantees the
+	// timer outlasts any live registration's remaining lifetime, so its DISCONNECT is late-true.
+	e.timer = time.AfterFunc(r.maxLife+r.grace, func() { r.onExpiry(regId, 0) })
+	r.byRegId[regId] = e
+	r.byIdentity[identity] = e
+	setGauge(r.metrics.ActiveRegistrations, len(r.byRegId))
+	incr(r.metrics.ShadowsReconstructed, 1)
+	log.Info().Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).Str("regId", regId).
+		Uint64("session", epoch).Msg("Reconstructed a shadow LwM2M registration on leadership acquisition (ADR-075 L3b).")
+	return true
+}
+
+// ReconstructDisconnect DISCONNECTS an asserted-active device that has NO current tenancy
+// binding (its PSK credential was decommissioned while the device was CONNECTED, B6). Such a
+// device can never re-handshake, so a shadow with a lifetime timer would only delay the
+// inevitable — the honest terminal state is DISCONNECTED now. It mints a fresh epoch above
+// the floor (F6, so the transition wins by session), resolves the token LOOKUP-ONLY
+// (AutoRegister:false — a device deleted during the blackout must not be re-created just to
+// mark it offline, F5-1; not-found ⇒ nothing to disconnect), and emits with the generous
+// budget. A re-added credential's later re-Register supersedes this at a higher epoch.
+//
+// It runs synchronously (the caller drives it off the acquisition path so a slow
+// device-management never stalls serving) and is best-effort: on an unreachable resolve or an
+// exhausted emit it returns without emitting; the row stays asserted and the next acquisition
+// re-attempts. This is the rare partial-decommission edge, not the hot path.
+func (r *Registry) ReconstructDisconnect(ctx context.Context, tenant, externalId string) {
+	if r.isStopped() {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, emitTimeout)
+	token, outcome, err := r.resolver.Resolve(rctx, tenant, externalId, adapter.IngestPolicy{Source: r.source, AutoRegister: false})
+	cancel()
+	if err != nil {
+		log.Warn().Err(err).Str("tenant", tenant).Str("externalId", externalId).
+			Msg("Could not resolve an orphaned asserted device to DISCONNECT it (device-management unreachable); retried on the next acquisition.")
+		return
+	}
+	if outcome == adapter.ResolveDropped {
+		return // the device no longer exists — nothing to disconnect
+	}
+	epoch := r.epoch.Mint()
+	log.Info().Str("tenant", tenant).Str("externalId", externalId).Uint64("session", epoch).
+		Msg("DISCONNECTING an asserted LwM2M device whose credential was decommissioned (ADR-075 L3b / B6).")
+	r.emitDisconnect(tenant, token, externalId, epoch, r.now(), "reconstruct-orphan", disconnectAttempts)
+}
+
+// onShadowExpiry runs when a reconstruction shadow's lifetime timer lapses with no re-Register:
+// the device stayed silent across the handover and is presumed gone. Unlike a live expiry it
+// must LAZILY resolve the token (a shadow carries none — F5-1 lookup-only) before it can emit,
+// so it re-validates the entry under the lock at each step, since a re-Register may have
+// superseded the shadow while this ran (its fresh higher-epoch CONNECTED then wins regardless).
+//
+//   - resolve error (device-management unreachable): RE-ARM a retry timer, do NOT drop — the
+//     reconstruction path is its own backstop (F5-2).
+//   - not-found (device deleted during the blackout): drop the shadow silently, no emit.
+//   - resolved: emit DISCONNECT@pre-minted-epoch; on an exhausted emit budget, re-arm (F5-2);
+//     on success, remove the shadow.
+func (r *Registry) onShadowExpiry(regId string, gen uint64) {
+	r.mu.Lock()
+	e := r.byRegId[regId]
+	if e == nil || e.generation != gen || !e.shadow {
+		r.mu.Unlock()
+		return // superseded by a re-Register (or already handled)
+	}
+	tenant, externalId, epoch, connectedAt := e.tenant, e.externalId, e.epoch, e.connectedAt
+	r.mu.Unlock()
+
+	// Lazy LOOKUP-ONLY resolve (F5-1): AutoRegister:false so a device deleted during the
+	// blackout is not re-created merely to mark it offline.
+	rctx, cancel := context.WithTimeout(context.Background(), emitTimeout)
+	token, outcome, err := r.resolver.Resolve(rctx, tenant, externalId, adapter.IngestPolicy{Source: r.source, AutoRegister: false})
+	cancel()
+	if err != nil {
+		r.rearmShadow(regId, gen) // transient — retry later, never drop (F5-2)
+		return
+	}
+	if outcome == adapter.ResolveDropped {
+		r.dropShadow(regId, gen) // device gone — nothing to disconnect
+		return
+	}
+
+	// Emit while the shadow is still installed, then remove on success. The only concurrent
+	// mutation is a re-Register (a shadow has no Update path), and it is epoch-ordered: whether
+	// it lands before or after this DISCONNECT, its higher-epoch CONNECTED wins in the projection.
+	if !r.emitDisconnect(tenant, token, externalId, epoch, r.disconnectStamp(connectedAt), "reconstruct-expiry", disconnectAttempts) {
+		r.rearmShadow(regId, gen) // durable store down — retry later, never drop (F5-2)
+		return
+	}
+	incr(r.metrics.Expiries, 1)
+	log.Info().Str("tenant", tenant).Str("externalId", externalId).Uint64("session", epoch).
+		Msg("Reconstruction shadow lifetime lapsed with no re-Register (DISCONNECTED across a leadership handover).")
+	// No fireSessionEnd: a shadow never had a live conn in THIS term (the observe manager is
+	// rebuilt empty per leadership term), so there are no observations to cancel.
+	r.dropShadow(regId, gen)
+}
+
+// rearmShadow re-arms a still-present shadow's lifetime timer after a failed expiry-DISCONNECT
+// (F5-2), re-validating under the lock: a re-Register may have superseded the shadow while the
+// resolve/emit ran, in which case there is nothing to re-arm (the device is back). The
+// generation is unchanged (a shadow has no Update to bump it), so the re-armed timer's gen
+// still matches.
+func (r *Registry) rearmShadow(regId string, gen uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e := r.byRegId[regId]
+	if e == nil || e.generation != gen || !e.shadow {
+		return
+	}
+	e.timer = time.AfterFunc(reconstructRetryInterval, func() { r.onExpiry(regId, gen) })
+}
+
+// dropShadow removes a shadow (device deleted during the blackout) with no DISCONNECT,
+// re-validating under the lock so a shadow a re-Register already superseded is left untouched.
+func (r *Registry) dropShadow(regId string, gen uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e := r.byRegId[regId]
+	if e == nil || e.generation != gen || !e.shadow {
+		return
+	}
+	r.removeLocked(e)
 }
 
 // fireSessionEnd invokes the OnSessionEnd hook (if set) so the observe manager cancels the
@@ -494,17 +715,20 @@ func (r *Registry) removeLocked(e *entry) {
 	setGauge(r.metrics.ActiveRegistrations, len(r.byRegId))
 }
 
-// emitDisconnect writes a DISCONNECTED transition with a bounded retry (attempts). On
-// exhaustion it counts the drop (bounded loss) and logs — the L3 failover reconstruction
-// re-derives presence from device-state, so a lost DISCONNECT during a durable-store
-// outage is a covered gap, not a silent forever-stuck device.
+// emitDisconnect writes a DISCONNECTED transition with a bounded retry (attempts),
+// returning whether it was durably emitted. On exhaustion the LIVE callers (Deregister,
+// live expiry) count the drop (bounded loss) and move on — the L3 failover reconstruction
+// re-derives presence from device-state, so a lost DISCONNECT during a durable-store outage
+// is a covered gap there, not a silent forever-stuck device. The RECONSTRUCTION caller is
+// that backstop and has none of its own, so it inspects the return and re-arms rather than
+// dropping (F5-2).
 //
 // It always emits under context.Background(), NEVER a request context: the entry is
 // already removed, so this DISCONNECT is our own bookkeeping — a device that drops its
 // connection right after DELETE must not cancel it mid-retry (which would strand the device
 // CONNECTED). The dedup id keys on (tenant, device, session, state), so any re-drive is
 // idempotent.
-func (r *Registry) emitDisconnect(tenant, token, externalId string, epoch uint64, occurredAt time.Time, reason string, attempts int) {
+func (r *Registry) emitDisconnect(tenant, token, externalId string, epoch uint64, occurredAt time.Time, reason string, attempts int) bool {
 	ev := adapter.PresenceEvent{
 		ExternalId: externalId,
 		Connected:  false,
@@ -516,9 +740,10 @@ func (r *Registry) emitDisconnect(tenant, token, externalId string, epoch uint64
 		incr(r.metrics.Dropped, 1)
 		log.Warn().Err(err).Str("tenant", tenant).Str("externalId", externalId).Str("reason", reason).
 			Msg("Could not emit DISCONNECTED after the retry budget; L3 reconstruction is the backstop.")
-		return
+		return false
 	}
 	incr(r.metrics.PresenceEmitted, 1)
+	return true
 }
 
 // disconnectStamp keeps a DISCONNECTED's OccurredAt strictly after the session's
@@ -555,14 +780,24 @@ func (r *Registry) emitPresence(ctx context.Context, tenant, token string, ev ad
 }
 
 // clampLifetime turns a client-requested lifetime (seconds; 0 ⇒ absent) into the enforced
-// duration: the default when absent, otherwise raised to the minimum (R5).
+// duration: the default when absent, otherwise raised to the minimum floor (R5) and capped
+// at the maximum ceiling (ADR-075 L3b / F2). The ceiling bounds the largest live lifetime so
+// a failover-reconstruction shadow timer armed at the same ceiling can never be shorter than
+// a live registration's remaining lifetime — which is what makes a shadow-expiry DISCONNECT
+// only ever late-true. The absent-lt default is capped too, so a tightened ceiling below the
+// default takes effect for a device that omits `lt`.
 func (r *Registry) clampLifetime(ltSeconds int) time.Duration {
+	var lt time.Duration
 	if ltSeconds <= 0 {
-		return r.defaultLife
+		lt = r.defaultLife
+	} else {
+		lt = time.Duration(ltSeconds) * time.Second
 	}
-	lt := time.Duration(ltSeconds) * time.Second
 	if lt < r.minLifetime {
-		return r.minLifetime
+		lt = r.minLifetime
+	}
+	if lt > r.maxLife {
+		lt = r.maxLife
 	}
 	return lt
 }
