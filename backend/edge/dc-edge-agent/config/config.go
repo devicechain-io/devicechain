@@ -58,6 +58,22 @@ type LocalConfiguration struct {
 	// ListenPort is the local device MQTT port. Defaults to 1883.
 	ListenPort int `json:"listenPort"`
 
+	// Username / PasswordEnv are the OPTIONAL shared-secret credential the local MQTT
+	// listener requires (E4). Empty (the default) leaves the listener OPEN — a
+	// trusted-LAN posture the agent announces with a loud startup WARN so "open" is
+	// always a visible operational choice, never a silent default. When set, the
+	// embedded MQTT gateway rejects any CONNECT that does not present this pair (it
+	// gates ONLY the device MQTT surface; the agent's own in-process drain client is
+	// unaffected). This is a single shared secret, NOT per-device identity — cloud
+	// event ATTRIBUTION still rides the per-event payload credential (ADR-014), so the
+	// gate is a network-access control, not an identity system. PasswordEnv names an
+	// environment variable holding the password (a projected Secret, never cleartext in
+	// this document), mirroring the uplink pattern. NOTE: over plaintext MQTT the secret
+	// crosses the LAN in the clear — the network is still the real boundary; local MQTT
+	// TLS is future work.
+	Username    string `json:"username"`
+	PasswordEnv string `json:"passwordEnv"`
+
 	// StoreDir is the on-disk directory for the embedded JetStream file store (the
 	// durable local spool). Required: an in-memory spool would lose everything on
 	// an agent restart during an outage (spec decision 3).
@@ -181,6 +197,13 @@ func (c *Configuration) Validate() error {
 	// that validates without defaulting gets an error, never a panic (fail-closed, not crash).
 	if p := c.Local.MetricsPort; p != nil && *p != 0 && (*p < 1 || *p > 65535) {
 		return fmt.Errorf("local.metricsPort %d out of range (0 to disable, else 1..65535)", *p)
+	}
+	// Local MQTT auth is both-or-neither: a username with no password source cannot be
+	// enforced, and a passwordEnv with no username names a secret nothing consumes. Either
+	// half alone is a misconfiguration whose runtime posture (open? closed?) is ambiguous —
+	// reject it at load rather than resolve it silently one way.
+	if (c.Local.Username == "") != (c.Local.PasswordEnv == "") {
+		return fmt.Errorf("local.username and local.passwordEnv must be set together (or both omitted to leave the local MQTT listener open)")
 	}
 	if c.Uplink.BrokerURL == "" {
 		return fmt.Errorf("uplink.brokerUrl is required")

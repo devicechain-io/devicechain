@@ -23,6 +23,16 @@ import (
 	"github.com/devicechain-io/dc-edge-agent/config"
 )
 
+// Build metadata, stamped by goreleaser via -ldflags -X (see .goreleaser.yaml). The
+// defaults are what an un-stamped `go build` / container image reports; a released binary
+// carries the tag. Kept as plain package vars (not a version package) — the agent is a
+// single small command.
+var (
+	version   = "dev"
+	gitCommit = "unknown"
+	buildDate = "unknown"
+)
+
 func main() {
 	if err := rootCommand().Execute(); err != nil {
 		os.Exit(1)
@@ -42,7 +52,21 @@ func rootCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "path to the agent configuration file (JSON)")
 	_ = cmd.MarkFlagRequired("config")
+	cmd.AddCommand(versionCommand())
 	return cmd
+}
+
+// versionCommand prints build metadata. A released binary sitting on an edge box for months
+// is exactly where "which build is this?" matters, so it is a first-class subcommand.
+func versionCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print build version, commit, and date",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, _ []string) {
+			fmt.Fprintf(cmd.OutOrStdout(), "dc-edge-agent %s (commit %s, built %s)\n", version, gitCommit, buildDate)
+		},
+	}
 }
 
 // run loads and validates the config (fail-closed), then runs the agent until a

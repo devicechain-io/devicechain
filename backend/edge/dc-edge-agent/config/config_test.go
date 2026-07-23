@@ -84,6 +84,23 @@ func TestValidateAcceptsValid(t *testing.T) {
 	}
 }
 
+// Both halves of the optional local-auth credential set together is valid (the enabled
+// case), and both omitted is valid (the open trusted-LAN default) — the both-or-neither
+// rule rejects only a lone half (covered in TestValidateRejects).
+func TestLocalAuthBothOrNeitherAccepts(t *testing.T) {
+	both := validConfig()
+	both.Local.Username = "edge"
+	both.Local.PasswordEnv = "DC_EDGE_LOCAL_PASSWORD"
+	if err := loaded(both); err != nil {
+		t.Errorf("username+passwordEnv together should validate: %v", err)
+	}
+	// neither is the default validConfig() — already exercised by TestValidateAcceptsValid,
+	// asserted here explicitly for the pairing.
+	if err := loaded(validConfig()); err != nil {
+		t.Errorf("neither username nor passwordEnv (open listener) should validate: %v", err)
+	}
+}
+
 func TestValidateRejects(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -109,6 +126,8 @@ func TestValidateRejects(t *testing.T) {
 		{"spoolMaxBytes below floor", func(c *Configuration) { c.Local.SpoolMaxBytes = 1024 }, "below the"},
 		{"metricsPort out of range", func(c *Configuration) { p := 70000; c.Local.MetricsPort = &p }, "out of range"},
 		{"metricsPort negative", func(c *Configuration) { p := -1; c.Local.MetricsPort = &p }, "out of range"},
+		{"local username without passwordEnv", func(c *Configuration) { c.Local.Username = "edge" }, "must be set together"},
+		{"local passwordEnv without username", func(c *Configuration) { c.Local.PasswordEnv = "DC_EDGE_LOCAL_PASSWORD" }, "must be set together"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

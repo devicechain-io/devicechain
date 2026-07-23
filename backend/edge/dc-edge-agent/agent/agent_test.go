@@ -28,6 +28,38 @@ import (
 
 func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
+// syncBuffer is a goroutine-safe io.Writer + reader for capturing an agent's log output:
+// Run writes from its own goroutine while the test reads, so an unguarded bytes.Buffer
+// would race under -race.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// newAgentLog is newAgent with the log routed to w (for tests that assert on log output).
+func newAgentLog(t *testing.T, cfg config.Configuration, w io.Writer) *Agent {
+	t.Helper()
+	cfg.ApplyDefaults()
+	a, err := New(cfg, slog.New(slog.NewTextHandler(w, nil)))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	a.metricsAddrOverride = "127.0.0.1:0"
+	return a
+}
+
 // freePort reserves an ephemeral port and releases it, returning the number. A brief
 // TOCTOU window exists before the caller binds it; acceptable in tests, and the
 // embedded MQTT gateway has no ephemeral-port accessor to use instead.
@@ -87,6 +119,34 @@ func mqttConnect(t *testing.T, addr, clientID string) mqtt.Client {
 	}
 	t.Cleanup(func() { c.Disconnect(100) })
 	return c
+}
+
+// mqttConnectAuth is mqttConnect with a username/password on the CONNECT, and it does NOT
+// fatal on failure — it returns the connect token's error so a test can assert either
+// acceptance (nil, client usable) or rejection (non-nil). A "" username/password presents
+// an anonymous CONNECT (the empty-vs-empty fail-open shape to guard against). The returned
+// client is auto-disconnected only on a successful connect.
+func mqttConnectAuth(t *testing.T, addr, clientID, user, pass string) (mqtt.Client, error) {
+	t.Helper()
+	opts := mqtt.NewClientOptions().
+		AddBroker("tcp://" + addr).
+		SetClientID(clientID).
+		SetConnectTimeout(5 * time.Second)
+	if user != "" {
+		opts.SetUsername(user)
+	}
+	if pass != "" {
+		opts.SetPassword(pass)
+	}
+	c := mqtt.NewClient(opts)
+	tok := c.Connect()
+	if !tok.WaitTimeout(10 * time.Second) {
+		return c, fmt.Errorf("connect timed out")
+	}
+	if tok.Error() == nil {
+		t.Cleanup(func() { c.Disconnect(100) })
+	}
+	return c, tok.Error()
 }
 
 func devicePublish(t *testing.T, addr, clientID, topic string, payload []byte) {
@@ -540,6 +600,18 @@ func collectSeqs(t *testing.T, cloudAddr, clientID string, mu *sync.Mutex, seqs 
 	}
 }
 
+// grepLine returns the lines of s containing sub — a compact excerpt for failure messages
+// so an assertion on one Prometheus metric doesn't dump the whole /metrics body.
+func grepLine(s, sub string) string {
+	var out []string
+	for _, ln := range strings.Split(s, "\n") {
+		if strings.Contains(ln, sub) {
+			out = append(out, ln)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
 func httpGet(t *testing.T, url string) (int, string) {
 	t.Helper()
 	resp, err := http.Get(url)
@@ -859,6 +931,225 @@ func TestInstanceMismatchIsCounted(t *testing.T) {
 	devicePublish(t, fmt.Sprintf("127.0.0.1:%d", agentPort), "dev-wrong",
 		"wrong/tenant1/devices/dev1/events", []byte(`{}`))
 	waitUntil(t, 10*time.Second, func() bool { return a.mismatched.Load() > 0 })
+}
+
+// TestLocalAuthGatesLocalMqtt is E4-A's check that cannot fail: with local.username +
+// local.passwordEnv set, the embedded MQTT gateway must reject a CONNECT that presents the
+// wrong password AND an anonymous CONNECT (the empty-vs-empty fail-open shape), while the
+// CORRECT credential is accepted and its event forwards end-to-end — the last part proving
+// the load-bearing seam: MQTT auth gates the device surface ONLY, leaving the agent's own
+// in-process drain client (which carries no credentials) working. The metric asserts the
+// posture is continuously auditable.
+//
+// Mutations this pins: drop the opts.MQTT.Username/Password wiring in newServer ⇒ the wrong
+// and anonymous CONNECTs are accepted; thread the creds into the in-process client (wrong
+// fix) ⇒ the drain can't connect and nothing forwards.
+func TestLocalAuthGatesLocalMqtt(t *testing.T) {
+	const user, pass = "edge", "s3cret-xyz"
+	t.Setenv("DC_EDGE_LOCAL_PASSWORD", pass)
+
+	cloudPort := freePort(t)
+	startCloudBroker(t, cloudPort)
+	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
+
+	agentPort := freePort(t)
+	a := startAgent(t, config.Configuration{
+		InstanceId: "test",
+		AgentId:    "site1",
+		Local: config.LocalConfiguration{
+			ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: t.TempDir(),
+			Username: user, PasswordEnv: "DC_EDGE_LOCAL_PASSWORD",
+		},
+		Uplink: config.UplinkConfiguration{BrokerURL: fmt.Sprintf("tcp://%s", cloudAddr)},
+	})
+	waitUntil(t, 15*time.Second, a.uplink.Connected)
+	addr := fmt.Sprintf("127.0.0.1:%d", agentPort)
+
+	// Wrong password → rejected.
+	if _, err := mqttConnectAuth(t, addr, "dev-wrong", user, "nope"); err == nil {
+		t.Error("CONNECT with a wrong password was accepted; the local gate is not enforcing")
+	}
+	// Anonymous (no username/password) → rejected. This is the fail-open shape:
+	// nats-server compares an empty configured password against an empty presented one as
+	// equal, so a listener with an empty resolved secret would accept this. (New refuses to
+	// reach that state; this pins the gate rejects anonymous even so.)
+	if _, err := mqttConnectAuth(t, addr, "dev-anon", "", ""); err == nil {
+		t.Error("anonymous CONNECT was accepted; the local gate is porous")
+	}
+
+	// Correct creds → accepted, and the event forwards all the way to the cloud (proving
+	// the in-process drain is unaffected by the MQTT gate).
+	dev, err := mqttConnectAuth(t, addr, "dev-ok", user, pass)
+	if err != nil {
+		t.Fatalf("CONNECT with correct creds was rejected: %v", err)
+	}
+	got := make(chan mqtt.Message, 1)
+	cloudSubscribe(t, cloudAddr, "cloud-sub-auth", got)
+	payload := []byte(`{"altId":"dev-a","occurredTime":"2026-07-22T10:30:00Z","eventType":"measurement","values":{"temp":5}}`)
+	if tok := dev.Publish("test/tenant1/devices/dev1/events", 1, false, payload); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+		t.Fatalf("authed device publish: %v", tok.Error())
+	}
+	select {
+	case m := <-got:
+		if !bytes.Equal(m.Payload(), payload) {
+			t.Errorf("forwarded payload = %q, want %q", m.Payload(), payload)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("authed device's event did not forward to the cloud (in-process drain broken by MQTT auth?)")
+	}
+
+	// Posture is continuously auditable: local_auth_enabled == 1.
+	_, body := httpGet(t, "http://"+a.metrics.addr+"/metrics")
+	if !strings.Contains(body, "devicechain_edge_local_auth_enabled 1") {
+		t.Errorf("metrics missing local_auth_enabled 1 (posture not exported); body excerpt:\n%s", grepLine(body, "local_auth_enabled"))
+	}
+}
+
+// TestLocalAuthMissingSecretFailsClosed pins the fail-closed guard on the env indirection:
+// a configured local.username whose passwordEnv resolves to empty (the Secret did not
+// project) must make New refuse to start — NOT silently degrade to an effectively-open
+// listener (nats-server would require the username but accept any password against the
+// empty configured one). Removing the guard in New makes New succeed here.
+func TestLocalAuthMissingSecretFailsClosed(t *testing.T) {
+	// Ensure the referenced variable is empty for this test.
+	t.Setenv("DC_EDGE_LOCAL_PASSWORD_MISSING", "")
+	cfg := config.Configuration{
+		InstanceId: "test",
+		AgentId:    "site1",
+		Local: config.LocalConfiguration{
+			ListenHost: "127.0.0.1", ListenPort: freePort(t), StoreDir: t.TempDir(),
+			Username: "edge", PasswordEnv: "DC_EDGE_LOCAL_PASSWORD_MISSING",
+		},
+		Uplink: config.UplinkConfiguration{BrokerURL: "tcp://127.0.0.1:1"},
+	}
+	cfg.ApplyDefaults()
+	if _, err := New(cfg, testLogger()); err == nil {
+		t.Fatal("New accepted a configured local username with an empty resolved password; it must fail closed")
+	}
+}
+
+// TestLocalAuthOpenByDefaultWarns pins the trusted-LAN default: with no local.username the
+// listener accepts an anonymous CONNECT AND the agent emits the loud UNAUTHENTICATED WARN
+// (deterministic — it precedes close(a.ready), which runReady waited on) AND exports
+// local_auth_enabled 0. Deleting the WARN, or defaulting the listener closed, fails this.
+func TestLocalAuthOpenByDefaultWarns(t *testing.T) {
+	cloudPort := freePort(t)
+	startCloudBroker(t, cloudPort)
+	agentPort := freePort(t)
+	buf := &syncBuffer{}
+	a := newAgentLog(t, config.Configuration{
+		InstanceId: "test",
+		AgentId:    "site1",
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: t.TempDir()},
+		Uplink:     config.UplinkConfiguration{BrokerURL: fmt.Sprintf("tcp://127.0.0.1:%d", cloudPort)},
+	}, buf)
+	t.Cleanup(runReady(t, a))
+
+	if _, err := mqttConnectAuth(t, fmt.Sprintf("127.0.0.1:%d", agentPort), "dev-open", "", ""); err != nil {
+		t.Errorf("anonymous CONNECT was rejected on an open listener: %v", err)
+	}
+	if !strings.Contains(buf.String(), "UNAUTHENTICATED") {
+		t.Errorf("open listener did not emit the UNAUTHENTICATED warning; log:\n%s", buf.String())
+	}
+	_, body := httpGet(t, "http://"+a.metrics.addr+"/metrics")
+	if !strings.Contains(body, "devicechain_edge_local_auth_enabled 0") {
+		t.Errorf("metrics missing local_auth_enabled 0 (open posture not exported); body excerpt:\n%s", grepLine(body, "local_auth_enabled"))
+	}
+}
+
+// TestStoreDirPermsHardened pins E4-B's core fix: a world-accessible store (the 0755
+// `mkdir -p`/container-volume default, or 0707) has its WORLD bits stripped and the action
+// logged, while a private (0700) or group-shared (0770 / setgid-2770 — the container
+// fsGroup path) store is left untouched and silent. Two mutations this catches: reverting
+// to WARN-only (no chmod) leaves world bits set on the 0755/0707 cases; widening the strip
+// to group bits (&^ 0o077, forcing 0700) destroys the group bits the fsGroup case needs to
+// reach its own store.
+func TestStoreDirPermsHardened(t *testing.T) {
+	cases := []struct {
+		name       string
+		mode       os.FileMode
+		wantWarn   bool
+		wantGroup  os.FileMode // group bits that must remain after hardening
+		wantSetgid bool        // setgid bit that must survive the tightening
+	}{
+		{"0700 private", 0o700, false, 0o000, false},
+		{"0770 group-shared", 0o770, false, 0o070, false},
+		{"2770 setgid group-shared", os.ModeSetgid | 0o770, false, 0o070, true},
+		{"0755 mkdir default", 0o755, true, 0o050, false},
+		{"2775 setgid world-readable", os.ModeSetgid | 0o775, true, 0o070, true},
+		{"0707 world-rwx", 0o707, true, 0o000, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Chmod(dir, tc.mode); err != nil {
+				t.Fatalf("chmod: %v", err)
+			}
+			buf := &syncBuffer{}
+			a := &Agent{
+				cfg: config.Configuration{Local: config.LocalConfiguration{StoreDir: dir}},
+				log: slog.New(slog.NewTextHandler(buf, nil)),
+			}
+			a.hardenStoreDirPerms()
+
+			fi, err := os.Stat(dir)
+			if err != nil {
+				t.Fatalf("stat: %v", err)
+			}
+			perm := fi.Mode().Perm()
+			if perm&0o007 != 0 {
+				t.Errorf("mode %#o: world bits remain after hardening (%#o)", tc.mode, perm)
+			}
+			if perm&0o070 != tc.wantGroup {
+				t.Errorf("mode %#o: group bits = %#o after hardening, want %#o (fsGroup share must be preserved)", tc.mode, perm&0o070, tc.wantGroup)
+			}
+			// setgid must survive: a group-shared store sets it so JetStream-created files
+			// inherit the group; stripping it (the Perm()-then-Chmod bug) rots group access.
+			if hasSetgid := fi.Mode()&os.ModeSetgid != 0; hasSetgid != tc.wantSetgid {
+				t.Errorf("mode %#o: setgid=%v after hardening, want %v (special bits must survive world-bit stripping)", tc.mode, hasSetgid, tc.wantSetgid)
+			}
+			warned := strings.Contains(buf.String(), "world-accessible")
+			if warned != tc.wantWarn {
+				t.Errorf("mode %#o: logged=%v, want %v; log:\n%s", tc.mode, warned, tc.wantWarn, buf.String())
+			}
+		})
+	}
+}
+
+// TestStoreArtifactsArePrivate is the end-to-end guard: after a normal run over a store
+// provisioned with the common world-readable default (0755), the store must carry no world
+// bits (hardened) and every identity token must be owner-only (0600). Removing the
+// hardening call in Run leaves the store world-traversable and fails this.
+func TestStoreArtifactsArePrivate(t *testing.T) {
+	cloudPort := freePort(t)
+	startCloudBroker(t, cloudPort)
+	storeDir := t.TempDir()
+	if err := os.Chmod(storeDir, 0o755); err != nil { // the mkdir -p / volume default
+		t.Fatalf("chmod storeDir: %v", err)
+	}
+	agentPort := freePort(t)
+	a := startAgent(t, config.Configuration{
+		InstanceId: "test",
+		AgentId:    "site1",
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: storeDir},
+		Uplink:     config.UplinkConfiguration{BrokerURL: fmt.Sprintf("tcp://127.0.0.1:%d", cloudPort)},
+	})
+	waitUntil(t, 15*time.Second, a.uplink.Connected)
+
+	if fi, err := os.Stat(storeDir); err != nil {
+		t.Fatalf("stat storeDir: %v", err)
+	} else if fi.Mode().Perm()&0o007 != 0 {
+		t.Errorf("storeDir mode = %#o, want no world bits (a spool carries in-flight credentials)", fi.Mode().Perm())
+	}
+	for _, name := range []string{installIdFile, streamEpochFile, ackedCountFile} {
+		fi, err := os.Stat(filepath.Join(storeDir, name))
+		if err != nil {
+			t.Fatalf("stat token %s: %v", name, err)
+		}
+		if fi.Mode().Perm()&0o077 != 0 {
+			t.Errorf("token %s mode = %#o, want owner-only (0600)", name, fi.Mode().Perm())
+		}
+	}
 }
 
 // TestUplinkReconnectsAndResumesForwarding exercises the reconnect loop: the uplink

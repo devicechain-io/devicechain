@@ -77,11 +77,13 @@ jobs:
         id: smoke
         run: |
           # ko-buildable image modules = each discovered service (mapped to its
-          # backend/services/<name> dir) PLUS the operator at backend/k8s.
-          # Identical logic to ci.yml's discover job -- single source of truth.
+          # backend/services/<name> dir) PLUS the operator at backend/k8s PLUS the Tier-1
+          # edge agent at backend/edge/dc-edge-agent. Keep this list in step with ci.yml's
+          # discover job -- they are two textual copies of the same set.
           smoke="$(
             { hack/list-services.sh | jq -r '.[] | "backend/services/" + .'
               echo "backend/k8s"
+              echo "backend/edge/dc-edge-agent"
             } | jq -R . | jq -s -c .
           )"
           echo "smoke=$smoke" >> "$GITHUB_OUTPUT"
@@ -392,4 +394,82 @@ jobs:
           # the prerelease and then try to upload assets to the RC's existing
           # release (422 already_exists). GITHUB_REF_NAME is unambiguous.
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+  # ---------------------------------------------------------------------------
+  # Cross-compile the Tier-1 edge agent (dc-edge-agent) static binaries and attach
+  # them to the GitHub Release the `cli` job just created.
+  #
+  # This does NOT run `goreleaser release` in publish mode: dcctl's goreleaser (the
+  # `cli` job) owns the single Release for the tag, and two goreleasers both creating a
+  # Release on one tag collide. The edge module's .goreleaser.yaml sets `release.disable:
+  # true`, so `goreleaser release` here builds the archives + a UNIQUELY named checksum
+  # file (dc-edge-agent_checksums.txt, so it cannot clobber dcctl's checksums.txt) without
+  # any GitHub write; the upload step then attaches them to the existing Release.
+  #
+  # `needs: cli` orders it AFTER the Release exists (cli in turn needs loadtest-gate), so
+  # the edge binaries never land on a Release that the correctness-under-load gate failed.
+  # The edge container IMAGE is published separately by the `images` matrix (the module is
+  # in the guard's smoke list); NOTE its ghcr package is created PRIVATE on the first
+  # release that pushes it and must be flipped Public once for operators to pull it (same
+  # one-time flip as any new module -- the loadtest-gate does not pull it, so it is not
+  # gate-blocking, only a pull-for-operators concern).
+  edge-agent:
+    needs: [guard, images, loadtest-gate, cli]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # goreleaser needs full history (tags + commits) for version/commit stamping.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: goreleaser build (archives + checksums, no publish)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --clean
+          workdir: backend/edge/dc-edge-agent
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Same tag-disambiguation reason as the cli job above.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      # A `-ldflags -X` to a renamed/nonexistent var is NOT an error — it silently no-ops,
+      # shipping a binary that reports "dev". Run the freshly built binary and confirm it
+      # reports the release tag before attaching it, so a var rename in main.go fails the
+      # release instead of shipping unstamped binaries (mirrors the cli job's verify).
+      - name: Verify the edge-agent binary is version-stamped
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          binary="$(find backend/edge/dc-edge-agent/dist -type f -name dc-edge-agent -path '*linux_amd64*' | head -1)"
+          if [ -z "$binary" ]; then
+            echo "::error::Could not find the built linux/amd64 dc-edge-agent to verify."
+            exit 1
+          fi
+          out="$("$binary" version)"
+          echo "reported: $out"
+          # goreleaser strips the leading 'v' for .Version, so match the tag with or without it.
+          if ! echo "$out" | grep -qE "dc-edge-agent (v?${TAG#v})[ (]"; then
+            echo "::error::edge-agent 'version' reported '$out', which does not carry tag '${TAG}' — ldflags stamping is broken (renamed main.version var?)."
+            exit 1
+          fi
+
+      - name: Attach edge-agent artifacts to the Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        # --clobber makes a re-run idempotent (it only ever overwrites the edge module's
+        # own uniquely-named assets, never dcctl's).
+        run: |
+          gh release upload "$TAG" \
+            backend/edge/dc-edge-agent/dist/dc-edge-agent_*.tar.gz \
+            backend/edge/dc-edge-agent/dist/dc-edge-agent_checksums.txt \
+            --clobber
 

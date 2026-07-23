@@ -101,6 +101,25 @@ func newEdgeMetrics(a *Agent) *edgeMetrics {
 		}
 		return float64(d)
 	})
+	// local_auth_enabled makes the local-listener security posture CONTINUOUSLY auditable,
+	// not just visible for one startup log line: a fleet where a few agents are
+	// unintentionally open (missing local.username) is otherwise invisible after boot.
+	// Alert on 0 where you expect 1. Constant for the life of the process (config is
+	// immutable at runtime), but exported as a gauge so it scrapes like any other posture.
+	//
+	// NOTE: this reflects CONFIG posture (username set), not the server's live MQTT opts.
+	// That is sound only because New makes config⇒enforcement unbreakable (it fails closed
+	// on an empty resolved password) and TestLocalAuthGatesLocalMqtt pins the enforcement
+	// end-to-end. Do not treat this gauge as proof the gate is wired — keep that e2e test.
+	localAuthEnabled := 0.0
+	if a.cfg.Local.Username != "" {
+		localAuthEnabled = 1.0
+	}
+	auto.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "local_auth_enabled",
+		Help: "1 when the local MQTT listener requires a shared-secret credential, 0 when it is open (trusted-LAN).",
+	}, func() float64 { return localAuthEnabled })
+
 	// uplink_connected as a GaugeFunc so a scrape sees live connectivity, not a 30s-stale
 	// sample.
 	auto.NewGaugeFunc(prometheus.GaugeOpts{
