@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/devicechain-io/dc-event-sources/adapter"
 	"github.com/devicechain-io/dc-sparkplug-ingest/codec"
 	sppb "github.com/devicechain-io/dc-sparkplug-ingest/proto"
 )
@@ -114,21 +115,12 @@ type SessionTracker struct {
 	backoff time.Duration
 	rebirth func(group, node string)
 
-	// lastEpoch is the high-water of every SessionId this tracker has minted. It
-	// makes nextEpoch strictly monotone within the process even across a wall-clock
-	// step-back; SetEpochFloor raises it from the persisted read-model on leader
-	// acquisition so a fresh leader (or a restart) never mints an epoch the
-	// projection would reject as stale (ADR-067 cross-process monotonicity).
-	//
-	// L0.5 EXTRACTION NOTE: nextEpoch/SetEpochFloor/MintEpoch are the ADR-067 epoch
-	// invariant — the subtlest logic under presence. They stayed with the Sparkplug
-	// session machine (they are called under tr.mu on the connect hot path) rather than
-	// moving to the shared adapter, because LwM2M's lifetime-timer presence has not yet
-	// defined what it needs from an epoch source. When L1 builds LwM2M presence, extract
-	// this into a shared adapter.EpochSource (its own mutex, taken as a leaf under tr.mu)
-	// and have both protocols consume it — do NOT reimplement the floor+monotonicity from
-	// scratch (that is exactly the silent-duplication trap this note exists to prevent).
-	lastEpoch uint64
+	// epoch mints every SessionId this tracker issues (ADR-067). It was extracted into
+	// the shared adapter at L1 (the I3 deferral) so LwM2M's registration registry mints
+	// through the same floor+monotonicity rather than reimplementing it. nextEpoch calls
+	// it under tr.mu, so its mutex is a LEAF under tr.mu; SetEpochFloor/MintEpoch forward
+	// to it off the hot path.
+	epoch *adapter.EpochSource
 }
 
 // Observation is everything a single decoded Sparkplug message contributes to the
@@ -147,16 +139,10 @@ func deviceExternalId(key nodeKey, device string) string {
 	return key.group + "/" + key.node + "/" + device
 }
 
-// nextEpoch mints a strictly-monotone host-observed connect epoch (the wall-clock
-// UnixNano floored to lastEpoch+1, so an in-process clock step-back can't invert
-// ordering against an already-issued epoch). The caller holds tr.mu.
+// nextEpoch mints a strictly-monotone host-observed connect epoch (ADR-067). The
+// caller holds tr.mu; the epoch source's own mutex is a leaf taken under it.
 func (tr *SessionTracker) nextEpoch() uint64 {
-	e := uint64(tr.now().UnixNano())
-	if e <= tr.lastEpoch {
-		e = tr.lastEpoch + 1
-	}
-	tr.lastEpoch = e
-	return e
+	return tr.epoch.Next()
 }
 
 // SetEpochFloor raises the epoch generator's floor so every subsequently-minted
@@ -165,11 +151,7 @@ func (tr *SessionTracker) nextEpoch() uint64 {
 // device-state read model, so a handover (or a restart across a wall-clock step-back)
 // can never mint an epoch the projection rejects as stale. Lowering is a no-op.
 func (tr *SessionTracker) SetEpochFloor(floor uint64) {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	if floor > tr.lastEpoch {
-		tr.lastEpoch = floor
-	}
+	tr.epoch.SetFloor(floor)
 }
 
 // MintEpoch mints a fresh strictly-monotone epoch above the current floor, for the
@@ -180,9 +162,7 @@ func (tr *SessionTracker) SetEpochFloor(floor uint64) {
 // supersedes the reconcile-DISCONNECT, so a slow-but-alive node self-heals regardless
 // of the race between its birth and the probe timeout.
 func (tr *SessionTracker) MintEpoch() uint64 {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	return tr.nextEpoch()
+	return tr.epoch.Mint()
 }
 
 // NewSessionTracker builds a tracker. now supplies the clock for backoff (pass
@@ -202,6 +182,9 @@ func NewSessionTracker(now func() time.Time, backoff time.Duration, rebirth func
 		now:      now,
 		backoff:  backoff,
 		rebirth:  rebirth,
+		// The epoch source shares this tracker's clock, so a moved-clock test drives both
+		// identically and the extraction is behaviour-preserving.
+		epoch: adapter.NewEpochSource(now),
 	}
 }
 
