@@ -106,8 +106,19 @@ target: **Eclipse Leshan** clients.
   Kubernetes Secret into it). Refused at startup if unset. A PSK identity is sent in the
   clear on the wire, so prefer an **opaque handle** over a `tenant:device` string.
 
+## Denial-of-service posture
+
+- The DTLS **cookie exchange** (HelloVerifyRequest) is on by default in pion's server
+  flow, so the server does not do handshake crypto for a spoofed source address — the
+  amplification defense.
+- **`maxSessions`** bounds the *post-handshake* live-session table.
+- Each in-flight ClientHello holds a listener entry + handshake goroutine until the
+  cookie/handshake completes or the **handshake timeout** (default 10s) expires, so the
+  timeout — not `maxSessions` — is what bounds a sustained ClientHello spray. This is
+  inherent to the pion listener; keep the handshake timeout short.
+
 ## Metrics
 
 `handshakes_total`, `handshake_failures_total` (unknown identity), `active_sessions`
-(gauge), `sessions_rejected_total` (ceiling), `coap_requests_total{code}`. None is
-labeled by tenant (the ADR-023 cardinality lesson).
+(gauge, moved with Inc/Dec so it cannot drift), `sessions_rejected_total` (ceiling),
+`coap_requests_total{code}`. None is labeled by tenant (the ADR-023 cardinality lesson).

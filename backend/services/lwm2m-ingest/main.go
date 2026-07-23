@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -41,6 +42,11 @@ var (
 	Configuration *config.Lwm2mConfiguration
 	Server        *server.Server
 	httpServer    *http.Server
+	// stopping is set the instant a graceful shutdown begins, so the serve goroutine can
+	// tell an intentional Stop (Serve returns, ignore) from an unexpected transport death
+	// (Serve returns while still meant to be serving — fatal, since GA is a single
+	// serving replica and a downed socket is a total outage).
+	stopping atomic.Bool
 )
 
 func main() {
@@ -139,9 +145,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 // connecting — a device-less deployment is healthy.
 func afterMicroserviceStarted(_ context.Context) error {
 	go func() {
-		if err := Server.Serve(); err != nil {
-			log.Error().Err(err).Msg("LwM2M CoAP/DTLS transport exited with error.")
+		err := Server.Serve()
+		if stopping.Load() {
+			return // Serve returned because Stop was called — the intended shutdown path.
 		}
+		// The transport exited while it was still meant to be serving. This pod is the
+		// single serving replica (ADR-075 HA posture), so a downed socket is a total
+		// ingest outage that readiness would otherwise keep hidden. Exit so Kubernetes
+		// restarts the pod rather than leaving a Ready zombie.
+		log.Fatal().Err(err).Msg("LwM2M CoAP/DTLS transport exited unexpectedly; terminating so the pod is restarted.")
 	}()
 	Microservice.MarkReady(nil)
 
@@ -159,6 +171,7 @@ func afterMicroserviceStarted(_ context.Context) error {
 // server down.
 func beforeMicroserviceStopped(ctx context.Context) error {
 	Microservice.Readiness.BeginDrain()
+	stopping.Store(true) // mark intent BEFORE Stop so the serve goroutine treats its return as graceful
 	if Server != nil {
 		Server.Stop()
 	}

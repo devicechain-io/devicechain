@@ -27,6 +27,7 @@ type roamingConn struct {
 	mu           sync.Mutex
 	inner        *net.UDPConn
 	readDeadline time.Time
+	lastWrite    []byte // copy of the most recent outbound datagram (a real DTLS record)
 }
 
 // newRoamingConn opens the initial loopback UDP socket.
@@ -63,7 +64,21 @@ func (r *roamingConn) ReadFrom(p []byte) (int, net.Addr, error) {
 }
 
 func (r *roamingConn) WriteTo(p []byte, addr net.Addr) (int, error) {
-	return r.current().WriteTo(p, addr)
+	r.mu.Lock()
+	r.lastWrite = append(r.lastWrite[:0:0], p...) // fresh copy — p is reused by the caller
+	c := r.inner
+	r.mu.Unlock()
+	return c.WriteTo(p, addr)
+}
+
+// lastOutbound returns a copy of the most recent datagram the DTLS stack sent. Once CID
+// is negotiated this is a real tls12_cid record carrying the server-issued Connection
+// ID, so a test can replay it (routes by CID, must fail anti-replay) or corrupt it
+// (routes by CID, must fail AEAD) to exercise the validate-before-rebind property.
+func (r *roamingConn) lastOutbound() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]byte(nil), r.lastWrite...)
 }
 
 // roam retires the current socket and installs a fresh one on a new local port. Any

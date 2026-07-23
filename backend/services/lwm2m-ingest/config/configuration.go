@@ -49,6 +49,11 @@ const (
 	// DoS ceiling (ADR-075 M6). A device population beyond this is a sizing decision an
 	// operator makes explicitly; the adapter never grows the table without bound.
 	DefaultMaxSessions = 100000
+	// MinPskBytes is the shortest pre-shared key ResolveCredentials will accept. A PSK
+	// is the device's sole authenticator (and, from L1, the tenancy anchor), so a
+	// too-short key is refused at startup rather than silently weakening every session.
+	// 16 bytes (128-bit) is the LwM2M-common baseline for the AES-128 cipher suite.
+	MinPskBytes = 16
 )
 
 // Lwm2mConfiguration is the top-level configuration for the adapter.
@@ -212,6 +217,13 @@ func (c *Lwm2mConfiguration) ResolveCredentials() (map[string][]byte, error) {
 		key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
 		if err != nil {
 			return nil, fmt.Errorf("security.identities[%d]: pskEnv %q is not valid base64: %w", i, id.PskEnv, err)
+		}
+		// A whitespace-only variable passes the emptiness check above but decodes to a
+		// zero-length key; the minimum-length guard catches that AND a too-short key,
+		// failing closed at startup rather than provisioning an unauthenticatable or
+		// weak credential.
+		if len(key) < MinPskBytes {
+			return nil, fmt.Errorf("security.identities[%d]: pskEnv %q decoded to a %d-byte key; a pre-shared key must be at least %d bytes", i, id.PskEnv, len(key), MinPskBytes)
 		}
 		creds[id.Identity] = key
 	}

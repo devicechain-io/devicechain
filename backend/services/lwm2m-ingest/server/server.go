@@ -36,6 +36,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/mux"
 	coapnet "github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/options"
 	udpclient "github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/prometheus/client_golang/prometheus"
@@ -126,6 +127,13 @@ func New(cfg Config, metrics Metrics) (*Server, error) {
 	opts := []dtlsserver.Option{
 		options.WithMux(router),
 		options.WithOnNewConn(s.onNewConn),
+		// Surface go-coap's internal transport/handshake errors through the structured
+		// logger instead of its default fmt.Println. These are frequent-and-expected
+		// (every unknown-identity refusal is one), so they log at debug; the counters
+		// carry the operational signal.
+		options.WithErrors(func(err error) {
+			log.Debug().Err(err).Msg("LwM2M CoAP/DTLS transport error (a handshake refusal or a transport-level error).")
+		}),
 	}
 	if cfg.HandshakeTimeout > 0 {
 		// Bound a single DTLS handshake so a stalled or half-open handshake cannot pin a
@@ -140,6 +148,14 @@ func New(cfg Config, metrics Metrics) (*Server, error) {
 			log.Debug().Str("peer", c.RemoteAddr().String()).Msg("Reaping idle LwM2M DTLS session.")
 			_ = c.Close()
 		}))
+	} else {
+		// CRITICAL: go-coap's DefaultConfig installs a 16-SECOND inactivity monitor that
+		// closes any session with no inbound message for 16s. Left in place that would
+		// silently sever a healthy-but-quiet device — and defeat the entire point of CID
+		// for queue-mode sleepers, which are idle for minutes to hours by design. There is
+		// no stock "disable" option, so when no idle timeout is configured we MUST actively
+		// override the default with a nil monitor.
+		opts = append(opts, disableInactivityMonitor{})
 	}
 	s.coap = coapdtls.NewServer(opts...)
 	return s, nil
@@ -203,15 +219,24 @@ func (s *Server) Addr() net.Addr { return s.listener.Addr() }
 
 // onNewConn fires once per completed DTLS handshake. It enforces the live-session
 // ceiling (a handshake past MaxSessions is accepted by DTLS but immediately closed and
-// counted as rejected, bounding the table) and maintains the active-session count.
+// counted as rejected — so the table is transiently exceeded by one, then bounded) and
+// maintains the active-session count. The gauge is moved with Inc/Dec (each internally
+// atomic) rather than Set(atomicCount): two concurrent closes doing atomic-add then
+// Set could land the stale Set last and pin the gauge above the true count until the
+// next session event — a permanent drift in a quiet deployment.
 func (s *Server) onNewConn(c *udpclient.Conn) {
 	if s.metrics.Handshakes != nil {
 		s.metrics.Handshakes.Inc()
 	}
 	newActive := atomic.AddInt64(&s.active, 1)
-	s.setActiveGauge(newActive)
+	if s.metrics.ActiveSessions != nil {
+		s.metrics.ActiveSessions.Inc()
+	}
 	c.AddOnClose(func() {
-		s.setActiveGauge(atomic.AddInt64(&s.active, -1))
+		atomic.AddInt64(&s.active, -1)
+		if s.metrics.ActiveSessions != nil {
+			s.metrics.ActiveSessions.Dec()
+		}
 	})
 	if newActive > int64(s.cfg.MaxSessions) {
 		if s.metrics.SessionsRejected != nil {
@@ -230,10 +255,14 @@ func (s *Server) onAuthFailure() {
 	}
 }
 
-// setActiveGauge mirrors the atomic active count onto the gauge (nil-tolerant).
-func (s *Server) setActiveGauge(n int64) {
-	if s.metrics.ActiveSessions != nil {
-		s.metrics.ActiveSessions.Set(float64(n))
+// disableInactivityMonitor is a go-coap DTLS-server option that replaces the default
+// 16-second idle reaper with a nil monitor, so a quiet session is never closed for
+// inactivity. See the CRITICAL note at its use site in New.
+type disableInactivityMonitor struct{}
+
+func (disableInactivityMonitor) DTLSServerApply(cfg *dtlsserver.Config) {
+	cfg.CreateInactivityMonitor = func() udpclient.InactivityMonitor {
+		return inactivity.NewNilMonitor[*udpclient.Conn]()
 	}
 }
 

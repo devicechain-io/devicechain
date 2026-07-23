@@ -87,7 +87,7 @@ func TestValidateRejects(t *testing.T) {
 		want   string
 	}{
 		{"port out of range high", func(c *Lwm2mConfiguration) { c.Listen.Port = 70000 }, "out of range"},
-		{"port negative", func(c *Lwm2mConfiguration) { c.Listen.Port = -1; z := -1; _ = z }, "out of range"},
+		{"port negative", func(c *Lwm2mConfiguration) { c.Listen.Port = -1 }, "out of range"},
 		{"cid too long", func(c *Lwm2mConfiguration) { n := MaxConnectionIdLength + 1; c.Security.ConnectionIdLength = &n }, "out of range"},
 		{"cid negative", func(c *Lwm2mConfiguration) { n := -1; c.Security.ConnectionIdLength = &n }, "out of range"},
 		{"idle negative", func(c *Lwm2mConfiguration) { c.Security.IdleTimeoutSeconds = -1 }, "must be >= 0"},
@@ -119,7 +119,7 @@ func TestPortDefaultIsValid(t *testing.T) {
 }
 
 func TestResolveCredentialsDecodesBase64(t *testing.T) {
-	key := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02}
+	key := []byte("0123456789abcdef") // 16 bytes (>= MinPskBytes)
 	t.Setenv("DC_LWM2M_PSK_DEV1", base64.StdEncoding.EncodeToString(key))
 	c := validConfig()
 	c.ApplyDefaults()
@@ -143,6 +143,20 @@ func TestResolveCredentialsFailsClosed(t *testing.T) {
 		_, err := c.ResolveCredentials()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not valid base64")
+	})
+	t.Run("whitespace-only (decodes to empty) is refused", func(t *testing.T) {
+		t.Setenv("DC_LWM2M_PSK_DEV1", "   ")
+		c := validConfig()
+		_, err := c.ResolveCredentials()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "at least")
+	})
+	t.Run("too-short key is refused", func(t *testing.T) {
+		t.Setenv("DC_LWM2M_PSK_DEV1", base64.StdEncoding.EncodeToString([]byte("short")))
+		c := validConfig()
+		_, err := c.ResolveCredentials()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "at least")
 	})
 }
 
