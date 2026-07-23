@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package host
+package adapter
 
 import (
 	"context"
@@ -22,6 +22,10 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
+
+// fixedNow is a stable clock for the emitter's ProcessedTime; the adapter suite is
+// protocol-neutral, so it carries its own rather than the Sparkplug decoder's.
+var fixedNow = func() time.Time { return time.Unix(1_700_000_000, 0) }
 
 // --- fakes ------------------------------------------------------------------
 
@@ -86,12 +90,12 @@ func (w *fakeWriter) WriteMessages(ctx context.Context, msgs ...messaging.Messag
 
 func TestRegistrarCachesResolvedToken(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupHit("dev-1"), nil }}
-	r := NewRegistrar(gql, "url")
+	r := NewRegistrar(gql, "url", "sp-")
 
 	tok, outcome, err := r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{})
 	require.NoError(t, err)
 	assert.Equal(t, "dev-1", tok)
-	assert.Equal(t, resolveFound, outcome)
+	assert.Equal(t, ResolveFound, outcome)
 
 	// Second resolve is served from cache — no second lookup.
 	tok2, _, err := r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{})
@@ -102,12 +106,12 @@ func TestRegistrarCachesResolvedToken(t *testing.T) {
 
 func TestRegistrarDropsUnknownWhenAutoRegisterOff(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupMiss(), nil }}
-	r := NewRegistrar(gql, "url")
+	r := NewRegistrar(gql, "url", "sp-")
 
 	tok, outcome, err := r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{AutoRegister: false})
 	require.NoError(t, err)
 	assert.Equal(t, "", tok)
-	assert.Equal(t, resolveDropped, outcome)
+	assert.Equal(t, ResolveDropped, outcome)
 	assert.Equal(t, 0, gql.creates, "auto-register off must never create a device")
 }
 
@@ -120,21 +124,21 @@ func TestRegistrarAutoRegistersUnknownDevice(t *testing.T) {
 		createdRequest, _ = vars["request"].(map[string]any)
 		return createHit(createdRequest["token"].(string)), nil
 	}}
-	r := NewRegistrar(gql, "url")
+	r := NewRegistrar(gql, "url", "sp-")
 
 	tok, outcome, err := r.Resolve(context.Background(), "acme", "plant-a/node-3", IngestPolicy{AutoRegister: true, DeviceTypeToken: "sp-node"})
 	require.NoError(t, err)
-	assert.Equal(t, resolveCreated, outcome)
+	assert.Equal(t, ResolveCreated, outcome)
 	// The created device carries the DERIVED (grammar-safe) token, the raw external
 	// id, and the source's device type.
-	assert.Equal(t, DeriveDeviceToken("plant-a/node-3"), tok)
-	assert.Equal(t, DeriveDeviceToken("plant-a/node-3"), createdRequest["token"])
+	assert.Equal(t, DeriveDeviceToken("plant-a/node-3", "sp-"), tok)
+	assert.Equal(t, DeriveDeviceToken("plant-a/node-3", "sp-"), createdRequest["token"])
 	assert.Equal(t, "plant-a/node-3", createdRequest["externalId"])
 	assert.Equal(t, "sp-node", createdRequest["deviceTypeToken"])
 }
 
-// TestRegistrarSwallowsCreateRaceViaReLookup pins §5: when create fails because a
-// concurrent burst already registered the device, the registrar re-looks-up and
+// TestRegistrarSwallowsCreateRaceViaReLookup pins the conflict-swallow: when create fails
+// because a concurrent burst already registered the device, the registrar re-looks-up and
 // uses the winner rather than surfacing an error.
 func TestRegistrarSwallowsCreateRaceViaReLookup(t *testing.T) {
 	lookups := 0
@@ -148,19 +152,19 @@ func TestRegistrarSwallowsCreateRaceViaReLookup(t *testing.T) {
 		}
 		return nil, errors.New("ERROR: duplicate key value violates unique constraint")
 	}}
-	r := NewRegistrar(gql, "url")
+	r := NewRegistrar(gql, "url", "sp-")
 
 	tok, outcome, err := r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{AutoRegister: true, DeviceTypeToken: "t"})
 	require.NoError(t, err)
 	assert.Equal(t, "winner-token", tok)
-	assert.Equal(t, resolveFound, outcome)
+	assert.Equal(t, ResolveFound, outcome)
 }
 
 func TestRegistrarReturnsTransportErrorForRetry(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) {
 		return nil, errors.New("svcclient: call url: connection refused")
 	}}
-	r := NewRegistrar(gql, "url")
+	r := NewRegistrar(gql, "url", "sp-")
 
 	_, _, err := r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{})
 	assert.Error(t, err, "a transport error must be returned so the caller can retry")
@@ -172,13 +176,13 @@ func TestRegistrarReturnsTransportErrorForRetry(t *testing.T) {
 // emitter writes must round-trip through the event-sources unmarshaller (the exact
 // contract the device-management resolver reads), carry the resolved token, the
 // stringified measurement at its own timestamp, a NIL AltId (so event-management's
-// alt_id dedup index does not collapse distinct messages — the B2 fix) alongside a
-// non-empty producer-stable DedupID (M12, dedup at the Nats-Msg-Id layer instead), a
-// non-zero ProcessedTime (a zero time marshals to year 0001, not an error), and be
-// published under the connection's tenant.
+// alt_id dedup index does not collapse distinct messages) alongside a non-empty
+// producer-stable DedupID (dedup at the Nats-Msg-Id layer instead), a non-zero
+// ProcessedTime (a zero time marshals to year 0001, not an error), and be published
+// under the connection's tenant.
 func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 	w := &fakeWriter{}
-	e := NewEmitter(w, fixedNow)
+	e := NewEmitter(w, fixedNow, "sp")
 
 	ts := int64(1_700_000_000_123)
 	err := e.Emit(context.Background(), "acme", "sparkplug:h1", "dev-1", []Sample{{Name: "temperature", Value: 21.5, Time: ts}})
@@ -186,7 +190,7 @@ func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 	require.Len(t, w.msgs, 1)
 
 	msg := w.msgs[0]
-	assert.NotEmpty(t, msg.DedupID, "SP4 sets a producer-stable DedupID so a retry dedups at JetStream (M12)")
+	assert.NotEmpty(t, msg.DedupID, "a producer-stable DedupID lets a retry dedup at JetStream")
 	assert.Equal(t, []byte("dev-1"), msg.Key)
 
 	ev, err := esproto.UnmarshalUnresolvedEvent(msg.Value)
@@ -205,8 +209,8 @@ func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 	require.NotNil(t, payload.Entries[0].OccurredTime)
 	assert.Equal(t, time.UnixMilli(ts).UTC().Format(time.RFC3339Nano), *payload.Entries[0].OccurredTime)
 
-	// The tenant flows from the connection into the write context (SP3a invariant) —
-	// never parsed from the Sparkplug topic.
+	// The tenant flows from the connection into the write context (the connection-scoped
+	// tenancy invariant) — never parsed from the source's own addressing.
 	require.Len(t, w.ctxs, 1)
 	tenant, ok := core.TenantFromContext(w.ctxs[0])
 	assert.True(t, ok)
@@ -220,7 +224,7 @@ func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 // not cosmetics.
 func TestEmitterFormatsLargeIntegersWithoutExponent(t *testing.T) {
 	w := &fakeWriter{}
-	e := NewEmitter(w, fixedNow)
+	e := NewEmitter(w, fixedNow, "sp")
 	require.NoError(t, e.Emit(context.Background(), "acme", "s", "dev-1",
 		[]Sample{{Name: "count", Value: 12345678, Time: 1}}))
 	require.Len(t, w.msgs, 1)
@@ -240,7 +244,7 @@ func TestEmitterFormatsLargeIntegersWithoutExponent(t *testing.T) {
 // DedupID.
 func TestEmitPresenceProducesResolverReadableStateChange(t *testing.T) {
 	w := &fakeWriter{}
-	e := NewEmitter(w, fixedNow)
+	e := NewEmitter(w, fixedNow, "sp")
 	occurred := time.UnixMilli(1_700_000_000_500).UTC()
 	epoch := uint64(1_799_000_000_123_456_789) // an epoch-sized UnixNano
 
@@ -266,24 +270,24 @@ func TestEmitPresenceProducesResolverReadableStateChange(t *testing.T) {
 	assert.Equal(t, "acme", tenant)
 }
 
-// TestDedupIDStableAndDistinct is the M12 pin: the same logical event re-emitted (a
-// retry, or a failover re-derivation) carries the SAME DedupID so JetStream dedups
-// it, while genuinely-different events carry DISTINCT ids so nothing is silently
-// dropped — for BOTH measurements (the B2 collision must NOT reappear at this layer)
-// and presence.
+// TestDedupIDStableAndDistinct is the idempotency pin: the same logical event re-emitted
+// (a retry, or a failover re-derivation) carries the SAME DedupID so JetStream dedups it,
+// while genuinely-different events carry DISTINCT ids so nothing is silently dropped —
+// for BOTH measurements (a distinct value at the same time must NOT collide at this
+// layer) and presence.
 func TestDedupIDStableAndDistinct(t *testing.T) {
 	// Measurements: identical batch → identical id; a different value at the SAME
-	// occurred-time → different id (the B2 case); a different time → different id.
+	// occurred-time → different id; a different time → different id.
 	base := []Sample{{Name: "t", Value: 21.5, Time: 1000}}
-	id := func(samples []Sample) string { return measurementDedupID("acme", "dev-1", 1000, samples) }
+	id := func(samples []Sample) string { return measurementDedupID("sp", "acme", "dev-1", 1000, samples) }
 	assert.Equal(t, id(base), id([]Sample{{Name: "t", Value: 21.5, Time: 1000}}), "identical batch dedups")
-	assert.NotEqual(t, id(base), id([]Sample{{Name: "t", Value: 99.0, Time: 1000}}), "a distinct value at the same time must stay distinct (B2)")
-	assert.NotEqual(t, id(base), measurementDedupID("acme", "dev-1", 2000, base), "a distinct occurred-time must stay distinct")
-	assert.NotEqual(t, id(base), measurementDedupID("acme", "dev-2", 1000, base), "a distinct device must stay distinct")
+	assert.NotEqual(t, id(base), id([]Sample{{Name: "t", Value: 99.0, Time: 1000}}), "a distinct value at the same time must stay distinct")
+	assert.NotEqual(t, id(base), measurementDedupID("sp", "acme", "dev-1", 2000, base), "a distinct occurred-time must stay distinct")
+	assert.NotEqual(t, id(base), measurementDedupID("sp", "acme", "dev-2", 1000, base), "a distinct device must stay distinct")
 
 	// Presence: stable per (device, session, state); distinct across state and session.
 	ev := PresenceEvent{ExternalId: "g/n", Connected: true, SessionId: 5, OccurredAt: time.Unix(1, 0)}
-	pid := func(e PresenceEvent) string { return presenceDedupID("acme", "dev-1", e) }
+	pid := func(e PresenceEvent) string { return presenceDedupID("sp", "acme", "dev-1", e) }
 	// OccurredAt is deliberately NOT in the key — a retry re-stamps a fresh receipt
 	// clock, so keying on it would defeat the dedup.
 	assert.Equal(t, pid(ev), pid(PresenceEvent{Connected: true, SessionId: 5, OccurredAt: time.Unix(9, 0)}), "same (device,session,state) dedups regardless of receipt time")
@@ -315,7 +319,7 @@ func TestIngesterEmitsForAKnownDevice(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupHit("dev-1"), nil }}
 	w := &fakeWriter{}
 	m, read := newIngestMetrics()
-	ing := NewIngester(NewRegistrar(gql, "url"), NewEmitter(w, fixedNow), m)
+	ing := NewIngester(NewRegistrar(gql, "url", "sp-"), NewEmitter(w, fixedNow, "sp"), m)
 
 	err := ing.Ingest(context.Background(), "acme", IngestPolicy{Source: "s"}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	require.NoError(t, err)
@@ -328,7 +332,7 @@ func TestIngesterDropsUnknownAndCountsIt(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupMiss(), nil }}
 	w := &fakeWriter{}
 	m, read := newIngestMetrics()
-	ing := NewIngester(NewRegistrar(gql, "url"), NewEmitter(w, fixedNow), m)
+	ing := NewIngester(NewRegistrar(gql, "url", "sp-"), NewEmitter(w, fixedNow, "sp"), m)
 
 	err := ing.Ingest(context.Background(), "acme", IngestPolicy{AutoRegister: false}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}, {Name: "u", Value: 2, Time: 1}})
 	require.NoError(t, err, "a definitive drop is handled, not an error")
@@ -346,7 +350,7 @@ func TestIngesterCountsRegistrationThenEmits(t *testing.T) {
 	}}
 	w := &fakeWriter{}
 	m, read := newIngestMetrics()
-	ing := NewIngester(NewRegistrar(gql, "url"), NewEmitter(w, fixedNow), m)
+	ing := NewIngester(NewRegistrar(gql, "url", "sp-"), NewEmitter(w, fixedNow, "sp"), m)
 
 	err := ing.Ingest(context.Background(), "acme", IngestPolicy{Source: "s", AutoRegister: true, DeviceTypeToken: "t"}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	require.NoError(t, err)
@@ -359,7 +363,7 @@ func TestIngesterReturnsRetryableErrors(t *testing.T) {
 	gqlErr := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return nil, errors.New("dm down") }}
 	w := &fakeWriter{}
 	m, _ := newIngestMetrics()
-	ing := NewIngester(NewRegistrar(gqlErr, "url"), NewEmitter(w, fixedNow), m)
+	ing := NewIngester(NewRegistrar(gqlErr, "url", "sp-"), NewEmitter(w, fixedNow, "sp"), m)
 	err := ing.Ingest(context.Background(), "acme", IngestPolicy{}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	assert.Error(t, err)
 	assert.Empty(t, w.msgs)
@@ -367,7 +371,7 @@ func TestIngesterReturnsRetryableErrors(t *testing.T) {
 	// Emit failure is retryable.
 	gqlOK := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupHit("dev-1"), nil }}
 	wErr := &fakeWriter{err: errors.New("nats down")}
-	ing2 := NewIngester(NewRegistrar(gqlOK, "url"), NewEmitter(wErr, fixedNow), m)
+	ing2 := NewIngester(NewRegistrar(gqlOK, "url", "sp-"), NewEmitter(wErr, fixedNow, "sp"), m)
 	err = ing2.Ingest(context.Background(), "acme", IngestPolicy{}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	assert.Error(t, err)
 }
