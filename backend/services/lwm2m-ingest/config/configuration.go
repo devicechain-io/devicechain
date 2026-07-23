@@ -64,6 +64,22 @@ const (
 	// raised by a per-tenant override, never by making the default unlimited.
 	DefaultIngestMessagesPerSecond = 1000
 	DefaultIngestBurst             = 2000
+	// DefaultMaxLifetimeSeconds is the ceiling a registration lifetime is clamped DOWN to
+	// at Register, and — identically — the lifetime the failover-reconstruction shadow timer
+	// is armed for (ADR-075 L3b / F2). Setting the reconstruction lifetime EQUAL to the
+	// Register ceiling makes one invariant hold BY CONSTRUCTION: a reconstruction shadow
+	// timer is never shorter than any live registration's remaining lifetime, so a
+	// shadow-expiry DISCONNECT is only ever late-true, never a false DISCONNECT of a healthy
+	// long-lived sleeper across a Recreate rollout. 86400s (one day) matches LwM2M's own
+	// default registration lifetime; a fleet with a tighter failover-recovery target lowers
+	// it (a shorter blackout for a genuinely-dead device) — but never below the largest `lt`
+	// its devices request, or that device is falsely expired on every handover.
+	DefaultMaxLifetimeSeconds = 86400
+	// MinMaxLifetimeSeconds floors the configurable ceiling at the registration min-lifetime
+	// clamp (registry.DefaultMinLifetime = 60s): a ceiling below the floor would invert the
+	// clamp (raise-to-min then cap-below-min), so the config refuses it rather than clamp to
+	// a self-contradictory window.
+	MinMaxLifetimeSeconds = 60
 )
 
 // Lwm2mConfiguration is the top-level configuration for the adapter.
@@ -76,6 +92,15 @@ type Lwm2mConfiguration struct {
 	// gates the device-facing telemetry and registration paths (ADR-075 L2c); a per-tenant
 	// override raises it for a legitimately high-volume tenant.
 	IngestRateLimit IngestRateLimit `json:"ingestRateLimit"`
+	// MaxLifetimeSeconds is the ceiling every registration lifetime is clamped down to at
+	// Register, and identically the lifetime the failover-reconstruction shadow timer is
+	// armed for (ADR-075 L3b / F2). It bounds the failover blackout for a genuinely-dead
+	// device — a device silent across a leadership handover is DISCONNECTED at most this long
+	// after the new leader takes over — while, by equalling the Register ceiling, it can
+	// never falsely expire a healthy device whose own `lt` fits under the ceiling. Unset (or
+	// non-positive) defaults to DefaultMaxLifetimeSeconds; a fleet using a longer `lt` MUST
+	// raise it above that `lt` or those devices are expired on every handover.
+	MaxLifetimeSeconds int `json:"maxLifetimeSeconds"`
 }
 
 // IngestRateLimit is the platform-default, per-tenant ingest ceiling every device is metered
@@ -217,6 +242,13 @@ func (c *Lwm2mConfiguration) ApplyDefaults() {
 	if c.IngestRateLimit.Burst <= 0 {
 		c.IngestRateLimit.Burst = DefaultIngestBurst
 	}
+	// Fail safe: a non-positive ceiling (unset, or an out-of-band bad value) takes the
+	// positive platform default. A zero here would arm every reconstruction shadow with a
+	// zero+grace timer — an immediate-expiry DISCONNECT storm the instant a leader takes
+	// over (the check that cannot fail) — and cap every live registration to nothing.
+	if c.MaxLifetimeSeconds <= 0 {
+		c.MaxLifetimeSeconds = DefaultMaxLifetimeSeconds
+	}
 }
 
 // Validate fails the load closed on a configuration that would bind an out-of-range
@@ -241,6 +273,9 @@ func (c *Lwm2mConfiguration) Validate() error {
 	}
 	if c.Security.MaxSessions < 1 {
 		return fmt.Errorf("security.maxSessions %d must be >= 1", c.Security.MaxSessions)
+	}
+	if c.MaxLifetimeSeconds < MinMaxLifetimeSeconds {
+		return fmt.Errorf("maxLifetimeSeconds %d must be >= %d (the registration lifetime ceiling must not fall below the min-lifetime clamp, ADR-075 L3b F2)", c.MaxLifetimeSeconds, MinMaxLifetimeSeconds)
 	}
 	seen := make(map[string]struct{}, len(c.Security.Identities))
 	for i := range c.Security.Identities {

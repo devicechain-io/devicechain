@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -71,11 +72,17 @@ const (
 )
 
 // reconcileQueryTimeout bounds EACH per-tenant device-state read that floors the epoch source
-// on a leadership acquisition. A slow/absent device-state must not stall the acquisition — on
-// timeout that tenant's floor is skipped (best-effort; the wall clock still monotonically
-// advances across a normal restart, so only a step-back is at risk, and that retries on the
-// next acquisition). L3b adds in-term retry and folds this read into the reconstruction pass.
+// AND rebuilds the shadow registration table on a leadership acquisition (ADR-075 L3b). A
+// slow/absent device-state must not stall the acquisition — on timeout that tenant's read is
+// skipped and RETRIED IN-TERM (retryReconstruct) with this same interval between rounds, so a
+// device that would otherwise sit stuck CONNECTED is reconstructed once device-state recovers,
+// without waiting for the next acquisition. It also paces the in-term retry loop.
 const reconcileQueryTimeout = 5 * time.Second
+
+// reconstructReadRetryInterval paces the in-term retry loop for tenants whose device-state read
+// failed on the first reconstruction pass (ADR-075 L3b / F4). A var (not a const) only so a test
+// can shorten it; production runs at reconcileQueryTimeout.
+var reconstructReadRetryInterval = reconcileQueryTimeout
 
 var (
 	Microservice  *core.Microservice
@@ -260,9 +267,11 @@ func buildMetrics() {
 		Expiries: Microservice.NewCounter("registration_expiries_total",
 			"LwM2M registrations that lapsed with no update (DISCONNECTED by lifetime timer).", nil),
 		ActiveRegistrations: Microservice.NewGauge("active_registrations",
-			"Live LwM2M registrations currently held.", nil),
+			"LwM2M registrations currently held. INCLUDES failover-reconstruction shadows immediately after a leadership takeover (ADR-075 L3b) — cross-check shadows_reconstructed_total and the per-tenant reconstruction log to tell a healthy takeover from a live fleet.", nil),
 		DevicesRegistered: Microservice.NewCounter("devices_registered_total",
 			"Devices auto-created on their first LwM2M registration.", nil),
+		ShadowsReconstructed: Microservice.NewCounter("shadows_reconstructed_total",
+			"Shadow registrations rebuilt from device-state on a leadership acquisition (ADR-075 L3b failover reconstruction) — a takeover marker; each is superseded by a re-Register or DISCONNECTED when its lifetime lapses.", nil),
 		PresenceEmitted: Microservice.NewCounter("presence_emitted_total",
 			"Presence StateChange events (ADR-067) durably written on an LwM2M register/deregister/expiry.", nil),
 		Dropped: Microservice.NewCounter("presence_dropped_total",
@@ -364,6 +373,10 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 
 	reg := registry.New(registrar, emitter, epoch, registryMetrics, registry.Options{
 		Source: registry.SourceLwM2M,
+		// The registration lifetime ceiling (ADR-075 L3b / F2): live registrations are clamped
+		// down to it, and failover-reconstruction shadow timers are armed at it. Equal by
+		// construction, so a shadow-expiry DISCONNECT is only ever late-true, never false.
+		MaxLife: durationSeconds(Configuration.MaxLifetimeSeconds),
 		// The registry ends a session (Deregister/expiry) → the observe manager cancels that
 		// session's observations. This is the ONE hook that keeps the registry a pure presence
 		// machine while the manager owns all conn/observation state (L2b).
@@ -399,40 +412,143 @@ func buildIngestLimiter(client *svcclient.Client, infra mscfg.InfrastructureConf
 	return adapter.NewIngestLimiter(resolve, adapter.DefaultSamplesPerMessage, decode.MaxSamplesPerNotify, limiterMetrics)
 }
 
-// establishEpochFloor reads every bound tenant's asserted-active LwM2M devices from the
-// device-state projection and raises the shared epoch source's floor above the maximum session
-// found (ADR-075 R2 / ADR-067). One EpochSource serves all tenants on the socket, so the floor is
-// the global max across tenants. It runs on every leadership acquisition (ADR-075 L3a / F4): a
-// standby that later wins must floor from the state as of ITS win, and a re-election across a
-// wall-clock step-back must re-floor (SetFloor is a ratchet, safe to re-run). Best-effort: a read
-// failure for a tenant is logged and skipped (retried on the next acquisition); L3b adds in-term
-// retry and folds this into the reconstruction pass.
-func establishEpochFloor(ctx context.Context, epoch *adapter.EpochSource, reconciler *adapter.Reconciler, bindings map[string]config.PskBinding) {
-	tenants := map[string]struct{}{}
-	for _, b := range bindings {
-		tenants[b.Tenant] = struct{}{}
+// assertedActiveReader is the device-state read the reconstruction pass needs (*adapter.Reconciler
+// implements it); the reconstruction functions depend on the interface so they are testable with a
+// fake, without a live device-state.
+type assertedActiveReader interface {
+	AssertedActive(ctx context.Context, tenant, source string) ([]adapter.AssertedDevice, uint64, error)
+}
+
+// identityBinding pairs a PSK identity with its resolved tenancy binding — the reverse of the
+// config's identity→binding map, keyed for the reconstruction lookup by (tenant, externalId).
+type identityBinding struct {
+	identity string
+	binding  config.PskBinding
+}
+
+// reconstructPresence rebuilds LwM2M presence on a leadership acquisition (ADR-075 L3b). For each
+// bound tenant it reads the asserted-active devices from device-state, floors the epoch source
+// above the maximum stored session (ADR-067, so a fresh emission always supersedes a stored one),
+// and reconstructs presence: a device with a live binding gets a shadow registration whose lifetime
+// timer will DISCONNECT it if it stays silent; a device whose binding was decommissioned is
+// DISCONNECTED now (B6). One EpochSource serves the whole socket, and SetFloor is a ratchet, so
+// flooring per tenant converges on the global maximum. Tenants whose first read fails are retried
+// in-term (F4): a skipped read leaves a device stuck CONNECTED until the next failover, so unlike
+// the floor's one-shot best-effort posture the reconstruction cannot inherit it.
+func reconstructPresence(ctx context.Context, epoch *adapter.EpochSource, reconciler assertedActiveReader, reg *registry.Registry, bindings map[string]config.PskBinding) {
+	rev := buildReverseBindings(bindings)
+	var pending []string
+	for tenant := range rev {
+		if !reconstructTenant(ctx, epoch, reconciler, reg, rev[tenant], tenant) {
+			pending = append(pending, tenant)
+		}
 	}
-	var globalMax uint64
-	for tenant := range tenants {
-		// A PER-TENANT timeout: a slow device-state must not let the first tenant burn a shared
-		// budget and leave every later tenant's floor unraised (the at-risk case is precisely a
-		// slow restart/re-election, which correlates with the step-back the floor guards).
-		qctx, cancel := context.WithTimeout(ctx, reconcileQueryTimeout)
-		_, maxSession, err := reconciler.AssertedActive(qctx, tenant, registry.SourceLwM2M)
-		cancel()
-		if err != nil {
-			log.Warn().Err(err).Str("tenant", tenant).
-				Msg("Could not read device-state to floor the LwM2M epoch for this tenant; skipping (retried on the next acquisition).")
+	if len(pending) > 0 {
+		// Retry the failed reads in the background so serving can start after the first pass (F4).
+		go retryReconstruct(ctx, epoch, reconciler, reg, rev, pending)
+	}
+}
+
+// reconstructTenant reads one tenant's asserted-active devices, floors the epoch from the maximum
+// session, and reconstructs each device's presence. It returns whether the device-state read
+// succeeded (false ⇒ the caller schedules an in-term retry). The unmatched-device DISCONNECTs (B6)
+// run in a single background goroutine so a slow device-management resolve never stalls serving;
+// the shadow installs are pure in-memory and run inline.
+func reconstructTenant(ctx context.Context, epoch *adapter.EpochSource, reconciler assertedActiveReader, reg *registry.Registry, byExternalId map[string]identityBinding, tenant string) bool {
+	// A PER-TENANT timeout: a slow device-state must not let the first tenant burn a shared budget
+	// and leave every later tenant unreconstructed (the at-risk case is precisely a slow
+	// restart/re-election, which correlates with the step-back the floor guards).
+	qctx, cancel := context.WithTimeout(ctx, reconcileQueryTimeout)
+	devices, maxSession, err := reconciler.AssertedActive(qctx, tenant, registry.SourceLwM2M)
+	cancel()
+	if err != nil {
+		log.Warn().Err(err).Str("tenant", tenant).
+			Msg("Could not read device-state to reconstruct LwM2M presence for this tenant; skipping (retried in-term).")
+		return false
+	}
+	if maxSession > 0 {
+		epoch.SetFloor(maxSession + 1)
+		log.Info().Uint64("floor", maxSession+1).Str("tenant", tenant).
+			Msg("Floored the LwM2M epoch source from the device-state projection.")
+	}
+	var orphans []string
+	shadows := 0
+	for _, d := range devices {
+		ib, ok := byExternalId[d.ExternalId]
+		if !ok {
+			orphans = append(orphans, d.ExternalId) // B6: no current credential — DISCONNECT below
 			continue
 		}
-		if maxSession > globalMax {
-			globalMax = maxSession
+		if reg.ReconstructShadow(ib.identity, ib.binding) {
+			shadows++
 		}
 	}
-	if globalMax > 0 {
-		epoch.SetFloor(globalMax + 1)
-		log.Info().Uint64("floor", globalMax+1).Msg("Floored the LwM2M epoch source from the device-state projection.")
+	log.Info().Str("tenant", tenant).Int("assertedDevices", len(devices)).Int("shadows", shadows).Int("orphans", len(orphans)).
+		Msg("Reconstructed LwM2M presence for tenant on leadership acquisition (ADR-075 L3b).")
+	if len(orphans) > 0 {
+		go func() {
+			for _, ext := range orphans {
+				if ctx.Err() != nil {
+					return
+				}
+				reg.ReconstructDisconnect(ctx, tenant, ext)
+			}
+		}()
 	}
+	return true
+}
+
+// retryReconstruct re-attempts the reconstruction for tenants whose first device-state read failed,
+// backing off between rounds, until every one succeeds or the leadership term ends (ADR-075 L3b /
+// F4). A late-landing read re-floors the epoch (SetFloor ratchets) and installs any shadows the
+// first pass missed; ReconstructShadow skips an identity that has since re-Registered (B1), so a
+// device that came back while a tenant's read was failing is never shadowed over a live entry.
+func retryReconstruct(ctx context.Context, epoch *adapter.EpochSource, reconciler assertedActiveReader, reg *registry.Registry, rev map[string]map[string]identityBinding, pending []string) {
+	for len(pending) > 0 {
+		if !sleepCtx(ctx, reconstructReadRetryInterval) {
+			return // term ended
+		}
+		var still []string
+		for _, tenant := range pending {
+			if !reconstructTenant(ctx, epoch, reconciler, reg, rev[tenant], tenant) {
+				still = append(still, tenant)
+			}
+		}
+		pending = still
+	}
+	log.Info().Msg("In-term LwM2M presence reconstruction completed for all previously-failed tenants.")
+}
+
+// buildReverseBindings inverts the identity→binding map into tenant → externalId → (identity,
+// binding), the lookup the reconstruction uses to map an asserted device's external id back to the
+// credential that can re-authenticate it. A duplicate (tenant, externalId) across two identities is
+// the credential-rotation overlap the config deliberately allows; it is resolved DETERMINISTICALLY
+// (the lowest identity wins) and counted, so a shadow is installed under exactly one identity and
+// the reconstruction is stable run-to-run (B8). Whichever identity the device actually re-Registers
+// on supersedes the shadow at a higher epoch regardless of which one held it.
+func buildReverseBindings(bindings map[string]config.PskBinding) map[string]map[string]identityBinding {
+	ids := make([]string, 0, len(bindings))
+	for id := range bindings {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	rev := map[string]map[string]identityBinding{}
+	for _, id := range ids {
+		b := bindings[id]
+		byExt := rev[b.Tenant]
+		if byExt == nil {
+			byExt = map[string]identityBinding{}
+			rev[b.Tenant] = byExt
+		}
+		if existing, dup := byExt[b.ExternalId]; dup {
+			log.Warn().Str("tenant", b.Tenant).Str("externalId", b.ExternalId).
+				Str("identity", existing.identity).Str("ignored", id).
+				Msg("Two PSK identities share a (tenant, externalId); reconstruction uses the lower identity (credential-rotation overlap, ADR-075 L3b / B8).")
+			continue
+		}
+		byExt[b.ExternalId] = identityBinding{identity: id, binding: b}
+	}
+	return rev
 }
 
 // ingestEndpoint validates the device-management coordinate the registrar resolves through and
@@ -620,18 +736,29 @@ func buildTerm(leaderCtx context.Context, bindings map[string]config.PskBinding)
 	if err != nil {
 		return nil, nil, err
 	}
-	// Floor the epoch BEFORE the transport serves, so no registration processed after acquisition
-	// mints an epoch a wall-clock step-back would make the projection reject as stale. Bound each
-	// per-tenant read by leaderCtx (not context.Background): the floor is best-effort — a slow
-	// device-state never fails the term — but an eviction or shutdown mid-floor must abort the reads
-	// promptly, so the unwind is not delayed reconcileQueryTimeout × N tenants (risking a SIGKILL
-	// before the lease is released).
-	establishEpochFloor(leaderCtx, epoch, reconciler, bindings)
-
+	// Bind the transport BEFORE reconstruction. server.New binds the socket but does NOT serve
+	// (Serve starts the read loop later, in serveAsLeader), and binding is the anticipated transient
+	// failure on a handover — the fuse comment names "a socket not yet freed by the prior term". If
+	// reconstruction ran first it would arm one maxLife+grace (~day-long) shadow timer per asserted
+	// device, and a subsequent bind failure discards this term's registry WITHOUT ever calling
+	// reg.Stop(), leaking every one of those timers to fire in a dead term. Binding first means a
+	// bind failure returns before any timer is armed.
 	srv, err := server.New(serverConfig(), serverMetrics, handlers.Mount)
 	if err != nil {
 		return nil, nil, err
 	}
+	// Reconstruct presence after the bind succeeds but BEFORE serving (ADR-075 L3b): read each bound
+	// tenant's asserted-active LwM2M devices from device-state, floor the epoch above the maximum
+	// stored session (so no registration the read loop processes after Serve mints a stale-rejected
+	// epoch), and rebuild a shadow registration table so a device that went silent across the
+	// handover is still DISCONNECTED. The socket is bound but not yet reading, so no Register is
+	// processed until Serve — the floor + shadows are in place first. Bound by leaderCtx (not
+	// context.Background): the pass is best-effort — a slow device-state never fails the term — but
+	// an eviction or shutdown mid-pass must abort the reads promptly so the unwind is not delayed
+	// reconcileQueryTimeout × N tenants (risking a SIGKILL before the lease is released). Tenants
+	// whose first read fails are retried in-term.
+	reconstructPresence(leaderCtx, epoch, reconciler, reg, bindings)
+
 	log.Info().Str("addr", srv.Addr().String()).Int("cidLength", Configuration.ConnectionIdLengthOrDefault()).
 		Int("credentials", len(Credentials)).Msg("Built the LwM2M CoAP/DTLS transport for this leadership term.")
 	return srv, reg, nil
