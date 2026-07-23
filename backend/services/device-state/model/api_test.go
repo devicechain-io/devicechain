@@ -191,6 +191,32 @@ func TestPresenceNonEventSplit(t *testing.T) {
 		}
 	})
 
+	t.Run("first authoritative DISCONNECT over an inferred-swept-dead device records the authoritative time", func(t *testing.T) {
+		api := newTestApi(t)
+		// An INFERRED device: a plain data event creates it active.
+		if _, err := api.MergeDeviceState(ctx, "d3", t0, nil, DeviceIdentity{}); err != nil {
+			t.Fatalf("data event: %v", err)
+		}
+		// The data-silence sweep flips it inactive far later, writing a SYNTHETIC disconnect time.
+		sweepAt := t0.Add(24 * time.Hour)
+		if _, err := api.SweepInactive(core.WithSystemContext(ctx), sweepAt); err != nil {
+			t.Fatalf("sweep: %v", err)
+		}
+		// Its authoritative LWT (the FIRST StateChange) then arrives, dated EARLIER than the
+		// sweep's guess — the device actually died at deathAt, the sweep only noticed at sweepAt.
+		deathAt := t0.Add(time.Hour)
+		ds, err := api.MergeDeviceState(ctx, "d3", deathAt, disc(5, deathAt), DeviceIdentity{})
+		if err != nil {
+			t.Fatalf("first authoritative disconnect: %v", err)
+		}
+		if ds.PresenceSource != PresenceSourceAsserted || ds.Active {
+			t.Fatalf("promotion did not assert/deactivate: %+v", ds)
+		}
+		if !ds.LastDisconnectTime.Time.Equal(deathAt) {
+			t.Fatalf("first authoritative word kept the SYNTHETIC swept time (%v) instead of the true death %v", ds.LastDisconnectTime.Time, deathAt)
+		}
+	})
+
 	t.Run("higher-session connect over live device refreshes LastConnectTime", func(t *testing.T) {
 		api := newTestApi(t)
 		if _, err := api.MergeDeviceState(ctx, "d2", t0, conn(100, t0), DeviceIdentity{}); err != nil {

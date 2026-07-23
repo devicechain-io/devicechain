@@ -37,6 +37,12 @@ type EventPersistenceWorker struct {
 // Results of event persistence process.
 type EventPersistenceResults struct {
 	Events []interface{}
+	// Deduped reports that the persist was a no-op because the row already existed —
+	// only the StateChange path sets it (its idempotency unique index absorbs a
+	// JetStream redelivery). When true the caller MUST skip anchor persistence: a
+	// StateChange carries no AltId, so without this a redelivery would re-insert its
+	// anchor set (event_anchors has no unique index), duplicating it.
+	Deduped bool
 }
 
 // Create a new event resolver.
@@ -195,7 +201,7 @@ func (ep *EventPersistenceWorker) PersistAlertEvents(ctx context.Context, db *go
 // separately by device-state's projection; this is the queryable timeline.
 func (ep *EventPersistenceWorker) PersistStateChangeEvents(ctx context.Context, db *gorm.DB, event model.Event,
 	payload dmmodel.ResolvedStateChangePayload) (*EventPersistenceResults, error) {
-	created, err := ep.Api.CreateStateChangeEvents(ctx, db, []*model.StateChangeEventCreateRequest{{
+	created, affected, err := ep.Api.CreateStateChangeEvents(ctx, db, []*model.StateChangeEventCreateRequest{{
 		Event:     event,
 		State:     payload.State,
 		Reason:    payload.Reason,
@@ -208,7 +214,9 @@ func (ep *EventPersistenceWorker) PersistStateChangeEvents(ctx context.Context, 
 	for _, scevt := range created {
 		events = append(events, scevt)
 	}
-	return &EventPersistenceResults{Events: events}, nil
+	// A redelivery inserts nothing (the idempotency index conflicts); tell the caller to
+	// skip anchors so it does not re-insert the anchor set.
+	return &EventPersistenceResults{Events: events, Deduped: affected == 0}, nil
 }
 
 // Persists a resolved event to the datastore. The event's relationship anchors
@@ -285,6 +293,12 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 		}
 		if perr != nil {
 			return perr
+		}
+		// A deduped persist (a StateChange redelivery absorbed by its idempotency index)
+		// must NOT re-run anchor persistence — event_anchors has no unique index, so a
+		// plain re-insert would duplicate the anchor set.
+		if results != nil && results.Deduped {
+			return nil
 		}
 		// Persist the event's anchor set in the same transaction, so the event and
 		// its queryable dimensions commit atomically (ADR-013 addendum 2026-07-01).

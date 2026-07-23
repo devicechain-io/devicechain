@@ -141,6 +141,12 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 			// device advances the marker (rejecting a later stale intermediate-session edge) but
 			// does NOT move LastDisconnectTime or re-fire the DETECT offline edge — the S3
 			// same-state-higher-session non-event. The identical predicate keys the DETECT engine.
+			// wasInferred is the FIRST-authoritative-word promotion: the device's presence was
+			// only inferred so far (data-silence sweep), so this StateChange establishes the
+			// authoritative baseline and must record its edge even without a state flip — an
+			// authoritative death time supersedes a synthetic swept one (captured before we
+			// stamp ASSERTED just below).
+			wasInferred := found.PresenceSource != PresenceSourceAsserted
 			found.PresenceSource = PresenceSourceAsserted
 			d := presence.Decide(
 				presence.Prior{
@@ -158,15 +164,19 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 				if pt.Connected {
 					// A higher session is a genuine reconnect even when Active was already true
 					// (a new epoch is a new physical connection), so refresh LastConnectTime on a
-					// flip OR a new session; a same-session duplicate connect leaves it frozen.
-					if d.Flipped || d.NewSession {
+					// flip OR a new session OR the first authoritative word; a same-session
+					// duplicate connect leaves it frozen. (A producer that never varies its session
+					// id cannot signal a reconnect-over-missed-disconnect this way; both current
+					// producers — Sparkplug SP4a, LwM2M L1 — mint a fresh epoch per connect.)
+					if d.Flipped || d.NewSession || wasInferred {
 						found.LastConnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
 						found.InactivityAlarmTime = sql.NullTime{}
 					}
-				} else if d.Flipped {
-					// Only a true CONNECTED→dead flip records a disconnect time; a higher-session
-					// DISCONNECT over an already-dead device is a late echo — first-known-dead wins
-					// (the S3a history table retains the later session's row for audit).
+				} else if d.Flipped || wasInferred {
+					// A true CONNECTED→dead flip, or the first authoritative word over an
+					// inferred-dead device, records the disconnect time. A higher-session
+					// DISCONNECT over an ALREADY-ASSERTED-dead device is a late echo —
+					// first-known-dead wins (the S3a history table retains the later row for audit).
 					found.LastDisconnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
 				}
 			}

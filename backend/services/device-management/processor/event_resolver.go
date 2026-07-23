@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -419,6 +420,13 @@ func (rez *EventResolver) ResolveStateChangeEventPayload(ctx context.Context, de
 		parsed, err := strconv.ParseUint(payload.SessionId, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("invalid session id %q in state-change event: %w", payload.SessionId, err)
+		}
+		// Both sinks (device-state, event-management) store SessionId in a signed bigint, so
+		// a value above MaxInt64 is unstorable. Reject it HERE as a deterministic failure —
+		// otherwise the pgx "greater than maximum int8" error is not classified deterministic
+		// and the message burns MaxDeliver redeliveries before dead-lettering (a poison loop).
+		if parsed > math.MaxInt64 {
+			return nil, fmt.Errorf("session id %q in state-change event exceeds the storable range (max %d)", payload.SessionId, int64(math.MaxInt64))
 		}
 		sessionId = parsed
 	}

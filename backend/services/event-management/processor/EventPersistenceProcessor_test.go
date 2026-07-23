@@ -284,7 +284,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleAlertEvent() {
 // the mock-call assertions are deterministic and race-free.
 func (suite *EventPersistenceProcessorTestSuite) TestStateChangeEventPersists() {
 	worker := &EventPersistenceWorker{Api: suite.API}
-	suite.API.Mock.On("CreateStateChangeEvents", mock.Anything, mock.Anything).Return([]*model.StateChangeEvent{{}}, nil)
+	suite.API.Mock.On("CreateStateChangeEvents", mock.Anything, mock.Anything).Return([]*model.StateChangeEvent{{}}, int64(1), nil)
 	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
 
 	results, err := worker.PersistEvent(context.Background(), *buildStateChangeEvent())
@@ -295,6 +295,30 @@ func (suite *EventPersistenceProcessorTestSuite) TestStateChangeEventPersists() 
 	// the ack-skip no-op did NEITHER.
 	suite.API.AssertCalled(suite.T(), "CreateStateChangeEvents", mock.Anything, mock.Anything)
 	suite.API.AssertCalled(suite.T(), "CreateEventAnchors", mock.Anything, mock.Anything)
+}
+
+// A redelivered StateChange (RowsAffected==0 from the idempotency index) must NOT
+// re-run anchor persistence — event_anchors has no unique index, so a plain re-insert
+// would duplicate the anchor set (a StateChange never carries an AltId, so the base
+// dedup does not engage). The FIRST delivery persists + anchors; the SECOND persists
+// nothing and skips anchors.
+func (suite *EventPersistenceProcessorTestSuite) TestStateChangeRedeliverySkipsAnchors() {
+	worker := &EventPersistenceWorker{Api: suite.API}
+	// First delivery inserts (RowsAffected 1); redelivery deduplicates (RowsAffected 0).
+	suite.API.Mock.On("CreateStateChangeEvents", mock.Anything, mock.Anything).Return([]*model.StateChangeEvent{{}}, int64(1), nil).Once()
+	suite.API.Mock.On("CreateStateChangeEvents", mock.Anything, mock.Anything).Return([]*model.StateChangeEvent{}, int64(0), nil).Once()
+	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
+
+	sc := *buildStateChangeEvent()
+	if _, err := worker.PersistEvent(context.Background(), sc); err != nil {
+		suite.T().Fatalf("first delivery: %v", err)
+	}
+	if _, err := worker.PersistEvent(context.Background(), sc); err != nil {
+		suite.T().Fatalf("redelivery: %v", err)
+	}
+
+	// Anchors persisted exactly ONCE across the two deliveries.
+	suite.API.AssertNumberOfCalls(suite.T(), "CreateEventAnchors", 1)
 }
 
 // Run all tests.

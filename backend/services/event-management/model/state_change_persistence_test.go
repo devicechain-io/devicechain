@@ -81,7 +81,7 @@ func TestStateChangePersistIdempotency(t *testing.T) {
 	t0 := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 
 	// A first CONNECT persists one row.
-	if _, err := api.CreateStateChangeEvents(ctx, api.RDB.DB(ctx), []*StateChangeEventCreateRequest{scReq("d1", t0, "CONNECTED", 100)}); err != nil {
+	if _, _, err := api.CreateStateChangeEvents(ctx, api.RDB.DB(ctx), []*StateChangeEventCreateRequest{scReq("d1", t0, "CONNECTED", 100)}); err != nil {
 		t.Fatalf("first connect: %v", err)
 	}
 	if got := countStateChanges(t, api, ctx, "d1"); got != 1 {
@@ -90,8 +90,13 @@ func TestStateChangePersistIdempotency(t *testing.T) {
 
 	// A redelivery of the SAME edge (tenant/device/time/state/session) is dropped by the
 	// idempotency index — not a duplicate presence row (which would read as phantom flapping).
-	if _, err := api.CreateStateChangeEvents(ctx, api.RDB.DB(ctx), []*StateChangeEventCreateRequest{scReq("d1", t0, "CONNECTED", 100)}); err != nil {
+	// RowsAffected must be 0: that is the signal the worker uses to skip anchor persistence.
+	_, affected, err := api.CreateStateChangeEvents(ctx, api.RDB.DB(ctx), []*StateChangeEventCreateRequest{scReq("d1", t0, "CONNECTED", 100)})
+	if err != nil {
 		t.Fatalf("redelivery must not error (ON CONFLICT DO NOTHING): %v", err)
+	}
+	if affected != 0 {
+		t.Fatalf("redelivery reported %d rows affected, want 0 (the skip-anchors signal)", affected)
 	}
 	if got := countStateChanges(t, api, ctx, "d1"); got != 1 {
 		t.Fatalf("redelivery duplicated a presence row: got %d, want 1", got)
@@ -99,7 +104,7 @@ func TestStateChangePersistIdempotency(t *testing.T) {
 
 	// A birth+death at ONE instant differ by state — BOTH survive (the equal-stamp pair the
 	// projection legitimizes; a unique NATURAL key would have dropped one).
-	if _, err := api.CreateStateChangeEvents(ctx, api.RDB.DB(ctx), []*StateChangeEventCreateRequest{scReq("d1", t0, "DISCONNECTED", 100)}); err != nil {
+	if _, _, err := api.CreateStateChangeEvents(ctx, api.RDB.DB(ctx), []*StateChangeEventCreateRequest{scReq("d1", t0, "DISCONNECTED", 100)}); err != nil {
 		t.Fatalf("equal-stamp disconnect: %v", err)
 	}
 	if got := countStateChanges(t, api, ctx, "d1"); got != 2 {
@@ -108,7 +113,7 @@ func TestStateChangePersistIdempotency(t *testing.T) {
 
 	// A late higher-session DISCONNECT echo (same time+state, different session) is RETAINED
 	// for audit — the projection freezes LastDisconnectTime, but the history keeps the row.
-	if _, err := api.CreateStateChangeEvents(ctx, api.RDB.DB(ctx), []*StateChangeEventCreateRequest{scReq("d1", t0, "DISCONNECTED", 200)}); err != nil {
+	if _, _, err := api.CreateStateChangeEvents(ctx, api.RDB.DB(ctx), []*StateChangeEventCreateRequest{scReq("d1", t0, "DISCONNECTED", 200)}); err != nil {
 		t.Fatalf("late echo: %v", err)
 	}
 	if got := countStateChanges(t, api, ctx, "d1"); got != 3 {
@@ -124,10 +129,10 @@ func TestStateChangeTenantIsolation(t *testing.T) {
 	ctxA := core.WithTenant(context.Background(), "A")
 	ctxB := core.WithTenant(context.Background(), "B")
 
-	if _, err := api.CreateStateChangeEvents(ctxA, api.RDB.DB(ctxA), []*StateChangeEventCreateRequest{scReq("shared", t0, "CONNECTED", 100)}); err != nil {
+	if _, _, err := api.CreateStateChangeEvents(ctxA, api.RDB.DB(ctxA), []*StateChangeEventCreateRequest{scReq("shared", t0, "CONNECTED", 100)}); err != nil {
 		t.Fatalf("tenant A: %v", err)
 	}
-	if _, err := api.CreateStateChangeEvents(ctxB, api.RDB.DB(ctxB), []*StateChangeEventCreateRequest{scReq("shared", t0, "CONNECTED", 100)}); err != nil {
+	if _, _, err := api.CreateStateChangeEvents(ctxB, api.RDB.DB(ctxB), []*StateChangeEventCreateRequest{scReq("shared", t0, "CONNECTED", 100)}); err != nil {
 		t.Fatalf("tenant B identical edge must not collide with A: %v", err)
 	}
 	if got := countStateChanges(t, api, ctxA, "shared"); got != 1 {
