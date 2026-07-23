@@ -40,6 +40,7 @@ const (
 	Mcp              FunctionalArea = "mcp"
 	AiInference      FunctionalArea = "ai-inference"
 	SparkplugIngest  FunctionalArea = "sparkplug-ingest"
+	Lwm2mIngest      FunctionalArea = "lwm2m-ingest"
 )
 
 // Manifest is a functional area's deployment contract (ADR-022 decision 2): its
@@ -181,6 +182,22 @@ var catalog = map[FunctionalArea]Manifest{
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
+	Lwm2mIngest: {
+		// The LwM2M ingest service (ADR-075): a stateful adapter that terminates OMA
+		// LwM2M over CoAP/UDP+DTLS from constrained devices onto the one device model —
+		// the second standards-native edge protocol alongside Sparkplug. Like the
+		// Sparkplug adapter it is a parallel inbound transport that RESOLVES what it
+		// produces through device-management (Hard, its designed contract, wired when the
+		// registration/measurement handlers land in L1). It is an OPT-IN edge area held
+		// back from ProfileDefault — a deliberate topology choice, and (like Sparkplug)
+		// it runs as a single inbound-UDP binder (ADR-075 HA posture: an inbound socket
+		// cannot warm-standby; GA is one serving replica). At L0 it exposes only its
+		// metrics/probes (the device-facing UDP ingress is wired with the L1 handlers);
+		// it consumes nothing, so it declares no consumer of its own as a Hard edge.
+		Area:     Lwm2mIngest,
+		HardDeps: []FunctionalArea{DeviceManagement},
+		SoftDeps: []FunctionalArea{UserManagement},
+	},
 }
 
 // Profile names a curated, valid enabled set (ADR-022 decision 2). Every profile
@@ -218,7 +235,7 @@ var standardAreas = []FunctionalArea{
 
 var profiles = map[Profile][]FunctionalArea{
 	ProfileDefault: standardAreas,
-	ProfileFull:    append(append([]FunctionalArea{}, standardAreas...), AiInference, OutboundConn, Mcp, SparkplugIngest),
+	ProfileFull:    append(append([]FunctionalArea{}, standardAreas...), AiInference, OutboundConn, Mcp, SparkplugIngest, Lwm2mIngest),
 	ProfileTelemetry: {
 		UserManagement, DeviceManagement, EventSources, EventManagement, DeviceState, DashboardMgmt,
 	},

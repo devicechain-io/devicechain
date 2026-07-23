@@ -708,3 +708,38 @@ functionalAreas:
     #       secretKeyRef:
     #         name: sparkplug-acme-broker
     #         key: password
+  lwm2m-ingest:
+    # The LwM2M ingest service (ADR-075): a stateful adapter that terminates OMA LwM2M
+    # over CoAP/UDP+DTLS from constrained devices onto the one device model — the second
+    # standards-native edge protocol alongside Sparkplug. OPT-IN edge area: held back from
+    # `default`, shipped by `full`, or named explicitly
+    # (enabledFunctionalAreas: [..., lwm2m-ingest]). Hard-depends on device-management
+    # (which resolves what it produces, once the L1 registration/measurement handlers land).
+    #
+    # It is a single INBOUND-UDP binder (ADR-075 HA posture): devices connect IN to one
+    # bound socket, so — unlike an outbound client — it cannot warm-standby (a Service
+    # would spray datagrams across replicas, and a standby would drop half). GA is ONE
+    # serving replica; it deploys strategy Recreate + replicas:1 (a rollout stops the old
+    # binder before the new one binds). Do NOT raise replicas past 1 until the ADR-070
+    # fenced lease lands. This L0 slice exposes only its metrics/probes; the device-facing
+    # UDP CoAPS port (5684) + the PSK credential Secret are wired with the L1 handlers.
+    replicas: 1
+    strategy: Recreate
+    config: {}
+      # listen:
+      #   host: 0.0.0.0
+      #   port: 5684                       # CoAPS (DTLS). Default 5684.
+      # security:
+      #   connectionIdLength: 8            # DTLS Connection ID length (RFC 9146); 0 disables. Default 8.
+      #   maxSessions: 100000              # live-session ceiling (memory bound).
+      #   idleTimeoutSeconds: 0            # reap idle sessions after N seconds; 0 = never (set above the queue-mode wake interval).
+      #   identities:                      # provisioned PSK credentials; empty (default) authenticates no one.
+      #     - identity: opaque-handle-1    # the DTLS PSK identity the device presents (prefer an opaque handle).
+      #       pskEnv: DC_LWM2M_PSK_DEV1    # NAMES the env var holding the base64 pre-shared key (never inline). Project a Secret below.
+    # Project each device PSK Secret into the env var its identity names:
+    # extraEnv:
+    #   - name: DC_LWM2M_PSK_DEV1
+    #     valueFrom:
+    #       secretKeyRef:
+    #         name: lwm2m-dev1-psk
+    #         key: psk

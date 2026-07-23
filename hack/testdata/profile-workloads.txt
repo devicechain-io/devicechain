@@ -26,6 +26,7 @@ event-management
 event-processing
 event-sources
 frontend
+lwm2m-ingest
 mcp
 notification-management
 outbound-connectors
