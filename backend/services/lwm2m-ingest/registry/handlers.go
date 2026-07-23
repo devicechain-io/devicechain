@@ -4,6 +4,7 @@
 package registry
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -56,6 +57,14 @@ type Handlers struct {
 	obs      observer               // nil ⇒ presence-only (no telemetry observations)
 	allow    decode.ObjectAllowlist // which objects in a registration are telemetry to observe
 	limit    messageLimiter         // nil ⇒ /rd ungated (presence-only test / inert deployment)
+	// leaderCtx is the leadership term's context (ADR-075 L3a): while this replica holds the
+	// ownership lease it is non-nil and live; the instant the term is evicted (lease lost) or
+	// shut down it is cancelled, before the transport socket is closed. The /rd handlers refuse
+	// with 5.03 once it is cancelled so no registration is processed — and no presence minted —
+	// by a replica that is no longer the leader (ADR-070; the confused-deputy / split-brain
+	// guard for N>1, and the honest self-eviction signal at N=1). A nil leaderCtx means "always
+	// serving" — an inert deployment with no lease, or a presence-only test.
+	leaderCtx context.Context
 }
 
 // NewHandlers builds the registration handlers over a Registry and the identity->binding
@@ -64,9 +73,19 @@ type Handlers struct {
 // authenticated identity has a binding (both are built from the same config identities). obs
 // is the telemetry-lifecycle manager (L2b) and may be nil (presence-only); allow selects which
 // registered object instances are observed. limit is the per-tenant ingest gate (L2c) applied to
-// Register/Update and may be nil (ungated).
-func NewHandlers(reg *Registry, bindings map[string]config.PskBinding, metrics Metrics, obs observer, allow decode.ObjectAllowlist, limit messageLimiter) *Handlers {
-	return &Handlers{reg: reg, bindings: bindings, metrics: metrics, obs: obs, allow: allow, limit: limit}
+// Register/Update and may be nil (ungated). leaderCtx is the leadership term's context (L3a): the
+// handlers refuse 5.03 once it is cancelled; a nil leaderCtx means always-serving (inert / test).
+func NewHandlers(reg *Registry, bindings map[string]config.PskBinding, metrics Metrics, obs observer, allow decode.ObjectAllowlist, limit messageLimiter, leaderCtx context.Context) *Handlers {
+	return &Handlers{reg: reg, bindings: bindings, metrics: metrics, obs: obs, allow: allow, limit: limit, leaderCtx: leaderCtx}
+}
+
+// notLeading reports whether this replica has stopped being the serving leader — its leadership
+// term context has been cancelled (eviction or shutdown). A nil leaderCtx (inert / test) is always
+// leading. It is the L3a self-eviction gate: the transport socket is torn down right after the term
+// context is cancelled, but any request already in the accept path in that window must not mint
+// presence for a non-leader.
+func (h *Handlers) notLeading() bool {
+	return h.leaderCtx != nil && h.leaderCtx.Err() != nil
 }
 
 // targetFrom builds the telemetry correlation for a registration from its authenticated
@@ -93,6 +112,10 @@ func (h *Handlers) Mount(router *mux.Router) error {
 
 // handleRd serves POST /rd — Register. Any other method is 4.05.
 func (h *Handlers) handleRd(w mux.ResponseWriter, r *mux.Message) {
+	if h.notLeading() {
+		h.respond(w, codes.ServiceUnavailable) // 5.03 — this replica is no longer the leader; the device retries
+		return
+	}
 	if r.Code() != codes.POST {
 		h.respond(w, codes.MethodNotAllowed)
 		return
@@ -150,6 +173,10 @@ func (h *Handlers) handleRd(w mux.ResponseWriter, r *mux.Message) {
 
 // handleRdItem serves POST /rd/{regId} (Update) and DELETE /rd/{regId} (Deregister).
 func (h *Handlers) handleRdItem(w mux.ResponseWriter, r *mux.Message) {
+	if h.notLeading() {
+		h.respond(w, codes.ServiceUnavailable) // 5.03 — this replica is no longer the leader; the device retries
+		return
+	}
 	identity, binding, ok := h.authorize(w, r)
 	if !ok {
 		return
