@@ -10,6 +10,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
 
 // PlanResult is the outcome of fanning one resolved event out across its applicable rules.
@@ -127,6 +128,16 @@ func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEve
 		return res
 	}
 
+	// A presence StateChange (ADR-067 S3b) is authoritative connectivity, NOT a data heartbeat:
+	// it feeds ONLY Connectivity rules a typed connect/disconnect edge and never enters the
+	// measurement/heartbeat path (BuildInputs returns nil for it, so a DISCONNECT can't reset an
+	// absence timer). Translating here in Plan — not in the persist loop — means the ADR-053
+	// preview runner, which also calls Plan, previews connectivity rules for free.
+	if ev.EventType == esmodel.StateChange {
+		res.planConnectivity(seq, ev, occurred, scoped)
+		return res
+	}
+
 	inputs := BuildInputs(ev, occurred)
 	for i := range inputs {
 		inputs[i].Attr = attr
@@ -134,6 +145,11 @@ func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEve
 	for _, in := range inputs {
 		for _, sr := range scoped {
 			cr := sr.Compiled
+			// A Connectivity rule is fed ONLY by a StateChange (handled above), never a measurement
+			// sample — skip it here so a data event doesn't build a no-op presence-less event.
+			if cr.Core.Kind == core.Connectivity {
+				continue
+			}
 			// Metric-scoped feed. GateMetric (structured), ValueMetric (value kinds), and
 			// FeedMetrics (a raw-CEL threshold/duration leaf, review D4) are mutually exclusive per
 			// the compiler, so at most one gate is active; whichever is set must be present to feed.
@@ -169,6 +185,33 @@ func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEve
 		}
 	}
 	return res
+}
+
+// planConnectivity feeds a resolved presence StateChange to the in-scope Connectivity rules
+// (ADR-067 S3b) as a typed connect/disconnect edge — SessionId rides a uint64 PresenceEdge, never
+// Event.Value (a float64 loses a UnixNano-scale epoch). Non-Connectivity rules never see a
+// StateChange (a measurement rule has nothing to do with presence). One edge per rule, keyed on the
+// source device; the engine's per-series cursor orders it via presence.Decide.
+func (res *PlanResult) planConnectivity(seq uint64, ev *dmmodel.ResolvedEvent, occurred time.Time, scoped []*ScopedRule) {
+	p, ok := ev.Payload.(*dmmodel.ResolvedStateChangePayload)
+	if !ok {
+		return // malformed presence payload: nothing to feed (the persist/projection paths log it)
+	}
+	edge := &core.PresenceEdge{
+		SessionId: p.SessionId,
+		Connected: p.State == string(esmodel.PresenceConnected),
+	}
+	for _, sr := range scoped {
+		if sr.Compiled.Core.Kind != core.Connectivity {
+			continue
+		}
+		res.Events = append(res.Events, core.Event{
+			Seq:      seq,
+			Key:      core.SeriesKey{Rule: sr.Compiled.ID, Series: ev.SourceDeviceToken},
+			Time:     occurred,
+			Presence: edge,
+		})
+	}
 }
 
 // fanCorrelation appends one event per matching anchor on the event, keyed by the anchor token

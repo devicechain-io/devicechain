@@ -67,6 +67,12 @@ const (
 	// TypeCorrelation fires when the number of distinct members (devices) reporting under
 	// an anchor (AnchorType) within Window reaches Count — area/fleet correlation.
 	TypeCorrelation RuleType = "correlation"
+	// TypeConnectivity raises a "device offline" alarm on an authoritative DISCONNECT and
+	// resolves it on the next CONNECT (ADR-067 S3b). It is a leaf-less, config-less EDGE
+	// trigger (no metric, no timeout): the presence StateChange itself is the signal. It
+	// complements TypeAbsence — DEATH is instant and authoritative, absence is the
+	// data-silence timeout fallback — and operators pair the two for full coverage.
+	TypeConnectivity RuleType = "connectivity"
 )
 
 // WindowMode selects the windowed-aggregate shape for TypeAggregate.
@@ -315,7 +321,8 @@ func (a Action) populatedVariants() []ActionType {
 // Condition is a rule's leaf: the boolean test one event must pass. Exactly one form is
 // populated — a structured comparison (the no-CEL default the form builder emits) or a
 // raw CEL string (advanced escape hatch) — or neither, which means "match every event"
-// (valid where the temporal shape carries the logic: absence, aggregate, correlation).
+// (valid where the temporal shape carries the logic: absence, aggregate, correlation, or the
+// leaf-less connectivity edge, which reads no event field at all).
 type Condition struct {
 	// Structured comparison `<Metric> <Op> <bound>`, where the bound is EITHER a literal
 	// Threshold OR a device-attribute reference ThresholdAttr (mutually exclusive). Metric

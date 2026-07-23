@@ -8,6 +8,8 @@ import (
 	"math"
 	"sort"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/presence"
 )
 
 // RuleKind is the temporal shape of a rule. Slice 0 proved the timer-driven shapes
@@ -48,6 +50,13 @@ const (
 	// Correlation fires when the number of DISTINCT members (Event.Member) seen for an
 	// anchor (the series key) within a sliding Window reaches Count — area/fleet correlation.
 	Correlation
+	// Connectivity raises a "device offline" alarm on an authoritative DISCONNECT and resolves
+	// it on the next CONNECT (ADR-067 S3b). It is EDGE-driven, not value- or timer-driven: it
+	// carries no metric and no timeout, and complements Absence (DEATH=instant/authoritative vs
+	// Absence=data-silence timeout). Ordering is by the presence session epoch (Event.Presence),
+	// via the SAME presence.Decide the device-state projection uses, so a same-state higher-session
+	// echo advances the cursor but fires nothing, and a stale lower-session edge is dropped.
+	Connectivity
 )
 
 // Rule is a compiled detection rule keyed by ID (tenant-token prefixed in the real
@@ -83,6 +92,20 @@ type Event struct {
 	HasValue bool
 	Match    bool
 	Member   string // Correlation: the distinct contributor (device token) under the anchor key; ignored otherwise
+	// Presence is the authoritative connect/disconnect edge for a Connectivity rule (ADR-067
+	// S3b), nil for every other kind. It is a TYPED carrier — SessionId is a UnixNano-scale
+	// epoch that would lose precision through Event.Value (a float64), and the codebase already
+	// sends presence session ids as strings over JSON for exactly this reason — so the engine
+	// never routes it through Value/Match.
+	Presence *PresenceEdge
+}
+
+// PresenceEdge is the payload of a Connectivity Event: the transition's session epoch (the
+// producer's monotone connect id, a host-observed epoch, not a raw bdSeq) and its direction
+// (Connected true = CONNECTED, false = DISCONNECTED).
+type PresenceEdge struct {
+	SessionId uint64
+	Connected bool
 }
 
 // EdgeKind discriminates the two edges of an alarm-bearing detection (ADR-057). A rule is
@@ -201,7 +224,14 @@ type Engine struct {
 	// an alarm the latest reading still supports (review D3/F2). It is snapshotted, so the level and
 	// its origin survive a restart.
 	raised map[SeriesKey]time.Time
-	out    []Detection
+	// presenceState is the Connectivity kind's per-series ordering cursor (ADR-067 S3b): the
+	// last-applied presence transition (session epoch, time, connected). It is the engine-side
+	// twin of the device-state projection's stored (SessionId, PresenceTime, Active), consulted
+	// through the SAME presence.Decide so both order a StateChange identically. Snapshotted, so
+	// a restart resumes the cursor; an absent entry (fresh series or an old snapshot) is treated
+	// as the first transition — the fail-safe (never re-raise a stale offline alarm).
+	presenceState map[SeriesKey]presence.Prior
+	out           []Detection
 }
 
 // expectedState is the dead-man arming record for one rostered device under one Absence rule
@@ -232,19 +262,20 @@ func NewEngine(rules []Rule, allowedLateness time.Duration) *Engine {
 		m[r.ID] = r
 	}
 	return &Engine{
-		rules:    m,
-		wheel:    newTimerWheel(),
-		wm:       watermark{lateness: allowedLateness},
-		active:   map[SeriesKey]time.Time{},
-		sliding:  map[SeriesKey][]time.Time{},
-		panes:    map[paneKey]*paneAgg{},
-		lastVal:  map[SeriesKey]deltaState{},
-		counts:   map[SeriesKey]*paneAgg{},
-		session:  map[SeriesKey]*paneAgg{},
-		slides:   map[SeriesKey]*slidingState{},
-		corr:     map[SeriesKey]map[string]int64{},
-		expected: map[SeriesKey]expectedState{},
-		raised:   map[SeriesKey]time.Time{},
+		rules:         m,
+		wheel:         newTimerWheel(),
+		wm:            watermark{lateness: allowedLateness},
+		active:        map[SeriesKey]time.Time{},
+		sliding:       map[SeriesKey][]time.Time{},
+		panes:         map[paneKey]*paneAgg{},
+		lastVal:       map[SeriesKey]deltaState{},
+		counts:        map[SeriesKey]*paneAgg{},
+		session:       map[SeriesKey]*paneAgg{},
+		slides:        map[SeriesKey]*slidingState{},
+		corr:          map[SeriesKey]map[string]int64{},
+		expected:      map[SeriesKey]expectedState{},
+		raised:        map[SeriesKey]time.Time{},
+		presenceState: map[SeriesKey]presence.Prior{},
 	}
 }
 
@@ -289,6 +320,7 @@ func (e *Engine) RemoveRule(id string) {
 	deleteSeriesKeys(e.corr, id)
 	deleteSeriesKeys(e.expected, id)
 	deleteSeriesKeys(e.raised, id)
+	deleteSeriesKeys(e.presenceState, id)
 	for pk := range e.panes {
 		if pk.Rule == id {
 			delete(e.panes, pk)
@@ -385,6 +417,7 @@ func (e *Engine) dropSeriesKey(key SeriesKey, kind RuleKind) bool {
 	n += dropOneKey(e.slides, key)
 	n += dropOneKey(e.corr, key)
 	n += dropOneKey(e.expected, key)
+	n += dropOneKey(e.presenceState, key)
 	if kind == Aggregate {
 		for pk := range e.panes {
 			if pk.Rule == key.Rule && pk.Series == key.Series {
@@ -448,8 +481,9 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 	countSeriesKeys(counts, e.session)
 	countSeriesKeys(counts, e.slides)
 	countSeriesKeys(counts, e.expected)
-	countSeriesKeys(counts, e.raised)     // ADR-057 two-edge latch: a raised series is a live entry
-	countSeriesKeys(counts, e.wheel.live) // heartbeat-armed absence timers live ONLY here
+	countSeriesKeys(counts, e.raised)        // ADR-057 two-edge latch: a raised series is a live entry
+	countSeriesKeys(counts, e.presenceState) // Connectivity cursor: one permanent entry per (rule, device-ever-seen)
+	countSeriesKeys(counts, e.wheel.live)    // heartbeat-armed absence timers live ONLY here
 	// Correlation: the anchor key plus each retained distinct member (the real memory).
 	for k, members := range e.corr {
 		counts[k.Rule] += 1 + len(members)
@@ -709,6 +743,60 @@ func (e *Engine) apply(ev Event) {
 		e.applySlidingAgg(ev, r)
 	case Correlation:
 		e.applyCorrelation(ev, r)
+	case Connectivity:
+		e.applyConnectivity(ev, r)
+	}
+}
+
+// applyConnectivity folds an authoritative presence edge into a "device offline" alarm
+// (ADR-067 S3b). It advances the per-series ordering cursor on any in-order edge but only
+// raises/resolves on a true state FLIP — so a same-state higher-session echo (the L3b
+// shadow-expiry DISCONNECT over an already-offline device) advances the cursor and fires
+// nothing, and a stale lower-session edge is dropped. A DISCONNECT flip raises (offline); a
+// CONNECT flip resolves. It uses the SAME presence.Decide the projection uses, so the two
+// consumers never disagree on ordering.
+func (e *Engine) applyConnectivity(ev Event, r Rule) {
+	if ev.Presence == nil {
+		return // not a presence edge (defensive: only the fan-out builds these for Connectivity)
+	}
+	prior := e.presenceState[ev.Key]
+	if !prior.HasTime {
+		// No authoritative edge seen yet for this series: assume the device is ONLINE, so a first
+		// DISCONNECT raises (a device online at rule activation that then dies must alarm) while a
+		// first CONNECT is a no-op. This matches the projection, whose data-inferred rows are
+		// Active=true. EXCEPT when an offline alarm is already latched for this series but the cursor
+		// is gone (a snapshot version-skew: rolled back to a pre-S3b binary that dropped the presence
+		// field, then forward — the latch round-trips, the cursor does not): assume OFFLINE so the
+		// next CONNECT is a flip that resolves the stranded alarm, not a non-flip that leaves it raised.
+		_, raised := e.raised[ev.Key]
+		prior.Connected = !raised
+	}
+	d := presence.Decide(prior, ev.Presence.SessionId, ev.Time, ev.Presence.Connected)
+	if !d.Ordered {
+		return // stale / out-of-order edge: neither the cursor nor the alarm moves
+	}
+	e.presenceState[ev.Key] = presence.Prior{
+		SessionId: ev.Presence.SessionId,
+		Time:      ev.Time,
+		HasTime:   true,
+		Connected: ev.Presence.Connected,
+	}
+	if !d.Flipped {
+		return // same-state higher-session non-event: cursor advanced, no edge
+	}
+	if ev.Presence.Connected {
+		// Back online → resolve the offline alarm. Connectivity ordering is session-DOMINANT: a
+		// newer session applies even at an EARLIER wall clock (a failover reconnect mints on
+		// another host's clock), so resolve at max(at, rising-edge) — NOT the value kinds' stale
+		// guard, which would ignore an earlier-stamped resolve and strand the alarm raised forever.
+		resolveAt := ev.Time
+		if raisedAt, raised := e.raised[ev.Key]; raised && resolveAt.Before(raisedAt) {
+			resolveAt = raisedAt
+		}
+		e.resolve(r, ev.Key, resolveAt)
+	} else {
+		// Went offline → raise the offline alarm (idempotent via the latch: a re-raise is a no-op).
+		e.emit(r, ev.Key, ev.Time)
 	}
 }
 
@@ -857,6 +945,20 @@ type snapRaised struct {
 	At     time.Time `json:"at"`
 }
 
+// snapPresence persists one Connectivity ordering cursor (ADR-067 S3b): the last-applied
+// (session, time, connected) for a series. Without it a restart would lose the epoch cursor
+// and treat the next edge as the first transition — the raised latch (snapRaised) still
+// prevents a duplicate offline Raised, but the cursor keeps a stale lower-session edge from
+// spuriously flipping the alarm. SessionId is a uint64 (JSON-exact; never a float64 hop).
+type snapPresence struct {
+	Rule      string    `json:"rule"`
+	Series    string    `json:"series"`
+	Session   uint64    `json:"session"`
+	At        time.Time `json:"at"`
+	HasTime   bool      `json:"hasTime"`
+	Connected bool      `json:"connected"`
+}
+
 type snapshot struct {
 	Watermark time.Time      `json:"watermark"`
 	LastSeq   uint64         `json:"lastSeq"`
@@ -872,6 +974,7 @@ type snapshot struct {
 	Corr      []snapCorr     `json:"corr"`
 	Expected  []snapExpected `json:"expected"`
 	Raised    []snapRaised   `json:"raised"`
+	Presence  []snapPresence `json:"presence"`
 }
 
 // Snapshot serializes the full engine state. In the service this is committed to Postgres
@@ -916,6 +1019,18 @@ func (e *Engine) Snapshot() ([]byte, error) {
 		}
 		return raised[i].Series < raised[j].Series
 	})
+	presenceCursors := make([]snapPresence, 0, len(e.presenceState))
+	for k, p := range e.presenceState {
+		presenceCursors = append(presenceCursors, snapPresence{
+			Rule: k.Rule, Series: k.Series, Session: p.SessionId, At: p.Time, HasTime: p.HasTime, Connected: p.Connected,
+		})
+	}
+	sort.Slice(presenceCursors, func(i, j int) bool {
+		if presenceCursors[i].Rule != presenceCursors[j].Rule {
+			return presenceCursors[i].Rule < presenceCursors[j].Rule
+		}
+		return presenceCursors[i].Series < presenceCursors[j].Series
+	})
 	return json.Marshal(snapshot{
 		Watermark: e.wm.now,
 		LastSeq:   e.lastSeq,
@@ -931,6 +1046,7 @@ func (e *Engine) Snapshot() ([]byte, error) {
 		Corr:      e.snapshotCorr(),
 		Expected:  expected,
 		Raised:    raised,
+		Presence:  presenceCursors,
 	})
 }
 
@@ -960,6 +1076,11 @@ func Restore(rules []Rule, allowedLateness time.Duration, data []byte) (*Engine,
 	}
 	for _, x := range s.Raised {
 		e.raised[SeriesKey{Rule: x.Rule, Series: x.Series}] = x.At
+	}
+	for _, x := range s.Presence {
+		e.presenceState[SeriesKey{Rule: x.Rule, Series: x.Series}] = presence.Prior{
+			SessionId: x.Session, Time: x.At, HasTime: x.HasTime, Connected: x.Connected,
+		}
 	}
 	return e, nil
 }
