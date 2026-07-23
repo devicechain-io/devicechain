@@ -36,6 +36,8 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
 	"github.com/devicechain-io/dc-lwm2m-ingest/config"
+	"github.com/devicechain-io/dc-lwm2m-ingest/decode"
+	"github.com/devicechain-io/dc-lwm2m-ingest/observe"
 	"github.com/devicechain-io/dc-lwm2m-ingest/registry"
 	"github.com/devicechain-io/dc-lwm2m-ingest/server"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -234,14 +236,53 @@ func buildRegistry(writer messaging.MessageWriter, bindings map[string]config.Ps
 			"/rd requests refused because no authenticated PSK identity (or its tenancy binding) could be recovered.", nil),
 		BadRequests: Microservice.NewCounter("bad_requests_total",
 			"Malformed /rd requests (e.g. a registration-item request with no location).", nil),
+		ObservationOverflow: Microservice.NewCounter("observation_overflow_total",
+			"Telemetry object instances a registration declared beyond the per-registration observe cap (dropped, not observed).", nil),
 	}
 
 	registrar := adapter.NewRegistrar(client, graphqlURL, "lw-")
 	emitter := adapter.NewEmitter(writer, time.Now, "lw")
 	epoch := adapter.NewEpochSource(time.Now)
 	reconciler := adapter.NewReconciler(client, deviceStateURL)
-	reg := registry.New(registrar, emitter, epoch, metrics, registry.Options{Source: registry.SourceLwM2M})
-	handlers := registry.NewHandlers(reg, bindings, metrics)
+
+	// L2b telemetry: the shared ingester (REUSING the same registrar + emitter the presence
+	// path uses) behind the Observe/Notify manager. A Notify's samples flow through the same
+	// durable emit Sparkplug uses. NOTE (ADR-023): this device-facing ingest is not yet behind
+	// the per-tenant rate gate — that is L2c (the shared limiter in the adapter package).
+	ingester := adapter.NewIngester(registrar, emitter, adapter.IngestMetrics{
+		MeasurementsEmitted: Microservice.NewCounter("measurements_emitted_total",
+			"Individual measurement samples durably written from LwM2M Observe/Notify.", nil),
+		DevicesRegistered: Microservice.NewCounter("telemetry_devices_registered_total",
+			"Devices auto-created on a first telemetry sample (rare: LwM2M devices are created at /rd registration).", nil),
+		UnknownDropped: Microservice.NewCounter("telemetry_unknown_dropped_total",
+			"Telemetry samples dropped for an unregistered device (auto-registration off for the credential).", nil),
+	})
+	obsMetrics := observe.Metrics{
+		NotifiesReceived: Microservice.NewCounter("notifies_received_total",
+			"LwM2M Notify messages received on an observed object instance.", nil),
+		DecodeFailures: Microservice.NewCounter("notify_decode_failures_total",
+			"LwM2M Notify payloads that could not be decoded (malformed or unreadable).", nil),
+		UnknownContentFormat: Microservice.NewCounter("notify_unknown_content_format_total",
+			"LwM2M Notify payloads in a content format this adapter does not decode (e.g. TLV; SenML-JSON only).", nil),
+		ObserveEstablishRefused: Microservice.NewCounter("observe_establish_refused_total",
+			"Observe requests refused or failed (dominant cause: a conformant LwM2M 1.0-only client answering the SenML Observe with 4.06).", nil),
+		TerminalNotifications: Microservice.NewCounter("observe_terminal_notifications_total",
+			"Notifications that terminated an observation (RFC 7641, e.g. 4.04 after the observed instance was deleted).", nil),
+		IngestDropped: Microservice.NewCounter("notify_ingest_dropped_total",
+			"LwM2M Notify samples dropped on a retryable ingest error (no retry in the notify path; the next Notify supersedes).", nil),
+		ActiveObservations: Microservice.NewGauge("active_observations",
+			"Live LwM2M observations currently held across all sessions.", nil),
+	}
+	obsManager := observe.NewManager(ingester, obsMetrics, observe.Options{})
+
+	reg := registry.New(registrar, emitter, epoch, metrics, registry.Options{
+		Source: registry.SourceLwM2M,
+		// The registry ends a session (Deregister/expiry) → the observe manager cancels that
+		// session's observations. This is the ONE hook that keeps the registry a pure presence
+		// machine while the manager owns all conn/observation state (L2b).
+		OnSessionEnd: obsManager.Cancel,
+	})
+	handlers := registry.NewHandlers(reg, bindings, metrics, obsManager, decode.DefaultObjectAllowlist)
 	log.Info().Str("deviceManagement", graphqlURL).Str("deviceState", deviceStateURL).
 		Msg("LwM2M ingest will resolve + emit presence via device-management and floor its epoch via device-state (ADR-044/067).")
 	return handlers, reg, epoch, reconciler, nil
