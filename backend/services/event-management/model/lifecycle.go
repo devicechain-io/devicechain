@@ -29,6 +29,7 @@ const lifecycleSchema = "event-management"
 // here ages the anchor rows out on the same window as the events.
 var LifecycleHypertables = []string{
 	"events", "location_events", "measurement_events", "alert_events", "event_anchors",
+	"state_change_events",
 }
 
 // lifecycleLockName namespaces the startup advisory lock that serializes policy

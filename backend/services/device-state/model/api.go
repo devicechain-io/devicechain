@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-state/config"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -60,32 +61,6 @@ type PresenceTransition struct {
 type DeviceIdentity struct {
 	ExternalId string
 	Source     string
-}
-
-// presenceApplies reports whether an incoming transition is not older than the
-// last-applied one, mirroring the alarm integrator's monotonic guard
-// (device-management alarm_contributor.apply): a newer session always supersedes;
-// within the same session the newer OccurredAt wins; at an equal (session, time)
-// DISCONNECTED wins over CONNECTED (a session that births and dies at one instant
-// is net-dead) and a same-state re-apply is a no-op. curConnected is the device's
-// current Active state (for an ASSERTED device this is exactly its last presence).
-// It is a pure function so it is order-independent and unit-testable off the DB.
-func presenceApplies(curSession uint64, curTime sql.NullTime, curConnected bool, pt PresenceTransition) bool {
-	if pt.SessionId != curSession {
-		return pt.SessionId > curSession
-	}
-	if !curTime.Valid {
-		return true // first transition applied in this session
-	}
-	if pt.OccurredAt.After(curTime.Time) {
-		return true
-	}
-	if pt.OccurredAt.Equal(curTime.Time) {
-		// Equal stamp: only a DISCONNECTED over a currently-CONNECTED device applies;
-		// CONNECTED-over-DISCONNECTED and any same-state re-apply are no-ops.
-		return !pt.Connected && curConnected
-	}
-	return false // strictly older within the session
 }
 
 // newDeviceState builds the row for the first event ever seen for a device. A plain
@@ -158,18 +133,40 @@ func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurr
 		}
 
 		if pt != nil {
-			// Authoritative presence transition: promote to ASSERTED (first-sight) and
-			// apply the connectivity edge under the monotonic guard.
+			// Authoritative presence transition: promote to ASSERTED (first-sight) and apply
+			// the connectivity edge under the shared monotonic guard (ADR-067). presence.Decide
+			// SPLITS the two effects the old fused guard conflated: "advance the ordering marker"
+			// (any in-order transition) is distinct from "the connectivity state flipped" (Active
+			// actually changed). So a day-late higher-session DISCONNECT over an already-dead
+			// device advances the marker (rejecting a later stale intermediate-session edge) but
+			// does NOT move LastDisconnectTime or re-fire the DETECT offline edge — the S3
+			// same-state-higher-session non-event. The identical predicate keys the DETECT engine.
 			found.PresenceSource = PresenceSourceAsserted
-			if presenceApplies(found.SessionId, found.PresenceTime, found.Active, *pt) {
+			d := presence.Decide(
+				presence.Prior{
+					SessionId: found.SessionId,
+					Time:      found.PresenceTime.Time,
+					HasTime:   found.PresenceTime.Valid,
+					Connected: found.Active,
+				},
+				pt.SessionId, pt.OccurredAt, pt.Connected,
+			)
+			if d.Ordered {
 				found.SessionId = pt.SessionId
 				found.PresenceTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+				found.Active = pt.Connected // idempotent when the state did not flip
 				if pt.Connected {
-					found.Active = true
-					found.LastConnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
-					found.InactivityAlarmTime = sql.NullTime{}
-				} else {
-					found.Active = false
+					// A higher session is a genuine reconnect even when Active was already true
+					// (a new epoch is a new physical connection), so refresh LastConnectTime on a
+					// flip OR a new session; a same-session duplicate connect leaves it frozen.
+					if d.Flipped || d.NewSession {
+						found.LastConnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+						found.InactivityAlarmTime = sql.NullTime{}
+					}
+				} else if d.Flipped {
+					// Only a true CONNECTED→dead flip records a disconnect time; a higher-session
+					// DISCONNECT over an already-dead device is a late echo — first-known-dead wins
+					// (the S3a history table retains the later session's row for audit).
 					found.LastDisconnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
 				}
 			}

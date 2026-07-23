@@ -16,7 +16,7 @@ import (
 // age out alongside the events they index, else retention orphans them).
 func TestLifecycleHypertablesCoverAll(t *testing.T) {
 	assert.ElementsMatch(t,
-		[]string{"events", "location_events", "measurement_events", "alert_events", "event_anchors"},
+		[]string{"events", "location_events", "measurement_events", "alert_events", "event_anchors", "state_change_events"},
 		LifecycleHypertables)
 }
 

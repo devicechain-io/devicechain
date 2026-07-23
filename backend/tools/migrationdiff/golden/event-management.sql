@@ -10,6 +10,7 @@ CREATE INDEX "idx_event-management_alert_events_tenant_id" ON "event-management"
 CREATE INDEX "idx_event-management_event_anchors_tenant_id" ON "event-management".event_anchors USING btree (tenant_id);
 CREATE INDEX "idx_event-management_location_events_tenant_id" ON "event-management".location_events USING btree (tenant_id);
 CREATE INDEX "idx_event-management_measurement_events_tenant_id" ON "event-management".measurement_events USING btree (tenant_id);
+CREATE INDEX "idx_event-management_state_change_events_tenant_id" ON "event-management".state_change_events USING btree (tenant_id);
 CREATE INDEX alert_events_occurred_time_idx ON "event-management".alert_events USING btree (occurred_time DESC);
 CREATE INDEX alert_events_tenant_id_occurred_time_idx ON "event-management".alert_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX event_anchors_occurred_time_idx ON "event-management".event_anchors USING btree (occurred_time DESC);
@@ -19,10 +20,12 @@ CREATE INDEX events_tenant_id_occurred_time_idx ON "event-management".events USI
 CREATE INDEX idx_audit_tenant_time ON "event-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_event_anchors_lookup ON "event-management".event_anchors USING btree (tenant_id, anchor_type, anchor_token, occurred_time DESC);
 CREATE INDEX idx_measurement_tenant_device_name_time ON "event-management".measurement_events USING btree (tenant_id, device_token, name, occurred_time DESC);
+CREATE INDEX idx_state_change_events_lookup ON "event-management".state_change_events USING btree (tenant_id, device_token, occurred_time DESC);
 CREATE INDEX location_events_occurred_time_idx ON "event-management".location_events USING btree (occurred_time DESC);
 CREATE INDEX location_events_tenant_id_occurred_time_idx ON "event-management".location_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX measurement_events_occurred_time_idx ON "event-management".measurement_events USING btree (occurred_time DESC);
 CREATE INDEX measurement_events_tenant_id_occurred_time_idx ON "event-management".measurement_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX state_change_events_occurred_time_idx ON "event-management".state_change_events USING btree (occurred_time DESC);
 CREATE SCHEMA "event-management";
 CREATE SEQUENCE "event-management".audit_events_id_seq
  START WITH 1
@@ -92,7 +95,17 @@ CREATE TABLE "event-management".measurement_events (
  unit text,
  data_type character varying(32)
 );
+CREATE TABLE "event-management".state_change_events (
+ tenant_id character varying(128) NOT NULL,
+ device_token character varying(128) NOT NULL COLLATE pg_catalog."C",
+ event_type bigint NOT NULL,
+ occurred_time timestamp with time zone NOT NULL,
+ state character varying(16) NOT NULL,
+ reason text,
+ session_id bigint DEFAULT 0 NOT NULL
+);
 CREATE UNIQUE INDEX idx_events_tenant_alt_id ON "event-management".events USING btree (tenant_id, alt_id, occurred_time) WHERE (alt_id IS NOT NULL);
+CREATE UNIQUE INDEX uq_state_change_events_idem ON "event-management".state_change_events USING btree (tenant_id, device_token, occurred_time, state, session_id);
 CREATE VIEW "event-management".measurement_rollups AS
  SELECT _materialized_hypertable_N.tenant_id,
  _materialized_hypertable_N.device_token,

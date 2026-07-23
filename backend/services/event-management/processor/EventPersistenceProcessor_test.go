@@ -166,6 +166,20 @@ func buildAlertsEvent() *dmodel.ResolvedEvent {
 	return buildResolvedEvent(esmodel.Alert, alert)
 }
 
+// Build a state change (presence) event. Unlike the others it carries NO AltId — a
+// StateChange has no base-event dedup key (ADR-067); redelivery dedup is the history
+// table's idempotency index.
+func buildStateChangeEvent() *dmodel.ResolvedEvent {
+	sc := &dmodel.ResolvedStateChangePayload{
+		State:     "DISCONNECTED",
+		Reason:    "lifetime-lapse",
+		SessionId: 42,
+	}
+	ev := buildResolvedEvent(esmodel.StateChange, sc)
+	ev.AltId = nil
+	return ev
+}
+
 // Test failed event flow for a given message.
 func (suite *EventPersistenceProcessorTestSuite) FailedEventFlowFor(msg messaging.Message) {
 	// Emulate read/write.
@@ -261,6 +275,26 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleAlertEvent() {
 	suite.API.Mock.On("CreateAlertEvents", mock.Anything, mock.Anything).Return([]*model.AlertEvent{{}}, nil)
 	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
 	suite.SuccessEventFlowFor(msg)
+}
+
+// Test a state change (presence) event persists to history (ADR-067 S3): it ROUTES to
+// CreateStateChangeEvents (no longer the ack-skip no-op) and falls through to anchor
+// persistence like every other event type — the two behavioral changes of the S3a
+// dispatch. Driven synchronously through the worker's PersistEvent (no async pool) so
+// the mock-call assertions are deterministic and race-free.
+func (suite *EventPersistenceProcessorTestSuite) TestStateChangeEventPersists() {
+	worker := &EventPersistenceWorker{Api: suite.API}
+	suite.API.Mock.On("CreateStateChangeEvents", mock.Anything, mock.Anything).Return([]*model.StateChangeEvent{{}}, nil)
+	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
+
+	results, err := worker.PersistEvent(context.Background(), *buildStateChangeEvent())
+	assert.Nil(suite.T(), err)
+	assert.NotNil(suite.T(), results)
+
+	// Routing to history persistence AND the anchor fall-through are the S3a changes —
+	// the ack-skip no-op did NEITHER.
+	suite.API.AssertCalled(suite.T(), "CreateStateChangeEvents", mock.Anything, mock.Anything)
+	suite.API.AssertCalled(suite.T(), "CreateEventAnchors", mock.Anything, mock.Anything)
 }
 
 // Run all tests.

@@ -151,6 +151,40 @@ type AlertEventCreateRequest struct {
 	Source  string
 }
 
+// StateChangeEvent is the append-only history of an authoritative presence
+// transition (ADR-067 decision 5): one row per resolved connect/disconnect edge, so
+// a device's connectivity timeline is queryable alongside its telemetry (the live
+// device-state projection holds only the LATEST presence — this table is the history
+// DETECT/audit reads). State is the wire enum (CONNECTED|DISCONNECTED); SessionId is
+// the producer's monotonic connect epoch (a host-observed session id, not a raw
+// bdSeq). PresenceSource is deliberately NOT recorded — it is a projection-derived
+// classification, not a fact of the resolved event. Like the other event tables it is
+// a hypertable partitioned on occurred_time.
+//
+// Because a StateChange carries no AltId (the base-event dedup key), the child insert
+// dedups against redelivery on an idempotency unique index
+// (tenant_id, device_token, occurred_time, state, session_id): a birth+death at one
+// instant differ by state and both survive, and a late higher-session echo differs by
+// session_id and is retained for audit, but a genuinely redelivered row collides and
+// is dropped.
+type StateChangeEvent struct {
+	rdb.TenantScoped
+	DeviceToken  string            `gorm:"type:varchar(128);not null"`
+	EventType    esmodel.EventType `gorm:"not null"`
+	OccurredTime time.Time         `gorm:"not null"`
+	State        string            `gorm:"type:varchar(16);not null"`
+	Reason       string
+	SessionId    uint64 `gorm:"not null;default:0"`
+}
+
+// Information required to create a state change event.
+type StateChangeEventCreateRequest struct {
+	Event
+	State     string
+	Reason    string
+	SessionId uint64
+}
+
 // AuditExempt opts the event tables out of the audit journal (ADR-019): they are
 // the high-volume, append-only telemetry data plane — immutable facts, not the
 // control-plane entity mutations the journal records.
@@ -159,3 +193,4 @@ func (EventAnchor) AuditExempt() bool      { return true }
 func (LocationEvent) AuditExempt() bool    { return true }
 func (MeasurementEvent) AuditExempt() bool { return true }
 func (AlertEvent) AuditExempt() bool       { return true }
+func (StateChangeEvent) AuditExempt() bool { return true }

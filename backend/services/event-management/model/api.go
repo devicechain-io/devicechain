@@ -45,6 +45,7 @@ type EventManagementApi interface {
 	CreateLocationEvents(ctx context.Context, db *gorm.DB, requests []*LocationEventCreateRequest) ([]*LocationEvent, error)
 	CreateMeasurementEvents(ctx context.Context, db *gorm.DB, requests []*MeasurementEventCreateRequest) ([]*MeasurementEvent, error)
 	CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*AlertEventCreateRequest) ([]*AlertEvent, error)
+	CreateStateChangeEvents(ctx context.Context, db *gorm.DB, requests []*StateChangeEventCreateRequest) ([]*StateChangeEvent, error)
 
 	// CreateEventAnchors persists an event's anchor set (ADR-013) on the given db
 	// handle (a transaction), so the event is queryable by each of the device's
@@ -282,6 +283,53 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 	// relate to the base event by the natural key (device_id, event_type,
 	// occurred_time) — no association / foreign key (ADR-026 amd, see events.go).
 	result := db.WithContext(ctx).Create(&created)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return created, nil
+}
+
+// Create a new state change event.
+func (api *Api) CreateStateChangeEvent(ctx context.Context, request *StateChangeEventCreateRequest) (*StateChangeEvent, error) {
+	created, err := api.CreateStateChangeEvents(ctx, api.RDB.DB(ctx), []*StateChangeEventCreateRequest{request})
+	if err != nil {
+		return nil, err
+	}
+	return created[0], nil
+}
+
+// Create a batch of state change events in a single multi-row INSERT on the given db
+// handle (which may be a transaction). Unlike the other event tables the child rows
+// are inserted ON CONFLICT DO NOTHING against the idempotency unique index
+// (tenant_id, device_token, occurred_time, state, session_id): a StateChange carries
+// no AltId, so the base-event dedup does not engage, and a persist-commit-then-crash-
+// before-ack JetStream redelivery would otherwise write a duplicate presence row
+// (phantom flapping). A birth+death at one instant differ by state and both survive;
+// a late higher-session echo differs by session_id and is retained.
+func (api *Api) CreateStateChangeEvents(ctx context.Context, db *gorm.DB, requests []*StateChangeEventCreateRequest) ([]*StateChangeEvent, error) {
+	if len(requests) == 0 {
+		return []*StateChangeEvent{}, nil
+	}
+	parents := make([]*Event, 0, len(requests))
+	created := make([]*StateChangeEvent, 0, len(requests))
+	for _, request := range requests {
+		parents = append(parents, &request.Event)
+		created = append(created, &StateChangeEvent{
+			DeviceToken:  request.DeviceToken,
+			EventType:    request.EventType,
+			OccurredTime: request.OccurredTime,
+			State:        request.State,
+			Reason:       request.Reason,
+			SessionId:    request.SessionId,
+		})
+	}
+	if err := upsertParentEvents(ctx, db, parents); err != nil {
+		return nil, err
+	}
+	result := db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}, {Name: "occurred_time"}, {Name: "state"}, {Name: "session_id"}},
+		DoNothing: true,
+	}).Create(&created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
