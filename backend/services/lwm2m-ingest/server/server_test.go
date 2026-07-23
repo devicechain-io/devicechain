@@ -104,6 +104,39 @@ func TestManySessionsSoak(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond, "session table should drain to zero")
 }
 
+// TestStopTerminatesLiveSessions pins the L3a self-eviction property (ADR-075 L3a / ADR-070,
+// design-review B4): Stop tears down LIVE DTLS sessions, not merely the accept loop — so when a
+// leadership term ends and its transport is Stopped, every established session (and the
+// observations riding it) dies rather than a non-leader continuing to serve/ingest on a
+// still-open connection. Each conn's AddOnClose decrements the active-session gauge, so the
+// gauge draining to zero after Stop (with no client-side Close) is the proof the server closed
+// them. If a future go-coap upgrade made Stop leave live sessions open, this reddens.
+func TestStopTerminatesLiveSessions(t *testing.T) {
+	const n = 8
+	s, m := startServer(t, Config{})
+
+	for i := 0; i < n; i++ {
+		conn, err := dialCoap(t, s.Addr().String(), testIdentity, testPSK)
+		require.NoError(t, err, "session %d should connect", i)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_, err = conn.Get(ctx, healthPath)
+		cancel()
+		require.NoError(t, err, "session %d GET should succeed", i)
+		// Deliberately DO NOT register a client-side Close: the drain must be driven by the
+		// server's Stop tearing the session down, not by the client hanging up.
+	}
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(m.ActiveSessions) == float64(n)
+	}, 5*time.Second, 20*time.Millisecond, "all %d sessions should be live before Stop", n)
+
+	// Stop the transport, as a leadership eviction does.
+	s.Stop()
+
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(m.ActiveSessions) == 0
+	}, 5*time.Second, 20*time.Millisecond, "Stop must tear down every live DTLS session (the gauge drains to zero)")
+}
+
 // TestUnknownIdentityRejected proves the fail-closed authentication floor: a client
 // presenting a PSK identity absent from the credential map is refused, no session is
 // established, and the refusal is counted. This is the floor the L1 tenancy seam binds

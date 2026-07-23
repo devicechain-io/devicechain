@@ -167,6 +167,42 @@ func okResolver() *fakeResolver {
 
 // --- tests -----------------------------------------------------------------
 
+// TestStopIsTerminal pins the L3a eviction-race fix (code-review #3): once Stop is called (a
+// leadership eviction), the registry refuses every further Register/Update/Deregister — so a
+// request that raced ahead of the term cancellation cannot install an entry (and arm a lifetime
+// timer that would fire in a dead term on a standby) — and the active-registrations gauge is zeroed
+// so an evicted standby advertises no phantom registrations.
+func TestStopIsTerminal(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "active_registrations"})
+	epoch := adapter.NewEpochSource(clk.now)
+	r := New(res, em, epoch, Metrics{ActiveRegistrations: gauge}, Options{
+		Now: clk.now, MinLifetime: time.Second, DefaultLife: time.Hour, Grace: time.Second, ReplaceBackoff: 5 * time.Second,
+	})
+
+	// A live registration first: CONNECTED emitted, gauge at 1.
+	result, _, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
+	require.Equal(t, RegisterOK, result)
+	require.Len(t, em.connects(), 1)
+	require.Equal(t, float64(1), testutil.ToFloat64(gauge))
+
+	// Stop (eviction) is terminal.
+	r.Stop()
+	assert.Equal(t, float64(0), testutil.ToFloat64(gauge), "Stop zeroes the active-registrations gauge (no phantom registrations on a standby)")
+
+	// A Register after Stop is refused (5.03) and emits no new presence.
+	result2, _, _, _ := r.Register(context.Background(), "dev-2",
+		config.PskBinding{Tenant: "acme", ExternalId: "plant-a/sensor-2", AutoRegister: true}, 300)
+	assert.Equal(t, RegisterUnavailable, result2, "a Register after Stop is refused")
+	assert.Len(t, em.connects(), 1, "a refused Register emits no presence")
+
+	// Update and Deregister after Stop are refused too, and emit nothing.
+	assert.Equal(t, UpdateUnknown, r.Update("dev-1", "anything", 300), "an Update after Stop is 4.04")
+	assert.False(t, r.Deregister("dev-1", "anything"), "a Deregister after Stop is a no-op")
+	assert.Empty(t, em.disconnects(), "no DISCONNECT emitted after Stop")
+}
+
 // Register resolves with the CREDENTIAL's binding (tenant + external id), never any value
 // a client could assert — and emits CONNECTED under that tenant at a fresh epoch. This is
 // the D1 tenancy invariant at the Registry seam (the handler ignoring `ep` is pinned by

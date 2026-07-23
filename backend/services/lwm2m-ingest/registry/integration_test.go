@@ -46,6 +46,13 @@ func startIntegration(t *testing.T) (string, *fakeResolver, *fakeEmitter) {
 // startIntegrationWith is startIntegration with a caller-supplied ingest limiter (nil ⇒
 // ungated) so the L2c /rd gating test can drive a shedding limiter over the real wire.
 func startIntegrationWith(t *testing.T, limit messageLimiter) (string, *fakeResolver, *fakeEmitter) {
+	return startIntegrationOpts(t, limit, nil)
+}
+
+// startIntegrationOpts is the base harness: a caller-supplied ingest limiter (nil ⇒ ungated) and
+// leadership-term context (nil ⇒ always-serving) so the L2c gating and L3a self-eviction tests can
+// each drive the real /rd path over a real DTLS handshake.
+func startIntegrationOpts(t *testing.T, limit messageLimiter, leaderCtx context.Context) (string, *fakeResolver, *fakeEmitter) {
 	t.Helper()
 	res := &fakeResolver{token: "tok-1", outcome: adapter.ResolveCreated}
 	em := &fakeEmitter{}
@@ -53,7 +60,7 @@ func startIntegrationWith(t *testing.T, limit messageLimiter) (string, *fakeReso
 	// Presence-only over the wire (nil observer): this test pins the CoAP code mapping and the
 	// D1 tenancy recovery; the Observe/Notify telemetry lifecycle is exercised by the observe
 	// package's own tests against a fake conn.
-	handlers := NewHandlers(reg, itBindings, Metrics{}, nil, decode.DefaultObjectAllowlist, limit)
+	handlers := NewHandlers(reg, itBindings, Metrics{}, nil, decode.DefaultObjectAllowlist, limit, leaderCtx)
 
 	srv, err := server.New(server.Config{
 		Addr:        "127.0.0.1:0",
@@ -184,6 +191,42 @@ func TestForeignIdentityCannotDeregisterOverTheWire(t *testing.T) {
 	upd, err := victim.Post(ctx, "/rd/"+regId, message.TextPlain, nil, query("lt=300")...)
 	require.NoError(t, err)
 	assert.Equal(t, codes.Changed, upd.Code(), "the victim's own registration must still be live")
+}
+
+// TestEvictedLeaderRefusesRegistration pins the L3a self-eviction gate over the real wire
+// (ADR-075 L3a / ADR-070, MUST-FIX #7): once this replica's leadership-term context is cancelled
+// — as on a lost lease, before the transport socket is torn down — the /rd handlers refuse both
+// Register and Update with 5.03 and mint NO further presence, so a non-leader cannot write
+// presence in the eviction window. While the term is live the same requests succeed.
+func TestEvictedLeaderRefusesRegistration(t *testing.T) {
+	leaderCtx, evict := context.WithCancel(context.Background())
+	addr, _, em := startIntegrationOpts(t, nil, leaderCtx)
+	conn := dial(t, addr, "dev-1")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// While leading, a Register is accepted and emits one CONNECTED.
+	resp, err := conn.Post(ctx, "/rd", message.TextPlain, nil, query("lt=300")...)
+	require.NoError(t, err)
+	require.Equal(t, codes.Created, resp.Code(), "while leading, Register is 2.01 Created")
+	regId := locationRegID(t, resp)
+	require.Len(t, em.connects(), 1)
+
+	// Evict: cancel the term context (the lost-lease signal), before the socket is closed.
+	evict()
+
+	// A Register is now refused 5.03 and emits nothing.
+	r2, err := conn.Post(ctx, "/rd", message.TextPlain, nil, query("lt=300")...)
+	require.NoError(t, err)
+	assert.Equal(t, codes.ServiceUnavailable, r2.Code(), "an evicted leader refuses Register with 5.03")
+
+	// An Update to the live regId is likewise refused 5.03.
+	upd, err := conn.Post(ctx, "/rd/"+regId, message.TextPlain, nil, query("lt=300")...)
+	require.NoError(t, err)
+	assert.Equal(t, codes.ServiceUnavailable, upd.Code(), "an evicted leader refuses Update with 5.03")
+
+	assert.Len(t, em.connects(), 1, "no presence emitted after eviction")
+	assert.Empty(t, em.disconnects(), "the gate emits nothing, it only refuses")
 }
 
 // fakeMessageLimiter is a scriptable ADR-023 message gate for the /rd tests: allow controls

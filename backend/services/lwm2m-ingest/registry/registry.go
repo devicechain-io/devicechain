@@ -118,6 +118,12 @@ type Registry struct {
 	mu         sync.Mutex
 	byRegId    map[string]*entry
 	byIdentity map[string]*entry
+	// stopped is set by Stop and is TERMINAL: once a leadership term ends (eviction/shutdown) its
+	// registry is abandoned (each term builds a fresh one), so a Stopped registry must accept no
+	// further work. It closes the eviction race where a Register that passed the handler's
+	// leadership gate BEFORE the term was cancelled finishes its out-of-lock resolve+emit and would
+	// otherwise install an entry — arming a lifetime timer that fires in a dead term on a standby.
+	stopped bool
 
 	resolver deviceResolver
 	emitter  presenceEmitter
@@ -240,6 +246,12 @@ const (
 // the backoff), and false for a compare-on-epoch loss (the winning Register establishes) or any
 // non-OK result — so the handler only spends Observe I/O when it can win the manager's CAS.
 func (r *Registry) Register(ctx context.Context, identity string, binding config.PskBinding, ltSeconds int) (result RegisterResult, regId string, epoch uint64, establish bool) {
+	// A terminal Stop (leadership eviction) refuses new registrations before any work: 5.03, the
+	// device retries toward the leader. The handler's leadership gate is the primary guard; this
+	// backs it for a request that raced ahead of the term cancellation.
+	if r.isStopped() {
+		return RegisterUnavailable, "", 0, false
+	}
 	// Storm control: if a live registration for this identity is younger than the replace
 	// backoff, return it unchanged rather than minting another session (R5). It keeps the
 	// existing lifetime — a re-Register this fast is treated as a duplicate, not a genuine
@@ -293,6 +305,13 @@ func (r *Registry) Register(ctx context.Context, identity string, binding config
 
 	regId = r.newRegID()
 	r.mu.Lock()
+	// A terminal Stop may have landed while we resolved+emitted outside the lock: do NOT install
+	// an entry (and arm a lifetime timer) in a term that no longer serves — that timer would fire
+	// on a standby / dead term. The CONNECTED already emitted rides the L3b reconstruction gap.
+	if r.stopped {
+		r.mu.Unlock()
+		return RegisterUnavailable, "", 0, false
+	}
 	// Compare-on-epoch (R1): if a concurrent Register already installed an equal-or-higher
 	// epoch, it won — discard this one. Our just-emitted CONNECTED@epoch is stale but
 	// harmless (the projection holds the higher session). Hand back the winner's location and
@@ -368,6 +387,11 @@ const (
 func (r *Registry) Update(identity, regId string, ltSeconds int) UpdateResult {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// A Stopped (evicted) term's table is cleared, so this is 4.04 anyway; the explicit check keeps
+	// the contract obvious and refuses even if a clear ever raced an install.
+	if r.stopped {
+		return UpdateUnknown
+	}
 	e := r.byRegId[regId]
 	if e == nil || e.identity != identity {
 		return UpdateUnknown
@@ -393,6 +417,10 @@ func (r *Registry) Update(identity, regId string, ltSeconds int) UpdateResult {
 // owned by the caller.
 func (r *Registry) Deregister(identity, regId string) bool {
 	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return false
+	}
 	e := r.byRegId[regId]
 	if e == nil || e.identity != identity {
 		r.mu.Unlock()
@@ -539,17 +567,32 @@ func (r *Registry) clampLifetime(ltSeconds int) time.Duration {
 	return lt
 }
 
-// Stop cancels every live registration's lifetime timer (best-effort, on shutdown). It
-// emits no presence — a graceful shutdown of the single replica is not a device
-// disconnect, and L3 reconstruction re-establishes presence on the next leader.
+// isStopped reports whether Stop has been called (a leadership eviction / shutdown).
+func (r *Registry) isStopped() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopped
+}
+
+// Stop is TERMINAL: it marks the registry stopped (refusing all further Register/Update/
+// Deregister), cancels every live registration's lifetime timer, clears the table, and zeroes the
+// active-registrations gauge. It emits no presence — a leadership handover or graceful shutdown is
+// not a device disconnect, and L3b reconstruction re-establishes presence on the next leader.
+// Clearing the table + gauge matters because the evicted term's registry is abandoned but the
+// process lives on as a standby: a lingering handler must not find a live entry to arm a timer
+// against, and the standby must not advertise phantom registrations.
 func (r *Registry) Stop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.stopped = true
 	for _, e := range r.byRegId {
 		if e.timer != nil {
 			e.timer.Stop()
 		}
 	}
+	r.byRegId = map[string]*entry{}
+	r.byIdentity = map[string]*entry{}
+	setGauge(r.metrics.ActiveRegistrations, 0)
 }
 
 // randomRegID mints an opaque 8-byte registration location. Opaque (not derived from the
