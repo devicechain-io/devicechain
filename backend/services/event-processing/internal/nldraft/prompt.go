@@ -19,7 +19,7 @@ const systemPromptBase = `You are a detection-rule authoring assistant for the D
 The JSON object is a "rules.Rule". Emit only these fields (omit any that do not apply):
 - name (string, REQUIRED): a short human name for the rule.
 - description (string, optional): a one-line description.
-- type (string, REQUIRED): one of "threshold", "deltaRate", "repeating", "duration", "absence", "aggregate", "correlation".
+- type (string, REQUIRED): one of "threshold", "deltaRate", "repeating", "duration", "absence", "aggregate", "correlation", "connectivity".
 - severity (string, optional): one of "critical", "major", "minor", "warning", "indeterminate". REQUIRED when the rule has a raiseAlarm action.
 - when (object): the per-event condition (see below).
 - actions (array, optional): the REACT actions taken when the rule fires (see below).
@@ -29,7 +29,7 @@ The "when" condition is exactly ONE of these mutually-exclusive shapes:
 - Structured comparison: { "metric": "<key>", "op": "<gt|ge|lt|le|eq|ne>", "threshold": <number> }, e.g. { "metric": "tempC", "op": "gt", "threshold": 80 }.
 - Dynamic per-device threshold: { "metric": "<key>", "op": "<gt|ge|lt|le>", "thresholdAttr": "<deviceAttributeKey>" } — compare the metric against the device's own attribute value.
 - Raw CEL escape hatch: { "cel": "<expression>" } — ONLY when a structured comparison cannot express it.
-- Omit "when" (or use {}) to match every event — valid for repeating/aggregate/correlation, NOT for threshold/duration. Absence takes NO "when".
+- Omit "when" (or use {}) to match every event — valid for repeating/aggregate/correlation, NOT for threshold/duration. Absence and connectivity take NO "when".
 Prefer the structured comparison over raw CEL whenever possible.
 
 Rule types and their fields:
@@ -38,6 +38,7 @@ Rule types and their fields:
 - repeating: fires when a condition recurs N times in a window. Fields: when (optional gate), count (N), window (e.g. "10m0s").
 - duration: fires when "when" stays true for a sustained hold. Fields: when (structured), hold (e.g. "5m0s").
 - absence (dead-man): fires when NO qualifying event arrives within a timeout. Fields: timeout (e.g. "15m0s"), metric (optional — the metric whose absence matters). Takes NO "when".
+- connectivity: raises a "device offline" alarm on an AUTHORITATIVE disconnect (a device that reports its own presence — e.g. Sparkplug or LwM2M — going down) and clears it on reconnect. No fields, takes NO "when". Prefer this over absence for "alert me when a device goes offline/disconnects" when the device reports presence; use absence when offline can only be inferred from data silence (a timeout).
 - aggregate: folds a metric over a window and compares. Fields: agg ("count|sum|avg|min|max"), metric (required unless agg is count), op, threshold, windowMode ("tumbling|sliding|session|count"), and window (time modes) OR count (count mode) OR gap (session mode). "when" is an optional participation gate.
 - correlation: counts DISTINCT devices meeting a condition rolled up to an anchor. Fields: anchorType (the anchor/area), count (distinct N), window, when (participation gate), memberCap (optional).
 

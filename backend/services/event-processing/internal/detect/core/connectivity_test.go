@@ -144,6 +144,20 @@ func TestConnectivitySnapshotRestoresCursorAndLatch(t *testing.T) {
 	if d := feedPresence(re, 4, "r", "d", 25, 100, true); len(d) != 0 {
 		t.Fatalf("restored engine lost the cursor and applied a stale edge: %+v", d)
 	}
-	// A genuinely newer CONNECT resolves.
+	// A genuinely newer CONNECT resolves — this only emits if the latch survived the restore
+	// (resolve is a no-op with no latch), so it is the honest proof the raised latch round-tripped.
 	onlyEdge(t, feedPresence(re, 5, "r", "d", 30, 300, true), EdgeResolved, 30)
+}
+
+// TestConnectivityResolvesWhenCursorLostButLatchKept covers the snapshot version-skew hazard
+// (Fable MINOR-2): if the raised latch survives but the ordering cursor is lost (a roll back to a
+// pre-S3b binary that dropped the presence field, then forward), the next CONNECT must still
+// resolve the stranded offline alarm rather than read as a non-flip against the assume-online default.
+func TestConnectivityResolvesWhenCursorLostButLatchKept(t *testing.T) {
+	e := NewEngine([]Rule{{ID: "r", Kind: Connectivity}}, 30*time.Second)
+	key := SeriesKey{Rule: "r", Series: "d"}
+	// Simulate the skew directly: an offline alarm latched at t=10, but no presence cursor.
+	e.raised[key] = at(10)
+	// A CONNECT arrives with no cursor: assume-offline (latch set) makes it a flip → clamped resolve.
+	onlyEdge(t, feedPresence(e, 1, "r", "d", 20, 100, true), EdgeResolved, 20)
 }

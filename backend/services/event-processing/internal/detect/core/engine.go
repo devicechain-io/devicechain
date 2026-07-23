@@ -481,8 +481,9 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 	countSeriesKeys(counts, e.session)
 	countSeriesKeys(counts, e.slides)
 	countSeriesKeys(counts, e.expected)
-	countSeriesKeys(counts, e.raised)     // ADR-057 two-edge latch: a raised series is a live entry
-	countSeriesKeys(counts, e.wheel.live) // heartbeat-armed absence timers live ONLY here
+	countSeriesKeys(counts, e.raised)        // ADR-057 two-edge latch: a raised series is a live entry
+	countSeriesKeys(counts, e.presenceState) // Connectivity cursor: one permanent entry per (rule, device-ever-seen)
+	countSeriesKeys(counts, e.wheel.live)    // heartbeat-armed absence timers live ONLY here
 	// Correlation: the anchor key plus each retained distinct member (the real memory).
 	for k, members := range e.corr {
 		counts[k.Rule] += 1 + len(members)
@@ -763,8 +764,12 @@ func (e *Engine) applyConnectivity(ev Event, r Rule) {
 		// No authoritative edge seen yet for this series: assume the device is ONLINE, so a first
 		// DISCONNECT raises (a device online at rule activation that then dies must alarm) while a
 		// first CONNECT is a no-op. This matches the projection, whose data-inferred rows are
-		// Active=true; DETECT sees no data events, so it must default the same way explicitly.
-		prior.Connected = true
+		// Active=true. EXCEPT when an offline alarm is already latched for this series but the cursor
+		// is gone (a snapshot version-skew: rolled back to a pre-S3b binary that dropped the presence
+		// field, then forward — the latch round-trips, the cursor does not): assume OFFLINE so the
+		// next CONNECT is a flip that resolves the stranded alarm, not a non-flip that leaves it raised.
+		_, raised := e.raised[ev.Key]
+		prior.Connected = !raised
 	}
 	d := presence.Decide(prior, ev.Presence.SessionId, ev.Time, ev.Presence.Connected)
 	if !d.Ordered {
