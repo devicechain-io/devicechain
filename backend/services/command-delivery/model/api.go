@@ -70,6 +70,14 @@ type Api struct {
 	// EnqueueValidator, when set, gates CreateCommand on the target device existing
 	// and on the command matching the device profile's published vocabulary.
 	EnqueueValidator CommandEnqueueValidator
+	// DefaultCommandTTL, when positive, is stamped as expires_at on a command whose
+	// creator supplies no explicit ExpiresAt (a caller value always wins). It gives
+	// every command a terminal horizon: a command a device never receives reaches
+	// TIMEOUT via ExpireStale instead of sitting in SENT forever, and it bounds the
+	// LwM2M queue-mode hold (ADR-075 L4b). Zero disables stamping — the pre-config
+	// behavior, used by tests that construct the Api directly; production always sets
+	// it from CommandDeliveryConfiguration (floored positive in ApplyDefaults).
+	DefaultCommandTTL time.Duration
 }
 
 // NewApi creates a new API instance.
@@ -118,6 +126,11 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 			return nil, err
 		}
 		expiresAt = sql.NullTime{Time: parsed, Valid: true}
+	} else if api.DefaultCommandTTL > 0 {
+		// No explicit TTL: stamp the platform default so the command still reaches a
+		// terminal state (ExpireStale → TIMEOUT) instead of sitting in SENT forever. A
+		// caller-supplied ExpiresAt above always wins; this only fills the absent case.
+		expiresAt = sql.NullTime{Time: time.Now().Add(api.DefaultCommandTTL), Valid: true}
 	}
 
 	// Gate the enqueue on device-management, the authoritative owner of both the
