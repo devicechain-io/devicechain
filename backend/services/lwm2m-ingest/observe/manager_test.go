@@ -227,9 +227,18 @@ var testTarget = Target{
 	Policy:     adapter.IngestPolicy{Source: "lwm2m", DeviceTypeToken: "sensor", AutoRegister: true},
 }
 
-// newHarness builds a Manager over a fake ingester with real (assertable) metrics and tiny
-// timeouts. The Now clock is fixed but unused by the absolute-time SenML the tests send.
+// newHarness builds an UNGATED Manager (nil limiter) over a fake ingester with real
+// (assertable) metrics and tiny timeouts. The Now clock is fixed but unused by the
+// absolute-time SenML the tests send. Gating tests use newGatedHarness.
 func newHarness(t *testing.T) (*Manager, *fakeIngester, Metrics) {
+	t.Helper()
+	m, ing, _, metrics := newGatedHarness(t, nil)
+	return m, ing, metrics
+}
+
+// newGatedHarness is newHarness with a caller-supplied limiter (a *fakeLimiter for the L2c
+// gating tests, or nil for ungated). It also returns the limiter for assertion convenience.
+func newGatedHarness(t *testing.T, limiter ingestLimiter) (*Manager, *fakeIngester, ingestLimiter, Metrics) {
 	t.Helper()
 	ing := &fakeIngester{}
 	metrics := Metrics{
@@ -238,16 +247,37 @@ func newHarness(t *testing.T) (*Manager, *fakeIngester, Metrics) {
 		UnknownContentFormat:    prometheus.NewCounter(prometheus.CounterOpts{Name: "unknown_cf"}),
 		ObserveEstablishRefused: prometheus.NewCounter(prometheus.CounterOpts{Name: "establish_refused"}),
 		TerminalNotifications:   prometheus.NewCounter(prometheus.CounterOpts{Name: "terminal"}),
+		SamplesTruncated:        prometheus.NewCounter(prometheus.CounterOpts{Name: "samples_truncated"}),
 		IngestDropped:           prometheus.NewCounter(prometheus.CounterOpts{Name: "ingest_dropped"}),
 		ActiveObservations:      prometheus.NewGauge(prometheus.GaugeOpts{Name: "active_observations"}),
 	}
-	m := NewManager(ing, metrics, Options{
+	m := NewManager(ing, limiter, metrics, Options{
 		Now:            func() time.Time { return time.Unix(1_700_000_500, 0).UTC() },
 		ObserveTimeout: time.Second,
 		CancelTimeout:  time.Second,
 		IngestTimeout:  time.Second,
 	})
-	return m, ing, metrics
+	return m, ing, limiter, metrics
+}
+
+// fakeLimiter is a scripted ingest limiter: allowMessage / allowSamples control admission, and
+// it records what it was asked so a test can assert the CHARGE (e.g. samples charged with the
+// decoded count, terminal notifications never charged).
+type fakeLimiter struct {
+	allowMessage bool
+	allowSamples bool
+	messageCalls int
+	sampleCharge []int // one entry per AllowSamples call: the n it was charged
+}
+
+func (f *fakeLimiter) AllowMessage(tenant string) bool {
+	f.messageCalls++
+	return f.allowMessage
+}
+
+func (f *fakeLimiter) AllowSamples(tenant string, n int) bool {
+	f.sampleCharge = append(f.sampleCharge, n)
+	return f.allowSamples
 }
 
 func senmlNotify(body string) *pool.Message {
@@ -568,4 +598,95 @@ func TestUnknownContentFormatNotifyDropped(t *testing.T) {
 
 	assert.Equal(t, 0, ing.callCount())
 	assert.Equal(t, float64(1), testutil.ToFloat64(metrics.UnknownContentFormat))
+}
+
+// L2c Guard: STAGE 1 sheds a Notify at the per-tenant message gate BEFORE decode/ingest. The
+// message limiter is charged; the sample limiter is never reached (no decode past the gate).
+func TestNotifyShedAtMessageGate(t *testing.T) {
+	lim := &fakeLimiter{allowMessage: false, allowSamples: true}
+	m, ing, _, metrics := newGatedHarness(t, lim)
+	c := newFakeConn(1)
+	require.True(t, m.Establish("id-1", 1, c, testTarget, []string{"/3303/0"}))
+
+	c.deliver("/3303/0", senmlNotify(`[{"bn":"/3303/0/","n":"5700","v":21.5,"bt":1700000500}]`))
+
+	assert.Equal(t, 0, ing.callCount(), "a message shed at stage 1 must not ingest")
+	assert.Equal(t, 1, lim.messageCalls, "the message gate was charged once")
+	assert.Empty(t, lim.sampleCharge, "decode/stage-2 is never reached past a shed message")
+	assert.Equal(t, float64(1), testutil.ToFloat64(metrics.NotifiesReceived), "the Notify is still counted (gate is after that)")
+}
+
+// L2c Guard (load-bearing ORDER): a terminal notification is handled BEFORE the message gate,
+// so it is never charged AND — even under a shedding limiter — still drops its dead observation.
+// Placing stage 1 before the terminal branch would both charge protocol state and, when
+// shedding, strand the observation. Severing the ordering reddens this.
+func TestTerminalNotificationNotChargedAndDroppedWhileShedding(t *testing.T) {
+	lim := &fakeLimiter{allowMessage: false, allowSamples: false} // a fully shedding limiter
+	m, ing, _, metrics := newGatedHarness(t, lim)
+	c1 := newFakeConn(1)
+	require.True(t, m.Establish("id-1", 1, c1, testTarget, []string{"/3303/0"}))
+
+	c1.deliver("/3303/0", terminalNotify())
+
+	require.Eventually(t, func() bool { return slotObsCount(m, "id-1") == 0 }, time.Second, time.Millisecond,
+		"a terminal notification must drop the observation even while the limiter is shedding")
+	assert.Equal(t, 0, lim.messageCalls, "a terminal notification must NOT be charged at the message gate")
+	assert.Empty(t, lim.sampleCharge, "a terminal notification never reaches the sample gate")
+	assert.Equal(t, 0, ing.callCount())
+	assert.Equal(t, float64(1), testutil.ToFloat64(metrics.TerminalNotifications))
+}
+
+// L2c Guard: STAGE 2 sheds a decoded batch at the per-tenant sample gate AFTER decode, charged
+// with the DECODED sample count. The message gate passed; ingest is not reached.
+func TestNotifyShedAtSampleGateChargedWithCount(t *testing.T) {
+	lim := &fakeLimiter{allowMessage: true, allowSamples: false}
+	m, ing, _, _ := newGatedHarness(t, lim)
+	c := newFakeConn(1)
+	require.True(t, m.Establish("id-1", 1, c, testTarget, []string{"/3303/0"}))
+
+	// A three-sample pack: the sample gate must be charged n=3, then shed the batch.
+	c.deliver("/3303/0", senmlNotify(`[
+      {"bn":"/3303/0/","bt":1700000500,"n":"5700","v":1},
+      {"n":"5601","v":2},
+      {"n":"5602","v":3}
+    ]`))
+
+	assert.Equal(t, 1, lim.messageCalls, "message gate charged once")
+	assert.Equal(t, []int{3}, lim.sampleCharge, "sample gate charged with the decoded count")
+	assert.Equal(t, 0, ing.callCount(), "a batch shed at stage 2 must not ingest")
+}
+
+// L2c Guard: the admitted happy path charges the message gate once and the sample gate with the
+// decoded count, then ingests.
+func TestNotifyAdmittedChargesBothStagesThenIngests(t *testing.T) {
+	lim := &fakeLimiter{allowMessage: true, allowSamples: true}
+	m, ing, _, _ := newGatedHarness(t, lim)
+	c := newFakeConn(1)
+	require.True(t, m.Establish("id-1", 1, c, testTarget, []string{"/3303/0"}))
+
+	c.deliver("/3303/0", senmlNotify(`[
+      {"bn":"/3303/0/","bt":1700000500,"n":"5700","v":1},
+      {"n":"5601","v":2}
+    ]`))
+
+	assert.Equal(t, 1, lim.messageCalls)
+	assert.Equal(t, []int{2}, lim.sampleCharge)
+	assert.Equal(t, 1, ing.callCount(), "an admitted Notify ingests")
+}
+
+// L2c Guard (charge semantics, finding 7): a well-formed but non-numeric (zero-sample) Notify
+// charges the MESSAGE gate — it is a message the tenant sent — but never the sample gate (a
+// zero-sample batch is not a rate event and returns before stage 2).
+func TestZeroSampleNotifyChargesMessageNotSamples(t *testing.T) {
+	lim := &fakeLimiter{allowMessage: true, allowSamples: true}
+	m, ing, _, _ := newGatedHarness(t, lim)
+	c := newFakeConn(1)
+	require.True(t, m.Establish("id-1", 1, c, testTarget, []string{"/3303/0"}))
+
+	// A boolean-only IPSO record yields zero numeric samples (ADR-016).
+	c.deliver("/3303/0", senmlNotify(`[{"bn":"/3303/0/","n":"5850","vb":true}]`))
+
+	assert.Equal(t, 1, lim.messageCalls, "a zero-sample message still charges the message gate")
+	assert.Empty(t, lim.sampleCharge, "a zero-sample batch never reaches the sample gate")
+	assert.Equal(t, 0, ing.callCount())
 }

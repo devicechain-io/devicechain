@@ -27,6 +27,16 @@ type observer interface {
 	Reestablish(identity string, conn mux.Conn, target observe.Target)
 }
 
+// messageLimiter is the narrow slice of *adapter.IngestLimiter the /rd path uses to gate a
+// device message against its tenant's ADR-023 ingest ceiling (ADR-075 L2c). A Register or an
+// Update is a device message that does real work — mint an epoch + durably emit presence, and
+// spawn up to MaxObservationsPerRegistration downlink Observe exchanges — so an authenticated
+// device could otherwise flood durable writes and goroutines past the ingest ceiling the Notify
+// path enforces. A nil limiter (a presence-only test/inert deployment) skips gating.
+type messageLimiter interface {
+	AllowMessage(tenant string) bool
+}
+
 // LwM2M registration interface paths (OMA LwM2M 1.x). Register is POST to the well-known
 // /rd; Update (POST) and Deregister (DELETE) target the server-assigned location under
 // it, which this adapter returns as /rd/{regId}.
@@ -45,6 +55,7 @@ type Handlers struct {
 	metrics  Metrics
 	obs      observer               // nil ⇒ presence-only (no telemetry observations)
 	allow    decode.ObjectAllowlist // which objects in a registration are telemetry to observe
+	limit    messageLimiter         // nil ⇒ /rd ungated (presence-only test / inert deployment)
 }
 
 // NewHandlers builds the registration handlers over a Registry and the identity->binding
@@ -52,9 +63,10 @@ type Handlers struct {
 // identity absent from it is refused (fail closed), though by construction every
 // authenticated identity has a binding (both are built from the same config identities). obs
 // is the telemetry-lifecycle manager (L2b) and may be nil (presence-only); allow selects which
-// registered object instances are observed.
-func NewHandlers(reg *Registry, bindings map[string]config.PskBinding, metrics Metrics, obs observer, allow decode.ObjectAllowlist) *Handlers {
-	return &Handlers{reg: reg, bindings: bindings, metrics: metrics, obs: obs, allow: allow}
+// registered object instances are observed. limit is the per-tenant ingest gate (L2c) applied to
+// Register/Update and may be nil (ungated).
+func NewHandlers(reg *Registry, bindings map[string]config.PskBinding, metrics Metrics, obs observer, allow decode.ObjectAllowlist, limit messageLimiter) *Handlers {
+	return &Handlers{reg: reg, bindings: bindings, metrics: metrics, obs: obs, allow: allow, limit: limit}
 }
 
 // targetFrom builds the telemetry correlation for a registration from its authenticated
@@ -87,6 +99,15 @@ func (h *Handlers) handleRd(w mux.ResponseWriter, r *mux.Message) {
 	}
 	identity, binding, ok := h.authorize(w, r)
 	if !ok {
+		return
+	}
+	// STAGE 1 ingest gate (ADR-075 L2c): a Register is an amplifying device message — it mints a
+	// presence epoch, durably emits a StateChange, and spawns downlink Observe exchanges — so it
+	// is charged against the tenant's message-rate ceiling BEFORE any of that work. A shed
+	// Register answers 4.29 Too Many Requests (RFC 8516); the LwM2M client retries registration,
+	// so presence is delayed under a flood, never silently lost.
+	if h.limit != nil && !h.limit.AllowMessage(binding.Tenant) {
+		h.respond(w, codes.TooManyRequests)
 		return
 	}
 	q := parseQueries(r)
@@ -143,6 +164,14 @@ func (h *Handlers) handleRdItem(w mux.ResponseWriter, r *mux.Message) {
 	}
 	switch r.Code() {
 	case codes.POST:
+		// STAGE 1 ingest gate (ADR-075 L2c): an Update does work (heal observations onto the
+		// conn) and is a device message, so it is charged like a Register. A Deregister (DELETE
+		// below) is NOT gated — it FREES a session's resources, and shedding it would keep a
+		// session alive against the device's intent.
+		if h.limit != nil && !h.limit.AllowMessage(binding.Tenant) {
+			h.respond(w, codes.TooManyRequests)
+			return
+		}
 		if h.reg.Update(identity, regId, parseLifetime(parseQueries(r))) == UpdateOK {
 			h.respond(w, codes.Changed) // 2.04
 			if h.obs != nil {

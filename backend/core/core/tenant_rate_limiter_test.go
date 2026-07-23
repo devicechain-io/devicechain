@@ -32,6 +32,30 @@ func TestTenantRateLimiter_BurstThenDeny(t *testing.T) {
 	assert.False(t, l.Allow("acme"), "4th exceeds burst")
 }
 
+// AllowN charges a whole batch in one call: it admits while the batch fits the
+// remaining tokens and denies (consuming nothing) once it does not, and a batch
+// larger than the burst is denied EVERY time (the forever-shed edge a variable-batch
+// caller must size its burst around).
+func TestTenantRateLimiter_AllowN(t *testing.T) {
+	l := NewTenantRateLimiter(constLimit(1, 10))
+	now := time.Unix(0, 0)
+	l.now = func() time.Time { return now }
+
+	assert.True(t, l.AllowN("acme", 4), "4 of 10 tokens")
+	assert.True(t, l.AllowN("acme", 6), "next 6 drains the bucket")
+	assert.False(t, l.AllowN("acme", 1), "bucket drained — even 1 is denied")
+
+	// A fresh tenant: a batch larger than the burst can NEVER be satisfied, so it is
+	// denied and consumes nothing (a following in-burst batch still fully admits).
+	assert.False(t, l.AllowN("beta", 11), "11 > burst 10 is always denied")
+	assert.True(t, l.AllowN("beta", 10), "the denied over-burst batch consumed nothing")
+
+	// A non-positive batch is not a rate event: admitted, charged nothing.
+	assert.True(t, l.AllowN("gamma", 0), "empty batch admits")
+	assert.True(t, l.AllowN("gamma", -3), "negative batch admits")
+	assert.True(t, l.AllowN("gamma", 10), "prior no-ops charged nothing")
+}
+
 // Wait admits the burst immediately, then — with the bucket drained and the next
 // token far in the future — sheds fast when the required delay exceeds the wait
 // budget (ctx deadline), consuming nothing. Uses the real clock (not the frozen

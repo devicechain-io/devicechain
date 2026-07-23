@@ -4,6 +4,8 @@
 package decode
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +34,7 @@ func TestDecodeAbsoluteTimeAndBaseName(t *testing.T) {
       {"n":"5601","v":20.1,"t":1.5}
     ]`)
 
-	samples, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	samples, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, samples, 2)
 
@@ -49,7 +51,7 @@ func TestBaseValueAddsToEveryRecord(t *testing.T) {
       {"bn":"/3303/0/","bt":1700000000,"bv":100,"n":"5700","v":1},
       {"n":"5601","v":2}
     ]`)
-	samples, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	samples, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, samples, 2)
 	assert.Equal(t, 101.0, samples[0].Value)
@@ -65,7 +67,7 @@ func TestBaseFieldsAreStickyFromAnyRecord(t *testing.T) {
       {"n":"5601","v":2,"t":0},
       {"bn":"/3304/0/","n":"5700","v":3,"t":0}
     ]`)
-	samples, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	samples, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, samples, 3)
 	assert.Equal(t, "/3303/0/5700", samples[0].Name)
@@ -87,7 +89,7 @@ func TestNonNumericRecordsDropped(t *testing.T) {
       {"n":"5852","s":42},
       {"n":"5601","v":20.1}
     ]`)
-	samples, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	samples, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, samples, 2)
 	assert.Equal(t, "/3303/0/5700", samples[0].Name)
@@ -101,7 +103,7 @@ func TestNonFiniteValueDropped(t *testing.T) {
       {"bn":"/3303/0/","bt":1700000000,"bv":1e308,"n":"5700","v":1e308},
       {"n":"5601","v":5}
     ]`)
-	samples, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	samples, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, samples, 1)
 	assert.Equal(t, "/3303/0/5601", samples[0].Name)
@@ -115,7 +117,7 @@ func TestRelativeOrAbsentTimeStampsReceiptClock(t *testing.T) {
       {"bn":"/3303/0/","n":"5700","v":21.5},
       {"n":"5601","v":20.1,"t":100}
     ]`)
-	samples, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	samples, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, samples, 2)
 	assert.Equal(t, fixedNowMs, samples[0].Time) // no time at all
@@ -129,7 +131,7 @@ func TestNameNormalization(t *testing.T) {
       {"bn":"/3303/0/","bt":1700000000,"n":"/5700","v":21.5},
       {"bn":"","n":"","v":9.9}
     ]`)
-	samples, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	samples, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, samples, 1)
 	assert.Equal(t, "/3303/0/5700", samples[0].Name) // "/3303/0/" + "/5700" collapsed
@@ -138,11 +140,11 @@ func TestNameNormalization(t *testing.T) {
 // TestUnsupportedVersionRejectsPack: any bver other than 10 drops the whole pack.
 func TestUnsupportedVersionRejectsPack(t *testing.T) {
 	payload := []byte(`[{"bver":5,"bn":"/3303/0/","bt":1700000000,"n":"5700","v":21.5}]`)
-	_, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	_, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	assert.ErrorIs(t, err, ErrUnsupportedSenmlVersion)
 
 	ok := []byte(`[{"bver":10,"bn":"/3303/0/","bt":1700000000,"n":"5700","v":21.5}]`)
-	samples, err := Samples(message.AppSenmlJSON, ok, fixedNow)
+	samples, _, err := Samples(message.AppSenmlJSON, ok, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, samples, 1)
 }
@@ -150,7 +152,7 @@ func TestUnsupportedVersionRejectsPack(t *testing.T) {
 // TestUnsupportedContentFormat: only SenML-JSON decodes in L2; TLV (the 1.0 default) is a
 // named follow-up and returns the typed error the caller counts+drops.
 func TestUnsupportedContentFormat(t *testing.T) {
-	_, err := Samples(message.AppLwm2mTLV, []byte("anything"), fixedNow)
+	_, _, err := Samples(message.AppLwm2mTLV, []byte("anything"), fixedNow)
 	assert.ErrorIs(t, err, ErrUnsupportedContentFormat)
 }
 
@@ -158,14 +160,14 @@ func TestUnsupportedContentFormat(t *testing.T) {
 // result, not an error.
 func TestWellFormedButNoMeasurements(t *testing.T) {
 	payload := []byte(`[{"bn":"/3342/0/","n":"5500","vb":false}]`)
-	samples, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	samples, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)
 	assert.Empty(t, samples)
 }
 
 // TestMalformedJSON surfaces a decode error rather than silently emitting nothing.
 func TestMalformedJSON(t *testing.T) {
-	_, err := Samples(message.AppSenmlJSON, []byte(`{not an array`), fixedNow)
+	_, _, err := Samples(message.AppSenmlJSON, []byte(`{not an array`), fixedNow)
 	assert.Error(t, err)
 	assert.NotErrorIs(t, err, ErrUnsupportedContentFormat)
 }
@@ -174,13 +176,13 @@ func TestMalformedJSON(t *testing.T) {
 // at the threshold the value is absolute; one below it is relative → receipt clock.
 func TestAbsoluteTimeBoundary(t *testing.T) {
 	at := []byte(`[{"bn":"/3303/0/","bt":268435456,"n":"5700","v":1}]`) // exactly 2^28
-	s, err := Samples(message.AppSenmlJSON, at, fixedNow)
+	s, _, err := Samples(message.AppSenmlJSON, at, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, s, 1)
 	assert.Equal(t, int64(268_435_456_000), s[0].Time)
 
 	below := []byte(`[{"bn":"/3303/0/","bt":268435455,"n":"5700","v":1}]`) // 2^28 - 1
-	s, err = Samples(message.AppSenmlJSON, below, fixedNow)
+	s, _, err = Samples(message.AppSenmlJSON, below, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, s, 1)
 	assert.Equal(t, fixedNowMs, s[0].Time)
@@ -191,19 +193,19 @@ func TestAbsoluteTimeBoundary(t *testing.T) {
 // clock, never to math.MinInt64 or a 1970 stamp.
 func TestHugeOrNegativeTimeStampsReceiptClock(t *testing.T) {
 	huge := []byte(`[{"bn":"/3303/0/","bt":1e17,"n":"5700","v":1}]`)
-	s, err := Samples(message.AppSenmlJSON, huge, fixedNow)
+	s, _, err := Samples(message.AppSenmlJSON, huge, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, s, 1)
 	assert.Equal(t, fixedNowMs, s[0].Time)
 
 	overflow := []byte(`[{"bn":"/3303/0/","bt":1.7e308,"n":"5700","v":1,"t":1.7e308}]`) // bt+t → +Inf
-	s, err = Samples(message.AppSenmlJSON, overflow, fixedNow)
+	s, _, err = Samples(message.AppSenmlJSON, overflow, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, s, 1)
 	assert.Equal(t, fixedNowMs, s[0].Time)
 
 	neg := []byte(`[{"bn":"/3303/0/","bt":-5000,"n":"5700","v":1}]`)
-	s, err = Samples(message.AppSenmlJSON, neg, fixedNow)
+	s, _, err = Samples(message.AppSenmlJSON, neg, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, s, 1)
 	assert.Equal(t, fixedNowMs, s[0].Time)
@@ -212,7 +214,7 @@ func TestHugeOrNegativeTimeStampsReceiptClock(t *testing.T) {
 // TestFractionalSecondRounds pins that a sub-millisecond fraction is rounded, not truncated.
 func TestFractionalSecondRounds(t *testing.T) {
 	payload := []byte(`[{"bn":"/3303/0/","bt":1700000000,"n":"5700","v":1,"t":0.0006}]`)
-	s, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	s, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, s, 1)
 	assert.Equal(t, int64(1_700_000_000_001), s[0].Time) // 1700000000.0006*1000 = ...000.6 → round up
@@ -224,7 +226,7 @@ func TestTrailingSlashIsSameSeries(t *testing.T) {
       {"bn":"/3303/0/5700","bt":1700000000,"v":1},
       {"bn":"/3303/0/5700/","v":2}
     ]`)
-	s, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	s, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, s, 2)
 	assert.Equal(t, "/3303/0/5700", s[0].Name)
@@ -238,7 +240,7 @@ func TestBaseVersionRejectedFromLaterRecord(t *testing.T) {
       {"bn":"/3303/0/","bt":1700000000,"n":"5700","v":1},
       {"bver":5,"n":"5601","v":2}
     ]`)
-	_, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	_, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	assert.ErrorIs(t, err, ErrUnsupportedSenmlVersion)
 }
 
@@ -250,10 +252,40 @@ func TestBaseValueResetMidPack(t *testing.T) {
       {"bv":200,"n":"5601","v":2},
       {"n":"5602","v":3}
     ]`)
-	s, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	s, _, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, s, 3)
 	assert.Equal(t, 101.0, s[0].Value) // bv 100
 	assert.Equal(t, 202.0, s[1].Value) // bv reset to 200
 	assert.Equal(t, 203.0, s[2].Value) // inherits 200
+}
+
+// A pack with more numeric records than MaxSamplesPerNotify is capped at the cap, with the
+// overflow reported as the truncation count — the per-message DoS bound that keeps one Notify
+// from flooding the store and that floors the sample limiter's burst.
+func TestSamplesCappedAtMaxPerNotify(t *testing.T) {
+	// Build a pack of cap+50 numeric records under one base name.
+	var b strings.Builder
+	b.WriteString(`[{"bn":"/3303/0/","n":"0","v":0}`)
+	for i := 1; i < MaxSamplesPerNotify+50; i++ {
+		fmt.Fprintf(&b, `,{"n":"%d","v":%d}`, i, i)
+	}
+	b.WriteString(`]`)
+
+	samples, truncated, err := Samples(message.AppSenmlJSON, []byte(b.String()), fixedNow)
+	require.NoError(t, err)
+	assert.Len(t, samples, MaxSamplesPerNotify, "output capped at the per-Notify maximum")
+	assert.Equal(t, 50, truncated, "the 50 records past the cap are reported dropped")
+	// The kept samples are the FIRST cap records, in order (the tail is what is dropped).
+	assert.Equal(t, "/3303/0/0", samples[0].Name)
+	assert.Equal(t, float64(MaxSamplesPerNotify-1), samples[MaxSamplesPerNotify-1].Value)
+}
+
+// A pack at or below the cap is never truncated (the common case): truncated is 0.
+func TestSamplesNotTruncatedUnderCap(t *testing.T) {
+	payload := []byte(`[{"bn":"/3303/0/","n":"5700","v":21.5},{"n":"5601","v":20.1}]`)
+	samples, truncated, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	require.NoError(t, err)
+	require.Len(t, samples, 2)
+	assert.Equal(t, 0, truncated)
 }

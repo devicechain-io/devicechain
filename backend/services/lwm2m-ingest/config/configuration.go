@@ -54,6 +54,16 @@ const (
 	// too-short key is refused at startup rather than silently weakening every session.
 	// 16 bytes (128-bit) is the LwM2M-common baseline for the AES-128 cipher suite.
 	MinPskBytes = 16
+	// DefaultIngestMessagesPerSecond and DefaultIngestBurst are the platform per-tenant
+	// ingest ceiling (ADR-023, ADR-075 L2c) applied when none is configured — a generous
+	// safety ceiling, high enough not to shed a normally busy fleet, low enough that one
+	// runaway device cannot saturate the pipeline. They MUST be positive: a zero ceiling
+	// yields a token bucket that admits nothing (core.TenantRateLimiter), which would
+	// black-hole every device's telemetry. The value matches event-sources so the two
+	// device-ingest paths share one platform default; a genuinely high-volume tenant is
+	// raised by a per-tenant override, never by making the default unlimited.
+	DefaultIngestMessagesPerSecond = 1000
+	DefaultIngestBurst             = 2000
 )
 
 // Lwm2mConfiguration is the top-level configuration for the adapter.
@@ -62,6 +72,24 @@ type Lwm2mConfiguration struct {
 	Listen ListenConfiguration `json:"listen"`
 	// Security is the DTLS posture and the PSK credential map.
 	Security SecurityConfiguration `json:"security"`
+	// IngestRateLimit is the platform-default, per-tenant ingest ceiling (ADR-023). It
+	// gates the device-facing telemetry and registration paths (ADR-075 L2c); a per-tenant
+	// override raises it for a legitimately high-volume tenant.
+	IngestRateLimit IngestRateLimit `json:"ingestRateLimit"`
+}
+
+// IngestRateLimit is the platform-default, per-tenant ingest ceiling every device is metered
+// against by an independent token bucket (ADR-023). It is fail-safe: an unset or non-positive
+// value falls back to the platform default (see ApplyDefaults), never to unlimited, so a
+// misconfiguration cannot silently remove the protection — and never to zero, which would be a
+// bucket that admits nothing.
+type IngestRateLimit struct {
+	// MessagesPerSecond is the sustained per-tenant message rate (the pre-decode STAGE 1
+	// ceiling). The per-tenant sample budget (STAGE 2) is derived from it.
+	MessagesPerSecond float64 `json:"messagesPerSecond"`
+	// Burst is the largest instantaneous batch a tenant may send before the sustained rate
+	// applies — it absorbs a bursty fleet without raising the sustained ceiling.
+	Burst int `json:"burst"`
 }
 
 // ListenConfiguration is the CoAPS bind address.
@@ -179,6 +207,15 @@ func (c *Lwm2mConfiguration) ApplyDefaults() {
 	}
 	if c.Security.MaxSessions == 0 {
 		c.Security.MaxSessions = DefaultMaxSessions
+	}
+	// Fail safe: a non-positive ceiling (unset, or an out-of-band bad value) floors to the
+	// positive platform default. A zero here would hand the limiter a bucket that admits
+	// nothing, silently blacking out every device's telemetry — worse than no gate at all.
+	if c.IngestRateLimit.MessagesPerSecond <= 0 {
+		c.IngestRateLimit.MessagesPerSecond = DefaultIngestMessagesPerSecond
+	}
+	if c.IngestRateLimit.Burst <= 0 {
+		c.IngestRateLimit.Burst = DefaultIngestBurst
 	}
 }
 

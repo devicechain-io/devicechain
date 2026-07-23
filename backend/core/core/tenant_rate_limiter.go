@@ -85,6 +85,45 @@ func (l *TenantRateLimiter) Allow(tenant string) bool {
 	return l.AllowAt(tenant, time.Time{})
 }
 
+// AllowN reports whether a batch of n events for the tenant may proceed now,
+// consuming n tokens from that tenant's bucket when it does. It is the batch-honest
+// form of Allow for a caller that admits a whole batch atomically — the LwM2M sample
+// budget charges one Notify's decoded samples in a single call (ADR-023 / ADR-075 L2c)
+// rather than looping Allow, which could partially admit a batch.
+//
+// A non-positive n admits and consumes nothing (an empty batch is not a rate event).
+// Because the underlying token bucket can never satisfy a request for more than its
+// burst, an n greater than the tenant's burst is ALWAYS denied (and consumes nothing) —
+// so a caller that charges a variable batch size must size the tenant's burst at or
+// above the largest batch it will ever pass, or a legitimately large batch is shed
+// every time. The LwM2M sample limiter floors its burst at the per-Notify sample cap
+// for exactly this reason.
+func (l *TenantRateLimiter) AllowN(tenant string, n int) bool {
+	return l.AllowNAt(tenant, time.Time{}, n)
+}
+
+// AllowNAt reports whether a batch of n events the tenant SENT at time `when` may
+// proceed, consuming n tokens when it does. A zero `when` means now (making it
+// identical to AllowN); a non-positive n admits and consumes nothing. It is AllowAt
+// generalized to a batch — see AllowAt for why admission is metered at send time and
+// why a bucket must be fed exactly one clock.
+func (l *TenantRateLimiter) AllowNAt(tenant string, when time.Time, n int) bool {
+	if n <= 0 {
+		return true
+	}
+	rps, burst := l.resolve(tenant)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := l.now()
+	lim := l.tuneBucketLocked(tenant, rate.Limit(rps), burst, now)
+	if when.IsZero() || when.After(now) {
+		when = now
+	}
+	return lim.AllowN(when, n)
+}
+
 // AllowAt reports whether a message the tenant SENT at time `when` may proceed,
 // consuming one token from that tenant's bucket when it does. A zero `when` means
 // now, making it identical to Allow.
