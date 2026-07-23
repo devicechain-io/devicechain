@@ -44,37 +44,71 @@ message's local store-time, so the *same* buffered event carries the *same* key 
 every delivery. This exactly-once property is per-decoder: it applies to **JSON**
 payloads; any non-JSON payload is forwarded verbatim and is **at-least-once**.
 
-## Slice status — **E2 (durable buffer).**
+## Slice status — **E3 (bounded buffer + observability).**
 
-E2 makes the agent do the thing that makes an edge agent valuable — survive a WAN
-outage without losing telemetry — on top of E1's device-transparent bridge:
+E3 makes the agent's behaviour under an arbitrarily long outage **bounded and
+observable**, on top of E2's durable store-and-forward buffer:
 
-- **Store-and-forward:** the drain acks a captured event only after the cloud PUBACKs
-  it, so an event published while the uplink is down survives the outage **and an
-  agent restart during it** (WorkQueue retention) and drains on reconnect.
-- **Cloud-side exactly-once (JSON):** replay-stable minted `altId` + stamped
-  `occurredTime` (above) let the cloud's partial unique index fold any redelivery
-  duplicate. Non-JSON payloads are at-least-once.
-- **No startup durability hole:** a two-phase start brings the capture stream up
-  before the device MQTT listener ever accepts a publish (closes E1's startup window).
+- **Bounded spool (ring buffer):** the capture stream carries a `MaxBytes` budget
+  (`local.spoolMaxBytes`, default 1 GiB) with `DiscardOld`, so a multi-day outage can
+  no longer grow the on-disk store until the disk fills. When the budget is reached the
+  spool drops the **oldest** un-forwarded event to admit the newest — see the overflow
+  policy below. `JetStreamMaxStore` is pinned above the budget, so a near-full spool on
+  a small disk still starts (admission does not depend on boot-time free space).
+- **Visible loss:** every eviction is counted (`…_dropped_total`) — computed from the
+  stream's durable first sequence minus the agent's own persisted acked-count, so the
+  count is correct **live during the outage** and **preserved across an agent restart**
+  (it is deliberately *not* derived from the durable consumer's ack floor, which
+  nats-server drags past limit-evicted messages and would silently erase the drops). A
+  loud `WARN` fires on each new drop and near the high-water mark.
+- **Local health signal:** a loopback (`127.0.0.1`) Prometheus `/metrics` + `/healthz`
+  endpoint (`local.metricsPort`, default 9090). The MQTT gateway stays the only
+  LAN-exposed surface (F5); `/healthz` is a live probe (up **and** the last stream
+  sample succeeded) and does **not** gate on the uplink — surviving a down uplink is
+  the point, so uplink state is a metric, never a readiness failure.
 
-Remaining before the agent is a GA artifact:
+It retains E2's guarantees (store-and-forward across a WAN outage + agent restart;
+cloud-side exactly-once for JSON via replay-stable minted `altId` + stamped
+`occurredTime`; the two-phase start that closes the startup durability window).
 
-- **E3** bounds the buffer (disk budget + fail-safe overflow policy — the spool is
-  **currently unbounded**, see below) and adds the full metric set.
+### Overflow policy — why `DiscardOld`, not `DiscardNew`
+
+On a finite disk an unbounded outage must eventually shed data — the only choice is
+*which*. The embedded MQTT gateway PUBACKs a QoS-1 device from its **own** internal
+persistence, decoupled from this overlay capture stream, so a `DiscardNew` rejection at
+the capture layer would silently lose the **newest** event *after* the device was
+already told it was durable. `DiscardOld` instead drops the **oldest** un-forwarded
+event: the agent stays healthy (the disk never fills), recent telemetry is favoured, and
+the loss is bounded, predictable, and **counted** rather than a disk-full crash. Neither
+policy avoids loss on a finite disk during an unbounded outage — `DiscardOld` is the
+fail-safe because the agent survives and the loss is surfaced.
+
+### Metrics
+
+Served on `127.0.0.1:<metricsPort>` (Prometheus text format), namespace
+`devicechain_edge_`: `spool_used_bytes` / `spool_limit_bytes` / `spool_used_messages`
+/ `spool_oldest_age_seconds` (the primary backlog signal) / `dropped_total` (overflow
+evictions) / `uplink_connected`, plus `received_total` / `forwarded_total` /
+`forward_errors_total` / `malformed_total` / `instance_mismatched_total`. `dropped_total`
+does not reset across a restart (both its operands are durable); the other `_total`
+counters are per-process. `GET /healthz` → `200` when up and healthy, else `503`.
+
+### Remaining before the agent is a GA artifact
+
 - **E4** packages it (container + static binary), settles the local-auth posture, and
   ships an operator runbook — the demoable GA artifact.
 
-### Known gaps deferred past E2 (accepted risks, tracked)
+### Known gaps / accepted risks (tracked)
 
-- **The spool is unbounded (E3).** A multi-day outage grows the local JetStream store
-  until the disk fills; there is no `MaxBytes`/discard policy yet. The periodic status
-  line reports **spool depth** so growth is visible, but an operator must currently
-  size `storeDir` for the worst-case outage. Bounding (and choosing a fail-safe
-  overflow behaviour — a naive `DiscardNew` would drop an event the gateway already
-  PUBACK'd) is E3.
 - **Power-loss durability** rides an fsync-on-every-store (`SyncAlways`), so the floor
   is on-disk, not page-cache — an explicit edge-vs-cloud trade (edge boxes lose power).
+  Note the internal MQTT session/QoS streams (`$MQTT_sess/_msgs/_qos2in`) carry no
+  `MaxBytes` of their own; the `JetStreamMaxStore` headroom accounts for them, but a
+  pathological churn of MQTT client ids is a slow leak one hop before the telemetry path.
+- **The high-water `WARN` is best-effort** (sampled on a 30 s tick); `dropped_total` is
+  the guarantee, the WARN is the early runway signal.
+- **Rolling back to an E2 binary over an E3 store silently strips the bound** (the E2
+  `UpdateStream` sends `MaxBytes=0`). Pre-GA acceptable; do not downgrade a bounded store.
 - **Changing `instanceId` or the uplink timeout over an existing store fails closed,
   not gracefully.** Both the durable consumer's filter subject (`instanceId`) and its
   `AckWait` (derived from `connectTimeoutSeconds`) are fixed when the consumer is first
@@ -82,7 +116,8 @@ Remaining before the agent is a GA artifact:
   durable bind reject at startup (a loud, repeated error — no silent loss). Reprovision
   a changed agent onto a fresh `storeDir` after its spool has drained; graceful
   in-place reconfiguration (recreate the durable, migrate/strand old-namespace events)
-  is E3.
+  is future work. (`spoolMaxBytes` and `metricsPort`, by contrast, *are* changeable over
+  an existing store.)
 
 - **No local device authentication (trusted-LAN only).** The local MQTT listener
   accepts any connection on the site LAN. Cloud event *attribution* does not depend
@@ -95,7 +130,7 @@ Remaining before the agent is a GA artifact:
   only exposed surface — this is enforced and tested, not incidental.
 - **A config `instanceId` typo forwards nothing.** The agent only captures/forwards
   its configured instance namespace. A mismatch is **counted and logged** (not a
-  silent success) so it is diagnosable, but the full metric set lands in E3.
+  silent success), and surfaced as `devicechain_edge_instance_mismatched_total`.
 
 ## Configuration
 
@@ -108,7 +143,9 @@ Typed and fail-closed: unknown/invalid keys are rejected at startup. JSON:
   "local": {
     "listenHost": "0.0.0.0",
     "listenPort": 1883,
-    "storeDir": "/var/lib/dc-edge-agent"
+    "storeDir": "/var/lib/dc-edge-agent",
+    "spoolMaxBytes": 1073741824,
+    "metricsPort": 9090
   },
   "uplink": {
     "brokerUrl": "ssl://cloud.example.com:8883",
@@ -131,6 +168,15 @@ Typed and fail-closed: unknown/invalid keys are rejected at startup. JSON:
 - `uplink.passwordEnv` names an environment variable holding the uplink password (a
   projected Secret — never cleartext in this file). The edge box has no ADR-059
   secret store, so this follows the sparkplug-ingest env/Secret precedent.
+- `local.spoolMaxBytes` bounds the durable spool (default 1 GiB; floor 16 MiB). Beyond
+  it the spool is a ring buffer (drop oldest; see the overflow policy above). It can be
+  raised or lowered over an existing store — shrinking below current usage evicts the
+  oldest immediately (surfaced as drops). Changing `instanceId` or `connectTimeoutSeconds`
+  over an existing store still **fails closed** (the durable consumer's filter subject and
+  `AckWait` are fixed at creation) — reprovision such a change onto a fresh `storeDir`
+  after the spool has drained; graceful in-place reconfiguration is future work.
+- `local.metricsPort` is the loopback Prometheus/health port (default 9090; `0` disables
+  the endpoint). It always binds `127.0.0.1` — never the LAN.
 
 ## Run
 

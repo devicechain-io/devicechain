@@ -11,6 +11,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +20,8 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	natsserver "github.com/nats-io/nats-server/v2/server"
+
+	"net/http"
 
 	"github.com/devicechain-io/dc-edge-agent/config"
 )
@@ -114,6 +118,11 @@ func newAgent(t *testing.T, cfg config.Configuration, configure func(*Agent)) *A
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	// Bind the metrics endpoint on an ephemeral loopback port for every test agent, so
+	// the many-agents-per-process and restart-on-same-store tests never collide on the
+	// fixed default port (config defaults it to 9090). A test that scrapes reads
+	// a.metrics.addr; a test may override this in configure.
+	a.metricsAddrOverride = "127.0.0.1:0"
 	if configure != nil {
 		configure(a)
 	}
@@ -505,6 +514,295 @@ func TestMintedKeyIsStableAcrossRestart(t *testing.T) {
 	}
 	if keyBefore != keyAfter {
 		t.Errorf("minted altId changed across restart: %q -> %q (streamEpoch/seq not recovered from the persisted stream)", keyBefore, keyAfter)
+	}
+}
+
+// collectSeqs subscribes to the cloud and records the values.seq of every forwarded
+// event (order and multiplicity preserved so the caller can assert no duplicates and a
+// contiguous survivor set).
+func collectSeqs(t *testing.T, cloudAddr, clientID string, mu *sync.Mutex, seqs *[]int) {
+	t.Helper()
+	sub := mqttConnect(t, cloudAddr, clientID)
+	if tok := sub.Subscribe("test/+/devices/+/events", 1, func(_ mqtt.Client, m mqtt.Message) {
+		var o struct {
+			Values struct {
+				Seq int `json:"seq"`
+			} `json:"values"`
+		}
+		if err := json.Unmarshal(m.Payload(), &o); err != nil {
+			return
+		}
+		mu.Lock()
+		*seqs = append(*seqs, o.Values.Seq)
+		mu.Unlock()
+	}); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+		t.Fatalf("cloud subscribe: %v", tok.Error())
+	}
+}
+
+func httpGet(t *testing.T, url string) (int, string) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// TestSpoolBoundedRingBufferDropsOldestVisibly is E3's check that cannot fail: a forced
+// overflow. With a tiny spool cap and the uplink DOWN, a device publishes far past the
+// cap; the spool must behave as a ring buffer that (a) stays healthy (no disk-full wedge),
+// (b) counts every drop — LIVE during the outage and PRESERVED across an agent restart,
+// the leg that would fail an ack-floor-seeded design — and (c) on restore drains the
+// SURVIVING (newest) events exactly once, with the dropped set being the oldest prefix.
+//
+// A clean run that never overflows is indeterminate (it proves the bound isn't hit, not
+// that overflow is safe) — so the drive asserts eviction STRUCTURALLY (FirstSeq > 1).
+//
+// Mutation checks this pins: remove MaxBytes ⇒ no eviction ⇒ the FirstSeq>1 wait times
+// out; flip DiscardOld→DiscardNew ⇒ the newest are lost ⇒ the survivor-suffix assertion
+// fails (max seq ≠ nEvents-1); zero the drop computation ⇒ dropped_total ≠ published−received.
+func TestSpoolBoundedRingBufferDropsOldestVisibly(t *testing.T) {
+	cloudPort := freePort(t)
+	cloudStore := t.TempDir()
+	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
+	cloudURL := fmt.Sprintf("tcp://%s", cloudAddr)
+	storeDir := t.TempDir() // shared across the restart; the spool lives here
+
+	const cap = config.SpoolMinBytes // 16 MiB — the floor, tiny on purpose
+	const nEvents = 40
+	const padBytes = 500 * 1024 // ~500 KiB each ⇒ ~20 MiB ≫ 16 MiB ⇒ forced eviction
+	pad := strings.Repeat("x", padBytes)
+
+	// Boot #1 with the cloud DOWN (port reserved, broker not started) so the uplink never
+	// connects and the drain stays paused while the spool fills.
+	agentPort := freePort(t)
+	a1 := newAgent(t, config.Configuration{
+		InstanceId: "test",
+		AgentId:    "site1",
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: storeDir, SpoolMaxBytes: cap},
+		Uplink:     config.UplinkConfiguration{BrokerURL: cloudURL},
+	}, nil)
+	stop1 := runReady(t, a1)
+
+	dev := mqttConnect(t, fmt.Sprintf("127.0.0.1:%d", agentPort), "dev-overflow")
+	for i := 0; i < nEvents; i++ {
+		payload := []byte(fmt.Sprintf(`{"eventType":"m","values":{"seq":%d,"pad":%q}}`, i, pad))
+		if tok := dev.Publish("test/tenant1/devices/dev1/events", 1, false, payload); !tok.WaitTimeout(10*time.Second) || tok.Error() != nil {
+			t.Fatalf("device publish %d: %v", i, tok.Error())
+		}
+	}
+
+	// Eviction MUST have occurred: the stream's first sequence advanced past 1 because the
+	// oldest events were dropped to fit the cap. Structural, not byte arithmetic.
+	waitUntil(t, 20*time.Second, func() bool {
+		info, err := a1.js.StreamInfo(captureStream)
+		return err == nil && info.State.FirstSeq > 1
+	})
+	// The agent is still alive and accepting (no disk-full wedge): a fresh publish is captured.
+	if tok := dev.Publish("test/tenant1/devices/dev1/events",
+		1, false, []byte(fmt.Sprintf(`{"eventType":"m","values":{"seq":%d,"pad":%q}}`, nEvents, pad))); !tok.WaitTimeout(10*time.Second) || tok.Error() != nil {
+		t.Fatalf("agent rejected a publish after overflow (should ring-buffer, not wedge): %v", tok.Error())
+	}
+	const totalPublished = nEvents + 1
+
+	a1.sampleMetrics()
+	dropped1 := a1.droppedTotal.Load()
+	if dropped1 <= 0 {
+		t.Fatalf("dropped_total = %d after overflow, want > 0 (drops must be counted live, not silent)", dropped1)
+	}
+
+	// Restart DURING the outage on the SAME store — the leg that fails an ack-floor-seeded
+	// design (nats-server drags the consumer floor past evicted messages on restore).
+	stop1()
+	a2 := newAgent(t, config.Configuration{
+		InstanceId: "test",
+		AgentId:    "site1",
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: freePort(t), StoreDir: storeDir, SpoolMaxBytes: cap},
+		Uplink:     config.UplinkConfiguration{BrokerURL: cloudURL},
+	}, nil)
+	t.Cleanup(runReady(t, a2))
+	a2.sampleMetrics()
+	if dropped2 := a2.droppedTotal.Load(); dropped2 != dropped1 {
+		t.Fatalf("dropped_total = %d after restart, want %d preserved (drop history erased by the ack-floor drag?)", dropped2, dropped1)
+	}
+
+	// Restore the cloud; the surviving (newest) events drain.
+	srv := newCloudBroker(t, cloudPort, cloudStore)
+	t.Cleanup(srv.Shutdown)
+	var mu sync.Mutex
+	var seqs []int
+	collectSeqs(t, cloudAddr, "cloud-collect", &mu, &seqs)
+	waitUntil(t, 20*time.Second, a2.uplink.Connected)
+	waitUntil(t, 40*time.Second, func() bool { return a2.spoolDepth() == 0 })
+	time.Sleep(1 * time.Second) // let the last in-flight deliveries land
+
+	a2.sampleMetrics()
+	droppedFinal := int(a2.droppedTotal.Load())
+
+	mu.Lock()
+	defer mu.Unlock()
+	// No duplicates: the surviving events each drain exactly once.
+	seen := map[int]bool{}
+	for _, s := range seqs {
+		if seen[s] {
+			t.Fatalf("duplicate event seq %d at the cloud (exactly-once violated on the drain path)", s)
+		}
+		seen[s] = true
+	}
+	// Survivor IDENTITY: DiscardOld keeps the NEWEST, so the received set must be exactly
+	// the contiguous suffix [droppedFinal .. totalPublished-1]. (A wrong DiscardNew would
+	// keep the oldest prefix, so max(received) ≠ totalPublished-1.)
+	if len(seqs) != totalPublished-droppedFinal {
+		t.Fatalf("received %d events, want %d (= %d published − %d dropped); count reconciliation failed",
+			len(seqs), totalPublished-droppedFinal, totalPublished, droppedFinal)
+	}
+	for want := droppedFinal; want < totalPublished; want++ {
+		if !seen[want] {
+			t.Errorf("survivor set is not the newest contiguous suffix: missing seq %d (dropped=%d)", want, droppedFinal)
+		}
+	}
+	if seen[droppedFinal-1] {
+		t.Errorf("seq %d survived but should have been dropped as part of the oldest prefix", droppedFinal-1)
+	}
+}
+
+// TestLoadOrSeedAckedCountClampsAndSeeds pins the acked-count token logic directly:
+// absent → seed FirstSeq-1; present-and-sane → load verbatim; present-but-above-FirstSeq-1
+// (a re-created/wiped stream incarnation, or corruption) → CLAMP to FirstSeq-1 so a
+// stale-high value cannot mask real evictions (drops would clamp to 0); fresh stream → 0.
+func TestLoadOrSeedAckedCountClampsAndSeeds(t *testing.T) {
+	dir := t.TempDir()
+	if n, err := loadOrSeedAckedCount(dir, 6); err != nil || n != 5 {
+		t.Fatalf("absent-token seed with FirstSeq 6 = %d, %v; want 5", n, err)
+	}
+	if n, _ := loadOrSeedAckedCount(dir, 10); n != 5 {
+		t.Fatalf("sane loaded token = %d; want 5 (verbatim)", n)
+	}
+	// Stale-high token (e.g. the stream was deleted+recreated to FirstSeq 3) must clamp.
+	if err := persistAckedCount(dir, 100); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := loadOrSeedAckedCount(dir, 3); n != 2 {
+		t.Fatalf("stale-high token with FirstSeq 3 = %d; want 2 (clamp to FirstSeq-1)", n)
+	}
+	if n, _ := loadOrSeedAckedCount(t.TempDir(), 0); n != 0 {
+		t.Fatalf("fresh-stream seed (FirstSeq 0) = %d; want 0", n)
+	}
+}
+
+// TestAckedCountSeedsFromDrainedStoreOnMigration pins the E2→E3 migration branch: a
+// pre-E3 store that has drained events has no acked-count token yet, and its stream's
+// FirstSeq is well past 1. Adopting it must seed the count from FirstSeq-1 (everything
+// already removed was acked, because a pre-E3 stream never evicted), so dropped_total
+// reads 0 — NOT the drained history counted as phantom drops. (Mutating the seed to a
+// constant 0 makes this report the whole drained history as drops.)
+func TestAckedCountSeedsFromDrainedStoreOnMigration(t *testing.T) {
+	cloudPort := freePort(t)
+	startCloudBroker(t, cloudPort)
+	cloudURL := fmt.Sprintf("tcp://127.0.0.1:%d", cloudPort)
+	storeDir := t.TempDir()
+	const n = 5
+
+	// Boot #1: publish and fully drain n events, so FirstSeq advances past 1.
+	agentPort := freePort(t)
+	a1 := newAgent(t, config.Configuration{
+		InstanceId: "test", AgentId: "site1",
+		Local:  config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: storeDir},
+		Uplink: config.UplinkConfiguration{BrokerURL: cloudURL},
+	}, nil)
+	stop1 := runReady(t, a1)
+	waitUntil(t, 15*time.Second, a1.uplink.Connected)
+	dev := mqttConnect(t, fmt.Sprintf("127.0.0.1:%d", agentPort), "dev-mig")
+	for i := 0; i < n; i++ {
+		if tok := dev.Publish("test/tenant1/devices/dev1/events", 1, false,
+			[]byte(fmt.Sprintf(`{"eventType":"m","values":{"seq":%d}}`, i))); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+			t.Fatalf("publish %d: %v", i, tok.Error())
+		}
+	}
+	waitUntil(t, 15*time.Second, func() bool { return a1.forwarded.Load() >= n && a1.spoolDepth() == 0 })
+	stop1()
+
+	// Simulate the first E3 boot over a drained pre-E3 store: no acked-count token yet.
+	if err := os.Remove(filepath.Join(storeDir, ackedCountFile)); err != nil {
+		t.Fatalf("remove acked-count token: %v", err)
+	}
+
+	// Boot #2 on the same store: the seed assumes the removed events were acked → 0 drops.
+	a2 := newAgent(t, config.Configuration{
+		InstanceId: "test", AgentId: "site1",
+		Local:  config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: freePort(t), StoreDir: storeDir},
+		Uplink: config.UplinkConfiguration{BrokerURL: cloudURL},
+	}, nil)
+	t.Cleanup(runReady(t, a2))
+	a2.sampleMetrics()
+	if d := a2.droppedTotal.Load(); d != 0 {
+		t.Fatalf("dropped_total = %d after adopting a drained pre-E3 store, want 0 (drained history must not count as drops)", d)
+	}
+}
+
+// TestMetricsAndHealthEndpoint pins the E3 observability surface: the loopback endpoint
+// serves the expected Prometheus metric family names and a 200 /healthz once the agent is
+// up. (The endpoint binds an ephemeral loopback port via the test harness override.)
+func TestMetricsAndHealthEndpoint(t *testing.T) {
+	cloudPort := freePort(t)
+	startCloudBroker(t, cloudPort)
+	agentPort := freePort(t)
+	a := startAgent(t, config.Configuration{
+		InstanceId: "test",
+		AgentId:    "site1",
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: t.TempDir()},
+		Uplink:     config.UplinkConfiguration{BrokerURL: fmt.Sprintf("tcp://127.0.0.1:%d", cloudPort)},
+	})
+	waitUntil(t, 15*time.Second, a.uplink.Connected)
+	if a.metrics == nil || a.metrics.addr == "" {
+		t.Fatal("metrics endpoint not bound")
+	}
+	base := "http://" + a.metrics.addr
+
+	code, body := httpGet(t, base+"/metrics")
+	if code != http.StatusOK {
+		t.Fatalf("/metrics = %d, want 200", code)
+	}
+	for _, name := range []string{
+		"devicechain_edge_spool_used_bytes",
+		"devicechain_edge_spool_limit_bytes",
+		"devicechain_edge_spool_used_messages",
+		"devicechain_edge_spool_oldest_age_seconds",
+		"devicechain_edge_dropped_total",
+		"devicechain_edge_uplink_connected",
+		"devicechain_edge_received_total",
+		"devicechain_edge_forwarded_total",
+	} {
+		if !strings.Contains(body, name) {
+			t.Errorf("/metrics missing metric family %q", name)
+		}
+	}
+
+	if code, _ := httpGet(t, base+"/healthz"); code != http.StatusOK {
+		t.Errorf("/healthz = %d, want 200 (agent is up and the last sample succeeded)", code)
+	}
+}
+
+// TestMetricsDisabledWhenPortZero pins that an explicit metricsPort of 0 disables the
+// endpoint (nil default → the default port; only an explicit 0 turns it off).
+func TestMetricsDisabledWhenPortZero(t *testing.T) {
+	zero := 0
+	cfg := config.Configuration{
+		InstanceId: "test",
+		AgentId:    "site1",
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: freePort(t), StoreDir: t.TempDir(), MetricsPort: &zero},
+		Uplink:     config.UplinkConfiguration{BrokerURL: "tcp://127.0.0.1:1"},
+	}
+	cfg.ApplyDefaults()
+	a, err := New(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if addr := a.metricsListenAddr(); addr != "" {
+		t.Errorf("metricsListenAddr = %q with metricsPort 0, want disabled (empty)", addr)
 	}
 }
 

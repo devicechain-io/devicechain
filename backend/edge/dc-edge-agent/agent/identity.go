@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -33,6 +34,7 @@ import (
 const (
 	installIdFile   = "install-id"
 	streamEpochFile = "stream-epoch"
+	ackedCountFile  = "acked-count"
 )
 
 // loadOrCreateInstallId returns the box install identity, minting it on first boot.
@@ -69,6 +71,58 @@ func readStreamEpoch(storeDir string) (string, error) {
 		return "", fmt.Errorf("stream epoch token %q is present but empty (corrupt); clear the store fully or restore it", path)
 	}
 	return id, nil
+}
+
+// loadOrSeedAckedCount returns the count of capture-stream messages this agent has
+// removed by ack — the durable basis for the drop metric (drops =
+// (FirstSeq-1) - ackedCount; see agent.sampleMetrics). It MUST be the agent's own
+// persisted token, never derived from the durable consumer's ack floor: nats-server
+// drags that floor PAST limit-evicted messages on restore (consumer.go checkAckFloor),
+// which would silently erase exactly the drops this metric exists to surface.
+//
+// When the token is ABSENT it is seeded from the stream's current first sequence:
+// everything already removed from the stream at first adoption is assumed acked
+// (a pre-E3 store never evicted; a fresh store has removed nothing), so drops start at
+// 0 from the adopted baseline forward — a one-time cap-shrink at first adoption is not
+// retroactively counted. firstSeq is the live StreamInfo().State.FirstSeq; 0 (a
+// brand-new stream) seeds 0.
+func loadOrSeedAckedCount(storeDir string, firstSeq uint64) (uint64, error) {
+	// The count of messages removed by ack can never exceed the total removed from the
+	// stream front, which is exactly firstSeq-1. Clamp to it: a loaded token above this
+	// ceiling means the stream is a NEW incarnation (deleted+recreated, or its data dir
+	// wiped while the token survived) or the token is corrupt — either way an un-clamped
+	// stale-high value would make drops = (firstSeq-1) - ackedCount clamp to 0 and HIDE
+	// real evictions until firstSeq caught up. Clamping re-bases onto the live stream.
+	var ceiling uint64
+	if firstSeq > 0 {
+		ceiling = firstSeq - 1
+	}
+	path := filepath.Join(storeDir, ackedCountFile)
+	b, err := os.ReadFile(path)
+	if err == nil {
+		n, perr := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+		if perr != nil {
+			return 0, fmt.Errorf("acked-count token %q is corrupt (%q): %w", path, strings.TrimSpace(string(b)), perr)
+		}
+		if n > ceiling {
+			return ceiling, nil
+		}
+		return n, nil
+	}
+	if !os.IsNotExist(err) {
+		return 0, fmt.Errorf("read acked-count %q: %w", path, err)
+	}
+	if err := persistAckedCount(storeDir, ceiling); err != nil {
+		return 0, err
+	}
+	return ceiling, nil
+}
+
+// persistAckedCount durably writes the acked-count progress token (atomic temp+fsync+
+// rename). Called on the sample tick and on graceful shutdown; a crash between writes
+// can only leave it stale-LOW, which over-counts drops (biased safe — never hides loss).
+func persistAckedCount(storeDir string, count uint64) error {
+	return writeTokenAtomic(storeDir, ackedCountFile, strconv.FormatUint(count, 10))
 }
 
 // loadOrMintToken reads a persisted token, minting and atomically persisting a fresh
