@@ -21,8 +21,9 @@ ADR-030 durable capture) rather than new surface.
                                               │  writes to a local JetStream
                                               │  capture stream BEFORE PUBACK
                                               ▼
-                                     [ durable capture stream ]
-                                              │  durable consumer drains FIFO
+                                     [ durable WorkQueue capture stream ]
+                                              │  durable consumer drains FIFO;
+                                              │  acks only AFTER the cloud PUBACKs
                                               ▼
                                      [ paho uplink ]──MQTT──▶ cloud Instance broker
 ```
@@ -32,28 +33,56 @@ standard MQTT clients work unchanged). The cloud receives the forward on the sam
 golden topic and ingests it through its own MQTT-gateway capture (ADR-030) — there
 is no bespoke edge↔cloud protocol.
 
-## Slice status — **E1 (bridge skeleton). NOT DEPLOYABLE.**
+Because the drain acks a captured event **only after the cloud confirms it**, an event
+published while the uplink (WAN) is down stays in the WorkQueue spool — across the
+outage *and* an agent restart during it — and drains when the link returns. The cloud
+folds any duplicate a redelivery would create on its device-level
+`(tenant_id, alt_id, occurred_time)` partial unique index: when a device omits them,
+the agent mints a **replay-stable** `altId` (`edge:<installId>:<streamEpoch>:<seq>`,
+all derived from immutable stored-message metadata) and stamps `occurredTime` with the
+message's local store-time, so the *same* buffered event carries the *same* key on
+every delivery. This exactly-once property is per-decoder: it applies to **JSON**
+payloads; any non-JSON payload is forwarded verbatim and is **at-least-once**.
 
-This is the first slice of the ADR-068 Tier-1 arc. It builds the durable substrate
-(embedded broker + capture stream + durable consumer) and proves the
-**device-transparent bridge** and the **uplink auth**. It deliberately does **not**
-yet do the thing that makes an edge agent valuable — buffer across a WAN outage:
+## Slice status — **E2 (durable buffer).**
 
-- **E1 forwards through and drops on outage.** The drain acks every captured event
-  immediately, whether or not the forward to the cloud succeeded. An event published
-  while the uplink is down is **dropped, not buffered**. → Do **not** run E1 at a
-  real site; direct-to-cloud a device would at least hold and retry. E1 is for
-  proving the bridge, nothing else.
-- **E2** turns the spool into a real buffer: it acks a captured event only after the
-  cloud confirms durable capture, so an un-acked event survives the outage (and an
-  agent restart) and drains on reconnect — with cloud-side exactly-once via a minted
-  `altId` + stamped `occurredTime`.
-- **E3** bounds the buffer (disk budget + fail-safe overflow policy) and adds the
-  full metric set.
-- **E4** packages it (container + static binary) with an operator runbook — the
-  demoable GA artifact.
+E2 makes the agent do the thing that makes an edge agent valuable — survive a WAN
+outage without losing telemetry — on top of E1's device-transparent bridge:
 
-### Known gaps deferred past E1 (accepted risks, tracked)
+- **Store-and-forward:** the drain acks a captured event only after the cloud PUBACKs
+  it, so an event published while the uplink is down survives the outage **and an
+  agent restart during it** (WorkQueue retention) and drains on reconnect.
+- **Cloud-side exactly-once (JSON):** replay-stable minted `altId` + stamped
+  `occurredTime` (above) let the cloud's partial unique index fold any redelivery
+  duplicate. Non-JSON payloads are at-least-once.
+- **No startup durability hole:** a two-phase start brings the capture stream up
+  before the device MQTT listener ever accepts a publish (closes E1's startup window).
+
+Remaining before the agent is a GA artifact:
+
+- **E3** bounds the buffer (disk budget + fail-safe overflow policy — the spool is
+  **currently unbounded**, see below) and adds the full metric set.
+- **E4** packages it (container + static binary), settles the local-auth posture, and
+  ships an operator runbook — the demoable GA artifact.
+
+### Known gaps deferred past E2 (accepted risks, tracked)
+
+- **The spool is unbounded (E3).** A multi-day outage grows the local JetStream store
+  until the disk fills; there is no `MaxBytes`/discard policy yet. The periodic status
+  line reports **spool depth** so growth is visible, but an operator must currently
+  size `storeDir` for the worst-case outage. Bounding (and choosing a fail-safe
+  overflow behaviour — a naive `DiscardNew` would drop an event the gateway already
+  PUBACK'd) is E3.
+- **Power-loss durability** rides an fsync-on-every-store (`SyncAlways`), so the floor
+  is on-disk, not page-cache — an explicit edge-vs-cloud trade (edge boxes lose power).
+- **Changing `instanceId` or the uplink timeout over an existing store fails closed,
+  not gracefully.** Both the durable consumer's filter subject (`instanceId`) and its
+  `AckWait` (derived from `connectTimeoutSeconds`) are fixed when the consumer is first
+  created; changing either on an agent that already has a populated `storeDir` makes the
+  durable bind reject at startup (a loud, repeated error — no silent loss). Reprovision
+  a changed agent onto a fresh `storeDir` after its spool has drained; graceful
+  in-place reconfiguration (recreate the durable, migrate/strand old-namespace events)
+  is E3.
 
 - **No local device authentication (trusted-LAN only).** The local MQTT listener
   accepts any connection on the site LAN. Cloud event *attribution* does not depend
