@@ -182,6 +182,13 @@ func TestPresenceEpochMonotoneAcrossClockStepBack(t *testing.T) {
 	h.now = time.Unix(1_700_000_500, 0)
 	e1 := presenceFor(h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1))), "g/n").SessionId
 
+	// Absolute pin: the epoch is the wall-clock UnixNano of the TRACKER's clock. This
+	// pins two things at once — "epoch = UnixNano" and that the extracted EpochSource
+	// mints on the tracker's injected clock, not a real time.Now (an epoch source wired
+	// to the wrong clock would pass every relative assertion below but fail here).
+	assert.Equal(t, uint64(time.Unix(1_700_000_500, 0).UnixNano()), e1,
+		"the minted epoch must be the tracker clock's UnixNano")
+
 	// The clock steps BACK before the next session (an NTP correction).
 	h.now = time.Unix(1_700_000_400, 0)
 	h.tr.Observe(nTop(NDEATH), pl(-1, bdSeqM(1)))
