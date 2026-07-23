@@ -819,26 +819,34 @@ func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
 	consecutiveTermBuildFailures = 0 // a successful build clears the fuse
 	setLeader(true)
 
-	// Serve this term's transport. A Serve return while the term still intends to serve is a downed
-	// socket on the single serving replica — a total ingest outage a Ready pod would hide — so it is
-	// fatal. stopServing records intent so the eviction Stop below is graceful, not fatal.
-	stopServing := superviseServe(srv, func(err error) {
-		log.Fatal().Err(err).Msg("LwM2M CoAP/DTLS transport exited unexpectedly; terminating so the pod is restarted.")
-	})
-
-	// Start the command dispatcher for THIS term (ADR-075 L4a): it pulls device-commands and
-	// dispatches to this term's conn table, only while leaderCtx is live. Leader-only pull is what
-	// keeps a standby (which never runs this) from draining the shared durable. It returns when
-	// leaderCtx is cancelled; dispatcherDone lets the unwind wait for its workers to finish.
+	// Start the command dispatcher for THIS term (ADR-075 L4a/L4b) BEFORE serving: it pulls
+	// device-commands and dispatches to this term's conn table, only while leaderCtx is live.
+	// Leader-only pull is what keeps a standby (which never runs this) from draining the shared
+	// durable. It returns when leaderCtx is cancelled; dispatcherDone lets the unwind wait for its
+	// workers to finish. We wait for the dispatcher to be READY (its wake-drain queues published)
+	// before serving, so a Register in a serve-before-Run window does not silently defer its
+	// wake-drain — a real gap at failover when the whole fleet re-Registers at once.
 	dispatcherDone := make(chan struct{})
 	if dispatcher != nil {
 		go func() {
 			defer close(dispatcherDone)
 			dispatcher.Run(leaderCtx)
 		}()
+		select {
+		case <-dispatcher.Ready():
+		case <-leaderCtx.Done(): // evicted before the dispatcher came up — do not serve
+		}
 	} else {
 		close(dispatcherDone)
 	}
+
+	// Serve this term's transport (after the dispatcher can accept wake drains). A Serve return while
+	// the term still intends to serve is a downed socket on the single serving replica — a total
+	// ingest outage a Ready pod would hide — so it is fatal. stopServing records intent so the
+	// eviction Stop below is graceful, not fatal.
+	stopServing := superviseServe(srv, func(err error) {
+		log.Fatal().Err(err).Msg("LwM2M CoAP/DTLS transport exited unexpectedly; terminating so the pod is restarted.")
+	})
 
 	<-leaderCtx.Done() // eviction (lease lost) or shutdown (parent ctx cancelled)
 

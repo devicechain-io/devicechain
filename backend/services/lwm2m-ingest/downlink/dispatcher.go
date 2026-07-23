@@ -170,6 +170,12 @@ type Dispatcher struct {
 	// nil whenever this replica is not the serving leader (before Run, and after it returns), so a
 	// Drain on a standby is a safe no-op. atomic so the handler goroutine reads it without a lock.
 	queuesPtr atomic.Pointer[[]chan task]
+	// ready is closed by Run once queuesPtr is published and the workers are started. The leader waits
+	// on it BEFORE serving the transport, so the first Register (which fires Drain) never lands in a
+	// serve-before-Run window where Drain would no-op and silently defer the wake-drain to the device's
+	// next Update — a real gap at failover, when the whole fleet re-Registers at once. One-shot per
+	// Dispatcher; the Dispatcher is rebuilt per leadership term.
+	ready chan struct{}
 }
 
 // Options configures a Dispatcher. Zero-valued fields take their package defaults.
@@ -197,8 +203,13 @@ func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, ex
 		workers:   opts.Workers,
 		opTimeout: opts.OpTimeout,
 		dedupe:    newDedupe(dedupeTTL, dedupeMax),
+		ready:     make(chan struct{}),
 	}
 }
+
+// Ready returns a channel closed once Run has published this term's worker queues — the leader waits
+// on it before serving the transport so no wake-drain is lost to a serve-before-Run window.
+func (d *Dispatcher) Ready() <-chan struct{} { return d.ready }
 
 // work is one parsed live command (a consumed device-commands message) routed to a device-sharded
 // worker.
@@ -254,8 +265,10 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		}(queues[i])
 	}
 	// Publish this term's queues so Drain (handler goroutine) can enqueue; clear on return so a
-	// post-eviction Drain is a no-op rather than feeding channels whose workers have exited.
+	// post-eviction Drain is a no-op rather than feeding channels whose workers have exited. Signal
+	// ready AFTER the publish so the leader only starts serving once wake-drains can be accepted.
 	d.queuesPtr.Store(&queues)
+	close(d.ready)
 	defer d.queuesPtr.Store(nil)
 
 	for ctx.Err() == nil {
@@ -385,7 +398,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 	// fetched its still-SENT row moments ago (drain and live share this device's one worker, but a
 	// fetch can still overlap a stream delivery). Re-running it would re-actuate the device, so skip
 	// the op and ACK (seal-fate — it was actuated, must not redeliver).
-	if d.dedupe.recentlyDispatched(w.env.DeviceToken, w.env.Token) {
+	if d.dedupe.recentlyDispatched(w.tenant, w.env.DeviceToken, w.env.Token) {
 		incr(d.metrics.DrainDedup, 1)
 		ackDrop(w.msg)
 		return
@@ -401,7 +414,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 	// result is an unreliable artifact of losing the conn — a spurious FAILED) and the command rides
 	// SENT→TIMEOUT; only the PRE-op eviction check (top of dispatch) redelivers, where the op never ran.
 	d.executeAndReport(ctx, conn, w.tenant, w.env.Name, w.env.Token, payload)
-	d.dedupe.mark(w.env.DeviceToken, w.env.Token)
+	d.dedupe.mark(w.tenant, w.env.DeviceToken, w.env.Token)
 	// Seal fate: the CoAP op already ran, so ack whether or not the response published — a publish we
 	// could not land leaves the command to TIMEOUT, which is the correct terminal for a lost outcome
 	// and strictly safer than a second actuation.
@@ -435,11 +448,11 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 		if reach != ReachLive {
 			return // the device dropped mid-drain: the remaining rows stay SENT for the next wake
 		}
-		if d.dedupe.recentlyDispatched(job.deviceToken, c.Token) {
+		if d.dedupe.recentlyDispatched(job.tenant, job.deviceToken, c.Token) {
 			continue // already fired by the live path or a prior drain — do not re-actuate
 		}
 		d.executeAndReport(ctx, conn, job.tenant, c.Name, c.Token, c.Payload)
-		d.dedupe.mark(job.deviceToken, c.Token)
+		d.dedupe.mark(job.tenant, job.deviceToken, c.Token)
 		incr(d.metrics.Drained, 1)
 	}
 }
@@ -574,26 +587,32 @@ func newDedupe(ttl time.Duration, max int) *dedupe {
 	return &dedupe{seen: make(map[string]time.Time), ttl: ttl, max: max}
 }
 
-func dedupeKey(deviceToken, commandToken string) string {
-	return deviceToken + "\x00" + commandToken
+// dedupeKey includes the TENANT: device tokens AND command tokens are only per-tenant unique
+// (ADR-042), so two tenants can each legitimately have device "pump-1" carrying command "cmd-1".
+// Keying without the tenant would let one tenant's dispatch suppress the other's — the live path
+// would ack the second tenant's message without executing OR publishing, silently losing the command
+// (it stays SENT with no wake to drain it on an always-connected device). This is the ADR-044 "every
+// key adds tenant_id" shape.
+func dedupeKey(tenant, deviceToken, commandToken string) string {
+	return tenant + "\x00" + deviceToken + "\x00" + commandToken
 }
 
-// recentlyDispatched reports whether (deviceToken, commandToken) was marked within the TTL.
-func (d *dedupe) recentlyDispatched(deviceToken, commandToken string) bool {
+// recentlyDispatched reports whether (tenant, deviceToken, commandToken) was marked within the TTL.
+func (d *dedupe) recentlyDispatched(tenant, deviceToken, commandToken string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	t, ok := d.seen[dedupeKey(deviceToken, commandToken)]
+	t, ok := d.seen[dedupeKey(tenant, deviceToken, commandToken)]
 	return ok && time.Since(t) < d.ttl
 }
 
-// mark records (deviceToken, commandToken) as dispatched now, pruning first if at capacity.
-func (d *dedupe) mark(deviceToken, commandToken string) {
+// mark records (tenant, deviceToken, commandToken) as dispatched now, pruning first if at capacity.
+func (d *dedupe) mark(tenant, deviceToken, commandToken string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if len(d.seen) >= d.max {
 		d.pruneLocked()
 	}
-	d.seen[dedupeKey(deviceToken, commandToken)] = time.Now()
+	d.seen[dedupeKey(tenant, deviceToken, commandToken)] = time.Now()
 }
 
 // pruneLocked drops expired keys; if the set is still at capacity (a pathological burst of distinct

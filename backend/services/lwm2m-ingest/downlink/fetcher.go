@@ -25,12 +25,23 @@ type commandQuerier interface {
 // LIVE path (draining it here too would double-dispatch), and a terminal row is done.
 const statusSent = "SENT"
 
-// maxDrainPerWake bounds BOTH the fetch page and the per-wake dispatch: a waking device
-// drains at most this many of its oldest still-SENT commands, the remainder on its next
-// Register/Update. It is the device-edge flood governor (ADR-075 L4b) — a REACT
-// send-command storm (the programmatic flood origin, not operators) cannot slam a
-// constrained radio with an unbounded burst the instant it wakes.
+// maxDrainPerWake bounds the per-wake DISPATCH: a waking device drains at most this many
+// of its OLDEST still-SENT commands, the remainder on its next Register/Update. It is the
+// device-edge flood governor (ADR-075 L4b) — a REACT send-command storm (the programmatic
+// flood origin, not operators) cannot slam a constrained radio with an unbounded burst the
+// instant it wakes.
 const maxDrainPerWake = 32
+
+// maxDrainFetch is the FETCH page size — deliberately larger than the dispatch cap. The
+// commands query has no server-side ORDER BY, so pageSize=N returns an ARBITRARY N rows;
+// sorting a page that is already the wrong N cannot recover the oldest ones (a firmware
+// Write /5/0/1 could be left off a 32-row page while its Execute /5/0/2 is on it → dispatched
+// out of order across wakes). So we fetch a large page (this equals core rdb.MaxPageSize, the
+// server's own clamp — a larger request is clamped to it anyway), sort by id, THEN truncate
+// to maxDrainPerWake, making the selection genuinely oldest-first. A device with more than
+// this many still-SENT commands is pathological (bounded by the 7-day TTL horizon); its
+// overflow drains across subsequent wakes.
+const maxDrainFetch = 1000
 
 // drainQuery pulls a device's commands in a given lifecycle state. Field names are
 // pinned to command-delivery's schema; the graphql-go fork rejects an unknown field
@@ -79,14 +90,15 @@ type drainResponse struct {
 // delivered (this) or reaches its TTL horizon (TIMEOUT). This is the read side of that
 // hold; it builds no second source of truth.
 type CommandFetcher struct {
-	client  commandQuerier
-	baseURL string
-	max     int
+	client    commandQuerier
+	baseURL   string
+	fetchSize int // page size requested from command-delivery (large, so the sort sees the oldest)
+	max       int // per-wake dispatch cap (the oldest N after sorting)
 }
 
 // NewCommandFetcher builds a fetcher over the command-delivery GraphQL client + URL.
 func NewCommandFetcher(client commandQuerier, baseURL string) *CommandFetcher {
-	return &CommandFetcher{client: client, baseURL: baseURL, max: maxDrainPerWake}
+	return &CommandFetcher{client: client, baseURL: baseURL, fetchSize: maxDrainFetch, max: maxDrainPerWake}
 }
 
 // Pending returns a waking device's still-SENT commands, OLDEST FIRST (by numeric id —
@@ -102,7 +114,7 @@ func NewCommandFetcher(client commandQuerier, baseURL string) *CommandFetcher {
 func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string, now time.Time) ([]DrainCommand, error) {
 	criteria := map[string]any{
 		"pageNumber":  1,
-		"pageSize":    f.max,
+		"pageSize":    f.fetchSize,
 		"deviceToken": deviceToken,
 		"status":      statusSent,
 	}
@@ -115,11 +127,16 @@ func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string
 	rows := resp.Commands.Results
 	// Sort by numeric id ascending — enqueue order. String-compare on queuedTime would
 	// be fragile (timezone/precision); the id is a monotonic PK, exactly what
-	// command-delivery's own PendingCommands orders by.
+	// command-delivery's own PendingCommands orders by. The sort runs over the WHOLE fetched
+	// page (up to maxDrainFetch) so the truncation below selects the genuinely oldest, not an
+	// arbitrary page's oldest.
 	sort.Slice(rows, func(i, j int) bool { return parseID(rows[i].Id) < parseID(rows[j].Id) })
 
-	out := make([]DrainCommand, 0, len(rows))
+	out := make([]DrainCommand, 0, min(len(rows), f.max))
 	for _, r := range rows {
+		if len(out) >= f.max {
+			break // per-wake dispatch cap: the oldest f.max; the rest drain on the next wake
+		}
 		// Defensive: the server filtered status=SENT, but never dispatch a row that is
 		// not SENT even if that contract ever drifts (a terminal command must not re-fire).
 		if r.Status != statusSent {

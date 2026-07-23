@@ -222,6 +222,23 @@ func TestDrainSkipsCommandAlreadyDispatchedLive(t *testing.T) {
 	assert.Equal(t, 2, exec.callCount(), "live c1 (1) + drain c2 (1); c1 is NOT re-actuated by the drain")
 }
 
+// TestDedupIsTenantScoped is the cross-tenant suppression guard (Blocker 1): device tokens and
+// command tokens are only per-tenant unique (ADR-042), so two tenants can each have device "pump-1"
+// carrying command "c1". One tenant's dispatch must NOT suppress the other's — else the second
+// tenant's command is acked without executing and silently lost.
+func TestDedupIsTenantScoped(t *testing.T) {
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	pub := &fakePublisher{}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive, "globex/pump-1": ReachLive}}
+	d := newDispatcher(nil, pub, look, exec)
+
+	d.dispatch(context.Background(), liveWorkTok("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"a"}`, newAck()))
+	d.dispatch(context.Background(), liveWorkTok("globex", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"b"}`, newAck()))
+
+	assert.Equal(t, 2, exec.callCount(), "a second tenant's identically-tokened command is not suppressed")
+	assert.Len(t, pub.responses(), 2, "both tenants' commands publish a response")
+}
+
 // TestDrainStopsWhenDeviceDropsMidDrain proves a device dropping mid-drain stops the drain cleanly —
 // the remaining held commands stay SENT (unfetched-again) for the next wake, never dispatched to a
 // dead conn.
@@ -526,8 +543,13 @@ func TestWakeDrainEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { d.Run(ctx); close(done) }()
-	// Wait until Run has published its queues, so the wake's Drain is not a standby no-op.
-	require.Eventually(t, func() bool { return d.queuesPtr.Load() != nil }, 2*time.Second, 5*time.Millisecond)
+	// Wait until Run signals ready (queues published), so the wake's Drain is not a standby no-op —
+	// exactly what serveAsLeader waits on before serving the transport (the S1 ordering fix).
+	select {
+	case <-d.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("dispatcher did not become ready")
+	}
 
 	// A Register wake: Bind installs the live conn AND fires onLive → Drain.
 	connTable.Bind("acme", "pump-1", "id-1", 100, newFakeConn(1))

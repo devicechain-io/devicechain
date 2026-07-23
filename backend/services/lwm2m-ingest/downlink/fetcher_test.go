@@ -6,6 +6,7 @@ package downlink
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -76,8 +77,41 @@ func TestPendingOrdersOldestFirst(t *testing.T) {
 	if q.gotTenant != "tenantA" || q.gotDevice != "dev-1" || q.gotStatus != statusSent {
 		t.Fatalf("query args = tenant %q device %q status %q", q.gotTenant, q.gotDevice, q.gotStatus)
 	}
-	if q.gotPageNum != 1 || q.gotPageSize != maxDrainPerWake {
-		t.Fatalf("pagination = page %d size %d, want 1/%d", q.gotPageNum, q.gotPageSize, maxDrainPerWake)
+	if q.gotPageNum != 1 || q.gotPageSize != maxDrainFetch {
+		t.Fatalf("pagination = page %d size %d, want 1/%d (a large fetch so the sort sees the oldest)", q.gotPageNum, q.gotPageSize, maxDrainFetch)
+	}
+}
+
+// TestPendingTruncatesToOldestAfterSort is the >cap FOTA-ordering guard: when a device has MORE than
+// maxDrainPerWake held commands, Pending must select the OLDEST maxDrainPerWake (by id), not an
+// arbitrary subset — otherwise a firmware Write could be left off this wake's batch while its Execute
+// is dispatched. The fetch page is large (maxDrainFetch), so the sort sees all rows; only then is the
+// batch capped.
+func TestPendingTruncatesToOldestAfterSort(t *testing.T) {
+	// Build maxDrainPerWake+5 rows with ids in DESCENDING order (worst case for a naive head-of-page).
+	n := maxDrainPerWake + 5
+	rows := make([]drainRow, 0, n)
+	for id := n; id >= 1; id-- {
+		rows = append(rows, drainRow{
+			Id: strconv.Itoa(id), Token: "c" + strconv.Itoa(id), Name: "lwm2m.read",
+			Payload: strp(`{"path":"/3/0/0"}`), Status: "SENT",
+		})
+	}
+	f := NewCommandFetcher(&fakeQuerier{rows: rows}, "http://cd/graphql")
+
+	got, err := f.Pending(context.Background(), "t", "d", time.Now())
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(got) != maxDrainPerWake {
+		t.Fatalf("got %d, want the per-wake cap %d", len(got), maxDrainPerWake)
+	}
+	// The oldest maxDrainPerWake commands are ids 1..maxDrainPerWake, in ascending order.
+	for i := 0; i < maxDrainPerWake; i++ {
+		want := "c" + strconv.Itoa(i+1)
+		if got[i].Token != want {
+			t.Fatalf("position %d: got %q, want %q — not the oldest, in order", i, got[i].Token, want)
+		}
 	}
 }
 

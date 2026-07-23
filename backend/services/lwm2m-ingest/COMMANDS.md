@@ -54,8 +54,10 @@ days** (aligned with the command-stream retention) on any command whose creator 
 Because a physical actuation firing twice is worse than a lost status report, the adapter **seals a
 command's fate after the CoAP op runs**: if the device acted but the response could not be published
 (a NATS blip), the command is *not* redelivered — it will `TIMEOUT` rather than re-actuate the device.
-A command dispatched by the live path and a drain that fetches its still-`SENT` row are de-duplicated,
-so the overlap never double-actuates a device.
+A command dispatched by the live path and a drain that fetches its still-`SENT` row are de-duplicated
+within a short wake window (best-effort — a recently-dispatched command token is suppressed on the
+other path), so the overlap does not double-actuate; the platform's underlying posture remains
+at-least-once.
 
 **Boundaries (named):** the drain delivers a bounded batch per wake (the oldest ~32 held commands);
 the rest drain on subsequent wakes. If the leader crashes *after* a drained op is issued but *before*
