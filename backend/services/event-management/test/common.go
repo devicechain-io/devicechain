@@ -67,6 +67,11 @@ func (api *MockApi) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests
 	return args.Get(0).([]*emmodel.AlertEvent), args.Error(1)
 }
 
+func (api *MockApi) CreateStateChangeEvents(ctx context.Context, db *gorm.DB, requests []*emmodel.StateChangeEventCreateRequest) ([]*emmodel.StateChangeEvent, int64, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]*emmodel.StateChangeEvent), args.Get(1).(int64), args.Error(2)
+}
+
 func (api *MockApi) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*emmodel.EventAnchor) error {
 	args := api.Mock.Called()
 	return args.Error(0)

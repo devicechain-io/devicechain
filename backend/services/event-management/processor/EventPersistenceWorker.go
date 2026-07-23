@@ -37,6 +37,12 @@ type EventPersistenceWorker struct {
 // Results of event persistence process.
 type EventPersistenceResults struct {
 	Events []interface{}
+	// Deduped reports that the persist was a no-op because the row already existed —
+	// only the StateChange path sets it (its idempotency unique index absorbs a
+	// JetStream redelivery). When true the caller MUST skip anchor persistence: a
+	// StateChange carries no AltId, so without this a redelivery would re-insert its
+	// anchor set (event_anchors has no unique index), duplicating it.
+	Deduped bool
 }
 
 // Create a new event resolver.
@@ -187,6 +193,32 @@ func (ep *EventPersistenceWorker) PersistAlertEvents(ctx context.Context, db *go
 	return results, nil
 }
 
+// Persists an authoritative presence transition to the append-only history hypertable
+// (ADR-067 decision 5, S3). A StateChange is a single connect/disconnect edge (one
+// row), not a batch. Idempotent redelivery is handled inside CreateStateChangeEvents
+// (ON CONFLICT on the idempotency index — a StateChange carries no AltId so the
+// base-event dedup does not engage). The live authoritative presence is written
+// separately by device-state's projection; this is the queryable timeline.
+func (ep *EventPersistenceWorker) PersistStateChangeEvents(ctx context.Context, db *gorm.DB, event model.Event,
+	payload dmmodel.ResolvedStateChangePayload) (*EventPersistenceResults, error) {
+	created, affected, err := ep.Api.CreateStateChangeEvents(ctx, db, []*model.StateChangeEventCreateRequest{{
+		Event:     event,
+		State:     payload.State,
+		Reason:    payload.Reason,
+		SessionId: payload.SessionId,
+	}})
+	if err != nil {
+		return nil, err
+	}
+	events := make([]interface{}, 0, len(created))
+	for _, scevt := range created {
+		events = append(events, scevt)
+	}
+	// A redelivery inserts nothing (the idempotency index conflicts); tell the caller to
+	// skip anchors so it does not re-insert the anchor set.
+	return &EventPersistenceResults{Events: events, Deduped: affected == 0}, nil
+}
+
 // Persists a resolved event to the datastore. The event's relationship anchors
 // (ADR-013) are stored as a set of event_anchors rows alongside the base event,
 // so the same reading is queryable by each of the device's assignment dimensions.
@@ -247,19 +279,26 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 			}
 			results, perr = ep.PersistAlertEvents(ctx, tx, pevent, *payload)
 		case esmodel.StateChange:
-			// ADR-067 presence: the authoritative write is device-state's projection,
-			// not event history. The append-only, queryable StateChange history that
-			// DETECT reacts to (ADR-067 decision 5) lands with S3; until then a
-			// StateChange is an explicit no-op here so it acks cleanly instead of
-			// dead-lettering. Return before persistEventAnchors — there is no base
-			// event row for the anchors to reference yet.
-			results = &EventPersistenceResults{}
-			return nil
+			// ADR-067 presence history (S3): persist the connect/disconnect edge to the
+			// append-only state_change_events hypertable, then fall through to
+			// persistEventAnchors like every other event type. The live authoritative
+			// presence is device-state's projection; this is the queryable timeline.
+			payload, ok := event.Payload.(*dmmodel.ResolvedStateChangePayload)
+			if !ok {
+				return fmt.Errorf("non-state-change payload in state change event")
+			}
+			results, perr = ep.PersistStateChangeEvents(ctx, tx, pevent, *payload)
 		default:
 			return fmt.Errorf("unhandled event type in persistence: %s", event.EventType.String())
 		}
 		if perr != nil {
 			return perr
+		}
+		// A deduped persist (a StateChange redelivery absorbed by its idempotency index)
+		// must NOT re-run anchor persistence — event_anchors has no unique index, so a
+		// plain re-insert would duplicate the anchor set.
+		if results != nil && results.Deduped {
+			return nil
 		}
 		// Persist the event's anchor set in the same transaction, so the event and
 		// its queryable dimensions commit atomically (ADR-013 addendum 2026-07-01).

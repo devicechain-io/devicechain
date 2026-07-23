@@ -146,46 +146,96 @@ func TestMergeAndSweep(t *testing.T) {
 	}
 }
 
-// TestPresenceApplies is the pure monotonic guard's table test (ADR-067 decision 4,
-// mirroring alarm_contributor.apply). Each row is a mutation control: break the guard
-// and exactly one row flips.
-func TestPresenceApplies(t *testing.T) {
+// TestPresenceNonEventSplit is the S3 correctness slice at the DB write path: the guard
+// (presence.Decide, table-tested in core/presence) SPLITS "advance the ordering marker"
+// from "the connectivity edge flipped". A day-late higher-session DISCONNECT over an
+// already-dead device advances SessionId but must FREEZE LastDisconnectTime and not
+// re-fire; a higher-session CONNECT over an already-connected device is a genuine
+// reconnect and MUST refresh LastConnectTime. (The ordering table itself lives in
+// github.com/devicechain-io/dc-microservice/presence.)
+func TestPresenceNonEventSplit(t *testing.T) {
+	ctx := core.WithTenant(context.Background(), "A")
 	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
-	valid := func(tm time.Time) sql.NullTime { return sql.NullTime{Time: tm, Valid: true} }
-	conn := func(s uint64, tm time.Time) PresenceTransition {
-		return PresenceTransition{Connected: true, SessionId: s, OccurredAt: tm}
+	conn := func(s uint64, tm time.Time) *PresenceTransition {
+		return &PresenceTransition{Connected: true, SessionId: s, OccurredAt: tm}
 	}
-	disc := func(s uint64, tm time.Time) PresenceTransition {
-		return PresenceTransition{Connected: false, SessionId: s, OccurredAt: tm}
+	disc := func(s uint64, tm time.Time) *PresenceTransition {
+		return &PresenceTransition{Connected: false, SessionId: s, OccurredAt: tm}
 	}
 
-	cases := []struct {
-		name         string
-		curSession   uint64
-		curTime      sql.NullTime
-		curConnected bool
-		pt           PresenceTransition
-		want         bool
-	}{
-		{"first transition ever applies", 0, sql.NullTime{}, false, conn(100, t0), true},
-		{"newer session supersedes even an earlier ts", 100, valid(t0), true, conn(200, t0.Add(-time.Hour)), true},
-		{"newer session disconnect supersedes", 100, valid(t0), true, disc(200, t0), true},
-		{"stale session disconnect rejected (stale-will guard)", 200, valid(t0), true, disc(100, t0.Add(time.Hour)), false},
-		{"same session newer time applies", 100, valid(t0), true, disc(100, t0.Add(time.Minute)), true},
-		{"same session older time rejected", 100, valid(t0), true, disc(100, t0.Add(-time.Minute)), false},
-		{"equal stamp: disconnect beats connect", 100, valid(t0), true, disc(100, t0), true},
-		{"equal stamp: connect does NOT beat disconnect", 100, valid(t0), false, conn(100, t0), false},
-		{"equal stamp: same-state connect is a no-op", 100, valid(t0), true, conn(100, t0), false},
-		{"equal stamp: same-state disconnect is a no-op", 100, valid(t0), false, disc(100, t0), false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := presenceApplies(tc.curSession, tc.curTime, tc.curConnected, tc.pt)
-			if got != tc.want {
-				t.Fatalf("presenceApplies = %v, want %v", got, tc.want)
-			}
-		})
-	}
+	t.Run("higher-session disconnect over dead device freezes LastDisconnectTime", func(t *testing.T) {
+		api := newTestApi(t)
+		// Establish a device that connected then disconnected at session 100.
+		if _, err := api.MergeDeviceState(ctx, "d1", t0, conn(100, t0), DeviceIdentity{}); err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		deathAt := t0.Add(time.Minute)
+		ds, err := api.MergeDeviceState(ctx, "d1", deathAt, disc(100, deathAt), DeviceIdentity{})
+		if err != nil {
+			t.Fatalf("disconnect: %v", err)
+		}
+		if ds.Active || !ds.LastDisconnectTime.Time.Equal(deathAt) {
+			t.Fatalf("first disconnect not recorded: %+v", ds)
+		}
+		// A day-late shadow-expiry DISCONNECT at a HIGHER session (L3b reconstruction backstop).
+		lateAt := t0.Add(24 * time.Hour)
+		ds, err = api.MergeDeviceState(ctx, "d1", lateAt, disc(200, lateAt), DeviceIdentity{})
+		if err != nil {
+			t.Fatalf("late disconnect: %v", err)
+		}
+		if ds.SessionId != 200 {
+			t.Fatalf("ordering marker did not advance to the newer session: %+v", ds)
+		}
+		if !ds.LastDisconnectTime.Time.Equal(deathAt) {
+			t.Fatalf("late higher-session disconnect MOVED LastDisconnectTime (%v) off the first-known death %v — the S3 non-event bug", ds.LastDisconnectTime.Time, deathAt)
+		}
+	})
+
+	t.Run("first authoritative DISCONNECT over an inferred-swept-dead device records the authoritative time", func(t *testing.T) {
+		api := newTestApi(t)
+		// An INFERRED device: a plain data event creates it active.
+		if _, err := api.MergeDeviceState(ctx, "d3", t0, nil, DeviceIdentity{}); err != nil {
+			t.Fatalf("data event: %v", err)
+		}
+		// The data-silence sweep flips it inactive far later, writing a SYNTHETIC disconnect time.
+		sweepAt := t0.Add(24 * time.Hour)
+		if _, err := api.SweepInactive(core.WithSystemContext(ctx), sweepAt); err != nil {
+			t.Fatalf("sweep: %v", err)
+		}
+		// Its authoritative LWT (the FIRST StateChange) then arrives, dated EARLIER than the
+		// sweep's guess — the device actually died at deathAt, the sweep only noticed at sweepAt.
+		deathAt := t0.Add(time.Hour)
+		ds, err := api.MergeDeviceState(ctx, "d3", deathAt, disc(5, deathAt), DeviceIdentity{})
+		if err != nil {
+			t.Fatalf("first authoritative disconnect: %v", err)
+		}
+		if ds.PresenceSource != PresenceSourceAsserted || ds.Active {
+			t.Fatalf("promotion did not assert/deactivate: %+v", ds)
+		}
+		if !ds.LastDisconnectTime.Time.Equal(deathAt) {
+			t.Fatalf("first authoritative word kept the SYNTHETIC swept time (%v) instead of the true death %v", ds.LastDisconnectTime.Time, deathAt)
+		}
+	})
+
+	t.Run("higher-session connect over live device refreshes LastConnectTime", func(t *testing.T) {
+		api := newTestApi(t)
+		if _, err := api.MergeDeviceState(ctx, "d2", t0, conn(100, t0), DeviceIdentity{}); err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		// A reconnect at a higher session with no intervening disconnect (missed DEATH): Active was
+		// already true, but the new epoch is a genuine new physical connection.
+		reAt := t0.Add(time.Hour)
+		ds, err := api.MergeDeviceState(ctx, "d2", reAt, conn(200, reAt), DeviceIdentity{})
+		if err != nil {
+			t.Fatalf("reconnect: %v", err)
+		}
+		if !ds.Active || ds.SessionId != 200 {
+			t.Fatalf("reconnect did not advance: %+v", ds)
+		}
+		if !ds.LastConnectTime.Time.Equal(reAt) {
+			t.Fatalf("higher-session reconnect did NOT refresh LastConnectTime (%v, want %v) — a stale connect time claims continuous uptime across the outage", ds.LastConnectTime.Time, reAt)
+		}
+	})
 }
 
 // TestAssertedPresenceProjection exercises the authoritative-presence write path end

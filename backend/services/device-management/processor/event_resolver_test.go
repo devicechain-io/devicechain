@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/config"
@@ -611,6 +612,30 @@ func (suite *EventResolverTestSuite) TestMeasurementNoDefinitionsSkipsValidation
 
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), uint(0), reason)
+}
+
+// A StateChange session id above the storable signed-bigint range is rejected at
+// resolve time as a DETERMINISTIC failure — both sinks store it in bigint, so without
+// this the pgx overflow error would poison-loop the message to MaxDeliver. MaxInt64 is
+// the storable boundary.
+func (suite *EventResolverTestSuite) TestStateChangeSessionIdRange() {
+	rez := suite.resolver(config.AuthModeOptional)
+	dev := deviceWithToken("TEST-123")
+	sc := func(session string) *esmodel.UnresolvedEvent {
+		return &esmodel.UnresolvedEvent{
+			EventType: esmodel.StateChange,
+			Payload:   &esmodel.UnresolvedStateChangePayload{State: esmodel.PresenceDisconnected, SessionId: session},
+		}
+	}
+
+	// The boundary value MaxInt64 is storable and resolves.
+	out, err := rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, sc("9223372036854775807"))
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint64(math.MaxInt64), out.(*dmodel.ResolvedStateChangePayload).SessionId)
+
+	// One above the boundary (here MaxUint64) is unstorable → deterministic rejection.
+	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, sc("18446744073709551615"))
+	assert.Error(suite.T(), err)
 }
 
 func TestEventResolverTestSuite(t *testing.T) {
