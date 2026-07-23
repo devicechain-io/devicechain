@@ -176,7 +176,7 @@ func TestRegisterEmitsConnectedWithBindingTenancy(t *testing.T) {
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
 	r := newTestRegistry(res, em, clk, nil)
 
-	result, regId := r.Register(context.Background(), "dev-1", testBinding, 300)
+	result, regId, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 	require.Equal(t, RegisterOK, result)
 	require.NotEmpty(t, regId)
 
@@ -203,7 +203,7 @@ func TestDeregisterEmitsDisconnectedAtSameEpoch(t *testing.T) {
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
 	r := newTestRegistry(res, em, clk, nil)
 
-	_, regId := r.Register(context.Background(), "dev-1", testBinding, 300)
+	_, regId, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 	connectEpoch := em.connects()[0].ev.SessionId
 
 	clk.advance(time.Minute)
@@ -224,7 +224,7 @@ func TestExpiryEmitsDisconnectedAtStoredEpoch(t *testing.T) {
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
 	r := newTestRegistry(res, em, clk, nil)
 
-	_, regId := r.Register(context.Background(), "dev-1", testBinding, 300)
+	_, regId, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 	connectEpoch := em.connects()[0].ev.SessionId
 
 	// Drive the expiry logic directly (deterministic): the arming timer's generation is 0.
@@ -245,7 +245,7 @@ func TestUpdateSuppressesStaleExpiryFire(t *testing.T) {
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
 	r := newTestRegistry(res, em, clk, nil)
 
-	_, regId := r.Register(context.Background(), "dev-1", testBinding, 300)
+	_, regId, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 	require.Equal(t, UpdateOK, r.Update("dev-1", regId, 300)) // bumps generation 0 -> 1
 
 	// The OLD timer (generation 0) fires late: it must NOT disconnect a device an Update
@@ -266,7 +266,7 @@ func TestForeignIdentityCannotUpdateOrDeregister(t *testing.T) {
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
 	r := newTestRegistry(res, em, clk, nil)
 
-	_, regId := r.Register(context.Background(), "dev-1", testBinding, 300)
+	_, regId, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 
 	assert.Equal(t, UpdateUnknown, r.Update("dev-2", regId, 300), "a foreign identity must not update")
 	assert.False(t, r.Deregister("dev-2", regId), "a foreign identity must not deregister")
@@ -284,11 +284,11 @@ func TestReRegisterMintsHigherEpochNoDisconnect(t *testing.T) {
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
 	r := newTestRegistry(res, em, clk, nil)
 
-	_, regId1 := r.Register(context.Background(), "dev-1", testBinding, 300)
+	_, regId1, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 	epoch1 := em.connects()[0].ev.SessionId
 
 	clk.advance(10 * time.Second) // past the replace backoff
-	_, regId2 := r.Register(context.Background(), "dev-1", testBinding, 300)
+	_, regId2, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 
 	require.NotEqual(t, regId1, regId2)
 	conns := em.connects()
@@ -308,9 +308,9 @@ func TestRapidReRegisterCollapses(t *testing.T) {
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
 	r := newTestRegistry(res, em, clk, nil)
 
-	_, regId1 := r.Register(context.Background(), "dev-1", testBinding, 300)
+	_, regId1, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 	// No clock advance: still inside the replace backoff.
-	result, regId2 := r.Register(context.Background(), "dev-1", testBinding, 300)
+	result, regId2, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 
 	assert.Equal(t, RegisterOK, result)
 	assert.Equal(t, regId1, regId2, "a rapid re-register returns the existing location")
@@ -340,7 +340,7 @@ func TestDisconnectStampAfterClockStepBack(t *testing.T) {
 	clk := &testClock{t: connectedAt}
 	r := newTestRegistry(res, em, clk, nil)
 
-	_, regId := r.Register(context.Background(), "dev-1", testBinding, 300)
+	_, regId, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 
 	// The clock steps BACK (an NTP correction mid-session).
 	clk.set(time.Unix(1_700_000_400, 0))
@@ -360,7 +360,7 @@ func TestRegisterUnknownDeviceRefusedNoEmit(t *testing.T) {
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
 	r := newTestRegistry(res, em, clk, nil)
 
-	result, regId := r.Register(context.Background(), "dev-1", testBinding, 300)
+	result, regId, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 	assert.Equal(t, RegisterUnknownDevice, result)
 	assert.Empty(t, regId)
 	assert.Empty(t, em.all(), "a refused registration must emit nothing")
@@ -375,7 +375,7 @@ func TestRegisterEmitFailureRefusesNoEntry(t *testing.T) {
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
 	r := newTestRegistry(res, em, clk, nil)
 
-	result, regId := r.Register(context.Background(), "dev-1", testBinding, 300)
+	result, regId, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 	assert.Equal(t, RegisterUnavailable, result)
 	assert.Empty(t, regId)
 	assert.Empty(t, em.connects())
@@ -396,7 +396,7 @@ func TestDeregisterEmitFailureStillSucceedsAndCounts(t *testing.T) {
 	epoch := adapter.NewEpochSource(clk.now)
 	r := New(res, em, epoch, Metrics{Dropped: dropped}, Options{Now: clk.now})
 
-	_, regId := r.Register(context.Background(), "dev-1", testBinding, 300)
+	_, regId, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 	// Now every emit fails.
 	em.mu.Lock()
 	em.failFirst = 100
@@ -416,7 +416,7 @@ func TestRegisterResolveErrorIsUnavailable(t *testing.T) {
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
 	r := newTestRegistry(res, em, clk, nil)
 
-	result, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
+	result, _, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
 	assert.Equal(t, RegisterUnavailable, result)
 	assert.Empty(t, em.all())
 }
@@ -471,12 +471,22 @@ func TestCompareOnEpochDiscardsLowerLateInstall(t *testing.T) {
 	// goroutine is collapsed before it reaches the install.
 	r := New(res, em, adapter.NewEpochSource(nil), Metrics{}, Options{ReplaceBackoff: time.Nanosecond})
 
+	type regRet struct {
+		regId     string
+		epoch     uint64
+		establish bool
+	}
+	var retMu sync.Mutex
+	var rets []regRet
 	var wg sync.WaitGroup
 	wg.Add(2)
 	for i := 0; i < 2; i++ {
 		go func() {
 			defer wg.Done()
-			r.Register(context.Background(), "dev-1", testBinding, 300)
+			_, rid, ep, est := r.Register(context.Background(), "dev-1", testBinding, 300)
+			retMu.Lock()
+			rets = append(rets, regRet{rid, ep, est})
+			retMu.Unlock()
 		}()
 	}
 
@@ -506,4 +516,102 @@ func TestCompareOnEpochDiscardsLowerLateInstall(t *testing.T) {
 	require.NotNil(t, stored)
 	assert.Equal(t, hi, stored.epoch,
 		"the entry must keep the HIGHER epoch; a late lower-epoch install is discarded (R1, no stuck-CONNECTED)")
+
+	// Both callers report the WINNING session's location and epoch; exactly one establishes
+	// (the winner). The compare-on-epoch loser is handed the winner's epoch and establish=false
+	// so it does not waste Observe I/O on a superseded conn (L2b).
+	retMu.Lock()
+	defer retMu.Unlock()
+	require.Len(t, rets, 2)
+	var winners, losers int
+	for _, rr := range rets {
+		assert.Equal(t, hi, rr.epoch, "both callers report the winning session epoch")
+		assert.Equal(t, stored.regId, rr.regId, "both callers report the winning location")
+		if rr.establish {
+			winners++
+		} else {
+			losers++
+		}
+	}
+	assert.Equal(t, 1, winners, "exactly one caller (the winner) establishes")
+	assert.Equal(t, 1, losers, "the compare-on-epoch loser does not establish")
+}
+
+// Register's telemetry-lifecycle returns (epoch, establish) drive the handler's Observe wiring
+// (L2b): a fresh install and a storm-collapse both establish (the storm-collapse may be on a new
+// conn), while a definitive refusal returns a zero epoch and does not establish.
+func TestRegisterReturnsEpochAndEstablish(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil)
+
+	result, regId, epoch, establish := r.Register(context.Background(), "dev-1", testBinding, 300)
+	require.Equal(t, RegisterOK, result)
+	require.NotEmpty(t, regId)
+	require.NotZero(t, epoch)
+	assert.True(t, establish, "a fresh install must establish observations")
+
+	// Storm-collapse (within the replace backoff): same location AND epoch, establish still true.
+	result2, regId2, epoch2, establish2 := r.Register(context.Background(), "dev-1", testBinding, 300)
+	assert.Equal(t, RegisterOK, result2)
+	assert.Equal(t, regId, regId2, "a storm-collapsed re-register returns the existing location")
+	assert.Equal(t, epoch, epoch2, "a storm-collapse keeps the session epoch")
+	assert.True(t, establish2, "a storm-collapse must re-establish (the reboot may be on a new conn)")
+
+	// An unknown device (auto-register off) is a definitive refusal: zero epoch, no establish.
+	res3 := &fakeResolver{outcome: adapter.ResolveDropped}
+	r3 := newTestRegistry(res3, &fakeEmitter{}, clk, nil)
+	result3, _, epoch3, establish3 := r3.Register(context.Background(), "dev-2", testBinding, 300)
+	assert.Equal(t, RegisterUnknownDevice, result3)
+	assert.Zero(t, epoch3)
+	assert.False(t, establish3)
+}
+
+// OnSessionEnd fires exactly when a session ENDS — a Deregister or a lifetime-expiry — and NOT
+// on an install-replace (a reboot re-register), where the successor's Establish supersedes the
+// old observations. This is the seam the observe manager hooks to cancel a session's
+// observations (L2b). Removing the hook from either end path, or adding it to the replace path,
+// reddens an assertion here.
+func TestOnSessionEndHook(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	var mu sync.Mutex
+	type sessionEnd struct {
+		identity string
+		epoch    uint64
+	}
+	var ended []sessionEnd
+	r := newTestRegistry(res, em, clk, func(o *Options) {
+		o.OnSessionEnd = func(identity string, epoch uint64) {
+			mu.Lock()
+			ended = append(ended, sessionEnd{identity, epoch})
+			mu.Unlock()
+		}
+	})
+
+	_, _, _, _ = r.Register(context.Background(), "dev-1", testBinding, 300)
+
+	// A re-register (replace) supersedes the old session WITHOUT ending it — no hook.
+	clk.advance(10 * time.Second)
+	_, regId2, epoch2, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
+	mu.Lock()
+	assert.Empty(t, ended, "an install-replace must NOT fire OnSessionEnd")
+	mu.Unlock()
+
+	// Deregister ends the session → the hook fires once with the CURRENT session epoch.
+	require.True(t, r.Deregister("dev-1", regId2))
+	mu.Lock()
+	require.Len(t, ended, 1)
+	assert.Equal(t, "dev-1", ended[0].identity)
+	assert.Equal(t, epoch2, ended[0].epoch)
+	ended = ended[:0]
+	mu.Unlock()
+
+	// A lifetime expiry also ends the session → the hook fires with the lapsed session's epoch.
+	_, regId3, epoch3, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
+	r.onExpiry(regId3, 0)
+	mu.Lock()
+	require.Len(t, ended, 1)
+	assert.Equal(t, epoch3, ended[0].epoch)
+	mu.Unlock()
 }

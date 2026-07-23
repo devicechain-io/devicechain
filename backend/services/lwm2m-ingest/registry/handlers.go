@@ -12,8 +12,20 @@ import (
 	"github.com/plgd-dev/go-coap/v3/mux"
 	"github.com/rs/zerolog/log"
 
+	"github.com/devicechain-io/dc-event-sources/adapter"
 	"github.com/devicechain-io/dc-lwm2m-ingest/config"
+	"github.com/devicechain-io/dc-lwm2m-ingest/decode"
+	"github.com/devicechain-io/dc-lwm2m-ingest/observe"
 )
+
+// observer is the telemetry-lifecycle seam the handler drives after a Register/Update
+// (*observe.Manager satisfies it). It is optional: a nil observer (an inert deployment or a
+// presence-only test) simply skips establishing observations. Cancel-on-session-end is wired
+// separately through the Registry's OnSessionEnd hook, not the handler.
+type observer interface {
+	Establish(identity string, epoch uint64, conn mux.Conn, target observe.Target, paths []string) bool
+	Reestablish(identity string, conn mux.Conn, target observe.Target)
+}
 
 // LwM2M registration interface paths (OMA LwM2M 1.x). Register is POST to the well-known
 // /rd; Update (POST) and Deregister (DELETE) target the server-assigned location under
@@ -31,14 +43,32 @@ type Handlers struct {
 	reg      *Registry
 	bindings map[string]config.PskBinding
 	metrics  Metrics
+	obs      observer               // nil ⇒ presence-only (no telemetry observations)
+	allow    decode.ObjectAllowlist // which objects in a registration are telemetry to observe
 }
 
 // NewHandlers builds the registration handlers over a Registry and the identity->binding
 // map (config.Bindings()). The binding map is authoritative for tenancy: an authenticated
 // identity absent from it is refused (fail closed), though by construction every
-// authenticated identity has a binding (both are built from the same config identities).
-func NewHandlers(reg *Registry, bindings map[string]config.PskBinding, metrics Metrics) *Handlers {
-	return &Handlers{reg: reg, bindings: bindings, metrics: metrics}
+// authenticated identity has a binding (both are built from the same config identities). obs
+// is the telemetry-lifecycle manager (L2b) and may be nil (presence-only); allow selects which
+// registered object instances are observed.
+func NewHandlers(reg *Registry, bindings map[string]config.PskBinding, metrics Metrics, obs observer, allow decode.ObjectAllowlist) *Handlers {
+	return &Handlers{reg: reg, bindings: bindings, metrics: metrics, obs: obs, allow: allow}
+}
+
+// targetFrom builds the telemetry correlation for a registration from its authenticated
+// binding — tenancy is bound to the credential (ADR-075 D1), never the device payload.
+func targetFrom(b config.PskBinding) observe.Target {
+	return observe.Target{
+		Tenant:     b.Tenant,
+		ExternalId: b.ExternalId,
+		Policy: adapter.IngestPolicy{
+			Source:          SourceLwM2M,
+			DeviceTypeToken: b.DeviceTypeToken,
+			AutoRegister:    b.AutoRegister,
+		},
+	}
 }
 
 // Mount registers the /rd and /rd/{regId} handlers on the transport router.
@@ -65,10 +95,31 @@ func (h *Handlers) handleRd(w mux.ResponseWriter, r *mux.Message) {
 	log.Debug().Str("ep", q["ep"]).Str("externalId", binding.ExternalId).Str("tenant", binding.Tenant).
 		Msg("LwM2M Register received (ep is logged, not trusted for tenancy).")
 
-	result, regId := h.reg.Register(r.Context(), identity, binding, parseLifetime(q))
+	// The registration payload is the CoRE-Link object list the observations are selected from
+	// (L2b). Read it before responding; an unreadable body yields no telemetry (presence still
+	// registers), never a refused registration. Reading it does not affect the response write.
+	body, err := r.ReadBody()
+	if err != nil {
+		body = nil
+		log.Debug().Err(err).Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).
+			Msg("Could not read the LwM2M registration body; registering presence with no observations.")
+	}
+
+	result, regId, epoch, establish := h.reg.Register(r.Context(), identity, binding, parseLifetime(q))
 	switch result {
 	case RegisterOK:
 		h.respondCreated(w, regId)
+		if h.obs != nil && establish {
+			// Select the telemetry object instances and (re)establish observations on THIS conn,
+			// off the handler goroutine — go-coap writes the 2.01 only after the handler returns,
+			// so a synchronous Observe would GET a client still awaiting its 2.01.
+			paths, overflow := decode.Observations(body, h.allow)
+			if overflow > 0 {
+				incr(h.metrics.ObservationOverflow, overflow)
+			}
+			conn := w.Conn()
+			go h.obs.Establish(identity, epoch, conn, targetFrom(binding), paths)
+		}
 	case RegisterUnknownDevice:
 		h.respond(w, codes.Forbidden) // 4.03 — device not provisioned, this credential does not auto-register
 	default: // RegisterUnavailable
@@ -78,7 +129,7 @@ func (h *Handlers) handleRd(w mux.ResponseWriter, r *mux.Message) {
 
 // handleRdItem serves POST /rd/{regId} (Update) and DELETE /rd/{regId} (Deregister).
 func (h *Handlers) handleRdItem(w mux.ResponseWriter, r *mux.Message) {
-	identity, _, ok := h.authorize(w, r)
+	identity, binding, ok := h.authorize(w, r)
 	if !ok {
 		return
 	}
@@ -94,6 +145,13 @@ func (h *Handlers) handleRdItem(w mux.ResponseWriter, r *mux.Message) {
 	case codes.POST:
 		if h.reg.Update(identity, regId, parseLifetime(parseQueries(r))) == UpdateOK {
 			h.respond(w, codes.Changed) // 2.04
+			if h.obs != nil {
+				// Heal observations onto THIS conn: a queue-mode sleeper that re-handshaked on a
+				// new conn Updates rather than re-Registers, so its observations must follow it
+				// (a cheap no-op when they already ride this live conn). Off the handler goroutine.
+				conn := w.Conn()
+				go h.obs.Reestablish(identity, conn, targetFrom(binding))
+			}
 			return
 		}
 		h.respond(w, codes.NotFound) // 4.04 — unknown OR foreign regId (uniform, no existence leak)

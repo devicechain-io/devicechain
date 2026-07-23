@@ -19,6 +19,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
 	"github.com/devicechain-io/dc-lwm2m-ingest/config"
+	"github.com/devicechain-io/dc-lwm2m-ingest/decode"
 	"github.com/devicechain-io/dc-lwm2m-ingest/server"
 )
 
@@ -42,7 +43,10 @@ func startIntegration(t *testing.T) (string, *fakeResolver, *fakeEmitter) {
 	res := &fakeResolver{token: "tok-1", outcome: adapter.ResolveCreated}
 	em := &fakeEmitter{}
 	reg := New(res, em, adapter.NewEpochSource(nil), Metrics{}, Options{})
-	handlers := NewHandlers(reg, itBindings, Metrics{})
+	// Presence-only over the wire (nil observer): this test pins the CoAP code mapping and the
+	// D1 tenancy recovery; the Observe/Notify telemetry lifecycle is exercised by the observe
+	// package's own tests against a fake conn.
+	handlers := NewHandlers(reg, itBindings, Metrics{}, nil, decode.DefaultObjectAllowlist)
 
 	srv, err := server.New(server.Config{
 		Addr:        "127.0.0.1:0",

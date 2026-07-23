@@ -93,6 +93,7 @@ type Metrics struct {
 	Dropped             prometheus.Counter // unknown device (auto-register off) OR emit budget exhausted
 	AuthErrors          prometheus.Counter // identity un-recoverable / no binding (handler layer)
 	BadRequests         prometheus.Counter // malformed /rd request (handler layer)
+	ObservationOverflow prometheus.Counter // telemetry instances a registration declared beyond the per-registration observe cap (L2b)
 }
 
 // entry is one live registration. It is mutated only under Registry.mu.
@@ -129,6 +130,12 @@ type Registry struct {
 	grace          time.Duration
 	replaceBackoff time.Duration
 
+	// onSessionEnd, when set, is invoked (outside r.mu) whenever a session ends by
+	// Deregister or lifetime-expiry — the seam the observe manager (L2b) hooks to cancel
+	// that session's observations. It is NOT fired on an install-replace (a reboot without
+	// deregister): there the new session's Establish already supersedes the old observations.
+	onSessionEnd func(identity string, epoch uint64)
+
 	now      func() time.Time
 	newRegID func() string
 }
@@ -141,8 +148,12 @@ type Options struct {
 	DefaultLife    time.Duration
 	Grace          time.Duration
 	ReplaceBackoff time.Duration
-	Now            func() time.Time // nil ⇒ time.Now
-	NewRegID       func() string    // nil ⇒ crypto-random hex
+	// OnSessionEnd, when set, is called (outside the table lock) when a session ends by
+	// Deregister or lifetime-expiry. The service wires it to the observe manager's Cancel so
+	// a device's observations are torn down when its presence ends (L2b).
+	OnSessionEnd func(identity string, epoch uint64)
+	Now          func() time.Time // nil ⇒ time.Now
+	NewRegID     func() string    // nil ⇒ crypto-random hex
 }
 
 // New builds a Registry over the shared adapter's device resolver + presence emitter and
@@ -182,6 +193,7 @@ func New(resolver deviceResolver, emitter presenceEmitter, epoch *adapter.EpochS
 		defaultLife:    opts.DefaultLife,
 		grace:          opts.Grace,
 		replaceBackoff: opts.ReplaceBackoff,
+		onSessionEnd:   opts.OnSessionEnd,
 		now:            opts.Now,
 		newRegID:       opts.NewRegID,
 	}
@@ -221,14 +233,21 @@ const (
 //     projection → the device stuck CONNECTED forever.
 //   - A too-fast re-Register (younger than replaceBackoff) is collapsed: the existing
 //     location is returned with no new session minted (R5 storm control).
-func (r *Registry) Register(ctx context.Context, identity string, binding config.PskBinding, ltSeconds int) (RegisterResult, string) {
+//
+// It returns the CoAP-mappable result, the registration location, the SESSION EPOCH, and
+// whether the caller should (re)establish observations for this conn (L2b). establish is true
+// for a real install AND a storm-collapse (the device may have rebooted onto a new conn within
+// the backoff), and false for a compare-on-epoch loss (the winning Register establishes) or any
+// non-OK result — so the handler only spends Observe I/O when it can win the manager's CAS.
+func (r *Registry) Register(ctx context.Context, identity string, binding config.PskBinding, ltSeconds int) (result RegisterResult, regId string, epoch uint64, establish bool) {
 	// Storm control: if a live registration for this identity is younger than the replace
 	// backoff, return it unchanged rather than minting another session (R5). It keeps the
 	// existing lifetime — a re-Register this fast is treated as a duplicate, not a genuine
 	// lifetime change; the backoff (seconds) is far below the minimum lifetime, so a real
-	// lifetime update is never lost this way.
-	if regId, ok := r.recentRegistration(identity); ok {
-		return RegisterOK, regId
+	// lifetime update is never lost this way. establish=true: a reboot within the backoff may
+	// be on a NEW conn, and the observe manager's equal-epoch CAS re-establishes on it.
+	if rid, ep, ok := r.recentRegistration(identity); ok {
+		return RegisterOK, rid, ep, true
 	}
 
 	policy := adapter.IngestPolicy{
@@ -238,13 +257,13 @@ func (r *Registry) Register(ctx context.Context, identity string, binding config
 	}
 	token, outcome, err := r.resolver.Resolve(ctx, binding.Tenant, binding.ExternalId, policy)
 	if err != nil {
-		return RegisterUnavailable, "" // retryable — the device re-Registers
+		return RegisterUnavailable, "", 0, false // retryable — the device re-Registers
 	}
 	if outcome == adapter.ResolveDropped {
 		incr(r.metrics.Dropped, 1)
 		log.Debug().Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).
 			Msg("Refusing LwM2M registration for an unregistered device (auto-registration is off for this credential).")
-		return RegisterUnknownDevice, ""
+		return RegisterUnknownDevice, "", 0, false
 	}
 	if outcome == adapter.ResolveCreated {
 		incr(r.metrics.DevicesRegistered, 1)
@@ -253,7 +272,7 @@ func (r *Registry) Register(ctx context.Context, identity string, binding config
 	}
 
 	lifetime := r.clampLifetime(ltSeconds)
-	epoch := r.epoch.Next()
+	epoch = r.epoch.Next()
 	now := r.now()
 	ev := adapter.PresenceEvent{
 		ExternalId: binding.ExternalId,
@@ -268,19 +287,21 @@ func (r *Registry) Register(ctx context.Context, identity string, binding config
 		incr(r.metrics.Dropped, 1)
 		log.Warn().Err(err).Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).
 			Msg("Could not emit CONNECTED for an LwM2M registration; refusing it so the device re-Registers.")
-		return RegisterUnavailable, ""
+		return RegisterUnavailable, "", 0, false
 	}
 	incr(r.metrics.PresenceEmitted, 1)
 
-	regId := r.newRegID()
+	regId = r.newRegID()
 	r.mu.Lock()
 	// Compare-on-epoch (R1): if a concurrent Register already installed an equal-or-higher
 	// epoch, it won — discard this one. Our just-emitted CONNECTED@epoch is stale but
-	// harmless (the projection holds the higher session). Hand back the winner's location.
+	// harmless (the projection holds the higher session). Hand back the winner's location and
+	// its epoch; establish=false because the winning Register establishes the observations
+	// (our conn is superseded — observing on it would only lose the manager's CAS).
 	if cur := r.byIdentity[identity]; cur != nil && cur.epoch >= epoch {
-		winner := cur.regId
+		winner, winnerEpoch := cur.regId, cur.epoch
 		r.mu.Unlock()
-		return RegisterOK, winner
+		return RegisterOK, winner, winnerEpoch, false
 	}
 	r.installLocked(regId, identity, binding, token, epoch, now, lifetime)
 	r.mu.Unlock()
@@ -288,7 +309,7 @@ func (r *Registry) Register(ctx context.Context, identity string, binding config
 	incr(r.metrics.Registrations, 1)
 	log.Info().Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).Str("regId", regId).
 		Uint64("session", epoch).Dur("lifetime", lifetime).Msg("LwM2M device registered (CONNECTED).")
-	return RegisterOK, regId
+	return RegisterOK, regId, epoch, true
 }
 
 // installLocked replaces any existing registration for the identity with a fresh one and
@@ -317,17 +338,17 @@ func (r *Registry) installLocked(regId, identity string, binding config.PskBindi
 // recentRegistration reports the live location for an identity whose registration is
 // younger than the replace backoff (R5 storm control), so a rapid re-Register is
 // idempotent rather than a fresh session.
-func (r *Registry) recentRegistration(identity string) (string, bool) {
+func (r *Registry) recentRegistration(identity string) (string, uint64, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cur := r.byIdentity[identity]
 	if cur == nil {
-		return "", false
+		return "", 0, false
 	}
 	if r.now().Sub(cur.connectedAt) < r.replaceBackoff {
-		return cur.regId, true
+		return cur.regId, cur.epoch, true
 	}
-	return "", false
+	return "", 0, false
 }
 
 // UpdateResult is the outcome of an Update the handler maps to a CoAP reply.
@@ -382,6 +403,10 @@ func (r *Registry) Deregister(identity, regId string) bool {
 	r.mu.Unlock()
 
 	incr(r.metrics.Deregistrations, 1)
+	// Cancel the session's observations FIRST (fast: it tombstones + detaches under a leaf lock
+	// and cancels asynchronously), then emit DISCONNECTED — so a device decided gone stops
+	// producing telemetry before, not after, the (retrying) presence write.
+	r.fireSessionEnd(identity, epoch)
 	r.emitDisconnect(tenant, token, externalId, epoch, r.disconnectStamp(connectedAt), "deregister", registerAttempts)
 	return true
 }
@@ -401,15 +426,29 @@ func (r *Registry) onExpiry(regId string, gen uint64) {
 		return // stale fire: already removed, or refreshed by an Update
 	}
 	r.removeLocked(e)
-	tenant, token, externalId, epoch, connectedAt := e.tenant, e.token, e.externalId, e.epoch, e.connectedAt
+	identity, tenant, token, externalId, epoch, connectedAt := e.identity, e.tenant, e.token, e.externalId, e.epoch, e.connectedAt
 	r.mu.Unlock()
 
 	incr(r.metrics.Expiries, 1)
 	log.Info().Str("tenant", tenant).Str("externalId", externalId).Uint64("session", epoch).
 		Msg("LwM2M registration lifetime lapsed with no update (DISCONNECTED).")
+	// Cancel the lapsed session's observations FIRST — the generous DISCONNECT retry budget
+	// below can span many seconds, and a queue-mode sleeper's conn may still be alive; tearing
+	// its observations down before the emit stops it ingesting telemetry for a device we have
+	// already decided is gone.
+	r.fireSessionEnd(identity, epoch)
 	// This runs on a dedicated timer goroutine (it blocks no request), so it gets the
 	// GENEROUS retry budget: it is the only actor that re-drives this DISCONNECT.
 	r.emitDisconnect(tenant, token, externalId, epoch, r.disconnectStamp(connectedAt), "lifetime-expiry", disconnectAttempts)
+}
+
+// fireSessionEnd invokes the OnSessionEnd hook (if set) so the observe manager cancels the
+// ended session's observations. Called outside r.mu on Deregister/expiry — never on an
+// install-replace, where the successor's Establish already supersedes the old observations.
+func (r *Registry) fireSessionEnd(identity string, epoch uint64) {
+	if r.onSessionEnd != nil {
+		r.onSessionEnd(identity, epoch)
+	}
 }
 
 // removeLocked drops an entry from both indexes, stops its timer, and updates the gauge.
