@@ -20,6 +20,7 @@ use (
 	./backend/services/event-management
 	./backend/services/event-processing
 	./backend/services/event-sources
+	./backend/services/lwm2m-ingest
 	./backend/services/mcp
 	./backend/services/notification-management
 	./backend/services/outbound-connectors

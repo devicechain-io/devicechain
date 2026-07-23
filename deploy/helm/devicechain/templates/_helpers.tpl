@@ -17,7 +17,7 @@ encoded — pub/sub (ADR-003) makes an absent peer safe, so only hard edges gate
   {{- $standard := list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" "notification-management" "event-processing" -}}
   {{- $profiles := dict
       "default"     $standard
-      "full"        (concat $standard (list "ai-inference" "outbound-connectors" "mcp" "sparkplug-ingest"))
+      "full"        (concat $standard (list "ai-inference" "outbound-connectors" "mcp" "sparkplug-ingest" "lwm2m-ingest"))
       "telemetry"   (list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management")
       "ingest-only" (list "user-management" "device-management" "event-sources")
   -}}
@@ -33,8 +33,9 @@ encoded — pub/sub (ADR-003) makes an absent peer safe, so only hard edges gate
       "outbound-connectors"  (list "event-processing")
       "mcp"                  (list "device-management")
       "sparkplug-ingest"     (list "device-management")
+      "lwm2m-ingest"         (list "device-management")
   -}}
-  {{- $known := list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" "notification-management" "event-processing" "outbound-connectors" "mcp" "ai-inference" "sparkplug-ingest" -}}
+  {{- $known := list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" "notification-management" "event-processing" "outbound-connectors" "mcp" "ai-inference" "sparkplug-ingest" "lwm2m-ingest" -}}
 
   {{- $profile := .Values.profile | default "" -}}
   {{- $explicit := .Values.enabledFunctionalAreas | default (list) -}}
