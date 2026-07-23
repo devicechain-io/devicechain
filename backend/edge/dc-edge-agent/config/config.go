@@ -62,7 +62,39 @@ type LocalConfiguration struct {
 	// durable local spool). Required: an in-memory spool would lose everything on
 	// an agent restart during an outage (spec decision 3).
 	StoreDir string `json:"storeDir"`
+
+	// SpoolMaxBytes bounds the durable capture spool's on-disk size (E3). A
+	// multi-day WAN outage must not grow the store until the disk fills — beyond
+	// this budget the spool behaves as a ring buffer (drop OLDEST un-forwarded
+	// event to admit the newest; see the agent's DiscardOld rationale), and every
+	// drop is counted and surfaced. Defaults to 1 GiB; must be >= SpoolMinBytes so
+	// a JetStream file stream can actually function rather than thrash.
+	SpoolMaxBytes int64 `json:"spoolMaxBytes"`
+
+	// MetricsPort is the loopback (127.0.0.1) port for the Prometheus /metrics and
+	// /healthz endpoints (E3). Bound to loopback ONLY — the MQTT gateway stays the
+	// sole LAN-exposed surface (F5). A pointer so an omitted key (nil) takes the
+	// default while an explicit 0 disables the endpoint entirely; any other value is
+	// the port. Defaults to 9090.
+	MetricsPort *int `json:"metricsPort"`
 }
+
+// SpoolMinBytes is the floor for Local.SpoolMaxBytes: below a working minimum a
+// JetStream file stream cannot hold a useful backlog and would thrash its blocks.
+const SpoolMinBytes int64 = 16 * 1024 * 1024 // 16 MiB
+
+// DefaultSpoolMaxBytes is the authoritative default spool budget (1 GiB) for an
+// edge box sized to ride a multi-hour-to-day outage of modest telemetry volume.
+const DefaultSpoolMaxBytes int64 = 1024 * 1024 * 1024 // 1 GiB
+
+// MaxSpoolBytes is the ceiling for Local.SpoolMaxBytes (1 TiB): far above any real edge
+// box, but bounded so the agent's JetStreamMaxStore pin (spoolMaxBytes + headroom) cannot
+// overflow int64 into a negative value that would silently reopen the disk-derived
+// admission crash-loop the pin exists to close.
+const MaxSpoolBytes int64 = 1024 * 1024 * 1024 * 1024 // 1 TiB
+
+// DefaultMetricsPort is the default loopback Prometheus/health port.
+const DefaultMetricsPort = 9090
 
 // UplinkConfiguration is the cloud-facing side: a paho MQTT client publishing the
 // golden path to the cloud broker, authenticated per ADR-025. The credential is
@@ -98,6 +130,15 @@ func (c *Configuration) ApplyDefaults() {
 	if c.Local.ListenPort == 0 {
 		c.Local.ListenPort = 1883
 	}
+	if c.Local.SpoolMaxBytes == 0 {
+		c.Local.SpoolMaxBytes = DefaultSpoolMaxBytes
+	}
+	if c.Local.MetricsPort == nil {
+		// Omitted (nil) takes the default port; an explicit 0 is preserved and means
+		// "disabled" (handled by the agent, which skips binding the endpoint).
+		def := DefaultMetricsPort
+		c.Local.MetricsPort = &def
+	}
 	if c.Uplink.ConnectTimeoutSeconds == 0 {
 		c.Uplink.ConnectTimeoutSeconds = 30
 	}
@@ -128,6 +169,18 @@ func (c *Configuration) Validate() error {
 	}
 	if c.Local.ListenPort < 1 || c.Local.ListenPort > 65535 {
 		return fmt.Errorf("local.listenPort %d out of range 1..65535", c.Local.ListenPort)
+	}
+	if c.Local.SpoolMaxBytes < SpoolMinBytes {
+		return fmt.Errorf("local.spoolMaxBytes %d is below the %d-byte floor a JetStream file spool needs to function",
+			c.Local.SpoolMaxBytes, SpoolMinBytes)
+	}
+	if c.Local.SpoolMaxBytes > MaxSpoolBytes {
+		return fmt.Errorf("local.spoolMaxBytes %d exceeds the %d-byte ceiling", c.Local.SpoolMaxBytes, MaxSpoolBytes)
+	}
+	// MetricsPort is a pointer defaulted non-nil by ApplyDefaults; guard nil so a caller
+	// that validates without defaulting gets an error, never a panic (fail-closed, not crash).
+	if p := c.Local.MetricsPort; p != nil && *p != 0 && (*p < 1 || *p > 65535) {
+		return fmt.Errorf("local.metricsPort %d out of range (0 to disable, else 1..65535)", *p)
 	}
 	if c.Uplink.BrokerURL == "" {
 		return fmt.Errorf("uplink.brokerUrl is required")

@@ -41,6 +41,27 @@ func TestApplyDefaultsFillsZeroValues(t *testing.T) {
 	if c.Uplink.BackoffMinSeconds != 1 || c.Uplink.BackoffMaxSeconds != 60 {
 		t.Errorf("backoff defaults = %d/%d, want 1/60", c.Uplink.BackoffMinSeconds, c.Uplink.BackoffMaxSeconds)
 	}
+	if c.Local.SpoolMaxBytes != DefaultSpoolMaxBytes {
+		t.Errorf("spoolMaxBytes default = %d, want %d", c.Local.SpoolMaxBytes, DefaultSpoolMaxBytes)
+	}
+	if c.Local.MetricsPort == nil || *c.Local.MetricsPort != DefaultMetricsPort {
+		t.Errorf("metricsPort default = %v, want %d", c.Local.MetricsPort, DefaultMetricsPort)
+	}
+}
+
+// An explicit metricsPort of 0 (disabled) must be PRESERVED, not defaulted back to 9090 —
+// that is the whole reason the field is a pointer (nil = omitted → default; 0 = off).
+func TestMetricsPortZeroIsPreserved(t *testing.T) {
+	c := validConfig()
+	zero := 0
+	c.Local.MetricsPort = &zero
+	c.ApplyDefaults()
+	if c.Local.MetricsPort == nil || *c.Local.MetricsPort != 0 {
+		t.Errorf("explicit metricsPort 0 was overwritten to %v; a pointer must let 0 mean disabled", c.Local.MetricsPort)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("metricsPort 0 (disabled) should validate: %v", err)
+	}
 }
 
 func TestApplyDefaultsDoesNotOverrideSetValues(t *testing.T) {
@@ -85,6 +106,9 @@ func TestValidateRejects(t *testing.T) {
 			c.Uplink.BackoffMinSeconds = 30
 			c.Uplink.BackoffMaxSeconds = 5
 		}, "must be >= backoffMinSeconds"},
+		{"spoolMaxBytes below floor", func(c *Configuration) { c.Local.SpoolMaxBytes = 1024 }, "below the"},
+		{"metricsPort out of range", func(c *Configuration) { p := 70000; c.Local.MetricsPort = &p }, "out of range"},
+		{"metricsPort negative", func(c *Configuration) { p := -1; c.Local.MetricsPort = &p }, "out of range"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
