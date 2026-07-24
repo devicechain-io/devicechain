@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -43,6 +44,7 @@ function renderPreview(template: string, index: number): string {
 // 1-based index, optionally zero-padded); the external-id template also understands
 // {random} for a per-device random business id.
 export function DeviceBulkForm({ onDone }: { onDone: (message: string) => void }) {
+  const { t } = useTranslation('devices');
   const { data: types } = useQuery(
     () => listDeviceTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results),
     [],
@@ -64,27 +66,23 @@ export function DeviceBulkForm({ onDone }: { onDone: (message: string) => void }
   // Client-side validity, mirroring the server's expandBulkDeviceRequest, so the
   // submit button and inline hints react before a round-trip.
   const validation = useMemo(() => {
-    if (!deviceTypeToken) return 'Choose a device type.';
-    if (!Number.isInteger(count) || count < 1) return 'Count must be at least 1.';
-    if (count > MAX_COUNT) return `Count cannot exceed ${MAX_COUNT} per bulk create.`;
-    if (!Number.isInteger(startIndex) || startIndex < 1) return 'Start index must be a whole number ≥ 1.';
-    if (!tokenTemplate.trim()) return 'Token template is required.';
-    if (tokenTemplate.includes('{random}'))
-      return 'Token template must not use {random}; use {n} or {n:0Wd} so tokens are reproducible.';
-    if (!INDEX_PLACEHOLDER.test(tokenTemplate))
-      return 'Token template must contain an {n} placeholder so every device gets a distinct token.';
-    if (nameTemplate.includes('{random}'))
-      return 'Name template must not use {random}; it is only meaningful for external IDs.';
+    if (!deviceTypeToken) return t('chooseDeviceType');
+    if (!Number.isInteger(count) || count < 1) return t('countMustBeAtLeastOne');
+    if (count > MAX_COUNT) return t('countExceedsMax', { max: MAX_COUNT });
+    if (!Number.isInteger(startIndex) || startIndex < 1) return t('startIndexMustBePositive');
+    if (!tokenTemplate.trim()) return t('tokenTemplateRequired');
+    if (tokenTemplate.includes('{random}')) return t('tokenTemplateNoRandom');
+    if (!INDEX_PLACEHOLDER.test(tokenTemplate)) return t('tokenTemplateNeedsIndex');
+    if (nameTemplate.includes('{random}')) return t('nameTemplateNoRandom');
     const firstToken = renderPreview(tokenTemplate, startIndex);
-    if (!TOKEN_GRAMMAR.test(firstToken))
-      return `Rendered token “${firstToken}” is not valid: use letters, digits, hyphens and underscores.`;
+    if (!TOKEN_GRAMMAR.test(firstToken)) return t('renderedTokenInvalid', { token: firstToken });
     // A fixed external id would collide across the batch (external ids are unique
     // per tenant), so require it to vary when creating more than one device.
     const ext = externalIdTemplate.trim();
     if (ext && count > 1 && !INDEX_PLACEHOLDER.test(ext) && !ext.includes('{random}'))
-      return 'External ID template must include {n}, {n:0Wd} or {random} when creating more than one device.';
+      return t('externalIdTemplateNeedsVariation');
     return null;
-  }, [deviceTypeToken, count, startIndex, tokenTemplate, nameTemplate, externalIdTemplate]);
+  }, [deviceTypeToken, count, startIndex, tokenTemplate, nameTemplate, externalIdTemplate, t]);
 
   // A few sample rows (first three, an ellipsis, then the last) so the operator
   // sees exactly what the templates will produce before committing.
@@ -121,7 +119,7 @@ export function DeviceBulkForm({ onDone }: { onDone: (message: string) => void }
         nameTemplate: nameTemplate.trim() || undefined,
         externalIdTemplate: externalIdTemplate.trim() || undefined,
       });
-      onDone(`Created ${created.length} device${created.length === 1 ? '' : 's'}`);
+      onDone(t('createdDevicesToast', { count: created.length }));
     } catch (err) {
       setFormError(errMessage(err));
     } finally {
@@ -133,17 +131,17 @@ export function DeviceBulkForm({ onDone }: { onDone: (message: string) => void }
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
 
-      <FormField label="Device type" htmlFor="b-type" description="Every device in the batch gets this type.">
+      <FormField label={t('deviceTypeLabel')} htmlFor="b-type" description={t('deviceTypeBatchHint')}>
         <Combobox
           options={typeOptions}
           value={deviceTypeToken}
           onChange={setDeviceTypeToken}
-          placeholder="Select a device type…"
+          placeholder={t('selectDeviceTypePlaceholder')}
         />
       </FormField>
 
       <div className="grid grid-cols-2 gap-3">
-        <FormField label="Count" htmlFor="b-count" description={`1 – ${MAX_COUNT}`}>
+        <FormField label={t('countLabel')} htmlFor="b-count" description={`1 – ${MAX_COUNT}`}>
           <Input
             id="b-count"
             type="number"
@@ -153,7 +151,7 @@ export function DeviceBulkForm({ onDone }: { onDone: (message: string) => void }
             onChange={(e) => setCount(Math.floor(Number(e.target.value)))}
           />
         </FormField>
-        <FormField label="Start index" htmlFor="b-start" description="First value of {n}.">
+        <FormField label={t('startIndexLabel')} htmlFor="b-start" description={t('startIndexHint')}>
           <Input
             id="b-start"
             type="number"
@@ -165,38 +163,38 @@ export function DeviceBulkForm({ onDone }: { onDone: (message: string) => void }
       </div>
 
       <FormField
-        label="Token template"
+        label={t('tokenTemplateLabel')}
         htmlFor="b-token"
-        description="Must include {n} or {n:0Wd} (zero-padded to width W)."
+        description={t('tokenTemplateHint')}
       >
         <Input
           id="b-token"
           value={tokenTemplate}
           onChange={(e) => setTokenTemplate(e.target.value)}
-          placeholder="device-{n:04d}"
+          placeholder={t('tokenTemplatePlaceholder')}
           className="font-mono"
         />
       </FormField>
 
-      <FormField label="Name template" htmlFor="b-name" description="Optional. Supports {n} / {n:0Wd}.">
+      <FormField label={t('nameTemplateLabel')} htmlFor="b-name" description={t('nameTemplateHint')}>
         <Input
           id="b-name"
           value={nameTemplate}
           onChange={(e) => setNameTemplate(e.target.value)}
-          placeholder="Device {n}"
+          placeholder={t('nameTemplatePlaceholder')}
         />
       </FormField>
 
       <FormField
-        label="External ID template"
+        label={t('externalIdTemplateLabel')}
         htmlFor="b-ext"
-        description="Optional business id. Supports {n}, {n:0Wd}, and {random} for a random id per device."
+        description={t('externalIdTemplateHint')}
       >
         <Input
           id="b-ext"
           value={externalIdTemplate}
           onChange={(e) => setExternalIdTemplate(e.target.value)}
-          placeholder="VIN-{random}"
+          placeholder={t('externalIdTemplatePlaceholder')}
           className="font-mono"
         />
       </FormField>
@@ -204,7 +202,7 @@ export function DeviceBulkForm({ onDone }: { onDone: (message: string) => void }
       {preview.length > 0 && (
         <div className="rounded-md border border-border bg-muted/30 p-3">
           <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Preview
+            {t('previewLabel')}
           </div>
           <div className="space-y-1 font-mono text-xs">
             {preview.map((row, i) =>
@@ -226,7 +224,7 @@ export function DeviceBulkForm({ onDone }: { onDone: (message: string) => void }
 
       <div className="flex items-center gap-3">
         <Button onClick={submit} loading={busy} disabled={busy || validation !== null}>
-          Create {count > 0 ? count : ''} device{count === 1 ? '' : 's'}
+          {t('createDeviceButton', { count: count > 0 ? count : 0 })}
         </Button>
         {validation && !formError && <span className="text-sm text-muted-foreground">{validation}</span>}
       </div>

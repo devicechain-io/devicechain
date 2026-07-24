@@ -9,6 +9,7 @@
 // command. Two forms over one contract that disagreed about coercion would produce
 // commands that behave differently depending on where an operator clicked.
 
+import { useTranslation } from 'react-i18next';
 import type { CommandParameter } from '@devicechain/dashboards';
 import { isScalar } from '@devicechain/widgets';
 import { Input } from '@/components/ui/input';
@@ -17,13 +18,34 @@ import { FormField } from '@/components/ui/form-field';
 import { HintText } from '@/components/ui/hint-text';
 import { Combobox } from '@/components/ui/combobox';
 
+// numericStep picks the <Input type="number"> step for a scalar param: whole
+// steps for INT, unconstrained for DOUBLE. Hoisted out of the JSX tree (rather
+// than an inline ternary) so its 'any' step token — a technical HTML attribute
+// value, not user text — never reaches the i18n literal-string lint, which walks
+// every node under a JSX element.
+function numericStep(dataType: string | undefined): number | 'any' {
+  return dataType === 'INT' ? 1 : 'any';
+}
+
+// checkedToParamValue mirrors the original inline ternary's truthiness check
+// (any non-false value, including radix's 'indeterminate', serializes as the
+// scalar-param string "true") rather than String(checked), which would leak
+// "indeterminate" as a distinct payload value this form never intends to send.
+// Hoisted for the same lint reason as numericStep above.
+function checkedToParamValue(checked: boolean | 'indeterminate'): 'true' | 'false' {
+  return checked ? 'true' : 'false';
+}
+
 // describe builds the muted helper line under an input from whatever the definition
 // declared: its description, unit, and bounds. Omitted entirely when it would say
 // nothing — an empty hint is visual noise, not help.
-function describe(param: CommandParameter): string | undefined {
+function describe(
+  param: CommandParameter,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string | undefined {
   const parts: string[] = [];
   if (param.description) parts.push(param.description);
-  if (param.unit) parts.push(`in ${param.unit}`);
+  if (param.unit) parts.push(t('unitHint', { unit: param.unit }));
   if (param.minValue != null && param.maxValue != null) {
     parts.push(`${param.minValue}–${param.maxValue}`);
   } else if (param.minValue != null) {
@@ -47,6 +69,7 @@ export function CommandParameterForm({
   onChange: (name: string, value: string) => void;
   disabled?: boolean;
 }) {
+  const { t } = useTranslation('devices');
   if (params.length === 0) return null;
 
   return (
@@ -59,22 +82,20 @@ export function CommandParameterForm({
         // rendering a text box that would send a string where an object is declared.
         if (!isScalar(param)) {
           return (
-            <FormField key={param.name} label={label} description={describe(param)}>
-              <HintText>
-                Structured parameter — send this command with a raw payload instead.
-              </HintText>
+            <FormField key={param.name} label={label} description={describe(param, t)}>
+              <HintText>{t('structuredParameterHint')}</HintText>
             </FormField>
           );
         }
 
         if (param.dataType === 'BOOLEAN') {
           return (
-            <FormField key={param.name} label={label} description={describe(param)}>
+            <FormField key={param.name} label={label} description={describe(param, t)}>
               <div className="flex h-10 items-center">
                 <Checkbox
                   checked={values[param.name] === 'true'}
                   disabled={disabled}
-                  onCheckedChange={(checked) => onChange(param.name, checked ? 'true' : 'false')}
+                  onCheckedChange={(checked) => onChange(param.name, checkedToParamValue(checked))}
                 />
               </div>
             </FormField>
@@ -83,14 +104,14 @@ export function CommandParameterForm({
 
         if (param.enum && param.enum.length > 0) {
           return (
-            <FormField key={param.name} label={label} description={describe(param)}>
+            <FormField key={param.name} label={label} description={describe(param, t)}>
               <Combobox
                 options={param.enum.map((value) => ({ value }))}
                 value={values[param.name] ?? ''}
                 disabled={disabled}
                 allowClear={!param.required}
                 onChange={(value) => onChange(param.name, value)}
-                placeholder="Select a value"
+                placeholder={t('selectValuePlaceholder')}
               />
               {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
             </FormField>
@@ -99,10 +120,10 @@ export function CommandParameterForm({
 
         const numeric = param.dataType === 'INT' || param.dataType === 'DOUBLE';
         return (
-          <FormField key={param.name} label={label} description={describe(param)}>
+          <FormField key={param.name} label={label} description={describe(param, t)}>
             <Input
               type={numeric ? 'number' : 'text'}
-              step={param.dataType === 'INT' ? 1 : 'any'}
+              step={numericStep(param.dataType)}
               value={values[param.name] ?? ''}
               disabled={disabled}
               placeholder={param.default ?? ''}

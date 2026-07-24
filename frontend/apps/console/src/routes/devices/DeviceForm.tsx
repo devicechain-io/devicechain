@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { useTranslation } from 'react-i18next';
 import { RegistryInstanceForm } from '@/components/registry';
 import {
   listDeviceTypes,
@@ -20,13 +21,14 @@ export function DeviceForm({
   device?: Device;
   onDone: (message: string) => void;
 }) {
+  const { t } = useTranslation('devices');
   return (
     <RegistryInstanceForm
       entity={device}
-      singular="device"
-      typeLabel="Device type"
-      typeSingular="device type"
-      tokenPlaceholder="sensor-001"
+      singular={t('deviceSingular')}
+      typeLabel={t('deviceTypeLabel')}
+      typeSingular={t('deviceTypeSingular')}
+      tokenPlaceholder={t('tokenPlaceholder')}
       checkAvailability={(token) => getDevice(token).then((d) => d === null)}
       defaultTypeToken={device?.deviceType.token}
       loadTypes={() => listDeviceTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}

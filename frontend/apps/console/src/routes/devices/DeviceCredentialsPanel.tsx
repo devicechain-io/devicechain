@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Copy, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -44,6 +45,7 @@ const needsSecret = (t: CredentialType) => t === 'MQTT_BASIC';
 // with a copy button. Loads independently: without device:read the query errors
 // and this panel degrades to an ErrorState rather than breaking the page.
 export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string }) {
+  const { t } = useTranslation('devices');
   const { toast } = useToast();
   const confirm = useConfirm();
   const [type, setType] = useState<CredentialType>('ACCESS_TOKEN');
@@ -73,13 +75,13 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
 
   const copy = (text: string) => {
     void navigator.clipboard?.writeText(text);
-    toast('Copied to clipboard');
+    toast(t('copiedToClipboard'));
   };
 
   const add = async () => {
     const id = credentialId.trim();
     if (!id) {
-      toast('A credential id is required', 'error');
+      toast(t('credentialIdRequired'), 'error');
       return;
     }
     setSubmitting(true);
@@ -92,7 +94,7 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
         credentialValue: needsSecret(type) ? secret : undefined,
         enabled: true,
       });
-      toast('Credential added');
+      toast(t('credentialAdded'));
       setCredentialId('');
       setSecret('');
       rearm(); // re-arm the autofill guard for the now-empty fields
@@ -107,16 +109,16 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
   const remove = async (c: DeviceCredential) => {
     if (
       !(await confirm({
-        title: 'Delete credential',
-        description: `Delete this ${c.credentialType} credential? The device can no longer authenticate with it.`,
-        confirmLabel: 'Delete',
+        title: t('deleteCredentialTitle'),
+        description: t('deleteCredentialConfirm', { credentialType: c.credentialType }),
+        confirmLabel: t('delete'),
       }))
     ) {
       return;
     }
     try {
       await deleteDeviceCredential(c.token);
-      toast('Credential deleted');
+      toast(t('credentialDeleted'));
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -131,9 +133,9 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
           on top; the fields below it are specific to the chosen type. */}
       <div className="space-y-4 rounded-lg border border-border bg-muted/40 p-4">
         <div className="max-w-52">
-          <FormField label="Type" description="How the device proves its identity.">
+          <FormField label={t('credentialTypeLabel')} description={t('credentialTypeHint')}>
             <Combobox
-              options={CREDENTIAL_TYPES.map((t) => ({ value: t }))}
+              options={CREDENTIAL_TYPES.map((ct) => ({ value: ct }))}
               value={type}
               onChange={(v) => changeType(v as CredentialType)}
               allowClear={false}
@@ -142,16 +144,16 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
         </div>
 
         {type === 'ACCESS_TOKEN' && (
-          <FormField label="Access token" description="The token the device presents. Generate one or paste your own.">
+          <FormField label={t('accessTokenLabel')} description={t('accessTokenHint')}>
             <div className="flex gap-2">
               <Input
                 value={credentialId}
                 onChange={(e) => setCredentialId(e.target.value)}
-                placeholder="token…"
+                placeholder={t('tokenValuePlaceholder')}
                 {...noAutofill}
               />
               <Button type="button" variant="outline" onClick={() => setCredentialId(crypto.randomUUID())}>
-                Generate
+                {t('generate')}
               </Button>
             </div>
           </FormField>
@@ -159,15 +161,15 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
 
         {type === 'MQTT_BASIC' && (
           <div className="space-y-4">
-            <FormField label="Username">
+            <FormField label={t('usernameLabel')}>
               <Input
                 value={credentialId}
                 onChange={(e) => setCredentialId(e.target.value)}
-                placeholder="device-user"
+                placeholder={t('usernamePlaceholder')}
                 {...noAutofill}
               />
             </FormField>
-            <FormField label="Password" description="Stored write-only; never shown again after this.">
+            <FormField label={t('passwordLabel')} description={t('passwordHint')}>
               <Input
                 type="password"
                 value={secret}
@@ -180,35 +182,35 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
         )}
 
         {type === 'X509_CERTIFICATE' && (
-          <FormField label="Certificate id" description="The certificate subject or fingerprint the device presents.">
+          <FormField label={t('certificateIdLabel')} description={t('certificateIdHint')}>
             <Input
               value={credentialId}
               onChange={(e) => setCredentialId(e.target.value)}
-              placeholder="CN=device…"
+              placeholder={t('certificateIdPlaceholder')}
               {...noAutofill}
             />
           </FormField>
         )}
 
         <Button onClick={add} loading={submitting} disabled={submitting}>
-          <Plus size={14} /> Add credential
+          <Plus size={14} /> {t('addCredential')}
         </Button>
       </div>
 
       {/* Existing credentials. */}
       {loading ? (
-        <LoadingState description="Loading credentials…" />
+        <LoadingState description={t('loadingCredentials')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : credentials.length === 0 ? (
-        <EmptyState description="No credentials registered for this device yet." />
+        <EmptyState description={t('noCredentials')} />
       ) : (
         <DataTable>
           <DataTableHead>
-            <DataTableHeaderCell>Type</DataTableHeaderCell>
-            <DataTableHeaderCell>Id</DataTableHeaderCell>
-            <DataTableHeaderCell>Enabled</DataTableHeaderCell>
-            <DataTableHeaderCell>Expires</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('common:colType')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('idColumn')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('enabledColumn')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('expiresColumn')}</DataTableHeaderCell>
             <DataTableHeaderCell>&nbsp;</DataTableHeaderCell>
           </DataTableHead>
           <DataTableBody>
@@ -224,7 +226,7 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                       type="button"
                       onClick={() => copy(c.credentialId)}
                       className="text-muted-foreground transition-colors hover:text-foreground"
-                      aria-label="Copy id"
+                      aria-label={t('copyIdAriaLabel')}
                     >
                       <Copy size={13} />
                     </button>
@@ -232,10 +234,10 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                 </DataTableCell>
                 <DataTableCell>
                   {c.enabled ? (
-                    <Badge variant="success">enabled</Badge>
+                    <Badge variant="success">{t('enabledBadge')}</Badge>
                   ) : (
                     <Badge variant="outline" className="text-muted-foreground">
-                      disabled
+                      {t('disabledBadge')}
                     </Badge>
                   )}
                 </DataTableCell>
@@ -244,7 +246,7 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                 </DataTableCell>
                 <DataTableCell className="text-right">
                   <Button variant="outline" size="sm" onClick={() => remove(c)}>
-                    <Trash2 size={13} /> Delete
+                    <Trash2 size={13} /> {t('delete')}
                   </Button>
                 </DataTableCell>
               </DataTableRow>

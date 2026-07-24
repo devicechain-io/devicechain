@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Send } from 'lucide-react';
 import type { CommandParameter } from '@devicechain/dashboards';
 import {
@@ -68,6 +69,7 @@ function statusVariant(status: string): 'success' | 'destructive' | 'outline' | 
 // the page: if the tenant's role lacks command:read the query errors and this
 // panel shows an ErrorState rather than breaking the page.
 export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
+  const { t } = useTranslation('devices');
   const { toast } = useToast();
   const [name, setName] = useState('');
   const [payload, setPayload] = useState('');
@@ -130,7 +132,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
     // operator picked from the published vocabulary.
     const trimmed = constrained ? selectedKey : name.trim();
     if (!trimmed) {
-      toast(constrained ? 'Select a command' : 'Command name is required', 'error');
+      toast(constrained ? t('selectCommand') : t('commandNameRequired'), 'error');
       return;
     }
 
@@ -139,7 +141,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
       const errors = validateParams(params, paramValues);
       if (Object.keys(errors).length > 0) {
         setParamErrors(errors);
-        toast('Fix the highlighted parameters', 'error');
+        toast(t('fixHighlightedParameters'), 'error');
         return;
       }
       setParamErrors({});
@@ -156,7 +158,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
         name: trimmed,
         payload: body,
       });
-      toast(`Command “${trimmed}” issued`);
+      toast(t('commandIssued', { name: trimmed }));
       setName('');
       setPayload('');
       setSelectedKey('');
@@ -172,7 +174,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
   const cancel = async (command: Command) => {
     try {
       await cancelCommand(command.token);
-      toast(`Command “${command.name}” cancelled`);
+      toast(t('commandCancelled', { name: command.name }));
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -186,12 +188,12 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
       {/* Issue form. A command:write failure surfaces as a toast on submit. */}
       <div className="space-y-3">
         {vocabularyLoading ? (
-          <HintText>Loading this device's commands…</HintText>
+          <HintText>{t('loadingDeviceCommands')}</HintText>
         ) : constrained ? (
           <>
             <FormField
-              label="Command"
-              description="The commands this device's published profile declares."
+              label={t('commandLabel')}
+              description={t('commandHint')}
             >
               <Combobox
                 options={publishedCommands.map((c) => ({
@@ -201,19 +203,19 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                 }))}
                 value={selectedKey}
                 onChange={setSelectedKey}
-                placeholder="Select a command"
+                placeholder={t('selectCommand')}
               />
             </FormField>
             {selected && needsRawPayload ? (
               <FormField
-                label="Payload"
-                description="This command declares a structured parameter, so its payload is entered as JSON."
+                label={t('payloadLabel')}
+                description={t('payloadStructuredHint')}
               >
                 <textarea
                   className="min-h-[4rem] w-full rounded-md border border-input bg-background px-3 py-1.5 font-mono text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                   rows={3}
                   value={payload}
-                  placeholder='{"schedule": {"hour": 2}}'
+                  placeholder={t('payloadStructuredPlaceholder')}
                   onChange={(e) => setPayload(e.target.value)}
                 />
               </FormField>
@@ -233,12 +235,12 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
           <>
             <div className="grid gap-3 sm:grid-cols-2">
               <FormField
-                label="Command name"
-                description="The command the device knows how to handle."
+                label={t('commandNameLabel')}
+                description={t('commandNameHint')}
               >
                 <Input
                   value={name}
-                  placeholder="e.g. reboot"
+                  placeholder={t('commandNamePlaceholder')}
                   onChange={(e) => setName(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') issue();
@@ -246,29 +248,22 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                 />
               </FormField>
               <FormField
-                label="Payload"
-                description="Optional. Sent to the device verbatim (e.g. JSON)."
+                label={t('payloadLabel')}
+                description={t('payloadFreeformHint')}
               >
                 <textarea
                   className="min-h-[2.25rem] w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                   rows={1}
                   value={payload}
-                  placeholder='{"delaySeconds": 5}'
+                  placeholder={t('payloadFreeformPlaceholder')}
                   onChange={(e) => setPayload(e.target.value)}
                 />
               </FormField>
             </div>
             {vocabularyKnown ? (
-              <HintText>
-                This device's profile declares no commands, so any command name is
-                accepted. Declare commands on its device profile — and publish it — to get
-                a typed form here.
-              </HintText>
+              <HintText>{t('noCommandsDeclaredHint')}</HintText>
             ) : (
-              <HintText>
-                Couldn't read this device's commands, so its declared vocabulary isn't
-                shown. Anything you send is still checked by the server.
-              </HintText>
+              <HintText>{t('vocabularyUnavailableHint')}</HintText>
             )}
           </>
         )}
@@ -277,24 +272,24 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
           loading={submitting}
           disabled={submitting || vocabularyLoading || (constrained && !selectedKey)}
         >
-          <Send size={14} /> Issue command
+          <Send size={14} /> {t('issueCommand')}
         </Button>
       </div>
 
       {/* History / audit trail. */}
       {loading ? (
-        <LoadingState description="Loading commands…" />
+        <LoadingState description={t('loadingCommands')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : commands.length === 0 ? (
-        <EmptyState description="No commands have been issued to this device yet." />
+        <EmptyState description={t('noCommandsIssued')} />
       ) : (
         <DataTable>
           <DataTableHead>
-            <DataTableHeaderCell>Queued</DataTableHeaderCell>
-            <DataTableHeaderCell>Name</DataTableHeaderCell>
-            <DataTableHeaderCell>Status</DataTableHeaderCell>
-            <DataTableHeaderCell>Result</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('queuedColumn')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('common:colName')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('common:colStatus')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('resultColumn')}</DataTableHeaderCell>
             <DataTableHeaderCell>&nbsp;</DataTableHeaderCell>
           </DataTableHead>
           <DataTableBody>
@@ -313,7 +308,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                 <DataTableCell className="text-right">
                   {!TERMINAL.has(command.status) && (
                     <Button variant="outline" size="sm" onClick={() => cancel(command)}>
-                      Cancel
+                      {t('cancel')}
                     </Button>
                   )}
                 </DataTableCell>
