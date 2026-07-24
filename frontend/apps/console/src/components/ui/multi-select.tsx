@@ -8,6 +8,7 @@
 // authorities — instead of a space-separated free-text Input.
 
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, ChevronsUpDown, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -30,12 +31,18 @@ export function MultiSelect({
   value,
   onChange,
   id,
-  placeholder = 'Select…',
-  searchPlaceholder = 'Search…',
-  emptyMessage = 'No matches.',
+  // Defaults resolve to the shared `common` strings below (a default parameter
+  // can't call the hook), so an unset placeholder is localized, not English.
+  placeholder,
+  searchPlaceholder,
+  emptyMessage,
   disabled,
   className,
 }: MultiSelectProps) {
+  const { t } = useTranslation('common');
+  const placeholderText = placeholder ?? t('select');
+  const searchPlaceholderText = searchPlaceholder ?? t('search');
+  const emptyMessageText = emptyMessage ?? t('noMatches');
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
 
@@ -66,7 +73,7 @@ export function MultiSelect({
         )}
       >
         {value.length === 0 ? (
-          <span className="text-muted-foreground">{placeholder}</span>
+          <span className="text-muted-foreground">{placeholderText}</span>
         ) : (
           <span className="flex flex-wrap gap-1">
             {value.map((v) => (
@@ -80,7 +87,7 @@ export function MultiSelect({
                     size={12}
                     className="opacity-60 hover:opacity-100"
                     role="button"
-                    aria-label={`Remove ${labelOf(v)}`}
+                    aria-label={t('removeItem', { label: labelOf(v) })}
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -99,12 +106,12 @@ export function MultiSelect({
           autoFocus
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={searchPlaceholder}
+          placeholder={searchPlaceholderText}
           className="w-full border-b border-border bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground"
         />
         <div className="max-h-60 overflow-auto p-1">
           {filtered.length === 0 ? (
-            <p className="px-2 py-3 text-center text-sm text-muted-foreground">{emptyMessage}</p>
+            <p className="px-2 py-3 text-center text-sm text-muted-foreground">{emptyMessageText}</p>
           ) : (
             filtered.map((o) => {
               const isSelected = selectedSet.has(o.value);

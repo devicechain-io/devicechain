@@ -47,6 +47,12 @@ const EXTRA_ATTRS = [
   // from ('connector', 'role', 'metric-definition', …) — a technical
   // discriminant, never user text.
   'entityType',
+  // shadcn structural / API props, never display text:
+  //  - data-sidebar / data-mobile: the sidebar primitive's internal state hooks
+  //    (styling + query selectors), not rendered anywhere.
+  //  - theme: Sonner's 'dark' | 'light' | 'system' enum.
+  //  - fallback: ColorField's default hex swatch ('#1f2937'), a color code.
+  'data-sidebar', 'data-mobile', 'theme', 'fallback',
 ];
 const EXTRA_CALLEES = ['cn', 'cva', 'clsx', 'cx', 'twMerge', 'tv', 'navigate', 'act'];
 const EXTRA_WORDS = ['^DeviceChain$'];

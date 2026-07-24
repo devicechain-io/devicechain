@@ -2,7 +2,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+
+// The default fallback UI. Extracted into a function component so it can use the
+// translation hook — the ErrorBoundary itself is a class (getDerivedStateFromError
+// has no hook-based equivalent) and cannot call hooks.
+function DefaultErrorFallback({ reset }: { reset: () => void }) {
+  const { t } = useTranslation('common');
+  return (
+    <div className="flex h-full min-h-64 flex-col items-center justify-center gap-4 p-8 text-center">
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-foreground">{t('errorBoundaryTitle')}</p>
+        <p className="text-xs text-muted-foreground">{t('errorBoundaryBody')}</p>
+      </div>
+      <div className="flex gap-2">
+        <Button variant="outline" size="sm" onClick={reset}>
+          {t('tryAgain')}
+        </Button>
+        <Button size="sm" onClick={() => window.location.reload()}>
+          {t('reload')}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -35,24 +59,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     const { error } = this.state;
     if (error) {
       if (this.props.fallback) return this.props.fallback(error, this.reset);
-      return (
-        <div className="flex h-full min-h-64 flex-col items-center justify-center gap-4 p-8 text-center">
-          <div className="space-y-1">
-            <p className="text-sm font-medium text-foreground">Something went wrong on this page.</p>
-            <p className="text-xs text-muted-foreground">
-              The rest of the console is still available.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={this.reset}>
-              Try again
-            </Button>
-            <Button size="sm" onClick={() => window.location.reload()}>
-              Reload
-            </Button>
-          </div>
-        </div>
-      );
+      return <DefaultErrorFallback reset={this.reset} />;
     }
     return this.props.children;
   }
