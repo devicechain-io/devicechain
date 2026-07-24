@@ -1,0 +1,3 @@
+# Maven build output — never committed; the CI workflow builds the jar fresh.
+target/
+dependency-reduced-pom.xml

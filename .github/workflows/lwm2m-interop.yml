@@ -1,0 +1,84 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# LwM2M interop conformance suite (edge-validation slice 1). Drives lwm2m-ingest with a REAL Eclipse
+# Leshan client (an independent Java/Californium/Scandium LwM2M stack) over DTLS-PSK, so the handshake,
+# CoAP framing, CoRE-Link registration, and SenML decoding are exercised by code DeviceChain did not
+# write — closing the encoder/decoder-cancel blind spot the pion-driven unit tests cannot.
+#
+# ADVISORY, NOT a per-PR gate and NOT (yet) release-blocking: it runs weekly + on demand. An external
+# Java client is too slow/flaky to gate every PR, and the harness earns the release gate after N green
+# weeks before being wired into release.yml. The Go side is tag-gated (`//go:build interop`), so normal
+# `go test ./...` never compiles it and never needs a JVM.
+name: lwm2m-interop
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC — the "periodic" leg
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lwm2m-interop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  interop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+
+      # Leshan 2.0.0-M15 is Java-8 bytecode, so Temurin 11 (matching the repo toolchain) builds and
+      # runs it. `cache: maven` caches ~/.m2 keyed on the pom so the weekly run does not re-download
+      # Leshan/Californium every time.
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+          cache: maven
+          cache-dependency-path: backend/services/lwm2m-ingest/interop/leshan-client/pom.xml
+
+      - name: Build the Leshan interop client
+        run: mvn -q -B -f backend/services/lwm2m-ingest/interop/leshan-client/pom.xml package
+
+      - name: Run the interop suite
+        run: |
+          set -o pipefail
+          export DC_LESHAN_JAR="$GITHUB_WORKSPACE/backend/services/lwm2m-ingest/interop/leshan-client/target/leshan-interop-client.jar"
+          test -f "$DC_LESHAN_JAR" || { echo "::error::interop client jar not built at $DC_LESHAN_JAR"; exit 1; }
+          go test -tags interop -run TestLeshanInterop -v -timeout 300s \
+            ./backend/services/lwm2m-ingest/registry/ 2>&1 | tee "$RUNNER_TEMP/interop.txt"
+          # Anti-vacuous floor: a `-run` that matches zero tests exits 0 with a warning. GitHub already
+          # sets CI, so a missing jar would t.Fatal; this catches a renamed/mis-tagged test instead.
+          if grep -q "no tests to run" "$RUNNER_TEMP/interop.txt"; then
+            echo "::error::TestLeshanInterop matched zero tests — the suite ran nothing (vacuous)"; exit 1
+          fi
+          grep -qE "^--- PASS: TestLeshanInterop \(" "$RUNNER_TEMP/interop.txt" || {
+            echo "::error::TestLeshanInterop did not report PASS"; exit 1; }
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### LwM2M Leshan interop"
+            echo '```'
+            grep -E "^(=== RUN|--- (PASS|FAIL)|PASS|FAIL|ok)" "$RUNNER_TEMP/interop.txt" 2>/dev/null || echo "no test output captured"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwm2m-interop-log
+          path: ${{ runner.temp }}/interop.txt
+          if-no-files-found: ignore

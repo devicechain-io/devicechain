@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  The Eclipse Leshan interop client for the LwM2M conformance suite (edge-validation slice 1). This
+  is an INDEPENDENT LwM2M implementation (Eclipse Leshan / Californium / Scandium) driven against
+  DeviceChain's lwm2m-ingest server so the DTLS-PSK handshake, CoAP framing, CoRE-Link registration,
+  and SenML encoding are exercised by code DeviceChain did not write. Pinned to Leshan 2.0.0-M15: it
+  registers as LwM2M 1.1 and answers SenML-JSON observes (Leshan 1.x hardcodes LwM2m.VERSION="1.0" and
+  so 4.06s every SenML observe — presence only), yet is still Java-8 bytecode so it builds and runs on
+  the Java 11 CI + local toolchain. RFC-9146 CID interop is a tracked fast-follow. NOT part of the Go
+  workspace or any Go build.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.devicechain.interop</groupId>
+  <artifactId>leshan-interop-client</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+  <name>DeviceChain LwM2M Leshan Interop Client</name>
+
+  <properties>
+    <maven.compiler.source>11</maven.compiler.source>
+    <maven.compiler.target>11</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <leshan.version>2.0.0-M15</leshan.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.eclipse.leshan</groupId>
+      <artifactId>leshan-client-cf</artifactId>
+      <version>${leshan.version}</version>
+    </dependency>
+    <!-- Logs to stderr (see src/main/resources/simplelogger.properties), keeping stdout a clean
+         JSON correlation channel for the Go harness. -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>1.7.36</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>leshan-interop-client</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.4.1</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>io.devicechain.interop.Main</mainClass>
+                </transformer>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
