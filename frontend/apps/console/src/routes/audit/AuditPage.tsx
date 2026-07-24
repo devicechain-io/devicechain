@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { formatTime } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value';
@@ -24,6 +25,23 @@ import {
 } from '@/components/ui/data-table';
 
 const pageSize = 25;
+
+// Options carry a `labelKey` into the `audit` catalog (ADR-066), resolved with t()
+// inside the component; the `value` is the wire enum and never localized.
+const OPERATION_OPTIONS = [
+  { value: 'create', labelKey: 'opCreate' },
+  { value: 'update', labelKey: 'opUpdate' },
+  { value: 'delete', labelKey: 'opDelete' },
+];
+
+// Wire enum → catalog key for the row badge, so the badge is localized to match
+// the filter above it. An unexpected operation falls back to its raw value rather
+// than a blank cell.
+const OPERATION_LABEL_KEY: Record<string, string> = {
+  create: 'opCreate',
+  update: 'opUpdate',
+  delete: 'opDelete',
+};
 
 // Operation → badge colour. create/update/delete are the mutation operations
 // this service records; anything else (should not occur here) falls back neutral.
@@ -49,6 +67,7 @@ function shortTable(tableName: string | null | undefined): string {
 }
 
 export default function AuditPage() {
+  const { t } = useTranslation('audit');
   const [pageNumber, setPageNumber] = useState(1);
   const [operation, setOperation] = useState('');
   const [actorInput, setActorInput] = useState('');
@@ -71,27 +90,24 @@ export default function AuditPage() {
   );
 
   const results: AuditEvent[] = data?.results ?? [];
+  const operationOptions = OPERATION_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }));
 
   return (
     <PageShell
-      title="Audit"
-      description="Every change to this tenant's registry, recorded by construction."
+      title={t('title')}
+      description={t('description')}
       action={
         <div className="flex items-center gap-2">
           <Combobox
             className="h-9 w-44"
-            placeholder="All operations"
+            placeholder={t('allOperationsPlaceholder')}
             value={operation}
             onChange={setOperation}
-            options={[
-              { value: 'create', label: 'Create' },
-              { value: 'update', label: 'Update' },
-              { value: 'delete', label: 'Delete' },
-            ]}
+            options={operationOptions}
           />
           <Input
             className="h-9 w-48"
-            placeholder="Filter by actor…"
+            placeholder={t('actorPlaceholder')}
             value={actorInput}
             onChange={(e) => setActorInput(e.target.value)}
           />
@@ -99,21 +115,21 @@ export default function AuditPage() {
       }
     >
       {loading ? (
-        <LoadingState description="Loading audit log…" />
+        <LoadingState description={t('loading')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : results.length === 0 ? (
-        <EmptyState description="No audit records match." />
+        <EmptyState description={t('empty')} />
       ) : (
         <>
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>Time</DataTableHeaderCell>
-              <DataTableHeaderCell>Actor</DataTableHeaderCell>
-              <DataTableHeaderCell>Operation</DataTableHeaderCell>
-              <DataTableHeaderCell>Table</DataTableHeaderCell>
-              <DataTableHeaderCell>Target</DataTableHeaderCell>
-              <DataTableHeaderCell>Rows</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colTime')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colActor')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colOperation')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colTable')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colTarget')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colRows')}</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
               {results.map((row) => (
@@ -125,7 +141,9 @@ export default function AuditPage() {
                     {row.actor || '—'}
                   </DataTableCell>
                   <DataTableCell>
-                    <Badge variant={operationVariant(row.operation)}>{row.operation}</Badge>
+                    <Badge variant={operationVariant(row.operation)}>
+                      {OPERATION_LABEL_KEY[row.operation] ? t(OPERATION_LABEL_KEY[row.operation]) : row.operation}
+                    </Badge>
                   </DataTableCell>
                   <DataTableCell className="text-foreground">{shortTable(row.tableName)}</DataTableCell>
                   <DataTableCell className="font-mono text-xs text-muted-foreground">
