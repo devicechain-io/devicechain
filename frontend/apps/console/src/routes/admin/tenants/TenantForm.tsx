@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -43,6 +44,7 @@ export function TenantForm({
   // Effective tab, the caller passes it in.
   aiModelsPanel?: ReactNode;
 }) {
+  const { t } = useTranslation('tenants');
   const editing = tenant != null;
   const [token, setToken] = useState(tenant?.token ?? '');
   const [name, setName] = useState(tenant?.name ?? '');
@@ -94,10 +96,10 @@ export function TenantForm({
       };
       if (editing) {
         await updateTenant(tenant.token, { name: name.trim() || undefined, tierToken, config: cfg, ...gov });
-        onDone(`Tenant “${tenant.token}” updated`);
+        onDone(t('tenantUpdatedToast', { token: tenant.token }));
       } else {
         await createTenant({ token: token.trim(), name: name.trim() || undefined, tierToken, config: cfg, ...gov });
-        onDone(`Tenant “${token.trim()}” created`);
+        onDone(t('tenantCreatedToast', { token: token.trim() }));
       }
     } catch (err) {
       setFormError(errMessage(err));
@@ -111,9 +113,9 @@ export function TenantForm({
   const identityFields = (
     <>
       <FormField
-        label="Token"
+        label={t('common:colToken')}
         htmlFor="t-token"
-        description={editing ? 'The tenant id used across the platform; it cannot change.' : undefined}
+        description={editing ? t('tokenDescription') : undefined}
       >
         {editing ? (
           <Input id="t-token" value={token} disabled />
@@ -124,25 +126,21 @@ export function TenantForm({
             value={token}
             onChange={setToken}
             seed={name}
-            placeholder="acme"
+            placeholder={t('tokenPlaceholder')}
           />
         )}
       </FormField>
-      <FormField label="Name" htmlFor="t-name">
-        <Input id="t-name" value={name} placeholder="Acme Corp" onChange={(e) => setName(e.target.value)} />
+      <FormField label={t('common:colName')} htmlFor="t-name">
+        <Input id="t-name" value={name} placeholder={t('namePlaceholder')} onChange={(e) => setName(e.target.value)} />
       </FormField>
       {/* The tenant's packaging tier (ADR-065) — one fact that several subsystems
           read: how the tenant is treated under contention, which AI models it may
           choose from, its default ceilings. Changing it takes effect within a
           minute and needs no restart. */}
       <FormField
-        label="Tier"
+        label={t('colTier')}
         htmlFor="t-tier"
-        description={
-          editing
-            ? 'The packaging this tenant is held to. Changing it applies within a minute.'
-            : 'The packaging this tenant is held to. Sets its defaults across the platform; individual settings below can still override them.'
-        }
+        description={editing ? t('tierDescriptionEdit') : t('tierDescriptionCreate')}
       >
         {/* Tiers arrive in the operator's display order; the picker preserves it.
             A tier's name is the label, its token the muted second line — the same
@@ -151,23 +149,25 @@ export function TenantForm({
           id="t-tier"
           value={tierToken}
           onChange={setTierToken}
-          placeholder="Select a tier…"
-          searchPlaceholder="Search tiers…"
-          emptyMessage="No tiers."
+          placeholder={t('selectTierPlaceholder')}
+          searchPlaceholder={t('searchTiersPlaceholder')}
+          emptyMessage={t('tiersEmptyOption')}
           allowClear={false}
-          options={(tiers ?? []).map((t) => ({
-            value: t.token,
-            label: t.name || t.token,
-            description: t.name ? t.token : undefined,
+          options={(tiers ?? []).map((tr) => ({
+            value: tr.token,
+            label: tr.name || tr.token,
+            description: tr.name ? tr.token : undefined,
           }))}
         />
-        {tiersError && <p className="mt-1 text-sm text-destructive">Tiers unavailable ({tiersError}).</p>}
+        {tiersError && (
+          <p className="mt-1 text-sm text-destructive">{t('tiersUnavailable', { error: tiersError })}</p>
+        )}
       </FormField>
-      <FormField label="Config (JSON)" htmlFor="t-config" description="Optional freeform JSON object.">
+      <FormField label={t('configLabel')} htmlFor="t-config" description={t('configDescription')}>
         <Textarea
           id="t-config"
           value={config}
-          placeholder='{ "region": "us-east" }'
+          placeholder={t('configPlaceholder')}
           onChange={(e) => setConfig(e.target.value)}
         />
       </FormField>
@@ -178,71 +178,55 @@ export function TenantForm({
   const settingsFields = (
     <>
       <div className="grid grid-cols-2 gap-2">
-        <FormField
-          label="Ingest rate (events/sec)"
-          htmlFor="t-ingest-rate"
-          description="Leave blank to inherit the platform default."
-        >
+        <FormField label={t('ingestRateLabel')} htmlFor="t-ingest-rate" description={t('inheritDefaultHint')}>
           <Input
             id="t-ingest-rate"
             type="number"
             min="0"
             value={ingestRate}
-            placeholder="default"
+            placeholder={t('defaultPlaceholder')}
             onChange={(e) => setIngestRate(e.target.value)}
           />
         </FormField>
-        <FormField
-          label="Ingest burst"
-          htmlFor="t-ingest-burst"
-          description="Leave blank to inherit the platform default."
-        >
+        <FormField label={t('ingestBurstLabel')} htmlFor="t-ingest-burst" description={t('inheritDefaultHint')}>
           <Input
             id="t-ingest-burst"
             type="number"
             min="0"
             step="1"
             value={ingestBurst}
-            placeholder="default"
+            placeholder={t('defaultPlaceholder')}
             onChange={(e) => setIngestBurst(e.target.value)}
           />
         </FormField>
         <FormField
-          label="Outbound rate (calls/sec)"
+          label={t('outboundRateLabel')}
           htmlFor="t-outbound-rate"
-          description="Rate ceiling for outbound connector actions. Leave blank to inherit the platform default."
+          description={t('outboundRateDescription')}
         >
           <Input
             id="t-outbound-rate"
             type="number"
             min="0"
             value={outboundRate}
-            placeholder="default"
+            placeholder={t('defaultPlaceholder')}
             onChange={(e) => setOutboundRate(e.target.value)}
           />
         </FormField>
-        <FormField
-          label="Outbound burst"
-          htmlFor="t-outbound-burst"
-          description="Leave blank to inherit the platform default."
-        >
+        <FormField label={t('outboundBurstLabel')} htmlFor="t-outbound-burst" description={t('inheritDefaultHint')}>
           <Input
             id="t-outbound-burst"
             type="number"
             min="0"
             step="1"
             value={outboundBurst}
-            placeholder="default"
+            placeholder={t('defaultPlaceholder')}
             onChange={(e) => setOutboundBurst(e.target.value)}
           />
         </FormField>
       </div>
       {/* The per-tenant external-model consent gate (ADR-056 §6). */}
-      <FormField
-        label="External AI routing"
-        htmlFor="t-ai-external"
-        description="Consent to send this tenant's rule descriptions to an external AI model for drafting. Off by default; rule drafting stays unavailable for the tenant until this is granted."
-      >
+      <FormField label={t('aiRoutingLabel')} htmlFor="t-ai-external" description={t('aiRoutingDescription')}>
         <label className="flex items-center gap-2 text-sm">
           <input
             id="t-ai-external"
@@ -251,36 +235,28 @@ export function TenantForm({
             onChange={(e) => setAiExternalEnabled(e.target.checked)}
             className="h-4 w-4 rounded border-input"
           />
-          <span>Allow external AI routing for NL→rule authoring</span>
+          <span>{t('aiRoutingCheckboxLabel')}</span>
         </label>
       </FormField>
       <div className="grid grid-cols-2 gap-2">
-        <FormField
-          label="AI drafting rate (requests/min)"
-          htmlFor="t-ai-rate"
-          description="Rate ceiling for AI inference requests. Leave blank to inherit the platform default."
-        >
+        <FormField label={t('aiRateLabel')} htmlFor="t-ai-rate" description={t('aiRateDescription')}>
           <Input
             id="t-ai-rate"
             type="number"
             min="0"
             value={aiRate}
-            placeholder="default"
+            placeholder={t('defaultPlaceholder')}
             onChange={(e) => setAiRate(e.target.value)}
           />
         </FormField>
-        <FormField
-          label="AI drafting burst"
-          htmlFor="t-ai-burst"
-          description="Leave blank to inherit the platform default."
-        >
+        <FormField label={t('aiBurstLabel')} htmlFor="t-ai-burst" description={t('inheritDefaultHint')}>
           <Input
             id="t-ai-burst"
             type="number"
             min="0"
             step="1"
             value={aiBurst}
-            placeholder="default"
+            placeholder={t('defaultPlaceholder')}
             onChange={(e) => setAiBurst(e.target.value)}
           />
         </FormField>
@@ -294,7 +270,7 @@ export function TenantForm({
   const saveButton = (
     <div className="flex gap-2">
       <Button onClick={submit} loading={busy} disabled={busy || !tierToken || (!editing && !token.trim())}>
-        {editing ? 'Save changes' : 'Create tenant'}
+        {editing ? t('common:saveChanges') : t('createTenantButton')}
       </Button>
     </div>
   );
@@ -323,10 +299,10 @@ export function TenantForm({
       {errorBanner}
       <Tabs defaultValue="basic">
         <TabsList>
-          <TabsTrigger value="basic">Basic</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
-          <TabsTrigger value="effective">Effective settings</TabsTrigger>
-          {aiModelsPanel !== undefined && <TabsTrigger value="ai-models">AI models</TabsTrigger>}
+          <TabsTrigger value="basic">{t('tabBasic')}</TabsTrigger>
+          <TabsTrigger value="settings">{t('tabSettings')}</TabsTrigger>
+          <TabsTrigger value="effective">{t('tabEffective')}</TabsTrigger>
+          {aiModelsPanel !== undefined && <TabsTrigger value="ai-models">{t('tabAiModels')}</TabsTrigger>}
         </TabsList>
         <TabsContent value="basic">
           <SectionPanel>
@@ -346,13 +322,13 @@ export function TenantForm({
         </TabsContent>
         {/* Read-only view of what the Settings tab resolves to, folded onto the tier. */}
         <TabsContent value="effective">
-          <SectionPanel title="Effective settings">{effectiveSettingsPanel}</SectionPanel>
+          <SectionPanel title={t('tabEffective')}>{effectiveSettingsPanel}</SectionPanel>
         </TabsContent>
         {/* The operator's per-function AI model assignment (ADR-065 S5c′) — its own
             mutations, not part of the tenant save. */}
         {aiModelsPanel !== undefined && (
           <TabsContent value="ai-models">
-            <SectionPanel title="AI models">{aiModelsPanel}</SectionPanel>
+            <SectionPanel title={t('tabAiModels')}>{aiModelsPanel}</SectionPanel>
           </TabsContent>
         )}
       </Tabs>

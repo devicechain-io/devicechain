@@ -9,6 +9,15 @@
   "colType": "Tipo",
   "colUpdated": "Actualizado",
   "colValue": "Valor",
+  "cancel": "Cancelar",
+  "delete": "Eliminar",
+  "dimensionAiDrafting": "Borrador de IA",
+  "dimensionBurstLabel": "Ráfaga de {{label}}",
+  "dimensionIngest": "Ingesta",
+  "dimensionOutbound": "Salida",
+  "dimensionRateLabel": "Tasa de {{label}} ({{unit}})",
+  "disabled": "Deshabilitado",
+  "enabled": "Habilitado",
   "familyArea": "Área",
   "familyAsset": "Activo",
   "familyCustomer": "Cliente",
@@ -19,5 +28,9 @@
   "paginationPrev": "Anterior",
   "paginationShowing_one": "Mostrando {{start}}–{{end}} de {{count}} resultado",
   "paginationShowing_other": "Mostrando {{start}}–{{end}} de {{count}} resultados",
-  "tenantFallback": "Inquilino"
+  "saveChanges": "Guardar cambios",
+  "tenantFallback": "Inquilino",
+  "unitCallsPerSec": "llamadas/s",
+  "unitEventsPerSec": "eventos/s",
+  "unitRequestsPerMin": "solicitudes/min"
 }

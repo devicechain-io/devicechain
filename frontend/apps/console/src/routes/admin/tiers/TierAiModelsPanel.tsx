@@ -15,6 +15,7 @@
 // whose own detail page you are on is, by definition, known).
 
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -38,6 +39,7 @@ export function TierAiModelsPanel({
   name: string | null;
   tenantCount: number;
 }) {
+  const { t } = useTranslation('tiers');
   const [version, reload] = useReload();
   const { busy, toggleGrant, chooseDefault } = useTierPackaging(reload);
 
@@ -66,22 +68,22 @@ export function TierAiModelsPanel({
   const truncated =
     providerResults != null && (providerResults.pagination.totalRecords ?? 0) > providers.length;
 
-  if (loading) return <LoadingState description="Loading models…" />;
+  if (loading) return <LoadingState description={t('loadingModels')} />;
   if (error) return <ErrorState description={error} />;
   if (providers.length === 0) {
-    return (
-      <EmptyState description="No AI providers registered yet. Register one on the AI providers screen before packaging it onto a tier." />
-    );
+    return <EmptyState description={t('noProvidersRegistered')} />;
   }
-  if (!tier) return <ErrorState description="Could not load this tier’s AI models." />;
+  if (!tier) return <ErrorState description={t('aiModelsLoadError')} />;
 
   return (
     <div className="space-y-6">
       {truncated && (
         <SectionPanel>
           <p className="text-sm text-muted-foreground">
-            Showing the first {providers.length} of {providerResults?.pagination.totalRecords}{' '}
-            providers. This tier may grant a provider that is not listed here.
+            {t('truncatedProvidersNotice', {
+              count: providers.length,
+              total: providerResults?.pagination.totalRecords,
+            })}
           </p>
         </SectionPanel>
       )}

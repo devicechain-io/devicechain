@@ -9,6 +9,15 @@
   "colType": "Type",
   "colUpdated": "Updated",
   "colValue": "Value",
+  "cancel": "Cancel",
+  "delete": "Delete",
+  "dimensionAiDrafting": "AI drafting",
+  "dimensionBurstLabel": "{{label}} burst",
+  "dimensionIngest": "Ingest",
+  "dimensionOutbound": "Outbound",
+  "dimensionRateLabel": "{{label}} rate ({{unit}})",
+  "disabled": "Disabled",
+  "enabled": "Enabled",
   "familyArea": "Area",
   "familyAsset": "Asset",
   "familyCustomer": "Customer",
@@ -19,5 +28,9 @@
   "paginationPrev": "Prev",
   "paginationShowing_one": "Showing {{start}}–{{end}} of {{count}} result",
   "paginationShowing_other": "Showing {{start}}–{{end}} of {{count}} results",
-  "tenantFallback": "Tenant"
+  "saveChanges": "Save changes",
+  "tenantFallback": "Tenant",
+  "unitCallsPerSec": "calls/sec",
+  "unitEventsPerSec": "events/sec",
+  "unitRequestsPerMin": "requests/min"
 }

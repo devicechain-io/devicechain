@@ -12,6 +12,8 @@ import {
   type TextareaHTMLAttributes,
 } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { ArrowLeft, CheckCircle2, CircleSlash } from 'lucide-react';
 import { GraphQLRequestError } from '@devicechain/client';
 import { Badge } from '@/components/ui/badge';
@@ -79,15 +81,42 @@ export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTex
 // StatusBadge renders an enabled/disabled pill — green with a check when enabled,
 // muted with a slash when not, so status reads at a glance from colour + icon.
 export function StatusBadge({ enabled }: { enabled: boolean }) {
+  const { t } = useTranslation('common');
   return enabled ? (
     <Badge variant="success" className="gap-1">
-      <CheckCircle2 size={12} /> Enabled
+      <CheckCircle2 size={12} /> {t('enabled')}
     </Badge>
   ) : (
     <Badge variant="outline" className="gap-1 text-muted-foreground">
-      <CircleSlash size={12} /> Disabled
+      <CircleSlash size={12} /> {t('disabled')}
     </Badge>
   );
+}
+
+// Governance rate-limit dimensions (ADR-065) arrive from the server with English
+// display labels + units (the core governance fetcher hardcodes "Ingest",
+// "events/sec", …). The stable `dimension.name` token ('ingest'/'outbound'/
+// 'ai-inference') is the localization key: map it to a `common` catalog entry so
+// the tenant/tier governance screens render a localized label rather than
+// interpolating raw English into an otherwise-translated template. An unknown
+// dimension falls back to the server-supplied string (visible, not blank).
+const DIMENSION_LABEL_KEY: Record<string, string> = {
+  ingest: 'common:dimensionIngest',
+  outbound: 'common:dimensionOutbound',
+  'ai-inference': 'common:dimensionAiDrafting',
+};
+const DIMENSION_UNIT_KEY: Record<string, string> = {
+  ingest: 'common:unitEventsPerSec',
+  outbound: 'common:unitCallsPerSec',
+  'ai-inference': 'common:unitRequestsPerMin',
+};
+
+export function dimensionLabel(t: TFunction, name: string, fallback: string): string {
+  return DIMENSION_LABEL_KEY[name] ? t(DIMENSION_LABEL_KEY[name]) : fallback;
+}
+
+export function dimensionUnit(t: TFunction, name: string, fallback: string): string {
+  return DIMENSION_UNIT_KEY[name] ? t(DIMENSION_UNIT_KEY[name]) : fallback;
 }
 
 // BackLink is the small "← Section" link shown atop detail/new pages, returning

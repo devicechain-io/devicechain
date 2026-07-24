@@ -24,6 +24,7 @@ import enDevices from './locales/en/devices.json';
 import enAlarms from './locales/en/alarms.json';
 import enDashboards from './locales/en/dashboards.json';
 import enTenants from './locales/en/tenants.json';
+import enTiers from './locales/en/tiers.json';
 import enConnectors from './locales/en/connectors.json';
 import enBranding from './locales/en/branding.json';
 import enBrowse from './locales/en/browse.json';
@@ -39,6 +40,7 @@ import esDevices from './locales/es/devices.json';
 import esAlarms from './locales/es/alarms.json';
 import esDashboards from './locales/es/dashboards.json';
 import esTenants from './locales/es/tenants.json';
+import esTiers from './locales/es/tiers.json';
 import esConnectors from './locales/es/connectors.json';
 import esBranding from './locales/es/branding.json';
 import esBrowse from './locales/es/browse.json';
@@ -99,6 +101,7 @@ export const NAMESPACES = [
   'alarms',
   'dashboards',
   'tenants',
+  'tiers',
   'connectors',
   'branding',
   'browse',
@@ -121,6 +124,7 @@ const resources = {
     alarms: enAlarms,
     dashboards: enDashboards,
     tenants: enTenants,
+    tiers: enTiers,
     connectors: enConnectors,
     branding: enBranding,
     browse: enBrowse,
@@ -137,6 +141,7 @@ const resources = {
     alarms: esAlarms,
     dashboards: esDashboards,
     tenants: esTenants,
+    tiers: esTiers,
     connectors: esConnectors,
     branding: esBranding,
     browse: esBrowse,
