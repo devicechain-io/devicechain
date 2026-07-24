@@ -8,6 +8,7 @@
 // — the value dashboard datasources reference.
 
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listDevices } from '@/lib/api/device-management';
@@ -18,6 +19,36 @@ import { listAssets } from '@/lib/api/assets';
 // The entity kinds a dashboard datasource can point at: a device directly, or one
 // of the anchor target types.
 export type EntityKind = 'device' | 'customer' | 'area' | 'asset';
+
+// Per-kind i18n keys (dashboards namespace) for the picker's placeholder/search/empty
+// copy — a lookup rather than string interpolation of the raw `kind` value, since the
+// displayed word ("device", "customer", …) needs its own translated form per locale.
+const KIND_KEYS: Record<EntityKind, { select: string; search: string; empty: string; failed: string }> = {
+  device: {
+    select: 'pickerSelectDevice',
+    search: 'pickerSearchDevices',
+    empty: 'pickerEmptyDevices',
+    failed: 'pickerFailedDevices',
+  },
+  customer: {
+    select: 'pickerSelectCustomer',
+    search: 'pickerSearchCustomers',
+    empty: 'pickerEmptyCustomers',
+    failed: 'pickerFailedCustomers',
+  },
+  area: {
+    select: 'pickerSelectArea',
+    search: 'pickerSearchAreas',
+    empty: 'pickerEmptyAreas',
+    failed: 'pickerFailedAreas',
+  },
+  asset: {
+    select: 'pickerSelectAsset',
+    search: 'pickerSearchAssets',
+    empty: 'pickerEmptyAssets',
+    failed: 'pickerFailedAssets',
+  },
+};
 
 // A generous single page — dashboards reference a handful of entities and the
 // Combobox filters client-side, so one wide page beats paged loading here.
@@ -53,7 +84,13 @@ export function EntityPicker({
   id?: string;
   placeholder?: string;
 }) {
+  const { t } = useTranslation(['dashboards', 'common']);
   const { data, loading, error } = useQuery(() => loadEntities(kind), [kind]);
+  // A hand-edited/imported definition (opaque JSON, ADR-039) can carry an out-of-union
+  // targetType; loadEntities already degrades it to an empty list rather than throwing
+  // (see entity-lister.ts). Fall back to the device copy so the picker renders instead
+  // of crashing on `t(undefined.select)`.
+  const kindKeys = KIND_KEYS[kind] ?? KIND_KEYS.device;
 
   const options = useMemo<ComboboxOption[]>(() => {
     // While a new kind loads, useQuery keeps the PREVIOUS kind's data — surfacing
@@ -79,11 +116,11 @@ export function EntityPicker({
       options={options}
       value={value}
       onChange={onChange}
-      placeholder={loading ? 'Loading…' : (placeholder ?? `Select ${kind}…`)}
-      searchPlaceholder={`Search ${kind}s…`}
+      placeholder={loading ? t('common:loading') : (placeholder ?? t(kindKeys.select))}
+      searchPlaceholder={t(kindKeys.search)}
       // Distinguish a failed load from a genuinely empty tenant so the user doesn't
       // "fix" a widget by rebinding when the real problem was a fetch error.
-      emptyMessage={loading ? 'Loading…' : error ? `Failed to load ${kind}s.` : `No ${kind}s found.`}
+      emptyMessage={loading ? t('common:loading') : error ? t(kindKeys.failed) : t(kindKeys.empty)}
     />
   );
 }

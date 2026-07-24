@@ -24,6 +24,8 @@ import type {
   WidgetType,
 } from '@devicechain/dashboards';
 import { useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -50,46 +52,78 @@ const DATA_WIDGETS = new Set<WidgetType>([
   ...CONTROL_WIDGETS,
 ]);
 
-const KIND_OPTIONS: ComboboxOption[] = [
-  { value: 'device', label: 'Device' },
-  { value: 'anchor', label: 'Anchor' },
-];
+// The option arrays below build Combobox dropdown text, so each is a FUNCTION of the
+// caller's `t` (module scope has no hook access) rather than a plain constant — a
+// plain constant here would render correct-looking but permanently-English option
+// text with no lint signal, since eslint-plugin-i18next only walks literals actually
+// nested inside a JSX tree (mode: jsx-only) and this array sits above the return.
 
-const ALARM_STATE_OPTIONS: ComboboxOption[] = [
-  { value: 'ACTIVE', label: 'Active' },
-  { value: 'CLEARED', label: 'Cleared' },
-];
+// eslint-disable-next-line i18next/no-literal-string -- 'device'/'anchor' are the
+// DatasourceSelector kind discriminants, not user text; only the labels are shown.
+function kindOptions(t: TFunction): ComboboxOption[] {
+  return [
+    { value: 'device', label: t('common:familyDevice') },
+    { value: 'anchor', label: t('widgetKindAnchor') },
+  ];
+}
 
-const ALARM_SEVERITY_OPTIONS: ComboboxOption[] = [
-  { value: 'CRITICAL', label: 'Critical' },
-  { value: 'MAJOR', label: 'Major' },
-  { value: 'MINOR', label: 'Minor' },
-  { value: 'WARNING', label: 'Warning' },
-  { value: 'INDETERMINATE', label: 'Indeterminate' },
-];
+// eslint-disable-next-line i18next/no-literal-string -- 'ACTIVE'/'CLEARED' are the
+// alarm-state API values, not user text.
+function alarmStateOptions(t: TFunction): ComboboxOption[] {
+  return [
+    { value: 'ACTIVE', label: t('widgetAlarmStateActive') },
+    { value: 'CLEARED', label: t('widgetAlarmStateCleared') },
+  ];
+}
+
+// eslint-disable-next-line i18next/no-literal-string -- severity API values.
+function alarmSeverityOptions(t: TFunction): ComboboxOption[] {
+  return [
+    { value: 'CRITICAL', label: t('widgetAlarmSeverityCritical') },
+    { value: 'MAJOR', label: t('widgetAlarmSeverityMajor') },
+    { value: 'MINOR', label: t('widgetAlarmSeverityMinor') },
+    { value: 'WARNING', label: t('widgetAlarmSeverityWarning') },
+    { value: 'INDETERMINATE', label: t('widgetAlarmSeverityIndeterminate') },
+  ];
+}
 
 // Stored as the string 'true'/'false' (absent = any) — the widget maps it back to the
 // boolean acknowledged filter.
-const ALARM_ACK_OPTIONS: ComboboxOption[] = [
-  { value: 'false', label: 'Unacknowledged' },
-  { value: 'true', label: 'Acknowledged' },
-];
+// eslint-disable-next-line i18next/no-literal-string -- 'true'/'false' are the stored
+// option values, not user text.
+function alarmAckOptions(t: TFunction): ComboboxOption[] {
+  return [
+    { value: 'false', label: t('widgetAlarmAckUnacknowledged') },
+    { value: 'true', label: t('widgetAlarmAckAcknowledged') },
+  ];
+}
 
-const TARGET_TYPE_OPTIONS: ComboboxOption[] = [
-  { value: 'customer', label: 'Customer' },
-  { value: 'area', label: 'Area' },
-  { value: 'asset', label: 'Asset' },
-];
+// eslint-disable-next-line i18next/no-literal-string -- target-type API values.
+function targetTypeOptions(t: TFunction): ComboboxOption[] {
+  return [
+    { value: 'customer', label: t('common:familyCustomer') },
+    { value: 'area', label: t('common:familyArea') },
+    { value: 'asset', label: t('common:familyAsset') },
+  ];
+}
 
-const CONTEXT_MODE_OPTIONS: ComboboxOption[] = [
-  { value: 'root', label: 'Root context' },
-  { value: 'scoped', label: 'Scoped to a parent' },
-];
+// eslint-disable-next-line i18next/no-literal-string -- 'root'/'scoped' are the
+// SlotScope mode discriminants, not user text.
+function contextModeOptions(t: TFunction): ComboboxOption[] {
+  return [
+    { value: 'root', label: t('widgetContextModeRoot') },
+    { value: 'scoped', label: t('widgetContextModeScoped') },
+  ];
+}
 
-const SCOPE_STRATEGY_OPTIONS: ComboboxOption[] = [
-  { value: 'first', label: 'First member' },
-  { value: 'manual', label: 'Manual pick' },
-];
+// eslint-disable-next-line i18next/no-literal-string -- 'first'/'manual' are the
+// SlotScope strategy discriminants, not user text.
+function scopeStrategyOptions(t: TFunction): ComboboxOption[] {
+  return [
+    { value: 'first', label: t('widgetScopeStrategyFirst') },
+    { value: 'manual', label: t('widgetScopeStrategyManual') },
+  ];
+}
 
 export interface WidgetConfigPanelProps {
   widget: WidgetInstance;
@@ -128,6 +162,7 @@ export function WidgetConfigPanel({
   onScope,
   onClose,
 }: WidgetConfigPanelProps) {
+  const { t } = useTranslation(['dashboards', 'common']);
   // Read/write a single options key, dropping it when cleared so the widget falls
   // back to its default rather than reading an empty string/NaN/false. Dropping a false
   // boolean keeps opt-in flags absent-when-off (matching optBoolean's absent = false).
@@ -156,7 +191,7 @@ export function WidgetConfigPanel({
         <div className="text-sm font-semibold">{widget.type}</div>
         <button
           onClick={onClose}
-          aria-label="Close panel"
+          aria-label={t('widgetClosePanel')}
           className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           <X size={14} />
@@ -169,7 +204,10 @@ export function WidgetConfigPanel({
         {widget.type === 'entity-selector' && (
           <EntitySelectorFields
             slots={slots}
+            // 'selectionTarget' is the widget.options field key, not user text.
+            // eslint-disable-next-line i18next/no-literal-string
             selectionTarget={optString(widget, 'selectionTarget')}
+            // eslint-disable-next-line i18next/no-literal-string
             onSelect={(target) => setOption('selectionTarget', target)}
           />
         )}
@@ -195,17 +233,19 @@ export function WidgetConfigPanel({
               // authored above.
               <div className="space-y-2 rounded-md border border-border p-3">
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Data source
+                  {t('widgetLabelDataSource')}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Derived from the parent context
-                  {slotName && (
-                    <>
-                      {' '}
-                      (slot <span className="font-mono">{slotName}</span>)
-                    </>
+                  {slotName ? (
+                    <Trans
+                      t={t}
+                      i18nKey="widgetDerivedFromParentWithSlot"
+                      values={{ slotName }}
+                      components={{ mono: <span className="font-mono" /> }}
+                    />
+                  ) : (
+                    t('widgetDerivedFromParentNoSlot')
                   )}
-                  . This widget follows the selected context and any drill-down.
                 </p>
               </div>
             ) : (
@@ -218,10 +258,10 @@ export function WidgetConfigPanel({
                   datasource={datasource}
                   label={
                     CONTROL_WIDGETS.has(widget.type)
-                      ? 'Target device'
+                      ? t('widgetLabelTargetDevice')
                       : ALARM_WIDGETS.has(widget.type)
-                        ? 'Scope'
-                        : 'Data source'
+                        ? t('widgetLabelScope')
+                        : t('widgetLabelDataSource')
                   }
                   showMeasurements={!ALARM_WIDGETS.has(widget.type) && !CONTROL_WIDGETS.has(widget.type)}
                   deviceOnly={CONTROL_WIDGETS.has(widget.type)}
@@ -229,13 +269,16 @@ export function WidgetConfigPanel({
                 />
                 {datasource && slotName && (
                   <p className="text-xs text-muted-foreground">
-                    Bound via slot <span className="font-mono">{slotName}</span>
+                    <Trans
+                      t={t}
+                      i18nKey="widgetBoundViaSlot"
+                      values={{ slotName }}
+                      components={{ mono: <span className="font-mono" /> }}
+                    />
                   </p>
                 )}
                 {ALARM_WIDGETS.has(widget.type) && !datasource && (
-                  <p className="text-xs text-muted-foreground">
-                    No scope selected — showing all alarms (tenant-wide).
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t('widgetNoScopeSelected')}</p>
                 )}
               </>
             )}
@@ -245,6 +288,8 @@ export function WidgetConfigPanel({
         {widget.type === 'command-button' && (
           <CommandFields
             deviceToken={datasource?.kind === 'device' ? datasource.deviceToken : undefined}
+            // 'commandName' is the widget.options field key, not user text.
+            // eslint-disable-next-line i18next/no-literal-string
             commandName={optString(widget, 'commandName')}
             onSelect={(def) =>
               setOptions({
@@ -271,9 +316,12 @@ function TitleFields({
   widget: WidgetInstance;
   setOption: (key: string, value: string | undefined) => void;
 }) {
+  const { t } = useTranslation('dashboards');
   if (widget.type === 'label') {
     return (
-      <FormField label="Text">
+      <FormField label={t('widgetLabelText')}>
+        {/* 'text' is the widget.options field key, not user text. */}
+        {/* eslint-disable-next-line i18next/no-literal-string */}
         <Input value={optString(widget, 'text')} onChange={(e) => setOption('text', e.target.value)} />
       </FormField>
     );
@@ -281,17 +329,20 @@ function TitleFields({
   if (widget.type === 'image') {
     return (
       <>
-        <FormField label="Image URL">
+        <FormField label={t('widgetLabelImageUrl')}>
+          {/* eslint-disable-next-line i18next/no-literal-string */}
           <Input value={optString(widget, 'url')} onChange={(e) => setOption('url', e.target.value)} />
         </FormField>
-        <FormField label="Alt text">
+        <FormField label={t('widgetLabelAltText')}>
+          {/* eslint-disable-next-line i18next/no-literal-string */}
           <Input value={optString(widget, 'alt')} onChange={(e) => setOption('alt', e.target.value)} />
         </FormField>
       </>
     );
   }
   return (
-    <FormField label="Title">
+    <FormField label={t('widgetLabelTitle')}>
+      {/* eslint-disable-next-line i18next/no-literal-string */}
       <Input value={optString(widget, 'title')} onChange={(e) => setOption('title', e.target.value)} />
     </FormField>
   );
@@ -306,16 +357,20 @@ function TypeOptions({
   widget: WidgetInstance;
   setOption: (key: string, value: string | number | boolean | undefined) => void;
 }) {
+  const { t } = useTranslation('dashboards');
   if (widget.type === 'gauge') {
     return (
       <>
-        <FormField label="Min">
+        <FormField label={t('widgetLabelMin')}>
+          {/* eslint-disable-next-line i18next/no-literal-string */}
           <NumberInput value={optNumber(widget, 'min')} onChange={(v) => setOption('min', v)} />
         </FormField>
-        <FormField label="Max">
+        <FormField label={t('widgetLabelMax')}>
+          {/* eslint-disable-next-line i18next/no-literal-string */}
           <NumberInput value={optNumber(widget, 'max')} onChange={(v) => setOption('max', v)} />
         </FormField>
-        <FormField label="Unit">
+        <FormField label={t('widgetLabelUnit')}>
+          {/* eslint-disable-next-line i18next/no-literal-string */}
           <Input value={optString(widget, 'unit')} onChange={(e) => setOption('unit', e.target.value)} />
         </FormField>
         <FlashToggle widget={widget} setOption={setOption} />
@@ -325,10 +380,12 @@ function TypeOptions({
   if (widget.type === 'latest-card') {
     return (
       <>
-        <FormField label="Unit">
+        <FormField label={t('widgetLabelUnit')}>
+          {/* eslint-disable-next-line i18next/no-literal-string */}
           <Input value={optString(widget, 'unit')} onChange={(e) => setOption('unit', e.target.value)} />
         </FormField>
-        <FormField label="Precision">
+        <FormField label={t('widgetLabelPrecision')}>
+          {/* eslint-disable-next-line i18next/no-literal-string */}
           <NumberInput value={optNumber(widget, 'precision')} onChange={(v) => setOption('precision', v)} />
         </FormField>
         <FlashToggle widget={widget} setOption={setOption} />
@@ -338,33 +395,37 @@ function TypeOptions({
   if (widget.type === 'alarm-table' || widget.type === 'alarm-count') {
     return (
       <>
-        <FormField label="State" description="Which alarm states to include.">
+        <FormField label={t('widgetLabelState')} description={t('widgetStateHint')}>
           <Combobox
-            options={ALARM_STATE_OPTIONS}
+            options={alarmStateOptions(t)}
             value={optString(widget, 'state')}
+            // eslint-disable-next-line i18next/no-literal-string
             onChange={(v) => setOption('state', v || undefined)}
-            placeholder="Any"
+            placeholder={t('widgetPlaceholderAny')}
           />
         </FormField>
-        <FormField label="Severity" description="Limit to one severity.">
+        <FormField label={t('widgetLabelSeverity')} description={t('widgetSeverityHint')}>
           <Combobox
-            options={ALARM_SEVERITY_OPTIONS}
+            options={alarmSeverityOptions(t)}
             value={optString(widget, 'severity')}
+            // eslint-disable-next-line i18next/no-literal-string
             onChange={(v) => setOption('severity', v || undefined)}
-            placeholder="Any"
+            placeholder={t('widgetPlaceholderAny')}
           />
         </FormField>
-        <FormField label="Acknowledged" description="Filter by acknowledgement.">
+        <FormField label={t('widgetLabelAcknowledged')} description={t('widgetAcknowledgedHint')}>
           <Combobox
-            options={ALARM_ACK_OPTIONS}
+            options={alarmAckOptions(t)}
             value={optString(widget, 'acknowledged')}
+            // eslint-disable-next-line i18next/no-literal-string
             onChange={(v) => setOption('acknowledged', v || undefined)}
-            placeholder="Any"
+            placeholder={t('widgetPlaceholderAny')}
           />
         </FormField>
         {widget.type === 'alarm-table' && (
           <>
-            <FormField label="Max rows" description="Newest alarms shown before scrolling.">
+            <FormField label={t('widgetLabelMaxRows')} description={t('widgetMaxRowsAlarmHint')}>
+              {/* eslint-disable-next-line i18next/no-literal-string */}
               <NumberInput value={optNumber(widget, 'maxRows')} onChange={(v) => setOption('maxRows', v)} />
             </FormField>
             <FlashToggle widget={widget} setOption={setOption} />
@@ -375,7 +436,8 @@ function TypeOptions({
   }
   if (widget.type === 'command-button') {
     return (
-      <FormField label="Max rows" description="Recent commands shown in the history before scrolling.">
+      <FormField label={t('widgetLabelMaxRows')} description={t('widgetMaxRowsCommandHint')}>
+        {/* eslint-disable-next-line i18next/no-literal-string */}
         <NumberInput value={optNumber(widget, 'maxRows')} onChange={(v) => setOption('maxRows', v)} />
       </FormField>
     );
@@ -383,7 +445,8 @@ function TypeOptions({
   if (widget.type === 'table') {
     return (
       <>
-        <FormField label="Precision" description="Decimal places for numeric values (blank = full precision).">
+        <FormField label={t('widgetLabelPrecision')} description={t('widgetPrecisionTableHint')}>
+          {/* eslint-disable-next-line i18next/no-literal-string */}
           <NumberInput value={optNumber(widget, 'precision')} onChange={(v) => setOption('precision', v)} />
         </FormField>
         <FlashToggle widget={widget} setOption={setOption} />
@@ -403,6 +466,7 @@ function FlashToggle({
   widget: WidgetInstance;
   setOption: (key: string, value: string | number | boolean | undefined) => void;
 }) {
+  const { t } = useTranslation('dashboards');
   const checked = widget.options?.flashOnChange === true;
   return (
     <label className="flex cursor-pointer items-start gap-2 text-sm text-foreground">
@@ -410,13 +474,12 @@ function FlashToggle({
         type="checkbox"
         className="mt-0.5"
         checked={checked}
+        // eslint-disable-next-line i18next/no-literal-string
         onChange={(e) => setOption('flashOnChange', e.target.checked)}
       />
       <span>
-        <span className="font-medium">Flash on change</span>
-        <span className="mt-0.5 block text-xs text-muted-foreground">
-          Briefly highlight a value green when it rises and red when it falls.
-        </span>
+        <span className="font-medium">{t('widgetFlashOnChange')}</span>
+        <span className="mt-0.5 block text-xs text-muted-foreground">{t('widgetFlashOnChangeHint')}</span>
       </span>
     </label>
   );
@@ -433,7 +496,7 @@ const EMPTY_ANCHOR: AnchorSelector = {
 
 function DatasourceFields({
   datasource,
-  label = 'Data source',
+  label,
   showMeasurements = true,
   deviceOnly = false,
   onChange,
@@ -447,11 +510,15 @@ function DatasourceFields({
   deviceOnly?: boolean;
   onChange: (next: DatasourceSelector | undefined) => void;
 }) {
+  const { t } = useTranslation(['dashboards', 'common']);
+  // Every current caller passes an explicit label; this default only guards a future
+  // caller that omits it, so it must still be translated rather than hard-coded English.
+  const resolvedLabel = label ?? t('widgetLabelDataSource');
   // Only device/anchor are offered (device only when deviceOnly); a stored reserved kind
   // (devices, slot, …) reads as unset here rather than being shown in a form that can't
   // edit it.
   const kind = datasource?.kind === 'anchor' ? 'anchor' : datasource?.kind === 'device' ? 'device' : '';
-  const kindOptions = deviceOnly ? KIND_OPTIONS.filter((o) => o.value === 'device') : KIND_OPTIONS;
+  const options = deviceOnly ? kindOptions(t).filter((o) => o.value === 'device') : kindOptions(t);
 
   const onKind = (next: string) => {
     if (next === 'device') onChange(EMPTY_DEVICE);
@@ -461,9 +528,11 @@ function DatasourceFields({
 
   return (
     <div className="space-y-3 rounded-md border border-border p-3">
-      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
-      <FormField label="Kind">
-        <Combobox options={kindOptions} value={kind} onChange={onKind} placeholder="None" />
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {resolvedLabel}
+      </div>
+      <FormField label={t('widgetLabelKind')}>
+        <Combobox options={options} value={kind} onChange={onKind} placeholder={t('widgetPlaceholderNone')} />
       </FormField>
 
       {datasource?.kind === 'device' && (
@@ -485,17 +554,20 @@ function DeviceFields({
   showMeasurements: boolean;
   onChange: (next: DatasourceSelector) => void;
 }) {
+  const { t } = useTranslation(['dashboards', 'common']);
   return (
     <>
-      <FormField label="Device">
+      <FormField label={t('common:familyDevice')}>
         <EntityPicker
+          // 'device' is the EntityKind discriminant, not user text.
+          // eslint-disable-next-line i18next/no-literal-string
           kind="device"
           value={selector.deviceToken}
           onChange={(token) => onChange({ ...selector, deviceToken: token })}
         />
       </FormField>
       {showMeasurements && (
-        <FormField label="Measurements" description="Comma-separated; leave blank for all.">
+        <FormField label={t('widgetLabelMeasurements')} description={t('widgetMeasurementsHint')}>
           <MeasurementsInput
             measurements={selector.measurements}
             onChange={(m) => onChange({ ...selector, measurements: m })}
@@ -515,20 +587,21 @@ function AnchorFields({
   showMeasurements: boolean;
   onChange: (next: DatasourceSelector) => void;
 }) {
+  const { t } = useTranslation(['dashboards', 'common']);
   const setAnchor = (patch: Partial<AnchorTarget>) =>
     onChange({ ...selector, anchor: { ...selector.anchor, ...patch } });
 
   return (
     <>
-      <FormField label="Relationship">
+      <FormField label={t('widgetLabelRelationship')}>
         <Input
           value={selector.anchor.relationship}
           onChange={(e) => setAnchor({ relationship: e.target.value })}
         />
       </FormField>
-      <FormField label="Target type">
+      <FormField label={t('widgetLabelTargetType')}>
         <Combobox
-          options={TARGET_TYPE_OPTIONS}
+          options={targetTypeOptions(t)}
           value={selector.anchor.targetType}
           onChange={(v) =>
             // Changing the target type clears the now-mismatched token.
@@ -537,7 +610,7 @@ function AnchorFields({
           allowClear={false}
         />
       </FormField>
-      <FormField label="Target">
+      <FormField label={t('widgetLabelTarget')}>
         <EntityPicker
           kind={selector.anchor.targetType as EntityKind}
           value={selector.anchor.targetToken}
@@ -545,7 +618,7 @@ function AnchorFields({
         />
       </FormField>
       {showMeasurements && (
-        <FormField label="Measurements" description="Comma-separated; leave blank for all.">
+        <FormField label={t('widgetLabelMeasurements')} description={t('widgetMeasurementsHint')}>
           <MeasurementsInput
             measurements={selector.measurements}
             onChange={(m) => onChange({ ...selector, measurements: m })}
@@ -586,6 +659,7 @@ function CommandFields({
   commandName: string;
   onSelect: (def: PickableCommand | undefined) => void;
 }) {
+  const { t } = useTranslation('dashboards');
   const { data, loading, error } = useQuery(
     async () => {
       if (!deviceToken) return commandChoices(null, []);
@@ -615,51 +689,42 @@ function CommandFields({
 
   return (
     <div className="space-y-3 rounded-md border border-border p-3">
-      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Command</div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {t('widgetCommandHeading')}
+      </div>
       {!deviceToken ? (
-        <p className="text-xs text-muted-foreground">Select a target device to choose a command.</p>
+        <p className="text-xs text-muted-foreground">{t('widgetCommandSelectDevice')}</p>
       ) : loading ? (
-        <p className="text-xs text-muted-foreground">Loading commands…</p>
+        <p className="text-xs text-muted-foreground">{t('widgetCommandLoading')}</p>
       ) : error ? (
-        <p className="text-xs text-muted-foreground">Couldn’t load commands: {error}</p>
+        <p className="text-xs text-muted-foreground">{t('widgetCommandLoadError', { error })}</p>
       ) : (
         <>
           {staleSelection && (
-            <p className="text-xs text-destructive">
-              “{commandName}” isn’t available on this device. Pick a command below.
-            </p>
+            <p className="text-xs text-destructive">{t('widgetCommandStale', { commandName })}</p>
           )}
           {selectable.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              This device’s profile defines no commands. Add a command definition to its device
-              profile.
-            </p>
+            <p className="text-xs text-muted-foreground">{t('widgetCommandNoneDefined')}</p>
           ) : (
-            <FormField label="Command" description="The command this button issues.">
+            <FormField label={t('widgetCommandHeading')} description={t('widgetCommandFieldHint')}>
               <Combobox
                 options={options}
                 value={commandName}
                 onChange={(key) => onSelect(selectable.find((d) => d.commandKey === key))}
-                placeholder="Select a command"
+                placeholder={t('widgetCommandSelectPlaceholder')}
               />
             </FormField>
           )}
           {!constrained && selectable.length > 0 && (
-            <p className="text-xs text-muted-foreground">
-              This profile isn’t published, so these definitions aren’t enforced yet and any
-              command is accepted. Publish it to hold this button to the contract.
-            </p>
+            <p className="text-xs text-muted-foreground">{t('widgetCommandUnpublishedHint')}</p>
           )}
           {draftOnly.length > 0 && (
             <div className="space-y-1 rounded-md bg-muted/50 p-2">
+              <p className="text-xs text-muted-foreground">{t('widgetCommandDraftOnlyLabel')}</p>
+              {/* Actual (untranslated) command names — data, not prose. */}
+              <p className="text-xs font-medium text-muted-foreground">{draftOnly.join(', ')}</p>
               <p className="text-xs text-muted-foreground">
-                Authored but not published, so not selectable yet:
-              </p>
-              <p className="text-xs font-medium text-muted-foreground">
-                {draftOnly.join(', ')}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Publish the device profile to use {draftOnly.length === 1 ? 'it' : 'them'} here.
+                {t('widgetCommandDraftOnlyPublishHint', { count: draftOnly.length })}
               </p>
             </div>
           )}
@@ -688,6 +753,7 @@ function SlotScopeFields({
   scope: SlotScope | undefined;
   onScope: (scope: SlotScope | undefined) => void;
 }) {
+  const { t } = useTranslation('dashboards');
   const parents = Object.keys(slots).filter((n) => slots[n].type === 'anchor' && n !== slotName);
   const mode = scope ? 'scoped' : 'root';
   const strategy = scope?.strategy ?? 'first';
@@ -701,37 +767,30 @@ function SlotScopeFields({
 
   return (
     <div className="space-y-3 rounded-md border border-border p-3">
-      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Context</div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {t('widgetContextHeading')}
+      </div>
       {parents.length === 0 && mode === 'root' ? (
-        <p className="text-xs text-muted-foreground">
-          Add a widget bound to a customer, area, or asset to use as a parent context — then this
-          slot can follow it.
-        </p>
+        <p className="text-xs text-muted-foreground">{t('widgetContextEmptyHint')}</p>
       ) : (
         <>
-          <FormField
-            label="Binds to"
-            description="Root: chosen directly or by a context selector. Scoped: follows a parent context (e.g. a device within the selected building)."
-          >
-            <Combobox options={CONTEXT_MODE_OPTIONS} value={mode} onChange={setMode} allowClear={false} />
+          <FormField label={t('widgetLabelBindsTo')} description={t('widgetBindsToHint')}>
+            <Combobox options={contextModeOptions(t)} value={mode} onChange={setMode} allowClear={false} />
           </FormField>
           {mode === 'scoped' && (
             <>
-              <FormField label="Parent slot">
+              <FormField label={t('widgetLabelParentSlot')}>
                 <Combobox
                   options={parents.map((p) => ({ value: p, label: p }))}
                   value={parent}
                   onChange={(p) => p && onScope({ parent: p, strategy })}
                   allowClear={false}
-                  placeholder="Select a parent"
+                  placeholder={t('widgetPlaceholderSelectParent')}
                 />
               </FormField>
-              <FormField
-                label="Strategy"
-                description="First: auto-follow the parent's first member. Manual: keep a chosen member (a picker offers the parent's members)."
-              >
+              <FormField label={t('widgetLabelStrategy')} description={t('widgetStrategyHint')}>
                 <Combobox
-                  options={SCOPE_STRATEGY_OPTIONS}
+                  options={scopeStrategyOptions(t)}
                   value={strategy}
                   onChange={(s) => onScope({ parent: parent || parents[0], strategy: s as SlotScope['strategy'] })}
                   allowClear={false}
@@ -758,37 +817,32 @@ function EntitySelectorFields({
   selectionTarget: string;
   onSelect: (target: string | undefined) => void;
 }) {
+  const { t } = useTranslation('dashboards');
   const names = Object.keys(slots ?? {});
   const options: ComboboxOption[] = names.map((name) => {
     const slot = slots![name];
     const role = slot.scope
-      ? `member of ${slot.scope.parent}`
+      ? t('widgetRoleMemberOf', { parent: slot.scope.parent })
       : slot.type === 'anchor'
-        ? 'context'
-        : 'device';
+        ? t('widgetRoleContext')
+        : t('widgetRoleDevice');
     return { value: name, label: name, description: role };
   });
 
   return (
     <div className="space-y-3 rounded-md border border-border p-3">
       <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Selection target
+        {t('widgetSelectionTargetHeading')}
       </div>
       {options.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          This dashboard has no slots yet. Bind a widget to a device or anchor first, then this
-          picker can re-point it.
-        </p>
+        <p className="text-xs text-muted-foreground">{t('widgetSelectionTargetEmptyHint')}</p>
       ) : (
-        <FormField
-          label="Target slot"
-          description="The slot this picker re-points. A scoped slot becomes a member picker; a root slot a context picker."
-        >
+        <FormField label={t('widgetLabelTargetSlot')} description={t('widgetTargetSlotHint')}>
           <Combobox
             options={options}
             value={selectionTarget}
             onChange={(v) => onSelect(v || undefined)}
-            placeholder="Select a slot"
+            placeholder={t('widgetPlaceholderSelectSlot')}
           />
         </FormField>
       )}

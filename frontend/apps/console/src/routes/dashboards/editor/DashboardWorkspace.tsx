@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { ArrowLeft, Download, FlaskConical, History, Plus, Trash2 } from 'lucide-react';
 import { hasAuthority } from '@devicechain/client';
 import {
@@ -93,6 +94,7 @@ function CanvasSettings({
   definition: DashboardDefinition;
   onChange: (next: DashboardDefinition) => void;
 }) {
+  const { t } = useTranslation('dashboards');
   const { grid, sizing } = definition.canvas;
   const gap = typeof grid.gap === 'number' ? grid.gap : grid.gap.row;
   const mode: 'fill' | 'width' | 'height' = sizing === 'fill' ? 'fill' : 'width' in sizing ? 'width' : 'height';
@@ -109,30 +111,35 @@ function CanvasSettings({
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
       <NumberField
-        label="Columns"
+        label={t('workspaceColumns')}
         value={grid.columns}
         min={1}
         onChange={(v) => onChange(setCanvasGrid(definition, { columns: v }))}
       />
       <NumberField
-        label="Row height"
+        label={t('workspaceRowHeight')}
         value={grid.rowHeight}
         min={1}
         onChange={(v) => onChange(setCanvasGrid(definition, { rowHeight: v }))}
       />
       <NumberField
-        label="Gap"
+        label={t('workspaceGap')}
         value={gap}
         min={0}
         onChange={(v) => onChange(setCanvasGrid(definition, { gap: v }))}
       />
       <div className="flex items-center gap-2">
-        <label className="text-sm text-muted-foreground">Size</label>
+        <label className="text-sm text-muted-foreground">{t('workspaceSize')}</label>
         <Combobox
           options={[
-            { value: 'fill', label: 'Fill area' },
-            { value: 'width', label: 'Fixed width' },
-            { value: 'height', label: 'Fixed height' },
+            // 'fill' | 'width' | 'height' are the CanvasSizing mode discriminants, not
+            // user text — the visible copy is the `label` alongside each.
+            // eslint-disable-next-line i18next/no-literal-string
+            { value: 'fill', label: t('workspaceSizeFill') },
+            // eslint-disable-next-line i18next/no-literal-string
+            { value: 'width', label: t('workspaceSizeWidth') },
+            // eslint-disable-next-line i18next/no-literal-string
+            { value: 'height', label: t('workspaceSizeHeight') },
           ]}
           value={mode}
           onChange={(v) => setMode(v as 'fill' | 'width' | 'height')}
@@ -140,7 +147,7 @@ function CanvasSettings({
           className="h-9 w-36"
         />
         {mode !== 'fill' && (
-          <NumberField label="px" value={fixedPx} min={1} onChange={setFixedPx} />
+          <NumberField label={t('workspacePx')} value={fixedPx} min={1} onChange={setFixedPx} />
         )}
       </div>
     </div>
@@ -249,6 +256,7 @@ export function DashboardWorkspace({
   loaded: DashboardDefinition;
   resolver: DeviceResolver;
 }) {
+  const { t } = useTranslation(['dashboards', 'common']);
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
@@ -351,9 +359,9 @@ export function DashboardWorkspace({
     if (
       dirty &&
       !(await confirm({
-        title: 'Discard unsaved changes?',
-        description: 'Your unsaved dashboard edits will be lost.',
-        confirmLabel: 'Discard',
+        title: t('workspaceDiscardTitle'),
+        description: t('workspaceDiscardDescription'),
+        confirmLabel: t('workspaceDiscardConfirm'),
       }))
     )
       return;
@@ -388,13 +396,11 @@ export function DashboardWorkspace({
         setSaved(snapshot);
         setExpectedUpdatedAt(result.updatedAt); // advance the baseline for the next save
         setSaveState({ kind: 'clean' });
-        toast('Dashboard saved');
+        toast(t('workspaceSaved'));
       })
       .catch((err: unknown) => {
         const raw = errMessage(err);
-        const message = raw.includes(CONFLICT_MARKER)
-          ? 'This dashboard changed elsewhere. Reload the page to get the latest, then reapply your edits.'
-          : raw;
+        const message = raw.includes(CONFLICT_MARKER) ? t('workspaceConflictMessage') : raw;
         setSaveState({ kind: 'error', message });
       });
   };
@@ -418,22 +424,22 @@ export function DashboardWorkspace({
       setExpectedUpdatedAt(result.updatedAt);
       setSaveState({ kind: 'clean' });
     } catch {
-      toast('Rolled back, but the returned version could not be parsed. Reload the page.', 'error');
+      toast(t('workspaceRollbackParseError'), 'error');
     }
   };
 
   const remove = async () => {
     if (
       !(await confirm({
-        title: 'Delete dashboard',
-        description: `Delete “${token}”? This cannot be undone.`,
-        confirmLabel: 'Delete',
+        title: t('deleteTitle'),
+        description: t('deleteConfirm', { token }),
+        confirmLabel: t('delete'),
       }))
     )
       return;
     try {
       await deleteDashboard(token);
-      toast(`Dashboard “${token}” deleted`);
+      toast(t('deleted', { token }));
       navigate('/dashboards');
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -447,18 +453,18 @@ export function DashboardWorkspace({
     saveState.kind === 'error' ? (
       <span className="text-sm text-destructive">{saveState.message}</span>
     ) : dirty ? (
-      <span className="text-sm text-muted-foreground">Unsaved changes</span>
+      <span className="text-sm text-muted-foreground">{t('workspaceUnsavedChanges')}</span>
     ) : null;
 
   const saveButton = (
     <Button size="sm" onClick={save} disabled={!dirty || saveState.kind === 'saving'}>
-      {saveState.kind === 'saving' ? 'Saving…' : 'Save'}
+      {saveState.kind === 'saving' ? t('workspaceSaving') : t('common:save')}
     </Button>
   );
 
   const historyButton = (
     <Button variant="outline" size="sm" onClick={() => setHistoryOpen(true)}>
-      <History size={14} /> History
+      <History size={14} /> {t('workspaceHistory')}
     </Button>
   );
 
@@ -471,12 +477,12 @@ export function DashboardWorkspace({
     // navigator.clipboard is undefined on a non-secure context (plain http over a LAN
     // IP) — the optional chain would resolve silently and falsely claim "copied".
     if (!navigator.clipboard) {
-      toast('Clipboard unavailable here — use Download instead.', 'error');
+      toast(t('workspaceClipboardUnavailable'), 'error');
       return;
     }
     try {
       await navigator.clipboard.writeText(exportJson(template));
-      toast(template ? 'Template (unbound) copied' : 'Definition copied');
+      toast(template ? t('workspaceTemplateCopied') : t('workspaceDefinitionCopied'));
     } catch (err) {
       toast(errMessage(err), 'error');
     }
@@ -495,15 +501,13 @@ export function DashboardWorkspace({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="sm">
-          <Download size={14} /> Export
+          <Download size={14} /> {t('workspaceExport')}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={downloadExport}>Download JSON</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => void copyExport(false)}>Copy JSON</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => void copyExport(true)}>
-          Copy as template (unbound)
-        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={downloadExport}>{t('workspaceDownloadJson')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void copyExport(false)}>{t('workspaceCopyJson')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void copyExport(true)}>{t('workspaceCopyTemplate')}</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -526,9 +530,9 @@ export function DashboardWorkspace({
         size="sm"
         aria-pressed={preview}
         onClick={() => setPreview((p) => !p)}
-        title="Preview with synthetic data (no device required)"
+        title={t('workspacePreviewHint')}
       >
-        <FlaskConical size={14} /> Preview
+        <FlaskConical size={14} /> {t('workspacePreview')}
       </Button>
     </div>
   );
@@ -543,10 +547,10 @@ export function DashboardWorkspace({
       {exportMenu}
       {historyButton}
       <Button variant="outline" size="sm" onClick={toggleMode} disabled={!canEdit}>
-        Edit
+        {t('workspaceEdit')}
       </Button>
       <Button variant="destructive" size="sm" onClick={remove} disabled={!canEdit}>
-        <Trash2 size={14} /> Delete
+        <Trash2 size={14} /> {t('delete')}
       </Button>
     </div>
   );
@@ -557,12 +561,15 @@ export function DashboardWorkspace({
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm">
-            <Plus size={14} /> Add widget
+            <Plus size={14} /> {t('workspaceAddWidget')}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {WIDGET_TYPES.map((type) => (
             <DropdownMenuItem key={type} onSelect={() => addWidgetOfType(type)}>
+              {/* `type` is the widget-kind identifier ('gauge', 'table', …) — a
+                  technical enum used as both the React key and the menu row's text,
+                  not user-facing prose. */}
               {type}
             </DropdownMenuItem>
           ))}
@@ -573,7 +580,7 @@ export function DashboardWorkspace({
       {historyButton}
       {saveButton}
       <Button variant="outline" size="sm" onClick={toggleMode}>
-        Done
+        {t('workspaceDone')}
       </Button>
     </div>
   );
@@ -590,7 +597,7 @@ export function DashboardWorkspace({
             onClick={() => void leaveGuarded('/dashboards')}
             className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft size={14} /> Dashboards
+            <ArrowLeft size={14} /> {t('title')}
           </button>
         </div>
       }
@@ -604,13 +611,13 @@ export function DashboardWorkspace({
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-6 py-2">
             <div className="flex items-center gap-3">
               <label htmlFor="dash-title" className="text-sm text-muted-foreground">
-                Title
+                {t('workspaceTitleLabel')}
               </label>
               <Input
                 id="dash-title"
                 value={working.title}
                 onChange={(e) => setWorking(setTitle(working, e.target.value))}
-                placeholder="Dashboard title"
+                placeholder={t('workspaceTitlePlaceholder')}
                 className="max-w-sm"
               />
             </div>

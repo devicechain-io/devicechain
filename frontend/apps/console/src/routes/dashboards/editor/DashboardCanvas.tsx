@@ -14,6 +14,7 @@
 // 'base' breakpoint; per-breakpoint responsive editing is deferred.
 
 import { useLayoutEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   baseBox,
   bringToFront,
@@ -62,6 +63,7 @@ function useMeasuredWidth<T extends HTMLElement>(): [React.RefObject<T | null>, 
 }
 
 export function DashboardCanvas({ definition, onChange, hub, actions, selectedId, onSelect }: DashboardCanvasProps) {
+  const { t } = useTranslation('dashboards');
   const { grid, sizing } = definition.canvas;
   const [contentRef, measuredWidth] = useMeasuredWidth<HTMLDivElement>();
 
@@ -114,7 +116,11 @@ export function DashboardCanvas({ definition, onChange, hub, actions, selectedId
               // can commit a different span than it showed. Instead resize is free and
               // `pxToGridBox` snaps to the nearest legal span on release.
               dragGrid={[colStride, rowStride]}
+              // `bounds`/`cancel` are react-rnd API values (a keyword + a CSS selector),
+              // not user-facing text.
+              // eslint-disable-next-line i18next/no-literal-string
               bounds="parent"
+              // eslint-disable-next-line i18next/no-literal-string
               cancel=".rnd-no-drag"
               style={{
                 zIndex: box.z,
@@ -158,7 +164,9 @@ export function DashboardCanvas({ definition, onChange, hub, actions, selectedId
                     pointerEvents: 'auto',
                   }}
                 >
-                  <ToolbarButton onClick={() => onChange(bringToFront(definition, widget.id))}>Front</ToolbarButton>
+                  <ToolbarButton onClick={() => onChange(bringToFront(definition, widget.id))}>
+                    {t('canvasFront')}
+                  </ToolbarButton>
                   <ToolbarButton
                     danger
                     onClick={() => {
@@ -166,7 +174,7 @@ export function DashboardCanvas({ definition, onChange, hub, actions, selectedId
                       onSelect(null);
                     }}
                   >
-                    Delete
+                    {t('delete')}
                   </ToolbarButton>
                 </div>
               )}

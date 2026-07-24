@@ -198,8 +198,8 @@ function DashboardCreateForm({ onDone }: { onDone: (token: string) => void }) {
           value={token}
           onChange={setToken}
           seed={name}
-          placeholder="ops-overview"
-          checkAvailability={(t) => getDashboard(t).then((d) => d === null)}
+          placeholder={t('createTokenPlaceholder')}
+          checkAvailability={(token) => getDashboard(token).then((d) => d === null)}
         />
       </FormField>
       <FormField label={t('common:colName')} htmlFor="d-name">

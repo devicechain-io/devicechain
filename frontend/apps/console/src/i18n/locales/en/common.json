@@ -53,6 +53,7 @@
   "reload": "Reload",
   "removeItem": "Remove {{label}}",
   "removedItem": "Removed {{label}}",
+  "save": "Save",
   "saveAppearance": "Save appearance",
   "saveChanges": "Save changes",
   "search": "Search…",
