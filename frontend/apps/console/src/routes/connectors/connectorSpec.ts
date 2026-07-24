@@ -18,15 +18,23 @@ export type FieldKind = 'text' | 'list' | 'qos' | 'bool';
 export interface ConfigField {
   // The JSON key in the connector config object (matches the Go struct tag).
   key: string;
+  // i18n key in the `connectors` namespace — the caller resolves it with t(),
+  // NOT a literal string (ADR-066). The `jsx-only` lint can't see text in this
+  // data module, so keeping these as keys is what keeps the config form localized.
   label: string;
   kind: FieldKind;
   required?: boolean;
+  // A literal example value shown in the field — an identifier/URL sample, not
+  // translated.
   placeholder?: string;
+  // i18n key (see `label`), or omitted.
   description?: string;
 }
 
 export interface SecretSpec {
+  // i18n key in the `connectors` namespace (resolved by the caller), not a literal.
   label: string;
+  // i18n key in the `connectors` namespace (resolved by the caller), not a literal.
   description: string;
   // Whether a credential is always required for this type (AWS). kafka is
   // conditionally required (only when SASL is enabled) — handled in the form.
@@ -35,7 +43,9 @@ export interface SecretSpec {
 
 export interface ConnectorTypeSpec {
   type: string;
-  // Human-facing name for the type dropdown.
+  // Human-facing name for the type dropdown — a product/proper noun (MQTT, Apache
+  // Kafka, AWS SNS), NOT localized, so this stays a literal (unlike the field and
+  // secret labels above, which are i18n keys).
   label: string;
   fields: ConfigField[];
   secret: SecretSpec;
@@ -57,26 +67,26 @@ export const CONNECTOR_TYPE_SPECS: ConnectorTypeSpec[] = [
     fields: [
       {
         key: 'urls',
-        label: 'Broker URLs',
+        label: 'fldBrokerUrls',
         kind: 'list',
         required: true,
         placeholder: 'tcp://broker:1883',
-        description: 'One per line. At least one is required.',
+        description: 'descBrokerUrls',
       },
-      { key: 'topic', label: 'Topic', kind: 'text', required: true, placeholder: 'alerts/incidents' },
-      { key: 'qos', label: 'QoS', kind: 'qos', description: 'Delivery quality of service. Default 1.' },
+      { key: 'topic', label: 'fldTopic', kind: 'text', required: true, placeholder: 'alerts/incidents' },
+      { key: 'qos', label: 'fldQos', kind: 'qos', description: 'descQos' },
       {
         key: 'clientId',
-        label: 'Client ID',
+        label: 'fldClientId',
         kind: 'text',
         placeholder: 'devicechain',
-        description: 'Optional. A per-connection suffix is appended so many senders can share it.',
+        description: 'descMqttClientId',
       },
-      { key: 'username', label: 'Username', kind: 'text', placeholder: 'publisher' },
+      { key: 'username', label: 'fldUsername', kind: 'text', placeholder: 'publisher' },
     ],
     secret: {
-      label: 'Password',
-      description: 'The broker password for the username above. Optional.',
+      label: 'secretPassword',
+      description: 'secretPasswordDesc',
       required: false,
     },
   },
@@ -86,20 +96,20 @@ export const CONNECTOR_TYPE_SPECS: ConnectorTypeSpec[] = [
     fields: [
       {
         key: 'addresses',
-        label: 'Broker addresses',
+        label: 'fldBrokerAddresses',
         kind: 'list',
         required: true,
         placeholder: 'broker:9092',
-        description: 'host:port, one per line. At least one is required.',
+        description: 'descKafkaAddresses',
       },
-      { key: 'topic', label: 'Topic', kind: 'text', required: true, placeholder: 'device-events' },
-      { key: 'clientId', label: 'Client ID', kind: 'text', placeholder: 'devicechain' },
-      { key: 'tls', label: 'Use TLS', kind: 'bool', description: 'Connect to the brokers over TLS.' },
+      { key: 'topic', label: 'fldTopic', kind: 'text', required: true, placeholder: 'device-events' },
+      { key: 'clientId', label: 'fldClientId', kind: 'text', placeholder: 'devicechain' },
+      { key: 'tls', label: 'fldUseTls', kind: 'bool', description: 'descKafkaTls' },
     ],
     sasl: true,
     secret: {
-      label: 'SASL password',
-      description: 'Required when SASL is enabled; the password for the SASL user.',
+      label: 'secretSaslPassword',
+      description: 'secretSaslPasswordDesc',
       required: false,
     },
   },
@@ -107,27 +117,27 @@ export const CONNECTOR_TYPE_SPECS: ConnectorTypeSpec[] = [
     type: 'aws_sns',
     label: 'AWS SNS',
     fields: [
-      { key: 'region', label: 'Region', kind: 'text', required: true, placeholder: 'us-east-1' },
+      { key: 'region', label: 'fldRegion', kind: 'text', required: true, placeholder: 'us-east-1' },
       {
         key: 'topicArn',
-        label: 'Topic ARN',
+        label: 'fldTopicArn',
         kind: 'text',
         required: true,
         placeholder: 'arn:aws:sns:us-east-1:123456789012:alerts',
       },
       {
         key: 'accessKeyId',
-        label: 'Access key ID',
+        label: 'fldAccessKeyId',
         kind: 'text',
         required: true,
         placeholder: 'AKIA…',
-        description: 'Static credentials are required; ambient/instance-role credentials are not used.',
+        description: 'descAwsStaticCreds',
       },
-      { key: 'endpoint', label: 'Endpoint override', kind: 'text', placeholder: 'https://…', description: 'Optional custom endpoint (e.g. a VPC endpoint or a test double).' },
+      { key: 'endpoint', label: 'fldEndpointOverride', kind: 'text', placeholder: 'https://…', description: 'descSnsEndpoint' },
     ],
     secret: {
-      label: 'Secret access key',
-      description: 'The AWS secret access key paired with the access key ID above. Required.',
+      label: 'secretAccessKey',
+      description: 'secretAccessKeyDesc',
       required: true,
     },
   },
@@ -135,27 +145,27 @@ export const CONNECTOR_TYPE_SPECS: ConnectorTypeSpec[] = [
     type: 'aws_sqs',
     label: 'AWS SQS',
     fields: [
-      { key: 'region', label: 'Region', kind: 'text', required: true, placeholder: 'us-east-1' },
+      { key: 'region', label: 'fldRegion', kind: 'text', required: true, placeholder: 'us-east-1' },
       {
         key: 'url',
-        label: 'Queue URL',
+        label: 'fldQueueUrl',
         kind: 'text',
         required: true,
         placeholder: 'https://sqs.us-east-1.amazonaws.com/123456789012/alerts',
       },
       {
         key: 'accessKeyId',
-        label: 'Access key ID',
+        label: 'fldAccessKeyId',
         kind: 'text',
         required: true,
         placeholder: 'AKIA…',
-        description: 'Static credentials are required; ambient/instance-role credentials are not used.',
+        description: 'descAwsStaticCreds',
       },
-      { key: 'endpoint', label: 'Endpoint override', kind: 'text', placeholder: 'https://…', description: 'Optional custom endpoint.' },
+      { key: 'endpoint', label: 'fldEndpointOverride', kind: 'text', placeholder: 'https://…', description: 'descSqsEndpoint' },
     ],
     secret: {
-      label: 'Secret access key',
-      description: 'The AWS secret access key paired with the access key ID above. Required.',
+      label: 'secretAccessKey',
+      description: 'secretAccessKeyDesc',
       required: true,
     },
   },
@@ -266,23 +276,27 @@ export function deserializeConfig(spec: ConnectorTypeSpec, config: string): Conf
 // Client-side required-field check, mirroring the backend validators so the author
 // gets a fast, specific error before the round-trip. Not authoritative — the server
 // re-validates. Returns a human message, or null when the shape looks complete.
+// `t` is the caller's `connectors`-namespace translator (this is a plain utility,
+// not a component); `f.label` is an i18n key, so the required message interpolates
+// the RESOLVED label into the `fieldRequired` sentence.
 export function validateConfigForm(
   spec: ConnectorTypeSpec,
   state: ConfigFormState,
+  t: (key: string, options?: Record<string, unknown>) => string,
 ): string | null {
   for (const f of spec.fields) {
     if (!f.required) continue;
     const v = state.fields[f.key];
     if (f.kind === 'list') {
       if (splitList(typeof v === 'string' ? v : '').length === 0) {
-        return `${f.label} is required.`;
+        return t('fieldRequired', { label: t(f.label) });
       }
     } else if (typeof v === 'string' && v.trim() === '') {
-      return `${f.label} is required.`;
+      return t('fieldRequired', { label: t(f.label) });
     }
   }
   if (spec.sasl && state.saslEnabled && state.saslUsername.trim() === '') {
-    return 'SASL username is required when SASL is enabled.';
+    return t('saslUsernameRequired');
   }
   return null;
 }

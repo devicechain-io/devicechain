@@ -10,10 +10,20 @@ import {
   validateConfigForm,
   type ConfigFormState,
 } from './connectorSpec';
+import enConnectors from '../../i18n/locales/en/connectors.json';
 
 const spec = (t: string) => {
   const s = specForType(t);
   if (!s) throw new Error(`no spec for ${t}`);
+  return s;
+};
+
+// A minimal t() stand-in: resolve a `connectors` key to its English value and
+// fill any {{tokens}}. validateConfigForm returns i18n-keyed messages now
+// (ADR-066), so the assertions below resolve through this to the English text.
+const tr = (key: string, opts?: Record<string, unknown>): string => {
+  let s = (enConnectors as Record<string, string>)[key] ?? key;
+  if (opts) for (const [k, v] of Object.entries(opts)) s = s.replace(`{{${k}}}`, String(v));
   return s;
 };
 
@@ -103,7 +113,7 @@ describe('validateConfigForm', () => {
   it('flags a missing required field', () => {
     const st = emptyFormState(spec('mqtt'));
     st.fields.topic = 'alerts'; // urls still empty
-    expect(validateConfigForm(spec('mqtt'), st)).toMatch(/Broker URLs/);
+    expect(validateConfigForm(spec('mqtt'), st, tr)).toMatch(/Broker URLs/);
   });
 
   it('flags a SASL username missing when SASL is enabled', () => {
@@ -111,7 +121,7 @@ describe('validateConfigForm', () => {
     st.fields.addresses = 'b:9092';
     st.fields.topic = 't';
     st.saslEnabled = true;
-    expect(validateConfigForm(spec('kafka'), st)).toMatch(/SASL username/);
+    expect(validateConfigForm(spec('kafka'), st, tr)).toMatch(/SASL username/);
   });
 
   it('passes a complete config', () => {
@@ -119,6 +129,6 @@ describe('validateConfigForm', () => {
     st.fields.region = 'us-east-1';
     st.fields.topicArn = 'arn:aws:sns:us-east-1:1:t';
     st.fields.accessKeyId = 'AKIA';
-    expect(validateConfigForm(spec('aws_sns'), st)).toBeNull();
+    expect(validateConfigForm(spec('aws_sns'), st, tr)).toBeNull();
   });
 });

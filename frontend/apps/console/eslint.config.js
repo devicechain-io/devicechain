@@ -38,6 +38,15 @@ const EXTRA_ATTRS = [
   'color', 'fill', 'stroke', 'deviceColor', 'defaultTheme',
   'to', 'href', 'target', 'rel', 'role', 'name', 'htmlFor',
   'autoComplete', 'inputMode', 'dir', 'slot', 'data-testid',
+  // radix/shadcn discriminants — Tabs/Select/RadioGroup `value`/`defaultValue`
+  // are enum tokens that pick a pane/option, never display text (the visible
+  // label is the element's children). Excluding them avoids forcing every such
+  // literal to be hoisted into a named const just to dodge the rule.
+  'value', 'defaultValue',
+  // TokenField's `entityType` is the entity-kind key it resolves a token mask
+  // from ('connector', 'role', 'metric-definition', …) — a technical
+  // discriminant, never user text.
+  'entityType',
 ];
 const EXTRA_CALLEES = ['cn', 'cva', 'clsx', 'cx', 'twMerge', 'tv', 'navigate', 'act'];
 const EXTRA_WORDS = ['^DeviceChain$'];

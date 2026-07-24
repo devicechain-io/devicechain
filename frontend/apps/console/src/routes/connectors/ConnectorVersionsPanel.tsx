@@ -10,6 +10,7 @@
 
 import { useState } from 'react';
 import { Rocket, RotateCcw } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -58,6 +59,7 @@ export function ConnectorVersionsPanel({
   /** Re-baseline the editor after a rollback re-drafts an earlier version. */
   onRolledBack: (draft: { type: string; config: string; updatedAt: string | null }) => void;
 }) {
+  const { t } = useTranslation('connectors');
   const { toast } = useToast();
   const confirm = useConfirm();
   const [reloadKey, reload] = useReload();
@@ -83,7 +85,7 @@ export function ConnectorVersionsPanel({
         description: description.trim() || undefined,
         expectedUpdatedAt,
       });
-      toast(`Published version ${version}`);
+      toast(t('publishedToast', { version }));
       setPublishing(false);
       setLabel('');
       setDescription('');
@@ -99,16 +101,16 @@ export function ConnectorVersionsPanel({
   const doRollback = async (v: number) => {
     if (
       !(await confirm({
-        title: 'Restore version',
-        description: `Copy version ${v}'s configuration back into the draft? Your current unsaved draft edits will be replaced. Publish afterward to make it the version rules dispatch through.`,
-        confirmLabel: 'Restore to draft',
+        title: t('restoreVersionTitle'),
+        description: t('restoreVersionConfirm', { version: v }),
+        confirmLabel: t('restoreToDraft'),
       }))
     )
       return;
     setRolling((s) => new Set(s).add(v));
     try {
       const draft = await rollbackConnector(token, v);
-      toast(`Restored version ${v} to the draft`);
+      toast(t('restoredToast', { version: v }));
       onRolledBack(draft);
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -126,29 +128,21 @@ export function ConnectorVersionsPanel({
       <div className="flex items-start justify-between gap-4">
         <div className="max-w-prose space-y-1 text-sm">
           {latest == null ? (
-            <p className="font-medium text-amber-600 dark:text-amber-500">
-              Not published yet — a rule can’t dispatch through this connector until you publish it.
-            </p>
+            <p className="font-medium text-amber-600 dark:text-amber-500">{t('notPublished')}</p>
           ) : (
-            <p>
-              Rules dispatch through version{' '}
-              <span className="font-semibold tabular-nums">{latest}</span> (the latest published).
-            </p>
+            <p>{t('dispatchVersion', { version: latest })}</p>
           )}
-          <p className="text-muted-foreground">
-            Publishing freezes the saved draft into a new immutable version. Save your draft edits
-            first, then publish.
-          </p>
+          <p className="text-muted-foreground">{t('publishHint')}</p>
         </div>
         {canWrite && (
           <Button
             size="sm"
             onClick={() => setPublishing(true)}
             disabled={dirty}
-            title={dirty ? 'Save your draft changes before publishing' : undefined}
+            title={dirty ? t('publishDisabledTitle') : undefined}
             className="shrink-0"
           >
-            <Rocket size={16} /> Publish
+            <Rocket size={16} /> {t('publish')}
           </Button>
         )}
       </div>
@@ -162,38 +156,43 @@ export function ConnectorVersionsPanel({
             setDescription('');
           }
         }}
-        title="Publish connector"
-        description="Freeze the current draft into a new immutable version."
+        title={t('publishConnectorTitle')}
+        description={t('publishConnectorDescription')}
       >
         <div className="space-y-4">
-          <FormField label="Label" htmlFor="cv-label" description="Optional, e.g. a version name.">
-            <Input id="cv-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="v1.0" />
+          <FormField label={t('label')} htmlFor="cv-label" description={t('versionLabelDescription')}>
+            <Input
+              id="cv-label"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={t('versionLabelPlaceholder')}
+            />
           </FormField>
-          <FormField label="Description" htmlFor="cv-desc" description="Optional notes about this version.">
+          <FormField label={t('common:colDescription')} htmlFor="cv-desc" description={t('versionDescriptionHint')}>
             <Textarea id="cv-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
           </FormField>
           <Button onClick={doPublish} loading={busy}>
-            Publish
+            {t('publish')}
           </Button>
         </div>
       </FormDrawer>
 
       {loading && !data ? (
-        <LoadingState description="Loading versions…" />
+        <LoadingState description={t('loadingVersions')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : versions.length === 0 ? (
         <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
-          No versions published yet.
+          {t('noVersionsYet')}
         </p>
       ) : (
         <DataTable>
           <DataTableHead>
-            <DataTableHeaderCell>Version</DataTableHeaderCell>
-            <DataTableHeaderCell>Label</DataTableHeaderCell>
-            <DataTableHeaderCell>Published</DataTableHeaderCell>
-            <DataTableHeaderCell>By</DataTableHeaderCell>
-            {canWrite && <DataTableHeaderCell className="text-right">Actions</DataTableHeaderCell>}
+            <DataTableHeaderCell>{t('colVersion')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('label')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('colPublished')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('colBy')}</DataTableHeaderCell>
+            {canWrite && <DataTableHeaderCell className="text-right">{t('common:colActions')}</DataTableHeaderCell>}
           </DataTableHead>
           <DataTableBody>
             {versions.map((v) => (
@@ -202,7 +201,7 @@ export function ConnectorVersionsPanel({
                   <span className="tabular-nums">{v.version}</span>
                   {v.version === latest && (
                     <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
-                      live
+                      {t('liveBadge')}
                     </span>
                   )}
                 </DataTableCell>
@@ -217,7 +216,7 @@ export function ConnectorVersionsPanel({
                       onClick={() => doRollback(v.version)}
                       loading={rolling.has(v.version)}
                     >
-                      <RotateCcw size={14} /> Restore
+                      <RotateCcw size={14} /> {t('restore')}
                     </Button>
                   </DataTableCell>
                 )}
