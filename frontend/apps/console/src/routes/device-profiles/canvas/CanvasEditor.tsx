@@ -10,6 +10,8 @@
 // show on nodes. A form-authored rule opens here via the pure reverse round-trip.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -99,8 +101,9 @@ function structuralKey(nodes: Node[], edges: Edge[]): string {
 
 // initialGraph resolves the starting graph: the stored AuthoringGraph if the rule was
 // canvas-authored, else the reverse round-trip of its definition, else a lone Source for a new
-// rule.
-function initialGraph(entity: DetectionRule | undefined, profileToken: string): CanvasDefinition {
+// rule. `t` (deviceProfiles-scoped) is threaded into graphFromDefinition, which is a plain
+// function and cannot call the translation hook itself.
+function initialGraph(entity: DetectionRule | undefined, profileToken: string, t: TFunction): CanvasDefinition {
   if (entity?.authoringGraph) {
     try {
       const parsed = JSON.parse(entity.authoringGraph) as CanvasDefinition;
@@ -112,7 +115,7 @@ function initialGraph(entity: DetectionRule | undefined, profileToken: string): 
     }
   }
   if (entity?.definition) {
-    const { graph } = graphFromDefinition(entity.definition, profileToken);
+    const { graph } = graphFromDefinition(entity.definition, profileToken, t);
     if (graph) return graph;
   }
   return {
@@ -134,8 +137,9 @@ function conditionMeta(nodes: Node[]): { name?: string; description?: string } {
 }
 
 function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: string; entity?: DetectionRule; onDone: (message: string) => void }) {
+  const { t } = useTranslation('deviceProfiles');
   const editing = entity != null;
-  const seed = useMemo(() => toReactFlow(initialGraph(entity, profileToken)), [entity, profileToken]);
+  const seed = useMemo(() => toReactFlow(initialGraph(entity, profileToken, t)), [entity, profileToken, t]);
   const [nodes, setNodes, onNodesChange] = useNodesState(seed.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(seed.edges);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -313,10 +317,10 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
       };
       if (editing) {
         await updateDetectionRule(entity.token, request);
-        onDone(`Detection rule “${request.token}” updated`);
+        onDone(t('canvasRuleUpdated', { token: request.token }));
       } else {
         await createDetectionRule(request);
-        onDone(`Detection rule “${request.token}” created`);
+        onDone(t('canvasRuleCreated', { token: request.token }));
       }
     } catch (err) {
       setFormError(errMessage(err));
@@ -333,52 +337,57 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
 
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <FormField label="Token" htmlFor="canvas-token" description={editing ? 'The rule id; it cannot change.' : undefined}>
+        <FormField label={t('canvasTokenLabel')} htmlFor="canvas-token" description={editing ? t('canvasTokenDescription') : undefined}>
           {editing ? (
             <Input id="canvas-token" value={token} disabled />
           ) : (
-            <TokenField id="canvas-token" entityType={normalizeToken('detection rule')} value={token} onChange={setToken} seed={conditionMeta(nodes).name ?? ''} placeholder="freezer-warm" />
+            <TokenField id="canvas-token" entityType={normalizeToken('detection rule')} value={token} onChange={setToken} seed={conditionMeta(nodes).name ?? ''} placeholder={t('canvasTokenPlaceholder')} />
           )}
         </FormField>
         <label className="flex items-center gap-2 pb-2 text-sm">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Enabled
+          {t('common:enabled')}
         </label>
         <div className="flex items-center gap-3 pb-1">
           <CompileStatus status={compile.status} result={result} />
           <Button onClick={save} loading={busy} disabled={!canSave}>
-            {editing ? 'Save changes' : 'Create rule'}
+            {editing ? t('common:saveChanges') : t('canvasCreateRule')}
           </Button>
         </div>
       </div>
       {entity?.entityGroupToken && (
         <p className="text-xs text-muted-foreground">
-          Scoped to group{' '}
-          <span className="font-medium">
-            {entity.entityGroupToken}@{entity.entityGroupVersion}
-          </span>{' '}
-          — preserved on save; edit the scope in the Form tab.
+          <Trans
+            t={t}
+            i18nKey="canvasScopedToGroup"
+            values={{ token: entity.entityGroupToken, version: entity.entityGroupVersion }}
+            components={{ mono: <span className="font-medium" /> }}
+          />
         </p>
       )}
 
       <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 p-2">
-        <span className="text-xs font-medium text-muted-foreground">Add:</span>
+        <span className="text-xs font-medium text-muted-foreground">{t('canvasAddLabel')}</span>
+        {/* eslint-disable-next-line i18next/no-literal-string -- 'source' is the NodeType discriminant, not user text. */}
         <Button variant="outline" size="sm" onClick={() => addNode('source')}>
-          <Plus size={14} /> Source
+          <Plus size={14} /> {t('nodeSource')}
         </Button>
-        {CONDITION_TYPES.map((t) => (
-          <Button key={t} variant="outline" size="sm" onClick={() => addNode(t)}>
-            {NODE_CATALOG[t].label}
+        {CONDITION_TYPES.map((condType) => (
+          <Button key={condType} variant="outline" size="sm" onClick={() => addNode(condType)}>
+            {t(NODE_CATALOG[condType].labelKey)}
           </Button>
         ))}
+        {/* eslint-disable-next-line i18next/no-literal-string -- 'compute' is the NodeType discriminant, not user text. */}
         <Button variant="outline" size="sm" onClick={() => addNode('compute')}>
-          <Plus size={14} /> Compute
+          <Plus size={14} /> {t('nodeCompute')}
         </Button>
+        {/* eslint-disable-next-line i18next/no-literal-string -- 'branch' is the NodeType discriminant, not user text. */}
         <Button variant="outline" size="sm" onClick={() => addNode('branch')}>
-          <Plus size={14} /> Branch
+          <Plus size={14} /> {t('nodeBranch')}
         </Button>
+        {/* eslint-disable-next-line i18next/no-literal-string -- 'action' is the NodeType discriminant, not user text. */}
         <Button variant="outline" size="sm" onClick={() => addNode('action')}>
-          <Plus size={14} /> Action
+          <Plus size={14} /> {t('nodeAction')}
         </Button>
       </div>
 
@@ -409,9 +418,9 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
           {selected ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <h4 className="text-sm font-semibold">{NODE_CATALOG[(selected.data as CanvasNodeData).nodeType].label}</h4>
+                <h4 className="text-sm font-semibold">{t(NODE_CATALOG[(selected.data as CanvasNodeData).nodeType].labelKey)}</h4>
                 {(selected.data as CanvasNodeData).nodeType !== 'source' && (
-                  <Button variant="ghost" size="sm" onClick={removeSelected} title="Remove node">
+                  <Button variant="ghost" size="sm" onClick={removeSelected} title={t('canvasRemoveNodeTitle')}>
                     <Trash2 size={14} />
                   </Button>
                 )}
@@ -432,7 +441,7 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
             </div>
           ) : (
             <div className="space-y-3 text-sm text-muted-foreground">
-              <p>Select a node to edit it, or add one from the palette. Wire a source into a condition, and the condition's signal into an action.</p>
+              <p>{t('canvasEmptySelectionHint')}</p>
               {graphErrors.length > 0 && (
                 <ul className="space-y-1">
                   {graphErrors.map((d, i) => (
@@ -455,7 +464,7 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
         graph={JSON.stringify(canvasDef)}
         profileToken={profileToken}
         structuralKey={key}
-        notReadyReason={!fresh ? 'Waiting for the compiler…' : !result?.ok ? 'Fix the compile errors before previewing' : null}
+        notReadyReason={!fresh ? t('canvasWaitingForCompiler') : !result?.ok ? t('canvasFixCompileErrors') : null}
         onTrace={setTrace}
       />
     </div>
@@ -463,16 +472,17 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
 }
 
 function CompileStatus({ status, result }: { status: 'idle' | 'checking' | 'done'; result: CanvasCompileResult | null }) {
-  if (status === 'checking') return <span className="text-xs text-muted-foreground">Checking…</span>;
+  const { t } = useTranslation('deviceProfiles');
+  if (status === 'checking') return <span className="text-xs text-muted-foreground">{t('canvasChecking')}</span>;
   if (!result) return null;
   if (result.ok) {
     return (
       <span className="text-xs text-success">
-        Compiles{typeof result.estimatedCost === 'number' ? ` · cost ${result.estimatedCost}` : ''}
+        {typeof result.estimatedCost === 'number' ? t('canvasCompilesWithCost', { cost: result.estimatedCost }) : t('canvasCompiles')}
       </span>
     );
   }
-  return <span className="text-xs text-destructive">Not valid yet</span>;
+  return <span className="text-xs text-destructive">{t('canvasNotValidYet')}</span>;
 }
 
 // CanvasEditor is the exported entry — it provides the @xyflow/react context the editor needs.

@@ -21,6 +21,8 @@
 // compiler then rejects.
 
 import { useEffect, useState } from 'react';
+import { useTranslation, Trans } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { normalizeToken } from '@devicechain/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -47,50 +49,67 @@ import { sameLogicalRule } from './rule-equal';
 
 type RuleType = 'threshold' | 'duration' | 'absence' | 'repeating' | 'deltaRate' | 'aggregate' | 'correlation';
 
-const RULE_TYPES: ComboboxOption[] = [
-  { value: 'threshold', label: 'Threshold', description: 'Fires while a metric compares past a bound.' },
-  { value: 'duration', label: 'Duration', description: 'Fires when a comparison stays true for a sustained time.' },
-  { value: 'absence', label: 'Absence', description: 'Fires when a device goes silent for a window.' },
-  { value: 'repeating', label: 'Repeating', description: 'Fires when N matching events fall inside a window.' },
-  { value: 'deltaRate', label: 'Rate of change', description: 'Fires on the change between consecutive samples.' },
-  { value: 'aggregate', label: 'Windowed aggregate', description: 'Fires when an aggregate over a window crosses a bound.' },
-  { value: 'correlation', label: 'Area correlation', description: 'Fires when distinct devices report under one anchor.' },
-];
+// Option arrays are FUNCTIONS of `t` (called inside the component that renders them), never
+// module-scope useTranslation — only the `value` fields are machine discriminants (serialized
+// into the rule JSON / compared in logic); `label`/`description` are display text.
+function ruleTypeOptions(t: TFunction): ComboboxOption[] {
+  return [
+    { value: 'threshold', label: t('ruleTypeThresholdLabel'), description: t('ruleTypeThresholdDescription') },
+    { value: 'duration', label: t('ruleTypeDurationLabel'), description: t('ruleTypeDurationDescription') },
+    { value: 'absence', label: t('ruleTypeAbsenceLabel'), description: t('ruleTypeAbsenceDescription') },
+    { value: 'repeating', label: t('ruleTypeRepeatingLabel'), description: t('ruleTypeRepeatingDescription') },
+    { value: 'deltaRate', label: t('ruleTypeDeltaRateLabel'), description: t('ruleTypeDeltaRateDescription') },
+    { value: 'aggregate', label: t('ruleTypeAggregateLabel'), description: t('ruleTypeAggregateDescription') },
+    { value: 'correlation', label: t('ruleTypeCorrelationLabel'), description: t('ruleTypeCorrelationDescription') },
+  ];
+}
 
-const SEVERITIES: ComboboxOption[] = [
-  { value: 'critical', label: 'Critical' },
-  { value: 'major', label: 'Major' },
-  { value: 'minor', label: 'Minor' },
-  { value: 'warning', label: 'Warning' },
-  { value: 'indeterminate', label: 'Indeterminate' },
-];
+// Severity labels are shared with the alarms area's own vocabulary (already translated there);
+// reused here rather than duplicating the catalog entries.
+function severityOptions(t: TFunction): ComboboxOption[] {
+  return [
+    { value: 'critical', label: t('alarms:sevCritical') },
+    { value: 'major', label: t('alarms:sevMajor') },
+    { value: 'minor', label: t('alarms:sevMinor') },
+    { value: 'warning', label: t('alarms:sevWarning') },
+    { value: 'indeterminate', label: t('alarms:sevIndeterminate') },
+  ];
+}
 
 // The structured leaf comparison allows eq/ne (it lowers to CEL, where equality is
 // well-defined); the engine-side aggregate/delta comparison is ordered-only.
-const ALL_OPS: ComboboxOption[] = [
-  { value: 'gt', label: '> greater than' },
-  { value: 'ge', label: '≥ at least' },
-  { value: 'lt', label: '< less than' },
-  { value: 'le', label: '≤ at most' },
-  { value: 'eq', label: '= equal to' },
-  { value: 'ne', label: '≠ not equal to' },
-];
-const ORDERED_OPS = ALL_OPS.filter((o) => o.value !== 'eq' && o.value !== 'ne');
+function allOps(t: TFunction): ComboboxOption[] {
+  return [
+    { value: 'gt', label: t('ruleOpGt') },
+    { value: 'ge', label: t('ruleOpGe') },
+    { value: 'lt', label: t('ruleOpLt') },
+    { value: 'le', label: t('ruleOpLe') },
+    { value: 'eq', label: t('ruleOpEq') },
+    { value: 'ne', label: t('ruleOpNe') },
+  ];
+}
+function orderedOps(t: TFunction): ComboboxOption[] {
+  return allOps(t).filter((o) => o.value !== 'eq' && o.value !== 'ne');
+}
 
-const AGG_FUNCS: ComboboxOption[] = [
-  { value: 'count', label: 'count' },
-  { value: 'sum', label: 'sum' },
-  { value: 'avg', label: 'average' },
-  { value: 'min', label: 'minimum' },
-  { value: 'max', label: 'maximum' },
-];
+function aggFuncOptions(t: TFunction): ComboboxOption[] {
+  return [
+    { value: 'count', label: t('ruleAggFuncCount') },
+    { value: 'sum', label: t('ruleAggFuncSum') },
+    { value: 'avg', label: t('ruleAggFuncAvg') },
+    { value: 'min', label: t('ruleAggFuncMin') },
+    { value: 'max', label: t('ruleAggFuncMax') },
+  ];
+}
 
-const WINDOW_MODES: ComboboxOption[] = [
-  { value: 'tumbling', label: 'Tumbling', description: 'Fixed, non-overlapping time windows.' },
-  { value: 'sliding', label: 'Sliding', description: 'Trailing time window, re-evaluated per event.' },
-  { value: 'session', label: 'Session', description: 'Closes after a gap of silence.' },
-  { value: 'count', label: 'Count', description: 'A window of N events, not time.' },
-];
+function windowModeOptions(t: TFunction): ComboboxOption[] {
+  return [
+    { value: 'tumbling', label: t('ruleWindowModeTumblingLabel'), description: t('ruleWindowModeTumblingDescription') },
+    { value: 'sliding', label: t('ruleWindowModeSlidingLabel'), description: t('ruleWindowModeSlidingDescription') },
+    { value: 'session', label: t('ruleWindowModeSessionLabel'), description: t('ruleWindowModeSessionDescription') },
+    { value: 'count', label: t('ruleWindowModeCountLabel'), description: t('ruleWindowModeCountDescription') },
+  ];
+}
 
 // Condition editors: a required-leaf type offers structured|cel; an optional-leaf type
 // also offers "match every event"; absence takes no leaf at all.
@@ -135,8 +154,9 @@ function DurationField({
   onChange: (v: string) => void;
   placeholder: string;
 }) {
+  const { t } = useTranslation('deviceProfiles');
   return (
-    <FormField label={label} htmlFor={id} description="A duration, e.g. 30s, 5m, 1h30m.">
+    <FormField label={label} htmlFor={id} description={t('ruleDurationFieldDescription')}>
       <Input id={id} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
     </FormField>
   );
@@ -176,25 +196,22 @@ function ConditionEditor({
   cel: string;
   setCel: (v: string) => void;
 }) {
+  const { t } = useTranslation('deviceProfiles');
   if (conditionForbidden(ruleType)) return null;
 
   const required = conditionRequired(ruleType);
   const modeOptions: ComboboxOption[] = [
-    { value: 'structured', label: 'Structured comparison' },
-    { value: 'cel', label: 'Advanced (CEL expression)' },
-    ...(required ? [] : [{ value: 'none', label: 'Match every event' } as ComboboxOption]),
+    { value: 'structured', label: t('ruleConditionModeStructuredLabel') },
+    { value: 'cel', label: t('ruleConditionModeCelLabel') },
+    ...(required ? [] : [{ value: 'none', label: t('ruleConditionModeNoneLabel') } as ComboboxOption]),
   ];
 
   return (
     <div className="space-y-3 rounded-md border p-3">
       <FormField
-        label="Condition"
+        label={t('ruleConditionLabel')}
         htmlFor="dr-cond-mode"
-        description={
-          required
-            ? 'The comparison this rule fires on.'
-            : 'An optional per-event gate. “Match every event” lets the temporal shape carry the logic.'
-        }
+        description={required ? t('ruleConditionDescriptionRequired') : t('ruleConditionDescriptionOptional')}
       >
         <Combobox
           id="dr-cond-mode"
@@ -208,32 +225,36 @@ function ConditionEditor({
       {mode === 'structured' && (
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
-            <FormField label="Metric" htmlFor="dr-cond-metric" description="The metric key the event carries.">
+            <FormField label={t('ruleMetricLabel')} htmlFor="dr-cond-metric" description={t('ruleMetricDescription')}>
               <Input
                 id="dr-cond-metric"
                 value={metric}
                 onChange={(e) => setMetric(e.target.value)}
-                placeholder="temperature"
+                placeholder={t('ruleMetricPlaceholder')}
               />
             </FormField>
-            <FormField label="Operator" htmlFor="dr-cond-op">
-              <Combobox id="dr-cond-op" value={op} onChange={setOp} options={ALL_OPS} allowClear={false} />
+            <FormField label={t('ruleOperatorLabel')} htmlFor="dr-cond-op">
+              <Combobox id="dr-cond-op" value={op} onChange={setOp} options={allOps(t)} allowClear={false} />
             </FormField>
           </div>
-          <FormField label="Bound" htmlFor="dr-cond-bound-kind" description="A fixed value, or the device's own attribute.">
+          <FormField label={t('ruleBoundLabel')} htmlFor="dr-cond-bound-kind" description={t('ruleBoundDescription')}>
             <Combobox
               id="dr-cond-bound-kind"
               value={boundKind}
               onChange={(v) => setBoundKind(v as BoundKind)}
+              // 'literal'/'attr' are the BoundKind discriminant, never user text — only the
+              // labels (translated above) are display text.
+              /* eslint-disable i18next/no-literal-string */
               options={[
-                { value: 'literal', label: 'Literal value' },
-                { value: 'attr', label: 'Device attribute (per-device threshold)' },
+                { value: 'literal', label: t('ruleBoundKindLiteralLabel') },
+                { value: 'attr', label: t('ruleBoundKindAttrLabel') },
               ]}
+              /* eslint-enable i18next/no-literal-string */
               allowClear={false}
             />
           </FormField>
           {boundKind === 'literal' ? (
-            <FormField label="Threshold" htmlFor="dr-cond-threshold">
+            <FormField label={t('ruleThresholdLabel')} htmlFor="dr-cond-threshold">
               <Input
                 id="dr-cond-threshold"
                 type="number"
@@ -244,15 +265,15 @@ function ConditionEditor({
             </FormField>
           ) : (
             <FormField
-              label="Threshold attribute"
+              label={t('ruleThresholdAttrLabel')}
               htmlFor="dr-cond-attr"
-              description="The device attribute whose numeric value is the bound, e.g. tempLimit."
+              description={t('ruleThresholdAttrDescription')}
             >
               <Input
                 id="dr-cond-attr"
                 value={thresholdAttr}
                 onChange={(e) => setThresholdAttr(e.target.value)}
-                placeholder="tempLimit"
+                placeholder={t('ruleThresholdAttrPlaceholder')}
               />
             </FormField>
           )}
@@ -261,14 +282,17 @@ function ConditionEditor({
 
       {mode === 'cel' && (
         <FormField
-          label="CEL expression"
+          label={t('ruleCelLabel')}
           htmlFor="dr-cond-cel"
-          description="An advanced predicate over the event vocabulary (m, attr, device). Type-checked and cost-gated at publish."
+          description={t('ruleCelDescription')}
         >
           <Textarea
             id="dr-cond-cel"
             value={cel}
             onChange={(e) => setCel(e.target.value)}
+            // Example CEL syntax, not prose — the metric key + operators here are literal rule
+            // grammar, never translated (mirrors the domain-note carve-out for CEL fragments).
+            // eslint-disable-next-line i18next/no-literal-string
             placeholder={'"temperature" in m && m["temperature"] > 80'}
             className="min-h-20 font-mono text-xs"
           />
@@ -295,6 +319,7 @@ export function DetectionRuleForm({
   initialDefinition?: string;
   onDone: (message: string) => void;
 }) {
+  const { t } = useTranslation('deviceProfiles');
   const editing = entity != null;
   // Pre-fill precedence: the stored rule when editing, else an NL/handoff draft, else blank.
   const initial = editing
@@ -371,6 +396,7 @@ export function DetectionRuleForm({
   // trip) before the inline compiler check or the publish gate rejects. It mirrors only the
   // cheap required-field rules; the compiler remains authoritative.
   const hint = validationHint({
+    t,
     editing,
     token,
     definitionName,
@@ -536,7 +562,7 @@ export function DetectionRuleForm({
       .then((preview) => {
         if (cancelled) return;
         if (!preview.valid || !preview.members) {
-          setScopeCount({ status: 'error', message: preview.error ?? 'selector invalid' });
+          setScopeCount({ status: 'error', message: preview.error ?? t('ruleScopeSelectorInvalidFallback') });
           return;
         }
         setScopeCount({ status: 'ok', total: preview.members.pagination.totalRecords ?? 0 });
@@ -576,10 +602,10 @@ export function DetectionRuleForm({
       };
       if (editing) {
         await updateDetectionRule(entity.token, request);
-        onDone(`Detection rule “${request.token}” updated`);
+        onDone(t('ruleUpdatedToast', { token: request.token }));
       } else {
         await createDetectionRule(request);
-        onDone(`Detection rule “${request.token}” created`);
+        onDone(t('ruleCreatedToast', { token: request.token }));
       }
     } catch (err) {
       setFormError(errMessage(err));
@@ -596,7 +622,7 @@ export function DetectionRuleForm({
   // publish gate rejects it).
   const scopeGroupOptions: ComboboxOption[] = scopeGroups.map((g) => ({
     value: g.token,
-    label: `${g.name ?? g.token} · ${g.memberType}`,
+    label: t('ruleScopeGroupOptionLabel', { name: g.name ?? g.token, memberType: g.memberType }),
   }));
   const scopeVersionOptions: ComboboxOption[] = scopeVersions.map((v) => ({
     value: String(v.version),
@@ -611,30 +637,25 @@ export function DetectionRuleForm({
   const scopeMemberType = scopeGroups.find((g) => g.token === scopeGroupToken)?.memberType ?? 'entity';
   // Block save on a half-set scope (a group with no version chosen — an unpublished group, or a
   // click before the versions fetch resolved); the backend would reject the publish anyway.
-  const scopeHint = scopeChosen && scopeGroupVersion == null ? 'Pick a published version for the scoped group.' : null;
+  const scopeHint = scopeChosen && scopeGroupVersion == null ? t('ruleScopeHalfSetHint') : null;
 
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      {unparseable && (
-        <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
-          This rule's stored definition could not be read into the form. It has been reset to a blank
-          threshold rule — saving will replace the original definition.
-        </p>
-      )}
+      {unparseable && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">{t('ruleUnparseableWarning')}</p>}
 
-      <FormField label="Name" htmlFor="dr-name" description="A human name for the rule.">
-        <Input id="dr-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Overheating" />
+      <FormField label={t('common:colName')} htmlFor="dr-name" description={t('ruleNameDescription')}>
+        <Input id="dr-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={t('ruleNamePlaceholder')} />
       </FormField>
-      <FormField label="Description" htmlFor="dr-description">
+      <FormField label={t('common:colDescription')} htmlFor="dr-description">
         <Textarea
           id="dr-description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="What this rule detects and why."
+          placeholder={t('ruleDescriptionPlaceholder')}
         />
       </FormField>
-      <FormField label="Token" htmlFor="dr-token" description={editing ? 'The id; it cannot change.' : undefined}>
+      <FormField label={t('common:colToken')} htmlFor="dr-token" description={editing ? t('ruleTokenLockedDescription') : undefined}>
         {editing ? (
           <Input id="dr-token" value={token} disabled />
         ) : (
@@ -644,46 +665,47 @@ export function DetectionRuleForm({
             value={token}
             onChange={setToken}
             seed={name}
-            placeholder="rule-overheating"
+            placeholder={t('ruleTokenPlaceholder')}
           />
         )}
       </FormField>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <FormField label="Rule type" htmlFor="dr-type" description="What the rule detects.">
+        <FormField label={t('ruleTypePickerLabel')} htmlFor="dr-type" description={t('ruleTypePickerDescription')}>
           <Combobox
             id="dr-type"
             value={ruleType}
             onChange={(v) => {
-              const t = v as RuleType;
-              setRuleType(t);
+              const newType = v as RuleType;
+              setRuleType(newType);
               // A required-leaf type has no "match every event" mode; if the previous type
               // left the condition at 'none', coerce it back to structured so the editor
               // reappears (otherwise the leaf silently stays empty — Fable H1).
-              if (conditionRequired(t) && condMode === 'none') setCondMode('structured');
+              // eslint-disable-next-line i18next/no-literal-string -- 'structured' is the CondMode discriminant.
+              if (conditionRequired(newType) && condMode === 'none') setCondMode('structured');
             }}
-            options={RULE_TYPES}
+            options={ruleTypeOptions(t)}
             allowClear={false}
           />
         </FormField>
         <FormField
-          label="Severity"
+          label={t('alarms:colSeverity')}
           htmlFor="dr-severity"
-          description={hasRaiseAlarm ? 'Required — the tier a raised alarm carries.' : 'The detection tier (optional).'}
+          description={hasRaiseAlarm ? t('ruleSeverityDescriptionRequired') : t('ruleSeverityDescriptionOptional')}
         >
           <Combobox
             id="dr-severity"
             value={severity}
             onChange={setSeverity}
-            options={SEVERITIES}
-            placeholder="none"
+            options={severityOptions(t)}
+            placeholder={t('ruleSeverityPlaceholder')}
           />
         </FormField>
       </div>
 
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="h-4 w-4" />
-        Enabled — a disabled rule is kept with the profile but not run.
+        {t('ruleEnabledCheckboxLabel')}
       </label>
 
       {/* ADR-062 S4 group scope: pin the rule to a published dynamic entity-group version so it
@@ -696,14 +718,14 @@ export function DetectionRuleForm({
             onChange={(e) => setScoped(e.target.checked)}
             className="h-4 w-4"
           />
-          Scope to an entity group — fire this rule only for members of a group version.
+          {t('ruleScopeCheckboxLabel')}
         </label>
         {scoped && (
           <div className="space-y-3 pl-6">
             <FormField
-              label="Group"
+              label={t('ruleScopeGroupLabel')}
               htmlFor="dr-scope-group"
-              description="A dynamic entity group. Members are resolved from the group version's frozen selector."
+              description={t('ruleScopeGroupDescription')}
             >
               <Combobox
                 id="dr-scope-group"
@@ -713,14 +735,14 @@ export function DetectionRuleForm({
                   setScopeGroupVersion(null);
                 }}
                 options={scopeGroupOptions}
-                placeholder={scopeGroups.length === 0 ? 'No dynamic groups yet' : 'Select a group'}
+                placeholder={scopeGroups.length === 0 ? t('ruleScopeGroupPlaceholderEmpty') : t('ruleScopeGroupPlaceholderSelect')}
               />
             </FormField>
             {scopeGroupToken && (
               <FormField
-                label="Version"
+                label={t('ruleScopeVersionLabel')}
                 htmlFor="dr-scope-version"
-                description="The rule pins a specific published version, so its target set never drifts under a later group edit."
+                description={t('ruleScopeVersionDescription')}
               >
                 <Combobox
                   id="dr-scope-version"
@@ -728,32 +750,25 @@ export function DetectionRuleForm({
                   onChange={(v) => setScopeGroupVersion(v ? Number(v) : null)}
                   options={scopeVersionOptions}
                   allowClear={false}
-                  placeholder={scopeVersions.length === 0 ? 'Group has no published version' : 'Select a version'}
+                  placeholder={scopeVersions.length === 0 ? t('ruleScopeVersionPlaceholderEmpty') : t('ruleScopeVersionPlaceholderSelect')}
                 />
               </FormField>
             )}
             {scopeGroupToken && scopeVersionsStatus === 'ok' && scopeVersions.length === 0 && (
-              <p className="text-sm text-amber-700 dark:text-amber-400">
-                This group has no published version yet — publish the group before scoping a rule to it.
-              </p>
+              <p className="text-sm text-amber-700 dark:text-amber-400">{t('ruleScopeNoPublishedVersion')}</p>
             )}
             {scopeGroupToken && scopeVersionsStatus === 'error' && (
-              <p className="text-sm text-amber-700 dark:text-amber-400">
-                Could not load this group's versions — check your connection and try again.
-              </p>
+              <p className="text-sm text-amber-700 dark:text-amber-400">{t('ruleScopeVersionsLoadError')}</p>
             )}
             {scopeUnsupportedKind && (
-              <p className="text-sm text-amber-700 dark:text-amber-400">
-                A group scope is not supported on a {ruleType} rule — publishing will be refused. Absence and
-                correlation rules cannot be group-scoped.
-              </p>
+              <p className="text-sm text-amber-700 dark:text-amber-400">{t('ruleScopeUnsupportedKind', { ruleType })}</p>
             )}
             {scopeGroupToken && scopeGroupVersion != null && !scopeUnsupportedKind && (
               <p className="text-sm text-muted-foreground" aria-live="polite">
-                {scopeCount.status === 'checking' && 'Counting members…'}
+                {scopeCount.status === 'checking' && t('ruleScopeCounting')}
                 {scopeCount.status === 'ok' &&
-                  `Currently matches ${scopeCount.total} ${scopeCount.total === 1 ? scopeMemberType : `${scopeMemberType}s`}.`}
-                {scopeCount.status === 'error' && `Selector preview unavailable: ${scopeCount.message}`}
+                  t('ruleScopeMatchCount', { count: scopeCount.total ?? 0, memberType: scopeMemberType })}
+                {scopeCount.status === 'error' && t('ruleScopeSelectorUnavailable', { message: scopeCount.message })}
               </p>
             )}
           </div>
@@ -781,32 +796,32 @@ export function DetectionRuleForm({
 
       {/* Type-specific temporal / value fields. */}
       {ruleType === 'duration' && (
-        <DurationField id="dr-hold" label="Sustain for" value={holdStr} onChange={setHoldStr} placeholder="5m" />
+        <DurationField id="dr-hold" label={t('ruleHoldLabel')} value={holdStr} onChange={setHoldStr} placeholder={t('ruleDurationPlaceholder5m')} />
       )}
 
       {ruleType === 'absence' && (
-        <DurationField id="dr-timeout" label="Silence window" value={timeoutStr} onChange={setTimeoutStr} placeholder="15m" />
+        <DurationField id="dr-timeout" label={t('ruleTimeoutLabel')} value={timeoutStr} onChange={setTimeoutStr} placeholder={t('ruleDurationPlaceholder15m')} />
       )}
 
       {ruleType === 'deltaRate' && (
         <div className="space-y-3">
-          <FormField label="Value metric" htmlFor="dr-value-metric" description="The metric whose change is measured.">
+          <FormField label={t('ruleValueMetricLabel')} htmlFor="dr-value-metric" description={t('ruleValueMetricDescriptionDelta')}>
             <Input
               id="dr-value-metric"
               value={valueMetric}
               onChange={(e) => setValueMetric(e.target.value)}
-              placeholder="temperature"
+              placeholder={t('ruleMetricPlaceholder')}
             />
           </FormField>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={rate} onChange={(e) => setRate(e.target.checked)} className="h-4 w-4" />
-            Per-second rate (otherwise the raw delta between samples).
+            {t('ruleRateCheckboxLabel')}
           </label>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-[auto_1fr]">
-            <FormField label="Operator" htmlFor="dr-agg-op">
-              <Combobox id="dr-agg-op" value={aggOp} onChange={setAggOp} options={ORDERED_OPS} allowClear={false} />
+            <FormField label={t('ruleOperatorLabel')} htmlFor="dr-agg-op">
+              <Combobox id="dr-agg-op" value={aggOp} onChange={setAggOp} options={orderedOps(t)} allowClear={false} />
             </FormField>
-            <FormField label="Threshold" htmlFor="dr-agg-threshold">
+            <FormField label={t('ruleThresholdLabel')} htmlFor="dr-agg-threshold">
               <Input
                 id="dr-agg-threshold"
                 type="number"
@@ -822,40 +837,40 @@ export function DetectionRuleForm({
       {ruleType === 'aggregate' && (
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <FormField label="Aggregate" htmlFor="dr-agg-func">
-              <Combobox id="dr-agg-func" value={aggFunc} onChange={setAggFunc} options={AGG_FUNCS} allowClear={false} />
+            <FormField label={t('ruleAggFuncLabel')} htmlFor="dr-agg-func">
+              <Combobox id="dr-agg-func" value={aggFunc} onChange={setAggFunc} options={aggFuncOptions(t)} allowClear={false} />
             </FormField>
-            <FormField label="Window mode" htmlFor="dr-window-mode">
+            <FormField label={t('ruleWindowModeLabel')} htmlFor="dr-window-mode">
               <Combobox
                 id="dr-window-mode"
                 value={windowMode}
                 onChange={setWindowMode}
-                options={WINDOW_MODES}
+                options={windowModeOptions(t)}
                 allowClear={false}
               />
             </FormField>
           </div>
           {aggNeedsValueMetric && (
-            <FormField label="Value metric" htmlFor="dr-agg-value-metric" description="The metric folded by the aggregate.">
+            <FormField label={t('ruleValueMetricLabel')} htmlFor="dr-agg-value-metric" description={t('ruleValueMetricDescriptionAgg')}>
               <Input
                 id="dr-agg-value-metric"
                 value={valueMetric}
                 onChange={(e) => setValueMetric(e.target.value)}
-                placeholder="temperature"
+                placeholder={t('ruleMetricPlaceholder')}
               />
             </FormField>
           )}
           {(windowMode === 'tumbling' || windowMode === 'sliding') && (
-            <DurationField id="dr-agg-window" label="Window" value={windowStr} onChange={setWindowStr} placeholder="5m" />
+            <DurationField id="dr-agg-window" label={t('ruleWindowLabel')} value={windowStr} onChange={setWindowStr} placeholder={t('ruleDurationPlaceholder5m')} />
           )}
           {windowMode === 'session' && (
-            <DurationField id="dr-agg-gap" label="Session gap" value={gapStr} onChange={setGapStr} placeholder="1m" />
+            <DurationField id="dr-agg-gap" label={t('ruleSessionGapLabel')} value={gapStr} onChange={setGapStr} placeholder={t('ruleDurationPlaceholder1m')} />
           )}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-[auto_1fr]">
-            <FormField label="Operator" htmlFor="dr-agg-op2">
-              <Combobox id="dr-agg-op2" value={aggOp} onChange={setAggOp} options={ORDERED_OPS} allowClear={false} />
+            <FormField label={t('ruleOperatorLabel')} htmlFor="dr-agg-op2">
+              <Combobox id="dr-agg-op2" value={aggOp} onChange={setAggOp} options={orderedOps(t)} allowClear={false} />
             </FormField>
-            <FormField label="Threshold" htmlFor="dr-agg-threshold2">
+            <FormField label={t('ruleThresholdLabel')} htmlFor="dr-agg-threshold2">
               <Input
                 id="dr-agg-threshold2"
                 type="number"
@@ -869,23 +884,23 @@ export function DetectionRuleForm({
       )}
 
       {ruleType === 'repeating' && (
-        <DurationField id="dr-rep-window" label="Within window" value={windowStr} onChange={setWindowStr} placeholder="10m" />
+        <DurationField id="dr-rep-window" label={t('ruleWithinWindowLabel')} value={windowStr} onChange={setWindowStr} placeholder={t('ruleDurationPlaceholder10m')} />
       )}
 
       {ruleType === 'correlation' && (
         <div className="space-y-3">
           <FormField
-            label="Anchor type"
+            label={t('ruleAnchorTypeLabel')}
             htmlFor="dr-anchor"
-            description="The anchor (area) relationship distinct devices roll up to."
+            description={t('ruleAnchorTypeDescription')}
           >
-            <Input id="dr-anchor" value={anchorType} onChange={(e) => setAnchorType(e.target.value)} placeholder="zone" />
+            <Input id="dr-anchor" value={anchorType} onChange={(e) => setAnchorType(e.target.value)} placeholder={t('ruleAnchorPlaceholder')} />
           </FormField>
-          <DurationField id="dr-corr-window" label="Within window" value={windowStr} onChange={setWindowStr} placeholder="5m" />
+          <DurationField id="dr-corr-window" label={t('ruleWithinWindowLabel')} value={windowStr} onChange={setWindowStr} placeholder={t('ruleDurationPlaceholder5m')} />
           <FormField
-            label="Member cap"
+            label={t('ruleMemberCapLabel')}
             htmlFor="dr-member-cap"
-            description="Optional retained-member backstop; defaults to the platform limit."
+            description={t('ruleMemberCapDescription')}
           >
             <Input
               id="dr-member-cap"
@@ -900,14 +915,14 @@ export function DetectionRuleForm({
 
       {showCount && (
         <FormField
-          label={ruleType === 'correlation' ? 'Distinct devices' : 'Occurrences'}
+          label={ruleType === 'correlation' ? t('ruleCountLabelCorrelation') : t('ruleCountLabelDefault')}
           htmlFor="dr-count"
           description={
             ruleType === 'correlation'
-              ? 'The number of distinct devices that must report within the window.'
+              ? t('ruleCountDescriptionCorrelation')
               : ruleType === 'repeating'
-                ? 'The number of matching events within the window.'
-                : 'The number of events per count window.'
+                ? t('ruleCountDescriptionRepeating')
+                : t('ruleCountDescriptionAggregate')
           }
         >
           <Input
@@ -922,32 +937,28 @@ export function DetectionRuleForm({
 
       {/* REACT action chain. */}
       {actionsForbidden(ruleType) ? (
-        <p className="rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground">
-          An area-correlation rule cannot carry actions — its series is an area anchor, not a device.
-        </p>
+        <p className="rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground">{t('ruleActionsForbiddenNote')}</p>
       ) : (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium">Actions</p>
-              <p className="text-sm text-muted-foreground">
-                What happens when the rule fires. No action ⇒ it emits a subscribe-able signal only.
-              </p>
+              <p className="text-sm font-medium">{t('ruleActionsSectionTitle')}</p>
+              <p className="text-sm text-muted-foreground">{t('ruleActionsSectionDescription')}</p>
             </div>
             <Button size="sm" variant="outline" onClick={addAction} disabled={actions.length >= 8}>
-              Add action
+              {t('ruleAddActionButton')}
             </Button>
           </div>
           {actions.map((a, i) => (
             <div key={i} className="space-y-3 rounded-md border p-3">
               <div className="flex items-center justify-between gap-2">
-                <FormField label={`Action ${i + 1}`} htmlFor={`dr-action-${i}`}>
+                <FormField label={t('ruleActionNumberLabel', { number: i + 1 })} htmlFor={`dr-action-${i}`}>
                   {a.raw ? (
                     // An outbound action (httpCall / publish) is Canvas-authored; the form shows it
                     // read-only and preserves it. No Combobox — it can't be retyped here.
                     <Input
                       id={`dr-action-${i}`}
-                      value={a.type === 'publish' ? 'Publish to a connector' : 'Call a webhook'}
+                      value={a.type === 'publish' ? t('ruleActionKindPublishReadonly') : t('ruleActionKindHttpCallReadonly')}
                       readOnly
                       disabled
                     />
@@ -956,61 +967,72 @@ export function DetectionRuleForm({
                       id={`dr-action-${i}`}
                       value={a.type}
                       onChange={(v) => setActionAt(i, { type: v as ActionKind })}
+                      // 'raiseAlarm'/'sendCommand' are the ActionKind discriminant, never user
+                      // text — only the labels (translated above) are display text.
+                      /* eslint-disable i18next/no-literal-string */
                       options={[
-                        { value: 'raiseAlarm', label: 'Raise alarm' },
-                        { value: 'sendCommand', label: 'Send command' },
+                        { value: 'raiseAlarm', label: t('ruleActionKindRaiseAlarmLabel') },
+                        { value: 'sendCommand', label: t('ruleActionKindSendCommandLabel') },
                       ]}
+                      /* eslint-enable i18next/no-literal-string */
                       allowClear={false}
                     />
                   )}
                 </FormField>
                 <Button size="sm" variant="ghost" onClick={() => removeAction(i)}>
-                  Remove
+                  {t('ruleRemoveActionButton')}
                 </Button>
               </div>
               {a.guard && (
                 <p className="rounded-md border border-dashed bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
-                  Runs only when <span className="font-mono">{a.guard}</span> — a branch condition authored on the Canvas. It is preserved here;
-                  switch to the Canvas to change or remove it.
+                  <Trans
+                    t={t}
+                    i18nKey="ruleActionGuardNote"
+                    values={{ guard: a.guard }}
+                    components={{ mono: <span className="font-mono" /> }}
+                  />
                 </p>
               )}
               {a.raw ? (
                 <p className="rounded-md border border-dashed bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
-                  An outbound {a.type === 'publish' ? 'publish' : 'webhook'} action authored on the Canvas. It is preserved here; switch to the
-                  Canvas to change it, or Remove it.
+                  {t('ruleOutboundActionNote', {
+                    kind: a.type === 'publish' ? t('ruleOutboundKindPublish') : t('ruleOutboundKindWebhook'),
+                  })}
                 </p>
               ) : a.type === 'raiseAlarm' ? (
                 <FormField
-                  label="Alarm key"
+                  label={t('ruleAlarmKeyLabel')}
                   htmlFor={`dr-alarm-key-${i}`}
-                  description="Optional. Repeated firings escalate one alarm keyed here; blank ⇒ the rule's token."
+                  description={t('ruleAlarmKeyDescription')}
                 >
                   <Input
                     id={`dr-alarm-key-${i}`}
                     value={a.alarmKey}
                     onChange={(e) => setActionAt(i, { alarmKey: e.target.value })}
-                    placeholder="(rule token)"
+                    placeholder={t('ruleAlarmKeyPlaceholder')}
                   />
                 </FormField>
               ) : (
                 <div className="space-y-3">
-                  <FormField label="Command" htmlFor={`dr-command-${i}`} description="The command key on this profile.">
+                  <FormField label={t('ruleCommandLabel')} htmlFor={`dr-command-${i}`} description={t('ruleCommandDescription')}>
                     <Input
                       id={`dr-command-${i}`}
                       value={a.command}
                       onChange={(e) => setActionAt(i, { command: e.target.value })}
-                      placeholder="set_point"
+                      placeholder={t('ruleCommandPlaceholder')}
                     />
                   </FormField>
                   <FormField
-                    label="Payload"
+                    label={t('rulePayloadLabel')}
                     htmlFor={`dr-payload-${i}`}
-                    description="Optional JSON object of arguments, stored verbatim."
+                    description={t('rulePayloadDescription')}
                   >
                     <Textarea
                       id={`dr-payload-${i}`}
                       value={a.payload}
                       onChange={(e) => setActionAt(i, { payload: e.target.value })}
+                      // A JSON payload example, not prose — technical syntax, never translated.
+                      // eslint-disable-next-line i18next/no-literal-string
                       placeholder='{"level":0}'
                       className="min-h-16 font-mono text-xs"
                     />
@@ -1026,18 +1048,18 @@ export function DetectionRuleForm({
 
       {/* Inline compiler feedback (advisory — does not block the draft save). */}
       {!hint && !scopeHint && validation?.status === 'checking' && (
-        <p className="text-sm text-muted-foreground">Checking the rule compiles…</p>
+        <p className="text-sm text-muted-foreground">{t('ruleCheckingCompiles')}</p>
       )}
       {!hint && !scopeHint && validation?.status === 'error' && (
-        <p className="text-sm text-red-600 dark:text-red-500">Compiler: {validation.message}</p>
+        <p className="text-sm text-red-600 dark:text-red-500">{t('ruleCompilerError', { message: validation.message })}</p>
       )}
       {!hint && !scopeHint && validation?.status === 'ok' && (
-        <p className="text-sm text-emerald-600 dark:text-emerald-500">The rule compiles. ✓</p>
+        <p className="text-sm text-emerald-600 dark:text-emerald-500">{t('ruleCompilesOk')}</p>
       )}
 
       <div className="flex gap-2 pt-1">
         <Button onClick={submit} loading={busy} disabled={busy || hint != null || scopeHint != null}>
-          {editing ? 'Save changes' : 'Create detection rule'}
+          {editing ? t('common:saveChanges') : t('ruleCreateButton')}
         </Button>
       </div>
     </div>
@@ -1281,6 +1303,7 @@ function parseDefinition(raw: string): ParsedDefinition | null {
 // ── Client-side pre-publish hint ────────────────────────────────────────────
 
 interface HintArgs {
+  t: TFunction;
   editing: boolean;
   token: string;
   definitionName: string;
@@ -1316,50 +1339,51 @@ function validationHint(a: HintArgs): string | null {
   const posInt = (s: string) => Number.isInteger(Number(s)) && Number(s) > 0;
   const finite = (s: string) => s.trim() !== '' && Number.isFinite(Number(s));
 
-  if (!a.editing && !a.token.trim()) return 'A token is required.';
-  if (!a.definitionName) return 'A name is required.';
+  const { t } = a;
+  if (!a.editing && !a.token.trim()) return t('ruleHintTokenRequired');
+  if (!a.definitionName) return t('ruleHintNameRequired');
 
   // Condition. Absence forbids a leaf entirely; for every other type a chosen structured or
   // CEL condition must be complete. A required-leaf type (threshold/duration) has no
   // "match every event" mode — so 'none' there is a missing condition, not a valid choice
   // (Fable H1: a type switch could leave the mode at 'none' with the editor hidden).
   if (!conditionForbidden(a.ruleType)) {
-    if (conditionRequired(a.ruleType) && a.condMode === 'none') return 'This rule type requires a condition.';
+    if (conditionRequired(a.ruleType) && a.condMode === 'none') return t('ruleHintConditionRequired');
     if (a.condMode === 'structured') {
-      if (!a.condMetric.trim()) return 'The condition needs a metric.';
-      if (a.boundKind === 'literal' && !finite(a.condThreshold)) return 'The condition needs a numeric threshold value.';
-      if (a.boundKind === 'attr' && !a.condAttr.trim()) return 'The condition needs a threshold attribute.';
+      if (!a.condMetric.trim()) return t('ruleHintConditionMetric');
+      if (a.boundKind === 'literal' && !finite(a.condThreshold)) return t('ruleHintConditionThreshold');
+      if (a.boundKind === 'attr' && !a.condAttr.trim()) return t('ruleHintConditionThresholdAttr');
     }
-    if (a.condMode === 'cel' && !a.cel.trim()) return 'The CEL expression is empty.';
+    if (a.condMode === 'cel' && !a.cel.trim()) return t('ruleHintCelEmpty');
   }
 
   switch (a.ruleType) {
     case 'duration':
-      if (!a.holdStr.trim()) return 'Duration needs a sustain-for time.';
+      if (!a.holdStr.trim()) return t('ruleHintDurationHold');
       break;
     case 'absence':
-      if (!a.timeoutStr.trim()) return 'Absence needs a silence window.';
+      if (!a.timeoutStr.trim()) return t('ruleHintAbsenceTimeout');
       break;
     case 'repeating':
-      if (!posInt(a.countStr)) return 'Repeating needs a positive occurrence count.';
-      if (!a.windowStr.trim()) return 'Repeating needs a window.';
+      if (!posInt(a.countStr)) return t('ruleHintRepeatingCount');
+      if (!a.windowStr.trim()) return t('ruleHintRepeatingWindow');
       break;
     case 'deltaRate':
-      if (!a.valueMetric.trim()) return 'Rate-of-change needs a value metric.';
-      if (!finite(a.aggThreshold)) return 'Rate-of-change needs a numeric threshold.';
+      if (!a.valueMetric.trim()) return t('ruleHintDeltaMetric');
+      if (!finite(a.aggThreshold)) return t('ruleHintDeltaThreshold');
       break;
     case 'aggregate':
-      if (a.aggFunc !== 'count' && !a.valueMetric.trim()) return 'This aggregate needs a value metric.';
-      if (!finite(a.aggThreshold)) return 'The aggregate needs a numeric threshold.';
+      if (a.aggFunc !== 'count' && !a.valueMetric.trim()) return t('ruleHintAggMetric');
+      if (!finite(a.aggThreshold)) return t('ruleHintAggThreshold');
       if ((a.windowMode === 'tumbling' || a.windowMode === 'sliding') && !a.windowStr.trim())
-        return 'The aggregate needs a window.';
-      if (a.windowMode === 'session' && !a.gapStr.trim()) return 'A session aggregate needs a gap.';
-      if (a.windowMode === 'count' && !posInt(a.countStr)) return 'A count-window aggregate needs a positive count.';
+        return t('ruleHintAggWindow');
+      if (a.windowMode === 'session' && !a.gapStr.trim()) return t('ruleHintAggGap');
+      if (a.windowMode === 'count' && !posInt(a.countStr)) return t('ruleHintAggCount');
       break;
     case 'correlation':
-      if (!a.anchorType.trim()) return 'Correlation needs an anchor type.';
-      if (!posInt(a.countStr)) return 'Correlation needs a positive distinct-device count.';
-      if (!a.windowStr.trim()) return 'Correlation needs a window.';
+      if (!a.anchorType.trim()) return t('ruleHintCorrAnchor');
+      if (!posInt(a.countStr)) return t('ruleHintCorrCount');
+      if (!a.windowStr.trim()) return t('ruleHintCorrWindow');
       break;
   }
 
@@ -1368,9 +1392,9 @@ function validationHint(a: HintArgs): string | null {
   // would otherwise block a valid rule).
   if (!actionsForbidden(a.ruleType)) {
     // A raiseAlarm action requires a severity tier.
-    if (a.hasRaiseAlarm && !a.severity) return 'A raise-alarm action requires a severity.';
+    if (a.hasRaiseAlarm && !a.severity) return t('ruleHintRaiseAlarmSeverity');
     for (const act of a.actions) {
-      if (act.type === 'sendCommand' && !act.command.trim()) return 'A send-command action needs a command.';
+      if (act.type === 'sendCommand' && !act.command.trim()) return t('ruleHintSendCommandNeedsCommand');
     }
   }
   return null;

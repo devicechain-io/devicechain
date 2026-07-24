@@ -10,6 +10,7 @@
 // a socket reconnect we re-run the query to pick up any firing the gap advanced.
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
 import {
   DataTable,
@@ -41,20 +42,23 @@ const fmtTime = (iso: string | null | undefined): string => {
 };
 
 function StatusBadge({ status }: { status: string }) {
-  if (status === 'ACTIVE') return <Badge variant="success">Active</Badge>;
-  if (status === 'COMPILE_ERROR') return <Badge variant="destructive">Compile error</Badge>;
+  const { t } = useTranslation('deviceProfiles');
+  if (status === 'ACTIVE') return <Badge variant="success">{t('healthStatusActive')}</Badge>;
+  if (status === 'COMPILE_ERROR') return <Badge variant="destructive">{t('healthStatusCompileError')}</Badge>;
   return <Badge variant="secondary">{status}</Badge>;
 }
 
 function EdgeBadge({ edge }: { edge: string }) {
+  const { t } = useTranslation('deviceProfiles');
   return edge === 'resolved' ? (
-    <Badge variant="secondary">resolved</Badge>
+    <Badge variant="secondary">{t('healthEdgeResolved')}</Badge>
   ) : (
-    <Badge variant="destructive">raised</Badge>
+    <Badge variant="destructive">{t('healthEdgeRaised')}</Badge>
   );
 }
 
 export function RuleHealthPanel({ profileToken }: { profileToken: string }) {
+  const { t } = useTranslation(['deviceProfiles', 'common']);
   const [version, reload] = useReload();
   const { data, loading, error } = useQuery(() => listRuleHealth(profileToken), [profileToken, version]);
 
@@ -89,25 +93,22 @@ export function RuleHealthPanel({ profileToken }: { profileToken: string }) {
   return (
     <div className="space-y-6">
       <div className="space-y-3">
-        <p className="max-w-prose text-sm text-muted-foreground">
-          Per-rule health for this profile's active published version. A rule fires against live telemetry
-          only after the profile is published.
-        </p>
+        <p className="max-w-prose text-sm text-muted-foreground">{t('healthIntro')}</p>
         {loading && !data ? (
-          <LoadingState description="Loading rule health…" />
+          <LoadingState description={t('healthLoading')} />
         ) : error ? (
           <ErrorState description={error} />
         ) : rules.length === 0 ? (
           <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
-            No published detection rules. Author rules in the Detection Rules tab and publish the profile.
+            {t('healthEmpty')}
           </p>
         ) : (
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>Rule</DataTableHeaderCell>
-              <DataTableHeaderCell>Status</DataTableHeaderCell>
-              <DataTableHeaderCell>Last fired</DataTableHeaderCell>
-              <DataTableHeaderCell className="text-right">Fires</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('healthColRule')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colStatus')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('healthColLastFired')}</DataTableHeaderCell>
+              <DataTableHeaderCell className="text-right">{t('healthColFires')}</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
               {rules.map((r) => (
@@ -141,21 +142,21 @@ export function RuleHealthPanel({ profileToken }: { profileToken: string }) {
 
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <h3 className="text-sm font-medium">Live detections</h3>
+          <h3 className="text-sm font-medium">{t('healthLiveDetectionsHeading')}</h3>
           <FeedStatus status={status} />
         </div>
         {feed.length === 0 ? (
           <p className="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-            Waiting for detections… firings appear here as rules trigger.
+            {t('healthFeedEmpty')}
           </p>
         ) : (
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>Time</DataTableHeaderCell>
-              <DataTableHeaderCell>Rule</DataTableHeaderCell>
-              <DataTableHeaderCell>Edge</DataTableHeaderCell>
-              <DataTableHeaderCell>Device</DataTableHeaderCell>
-              <DataTableHeaderCell className="text-right">Value</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('healthColTime')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('healthColRule')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('healthColEdge')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('healthColDevice')}</DataTableHeaderCell>
+              <DataTableHeaderCell className="text-right">{t('common:colValue')}</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
               {feed.map((f) => (
@@ -183,7 +184,8 @@ export function RuleHealthPanel({ profileToken }: { profileToken: string }) {
 }
 
 function FeedStatus({ status }: { status: 'connecting' | 'live' | 'reconnecting' }) {
-  const label = status === 'live' ? 'live' : status === 'connecting' ? 'connecting…' : 'reconnecting…';
+  const { t } = useTranslation('deviceProfiles');
+  const label = status === 'live' ? t('healthStatusLive') : status === 'connecting' ? t('healthStatusConnecting') : t('healthStatusReconnecting');
   const color =
     status === 'live' ? 'bg-success' : status === 'connecting' ? 'bg-muted-foreground' : 'bg-destructive';
   return (

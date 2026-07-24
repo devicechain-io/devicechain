@@ -9,6 +9,7 @@
 // without touching the draft.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Rocket, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -55,6 +56,7 @@ export function VersionsPanel({
   /** Refresh the parent detail so the active-version badge updates after a change. */
   onChanged: () => void;
 }) {
+  const { t } = useTranslation(['deviceProfiles', 'common']);
   const { claims } = useAuth();
   const canWrite = hasAuthority(claims, 'device:write');
   const { toast } = useToast();
@@ -73,7 +75,7 @@ export function VersionsPanel({
     setBusy(true);
     try {
       const v = await publishDeviceProfile(profileToken, label.trim() || undefined, description.trim() || undefined);
-      toast(`Published version ${v}`);
+      toast(t('deviceProfiles:versionPublishedToast', { version: v }));
       setPublishing(false);
       setLabel('');
       setDescription('');
@@ -89,9 +91,9 @@ export function VersionsPanel({
   const doRollback = async (v: number) => {
     if (
       !(await confirm({
-        title: 'Roll back',
-        description: `Make version ${v} the active version devices resolve? The draft is unchanged.`,
-        confirmLabel: 'Roll back',
+        title: t('deviceProfiles:versionRollbackButton'),
+        description: t('deviceProfiles:versionRollbackConfirm', { version: v }),
+        confirmLabel: t('deviceProfiles:versionRollbackButton'),
         destructive: false,
       }))
     )
@@ -99,7 +101,7 @@ export function VersionsPanel({
     setRolling((s) => new Set(s).add(v));
     try {
       await rollbackDeviceProfile(profileToken, v);
-      toast(`Rolled back to version ${v}`);
+      toast(t('deviceProfiles:versionRolledBackToast', { version: v }));
       reload();
       onChanged();
     } catch (err) {
@@ -119,27 +121,23 @@ export function VersionsPanel({
         <div className="max-w-prose space-y-1 text-sm">
           {activeVersion == null ? (
             <p className="font-medium text-amber-600 dark:text-amber-500">
-              Not published yet — devices resolve nothing on this profile until you publish.
+              {t('deviceProfiles:versionNotPublished')}
             </p>
           ) : (
             <p>
-              Active version: <span className="font-semibold tabular-nums">{activeVersion}</span>
+              {t('deviceProfiles:versionActiveLabel')} <span className="font-semibold tabular-nums">{activeVersion}</span>
             </p>
           )}
-          <p className="text-muted-foreground">
-            Publishing snapshots the current draft — all metrics, commands, and alarm rules — into a
-            new version. Devices resolve the active version, so draft edits take effect only when
-            published.
-          </p>
+          <p className="text-muted-foreground">{t('deviceProfiles:versionPublishExplain')}</p>
           {deviceTypeCount > 1 && (
             <p className="text-amber-600 dark:text-amber-500">
-              Used by {deviceTypeCount} device types — publishing changes what all of them resolve.
+              {t('deviceProfiles:versionUsedByWarning', { count: deviceTypeCount })}
             </p>
           )}
         </div>
         {canWrite && (
           <Button size="sm" onClick={() => setPublishing(true)} className="shrink-0">
-            <Rocket size={16} /> Publish
+            <Rocket size={16} /> {t('deviceProfiles:versionPublishButton')}
           </Button>
         )}
       </div>
@@ -154,38 +152,43 @@ export function VersionsPanel({
             setDescription('');
           }
         }}
-        title="Publish profile"
-        description="Freeze the current draft into a new version and make it the version devices resolve."
+        title={t('deviceProfiles:versionPublishDrawerTitle')}
+        description={t('deviceProfiles:versionPublishDrawerDescription')}
       >
         <div className="space-y-4">
-          <FormField label="Label" htmlFor="v-label" description="Optional, e.g. a version name.">
-            <Input id="v-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="v1.0" />
+          <FormField label={t('deviceProfiles:versionLabelFieldLabel')} htmlFor="v-label" description={t('deviceProfiles:versionLabelHint')}>
+            <Input
+              id="v-label"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={t('deviceProfiles:versionLabelPlaceholder')}
+            />
           </FormField>
-          <FormField label="Description" htmlFor="v-desc" description="Optional notes about this version.">
+          <FormField label={t('common:colDescription')} htmlFor="v-desc" description={t('deviceProfiles:versionDescHint')}>
             <Textarea id="v-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
           </FormField>
           <Button onClick={doPublish} loading={busy}>
-            Publish
+            {t('deviceProfiles:versionPublishButton')}
           </Button>
         </div>
       </FormDrawer>
 
       {loading && !data ? (
-        <LoadingState description="Loading versions…" />
+        <LoadingState description={t('deviceProfiles:versionLoading')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : versions.length === 0 ? (
         <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
-          No versions published yet.
+          {t('deviceProfiles:versionEmpty')}
         </p>
       ) : (
         <DataTable>
           <DataTableHead>
-            <DataTableHeaderCell>Version</DataTableHeaderCell>
-            <DataTableHeaderCell>Label</DataTableHeaderCell>
-            <DataTableHeaderCell>Published</DataTableHeaderCell>
-            <DataTableHeaderCell>By</DataTableHeaderCell>
-            {canWrite && <DataTableHeaderCell className="text-right">Actions</DataTableHeaderCell>}
+            <DataTableHeaderCell>{t('deviceProfiles:versionColVersion')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('deviceProfiles:versionLabelFieldLabel')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('deviceProfiles:versionColPublished')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('deviceProfiles:versionColBy')}</DataTableHeaderCell>
+            {canWrite && <DataTableHeaderCell className="text-right">{t('common:colActions')}</DataTableHeaderCell>}
           </DataTableHead>
           <DataTableBody>
             {versions.map((v) => (
@@ -194,7 +197,7 @@ export function VersionsPanel({
                   <span className="tabular-nums">{v.version}</span>
                   {v.version === activeVersion && (
                     <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
-                      active
+                      {t('deviceProfiles:versionActiveBadge')}
                     </span>
                   )}
                 </DataTableCell>
@@ -210,7 +213,7 @@ export function VersionsPanel({
                       loading={rolling.has(v.version)}
                       disabled={v.version === activeVersion}
                     >
-                      <RotateCcw size={14} /> Roll back
+                      <RotateCcw size={14} /> {t('deviceProfiles:versionRollbackButton')}
                     </Button>
                   </DataTableCell>
                 )}

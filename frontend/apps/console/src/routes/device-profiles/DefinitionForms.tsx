@@ -10,6 +10,7 @@
 // moved to the DETECT DetectionRule path (ADR-057), whose console form is slice 7.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -36,21 +37,23 @@ const optNum = (s: string): number | undefined => (s.trim() === '' ? undefined :
 
 function SubmitRow({
   editing,
-  singular,
+  createLabel,
   busy,
   disabled,
   onClick,
 }: {
   editing: boolean;
-  singular: string;
+  /** Already-translated "Create <noun>" label for the create case. */
+  createLabel: string;
   busy: boolean;
   disabled: boolean;
   onClick: () => void;
 }) {
+  const { t } = useTranslation('common');
   return (
     <div className="flex gap-2 pt-1">
       <Button onClick={onClick} loading={busy} disabled={disabled}>
-        {editing ? 'Save changes' : `Create ${singular}`}
+        {editing ? t('saveChanges') : createLabel}
       </Button>
     </div>
   );
@@ -67,6 +70,7 @@ export function MetricDefinitionForm({
   entity?: MetricDefinition;
   onDone: (message: string) => void;
 }) {
+  const { t } = useTranslation(['deviceProfiles', 'common']);
   const editing = entity != null;
   const [metricKey, setMetricKey] = useState(entity?.metricKey ?? '');
   const [token, setToken] = useState(entity?.token ?? '');
@@ -100,10 +104,10 @@ export function MetricDefinitionForm({
       };
       if (editing) {
         await updateMetricDefinition(entity.token, request);
-        onDone(`Metric “${request.metricKey}” updated`);
+        onDone(t('deviceProfiles:defMetricUpdatedToast', { key: request.metricKey }));
       } else {
         await createMetricDefinition(request);
-        onDone(`Metric “${request.metricKey}” created`);
+        onDone(t('deviceProfiles:defMetricCreatedToast', { key: request.metricKey }));
       }
     } catch (err) {
       setFormError(errMessage(err));
@@ -115,41 +119,53 @@ export function MetricDefinitionForm({
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <FormField label="Metric key" htmlFor="m-key" description="The key measurements carry, e.g. temperature.">
-        <Input id="m-key" value={metricKey} onChange={(e) => setMetricKey(e.target.value)} placeholder="temperature" />
+      <FormField label={t('deviceProfiles:defMetricKeyLabel')} htmlFor="m-key" description={t('deviceProfiles:defMetricKeyHint')}>
+        <Input
+          id="m-key"
+          value={metricKey}
+          onChange={(e) => setMetricKey(e.target.value)}
+          placeholder={t('deviceProfiles:defMetricKeyPlaceholder')}
+        />
       </FormField>
-      <FormField label="Token" htmlFor="m-token" description={editing ? 'The id; it cannot change.' : undefined}>
+      <FormField label={t('common:colToken')} htmlFor="m-token" description={editing ? t('deviceProfiles:defTokenLockedHint') : undefined}>
         {editing ? (
           <Input id="m-token" value={token} disabled />
         ) : (
-          <TokenField id="m-token" entityType="metric-definition" value={token} onChange={setToken} seed={metricKey} placeholder="metric-temperature" />
+          <TokenField
+            id="m-token"
+            entityType="metric-definition"
+            value={token}
+            onChange={setToken}
+            seed={metricKey}
+            placeholder={t('deviceProfiles:defMetricTokenPlaceholder')}
+          />
         )}
       </FormField>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <FormField label="Data type" htmlFor="m-type">
+        <FormField label={t('deviceProfiles:defDataTypeLabel')} htmlFor="m-type">
           <Combobox id="m-type" value={dataType} onChange={setDataType} options={METRIC_DATA_TYPES} allowClear={false} />
         </FormField>
-        <FormField label="Unit" htmlFor="m-unit" description="UCUM, e.g. Cel">
-          <Input id="m-unit" value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="Cel" />
+        <FormField label={t('deviceProfiles:defColUnit')} htmlFor="m-unit" description={t('deviceProfiles:defUnitHint')}>
+          <Input id="m-unit" value={unit} onChange={(e) => setUnit(e.target.value)} placeholder={t('deviceProfiles:defUnitPlaceholder')} />
         </FormField>
         <div className="grid grid-cols-2 gap-2">
-          <FormField label="Min" htmlFor="m-min">
+          <FormField label={t('deviceProfiles:defMinLabel')} htmlFor="m-min">
             <Input id="m-min" type="number" value={minValue} onChange={(e) => setMinValue(e.target.value)} />
           </FormField>
-          <FormField label="Max" htmlFor="m-max">
+          <FormField label={t('deviceProfiles:defMaxLabel')} htmlFor="m-max">
             <Input id="m-max" type="number" value={maxValue} onChange={(e) => setMaxValue(e.target.value)} />
           </FormField>
         </div>
       </div>
-      <FormField label="Name" htmlFor="m-name">
+      <FormField label={t('common:colName')} htmlFor="m-name">
         <Input id="m-name" value={name} onChange={(e) => setName(e.target.value)} />
       </FormField>
-      <FormField label="Description" htmlFor="m-desc">
+      <FormField label={t('common:colDescription')} htmlFor="m-desc">
         <Textarea id="m-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
       </FormField>
       <SubmitRow
         editing={editing}
-        singular="metric"
+        createLabel={t('deviceProfiles:defMetricCreateButton')}
         busy={busy}
         disabled={busy || !metricKey.trim() || (!editing && !token.trim())}
         onClick={submit}
@@ -169,6 +185,7 @@ export function CommandDefinitionForm({
   entity?: CommandDefinition;
   onDone: (message: string) => void;
 }) {
+  const { t } = useTranslation(['deviceProfiles', 'common']);
   const editing = entity != null;
   const [commandKey, setCommandKey] = useState(entity?.commandKey ?? '');
   const [token, setToken] = useState(entity?.token ?? '');
@@ -193,10 +210,10 @@ export function CommandDefinitionForm({
       };
       if (editing) {
         await updateCommandDefinition(entity.token, request);
-        onDone(`Command “${request.commandKey}” updated`);
+        onDone(t('deviceProfiles:defCommandUpdatedToast', { key: request.commandKey }));
       } else {
         await createCommandDefinition(request);
-        onDone(`Command “${request.commandKey}” created`);
+        onDone(t('deviceProfiles:defCommandCreatedToast', { key: request.commandKey }));
       }
     } catch (err) {
       setFormError(errMessage(err));
@@ -208,38 +225,50 @@ export function CommandDefinitionForm({
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <FormField label="Command key" htmlFor="c-key" description="The command a device accepts, e.g. set_point.">
-        <Input id="c-key" value={commandKey} onChange={(e) => setCommandKey(e.target.value)} placeholder="set_point" />
+      <FormField label={t('deviceProfiles:defCommandKeyLabel')} htmlFor="c-key" description={t('deviceProfiles:defCommandKeyHint')}>
+        <Input
+          id="c-key"
+          value={commandKey}
+          onChange={(e) => setCommandKey(e.target.value)}
+          placeholder={t('deviceProfiles:defCommandKeyPlaceholder')}
+        />
       </FormField>
-      <FormField label="Token" htmlFor="c-token" description={editing ? 'The id; it cannot change.' : undefined}>
+      <FormField label={t('common:colToken')} htmlFor="c-token" description={editing ? t('deviceProfiles:defTokenLockedHint') : undefined}>
         {editing ? (
           <Input id="c-token" value={token} disabled />
         ) : (
-          <TokenField id="c-token" entityType="command-definition" value={token} onChange={setToken} seed={commandKey} placeholder="command-set-point" />
+          <TokenField
+            id="c-token"
+            entityType="command-definition"
+            value={token}
+            onChange={setToken}
+            seed={commandKey}
+            placeholder={t('deviceProfiles:defCommandTokenPlaceholder')}
+          />
         )}
       </FormField>
-      <FormField label="Name" htmlFor="c-name">
+      <FormField label={t('common:colName')} htmlFor="c-name">
         <Input id="c-name" value={name} onChange={(e) => setName(e.target.value)} />
       </FormField>
-      <FormField label="Description" htmlFor="c-desc">
+      <FormField label={t('common:colDescription')} htmlFor="c-desc">
         <Textarea id="c-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
       </FormField>
       <FormField
-        label="Parameter schema"
+        label={t('deviceProfiles:defParamSchemaLabel')}
         htmlFor="c-schema"
-        description='Optional JSON array of parameters, each { "name", "dataType", … }. Leave blank for a no-argument command.'
+        description={t('deviceProfiles:defParamSchemaHint')}
       >
         <Textarea
           id="c-schema"
           value={parameterSchema}
           onChange={(e) => setParameterSchema(e.target.value)}
-          placeholder='[{"name":"level","dataType":"INT","required":true}]'
+          placeholder={t('deviceProfiles:defParamSchemaPlaceholder')}
           className="min-h-28"
         />
       </FormField>
       <SubmitRow
         editing={editing}
-        singular="command"
+        createLabel={t('deviceProfiles:defCommandCreateButton')}
         busy={busy}
         disabled={busy || !commandKey.trim() || (!editing && !token.trim())}
         onClick={submit}
