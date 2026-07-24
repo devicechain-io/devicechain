@@ -1,4 +1,7 @@
-import { defineConfig, loadEnv } from 'vite';
+// defineConfig from vitest/config (a superset of vite's) so the `test` block
+// below is typed; it is otherwise the same config Vite consumes for the build.
+import { defineConfig } from 'vitest/config';
+import { loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
@@ -20,6 +23,19 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
     plugins: [react(), tailwindcss()],
+    // The console is a browser app, so its unit tests default to a DOM
+    // environment: anything touching window/localStorage (the i18n config and
+    // its browser language detector, ADR-066) needs it, and a per-file
+    // `@vitest-environment` docblock proved unreliable across Node versions in
+    // CI. Pure-logic tests run fine here too (jsdom is a superset). jsdom is a
+    // devDependency of this workspace.
+    test: {
+      environment: 'jsdom',
+      // Force a working in-memory localStorage — newer Node's experimental
+      // native global shadows jsdom's and is unavailable without a flag (see the
+      // setup file). Runs after the environment is set up, before test files.
+      setupFiles: ['./vitest.setup.ts'],
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),

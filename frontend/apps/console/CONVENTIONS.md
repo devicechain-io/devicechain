@@ -124,6 +124,41 @@ The tenant, tier, and AI-provider detail pages share one shape. Copy it for the 
   of the server's cases — never a second source of truth. The server always re-checks. See
   the doc comment in [`tenantAiModels.ts`](src/routes/admin/tenants/tenantAiModels.ts).
 
+## Internationalization (i18n)
+
+The console is internationalized with **react-i18next** (ADR-066). The framework is
+wired ([`src/i18n/config.ts`](src/i18n/config.ts)); [`Login.tsx`](src/routes/Login.tsx) is
+the reference-converted screen — copy its shape. The string-externalization *sweep* over
+the rest of the console (and the CI lint that holds the line, and the Spanish catalog) are
+follow-on sub-workstreams; until the sweep reaches a screen, that screen's strings are still
+hardcoded — but **new** copy must be written i18n-aware from now on.
+
+- **No bare user-facing text.** Every string the user reads goes through the catalog:
+  `t('key')` or `<Trans i18nKey="key">`. This includes `aria-label`, `title`, `placeholder`,
+  and toast/error copy the console composes. It does **not** include tokens, ids, log
+  messages, or user/tenant data (a device's name is the customer's data), and it does **not**
+  include backend-originated error text — that stays English at GA (ADR-066 scope boundary);
+  the console localizes only the copy it owns.
+- **A sentence is one key with interpolation slots — never assembled from fragments.**
+  Write `t('devices.count', { count })` (catalog: `"{{count}} devices"`), not
+  `` `${count} ` + t('devices') ``. Fragment concatenation hard-codes English word order and
+  is untranslatable. For counts/plurals use ICU/i18next plural keys (`_one`/`_other`), not an
+  `n === 1 ? … : …` branch in the component. For a sentence with embedded markup (a link, a
+  `<strong>`), use `<Trans>` so the whole sentence stays one translatable unit.
+- **One namespace per screen; `common` for cross-screen copy.** `useTranslation('devices')`
+  binds `t` to the screen's namespace; pull shared strings explicitly with the namespace
+  prefix (`t('common:back')`). Namespaces are registered in
+  [`config.ts`](src/i18n/config.ts) (`NAMESPACES`) and catalogs live under
+  `src/i18n/locales/<code>/<namespace>.json`. Keys are **flat semantic identifiers**
+  (`signInSubtitle`), never the English text and never dotted into a tree.
+- **Keep copy in the render, in whole sentences**, not pre-built in a helper — so the
+  extraction sweep can find it and so a translator sees a full sentence.
+- **Locale precedence** (ADR-066): explicit user choice → tenant default → browser → `en`.
+  The switcher persists the user
+  choice; the tenant-default rung is a documented seam (`applyTenantDefaultLocale`) not yet
+  wired. Prefer CSS logical properties (`ms-*`/`me-*`, `start`/`end`) over `left`/`right`
+  where it's free, so a future RTL locale is cheaper — RTL is out of GA scope.
+
 ## Gotchas
 
 - **Radix Tabs `forceMount` does not reliably hide inactive tab content in this Tailwind
