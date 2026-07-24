@@ -1,10 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// @vitest-environment jsdom
-//
-// jsdom, not the repo-default node env: config.ts initializes the browser
-// language detector and the seam functions touch localStorage/window.
+// Runs under jsdom (set globally in vite.config.ts): config.ts initializes the
+// browser language detector and the seam functions touch localStorage/window.
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import i18n, {
