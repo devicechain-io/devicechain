@@ -30,5 +30,5 @@ Each Sparkplug **source** is configured for one tenant: the broker URL, credenti
 Only **one** replica of the Sparkplug service connects to a given broker at a time, elected through a lease. A second replica stands by and takes over if the leader fails; on takeover it re-establishes the session (asking nodes to re-announce) and reconciles device presence, so a disconnect that happened during the handover isn't missed and no device is left wrongly showing online.
 
 :::note Status
-Sparkplug-B ingestion is available as an opt-in service. It ingests measurements and drives authoritative [device presence](./device-presence.md); it connects to a broker over TLS or plaintext per the configured URL. Custom-CA / mutual-TLS to a private broker, and additional standards-native edge protocols, are planned.
+Sparkplug-B ingestion is available as an opt-in service. It ingests measurements and drives authoritative [device presence](./device-presence.md); it connects to a broker over TLS or plaintext per the configured URL. A second standards-native edge protocol, [LwM2M](./lwm2m.md), is also available. Custom-CA / mutual-TLS to a private broker is planned.
 :::

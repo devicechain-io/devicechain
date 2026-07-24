@@ -19,7 +19,7 @@ Every device carries a **presence source** that says how its online/offline stat
   - its online/offline state is driven **only** by explicit connect/disconnect signals — a stray data packet can never mark a device online that the platform has been told is offline;
   - the inactivity sweep leaves it alone — an asserted device that goes quiet is *not* assumed dead, because if it had died the transport would have said so.
 
-A device stays **inferred** until an asserting transport produces for it, so nothing changes for existing devices unless they start arriving over a transport that asserts presence. Today the asserting transport is [Sparkplug-B](./sparkplug.md), whose BIRTH and DEATH messages are exactly these explicit connect/disconnect signals.
+A device stays **inferred** until an asserting transport produces for it, so nothing changes for existing devices unless they start arriving over a transport that asserts presence. Today two transports assert presence: [Sparkplug-B](./sparkplug.md), whose BIRTH and DEATH messages are exactly these explicit connect/disconnect signals, and [LwM2M](./lwm2m.md), whose registration lifecycle — register, periodic update, and deregister (or a lapsed lifetime) — does the same.
 
 ## Why the distinction matters
 
@@ -28,5 +28,5 @@ Inferred presence is convenient but laggy and ambiguous: "offline" only means "h
 Keeping the two modes as an explicit per-device flag means a device on a connectionless transport keeps its familiar timeout behavior, while a device on a presence-aware transport gets the authoritative signal, and the two never interfere.
 
 :::note Status
-Device presence — both inferred and asserted — is available, with [Sparkplug-B](./sparkplug.md) as the first presence-asserting transport. Authoring a detection rule directly on a connect/disconnect edge (raise on disconnect, resolve on reconnect) is planned; today an authoritative disconnect updates the device's live state and can be seen on the Connectivity tab.
+Device presence — both inferred and asserted — is available, with [Sparkplug-B](./sparkplug.md) and [LwM2M](./lwm2m.md) as presence-asserting transports. A **detection rule can be authored directly on a connect/disconnect edge**: the [Connectivity condition](./event-processing.md#condition-types) raises an alarm the instant an authoritative disconnect arrives and resolves it on reconnect — no timeout to tune. It complements the timeout-based Absence rule (authoritative death vs. inferred silence), and the two are meant to be paired. An authoritative disconnect also updates the device's live state, visible on the Connectivity tab.
 :::
