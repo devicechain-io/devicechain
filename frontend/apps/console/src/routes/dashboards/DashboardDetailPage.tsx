@@ -3,6 +3,7 @@
 
 import { useMemo } from 'react';
 import { useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   createDeviceResolver,
   migrateToSlots,
@@ -18,6 +19,7 @@ import { getDashboard } from '@/lib/api/dashboards';
 import { DashboardWorkspace } from './editor/DashboardWorkspace';
 
 export default function DashboardDetailPage() {
+  const { t } = useTranslation('dashboards');
   // useParams returns already-decoded values (React Router v6); the nav side
   // encodes, so a second decode here would double-decode (e.g. a "%" token throws).
   const { token: rawToken } = useParams<{ token: string }>();
@@ -50,14 +52,14 @@ export default function DashboardDetailPage() {
       definition = migrateToSlots(definition);
       return { definition };
     } catch (err) {
-      return { error: err instanceof Error ? err.message : 'Invalid dashboard definition.' };
+      return { error: err instanceof Error ? err.message : t('detailInvalidDefinition') };
     }
-  }, [data]);
+  }, [data, t]);
 
   if (loading) {
     return (
       <PageShell title={token} banner="dashboard">
-        <LoadingState description="Loading dashboard…" />
+        <LoadingState description={t('detailLoading')} />
       </PageShell>
     );
   }
@@ -71,14 +73,14 @@ export default function DashboardDetailPage() {
   if (!data) {
     return (
       <PageShell title={token} banner="dashboard">
-        <ErrorState description={`Dashboard “${token}” not found.`} />
+        <ErrorState description={t('detailNotFound', { token })} />
       </PageShell>
     );
   }
   if (parsed && 'error' in parsed) {
     return (
       <PageShell title={data.name || token} banner="dashboard">
-        <ErrorState description={`Could not render this dashboard: ${parsed.error}`} />
+        <ErrorState description={t('detailParseError', { error: parsed.error })} />
       </PageShell>
     );
   }

@@ -9,6 +9,7 @@
 // the returned definition (onRolledBack) rather than reloading the page.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -73,15 +74,13 @@ export function VersionHistorySheet({
   expectedUpdatedAt,
   onRolledBack,
 }: VersionHistorySheetProps) {
+  const { t } = useTranslation(['dashboards', 'common']);
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-lg">
         <SheetHeader className="mb-6">
-          <SheetTitle>Version history</SheetTitle>
-          <SheetDescription>
-            Publish the current draft as an immutable version, or roll the draft back to a
-            previous one. History is append-only.
-          </SheetDescription>
+          <SheetTitle>{t('versionHistoryTitle')}</SheetTitle>
+          <SheetDescription>{t('versionHistoryDescription')}</SheetDescription>
         </SheetHeader>
         {/* Rendered inside SheetContent, which Radix unmounts when closed, so the
             version list is fetched fresh each time the drawer opens. */}
@@ -118,6 +117,7 @@ function VersionHistoryBody({
   onRolledBack: (result: { definition: string; updatedAt: string | null }) => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation(['dashboards', 'common']);
   const { toast } = useToast();
   const confirm = useConfirm();
 
@@ -132,18 +132,13 @@ function VersionHistoryBody({
     setBusy(true);
     try {
       const { version } = await publishDashboard(token, { label, description, expectedUpdatedAt });
-      toast(`Published version ${version}`);
+      toast(t('versionPublished', { version }));
       setLabel('');
       setDescription('');
       setRefreshKey((k) => k + 1);
     } catch (err) {
       const raw = errMessage(err);
-      toast(
-        raw.includes(CONFLICT_MARKER)
-          ? 'This dashboard changed elsewhere. Reload the page before publishing.'
-          : raw,
-        'error',
-      );
+      toast(raw.includes(CONFLICT_MARKER) ? t('versionPublishConflict') : raw, 'error');
     } finally {
       setBusy(false);
     }
@@ -152,10 +147,9 @@ function VersionHistoryBody({
   const rollback = async (v: DashboardVersion) => {
     if (
       !(await confirm({
-        title: `Roll back to version ${v.version}?`,
-        description:
-          'This replaces the current draft with that version. The current draft — including saved changes you have not published — will be lost.',
-        confirmLabel: 'Roll back',
+        title: t('versionRollbackConfirmTitle', { version: v.version }),
+        description: t('versionRollbackConfirmDescription'),
+        confirmLabel: t('versionRollback'),
       }))
     )
       return;
@@ -163,7 +157,7 @@ function VersionHistoryBody({
     try {
       const result = await rollbackDashboard(token, v.version);
       onRolledBack(result);
-      toast(`Rolled back to version ${v.version}`);
+      toast(t('versionRolledBack', { version: v.version }));
       onClose();
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -176,40 +170,44 @@ function VersionHistoryBody({
     <div className="space-y-6">
       {canWrite && (
         <div className="space-y-3 rounded-md border border-border p-4">
-          <div className="text-sm font-semibold">Publish current draft</div>
-          <FormField label="Label" description="Optional — e.g. a release name or v1.2.0.">
-            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="v1.0.0" />
+          <div className="text-sm font-semibold">{t('versionPublishHeading')}</div>
+          <FormField label={t('versionLabelField')} description={t('versionLabelHint')}>
+            <Input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={t('versionLabelPlaceholder')}
+            />
           </FormField>
-          <FormField label="Description">
+          <FormField label={t('common:colDescription')}>
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="What changed in this version?"
+              placeholder={t('versionDescriptionPlaceholder')}
             />
           </FormField>
           {dirty ? (
-            <p className="text-sm text-muted-foreground">Save your changes before publishing.</p>
+            <p className="text-sm text-muted-foreground">{t('versionSaveBeforePublish')}</p>
           ) : null}
           <Button size="sm" onClick={publish} loading={busy} disabled={busy || dirty || saving}>
-            Publish version
+            {t('versionPublishButton')}
           </Button>
         </div>
       )}
 
       <div>
-        <div className="mb-2 text-sm font-semibold">Published versions</div>
+        <div className="mb-2 text-sm font-semibold">{t('versionPublishedHeading')}</div>
         {loading ? (
-          <LoadingState description="Loading versions…" />
+          <LoadingState description={t('versionLoading')} />
         ) : error ? (
           <ErrorState description={error} />
         ) : !data || data.length === 0 ? (
-          <EmptyState description="No versions published yet." />
+          <EmptyState description={t('versionEmpty')} />
         ) : (
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>Version</DataTableHeaderCell>
-              <DataTableHeaderCell>Published</DataTableHeaderCell>
-              <DataTableHeaderCell>By</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('versionColumnVersion')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('versionColumnPublished')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('versionColumnBy')}</DataTableHeaderCell>
               <DataTableHeaderCell> </DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
@@ -231,7 +229,7 @@ function VersionHistoryBody({
                         onClick={() => rollback(v)}
                         disabled={busy || saving}
                       >
-                        <RotateCcw size={13} /> Roll back
+                        <RotateCcw size={13} /> {t('versionRollback')}
                       </Button>
                     )}
                   </DataTableCell>
