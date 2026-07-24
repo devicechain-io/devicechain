@@ -16,9 +16,7 @@ import {
 // The asset registry, described once for the generic list/detail/new pages.
 export const assetResource: RegistryResource<Asset> = {
   basePath: '/assets',
-  titlePlural: 'Assets',
-  singular: 'asset',
-  listDescription: 'Physical or logical things you track',
+  i18nKey: 'asset',
   banner: 'assets',
   list: listAssets,
   load: getAsset,
@@ -31,7 +29,7 @@ export const assetResource: RegistryResource<Asset> = {
     tokenColumn<Asset>(),
     nameColumn<Asset>(),
     {
-      header: 'Type',
+      header: 'common:colType',
       cell: (a) =>
         a.assetType ? (
           <TypeCapsule appearance={appearanceOf(a.assetType)} />
@@ -44,10 +42,8 @@ export const assetResource: RegistryResource<Asset> = {
   renderForm: (a, onDone) => (
     <RegistryInstanceForm
       entity={a}
-      singular="asset"
-      typeLabel="Asset type"
-      typeSingular="asset type"
-      tokenPlaceholder="pump-001"
+      i18nKey="asset"
+      entityType="asset"
       defaultTypeToken={a?.assetType?.token}
       loadTypes={() => listAssetTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
       create={(req) =>
@@ -69,5 +65,4 @@ export const assetResource: RegistryResource<Asset> = {
       onDone={onDone}
     />
   ),
-  removeConfirm: (a) => `Delete asset “${a.token}”? This cannot be undone.`,
 };

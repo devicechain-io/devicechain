@@ -19,10 +19,8 @@ import {
 // The device-type registry, described once for the generic list/detail/new pages.
 export const deviceTypeResource: RegistryResource<DeviceType> = {
   basePath: '/device-types',
-  titlePlural: 'Device Types',
-  singular: 'device type',
+  i18nKey: 'deviceType',
   banner: 'devices',
-  listDescription: 'Templates that classify devices',
   list: listDeviceTypes,
   load: getDeviceType,
   remove: deleteDeviceType,
@@ -31,7 +29,7 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
   nameOf: (dt) => dt.name,
   columns: [
     {
-      header: 'Appearance',
+      header: 'common:colAppearance',
       cell: (dt) => <TypeCapsule appearance={appearanceOf(dt)} />,
     },
     tokenColumn<DeviceType>(),
@@ -41,8 +39,8 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
   renderForm: (dt, onDone) => (
     <RegistryTypeForm
       entity={dt}
-      singular="device type"
-      tokenPlaceholder="thermostat"
+      i18nKey="deviceType"
+      entityType="device-type"
       create={(req) => createDeviceType(req)}
       update={(token, req) =>
         // RegistryTypeForm only calls update when editing, so dt is always set.
@@ -57,16 +55,15 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
       onDone={onDone}
     />
   ),
-  removeConfirm: (dt) => `Delete device type “${dt.token}”? This cannot be undone.`,
   detailTabs: [
     {
       value: 'identity',
-      label: 'Identity',
+      label: 'entities:deviceTypeIdentityTab',
       render: (dt, reload) => <TypeIdentityForm entity={dt} onSaved={reload} />,
     },
     {
       value: 'appearance',
-      label: 'Appearance',
+      label: 'common:colAppearance',
       render: (dt, reload) => (
         <TypeAppearanceForm
           entity={dt}
@@ -80,7 +77,7 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
     },
     {
       value: 'profile',
-      label: 'Profile',
+      label: 'entities:deviceTypeProfileTab',
       render: (dt, reload) => <ProfilePanel entity={dt} onChanged={reload} />,
     },
   ],

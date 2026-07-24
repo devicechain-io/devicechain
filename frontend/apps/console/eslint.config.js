@@ -53,8 +53,18 @@ const EXTRA_ATTRS = [
   //  - theme: Sonner's 'dark' | 'light' | 'system' enum.
   //  - fallback: ColorField's default hex swatch ('#1f2937'), a color code.
   'data-sidebar', 'data-mobile', 'theme', 'fallback',
+  // Registry-kit i18n/technical discriminants, never display text:
+  //  - i18nKey: a catalog key. On a RegistryResource it's the family prefix
+  //    ('deviceType'); on react-i18next's <Trans> it's the message key. A key,
+  //    not prose — the resolved text is what the user sees.
+  //  - memberI18nKey / groupType / memberType: MembershipPanel's family prefix
+  //    and backend entity-type tokens ('group', 'asset').
+  'i18nKey', 'memberI18nKey', 'groupType', 'memberType',
 ];
-const EXTRA_CALLEES = ['cn', 'cva', 'clsx', 'cx', 'twMerge', 'tv', 'navigate', 'act'];
+// `e` is the registry engine's per-resource key resolver (`e('New')` →
+// t(`entities:${i18nKey}New`)); its argument is a key suffix, never user text —
+// the same reason `t` itself is excluded. No other `e('literal')` call exists.
+const EXTRA_CALLEES = ['cn', 'cva', 'clsx', 'cx', 'twMerge', 'tv', 'navigate', 'act', 'e'];
 const EXTRA_WORDS = ['^DeviceChain$'];
 
 export default [

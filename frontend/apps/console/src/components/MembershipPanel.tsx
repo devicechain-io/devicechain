@@ -8,6 +8,7 @@
 // list (the Entity edge target only carries id + token).
 
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Trash2 } from 'lucide-react';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Button } from '@/components/ui/button';
@@ -28,7 +29,7 @@ export function MembershipPanel({
   groupType,
   groupToken,
   memberType,
-  memberSingular,
+  memberI18nKey,
   loadCandidates,
 }: {
   /** Backend entity-type token for the group — always "group" since ADR-061. */
@@ -36,11 +37,16 @@ export function MembershipPanel({
   groupToken: string;
   /** Backend entity-type token for members, e.g. "asset". */
   memberType: string;
-  /** Lowercase member noun for labels, e.g. "asset". */
-  memberSingular: string;
+  /** Member family prefix in the `entities` catalog, e.g. "asset" — resolves the
+   *  member-noun prose (`${memberI18nKey}AddPlaceholder`, `${memberI18nKey}EmptyInGroup`,
+   *  `${memberI18nKey}AddedCount`). */
+  memberI18nKey: string;
   /** Loads all member-type instances (add candidates + name resolution). */
   loadCandidates: () => Promise<Candidate[]>;
 }) {
+  const { t } = useTranslation(['entities', 'common']);
+  const e = (suffix: string, opts?: Record<string, unknown>) =>
+    t(`entities:${memberI18nKey}${suffix}`, opts);
   const { toast } = useToast();
   const [version, reload] = useReload();
   const [selected, setSelected] = useState<string[]>([]);
@@ -79,7 +85,7 @@ export function MembershipPanel({
     setBusy(true);
     try {
       const n = await addGroupMembers(groupType, groupToken, memberType, selected);
-      toast(`Added ${n} ${memberSingular}${n === 1 ? '' : 's'}`);
+      toast(e('AddedCount', { count: n }));
       setSelected([]);
       reload();
     } catch (err) {
@@ -92,7 +98,7 @@ export function MembershipPanel({
   const remove = async (edgeToken: string, label: string) => {
     try {
       await removeGroupMembers([edgeToken]);
-      toast(`Removed ${label}`);
+      toast(t('common:removedItem', { label }));
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -109,18 +115,18 @@ export function MembershipPanel({
               options={options}
               value={selected}
               onChange={setSelected}
-              placeholder={`Add ${memberSingular}s…`}
+              placeholder={e('AddPlaceholder')}
             />
           </div>
           <Button onClick={add} loading={busy} disabled={busy || selected.length === 0}>
-            Add
+            {t('common:add')}
           </Button>
         </div>
 
         {loading ? (
-          <LoadingState description={`Loading ${memberSingular}s…`} />
+          <LoadingState description={t('common:loading')} />
         ) : memberEdges.length === 0 ? (
-          <EmptyState description={`No ${memberSingular}s in this group yet.`} />
+          <EmptyState description={e('EmptyInGroup')} />
         ) : (
           <ul className="divide-y divide-border rounded-md border border-border">
             {memberEdges.map((edge) => (
@@ -137,7 +143,7 @@ export function MembershipPanel({
                   variant="ghost"
                   size="sm"
                   onClick={() => remove(edge.token, nameOf(edge.target.token))}
-                  aria-label={`Remove ${nameOf(edge.target.token)}`}
+                  aria-label={t('common:removeItem', { label: nameOf(edge.target.token) })}
                 >
                   <Trash2 size={14} />
                 </Button>

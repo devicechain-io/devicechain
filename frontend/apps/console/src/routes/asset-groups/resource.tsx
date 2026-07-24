@@ -16,10 +16,8 @@ import {
 // The asset-group registry, described once for the generic list/detail/new pages.
 export const assetGroupResource: RegistryResource<AssetGroup> = {
   basePath: '/asset-groups',
-  titlePlural: 'Asset Groups',
-  singular: 'asset group',
+  i18nKey: 'assetGroup',
   banner: 'assets',
-  listDescription: 'Collections of assets',
   list: listAssetGroups,
   load: getAssetGroup,
   remove: deleteAssetGroup,
@@ -30,21 +28,20 @@ export const assetGroupResource: RegistryResource<AssetGroup> = {
   renderForm: (g, onDone) => (
     <RegistryTypeForm
       entity={g}
-      singular="asset group"
-      tokenPlaceholder="fleet-a"
+      i18nKey="assetGroup"
+      entityType="asset-group"
       create={(req) => createAssetGroup(req)}
       update={(token, req) => updateAssetGroup(token, req)}
       onDone={onDone}
     />
   ),
-  removeConfirm: (g) => `Delete asset group “${g.token}”? This cannot be undone.`,
-  detailExtraLabel: 'Members',
+  detailExtraLabel: 'common:membersTab',
   renderDetailExtra: (g) => (
     <MembershipPanel
       groupType="group"
       groupToken={g.token}
       memberType="asset"
-      memberSingular="asset"
+      memberI18nKey="asset"
       loadCandidates={() => listAssets({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
     />
   ),

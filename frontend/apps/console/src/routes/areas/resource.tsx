@@ -15,9 +15,7 @@ import {
 
 export const areaResource: RegistryResource<Area> = {
   basePath: '/areas',
-  titlePlural: 'Areas',
-  singular: 'area',
-  listDescription: 'Locations or zones you organize by',
+  i18nKey: 'area',
   banner: 'areas',
   list: listAreas,
   load: getArea,
@@ -30,7 +28,7 @@ export const areaResource: RegistryResource<Area> = {
     tokenColumn<Area>(),
     nameColumn<Area>(),
     {
-      header: 'Type',
+      header: 'common:colType',
       cell: (a) =>
         a.areaType ? (
           <TypeCapsule appearance={appearanceOf(a.areaType)} />
@@ -43,10 +41,8 @@ export const areaResource: RegistryResource<Area> = {
   renderForm: (a, onDone) => (
     <RegistryInstanceForm
       entity={a}
-      singular="area"
-      typeLabel="Area type"
-      typeSingular="area type"
-      tokenPlaceholder="warehouse-1"
+      i18nKey="area"
+      entityType="area"
       defaultTypeToken={a?.areaType?.token}
       loadTypes={() => listAreaTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
       create={(req) =>
@@ -68,5 +64,4 @@ export const areaResource: RegistryResource<Area> = {
       onDone={onDone}
     />
   ),
-  removeConfirm: (a) => `Delete area “${a.token}”? This cannot be undone.`,
 };

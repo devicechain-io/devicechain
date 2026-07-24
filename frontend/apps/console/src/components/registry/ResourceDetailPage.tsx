@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Trash2 } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
@@ -15,7 +16,6 @@ import { ErrorState } from '@/components/ui/error-state';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
-import { cap } from '@/components/registry/forms';
 import { errMessage, useReload } from '@/routes/common';
 import type { RegistryResource } from '@/components/registry/types';
 
@@ -24,6 +24,10 @@ import type { RegistryResource } from '@/components/registry/types';
 // (e.g. device state + events). Delete surfaces the backend message (including a
 // referential-integrity refusal) and only navigates away on success.
 export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource<T> }) {
+  const { t } = useTranslation(['entities', 'common']);
+  // Resolve one of this family's noun-bearing strings by its fixed suffix.
+  const e = (suffix: string, opts?: Record<string, unknown>) =>
+    t(`entities:${resource.i18nKey}${suffix}`, opts);
   const { token: rawToken } = useParams<{ token: string }>();
   const token = decodeURIComponent(rawToken ?? '');
   const navigate = useNavigate();
@@ -43,7 +47,7 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
   if (loading && !item) {
     return (
       <PageShell title={token} banner={resource.banner}>
-        <LoadingState description={`Loading ${resource.singular}…`} />
+        <LoadingState description={t('common:loading')} />
       </PageShell>
     );
   }
@@ -57,26 +61,23 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
   if (!item) {
     return (
       <PageShell title={token} banner={resource.banner}>
-        <ErrorState description={`${cap(resource.singular)} “${token}” not found.`} />
+        <ErrorState description={e('NotFound', { token })} />
       </PageShell>
     );
   }
 
   const remove = async () => {
-    const prompt =
-      resource.removeConfirm?.(item) ??
-      `Delete ${resource.singular} “${token}”? This cannot be undone.`;
     if (
       !(await confirm({
-        title: `Delete ${resource.singular}`,
-        description: prompt,
-        confirmLabel: 'Delete',
+        title: e('DeleteTitle'),
+        description: e('RemoveConfirm', { token }),
+        confirmLabel: t('common:delete'),
       }))
     )
       return;
     try {
       await resource.remove(token);
-      toast(`${cap(resource.singular)} “${token}” deleted`);
+      toast(e('DeletedToast', { token }));
       navigate(resource.basePath);
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -94,10 +95,22 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
   // Detail tabs beside "Basic": the N-tab list wins (device profiles), else the
   // legacy single labelled extra (a group's Members, a type's Appearance).
   const extraTabs: { value: string; label: string; content: ReactNode }[] = resource.detailTabs
-    ? resource.detailTabs.map((t) => ({ value: t.value, label: t.label, content: t.render(item, reload) }))
+    ? resource.detailTabs.map((tab) => ({
+        value: tab.value,
+        label: t(tab.label),
+        content: tab.render(item, reload),
+      }))
     : (() => {
         const extra = resource.renderDetailExtra?.(item, reload);
-        return extra ? [{ value: 'extra', label: resource.detailExtraLabel ?? 'More', content: extra }] : [];
+        return extra
+          ? [
+              {
+                value: 'extra',
+                label: resource.detailExtraLabel ? t(resource.detailExtraLabel) : t('common:moreTab'),
+                content: extra,
+              },
+            ]
+          : [];
       })();
   const name = resource.nameOf?.(item);
   const heading = name || token;
@@ -119,7 +132,7 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
       }
       action={
         <Button variant="destructive" size="sm" onClick={remove}>
-          <Trash2 size={14} /> Delete
+          <Trash2 size={14} /> {t('common:delete')}
         </Button>
       }
     >
@@ -128,17 +141,17 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
           beside it. */}
       <Tabs defaultValue="basic">
         <TabsList>
-          <TabsTrigger value="basic">Basic</TabsTrigger>
-          {extraTabs.map((t) => (
-            <TabsTrigger key={t.value} value={t.value}>
-              {t.label}
+          <TabsTrigger value="basic">{t('common:basicTab')}</TabsTrigger>
+          {extraTabs.map((tab) => (
+            <TabsTrigger key={tab.value} value={tab.value}>
+              {tab.label}
             </TabsTrigger>
           ))}
         </TabsList>
         <TabsContent value="basic">{form}</TabsContent>
-        {extraTabs.map((t) => (
-          <TabsContent key={t.value} value={t.value}>
-            {t.content}
+        {extraTabs.map((tab) => (
+          <TabsContent key={tab.value} value={tab.value}>
+            {tab.content}
           </TabsContent>
         ))}
       </Tabs>

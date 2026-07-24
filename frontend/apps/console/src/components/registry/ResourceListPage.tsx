@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -30,6 +31,9 @@ const pageSize = 20;
 // create drawer, clickable rows that route to the detail page, and the resource's
 // own columns.
 export function ResourceListPage<T>({ resource }: { resource: RegistryResource<T> }) {
+  const { t } = useTranslation(['entities', 'common']);
+  // Resolve one of this family's noun-bearing strings by its fixed suffix.
+  const e = (suffix: string) => t(`entities:${resource.i18nKey}${suffix}`);
   const navigate = useNavigate();
   const { toast } = useToast();
   const [pageNumber, setPageNumber] = useState(1);
@@ -44,20 +48,16 @@ export function ResourceListPage<T>({ resource }: { resource: RegistryResource<T
 
   return (
     <PageShell
-      title={resource.titlePlural}
-      description={resource.listDescription}
+      title={e('TitlePlural')}
+      description={e('ListDescription')}
       banner={resource.banner}
       action={
         <Button onClick={() => setCreating(true)}>
-          <Plus size={16} /> New {resource.singular}
+          <Plus size={16} /> {e('New')}
         </Button>
       }
     >
-      <FormDrawer
-        open={creating}
-        onOpenChange={setCreating}
-        title={`New ${resource.singular}`}
-      >
+      <FormDrawer open={creating} onOpenChange={setCreating} title={e('New')}>
         {resource.renderForm(undefined, (m) => {
           toast(m);
           setCreating(false);
@@ -65,17 +65,17 @@ export function ResourceListPage<T>({ resource }: { resource: RegistryResource<T
         })}
       </FormDrawer>
       {loading ? (
-        <LoadingState description={`Loading ${resource.titlePlural.toLowerCase()}…`} />
+        <LoadingState description={t('common:loading')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : results.length === 0 ? (
-        <EmptyState description={`No ${resource.singular}s defined yet.`} />
+        <EmptyState description={e('ListEmpty')} />
       ) : (
         <>
           <DataTable>
             <DataTableHead>
               {resource.columns.map((c) => (
-                <DataTableHeaderCell key={c.header}>{c.header}</DataTableHeaderCell>
+                <DataTableHeaderCell key={c.header}>{t(c.header)}</DataTableHeaderCell>
               ))}
             </DataTableHead>
             <DataTableBody>

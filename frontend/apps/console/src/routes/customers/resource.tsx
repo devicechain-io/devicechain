@@ -15,9 +15,7 @@ import {
 
 export const customerResource: RegistryResource<Customer> = {
   basePath: '/customers',
-  titlePlural: 'Customers',
-  singular: 'customer',
-  listDescription: 'Organizations or accounts you serve',
+  i18nKey: 'customer',
   banner: 'customers',
   list: listCustomers,
   load: getCustomer,
@@ -30,7 +28,7 @@ export const customerResource: RegistryResource<Customer> = {
     tokenColumn<Customer>(),
     nameColumn<Customer>(),
     {
-      header: 'Type',
+      header: 'common:colType',
       cell: (c) =>
         c.customerType ? (
           <TypeCapsule appearance={appearanceOf(c.customerType)} />
@@ -43,10 +41,8 @@ export const customerResource: RegistryResource<Customer> = {
   renderForm: (c, onDone) => (
     <RegistryInstanceForm
       entity={c}
-      singular="customer"
-      typeLabel="Customer type"
-      typeSingular="customer type"
-      tokenPlaceholder="acme"
+      i18nKey="customer"
+      entityType="customer"
       defaultTypeToken={c?.customerType?.token}
       loadTypes={() => listCustomerTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
       create={(req) =>
@@ -68,5 +64,4 @@ export const customerResource: RegistryResource<Customer> = {
       onDone={onDone}
     />
   ),
-  removeConfirm: (c) => `Delete customer “${c.token}”? This cannot be undone.`,
 };

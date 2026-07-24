@@ -16,10 +16,8 @@ import {
 // The area-type registry, described once for the generic list/detail/new pages.
 export const areaTypeResource: RegistryResource<AreaType> = {
   basePath: '/area-types',
-  titlePlural: 'Area Types',
-  singular: 'area type',
+  i18nKey: 'areaType',
   banner: 'areas',
-  listDescription: 'Templates that classify areas',
   list: listAreaTypes,
   load: getAreaType,
   remove: deleteAreaType,
@@ -28,7 +26,7 @@ export const areaTypeResource: RegistryResource<AreaType> = {
   nameOf: (at) => at.name,
   columns: [
     {
-      header: 'Appearance',
+      header: 'common:colAppearance',
       cell: (at) => <TypeCapsule appearance={appearanceOf(at)} />,
     },
     tokenColumn<AreaType>(),
@@ -38,8 +36,8 @@ export const areaTypeResource: RegistryResource<AreaType> = {
   renderForm: (at, onDone) => (
     <RegistryTypeForm
       entity={at}
-      singular="area type"
-      tokenPlaceholder="building"
+      i18nKey="areaType"
+      entityType="area-type"
       create={(req) => createAreaType(req)}
       update={(token, req) =>
         updateAreaType(token, {
@@ -55,8 +53,7 @@ export const areaTypeResource: RegistryResource<AreaType> = {
       onDone={onDone}
     />
   ),
-  removeConfirm: (at) => `Delete area type “${at.token}”? This cannot be undone.`,
-  detailExtraLabel: 'Appearance',
+  detailExtraLabel: 'common:colAppearance',
   renderDetailExtra: (at, reload) => (
     <TypeAppearanceForm
       entity={at}

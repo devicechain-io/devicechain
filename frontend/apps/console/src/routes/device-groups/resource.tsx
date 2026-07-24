@@ -15,10 +15,8 @@ import {
 
 export const deviceGroupResource: RegistryResource<DeviceGroup> = {
   basePath: '/device-groups',
-  titlePlural: 'Device Groups',
-  singular: 'device group',
+  i18nKey: 'deviceGroup',
   banner: 'devices',
-  listDescription: 'Collections of devices',
   list: listDeviceGroups,
   load: getDeviceGroup,
   remove: deleteDeviceGroup,
@@ -29,21 +27,20 @@ export const deviceGroupResource: RegistryResource<DeviceGroup> = {
   renderForm: (g, onDone) => (
     <RegistryTypeForm
       entity={g}
-      singular="device group"
-      tokenPlaceholder="floor-1"
+      i18nKey="deviceGroup"
+      entityType="device-group"
       create={(req) => createDeviceGroup(req)}
       update={(token, req) => updateDeviceGroup(token, req)}
       onDone={onDone}
     />
   ),
-  removeConfirm: (g) => `Delete device group “${g.token}”? This cannot be undone.`,
-  detailExtraLabel: 'Members',
+  detailExtraLabel: 'common:membersTab',
   renderDetailExtra: (g) => (
     <MembershipPanel
       groupType="group"
       groupToken={g.token}
       memberType="device"
-      memberSingular="device"
+      memberI18nKey="device"
       loadCandidates={() => listDevices({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
     />
   ),
