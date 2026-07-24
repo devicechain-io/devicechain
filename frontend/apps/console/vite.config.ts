@@ -31,6 +31,10 @@ export default defineConfig(({ mode }) => {
     // devDependency of this workspace.
     test: {
       environment: 'jsdom',
+      // Force a working in-memory localStorage — newer Node's experimental
+      // native global shadows jsdom's and is unavailable without a flag (see the
+      // setup file). Runs after the environment is set up, before test files.
+      setupFiles: ['./vitest.setup.ts'],
     },
     resolve: {
       alias: {
