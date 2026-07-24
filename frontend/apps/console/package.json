@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "codegen": "graphql-codegen --config codegen.ts",
-    "i18n:extract": "i18next -c i18next-parser.config.js"
+    "i18n:extract": "i18next -c i18next-parser.config.js",
+    "lint": "eslint 'src/**/*.{ts,tsx}'"
   },
   "dependencies": {
     "@devicechain/client": "*",
@@ -46,12 +47,19 @@
     "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@babel/eslint-parser": "^7.29.7",
+    "@babel/preset-react": "^7.29.7",
+    "@babel/preset-typescript": "^7.29.7",
     "@graphql-codegen/cli": "^7.2.0",
     "@graphql-codegen/client-preset": "^6.0.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-i18next": "^6.1.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "i18next-parser": "^9.0.2",
     "jsdom": "^29.1.1",
     "tailwindcss": "^4.0.0",
