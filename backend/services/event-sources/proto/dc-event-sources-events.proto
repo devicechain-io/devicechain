@@ -26,6 +26,13 @@ message PUnresolvedEvent {
     optional string credential_type = 9;
     optional string credential_id = 10;
     optional string credential_secret = 11;
+    // Set by an internal ingest source that authenticated the device at the
+    // TRANSPORT (LwM2M DTLS-PSK / Sparkplug broker) upstream, so the device
+    // presents no per-event credential. The resolver trusts the self-asserted
+    // device token on such an event under deviceAuthMode=required (ADR-025 confines
+    // inbound-events publish to the service account, so this is not device-forgeable
+    // — see resolveDevice). NEVER set from device-controlled input.
+    bool authenticated_transport = 12;
 }
 
 /**

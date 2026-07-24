@@ -90,3 +90,26 @@ func TestMarshalUnresolvedEventCarriesSubSecondTimestamps(t *testing.T) {
 	assert.True(t, got.OccurredTime.Equal(occurred), "occurred time sub-second round-trip: got %s want %s", got.OccurredTime, occurred)
 	assert.True(t, got.ProcessedTime.Equal(processed), "processed time sub-second round-trip: got %s want %s", got.ProcessedTime, processed)
 }
+
+// SF-3: the AuthenticatedTransport marker must survive the marshal/unmarshal round-trip
+// (it crosses the messaging hop to the resolver, and a dropped marker would silently
+// re-break transport-authenticated presence). proto3 bool defaults false, so an event
+// that never set it round-trips false — there is no path where old bytes set it true.
+func TestMarshalRoundTripCarriesAuthenticatedTransport(t *testing.T) {
+	for _, marked := range []bool{true, false} {
+		event := &model.UnresolvedEvent{
+			Source:                 "lwm2m",
+			Device:                 "lw-dev-1",
+			OccurredTime:           time.Now().UTC().Truncate(time.Second),
+			ProcessedTime:          time.Now().UTC().Truncate(time.Second),
+			EventType:              model.StateChange,
+			Payload:                &model.UnresolvedStateChangePayload{State: model.PresenceConnected, SessionId: "1"},
+			AuthenticatedTransport: marked,
+		}
+		bytes, err := MarshalUnresolvedEvent(event)
+		assert.NoError(t, err)
+		got, err := UnmarshalUnresolvedEvent(bytes)
+		assert.NoError(t, err)
+		assert.Equal(t, marked, got.AuthenticatedTransport)
+	}
+}

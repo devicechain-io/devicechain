@@ -608,12 +608,47 @@ func presentedCredential(unrez *esmodel.UnresolvedEvent) *model.PresentedCredent
 	}
 }
 
+// transportAuthenticatedBypass reports whether an event may skip the required-mode
+// credential check because a trusted internal ingest source authenticated the device
+// at the TRANSPORT (LwM2M DTLS-PSK / Sparkplug broker) upstream and marked the event.
+// The event then resolves on its self-asserted device token, exactly as the
+// disabled/optional transports already do (config.AuthMode doc, ADR-014/025).
+//
+// This is safe because the marker is NOT device-forgeable: ADR-025 confines a
+// device's NATS publish to its own devices.{token}.events subject, and the
+// device->inbound-events gateway (event-sources JsonDecoder) copies only named
+// payload fields — it has no field for this marker — so only the trusted service
+// account can ever set it. LwM2M binds the device token to the authenticated PSK
+// identity (per-device, ADR-075 D1). Sparkplug's token is topic-derived, so this is
+// BROKER-level not per-device — `required` does NOT close intra-tenant device-token
+// spoofing for Sparkplug (it still does for HTTP/MQTT credential paths); cross-tenant
+// stays closed via connection-scoped tenancy. Real per-device Sparkplug auth is a
+// tracked gap.
+//
+// The bypass is confined to the event types the transport-authenticated ingest path
+// actually emits (Measurement, StateChange). A marked event of ANY other type does
+// not bypass the credential check, so a future emit path for a more dangerous type
+// cannot silently inherit this trust.
+func transportAuthenticatedBypass(unrez *esmodel.UnresolvedEvent) bool {
+	if !unrez.AuthenticatedTransport {
+		return false
+	}
+	switch unrez.EventType {
+	case esmodel.Measurement, esmodel.StateChange:
+		return true
+	default:
+		return false
+	}
+}
+
 // resolveDevice determines the originating device for an event, enforcing the
 // configured device authentication policy (transport security, ADR-014):
 //   - disabled: the self-asserted device token is trusted (legacy path).
 //   - optional: a presented credential is authenticated and authoritative; with
 //     no credential the device token is trusted.
-//   - required: a valid credential must be presented or the event is rejected.
+//   - required: a valid credential must be presented and is authoritative — UNLESS
+//     the event was marked transport-authenticated by a trusted internal ingest
+//     source, which resolves on its self-asserted token (transportAuthenticatedBypass).
 //
 // When a credential authenticates, the resolved device is authoritative: a
 // self-asserted token naming a different device is rejected so one authenticated
@@ -631,7 +666,7 @@ func (rez *EventResolver) resolveDevice(ctx context.Context, unrez *esmodel.Unre
 			}
 			return device, 0, nil
 		}
-		if rez.AuthMode == config.AuthModeRequired {
+		if rez.AuthMode == config.AuthModeRequired && !transportAuthenticatedBypass(unrez) {
 			return nil, uint(dmproto.FailureReason_Unauthenticated),
 				errors.New("device authentication required but no credential was presented")
 		}

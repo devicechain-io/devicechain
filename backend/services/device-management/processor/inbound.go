@@ -155,6 +155,16 @@ func (iproc *InboundEventsProcessor) OnUnresolvedEvent(tenant string, reason uin
 	if err != nil {
 		log.Error().Err(err).Msg("unable to marshal unresolved event to protobuf")
 	} else {
+		// Log the resolution failure REASON before dead-lettering. Without this the
+		// cause travels only inside the dead-lettered FailedEvent payload — an
+		// authentication rejection, a bad presence enum, a foreign device token all
+		// looked identical from the logs (a "could not be resolved" debug line with no
+		// error), which hid a real presence-auth bug for a long time. WARN, not ERROR:
+		// a misbehaving producer can flood this, and each line is a single dropped event.
+		log.Warn().Err(rezerr).Uint("reason", reason).Str("tenant", tenant).
+			Str("source", unrez.Source).Str("device", unrez.Device).
+			Str("eventType", unrez.EventType.String()).Str("correlation", correlation).
+			Msg("event could not be resolved; dead-lettering")
 		failed := dmodel.NewFailedEvent(reason, iproc.Microservice.FunctionalArea,
 			"event could not be resolved", rezerr, bytes)
 		iproc.failed <- failedItem{tenant: tenant, event: *failed, correlation: correlation}

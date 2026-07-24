@@ -257,15 +257,23 @@ type Emitter struct {
 	writer      EventWriter
 	now         func() time.Time
 	dedupPrefix string
+	// authenticatedTransport stamps every emitted event as transport-authenticated
+	// (the device authenticated at DTLS-PSK / broker upstream, so it carries no
+	// per-event credential). The resolver trusts the self-asserted device token on
+	// such an event under deviceAuthMode=required. Only the transport-authenticating
+	// ingest services (lwm2m, sparkplug) construct this true; a caller must opt in
+	// consciously — it is NEVER derived from device-controlled input.
+	authenticatedTransport bool
 }
 
 // NewEmitter binds an emitter to a durable message writer, a clock (nil ⇒ time.Now),
-// and the origin protocol's dedup-id prefix (e.g. "sp", "lw").
-func NewEmitter(writer EventWriter, now func() time.Time, dedupPrefix string) *Emitter {
+// the origin protocol's dedup-id prefix (e.g. "sp", "lw"), and whether this source
+// authenticated its devices at the transport (see Emitter.authenticatedTransport).
+func NewEmitter(writer EventWriter, now func() time.Time, dedupPrefix string, authenticatedTransport bool) *Emitter {
 	if now == nil {
 		now = time.Now
 	}
-	return &Emitter{writer: writer, now: now, dedupPrefix: dedupPrefix}
+	return &Emitter{writer: writer, now: now, dedupPrefix: dedupPrefix, authenticatedTransport: authenticatedTransport}
 }
 
 // Emit writes the samples for one device as a measurements UnresolvedEvent under the
@@ -295,12 +303,13 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 		latest = e.now().UnixMilli() // never emit a year-0/1970 event time
 	}
 	ev := &esmodel.UnresolvedEvent{
-		Source:        source,
-		Device:        deviceToken,
-		EventType:     esmodel.Measurement,
-		OccurredTime:  time.UnixMilli(latest).UTC(),
-		ProcessedTime: e.now().UTC(),
-		Payload:       &esmodel.UnresolvedMeasurementsPayload{Entries: entries},
+		Source:                 source,
+		Device:                 deviceToken,
+		EventType:              esmodel.Measurement,
+		OccurredTime:           time.UnixMilli(latest).UTC(),
+		ProcessedTime:          e.now().UTC(),
+		Payload:                &esmodel.UnresolvedMeasurementsPayload{Entries: entries},
+		AuthenticatedTransport: e.authenticatedTransport,
 	}
 	encoded, err := esproto.MarshalUnresolvedEvent(ev)
 	if err != nil {
@@ -328,11 +337,12 @@ func (e *Emitter) EmitPresence(ctx context.Context, tenant, source, deviceToken 
 	occurred := ev.OccurredAt.UTC()
 	occStr := occurred.Format(time.RFC3339Nano)
 	uev := &esmodel.UnresolvedEvent{
-		Source:        source,
-		Device:        deviceToken,
-		EventType:     esmodel.StateChange,
-		OccurredTime:  occurred,
-		ProcessedTime: e.now().UTC(),
+		Source:                 source,
+		Device:                 deviceToken,
+		EventType:              esmodel.StateChange,
+		OccurredTime:           occurred,
+		ProcessedTime:          e.now().UTC(),
+		AuthenticatedTransport: e.authenticatedTransport,
 		Payload: &esmodel.UnresolvedStateChangePayload{
 			State:        state,
 			Reason:       ev.Reason,

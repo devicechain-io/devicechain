@@ -418,7 +418,11 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 			string(auth.TenantRead), string(auth.CommandRead)})
 
 	registrar := adapter.NewRegistrar(client, ingestURL, "lw-")
-	emitter := adapter.NewEmitter(Writer, time.Now, "lw")
+	// authenticatedTransport=true: LwM2M devices authenticate at the DTLS-PSK
+	// handshake, and the device token is bound to that authenticated PSK identity
+	// (ADR-075 D1), so emitted events carry no per-event credential but the resolver
+	// can trust their device token under deviceAuthMode=required.
+	emitter := adapter.NewEmitter(Writer, time.Now, "lw", true)
 	epoch := adapter.NewEpochSource(time.Now)
 	reconciler := adapter.NewReconciler(client, deviceStateURL)
 

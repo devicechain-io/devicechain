@@ -250,17 +250,18 @@ func MarshalUnresolvedEvent(event *model.UnresolvedEvent) ([]byte, error) {
 
 	// Encode protobuf event.
 	pbevent := &PUnresolvedEvent{
-		SourceId:         event.Source,
-		AltId:            event.AltId,
-		Device:           event.Device,
-		Relationship:     event.Relationship,
-		OccurredTime:     event.OccurredTime.Format(time.RFC3339Nano),
-		ProcessedTime:    event.ProcessedTime.Format(time.RFC3339Nano),
-		EventType:        int64(event.EventType),
-		Payload:          plbytes,
-		CredentialType:   event.CredentialType,
-		CredentialId:     event.CredentialId,
-		CredentialSecret: event.CredentialSecret,
+		SourceId:               event.Source,
+		AltId:                  event.AltId,
+		Device:                 event.Device,
+		Relationship:           event.Relationship,
+		OccurredTime:           event.OccurredTime.Format(time.RFC3339Nano),
+		ProcessedTime:          event.ProcessedTime.Format(time.RFC3339Nano),
+		EventType:              int64(event.EventType),
+		Payload:                plbytes,
+		CredentialType:         event.CredentialType,
+		CredentialId:           event.CredentialId,
+		CredentialSecret:       event.CredentialSecret,
+		AuthenticatedTransport: event.AuthenticatedTransport,
 	}
 
 	// Marshal event to bytes.
@@ -299,17 +300,18 @@ func UnmarshalUnresolvedEvent(encoded []byte) (*model.UnresolvedEvent, error) {
 		return nil, err
 	}
 	event := &model.UnresolvedEvent{
-		Source:           pbevent.SourceId,
-		AltId:            pbevent.AltId,
-		Device:           pbevent.Device,
-		Relationship:     pbevent.Relationship,
-		OccurredTime:     occtime,
-		ProcessedTime:    proctime,
-		EventType:        etype,
-		Payload:          payload,
-		CredentialType:   pbevent.CredentialType,
-		CredentialId:     pbevent.CredentialId,
-		CredentialSecret: pbevent.CredentialSecret,
+		Source:                 pbevent.SourceId,
+		AltId:                  pbevent.AltId,
+		Device:                 pbevent.Device,
+		Relationship:           pbevent.Relationship,
+		OccurredTime:           occtime,
+		ProcessedTime:          proctime,
+		EventType:              etype,
+		Payload:                payload,
+		CredentialType:         pbevent.CredentialType,
+		CredentialId:           pbevent.CredentialId,
+		CredentialSecret:       pbevent.CredentialSecret,
+		AuthenticatedTransport: pbevent.AuthenticatedTransport,
 	}
 
 	return event, nil
