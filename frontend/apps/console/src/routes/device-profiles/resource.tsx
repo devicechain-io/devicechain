@@ -62,6 +62,19 @@ const ruleTypeLabel = (definition: string): string => {
 
 const Dash = () => <span className="text-muted-foreground">—</span>;
 
+// Extracted so it can legally call useTranslation: the `columns` config below is a
+// module-level array whose `cell:` entries are plain callbacks invoked from inside
+// ResourceDetailPage, not components React can attach hook state to (same reasoning
+// as the detail-tab bodies further down this file).
+function UsedByCount({ count }: { count: number }) {
+  const { t } = useTranslation('devices');
+  return (
+    <span className={count === 0 ? 'text-muted-foreground' : 'tabular-nums'}>
+      {typeCountLabel(count, t)}
+    </span>
+  );
+}
+
 // Basic-tab form: the profile header (token, name, description, category). Category
 // is the free-text capability facet (ADR-045 decision 8), suggesting the values
 // already in use via SuggestField. Metadata is carried forward untouched on edit.
@@ -253,11 +266,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
     { header: 'entities:deviceProfileColCategory', cell: (p) => p.category || <Dash /> },
     {
       header: 'entities:deviceProfileColUsedBy',
-      cell: (p) => (
-        <span className={p.deviceTypeCount === 0 ? 'text-muted-foreground' : 'tabular-nums'}>
-          {typeCountLabel(p.deviceTypeCount)}
-        </span>
-      ),
+      cell: (p) => <UsedByCount count={p.deviceTypeCount} />,
     },
     descriptionColumn<DeviceProfile>(),
     createdColumn<DeviceProfile>(),

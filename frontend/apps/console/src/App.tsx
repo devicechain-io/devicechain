@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthProvider';
 import { LoadingState } from '@/components/ui/loading-state';
 import LoginPage from '@/routes/Login';
@@ -71,12 +72,13 @@ const REGISTRY_RESOURCES: RegistryResource<any>[] = [
 ];
 
 function ProtectedRoute() {
+  const { t } = useTranslation('common');
   const { isAuthenticated, isLoading } = useAuth();
 
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
-        <LoadingState description="Loading…" />
+        <LoadingState description={t('loading')} />
       </div>
     );
   }

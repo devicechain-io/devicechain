@@ -40,8 +40,8 @@ export function errMessage(err: unknown): string {
 // typeCountLabel renders a device-type adoption count (ADR-045): "unused" at zero,
 // else a pluralized "N type(s)". Shared by the profiles list column and the
 // type-picker options so the two stay in lockstep.
-export function typeCountLabel(count: number): string {
-  return count === 0 ? 'unused' : `${count} type${count === 1 ? '' : 's'}`;
+export function typeCountLabel(count: number, t: TFunction): string {
+  return count === 0 ? t('devices:typeCountUnused') : t('devices:typeCount', { count });
 }
 
 // rowLinkProps makes a whole table row behave like a link to a detail page:

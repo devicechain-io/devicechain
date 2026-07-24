@@ -7,11 +7,13 @@
 // beside the human name and must be trivially copyable.
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Copy, Check } from 'lucide-react';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 
 export function CopyToken({ value, className }: { value: string; className?: string }) {
+  const { t } = useTranslation('common');
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -28,7 +30,7 @@ export function CopyToken({ value, className }: { value: string; className?: str
       clearTimeout(timer.current);
       timer.current = setTimeout(() => setCopied(false), 1500);
     } catch {
-      toast('Could not copy to clipboard', 'error');
+      toast(t('copyFailed'), 'error');
     }
   };
 
@@ -36,8 +38,8 @@ export function CopyToken({ value, className }: { value: string; className?: str
     <button
       type="button"
       onClick={copy}
-      title={`Copy “${value}”`}
-      aria-label={`Copy ${value} to clipboard`}
+      title={t('copyTitle', { value })}
+      aria-label={t('copyAria', { value })}
       className={cn(
         'inline-flex min-w-0 max-w-[18rem] items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-0.5',
         'font-mono text-xs text-muted-foreground transition-colors hover:text-foreground',

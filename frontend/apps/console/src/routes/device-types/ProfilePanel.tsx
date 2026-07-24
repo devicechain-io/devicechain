@@ -11,6 +11,7 @@
 
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { AlertTriangle, ArrowRight, Plus, SlidersHorizontal, Unlink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -40,6 +41,7 @@ export function ProfilePanel({
   /** Refresh the parent detail so the attached profile updates after a change. */
   onChanged: () => void;
 }) {
+  const { t } = useTranslation(['devices', 'common']);
   const { claims } = useAuth();
   const canWrite = hasAuthority(claims, 'device:write');
   const { toast } = useToast();
@@ -79,7 +81,7 @@ export function ProfilePanel({
     .map((p) => ({
       value: p.token,
       label: p.name ? `${p.name} (${p.token})` : p.token,
-      description: [p.category || null, typeCountLabel(p.deviceTypeCount)].filter(Boolean).join(' · '),
+      description: [p.category || null, typeCountLabel(p.deviceTypeCount, t)].filter(Boolean).join(' · '),
     }));
 
   const closePicker = () => {
@@ -96,7 +98,7 @@ export function ProfilePanel({
     setBusy('attach');
     try {
       await setProfile(token);
-      toast(`Attached profile “${token}”`);
+      toast(t('devices:typeProfileAttached', { token }));
       const picked = profiles.find((p) => p.token === token);
       setOverride({
         profile: { token, name: picked?.name ?? null, category: picked?.category ?? null },
@@ -115,16 +117,16 @@ export function ProfilePanel({
     if (!attached) return;
     if (
       !(await confirm({
-        title: 'Detach profile',
-        description: `Detach “${attached.token}” from this device type? Its devices keep working but lose their typed capabilities — no metric typing, commands, or alarms — until a profile is re-attached. The profile itself is not deleted.`,
-        confirmLabel: 'Detach',
+        title: t('devices:typeProfileDetachTitle'),
+        description: t('devices:typeProfileDetachConfirm', { token: attached.token }),
+        confirmLabel: t('devices:typeProfileDetachAction'),
       }))
     )
       return;
     setBusy('detach');
     try {
       await setProfile(undefined);
-      toast('Profile detached');
+      toast(t('devices:typeProfileDetached'));
       setOverride({ profile: null });
       closePicker();
       onChanged();
@@ -144,7 +146,7 @@ export function ProfilePanel({
         name: entity.name ? `${entity.name} Profile` : undefined,
       });
       await setProfile(created.token);
-      toast(`Created and attached profile “${created.token}”`);
+      toast(t('devices:typeProfileCreatedAttached', { token: created.token }));
       setOverride({
         profile: { token: created.token, name: created.name ?? null, category: created.category ?? null },
       });
@@ -160,11 +162,7 @@ export function ProfilePanel({
 
   return (
     <div className="max-w-2xl space-y-4">
-      <p className="max-w-prose text-sm text-muted-foreground">
-        A profile is the reusable capability contract — metrics, commands, and alarm rules — that
-        this device type adopts. Authoring lives on the profile; here you choose which one this type
-        uses.
-      </p>
+      <p className="max-w-prose text-sm text-muted-foreground">{t('devices:typeProfileIntro')}</p>
 
       {attached && !picking ? (
         <div className="space-y-3 rounded-md border p-4">
@@ -176,30 +174,32 @@ export function ProfilePanel({
               </div>
               <div className="font-mono text-xs text-muted-foreground">{attached.token}</div>
               {attached.category && (
-                <div className="text-xs text-muted-foreground">Category: {attached.category}</div>
+                <div className="text-xs text-muted-foreground">
+                  {t('devices:typeProfileCategory', { category: attached.category })}
+                </div>
               )}
             </div>
             {canWrite && (
               <div className="flex shrink-0 gap-2">
                 <Button variant="outline" size="sm" onClick={() => setPicking(true)}>
-                  Change
+                  {t('devices:typeProfileChange')}
                 </Button>
                 <Button variant="ghost" size="sm" onClick={doDetach} loading={busy === 'detach'}>
-                  <Unlink size={14} /> Detach
+                  <Unlink size={14} /> {t('devices:typeProfileDetach')}
                 </Button>
               </div>
             )}
           </div>
           {attachedCount != null && attachedCount > 1 && (
             <p className="text-xs text-amber-600 dark:text-amber-500">
-              Shared by {attachedCount} device types — changes to its definitions affect all of them.
+              {t('devices:typeProfileShared', { count: attachedCount })}
             </p>
           )}
           <Link
             to={`/device-profiles/${attached.token}`}
             className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
           >
-            Author this profile <ArrowRight size={14} />
+            {t('devices:typeProfileAuthorLink')} <ArrowRight size={14} />
           </Link>
         </div>
       ) : (
@@ -212,33 +212,32 @@ export function ProfilePanel({
           {!attached && (
             <div className="space-y-1">
               <p className="flex items-center gap-2 text-sm font-medium text-amber-600 dark:text-amber-500">
-                <AlertTriangle size={16} /> Capability-limited — no profile attached
+                <AlertTriangle size={16} /> {t('devices:typeProfileCapabilityLimited')}
               </p>
               <p className="text-sm text-muted-foreground">
-                Devices of this type are still classified and displayed, but report no typed metrics,
-                accept no commands, and raise no alarms until a profile is attached.
+                {t('devices:typeProfileCapabilityLimitedBody')}
               </p>
             </div>
           )}
           {canWrite ? (
             <>
               {error && !data ? (
-                <p className="text-sm text-destructive">
-                  Couldn’t load the profiles to choose from. You can still create one below.
-                </p>
+                <p className="text-sm text-destructive">{t('devices:typeProfileLoadError')}</p>
               ) : (
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                   <div className="flex-1 space-y-1.5">
                     <label htmlFor="attach-profile" className="text-xs font-medium text-muted-foreground">
-                      Attach an existing profile
+                      {t('devices:typeProfileAttachLabel')}
                     </label>
                     <Combobox
                       id="attach-profile"
                       options={options}
                       value={selected}
                       onChange={setSelected}
-                      placeholder={loading ? 'Loading profiles…' : 'Select a profile…'}
-                      emptyMessage="No other profiles."
+                      placeholder={
+                        loading ? t('devices:typeProfileLoadingProfiles') : t('devices:typeProfileSelectProfile')
+                      }
+                      emptyMessage={t('devices:typeProfileNoOtherProfiles')}
                       disabled={loading}
                     />
                   </div>
@@ -247,26 +246,24 @@ export function ProfilePanel({
                     disabled={!selected}
                     loading={busy === 'attach'}
                   >
-                    Attach
+                    {t('devices:typeProfileAttach')}
                   </Button>
                 </div>
               )}
               <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">or</span>
+                <span className="text-xs text-muted-foreground">{t('devices:typeProfileOr')}</span>
                 <Button variant="outline" size="sm" onClick={doCreateForType} loading={busy === 'create'}>
-                  <Plus size={14} /> Create a profile for this type
+                  <Plus size={14} /> {t('devices:typeProfileCreate')}
                 </Button>
                 {attached && (
                   <Button variant="ghost" size="sm" onClick={closePicker}>
-                    Cancel
+                    {t('common:cancel')}
                   </Button>
                 )}
               </div>
             </>
           ) : (
-            <p className="text-sm text-muted-foreground">
-              You don’t have permission to change this type’s profile.
-            </p>
+            <p className="text-sm text-muted-foreground">{t('devices:typeProfileNoPermission')}</p>
           )}
         </div>
       )}

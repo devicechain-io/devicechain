@@ -1,4 +1,9 @@
 {
+  "accountEmail": "Email",
+  "accountEmailFixed": "Your sign-in identity; it can't change.",
+  "accountFirstName": "First name",
+  "accountLastName": "Last name",
+  "accountUpdated": "Profile updated",
   "editProfile": "Edit profile",
   "editProfileDescription": "Update your display name.",
   "adminConsole": "Admin console",

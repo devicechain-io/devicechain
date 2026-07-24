@@ -60,6 +60,9 @@ const EXTRA_ATTRS = [
   //  - memberI18nKey / groupType / memberType: MembershipPanel's family prefix
   //    and backend entity-type tokens ('group', 'asset').
   'i18nKey', 'memberI18nKey', 'groupType', 'memberType',
+  // React Router `<Route path="devices/:token">` — a URL route pattern, never
+  // display text. The visible label lives in the nav/page chrome, not here.
+  'path',
 ];
 // `e` is the registry engine's per-resource key resolver (`e('New')` →
 // t(`entities:${i18nKey}New`)); its argument is a key suffix, never user text —

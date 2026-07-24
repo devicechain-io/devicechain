@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -14,6 +15,7 @@ import { errMessage } from '@/routes/common';
 // is the stable identity key, so it's shown read-only. On save we write the
 // result straight into the current-user cache, so the name updates everywhere.
 export function ProfileForm({ onDone }: { onDone: (message: string) => void }) {
+  const { t } = useTranslation(['userMenu', 'common']);
   const user = useCurrentUser();
   const applyUser = useApplyCurrentUser();
   const [firstName, setFirstName] = useState(user?.firstName ?? '');
@@ -36,7 +38,7 @@ export function ProfileForm({ onDone }: { onDone: (message: string) => void }) {
         firstName: updated.firstName ?? null,
         lastName: updated.lastName ?? null,
       });
-      onDone('Profile updated');
+      onDone(t('accountUpdated'));
     } catch (err) {
       setFormError(errMessage(err));
     } finally {
@@ -47,18 +49,22 @@ export function ProfileForm({ onDone }: { onDone: (message: string) => void }) {
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <FormField label="Email" htmlFor="p-email" description="Your sign-in identity; it can't change.">
+      <FormField
+        label={t('userMenu:accountEmail')}
+        htmlFor="p-email"
+        description={t('userMenu:accountEmailFixed')}
+      >
         <Input id="p-email" value={user?.email ?? ''} disabled />
       </FormField>
-      <FormField label="First name" htmlFor="p-first">
+      <FormField label={t('userMenu:accountFirstName')} htmlFor="p-first">
         <Input id="p-first" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
       </FormField>
-      <FormField label="Last name" htmlFor="p-last">
+      <FormField label={t('userMenu:accountLastName')} htmlFor="p-last">
         <Input id="p-last" value={lastName} onChange={(e) => setLastName(e.target.value)} />
       </FormField>
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy}>
-          Save changes
+          {t('common:saveChanges')}
         </Button>
       </div>
     </div>

@@ -3,6 +3,7 @@
 
 import { Link } from 'react-router-dom';
 import { Boxes, Cpu, type LucideIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useCurrentUser } from '@/auth/CurrentUserProvider';
 import { PageShell } from '@/components/ui/page-shell';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -37,7 +38,12 @@ function StatCard({
   );
 }
 
+// Not user-facing text — pulled out of JSX so it reads as a Tailwind class
+// fragment (a technical value) rather than a literal the i18n sweep must flag.
+const homeBodyClassName = 'space-y-6 max-w-5xl';
+
 export default function Dashboard() {
+  const { t } = useTranslation(['common', 'nav']);
   const user = useCurrentUser();
 
   // A page size of 1 keeps the count query cheap — we only read pagination.totalRecords.
@@ -49,14 +55,14 @@ export default function Dashboard() {
 
   return (
     <PageShell
-      title={user ? `Welcome, ${user.displayName}` : 'Welcome'}
-      description="Your DeviceChain tenant at a glance. Event and state surfaces land here as the console grows."
+      title={user ? t('common:homeWelcome', { name: user.displayName }) : t('common:homeWelcomeAnon')}
+      description={t('common:homeTagline')}
       banner="dashboard"
-      bodyClassName="space-y-6 max-w-5xl"
+      bodyClassName={homeBodyClassName}
     >
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <StatCard label="Devices" icon={Cpu} count={deviceCount} to="/devices" />
-        <StatCard label="Device Types" icon={Boxes} count={deviceTypeCount} to="/device-types" />
+        <StatCard label={t('nav:devices')} icon={Cpu} count={deviceCount} to="/devices" />
+        <StatCard label={t('nav:deviceTypes')} icon={Boxes} count={deviceTypeCount} to="/device-types" />
       </div>
     </PageShell>
   );
