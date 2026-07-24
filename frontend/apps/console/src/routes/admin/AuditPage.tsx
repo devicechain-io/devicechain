@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { formatTime } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value';
@@ -24,6 +25,31 @@ import {
 } from '@/components/ui/data-table';
 
 const pageSize = 25;
+
+// Wire enum → catalog key for the operation badge. An operation this map does not
+// cover (should not occur) falls back to its raw value rather than a blank cell —
+// see the render below.
+const OPERATION_LABEL_KEY: Record<string, string> = {
+  login: 'opLogin',
+  login_failed: 'opLoginFailed',
+  create: 'opCreate',
+  delete: 'opDelete',
+  refresh: 'opRefresh',
+  update: 'opUpdate',
+};
+
+// Category filter options: `value` is the wire enum sent to the query and never
+// localized; `labelKey` resolves through t() at render time.
+const CATEGORY_OPTIONS = [
+  { value: 'auth', labelKey: 'categoryAuth' },
+  { value: 'mutation', labelKey: 'categoryMutation' },
+];
+
+// Wire enum → catalog key for the category badge, mirroring CATEGORY_OPTIONS.
+const CATEGORY_LABEL_KEY: Record<string, string> = {
+  auth: 'categoryAuth',
+  mutation: 'categoryMutation',
+};
 
 // Operation → badge colour, covering both auth events and admin mutations:
 // created/succeeded green, failed/removed red, refreshed/changed neutral.
@@ -55,6 +81,7 @@ function target(row: AdminAuditEvent): string {
 }
 
 export default function AdminAuditPage() {
+  const { t } = useTranslation('adminAudit');
   const [pageNumber, setPageNumber] = useState(1);
   const [category, setCategory] = useState('');
   const [tenant, setTenant] = useState('');
@@ -81,33 +108,31 @@ export default function AdminAuditPage() {
   );
 
   const results: AdminAuditEvent[] = data?.results ?? [];
+  const categoryOptions = CATEGORY_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }));
 
   return (
     <PageShell
-      title="Audit"
-      description="Authentication events and identity, role & tenant administration across the instance."
+      title={t('title')}
+      description={t('description')}
       action={
         <div className="flex items-center gap-2">
           <Combobox
             className="h-9 w-44"
-            placeholder="All tenants"
+            placeholder={t('allTenantsPlaceholder')}
             value={tenant}
             onChange={setTenant}
-            options={(tenants ?? []).map((t) => ({ value: t.token }))}
+            options={(tenants ?? []).map((tr) => ({ value: tr.token }))}
           />
           <Combobox
             className="h-9 w-44"
-            placeholder="All categories"
+            placeholder={t('allCategoriesPlaceholder')}
             value={category}
             onChange={setCategory}
-            options={[
-              { value: 'auth', label: 'Auth' },
-              { value: 'mutation', label: 'Mutation' },
-            ]}
+            options={categoryOptions}
           />
           <Input
             className="h-9 w-48"
-            placeholder="Filter by actor…"
+            placeholder={t('filterByActorPlaceholder')}
             value={actorInput}
             onChange={(e) => setActorInput(e.target.value)}
           />
@@ -116,21 +141,21 @@ export default function AdminAuditPage() {
     >
       <div className="space-y-6">
         {loading ? (
-          <LoadingState description="Loading audit log…" />
+          <LoadingState description={t('loadingAuditLog')} />
         ) : error ? (
           <ErrorState description={error} />
         ) : results.length === 0 ? (
-          <EmptyState description="No audit records match." />
+          <EmptyState description={t('noAuditRecordsMatch')} />
         ) : (
           <>
             <DataTable>
               <DataTableHead>
-                <DataTableHeaderCell>Time</DataTableHeaderCell>
-                <DataTableHeaderCell>Category</DataTableHeaderCell>
-                <DataTableHeaderCell>Actor</DataTableHeaderCell>
-                <DataTableHeaderCell>Operation</DataTableHeaderCell>
-                <DataTableHeaderCell>Tenant</DataTableHeaderCell>
-                <DataTableHeaderCell>Target</DataTableHeaderCell>
+                <DataTableHeaderCell>{t('colTime')}</DataTableHeaderCell>
+                <DataTableHeaderCell>{t('colCategory')}</DataTableHeaderCell>
+                <DataTableHeaderCell>{t('colActor')}</DataTableHeaderCell>
+                <DataTableHeaderCell>{t('colOperation')}</DataTableHeaderCell>
+                <DataTableHeaderCell>{t('colTenant')}</DataTableHeaderCell>
+                <DataTableHeaderCell>{t('colTarget')}</DataTableHeaderCell>
               </DataTableHead>
               <DataTableBody>
                 {results.map((row) => (
@@ -140,14 +165,16 @@ export default function AdminAuditPage() {
                     </DataTableCell>
                     <DataTableCell>
                       <Badge variant={row.category === 'auth' ? 'secondary' : 'outline'}>
-                        {row.category}
+                        {CATEGORY_LABEL_KEY[row.category] ? t(CATEGORY_LABEL_KEY[row.category]) : row.category}
                       </Badge>
                     </DataTableCell>
                     <DataTableCell className="font-medium text-foreground">
                       {row.actor || '—'}
                     </DataTableCell>
                     <DataTableCell>
-                      <Badge variant={operationVariant(row.operation)}>{row.operation}</Badge>
+                      <Badge variant={operationVariant(row.operation)}>
+                        {OPERATION_LABEL_KEY[row.operation] ? t(OPERATION_LABEL_KEY[row.operation]) : row.operation}
+                      </Badge>
                     </DataTableCell>
                     <DataTableCell className="text-muted-foreground">{row.tenant || '—'}</DataTableCell>
                     <DataTableCell className="text-foreground">{target(row)}</DataTableCell>

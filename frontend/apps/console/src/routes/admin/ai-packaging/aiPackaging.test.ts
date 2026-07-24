@@ -9,6 +9,20 @@ import {
   type PackagingTierInput,
 } from './aiPackaging';
 import type { AiProviderTierGrant } from '@/lib/api/ai-inference-admin';
+import enAiPackaging from '../../../i18n/locales/en/aiPackaging.json';
+
+// A minimal t() stand-in: resolve an `aiPackaging` key to its English value, pluralize
+// via the `_one`/`_other` suffix when a `count` option is given, and fill any
+// {{tokens}}. warningText returns i18n-keyed messages now (ADR-066), so the assertions
+// below resolve through this to the English text.
+const tr = (key: string, opts?: Record<string, unknown>): string => {
+  const catalog = enAiPackaging as Record<string, string>;
+  const resolvedKey =
+    opts && typeof opts.count === 'number' ? `${key}_${opts.count === 1 ? 'one' : 'other'}` : key;
+  let s = catalog[resolvedKey] ?? catalog[key] ?? key;
+  if (opts) for (const [k, v] of Object.entries(opts)) s = s.split(`{{${k}}}`).join(String(v));
+  return s;
+};
 
 const grant = (
   tier: string,
@@ -158,7 +172,7 @@ describe('warningText', () => {
     const tier = buildPackagingTiers(CATALOG, [grant('silver', 'opus')]).find(
       (t) => t.token === 'silver',
     )!;
-    expect(warningText({ kind: 'no-default' }, tier)).toContain('5 tenants packaged here');
+    expect(warningText({ kind: 'no-default' }, tier, tr)).toContain('5 tenants packaged here');
   });
 
   it('singularizes one tenant', () => {
@@ -166,14 +180,14 @@ describe('warningText', () => {
       [{ token: 'gold', tenantCount: 1 }],
       [grant('gold', 'opus')],
     ).find((t) => t.token === 'gold')!;
-    expect(warningText({ kind: 'no-default' }, tier)).toContain('1 tenant packaged here');
+    expect(warningText({ kind: 'no-default' }, tier, tr)).toContain('1 tenant packaged here');
   });
 
   it('speaks in the future tense for a tier nobody is on yet', () => {
     const tier = buildPackagingTiers(CATALOG, [grant('bronze', 'opus')]).find(
       (t) => t.token === 'bronze',
     )!;
-    const text = warningText({ kind: 'no-default' }, tier);
+    const text = warningText({ kind: 'no-default' }, tier, tr);
     expect(text).toContain('No tenants are packaged here yet');
     expect(text).toContain('will get');
   });
@@ -182,7 +196,7 @@ describe('warningText', () => {
     const tier = buildPackagingTiers(CATALOG, [grant('gold', 'retired', true, false)]).find(
       (t) => t.token === 'gold',
     )!;
-    expect(warningText({ kind: 'default-disabled', provider: 'retired' }, tier)).toContain(
+    expect(warningText({ kind: 'default-disabled', provider: 'retired' }, tier, tr)).toContain(
       'retired',
     );
   });

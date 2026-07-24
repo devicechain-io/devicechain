@@ -1,0 +1,18 @@
+{
+  "defaultBadge": "Default",
+  "description": "Instance-wide configuration. Defaults live in code; only your overrides are stored, so a setting always resolves even before it is ever set.",
+  "loadingSettings": "Loading settings…",
+  "maskPreviewLabel": "Preview — a sample token per type (from the seed “{{seed}}”)",
+  "noSettingsDefined": "No settings are defined.",
+  "overriddenBadge": "Overridden",
+  "overriddenByLabel": "Overridden by {{by}}",
+  "resetConfirmDescription": "“{{key}}” will revert to its built-in default and your override will be removed.",
+  "resetConfirmLabel": "Reset",
+  "resetConfirmTitle": "Reset to default?",
+  "resetToDefaultButton": "Reset to default",
+  "saveOverrideButton": "Save override",
+  "settingResetToast": "Setting “{{key}}” reset to default",
+  "settingSavedToast": "Setting “{{key}}” saved",
+  "title": "System settings",
+  "valueMustBeJsonError": "Value must be valid JSON."
+}

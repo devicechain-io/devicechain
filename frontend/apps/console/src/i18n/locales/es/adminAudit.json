@@ -1,0 +1,23 @@
+{
+  "allCategoriesPlaceholder": "Todas las categorías",
+  "allTenantsPlaceholder": "Todos los inquilinos",
+  "categoryAuth": "Autenticación",
+  "categoryMutation": "Mutación",
+  "colActor": "Actor",
+  "colCategory": "Categoría",
+  "colOperation": "Operación",
+  "colTarget": "Objetivo",
+  "colTenant": "Inquilino",
+  "colTime": "Hora",
+  "description": "Eventos de autenticación y administración de identidades, roles e inquilinos en toda la instancia.",
+  "filterByActorPlaceholder": "Filtrar por actor…",
+  "loadingAuditLog": "Cargando registro de auditoría…",
+  "noAuditRecordsMatch": "Ningún registro de auditoría coincide.",
+  "opCreate": "Crear",
+  "opDelete": "Eliminar",
+  "opLogin": "Inicio de sesión",
+  "opLoginFailed": "Inicio de sesión fallido",
+  "opRefresh": "Renovar",
+  "opUpdate": "Actualizar",
+  "title": "Auditoría"
+}

@@ -155,17 +155,32 @@ export function tierWarning(tier: PackagingTier): PackagingWarning | null {
 
 // warningText renders a warning as the sentence the operator reads. Kept beside the
 // warning type so a new kind cannot be added without its wording.
-export function warningText(w: PackagingWarning, tier: PackagingTier): string {
-  const who =
-    tier.tenantCount === 0
-      ? 'No tenants are packaged here yet, but once one is, it'
-      : `${tier.tenantCount} tenant${tier.tenantCount === 1 ? '' : 's'} packaged here`;
-  const verb = tier.tenantCount === 0 ? 'will get' : 'get';
-
+//
+// `t` is the caller's `aiPackaging`-namespace translator (this is a plain utility, not
+// a component — see the NON-JSX externalization note below). The zero-tenant case reads
+// in the future tense ("will get") and cannot be pluralized the normal CLDR way (there
+// is no count to pluralize — "no tenants... yet" is its own sentence), so it is its own
+// whole-sentence key rather than a `_zero` plural form glued from the same pieces as the
+// counted case: gluing a shared "who ‹verb› no model…" tail onto two different subjects
+// is exactly the fragment-concatenation trap this sweep exists to remove — English
+// tolerates it, but a language with different word order for a subject clause and a verb
+// clause could not reproduce it from two independently-translated fragments. Four whole
+// sentences (counted vs zero-tenant, crossed with the two warning kinds) is what stays
+// translatable.
+export function warningText(
+  w: PackagingWarning,
+  tier: PackagingTier,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const empty = tier.tenantCount === 0;
   switch (w.kind) {
     case 'no-default':
-      return `${who} ${verb} no model for any AI function they have not assigned themselves — this tier offers models but marks none of them its default.`;
+      return empty
+        ? t('noDefaultWarningNoTenants')
+        : t('noDefaultWarningWithTenants', { count: tier.tenantCount });
     case 'default-disabled':
-      return `${who} ${verb} no model for any AI function they have not assigned themselves — this tier's default (${w.provider}) is disabled, and nothing takes the call in its place.`;
+      return empty
+        ? t('defaultDisabledWarningNoTenants', { provider: w.provider })
+        : t('defaultDisabledWarningWithTenants', { count: tier.tenantCount, provider: w.provider });
   }
 }

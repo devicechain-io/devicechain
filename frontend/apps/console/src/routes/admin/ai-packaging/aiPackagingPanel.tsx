@@ -18,6 +18,7 @@
 
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { AlertTriangle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -62,6 +63,7 @@ export const NO_DEFAULT = '__no_default__';
 // control repaints from server truth. `reload` is the caller's refetch of the queries this
 // panel is rendered from — the hook does not own the data, only the writes against it.
 export function useTierPackaging(reload: () => void) {
+  const { t } = useTranslation('aiPackaging');
   const { toast } = useToast();
   const confirm = useConfirm();
   // One in-flight mutation at a time. The controls are cheap and each panel is small, so
@@ -93,10 +95,16 @@ export function useTierPackaging(reload: () => void) {
   // confirmed — it hands those tenants a different working model rather than none, it is
   // audited, and this screen shows the result immediately. Blast radius, not mutation
   // count, is what earns a dialog.
-  const confirmStranding = (tier: PackagingTier, what: string, confirmLabel: string) =>
+  //
+  // `description` is a FULL, ALREADY-RESOLVED sentence, not a fragment this function
+  // glues onto a shared tail (that was the old shape: a `what` fragment concatenated in
+  // front of a hardcoded English tail — unrepresentable in a language whose word order
+  // differs). The two call sites below each resolve their own whole sentence from the
+  // catalog instead.
+  const confirmStranding = (tier: PackagingTier, description: string, confirmLabel: string) =>
     confirm({
-      title: `Leave ${tier.token} with no default model`,
-      description: `${what} leaves ${tier.token} with no default — no other model is promoted in its place, so every tenant at ${tier.token} that has not chosen a model itself will resolve to no model.`,
+      title: t('confirmStrandingTitle', { tier: tier.token }),
+      description,
       confirmLabel,
     });
 
@@ -104,7 +112,7 @@ export function useTierPackaging(reload: () => void) {
     if (!granted) {
       await run(
         () => grantAiProviderToTier(tier.token, provider),
-        `“${provider}” is on the ${tier.token} menu`,
+        t('grantedToast', { provider, tier: tier.token }),
       );
       return;
     }
@@ -129,7 +137,11 @@ export function useTierPackaging(reload: () => void) {
       }
       if (
         isDefault &&
-        !(await confirmStranding(tier, `“${provider}” is ${tier.token}'s default. Revoking it`, 'Revoke'))
+        !(await confirmStranding(
+          tier,
+          t('revokeDefaultConfirmDescription', { provider, tier: tier.token }),
+          t('revokeConfirmLabel'),
+        ))
       ) {
         return;
       }
@@ -137,7 +149,7 @@ export function useTierPackaging(reload: () => void) {
 
     await run(
       () => revokeAiProviderFromTier(tier.token, provider),
-      `“${provider}” is off the ${tier.token} menu`,
+      t('revokedToast', { provider, tier: tier.token }),
     );
   };
 
@@ -150,14 +162,21 @@ export function useTierPackaging(reload: () => void) {
       if (
         tier.known &&
         tier.granted.size > 0 &&
-        !(await confirmStranding(tier, 'Clearing the default', 'Clear'))
+        !(await confirmStranding(
+          tier,
+          t('clearDefaultConfirmDescription', { tier: tier.token }),
+          t('clearConfirmLabel'),
+        ))
       ) {
         return;
       }
-      await run(() => clearAiTierDefault(tier.token), `${tier.token} has no default model`);
+      await run(() => clearAiTierDefault(tier.token), t('noDefaultToast', { tier: tier.token }));
       return;
     }
-    await run(() => setAiTierDefault(tier.token, value), `${tier.token} defaults to “${value}”`);
+    await run(
+      () => setAiTierDefault(tier.token, value),
+      t('defaultSetToast', { tier: tier.token, value }),
+    );
   };
 
   return { busy, toggleGrant, chooseDefault };
@@ -186,6 +205,7 @@ export function TierPanel({
   onChooseDefault: (tier: PackagingTier, value: string) => void;
   showHeader?: boolean;
 }) {
+  const { t } = useTranslation('aiPackaging');
   const warning = tierWarning(tier);
   // The marked default is normally one of the rows below. It is not when the provider list
   // was truncated past it — and then the group's value names an item that does not exist,
@@ -203,30 +223,20 @@ export function TierPanel({
       action={
         showHeader ? (
           tier.known ? (
-            <Badge variant="secondary">
-              {tier.tenantCount} tenant{tier.tenantCount === 1 ? '' : 's'}
-            </Badge>
+            <Badge variant="secondary">{t('tenantCountBadge', { count: tier.tenantCount })}</Badge>
           ) : (
-            <Badge variant="outline">unknown tier</Badge>
+            <Badge variant="outline">{t('unknownTierBadge')}</Badge>
           )
         ) : undefined
       }
     >
       <div className="space-y-4">
-        {!tier.known && (
-          <p className="text-sm text-muted-foreground">
-            No tier with this token exists, so nothing resolves through these grants — no tenant
-            can report a tier the catalog does not have. It is shown because this is the only
-            screen that can reveal it: ai-inference cannot check a tier token when a grant is
-            written, since the catalog lives on a plane its credential cannot reach. Untick every
-            model below to clear it.
-          </p>
-        )}
+        {!tier.known && <p className="text-sm text-muted-foreground">{t('unknownTierExplanation')}</p>}
 
         {warning && (
           <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
             <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-500" aria-hidden />
-            <span>{warningText(warning, tier)}</span>
+            <span>{warningText(warning, tier, t)}</span>
           </div>
         )}
 
@@ -239,13 +249,13 @@ export function TierPanel({
           onValueChange={(v) => onChooseDefault(tier, v)}
           disabled={busy}
           className="gap-0"
-          aria-label={`Default model for ${tier.token}`}
+          aria-label={t('defaultModelAriaLabel', { tier: tier.token })}
         >
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>Provider</DataTableHeaderCell>
-              <DataTableHeaderCell className="w-24 text-center">Grant</DataTableHeaderCell>
-              <DataTableHeaderCell className="w-24 text-center">Default</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colProvider')}</DataTableHeaderCell>
+              <DataTableHeaderCell className="w-24 text-center">{t('colGrant')}</DataTableHeaderCell>
+              <DataTableHeaderCell className="w-24 text-center">{t('colDefault')}</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
               {providers.map((p) => {
@@ -260,7 +270,7 @@ export function TierPanel({
                         >
                           {p.token}
                         </Link>
-                        {!p.enabled && <Badge variant="outline">disabled</Badge>}
+                        {!p.enabled && <Badge variant="outline">{t('common:disabled')}</Badge>}
                       </div>
                       <span className="text-xs text-muted-foreground">{p.model}</span>
                     </DataTableCell>
@@ -269,7 +279,7 @@ export function TierPanel({
                         <Checkbox
                           checked={granted}
                           disabled={busy}
-                          aria-label={`Grant ${p.token} to ${tier.token}`}
+                          aria-label={t('grantAriaLabel', { provider: p.token, tier: tier.token })}
                           onCheckedChange={() => onToggleGrant(tier, p.token, granted)}
                         />
                       </div>
@@ -283,8 +293,8 @@ export function TierPanel({
                         <RadioGroupItem
                           value={p.token}
                           disabled={busy || !granted}
-                          aria-label={`Make ${p.token} the default for ${tier.token}`}
-                          title={granted ? undefined : 'Grant this model first'}
+                          aria-label={t('makeDefaultAriaLabel', { provider: p.token, tier: tier.token })}
+                          title={granted ? undefined : t('grantFirstTitle')}
                         />
                       </div>
                     </DataTableCell>
@@ -304,18 +314,16 @@ export function TierPanel({
                       >
                         {tier.defaultProvider}
                       </Link>
-                      {!tier.defaultProviderEnabled && <Badge variant="outline">disabled</Badge>}
+                      {!tier.defaultProviderEnabled && <Badge variant="outline">{t('common:disabled')}</Badge>}
                     </div>
-                    <span className="text-xs text-muted-foreground">
-                      This tier’s default, below the provider-list page cut
-                    </span>
+                    <span className="text-xs text-muted-foreground">{t('belowPageCutNote')}</span>
                   </DataTableCell>
                   <DataTableCell className="text-center">
                     <div className="flex justify-center">
                       <Checkbox
                         checked
                         disabled={busy}
-                        aria-label={`Grant ${tier.defaultProvider} to ${tier.token}`}
+                        aria-label={t('grantAriaLabel', { provider: tier.defaultProvider, tier: tier.token })}
                         onCheckedChange={() =>
                           onToggleGrant(tier, tier.defaultProvider as string, true)
                         }
@@ -327,7 +335,7 @@ export function TierPanel({
                       <RadioGroupItem
                         value={tier.defaultProvider}
                         disabled={busy}
-                        aria-label={`Make ${tier.defaultProvider} the default for ${tier.token}`}
+                        aria-label={t('makeDefaultAriaLabel', { provider: tier.defaultProvider, tier: tier.token })}
                       />
                     </div>
                   </DataTableCell>
@@ -341,10 +349,8 @@ export function TierPanel({
                   model was marked. */}
               <DataTableRow className="bg-muted/30">
                 <DataTableCell>
-                  <span className="font-medium">No default</span>
-                  <span className="block text-xs text-muted-foreground">
-                    Tenants at this tier must each choose a model
-                  </span>
+                  <span className="font-medium">{t('noDefaultLabel')}</span>
+                  <span className="block text-xs text-muted-foreground">{t('noDefaultHint')}</span>
                 </DataTableCell>
                 <DataTableCell className="text-center text-muted-foreground">—</DataTableCell>
                 <DataTableCell className="text-center">
@@ -352,7 +358,7 @@ export function TierPanel({
                     <RadioGroupItem
                       value={NO_DEFAULT}
                       disabled={busy}
-                      aria-label={`${tier.token} has no default model`}
+                      aria-label={t('tierHasNoDefaultAriaLabel', { tier: tier.token })}
                     />
                   </div>
                 </DataTableCell>

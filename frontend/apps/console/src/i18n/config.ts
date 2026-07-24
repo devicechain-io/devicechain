@@ -32,6 +32,10 @@ import enFacets from './locales/en/facets.json';
 import enAudit from './locales/en/audit.json';
 import enIdentities from './locales/en/identities.json';
 import enRoles from './locales/en/roles.json';
+import enAiProviders from './locales/en/aiProviders.json';
+import enAiPackaging from './locales/en/aiPackaging.json';
+import enAdminSettings from './locales/en/adminSettings.json';
+import enAdminAudit from './locales/en/adminAudit.json';
 
 import esCommon from './locales/es/common.json';
 import esLogin from './locales/es/login.json';
@@ -50,6 +54,10 @@ import esFacets from './locales/es/facets.json';
 import esAudit from './locales/es/audit.json';
 import esIdentities from './locales/es/identities.json';
 import esRoles from './locales/es/roles.json';
+import esAiProviders from './locales/es/aiProviders.json';
+import esAiPackaging from './locales/es/aiPackaging.json';
+import esAdminSettings from './locales/es/adminSettings.json';
+import esAdminAudit from './locales/es/adminAudit.json';
 
 export interface Locale {
   /** BCP-47 code; also the ./locales/<code>/ directory name and the i18next lng. */
@@ -113,6 +121,10 @@ export const NAMESPACES = [
   'audit',
   'identities',
   'roles',
+  'aiProviders',
+  'aiPackaging',
+  'adminSettings',
+  'adminAudit',
 ] as const;
 
 // Catalogs are bundled statically: the corpus is still small enough that a
@@ -138,6 +150,10 @@ const resources = {
     audit: enAudit,
     identities: enIdentities,
     roles: enRoles,
+    aiProviders: enAiProviders,
+    aiPackaging: enAiPackaging,
+    adminSettings: enAdminSettings,
+    adminAudit: enAdminAudit,
   },
   es: {
     common: esCommon,
@@ -157,6 +173,10 @@ const resources = {
     audit: esAudit,
     identities: esIdentities,
     roles: esRoles,
+    aiProviders: esAiProviders,
+    aiPackaging: esAiPackaging,
+    adminSettings: esAdminSettings,
+    adminAudit: esAdminAudit,
   },
 } as const;
 

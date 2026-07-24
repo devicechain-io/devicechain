@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Navigate, Outlet } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthProvider';
 import { LoadingState } from '@/components/ui/loading-state';
 
@@ -10,12 +11,13 @@ import { LoadingState } from '@/components/ui/loading-state';
 // The admin API additionally enforces a system authority on every operation, so
 // this is the UI gate, not the security boundary.
 export default function AdminProtectedRoute() {
+  const { t } = useTranslation('common');
   const { isIdentityAuthenticated, superuser, isLoading } = useAuth();
 
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
-        <LoadingState description="Loading…" />
+        <LoadingState description={t('loading')} />
       </div>
     );
   }
