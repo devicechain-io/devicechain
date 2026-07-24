@@ -7,6 +7,8 @@
 // cleartext key — only whether one exists (`existingHasSecret`) — matching the
 // ADR-059 write-only contract.
 
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
@@ -69,21 +71,23 @@ export function providerStateFrom(p: AiProvider): ProviderEditorState {
 // validateProvider runs the fast client-side shape check, returning a human message
 // or null. The server re-validates authoritatively on save. A key is NOT required: a
 // provider can be created key-less and filled in later (it just can't serve until one
-// is set), so the only hard checks are model + endpoint/params shape.
-export function validateProvider(state: ProviderEditorState): string | null {
-  if (state.kind.trim() === '') return 'Kind is required.';
-  if (state.model.trim() === '') return 'Model is required.';
+// is set), so the only hard checks are model + endpoint/params shape. `t` is the
+// caller's `aiProviders`-namespace translator (this is a plain utility, not a
+// component).
+export function validateProvider(state: ProviderEditorState, t: TFunction): string | null {
+  if (state.kind.trim() === '') return t('kindRequiredError');
+  if (state.model.trim() === '') return t('modelRequiredError');
   if (state.endpoint.trim() !== '' && !/^https?:\/\//i.test(state.endpoint.trim())) {
-    return 'Endpoint must be an http(s) URL, or blank for the kind default.';
+    return t('endpointInvalidError');
   }
   if (state.params.trim() !== '') {
     try {
       const parsed = JSON.parse(state.params);
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return 'Params must be a JSON object (like { "temperature": 0.2 }).';
+        return t('paramsNotObjectError');
       }
     } catch {
-      return 'Params must be valid JSON, or blank.';
+      return t('paramsInvalidJsonError');
     }
   }
   return null;
@@ -113,6 +117,7 @@ export function ProviderBasicFields({
   onChange: (next: ProviderEditorState) => void;
   kinds: string[];
 }) {
+  const { t } = useTranslation('aiProviders');
   const set = (patch: Partial<ProviderEditorState>) => onChange({ ...state, ...patch });
 
   // The kind list may not include a legacy/unknown value on an existing provider; include
@@ -121,11 +126,7 @@ export function ProviderBasicFields({
 
   return (
     <div className="space-y-4">
-      <FormField
-        label="Kind"
-        htmlFor="ai-kind"
-        description="The provider implementation. `anthropic` is the shipped kind at GA."
-      >
+      <FormField label={t('kindLabel')} htmlFor="ai-kind" description={t('kindDescription')}>
         {/* A closed enum, but on our styled picker (not a native select) so it reads like
             every other dropdown in the console. Never clearable — a provider always has a
             kind. */}
@@ -133,19 +134,23 @@ export function ProviderBasicFields({
           id="ai-kind"
           value={state.kind}
           onChange={(v) => set({ kind: v })}
-          placeholder="Select a kind…"
-          searchPlaceholder="Search kinds…"
-          emptyMessage="No provider kinds."
+          placeholder={t('selectKindPlaceholder')}
+          searchPlaceholder={t('searchKindsPlaceholder')}
+          emptyMessage={t('noKindsMessage')}
           allowClear={false}
+          // A provider kind (openai/anthropic/…) has no separate human-readable
+          // display name — the wire value IS the label a caller sees elsewhere
+          // (list column, detail page), so it is shown verbatim rather than run
+          // through a label map that does not exist server-side.
           options={kindOptions.map((k) => ({ value: k, label: k }))}
         />
       </FormField>
 
-      <FormField label="Name" htmlFor="ai-name">
+      <FormField label={t('common:colName')} htmlFor="ai-name">
         <Input id="ai-name" value={state.name} onChange={(e) => set({ name: e.target.value })} />
       </FormField>
 
-      <FormField label="Description" htmlFor="ai-description">
+      <FormField label={t('common:colDescription')} htmlFor="ai-description">
         <Textarea
           id="ai-description"
           value={state.description}
@@ -160,8 +165,8 @@ export function ProviderBasicFields({
           onChange={(e) => set({ enabled: e.target.checked })}
           className="h-4 w-4 rounded border-input"
         />
-        <span>Enabled</span>
-        <span className="text-muted-foreground">— a disabled provider stays listed but never serves a call.</span>
+        <span>{t('common:enabled')}</span>
+        <span className="text-muted-foreground">{t('enabledHint')}</span>
       </label>
     </div>
   );
@@ -178,45 +183,34 @@ export function ProviderConnectionFields({
   state: ProviderEditorState;
   onChange: (next: ProviderEditorState) => void;
 }) {
+  const { t } = useTranslation('aiProviders');
   const set = (patch: Partial<ProviderEditorState>) => onChange({ ...state, ...patch });
 
   return (
     <div className="space-y-4">
-      <FormField
-        label="Model *"
-        htmlFor="ai-model"
-        description="The provider model id (e.g. claude-opus-4-8)."
-      >
+      <FormField label={t('modelLabel')} htmlFor="ai-model" description={t('modelDescription')}>
         <Input
           id="ai-model"
           value={state.model}
-          placeholder="claude-opus-4-8"
+          placeholder={t('modelPlaceholder')}
           onChange={(e) => set({ model: e.target.value })}
         />
       </FormField>
 
-      <FormField
-        label="Endpoint"
-        htmlFor="ai-endpoint"
-        description="Override the kind's default base URL (self-hosted / proxied). Blank = the built-in default."
-      >
+      <FormField label={t('endpointLabel')} htmlFor="ai-endpoint" description={t('endpointDescription')}>
         <Input
           id="ai-endpoint"
           value={state.endpoint}
-          placeholder="https://api.anthropic.com"
+          placeholder={t('endpointPlaceholder')}
           onChange={(e) => set({ endpoint: e.target.value })}
         />
       </FormField>
 
-      <FormField
-        label="Params (JSON)"
-        htmlFor="ai-params"
-        description="Opaque per-kind tuning as a JSON object (e.g. output-token cap), or blank."
-      >
+      <FormField label={t('paramsLabel')} htmlFor="ai-params" description={t('paramsDescription')}>
         <Textarea
           id="ai-params"
           value={state.params}
-          placeholder='{ "maxOutputTokens": 1024 }'
+          placeholder={t('paramsPlaceholder')}
           onChange={(e) => set({ params: e.target.value })}
           rows={3}
           className="font-mono text-xs"
@@ -274,30 +268,37 @@ export function ProviderApiKeyControl({
   secret: SecretState;
   onChange: (next: Partial<SecretState>) => void;
 }) {
-  const label = 'API key';
-  const description =
-    'Write-only — sealed in the secret store and never displayed. A provider without a key cannot serve until one is set.';
+  const { t } = useTranslation('aiProviders');
+  const label = t('apiKeyLabel');
+  const description = t('apiKeyDescription');
+
+  // Hoisted out of the JSX below so the i18next lint rule (jsx-only mode) does not
+  // mistake the SecretMode enum literal for user-facing text — see RoleForm's
+  // SCOPES for the same technique. (Only this one call site tripped the rule; the
+  // sibling `onChange({ mode: 'set', value: '' })` calls below did not, but the
+  // same hazard applies to all of them, so the fix is the shape, not the instance.)
+  const setNewValue = (value: string) => onChange({ mode: 'set', value });
 
   if (mode === 'edit' && existingHasSecret && secret.mode === 'keep') {
     return (
       <FormField label={label} description={description}>
         <div className="flex items-center gap-3 text-sm">
           <span className="rounded bg-emerald-500/10 px-2 py-1 font-medium text-emerald-600 dark:text-emerald-500">
-            API key configured
+            {t('apiKeyConfiguredStatus')}
           </span>
           <button
             type="button"
             className="text-primary hover:underline"
             onClick={() => onChange({ mode: 'set', value: '' })}
           >
-            Replace
+            {t('replaceButton')}
           </button>
           <button
             type="button"
             className="text-destructive hover:underline"
             onClick={() => onChange({ mode: 'clear', value: '' })}
           >
-            Clear
+            {t('clearButton')}
           </button>
         </div>
       </FormField>
@@ -308,14 +309,14 @@ export function ProviderApiKeyControl({
       <FormField label={label} description={description}>
         <div className="flex items-center gap-3 text-sm">
           <span className="rounded bg-destructive/10 px-2 py-1 font-medium text-destructive">
-            API key will be cleared on save
+            {t('apiKeyClearedStatus')}
           </span>
           <button
             type="button"
             className="text-primary hover:underline"
             onClick={() => onChange({ mode: existingHasSecret ? 'keep' : 'set', value: '' })}
           >
-            Undo
+            {t('undoButton')}
           </button>
         </div>
       </FormField>
@@ -328,8 +329,8 @@ export function ProviderApiKeyControl({
         type="password"
         autoComplete="new-password"
         value={secret.value}
-        onChange={(e) => onChange({ mode: 'set', value: e.target.value })}
-        placeholder={mode === 'edit' && existingHasSecret ? 'Enter a new value' : 'sk-…'}
+        onChange={(e) => setNewValue(e.target.value)}
+        placeholder={mode === 'edit' && existingHasSecret ? t('apiKeyReplacePlaceholder') : t('apiKeyNewPlaceholder')}
       />
     </FormField>
   );

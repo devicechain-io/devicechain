@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { generateToken } from '@devicechain/client';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
@@ -21,6 +22,12 @@ import { Textarea, useReload, errMessage } from '@/routes/common';
 // generates (ADR-042 P3), so an admin sees the effect of an edit immediately.
 const TOKEN_MASKS_KEY = 'entity.token_masks';
 
+// The fixed seed the mask preview samples from. Not user-facing data — it exists
+// only to produce a deterministic illustrative token — but it is quoted inside
+// the preview label, so it is interpolated rather than baked into the catalog
+// string (see maskPreviewLabel).
+const SAMPLE_SEED = 'Sample Name';
+
 // pretty renders a stored JSON value multi-line for editing; a value that somehow
 // does not parse is shown verbatim rather than lost.
 function pretty(json: string): string {
@@ -35,6 +42,7 @@ function pretty(json: string): string {
 // (possibly unsaved) token-masks JSON. Purely illustrative — it re-samples only
 // when the JSON changes.
 function MaskPreview({ json }: { json: string }) {
+  const { t } = useTranslation('adminSettings');
   const entries = useMemo(() => {
     let masks: unknown;
     try {
@@ -45,14 +53,14 @@ function MaskPreview({ json }: { json: string }) {
     if (!masks || typeof masks !== 'object' || Array.isArray(masks)) return null;
     return Object.entries(masks as Record<string, unknown>)
       .filter(([, mask]) => typeof mask === 'string')
-      .map(([type, mask]) => [type, generateToken(mask as string, { seed: 'Sample Name' })] as const);
+      .map(([type, mask]) => [type, generateToken(mask as string, { seed: SAMPLE_SEED })] as const);
   }, [json]);
 
   if (!entries || entries.length === 0) return null;
   return (
     <div className="rounded-md border border-border bg-muted/30 p-3 text-xs">
       <p className="mb-2 font-medium text-muted-foreground">
-        Preview — a sample token per type (from the seed “Sample Name”)
+        {t('maskPreviewLabel', { seed: SAMPLE_SEED })}
       </p>
       <ul className="space-y-1 font-mono">
         {entries.map(([type, sample]) => (
@@ -68,20 +76,18 @@ function MaskPreview({ json }: { json: string }) {
 }
 
 export default function SettingsPage() {
+  const { t } = useTranslation('adminSettings');
   const [version, reload] = useReload();
   const { data: settings, loading, error } = useQuery(listSettings, [version]);
 
   return (
-    <PageShell
-      title="System settings"
-      description="Instance-wide configuration. Defaults live in code; only your overrides are stored, so a setting always resolves even before it is ever set."
-    >
+    <PageShell title={t('title')} description={t('description')}>
       {loading ? (
-        <LoadingState description="Loading settings…" />
+        <LoadingState description={t('loadingSettings')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : !settings || settings.length === 0 ? (
-        <EmptyState description="No settings are defined." />
+        <EmptyState description={t('noSettingsDefined')} />
       ) : (
         <div className="space-y-6">
           {settings.map((s) => (
@@ -96,6 +102,7 @@ export default function SettingsPage() {
 }
 
 function SettingCard({ setting, onChanged }: { setting: Setting; onChanged: () => void }) {
+  const { t } = useTranslation('adminSettings');
   const { toast } = useToast();
   const confirm = useConfirm();
   const [value, setValue] = useState(() => pretty(setting.value));
@@ -110,13 +117,13 @@ function SettingCard({ setting, onChanged }: { setting: Setting; onChanged: () =
     try {
       compact = JSON.stringify(JSON.parse(value));
     } catch {
-      setFormError('Value must be valid JSON.');
+      setFormError(t('valueMustBeJsonError'));
       return;
     }
     setBusy(true);
     try {
       await setSetting(setting.key, compact);
-      toast(`Setting “${setting.key}” saved`);
+      toast(t('settingSavedToast', { key: setting.key }));
       onChanged();
     } catch (err) {
       setFormError(errMessage(err));
@@ -128,9 +135,9 @@ function SettingCard({ setting, onChanged }: { setting: Setting; onChanged: () =
   const reset = async () => {
     if (
       !(await confirm({
-        title: 'Reset to default?',
-        description: `“${setting.key}” will revert to its built-in default and your override will be removed.`,
-        confirmLabel: 'Reset',
+        title: t('resetConfirmTitle'),
+        description: t('resetConfirmDescription', { key: setting.key }),
+        confirmLabel: t('resetConfirmLabel'),
       }))
     )
       return;
@@ -138,7 +145,7 @@ function SettingCard({ setting, onChanged }: { setting: Setting; onChanged: () =
     setFormError(null);
     try {
       await clearSetting(setting.key);
-      toast(`Setting “${setting.key}” reset to default`);
+      toast(t('settingResetToast', { key: setting.key }));
       onChanged();
     } catch (err) {
       setFormError(errMessage(err));
@@ -153,10 +160,10 @@ function SettingCard({ setting, onChanged }: { setting: Setting; onChanged: () =
       description={setting.description}
       action={
         setting.overridden ? (
-          <Badge variant="default">Overridden</Badge>
+          <Badge variant="default">{t('overriddenBadge')}</Badge>
         ) : (
           <Badge variant="outline" className="text-muted-foreground">
-            Default
+            {t('defaultBadge')}
           </Badge>
         )
       }
@@ -172,16 +179,16 @@ function SettingCard({ setting, onChanged }: { setting: Setting; onChanged: () =
         {setting.key === TOKEN_MASKS_KEY && <MaskPreview json={value} />}
         {setting.overridden && setting.updatedBy && (
           <p className="text-xs text-muted-foreground">
-            Overridden by {setting.updatedBy}
+            {t('overriddenByLabel', { by: setting.updatedBy })}
             {setting.updatedAt ? ` · ${new Date(setting.updatedAt).toLocaleString()}` : ''}
           </p>
         )}
         <div className="flex gap-2">
           <Button onClick={save} loading={busy} disabled={busy || !dirty}>
-            Save override
+            {t('saveOverrideButton')}
           </Button>
           <Button variant="outline" onClick={reset} disabled={busy || !setting.overridden}>
-            Reset to default
+            {t('resetToDefaultButton')}
           </Button>
         </div>
       </div>

@@ -19,6 +19,7 @@
 
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { Trans, useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -50,6 +51,7 @@ import {
 } from './AiProviderForm';
 
 export default function AiProviderDetailPage() {
+  const { t } = useTranslation('aiProviders');
   const { token: rawToken } = useParams<{ token: string }>();
   const token = decodeURIComponent(rawToken ?? '');
   const { data, loading, error } = useQuery(() => getAiProvider(token), [token]);
@@ -57,7 +59,7 @@ export default function AiProviderDetailPage() {
   if (loading) {
     return (
       <PageShell title={token} banner="dashboard">
-        <LoadingState description="Loading provider…" />
+        <LoadingState description={t('loadingProvider')} />
       </PageShell>
     );
   }
@@ -71,7 +73,7 @@ export default function AiProviderDetailPage() {
   if (!data) {
     return (
       <PageShell title={token} banner="dashboard">
-        <ErrorState description={`Provider “${token}” not found.`} />
+        <ErrorState description={t('providerNotFound', { token })} />
       </PageShell>
     );
   }
@@ -106,6 +108,7 @@ function baselineFrom(p: AiProvider): Baseline {
 }
 
 function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string[] }) {
+  const { t } = useTranslation('aiProviders');
   const { toast } = useToast();
 
   const [editor, setEditor] = useState<ProviderEditorState>(() => providerStateFrom(loaded));
@@ -133,7 +136,7 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
 
   const save = async () => {
     setFormError(null);
-    const shapeErr = validateProvider(editor);
+    const shapeErr = validateProvider(editor, t);
     if (shapeErr) {
       setFormError(shapeErr);
       return;
@@ -173,7 +176,7 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
       });
       // Reset the key control back to 'keep'/'set' now that it's persisted.
       setEditor((e) => ({ ...e, secret: { mode: nextHasSecret ? 'keep' : 'set', value: '' } }));
-      toast('Provider saved');
+      toast(t('providerSavedToast'));
     } catch (err) {
       toast(errMessage(err), 'error');
       setFormError(errMessage(err));
@@ -193,9 +196,9 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
   const saveBar = (
     <div className="flex items-center gap-3">
       <Button onClick={save} loading={saving} disabled={!dirty || saving}>
-        Save provider
+        {t('saveProviderButton')}
       </Button>
-      {dirty && <span className="text-sm text-muted-foreground">Unsaved changes</span>}
+      {dirty && <span className="text-sm text-muted-foreground">{t('unsavedChanges')}</span>}
     </div>
   );
 
@@ -211,9 +214,9 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
         {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
         <Tabs defaultValue="basic">
           <TabsList>
-            <TabsTrigger value="basic">Basic</TabsTrigger>
-            <TabsTrigger value="connection">Connection</TabsTrigger>
-            <TabsTrigger value="test">Test</TabsTrigger>
+            <TabsTrigger value="basic">{t('basicTab')}</TabsTrigger>
+            <TabsTrigger value="connection">{t('connectionTab')}</TabsTrigger>
+            <TabsTrigger value="test">{t('testTab')}</TabsTrigger>
           </TabsList>
           <TabsContent value="basic">
             <SectionPanel>
@@ -238,10 +241,7 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
             </SectionPanel>
           </TabsContent>
           <TabsContent value="test">
-            <SectionPanel
-              title="Test provider"
-              description="Run a prompt live through this provider’s endpoint and key to validate it. This is an operator smoke test — it does not apply the per-tenant external-routing consent gate."
-            >
+            <SectionPanel title={t('testProviderTitle')} description={t('testProviderDescription')}>
               <TestInferPanel token={loaded.token} hasSecret={baseline.hasSecret} dirty={dirty} />
             </SectionPanel>
           </TabsContent>
@@ -267,7 +267,8 @@ function TestInferPanel({
   // unsaved edits — so a dirty editor means the test would validate the old config.
   dirty: boolean;
 }) {
-  const [prompt, setPrompt] = useState('Reply with the single word: ok');
+  const { t } = useTranslation('aiProviders');
+  const [prompt, setPrompt] = useState(t('defaultTestPrompt'));
   const [system, setSystem] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ candidate: string; model: string } | null>(null);
@@ -292,19 +293,10 @@ function TestInferPanel({
 
   return (
     <div className="space-y-4">
-      {!hasSecret && (
-        <p className="text-sm text-warning">
-          No API key is configured — set and save one on the Connection tab before testing.
-        </p>
-      )}
-      {dirty && (
-        <p className="text-sm text-muted-foreground">
-          You have unsaved changes. This tests the last saved configuration — save first to test
-          your edits.
-        </p>
-      )}
+      {!hasSecret && <p className="text-sm text-warning">{t('noApiKeyWarning')}</p>}
+      {dirty && <p className="text-sm text-muted-foreground">{t('dirtyTestWarning')}</p>}
       {testError && <ErrorBanner message={testError} onDismiss={() => setTestError(null)} />}
-      <FormField label="System prompt (optional)" htmlFor="ai-test-system">
+      <FormField label={t('systemPromptLabel')} htmlFor="ai-test-system">
         <Textarea
           id="ai-test-system"
           value={system}
@@ -312,7 +304,7 @@ function TestInferPanel({
           rows={2}
         />
       </FormField>
-      <FormField label="Prompt" htmlFor="ai-test-prompt">
+      <FormField label={t('promptLabel')} htmlFor="ai-test-prompt">
         <Textarea
           id="ai-test-prompt"
           value={prompt}
@@ -321,12 +313,17 @@ function TestInferPanel({
         />
       </FormField>
       <Button onClick={run} loading={busy} disabled={busy || prompt.trim() === ''}>
-        Test provider
+        {t('testProviderButton')}
       </Button>
       {result && (
         <div className="space-y-2 rounded-md bg-muted/40 p-3">
           <p className="text-xs text-muted-foreground">
-            Answered by <span className="font-mono">{result.model}</span>
+            <Trans
+              t={t}
+              i18nKey="answeredBy"
+              values={{ model: result.model }}
+              components={{ model: <span className="font-mono" /> }}
+            />
           </p>
           <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-foreground">
             {result.candidate}

@@ -1,0 +1,18 @@
+{
+  "defaultBadge": "Predeterminado",
+  "description": "Configuración de toda la instancia. Los valores predeterminados viven en el código; solo se almacenan tus anulaciones, así que un ajuste siempre se resuelve incluso antes de configurarse por primera vez.",
+  "loadingSettings": "Cargando ajustes…",
+  "maskPreviewLabel": "Vista previa — un token de muestra por tipo (a partir de la semilla “{{seed}}”)",
+  "noSettingsDefined": "No hay ajustes definidos.",
+  "overriddenBadge": "Anulado",
+  "overriddenByLabel": "Anulado por {{by}}",
+  "resetConfirmDescription": "“{{key}}” volverá a su valor predeterminado integrado y se eliminará tu anulación.",
+  "resetConfirmLabel": "Restablecer",
+  "resetConfirmTitle": "¿Restablecer al valor predeterminado?",
+  "resetToDefaultButton": "Restablecer al valor predeterminado",
+  "saveOverrideButton": "Guardar anulación",
+  "settingResetToast": "Ajuste “{{key}}” restablecido al valor predeterminado",
+  "settingSavedToast": "Ajuste “{{key}}” guardado",
+  "title": "Ajustes del sistema",
+  "valueMustBeJsonError": "El valor debe ser un JSON válido."
+}

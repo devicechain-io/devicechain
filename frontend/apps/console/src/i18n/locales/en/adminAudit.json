@@ -1,0 +1,23 @@
+{
+  "allCategoriesPlaceholder": "All categories",
+  "allTenantsPlaceholder": "All tenants",
+  "categoryAuth": "Auth",
+  "categoryMutation": "Mutation",
+  "colActor": "Actor",
+  "colCategory": "Category",
+  "colOperation": "Operation",
+  "colTarget": "Target",
+  "colTenant": "Tenant",
+  "colTime": "Time",
+  "description": "Authentication events and identity, role & tenant administration across the instance.",
+  "filterByActorPlaceholder": "Filter by actor…",
+  "loadingAuditLog": "Loading audit log…",
+  "noAuditRecordsMatch": "No audit records match.",
+  "opCreate": "Create",
+  "opDelete": "Delete",
+  "opLogin": "Login",
+  "opLoginFailed": "Login failed",
+  "opRefresh": "Refresh",
+  "opUpdate": "Update",
+  "title": "Audit"
+}

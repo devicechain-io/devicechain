@@ -25,6 +25,7 @@
 // AdminProtectedRoute, so this page performs no authority check of its own.
 
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -38,6 +39,7 @@ import { buildPackagingTiers } from './aiPackaging';
 import { PROVIDER_PAGE_SIZE, TierPanel, useTierPackaging } from './aiPackagingPanel';
 
 export default function AiPackagingPage() {
+  const { t } = useTranslation('aiPackaging');
   const [version, reload] = useReload();
   const { busy, toggleGrant, chooseDefault } = useTierPackaging(reload);
 
@@ -76,27 +78,25 @@ export default function AiPackagingPage() {
     providerResults != null && (providerResults.pagination.totalRecords ?? 0) > providers.length;
 
   return (
-    <PageShell
-      title="AI packaging"
-      description="Which AI models each tier offers, and which one it falls back to. Granting a model puts it on the menu of every tenant at that tier; the default is what those tenants get for a function they have not assigned a model to themselves. They are separate decisions — a tier can offer models and default to none, in which case its tenants must each choose."
-    >
+    <PageShell title={t('title')} description={t('description')}>
       <div className="space-y-6">
         {loading ? (
-          <LoadingState description="Loading packaging…" />
+          <LoadingState description={t('loadingPackaging')} />
         ) : error ? (
           <ErrorState description={error} />
         ) : providers.length === 0 ? (
-          <EmptyState description="No AI providers registered yet. Register one before packaging it." />
+          <EmptyState description={t('noProvidersRegistered')} />
         ) : tiers.length === 0 ? (
-          <EmptyState description="No tiers defined yet. Tiers are what models are packaged onto." />
+          <EmptyState description={t('noTiersDefined')} />
         ) : (
           <>
             {truncated && (
               <SectionPanel>
                 <p className="text-sm text-muted-foreground">
-                  Showing the first {providers.length} of {providerResults?.pagination.totalRecords}{' '}
-                  providers. The panels below are not complete — a tier may grant a provider that
-                  is not listed here.
+                  {t('truncatedNotice', {
+                    count: providers.length,
+                    total: providerResults?.pagination.totalRecords,
+                  })}
                 </p>
               </SectionPanel>
             )}

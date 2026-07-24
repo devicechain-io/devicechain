@@ -18,6 +18,7 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { Package, Plus, Trash2 } from 'lucide-react';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
@@ -61,6 +62,7 @@ import { aiProviderPath } from './paths';
 const pageSize = 20;
 
 export default function AiProvidersPage() {
+  const { t } = useTranslation('aiProviders');
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
@@ -79,15 +81,15 @@ export default function AiProvidersPage() {
   const remove = async (token: string) => {
     if (
       !(await confirm({
-        title: 'Delete provider',
-        description: `Delete “${token}” and its API key? This is refused while any tier or tenant is still granted the provider — remove those grants first.`,
-        confirmLabel: 'Delete',
+        title: t('deleteProviderTitle'),
+        description: t('deleteProviderDescription', { token }),
+        confirmLabel: t('common:delete'),
       }))
     )
       return;
     try {
       await deleteAiProvider(token);
-      toast(`Provider “${token}” deleted`);
+      toast(t('providerDeletedToast', { token }));
       // On the last-row-of-a-later-page case, step back a page; the list keys on both
       // page and version, so it refetches once.
       if (results.length === 1 && pageNumber > 1) setPageNumber(pageNumber - 1);
@@ -99,25 +101,25 @@ export default function AiProvidersPage() {
 
   return (
     <PageShell
-      title="AI Providers"
-      description="AI models registered on this instance. Registering one does not offer it to anyone — grant it to a tier, under AI packaging, to put it on those tenants’ menu."
+      title={t('title')}
+      description={t('description')}
       banner="dashboard"
       action={
         <>
           <Button variant="outline" onClick={() => navigate('/admin/ai-packaging')}>
-            <Package size={16} /> Packaging
+            <Package size={16} /> {t('packagingButton')}
           </Button>
           <Button onClick={() => setCreating(true)}>
-            <Plus size={16} /> New provider
+            <Plus size={16} /> {t('newProviderButton')}
           </Button>
         </>
       }
     >
-      <FormDrawer open={creating} onOpenChange={setCreating} title="New AI provider">
+      <FormDrawer open={creating} onOpenChange={setCreating} title={t('newProviderDrawerTitle')}>
         <AiProviderCreateForm
           kinds={kinds ?? []}
           onDone={(token) => {
-            toast(`Provider “${token}” created`);
+            toast(t('providerCreatedToast', { token }));
             setCreating(false);
             reload();
             navigate(aiProviderPath(token));
@@ -126,20 +128,20 @@ export default function AiProvidersPage() {
       </FormDrawer>
 
       {loading ? (
-        <LoadingState description="Loading providers…" />
+        <LoadingState description={t('loadingProviders')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : results.length === 0 ? (
-        <EmptyState description="No providers yet. Create one, then grant it to a tier to enable NL→rule authoring for those tenants." />
+        <EmptyState description={t('emptyProviders')} />
       ) : (
         <>
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>Name</DataTableHeaderCell>
-              <DataTableHeaderCell>Kind</DataTableHeaderCell>
-              <DataTableHeaderCell>Model</DataTableHeaderCell>
-              <DataTableHeaderCell>API key</DataTableHeaderCell>
-              <DataTableHeaderCell>Status</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colName')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colKind')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colModel')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('apiKeyLabel')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colStatus')}</DataTableHeaderCell>
               <DataTableHeaderCell> </DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
@@ -151,14 +153,16 @@ export default function AiProvidersPage() {
                   <DataTableCell className="font-medium text-foreground">
                     {p.name || p.token}
                   </DataTableCell>
+                  {/* p.kind is the wire enum with no separate display name — see
+                      AiProviderForm's ProviderBasicFields. */}
                   <DataTableCell className="text-muted-foreground">{p.kind}</DataTableCell>
                   <DataTableCell className="text-muted-foreground">{p.model}</DataTableCell>
                   <DataTableCell>
                     {p.hasSecret ? (
-                      <Badge variant="secondary">Configured</Badge>
+                      <Badge variant="secondary">{t('apiKeyConfiguredBadge')}</Badge>
                     ) : (
                       <Badge variant="outline" className="text-muted-foreground">
-                        Not set
+                        {t('apiKeyNotSetBadge')}
                       </Badge>
                     )}
                   </DataTableCell>
@@ -176,7 +180,7 @@ export default function AiProvidersPage() {
                         }}
                         onKeyDown={(e) => e.stopPropagation()}
                       >
-                        <Trash2 size={14} /> Delete
+                        <Trash2 size={14} /> {t('common:delete')}
                       </Button>
                     </div>
                   </DataTableCell>
@@ -200,6 +204,7 @@ export default function AiProvidersPage() {
 // The create form collects the full provider shape. It reuses the shared
 // AiProviderForm; token is collected here (immutable after create).
 function AiProviderCreateForm({ kinds, onDone }: { kinds: string[]; onDone: (token: string) => void }) {
+  const { t } = useTranslation('aiProviders');
   const [token, setToken] = useState('');
   const [editor, setEditor] = useState<ProviderEditorState>(() => newProviderState(kinds));
   const [formError, setFormError] = useState<string | null>(null);
@@ -217,7 +222,7 @@ function AiProviderCreateForm({ kinds, onDone }: { kinds: string[]; onDone: (tok
 
   const submit = async () => {
     setFormError(null);
-    const shapeErr = validateProvider(editor);
+    const shapeErr = validateProvider(editor, t);
     if (shapeErr) {
       setFormError(shapeErr);
       return;
@@ -246,15 +251,15 @@ function AiProviderCreateForm({ kinds, onDone }: { kinds: string[]; onDone: (tok
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <FormField label="Token" htmlFor="ai-token">
+      <FormField label={t('common:colToken')} htmlFor="ai-token">
         <TokenField
           id="ai-token"
           entityType="ai-provider"
           value={token}
           onChange={setToken}
           seed={editor.name}
-          placeholder="claude-primary"
-          checkAvailability={(t) => getAiProvider(t).then((p) => p === null)}
+          placeholder={t('tokenPlaceholder')}
+          checkAvailability={(candidate) => getAiProvider(candidate).then((p) => p === null)}
         />
       </FormField>
       <AiProviderForm
@@ -266,7 +271,7 @@ function AiProviderCreateForm({ kinds, onDone }: { kinds: string[]; onDone: (tok
       />
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy || !token.trim()}>
-          Create provider
+          {t('createProviderButton')}
         </Button>
       </div>
     </div>
