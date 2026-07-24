@@ -3,5 +3,8 @@
   "editProfileDescription": "Update your display name.",
   "adminConsole": "Admin console",
   "metrics": "Metrics",
-  "signOut": "Sign out"
+  "signOut": "Sign out",
+  "superuser": "Superuser",
+  "switchToTenant": "Switch to tenant",
+  "noTenantMemberships": "You hold no tenant memberships. Add one from Identities to enter a tenant."
 }
