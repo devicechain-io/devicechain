@@ -14,21 +14,22 @@ import (
 
 // Bootstrap command flags.
 var (
-	bootstrapKubeContext   string
-	bootstrapProfile       string
-	bootstrapDryRun        bool
-	bootstrapAssumeYes     bool
-	bootstrapSkipPreflight bool
-	bootstrapRegistry      string
-	bootstrapVersion       string
-	bootstrapBuild         bool
-	bootstrapHost          string
-	bootstrapNoTLS         bool
-	bootstrapNoMonitoring  bool
-	bootstrapGrafanaSSO    bool
-	bootstrapDev           bool
-	bootstrapCompact       bool
-	bootstrapEnableAreas   []string
+	bootstrapKubeContext     string
+	bootstrapProfile         string
+	bootstrapDryRun          bool
+	bootstrapAssumeYes       bool
+	bootstrapSkipPreflight   bool
+	bootstrapRegistry        string
+	bootstrapVersion         string
+	bootstrapBuild           bool
+	bootstrapHost            string
+	bootstrapNoTLS           bool
+	bootstrapNoMonitoring    bool
+	bootstrapGrafanaSSO      bool
+	bootstrapDev             bool
+	bootstrapCompact         bool
+	bootstrapEnableAreas     []string
+	bootstrapLwm2mIdentities string
 )
 
 // devModeResolution is the set of flag values the --dev preset settles on.
@@ -184,6 +185,14 @@ var bootstrapCmd = &cobra.Command{
 			fmt.Printf("compact mode: %s\n", bootstrap.CompactSummary())
 		}
 
+		// Parse + validate --lwm2m-identities up front (a short PSK or a missing tenancy
+		// field must fail here, not as a ten-minute helm-timeout when lwm2m-ingest
+		// crash-loops on a bad credential). An empty flag yields no identities.
+		lwm2mIdentities, err := bootstrap.ParseLwm2mIdentities(bootstrapLwm2mIdentities)
+		if err != nil {
+			return fmt.Errorf("--lwm2m-identities: %w", err)
+		}
+
 		// Normalize --enable-area (trim, drop blanks) ONCE, so the deployment selection
 		// and the report label see the same clean set. A stray `--enable-area " "` then
 		// correctly takes the untouched-profile path instead of silently switching to an
@@ -193,6 +202,13 @@ var bootstrapCmd = &cobra.Command{
 			if a = strings.TrimSpace(a); a != "" {
 				enableAreas = append(enableAreas, a)
 			}
+		}
+		// Provisioning LwM2M identities is meaningless unless lwm2m-ingest is deployed,
+		// so the flag implies --enable-area lwm2m-ingest. Guard the append so
+		// `--enable-area lwm2m-ingest --lwm2m-identities f` doesn't list the area twice
+		// in the report label (ResolveEnabledAreas dedups the deployment either way).
+		if len(lwm2mIdentities) > 0 && !slices.Contains(enableAreas, "lwm2m-ingest") {
+			enableAreas = append(enableAreas, "lwm2m-ingest")
 		}
 
 		// Resolve --enable-area (profile ∪ extras) and validate it against the area
@@ -243,22 +259,23 @@ var bootstrapCmd = &cobra.Command{
 		}
 
 		st := &bootstrap.State{
-			Instance:      opts.Instance,
-			KubeContext:   kubeContext,
-			Profile:       opts.Profile,
-			DryRun:        opts.DryRun,
-			AssumeYes:     opts.AssumeYes,
-			ImageRegistry: opts.ImageRegistry,
-			ImageVersion:  opts.ImageVersion,
-			BuildImages:   opts.BuildImages,
-			IngressHost:   opts.IngressHost,
-			NoTLS:         opts.NoTLS,
-			NoMonitoring:  opts.NoMonitoring,
-			GrafanaSSO:    opts.GrafanaSSO,
-			Compact:       opts.Compact,
-			EnableAreas:   opts.EnableAreas,
-			EnabledAreas:  enabledAreas,
-			Values:        map[string]string{},
+			Instance:        opts.Instance,
+			KubeContext:     kubeContext,
+			Profile:         opts.Profile,
+			DryRun:          opts.DryRun,
+			AssumeYes:       opts.AssumeYes,
+			ImageRegistry:   opts.ImageRegistry,
+			ImageVersion:    opts.ImageVersion,
+			BuildImages:     opts.BuildImages,
+			IngressHost:     opts.IngressHost,
+			NoTLS:           opts.NoTLS,
+			NoMonitoring:    opts.NoMonitoring,
+			GrafanaSSO:      opts.GrafanaSSO,
+			Compact:         opts.Compact,
+			EnableAreas:     opts.EnableAreas,
+			EnabledAreas:    enabledAreas,
+			Lwm2mIdentities: lwm2mIdentities,
+			Values:          map[string]string{},
 		}
 		return bootstrap.NewDefaultPipeline().Run(ctx, st)
 	},
@@ -282,6 +299,7 @@ func init() {
 
 	bootstrapCmd.Flags().BoolVar(&bootstrapCompact, "compact", false, "small-footprint preset: lowered JetStream/KV ceilings with the smaller volumes they permit, lowered scheduling requests, and no monitoring stack. Keeps --profile default (it does not change which services run); rejects a conflicting --profile")
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapEnableAreas, "enable-area", nil, "additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with --compact; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)")
+	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", "path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials")
 
 	rootCmd.AddCommand(bootstrapCmd)
 }

@@ -83,7 +83,11 @@ type State struct {
 	// ResolveEnabledAreas.
 	EnableAreas  []string
 	EnabledAreas []string
-	Values       map[string]string
+	// Lwm2mIdentities are the provisioned LwM2M DTLS-PSK credentials (--lwm2m-identities):
+	// helmValues renders them into a chart-owned Secret + lwm2m-ingest config. Setting
+	// this implies lwm2m-ingest ∈ EnabledAreas. Empty when the flag is unused.
+	Lwm2mIdentities []Lwm2mIdentity
+	Values          map[string]string
 }
 
 // Step is a single named unit of bootstrap work.

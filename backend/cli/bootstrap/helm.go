@@ -190,21 +190,34 @@ func helmValues(st *State) map[string]interface{} {
 	// functionalAreas.user-management.config, preserving the other areas' config.
 	if grafanaSSOEnabled(st) {
 		u := grafanaSSOURLsFor(st)
-		vals["functionalAreas"] = map[string]interface{}{
-			"user-management": map[string]interface{}{
-				"config": map[string]interface{}{
-					"auth": map[string]interface{}{
-						"issuerUrl": u.Issuer,
-						"seedClients": []map[string]interface{}{{
-							"clientId":     "grafana",
-							"redirectUris": []string{u.Redirect},
-							"scopes":       []string{"read-only"},
-							"secretHash":   st.Values["grafanaOAuthSecretBcrypt"],
-						}},
-					},
+		mergeFunctionalArea(vals, "user-management", map[string]interface{}{
+			"config": map[string]interface{}{
+				"auth": map[string]interface{}{
+					"issuerUrl": u.Issuer,
+					"seedClients": []map[string]interface{}{{
+						"clientId":     "grafana",
+						"redirectUris": []string{u.Redirect},
+						"scopes":       []string{"read-only"},
+						"secretHash":   st.Values["grafanaOAuthSecretBcrypt"],
+					}},
 				},
 			},
-		}
+		})
+	}
+
+	// LwM2M PSK provisioning (--lwm2m-identities): render the device PSKs into a
+	// chart-owned Secret (extraSecrets) and bind each into lwm2m-ingest's config
+	// (security.identities[]) + an extraEnv secretKeyRef that projects it. The area is
+	// turned on separately via EnabledAreas (the flag implies --enable-area
+	// lwm2m-ingest); this only supplies its config, merged so it coexists with any
+	// other functionalAreas block (e.g. Grafana SSO) rather than overwriting it.
+	if len(st.Lwm2mIdentities) > 0 {
+		secret, areaConfig := lwm2mProvisioning(st.Instance, st.Lwm2mIdentities)
+		// Append rather than assign, so a future second writer of extraSecrets doesn't
+		// silently drop this one (the same clobber class mergeFunctionalArea guards).
+		existing, _ := vals["extraSecrets"].([]interface{})
+		vals["extraSecrets"] = append(existing, secret)
+		mergeFunctionalArea(vals, "lwm2m-ingest", areaConfig)
 	}
 
 	return vals

@@ -34,6 +34,24 @@
       "uniqueItems": true,
       "description": "Explicit set of functional areas; mutually exclusive with profile."
     },
+    "extraSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "stringData"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "description": "Secret name, rendered in the instance namespace." },
+          "stringData": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": { "type": "string" },
+            "description": "Verbatim key→value entries (e.g. a base64 PSK string a service decodes at load)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Extra Opaque Secrets to render into the instance namespace (templates/extra-secrets.yaml), projected into a functional area via its extraEnv secretKeyRef."
+    },
     "instance": {
       "type": "object",
       "required": ["id", "config"],
