@@ -1,4 +1,9 @@
 {
+  "accountEmail": "Correo electrónico",
+  "accountEmailFixed": "Tu identidad de inicio de sesión; no se puede cambiar.",
+  "accountFirstName": "Nombre",
+  "accountLastName": "Apellido",
+  "accountUpdated": "Perfil actualizado",
   "editProfile": "Editar perfil",
   "editProfileDescription": "Actualiza tu nombre visible.",
   "adminConsole": "Consola de administración",

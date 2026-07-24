@@ -7,6 +7,7 @@
 // which are tied to the app's accent/CSS-variable palette). Colour is backed by an
 // icon + label so status never reads on hue alone.
 import { AlertTriangle, BellRing, CircleCheck, UserCheck } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 
 const pillBase =
@@ -23,9 +24,18 @@ const SEVERITY_STYLES: Record<string, string> = {
   INDETERMINATE: 'border-border bg-muted text-muted-foreground',
 };
 
+const SEVERITY_LABELS: Record<string, string> = {
+  CRITICAL: 'sevCritical',
+  MAJOR: 'sevMajor',
+  MINOR: 'sevMinor',
+  WARNING: 'sevWarning',
+  INDETERMINATE: 'sevIndeterminate',
+};
+
 export function AlarmSeverityBadge({ severity }: { severity: string }) {
+  const { t } = useTranslation('alarms');
   const style = SEVERITY_STYLES[severity] ?? SEVERITY_STYLES.INDETERMINATE;
-  return <span className={cn(pillBase, style)}>{severity}</span>;
+  return <span className={cn(pillBase, style)}>{t(SEVERITY_LABELS[severity] ?? 'sevIndeterminate')}</span>;
 }
 
 // AlarmStatusBadge collapses the four-state model (state × acknowledged) into the
@@ -39,10 +49,11 @@ export function AlarmStatusBadge({
   state: string;
   acknowledged: boolean;
 }) {
+  const { t } = useTranslation('alarms');
   if (state === 'CLEARED') {
     return (
       <span className={cn(pillBase, 'border-border bg-muted text-muted-foreground')}>
-        <CircleCheck size={12} /> Cleared
+        <CircleCheck size={12} /> {t('stateCleared')}
       </span>
     );
   }
@@ -54,7 +65,7 @@ export function AlarmStatusBadge({
           'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-400',
         )}
       >
-        <UserCheck size={12} /> Acknowledged
+        <UserCheck size={12} /> {t('ackAcknowledged')}
       </span>
     );
   }
@@ -65,7 +76,7 @@ export function AlarmStatusBadge({
         'border-red-500/30 bg-red-500/15 text-red-700 dark:text-red-400',
       )}
     >
-      <BellRing size={12} /> Active
+      <BellRing size={12} /> {t('stateActive')}
     </span>
   );
 }
@@ -81,11 +92,20 @@ const EVENT_ICONS: Record<string, typeof AlertTriangle> = {
   ACKNOWLEDGED: UserCheck,
 };
 
+const EVENT_LABELS: Record<string, string> = {
+  RAISED: 'eventRaised',
+  ESCALATED: 'eventEscalated',
+  DEESCALATED: 'eventDeescalated',
+  CLEARED: 'eventCleared',
+  ACKNOWLEDGED: 'eventAcknowledged',
+};
+
 export function AlarmEventTypeBadge({ eventType }: { eventType: string }) {
+  const { t } = useTranslation('alarms');
   const Icon = EVENT_ICONS[eventType] ?? AlertTriangle;
   return (
     <span className={cn(pillBase, 'border-border bg-muted text-muted-foreground')}>
-      <Icon size={12} /> {eventType}
+      <Icon size={12} /> {t(EVENT_LABELS[eventType] ?? 'eventUnknown')}
     </span>
   );
 }

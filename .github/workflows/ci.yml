@@ -295,6 +295,13 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # i18n gate (ADR-066): the console's eslint `no-literal-string` rule fails
+      # on any hard-coded user-facing string, keeping the app fully externalized
+      # into the react-i18next catalogs. Only apps/console defines a lint script,
+      # so `--workspaces --if-present` runs exactly that gate.
+      - name: Lint (i18n no-literal-string gate)
+        run: npm run lint
+
       - name: Test
         run: npm test
 

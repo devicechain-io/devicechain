@@ -9,6 +9,7 @@
 // this carries everything else forward via deviceTypePreserved.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
@@ -20,6 +21,7 @@ import { hasAuthority } from '@devicechain/client';
 import { updateDeviceType, deviceTypePreserved, type DeviceType } from '@/lib/api/device-management';
 
 export function TypeIdentityForm({ entity, onSaved }: { entity: DeviceType; onSaved: () => void }) {
+  const { t } = useTranslation('devices');
   const { claims } = useAuth();
   const canWrite = hasAuthority(claims, 'device:write');
   const { toast } = useToast();
@@ -43,7 +45,7 @@ export function TypeIdentityForm({ entity, onSaved }: { entity: DeviceType; onSa
         manufacturer: manufacturer.trim() || null,
         model: model.trim() || null,
       });
-      toast('Identity saved');
+      toast(t('typeIdentitySaved'));
       onSaved();
     } catch (err) {
       setFormError(errMessage(err));
@@ -55,28 +57,31 @@ export function TypeIdentityForm({ entity, onSaved }: { entity: DeviceType; onSa
   return (
     <div className="max-w-xl space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <p className="max-w-prose text-sm text-muted-foreground">
-        Manufacturer and model identify the physical device. They are discovery facets — used to filter
-        and group — so the fields suggest values already in use to keep them consistent, while still
-        letting you type a new one.
-      </p>
-      <FormField label="Manufacturer" htmlFor="dt-manufacturer">
+      <p className="max-w-prose text-sm text-muted-foreground">{t('typeIdentityIntro')}</p>
+      <FormField label={t('typeIdentityManufacturer')} htmlFor="dt-manufacturer">
         <SuggestField
           id="dt-manufacturer"
           facet="MANUFACTURER"
           value={manufacturer}
           onChange={setManufacturer}
-          placeholder="Acme Corp"
+          placeholder={t('typeIdentityManufacturerPlaceholder')}
           disabled={!canWrite}
         />
       </FormField>
-      <FormField label="Model" htmlFor="dt-model">
-        <SuggestField id="dt-model" facet="MODEL" value={model} onChange={setModel} placeholder="TS-100" disabled={!canWrite} />
+      <FormField label={t('typeIdentityModel')} htmlFor="dt-model">
+        <SuggestField
+          id="dt-model"
+          facet="MODEL"
+          value={model}
+          onChange={setModel}
+          placeholder={t('typeIdentityModelPlaceholder')}
+          disabled={!canWrite}
+        />
       </FormField>
       {canWrite && (
         <div className="flex gap-2">
           <Button onClick={submit} loading={busy} disabled={busy || !dirty}>
-            Save identity
+            {t('typeIdentitySave')}
           </Button>
         </div>
       )}
