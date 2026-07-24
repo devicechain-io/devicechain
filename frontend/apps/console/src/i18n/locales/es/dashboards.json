@@ -1,0 +1,13 @@
+{
+  "title": "Paneles",
+  "description": "Paneles en vivo para este inquilino",
+  "newDashboard": "Nuevo panel",
+  "loading": "Cargando paneles…",
+  "empty": "Aún no hay paneles.",
+  "delete": "Eliminar",
+  "deleteTitle": "Eliminar panel",
+  "deleteConfirm": "¿Eliminar «{{token}}»? Esta acción no se puede deshacer.",
+  "deleted": "Panel «{{token}}» eliminado",
+  "created": "Panel «{{token}}» creado",
+  "createDashboard": "Crear panel"
+}

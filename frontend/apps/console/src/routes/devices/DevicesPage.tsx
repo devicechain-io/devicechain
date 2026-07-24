@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Layers } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listDevices } from '@/lib/api/device-management';
@@ -35,18 +36,20 @@ const pageSize = 20;
 // no state is known (no state:read authority, or the device has never reported) —
 // rendered as a neutral dash so the list stays useful without it.
 function StatusDot({ active }: { active: boolean | undefined }) {
+  const { t } = useTranslation('devices');
   if (active === undefined) return <span className="text-muted-foreground">—</span>;
   return (
     <span className="inline-flex items-center gap-1.5 text-sm">
       <span className={cn('inline-block size-2 rounded-full', active ? 'bg-success' : 'bg-muted-foreground/40')} />
       <span className={active ? 'text-foreground' : 'text-muted-foreground'}>
-        {active ? 'Online' : 'Offline'}
+        {active ? t('online') : t('offline')}
       </span>
     </span>
   );
 }
 
 export default function DevicesPage() {
+  const { t } = useTranslation('devices');
   const navigate = useNavigate();
   const { toast } = useToast();
   const [pageNumber, setPageNumber] = useState(1);
@@ -67,21 +70,21 @@ export default function DevicesPage() {
 
   return (
     <PageShell
-      title="Devices"
-      description="Devices registered in this tenant"
+      title={t('title')}
+      description={t('description')}
       banner="devices"
       action={
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setBulkCreating(true)}>
-            <Layers size={16} /> Bulk create
+            <Layers size={16} /> {t('bulkCreate')}
           </Button>
           <Button onClick={() => setCreating(true)}>
-            <Plus size={16} /> New device
+            <Plus size={16} /> {t('newDevice')}
           </Button>
         </div>
       }
     >
-      <FormDrawer open={creating} onOpenChange={setCreating} title="New device">
+      <FormDrawer open={creating} onOpenChange={setCreating} title={t('newDevice')}>
         <DeviceForm
           onDone={(m) => {
             toast(m);
@@ -90,7 +93,7 @@ export default function DevicesPage() {
           }}
         />
       </FormDrawer>
-      <FormDrawer open={bulkCreating} onOpenChange={setBulkCreating} title="Bulk create devices">
+      <FormDrawer open={bulkCreating} onOpenChange={setBulkCreating} title={t('bulkCreateTitle')}>
         <DeviceBulkForm
           onDone={(m) => {
             toast(m);
@@ -100,21 +103,21 @@ export default function DevicesPage() {
         />
       </FormDrawer>
       {loading ? (
-        <LoadingState description="Loading devices…" />
+        <LoadingState description={t('loading')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : results.length === 0 ? (
-        <EmptyState description="No devices registered yet." />
+        <EmptyState description={t('empty')} />
       ) : (
         <>
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>Status</DataTableHeaderCell>
-              <DataTableHeaderCell>Token</DataTableHeaderCell>
-              <DataTableHeaderCell>Name</DataTableHeaderCell>
-              <DataTableHeaderCell>Type</DataTableHeaderCell>
-              <DataTableHeaderCell>Description</DataTableHeaderCell>
-              <DataTableHeaderCell>Created</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colStatus')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colToken')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colName')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colType')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colDescription')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colCreated')}</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
               {results.map((device) => (

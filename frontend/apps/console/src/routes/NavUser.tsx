@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { ChevronsUpDown, LineChart, LogOut, ShieldCheck, UserPen } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthProvider';
 import { useCurrentUser } from '@/auth/CurrentUserProvider';
 import { useMetricsAvailable } from '@/lib/hooks/use-metrics-available';
@@ -35,6 +36,7 @@ function UserAvatar({ name }: { name: string }) {
 }
 
 export function NavUser() {
+  const { t } = useTranslation('userMenu');
   const { claims, logout, superuser, isIdentityAuthenticated } = useAuth();
   const user = useCurrentUser();
   const { isMobile } = useSidebar();
@@ -88,7 +90,7 @@ export function NavUser() {
 
             <DropdownMenuItem onClick={() => setEditing(true)} className="cursor-pointer">
               <UserPen size={16} />
-              Edit profile
+              {t('editProfile')}
             </DropdownMenuItem>
 
             {superuser && isIdentityAuthenticated && (
@@ -99,13 +101,13 @@ export function NavUser() {
                   className="cursor-pointer"
                 >
                   <ShieldCheck size={16} />
-                  Admin console
+                  {t('adminConsole')}
                 </DropdownMenuItem>
                 {metricsAvailable && (
                   <DropdownMenuItem asChild className="cursor-pointer">
                     <a href="/grafana" target="_blank" rel="noopener noreferrer">
                       <LineChart size={16} />
-                      Metrics
+                      {t('metrics')}
                     </a>
                   </DropdownMenuItem>
                 )}
@@ -115,7 +117,7 @@ export function NavUser() {
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={logout} className="cursor-pointer">
               <LogOut size={16} />
-              Sign out
+              {t('signOut')}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -123,8 +125,8 @@ export function NavUser() {
         <FormDrawer
           open={editing}
           onOpenChange={setEditing}
-          title="Edit profile"
-          description="Update your display name."
+          title={t('editProfile')}
+          description={t('editProfileDescription')}
         >
           <ProfileForm
             onDone={(message) => {

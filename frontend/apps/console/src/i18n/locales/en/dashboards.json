@@ -1,0 +1,13 @@
+{
+  "title": "Dashboards",
+  "description": "Live dashboards for this tenant",
+  "newDashboard": "New dashboard",
+  "loading": "Loading dashboards…",
+  "empty": "No dashboards yet.",
+  "delete": "Delete",
+  "deleteTitle": "Delete dashboard",
+  "deleteConfirm": "Delete “{{token}}”? This cannot be undone.",
+  "deleted": "Dashboard “{{token}}” deleted",
+  "created": "Dashboard “{{token}}” created",
+  "createDashboard": "Create dashboard"
+}

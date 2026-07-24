@@ -1,4 +1,19 @@
 {
   "back": "Back",
-  "languagePicker": "Language"
+  "languagePicker": "Language",
+  "tenantFallback": "Tenant",
+  "colName": "Name",
+  "colDescription": "Description",
+  "colStatus": "Status",
+  "colToken": "Token",
+  "colType": "Type",
+  "colCreated": "Created",
+  "colUpdated": "Updated",
+  "colValue": "Value",
+  "colActions": "Actions",
+  "paginationShowing_one": "Showing {{start}}–{{end}} of {{count}} result",
+  "paginationShowing_other": "Showing {{start}}–{{end}} of {{count}} results",
+  "paginationNoResults": "No results",
+  "paginationPrev": "Prev",
+  "paginationNext": "Next"
 }

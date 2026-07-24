@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
   Boxes,
@@ -46,14 +47,16 @@ import { hasAuthority, type DecodedClaims } from '@devicechain/client';
 import { NavUser } from '@/routes/NavUser';
 
 interface NavLeaf {
-  label: string;
+  // A key into the `nav` catalog (ADR-066), resolved with t() at render — never a
+  // literal display string, so the sidebar localizes.
+  labelKey: string;
   href: string;
   icon: LucideIcon;
   // Authority required to see this item; omit for always-visible (e.g. Dashboard).
   requires?: string;
 }
 
-type NavGroupNode = { label: string; icon: LucideIcon; children: NavLeaf[] };
+type NavGroupNode = { labelKey: string; icon: LucideIcon; children: NavLeaf[] };
 
 // A top-level nav node is either a direct link (Dashboard) or a collapsible
 // group of leaves. Each model construct (Devices, and later Assets/Customers/
@@ -62,60 +65,60 @@ type NavGroupNode = { label: string; icon: LucideIcon; children: NavLeaf[] };
 type NavNode = NavLeaf | NavGroupNode;
 
 const NAV: NavNode[] = [
-  { label: 'Dashboard', href: '/', icon: LayoutGrid },
-  { label: 'Dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read' },
-  { label: 'Alarms', href: '/alarms', icon: AlertTriangle, requires: 'alarm:read' },
-  { label: 'Connectors', href: '/connectors', icon: Webhook, requires: 'connector:read' },
+  { labelKey: 'dashboard', href: '/', icon: LayoutGrid },
+  { labelKey: 'dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read' },
+  { labelKey: 'alarms', href: '/alarms', icon: AlertTriangle, requires: 'alarm:read' },
+  { labelKey: 'connectors', href: '/connectors', icon: Webhook, requires: 'connector:read' },
   {
-    label: 'Devices',
+    labelKey: 'devices',
     icon: Cpu,
     children: [
       // All of device-management is gated by device:read (there is no separate
       // devicetype:read), so both share the same requirement.
-      { label: 'Devices', href: '/devices', icon: Cpu, requires: 'device:read' },
-      { label: 'Device Types', href: '/device-types', icon: Boxes, requires: 'device:read' },
-      { label: 'Device Profiles', href: '/device-profiles', icon: SlidersHorizontal, requires: 'device:read' },
-      { label: 'Device Groups', href: '/device-groups', icon: Layers, requires: 'device:read' },
+      { labelKey: 'devices', href: '/devices', icon: Cpu, requires: 'device:read' },
+      { labelKey: 'deviceTypes', href: '/device-types', icon: Boxes, requires: 'device:read' },
+      { labelKey: 'deviceProfiles', href: '/device-profiles', icon: SlidersHorizontal, requires: 'device:read' },
+      { labelKey: 'deviceGroups', href: '/device-groups', icon: Layers, requires: 'device:read' },
     ],
   },
   {
     // Asset / Customer / Area share device-management's authority model: the whole
     // service is gated by device:read, so every leaf below uses it too.
-    label: 'Assets',
+    labelKey: 'assets',
     icon: Package,
     children: [
-      { label: 'Assets', href: '/assets', icon: Package, requires: 'device:read' },
-      { label: 'Asset Types', href: '/asset-types', icon: Boxes, requires: 'device:read' },
-      { label: 'Asset Groups', href: '/asset-groups', icon: Layers, requires: 'device:read' },
+      { labelKey: 'assets', href: '/assets', icon: Package, requires: 'device:read' },
+      { labelKey: 'assetTypes', href: '/asset-types', icon: Boxes, requires: 'device:read' },
+      { labelKey: 'assetGroups', href: '/asset-groups', icon: Layers, requires: 'device:read' },
     ],
   },
   {
-    label: 'Customers',
+    labelKey: 'customers',
     icon: Building2,
     children: [
-      { label: 'Customers', href: '/customers', icon: Building2, requires: 'device:read' },
-      { label: 'Customer Types', href: '/customer-types', icon: Boxes, requires: 'device:read' },
-      { label: 'Customer Groups', href: '/customer-groups', icon: Layers, requires: 'device:read' },
+      { labelKey: 'customers', href: '/customers', icon: Building2, requires: 'device:read' },
+      { labelKey: 'customerTypes', href: '/customer-types', icon: Boxes, requires: 'device:read' },
+      { labelKey: 'customerGroups', href: '/customer-groups', icon: Layers, requires: 'device:read' },
     ],
   },
   {
-    label: 'Areas',
+    labelKey: 'areas',
     icon: MapPin,
     children: [
-      { label: 'Areas', href: '/areas', icon: MapPin, requires: 'device:read' },
-      { label: 'Area Types', href: '/area-types', icon: Boxes, requires: 'device:read' },
-      { label: 'Area Groups', href: '/area-groups', icon: Layers, requires: 'device:read' },
+      { labelKey: 'areas', href: '/areas', icon: MapPin, requires: 'device:read' },
+      { labelKey: 'areaTypes', href: '/area-types', icon: Boxes, requires: 'device:read' },
+      { labelKey: 'areaGroups', href: '/area-groups', icon: Layers, requires: 'device:read' },
     ],
   },
   // Facets classify every member family (ADR-061), so they are one cross-cutting
   // registry rather than a leaf under each construct group. Gated by device:read
   // like the rest of device-management.
-  { label: 'Facets', href: '/facets', icon: Tags, requires: 'device:read' },
+  { labelKey: 'facets', href: '/facets', icon: Tags, requires: 'device:read' },
   // Faceted browse + dynamic groups (ADR-061 G4) — compose a selector from facet
   // axes, preview matches live, save it as a dynamic group. Cross-cutting like Facets.
-  { label: 'Browse', href: '/browse', icon: Filter, requires: 'device:read' },
-  { label: 'Audit', href: '/audit', icon: ScrollText, requires: 'audit:read' },
-  { label: 'Branding', href: '/branding', icon: Palette, requires: 'branding:write' },
+  { labelKey: 'browse', href: '/browse', icon: Filter, requires: 'device:read' },
+  { labelKey: 'audit', href: '/audit', icon: ScrollText, requires: 'audit:read' },
+  { labelKey: 'branding', href: '/branding', icon: Palette, requires: 'branding:write' },
   // Inference providers for NL→rule authoring (ADR-056) are NOT here: they are
   // instance config an operator owns, so they live in the admin console (ADR-065). A
   // tenant's only say over AI is its external-routing consent, set per tenant by an
@@ -145,22 +148,24 @@ function isActive(pathname: string, href: string) {
   return href === '/' ? pathname === '/' : pathname.startsWith(href);
 }
 
-// Label of the group that owns the current route, if any — used to keep the
-// active group expanded (including on deep links / refreshes).
-function activeGroupLabel(pathname: string): string | undefined {
+// labelKey of the group that owns the current route, if any — used to keep the
+// active group expanded (including on deep links / refreshes). The key is an
+// opaque accordion identity here, not display text.
+function activeGroupKey(pathname: string): string | undefined {
   return NAV.find(
     (node) => !isLeaf(node) && node.children.some((c) => isActive(pathname, c.href)),
-  )?.label;
+  )?.labelKey;
 }
 
 export function AppSidebar() {
   const { pathname } = useLocation();
+  const { t } = useTranslation('nav');
   const { claims } = useAuth();
   const tenant = useCurrentTenant();
   const brandLogo = useBrandingLogoSrc(tenant?.branding?.logo);
   const brandHeight = tenant?.branding?.logoMaxHeight ?? 24;
   const nav = visibleNav(claims);
-  const activeGroup = activeGroupLabel(pathname);
+  const activeGroup = activeGroupKey(pathname);
   // Accordion: at most one group expanded at a time, to keep the rail uncluttered.
   // Default to the group that owns the current route, and follow the route when it
   // moves into a different group (deep links / refreshes land expanded too).
@@ -169,7 +174,7 @@ export function AppSidebar() {
     if (activeGroup) setOpenGroup(activeGroup);
   }, [activeGroup]);
 
-  const toggle = (label: string) => setOpenGroup((cur) => (cur === label ? null : label));
+  const toggle = (key: string) => setOpenGroup((cur) => (cur === key ? null : key));
 
   return (
     <Sidebar collapsible="icon">
@@ -188,14 +193,16 @@ export function AppSidebar() {
                   {brandLogo ? (
                     <img
                       src={brandLogo}
-                      alt={tenant?.name || tenant?.token || 'Tenant'}
+                      alt={tenant?.name || tenant?.token || t('common:tenantFallback')}
                       className="w-auto max-w-full object-contain"
                       style={{ maxHeight: brandHeight }}
                     />
                   ) : (
                     <LogoHorizontal deviceColor="currentColor" className="h-[17px] w-auto" />
                   )}
-                  <span className="truncate text-xs text-muted-foreground">Management Console</span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {t('managementConsole')}
+                  </span>
                 </div>
               </Link>
             </SidebarMenuButton>
@@ -209,11 +216,11 @@ export function AppSidebar() {
             <SidebarMenu>
               {nav.map((node) =>
                 isLeaf(node) ? (
-                  <SidebarMenuItem key={node.label}>
+                  <SidebarMenuItem key={node.labelKey}>
                     <SidebarMenuButton
                       asChild
                       isActive={isActive(pathname, node.href)}
-                      tooltip={node.label}
+                      tooltip={t(node.labelKey)}
                       className={cn(
                         'text-[0.9375rem] font-medium',
                         isActive(pathname, node.href) && '!font-semibold !text-primary',
@@ -221,17 +228,17 @@ export function AppSidebar() {
                     >
                       <Link to={node.href}>
                         <node.icon />
-                        <span>{node.label}</span>
+                        <span>{t(node.labelKey)}</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ) : (
                   <NavGroup
-                    key={node.label}
+                    key={node.labelKey}
                     node={node}
                     pathname={pathname}
-                    open={openGroup === node.label}
-                    onToggle={() => toggle(node.label)}
+                    open={openGroup === node.labelKey}
+                    onToggle={() => toggle(node.labelKey)}
                   />
                 ),
               )}
@@ -261,6 +268,7 @@ function NavGroup({
   onToggle: () => void;
 }) {
   const navigate = useNavigate();
+  const { t } = useTranslation('nav');
   const hasActiveChild = node.children.some((c) => isActive(pathname, c.href));
   // Expanding a category lands you on its first item in one click (the active-group
   // effect keeps it open); clicking an already-open group just collapses it.
@@ -275,14 +283,14 @@ function NavGroup({
         onClick={handleClick}
         // Highlight the collapsed parent so the user still sees where they are.
         isActive={hasActiveChild && !open}
-        tooltip={node.label}
+        tooltip={t(node.labelKey)}
         className={cn(
           'text-[0.9375rem] font-medium',
           hasActiveChild && !open && '!font-semibold !text-primary',
         )}
       >
         <node.icon />
-        <span>{node.label}</span>
+        <span>{t(node.labelKey)}</span>
         <ChevronRight
           className={cn(
             'ml-auto transition-transform group-data-[collapsible=icon]:hidden',
@@ -306,7 +314,7 @@ function NavGroup({
               >
                 <Link to={child.href}>
                   <child.icon />
-                  <span>{child.label}</span>
+                  <span>{t(child.labelKey)}</span>
                 </Link>
               </SidebarMenuSubButton>
             </SidebarMenuSubItem>

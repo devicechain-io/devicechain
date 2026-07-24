@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
@@ -23,6 +24,7 @@ export function Pagination({
   onPageChange,
   className,
 }: PaginationProps) {
+  const { t } = useTranslation('common');
   const { pageStart, pageEnd, totalRecords } = pagination;
 
   const hasResults = pageEnd != null && pageStart != null && pageEnd >= pageStart;
@@ -35,8 +37,10 @@ export function Pagination({
     <div className={cn('flex items-center justify-between gap-4 py-1', className)}>
       <span className="text-sm text-muted-foreground">
         {hasResults && totalRecords != null
-          ? `Showing ${pageStart}–${pageEnd} of ${totalRecords}`
-          : 'No results'}
+          ? // `count` drives the i18next plural selection (…_one / …_other) as well
+            // as the {{count}} interpolation; {{start}}/{{end}} fill the range.
+            t('paginationShowing', { start: pageStart, end: pageEnd, count: totalRecords })
+          : t('paginationNoResults')}
       </span>
       <div className="flex items-center gap-2">
         <Button
@@ -46,7 +50,7 @@ export function Pagination({
           onClick={() => onPageChange(pageNumber - 1)}
         >
           <ChevronLeft />
-          Prev
+          {t('paginationPrev')}
         </Button>
         <Button
           variant="outline"
@@ -54,7 +58,7 @@ export function Pagination({
           disabled={nextDisabled}
           onClick={() => onPageChange(pageNumber + 1)}
         >
-          Next
+          {t('paginationNext')}
           <ChevronRight />
         </Button>
       </div>

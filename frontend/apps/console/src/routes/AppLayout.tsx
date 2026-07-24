@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Outlet, useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from '@/routes/AppSidebar';
 import { TenantChip } from '@/routes/TenantChip';
@@ -10,7 +11,10 @@ import { CurrentUserProvider } from '@/auth/CurrentUserProvider';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { BackLink } from '@/routes/common';
 
-// Title-case a route segment: "device-types" -> "Device Types".
+// Title-case a route segment: "device-types" -> "Device Types". Fallback for a
+// route not in NAV_SECTION_KEY below (a new page whose nav catalog entry hasn't
+// been added yet) — it keeps such a page's top bar readable in English rather than
+// blank while (b)'s sweep catches up.
 function humanize(segment: string): string {
   return segment
     .split('-')
@@ -18,35 +22,48 @@ function humanize(segment: string): string {
     .join(' ');
 }
 
-// The active page's name, derived from the path so it stays correct without a
-// per-route registry: list pages read as their (plural) segment; detail pages
-// singularize it and append "Detail".
-//   /                -> Dashboard
-//   /devices         -> Devices
-//   /devices/:token  -> Device Detail
-//   /device-types/:t -> Device Type Detail
-function pageTitle(pathname: string): string {
-  const segments = pathname.split('/').filter(Boolean);
-  if (segments.length === 0) return 'Dashboard';
-  const list = humanize(segments[0]);
-  if (segments.length === 1) return list;
-  const words = list.split(' ');
-  words[words.length - 1] = words[words.length - 1].replace(/s$/, '');
-  return `${words.join(' ')} Detail`;
-}
-
-// On a detail page, the header carries a back-link to its list (navigation kept
-// separate from the page content's own actions).
-function detailBack(pathname: string): { to: string; label: string } | null {
-  const segments = pathname.split('/').filter(Boolean);
-  if (segments.length < 2) return null;
-  return { to: `/${segments[0]}`, label: humanize(segments[0]) };
-}
+// First-path-segment -> `nav` catalog key, so the top-bar title and back-link
+// localize (ADR-066). A section's list AND its detail pages both read as the
+// localized section name; the entity's own name is the big title in the page body.
+// Fully localizing the English "<Singular> Detail" affordance needs number-aware
+// rules and is deferred to the sweep (b) — until then a detail page's top bar shows
+// the section name, not "<Thing> Detail".
+const NAV_SECTION_KEY: Record<string, string> = {
+  '': 'dashboard',
+  devices: 'devices',
+  'device-types': 'deviceTypes',
+  'device-profiles': 'deviceProfiles',
+  'device-groups': 'deviceGroups',
+  dashboards: 'dashboards',
+  alarms: 'alarms',
+  connectors: 'connectors',
+  assets: 'assets',
+  'asset-types': 'assetTypes',
+  'asset-groups': 'assetGroups',
+  customers: 'customers',
+  'customer-types': 'customerTypes',
+  'customer-groups': 'customerGroups',
+  areas: 'areas',
+  'area-types': 'areaTypes',
+  'area-groups': 'areaGroups',
+  facets: 'facets',
+  browse: 'browse',
+  audit: 'audit',
+  branding: 'branding',
+};
 
 export default function AppLayout() {
   const { pathname } = useLocation();
-  const title = pageTitle(pathname);
-  const back = detailBack(pathname);
+  const { t } = useTranslation('nav');
+  const segments = pathname.split('/').filter(Boolean);
+  const seg0 = segments[0] ?? '';
+  const navKey = NAV_SECTION_KEY[seg0];
+  const sectionLabel = navKey ? t(navKey) : humanize(seg0);
+  const title = seg0 === '' ? t('dashboard') : sectionLabel;
+  // On a detail page (>= 2 segments) the header carries a back-link to its list,
+  // labeled with the localized section name (navigation kept separate from the
+  // page content's own actions).
+  const back = segments.length >= 2 ? { to: `/${seg0}`, label: sectionLabel } : null;
 
   return (
     <TenantProvider>

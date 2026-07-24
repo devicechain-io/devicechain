@@ -1,0 +1,9 @@
+{
+  "title": "Tenants",
+  "description": "The instance's tenant registry. A tenant is a control-plane record, not a provisioned resource.",
+  "newTenant": "New tenant",
+  "loading": "Loading tenants…",
+  "empty": "No tenants yet. Create the first one to get started.",
+  "colTier": "Tier",
+  "colConfig": "Config"
+}
