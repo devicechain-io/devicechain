@@ -45,8 +45,17 @@ func NewRegistrar(client adapter.GraphQLClient, graphqlURL string) *adapter.Regi
 }
 
 // NewEmitter binds the shared emitter with Sparkplug's dedup-id prefix.
+//
+// authenticatedTransport=true: a Sparkplug publisher authenticates at the MQTT
+// BROKER connection, so emitted events carry no per-event credential and the
+// resolver trusts their device token under deviceAuthMode=required. NOTE this is
+// BROKER-level, not per-device: the device token is derived from the publisher's
+// MQTT topic (group/node/device), which Sparkplug does not authenticate per-device
+// — so `required` does NOT close intra-tenant device-token spoofing for Sparkplug
+// (it still does for HTTP/MQTT credential paths). Cross-tenant is still closed
+// (connection-scoped tenancy). Real per-device Sparkplug auth is a tracked gap.
 func NewEmitter(writer adapter.EventWriter, now func() time.Time) *adapter.Emitter {
-	return adapter.NewEmitter(writer, now, dedupPrefix)
+	return adapter.NewEmitter(writer, now, dedupPrefix, true)
 }
 
 // NewReconciler and NewIngester carry no protocol prefix; they are thin pass-throughs so

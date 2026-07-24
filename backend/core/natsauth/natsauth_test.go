@@ -103,10 +103,14 @@ func TestDevicePermissions(t *testing.T) {
 	}
 
 	// Likewise the device must not be able to publish as another device, or onto an
-	// arbitrary platform topic.
+	// arbitrary platform topic. `inbound-events` is called out explicitly: the
+	// transport-auth marker's whole safety rests on a device being unable to publish a
+	// resolver-bound inbound event (only the dc_service account can), so if a future
+	// grant widening ever let a device reach inbound-events this must fail loudly.
 	for _, forbidden := range []string{
 		"inst-1.acme-corp.devices.sensor-002.events",
 		"inst-1.acme-corp.device-commands.sensor-001",
+		"inst-1.acme-corp.inbound-events",
 		"inst-1.acme-corp.anything-else",
 	} {
 		for _, granted := range p.Pub.Allow {

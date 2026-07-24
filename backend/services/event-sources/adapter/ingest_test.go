@@ -182,7 +182,7 @@ func TestRegistrarReturnsTransportErrorForRetry(t *testing.T) {
 // under the connection's tenant.
 func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 	w := &fakeWriter{}
-	e := NewEmitter(w, fixedNow, "sp")
+	e := NewEmitter(w, fixedNow, "sp", false)
 
 	ts := int64(1_700_000_000_123)
 	err := e.Emit(context.Background(), "acme", "sparkplug:h1", "dev-1", []Sample{{Name: "temperature", Value: 21.5, Time: ts}})
@@ -224,7 +224,7 @@ func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 // not cosmetics.
 func TestEmitterFormatsLargeIntegersWithoutExponent(t *testing.T) {
 	w := &fakeWriter{}
-	e := NewEmitter(w, fixedNow, "sp")
+	e := NewEmitter(w, fixedNow, "sp", false)
 	require.NoError(t, e.Emit(context.Background(), "acme", "s", "dev-1",
 		[]Sample{{Name: "count", Value: 12345678, Time: 1}}))
 	require.Len(t, w.msgs, 1)
@@ -244,7 +244,7 @@ func TestEmitterFormatsLargeIntegersWithoutExponent(t *testing.T) {
 // DedupID.
 func TestEmitPresenceProducesResolverReadableStateChange(t *testing.T) {
 	w := &fakeWriter{}
-	e := NewEmitter(w, fixedNow, "sp")
+	e := NewEmitter(w, fixedNow, "sp", false)
 	occurred := time.UnixMilli(1_700_000_000_500).UTC()
 	epoch := uint64(1_799_000_000_123_456_789) // an epoch-sized UnixNano
 
@@ -319,7 +319,7 @@ func TestIngesterEmitsForAKnownDevice(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupHit("dev-1"), nil }}
 	w := &fakeWriter{}
 	m, read := newIngestMetrics()
-	ing := NewIngester(NewRegistrar(gql, "url", "sp-"), NewEmitter(w, fixedNow, "sp"), m)
+	ing := NewIngester(NewRegistrar(gql, "url", "sp-"), NewEmitter(w, fixedNow, "sp", false), m)
 
 	err := ing.Ingest(context.Background(), "acme", IngestPolicy{Source: "s"}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	require.NoError(t, err)
@@ -332,7 +332,7 @@ func TestIngesterDropsUnknownAndCountsIt(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupMiss(), nil }}
 	w := &fakeWriter{}
 	m, read := newIngestMetrics()
-	ing := NewIngester(NewRegistrar(gql, "url", "sp-"), NewEmitter(w, fixedNow, "sp"), m)
+	ing := NewIngester(NewRegistrar(gql, "url", "sp-"), NewEmitter(w, fixedNow, "sp", false), m)
 
 	err := ing.Ingest(context.Background(), "acme", IngestPolicy{AutoRegister: false}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}, {Name: "u", Value: 2, Time: 1}})
 	require.NoError(t, err, "a definitive drop is handled, not an error")
@@ -350,7 +350,7 @@ func TestIngesterCountsRegistrationThenEmits(t *testing.T) {
 	}}
 	w := &fakeWriter{}
 	m, read := newIngestMetrics()
-	ing := NewIngester(NewRegistrar(gql, "url", "sp-"), NewEmitter(w, fixedNow, "sp"), m)
+	ing := NewIngester(NewRegistrar(gql, "url", "sp-"), NewEmitter(w, fixedNow, "sp", false), m)
 
 	err := ing.Ingest(context.Background(), "acme", IngestPolicy{Source: "s", AutoRegister: true, DeviceTypeToken: "t"}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	require.NoError(t, err)
@@ -363,7 +363,7 @@ func TestIngesterReturnsRetryableErrors(t *testing.T) {
 	gqlErr := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return nil, errors.New("dm down") }}
 	w := &fakeWriter{}
 	m, _ := newIngestMetrics()
-	ing := NewIngester(NewRegistrar(gqlErr, "url", "sp-"), NewEmitter(w, fixedNow, "sp"), m)
+	ing := NewIngester(NewRegistrar(gqlErr, "url", "sp-"), NewEmitter(w, fixedNow, "sp", false), m)
 	err := ing.Ingest(context.Background(), "acme", IngestPolicy{}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	assert.Error(t, err)
 	assert.Empty(t, w.msgs)
@@ -371,7 +371,29 @@ func TestIngesterReturnsRetryableErrors(t *testing.T) {
 	// Emit failure is retryable.
 	gqlOK := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupHit("dev-1"), nil }}
 	wErr := &fakeWriter{err: errors.New("nats down")}
-	ing2 := NewIngester(NewRegistrar(gqlOK, "url", "sp-"), NewEmitter(wErr, fixedNow, "sp"), m)
+	ing2 := NewIngester(NewRegistrar(gqlOK, "url", "sp-"), NewEmitter(wErr, fixedNow, "sp", false), m)
 	err = ing2.Ingest(context.Background(), "acme", IngestPolicy{}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	assert.Error(t, err)
+}
+
+// The AuthenticatedTransport flag an Emitter is constructed with is stamped on every
+// event it emits (measurement AND presence) and survives the round-trip to the
+// resolver. This is what lets lwm2m/sparkplug presence resolve under required mode —
+// and constructing with false leaves it off, so event-sources' own HTTP/MQTT path
+// (which does not use this Emitter) never marks its events.
+func TestEmitterStampsAuthenticatedTransport(t *testing.T) {
+	for _, marked := range []bool{true, false} {
+		w := &fakeWriter{}
+		e := NewEmitter(w, fixedNow, "lw", marked)
+		require.NoError(t, e.Emit(context.Background(), "acme", "lwm2m", "dev-1",
+			[]Sample{{Name: "t", Value: 1, Time: 1_700_000_000_000}}))
+		require.NoError(t, e.EmitPresence(context.Background(), "acme", "lwm2m", "dev-1",
+			PresenceEvent{Connected: true, SessionId: 1, OccurredAt: time.UnixMilli(1_700_000_000_000).UTC()}))
+		require.Len(t, w.msgs, 2)
+		for i, m := range w.msgs {
+			ev, err := esproto.UnmarshalUnresolvedEvent(m.Value)
+			require.NoError(t, err)
+			assert.Equal(t, marked, ev.AuthenticatedTransport, "msg %d (marked=%v)", i, marked)
+		}
+	}
 }

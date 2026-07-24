@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
+	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -74,4 +75,13 @@ func TestSparkplugWiringInjectsDedupPrefix(t *testing.T) {
 	// const reddens here.
 	assert.Equal(t, "sp1gip9ahddziq7", w.msgs[0].DedupID,
 		"host.NewEmitter must inject the Sparkplug dedup prefix \"sp\"")
+	// host.NewEmitter must construct the shared Emitter with authenticatedTransport=true:
+	// a Sparkplug publisher authenticates at the MQTT broker, so its events carry no
+	// per-event credential and must be marked so the resolver accepts them under
+	// deviceAuthMode=required. Flipping that constructor arg to false silently re-breaks
+	// Sparkplug presence in a default deployment — this pins it.
+	ue, err := esproto.UnmarshalUnresolvedEvent(w.msgs[0].Value)
+	require.NoError(t, err)
+	assert.True(t, ue.AuthenticatedTransport,
+		"host.NewEmitter must mark Sparkplug events transport-authenticated (broker-level)")
 }

@@ -43,6 +43,22 @@ type UnresolvedEvent struct {
 	CredentialType   *string
 	CredentialId     *string
 	CredentialSecret *string
+
+	// AuthenticatedTransport marks an event whose device was authenticated at the
+	// TRANSPORT by a trusted internal ingest source (LwM2M DTLS-PSK / Sparkplug
+	// broker), so it presents no per-event credential. The resolver then trusts the
+	// self-asserted Device token under deviceAuthMode=required — the same trust the
+	// 'disabled'/'optional' transports already grant, but confined to these sources.
+	//
+	// SAFE only because it is NOT device-forgeable: ADR-025 confines a device's NATS
+	// publish to its own devices.{token}.events subject, and the device->inbound-events
+	// gateway (event-sources JsonDecoder) copies only named payload fields — it has NO
+	// field for this flag. It MUST therefore never be settable from device-controlled
+	// input (see the decoder guard test). For LwM2M the Device token is bound to the
+	// authenticated PSK identity (per-device); for Sparkplug it is topic-derived
+	// (broker-level, NOT per-device — required no longer closes intra-tenant spoofing
+	// for Sparkplug; a known, tracked gap).
+	AuthenticatedTransport bool
 }
 
 // Payload for creating a new relationship. The target is a uniform (type, token)

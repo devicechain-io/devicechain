@@ -402,6 +402,13 @@ func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, 
 
 	event.Source = source
 	event.Payload = payload
+	// A device controls the raw bytes a Decoder parses, so the device-facing decode
+	// path must NEVER be able to mark an event transport-authenticated (that marker
+	// bypasses the required-mode credential check, and is legitimately set only by the
+	// internal ingest services that emit straight to inbound-events, not through here).
+	// No current Decoder carries the field; clamp it to false unconditionally so the
+	// guarantee is STRUCTURAL for every future decoder rather than a per-decoder pin.
+	event.AuthenticatedTransport = false
 
 	if tenant == "" {
 		log.Warn().Msg(fmt.Sprintf("Dropping decoded event from source %q with no tenant", source))
