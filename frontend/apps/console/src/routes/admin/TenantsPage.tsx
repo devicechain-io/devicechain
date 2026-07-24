@@ -23,55 +23,55 @@ import { TierPill } from '@/components/tiers/TierPill';
 import { StatusBadge, rowLinkProps } from '@/routes/common';
 
 export default function TenantsPage() {
-  const { t: translate } = useTranslation('tenants');
+  const { t } = useTranslation('tenants');
   const navigate = useNavigate();
   const { data: tenants, loading, error } = useQuery(listTenants, []);
 
   return (
     <PageShell
-      title={translate('title')}
-      description={translate('description')}
+      title={t('title')}
+      description={t('description')}
       action={
         <Button onClick={() => navigate('/admin/tenants/new')}>
-          <Plus size={16} /> {translate('newTenant')}
+          <Plus size={16} /> {t('newTenant')}
         </Button>
       }
     >
       <div className="space-y-6">
         {loading ? (
-          <LoadingState description={translate('loading')} />
+          <LoadingState description={t('loading')} />
         ) : error ? (
           <ErrorState description={error} />
         ) : !tenants || tenants.length === 0 ? (
-          <EmptyState description={translate('empty')} />
+          <EmptyState description={t('empty')} />
         ) : (
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>{translate('common:colToken')}</DataTableHeaderCell>
-              <DataTableHeaderCell>{translate('common:colName')}</DataTableHeaderCell>
-              <DataTableHeaderCell>{translate('colTier')}</DataTableHeaderCell>
-              <DataTableHeaderCell>{translate('common:colStatus')}</DataTableHeaderCell>
-              <DataTableHeaderCell>{translate('colConfig')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colToken')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colName')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colTier')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colStatus')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colConfig')}</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
-              {tenants.map((t) => (
+              {tenants.map((tr) => (
                 <DataTableRow
-                  key={t.id}
-                  {...rowLinkProps(() => navigate(`/admin/tenants/${encodeURIComponent(t.token)}`))}
+                  key={tr.id}
+                  {...rowLinkProps(() => navigate(`/admin/tenants/${encodeURIComponent(tr.token)}`))}
                 >
-                  <DataTableCell className="font-medium">{t.token}</DataTableCell>
-                  <DataTableCell>{t.name ?? '—'}</DataTableCell>
+                  <DataTableCell className="font-medium">{tr.token}</DataTableCell>
+                  <DataTableCell>{tr.name ?? '—'}</DataTableCell>
                   {/* Never blank: the tier is a required FK (ADR-065). The pill carries
                       the tier token in the tier's color (S5c) — presentation, so a tenant
                       reads at a glance as its packaging. */}
                   <DataTableCell>
-                    <TierPill label={t.tier.token} color={t.tier.color} />
+                    <TierPill label={tr.tier.token} color={tr.tier.color} />
                   </DataTableCell>
                   <DataTableCell>
-                    <StatusBadge enabled={t.enabled} />
+                    <StatusBadge enabled={tr.enabled} />
                   </DataTableCell>
                   <DataTableCell className="max-w-xs truncate font-mono text-xs text-muted-foreground">
-                    {t.config ?? '—'}
+                    {tr.config ?? '—'}
                   </DataTableCell>
                 </DataTableRow>
               ))}

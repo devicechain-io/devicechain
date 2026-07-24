@@ -15,6 +15,7 @@
 // never re-fetches the tenant. Assigning or clearing calls the admin plane and reloads.
 
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Combobox } from '@/components/ui/combobox';
 import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -34,6 +35,7 @@ import {
 import { buildTenantAiModels, modelLabel, type FunctionRow } from './tenantAiModels';
 
 export function TenantAiModelsPanel({ tenant }: { tenant: AdminTenant }) {
+  const { t } = useTranslation('tenants');
   const { toast } = useToast();
   const [version, reload] = useReload();
   // The function token currently being mutated, so only its controls freeze.
@@ -91,9 +93,9 @@ export function TenantAiModelsPanel({ tenant }: { tenant: AdminTenant }) {
     }
   };
 
-  if (loading) return <LoadingState description="Loading AI models…" />;
+  if (loading) return <LoadingState description={t('loadingAiModels')} />;
   if (error) return <ErrorState description={error} />;
-  if (!model) return <ErrorState description="Could not load this tenant’s AI models." />;
+  if (!model) return <ErrorState description={t('aiModelsLoadError')} />;
 
   const menuEmpty = model.menu.length === 0;
 
@@ -101,17 +103,12 @@ export function TenantAiModelsPanel({ tenant }: { tenant: AdminTenant }) {
     <div className="space-y-6">
       {!tenant.aiExternalEnabled && (
         <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
-          External AI routing is off for this tenant (Settings tab). Assignments here are saved,
-          but the tenant cannot draft rules until it is enabled.
+          {t('aiRoutingOffNotice')}
         </p>
       )}
       {menuEmpty && (
         <p className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
-          This tenant has no AI models available: the{' '}
-          <span className="font-medium text-foreground">{tierLabel}</span> tier grants none (or the
-          ones it grants are disabled), and this tenant has no additional grants. Package or re-enable
-          a model on the tier (its AI Models tab), or grant one to this tenant, before assigning a
-          model here.
+          {t('aiModelsMenuEmpty', { tierLabel })}
         </p>
       )}
       <div className="space-y-4">
@@ -149,6 +146,7 @@ function FunctionAssignmentRow({
   onAssign: (provider: string) => void;
   onClear: () => void;
 }) {
+  const { t } = useTranslation('tenants');
   // The picker shows the assignment only when it is actually on the menu; a stale
   // assignment (off-menu) leaves the picker empty and is surfaced in the status line, so
   // the operator never sees a model selected that in fact resolves to nothing.
@@ -161,8 +159,8 @@ function FunctionAssignmentRow({
   // assert the very substitution the server refuses.
   const placeholder =
     row.effective.kind === 'tier-default' && tierDefault
-      ? `Tier default — ${modelLabel(tierDefault)}`
-      : 'No model — assign one';
+      ? t('tierDefaultPlaceholder', { model: modelLabel(tierDefault) })
+      : t('noModelPlaceholder');
 
   return (
     <div className="rounded-md border border-border p-4">
@@ -177,8 +175,8 @@ function FunctionAssignmentRow({
             value={pickerValue}
             onChange={onAssign}
             placeholder={placeholder}
-            searchPlaceholder="Search models…"
-            emptyMessage="No models on this tenant’s menu."
+            searchPlaceholder={t('searchModelsPlaceholder')}
+            emptyMessage={t('noModelsOnMenu')}
             allowClear={false}
             disabled={busy || menu.length === 0}
             options={menu.map((m) => ({
@@ -193,7 +191,7 @@ function FunctionAssignmentRow({
             the tenant back to its tier default. */}
         {row.assigned && (
           <Button variant="outline" size="sm" onClick={onClear} loading={busy} disabled={busy}>
-            Clear
+            {t('clear')}
           </Button>
         )}
       </div>
@@ -206,42 +204,36 @@ function FunctionAssignmentRow({
 // three NONE cases read as warnings because each leaves the tenant with no model; the two
 // resolved cases are muted context.
 function EffectiveLine({ row, tierLabel }: { row: FunctionRow; tierLabel: string }) {
+  const { t } = useTranslation('tenants');
   const e = row.effective;
   switch (e.kind) {
     case 'assigned':
       return (
         <p className="mt-2 text-sm text-muted-foreground">
-          Uses {modelLabel({ token: e.token, name: e.name })}.
+          {t('effectiveAssigned', { model: modelLabel({ token: e.token, name: e.name }) })}
         </p>
       );
     case 'tier-default':
       return (
         <p className="mt-2 text-sm text-muted-foreground">
-          No model assigned — falls back to the tier default,{' '}
-          {modelLabel({ token: e.token, name: e.name })}.
+          {t('effectiveTierDefault', { model: modelLabel({ token: e.token, name: e.name }) })}
         </p>
       );
     case 'none-assignment-off-menu':
       return (
         <p className="mt-2 text-sm text-destructive">
-          Assigned {modelLabel({ token: e.token, name: e.name })}, which is no longer on this
-          tenant’s menu — it resolves to no model until you pick an available one or the model is
-          granted again.
+          {t('effectiveOffMenu', { model: modelLabel({ token: e.token, name: e.name }) })}
         </p>
       );
     case 'none-default-disabled':
       return (
         <p className="mt-2 text-sm text-destructive">
-          No model assigned. The tier’s default ({modelLabel({ token: e.token, name: e.name })}) is
-          disabled, so nothing takes the call — this function is unavailable for the tenant.
+          {t('effectiveDefaultDisabled', { model: modelLabel({ token: e.token, name: e.name }) })}
         </p>
       );
     case 'none-no-default':
       return (
-        <p className="mt-2 text-sm text-destructive">
-          No model assigned and the {tierLabel} tier marks no default — this function is unavailable
-          for the tenant. Assign a model above, or set a default on the tier.
-        </p>
+        <p className="mt-2 text-sm text-destructive">{t('effectiveNoDefault', { tierLabel })}</p>
       );
   }
 }

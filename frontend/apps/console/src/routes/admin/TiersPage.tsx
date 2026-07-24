@@ -12,6 +12,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, GripVertical } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import {
   DndContext,
   closestCenter,
@@ -54,6 +55,7 @@ import {
 import { useReload, errMessage } from '@/routes/common';
 
 export default function TiersPage() {
+  const { t } = useTranslation('tiers');
   const navigate = useNavigate();
   const { toast } = useToast();
   const [version, reload] = useReload();
@@ -90,8 +92,8 @@ export default function TiersPage() {
     setOrder(next); // optimistic
     setSaving(true);
     try {
-      await reorderTenantTiers(next.map((t) => t.token));
-      toast('Tier order saved');
+      await reorderTenantTiers(next.map((tr) => tr.token));
+      toast(t('orderSaved'));
       // No reload on success: `next` already IS the order the server committed (the
       // mutation validated and persisted exactly this token order), so refetching would
       // only open a window where a stale in-flight read could clobber a subsequent drag.
@@ -106,11 +108,11 @@ export default function TiersPage() {
 
   return (
     <PageShell
-      title="Tiers"
-      description="The packaging a tenant is sold. Drag to arrange how tiers are listed — order is presentation only."
+      title={t('title')}
+      description={t('description')}
       action={
         <Button onClick={() => navigate('/admin/tiers/new')}>
-          <Plus size={16} /> New tier
+          <Plus size={16} /> {t('newTier')}
         </Button>
       }
     >
@@ -118,31 +120,31 @@ export default function TiersPage() {
         {/* Once a list has rendered, keep showing it on a failed reload rather than
             blanking to an error — but surface the failure instead of hiding it. */}
         {error && order.length > 0 && (
-          <p className="text-sm text-destructive">Could not refresh tiers ({error}).</p>
+          <p className="text-sm text-destructive">{t('refreshError', { error })}</p>
         )}
         {loading && order.length === 0 ? (
-          <LoadingState description="Loading tiers…" />
+          <LoadingState description={t('loading')} />
         ) : error && order.length === 0 ? (
           <ErrorState description={error} />
         ) : order.length === 0 ? (
-          <EmptyState description="No tiers defined yet." />
+          <EmptyState description={t('empty')} />
         ) : (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-            <SortableContext items={order.map((t) => t.token)} strategy={verticalListSortingStrategy}>
+            <SortableContext items={order.map((tr) => tr.token)} strategy={verticalListSortingStrategy}>
               <DataTable>
                 <DataTableHead>
                   <DataTableHeaderCell className="w-8"> </DataTableHeaderCell>
-                  <DataTableHeaderCell>Tier</DataTableHeaderCell>
-                  <DataTableHeaderCell>Description</DataTableHeaderCell>
-                  <DataTableHeaderCell className="text-right">Tenants</DataTableHeaderCell>
+                  <DataTableHeaderCell>{t('colTier')}</DataTableHeaderCell>
+                  <DataTableHeaderCell>{t('common:colDescription')}</DataTableHeaderCell>
+                  <DataTableHeaderCell className="text-right">{t('colTenants')}</DataTableHeaderCell>
                 </DataTableHead>
                 <DataTableBody>
-                  {order.map((t) => (
+                  {order.map((tr) => (
                     <TierRow
-                      key={t.token}
-                      tier={t}
+                      key={tr.token}
+                      tier={tr}
                       saving={saving}
-                      onOpen={() => navigate(`/admin/tiers/${encodeURIComponent(t.token)}`)}
+                      onOpen={() => navigate(`/admin/tiers/${encodeURIComponent(tr.token)}`)}
                     />
                   ))}
                 </DataTableBody>
@@ -164,6 +166,7 @@ function TierRow({
   saving: boolean;
   onOpen: () => void;
 }) {
+  const { t } = useTranslation('tiers');
   const {
     attributes,
     listeners,
@@ -203,7 +206,7 @@ function TierRow({
           type="button"
           ref={setActivatorNodeRef}
           className="cursor-grab touch-none rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40"
-          aria-label={`Reorder ${tier.name ?? tier.token}`}
+          aria-label={t('reorderAriaLabel', { name: tier.name ?? tier.token })}
           disabled={saving}
           onClick={(e) => e.stopPropagation()}
           {...attributes}
@@ -222,9 +225,7 @@ function TierRow({
         {tier.description ?? '—'}
       </DataTableCell>
       <DataTableCell className="text-right">
-        <Badge variant="secondary">
-          {tier.tenantCount} tenant{tier.tenantCount === 1 ? '' : 's'}
-        </Badge>
+        <Badge variant="secondary">{t('tenantCount', { count: tier.tenantCount })}</Badge>
       </DataTableCell>
     </DataTableRow>
   );

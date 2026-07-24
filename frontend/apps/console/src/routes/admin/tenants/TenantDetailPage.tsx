@@ -3,6 +3,7 @@
 
 import { useNavigate, useParams } from 'react-router-dom';
 import { Ban, Power, Trash2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { CopyToken } from '@/components/ui/copy-token';
@@ -19,6 +20,7 @@ import { TenantAiModelsPanel } from '@/routes/admin/tenants/TenantAiModelsPanel'
 import { TierPill } from '@/components/tiers/TierPill';
 
 export default function TenantDetailPage() {
+  const { t } = useTranslation('tenants');
   const { token: rawToken } = useParams<{ token: string }>();
   const token = decodeURIComponent(rawToken ?? '');
   const navigate = useNavigate();
@@ -40,7 +42,7 @@ export default function TenantDetailPage() {
   if (loading && !tenants) {
     return (
       <PageShell title={token}>
-        <LoadingState description="Loading tenant…" />
+        <LoadingState description={t('loadingTenant')} />
       </PageShell>
     );
   }
@@ -54,7 +56,7 @@ export default function TenantDetailPage() {
   if (!tenant) {
     return (
       <PageShell title={token}>
-        <ErrorState description={`Tenant “${token}” not found.`} />
+        <ErrorState description={t('tenantNotFound', { token })} />
       </PageShell>
     );
   }
@@ -62,7 +64,11 @@ export default function TenantDetailPage() {
   const toggleEnabled = async () => {
     try {
       await setTenantEnabled(tenant.token, !tenant.enabled);
-      toast(`Tenant “${tenant.token}” ${tenant.enabled ? 'disabled' : 'enabled'}`);
+      toast(
+        tenant.enabled
+          ? t('tenantDisabledToast', { token: tenant.token })
+          : t('tenantEnabledToast', { token: tenant.token }),
+      );
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -72,15 +78,19 @@ export default function TenantDetailPage() {
   const remove = async () => {
     if (
       !(await confirm({
-        title: 'Delete tenant',
-        description: `Delete “${tenant.token}”? This cannot be undone.`,
-        confirmLabel: 'Delete',
+        title: t('deleteTenantTitle'),
+        description: t('deleteTenantConfirm', { token: tenant.token }),
+        confirmLabel: t('delete'),
       }))
     )
       return;
     try {
       const ok = await deleteTenant(tenant.token);
-      toast(ok ? `Tenant “${tenant.token}” deleted` : `Tenant “${tenant.token}” not found`);
+      toast(
+        ok
+          ? t('tenantDeletedToast', { token: tenant.token })
+          : t('tenantDeleteNotFoundToast', { token: tenant.token }),
+      );
       navigate('/admin/tenants');
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -104,10 +114,10 @@ export default function TenantDetailPage() {
         <>
           <Button variant="outline" size="sm" onClick={toggleEnabled}>
             {tenant.enabled ? <Ban size={14} /> : <Power size={14} />}
-            {tenant.enabled ? 'Disable' : 'Enable'}
+            {tenant.enabled ? t('disable') : t('enable')}
           </Button>
           <Button variant="destructive" size="sm" onClick={remove}>
-            <Trash2 size={14} /> Delete
+            <Trash2 size={14} /> {t('delete')}
           </Button>
         </>
       }

@@ -3,6 +3,7 @@
 
 import { useNavigate, useParams } from 'react-router-dom';
 import { Trash2, Users } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -19,6 +20,7 @@ import { TierPill } from '@/components/tiers/TierPill';
 import { CopyToken } from '@/components/ui/copy-token';
 
 export default function TierDetailPage() {
+  const { t } = useTranslation('tiers');
   const { token: rawToken } = useParams<{ token: string }>();
   const token = decodeURIComponent(rawToken ?? '');
   const navigate = useNavigate();
@@ -41,7 +43,7 @@ export default function TierDetailPage() {
   if (loading && !tiers) {
     return (
       <PageShell title={token}>
-        <LoadingState description="Loading tier…" />
+        <LoadingState description={t('loadingTier')} />
       </PageShell>
     );
   }
@@ -55,7 +57,7 @@ export default function TierDetailPage() {
   if (!tier) {
     return (
       <PageShell title={token}>
-        <ErrorState description={`Tier “${token}” not found.`} />
+        <ErrorState description={t('tierNotFound', { token })} />
       </PageShell>
     );
   }
@@ -69,15 +71,17 @@ export default function TierDetailPage() {
     // surfaced rather than assumed unreachable.
     if (
       !(await confirm({
-        title: 'Delete tier',
-        description: `Delete “${tier.token}”? This cannot be undone.`,
-        confirmLabel: 'Delete',
+        title: t('deleteTierTitle'),
+        description: t('deleteTierConfirm', { token: tier.token }),
+        confirmLabel: t('delete'),
       }))
     )
       return;
     try {
       const ok = await deleteTenantTier(tier.token);
-      toast(ok ? `Tier “${tier.token}” deleted` : `Tier “${tier.token}” not found`);
+      toast(
+        ok ? t('tierDeletedToast', { token: tier.token }) : t('tierDeleteNotFoundToast', { token: tier.token }),
+      );
       navigate('/admin/tiers');
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -95,14 +99,14 @@ export default function TierDetailPage() {
         <div className="flex items-center gap-2">
           <TierPill label={tier.token} color={tier.color} />
           <Badge variant="secondary">
-            <Users size={12} /> {tier.tenantCount} {tier.tenantCount === 1 ? 'tenant' : 'tenants'}
+            <Users size={12} /> {t('tenantCount', { count: tier.tenantCount })}
           </Badge>
         </div>
       }
       action={
         <>
           <Button variant="destructive" size="sm" onClick={remove} disabled={inUse}>
-            <Trash2 size={14} /> Delete
+            <Trash2 size={14} /> {t('delete')}
           </Button>
         </>
       }
@@ -110,10 +114,7 @@ export default function TierDetailPage() {
       <div className="space-y-4">
         {inUse && (
           <p className="text-sm text-muted-foreground">
-            {tier.tenantCount} {tier.tenantCount === 1 ? 'tenant is' : 'tenants are'} packaged at this
-            tier. Saving a change here re-prices {tier.tenantCount === 1 ? 'it' : 'them'} within a
-            minute — no restart, and no effect on any tenant given its own override. The tier cannot
-            be deleted until {tier.tenantCount === 1 ? 'it is' : 'they are'} moved elsewhere.
+            {t('tierInUseNotice', { count: tier.tenantCount })}
           </p>
         )}
         {/* Tabbed: Basic + Settings edit the tier (one atomic save), and the AI-models

@@ -15,6 +15,7 @@
 // trap, and Esc/outside-click handling match the rest of the console.
 
 import * as React from 'react';
+import { useTranslation } from 'react-i18next';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 
 import { Button } from '@/components/ui/button';
@@ -77,12 +78,17 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
     request.resolve(confirmed);
   }, []);
 
+  const { t } = useTranslation('common');
   const options = pending?.options;
+  // The confirm/cancel labels default to the shared `common` atoms so a caller
+  // that omits them (most delete flows pass only their own destructive verb, or
+  // nothing) gets a localized button rather than a hardcoded English one. A
+  // caller may still override either with its own copy.
   const {
     title,
     description,
-    confirmLabel = 'Delete',
-    cancelLabel = 'Cancel',
+    confirmLabel = t('delete'),
+    cancelLabel = t('cancel'),
     destructive = true,
   } = options ?? { title: '' };
 

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Link } from 'react-router-dom';
+import { Trans, useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
 import {
   DataTable,
@@ -12,6 +13,7 @@ import {
   DataTableCell,
 } from '@/components/ui/data-table';
 import { SETTING_SOURCE, type AdminTenant } from '@/lib/api/admin';
+import { dimensionLabel, dimensionUnit } from '@/routes/common';
 
 // One resolved setting, flattened out of a dimension's rate/burst pair so both
 // render through the same row.
@@ -30,13 +32,14 @@ type Row = {
 // granted this tenant, because those have very different consequences when the tier
 // is later re-priced.
 function SourceBadge({ source }: { source: string }) {
+  const { t } = useTranslation('tenants');
   if (source === SETTING_SOURCE.override) {
-    return <Badge variant="outline">Override</Badge>;
+    return <Badge variant="outline">{t('colOverride')}</Badge>;
   }
   if (source === SETTING_SOURCE.tier) {
-    return <Badge variant="secondary">Tier</Badge>;
+    return <Badge variant="secondary">{t('colTier')}</Badge>;
   }
-  return <Badge variant="secondary">Platform default</Badge>;
+  return <Badge variant="secondary">{t('sourcePlatformDefault')}</Badge>;
 }
 
 // num renders an optional number, with an em dash for "this level declares none" —
@@ -56,10 +59,14 @@ function num(v: number | null): string {
 // tell an operator something the platform does not do, which is the one thing a
 // screen whose whole job is to be the truth about packaging must never do.
 export function TenantSettingsPanel({ tenant }: { tenant: AdminTenant }) {
+  const { t } = useTranslation('tenants');
   const rows: Row[] = tenant.effectiveSettings.flatMap((s) => [
     {
       key: `${s.dimension.name}-rate`,
-      label: `${s.dimension.label} rate (${s.dimension.rateUnit})`,
+      label: t('common:dimensionRateLabel', {
+        label: dimensionLabel(t, s.dimension.name, s.dimension.label),
+        unit: dimensionUnit(t, s.dimension.name, s.dimension.rateUnit),
+      }),
       source: s.rate.source,
       value: s.rate.value ?? null,
       tier: s.rate.tier ?? null,
@@ -67,7 +74,9 @@ export function TenantSettingsPanel({ tenant }: { tenant: AdminTenant }) {
     },
     {
       key: `${s.dimension.name}-burst`,
-      label: `${s.dimension.label} burst`,
+      label: t('common:dimensionBurstLabel', {
+        label: dimensionLabel(t, s.dimension.name, s.dimension.label),
+      }),
       source: s.burst.source,
       value: s.burst.value ?? null,
       tier: s.burst.tier ?? null,
@@ -78,19 +87,23 @@ export function TenantSettingsPanel({ tenant }: { tenant: AdminTenant }) {
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        What this tenant is metered at, and where each limit comes from. A setting falls back from
-        its own override, to the{' '}
-        <Link to={`/admin/tiers/${encodeURIComponent(tenant.tier.token)}`} className="underline">
-          {tenant.tier.name || tenant.tier.token}
-        </Link>{' '}
-        tier, to the platform default — which is a real limit, never unlimited.
+        <Trans
+          t={t}
+          i18nKey="settingsExplanation"
+          values={{ tier: tenant.tier.name || tenant.tier.token }}
+          components={{
+            tierLink: (
+              <Link to={`/admin/tiers/${encodeURIComponent(tenant.tier.token)}`} className="underline" />
+            ),
+          }}
+        />
       </p>
       <DataTable>
         <DataTableHead>
-          <DataTableHeaderCell>Setting</DataTableHeaderCell>
-          <DataTableHeaderCell>Tier</DataTableHeaderCell>
-          <DataTableHeaderCell>Override</DataTableHeaderCell>
-          <DataTableHeaderCell>Effective</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('colSetting')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('colTier')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('colOverride')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('colEffective')}</DataTableHeaderCell>
         </DataTableHead>
         <DataTableBody>
           {rows.map((r) => (
@@ -109,7 +122,7 @@ export function TenantSettingsPanel({ tenant }: { tenant: AdminTenant }) {
                       answer; a wrong number would be worse than none, because an
                       operator would believe it. */}
                   {r.value == null ? (
-                    <span className="text-muted-foreground">Set by the service</span>
+                    <span className="text-muted-foreground">{t('setByService')}</span>
                   ) : (
                     <span className="font-medium">{r.value}</span>
                   )}

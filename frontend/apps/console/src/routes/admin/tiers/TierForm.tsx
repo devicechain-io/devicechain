@@ -3,6 +3,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { Check } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -19,7 +20,7 @@ import {
   listTierColorPalette,
   type AdminTenantTierDetail,
 } from '@/lib/api/admin';
-import { Textarea, errMessage } from '@/routes/common';
+import { Textarea, errMessage, dimensionLabel, dimensionUnit } from '@/routes/common';
 import { parseTierConfig, buildTierConfigPatch } from '@/routes/admin/tiers/tierConfig';
 
 // TierForm creates a tier (tier absent) or edits one (tier present, token fixed).
@@ -47,6 +48,7 @@ export function TierForm({
   // When provided (edit only), the form renders tabbed and this is the AI-models tab.
   aiModelsPanel?: ReactNode;
 }) {
+  const { t } = useTranslation('tiers');
   const editing = tier != null;
   const { data: dimensions, error: dimensionsError } = useQuery(listGovernanceDimensions, []);
   // The palette is fetched, not hardcoded, so the picker offers exactly the tokens the
@@ -91,7 +93,7 @@ export function TierForm({
           // Color is a full replace, like name: "" is a real value meaning "no pill".
           color,
         });
-        onDone(`Tier “${tier.token}” updated`);
+        onDone(t('tierUpdatedToast', { token: tier.token }));
       } else {
         await createTenantTier({
           token: token.trim(),
@@ -100,7 +102,7 @@ export function TierForm({
           config,
           color,
         });
-        onDone(`Tier “${token.trim()}” created`);
+        onDone(t('tierCreatedToast', { token: token.trim() }));
       }
     } catch (err) {
       setFormError(errMessage(err));
@@ -114,9 +116,9 @@ export function TierForm({
   const identityFields = (
     <>
       <FormField
-        label="Token"
+        label={t('common:colToken')}
         htmlFor="tier-token"
-        description={editing ? 'The tier id used across the platform; it cannot change.' : undefined}
+        description={editing ? t('tokenDescription') : undefined}
       >
         {editing ? (
           <Input id="tier-token" value={token} disabled />
@@ -127,30 +129,32 @@ export function TierForm({
             value={token}
             onChange={setToken}
             seed={name}
-            placeholder="platinum"
+            placeholder={t('tokenPlaceholder')}
           />
         )}
       </FormField>
-      <FormField label="Name" htmlFor="tier-name">
-        <Input id="tier-name" value={name} placeholder="Platinum" onChange={(e) => setName(e.target.value)} />
+      <FormField label={t('common:colName')} htmlFor="tier-name">
+        <Input
+          id="tier-name"
+          value={name}
+          placeholder={t('namePlaceholder')}
+          onChange={(e) => setName(e.target.value)}
+        />
       </FormField>
       <FormField
-        label="Description"
+        label={t('common:colDescription')}
         htmlFor="tier-description"
-        description="What this tier is sold as. Operator-facing only."
+        description={t('descriptionFieldHint')}
       >
         <Textarea
           id="tier-description"
           value={description}
-          placeholder="Premium packaging: the highest ceilings and the broadest set of AI models."
+          placeholder={t('descriptionPlaceholder')}
           onChange={(e) => setDescription(e.target.value)}
         />
       </FormField>
 
-      <FormField
-        label="Color"
-        description="A pill shown beside a tenant on this tier. Presentation only — it says nothing about what the tier grants."
-      >
+      <FormField label={t('colorLabel')} description={t('colorDescription')}>
         <div className="flex items-center gap-3">
           <div className="flex flex-wrap gap-1.5">
             {/* "No color" is a first-class choice, not the absence of one — a neutral
@@ -159,7 +163,7 @@ export function TierForm({
               color=""
               selected={color === ''}
               onSelect={() => setColor('')}
-              title="No color"
+              title={t('noColorLabel')}
             />
             {(palette ?? []).map((c) => (
               <ColorSwatch
@@ -173,7 +177,7 @@ export function TierForm({
           </div>
           {/* Live preview: what the pill will actually look like. It carries the token,
               so the preview shows the token, matching how it renders everywhere else. */}
-          <TierPill label={token.trim() || 'tier'} color={color} />
+          <TierPill label={token.trim() || t('tierPillFallback')} color={color} />
         </div>
       </FormField>
     </>
@@ -183,30 +187,25 @@ export function TierForm({
   const ceilingsFields = (
     <div className="space-y-3">
       <div>
-        <h3 className="text-sm font-medium">Ceilings</h3>
-        <p className="text-sm text-muted-foreground">
-          The defaults every tenant at this tier is held to. Leave a field blank for the platform
-          default — which is a real limit, never unlimited. An individual tenant can still be given
-          an override, which is recorded as an exception to this tier.
-        </p>
+        <h3 className="text-sm font-medium">{t('ceilingsHeading')}</h3>
+        <p className="text-sm text-muted-foreground">{t('ceilingsDescription')}</p>
       </div>
       {dimensionsError ? (
         // Say plainly that settings are untouched, not just that something failed.
         // An operator who saves a rename here needs to know the ceilings survived —
         // otherwise the safe behavior looks identical to a silent wipe.
         <p className="text-sm text-destructive">
-          Settings unavailable ({dimensionsError}). This tier’s existing ceilings are left
-          unchanged; name and description can still be saved.
+          {t('settingsUnavailable', { error: dimensionsError })}
         </p>
       ) : !settingsEditorReady ? (
-        <p className="text-sm text-muted-foreground">Loading settings…</p>
+        <p className="text-sm text-muted-foreground">{t('loadingSettings')}</p>
       ) : (
         <div className="grid grid-cols-2 gap-2">
           {(dimensions ?? []).map((d) => (
             <FormFieldPair
               key={d.name}
-              label={d.label}
-              unit={d.rateUnit}
+              label={dimensionLabel(t, d.name, d.label)}
+              unit={dimensionUnit(t, d.name, d.rateUnit)}
               rateField={d.rateField}
               burstField={d.burstField}
               rate={settings[d.rateField] ?? ''}
@@ -224,7 +223,7 @@ export function TierForm({
   const saveButton = (
     <div className="flex gap-2">
       <Button onClick={submit} loading={busy} disabled={busy || (!editing && !token.trim())}>
-        {editing ? 'Save changes' : 'Create tier'}
+        {editing ? t('common:saveChanges') : t('createTierButton')}
       </Button>
     </div>
   );
@@ -253,9 +252,9 @@ export function TierForm({
       {errorBanner}
       <Tabs defaultValue="basic">
         <TabsList>
-          <TabsTrigger value="basic">Basic</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
-          <TabsTrigger value="ai">AI models</TabsTrigger>
+          <TabsTrigger value="basic">{t('tabBasic')}</TabsTrigger>
+          <TabsTrigger value="settings">{t('tabSettings')}</TabsTrigger>
+          <TabsTrigger value="ai">{t('tabAiModels')}</TabsTrigger>
         </TabsList>
         <TabsContent value="basic">
           <SectionPanel>
@@ -293,12 +292,13 @@ function ColorSwatch({
   onSelect: () => void;
   title: string;
 }) {
+  const { t } = useTranslation('tiers');
   return (
     <button
       type="button"
       onClick={onSelect}
       title={title}
-      aria-label={color === '' ? 'No color' : color}
+      aria-label={color === '' ? t('noColorLabel') : color}
       aria-pressed={selected}
       className={`flex size-6 items-center justify-center rounded-full ring-1 ring-inset transition ${tierSwatch(
         color,
@@ -330,26 +330,27 @@ function FormFieldPair({
   onRate: (v: string) => void;
   onBurst: (v: string) => void;
 }) {
+  const { t } = useTranslation('tiers');
   return (
     <>
-      <FormField label={`${label} rate (${unit})`} htmlFor={`tier-${rateField}`}>
+      <FormField label={t('common:dimensionRateLabel', { label, unit })} htmlFor={`tier-${rateField}`}>
         <Input
           id={`tier-${rateField}`}
           type="number"
           min="0"
           value={rate}
-          placeholder="platform default"
+          placeholder={t('platformDefaultPlaceholder')}
           onChange={(e) => onRate(e.target.value)}
         />
       </FormField>
-      <FormField label={`${label} burst`} htmlFor={`tier-${burstField}`}>
+      <FormField label={t('common:dimensionBurstLabel', { label })} htmlFor={`tier-${burstField}`}>
         <Input
           id={`tier-${burstField}`}
           type="number"
           min="0"
           step="1"
           value={burst}
-          placeholder="platform default"
+          placeholder={t('platformDefaultPlaceholder')}
           onChange={(e) => onBurst(e.target.value)}
         />
       </FormField>
