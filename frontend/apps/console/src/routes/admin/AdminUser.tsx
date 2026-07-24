@@ -3,10 +3,12 @@
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { ChevronsUpDown, LineChart, LogOut, Building2 } from 'lucide-react';
 import { useAuth } from '@/auth/AuthProvider';
 import { useMetricsAvailable } from '@/lib/hooks/use-metrics-available';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 import { decodeToken } from '@devicechain/client';
 import { useToast } from '@/components/ui/toast';
 import { errMessage } from '@/routes/common';
@@ -38,6 +40,7 @@ function Avatar({ name }: { name: string }) {
 // action that exchanges the identity token for a tenant session (ADR-033), the
 // theme toggle, and sign-out.
 export function AdminUser() {
+  const { t } = useTranslation('userMenu');
   const { identityToken, memberships, selectTenant, logout } = useAuth();
   const { isMobile } = useSidebar();
   const { toast } = useToast();
@@ -76,23 +79,26 @@ export function AdminUser() {
               <Avatar name={email} />
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-semibold">{email}</span>
-                <span className="truncate text-xs text-muted-foreground">Superuser</span>
+                <span className="truncate text-xs text-muted-foreground">{t('superuser')}</span>
               </div>
               <ChevronsUpDown className="ml-auto size-4" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent
-            className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
+            // Fixed width so the panel is sized by its controls, not by its
+            // longest line of text (which localizes and would otherwise stretch
+            // the menu). The no-memberships sentence wraps within this width.
+            className="w-72 rounded-lg"
             side={isMobile ? 'bottom' : 'right'}
             align="end"
             sideOffset={4}
           >
             <DropdownMenuLabel className="text-xs text-muted-foreground">
-              Switch to tenant
+              {t('switchToTenant')}
             </DropdownMenuLabel>
             {memberships.length === 0 ? (
               <div className="px-2 pb-1.5 text-xs text-muted-foreground">
-                You hold no tenant memberships. Add one from Identities to enter a tenant.
+                {t('noTenantMemberships')}
               </div>
             ) : (
               memberships.map((m) => (
@@ -114,7 +120,7 @@ export function AdminUser() {
                 <DropdownMenuItem asChild className="cursor-pointer">
                   <a href="/grafana" target="_blank" rel="noopener noreferrer">
                     <LineChart size={16} />
-                    Metrics
+                    {t('metrics')}
                   </a>
                 </DropdownMenuItem>
               </>
@@ -124,10 +130,13 @@ export function AdminUser() {
             <div className="px-2 py-1.5">
               <ThemeToggle />
             </div>
+            <div className="px-2 pb-1.5">
+              <LocaleSwitcher className="w-full" />
+            </div>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={logout} className="cursor-pointer">
               <LogOut size={16} />
-              Sign out
+              {t('signOut')}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

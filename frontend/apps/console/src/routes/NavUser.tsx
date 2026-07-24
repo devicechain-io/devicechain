@@ -9,6 +9,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { useCurrentUser } from '@/auth/CurrentUserProvider';
 import { useMetricsAvailable } from '@/lib/hooks/use-metrics-available';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 import { FormDrawer } from '@/components/registry';
 import { ProfileForm } from '@/routes/ProfileForm';
 import { useToast } from '@/components/ui/toast';
@@ -72,18 +73,24 @@ export function NavUser() {
             </SidebarMenuButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent
-            className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
+            // Fixed width so the panel is sized by its controls, not by its
+            // longest line of text (which localizes and would otherwise stretch
+            // the menu). Text inside wraps within this width.
+            className="w-72 rounded-lg"
             side={isMobile ? 'bottom' : 'right'}
             align="end"
             sideOffset={4}
           >
             <div className="px-2 py-2">
-              <p className="text-sm font-medium text-foreground">{name}</p>
-              <p className="text-xs text-muted-foreground">{email}</p>
+              <p className="break-words text-sm font-medium text-foreground">{name}</p>
+              <p className="break-words text-xs text-muted-foreground">{email}</p>
             </div>
 
             <div className="px-2 py-1.5">
               <ThemeToggle />
+            </div>
+            <div className="px-2 pb-1.5">
+              <LocaleSwitcher className="w-full" />
             </div>
 
             <DropdownMenuSeparator />

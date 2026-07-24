@@ -42,6 +42,16 @@ describe('i18n config', () => {
     expect(SUPPORTED_LOCALES.map((l) => l.code)).toContain(DEFAULT_LOCALE);
   });
 
+  it('every shipped locale carries a switcher label and code badge', () => {
+    // The switcher renders the `badge` chip + `label` per locale; a blank either
+    // would show an empty pill. Endonym labels are never translated, so pin they
+    // exist here.
+    for (const l of SUPPORTED_LOCALES) {
+      expect(l.label.length).toBeGreaterThan(0);
+      expect(l.badge.length).toBeGreaterThan(0);
+    }
+  });
+
   it('never writes the user-choice key on a plain language change (caches: [])', async () => {
     // Directly pins detection.caches === []: only the switcher (setUserLocale)
     // may write LOCALE_STORAGE_KEY, so its presence stays an unambiguous "user

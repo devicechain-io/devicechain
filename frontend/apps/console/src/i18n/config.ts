@@ -40,6 +40,15 @@ export interface Locale {
   code: string;
   /** The language's own endonym, shown in the switcher — never itself translated. */
   label: string;
+  /**
+   * A short language-code badge shown as a chip before the endonym in the switcher
+   * (e.g. "EN", "ES") — the quick visual anchor, chosen over a flag on purpose: a
+   * flag denotes a country, not a language (Spanish spans many flags), and a code
+   * chip stays unambiguous and legible as the locale list grows past a handful.
+   * Usually the primary subtag uppercased; set it explicitly so an ambiguous split
+   * (pt-BR vs pt-PT) can be disambiguated.
+   */
+  badge: string;
 }
 
 // The locales the console actually ships. Adding one is a one-line change here
@@ -51,8 +60,8 @@ export interface Locale {
 // so browser detection can never resolve to a locale whose catalog is missing
 // (which would render raw keys to the user).
 export const SUPPORTED_LOCALES: Locale[] = [
-  { code: 'en', label: 'English' },
-  { code: 'es', label: 'Español' },
+  { code: 'en', label: 'English', badge: 'EN' },
+  { code: 'es', label: 'Español', badge: 'ES' },
 ];
 
 export const DEFAULT_LOCALE = 'en';

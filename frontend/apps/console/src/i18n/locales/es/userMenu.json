@@ -3,5 +3,8 @@
   "editProfileDescription": "Actualiza tu nombre visible.",
   "adminConsole": "Consola de administración",
   "metrics": "Métricas",
-  "signOut": "Cerrar sesión"
+  "signOut": "Cerrar sesión",
+  "superuser": "Superusuario",
+  "switchToTenant": "Cambiar de inquilino",
+  "noTenantMemberships": "No tienes membresías de inquilino. Agrega una desde Identidades para acceder a un inquilino."
 }
