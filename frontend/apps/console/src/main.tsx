@@ -9,6 +9,9 @@ import { ToastProvider } from '@/components/ui/toast';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { AuthProvider } from '@/auth/AuthProvider';
 import App from './App';
+// Initializes the shared i18next instance (ADR-066) as a side effect, before any
+// component renders — react-i18next reads it through context/useTranslation.
+import '@/i18n/config';
 import '@fontsource-variable/inter';
 import './index.css';
 

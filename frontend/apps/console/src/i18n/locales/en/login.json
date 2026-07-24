@@ -1,0 +1,12 @@
+{
+  "chooseTenantSubtitle": "Choose a tenant to continue",
+  "emailLabel": "Email",
+  "enterTenantFailed": "Could not enter that tenant.",
+  "invalidCredentials": "Invalid email or password.",
+  "noTenantAccess": "This account has no tenant access yet. Ask an administrator to add you to a tenant.",
+  "passwordLabel": "Password",
+  "serverUnreachable": "Could not reach the server. Check that the API is running.",
+  "sessionExpired": "Your session expired. Please sign in again.",
+  "signIn": "Sign in",
+  "signInSubtitle": "Sign in to the management console"
+}

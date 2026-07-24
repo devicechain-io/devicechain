@@ -3,11 +3,13 @@
 
 import { useState, type FormEvent } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth, consumeSessionExpired } from '@/auth/AuthProvider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { Logo } from '@/components/brand/Logo';
+import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { GraphQLRequestError } from '@devicechain/client';
 import type { IdentityAuth } from '@/lib/api/user-management';
@@ -15,8 +17,14 @@ import type { IdentityAuth } from '@/lib/api/user-management';
 // Login is two-step (ADR-033): authenticate the email/password to get an identity
 // token + the tenants the identity may act in, then select a tenant to start the
 // session. A single membership is auto-selected so the common case stays one step.
+//
+// This is the reference i18n-converted screen (ADR-066): every user-facing string
+// flows through the `login` catalog (frontend/apps/console/src/i18n/locales/en),
+// each sentence is one key with no fragment concatenation, and cross-screen copy
+// (Back) is drawn from the `common` namespace. Copy the pattern for the next screen.
 export default function LoginPage() {
   const { isAuthenticated, login, selectTenant } = useAuth();
+  const { t } = useTranslation('login');
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,11 +40,7 @@ export default function LoginPage() {
   }
 
   const failure = (err: unknown, badCreds: string) =>
-    setError(
-      err instanceof GraphQLRequestError
-        ? badCreds
-        : 'Could not reach the server. Check that the API is running.',
-    );
+    setError(err instanceof GraphQLRequestError ? badCreds : t('serverUnreachable'));
 
   const enterTenant = async (auth: IdentityAuth, tenant: string) => {
     await selectTenant(auth.identityToken, tenant);
@@ -59,7 +63,7 @@ export default function LoginPage() {
       if (auth.memberships.length === 0) {
         // No tenant to enter yet. The admin console is where tenants get created
         // and memberships assigned (ADR-033 phase 4).
-        setError('This account has no tenant access yet. Ask an administrator to add you to a tenant.');
+        setError(t('noTenantAccess'));
         setSubmitting(false);
         return;
       }
@@ -72,7 +76,7 @@ export default function LoginPage() {
       setSubmitting(false);
     } catch (err) {
       // The backend deliberately doesn't distinguish bad-email vs bad-password.
-      failure(err, 'Invalid email or password.');
+      failure(err, t('invalidCredentials'));
       setSubmitting(false);
     }
   };
@@ -84,7 +88,7 @@ export default function LoginPage() {
     try {
       await enterTenant(identity, tenant);
     } catch (err) {
-      failure(err, 'Could not enter that tenant.');
+      failure(err, t('enterTenantFailed'));
       setSubmitting(false);
     }
   };
@@ -97,13 +101,13 @@ export default function LoginPage() {
               both light and dark backgrounds; "Chain" and the cube stay brand. */}
           <Logo deviceColor="currentColor" className="mb-4 h-16 w-auto" />
           <p className="text-sm text-muted-foreground">
-            {identity ? 'Choose a tenant to continue' : 'Sign in to the management console'}
+            {identity ? t('chooseTenantSubtitle') : t('signInSubtitle')}
           </p>
         </div>
 
         {expired && !identity && (
           <p className="mb-4 rounded-md border border-border bg-muted/50 px-3 py-2 text-center text-sm text-muted-foreground">
-            Your session expired. Please sign in again.
+            {t('sessionExpired')}
           </p>
         )}
 
@@ -130,7 +134,7 @@ export default function LoginPage() {
                 setError(null);
               }}
             >
-              Back
+              {t('common:back')}
             </Button>
           </div>
         ) : (
@@ -140,7 +144,7 @@ export default function LoginPage() {
           >
             {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
-            <FormField label="Email" htmlFor="email">
+            <FormField label={t('emailLabel')} htmlFor="email">
               <Input
                 id="email"
                 type="email"
@@ -152,7 +156,7 @@ export default function LoginPage() {
               />
             </FormField>
 
-            <FormField label="Password" htmlFor="password">
+            <FormField label={t('passwordLabel')} htmlFor="password">
               <Input
                 id="password"
                 type="password"
@@ -164,10 +168,14 @@ export default function LoginPage() {
             </FormField>
 
             <Button type="submit" className="w-full" loading={submitting} disabled={submitting}>
-              Sign in
+              {t('signIn')}
             </Button>
           </form>
         )}
+
+        <div className="mt-6 flex justify-center">
+          <LocaleSwitcher />
+        </div>
       </div>
     </div>
   );
