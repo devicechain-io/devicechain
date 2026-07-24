@@ -3,6 +3,7 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Button } from '@/components/ui/button';
@@ -26,6 +27,7 @@ function toOptions(items: { token: string; name?: string | null }[] | null | und
 }
 
 export default function NewIdentityPage() {
+  const { t } = useTranslation('identities');
   const navigate = useNavigate();
   const { toast } = useToast();
   const { data: systemRoles } = useQuery(() => listRoles('system'), []);
@@ -52,7 +54,7 @@ export default function NewIdentityPage() {
         enabled: true,
         systemRoles: roles,
       });
-      toast(`Identity “${email.trim()}” created`);
+      toast(t('identityCreatedToast', { email: email.trim() }));
       navigate(`/admin/identities/${encodeURIComponent(normalized)}`);
     } catch (err) {
       setFormError(errMessage(err));
@@ -62,48 +64,41 @@ export default function NewIdentityPage() {
   };
 
   return (
-    <PageShell
-      title="New identity"
-      description="An email-keyed global principal. Add tenant memberships after creating it."
-    >
+    <PageShell title={t('newIdentity')} description={t('newIdentityDescription')}>
       <SectionPanel>
         <div className="space-y-4">
           {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
           <div className="grid gap-4 sm:grid-cols-2">
-            <FormField label="Email" htmlFor="i-email">
+            <FormField label={t('colEmail')} htmlFor="i-email">
               <Input id="i-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </FormField>
-            <FormField label="Password" htmlFor="i-pw">
+            <FormField label={t('passwordLabel')} htmlFor="i-pw">
               <Input id="i-pw" type="password" value={password} onChange={(e) => setPasswordValue(e.target.value)} />
             </FormField>
-            <FormField label="First name" htmlFor="i-fn">
+            <FormField label={t('firstNameLabel')} htmlFor="i-fn">
               <Input id="i-fn" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
             </FormField>
-            <FormField label="Last name" htmlFor="i-ln">
+            <FormField label={t('lastNameLabel')} htmlFor="i-ln">
               <Input id="i-ln" value={lastName} onChange={(e) => setLastName(e.target.value)} />
             </FormField>
           </div>
-          <FormField
-            label="System roles"
-            htmlFor="i-sys"
-            description="System roles gate the admin API (e.g. superuser). Leave empty for none."
-          >
+          <FormField label={t('systemRoles')} htmlFor="i-sys" description={t('systemRolesFormDescription')}>
             <MultiSelect
               id="i-sys"
               options={systemRoleOptions}
               value={roles}
               onChange={setRoles}
-              placeholder="Select system roles…"
-              searchPlaceholder="Filter roles…"
-              emptyMessage="No system roles defined."
+              placeholder={t('selectSystemRolesPlaceholder')}
+              searchPlaceholder={t('filterRolesPlaceholder')}
+              emptyMessage={t('noSystemRolesMessage')}
             />
           </FormField>
           <div className="flex gap-2">
             <Button onClick={submit} loading={busy} disabled={busy || !email.trim() || !password}>
-              Create identity
+              {t('createIdentityButton')}
             </Button>
             <Button variant="ghost" onClick={() => navigate('/admin/identities')} disabled={busy}>
-              Cancel
+              {t('common:cancel')}
             </Button>
           </div>
         </div>

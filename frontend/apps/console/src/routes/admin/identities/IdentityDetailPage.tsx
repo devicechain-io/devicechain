@@ -4,6 +4,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Ban, Power, Trash2, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { Button } from '@/components/ui/button';
@@ -47,6 +48,7 @@ function toOptions(items: { token: string; name?: string | null }[] | null | und
 }
 
 export default function IdentityDetailPage() {
+  const { t } = useTranslation('identities');
   const { email: rawEmail } = useParams<{ email: string }>();
   const email = decodeURIComponent(rawEmail ?? '');
   const navigate = useNavigate();
@@ -79,7 +81,7 @@ export default function IdentityDetailPage() {
   if (loading) {
     return (
       <PageShell title={email}>
-        <LoadingState description="Loading identity…" />
+        <LoadingState description={t('loadingIdentity')} />
       </PageShell>
     );
   }
@@ -93,7 +95,7 @@ export default function IdentityDetailPage() {
   if (!identity) {
     return (
       <PageShell title={email}>
-        <ErrorState description={`Identity “${email}” not found.`} />
+        <ErrorState description={t('notFound', { email })} />
       </PageShell>
     );
   }
@@ -101,7 +103,11 @@ export default function IdentityDetailPage() {
   const toggleEnabled = async () => {
     try {
       await setIdentityEnabled(identity.email, !identity.enabled);
-      toast(`Identity “${identity.email}” ${identity.enabled ? 'disabled' : 'enabled'}`);
+      toast(
+        identity.enabled
+          ? t('identityDisabledToast', { email: identity.email })
+          : t('identityEnabledToast', { email: identity.email }),
+      );
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -111,15 +117,15 @@ export default function IdentityDetailPage() {
   const remove = async () => {
     if (
       !(await confirm({
-        title: 'Delete identity',
-        description: `Delete “${identity.email}” and all its memberships? This cannot be undone.`,
-        confirmLabel: 'Delete',
+        title: t('deleteIdentityTitle'),
+        description: t('deleteIdentityConfirm', { email: identity.email }),
+        confirmLabel: t('common:delete'),
       }))
     )
       return;
     try {
       await deleteIdentity(identity.email);
-      toast(`Identity “${identity.email}” deleted`);
+      toast(t('identityDeletedToast', { email: identity.email }));
       navigate('/admin/identities');
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -140,10 +146,10 @@ export default function IdentityDetailPage() {
         <>
           <Button variant="outline" size="sm" onClick={toggleEnabled}>
             {identity.enabled ? <Ban size={14} /> : <Power size={14} />}
-            {identity.enabled ? 'Disable' : 'Enable'}
+            {identity.enabled ? t('disable') : t('enable')}
           </Button>
           <Button variant="destructive" size="sm" onClick={remove}>
-            <Trash2 size={14} /> Delete
+            <Trash2 size={14} /> {t('common:delete')}
           </Button>
         </>
       }
@@ -175,6 +181,7 @@ function IdentityDetail({
   tenantRoleOptions: ComboboxOption[];
   onChanged: () => void;
 }) {
+  const { t } = useTranslation('identities');
   const { toast } = useToast();
   const [sysRoles, setSysRoles] = useState<string[]>(identity.systemRoles);
   const [newPassword, setNewPassword] = useState('');
@@ -195,33 +202,33 @@ function IdentityDetail({
     <div className="space-y-6">
       {memberError && <ErrorBanner message={memberError} onDismiss={() => setMemberError(null)} />}
 
-      <SectionPanel title="Access">
+      <SectionPanel title={t('accessSectionTitle')}>
         <div className="grid gap-4 sm:grid-cols-2">
-          <FormField label="System roles" description="Roles that gate the admin API.">
+          <FormField label={t('systemRoles')} description={t('systemRolesDescription')}>
             <div className="flex gap-2">
               <MultiSelect
                 className="flex-1"
                 options={systemRoleOptions}
                 value={sysRoles}
                 onChange={setSysRoles}
-                placeholder="Select system roles…"
-                searchPlaceholder="Filter roles…"
-                emptyMessage="No system roles defined."
+                placeholder={t('selectSystemRolesPlaceholder')}
+                searchPlaceholder={t('filterRolesPlaceholder')}
+                emptyMessage={t('noSystemRolesMessage')}
               />
               <Button
                 variant="outline"
-                onClick={() => run(() => setSystemRoles(identity.email, sysRoles), 'System roles updated')}
+                onClick={() => run(() => setSystemRoles(identity.email, sysRoles), t('systemRolesUpdatedToast'))}
               >
-                Save
+                {t('save')}
               </Button>
             </div>
           </FormField>
-          <FormField label="Set password" description="Replaces the identity's password.">
+          <FormField label={t('setPasswordLabel')} description={t('setPasswordDescription')}>
             <div className="flex gap-2">
               <Input
                 type="password"
                 value={newPassword}
-                placeholder="New password"
+                placeholder={t('newPasswordPlaceholder')}
                 onChange={(e) => setNewPassword(e.target.value)}
               />
               <Button
@@ -231,19 +238,19 @@ function IdentityDetail({
                   run(async () => {
                     await setPassword(identity.email, newPassword);
                     setNewPassword('');
-                  }, 'Password updated')
+                  }, t('passwordUpdatedToast'))
                 }
               >
-                Set
+                {t('setButton')}
               </Button>
             </div>
           </FormField>
         </div>
       </SectionPanel>
 
-      <SectionPanel title="Memberships">
+      <SectionPanel title={t('membershipsSectionTitle')}>
         {identity.memberships.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No tenant memberships.</p>
+          <p className="text-sm text-muted-foreground">{t('noMemberships')}</p>
         ) : (
           <div className="space-y-2">
             {identity.memberships.map((m) => (
@@ -280,6 +287,7 @@ function MembershipRow({
   roleOptions: ComboboxOption[];
   onChanged: () => void;
 }) {
+  const { t } = useTranslation('identities');
   const { toast } = useToast();
   const [roles, setRoles] = useState<string[]>(membership.roles);
 
@@ -302,16 +310,16 @@ function MembershipRow({
         options={roleOptions}
         value={roles}
         onChange={setRoles}
-        placeholder="Select roles…"
-        searchPlaceholder="Filter roles…"
-        emptyMessage="No tenant roles defined."
+        placeholder={t('selectRolesPlaceholder')}
+        searchPlaceholder={t('filterRolesPlaceholder')}
+        emptyMessage={t('noTenantRolesMessage')}
       />
       <Button
         variant="outline"
         size="sm"
-        onClick={() => run(() => setMembershipRoles(email, membership.tenant, roles), 'Roles updated')}
+        onClick={() => run(() => setMembershipRoles(email, membership.tenant, roles), t('rolesUpdatedToast'))}
       >
-        Save roles
+        {t('saveRolesButton')}
       </Button>
       <Button
         variant="ghost"
@@ -319,18 +327,18 @@ function MembershipRow({
         onClick={() =>
           run(
             () => setMembershipEnabled(email, membership.tenant, !membership.enabled),
-            `Membership ${membership.enabled ? 'disabled' : 'enabled'}`,
+            membership.enabled ? t('membershipDisabledToast') : t('membershipEnabledToast'),
           )
         }
       >
-        {membership.enabled ? 'Disable' : 'Enable'}
+        {membership.enabled ? t('disable') : t('enable')}
       </Button>
       <Button
         variant="ghost"
         size="sm"
-        onClick={() => run(() => removeMembership(email, membership.tenant), 'Membership removed')}
+        onClick={() => run(() => removeMembership(email, membership.tenant), t('membershipRemovedToast'))}
       >
-        <X size={14} /> Remove
+        <X size={14} /> {t('removeButton')}
       </Button>
     </div>
   );
@@ -349,6 +357,7 @@ function AddMembershipRow({
   existingTenants: string[];
   onChanged: () => void;
 }) {
+  const { t } = useTranslation('identities');
   const { toast } = useToast();
   const [tenant, setTenant] = useState('');
   const [roles, setRoles] = useState<string[]>([]);
@@ -364,7 +373,7 @@ function AddMembershipRow({
     setBusy(true);
     try {
       await addMembership(email, tenant, roles);
-      toast(`Added to “${tenant}”`);
+      toast(t('addedToTenantToast', { tenant }));
       setTenant('');
       setRoles([]);
       onChanged();
@@ -377,30 +386,30 @@ function AddMembershipRow({
 
   return (
     <div className="mt-3 flex flex-wrap items-end gap-2">
-      <FormField label="Add to tenant">
+      <FormField label={t('addToTenantLabel')}>
         <Combobox
           className="w-56"
           options={available}
           value={tenant}
           onChange={setTenant}
-          placeholder="Select a tenant…"
-          searchPlaceholder="Filter tenants…"
-          emptyMessage="No tenants available."
+          placeholder={t('selectTenantPlaceholder')}
+          searchPlaceholder={t('filterTenantsPlaceholder')}
+          emptyMessage={t('noTenantsAvailableMessage')}
         />
       </FormField>
-      <FormField label="Roles">
+      <FormField label={t('rolesLabel')}>
         <MultiSelect
           className="w-64"
           options={roleOptions}
           value={roles}
           onChange={setRoles}
-          placeholder="Select roles…"
-          searchPlaceholder="Filter roles…"
-          emptyMessage="No tenant roles defined."
+          placeholder={t('selectRolesPlaceholder')}
+          searchPlaceholder={t('filterRolesPlaceholder')}
+          emptyMessage={t('noTenantRolesMessage')}
         />
       </FormField>
       <Button variant="outline" loading={busy} disabled={busy || !tenant} onClick={add}>
-        Add membership
+        {t('addMembershipButton')}
       </Button>
     </div>
   );
