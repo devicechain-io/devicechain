@@ -104,9 +104,14 @@ spec:
   template:
     metadata:
       annotations:
-        {{/* E8: roll pods deterministically when config changes. */}}
+        {{/* E8: roll pods deterministically when config changes. The extra-secrets
+        hash covers a value-only rotation of a projected Secret (e.g. a LwM2M device
+        PSK): that changes neither the instance config nor the per-area config, so
+        without it an in-place rotation would leave the running pod on its old key
+        (secretKeyRef env resolves at container start). A hash, never the value. */}}
         checksum/instance-secret: {{ $root.Values.instance.config | toJson | sha256sum }}
         checksum/microservice-config: {{ include "devicechain.microserviceConfig" $root | sha256sum }}
+        checksum/extra-secrets: {{ $root.Values.extraSecrets | default list | toJson | sha256sum }}
       labels:
         {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 8 }}
     spec:
