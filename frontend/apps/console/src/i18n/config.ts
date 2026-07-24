@@ -30,6 +30,8 @@ import enBranding from './locales/en/branding.json';
 import enBrowse from './locales/en/browse.json';
 import enFacets from './locales/en/facets.json';
 import enAudit from './locales/en/audit.json';
+import enIdentities from './locales/en/identities.json';
+import enRoles from './locales/en/roles.json';
 
 import esCommon from './locales/es/common.json';
 import esLogin from './locales/es/login.json';
@@ -46,6 +48,8 @@ import esBranding from './locales/es/branding.json';
 import esBrowse from './locales/es/browse.json';
 import esFacets from './locales/es/facets.json';
 import esAudit from './locales/es/audit.json';
+import esIdentities from './locales/es/identities.json';
+import esRoles from './locales/es/roles.json';
 
 export interface Locale {
   /** BCP-47 code; also the ./locales/<code>/ directory name and the i18next lng. */
@@ -107,6 +111,8 @@ export const NAMESPACES = [
   'browse',
   'facets',
   'audit',
+  'identities',
+  'roles',
 ] as const;
 
 // Catalogs are bundled statically: the corpus is still small enough that a
@@ -130,6 +136,8 @@ const resources = {
     browse: enBrowse,
     facets: enFacets,
     audit: enAudit,
+    identities: enIdentities,
+    roles: enRoles,
   },
   es: {
     common: esCommon,
@@ -147,6 +155,8 @@ const resources = {
     browse: esBrowse,
     facets: esFacets,
     audit: esAudit,
+    identities: esIdentities,
+    roles: esRoles,
   },
 } as const;
 

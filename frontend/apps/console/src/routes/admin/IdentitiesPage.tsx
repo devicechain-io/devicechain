@@ -3,6 +3,7 @@
 
 import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -22,34 +23,35 @@ import { listIdentities } from '@/lib/api/admin';
 import { StatusBadge, rowLinkProps } from '@/routes/common';
 
 export default function IdentitiesPage() {
+  const { t } = useTranslation('identities');
   const navigate = useNavigate();
   const { data: identities, loading, error } = useQuery(listIdentities, []);
 
   return (
     <PageShell
-      title="Identities"
-      description="The global identity directory. A person is one identity that can hold memberships in many tenants."
+      title={t('title')}
+      description={t('description')}
       action={
         <Button onClick={() => navigate('/admin/identities/new')}>
-          <Plus size={16} /> New identity
+          <Plus size={16} /> {t('newIdentity')}
         </Button>
       }
     >
       <div className="space-y-6">
         {loading ? (
-          <LoadingState description="Loading identities…" />
+          <LoadingState description={t('loading')} />
         ) : error ? (
           <ErrorState description={error} />
         ) : !identities || identities.length === 0 ? (
-          <EmptyState description="No identities yet. Create the first one." />
+          <EmptyState description={t('empty')} />
         ) : (
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>Email</DataTableHeaderCell>
-              <DataTableHeaderCell>Name</DataTableHeaderCell>
-              <DataTableHeaderCell>Status</DataTableHeaderCell>
-              <DataTableHeaderCell>System roles</DataTableHeaderCell>
-              <DataTableHeaderCell>Tenants</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colEmail')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colName')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colStatus')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('systemRoles')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colTenants')}</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
               {identities.map((i) => (

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -15,10 +16,24 @@ import { errMessage } from '@/routes/common';
 
 type Scope = 'system' | 'tenant';
 
+// SCOPE_LABEL_KEY maps the role scope enum to its localized human-readable label.
+// The raw values are also the wire tokens sent on create/update, so only the
+// RENDERED text goes through the map — the values themselves are never translated.
+const SCOPE_LABEL_KEY: Record<Scope, string> = {
+  system: 'scopeSystem',
+  tenant: 'scopeTenant',
+};
+
+// The scope picker's options, in display order. Hoisted out of the JSX below so
+// the i18next lint rule (jsx-only mode) doesn't mistake the enum values for
+// user-facing text — the rendered label for each comes from SCOPE_LABEL_KEY.
+const SCOPES: Scope[] = ['tenant', 'system'];
+
 // RoleForm creates a role (role absent) or edits one (role present, with its
 // scope + token fixed). It loads the authority vocabulary itself so both the new
 // and detail pages can render it without duplicating that wiring.
 export function RoleForm({ role, onDone }: { role?: AdminRole; onDone: (message: string) => void }) {
+  const { t } = useTranslation('roles');
   const editing = role != null;
   const [scope, setScope] = useState<Scope>((role?.scope as Scope) ?? 'tenant');
 
@@ -34,10 +49,14 @@ export function RoleForm({ role, onDone }: { role?: AdminRole; onDone: (message:
     () =>
       (authorityVocab ?? []).map((a) =>
         a === '*'
-          ? { value: '*', label: '*', description: `Full access within this ${scope} role's scope` }
+          ? {
+              value: '*',
+              label: '*',
+              description: t('fullAccessDescription', { scope: t(SCOPE_LABEL_KEY[scope]) }),
+            }
           : { value: a },
       ),
-    [authorityVocab, scope],
+    [authorityVocab, scope, t],
   );
   const [token, setToken] = useState(role?.token ?? '');
   const [name, setName] = useState(role?.name ?? '');
@@ -56,7 +75,7 @@ export function RoleForm({ role, onDone }: { role?: AdminRole; onDone: (message:
           description: description.trim() || undefined,
           authorities,
         });
-        onDone(`Role “${role.token}” updated`);
+        onDone(t('roleUpdatedToast', { token: role.token }));
       } else {
         await createRole({
           scope,
@@ -65,7 +84,7 @@ export function RoleForm({ role, onDone }: { role?: AdminRole; onDone: (message:
           description: description.trim() || undefined,
           authorities,
         });
-        onDone(`Role “${token.trim()}” created`);
+        onDone(t('roleCreatedToast', { token: token.trim() }));
       }
     } catch (err) {
       setFormError(errMessage(err));
@@ -77,9 +96,9 @@ export function RoleForm({ role, onDone }: { role?: AdminRole; onDone: (message:
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <FormField label="Scope">
+      <FormField label={t('scopeLabel')}>
         <div className="flex gap-2">
-          {(['tenant', 'system'] as Scope[]).map((s) => (
+          {SCOPES.map((s) => (
             <Button
               key={s}
               type="button"
@@ -94,12 +113,12 @@ export function RoleForm({ role, onDone }: { role?: AdminRole; onDone: (message:
                 setAuthorities((prev) => prev.filter((a) => a === '*'));
               }}
             >
-              {s}
+              {t(SCOPE_LABEL_KEY[s])}
             </Button>
           ))}
         </div>
       </FormField>
-      <FormField label="Token" htmlFor="r-token">
+      <FormField label={t('common:colToken')} htmlFor="r-token">
         {editing ? (
           <Input id="r-token" value={token} disabled />
         ) : (
@@ -109,33 +128,30 @@ export function RoleForm({ role, onDone }: { role?: AdminRole; onDone: (message:
             value={token}
             onChange={setToken}
             seed={name}
-            placeholder="operator"
+            placeholder={t('tokenPlaceholder')}
           />
         )}
       </FormField>
-      <FormField label="Name" htmlFor="r-name">
-        <Input id="r-name" value={name} placeholder="Operator" onChange={(e) => setName(e.target.value)} />
+      <FormField label={t('common:colName')} htmlFor="r-name">
+        <Input id="r-name" value={name} placeholder={t('namePlaceholder')} onChange={(e) => setName(e.target.value)} />
       </FormField>
-      <FormField label="Description" htmlFor="r-desc">
+      <FormField label={t('common:colDescription')} htmlFor="r-desc">
         <Input id="r-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
       </FormField>
-      <FormField
-        label="Authorities"
-        htmlFor="r-auths"
-        description='The capabilities this role grants. Use "*" for full access.'
-      >
+      <FormField label={t('authoritiesLabel')} htmlFor="r-auths" description={t('authoritiesDescription')}>
         <MultiSelect
           id="r-auths"
           options={authorityOptions}
           value={authorities}
           onChange={setAuthorities}
-          placeholder="Select authorities…"
-          searchPlaceholder="Filter authorities…"
+          placeholder={t('selectAuthoritiesPlaceholder')}
+          searchPlaceholder={t('filterAuthoritiesPlaceholder')}
+          emptyMessage={t('noAuthoritiesMessage')}
         />
       </FormField>
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy || (!editing && !token.trim())}>
-          {editing ? 'Save changes' : 'Create role'}
+          {editing ? t('common:saveChanges') : t('createRoleButton')}
         </Button>
       </div>
     </div>
