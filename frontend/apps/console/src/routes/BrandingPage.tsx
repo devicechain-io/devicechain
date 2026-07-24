@@ -13,6 +13,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Upload, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -45,6 +46,10 @@ const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 // URL field is left blank for one (it is an upload, not a pasted link).
 const PROXY_LOGO_PREFIX = '/branding/logo';
 
+// The authority name shown in the permission-denied message, in a font-mono span —
+// a technical identifier, never localized (mirrors how a token/id is displayed).
+const BRANDING_WRITE_AUTHORITY = 'branding:write';
+
 // The theme form's per-field state — strings so "" cleanly represents "inherit".
 interface FormState {
   title: string;
@@ -67,16 +72,18 @@ function initialState(o: TenantBranding | null): FormState {
 }
 
 export default function BrandingPage() {
+  const { t } = useTranslation('branding');
   const { claims } = useAuth();
   const canWrite = hasAuthority(claims, 'branding:write');
   const tenant = useCurrentTenant();
 
   if (!canWrite) {
     return (
-      <PageShell title="Branding" description="Tenant white-labeling">
+      <PageShell title={t('title')} description={t('description')}>
         <p className="text-sm text-muted-foreground">
-          You don’t have permission to edit this tenant’s branding. Ask a tenant administrator for the
-          <span className="font-mono"> branding:write </span> authority.
+          {t('noPermissionPrefix')}
+          <span className="font-mono"> {BRANDING_WRITE_AUTHORITY} </span>
+          {t('noPermissionSuffix')}
         </p>
       </PageShell>
     );
@@ -92,8 +99,8 @@ export default function BrandingPage() {
   const override = tenant?.brandingOverride ?? null;
   if (!override) {
     return (
-      <PageShell title="Branding" description="Tenant white-labeling">
-        <LoadingState description="Loading branding…" />
+      <PageShell title={t('title')} description={t('description')}>
+        <LoadingState description={t('loadingBranding')} />
       </PageShell>
     );
   }
@@ -101,6 +108,7 @@ export default function BrandingPage() {
 }
 
 function BrandingEditor({ override }: { override: TenantBranding }) {
+  const { t } = useTranslation('branding');
   const applyTenant = useSetCurrentTenant();
   const tenant = useCurrentTenant();
   const toast = useToast();
@@ -134,6 +142,16 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
     setDirty(true);
     setForm((f) => ({ ...f, [k]: v }));
   };
+  // Bound per-field setters — each closes over a literal FormState key OUTSIDE any
+  // JSX attribute, so the key itself is a plain identifier by the time it reaches
+  // JSX (a JSX-attribute call argument here would trip the i18n literal-string lint,
+  // even though these keys are technical, never user-facing text).
+  const setTitleField = (v: string) => set('title', v);
+  const setPrimaryField = (v: string) => set('primary', v);
+  const setAccentField = (v: string) => set('accent', v);
+  const setBackgroundField = (v: string) => set('background', v);
+  const setForegroundField = (v: string) => set('foreground', v);
+  const setLogoMaxHeightField = (v: string) => set('logoMaxHeight', v);
 
   // The live resolved logo (updated by the logo actions via the tenant cache), used
   // for the preview. Whether THIS tenant set its own logo — which gates the Remove
@@ -160,7 +178,7 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
   const submit = async () => {
     setFormError(null);
     if (badHex.length > 0) {
-      setFormError(`Enter a 6-digit hex color (like #1f9fb7) for: ${badHex.join(', ')}`);
+      setFormError(t('badHexError', { fields: badHex.join(', ') }));
       return;
     }
     const height = form.logoMaxHeight.trim();
@@ -178,7 +196,7 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
       applyTenant(updated); // write-through cache → shell re-themes immediately
       setForm(initialState(updated.brandingOverride));
       setDirty(false);
-      toast.toast('Branding saved');
+      toast.toast(t('brandingSaved'));
     } catch (err) {
       setFormError(errMessage(err));
     } finally {
@@ -191,13 +209,11 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
   const onUpload = async (file: File) => {
     setFormError(null);
     if (!UPLOAD_LOGO_MIME.includes(file.type)) {
-      setFormError('Uploaded logos must be PNG, JPEG, or WebP. For SVG, host it and paste an https URL.');
+      setFormError(t('uploadedLogoMimeError'));
       return;
     }
     if (file.size > MAX_UPLOAD_LOGO_BYTES) {
-      setFormError(
-        `Logo must be at most 1 MB (this file is ${Math.round(file.size / 1024)} KB).`,
-      );
+      setFormError(t('logoTooLarge', { sizeKb: Math.round(file.size / 1024) }));
       return;
     }
     setLogoBusy(true);
@@ -217,7 +233,7 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
       /* logo is persisted; the shell will pick it up on the next refresh */
     }
     setLogoUrl('');
-    toast.toast('Logo uploaded');
+    toast.toast(t('logoUploaded'));
     setLogoBusy(false);
   };
 
@@ -227,13 +243,13 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
     // accidental "Apply URL" with an empty field can't silently delete an uploaded
     // logo (its blob is GC'd server-side and unrecoverable).
     if (logoUrl.trim() === '') {
-      setFormError('Enter an https URL, or use “Remove logo” to clear it.');
+      setFormError(t('logoUrlRequired'));
       return;
     }
     setLogoBusy(true);
     try {
       applyTenant(await setTenantLogo(logoUrl.trim()));
-      toast.toast('Logo updated');
+      toast.toast(t('logoUpdated'));
     } catch (err) {
       setFormError(errMessage(err));
     } finally {
@@ -247,7 +263,7 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
     try {
       applyTenant(await setTenantLogo(null));
       setLogoUrl('');
-      toast.toast('Logo removed');
+      toast.toast(t('logoRemoved'));
     } catch (err) {
       setFormError(errMessage(err));
     } finally {
@@ -257,11 +273,11 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
 
   return (
     <PageShell
-      title="Branding"
-      description="White-label this tenant: title, colors, and logo. Leave a field blank to inherit the default."
+      title={t('title')}
+      description={t('editorDescription')}
       action={
         <Button onClick={submit} loading={busy} disabled={busy}>
-          Save branding
+          {t('saveBranding')}
         </Button>
       }
     >
@@ -269,60 +285,58 @@ function BrandingEditor({ override }: { override: TenantBranding }) {
         <div className="space-y-6">
           {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
 
-          <FormField label="App title" htmlFor="b-title" description="Shown in the browser tab and the console. Blank = “DeviceChain”.">
-            <Input id="b-title" value={form.title} maxLength={64} placeholder="DeviceChain" onChange={(e) => set('title', e.target.value)} />
+          <FormField label={t('appTitleLabel')} htmlFor="b-title" description={t('appTitleDescription')}>
+            <Input id="b-title" value={form.title} maxLength={64} placeholder="DeviceChain" onChange={(e) => setTitleField(e.target.value)} />
           </FormField>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <ColorField label="Primary" hint="Brand accent (buttons, links, focus rings)." value={form.primary} onChange={(v) => set('primary', v)} />
-            <ColorField label="Accent" hint="Secondary highlight surfaces." value={form.accent} onChange={(v) => set('accent', v)} />
-            <ColorField label="Sidebar background" hint="Applies to the branded chrome only." value={form.background} onChange={(v) => set('background', v)} />
-            <ColorField label="Sidebar foreground" hint="Text/icons on the branded chrome." value={form.foreground} onChange={(v) => set('foreground', v)} />
+            <ColorField label={t('primaryLabel')} hint={t('primaryHint')} value={form.primary} onChange={setPrimaryField} />
+            <ColorField label={t('accentLabel')} hint={t('accentHint')} value={form.accent} onChange={setAccentField} />
+            <ColorField label={t('sidebarBackgroundLabel')} hint={t('sidebarBackgroundHint')} value={form.background} onChange={setBackgroundField} />
+            <ColorField label={t('sidebarForegroundLabel')} hint={t('sidebarForegroundHint')} value={form.foreground} onChange={setForegroundField} />
           </div>
 
           {contrast !== null && contrast < 4.5 && (
             <p className="text-label-lg text-warning">
-              Sidebar foreground/background contrast is {contrast.toFixed(1)}:1 — below the WCAG AA target of
-              4.5:1. This is a hint only; you can still save.
+              {t('contrastWarning', { ratio: contrast.toFixed(1) })}
             </p>
           )}
           {primaryContrast !== null && primaryContrast < 4.5 && (
             <p className="text-label-lg text-warning">
-              Primary is {primaryContrast.toFixed(1)}:1 against white button text — a lighter primary may read
-              poorly on buttons. Hint only; you can still save.
+              {t('primaryContrastWarning', { ratio: primaryContrast.toFixed(1) })}
             </p>
           )}
 
           <FormField
-            label="Logo"
-            description="Upload a PNG/JPEG/WebP (≤1 MB, stored in the object store) or paste an https URL (any image, incl. SVG). Applied immediately — not part of Save."
+            label={t('logoLabel')}
+            description={t('logoDescription')}
           >
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Input
-                  aria-label="Logo URL"
+                  aria-label={t('logoUrlAriaLabel')}
                   value={logoUrl}
-                  placeholder="https://…"
+                  placeholder={t('httpsPlaceholder')}
                   disabled={logoBusy}
                   onChange={(e) => setLogoUrl(e.target.value)}
                 />
                 <Button type="button" variant="outline" size="sm" disabled={logoBusy} onClick={applyLogoUrl}>
-                  Apply URL
+                  {t('applyUrl')}
                 </Button>
               </div>
               <div className="flex items-center gap-2">
                 <UploadButton disabled={logoBusy} onPick={onUpload} />
                 {hasOwnLogo && (
                   <Button type="button" variant="ghost" size="sm" disabled={logoBusy} onClick={removeLogo}>
-                    <X className="mr-1 size-3.5" /> Remove logo
+                    <X className="mr-1 size-3.5" /> {t('removeLogo')}
                   </Button>
                 )}
               </div>
             </div>
           </FormField>
 
-          <FormField label="Logo max height (px)" htmlFor="b-height" description="How tall the logo renders in the chip/sidebar (16–200). Blank = 28.">
-            <Input id="b-height" type="number" min={16} max={200} value={form.logoMaxHeight} placeholder="28" onChange={(e) => set('logoMaxHeight', e.target.value)} className="w-32" />
+          <FormField label={t('logoMaxHeightLabel')} htmlFor="b-height" description={t('logoMaxHeightDescription')}>
+            <Input id="b-height" type="number" min={16} max={200} value={form.logoMaxHeight} placeholder="28" onChange={(e) => setLogoMaxHeightField(e.target.value)} className="w-32" />
           </FormField>
         </div>
 
@@ -344,20 +358,21 @@ function ColorField({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const { t } = useTranslation('branding');
   const valid = HEX_RE.test(value);
   return (
     <FormField label={label} description={hint}>
       <div className="flex items-center gap-2">
         <input
           type="color"
-          aria-label={`${label} swatch`}
+          aria-label={t('colorSwatchAriaLabel', { label })}
           value={valid ? value : '#000000'}
           onChange={(e) => onChange(e.target.value)}
           className="size-9 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5"
         />
-        <Input value={value} placeholder="inherit" onChange={(e) => onChange(e.target.value)} className="font-mono" />
+        <Input value={value} placeholder={t('inheritPlaceholder')} onChange={(e) => onChange(e.target.value)} className="font-mono" />
         {value !== '' && (
-          <Button type="button" variant="ghost" size="icon" aria-label={`Clear ${label}`} onClick={() => onChange('')}>
+          <Button type="button" variant="ghost" size="icon" aria-label={t('clearColorLabel', { label })} onClick={() => onChange('')}>
             <X className="size-3.5" />
           </Button>
         )}
@@ -367,6 +382,7 @@ function ColorField({
 }
 
 function UploadButton({ onPick, disabled }: { onPick: (file: File) => void; disabled?: boolean }) {
+  const { t } = useTranslation('branding');
   const ref = useRef<HTMLInputElement>(null);
   return (
     <>
@@ -382,7 +398,7 @@ function UploadButton({ onPick, disabled }: { onPick: (file: File) => void; disa
         }}
       />
       <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={() => ref.current?.click()}>
-        <Upload className="mr-1 size-3.5" /> Upload
+        <Upload className="mr-1 size-3.5" /> {t('upload')}
       </Button>
     </>
   );
@@ -391,13 +407,14 @@ function UploadButton({ onPick, disabled }: { onPick: (file: File) => void; disa
 // A live preview of the palette + logo. Colors come from the (unsaved) theme form;
 // the logo is the live resolved logo (already applied), shown only in an <img>.
 function BrandingPreview({ form, logoSrc }: { form: FormState; logoSrc: string | null }) {
+  const { t } = useTranslation('branding');
   const primary = HEX_RE.test(form.primary) ? form.primary : undefined;
   const bg = HEX_RE.test(form.background) ? form.background : undefined;
   const fg = HEX_RE.test(form.foreground) ? form.foreground : undefined;
   const height = form.logoMaxHeight.trim() === '' ? 28 : Number(form.logoMaxHeight);
   return (
     <div className="space-y-2">
-      <p className="text-sm font-medium text-foreground">Preview</p>
+      <p className="text-sm font-medium text-foreground">{t('preview')}</p>
       <div className="overflow-hidden rounded-lg border border-border">
         <div className="flex items-center gap-2 px-3 py-3" style={{ background: bg, color: fg }}>
           {logoSrc ? (
@@ -412,9 +429,9 @@ function BrandingPreview({ form, logoSrc }: { form: FormState; logoSrc: string |
             className="rounded-md px-3 py-1.5 text-sm font-medium text-white"
             style={{ background: primary ?? 'hsl(var(--primary))' }}
           >
-            Primary button
+            {t('primaryButtonSample')}
           </button>
-          <p className="text-xs text-muted-foreground">Sample content on the card surface.</p>
+          <p className="text-xs text-muted-foreground">{t('sampleContent')}</p>
         </div>
       </div>
     </div>

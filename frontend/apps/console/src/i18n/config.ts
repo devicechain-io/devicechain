@@ -25,6 +25,10 @@ import enAlarms from './locales/en/alarms.json';
 import enDashboards from './locales/en/dashboards.json';
 import enTenants from './locales/en/tenants.json';
 import enConnectors from './locales/en/connectors.json';
+import enBranding from './locales/en/branding.json';
+import enBrowse from './locales/en/browse.json';
+import enFacets from './locales/en/facets.json';
+import enAudit from './locales/en/audit.json';
 
 import esCommon from './locales/es/common.json';
 import esLogin from './locales/es/login.json';
@@ -36,6 +40,10 @@ import esAlarms from './locales/es/alarms.json';
 import esDashboards from './locales/es/dashboards.json';
 import esTenants from './locales/es/tenants.json';
 import esConnectors from './locales/es/connectors.json';
+import esBranding from './locales/es/branding.json';
+import esBrowse from './locales/es/browse.json';
+import esFacets from './locales/es/facets.json';
+import esAudit from './locales/es/audit.json';
 
 export interface Locale {
   /** BCP-47 code; also the ./locales/<code>/ directory name and the i18next lng. */
@@ -92,6 +100,10 @@ export const NAMESPACES = [
   'dashboards',
   'tenants',
   'connectors',
+  'branding',
+  'browse',
+  'facets',
+  'audit',
 ] as const;
 
 // Catalogs are bundled statically: the corpus is still small enough that a
@@ -110,6 +122,10 @@ const resources = {
     dashboards: enDashboards,
     tenants: enTenants,
     connectors: enConnectors,
+    branding: enBranding,
+    browse: enBrowse,
+    facets: enFacets,
+    audit: enAudit,
   },
   es: {
     common: esCommon,
@@ -122,6 +138,10 @@ const resources = {
     dashboards: esDashboards,
     tenants: esTenants,
     connectors: esConnectors,
+    branding: esBranding,
+    browse: esBrowse,
+    facets: esFacets,
+    audit: esAudit,
   },
 } as const;
 

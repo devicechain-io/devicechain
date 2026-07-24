@@ -1,0 +1,17 @@
+{
+  "actorPlaceholder": "Filtrar por actor…",
+  "allOperationsPlaceholder": "Todas las operaciones",
+  "colActor": "Actor",
+  "colOperation": "Operación",
+  "colRows": "Filas",
+  "colTable": "Tabla",
+  "colTarget": "Objetivo",
+  "colTime": "Hora",
+  "description": "Cada cambio en el registro de este inquilino, registrado por construcción.",
+  "empty": "Ningún registro de auditoría coincide.",
+  "loading": "Cargando registro de auditoría…",
+  "opCreate": "Crear",
+  "opDelete": "Eliminar",
+  "opUpdate": "Actualizar",
+  "title": "Auditoría"
+}

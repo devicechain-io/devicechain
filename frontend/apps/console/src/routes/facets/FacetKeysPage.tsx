@@ -10,6 +10,7 @@
 // axes lands in G4.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
@@ -46,21 +47,25 @@ import {
   DataTableRow,
 } from '@/components/ui/data-table';
 
-const MEMBER_TYPE_OPTIONS: ComboboxOption[] = FACET_MEMBER_TYPES.map((t) => ({
-  value: t,
-  label: t.charAt(0).toUpperCase() + t.slice(1),
+// Value types are technical enum tokens (STRING/LONG/…), never localized.
+const VALUE_TYPE_OPTIONS: ComboboxOption[] = FACET_VALUE_TYPES.map((vt) => ({
+  value: vt,
+  label: vt,
 }));
 
-const VALUE_TYPE_OPTIONS: ComboboxOption[] = FACET_VALUE_TYPES.map((t) => ({
-  value: t,
-  label: t,
-}));
-
-function titleCase(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
+// Localized display label per member family (ADR-061). The family values
+// ('device'/'asset'/'area'/'customer') are internal; these shared `common` keys
+// give the user-facing name so no raw English family shows under a non-English
+// locale.
+const FAMILY_LABEL_KEY: Record<string, string> = {
+  device: 'common:familyDevice',
+  asset: 'common:familyAsset',
+  area: 'common:familyArea',
+  customer: 'common:familyCustomer',
+};
 
 export default function FacetKeysPage() {
+  const { t } = useTranslation('facets');
   const { toast } = useToast();
   const confirm = useConfirm();
   const { claims } = useAuth();
@@ -72,18 +77,24 @@ export default function FacetKeysPage() {
 
   const facets = data ?? [];
 
+  // Resolve a member family to its localized label, falling back to the raw value
+  // for an out-of-vocabulary family (backend-validated to the 4 today, but this
+  // keeps a surprise value visible instead of blank). fk.memberType is typed as a
+  // plain string by codegen, so the map lookup isn't compile-total.
+  const familyLabel = (mt: string) => (FAMILY_LABEL_KEY[mt] ? t(FAMILY_LABEL_KEY[mt]) : mt);
+
   const remove = async (fk: FacetKey) => {
     if (
       !(await confirm({
-        title: 'Delete facet',
-        description: `Delete the ${fk.memberType} facet “${fk.key}”? Its EntityAttribute values are untouched; only the axis declaration is removed. Any saved dynamic group that references it keeps working. This cannot be undone.`,
-        confirmLabel: 'Delete',
+        title: t('deleteTitle'),
+        description: t('deleteConfirm', { memberType: familyLabel(fk.memberType), key: fk.key }),
+        confirmLabel: t('delete'),
       }))
     )
       return;
     try {
       await deleteFacetKey(fk.memberType, fk.key);
-      toast(`Facet “${fk.key}” deleted`);
+      toast(t('deleted', { key: fk.key }));
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -92,18 +103,18 @@ export default function FacetKeysPage() {
 
   return (
     <PageShell
-      title="Facets"
-      description="Classification axes for browsing and filtering — declare which attribute keys are facets"
+      title={t('title')}
+      description={t('description')}
       banner="dashboard"
       action={
         canWrite ? (
           <Button onClick={() => setCreating(true)}>
-            <Plus size={16} /> New facet
+            <Plus size={16} /> {t('newFacet')}
           </Button>
         ) : undefined
       }
     >
-      <FormDrawer open={creating} onOpenChange={setCreating} title="New facet">
+      <FormDrawer open={creating} onOpenChange={setCreating} title={t('newFacet')}>
         <FacetKeyForm
           onDone={() => {
             setCreating(false);
@@ -115,31 +126,31 @@ export default function FacetKeysPage() {
       {/* Member-family filter. Facets are declared per family, so the axis picker
           (and this list) scopes to one family at a time; "All" shows every family. */}
       <div className="mb-4 flex flex-wrap gap-2">
-        <FilterChip label="All" active={filter === undefined} onClick={() => setFilter(undefined)} />
-        {FACET_MEMBER_TYPES.map((t) => (
+        <FilterChip label={t('all')} active={filter === undefined} onClick={() => setFilter(undefined)} />
+        {FACET_MEMBER_TYPES.map((mt) => (
           <FilterChip
-            key={t}
-            label={titleCase(t)}
-            active={filter === t}
-            onClick={() => setFilter(t)}
+            key={mt}
+            label={familyLabel(mt)}
+            active={filter === mt}
+            onClick={() => setFilter(mt)}
           />
         ))}
       </div>
 
       {loading ? (
-        <LoadingState description="Loading facets…" />
+        <LoadingState description={t('loading')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : facets.length === 0 ? (
-        <EmptyState description="No facets declared yet." />
+        <EmptyState description={t('empty')} />
       ) : (
         <DataTable>
           <DataTableHead>
-            <DataTableHeaderCell>Member</DataTableHeaderCell>
-            <DataTableHeaderCell>Key</DataTableHeaderCell>
-            <DataTableHeaderCell>Type</DataTableHeaderCell>
-            <DataTableHeaderCell>Values</DataTableHeaderCell>
-            <DataTableHeaderCell>Label</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('colMember')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('colKey')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('common:colType')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('colValues')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('colLabel')}</DataTableHeaderCell>
             <DataTableHeaderCell> </DataTableHeaderCell>
           </DataTableHead>
           <DataTableBody>
@@ -148,12 +159,12 @@ export default function FacetKeysPage() {
               return (
                 <DataTableRow key={fk.id}>
                   <DataTableCell className="text-muted-foreground">
-                    {titleCase(fk.memberType)}
+                    {familyLabel(fk.memberType)}
                   </DataTableCell>
                   <DataTableCell className="font-medium text-foreground">
                     <span className="flex items-center gap-2">
                       {fk.key}
-                      {isSystem && <Badge variant="secondary">system</Badge>}
+                      {isSystem && <Badge variant="secondary">{t('system')}</Badge>}
                     </span>
                   </DataTableCell>
                   <DataTableCell className="font-mono text-xs text-muted-foreground">
@@ -166,7 +177,7 @@ export default function FacetKeysPage() {
                   <DataTableCell className="text-right">
                     {canWrite && !isSystem && (
                       <Button variant="ghost" size="sm" onClick={() => void remove(fk)}>
-                        <Trash2 size={14} /> Delete
+                        <Trash2 size={14} /> {t('delete')}
                       </Button>
                     )}
                   </DataTableCell>
@@ -209,6 +220,8 @@ function FilterChip({
 // existing facet is the same operation — re-declaring the same (memberType, key)
 // overwrites its type/values/label — so there is no separate edit surface in v1.
 function FacetKeyForm({ onDone }: { onDone: () => void }) {
+  const { t } = useTranslation('facets');
+  const memberTypeOptions: ComboboxOption[] = FACET_MEMBER_TYPES.map((mt) => ({ value: mt, label: t(FAMILY_LABEL_KEY[mt]) }));
   const [memberType, setMemberType] = useState<string>(FACET_MEMBER_TYPES[0]);
   const [key, setKey] = useState('');
   const [valueType, setValueType] = useState<string>('STRING');
@@ -221,7 +234,7 @@ function FacetKeyForm({ onDone }: { onDone: () => void }) {
     setFormError(null);
     const trimmedKey = key.trim();
     if (!trimmedKey) {
-      setFormError('A facet needs an attribute key.');
+      setFormError(t('keyRequired'));
       return;
     }
     // Comma-separated vocabulary → a de-duplicated, trimmed, non-empty list.
@@ -253,24 +266,24 @@ function FacetKeyForm({ onDone }: { onDone: () => void }) {
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <FormField label="Member family" htmlFor="fk-member">
+      <FormField label={t('memberFamily')} htmlFor="fk-member">
         <Combobox
           id="fk-member"
           value={memberType}
           onChange={(v) => setMemberType(v)}
-          options={MEMBER_TYPE_OPTIONS}
+          options={memberTypeOptions}
           allowClear={false}
         />
       </FormField>
-      <FormField label="Attribute key" htmlFor="fk-key">
+      <FormField label={t('attributeKey')} htmlFor="fk-key">
         <Input
           id="fk-key"
           value={key}
           onChange={(e) => setKey(e.target.value)}
-          placeholder="climate"
+          placeholder={t('keyPlaceholder')}
         />
       </FormField>
-      <FormField label="Value type" htmlFor="fk-type">
+      <FormField label={t('valueType')} htmlFor="fk-type">
         <Combobox
           id="fk-type"
           value={valueType}
@@ -279,25 +292,25 @@ function FacetKeyForm({ onDone }: { onDone: () => void }) {
           allowClear={false}
         />
       </FormField>
-      <FormField label="Values" htmlFor="fk-values" description="Optional. Comma-separated vocabulary for typeahead; leave blank for free-form.">
+      <FormField label={t('colValues')} htmlFor="fk-values" description={t('valuesDescription')}>
         <Input
           id="fk-values"
           value={valuesText}
           onChange={(e) => setValuesText(e.target.value)}
-          placeholder="arid, temperate, tropical"
+          placeholder={t('valuesPlaceholder')}
         />
       </FormField>
-      <FormField label="Label" htmlFor="fk-label" description="Optional. Display name for the axis; defaults to the key.">
+      <FormField label={t('colLabel')} htmlFor="fk-label" description={t('labelDescription')}>
         <Input
           id="fk-label"
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          placeholder="Climate"
+          placeholder={t('labelPlaceholder')}
         />
       </FormField>
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy || !key.trim()}>
-          Save facet
+          {t('saveFacet')}
         </Button>
       </div>
     </div>

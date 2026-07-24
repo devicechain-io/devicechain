@@ -1,0 +1,17 @@
+{
+  "actorPlaceholder": "Filter by actor…",
+  "allOperationsPlaceholder": "All operations",
+  "colActor": "Actor",
+  "colOperation": "Operation",
+  "colRows": "Rows",
+  "colTable": "Table",
+  "colTarget": "Target",
+  "colTime": "Time",
+  "description": "Every change to this tenant's registry, recorded by construction.",
+  "empty": "No audit records match.",
+  "loading": "Loading audit log…",
+  "opCreate": "Create",
+  "opDelete": "Delete",
+  "opUpdate": "Update",
+  "title": "Audit"
+}

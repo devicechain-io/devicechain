@@ -10,6 +10,7 @@
 
 import { useMemo, useState } from 'react';
 import { Plus, Filter, Users } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value';
 import { listFacetKeys, FACET_MEMBER_TYPES, type FacetKey } from '@/lib/api/facet-keys';
@@ -51,25 +52,45 @@ import {
 
 const PREVIEW_PAGE_SIZE = 25;
 
-function titleCase(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
+// Localized display label per member family (ADR-061). The family values
+// ('device'/'asset'/'area'/'customer') are internal; these shared `common` keys
+// give the user-facing name, so the picker never shows a raw English family under
+// a non-English locale.
+const FAMILY_LABEL_KEY: Record<string, string> = {
+  device: 'common:familyDevice',
+  asset: 'common:familyAsset',
+  area: 'common:familyArea',
+  customer: 'common:familyCustomer',
+};
 
 // The per-facet condition the UI holds. `operator === 'off'` means the facet is not
 // contributing; every other operator maps to a lowerable CEL leaf (see lib/selector).
 type ConditionState = { operator: FacetOperator | 'off'; values: string[] };
 
+// The default ("off") condition for a facet with no live operator yet — a module-
+// level constant so the fallback in JSX is a variable reference, not a literal.
+const OFF_CONDITION: ConditionState = { operator: 'off', values: [] };
+
+// The BOOLEAN valueType's fixed value picker — the raw stored boolean, never
+// localized (it mirrors the JSON value, not a translated concept).
+const BOOLEAN_VALUE_OPTIONS: ComboboxOption[] = [
+  { value: 'true', label: 'true' },
+  { value: 'false', label: 'false' },
+];
+
 // The operators offered for a facet's value type. `present` ("has any value") works
 // for every type; equality for all scalars; inequality + ordering only where they lower.
-function operatorOptions(valueType: string): ComboboxOption[] {
-  const base: ComboboxOption[] = [{ value: 'off', label: '— (ignore)' }];
+// `t` is threaded in (rather than called here) so this stays a plain module-scope
+// function outside JSX; the comparison symbols are locale-neutral and left as-is.
+function operatorOptions(valueType: string, t: (key: string) => string): ComboboxOption[] {
+  const base: ComboboxOption[] = [{ value: 'off', label: t('opIgnore') }];
   if (valueType === 'JSON') {
-    return [...base, { value: 'present', label: 'has any value' }];
+    return [...base, { value: 'present', label: t('opHasAnyValue') }];
   }
   const opts: ComboboxOption[] = [
     ...base,
-    { value: 'eq', label: 'is' },
-    { value: 'neq', label: 'is not' },
+    { value: 'eq', label: t('opIs') },
+    { value: 'neq', label: t('opIsNot') },
   ];
   if (valueType === 'LONG' || valueType === 'DOUBLE') {
     opts.push(
@@ -79,11 +100,12 @@ function operatorOptions(valueType: string): ComboboxOption[] {
       { value: 'gte', label: '≥' },
     );
   }
-  opts.push({ value: 'present', label: 'has any value' });
+  opts.push({ value: 'present', label: t('opHasAnyValue') });
   return opts;
 }
 
 export default function BrowsePage() {
+  const { t } = useTranslation('browse');
   const { claims } = useAuth();
   const canWrite = hasAuthority(claims, 'device:write');
   const [family, setFamily] = useState<string>(FACET_MEMBER_TYPES[0]);
@@ -124,19 +146,19 @@ export default function BrowsePage() {
 
   return (
     <PageShell
-      title="Browse"
-      description="Filter a family by its facets, preview the matches live, and save the filter as a dynamic group"
+      title={t('title')}
+      description={t('description')}
       banner="dashboard"
     >
       {/* Member-family picker. Facets, the composed selector, and saved dynamic groups
           all scope to one family at a time. */}
       <div className="mb-6 flex flex-wrap gap-2">
-        {FACET_MEMBER_TYPES.map((t) => (
+        {FACET_MEMBER_TYPES.map((mt) => (
           <FilterChip
-            key={t}
-            label={titleCase(t)}
-            active={family === t}
-            onClick={() => setFamilyAndReset(t)}
+            key={mt}
+            label={t(FAMILY_LABEL_KEY[mt])}
+            active={family === mt}
+            onClick={() => setFamilyAndReset(mt)}
           />
         ))}
       </div>
@@ -145,21 +167,21 @@ export default function BrowsePage() {
         {/* Axes */}
         <section>
           <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
-            <Filter size={15} /> Facet axes
+            <Filter size={15} /> {t('facetAxes')}
           </h2>
           {facetsQ.loading ? (
-            <LoadingState description="Loading facets…" />
+            <LoadingState description={t('loadingFacets')} />
           ) : facetsQ.error ? (
             <ErrorState description={facetsQ.error} />
           ) : facets.length === 0 ? (
-            <EmptyState description="No facets declared for this family. Declare axes on the Facets screen first." />
+            <EmptyState description={t('noFacetsForFamily')} />
           ) : (
             <div className="space-y-3">
               {facets.map((f) => (
                 <FacetAxis
                   key={f.id}
                   facet={f}
-                  state={conditions[f.key] ?? { operator: 'off', values: [] }}
+                  state={conditions[f.key] ?? OFF_CONDITION}
                   onChange={(next) => setCondition(f.key, next)}
                 />
               ))}
@@ -170,7 +192,7 @@ export default function BrowsePage() {
         {/* Preview */}
         <section>
           <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
-            <Users size={15} /> Matches
+            <Users size={15} /> {t('matches')}
           </h2>
           {/* Key by family so a family switch remounts the panel, resetting its
               debounce state — otherwise the old family's selector lingers for one
@@ -188,7 +210,7 @@ export default function BrowsePage() {
       {/* Saved dynamic groups for this family */}
       <SavedGroups family={family} version={groupsVersion} />
 
-      <FormDrawer open={saving} onOpenChange={setSaving} title="Save as dynamic group">
+      <FormDrawer open={saving} onOpenChange={setSaving} title={t('saveAsDynamicGroupTitle')}>
         {built.selector && (
           <SaveGroupForm
             family={family}
@@ -216,7 +238,8 @@ function FacetAxis({
   state: ConditionState;
   onChange: (next: ConditionState) => void;
 }) {
-  const opts = useMemo(() => operatorOptions(facet.valueType), [facet.valueType]);
+  const { t } = useTranslation('browse');
+  const opts = useMemo(() => operatorOptions(facet.valueType, t), [facet.valueType, t]);
   const vocab = facet.values ?? [];
   const needsValue = state.operator !== 'off' && state.operator !== 'present';
   const isMulti = state.operator === 'eq' && facet.valueType === 'STRING' && vocab.length > 0;
@@ -245,7 +268,7 @@ function FacetAxis({
                 options={vocab.map((v) => ({ value: v, label: v }))}
                 value={state.values}
                 onChange={(values) => onChange({ ...state, values })}
-                placeholder="any of…"
+                placeholder={t('anyOf')}
               />
             </div>
           ) : facet.valueType === 'BOOLEAN' ? (
@@ -253,10 +276,7 @@ function FacetAxis({
               <Combobox
                 value={state.values[0] ?? ''}
                 onChange={(v) => onChange({ ...state, values: v ? [v] : [] })}
-                options={[
-                  { value: 'true', label: 'true' },
-                  { value: 'false', label: 'false' },
-                ]}
+                options={BOOLEAN_VALUE_OPTIONS}
                 allowClear={false}
               />
             </div>
@@ -273,7 +293,7 @@ function FacetAxis({
               className="w-52"
               value={state.values[0] ?? ''}
               onChange={(e) => onChange({ ...state, values: e.target.value ? [e.target.value] : [] })}
-              placeholder={facet.valueType === 'STRING' ? 'value' : 'number'}
+              placeholder={facet.valueType === 'STRING' ? t('valuePlaceholder') : t('numberPlaceholder')}
               inputMode={
                 facet.valueType === 'LONG' || facet.valueType === 'DOUBLE' ? 'decimal' : 'text'
               }
@@ -298,6 +318,7 @@ function PreviewPanel({
   canSave: boolean;
   onSave: () => void;
 }) {
+  const { t } = useTranslation('browse');
   const debounced = useDebouncedValue(built.selector, 400);
   const preview = useQuery(
     () => (debounced ? previewSelector(family, debounced, PREVIEW_PAGE_SIZE) : Promise.resolve(null)),
@@ -317,7 +338,7 @@ function PreviewPanel({
       {/* The composed selector, verbatim — the authored contract the backend lowers. */}
       <div className="rounded-lg border border-border bg-muted/40 p-3">
         <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Selector
+          {t('selectorLabel')}
         </div>
         {built.selector ? (
           <code className="block break-words font-mono text-xs text-foreground">
@@ -325,7 +346,7 @@ function PreviewPanel({
           </code>
         ) : (
           <span className="text-sm text-muted-foreground">
-            Pick one or more facet axes to compose a filter.
+            {t('pickAxesHint')}
           </span>
         )}
       </div>
@@ -343,28 +364,28 @@ function PreviewPanel({
       {built.selector && (
         <>
           {preview.loading ? (
-            <LoadingState description="Evaluating…" />
+            <LoadingState description={t('evaluating')} />
           ) : preview.error ? (
             // A genuine fault (auth, network) — distinct from a publish-gate rejection,
             // which comes back as result.valid === false below.
             <ErrorState description={preview.error} />
           ) : result && !result.valid ? (
-            <ErrorBanner message={result.error ?? 'This filter is not expressible yet.'} />
+            <ErrorBanner message={result.error ?? t('filterNotExpressible')} />
           ) : result ? (
             <>
               <div className="flex items-center justify-between">
                 <p className={cn('text-sm text-foreground', pending && 'opacity-40')}>
                   <span className="font-semibold">{total}</span>{' '}
-                  {total === 1 ? family : `${family}s`} match
+                  {t('matchCount', { count: total })}
                 </p>
                 {canSave && (
                   <Button size="sm" onClick={onSave} disabled={pending}>
-                    <Plus size={15} /> Save as group
+                    <Plus size={15} /> {t('saveAsGroup')}
                   </Button>
                 )}
               </div>
               {members.length === 0 ? (
-                <EmptyState description="No members match this filter." />
+                <EmptyState description={t('noMembersMatch')} />
               ) : (
                 <MembersTable members={members} truncated={total > members.length} total={total} />
               )}
@@ -385,12 +406,13 @@ function MembersTable({
   truncated: boolean;
   total: number;
 }) {
+  const { t } = useTranslation('browse');
   return (
     <div>
       <DataTable>
         <DataTableHead>
-          <DataTableHeaderCell>Token</DataTableHeaderCell>
-          <DataTableHeaderCell>Id</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('common:colToken')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('colId')}</DataTableHeaderCell>
         </DataTableHead>
         <DataTableBody>
           {members.map((m) => (
@@ -405,7 +427,7 @@ function MembersTable({
       </DataTable>
       {truncated && (
         <p className="mt-2 text-xs text-muted-foreground">
-          Showing the first {members.length} of {total}.
+          {t('showingFirst', { shown: members.length, total })}
         </p>
       )}
     </div>
@@ -415,25 +437,26 @@ function MembersTable({
 // The saved dynamic groups for the current family — token, name, its selector, and a
 // members view that resolves eval-on-read off the stored selector.
 function SavedGroups({ family, version }: { family: string; version: number }) {
+  const { t } = useTranslation('browse');
   const { data, loading, error } = useQuery(() => listDynamicGroups(family), [family, version]);
   const [viewing, setViewing] = useState<DynamicGroup | null>(null);
   const groups = data ?? [];
 
   return (
     <section className="mt-8">
-      <h2 className="mb-3 text-sm font-medium text-foreground">Saved dynamic groups</h2>
+      <h2 className="mb-3 text-sm font-medium text-foreground">{t('savedGroups')}</h2>
       {loading ? (
-        <LoadingState description="Loading groups…" />
+        <LoadingState description={t('loadingGroups')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : groups.length === 0 ? (
-        <EmptyState description="No dynamic groups for this family yet. Compose a filter above and save it." />
+        <EmptyState description={t('noGroups')} />
       ) : (
         <DataTable>
           <DataTableHead>
-            <DataTableHeaderCell>Token</DataTableHeaderCell>
-            <DataTableHeaderCell>Name</DataTableHeaderCell>
-            <DataTableHeaderCell>Selector</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('common:colToken')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('common:colName')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('selectorLabel')}</DataTableHeaderCell>
             <DataTableHeaderCell> </DataTableHeaderCell>
           </DataTableHead>
           <DataTableBody>
@@ -442,7 +465,7 @@ function SavedGroups({ family, version }: { family: string; version: number }) {
                 <DataTableCell className="font-medium text-foreground">
                   <span className="flex items-center gap-2">
                     {g.token}
-                    <Badge variant="secondary">dynamic</Badge>
+                    <Badge variant="secondary">{t('dynamicBadge')}</Badge>
                   </span>
                 </DataTableCell>
                 <DataTableCell className="text-muted-foreground">{g.name || '—'}</DataTableCell>
@@ -451,7 +474,7 @@ function SavedGroups({ family, version }: { family: string; version: number }) {
                 </DataTableCell>
                 <DataTableCell className="text-right">
                   <Button variant="ghost" size="sm" onClick={() => setViewing(g)}>
-                    <Users size={14} /> Members
+                    <Users size={14} /> {t('membersButton')}
                   </Button>
                 </DataTableCell>
               </DataTableRow>
@@ -463,30 +486,31 @@ function SavedGroups({ family, version }: { family: string; version: number }) {
       <FormDrawer
         open={viewing !== null}
         onOpenChange={(open) => !open && setViewing(null)}
-        title={viewing ? `Members of “${viewing.token}”` : ''}
+        title={viewing ? t('membersOfTitle', { token: viewing.token }) : ''}
       >
-        {viewing && <GroupMembersView token={viewing.token} family={family} />}
+        {viewing && <GroupMembersView token={viewing.token} />}
       </FormDrawer>
     </section>
   );
 }
 
-function GroupMembersView({ token, family }: { token: string; family: string }) {
+function GroupMembersView({ token }: { token: string }) {
+  const { t } = useTranslation('browse');
   const { data, loading, error } = useQuery(
     () => resolveGroupMembers(token, { pageNumber: 1, pageSize: 100 }),
     [token],
   );
 
-  if (loading) return <LoadingState description="Resolving members…" />;
+  if (loading) return <LoadingState description={t('resolvingMembers')} />;
   if (error) return <ErrorState description={error} />;
   const page = data ?? { results: [], totalRecords: 0 };
-  if (page.results.length === 0) return <EmptyState description="This group has no members." />;
+  if (page.results.length === 0) return <EmptyState description={t('noMembersInGroup')} />;
 
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
         <span className="font-semibold text-foreground">{page.totalRecords}</span>{' '}
-        {page.totalRecords === 1 ? family : `${family}s`} — resolved live from the selector.
+        {t('resolvedLive', { count: page.totalRecords })}
       </p>
       <MembersTable
         members={page.results}
@@ -508,6 +532,7 @@ function SaveGroupForm({
   selector: string;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('browse');
   const { toast } = useToast();
   const [token, setToken] = useState('');
   const [name, setName] = useState('');
@@ -517,7 +542,7 @@ function SaveGroupForm({
   const submit = async () => {
     setFormError(null);
     if (!token.trim()) {
-      setFormError('A group needs a token.');
+      setFormError(t('tokenRequired'));
       return;
     }
     setBusy(true);
@@ -528,7 +553,7 @@ function SaveGroupForm({
         token: token.trim(),
         name: name.trim() || undefined,
       });
-      toast(`Dynamic group “${token.trim()}” saved`);
+      toast(t('groupSaved', { token: token.trim() }));
       onDone();
     } catch (err) {
       setFormError(errMessage(err));
@@ -542,31 +567,31 @@ function SaveGroupForm({
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
       <div className="rounded-lg border border-border bg-muted/40 p-3">
         <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Selector
+          {t('selectorLabel')}
         </div>
         <code className="block break-words font-mono text-xs text-foreground">{selector}</code>
       </div>
-      <FormField label="Token" htmlFor="grp-token">
+      <FormField label={t('common:colToken')} htmlFor="grp-token">
         <TokenField
           id="grp-token"
           entityType="group"
           value={token}
           onChange={setToken}
           seed={name}
-          placeholder="arid-fleet"
+          placeholder={t('tokenPlaceholder')}
         />
       </FormField>
-      <FormField label="Name" htmlFor="grp-name" description="Optional display name.">
+      <FormField label={t('common:colName')} htmlFor="grp-name" description={t('nameFieldDescription')}>
         <Input
           id="grp-name"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Arid-climate fleet"
+          placeholder={t('namePlaceholder')}
         />
       </FormField>
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy || !token.trim()}>
-          Save group
+          {t('saveGroup')}
         </Button>
       </div>
     </div>
