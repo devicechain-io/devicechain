@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface ErrorBannerProps {
   message: string;
@@ -20,6 +21,7 @@ interface ErrorBannerProps {
 const IS_DEV = (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV === true;
 
 export function ErrorBanner({ message, onDismiss, details, detailsLabel }: ErrorBannerProps) {
+  const { t } = useTranslation('common');
   const [showDetails, setShowDetails] = useState(false);
   const showDisclosure = IS_DEV && !!details;
 
@@ -34,7 +36,7 @@ export function ErrorBanner({ message, onDismiss, details, detailsLabel }: Error
               onClick={() => setShowDetails((v) => !v)}
               className="text-destructive/70 hover:text-destructive underline text-xs transition-colors"
             >
-              {showDetails ? 'hide' : (detailsLabel ?? 'raw response')}
+              {showDetails ? t('hide') : (detailsLabel ?? t('rawResponse'))}
             </button>
           )}
           {onDismiss && (
@@ -43,7 +45,7 @@ export function ErrorBanner({ message, onDismiss, details, detailsLabel }: Error
               onClick={onDismiss}
               className="text-destructive/70 hover:text-destructive underline text-xs transition-colors"
             >
-              dismiss
+              {t('dismiss')}
             </button>
           )}
         </div>

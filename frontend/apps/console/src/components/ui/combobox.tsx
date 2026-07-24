@@ -7,6 +7,7 @@
 // no extra dependency beyond @radix-ui/react-popover.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, ChevronsUpDown, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -56,13 +57,19 @@ export function Combobox({
   value,
   onChange,
   id,
-  placeholder = 'Select…',
-  searchPlaceholder = 'Search…',
-  emptyMessage = 'No matches.',
+  // Defaults resolve to the shared `common` strings below (a default parameter
+  // can't call the hook), so an unset placeholder is localized, not English.
+  placeholder,
+  searchPlaceholder,
+  emptyMessage,
   disabled,
   allowClear = true,
   className,
 }: ComboboxProps) {
+  const { t } = useTranslation('common');
+  const placeholderText = placeholder ?? t('select');
+  const searchPlaceholderText = searchPlaceholder ?? t('search');
+  const emptyMessageText = emptyMessage ?? t('noMatches');
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -110,14 +117,14 @@ export function Combobox({
         className={cn(triggerClasses, className)}
       >
         <span className={cn('truncate', !selected && 'text-muted-foreground')}>
-          {selected ? optionLabel(selected) : placeholder}
+          {selected ? optionLabel(selected) : placeholderText}
         </span>
         {allowClear && selected && !disabled ? (
           <X
             size={14}
             className="shrink-0 opacity-50 hover:opacity-100"
             role="button"
-            aria-label="Clear"
+            aria-label={t('clear')}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -136,12 +143,12 @@ export function Combobox({
             setQuery(e.target.value);
             setActive(0);
           }}
-          placeholder={searchPlaceholder}
+          placeholder={searchPlaceholderText}
           className="w-full border-b border-border bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground"
         />
         <div className="max-h-60 overflow-auto p-1">
           {filtered.length === 0 ? (
-            <p className="px-2 py-3 text-center text-sm text-muted-foreground">{emptyMessage}</p>
+            <p className="px-2 py-3 text-center text-sm text-muted-foreground">{emptyMessageText}</p>
           ) : (
             filtered.map((o, i) => {
               const isSelected = o.value === value;

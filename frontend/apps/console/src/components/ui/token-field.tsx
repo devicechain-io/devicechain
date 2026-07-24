@@ -9,6 +9,7 @@
 // generation and the pattern hint, not a hard block.
 
 import { useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { AlertCircle, Check, Loader2, RefreshCw } from 'lucide-react';
 import { generateToken, isValidToken, resolveMask } from '@devicechain/client';
 import { Input } from '@/components/ui/input';
@@ -42,6 +43,7 @@ export function TokenField({
   id,
   disabled,
 }: TokenFieldProps) {
+  const { t } = useTranslation('common');
   const [mask, setMask] = useState<string | null>(null);
   const [availability, setAvailability] = useState<Availability>('idle');
 
@@ -124,21 +126,24 @@ export function TokenField({
           size="icon"
           disabled={disabled || !mask}
           onClick={regenerate}
-          title="Generate a token from the mask"
-          aria-label="Generate a token from the mask"
+          title={t('generateToken')}
+          aria-label={t('generateToken')}
         >
           <RefreshCw className="size-4" />
         </Button>
       </div>
       {invalid ? (
-        <p className="text-xs text-destructive">
-          Only letters, digits, hyphens and underscores; must start with a letter or digit.
-        </p>
+        <p className="text-xs text-destructive">{t('tokenInvalid')}</p>
       ) : availability === 'taken' ? (
-        <p className="text-xs text-destructive">That token is already in use.</p>
+        <p className="text-xs text-destructive">{t('tokenTaken')}</p>
       ) : mask ? (
         <p className="text-xs text-muted-foreground">
-          Pattern: <span className="font-mono">{mask}</span>
+          <Trans
+            i18nKey="tokenPattern"
+            t={t}
+            values={{ mask }}
+            components={{ mask: <span className="font-mono" /> }}
+          />
         </p>
       ) : null}
     </div>

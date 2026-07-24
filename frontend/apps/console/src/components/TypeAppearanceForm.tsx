@@ -7,6 +7,7 @@
 // is a full replace; the parent reloads so the Basic tab stays in sync.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
@@ -34,6 +35,7 @@ function ColorField({
   fallback: string;
   onChange: (v: string | undefined) => void;
 }) {
+  const { t } = useTranslation('common');
   return (
     <FormField label={label} htmlFor={`color-${label}`}>
       <div className="flex items-center gap-2">
@@ -51,7 +53,7 @@ function ColorField({
             onClick={() => onChange(undefined)}
             className="ml-auto text-xs text-muted-foreground hover:text-foreground"
           >
-            Clear
+            {t('clear')}
           </button>
         )}
       </div>
@@ -68,6 +70,7 @@ export function TypeAppearanceForm({
   update: (req: AppearanceUpdate) => Promise<unknown>;
   onSaved: () => void;
 }) {
+  const { t } = useTranslation('common');
   const { toast } = useToast();
   const [icon, setIcon] = useState<string | undefined>(entity.icon ?? undefined);
   const [backgroundColor, setBackground] = useState<string | undefined>(
@@ -93,7 +96,7 @@ export function TypeAppearanceForm({
         foregroundColor,
         borderColor,
       });
-      toast('Appearance saved');
+      toast(t('appearanceSaved'));
       onSaved();
     } catch (err) {
       setFormError(errMessage(err));
@@ -106,7 +109,7 @@ export function TypeAppearanceForm({
     <div className="space-y-6">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
 
-      <FormField label="Preview">
+      <FormField label={t('appearancePreview')}>
         <div>
           <TypeCapsule
             appearance={{ token: entity.token, name: entity.name, icon, backgroundColor, foregroundColor, borderColor }}
@@ -115,12 +118,12 @@ export function TypeAppearanceForm({
       </FormField>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <ColorField label="Background" value={backgroundColor} fallback="#1f2937" onChange={setBackground} />
-        <ColorField label="Text" value={foregroundColor} fallback="#f9fafb" onChange={setForeground} />
-        <ColorField label="Border" value={borderColor} fallback="#374151" onChange={setBorder} />
+        <ColorField label={t('colorBackground')} value={backgroundColor} fallback="#1f2937" onChange={setBackground} />
+        <ColorField label={t('colorText')} value={foregroundColor} fallback="#f9fafb" onChange={setForeground} />
+        <ColorField label={t('colorBorder')} value={borderColor} fallback="#374151" onChange={setBorder} />
       </div>
 
-      <FormField label="Icon" description="Pick an icon, or click the selected one again to clear it.">
+      <FormField label={t('appearanceIcon')} description={t('iconPickerHint')}>
         <div className="grid grid-cols-9 gap-1 sm:grid-cols-12">
           {TYPE_ICON_KEYS.map((key) => {
             const Icon = TYPE_ICONS[key];
@@ -148,7 +151,7 @@ export function TypeAppearanceForm({
 
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy}>
-          Save appearance
+          {t('saveAppearance')}
         </Button>
       </div>
     </div>
