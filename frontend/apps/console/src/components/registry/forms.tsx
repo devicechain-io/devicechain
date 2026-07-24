@@ -6,9 +6,15 @@
 // type — so a single RegistryTypeForm / RegistryInstanceForm serves all the
 // device/asset/customer/area families. A resource adapts the normalized form
 // values to its own typed create/update request in its config (see resource.tsx).
+//
+// Noun-bearing prose is resolved from the `entities` catalog by the family's
+// `i18nKey` prefix (`${i18nKey}CreateAction`, `${i18nKey}CreatedToast`, …), so the
+// engine never builds a sentence by interpolating a noun — each locale writes
+// grammatical text. `entityType` is the technical mask key (ADR-042 P3), separate
+// from any display noun.
 
 import { useState } from 'react';
-import { normalizeToken } from '@devicechain/client';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -18,6 +24,9 @@ import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useQuery } from '@/lib/hooks/use-query';
 import { Textarea, errMessage } from '@/routes/common';
 
+// Capitalize the first letter. Still used by device-profile definition toasts
+// (DefinitionsPanel) pending that area's sweep; the registry forms below now take
+// their prose from the catalog and no longer call it.
 export const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // A minimal registry entity: every family exposes at least these.
@@ -41,24 +50,26 @@ export interface InstanceRequest extends TypeRequest {
 
 export function RegistryTypeForm<T extends NamedEntity>({
   entity,
-  singular,
+  i18nKey,
   entityType,
-  tokenPlaceholder,
   checkAvailability,
   create,
   update,
   onDone,
 }: {
   entity?: T;
-  singular: string; // "device type"
-  /** Mask key for token generation (ADR-042 P3); defaults to the kebab singular. */
-  entityType?: string;
-  tokenPlaceholder?: string;
+  /** Family prefix in the `entities` catalog, e.g. "deviceType". */
+  i18nKey: string;
+  /** Mask key for token generation (ADR-042 P3), e.g. "device-type". */
+  entityType: string;
   checkAvailability?: (token: string) => Promise<boolean>;
   create: (req: TypeRequest) => Promise<unknown>;
   update: (token: string, req: TypeRequest) => Promise<unknown>;
   onDone: (message: string) => void;
 }) {
+  const { t } = useTranslation(['entities', 'common']);
+  const e = (suffix: string, opts?: Record<string, unknown>) =>
+    t(`entities:${i18nKey}${suffix}`, opts);
   const editing = entity != null;
   const [token, setToken] = useState(entity?.token ?? '');
   const [name, setName] = useState(entity?.name ?? '');
@@ -73,11 +84,11 @@ export function RegistryTypeForm<T extends NamedEntity>({
       const fields = { name: name.trim() || undefined, description: description.trim() || undefined };
       if (editing) {
         await update(entity.token, { token: entity.token, ...fields });
-        onDone(`${cap(singular)} “${entity.token}” updated`);
+        onDone(e('UpdatedToast', { token: entity.token }));
       } else {
-        const t = token.trim();
-        await create({ token: t, ...fields });
-        onDone(`${cap(singular)} “${t}” created`);
+        const trimmed = token.trim();
+        await create({ token: trimmed, ...fields });
+        onDone(e('CreatedToast', { token: trimmed }));
       }
     } catch (err) {
       setFormError(errMessage(err));
@@ -90,33 +101,33 @@ export function RegistryTypeForm<T extends NamedEntity>({
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
       <FormField
-        label="Token"
+        label={t('common:colToken')}
         htmlFor="r-token"
-        description={editing ? `The ${singular} id; it cannot change.` : undefined}
+        description={editing ? e('TokenFixed') : undefined}
       >
         {editing ? (
           <Input id="r-token" value={token} disabled />
         ) : (
           <TokenField
             id="r-token"
-            entityType={entityType ?? normalizeToken(singular)}
+            entityType={entityType}
             value={token}
             onChange={setToken}
             seed={name}
-            placeholder={tokenPlaceholder}
+            placeholder={e('TokenPlaceholder')}
             checkAvailability={checkAvailability}
           />
         )}
       </FormField>
-      <FormField label="Name" htmlFor="r-name">
-        <Input id="r-name" value={name} onChange={(e) => setName(e.target.value)} />
+      <FormField label={t('common:colName')} htmlFor="r-name">
+        <Input id="r-name" value={name} onChange={(ev) => setName(ev.target.value)} />
       </FormField>
-      <FormField label="Description" htmlFor="r-description">
-        <Textarea id="r-description" value={description} onChange={(e) => setDescription(e.target.value)} />
+      <FormField label={t('common:colDescription')} htmlFor="r-description">
+        <Textarea id="r-description" value={description} onChange={(ev) => setDescription(ev.target.value)} />
       </FormField>
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy || (!editing && !token.trim())}>
-          {editing ? 'Save changes' : `Create ${singular}`}
+          {editing ? t('common:saveChanges') : e('CreateAction')}
         </Button>
       </div>
     </div>
@@ -127,12 +138,9 @@ export function RegistryTypeForm<T extends NamedEntity>({
 
 export function RegistryInstanceForm<T extends NamedEntity>({
   entity,
-  singular,
+  i18nKey,
   entityType,
-  typeLabel,
-  typeSingular,
   defaultTypeToken,
-  tokenPlaceholder,
   checkAvailability,
   loadTypes,
   create,
@@ -140,19 +148,20 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   onDone,
 }: {
   entity?: T;
-  singular: string; // "asset"
-  /** Mask key for token generation (ADR-042 P3); defaults to the kebab singular. */
-  entityType?: string;
-  typeLabel: string; // "Asset type"
-  typeSingular: string; // "asset type" — used in the "create one first" hint
+  /** Family prefix in the `entities` catalog, e.g. "asset". */
+  i18nKey: string;
+  /** Mask key for token generation (ADR-042 P3), e.g. "asset". */
+  entityType: string;
   defaultTypeToken?: string;
-  tokenPlaceholder?: string;
   checkAvailability?: (token: string) => Promise<boolean>;
   loadTypes: () => Promise<NamedEntity[]>;
   create: (req: InstanceRequest) => Promise<unknown>;
   update: (token: string, req: InstanceRequest) => Promise<unknown>;
   onDone: (message: string) => void;
 }) {
+  const { t } = useTranslation(['entities', 'common']);
+  const e = (suffix: string, opts?: Record<string, unknown>) =>
+    t(`entities:${i18nKey}${suffix}`, opts);
   const editing = entity != null;
   const [token, setToken] = useState(entity?.token ?? '');
   const [name, setName] = useState(entity?.name ?? '');
@@ -162,10 +171,10 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   const [busy, setBusy] = useState(false);
 
   const { data: types } = useQuery(loadTypes, []);
-  const options: ComboboxOption[] = (types ?? []).map((t) => ({
-    value: t.token,
-    label: t.name || t.token,
-    description: t.name ? t.token : undefined,
+  const options: ComboboxOption[] = (types ?? []).map((ty) => ({
+    value: ty.token,
+    label: ty.name || ty.token,
+    description: ty.name ? ty.token : undefined,
   }));
   const noTypes = types != null && options.length === 0;
 
@@ -180,11 +189,11 @@ export function RegistryInstanceForm<T extends NamedEntity>({
       };
       if (editing) {
         await update(entity.token, { token: entity.token, ...fields });
-        onDone(`${cap(singular)} “${entity.token}” updated`);
+        onDone(e('UpdatedToast', { token: entity.token }));
       } else {
-        const t = token.trim();
-        await create({ token: t, ...fields });
-        onDone(`${cap(singular)} “${t}” created`);
+        const trimmed = token.trim();
+        await create({ token: trimmed, ...fields });
+        onDone(e('CreatedToast', { token: trimmed }));
       }
     } catch (err) {
       setFormError(errMessage(err));
@@ -201,44 +210,44 @@ export function RegistryInstanceForm<T extends NamedEntity>({
           field later.) */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <FormField
-          label={typeLabel}
+          label={e('TypeLabel')}
           htmlFor="r-type"
-          description={noTypes ? `Create a ${typeSingular} first.` : undefined}
+          description={noTypes ? e('TypeEmpty') : undefined}
         >
           <Combobox
             id="r-type"
             value={typeToken}
             onChange={setTypeToken}
             options={options}
-            placeholder={`Select a ${typeSingular}…`}
+            placeholder={e('TypeSelect')}
             disabled={noTypes}
           />
         </FormField>
         <FormField
-          label="Token"
+          label={t('common:colToken')}
           htmlFor="r-token"
-          description={editing ? `The ${singular} id; it cannot change.` : undefined}
+          description={editing ? e('TokenFixed') : undefined}
         >
           {editing ? (
             <Input id="r-token" value={token} disabled />
           ) : (
             <TokenField
               id="r-token"
-              entityType={entityType ?? normalizeToken(singular)}
+              entityType={entityType}
               value={token}
               onChange={setToken}
               seed={name}
-              placeholder={tokenPlaceholder}
+              placeholder={e('TokenPlaceholder')}
               checkAvailability={checkAvailability}
             />
           )}
         </FormField>
       </div>
-      <FormField label="Name" htmlFor="r-name">
-        <Input id="r-name" value={name} onChange={(e) => setName(e.target.value)} />
+      <FormField label={t('common:colName')} htmlFor="r-name">
+        <Input id="r-name" value={name} onChange={(ev) => setName(ev.target.value)} />
       </FormField>
-      <FormField label="Description" htmlFor="r-description">
-        <Textarea id="r-description" value={description} onChange={(e) => setDescription(e.target.value)} />
+      <FormField label={t('common:colDescription')} htmlFor="r-description">
+        <Textarea id="r-description" value={description} onChange={(ev) => setDescription(ev.target.value)} />
       </FormField>
       <div className="flex gap-2">
         <Button
@@ -246,7 +255,7 @@ export function RegistryInstanceForm<T extends NamedEntity>({
           loading={busy}
           disabled={busy || noTypes || (!editing && !token.trim()) || !typeToken}
         >
-          {editing ? 'Save changes' : `Create ${singular}`}
+          {editing ? t('common:saveChanges') : e('CreateAction')}
         </Button>
       </div>
     </div>

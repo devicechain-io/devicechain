@@ -36,6 +36,7 @@ import enAiProviders from './locales/en/aiProviders.json';
 import enAiPackaging from './locales/en/aiPackaging.json';
 import enAdminSettings from './locales/en/adminSettings.json';
 import enAdminAudit from './locales/en/adminAudit.json';
+import enEntities from './locales/en/entities.json';
 
 import esCommon from './locales/es/common.json';
 import esLogin from './locales/es/login.json';
@@ -58,6 +59,7 @@ import esAiProviders from './locales/es/aiProviders.json';
 import esAiPackaging from './locales/es/aiPackaging.json';
 import esAdminSettings from './locales/es/adminSettings.json';
 import esAdminAudit from './locales/es/adminAudit.json';
+import esEntities from './locales/es/entities.json';
 
 export interface Locale {
   /** BCP-47 code; also the ./locales/<code>/ directory name and the i18next lng. */
@@ -125,6 +127,10 @@ export const NAMESPACES = [
   'aiPackaging',
   'adminSettings',
   'adminAudit',
+  // The registry entity families (device/asset/customer/area types, instances,
+  // groups). One shared namespace, keyed by each family's `i18nKey` prefix — the
+  // generic list/detail/form pages resolve `${i18nKey}TitlePlural` etc. against it.
+  'entities',
 ] as const;
 
 // Catalogs are bundled statically: the corpus is still small enough that a
@@ -154,6 +160,7 @@ const resources = {
     aiPackaging: enAiPackaging,
     adminSettings: enAdminSettings,
     adminAudit: enAdminAudit,
+    entities: enEntities,
   },
   es: {
     common: esCommon,
@@ -177,6 +184,7 @@ const resources = {
     aiPackaging: esAiPackaging,
     adminSettings: esAdminSettings,
     adminAudit: esAdminAudit,
+    entities: esEntities,
   },
 } as const;
 

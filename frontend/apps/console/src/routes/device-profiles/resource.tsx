@@ -136,11 +136,8 @@ function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (mess
 
 export const deviceProfileResource: RegistryResource<DeviceProfile> = {
   basePath: '/device-profiles',
-  titlePlural: 'Device Profiles',
-  singular: 'device profile',
+  i18nKey: 'deviceProfile',
   banner: 'devices',
-  listDescription:
-    'Reusable capability contracts — metrics, commands, and detection rules — that device types adopt',
   list: listDeviceProfiles,
   load: getDeviceProfile,
   remove: deleteDeviceProfile,
@@ -149,9 +146,9 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
   nameOf: (p) => p.name ?? null,
   columns: [
     tokenColumn<DeviceProfile>(),
-    { header: 'Category', cell: (p) => p.category || <Dash /> },
+    { header: 'entities:deviceProfileColCategory', cell: (p) => p.category || <Dash /> },
     {
-      header: 'Used by',
+      header: 'entities:deviceProfileColUsedBy',
       cell: (p) => (
         <span className={p.deviceTypeCount === 0 ? 'text-muted-foreground' : 'tabular-nums'}>
           {typeCountLabel(p.deviceTypeCount)}
@@ -162,12 +159,10 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
     createdColumn<DeviceProfile>(),
   ],
   renderForm: (p, onDone) => <ProfileForm entity={p} onDone={onDone} />,
-  removeConfirm: (p) =>
-    `Delete device profile “${p.token}”? Its metrics, commands, detection rules, and version history are removed. This is refused while any device type still uses it.`,
   detailTabs: [
     {
       value: 'metrics',
-      label: 'Metrics',
+      label: 'entities:deviceProfileMetricsTab',
       render: (p) => (
         <DefinitionsPanel
           profileToken={p.token}
@@ -198,7 +193,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
     },
     {
       value: 'commands',
-      label: 'Commands',
+      label: 'entities:deviceProfileCommandsTab',
       render: (p) => (
         <DefinitionsPanel
           profileToken={p.token}
@@ -218,7 +213,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
     },
     {
       value: 'detection-rules',
-      label: 'Detection Rules',
+      label: 'entities:deviceProfileDetectionRulesTab',
       render: (p) => (
         <DefinitionsPanel
           profileToken={p.token}
@@ -239,7 +234,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
     },
     {
       value: 'rule-health',
-      label: 'Rule Health',
+      label: 'entities:deviceProfileRuleHealthTab',
       // Key by token so switching between two profile detail URLs (which React Router does
       // not remount on a param-only change) resets the live feed + stream status instead of
       // leaking profile A's firings under profile B (Fable 7c MEDIUM 1).
@@ -247,7 +242,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
     },
     {
       value: 'versions',
-      label: 'Versions',
+      label: 'entities:deviceProfileVersionsTab',
       render: (p, reload) => (
         <VersionsPanel
           profileToken={p.token}

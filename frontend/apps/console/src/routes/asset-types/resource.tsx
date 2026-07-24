@@ -16,10 +16,8 @@ import {
 // The asset-type registry, described once for the generic list/detail/new pages.
 export const assetTypeResource: RegistryResource<AssetType> = {
   basePath: '/asset-types',
-  titlePlural: 'Asset Types',
-  singular: 'asset type',
+  i18nKey: 'assetType',
   banner: 'assets',
-  listDescription: 'Templates that classify assets',
   list: listAssetTypes,
   load: getAssetType,
   remove: deleteAssetType,
@@ -28,7 +26,7 @@ export const assetTypeResource: RegistryResource<AssetType> = {
   nameOf: (at) => at.name,
   columns: [
     {
-      header: 'Appearance',
+      header: 'common:colAppearance',
       cell: (at) => <TypeCapsule appearance={appearanceOf(at)} />,
     },
     tokenColumn<AssetType>(),
@@ -38,8 +36,8 @@ export const assetTypeResource: RegistryResource<AssetType> = {
   renderForm: (at, onDone) => (
     <RegistryTypeForm
       entity={at}
-      singular="asset type"
-      tokenPlaceholder="pump"
+      i18nKey="assetType"
+      entityType="asset-type"
       create={(req) => createAssetType(req)}
       update={(token, req) =>
         updateAssetType(token, {
@@ -55,8 +53,7 @@ export const assetTypeResource: RegistryResource<AssetType> = {
       onDone={onDone}
     />
   ),
-  removeConfirm: (at) => `Delete asset type “${at.token}”? This cannot be undone.`,
-  detailExtraLabel: 'Appearance',
+  detailExtraLabel: 'common:colAppearance',
   renderDetailExtra: (at, reload) => (
     <TypeAppearanceForm
       entity={at}

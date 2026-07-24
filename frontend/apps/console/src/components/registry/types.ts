@@ -24,6 +24,9 @@ export interface RegistryListResult<T> {
 }
 
 export interface RegistryColumn<T> {
+  /** i18n key for the column header, resolved by the list page against the
+   *  `entities` + `common` namespaces (e.g. 'common:colToken', 'common:colName').
+   *  A key, NOT display text — so headers localize with the rest of the page. */
   header: string;
   cell: (item: T) => ReactNode;
   /** Optional className on the cell (not the header). */
@@ -35,6 +38,7 @@ export interface RegistryColumn<T> {
 export interface DetailTab<T> {
   /** Stable tab key (unique within the resource). */
   value: string;
+  /** i18n key for the tab label (resolved against `entities` + `common`). */
   label: string;
   render: (item: T, reload: () => void) => ReactNode;
 }
@@ -42,12 +46,20 @@ export interface DetailTab<T> {
 export interface RegistryResource<T> {
   /** Route base, e.g. "/device-types". The /new and /:token routes hang off it. */
   basePath: string;
-  /** Plural list-page title, e.g. "Device Types". */
-  titlePlural: string;
-  /** Lowercase singular used in prose + buttons, e.g. "device type". */
-  singular: string;
-  /** Optional list-page description line. */
-  listDescription?: string;
+  /**
+   * The family's key prefix in the `entities` namespace, e.g. "deviceType",
+   * "asset", "assetGroup". The generic pages compose it with a fixed suffix set
+   * (`${i18nKey}TitlePlural`, `${i18nKey}New`, `${i18nKey}ListEmpty`,
+   * `${i18nKey}CreatedToast`, …) to resolve every noun-bearing string. The
+   * list-empty suffix is deliberately `ListEmpty`, not `Empty`: `area`+`TypeEmpty`
+   * would otherwise collide with `areaType`+`Empty` (both "areaTypeEmpty") and one
+   * family would silently render another's string — keep new suffixes collision-safe
+   * against every prefix that is itself a prefix of another. Whole
+   * sentences live per-family in the catalog — the engine never builds prose by
+   * interpolating a noun, so each locale writes grammatical text (gender, case,
+   * counters) that a shared "New {noun}" template could not.
+   */
+  i18nKey: string;
   /**
    * Category key for the muted header background texture, e.g. "assets".
    * Set only on top-level categories — leave unset for sub-item resources
@@ -76,11 +88,10 @@ export interface RegistryResource<T> {
    *  Receives a reload callback to refresh the page after a save. */
   renderDetailExtra?: (item: T, reload: () => void) => ReactNode;
   /** When set alongside renderDetailExtra, the detail page splits into a "Basic"
-   *  tab (the form) and a second tab with this label holding the extra content. */
+   *  tab (the form) and a second tab with this i18n-key label holding the extra
+   *  content. */
   detailExtraLabel?: string;
   /** Multiple named detail tabs beside "Basic" (e.g. a device profile's Metrics,
    *  Commands, Alarm Rules, Versions). Takes precedence over renderDetailExtra. */
   detailTabs?: DetailTab<T>[];
-  /** Override the delete confirmation prompt. */
-  removeConfirm?: (item: T) => string;
 }

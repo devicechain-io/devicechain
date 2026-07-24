@@ -15,10 +15,8 @@ import {
 
 export const customerGroupResource: RegistryResource<CustomerGroup> = {
   basePath: '/customer-groups',
-  titlePlural: 'Customer Groups',
-  singular: 'customer group',
+  i18nKey: 'customerGroup',
   banner: 'customers',
-  listDescription: 'Collections of customers',
   list: listCustomerGroups,
   load: getCustomerGroup,
   remove: deleteCustomerGroup,
@@ -29,21 +27,20 @@ export const customerGroupResource: RegistryResource<CustomerGroup> = {
   renderForm: (g, onDone) => (
     <RegistryTypeForm
       entity={g}
-      singular="customer group"
-      tokenPlaceholder="enterprise"
+      i18nKey="customerGroup"
+      entityType="customer-group"
       create={(req) => createCustomerGroup(req)}
       update={(token, req) => updateCustomerGroup(token, req)}
       onDone={onDone}
     />
   ),
-  removeConfirm: (g) => `Delete customer group “${g.token}”? This cannot be undone.`,
-  detailExtraLabel: 'Members',
+  detailExtraLabel: 'common:membersTab',
   renderDetailExtra: (g) => (
     <MembershipPanel
       groupType="group"
       groupToken={g.token}
       memberType="customer"
-      memberSingular="customer"
+      memberI18nKey="customer"
       loadCandidates={() => listCustomers({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
     />
   ),

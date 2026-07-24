@@ -15,10 +15,8 @@ import {
 
 export const areaGroupResource: RegistryResource<AreaGroup> = {
   basePath: '/area-groups',
-  titlePlural: 'Area Groups',
-  singular: 'area group',
+  i18nKey: 'areaGroup',
   banner: 'areas',
-  listDescription: 'Collections of areas',
   list: listAreaGroups,
   load: getAreaGroup,
   remove: deleteAreaGroup,
@@ -29,21 +27,20 @@ export const areaGroupResource: RegistryResource<AreaGroup> = {
   renderForm: (g, onDone) => (
     <RegistryTypeForm
       entity={g}
-      singular="area group"
-      tokenPlaceholder="campus"
+      i18nKey="areaGroup"
+      entityType="area-group"
       create={(req) => createAreaGroup(req)}
       update={(token, req) => updateAreaGroup(token, req)}
       onDone={onDone}
     />
   ),
-  removeConfirm: (g) => `Delete area group “${g.token}”? This cannot be undone.`,
-  detailExtraLabel: 'Members',
+  detailExtraLabel: 'common:membersTab',
   renderDetailExtra: (g) => (
     <MembershipPanel
       groupType="group"
       groupToken={g.token}
       memberType="area"
-      memberSingular="area"
+      memberI18nKey="area"
       loadCandidates={() => listAreas({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
     />
   ),
