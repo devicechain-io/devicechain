@@ -34,6 +34,7 @@ Group membership is recorded on each event **as it is resolved**, so the engine 
 | **Repeating** | the condition occurs a number of times within a window (e.g. `3 faults in 10 minutes`) | an occurrence count + a window |
 | **Rate of change** | a metric moves too fast (e.g. `temperature rising > 5°/min`) | the comparison + a window (optional per-second rate) |
 | **Absence / silence** | a device goes quiet — no qualifying event within a window (a dead-man check) | a silence window |
+| **Connectivity** | a device reports an authoritative disconnect (raise) and reconnects (resolve) — for presence-asserting transports like [Sparkplug-B](./sparkplug.md) and [LwM2M](./lwm2m.md) | none — the [presence](./device-presence.md) edge is the whole signal |
 | **Windowed aggregate** | an aggregate over a window crosses a comparison (e.g. `average > 50 over 10 minutes`) | the function (count/sum/avg/min/max), a window (tumbling, sliding, or session), the comparison + value |
 | **Area correlation** | enough distinct devices in an area meet the condition together (e.g. `≥ 3 devices in a zone report a fault within 5 minutes`) | the area/anchor type, a distinct-device count + window |
 
