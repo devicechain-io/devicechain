@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   listConnectors,
@@ -57,6 +58,7 @@ function typeLabel(type: string): string {
 }
 
 export default function ConnectorsPage() {
+  const { t } = useTranslation('connectors');
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
@@ -75,15 +77,15 @@ export default function ConnectorsPage() {
   const remove = async (token: string) => {
     if (
       !(await confirm({
-        title: 'Delete connector',
-        description: `Delete “${token}”? Any rule that publishes through it will fail to deliver until repointed. This cannot be undone.`,
-        confirmLabel: 'Delete',
+        title: t('deleteTitle'),
+        description: t('deleteConfirm', { token }),
+        confirmLabel: t('delete'),
       }))
     )
       return;
     try {
       await deleteConnector(token);
-      toast(`Connector “${token}” deleted`);
+      toast(t('deleted', { token }));
       if (results.length === 1 && pageNumber > 1) setPageNumber(pageNumber - 1);
       else reload();
     } catch (err) {
@@ -93,21 +95,21 @@ export default function ConnectorsPage() {
 
   return (
     <PageShell
-      title="Connectors"
-      description="Outbound targets a rule can publish to — brokers, cloud queues, and webhooks"
+      title={t('title')}
+      description={t('description')}
       banner="dashboard"
       action={
         canWrite ? (
           <Button onClick={() => setCreating(true)}>
-            <Plus size={16} /> New connector
+            <Plus size={16} /> {t('newConnector')}
           </Button>
         ) : undefined
       }
     >
-      <FormDrawer open={creating} onOpenChange={setCreating} title="New connector">
+      <FormDrawer open={creating} onOpenChange={setCreating} title={t('newConnector')}>
         <ConnectorCreateForm
           onDone={(token) => {
-            toast(`Connector “${token}” created`);
+            toast(t('created', { token }));
             setCreating(false);
             reload();
             navigate(`/connectors/${encodeURIComponent(token)}`);
@@ -115,18 +117,18 @@ export default function ConnectorsPage() {
         />
       </FormDrawer>
       {loading ? (
-        <LoadingState description="Loading connectors…" />
+        <LoadingState description={t('loading')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : results.length === 0 ? (
-        <EmptyState description="No connectors yet." />
+        <EmptyState description={t('empty')} />
       ) : (
         <>
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>Name</DataTableHeaderCell>
-              <DataTableHeaderCell>Type</DataTableHeaderCell>
-              <DataTableHeaderCell>Description</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colName')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colType')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colDescription')}</DataTableHeaderCell>
               <DataTableHeaderCell> </DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
@@ -153,7 +155,7 @@ export default function ConnectorsPage() {
                         }}
                         onKeyDown={(e) => e.stopPropagation()}
                       >
-                        <Trash2 size={14} /> Delete
+                        <Trash2 size={14} /> {t('delete')}
                       </Button>
                     )}
                   </DataTableCell>
@@ -178,6 +180,7 @@ export default function ConnectorsPage() {
 // non-nullable and validated on create, so it can't be created empty and filled in
 // later). It reuses the shared ConnectorConfigForm.
 function ConnectorCreateForm({ onDone }: { onDone: (token: string) => void }) {
+  const { t } = useTranslation('connectors');
   const [token, setToken] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -187,7 +190,7 @@ function ConnectorCreateForm({ onDone }: { onDone: (token: string) => void }) {
 
   const submit = async () => {
     setFormError(null);
-    const shapeErr = validateEditor(editor);
+    const shapeErr = validateEditor(editor, t);
     if (shapeErr) {
       setFormError(shapeErr);
       return;
@@ -213,21 +216,21 @@ function ConnectorCreateForm({ onDone }: { onDone: (token: string) => void }) {
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <FormField label="Token" htmlFor="cx-token">
+      <FormField label={t('common:colToken')} htmlFor="cx-token">
         <TokenField
           id="cx-token"
           entityType="connector"
           value={token}
           onChange={setToken}
           seed={name}
-          placeholder="pagerduty-webhook"
-          checkAvailability={(t) => getConnector(t).then((c) => c === null)}
+          placeholder={t('tokenPlaceholder')}
+          checkAvailability={(tok) => getConnector(tok).then((c) => c === null)}
         />
       </FormField>
-      <FormField label="Name" htmlFor="cx-name">
+      <FormField label={t('common:colName')} htmlFor="cx-name">
         <Input id="cx-name" value={name} onChange={(e) => setName(e.target.value)} />
       </FormField>
-      <FormField label="Description" htmlFor="cx-description">
+      <FormField label={t('common:colDescription')} htmlFor="cx-description">
         <Textarea
           id="cx-description"
           value={description}
@@ -237,7 +240,7 @@ function ConnectorCreateForm({ onDone }: { onDone: (token: string) => void }) {
       <ConnectorConfigForm state={editor} onChange={setEditor} mode="create" existingHasSecret={false} />
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy || !token.trim()}>
-          Create connector
+          {t('createConnector')}
         </Button>
       </div>
     </div>

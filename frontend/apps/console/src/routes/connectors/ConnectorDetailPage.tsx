@@ -7,6 +7,7 @@
 
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
 import { CopyToken } from '@/components/ui/copy-token';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -33,6 +34,7 @@ import {
 import { ConnectorVersionsPanel } from './ConnectorVersionsPanel';
 
 export default function ConnectorDetailPage() {
+  const { t } = useTranslation('connectors');
   const { token: rawToken } = useParams<{ token: string }>();
   const token = rawToken ?? '';
   const { data, loading, error } = useQuery(() => getConnector(token), [token]);
@@ -40,7 +42,7 @@ export default function ConnectorDetailPage() {
   if (loading) {
     return (
       <PageShell title={token} banner="dashboard">
-        <LoadingState description="Loading connector…" />
+        <LoadingState description={t('loadingConnector')} />
       </PageShell>
     );
   }
@@ -54,7 +56,7 @@ export default function ConnectorDetailPage() {
   if (!data) {
     return (
       <PageShell title={token} banner="dashboard">
-        <ErrorState description={`Connector “${token}” not found.`} />
+        <ErrorState description={t('notFound', { token })} />
       </PageShell>
     );
   }
@@ -63,6 +65,7 @@ export default function ConnectorDetailPage() {
 }
 
 function ConnectorEditor({ loaded }: { loaded: Connector }) {
+  const { t } = useTranslation('connectors');
   const { toast } = useToast();
   const { claims } = useAuth();
   const canWrite = hasAuthority(claims, 'connector:write');
@@ -101,7 +104,7 @@ function ConnectorEditor({ loaded }: { loaded: Connector }) {
 
   const save = async () => {
     setFormError(null);
-    const shapeErr = validateEditor(editor, baseline.hasSecret);
+    const shapeErr = validateEditor(editor, t, baseline.hasSecret);
     if (shapeErr) {
       setFormError(shapeErr);
       return;
@@ -142,7 +145,7 @@ function ConnectorEditor({ loaded }: { loaded: Connector }) {
       });
       // Reset the credential control back to 'keep'/'set' now that it's persisted.
       setEditor((e) => ({ ...e, secret: { mode: nextHasSecret ? 'keep' : 'set', value: '' } }));
-      toast('Connector saved');
+      toast(t('saved'));
     } catch (err) {
       toast(errMessage(err), 'error');
       setFormError(errMessage(err));
@@ -168,14 +171,14 @@ function ConnectorEditor({ loaded }: { loaded: Connector }) {
     >
       <Tabs defaultValue="config">
         <TabsList>
-          <TabsTrigger value="config">Configuration</TabsTrigger>
-          <TabsTrigger value="versions">Versions</TabsTrigger>
+          <TabsTrigger value="config">{t('tabConfiguration')}</TabsTrigger>
+          <TabsTrigger value="versions">{t('tabVersions')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="config">
           <div className="max-w-2xl space-y-4">
             {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-            <FormField label="Name" htmlFor="cx-name">
+            <FormField label={t('common:colName')} htmlFor="cx-name">
               <Input
                 id="cx-name"
                 value={name}
@@ -183,7 +186,7 @@ function ConnectorEditor({ loaded }: { loaded: Connector }) {
                 disabled={!canWrite}
               />
             </FormField>
-            <FormField label="Description" htmlFor="cx-description">
+            <FormField label={t('common:colDescription')} htmlFor="cx-description">
               <Textarea
                 id="cx-description"
                 value={description}
@@ -200,9 +203,9 @@ function ConnectorEditor({ loaded }: { loaded: Connector }) {
             {canWrite && (
               <div className="flex items-center gap-3">
                 <Button onClick={save} loading={saving} disabled={!dirty || saving}>
-                  Save draft
+                  {t('saveDraft')}
                 </Button>
-                {dirty && <span className="text-sm text-muted-foreground">Unsaved changes</span>}
+                {dirty && <span className="text-sm text-muted-foreground">{t('unsavedChanges')}</span>}
               </div>
             )}
           </div>

@@ -7,7 +7,8 @@
 // cleartext secret — only whether one exists (`existingHasSecret`) — matching the
 // ADR-059 write-only contract.
 
-import type { ReactNode } from 'react';
+import type { ChangeEvent, ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/routes/common';
@@ -83,18 +84,24 @@ export function secretRequiredForState(state: ConnectorEditorState): boolean {
 // validateEditor runs the fast client-side shape check, returning a human message
 // or null. The server re-validates authoritatively on save/publish. existingHasSecret
 // is whether a credential is already stored (edit flow) — a required secret is
-// satisfied by preserving it, so a save that keeps it needs no re-entry.
-export function validateEditor(state: ConnectorEditorState, existingHasSecret = false): string | null {
+// satisfied by preserving it, so a save that keeps it needs no re-entry. `t` is the
+// caller's `connectors` namespace translator — this is a plain utility function, not
+// a component, so it can't call useTranslation itself.
+export function validateEditor(
+  state: ConnectorEditorState,
+  t: (key: string, options?: Record<string, unknown>) => string,
+  existingHasSecret = false,
+): string | null {
   const spec = specForType(state.type);
   if (!spec) {
     try {
       JSON.parse(state.raw || '{}');
     } catch {
-      return 'Config must be valid JSON.';
+      return t('invalidJson');
     }
     return null;
   }
-  const shapeErr = validateConfigForm(spec, state.form);
+  const shapeErr = validateConfigForm(spec, state.form, t);
   if (shapeErr) return shapeErr;
   if (secretRequiredForState(state)) {
     // A credential will exist after save when: it is being set to a non-empty value,
@@ -104,7 +111,7 @@ export function validateEditor(state: ConnectorEditorState, existingHasSecret = 
     const willHaveSecret =
       (s.mode === 'set' && s.value !== '') || (s.mode === 'keep' && existingHasSecret);
     if (!willHaveSecret) {
-      return `${spec.secret.label} is required for ${spec.label} connectors.`;
+      return t('secretRequired', { secretLabel: t(spec.secret.label), connectorLabel: spec.label });
     }
   }
   return null;
@@ -158,6 +165,7 @@ export function ConnectorConfigForm({
   mode: 'create' | 'edit';
   existingHasSecret: boolean;
 }) {
+  const { t } = useTranslation('connectors');
   const spec = specForType(state.type);
 
   const setType = (type: string) => {
@@ -178,7 +186,7 @@ export function ConnectorConfigForm({
 
   return (
     <div className="space-y-4">
-      <FormField label="Type" htmlFor="cx-type" description="The transport this connector publishes through.">
+      <FormField label={t('typeLabel')} htmlFor="cx-type" description={t('typeDescription')}>
         {mode === 'create' ? (
           <Select id="cx-type" value={state.type} onChange={setType}>
             {CONNECTOR_TYPE_SPECS.map((s) => (
@@ -208,19 +216,19 @@ export function ConnectorConfigForm({
                     onChange={(e) => setField(f.key, e.target.checked)}
                     className="h-4 w-4 rounded border-input"
                   />
-                  <span>{f.label}</span>
-                  {f.description && <span className="text-muted-foreground">— {f.description}</span>}
+                  <span>{t(f.label)}</span>
+                  {f.description && <span className="text-muted-foreground">— {t(f.description)}</span>}
                 </label>
               );
             }
             if (f.kind === 'qos') {
               return (
-                <FormField key={f.key} label={f.label} htmlFor={`cx-${f.key}`} description={f.description}>
+                <FormField key={f.key} label={t(f.label)} htmlFor={`cx-${f.key}`} description={f.description ? t(f.description) : undefined}>
                   <Select id={`cx-${f.key}`} value={typeof v === 'string' ? v : ''} onChange={(nv) => setField(f.key, nv)}>
-                    <option value="">Default (1)</option>
-                    <option value="0">0 — at most once</option>
-                    <option value="1">1 — at least once</option>
-                    <option value="2">2 — exactly once</option>
+                    <option value="">{t('qosDefault')}</option>
+                    <option value="0">{t('qos0')}</option>
+                    <option value="1">{t('qos1')}</option>
+                    <option value="2">{t('qos2')}</option>
                   </Select>
                 </FormField>
               );
@@ -229,9 +237,9 @@ export function ConnectorConfigForm({
               return (
                 <FormField
                   key={f.key}
-                  label={f.required ? `${f.label} *` : f.label}
+                  label={f.required ? `${t(f.label)} *` : t(f.label)}
                   htmlFor={`cx-${f.key}`}
-                  description={f.description}
+                  description={f.description ? t(f.description) : undefined}
                 >
                   <Textarea
                     id={`cx-${f.key}`}
@@ -246,9 +254,9 @@ export function ConnectorConfigForm({
             return (
               <FormField
                 key={f.key}
-                label={f.required ? `${f.label} *` : f.label}
+                label={f.required ? `${t(f.label)} *` : t(f.label)}
                 htmlFor={`cx-${f.key}`}
-                description={f.description}
+                description={f.description ? t(f.description) : undefined}
               >
                 <Input
                   id={`cx-${f.key}`}
@@ -269,11 +277,11 @@ export function ConnectorConfigForm({
                   onChange={(e) => onChange({ ...state, form: { ...state.form, saslEnabled: e.target.checked } })}
                   className="h-4 w-4 rounded border-input"
                 />
-                <span>Use SASL authentication</span>
+                <span>{t('useSasl')}</span>
               </label>
               {state.form.saslEnabled && (
                 <>
-                  <FormField label="Mechanism" htmlFor="cx-sasl-mech">
+                  <FormField label={t('mechanismLabel')} htmlFor="cx-sasl-mech">
                     <Select
                       id="cx-sasl-mech"
                       value={state.form.saslMechanism}
@@ -286,7 +294,7 @@ export function ConnectorConfigForm({
                       ))}
                     </Select>
                   </FormField>
-                  <FormField label="SASL username *" htmlFor="cx-sasl-user">
+                  <FormField label={t('saslUsernameLabel')} htmlFor="cx-sasl-user">
                     <Input
                       id="cx-sasl-user"
                       value={state.form.saslUsername}
@@ -302,9 +310,9 @@ export function ConnectorConfigForm({
         // Unknown/unsupported type: edit the raw config JSON directly (the backend
         // validates it). Keeps a connector of a not-yet-shipped type editable.
         <FormField
-          label="Config (JSON)"
+          label={t('rawConfigLabel')}
           htmlFor="cx-raw"
-          description={`No structured editor for type “${state.type}”. Edit the raw config JSON; the server validates it.`}
+          description={t('rawConfigDescription', { type: state.type })}
         >
           <Textarea
             id="cx-raw"
@@ -318,8 +326,8 @@ export function ConnectorConfigForm({
 
       <SecretControl
         spec={state.type}
-        label={spec?.secret.label ?? 'Credential'}
-        description={spec?.secret.description ?? 'Optional outbound credential. Write-only — never displayed.'}
+        label={spec ? t(spec.secret.label) : t('credentialLabel')}
+        description={spec ? t(spec.secret.description) : t('credentialDescription')}
         mode={mode}
         required={secretRequiredForState(state)}
         existingHasSecret={existingHasSecret}
@@ -356,19 +364,28 @@ function SecretControl({
   secret: SecretState;
   onChange: (next: Partial<SecretState>) => void;
 }) {
+  const { t } = useTranslation('connectors');
+  // Handlers are named functions (not inline JSX arrows) so the SecretMode
+  // discriminants below read as plain code, not user-facing text.
+  const handleReplace = () => onChange({ mode: 'set', value: '' });
+  const handleClear = () => onChange({ mode: 'clear', value: '' });
+  const handleUndo = () => onChange({ mode: existingHasSecret ? 'keep' : 'set', value: '' });
+  const handleSecretInput = (e: ChangeEvent<HTMLInputElement>) =>
+    onChange({ mode: 'set', value: e.target.value });
+
   if (mode === 'edit' && existingHasSecret && secret.mode === 'keep') {
     return (
       <FormField label={required ? `${label} *` : label} description={description}>
         <div className="flex items-center gap-3 text-sm">
           <span className="rounded bg-emerald-500/10 px-2 py-1 font-medium text-emerald-600 dark:text-emerald-500">
-            Credential configured
+            {t('credentialConfigured')}
           </span>
-          <button type="button" className="text-primary hover:underline" onClick={() => onChange({ mode: 'set', value: '' })}>
-            Replace
+          <button type="button" className="text-primary hover:underline" onClick={handleReplace}>
+            {t('replace')}
           </button>
           {!required && (
-            <button type="button" className="text-destructive hover:underline" onClick={() => onChange({ mode: 'clear', value: '' })}>
-              Clear
+            <button type="button" className="text-destructive hover:underline" onClick={handleClear}>
+              {t('clear')}
             </button>
           )}
         </div>
@@ -380,14 +397,10 @@ function SecretControl({
       <FormField label={label} description={description}>
         <div className="flex items-center gap-3 text-sm">
           <span className="rounded bg-destructive/10 px-2 py-1 font-medium text-destructive">
-            Credential will be cleared on save
+            {t('credentialWillClear')}
           </span>
-          <button
-            type="button"
-            className="text-primary hover:underline"
-            onClick={() => onChange({ mode: existingHasSecret ? 'keep' : 'set', value: '' })}
-          >
-            Undo
+          <button type="button" className="text-primary hover:underline" onClick={handleUndo}>
+            {t('undo')}
           </button>
         </div>
       </FormField>
@@ -400,8 +413,8 @@ function SecretControl({
         type="password"
         autoComplete="new-password"
         value={secret.value}
-        onChange={(e) => onChange({ mode: 'set', value: e.target.value })}
-        placeholder={mode === 'edit' && existingHasSecret ? 'Enter a new value' : ''}
+        onChange={handleSecretInput}
+        placeholder={mode === 'edit' && existingHasSecret ? t('enterNewValue') : ''}
       />
     </FormField>
   );
