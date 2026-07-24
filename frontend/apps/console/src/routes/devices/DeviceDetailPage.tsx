@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useNavigate, useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { Trash2, Wifi, WifiOff } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { CopyToken } from '@/components/ui/copy-token';
@@ -35,6 +36,7 @@ import { DeviceCredentialsPanel } from '@/routes/devices/DeviceCredentialsPanel'
 import { DeviceAssignmentPanel } from '@/routes/devices/DeviceAssignmentPanel';
 
 export default function DeviceDetailPage() {
+  const { t } = useTranslation('devices');
   const { token: rawToken } = useParams<{ token: string }>();
   const token = decodeURIComponent(rawToken ?? '');
   const navigate = useNavigate();
@@ -47,7 +49,7 @@ export default function DeviceDetailPage() {
   if (loading) {
     return (
       <PageShell title={token} banner="devices">
-        <LoadingState description="Loading device…" />
+        <LoadingState description={t('loadingDevice')} />
       </PageShell>
     );
   }
@@ -61,7 +63,7 @@ export default function DeviceDetailPage() {
   if (!device) {
     return (
       <PageShell title={token} banner="devices">
-        <ErrorState description={`Device “${token}” not found.`} />
+        <ErrorState description={t('deviceNotFound', { token })} />
       </PageShell>
     );
   }
@@ -69,15 +71,15 @@ export default function DeviceDetailPage() {
   const remove = async () => {
     if (
       !(await confirm({
-        title: 'Delete device',
-        description: `Delete “${device.token}”? This cannot be undone.`,
-        confirmLabel: 'Delete',
+        title: t('deleteDeviceTitle'),
+        description: t('deleteDeviceConfirm', { token: device.token }),
+        confirmLabel: t('delete'),
       }))
     )
       return;
     try {
       await deleteDevice(device.token);
-      toast(`Device “${device.token}” deleted`);
+      toast(t('deviceDeleted', { token: device.token }));
       navigate('/devices');
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -96,7 +98,7 @@ export default function DeviceDetailPage() {
       }
       action={
         <Button variant="destructive" size="sm" onClick={remove}>
-          <Trash2 size={14} /> Delete
+          <Trash2 size={14} /> {t('delete')}
         </Button>
       }
     >
@@ -104,12 +106,12 @@ export default function DeviceDetailPage() {
           opened and the page stays digestible. */}
       <Tabs defaultValue="basic">
         <TabsList>
-          <TabsTrigger value="basic">Basic</TabsTrigger>
-          <TabsTrigger value="assignment">Assignment</TabsTrigger>
-          <TabsTrigger value="connectivity">Connectivity</TabsTrigger>
-          <TabsTrigger value="events">Events</TabsTrigger>
-          <TabsTrigger value="commands">Commands</TabsTrigger>
-          <TabsTrigger value="credentials">Credentials</TabsTrigger>
+          <TabsTrigger value="basic">{t('tabBasic')}</TabsTrigger>
+          <TabsTrigger value="assignment">{t('tabAssignment')}</TabsTrigger>
+          <TabsTrigger value="connectivity">{t('tabConnectivity')}</TabsTrigger>
+          <TabsTrigger value="events">{t('tabEvents')}</TabsTrigger>
+          <TabsTrigger value="commands">{t('tabCommands')}</TabsTrigger>
+          <TabsTrigger value="credentials">{t('tabCredentials')}</TabsTrigger>
         </TabsList>
         <TabsContent value="basic">
           <SectionPanel>
@@ -129,10 +131,10 @@ export default function DeviceDetailPage() {
         </TabsContent>
         <TabsContent value="connectivity">
           <div className="space-y-4">
-            <SectionPanel title="Connectivity">
+            <SectionPanel title={t('tabConnectivity')}>
               <DeviceStatePanel deviceToken={device.token} />
             </SectionPanel>
-            <SectionPanel title="Latest readings">
+            <SectionPanel title={t('latestReadingsTitle')}>
               <DeviceReadingsPanel deviceToken={device.token} />
             </SectionPanel>
           </div>
@@ -161,34 +163,35 @@ export default function DeviceDetailPage() {
 // of the page: if the tenant's role lacks state:read the query errors and this
 // panel shows an ErrorState rather than breaking the page.
 function DeviceStatePanel({ deviceToken }: { deviceToken: string }) {
+  const { t } = useTranslation('devices');
   const { data: state, loading, error } = useQuery(
     () => getDeviceState(deviceToken),
     [deviceToken],
   );
 
-  if (loading) return <LoadingState description="Loading state…" />;
+  if (loading) return <LoadingState description={t('loadingState')} />;
   if (error) return <ErrorState description={error} />;
-  if (!state) return <EmptyState description="No state recorded for this device yet." />;
+  if (!state) return <EmptyState description={t('noStateRecorded')} />;
 
   return (
     <div className="space-y-4">
       <div>
         {state.active ? (
           <Badge variant="success" className="gap-1">
-            <Wifi size={12} /> Online
+            <Wifi size={12} /> {t('online')}
           </Badge>
         ) : (
           <Badge variant="outline" className="gap-1 text-muted-foreground">
-            <WifiOff size={12} /> Offline
+            <WifiOff size={12} /> {t('offline')}
           </Badge>
         )}
       </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
-        <dt className="text-muted-foreground">Last connect</dt>
+        <dt className="text-muted-foreground">{t('lastConnectLabel')}</dt>
         <dd className="text-foreground">{formatTime(state.lastConnectTime)}</dd>
-        <dt className="text-muted-foreground">Last activity</dt>
+        <dt className="text-muted-foreground">{t('lastActivityLabel')}</dt>
         <dd className="text-foreground">{formatTime(state.lastActivityTime)}</dd>
-        <dt className="text-muted-foreground">Last disconnect</dt>
+        <dt className="text-muted-foreground">{t('lastDisconnectLabel')}</dt>
         <dd className="text-foreground">{formatTime(state.lastDisconnectTime)}</dd>
       </dl>
     </div>
@@ -200,25 +203,26 @@ function DeviceStatePanel({ deviceToken }: { deviceToken: string }) {
 // independently: if the role lacks state:read the query errors and this panel
 // degrades to an ErrorState rather than breaking the page.
 function DeviceReadingsPanel({ deviceToken }: { deviceToken: string }) {
+  const { t } = useTranslation('devices');
   const { data, loading, error } = useQuery(
     () => getLatestMeasurements(deviceToken),
     [deviceToken],
   );
 
-  if (loading) return <LoadingState description="Loading readings…" />;
+  if (loading) return <LoadingState description={t('loadingReadings')} />;
   if (error) return <ErrorState description={error} />;
 
   const readings = data ?? [];
   if (readings.length === 0) {
-    return <EmptyState description="No measurements received from this device yet." />;
+    return <EmptyState description={t('noMeasurements')} />;
   }
 
   return (
     <DataTable>
       <DataTableHead>
-        <DataTableHeaderCell>Measurement</DataTableHeaderCell>
-        <DataTableHeaderCell>Value</DataTableHeaderCell>
-        <DataTableHeaderCell>Updated</DataTableHeaderCell>
+        <DataTableHeaderCell>{t('measurementColumn')}</DataTableHeaderCell>
+        <DataTableHeaderCell>{t('common:colValue')}</DataTableHeaderCell>
+        <DataTableHeaderCell>{t('common:colUpdated')}</DataTableHeaderCell>
       </DataTableHead>
       <DataTableBody>
         {readings.map((m) => (
@@ -237,17 +241,18 @@ function DeviceReadingsPanel({ deviceToken }: { deviceToken: string }) {
 // the page: if the tenant's role lacks event:read the query errors and this
 // panel shows an ErrorState rather than breaking the page.
 function DeviceEventsPanel({ deviceToken }: { deviceToken: string }) {
+  const { t } = useTranslation('devices');
   const { data, loading, error } = useQuery(
     () => listEvents({ deviceToken, pageNumber: 1, pageSize: 10 }),
     [deviceToken],
   );
 
-  if (loading) return <LoadingState description="Loading events…" />;
+  if (loading) return <LoadingState description={t('loadingEvents')} />;
   if (error) return <ErrorState description={error} />;
 
   const results = data?.results ?? [];
   if (results.length === 0) {
-    return <EmptyState description="No events received from this device yet." />;
+    return <EmptyState description={t('noEvents')} />;
   }
 
   const totalRecords = data?.pagination.totalRecords ?? 0;
@@ -256,9 +261,9 @@ function DeviceEventsPanel({ deviceToken }: { deviceToken: string }) {
     <div className="space-y-3">
       <DataTable>
         <DataTableHead>
-          <DataTableHeaderCell>Occurred</DataTableHeaderCell>
-          <DataTableHeaderCell>Type</DataTableHeaderCell>
-          <DataTableHeaderCell>Source</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('occurredColumn')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('common:colType')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('sourceColumn')}</DataTableHeaderCell>
         </DataTableHead>
         <DataTableBody>
           {results.map((event) => (
@@ -275,7 +280,7 @@ function DeviceEventsPanel({ deviceToken }: { deviceToken: string }) {
         </DataTableBody>
       </DataTable>
       {totalRecords > 10 && (
-        <p className="text-xs text-muted-foreground">Showing the 10 most recent events.</p>
+        <p className="text-xs text-muted-foreground">{t('showingRecentEvents')}</p>
       )}
     </div>
   );
