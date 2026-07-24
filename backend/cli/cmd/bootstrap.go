@@ -28,6 +28,7 @@ var (
 	bootstrapGrafanaSSO    bool
 	bootstrapDev           bool
 	bootstrapCompact       bool
+	bootstrapEnableAreas   []string
 )
 
 // devModeResolution is the set of flag values the --dev preset settles on.
@@ -183,6 +184,32 @@ var bootstrapCmd = &cobra.Command{
 			fmt.Printf("compact mode: %s\n", bootstrap.CompactSummary())
 		}
 
+		// Normalize --enable-area (trim, drop blanks) ONCE, so the deployment selection
+		// and the report label see the same clean set. A stray `--enable-area " "` then
+		// correctly takes the untouched-profile path instead of silently switching to an
+		// explicit set with a garbage "default (+  )" label.
+		enableAreas := make([]string, 0, len(bootstrapEnableAreas))
+		for _, a := range bootstrapEnableAreas {
+			if a = strings.TrimSpace(a); a != "" {
+				enableAreas = append(enableAreas, a)
+			}
+		}
+
+		// Resolve --enable-area (profile ∪ extras) and validate it against the area
+		// catalog up front — BEFORE the preflight doctor and any cluster — so a typo'd
+		// or dependency-broken area fails immediately rather than after a doctor probe
+		// or a ten-minute chart-render timeout.
+		enabledAreas, err := bootstrap.ResolveEnabledAreas(bootstrapProfile, enableAreas)
+		if err != nil {
+			return fmt.Errorf("resolving deployment areas (--profile/--enable-area): %w", err)
+		}
+		// --compact publishes a footprint measured on the default profile; extra areas
+		// add workloads beyond that, so the printed compact figure understates the real
+		// instance. Flag it rather than silently contradict the number.
+		if bootstrapCompact && len(enableAreas) > 0 {
+			fmt.Printf("note: --enable-area adds %s beyond the compact-measured default; the printed footprint is a floor, not the total\n", strings.Join(enableAreas, ", "))
+		}
+
 		// Diagnose the local system up front so a run fails fast on a missing
 		// tool / low limit / unreachable docker rather than midway through.
 		if !bootstrapSkipPreflight {
@@ -205,6 +232,7 @@ var bootstrapCmd = &cobra.Command{
 			NoMonitoring:  bootstrapNoMonitoring,
 			GrafanaSSO:    bootstrapGrafanaSSO,
 			Compact:       bootstrapCompact,
+			EnableAreas:   enableAreas,
 		}
 
 		ctx := cmd.Context()
@@ -228,6 +256,8 @@ var bootstrapCmd = &cobra.Command{
 			NoMonitoring:  opts.NoMonitoring,
 			GrafanaSSO:    opts.GrafanaSSO,
 			Compact:       opts.Compact,
+			EnableAreas:   opts.EnableAreas,
+			EnabledAreas:  enabledAreas,
 			Values:        map[string]string{},
 		}
 		return bootstrap.NewDefaultPipeline().Run(ctx, st)
@@ -251,6 +281,7 @@ func init() {
 	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags. Compose with --grafana-sso for local SSO")
 
 	bootstrapCmd.Flags().BoolVar(&bootstrapCompact, "compact", false, "small-footprint preset: lowered JetStream/KV ceilings with the smaller volumes they permit, lowered scheduling requests, and no monitoring stack. Keeps --profile default (it does not change which services run); rejects a conflicting --profile")
+	bootstrapCmd.Flags().StringSliceVar(&bootstrapEnableAreas, "enable-area", nil, "additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with --compact; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)")
 
 	rootCmd.AddCommand(bootstrapCmd)
 }

@@ -42,6 +42,11 @@ type Options struct {
 	// over levers that already exist and does NOT change which services run (that
 	// stays on Profile). See compactSizing.
 	Compact bool
+	// EnableAreas is the raw set of extra functional areas requested via
+	// --enable-area, deployed ADDITIVELY on top of the profile (e.g. lwm2m-ingest on
+	// a default/compact bring-up). Resolved+validated by ResolveEnabledAreas into the
+	// State's EnabledAreas before the pipeline runs.
+	EnableAreas []string
 }
 
 // Provider abstracts the target environment (local cluster today; cloud later)

@@ -189,7 +189,19 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 
 	st.Values["instance"] = st.Instance
 	st.Values["namespace"] = namespace
-	st.Values["profile"] = st.Profile
+	// Profile label. When --enable-area added areas the deployment is an explicit set,
+	// so name the base profile and the additive delta rather than a bare (possibly
+	// empty) profile — otherwise a run that deployed lwm2m-ingest would report only
+	// "default" and hide it.
+	profileLabel := st.Profile
+	if len(st.EnableAreas) > 0 {
+		base := st.Profile
+		if base == "" {
+			base = "default"
+		}
+		profileLabel = fmt.Sprintf("%s (+ %s)", base, strings.Join(st.EnableAreas, ", "))
+	}
+	st.Values["profile"] = profileLabel
 
 	// Ingress host + scheme. Default to DefaultIngressHost; a loopback host
 	// (localhost/127.0.0.1) needs no /etc/hosts edit. TLS is on unless --no-tls,
