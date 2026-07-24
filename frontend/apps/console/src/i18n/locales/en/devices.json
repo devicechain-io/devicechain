@@ -1,0 +1,11 @@
+{
+  "title": "Devices",
+  "description": "Devices registered in this tenant",
+  "bulkCreate": "Bulk create",
+  "newDevice": "New device",
+  "bulkCreateTitle": "Bulk create devices",
+  "loading": "Loading devices…",
+  "empty": "No devices registered yet.",
+  "online": "Online",
+  "offline": "Offline"
+}

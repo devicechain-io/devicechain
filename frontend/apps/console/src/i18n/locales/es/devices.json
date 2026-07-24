@@ -1,0 +1,11 @@
+{
+  "title": "Dispositivos",
+  "description": "Dispositivos registrados en este inquilino",
+  "bulkCreate": "Creación masiva",
+  "newDevice": "Nuevo dispositivo",
+  "bulkCreateTitle": "Crear dispositivos en masa",
+  "loading": "Cargando dispositivos…",
+  "empty": "Aún no hay dispositivos registrados.",
+  "online": "En línea",
+  "offline": "Desconectado"
+}

@@ -3,6 +3,7 @@
 
 import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -22,34 +23,35 @@ import { TierPill } from '@/components/tiers/TierPill';
 import { StatusBadge, rowLinkProps } from '@/routes/common';
 
 export default function TenantsPage() {
+  const { t: translate } = useTranslation('tenants');
   const navigate = useNavigate();
   const { data: tenants, loading, error } = useQuery(listTenants, []);
 
   return (
     <PageShell
-      title="Tenants"
-      description="The instance's tenant registry. A tenant is a control-plane record, not a provisioned resource."
+      title={translate('title')}
+      description={translate('description')}
       action={
         <Button onClick={() => navigate('/admin/tenants/new')}>
-          <Plus size={16} /> New tenant
+          <Plus size={16} /> {translate('newTenant')}
         </Button>
       }
     >
       <div className="space-y-6">
         {loading ? (
-          <LoadingState description="Loading tenants…" />
+          <LoadingState description={translate('loading')} />
         ) : error ? (
           <ErrorState description={error} />
         ) : !tenants || tenants.length === 0 ? (
-          <EmptyState description="No tenants yet. Create the first one to get started." />
+          <EmptyState description={translate('empty')} />
         ) : (
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>Token</DataTableHeaderCell>
-              <DataTableHeaderCell>Name</DataTableHeaderCell>
-              <DataTableHeaderCell>Tier</DataTableHeaderCell>
-              <DataTableHeaderCell>Status</DataTableHeaderCell>
-              <DataTableHeaderCell>Config</DataTableHeaderCell>
+              <DataTableHeaderCell>{translate('common:colToken')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{translate('common:colName')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{translate('colTier')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{translate('common:colStatus')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{translate('colConfig')}</DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
               {tenants.map((t) => (

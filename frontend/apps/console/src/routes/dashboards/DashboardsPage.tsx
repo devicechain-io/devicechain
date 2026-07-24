@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   listDashboards,
@@ -38,6 +39,7 @@ import {
 const pageSize = 20;
 
 export default function DashboardsPage() {
+  const { t } = useTranslation('dashboards');
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
@@ -54,15 +56,15 @@ export default function DashboardsPage() {
   const remove = async (token: string) => {
     if (
       !(await confirm({
-        title: 'Delete dashboard',
-        description: `Delete “${token}”? This cannot be undone.`,
-        confirmLabel: 'Delete',
+        title: t('deleteTitle'),
+        description: t('deleteConfirm', { token }),
+        confirmLabel: t('delete'),
       }))
     )
       return;
     try {
       await deleteDashboard(token);
-      toast(`Dashboard “${token}” deleted`);
+      toast(t('deleted', { token }));
       // Removing the last row of a page > 1 would strand the user on an empty
       // page (rendered as the misleading "no dashboards" state); step back.
       if (results.length === 1 && pageNumber > 1) setPageNumber(pageNumber - 1);
@@ -74,19 +76,19 @@ export default function DashboardsPage() {
 
   return (
     <PageShell
-      title="Dashboards"
-      description="Live dashboards for this tenant"
+      title={t('title')}
+      description={t('description')}
       banner="dashboard"
       action={
         <Button onClick={() => setCreating(true)}>
-          <Plus size={16} /> New dashboard
+          <Plus size={16} /> {t('newDashboard')}
         </Button>
       }
     >
-      <FormDrawer open={creating} onOpenChange={setCreating} title="New dashboard">
+      <FormDrawer open={creating} onOpenChange={setCreating} title={t('newDashboard')}>
         <DashboardCreateForm
           onDone={(token) => {
-            toast(`Dashboard “${token}” created`);
+            toast(t('created', { token }));
             setCreating(false);
             reload();
             navigate(`/dashboards/${encodeURIComponent(token)}`);
@@ -94,18 +96,18 @@ export default function DashboardsPage() {
         />
       </FormDrawer>
       {loading ? (
-        <LoadingState description="Loading dashboards…" />
+        <LoadingState description={t('loading')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : results.length === 0 ? (
-        <EmptyState description="No dashboards yet." />
+        <EmptyState description={t('empty')} />
       ) : (
         <>
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>Name</DataTableHeaderCell>
-              <DataTableHeaderCell>Description</DataTableHeaderCell>
-              <DataTableHeaderCell>Updated</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colName')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colDescription')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colUpdated')}</DataTableHeaderCell>
               <DataTableHeaderCell> </DataTableHeaderCell>
             </DataTableHead>
             <DataTableBody>
@@ -137,7 +139,7 @@ export default function DashboardsPage() {
                       }}
                       onKeyDown={(e) => e.stopPropagation()}
                     >
-                      <Trash2 size={14} /> Delete
+                      <Trash2 size={14} /> {t('delete')}
                     </Button>
                   </DataTableCell>
                 </DataTableRow>
@@ -161,6 +163,7 @@ export default function DashboardsPage() {
 // registry instance forms, a dashboard has no classifying type). Seeds an empty
 // canonical definition server-side (see createDashboard).
 function DashboardCreateForm({ onDone }: { onDone: (token: string) => void }) {
+  const { t } = useTranslation('dashboards');
   const [token, setToken] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -188,7 +191,7 @@ function DashboardCreateForm({ onDone }: { onDone: (token: string) => void }) {
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <FormField label="Token" htmlFor="d-token">
+      <FormField label={t('common:colToken')} htmlFor="d-token">
         <TokenField
           id="d-token"
           entityType="dashboard"
@@ -199,10 +202,10 @@ function DashboardCreateForm({ onDone }: { onDone: (token: string) => void }) {
           checkAvailability={(t) => getDashboard(t).then((d) => d === null)}
         />
       </FormField>
-      <FormField label="Name" htmlFor="d-name">
+      <FormField label={t('common:colName')} htmlFor="d-name">
         <Input id="d-name" value={name} onChange={(e) => setName(e.target.value)} />
       </FormField>
-      <FormField label="Description" htmlFor="d-description">
+      <FormField label={t('common:colDescription')} htmlFor="d-description">
         <Textarea
           id="d-description"
           value={description}
@@ -211,7 +214,7 @@ function DashboardCreateForm({ onDone }: { onDone: (token: string) => void }) {
       </FormField>
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy || !token.trim()}>
-          Create dashboard
+          {t('createDashboard')}
         </Button>
       </div>
     </div>

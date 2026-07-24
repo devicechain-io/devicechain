@@ -110,3 +110,45 @@ describe('applyTenantDefaultLocale (ADR-066 rung-2 seam)', () => {
     expect(spy).toHaveBeenCalledWith('en');
   });
 });
+
+// Spanish is ADR-066's proof locale (sub-workstream c). These pin that the broad
+// `es` corpus actually resolves — a missing/misnamed catalog would fall back to the
+// English string (or the raw key) and redden here rather than in a live demo.
+describe('Spanish (es) proof locale', () => {
+  it('is shipped and selectable via the switcher', () => {
+    expect(SUPPORTED_LOCALES.map((l) => l.code)).toContain('es');
+    setUserLocale('es');
+    expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('es');
+  });
+
+  it('resolves the es catalog across the chrome and screen namespaces', async () => {
+    await i18n.changeLanguage('es');
+    expect(i18n.t('nav:devices')).toBe('Dispositivos');
+    expect(i18n.t('nav:alarms')).toBe('Alarmas');
+    expect(i18n.t('userMenu:signOut')).toBe('Cerrar sesión');
+    expect(i18n.t('theme:dark')).toBe('Oscuro');
+    expect(i18n.t('devices:empty')).toBe('Aún no hay dispositivos registrados.');
+    expect(i18n.t('tenants:title')).toBe('Inquilinos');
+    expect(i18n.t('login:signIn')).toBe('Iniciar sesión');
+  });
+
+  it('selects the correct plural category for the pagination line in both locales', async () => {
+    // The pagination count is the corpus's one plural (i18next _one/_other, driven
+    // by `count`). Pin one and many in each locale so a dropped plural form (which
+    // silently renders the _other string for count===1) reddens.
+    await i18n.changeLanguage('en');
+    expect(i18n.t('common:paginationShowing', { start: 1, end: 1, count: 1 })).toBe(
+      'Showing 1–1 of 1 result',
+    );
+    expect(i18n.t('common:paginationShowing', { start: 1, end: 20, count: 42 })).toBe(
+      'Showing 1–20 of 42 results',
+    );
+    await i18n.changeLanguage('es');
+    expect(i18n.t('common:paginationShowing', { start: 1, end: 1, count: 1 })).toBe(
+      'Mostrando 1–1 de 1 resultado',
+    );
+    expect(i18n.t('common:paginationShowing', { start: 1, end: 20, count: 42 })).toBe(
+      'Mostrando 1–20 de 42 resultados',
+    );
+  });
+});

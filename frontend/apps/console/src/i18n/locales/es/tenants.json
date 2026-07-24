@@ -1,0 +1,9 @@
+{
+  "title": "Inquilinos",
+  "description": "El registro de inquilinos de la instancia. Un inquilino es un registro del plano de control, no un recurso aprovisionado.",
+  "newTenant": "Nuevo inquilino",
+  "loading": "Cargando inquilinos…",
+  "empty": "Aún no hay inquilinos. Crea el primero para empezar.",
+  "colTier": "Nivel",
+  "colConfig": "Configuración"
+}

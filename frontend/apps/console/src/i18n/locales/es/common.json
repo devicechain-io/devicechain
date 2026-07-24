@@ -1,0 +1,19 @@
+{
+  "back": "Volver",
+  "languagePicker": "Idioma",
+  "tenantFallback": "Inquilino",
+  "colName": "Nombre",
+  "colDescription": "Descripción",
+  "colStatus": "Estado",
+  "colToken": "Token",
+  "colType": "Tipo",
+  "colCreated": "Creado",
+  "colUpdated": "Actualizado",
+  "colValue": "Valor",
+  "colActions": "Acciones",
+  "paginationShowing_one": "Mostrando {{start}}–{{end}} de {{count}} resultado",
+  "paginationShowing_other": "Mostrando {{start}}–{{end}} de {{count}} resultados",
+  "paginationNoResults": "Sin resultados",
+  "paginationPrev": "Anterior",
+  "paginationNext": "Siguiente"
+}

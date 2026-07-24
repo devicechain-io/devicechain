@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { hasAuthority } from '@devicechain/client';
 import { useAuth } from '@/auth/AuthProvider';
 import { formatTime } from '@/lib/utils';
@@ -36,23 +37,25 @@ import { AlarmEventTypeBadge, AlarmSeverityBadge, AlarmStatusBadge } from './bad
 
 const pageSize = 25;
 
+// Options carry a `labelKey` into the `alarms` catalog (ADR-066), resolved with t()
+// inside the component; the `value` is the wire enum and never localized.
 const STATE_OPTIONS = [
-  { value: 'ACTIVE', label: 'Active' },
-  { value: 'CLEARED', label: 'Cleared' },
+  { value: 'ACTIVE', labelKey: 'stateActive' },
+  { value: 'CLEARED', labelKey: 'stateCleared' },
 ];
 
 // Ordered by descending severity so the dropdown reads like the ramp (ADR-041).
 const SEVERITY_OPTIONS = [
-  { value: 'CRITICAL', label: 'Critical' },
-  { value: 'MAJOR', label: 'Major' },
-  { value: 'MINOR', label: 'Minor' },
-  { value: 'WARNING', label: 'Warning' },
-  { value: 'INDETERMINATE', label: 'Indeterminate' },
+  { value: 'CRITICAL', labelKey: 'sevCritical' },
+  { value: 'MAJOR', labelKey: 'sevMajor' },
+  { value: 'MINOR', labelKey: 'sevMinor' },
+  { value: 'WARNING', labelKey: 'sevWarning' },
+  { value: 'INDETERMINATE', labelKey: 'sevIndeterminate' },
 ];
 
 const ACK_OPTIONS = [
-  { value: 'false', label: 'Unacknowledged' },
-  { value: 'true', label: 'Acknowledged' },
+  { value: 'false', labelKey: 'ackUnacknowledged' },
+  { value: 'true', labelKey: 'ackAcknowledged' },
 ];
 
 // LiveIndicator shows the health of the alarm-events subscription so an operator
@@ -60,16 +63,17 @@ const ACK_OPTIONS = [
 // while connecting, amber when reconnecting (graphql-ws retries under the hood and
 // the periodic reconcile keeps the list fresh regardless).
 function LiveIndicator({ status }: { status: AlarmStreamStatus }) {
-  const map: Record<AlarmStreamStatus, { dot: string; label: string }> = {
-    live: { dot: 'bg-green-500', label: 'Live' },
-    connecting: { dot: 'bg-muted-foreground', label: 'Connecting…' },
-    reconnecting: { dot: 'bg-amber-500', label: 'Reconnecting…' },
+  const { t } = useTranslation('alarms');
+  const map: Record<AlarmStreamStatus, { dot: string; labelKey: string }> = {
+    live: { dot: 'bg-green-500', labelKey: 'live' },
+    connecting: { dot: 'bg-muted-foreground', labelKey: 'connecting' },
+    reconnecting: { dot: 'bg-amber-500', labelKey: 'reconnecting' },
   };
-  const { dot, label } = map[status];
+  const { dot, labelKey } = map[status];
   return (
     <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
       <span className={cn('inline-block size-2 rounded-full', dot, status === 'live' && 'animate-pulse')} />
-      {label}
+      {t(labelKey)}
     </span>
   );
 }
@@ -83,9 +87,15 @@ function originatorLabel(a: Alarm | AlarmEvent): string {
 }
 
 export default function AlarmsPage() {
+  const { t } = useTranslation('alarms');
   const { claims } = useAuth();
   const canWrite = hasAuthority(claims, 'alarm:write');
   const { toast } = useToast();
+  // Localize the filter option labels here (the wire `value` stays as-is). Rebuilt
+  // each render so they follow a live language switch.
+  const stateOptions = STATE_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }));
+  const severityOptions = SEVERITY_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }));
+  const ackOptions = ACK_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }));
 
   const [pageNumber, setPageNumber] = useState(1);
   const [state, setState] = useState('');
@@ -168,10 +178,10 @@ export default function AlarmsPage() {
     try {
       if (action === 'ack') {
         await acknowledgeAlarm(token);
-        toast('Alarm acknowledged');
+        toast(t('alarmAcknowledged'));
       } else {
         await clearAlarm(token);
-        toast('Alarm cleared');
+        toast(t('alarmCleared'));
       }
       // Reconcile from the authoritative row immediately (the actor sees their action
       // land without waiting on the debounced stream reconcile).
@@ -197,13 +207,11 @@ export default function AlarmsPage() {
 
   return (
     <PageShell
-      title="Alarms"
+      title={t('title')}
       banner="devices"
       description={
         <div className="mt-1 flex items-center gap-3">
-          <span className="text-sm text-muted-foreground">
-            Alarms raised across this tenant, live as they change.
-          </span>
+          <span className="text-sm text-muted-foreground">{t('description')}</span>
           <LiveIndicator status={status} />
           {lastEvent && (
             <span className="hidden items-center gap-1.5 text-xs text-muted-foreground md:inline-flex">
@@ -217,45 +225,49 @@ export default function AlarmsPage() {
         <div className="flex items-center gap-2">
           <Combobox
             className="h-9 w-36"
-            placeholder="All states"
+            placeholder={t('allStates')}
             value={state}
             onChange={setState}
-            options={STATE_OPTIONS}
+            options={stateOptions}
           />
           <Combobox
             className="h-9 w-40"
-            placeholder="All severities"
+            placeholder={t('allSeverities')}
             value={severity}
             onChange={setSeverity}
-            options={SEVERITY_OPTIONS}
+            options={severityOptions}
           />
           <Combobox
             className="h-9 w-44"
-            placeholder="Any acknowledgement"
+            placeholder={t('anyAck')}
             value={ack}
             onChange={setAck}
-            options={ACK_OPTIONS}
+            options={ackOptions}
           />
         </div>
       }
     >
       {!showTable && loading ? (
-        <LoadingState description="Loading alarms…" />
+        <LoadingState description={t('loading')} />
       ) : !showTable && error ? (
         <ErrorState description={error} />
       ) : results.length === 0 ? (
-        <EmptyState description="No alarms match." />
+        <EmptyState description={t('empty')} />
       ) : (
         <>
           <DataTable>
             <DataTableHead>
-              <DataTableHeaderCell>Severity</DataTableHeaderCell>
-              <DataTableHeaderCell>Status</DataTableHeaderCell>
-              <DataTableHeaderCell>Originator</DataTableHeaderCell>
-              <DataTableHeaderCell>Alarm</DataTableHeaderCell>
-              <DataTableHeaderCell className="text-right">Value</DataTableHeaderCell>
-              <DataTableHeaderCell>Raised</DataTableHeaderCell>
-              {canWrite && <DataTableHeaderCell className="text-right">Actions</DataTableHeaderCell>}
+              <DataTableHeaderCell>{t('colSeverity')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('common:colStatus')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colOriginator')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colAlarm')}</DataTableHeaderCell>
+              <DataTableHeaderCell className="text-right">{t('common:colValue')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colRaised')}</DataTableHeaderCell>
+              {canWrite && (
+                <DataTableHeaderCell className="text-right">
+                  {t('common:colActions')}
+                </DataTableHeaderCell>
+              )}
             </DataTableHead>
             <DataTableBody>
               {results.map((a) => (
@@ -296,7 +308,7 @@ export default function AlarmsPage() {
                               disabled={rowBusy(a.token)}
                               onClick={() => act(a.token, 'ack')}
                             >
-                              Acknowledge
+                              {t('acknowledge')}
                             </Button>
                           )}
                           <Button
@@ -306,7 +318,7 @@ export default function AlarmsPage() {
                             disabled={rowBusy(a.token)}
                             onClick={() => act(a.token, 'clear')}
                           >
-                            Clear
+                            {t('clear')}
                           </Button>
                         </div>
                       ) : (

@@ -17,6 +17,23 @@ import LanguageDetector from 'i18next-browser-languagedetector';
 
 import enCommon from './locales/en/common.json';
 import enLogin from './locales/en/login.json';
+import enNav from './locales/en/nav.json';
+import enUserMenu from './locales/en/userMenu.json';
+import enTheme from './locales/en/theme.json';
+import enDevices from './locales/en/devices.json';
+import enAlarms from './locales/en/alarms.json';
+import enDashboards from './locales/en/dashboards.json';
+import enTenants from './locales/en/tenants.json';
+
+import esCommon from './locales/es/common.json';
+import esLogin from './locales/es/login.json';
+import esNav from './locales/es/nav.json';
+import esUserMenu from './locales/es/userMenu.json';
+import esTheme from './locales/es/theme.json';
+import esDevices from './locales/es/devices.json';
+import esAlarms from './locales/es/alarms.json';
+import esDashboards from './locales/es/dashboards.json';
+import esTenants from './locales/es/tenants.json';
 
 export interface Locale {
   /** BCP-47 code; also the ./locales/<code>/ directory name and the i18next lng. */
@@ -26,13 +43,17 @@ export interface Locale {
 }
 
 // The locales the console actually ships. Adding one is a one-line change here
-// plus its catalogs under ./locales/<code>/. Only English ships today; Spanish
-// (ADR-066's proof locale) joins this list with sub-workstream (c), when its
-// catalogs land beside en's. Keeping this list to only-shipped locales is
-// deliberate — `supportedLngs` below is derived from it, so browser detection
-// can never resolve to a locale whose catalog is missing (which would render
-// raw keys to the user).
-export const SUPPORTED_LOCALES: Locale[] = [{ code: 'en', label: 'English' }];
+// plus its catalogs under ./locales/<code>/. Spanish is ADR-066's proof locale
+// (sub-workstream c): its `es` catalogs are a machine-drafted first pass pending
+// native review, deliberately broad to prove the pipeline end to end (chrome +
+// the primary tenant/admin screens) rather than deep. Keeping this list to
+// only-shipped locales is deliberate — `supportedLngs` below is derived from it,
+// so browser detection can never resolve to a locale whose catalog is missing
+// (which would render raw keys to the user).
+export const SUPPORTED_LOCALES: Locale[] = [
+  { code: 'en', label: 'English' },
+  { code: 'es', label: 'Español' },
+];
 
 export const DEFAULT_LOCALE = 'en';
 
@@ -45,11 +66,23 @@ export const DEFAULT_LOCALE = 'en';
 export const LOCALE_STORAGE_KEY = 'dc.locale';
 
 // One namespace per feature/route area so a catalog maps to a screen (ADR-066
-// decision 2). `common` holds cross-screen copy. The externalization sweep (b)
-// grows this list one namespace per screen; slice (a) ships common + login.
-export const NAMESPACES = ['common', 'login'] as const;
+// decision 2). `common` holds cross-screen copy (shared column headers, the
+// pagination line, Back); `nav` is the sidebar + top-bar label vocabulary shared
+// by both the tenant and admin shells. The externalization sweep (b) grows this
+// list one namespace per remaining screen.
+export const NAMESPACES = [
+  'common',
+  'login',
+  'nav',
+  'userMenu',
+  'theme',
+  'devices',
+  'alarms',
+  'dashboards',
+  'tenants',
+] as const;
 
-// Catalogs are bundled statically for slice (a): two small namespaces, so a
+// Catalogs are bundled statically: the corpus is still small enough that a
 // build-time import is simplest and has no loading state (hence useSuspense:false
 // below). The full corpus (sub-workstream b) switches to lazy per-namespace
 // loading so a screen pays only for its own catalog — NAMESPACES is the seam.
@@ -57,6 +90,24 @@ const resources = {
   en: {
     common: enCommon,
     login: enLogin,
+    nav: enNav,
+    userMenu: enUserMenu,
+    theme: enTheme,
+    devices: enDevices,
+    alarms: enAlarms,
+    dashboards: enDashboards,
+    tenants: enTenants,
+  },
+  es: {
+    common: esCommon,
+    login: esLogin,
+    nav: esNav,
+    userMenu: esUserMenu,
+    theme: esTheme,
+    devices: esDevices,
+    alarms: esAlarms,
+    dashboards: esDashboards,
+    tenants: esTenants,
   },
 } as const;
 

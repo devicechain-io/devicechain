@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   Building2,
   ChevronRight,
@@ -35,8 +36,9 @@ import {
 } from '@/components/ui/sidebar';
 import { AdminUser } from '@/routes/admin/AdminUser';
 
-type NavLeaf = { label: string; href: string; icon: LucideIcon };
-type NavGroupNode = { label: string; icon: LucideIcon; children: NavLeaf[] };
+// labelKey indexes the `nav` catalog (ADR-066), resolved with t() at render.
+type NavLeaf = { labelKey: string; href: string; icon: LucideIcon };
+type NavGroupNode = { labelKey: string; icon: LucideIcon; children: NavLeaf[] };
 type NavNode = NavLeaf | NavGroupNode;
 
 const isLeaf = (n: NavNode): n is NavLeaf => 'href' in n;
@@ -50,30 +52,30 @@ const isLeaf = (n: NavNode): n is NavLeaf => 'href' in n;
 // top-level peer (ADR-065 — a tier is packaging OF tenants, not a separate domain).
 const NAV: NavNode[] = [
   {
-    label: 'Tenants',
+    labelKey: 'adminTenants',
     icon: Building2,
     children: [
-      { label: 'List', href: '/admin/tenants', icon: List },
-      { label: 'Tiers', href: '/admin/tiers', icon: Layers },
+      { labelKey: 'adminList', href: '/admin/tenants', icon: List },
+      { labelKey: 'adminTiers', href: '/admin/tiers', icon: Layers },
     ],
   },
   {
-    label: 'Identities',
+    labelKey: 'adminIdentities',
     icon: Users,
     children: [
-      { label: 'List', href: '/admin/identities', icon: List },
+      { labelKey: 'adminList', href: '/admin/identities', icon: List },
       // Roles are the RBAC vocabulary identities are assigned, so the catalog nests under
       // Identities (the same "configuration OF the parent" logic that puts Tiers under
       // Tenants) rather than sitting as its own top-level peer.
-      { label: 'Roles', href: '/admin/roles', icon: ShieldCheck },
+      { labelKey: 'adminRoles', href: '/admin/roles', icon: ShieldCheck },
     ],
   },
-  { label: 'AI Providers', href: '/admin/ai-providers', icon: Sparkles },
+  { labelKey: 'adminAiProviders', href: '/admin/ai-providers', icon: Sparkles },
   // AI packaging (which models each tier grants) is not a top-level screen: it is
   // configuration OF the tiers, reached from a tier's detail page. The route still exists
   // (a cross-tier comparison matrix); it is just not its own nav entry.
-  { label: 'Audit', href: '/admin/audit', icon: ScrollText },
-  { label: 'Settings', href: '/admin/settings', icon: Settings },
+  { labelKey: 'audit', href: '/admin/audit', icon: ScrollText },
+  { labelKey: 'adminSettings', href: '/admin/settings', icon: Settings },
 ];
 
 // A child href matches the current route by prefix, so a tenant/tier DETAIL page keeps its
@@ -83,24 +85,26 @@ function childActive(pathname: string, href: string) {
   return pathname.startsWith(href);
 }
 
-// Label of the group that owns the current route, if any — used to keep the active group
-// expanded (including on deep links / refreshes).
-function activeGroupLabel(pathname: string): string | undefined {
+// labelKey of the group that owns the current route, if any — used to keep the active
+// group expanded (including on deep links / refreshes). Opaque accordion identity, not
+// display text.
+function activeGroupKey(pathname: string): string | undefined {
   return NAV.find(
     (n): n is NavGroupNode => !isLeaf(n) && n.children.some((c) => childActive(pathname, c.href)),
-  )?.label;
+  )?.labelKey;
 }
 
 export function AdminSidebar() {
   const { pathname } = useLocation();
-  const activeGroup = activeGroupLabel(pathname);
+  const { t } = useTranslation('nav');
+  const activeGroup = activeGroupKey(pathname);
   // Accordion: default to the group that owns the current route, and follow the route when
   // it moves into a different group (deep links / refreshes land expanded too).
   const [openGroup, setOpenGroup] = useState<string | null>(activeGroup ?? null);
   useEffect(() => {
     if (activeGroup) setOpenGroup(activeGroup);
   }, [activeGroup]);
-  const toggle = (label: string) => setOpenGroup((cur) => (cur === label ? null : label));
+  const toggle = (key: string) => setOpenGroup((cur) => (cur === key ? null : key));
 
   return (
     <Sidebar collapsible="icon">
@@ -110,7 +114,7 @@ export function AdminSidebar() {
             <SidebarMenuButton
               size="lg"
               asChild
-              tooltip="DeviceChain Admin"
+              tooltip={t('adminTooltip')}
               className="justify-center"
             >
               <Link to="/admin">
@@ -121,7 +125,9 @@ export function AdminSidebar() {
                     no tenant branding here — always the DeviceChain wordmark. */}
                 <div className="flex flex-col items-center gap-1 group-data-[collapsible=icon]:hidden">
                   <LogoHorizontal deviceColor="currentColor" className="h-[17px] w-auto" />
-                  <span className="truncate text-xs text-muted-foreground">Admin Console</span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {t('adminConsole')}
+                  </span>
                 </div>
               </Link>
             </SidebarMenuButton>
@@ -131,30 +137,30 @@ export function AdminSidebar() {
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Platform</SidebarGroupLabel>
+          <SidebarGroupLabel>{t('adminPlatform')}</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {NAV.map((node) =>
                 isLeaf(node) ? (
-                  <SidebarMenuItem key={node.label}>
+                  <SidebarMenuItem key={node.labelKey}>
                     <SidebarMenuButton
                       asChild
                       isActive={childActive(pathname, node.href)}
-                      tooltip={node.label}
+                      tooltip={t(node.labelKey)}
                     >
                       <Link to={node.href}>
                         <node.icon />
-                        <span>{node.label}</span>
+                        <span>{t(node.labelKey)}</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ) : (
                   <NavGroup
-                    key={node.label}
+                    key={node.labelKey}
                     node={node}
                     pathname={pathname}
-                    open={openGroup === node.label}
-                    onToggle={() => toggle(node.label)}
+                    open={openGroup === node.labelKey}
+                    onToggle={() => toggle(node.labelKey)}
                   />
                 ),
               )}
@@ -184,6 +190,7 @@ function NavGroup({
   onToggle: () => void;
 }) {
   const navigate = useNavigate();
+  const { t } = useTranslation('nav');
   const hasActiveChild = node.children.some((c) => childActive(pathname, c.href));
   // Expanding a group lands you on its first item in one click (the active-group effect
   // keeps it open); clicking an already-open group just collapses it. But if the current
@@ -200,10 +207,10 @@ function NavGroup({
         onClick={handleClick}
         // Highlight the collapsed parent so the user still sees where they are.
         isActive={hasActiveChild && !open}
-        tooltip={node.label}
+        tooltip={t(node.labelKey)}
       >
         <node.icon />
-        <span>{node.label}</span>
+        <span>{t(node.labelKey)}</span>
         <ChevronRight
           className={cn(
             'ml-auto transition-transform group-data-[collapsible=icon]:hidden',
@@ -218,7 +225,7 @@ function NavGroup({
               <SidebarMenuSubButton asChild isActive={childActive(pathname, child.href)}>
                 <Link to={child.href}>
                   <child.icon />
-                  <span>{child.label}</span>
+                  <span>{t(child.labelKey)}</span>
                 </Link>
               </SidebarMenuSubButton>
             </SidebarMenuSubItem>
