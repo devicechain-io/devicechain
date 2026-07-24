@@ -142,7 +142,6 @@ func helmValues(st *State) map[string]interface{} {
 
 	vals := map[string]interface{}{
 		"instance": instanceVals,
-		"profile":  st.Profile,
 		// Set the host explicitly (matching the chart default) so the deployed
 		// ingress and the access report agree on one value. --no-tls turns off the
 		// self-signed cert for a plain-HTTP (zero-warning) local URL.
@@ -157,6 +156,25 @@ func helmValues(st *State) map[string]interface{} {
 		// default (BEFORE this Helm step), so enable it — UNLESS --no-monitoring, where
 		// we install no operator and must not render CRs against absent CRDs.
 		"metrics": map[string]interface{}{"enabled": !st.NoMonitoring},
+	}
+
+	// Deployment selection: normally the named profile (or "" → the chart's default).
+	// When --enable-area added extra areas, ResolveEnabledAreas already expanded
+	// profile ∪ extras into one validated explicit set; emit THAT as
+	// enabledFunctionalAreas and NOT profile, because the chart rejects both being set
+	// at once (_helpers.tpl). The expansion preserves the profile's areas, so this is
+	// purely additive.
+	if len(st.EnabledAreas) > 0 {
+		// The chart's values schema validates enabledFunctionalAreas as a JSON array;
+		// a Go []string is not the jsonType its validator accepts, so hand it
+		// []interface{} of strings (the shape a YAML/JSON values file would produce).
+		areas := make([]interface{}, len(st.EnabledAreas))
+		for i, a := range st.EnabledAreas {
+			areas[i] = a
+		}
+		vals["enabledFunctionalAreas"] = areas
+	} else {
+		vals["profile"] = st.Profile
 	}
 
 	// Compact lowers the SCHEDULING requests so the pods fit a small node. It does

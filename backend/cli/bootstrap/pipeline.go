@@ -75,7 +75,15 @@ type State struct {
 	GrafanaSSO bool
 	// Compact applies the small-footprint preset (compactSizing). See Options.
 	Compact bool
-	Values  map[string]string
+	// EnableAreas is the raw extra areas requested via --enable-area (the delta over
+	// the profile), kept for an honest access-report label. EnabledAreas is the
+	// resolved+validated explicit set (profile ∪ extras), or nil when no extra area
+	// was requested; when set, helmValues emits it as enabledFunctionalAreas IN PLACE
+	// OF profile (the chart treats the two as mutually exclusive). See
+	// ResolveEnabledAreas.
+	EnableAreas  []string
+	EnabledAreas []string
+	Values       map[string]string
 }
 
 // Step is a single named unit of bootstrap work.
