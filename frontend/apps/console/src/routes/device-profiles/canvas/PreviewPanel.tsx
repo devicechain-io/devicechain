@@ -8,16 +8,16 @@
 // with the current graph, and renders the firing timeline + coverage stats + any degraded note.
 
 import { useEffect, useRef, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { errMessage } from '@/routes/common';
 import { previewRule, type PreviewResult, type NodeTraceStep } from '@/lib/api/event-processing';
 
-// The window presets (hours back from now). A preview is capped server-side to 24h.
-const WINDOWS: { label: string; hours: number }[] = [
-  { label: 'Last 1h', hours: 1 },
-  { label: 'Last 6h', hours: 6 },
-  { label: 'Last 24h', hours: 24 },
-];
+// The window presets (hours back from now). A preview is capped server-side to 24h. The label is
+// composed from `previewWindowLabel` + hours at render (not stored here) — model-ish tables like
+// this one are plain data, not JSX, so eslint's jsx-only literal-string rule never sees the old
+// 'Last 1h' text; it was still user-facing and had to be hunted down by hand.
+const WINDOWS: { hours: number }[] = [{ hours: 1 }, { hours: 6 }, { hours: 24 }];
 
 type State =
   | { status: 'idle' }
@@ -45,6 +45,7 @@ export function PreviewPanel({
   notReadyReason: string | null;
   onTrace: (steps: NodeTraceStep[] | null) => void;
 }) {
+  const { t } = useTranslation('deviceProfiles');
   const [hours, setHours] = useState(24);
   const [state, setState] = useState<State>({ status: 'idle' });
   // The firing whose trace is overlaid on the canvas (index into the current result's firings); null
@@ -107,7 +108,7 @@ export function PreviewPanel({
     <div className="space-y-3 rounded-md border p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold">Preview against history</span>
+          <span className="text-sm font-semibold">{t('previewTitle')}</span>
           <div className="flex overflow-hidden rounded-md border">
             {WINDOWS.map((w) => (
               <button
@@ -119,7 +120,7 @@ export function PreviewPanel({
                   hours === w.hours ? 'bg-primary text-primary-foreground' : 'bg-transparent hover:bg-muted',
                 ].join(' ')}
               >
-                {w.label}
+                {t('previewWindowLabel', { hours: w.hours })}
               </button>
             ))}
           </div>
@@ -132,13 +133,11 @@ export function PreviewPanel({
           disabled={notReadyReason !== null || state.status === 'running'}
           title={notReadyReason ?? undefined}
         >
-          Run preview
+          {t('previewRunButton')}
         </Button>
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        Replays this profile's published history and shows the raise/resolve edges this draft would have produced — nothing is published.
-      </p>
+      <p className="text-xs text-muted-foreground">{t('previewDescription')}</p>
 
       {state.status === 'error' && (
         <p className="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">{state.message}</p>
@@ -162,13 +161,14 @@ function PreviewOutcome({
   selected: number | null;
   onSelect: (idx: number, steps: NodeTraceStep[]) => void;
 }) {
+  const { t } = useTranslation('deviceProfiles');
   if (!result.ok) {
     // A resolver-level rejection (not a node compile error — the panel is gated on a good compile).
     // Surface the diagnostics directly rather than pointing at nodes that carry no error.
     return (
       <div className="space-y-1">
         {result.diagnostics.length === 0 ? (
-          <p className="text-xs text-muted-foreground">The preview could not run.</p>
+          <p className="text-xs text-muted-foreground">{t('previewCouldNotRun')}</p>
         ) : (
           result.diagnostics.map((d, i) => (
             <p key={i} className="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
@@ -184,15 +184,21 @@ function PreviewOutcome({
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span>
-          <span className="font-medium text-foreground tabular-nums">{firings.length}</span> firing{firings.length === 1 ? '' : 's'} · last {hours}h
+          <Trans
+            t={t}
+            i18nKey="previewFiringsCount"
+            count={firings.length}
+            values={{ count: firings.length, hours }}
+            components={{ b: <span className="font-medium text-foreground tabular-nums" /> }}
+          />
         </span>
         <span>
-          <span className="tabular-nums">{stats.eventsScanned}</span> events scanned
+          <Trans t={t} i18nKey="previewEventsScanned" values={{ count: stats.eventsScanned }} components={{ b: <span className="tabular-nums" /> }} />
         </span>
         <span>
-          <span className="tabular-nums">{stats.wallMs}</span> ms
+          <Trans t={t} i18nKey="previewWallMs" values={{ ms: stats.wallMs }} components={{ b: <span className="tabular-nums" /> }} />
         </span>
-        {stats.evalErrors > 0 && <span className="text-destructive">{stats.evalErrors} eval errors</span>}
+        {stats.evalErrors > 0 && <span className="text-destructive">{t('previewEvalErrors', { count: stats.evalErrors })}</span>}
       </div>
 
       {degraded && (
@@ -200,10 +206,10 @@ function PreviewOutcome({
       )}
 
       {firings.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No firings in this window.</p>
+        <p className="text-xs text-muted-foreground">{t('previewNoFirings')}</p>
       ) : (
         <>
-          <p className="text-[11px] text-muted-foreground">Select a firing to trace its path on the canvas.</p>
+          <p className="text-[11px] text-muted-foreground">{t('previewSelectFiringHint')}</p>
           <ul className="max-h-56 space-y-1 overflow-y-auto">
             {firings.map((f, i) => (
               <li key={i}>
@@ -222,7 +228,7 @@ function PreviewOutcome({
                       f.signal === 'raised' ? 'bg-destructive/15 text-destructive' : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
                     ].join(' ')}
                   >
-                    {f.signal === 'raised' ? 'RAISE' : 'RESOLVE'}
+                    {f.signal === 'raised' ? t('previewRaise') : t('previewResolve')}
                   </span>
                   <span className="font-mono text-muted-foreground">{f.series}</span>
                   <span className="ml-auto tabular-nums text-muted-foreground">{new Date(f.occurredAt).toLocaleString()}</span>

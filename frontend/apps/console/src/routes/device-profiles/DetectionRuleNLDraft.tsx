@@ -14,6 +14,7 @@
 // model's raw attempt, so the author can refine the description and try again.
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Textarea, errMessage } from '@/routes/common';
@@ -33,6 +34,7 @@ export function DetectionRuleNLDraft({
   // form (pre-filled, still a NEW rule) for the human to review and save.
   onDrafted: (definition: string) => void;
 }) {
+  const { t } = useTranslation('deviceProfiles');
   const [text, setText] = useState('');
   const [metrics, setMetrics] = useState<MetricHintInput[]>([]);
   const [busy, setBusy] = useState(false);
@@ -93,7 +95,7 @@ export function DetectionRuleNLDraft({
         }
         // ok with no definition would be a server contract break; surface it rather than
         // silently flipping the button back to idle with nothing shown.
-        setError('The draft compiled but returned no definition. Please try again.');
+        setError(t('nlNoDefinitionError'));
         return;
       }
       setResult(res);
@@ -111,8 +113,7 @@ export function DetectionRuleNLDraft({
     <div className="space-y-4">
       <div className="space-y-1">
         <p id="nl-draft-help" className="text-sm text-muted-foreground">
-          Describe the rule in plain language. AI drafts it and the compiler checks it; you review and
-          save the result through the form.
+          {t('nlHelpText')}
         </p>
       </div>
 
@@ -120,9 +121,11 @@ export function DetectionRuleNLDraft({
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={4}
-        aria-label="Rule description"
+        aria-label={t('nlDescriptionAriaLabel')}
+        // References the paragraph's `id` above — an ID pointer, not display text.
+        // eslint-disable-next-line i18next/no-literal-string
         aria-describedby="nl-draft-help"
-        placeholder="e.g. Raise a major alarm when the case temperature stays above 80°C for 5 minutes"
+        placeholder={t('nlPlaceholder')}
         onKeyDown={(e) => {
           // ⌘/Ctrl-Enter drafts, matching the app's other free-text submit affordances.
           if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -134,17 +137,16 @@ export function DetectionRuleNLDraft({
 
       <div className="flex items-center gap-3">
         <Button type="button" onClick={() => void submit()} disabled={busy || !text.trim()}>
-          {busy ? 'Drafting…' : 'Draft rule'}
+          {busy ? t('nlDraftButtonBusy') : t('nlDraftButtonIdle')}
         </Button>
-        <span className="text-xs text-muted-foreground">The AI proposes; the compiler decides. Nothing is saved until you do.</span>
+        <span className="text-xs text-muted-foreground">{t('nlFooterNote')}</span>
       </div>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
       {unavailable && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
-          {result?.unavailableReason ??
-            'Natural-language drafting is not available — no inference provider is enabled for this tenant.'}
+          {result?.unavailableReason ?? t('nlUnavailableDefaultReason')}
         </div>
       )}
 
@@ -152,8 +154,7 @@ export function DetectionRuleNLDraft({
         <div className="space-y-3">
           <div className="space-y-2">
             <p className="text-sm text-muted-foreground">
-              The draft didn’t compile after {result?.attempts ?? 0} attempt
-              {result?.attempts === 1 ? '' : 's'}. Refine your description and try again.
+              {t('nlDraftFailedMessage', { count: result?.attempts ?? 0 })}
             </p>
             <ul className="space-y-1">
               {result?.diagnostics.map((d, i) => (
@@ -169,7 +170,7 @@ export function DetectionRuleNLDraft({
           </div>
           {result?.rawCandidate && (
             <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer select-none">What the AI tried</summary>
+              <summary className="cursor-pointer select-none">{t('nlRawCandidateSummary')}</summary>
               <pre className="mt-2 max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 text-xs">
                 {result.rawCandidate}
               </pre>
@@ -177,7 +178,7 @@ export function DetectionRuleNLDraft({
           )}
           {result?.provider && (
             <p className="text-xs text-muted-foreground">
-              via {result.model || 'model'} ({result.provider})
+              {t('nlViaModelLabel', { model: result.model || t('nlModelFallback'), provider: result.provider })}
             </p>
           )}
         </div>

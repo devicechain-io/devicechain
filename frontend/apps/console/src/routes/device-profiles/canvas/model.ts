@@ -35,27 +35,31 @@ export type NodeCategory = 'source' | 'condition' | 'branch' | 'action' | 'compu
 
 // A node's typed ports + its category, keyed by port name — the client-side twin of the Go
 // `catalog`. Used to validate a connection before the server re-checks it, and to render ports.
+// `labelKey` is a stable i18n key (resolved via `t(`deviceProfiles:${labelKey}`)`) rather than
+// display text — model.ts is a plain module with no React context, so it cannot call the
+// translation hook itself; every consumer that renders a node's name resolves this key at render
+// time from within a component.
 export interface NodeSpec {
   category: NodeCategory;
-  label: string;
+  labelKey: string;
   in: Record<string, PortType>;
   out: Record<string, PortType>;
 }
 
 export const NODE_CATALOG: Record<NodeType, NodeSpec> = {
-  source: { category: 'source', label: 'Source', in: {}, out: { out: 'stream' } },
-  threshold: { category: 'condition', label: 'Threshold', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
-  duration: { category: 'condition', label: 'Duration', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  source: { category: 'source', labelKey: 'nodeSource', in: {}, out: { out: 'stream' } },
+  threshold: { category: 'condition', labelKey: 'nodeThreshold', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  duration: { category: 'condition', labelKey: 'nodeDuration', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
   // Absence has no leaf predicate (it fires on silence), so nothing for a compute value to feed — no
   // `value` input, mirroring the Go catalog.
-  absence: { category: 'condition', label: 'Absence', in: { in: 'stream' }, out: { signal: 'signal' } },
-  aggregate: { category: 'condition', label: 'Windowed aggregate', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
-  deltaRate: { category: 'condition', label: 'Rate of change', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
-  repeating: { category: 'condition', label: 'Repeating', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
-  correlation: { category: 'condition', label: 'Area correlation', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
-  branch: { category: 'branch', label: 'Branch', in: { in: 'signal', value: 'value' }, out: { out: 'signal' } },
-  action: { category: 'action', label: 'Action', in: { in: 'signal' }, out: {} },
-  compute: { category: 'compute', label: 'Compute', in: {}, out: { value: 'value' } },
+  absence: { category: 'condition', labelKey: 'nodeAbsence', in: { in: 'stream' }, out: { signal: 'signal' } },
+  aggregate: { category: 'condition', labelKey: 'nodeAggregate', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  deltaRate: { category: 'condition', labelKey: 'nodeDeltaRate', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  repeating: { category: 'condition', labelKey: 'nodeRepeating', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  correlation: { category: 'condition', labelKey: 'nodeCorrelation', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
+  branch: { category: 'branch', labelKey: 'nodeBranch', in: { in: 'signal', value: 'value' }, out: { out: 'signal' } },
+  action: { category: 'action', labelKey: 'nodeAction', in: { in: 'signal' }, out: {} },
+  compute: { category: 'compute', labelKey: 'nodeCompute', in: {}, out: { value: 'value' } },
 };
 
 export const CONDITION_TYPES: NodeType[] = [

@@ -8,6 +8,8 @@
 // re-checks it.
 
 import { memo } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import {
   NODE_CATALOG,
@@ -29,19 +31,21 @@ export interface CanvasNodeData {
   [key: string]: unknown;
 }
 
-// TRACE_STYLE maps a node's per-firing disposition (slice 9e) to its overlay badge label + colors.
-// The palette reads at a glance: green = the signal flowed (passed/raised/sent/cleared/delivered),
-// muted = it stopped or was inert (blocked/skipped/inert), and a distinct emerald for a resolve.
-const TRACE_STYLE: Record<string, { label: string; badge: string; border: string }> = {
-  delivered: { label: 'delivered', badge: 'bg-blue-500/15 text-blue-700 dark:text-blue-400', border: 'border-blue-500' },
-  raised: { label: 'raised', badge: 'bg-destructive/15 text-destructive', border: 'border-destructive' },
-  resolved: { label: 'resolved', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400', border: 'border-emerald-500' },
-  passed: { label: 'passed', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400', border: 'border-emerald-500' },
-  blocked: { label: 'blocked', badge: 'bg-amber-500/15 text-amber-700 dark:text-amber-400', border: 'border-amber-500' },
-  skipped: { label: 'skipped', badge: 'bg-muted text-muted-foreground', border: 'border-muted-foreground/40' },
-  sent: { label: 'sent', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400', border: 'border-emerald-500' },
-  cleared: { label: 'cleared', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400', border: 'border-emerald-500' },
-  inert: { label: 'inert', badge: 'bg-muted text-muted-foreground', border: 'border-muted-foreground/40' },
+// TRACE_STYLE maps a node's per-firing disposition (slice 9e) to its overlay badge labelKey +
+// colors. The palette reads at a glance: green = the signal flowed (passed/raised/sent/cleared/
+// delivered), muted = it stopped or was inert (blocked/skipped/inert), and a distinct emerald for
+// a resolve. labelKey is resolved via t() at render (this is a plain module-level table, not a
+// component), mirroring NODE_CATALOG's labelKey design in model.ts.
+const TRACE_STYLE: Record<string, { labelKey: string; badge: string; border: string }> = {
+  delivered: { labelKey: 'nodeTraceDelivered', badge: 'bg-blue-500/15 text-blue-700 dark:text-blue-400', border: 'border-blue-500' },
+  raised: { labelKey: 'nodeTraceRaised', badge: 'bg-destructive/15 text-destructive', border: 'border-destructive' },
+  resolved: { labelKey: 'nodeTraceResolved', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400', border: 'border-emerald-500' },
+  passed: { labelKey: 'nodeTracePassed', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400', border: 'border-emerald-500' },
+  blocked: { labelKey: 'nodeTraceBlocked', badge: 'bg-amber-500/15 text-amber-700 dark:text-amber-400', border: 'border-amber-500' },
+  skipped: { labelKey: 'nodeTraceSkipped', badge: 'bg-muted text-muted-foreground', border: 'border-muted-foreground/40' },
+  sent: { labelKey: 'nodeTraceSent', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400', border: 'border-emerald-500' },
+  cleared: { labelKey: 'nodeTraceCleared', badge: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400', border: 'border-emerald-500' },
+  inert: { labelKey: 'nodeTraceInert', badge: 'bg-muted text-muted-foreground', border: 'border-muted-foreground/40' },
 };
 
 const PORT_COLOR: Record<PortType, string> = {
@@ -63,12 +67,14 @@ function boundSummary(threshold: unknown): string {
   return '';
 }
 
-// leafSummary renders a when-leaf: structured `metric op bound`, raw CEL, or empty.
-function leafSummary(when: unknown): string {
-  if (!when || typeof when !== 'object') return 'every event';
+// leafSummary renders a when-leaf: structured `metric op bound`, raw CEL, or empty. `t` is the
+// deviceProfiles-scoped translate function, threaded down from CanvasNodeView (this is a plain
+// function, not a component, so it cannot call the hook itself).
+function leafSummary(t: TFunction, when: unknown): string {
+  if (!when || typeof when !== 'object') return t('nodeEveryEvent');
   const w = when as { metric?: string; op?: string; threshold?: unknown; cel?: string };
-  if (w.cel) return `CEL: ${w.cel}`;
-  if (!w.metric) return 'every event';
+  if (w.cel) return t('nodeCelPrefix', { cel: w.cel });
+  if (!w.metric) return t('nodeEveryEvent');
   const op = OP_SYMBOL[(w.op as CompareOp) ?? 'gt'] ?? w.op ?? '';
   return `${w.metric} ${op} ${boundSummary(w.threshold)}`.trim();
 }
@@ -83,41 +89,47 @@ const ms = (v: unknown): string => {
 };
 
 // summarize is the one-line description shown on a node card — a fast read of what it detects.
-export function summarize(type: NodeType, config: Record<string, unknown>): string {
+// `t` is the deviceProfiles-scoped translate function; summarize is a plain function (not a
+// component), so it cannot call useTranslation itself — CanvasNodeView threads its own `t` in.
+// Note: agg/windowMode/op-symbol/unit fragments (avg, tumbling, Δ, /s, …) are the rules-native
+// vocabulary shown verbatim to the author (same discipline as OP_SYMBOL and the inspector's
+// Select options for these enums) — intentionally not localized.
+export function summarize(t: TFunction, type: NodeType, config: Record<string, unknown>): string {
   const c = config;
   switch (type) {
     case 'source': {
       const scope = c.scope as { profileToken?: string } | undefined;
-      return scope?.profileToken ? `profile: ${scope.profileToken}` : 'no scope';
+      return scope?.profileToken ? t('nodeScopeProfile', { token: scope.profileToken }) : t('nodeNoScope');
     }
     case 'threshold':
-      return leafSummary(c.when);
+      return leafSummary(t, c.when);
     case 'duration':
-      return `${leafSummary(c.when)} · for ${ms(c.holdMs)}`;
+      return t('nodeDurationSummary', { leaf: leafSummary(t, c.when), duration: ms(c.holdMs) });
     case 'absence':
-      return `silent for ${ms(c.timeoutMs)}`;
+      return t('nodeSilentFor', { duration: ms(c.timeoutMs) });
     case 'aggregate': {
       const metric = c.agg === 'count' ? '' : `(${str(c.metric)})`;
-      const win = c.windowMode === 'session' ? `gap ${ms(c.gapMs)}` : c.windowMode === 'count' ? `${num(c.count)} evt` : ms(c.windowMs);
+      const win = c.windowMode === 'session' ? t('nodeAggregateGap', { duration: ms(c.gapMs) }) : c.windowMode === 'count' ? t('nodeAggregateEventCount', { count: num(c.count) }) : ms(c.windowMs);
       return `${str(c.agg)}${metric} ${OP_SYMBOL[(c.op as CompareOp) ?? 'gt'] ?? ''} ${num(c.threshold)} · ${str(c.windowMode)} ${win}`;
     }
     case 'deltaRate':
       return `Δ${str(c.metric)}${c.rate ? '/s' : ''} ${OP_SYMBOL[(c.op as CompareOp) ?? 'gt'] ?? ''} ${num(c.threshold)}`;
     case 'repeating':
-      return `${num(c.count)}× ${leafSummary(c.when)} in ${ms(c.windowMs)}`;
+      return t('nodeRepeatingSummary', { count: num(c.count), leaf: leafSummary(t, c.when), duration: ms(c.windowMs) });
     case 'correlation':
-      return `${num(c.count)} devices in ${str(c.anchorType)} · ${ms(c.windowMs)}`;
+      return t('nodeCorrelationSummary', { count: num(c.count), anchor: str(c.anchorType), duration: ms(c.windowMs) });
     case 'branch':
-      return str(c.when) ? `if ${str(c.when)}` : 'if …';
+      return str(c.when) ? t('nodeBranchIf', { when: str(c.when) }) : t('nodeBranchIfEmpty');
     case 'action':
-      return c.action === 'sendCommand' ? `send ${str(c.command) || '…'}` : `raise alarm ${str(c.alarmKey)}`.trim();
+      return c.action === 'sendCommand' ? t('nodeActionSend', { command: str(c.command) || '…' }) : t('nodeActionRaiseAlarm', { key: str(c.alarmKey) }).trim();
     case 'compute':
-      return str(c.name) ? `${str(c.name)} = ${str(c.expr) || '…'}` : 'value = …';
+      return str(c.name) ? t('nodeComputeSummary', { name: str(c.name), expr: str(c.expr) || '…' }) : t('nodeComputeEmpty');
   }
 }
 
 // CanvasNodeView renders one node with its typed handles and diagnostic state.
 export const CanvasNodeView = memo(function CanvasNodeView({ data, selected }: NodeProps) {
+  const { t } = useTranslation('deviceProfiles');
   const d = data as CanvasNodeData;
   const spec = NODE_CATALOG[d.nodeType];
   const name = str(d.config.name);
@@ -157,15 +169,15 @@ export const CanvasNodeView = memo(function CanvasNodeView({ data, selected }: N
       ))}
 
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{spec.label}</span>
+        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{t(spec.labelKey)}</span>
         {traceStyle ? (
-          <span className={['rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide', traceStyle.badge].join(' ')}>{traceStyle.label}</span>
+          <span className={['rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide', traceStyle.badge].join(' ')}>{t(traceStyle.labelKey)}</span>
         ) : (
           hasError && <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
         )}
       </div>
       {name && <div className="truncate text-sm font-medium">{name}</div>}
-      <div className="mt-0.5 truncate text-xs text-muted-foreground">{summarize(d.nodeType, d.config)}</div>
+      <div className="mt-0.5 truncate text-xs text-muted-foreground">{summarize(t, d.nodeType, d.config)}</div>
     </div>
   );
 });

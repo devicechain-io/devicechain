@@ -10,6 +10,7 @@
 // Detection Rules tab is that path's console form (slice 7a).
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { normalizeToken } from '@devicechain/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,7 +25,7 @@ import {
   createdColumn,
   type RegistryResource,
 } from '@/components/registry';
-import { DefinitionsPanel } from './DefinitionsPanel';
+import { DefinitionsPanel, type DefinitionColumn } from './DefinitionsPanel';
 import { VersionsPanel } from './VersionsPanel';
 import { MetricDefinitionForm, CommandDefinitionForm } from './DefinitionForms';
 import { DetectionRuleAuthoring } from './DetectionRuleAuthoring';
@@ -43,6 +44,9 @@ import {
   deleteDetectionRule,
   type DeviceProfile,
   type DeviceProfileCreateRequest,
+  type MetricDefinition,
+  type CommandDefinition,
+  type DetectionRule,
 } from '@/lib/api/device-management';
 
 // The rule type is inside the opaque definition JSON; read it defensively for the
@@ -62,6 +66,7 @@ const Dash = () => <span className="text-muted-foreground">—</span>;
 // is the free-text capability facet (ADR-045 decision 8), suggesting the values
 // already in use via SuggestField. Metadata is carried forward untouched on edit.
 function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (message: string) => void }) {
+  const { t } = useTranslation(['deviceProfiles', 'common', 'entities']);
   const editing = entity != null;
   const [token, setToken] = useState(entity?.token ?? '');
   const [name, setName] = useState(entity?.name ?? '');
@@ -83,10 +88,10 @@ function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (mess
       };
       if (editing) {
         await updateDeviceProfile(entity.token, request);
-        onDone(`Device profile “${entity.token}” updated`);
+        onDone(t('deviceProfiles:profileUpdatedToast', { token: entity.token }));
       } else {
         await createDeviceProfile(request);
-        onDone(`Device profile “${request.token}” created`);
+        onDone(t('deviceProfiles:profileCreatedToast', { token: request.token }));
       }
     } catch (err) {
       setFormError(errMessage(err));
@@ -98,7 +103,11 @@ function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (mess
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      <FormField label="Token" htmlFor="p-token" description={editing ? 'The profile id; it cannot change.' : undefined}>
+      <FormField
+        label={t('common:colToken')}
+        htmlFor="p-token"
+        description={editing ? t('deviceProfiles:profileTokenLockedHint') : undefined}
+      >
         {editing ? (
           <Input id="p-token" value={token} disabled />
         ) : (
@@ -108,29 +117,124 @@ function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (mess
             value={token}
             onChange={setToken}
             seed={name}
-            placeholder="thermostat-v2"
+            placeholder={t('deviceProfiles:profileTokenPlaceholder')}
           />
         )}
       </FormField>
-      <FormField label="Name" htmlFor="p-name">
+      <FormField label={t('common:colName')} htmlFor="p-name">
         <Input id="p-name" value={name} onChange={(e) => setName(e.target.value)} />
       </FormField>
       <FormField
-        label="Category"
+        label={t('entities:deviceProfileColCategory')}
         htmlFor="p-category"
-        description="Functional device class, e.g. thermostat, meter, gateway. Suggests categories already in use; you can type a new one."
+        description={t('deviceProfiles:profileCategoryHint')}
       >
-        <SuggestField id="p-category" facet="CATEGORY" value={category} onChange={setCategory} placeholder="thermostat" />
+        <SuggestField
+          id="p-category"
+          facet="CATEGORY"
+          value={category}
+          onChange={setCategory}
+          placeholder={t('deviceProfiles:profileCategoryPlaceholder')}
+        />
       </FormField>
-      <FormField label="Description" htmlFor="p-description">
+      <FormField label={t('common:colDescription')} htmlFor="p-description">
         <Textarea id="p-description" value={description} onChange={(e) => setDescription(e.target.value)} />
       </FormField>
       <div className="flex gap-2">
         <Button onClick={submit} loading={busy} disabled={busy || (!editing && !token.trim())}>
-          {editing ? 'Save changes' : 'Create device profile'}
+          {editing ? t('common:saveChanges') : t('deviceProfiles:profileCreateButton')}
         </Button>
       </div>
     </div>
+  );
+}
+
+// Detail-tab bodies as proper components (not inline arrow-function `render`
+// callbacks) so each can legally call useTranslation — `deviceProfileResource` is a
+// module-level config object, and its `render:` entries are plain callbacks invoked
+// from inside ResourceDetailPage, not components React can attach hook state to.
+// Column `header` values are i18n keys (resolved inside DefinitionsPanel), just
+// like the top-level registry `columns` config in this file. Declared as plain
+// consts rather than inline in the JSX below so they're outside the JSX tree the
+// (b)-sweep lint scans (mode: jsx-only) — matching how `@/components/registry`'s
+// own tokenColumn()/descriptionColumn() are plain functions, not inline literals.
+const metricColumns: DefinitionColumn<MetricDefinition>[] = [
+  { header: 'deviceProfiles:defColKey', cell: (d) => <span className="font-medium">{d.metricKey}</span> },
+  { header: 'common:colType', cell: (d) => d.dataType },
+  { header: 'deviceProfiles:defColUnit', cell: (d) => d.unit || <Dash /> },
+  {
+    header: 'deviceProfiles:defColRange',
+    cell: (d) =>
+      d.minValue == null && d.maxValue == null ? (
+        <Dash />
+      ) : (
+        <span className="tabular-nums">
+          {d.minValue ?? '−∞'} … {d.maxValue ?? '∞'}
+        </span>
+      ),
+  },
+];
+
+function MetricsTab({ profile }: { profile: DeviceProfile }) {
+  const { t } = useTranslation('deviceProfiles');
+  return (
+    <DefinitionsPanel
+      profileToken={profile.token}
+      i18nKey="defMetric"
+      description={t('defMetricDescription')}
+      load={listMetricDefinitions}
+      remove={deleteMetricDefinition}
+      removeConfirm={(d) => t('defMetricRemoveConfirm', { key: d.metricKey })}
+      columns={metricColumns}
+      renderForm={(e, onDone) => <MetricDefinitionForm profileToken={profile.token} entity={e} onDone={onDone} />}
+    />
+  );
+}
+
+function commandColumns(t: (key: string) => string): DefinitionColumn<CommandDefinition>[] {
+  return [
+    { header: 'deviceProfiles:defColKey', cell: (d) => <span className="font-medium">{d.commandKey}</span> },
+    { header: 'common:colName', cell: (d) => d.name || <Dash /> },
+    { header: 'deviceProfiles:defColParameters', cell: (d) => (d.parameterSchema ? t('deviceProfiles:defParamSchemaDeclared') : <Dash />) },
+  ];
+}
+
+function CommandsTab({ profile }: { profile: DeviceProfile }) {
+  const { t } = useTranslation(['deviceProfiles']);
+  return (
+    <DefinitionsPanel
+      profileToken={profile.token}
+      i18nKey="defCommand"
+      description={t('defCommandDescription')}
+      load={listCommandDefinitions}
+      remove={deleteCommandDefinition}
+      removeConfirm={(d) => t('defCommandRemoveConfirm', { key: d.commandKey })}
+      columns={commandColumns(t)}
+      renderForm={(e, onDone) => <CommandDefinitionForm profileToken={profile.token} entity={e} onDone={onDone} />}
+    />
+  );
+}
+
+const detectionRuleColumns: DefinitionColumn<DetectionRule>[] = [
+  { header: 'common:colName', cell: (d) => <span className="font-medium">{d.name || d.token}</span> },
+  { header: 'common:colType', cell: (d) => ruleTypeLabel(d.definition) },
+  { header: 'common:enabled', cell: (d) => <StatusBadge enabled={d.enabled} /> },
+];
+
+function DetectionRulesTab({ profile }: { profile: DeviceProfile }) {
+  const { t } = useTranslation('deviceProfiles');
+  return (
+    <DefinitionsPanel
+      profileToken={profile.token}
+      i18nKey="defDetectionRule"
+      description={t('defDetectionRuleDescription')}
+      load={listDetectionRules}
+      remove={deleteDetectionRule}
+      removeConfirm={(d) => t('defDetectionRuleRemoveConfirm', { key: d.token })}
+      className="sm:max-w-4xl"
+      columns={detectionRuleColumns}
+      renderForm={(e, onDone) => <DetectionRuleAuthoring profileToken={profile.token} entity={e} onDone={onDone} />}
+    />
   );
 }
 
@@ -163,74 +267,17 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
     {
       value: 'metrics',
       label: 'entities:deviceProfileMetricsTab',
-      render: (p) => (
-        <DefinitionsPanel
-          profileToken={p.token}
-          singular="metric"
-          description="The typed, unit-bearing measurements a device reports."
-          load={listMetricDefinitions}
-          remove={deleteMetricDefinition}
-          removeConfirm={(d) => `Delete metric “${d.metricKey}”?`}
-          columns={[
-            { header: 'Key', cell: (d) => <span className="font-medium">{d.metricKey}</span> },
-            { header: 'Type', cell: (d) => d.dataType },
-            { header: 'Unit', cell: (d) => d.unit || <Dash /> },
-            {
-              header: 'Range',
-              cell: (d) =>
-                d.minValue == null && d.maxValue == null ? (
-                  <Dash />
-                ) : (
-                  <span className="tabular-nums">
-                    {d.minValue ?? '−∞'} … {d.maxValue ?? '∞'}
-                  </span>
-                ),
-            },
-          ]}
-          renderForm={(e, onDone) => <MetricDefinitionForm profileToken={p.token} entity={e} onDone={onDone} />}
-        />
-      ),
+      render: (p) => <MetricsTab profile={p} />,
     },
     {
       value: 'commands',
       label: 'entities:deviceProfileCommandsTab',
-      render: (p) => (
-        <DefinitionsPanel
-          profileToken={p.token}
-          singular="command"
-          description="The commands a device accepts, with their optional parameter schema."
-          load={listCommandDefinitions}
-          remove={deleteCommandDefinition}
-          removeConfirm={(d) => `Delete command “${d.commandKey}”?`}
-          columns={[
-            { header: 'Key', cell: (d) => <span className="font-medium">{d.commandKey}</span> },
-            { header: 'Name', cell: (d) => d.name || <Dash /> },
-            { header: 'Parameters', cell: (d) => (d.parameterSchema ? 'declared' : <Dash />) },
-          ]}
-          renderForm={(e, onDone) => <CommandDefinitionForm profileToken={p.token} entity={e} onDone={onDone} />}
-        />
-      ),
+      render: (p) => <CommandsTab profile={p} />,
     },
     {
       value: 'detection-rules',
       label: 'entities:deviceProfileDetectionRulesTab',
-      render: (p) => (
-        <DefinitionsPanel
-          profileToken={p.token}
-          singular="detection rule"
-          description="Rules that raise alarms and send commands off this profile's telemetry. Author them step by step in the Form, or visually on the Canvas — both compile to the same rule."
-          load={listDetectionRules}
-          remove={deleteDetectionRule}
-          removeConfirm={(d) => `Delete detection rule “${d.token}”?`}
-          drawerClassName="sm:max-w-4xl"
-          columns={[
-            { header: 'Name', cell: (d) => <span className="font-medium">{d.name || d.token}</span> },
-            { header: 'Type', cell: (d) => ruleTypeLabel(d.definition) },
-            { header: 'Enabled', cell: (d) => <StatusBadge enabled={d.enabled} /> },
-          ]}
-          renderForm={(e, onDone) => <DetectionRuleAuthoring profileToken={p.token} entity={e} onDone={onDone} />}
-        />
-      ),
+      render: (p) => <DetectionRulesTab profile={p} />,
     },
     {
       value: 'rule-health',

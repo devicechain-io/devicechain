@@ -11,6 +11,7 @@
 // only when creating a new rule (there is nothing to "describe" when editing an existing one).
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { DetectionRuleForm } from './DetectionRuleForm';
 import { DetectionRuleNLDraft } from './DetectionRuleNLDraft';
@@ -28,6 +29,7 @@ export function DetectionRuleAuthoring({
   entity?: DetectionRule;
   onDone: (message: string) => void;
 }) {
+  const { t } = useTranslation('deviceProfiles');
   const [mode, setMode] = useState<Mode>(entity?.authoringGraph ? 'canvas' : 'form');
   // A compiled draft handed over from the NL door, used to pre-fill the form for a NEW rule. It
   // is passed as `initialDefinition` (not `entity`), so the form stays on the create path.
@@ -37,15 +39,20 @@ export function DetectionRuleAuthoring({
   return (
     <div className="space-y-4">
       <div className="inline-flex rounded-md border p-0.5 text-sm">
+        {/* 'form'/'canvas'/'nl' are the Mode discriminant, never user text — only the
+            ModeButton children (translated below) are display text. */}
+        {/* eslint-disable-next-line i18next/no-literal-string */}
         <ModeButton active={mode === 'form'} onClick={() => setMode('form')}>
-          Form
+          {t('ruleModeForm')}
         </ModeButton>
+        {/* eslint-disable-next-line i18next/no-literal-string */}
         <ModeButton active={mode === 'canvas'} onClick={() => setMode('canvas')}>
-          Canvas
+          {t('ruleModeCanvas')}
         </ModeButton>
         {creating && (
+          // eslint-disable-next-line i18next/no-literal-string
           <ModeButton active={mode === 'nl'} onClick={() => setMode('nl')}>
-            Describe
+            {t('ruleModeDescribe')}
           </ModeButton>
         )}
       </div>
@@ -55,6 +62,7 @@ export function DetectionRuleAuthoring({
           onDrafted={(definition) => {
             // Land the compiled draft in the form for the human to review and save.
             setNlDraft(definition);
+            // eslint-disable-next-line i18next/no-literal-string -- 'form' is the Mode discriminant.
             setMode('form');
           }}
         />

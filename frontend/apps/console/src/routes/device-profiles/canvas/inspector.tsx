@@ -9,6 +9,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { Trans, useTranslation } from 'react-i18next';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { Textarea } from '@/routes/common';
@@ -56,6 +57,7 @@ const strVal = (v: unknown): string => (typeof v === 'string' ? v : '');
 // DurationField edits a millisecond value as a number + unit, keeping the config in ms (the
 // wire form) while showing a friendly unit.
 function DurationField({ label, id, ms, onChange }: { label: string; id: string; ms: number; onChange: (ms: number) => void }) {
+  const { t } = useTranslation('deviceProfiles');
   // Pick the coarsest exact unit for display.
   const unit = ms !== 0 && ms % 3_600_000 === 0 ? 'h' : ms !== 0 && ms % 60_000 === 0 ? 'm' : ms % 1000 === 0 ? 's' : 'ms';
   const factor = unit === 'h' ? 3_600_000 : unit === 'm' ? 60_000 : unit === 's' ? 1000 : 1;
@@ -73,10 +75,10 @@ function DurationField({ label, id, ms, onChange }: { label: string; id: string;
           onChange={(e) => onChange(Math.round(Math.max(0, Number(e.target.value)) * factor))}
         />
         <Select value={unit} onChange={(u) => onChange(Math.round(shown * (u === 'h' ? 3_600_000 : u === 'm' ? 60_000 : u === 's' ? 1000 : 1)))}>
-          <option value="ms">ms</option>
-          <option value="s">sec</option>
-          <option value="m">min</option>
-          <option value="h">hr</option>
+          <option value="ms">{t('inspectorUnitMs')}</option>
+          <option value="s">{t('inspectorUnitSec')}</option>
+          <option value="m">{t('inspectorUnitMin')}</option>
+          <option value="h">{t('inspectorUnitHr')}</option>
         </Select>
       </div>
     </FormField>
@@ -100,6 +102,7 @@ const orderedOpOptions = COMPARE_OPS.filter((op) => op !== 'eq' && op !== 'ne').
 // LeafEditor edits a when-leaf: none (match every) / structured (metric·op·bound) / raw CEL.
 // `allowNone` is false for threshold/duration where the comparison IS the rule.
 function LeafEditor({ leaf, allowNone, onChange }: { leaf: unknown; allowNone: boolean; onChange: (leaf: unknown) => void }) {
+  const { t } = useTranslation('deviceProfiles');
   const l = asRecord(leaf);
   const bound = asRecord(l.threshold);
   const mode: 'none' | 'structured' | 'cel' = l.cel ? 'cel' : l.metric || l.op || l.threshold ? 'structured' : allowNone ? 'none' : 'structured';
@@ -113,47 +116,50 @@ function LeafEditor({ leaf, allowNone, onChange }: { leaf: unknown; allowNone: b
 
   return (
     <div className="space-y-3 rounded-md border border-dashed p-3">
-      <FormField label="Condition" htmlFor="leaf-mode">
+      <FormField label={t('inspectorConditionLabel')} htmlFor="leaf-mode">
         <Select id="leaf-mode" value={mode} onChange={setMode}>
-          {allowNone && <option value="none">Match every event</option>}
-          <option value="structured">Comparison</option>
-          <option value="cel">Advanced (CEL)</option>
+          {allowNone && <option value="none">{t('inspectorMatchEveryEvent')}</option>}
+          <option value="structured">{t('inspectorComparison')}</option>
+          <option value="cel">{t('inspectorAdvancedCel')}</option>
         </Select>
       </FormField>
       {mode === 'structured' && (
         <div className="grid grid-cols-[1fr_auto] gap-2">
-          <FormField label="Metric" htmlFor="leaf-metric">
-            <Input id="leaf-metric" value={strVal(l.metric)} onChange={(e) => onChange({ ...l, metric: e.target.value })} placeholder="tempC" />
+          <FormField label={t('inspectorMetricLabel')} htmlFor="leaf-metric">
+            <Input id="leaf-metric" value={strVal(l.metric)} onChange={(e) => onChange({ ...l, metric: e.target.value })} placeholder={t('inspectorMetricPlaceholder')} />
           </FormField>
-          <FormField label="Op" htmlFor="leaf-op">
+          <FormField label={t('inspectorOpLabel')} htmlFor="leaf-op">
             <Select id="leaf-op" value={strVal(l.op) || 'gt'} onChange={(op) => onChange({ ...l, op })}>
               {opOptions}
             </Select>
           </FormField>
-          <FormField label="Bound" htmlFor="leaf-boundkind">
+          <FormField label={t('inspectorBoundLabel')} htmlFor="leaf-boundkind">
             <Select
               id="leaf-boundkind"
               value={boundKind}
+              // eslint-disable-next-line i18next/no-literal-string -- 'attribute'/'literal' are the Bound.kind discriminant, not user text.
               onChange={(k) => onChange({ ...l, threshold: k === 'attribute' ? { kind: 'attribute', attribute: strVal(bound.attribute) } : { kind: 'literal', value: numVal(bound.value) } })}
             >
-              <option value="literal">Literal</option>
-              <option value="attribute">Device attribute</option>
+              <option value="literal">{t('inspectorLiteral')}</option>
+              <option value="attribute">{t('inspectorDeviceAttribute')}</option>
             </Select>
           </FormField>
           {boundKind === 'literal' ? (
-            <FormField label="Value" htmlFor="leaf-value">
+            <FormField label={t('inspectorValueLabel')} htmlFor="leaf-value">
+              {/* eslint-disable-next-line i18next/no-literal-string -- 'literal' is the Bound.kind discriminant, not user text. */}
               <Input id="leaf-value" type="number" value={numVal(bound.value)} onChange={(e) => onChange({ ...l, threshold: { kind: 'literal', value: Number(e.target.value) } })} />
             </FormField>
           ) : (
-            <FormField label="Attribute" htmlFor="leaf-attr">
-              <Input id="leaf-attr" value={strVal(bound.attribute)} onChange={(e) => onChange({ ...l, threshold: { kind: 'attribute', attribute: e.target.value } })} placeholder="tempLimit" />
+            <FormField label={t('inspectorAttributeLabel')} htmlFor="leaf-attr">
+              {/* eslint-disable-next-line i18next/no-literal-string -- 'attribute' is the Bound.kind discriminant, not user text. */}
+              <Input id="leaf-attr" value={strVal(bound.attribute)} onChange={(e) => onChange({ ...l, threshold: { kind: 'attribute', attribute: e.target.value } })} placeholder={t('inspectorAttributePlaceholder')} />
             </FormField>
           )}
         </div>
       )}
       {mode === 'cel' && (
-        <FormField label="CEL expression" htmlFor="leaf-cel" description="An advanced predicate over the event vocabulary. Cost-gated at compile.">
-          <Textarea id="leaf-cel" value={strVal(l.cel)} onChange={(e) => onChange({ cel: e.target.value })} placeholder='m["tempC"].value > 30' />
+        <FormField label={t('inspectorCelExpressionLabel')} htmlFor="leaf-cel" description={t('inspectorCelExpressionDescription')}>
+          <Textarea id="leaf-cel" value={strVal(l.cel)} onChange={(e) => onChange({ cel: e.target.value })} placeholder={t('inspectorCelPlaceholderThreshold')} />
         </FormField>
       )}
     </div>
@@ -162,14 +168,15 @@ function LeafEditor({ leaf, allowNone, onChange }: { leaf: unknown; allowNone: b
 
 // meta edits the shared rule identity (name/description/severity) carried on a condition node.
 function MetaFields({ config, set }: { config: NodeConfig; set: (patch: NodeConfig) => void }) {
+  const { t } = useTranslation('deviceProfiles');
   return (
     <>
-      <FormField label="Name" htmlFor="cfg-name">
-        <Input id="cfg-name" value={strVal(config.name)} onChange={(e) => set({ name: e.target.value })} placeholder="Freezer warming" />
+      <FormField label={t('inspectorNameLabel')} htmlFor="cfg-name">
+        <Input id="cfg-name" value={strVal(config.name)} onChange={(e) => set({ name: e.target.value })} placeholder={t('inspectorNamePlaceholder')} />
       </FormField>
-      <FormField label="Severity" htmlFor="cfg-severity" description="Required when this rule raises an alarm.">
+      <FormField label={t('inspectorSeverityLabel')} htmlFor="cfg-severity" description={t('inspectorSeverityDescription')}>
         <Select id="cfg-severity" value={strVal(config.severity)} onChange={(v) => set({ severity: v || undefined })}>
-          <option value="">— none —</option>
+          <option value="">{t('inspectorSeverityNone')}</option>
           {SEVERITIES.map((s) => (
             <option key={s} value={s}>
               {s}
@@ -183,6 +190,7 @@ function MetaFields({ config, set }: { config: NodeConfig; set: (patch: NodeConf
 
 // NodeInspector renders the field set for a node type. onChange receives the FULL new config.
 export function NodeInspector({ type, config, onChange }: { type: NodeType; config: NodeConfig; onChange: (config: NodeConfig) => void }) {
+  const { t } = useTranslation('deviceProfiles');
   const set = (patch: NodeConfig) => onChange({ ...config, ...patch });
   const setLeaf = (leaf: unknown) => onChange({ ...config, when: leaf });
 
@@ -190,7 +198,12 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
     case 'source':
       return (
         <p className="text-sm text-muted-foreground">
-          Scoped to profile <span className="font-mono">{strVal(asRecord(config.scope).profileToken)}</span>. Every rule reads this profile's telemetry.
+          <Trans
+            t={t}
+            i18nKey="inspectorSourceScopedTo"
+            values={{ token: strVal(asRecord(config.scope).profileToken) }}
+            components={{ mono: <span className="font-mono" /> }}
+          />
         </p>
       );
     case 'threshold':
@@ -205,14 +218,14 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
         <div className="space-y-4">
           <MetaFields config={config} set={set} />
           <LeafEditor leaf={config.when} allowNone={false} onChange={setLeaf} />
-          <DurationField label="Sustained for" id="cfg-hold" ms={numVal(config.holdMs)} onChange={(ms) => set({ holdMs: ms })} />
+          <DurationField label={t('inspectorSustainedFor')} id="cfg-hold" ms={numVal(config.holdMs)} onChange={(ms) => set({ holdMs: ms })} />
         </div>
       );
     case 'absence':
       return (
         <div className="space-y-4">
           <MetaFields config={config} set={set} />
-          <DurationField label="Silent for" id="cfg-timeout" ms={numVal(config.timeoutMs)} onChange={(ms) => set({ timeoutMs: ms })} />
+          <DurationField label={t('inspectorSilentForLabel')} id="cfg-timeout" ms={numVal(config.timeoutMs)} onChange={(ms) => set({ timeoutMs: ms })} />
         </div>
       );
     case 'aggregate': {
@@ -221,7 +234,7 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
         <div className="space-y-4">
           <MetaFields config={config} set={set} />
           <div className="grid grid-cols-2 gap-2">
-            <FormField label="Aggregate" htmlFor="cfg-agg">
+            <FormField label={t('inspectorAggregateLabel')} htmlFor="cfg-agg">
               <Select
                 id="cfg-agg"
                 value={strVal(config.agg) || 'avg'}
@@ -240,7 +253,7 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
                 ))}
               </Select>
             </FormField>
-            <FormField label="Window" htmlFor="cfg-mode">
+            <FormField label={t('inspectorWindowLabel')} htmlFor="cfg-mode">
               <Select
                 id="cfg-mode"
                 value={mode}
@@ -265,26 +278,26 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
             </FormField>
           </div>
           {config.agg !== 'count' && (
-            <FormField label="Value metric" htmlFor="cfg-metric">
-              <Input id="cfg-metric" value={strVal(config.metric)} onChange={(e) => set({ metric: e.target.value })} placeholder="tempC" />
+            <FormField label={t('inspectorValueMetricLabel')} htmlFor="cfg-metric">
+              <Input id="cfg-metric" value={strVal(config.metric)} onChange={(e) => set({ metric: e.target.value })} placeholder={t('inspectorMetricPlaceholder')} />
             </FormField>
           )}
           {(mode === 'tumbling' || mode === 'sliding') && (
-            <DurationField label="Window" id="cfg-window" ms={numVal(config.windowMs)} onChange={(ms) => set({ windowMs: ms })} />
+            <DurationField label={t('inspectorWindowLabel')} id="cfg-window" ms={numVal(config.windowMs)} onChange={(ms) => set({ windowMs: ms })} />
           )}
-          {mode === 'session' && <DurationField label="Session gap" id="cfg-gap" ms={numVal(config.gapMs)} onChange={(ms) => set({ gapMs: ms })} />}
+          {mode === 'session' && <DurationField label={t('inspectorSessionGapLabel')} id="cfg-gap" ms={numVal(config.gapMs)} onChange={(ms) => set({ gapMs: ms })} />}
           {mode === 'count' && (
-            <FormField label="Window size (events)" htmlFor="cfg-count">
+            <FormField label={t('inspectorWindowSizeEventsLabel')} htmlFor="cfg-count">
               <Input id="cfg-count" type="number" min={1} value={numVal(config.count)} onChange={(e) => set({ count: Number(e.target.value) })} />
             </FormField>
           )}
           <div className="grid grid-cols-2 gap-2">
-            <FormField label="Op" htmlFor="cfg-op">
+            <FormField label={t('inspectorOpLabel')} htmlFor="cfg-op">
               <Select id="cfg-op" value={strVal(config.op) || 'gt'} onChange={(v) => set({ op: v })}>
                 {orderedOpOptions}
               </Select>
             </FormField>
-            <FormField label="Threshold" htmlFor="cfg-threshold">
+            <FormField label={t('inspectorThresholdLabel')} htmlFor="cfg-threshold">
               <Input id="cfg-threshold" type="number" value={numVal(config.threshold)} onChange={(e) => set({ threshold: Number(e.target.value) })} />
             </FormField>
           </div>
@@ -295,20 +308,20 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
       return (
         <div className="space-y-4">
           <MetaFields config={config} set={set} />
-          <FormField label="Value metric" htmlFor="cfg-metric">
-            <Input id="cfg-metric" value={strVal(config.metric)} onChange={(e) => set({ metric: e.target.value })} placeholder="tempC" />
+          <FormField label={t('inspectorValueMetricLabel')} htmlFor="cfg-metric">
+            <Input id="cfg-metric" value={strVal(config.metric)} onChange={(e) => set({ metric: e.target.value })} placeholder={t('inspectorMetricPlaceholder')} />
           </FormField>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={!!config.rate} onChange={(e) => set({ rate: e.target.checked || undefined })} />
-            Per-second rate
+            {t('inspectorPerSecondRateLabel')}
           </label>
           <div className="grid grid-cols-2 gap-2">
-            <FormField label="Op" htmlFor="cfg-op">
+            <FormField label={t('inspectorOpLabel')} htmlFor="cfg-op">
               <Select id="cfg-op" value={strVal(config.op) || 'gt'} onChange={(v) => set({ op: v })}>
                 {orderedOpOptions}
               </Select>
             </FormField>
-            <FormField label="Threshold" htmlFor="cfg-threshold">
+            <FormField label={t('inspectorThresholdLabel')} htmlFor="cfg-threshold">
               <Input id="cfg-threshold" type="number" value={numVal(config.threshold)} onChange={(e) => set({ threshold: Number(e.target.value) })} />
             </FormField>
           </div>
@@ -320,10 +333,10 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
           <MetaFields config={config} set={set} />
           <LeafEditor leaf={config.when} allowNone onChange={setLeaf} />
           <div className="grid grid-cols-2 gap-2">
-            <FormField label="Count" htmlFor="cfg-count">
+            <FormField label={t('inspectorCountLabel')} htmlFor="cfg-count">
               <Input id="cfg-count" type="number" min={1} value={numVal(config.count)} onChange={(e) => set({ count: Number(e.target.value) })} />
             </FormField>
-            <DurationField label="Within" id="cfg-window" ms={numVal(config.windowMs)} onChange={(ms) => set({ windowMs: ms })} />
+            <DurationField label={t('inspectorWithinLabel')} id="cfg-window" ms={numVal(config.windowMs)} onChange={(ms) => set({ windowMs: ms })} />
           </div>
         </div>
       );
@@ -331,35 +344,42 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
       return (
         <div className="space-y-4">
           <MetaFields config={config} set={set} />
-          <FormField label="Anchor type" htmlFor="cfg-anchor" description="The area/anchor devices roll up to (e.g. zone).">
-            <Input id="cfg-anchor" value={strVal(config.anchorType)} onChange={(e) => set({ anchorType: e.target.value })} placeholder="zone" />
+          <FormField label={t('inspectorAnchorTypeLabel')} htmlFor="cfg-anchor" description={t('inspectorAnchorTypeDescription')}>
+            <Input id="cfg-anchor" value={strVal(config.anchorType)} onChange={(e) => set({ anchorType: e.target.value })} placeholder={t('inspectorAnchorTypePlaceholder')} />
           </FormField>
           <div className="grid grid-cols-2 gap-2">
-            <FormField label="Distinct devices" htmlFor="cfg-count">
+            <FormField label={t('inspectorDistinctDevicesLabel')} htmlFor="cfg-count">
               <Input id="cfg-count" type="number" min={1} value={numVal(config.count)} onChange={(e) => set({ count: Number(e.target.value) })} />
             </FormField>
-            <DurationField label="Within" id="cfg-window" ms={numVal(config.windowMs)} onChange={(ms) => set({ windowMs: ms })} />
+            <DurationField label={t('inspectorWithinLabel')} id="cfg-window" ms={numVal(config.windowMs)} onChange={(ms) => set({ windowMs: ms })} />
           </div>
         </div>
       );
     case 'branch':
       return (
         <div className="space-y-4">
-          <FormField label="Label" htmlFor="cfg-branch-name" description="An optional name for this route (authoring only).">
-            <Input id="cfg-branch-name" value={strVal(config.name)} onChange={(e) => set({ name: e.target.value || undefined })} placeholder="only when severe" />
+          <FormField label={t('inspectorBranchLabelLabel')} htmlFor="cfg-branch-name" description={t('inspectorBranchLabelDescription')}>
+            <Input id="cfg-branch-name" value={strVal(config.name)} onChange={(e) => set({ name: e.target.value || undefined })} placeholder={t('inspectorBranchNamePlaceholder')} />
           </FormField>
           <FormField
-            label="Only when (CEL)"
+            label={t('inspectorOnlyWhenCelLabel')}
             htmlFor="cfg-branch-when"
-            description="A boolean over the detection: value, hasValue, series. Downstream actions run only when it holds. Cost-gated at compile."
+            description={t('inspectorOnlyWhenCelDescription')}
           >
-            <Textarea id="cfg-branch-when" value={strVal(config.when)} onChange={(e) => set({ when: e.target.value })} placeholder="value > 100.0" />
+            <Textarea id="cfg-branch-when" value={strVal(config.when)} onChange={(e) => set({ when: e.target.value })} placeholder={t('inspectorBranchWhenPlaceholder')} />
           </FormField>
           <p className="rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
-            Use decimal literals (<span className="font-mono">value &gt; 100.0</span>, not <span className="font-mono">100</span>). <span className="font-mono">value</span> is the
-            triggering reading — it is absent for conditions that carry no scalar (absence, duration, and metric-less or raw-CEL leaves), so guard those
-            with <span className="font-mono">hasValue</span> (e.g. <span className="font-mono">hasValue &amp;&amp; value &gt; 100.0</span>). The branch never blocks an alarm from
-            clearing.
+            <Trans
+              t={t}
+              i18nKey="inspectorBranchHelp"
+              components={{
+                gt100: <span className="font-mono" />,
+                oneHundred: <span className="font-mono" />,
+                valueWord: <span className="font-mono" />,
+                hasValueWord: <span className="font-mono" />,
+                hasValueExpr: <span className="font-mono" />,
+              }}
+            />
           </p>
         </div>
       );
@@ -369,21 +389,30 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
       return (
         <div className="space-y-4">
           <FormField
-            label="Name"
+            label={t('inspectorNameLabel')}
             htmlFor="cfg-compute-name"
-            description="The identifier the condition or branch references this value by. Letters, digits, underscore; not starting with a digit."
+            description={t('inspectorComputeNameDescription')}
           >
-            <Input id="cfg-compute-name" value={strVal(config.name)} onChange={(e) => set({ name: e.target.value })} placeholder="tempF" />
+            <Input id="cfg-compute-name" value={strVal(config.name)} onChange={(e) => set({ name: e.target.value })} placeholder={t('inspectorComputeNamePlaceholder')} />
           </FormField>
-          <FormField label="Value (CEL)" htmlFor="cfg-compute-expr" description="A single expression the compiler folds into the predicate it feeds. Cost-gated at compile.">
-            <Textarea id="cfg-compute-expr" value={strVal(config.expr)} onChange={(e) => set({ expr: e.target.value })} placeholder={'m["tempC"] * 1.8 + 32.0'} />
+          <FormField label={t('inspectorComputeValueCelLabel')} htmlFor="cfg-compute-expr" description={t('inspectorComputeValueCelDescription')}>
+            <Textarea id="cfg-compute-expr" value={strVal(config.expr)} onChange={(e) => set({ expr: e.target.value })} placeholder={t('inspectorComputeCelPlaceholder')} />
           </FormField>
           <p className="rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
-            Wire this into a condition&apos;s or branch&apos;s <span className="font-mono">value</span> port, then reference it by name in that node&apos;s CEL (e.g.{' '}
-            <span className="font-mono">tempF &gt; 100.0</span>). It reads the vocabulary of whatever it feeds — the event&apos;s{' '}
-            <span className="font-mono">m</span>/<span className="font-mono">attr</span> for a condition leaf, the detection&apos;s{' '}
-            <span className="font-mono">value</span>/<span className="font-mono">hasValue</span>/<span className="font-mono">series</span> for a branch. Use decimal literals; a computed value can only feed a{' '}
-            <span className="font-mono">CEL</span> predicate, not a structured metric·op·threshold leaf.
+            <Trans
+              t={t}
+              i18nKey="inspectorComputeHelp"
+              components={{
+                valuePort: <span className="font-mono" />,
+                tempFExample: <span className="font-mono" />,
+                mWord: <span className="font-mono" />,
+                attrWord: <span className="font-mono" />,
+                valueWord: <span className="font-mono" />,
+                hasValueWord: <span className="font-mono" />,
+                seriesWord: <span className="font-mono" />,
+                celWord: <span className="font-mono" />,
+              }}
+            />
           </p>
         </div>
       );
@@ -404,59 +433,60 @@ function ActionFields({
   set: (patch: NodeConfig) => void;
   onChange: (config: NodeConfig) => void;
 }) {
+  const { t } = useTranslation('deviceProfiles');
   const kind = strVal(config.action) || 'raiseAlarm';
   return (
     <div className="space-y-4">
-      <FormField label="Action" htmlFor="cfg-action">
+      <FormField label={t('inspectorActionLabel')} htmlFor="cfg-action">
         <Select id="cfg-action" value={kind} onChange={(v) => onChange({ action: v })}>
-          <option value="raiseAlarm">Raise alarm</option>
-          <option value="sendCommand">Send command</option>
-          <option value="httpCall">Call a webhook</option>
-          <option value="publish">Publish to a connector</option>
+          <option value="raiseAlarm">{t('inspectorActionRaiseAlarm')}</option>
+          <option value="sendCommand">{t('inspectorActionSendCommand')}</option>
+          <option value="httpCall">{t('inspectorActionHttpCall')}</option>
+          <option value="publish">{t('inspectorActionPublish')}</option>
         </Select>
       </FormField>
 
       {kind === 'raiseAlarm' && (
-        <FormField label="Alarm key" htmlFor="cfg-alarmkey" description="Repeated firings escalate one alarm keyed on this. Empty ⇒ the rule's token.">
-          <Input id="cfg-alarmkey" value={strVal(config.alarmKey)} onChange={(e) => set({ alarmKey: e.target.value || undefined })} placeholder="freezer-warm" />
+        <FormField label={t('inspectorAlarmKeyLabel')} htmlFor="cfg-alarmkey" description={t('inspectorAlarmKeyDescription')}>
+          <Input id="cfg-alarmkey" value={strVal(config.alarmKey)} onChange={(e) => set({ alarmKey: e.target.value || undefined })} placeholder={t('inspectorAlarmKeyPlaceholder')} />
         </FormField>
       )}
 
       {kind === 'sendCommand' && (
         <>
-          <FormField label="Command" htmlFor="cfg-command">
-            <Input id="cfg-command" value={strVal(config.command)} onChange={(e) => set({ command: e.target.value })} placeholder="cool" />
+          <FormField label={t('inspectorCommandLabel')} htmlFor="cfg-command">
+            <Input id="cfg-command" value={strVal(config.command)} onChange={(e) => set({ command: e.target.value })} placeholder={t('inspectorCommandPlaceholder')} />
           </FormField>
-          <FormField label="Payload (JSON)" htmlFor="cfg-payload" description="Optional static argument object.">
-            <Textarea id="cfg-payload" value={strVal(config.payload)} onChange={(e) => set({ payload: e.target.value || undefined })} placeholder='{"level":2}' />
+          <FormField label={t('inspectorPayloadJsonLabel')} htmlFor="cfg-payload" description={t('inspectorPayloadJsonDescription')}>
+            <Textarea id="cfg-payload" value={strVal(config.payload)} onChange={(e) => set({ payload: e.target.value || undefined })} placeholder={t('inspectorPayloadJsonPlaceholder')} />
           </FormField>
         </>
       )}
 
       {kind === 'httpCall' && (
         <>
-          <FormField label="URL" htmlFor="cfg-url" description="An http/https endpoint. POST only. Delivered by the outbound-connectors service.">
-            <Input id="cfg-url" value={strVal(config.url)} onChange={(e) => set({ url: e.target.value })} placeholder="https://hooks.example.com/incident" />
+          <FormField label={t('inspectorUrlLabel')} htmlFor="cfg-url" description={t('inspectorUrlDescription')}>
+            <Input id="cfg-url" value={strVal(config.url)} onChange={(e) => set({ url: e.target.value })} placeholder={t('inspectorUrlPlaceholder')} />
           </FormField>
-          <FormField label="Body (CEL)" htmlFor="cfg-body" description="A CEL expression over the detection (value / hasValue / series) evaluating to the request body string. Empty ⇒ no body.">
-            <Textarea id="cfg-body" value={strVal(config.bodyTemplate)} onChange={(e) => set({ bodyTemplate: e.target.value || undefined })} placeholder={'"device " + string(series) + " overheated"'} />
+          <FormField label={t('inspectorBodyCelLabel')} htmlFor="cfg-body" description={t('inspectorBodyCelDescription')}>
+            <Textarea id="cfg-body" value={strVal(config.bodyTemplate)} onChange={(e) => set({ bodyTemplate: e.target.value || undefined })} placeholder={t('inspectorBodyCelPlaceholder')} />
           </FormField>
-          <FormField label="Headers" htmlFor="cfg-headers" description="Optional static headers, one “Key: Value” per line. Authorization / X-DC-* are reserved and rejected at publish.">
+          <FormField label={t('inspectorHeadersLabel')} htmlFor="cfg-headers" description={t('inspectorHeadersDescription')}>
             <HeadersField value={config.headers} onChange={(h) => set({ headers: h })} />
           </FormField>
-          <FormField label="Secret handle" htmlFor="cfg-secretref" description="Optional. The name of a stored secret presented as the auth header at dispatch. Never the cleartext value.">
-            <Input id="cfg-secretref" value={strVal(config.secretRef)} onChange={(e) => set({ secretRef: e.target.value || undefined })} placeholder="incident-webhook-token" />
+          <FormField label={t('inspectorSecretHandleLabel')} htmlFor="cfg-secretref" description={t('inspectorSecretHandleDescription')}>
+            <Input id="cfg-secretref" value={strVal(config.secretRef)} onChange={(e) => set({ secretRef: e.target.value || undefined })} placeholder={t('inspectorSecretHandlePlaceholder')} />
           </FormField>
         </>
       )}
 
       {kind === 'publish' && (
         <>
-          <FormField label="Connector" htmlFor="cfg-connectorref" description="The registered connector to publish through. Manage connectors under Connectors.">
+          <FormField label={t('inspectorConnectorLabel')} htmlFor="cfg-connectorref" description={t('inspectorConnectorDescription')}>
             <ConnectorPicker value={strVal(config.connectorRef)} onChange={(v) => set({ connectorRef: v || undefined })} />
           </FormField>
-          <FormField label="Payload (CEL)" htmlFor="cfg-payloadtemplate" description="A CEL expression over the detection evaluating to the message body string. Empty ⇒ an empty payload.">
-            <Textarea id="cfg-payloadtemplate" value={strVal(config.payloadTemplate)} onChange={(e) => set({ payloadTemplate: e.target.value || undefined })} placeholder={'"overheat: " + string(series)'} />
+          <FormField label={t('inspectorPayloadCelLabel')} htmlFor="cfg-payloadtemplate" description={t('inspectorPayloadCelDescription')}>
+            <Textarea id="cfg-payloadtemplate" value={strVal(config.payloadTemplate)} onChange={(e) => set({ payloadTemplate: e.target.value || undefined })} placeholder={t('inspectorPayloadCelPlaceholder')} />
           </FormField>
         </>
       )}
@@ -469,6 +499,7 @@ function ActionFields({
 // publish-time existence check is server-side); an unknown/stale current value is
 // still shown so it isn't silently dropped.
 function ConnectorPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const { t } = useTranslation('deviceProfiles');
   const { data, loading } = useQuery(() => listConnectors({ pageNumber: 1, pageSize: 100 }), []);
   const connectors = data?.results ?? [];
   const known = connectors.some((c) => c.token === value);
@@ -477,16 +508,16 @@ function ConnectorPicker({ value, onChange }: { value: string; onChange: (v: str
   if (!loading && connectors.length === 0 && !value) {
     return (
       <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-        No connectors yet. Create one under <Link to="/connectors" className="text-primary hover:underline">Connectors</Link>, then pick it here.
+        <Trans t={t} i18nKey="inspectorNoConnectorsHint" components={{ link: <Link to="/connectors" className="text-primary hover:underline" /> }} />
       </p>
     );
   }
   return (
     <Select id="cfg-connectorref" value={value} onChange={onChange}>
-      <option value="">{loading ? 'Loading…' : 'Select a connector…'}</option>
+      <option value="">{loading ? t('common:loading') : t('inspectorSelectConnectorPlaceholder')}</option>
       {/* Show a "(not found)" row for a value not in the list — but only once loaded, so a valid
           ref doesn't flash as not-found while the query is in flight. */}
-      {!loading && value && !known && <option value={value}>{value} (not found)</option>}
+      {!loading && value && !known && <option value={value}>{t('inspectorConnectorNotFound', { token: value })}</option>}
       {connectors.map((c) => (
         <option key={c.token} value={c.token}>
           {c.name ? `${c.name} (${c.token})` : c.token}
@@ -502,6 +533,7 @@ function ConnectorPicker({ value, onChange }: { value: string; onChange: (v: str
 // to the node config on each change; the textarea shows the local text. It is remounted per node
 // (NodeInspector is keyed by node id), so the seed is always the selected node's headers.
 function HeadersField({ value, onChange }: { value: unknown; onChange: (h: Record<string, string> | undefined) => void }) {
+  const { t } = useTranslation('deviceProfiles');
   const [text, setText] = useState(() => formatHeaders(value));
   return (
     <Textarea
@@ -511,7 +543,7 @@ function HeadersField({ value, onChange }: { value: unknown; onChange: (h: Recor
         setText(e.target.value);
         onChange(parseHeaders(e.target.value));
       }}
-      placeholder={'Content-Type: application/json'}
+      placeholder={t('inspectorHeadersPlaceholder')}
     />
   );
 }

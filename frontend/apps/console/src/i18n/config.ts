@@ -23,6 +23,7 @@ import enTheme from './locales/en/theme.json';
 import enDevices from './locales/en/devices.json';
 import enAlarms from './locales/en/alarms.json';
 import enDashboards from './locales/en/dashboards.json';
+import enDeviceProfiles from './locales/en/deviceProfiles.json';
 import enTenants from './locales/en/tenants.json';
 import enTiers from './locales/en/tiers.json';
 import enConnectors from './locales/en/connectors.json';
@@ -46,6 +47,7 @@ import esTheme from './locales/es/theme.json';
 import esDevices from './locales/es/devices.json';
 import esAlarms from './locales/es/alarms.json';
 import esDashboards from './locales/es/dashboards.json';
+import esDeviceProfiles from './locales/es/deviceProfiles.json';
 import esTenants from './locales/es/tenants.json';
 import esTiers from './locales/es/tiers.json';
 import esConnectors from './locales/es/connectors.json';
@@ -114,6 +116,7 @@ export const NAMESPACES = [
   'devices',
   'alarms',
   'dashboards',
+  'deviceProfiles',
   'tenants',
   'tiers',
   'connectors',
@@ -147,6 +150,7 @@ const resources = {
     devices: enDevices,
     alarms: enAlarms,
     dashboards: enDashboards,
+    deviceProfiles: enDeviceProfiles,
     tenants: enTenants,
     tiers: enTiers,
     connectors: enConnectors,
@@ -171,6 +175,7 @@ const resources = {
     devices: esDevices,
     alarms: esAlarms,
     dashboards: esDashboards,
+    deviceProfiles: esDeviceProfiles,
     tenants: esTenants,
     tiers: esTiers,
     connectors: esConnectors,

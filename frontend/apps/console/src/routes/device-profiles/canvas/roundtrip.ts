@@ -222,22 +222,40 @@ export interface SynthesisResult {
   error?: string;
 }
 
+// A minimal i18next-shaped translate function. roundtrip.ts is a plain module (no React), so it
+// cannot call useTranslation itself; callers with hook access (CanvasEditor) pass their real `t`
+// (already scoped to the `deviceProfiles` namespace). defaultTranslate is the fallback used when
+// no `t` is supplied — e.g. roundtrip.test.ts, which asserts on the literal English `error` text.
+type Translate = (key: string, options?: Record<string, unknown>) => string;
+const defaultTranslate: Translate = (key, options) => {
+  switch (key) {
+    case 'canvasErrorInvalidJson':
+      return 'The rule definition is not valid JSON.';
+    case 'canvasErrorNotRuleObject':
+      return 'The rule definition is not a rule object.';
+    case 'canvasErrorUnsupportedType':
+      return `This rule type (${(options?.type as string | undefined) ?? 'unknown'}) cannot be shown on the canvas.`;
+    default:
+      return key;
+  }
+};
+
 // graphFromDefinition synthesizes a canvas graph from a rules.Rule JSON definition: one
 // profile-scoped Source, one condition node of the rule's type, and one Action node per
 // declared action, wired source→condition→action. Deterministic and pure.
-export function graphFromDefinition(definition: string, profileToken: string): SynthesisResult {
+export function graphFromDefinition(definition: string, profileToken: string, t: Translate = defaultTranslate): SynthesisResult {
   let rule: WireRule;
   try {
     rule = JSON.parse(definition) as WireRule;
   } catch {
-    return { graph: null, error: 'The rule definition is not valid JSON.' };
+    return { graph: null, error: t('canvasErrorInvalidJson') };
   }
   if (!rule || typeof rule !== 'object') {
-    return { graph: null, error: 'The rule definition is not a rule object.' };
+    return { graph: null, error: t('canvasErrorNotRuleObject') };
   }
   const type = rule.type as NodeType;
   if (!type || !isConditionType(type)) {
-    return { graph: null, error: `This rule type (${rule.type ?? 'unknown'}) cannot be shown on the canvas.` };
+    return { graph: null, error: t('canvasErrorUnsupportedType', { type: rule.type ?? 'unknown' }) };
   }
 
   const nodes: CanvasNode[] = [];

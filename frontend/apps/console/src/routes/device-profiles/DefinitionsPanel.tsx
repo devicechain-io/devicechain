@@ -13,6 +13,7 @@
 // message — but that is why saving a definition does not change live behaviour.
 
 import { useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Plus, Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -30,43 +31,55 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { FormDrawer } from '@/components/registry';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
-import { cap } from '@/components/registry/forms';
 import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
 
 export interface DefinitionColumn<TDef> {
+  /** i18n key, e.g. "deviceProfiles:defColKey" or "common:colName" — resolved here. */
   header: string;
   cell: (d: TDef) => ReactNode;
 }
 
 export function DefinitionsPanel<TDef extends { id: string; token: string }>({
   profileToken,
-  singular,
+  i18nKey,
   description,
   load,
   columns,
   renderForm,
   remove,
   removeConfirm,
-  drawerClassName,
+  className,
 }: {
   profileToken: string;
-  /** Lowercase singular, e.g. "metric". */
-  singular: string;
+  /**
+   * Key prefix in the `deviceProfiles` catalog this panel composes its prose from,
+   * e.g. "defMetric" -> defMetricNew / defMetricEmpty / defMetricDeleted / …. Kept
+   * as a key rather than a raw noun ("metric") so each locale supplies its own
+   * grammatical sentence instead of this shared component interpolating a bare noun
+   * into one English-shaped template (which breaks under gender/case elsewhere) —
+   * the same convention `RegistryResource.i18nKey` uses for the top-level registry.
+   */
+  i18nKey: string;
+  /** Already-translated tab description shown above the list. */
   description: string;
   load: (profileToken: string) => Promise<TDef[]>;
   columns: DefinitionColumn<TDef>[];
   /** The create/edit form; the profile token is bound by the caller. */
   renderForm: (entity: TDef | undefined, onDone: (message: string) => void) => ReactNode;
   remove: (token: string) => Promise<unknown>;
+  /** Already-translated confirm-dialog body for deleting one entity. */
   removeConfirm: (d: TDef) => string;
   /** Widens the edit drawer — e.g. for the detection-rule canvas editor. */
-  drawerClassName?: string;
+  className?: string;
 }) {
   const { claims } = useAuth();
   const canWrite = hasAuthority(claims, 'device:write');
   const { toast } = useToast();
   const confirm = useConfirm();
+  const { t } = useTranslation(['deviceProfiles', 'common']);
+  // Resolve one of this definition-kind's noun-bearing strings by its fixed suffix.
+  const e = (suffix: string, opts?: Record<string, unknown>) => t(`deviceProfiles:${i18nKey}${suffix}`, opts);
   const [version, reload] = useReload();
   const { data, loading, error } = useQuery(() => load(profileToken), [profileToken, version]);
   const [drawer, setDrawer] = useState<{ open: boolean; entity?: TDef }>({ open: false });
@@ -81,20 +94,20 @@ export function DefinitionsPanel<TDef extends { id: string; token: string }>({
   };
 
   const del = async (d: TDef) => {
-    if (!(await confirm({ title: `Delete ${singular}`, description: removeConfirm(d), confirmLabel: 'Delete' })))
+    if (!(await confirm({ title: e('DeleteTitle'), description: removeConfirm(d), confirmLabel: t('common:delete') })))
       return;
     setRemoving((s) => new Set(s).add(d.token));
     try {
       await remove(d.token);
-      toast(`${cap(singular)} “${d.token}” deleted`);
+      toast(e('Deleted', { token: d.token }));
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');
     } finally {
       setRemoving((s) => {
-        const n = new Set(s);
-        n.delete(d.token);
-        return n;
+        const next = new Set(s);
+        next.delete(d.token);
+        return next;
       });
     }
   };
@@ -105,7 +118,7 @@ export function DefinitionsPanel<TDef extends { id: string; token: string }>({
         <p className="max-w-prose text-sm text-muted-foreground">{description}</p>
         {canWrite && (
           <Button size="sm" onClick={() => setDrawer({ open: true })} className="shrink-0">
-            <Plus size={16} /> New {singular}
+            <Plus size={16} /> {e('New')}
           </Button>
         )}
       </div>
@@ -113,29 +126,29 @@ export function DefinitionsPanel<TDef extends { id: string; token: string }>({
       <FormDrawer
         open={drawer.open}
         onOpenChange={(open) => setDrawer((s) => ({ ...s, open }))}
-        title={`${drawer.entity ? 'Edit' : 'New'} ${singular}`}
-        contentClassName={drawerClassName}
+        title={drawer.entity ? e('EditTitle') : e('NewTitle')}
+        contentClassName={className}
       >
         {/* Mount the form only while open so each open starts from fresh state. */}
         {drawer.open && renderForm(drawer.entity, onDone)}
       </FormDrawer>
 
       {loading && !data ? (
-        <LoadingState description={`Loading ${singular} definitions…`} />
+        <LoadingState description={e('Loading')} />
       ) : error ? (
         <ErrorState description={error} />
       ) : items.length === 0 ? (
         <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
-          No {singular} definitions yet.
-          {canWrite && ` Use “New ${singular}” to add one.`}
+          {e('Empty')}
+          {canWrite && ` ${e('EmptyHint')}`}
         </p>
       ) : (
         <DataTable>
           <DataTableHead>
             {columns.map((c) => (
-              <DataTableHeaderCell key={c.header}>{c.header}</DataTableHeaderCell>
+              <DataTableHeaderCell key={c.header}>{t(c.header)}</DataTableHeaderCell>
             ))}
-            {canWrite && <DataTableHeaderCell className="text-right">Actions</DataTableHeaderCell>}
+            {canWrite && <DataTableHeaderCell className="text-right">{t('common:colActions')}</DataTableHeaderCell>}
           </DataTableHead>
           <DataTableBody>
             {items.map((d) => (
@@ -147,7 +160,7 @@ export function DefinitionsPanel<TDef extends { id: string; token: string }>({
                   <DataTableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="sm" onClick={() => setDrawer({ open: true, entity: d })}>
-                        <Pencil size={14} /> Edit
+                        <Pencil size={14} /> {t('deviceProfiles:defEdit')}
                       </Button>
                       <Button
                         variant="ghost"
