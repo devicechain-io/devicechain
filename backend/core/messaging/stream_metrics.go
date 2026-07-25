@@ -91,6 +91,20 @@ func (m *streamMetrics) sampleReplication(name string, info *nats.StreamInfo, de
 	m.peersCurrent.WithLabelValues(name).Set(float64(currentPeers(info)))
 }
 
+// forgetReplication drops a stream's replication series when it cannot be read.
+//
+// Leaving the last healthy values in place would be worse than reporting nothing:
+// the alerting condition is peersCurrent < replicasActual, so a pod that can no
+// longer reach the JetStream API would keep exporting a scrapable, plausible,
+// stale "everything is fine" — and the one condition that would have fired can
+// never fire while the thing it watches is unreachable. Absence of a series is
+// detectable (Prometheus `absent()`, a stale-series alert); a frozen series is not.
+func (m *streamMetrics) forgetReplication(name string) {
+	m.replicasDesired.DeleteLabelValues(name)
+	m.replicasActual.DeleteLabelValues(name)
+	m.peersCurrent.DeleteLabelValues(name)
+}
+
 // currentPeers counts the RAFT peers that are caught up AND online, including the
 // leader.
 //
@@ -135,6 +149,7 @@ func (m *streamMetrics) sample(js nats.JetStreamContext, names, buckets []string
 		info, err := js.StreamInfo(name)
 		if err != nil {
 			log.Debug().Err(err).Str("bucket", name).Msg("KV bucket replication sample failed")
+			m.forgetReplication(name)
 			continue
 		}
 		m.sampleReplication(name, info, desired)
@@ -143,6 +158,7 @@ func (m *streamMetrics) sample(js nats.JetStreamContext, names, buckets []string
 		info, err := js.StreamInfo(name)
 		if err != nil {
 			log.Debug().Err(err).Str("stream", name).Msg("Stream utilization sample failed")
+			m.forgetReplication(name)
 			continue
 		}
 		m.sampleReplication(name, info, desired)

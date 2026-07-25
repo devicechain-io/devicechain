@@ -126,10 +126,6 @@ func (nmgr *NatsManager) reconcileKvBucket(bucket string, maxBytes int64, tier k
 			Msg("Could not read KV bucket config to apply its disk ceiling; it stays as-is until the next startup")
 		return
 	}
-	cfg := info.Config
-	previousBytes := cfg.MaxBytes
-	previousReplicas := cfg.Replicas
-
 	// The replica factor is reconciled UPWARD, and it is why this function matters
 	// beyond disk. A bucket's replication is otherwise set once, at creation, and
 	// never revisited — so an instance that turns on HA replicates the buckets it
@@ -138,24 +134,29 @@ func (nmgr *NatsManager) reconcileKvBucket(bucket string, maxBytes int64, tier k
 	// dc_leases means the lease deciding which pod may write lives on exactly one
 	// node. Losing that node does not merely lose the lease, it blocks every
 	// standby's Acquire — the failover the fence exists to make safe cannot happen.
-	// See applyStreamReplicas for why downward is refused rather than applied.
 	//
-	// Note the two reconciles below are deliberately INDEPENDENT, and the ordering
-	// is load-bearing. The State-tier shrink refusal further down returns early, and
-	// dc_leases is a State bucket — so computing replicas after that guard would
-	// make an over-ceiling dc_leases permanently unreplicable, which is precisely
-	// the bucket that can least afford it. A bucket being too full to safely bound
-	// says nothing about whether it should be replicated.
-	desiredReplicas := nmgr.effectiveStreamReplicas()
-	replicasChanged, replicasRefused := applyStreamReplicas(&cfg, desiredReplicas)
-	if replicasRefused {
-		log.Warn().Str("bucket", bucket).Int("current", previousReplicas).Int("configured", desiredReplicas).
-			Msg("KV bucket has MORE replicas than this instance is configured for; leaving it alone rather " +
-				"than de-replicating it from a starting pod")
-	}
+	// It runs FIRST, and that ordering is load-bearing rather than incidental. The
+	// State-tier shrink refusal below returns early, and dc_leases is a State bucket
+	// — so reconciling replicas after that guard would make an over-ceiling
+	// dc_leases permanently unreplicable, which is exactly the bucket that can least
+	// afford it. A bucket being too full to safely bound says nothing about whether
+	// it should be replicated. It is also a separate UpdateStream for the reasons
+	// given in reconcileStreamReplicas, which both paths now share.
+	nmgr.reconcileStreamReplicas(stream, info.Config)
 
-	bytesChanged := previousBytes != maxBytes
-	if bytesChanged && tier == kv.State && int64(info.State.Bytes) > maxBytes {
+	// Re-read: the replica reconcile above may have updated the stream, and applying
+	// a ceiling from a stale config would revert it.
+	info, err = nmgr.js.StreamInfo(stream)
+	if err != nil {
+		log.Warn().Err(err).Str("bucket", bucket).
+			Msg("Could not re-read KV bucket config after the replica reconcile; its disk ceiling " +
+				"stays as-is until the next startup")
+		return
+	}
+	if info.Config.MaxBytes == maxBytes {
+		return
+	}
+	if tier == kv.State && int64(info.State.Bytes) > maxBytes {
 		log.Warn().Str("bucket", bucket).Int64("maxBytes", maxBytes).Uint64("currentBytes", info.State.Bytes).
 			Msg("KV bucket already exceeds the ceiling it would be given; leaving it UNBOUNDED rather than " +
 				"applying it. JetStream does not truncate on shrink — it would refuse every write to this " +
@@ -163,24 +164,16 @@ func (nmgr *NatsManager) reconcileKvBucket(bucket string, maxBytes int64, tier k
 				"exchanges or lock acquisitions for the length of its TTL. Raise the ceiling for this " +
 				"instance, or let the bucket drain. The disk budget is optimistic by this bucket's ceiling " +
 				"until then.")
-		bytesChanged = false
-		cfg.MaxBytes = previousBytes
-	} else if bytesChanged {
-		cfg.MaxBytes = maxBytes
-	}
-
-	if !bytesChanged && !replicasChanged {
 		return
 	}
+	cfg := info.Config
+	previous := cfg.MaxBytes
+	cfg.MaxBytes = maxBytes
 	if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
-		log.Warn().Err(err).Str("bucket", bucket).Int64("maxBytes", maxBytes).Int64("previous", previousBytes).
-			Int("replicas", cfg.Replicas).
-			Msg("Could not reconcile the existing KV bucket; it stays as-is until the next startup")
+		log.Warn().Err(err).Str("bucket", bucket).Int64("maxBytes", maxBytes).Int64("previous", previous).
+			Msg("Could not apply the disk ceiling to an existing KV bucket; it stays as-is until the next startup")
 		return
 	}
-	log.Info().Str("bucket", bucket).Int64("maxBytes", cfg.MaxBytes).Int64("previousMaxBytes", previousBytes).
-		Bool("maxBytesChanged", bytesChanged).
-		Int("replicas", cfg.Replicas).Int("previousReplicas", previousReplicas).
-		Bool("replicasChanged", replicasChanged).
-		Msg("Reconciled existing KV bucket")
+	log.Info().Str("bucket", bucket).Int64("maxBytes", maxBytes).Int64("previous", previous).
+		Msg("Bounded KV bucket so it cannot consume the JetStream disk budget's headroom")
 }

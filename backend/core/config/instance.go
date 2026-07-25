@@ -28,8 +28,11 @@ type NatsConfiguration struct {
 	// server error on every stream and bucket creation — see effectiveStreamReplicas
 	// in core/messaging, which clamps to what the broker can actually do so a
 	// mismatched pair degrades loudly instead of crashlooping the platform.
-	// dcctl --ha sets both halves from one value; that composer is the only place
-	// they are guaranteed to agree.
+	// Nothing today sets both halves from one value: this one is rendered by helm
+	// and the other by tofu, and they are only guaranteed to agree if an operator
+	// makes them. The composer that fixes this is a planned dcctl --ha flag (A0
+	// unit U5) which does not exist yet — so until it does, raising this key is a
+	// two-step change and getting only one step done is the expected mistake.
 	StreamReplicas uint32
 	// StreamMaxBytes / StreamMaxMsgs bound the on-disk size and message count of
 	// each per-suffix JetStream stream (ADR-023): a PER-STREAM platform ceiling so a

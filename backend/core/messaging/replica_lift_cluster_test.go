@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/kv"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // freePort reserves an ephemeral port and immediately releases it, so a cluster
@@ -83,16 +85,33 @@ func newTestCluster(t *testing.T) (*NatsManager, func()) {
 			t.Fatalf("clustered nats server %d not ready", i)
 		}
 	}
-	// Wait for the JetStream meta group to elect a leader; until it has, stream
-	// creation fails with "no metadata leader" rather than doing anything useful.
-	deadline := time.Now().Add(20 * time.Second)
+	// Wait for all three servers to have JOINED the JetStream meta group — not
+	// merely for a leader to exist.
+	//
+	// The difference is the whole reason this helper is not a one-liner. A meta
+	// leader is elected as soon as a quorum forms, and in the window before the
+	// third peer joins, JetStream will happily place an R1 stream but rejects R3
+	// with "no suitable peers for placement". A leader-only gate therefore lets the
+	// tests start against a cluster that cannot yet do the one thing they exist to
+	// assert, and the resulting failure reads as "an existing cluster was NOT
+	// lifted" — indistinguishable from the product bug, which is the worst possible
+	// flake because it trains everyone to re-run instead of investigate. Measured at
+	// roughly one run in ten before this gate.
+	deadline := time.Now().Add(30 * time.Second)
 	for {
-		if servers[0].JetStreamIsLeader() || servers[1].JetStreamIsLeader() || servers[2].JetStreamIsLeader() {
+		ready := false
+		for _, srv := range servers {
+			if len(srv.JetStreamClusterPeers()) == size {
+				ready = true
+				break
+			}
+		}
+		if ready {
 			break
 		}
 		if time.Now().After(deadline) {
 			shutdown()
-			t.Fatal("no JetStream metadata leader elected; the cluster never formed")
+			t.Fatalf("JetStream meta group never reached %d peers; the cluster never fully formed", size)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -112,13 +131,16 @@ func newTestCluster(t *testing.T) (*NatsManager, func()) {
 		Microservice: &core.Microservice{InstanceId: "test", FunctionalArea: "area"},
 		nc:           nc,
 		js:           js,
-		clustered:    nc.ConnectedClusterName() != "",
 	}
-	if !nmgr.clustered {
+	// Assert the PRODUCTION predicate, not a restatement of it. An earlier version of
+	// this harness set a cached `clustered` field by copying the expression out of
+	// nats.go, which meant the real probe was never executed by any test — deleting
+	// it from production code passed the whole package.
+	if !nmgr.brokerIsClustered() {
 		nc.Close()
 		shutdown()
-		t.Fatal("connected server does not report a cluster name; the clustered-ness probe " +
-			"effectiveStreamReplicas depends on would clamp every replica factor to 1")
+		t.Fatal("brokerIsClustered() is false against a real 3-node cluster; every replica factor " +
+			"would be clamped to 1 and the whole workstream would be inert")
 	}
 	return nmgr, func() {
 		nc.Close()
@@ -445,4 +467,101 @@ func TestReplicationMetricsReportBrokerStateNotConfig(t *testing.T) {
 			"cache sitting near its ceiling by design fires the near-full alert", streams)
 	}
 	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), buckets, nmgr.desiredStreamReplicas())
+}
+
+// TestReplicaLiftIsNotBlockedByTheShrinkRefusal proves the ordering inside
+// reconcileKvBucket, and it has to run on a real cluster to prove anything at all.
+//
+// An earlier version of this test ran on the unclustered harness with the replica
+// factor unset, which made the replica reconcile inert on either side of the guard
+// — restoring the original buggy ordering left the whole package passing. The bug
+// it is meant to catch is specific and severe: the State-tier shrink refusal
+// RETURNS EARLY, and dc_leases is a State bucket, so reconciling replicas after
+// that guard would leave an over-ceiling fence substrate pinned to one node
+// forever. Losing that node then blocks every standby's Acquire.
+//
+// So: a State bucket, deliberately driven over the ceiling it is about to be
+// offered, on an instance that has just turned on HA. Both things must happen —
+// the replicas go up, and the ceiling is refused.
+func TestReplicaLiftIsNotBlockedByTheShrinkRefusal(t *testing.T) {
+	nmgr, cleanup := newTestCluster(t)
+	defer cleanup()
+
+	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = 1
+	const logical = "leases"
+	const bucket = "test_overfull_leases"
+	store, err := nmgr.KeyValueStore(logical, bucket, time.Hour)
+	if err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	waitForReplicated(t, nmgr.js, kvStreamPrefix+bucket, 1)
+
+	payload := make([]byte, 4096)
+	for i := 0; i < 32; i++ {
+		if _, err := store.Put(kvKey(fmt.Sprintf("k%d", i)), payload); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+	}
+	before, err := nmgr.js.StreamInfo(kvStreamPrefix + bucket)
+	if err != nil {
+		t.Fatalf("stream info: %v", err)
+	}
+	tinyCeiling := int64(before.State.Bytes) / 2
+	if tinyCeiling <= 0 {
+		t.Fatalf("bucket stored %d bytes; the shrink guard would not engage", before.State.Bytes)
+	}
+	previousMaxBytes := before.Config.MaxBytes
+
+	// The upgrade: HA turned on, and a ceiling this bucket is already over.
+	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = 3
+	nmgr.reconcileKvBucket(bucket, tinyCeiling, kv.State)
+
+	after := waitForReplicated(t, nmgr.js, kvStreamPrefix+bucket, 3)
+	if after.Config.MaxBytes != previousMaxBytes {
+		t.Errorf("MaxBytes changed to %d (was %d): the State-tier shrink refusal did not hold, and "+
+			"JetStream will now refuse every write to this bucket until its entries age out",
+			after.Config.MaxBytes, previousMaxBytes)
+	}
+}
+
+// TestReplicationGaugesCarryTheRightNumbers reads the exported gauges back.
+//
+// Without this the metrics are asserted only by a does-not-panic smoke call, and
+// two separate mutations pass: reporting `actual` in place of `desired`, and
+// feeding the sampler effectiveStreamReplicas instead of desiredStreamReplicas.
+// The second is the dangerous one — it looks like a correctness fix, and it makes
+// desired equal actual on exactly the unclustered instance whose mismatch the
+// whole mechanism exists to surface.
+func TestReplicationGaugesCarryTheRightNumbers(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+	nmgr.Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: uniqueArea("gauges")}
+	nmgr.metrics = newStreamMetrics(nmgr.Microservice)
+	// Unclustered broker plus a replicated configuration: the mismatch case.
+	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = 3
+
+	if _, err := nmgr.KeyValueStore("leases", "test_gauges", time.Hour); err != nil {
+		t.Fatalf("KeyValueStore: %v", err)
+	}
+	nmgr.metrics.sample(nmgr.js, nil, nmgr.trackedBuckets(), nmgr.desiredStreamReplicas())
+
+	name := kvStreamPrefix + "test_gauges"
+	desired := testutil.ToFloat64(nmgr.metrics.replicasDesired.WithLabelValues(name))
+	actual := testutil.ToFloat64(nmgr.metrics.replicasActual.WithLabelValues(name))
+	peers := testutil.ToFloat64(nmgr.metrics.peersCurrent.WithLabelValues(name))
+
+	if desired != 3 {
+		t.Errorf("replicas_desired = %v, want 3 — the gauge must carry the CONFIGURED value, not the "+
+			"clamped one, or an instance that is silently unreplicated reports itself as healthy", desired)
+	}
+	if actual != 1 {
+		t.Errorf("replicas_actual = %v, want 1 (the clamp created it unreplicated)", actual)
+	}
+	if desired == actual {
+		t.Error("desired equals actual on an unclustered instance configured for 3 replicas; the " +
+			"mismatch signal this mechanism exists to raise is unreachable")
+	}
+	if peers != 1 {
+		t.Errorf("peers_current = %v, want 1", peers)
+	}
 }

@@ -13,15 +13,13 @@ import (
 // unclustered broker resolves to 1 rather than to 3, because issuing 3 there is not
 // a degraded request, it is a hard server error on every stream and bucket the
 // platform creates.
-func TestEffectiveStreamReplicasClampsToBrokerCapability(t *testing.T) {
+func TestClampReplicas(t *testing.T) {
 	tests := []struct {
 		name       string
-		configured uint32
+		configured int
 		clustered  bool
 		want       int
 	}{
-		{"unset on a single node", 0, false, 1},
-		{"unset on a cluster", 0, true, 1},
 		{"one on a single node", 1, false, 1},
 		{"one on a cluster", 1, true, 1},
 		{"three on a cluster is honoured", 3, true, 3},
@@ -31,16 +29,49 @@ func TestEffectiveStreamReplicasClampsToBrokerCapability(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			nmgr, cleanup := newTestManager(t)
-			defer cleanup()
-			nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = tt.configured
-			nmgr.clustered = tt.clustered
-
-			if got := nmgr.effectiveStreamReplicas(); got != tt.want {
-				t.Errorf("effectiveStreamReplicas() = %d, want %d (configured %d, clustered %v)",
-					got, tt.want, tt.configured, tt.clustered)
+			if got := clampReplicas(tt.configured, tt.clustered); got != tt.want {
+				t.Errorf("clampReplicas(%d, %v) = %d, want %d", tt.configured, tt.clustered, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestBrokerIsClusteredAgainstAnUnclusteredBroker pins the predicate the clamp
+// actually depends on, against a real broker rather than a restatement of the
+// expression. Its clustered counterpart lives in newTestCluster, which fails the
+// test outright if this returns false on a genuine 3-node cluster.
+//
+// The nil-connection row is not hypothetical padding. Under
+// nats.RetryOnFailedConnect, nats.Connect hands back a live-looking connection in
+// RECONNECTING state with a nil error when no broker is reachable, and
+// ConnectedClusterName reports "" for any status other than CONNECTED — so
+// "unreachable" and "not clustered" are indistinguishable without the IsConnected
+// gate. Answering the first question with the second answer is what made an
+// earlier version of this clamp pin whole processes to single-replica streams on
+// healthy clusters.
+func TestBrokerIsClusteredAgainstAnUnclusteredBroker(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	if nmgr.brokerIsClustered() {
+		t.Error("brokerIsClustered() is true against the unclustered embedded broker")
+	}
+	if got := nmgr.effectiveStreamReplicas(); got != 1 {
+		t.Errorf("effectiveStreamReplicas() = %d against an unclustered broker, want 1", got)
+	}
+
+	// A manager with no connection at all must clamp rather than assume.
+	disconnected := &NatsManager{Microservice: nmgr.Microservice}
+	if disconnected.brokerIsClustered() {
+		t.Error("brokerIsClustered() is true with a nil connection")
+	}
+
+	// A connection that exists but is not CONNECTED must also clamp, and must not
+	// be mistaken for a definitive "not clustered".
+	nmgr.nc.Close()
+	if nmgr.brokerIsClustered() {
+		t.Error("brokerIsClustered() is true on a closed connection; an unreachable broker is being " +
+			"reported as a definitively unclustered one, which is the regression this guards")
 	}
 }
 
@@ -62,8 +93,8 @@ func TestReplicatedConfigAgainstUnclusteredBrokerStillCreatesBuckets(t *testing.
 	nmgr, cleanup := newTestManager(t)
 	defer cleanup()
 	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = 3
-	// clustered stays false — the embedded broker genuinely is not clustered, so
-	// this matches what ExecuteInitialize would have read from it.
+	// The embedded broker genuinely is not clustered, so brokerIsClustered() reports
+	// the truth here with no stubbing.
 
 	if _, err := nmgr.NewCache("devices", time.Minute); err != nil {
 		t.Fatalf("NewCache against an unclustered broker with streamReplicas=3: %v "+
@@ -89,7 +120,6 @@ func TestDesiredStreamReplicasIsUnclamped(t *testing.T) {
 	nmgr, cleanup := newTestManager(t)
 	defer cleanup()
 	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = 3
-	nmgr.clustered = false
 
 	if got := nmgr.desiredStreamReplicas(); got != 3 {
 		t.Errorf("desiredStreamReplicas() = %d, want 3 — the configured value must survive the clamp "+
