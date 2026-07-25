@@ -86,9 +86,23 @@ fast-follow.
 
 ## Notes & scope boundaries
 
-- **Single-node by default.** The `ha` variable is threaded through for the
-  ADR-020 HA topology (3-node NATS RAFT, DB replication) but defaults to
-  single-node for the launch slice — HA is a later toggle, not a rewrite.
+- **Single-node by default.** `ha = true` provisions the ADR-020 NATS topology —
+  3 servers in a RAFT cluster, spread one per node with a hard
+  `topologySpreadConstraint`. `nats_cluster_replicas` overrides the count for a
+  topology the toggle cannot express (odd, at most 5). It does **not** replicate
+  the databases: Postgres and TimescaleDB are single-instance StatefulSets here
+  regardless — see ADR-028 for where their durability comes from.
+- **HA is two levers, and this root owns only one of them.** The server count
+  lives here; the per-stream replica factor lives in the services' config
+  (`instance.config.infrastructure.nats.streamReplicas`), rendered by the
+  DeviceChain Helm chart, which this root does not install. Raising only this half
+  yields a 3-node broker whose every stream and KV bucket is still single-replica —
+  a cluster that survives no node loss while looking like it would. The services
+  clamp down to 1 against an unclustered broker rather than crashloop, and export
+  `devicechain_*_jetstream_replicas_desired` / `_actual` / `_peers_current` so the
+  disagreement alerts. `dcctl bootstrap --ha` sets both from one value; a direct
+  tofu user must set the Helm value themselves. `nats_cluster_replicas` is
+  published as an output for exactly that check.
 - **TimescaleDB extension.** The Timescale image preloads the `timescaledb`
   library; the application creates the extension and hypertables on migrate.
 - **Credentials.** Passwords default to `devicechain` for local dev. Override via
@@ -98,8 +112,14 @@ fast-follow.
 - **JetStream disk ceiling.** `nats_jetstream_max_file_store` is the hard aggregate
   JetStream file-store bound (ADR-023); it defaults to 90% of `nats_jetstream_storage`
   for filesystem headroom, **floored to a whole unit of that size's own magnitude** —
-  a 12Gi PV yields a 10Gi ceiling, not 10.8Gi. Lowering it below a stream's current on-disk usage on an
+  a 16Gi PV yields a 14Gi ceiling, not 14.4Gi. Lowering it below a stream's current on-disk usage on an
   existing cluster causes immediate `DiscardOld` eviction of the overflow — a
-  non-issue on a fresh bring-up, but size it before a running cluster fills.
-- **Not yet here (next slice):** the ADR-020 HA topology + the broker-enforced
-  transport security (TLS + NATS auth-callout) it unblocks.
+  non-issue on a fresh bring-up, but size it before a running cluster fills. Both
+  the volume and the ceiling are **per node**: an HA cluster provisions the volume
+  on every server, each holding one replica of the same ~9.5Gi reservation, so
+  neither value scales with `nats_cluster_replicas`.
+- **Broker metrics.** `nats_prom_exporter` (default on) runs the
+  prometheus-nats-exporter sidecar for broker-side cluster health. The PodMonitor
+  that scrapes it is rendered by the DeviceChain Helm chart, not here — it is an
+  Operator CRD, and this root installs NATS and the monitoring stack in parallel,
+  so rendering one here would fail a fresh apply nondeterministically.

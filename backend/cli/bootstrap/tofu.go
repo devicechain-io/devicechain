@@ -153,6 +153,14 @@ func infraVars(st *State) []string {
 			"nats_jetstream_storage="+compact.JetStreamStorage,
 			"postgres_storage="+compact.PostgresStorage,
 			"timescale_storage="+compact.TimescaleStorage,
+			// Drop the prometheus-nats-exporter sidecar. It is a whole extra
+			// container per NATS pod, and what it publishes is BROKER-side cluster
+			// health — route state, RAFT peer health — which is information about a
+			// topology compact does not have: compact runs one NATS server, so there
+			// are no routes and no RAFT. The platform's own replication gauges are
+			// exported by the services either way, so nothing that speaks about
+			// stream replication is lost here.
+			"nats_prom_exporter=false",
 		)
 		// cert-manager exists to issue the ingress certificate. Dropping it is only
 		// safe because compact serves plain HTTP; an instance that still terminates

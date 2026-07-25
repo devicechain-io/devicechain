@@ -399,6 +399,14 @@ jobs:
       - name: tofu validate
         run: tofu validate
 
+      # `tofu validate` evaluates variables at their DEFAULTS and never runs a
+      # validation block, so an inverted or misdirected condition passes every step
+      # above. This supplies real values and asserts what is refused and — the
+      # counterweight — what is still accepted.
+      - name: variable validation blocks
+        run: hack/check-tofu-validations.sh
+        working-directory: .
+
   # ---------------------------------------------------------------------------
   # Image smoke build: ko builds each service image locally (no push). This
   # catches image-build breakage. The matrix covers the discovered services

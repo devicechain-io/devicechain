@@ -30,9 +30,41 @@ variable "create_namespace" {
 # --- High availability ----------------------------------------------------------
 
 variable "ha" {
-  description = "Reserved for the ADR-020 HA topology (3-node NATS RAFT, replicated streams, DB replicas). Defaults to single-node for the launch slice; the modules read it so HA becomes a toggle, not a rewrite."
+  description = <<-EOT
+    Shorthand for the ADR-020 NATS topology: 3 NATS servers in a RAFT cluster,
+    spread one-per-node, instead of 1. Defaults to single-node.
+
+    WHAT THIS DOES NOT DO, stated because the previous description promised it and
+    it was never true: it does not replicate the databases. Postgres and TimescaleDB
+    are single-instance StatefulSets in this root regardless — see ADR-028 for where
+    their durability actually comes from. It also does not, on its own, replicate
+    the JetStream STREAMS: that is a per-stream replica factor in the services'
+    config (instance.config.infrastructure.nats.streamReplicas), rendered by the
+    DeviceChain Helm chart, which this root does not install. Both halves must be
+    raised together or the instance runs a 3-node broker holding single-replica
+    streams — replicated servers, unreplicated data. `dcctl bootstrap --ha` sets
+    both from one value and preflights that they agree; a direct tofu user must set
+    the Helm value themselves.
+  EOT
   type        = bool
   default     = false
+}
+
+variable "nats_cluster_replicas" {
+  description = "Number of NATS servers. 0 (default) derives it from var.ha — 3 when true, 1 when false. Set explicitly for a topology the toggle cannot express (5). ODD ONLY, at most 5: RAFT commits on a majority, so an even cluster tolerates no more failures than the odd size below it while costing a server and a wider quorum, and JetStream refuses more than 5 replicas per stream. See the nats module variable for the full rationale, including why this is only half the HA toggle."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = contains([0, 1, 3, 5], var.nats_cluster_replicas)
+    error_message = "nats_cluster_replicas must be 0 (derive from var.ha), 1, 3, or 5."
+  }
+}
+
+variable "nats_prom_exporter" {
+  description = "Run the prometheus-nats-exporter sidecar on each NATS server, publishing BROKER-side metrics (routes, RAFT/JetStream cluster health) on :7777. The PodMonitor that scrapes it is rendered by the DeviceChain Helm chart, not here — it is an Operator CRD, and rendering one from this root would fail the apply on a fresh cluster where the monitoring stack is still installing alongside it. Set false to drop the sidecar (dcctl's compact preset does)."
+  type        = bool
+  default     = true
 }
 
 # --- NATS (messaging + MQTT + JetStream KV, ADR-003/006/007) --------------------
@@ -48,9 +80,17 @@ variable "nats_jetstream_storage" {
     PersistentVolume size for NATS JetStream file storage. The default must fit the
     platform's OWN stream set on a cold start: every per-suffix stream reserves its
     byte ceiling UP FRONT at creation, against max_file_store (90% of this, FLOORED
-    to whole units of the size's own magnitude — 12Gi yields 10Gi, not 10.8Gi). The
-    platform creates 15 such streams — a FIXED set (streams are per-suffix and cover
+    to whole units of the size's own magnitude — 16Gi yields 14Gi, not 14.4Gi). The
+    platform creates 16 such streams — a FIXED set (streams are per-suffix and cover
     every tenant via the wildcard subject), so this does not grow with tenant count.
+
+    THIS IS PER NODE, not per cluster. JetStream reserves on the server that holds a
+    replica, so a 3-node HA cluster (var.ha) provisions this volume three times and
+    each node stores one copy of the same reservation. Do NOT multiply it by the
+    replica factor — that would triple a budget that is already correct, and the
+    only thing it would buy is the illusion of headroom. (The account-level quota
+    WOULD multiply, which is exactly why the APP account is left on dynamic limits;
+    see the landmine note in modules/nats/main.tf.)
 
     Sizing history, because getting this wrong fails in a confusing way: 8Gi (→7Gi
     ceiling) fit only ~7 streams at the old uniform 1 GiB bound, so a fresh bring-up
@@ -60,22 +100,28 @@ variable "nats_jetstream_storage" {
     on control-plane streams that never hold more than a few MiB.
 
     The bound is now split hot/cold in backend/core/streams (see streams.All): 7 hot
-    streams at 1 GiB + 8 control-plane streams at 128 MiB reserve 8Gi. The MQTT
-    gateway's own streams — which nats-server creates UNBOUNDED, and which the
-    platform bounds at startup so they cannot eat the rest — add 384Mi, for ~8.4Gi
-    total. The KV buckets are bounded on the same principle (see kv.All) and reserve
-    a further 768Mi, for ~9.1Gi. That fits 12Gi (→10Gi ceiling) with the ingest
-    streams keeping their FULL buffer, and ~896Mi genuinely unreserved — which now
-    covers only the two MQTT stores deliberately left unbounded and JetStream's own
-    per-consumer state, rather than the open-ended KV growth it used to have to
-    absorb.
+    streams at 1 GiB, 8 control-plane streams at 128 MiB, and the capture stream at
+    256 MiB reserve 8448Mi (8.25Gi). The MQTT gateway's own streams — which
+    nats-server creates UNBOUNDED, and which the platform bounds at startup so they
+    cannot eat the rest — add 384Mi. The KV buckets are bounded on the same principle
+    (see kv.All): 4 State buckets at 128Mi + 6 Cache buckets at 64Mi reserve a
+    further 896Mi. Total reserved: exactly 9.5Gi.
+
+    Why 16Gi and not 12Gi, which also "fits": at 12Gi the ceiling is 10Gi, leaving
+    512Mi unreserved — which is EXACTLY the headroom floor the budget test asserts,
+    i.e. zero margin. At that size the platform could not add one more stream or one
+    more KV bucket without moving the PV first, and the failure for doing so is the
+    crashloop above rather than a test. 16Gi (→14Gi ceiling) leaves 4.5Gi, which is
+    room for the reservation to grow by half again. The extra 4Gi of disk is the
+    cheapest part of this deployment; the alternative was a budget where every new
+    bucket is a deploy-time landmine.
 
     NEVER shrink this independently of the stream bounds, and do NOT size the PV as
     (sum of stream ceilings) / 0.9 — the flooring above makes that formula unsafe.
     A 9.5Gi sum / 0.9 rounds to an 11Gi PV, whose ceiling is floor(11 × 0.9) = 9Gi,
     which is BELOW the sum and brings the crashloop back. Pick the smallest whole
-    magnitude where floor(magnitude × 0.9) >= the sum instead. Raise it for real
-    ingest volume.
+    magnitude where floor(magnitude × 0.9) >= the sum, then leave real margin above
+    it. Raise it for real ingest volume.
 
     This value IS linked to a test. dcctl's TestRenderedReservationFitsTheJetStreamStore
     (backend/cli/bootstrap) reads this default out of the embedded infrastructure
@@ -90,11 +136,11 @@ variable "nats_jetstream_storage" {
     variable. Changing this value means updating that constant by hand.
   EOT
   type        = string
-  default     = "12Gi"
+  default     = "16Gi"
 }
 
 variable "nats_jetstream_max_file_store" {
-  description = "Server-level max_file_store — the hard aggregate JetStream disk ceiling (ADR-023). Empty derives it as 90% of nats_jetstream_storage, FLOORED to a whole unit of that size's own magnitude (12Gi yields 10Gi, not 10.8Gi), leaving filesystem headroom; set explicitly to override. Must be <= nats_jetstream_storage."
+  description = "Server-level max_file_store — the hard aggregate JetStream disk ceiling (ADR-023). Empty derives it as 90% of nats_jetstream_storage, FLOORED to a whole unit of that size's own magnitude (16Gi yields 14Gi, not 14.4Gi), leaving filesystem headroom; set explicitly to override. Must be <= nats_jetstream_storage. Note this is a PER-NODE ceiling: an HA cluster applies it on every server, each holding one replica."
   type        = string
   default     = ""
 }

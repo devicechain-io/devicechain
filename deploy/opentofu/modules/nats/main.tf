@@ -4,8 +4,16 @@
 # NATS is DeviceChain's single messaging runtime dependency (ADR-003/006/007): it
 # carries core messaging, the JetStream KV cache + distributed lock, and the MQTT
 # device ingress. Installed from the official chart; JetStream and MQTT are
-# enabled, cluster size is driven by the HA toggle (single-node for the launch
-# slice, 3-node RAFT under ADR-020).
+# enabled, and the server count comes from var.cluster_replicas (or var.ha as its
+# shorthand): 1 by default, 3-node RAFT under ADR-020.
+#
+# SCOPE, because it is the thing most easily misread here: this module sizes the
+# SERVER CLUSTER and nothing else. Whether the platform's streams and KV buckets
+# are actually replicated across those servers is a per-stream replica factor set
+# in the services' own config, rendered by the DeviceChain Helm chart — which is a
+# separate release this module does not install and cannot see. A 3-node cluster
+# whose streams are all R1 is the default outcome of raising only this half, and
+# it presents as healthy. See var.cluster_replicas.
 #
 # Transport security (ADR-025): when enable_tls is set, this module generates a
 # self-signed CA and a NATS-server leaf from it (the tls provider — declarative,
@@ -42,28 +50,34 @@ variable "jetstream_storage" {
 
     This default is NOT a free choice — it must hold the platform's whole
     reservation. JetStream reserves each stream's MaxBytes UP FRONT at creation,
-    so the disk floor is the SUM of the ceilings, and today that sum is ~9.4Gi:
-    8.25Gi of platform streams, 384Mi of MQTT gateway stores, and 768Mi of KV
-    buckets. The ceiling that has to hold it is max_file_store, which is 90% of
+    so the disk floor is the SUM of the ceilings, and today that sum is exactly
+    9.5Gi: 8.25Gi of platform streams, 384Mi of MQTT gateway stores, and 896Mi of
+    KV buckets. The ceiling that has to hold it is max_file_store, which is 90% of
     this value FLOORED to a whole unit of its own magnitude.
 
-    It was 8Gi, which no longer fits: floor(8 × 0.9) = 7Gi, well under the ~9.4Gi
+    PER NODE, not per cluster: a 3-server cluster provisions this volume three
+    times and each server holds one copy of the reservation, so the size does NOT
+    scale with cluster_replicas.
+
+    It was 8Gi, which no longer fits: floor(8 × 0.9) = 7Gi, well under the 9.5Gi
     reserved, so a consumer using this module directly with its defaults would hit
     the "insufficient storage resources available" crashloop on the last services
-    to create a stream. The root module always passes 12Gi explicitly, so the
-    shipped path was never exposed — but a default that only works because every
-    caller overrides it is a trap, not a default.
+    to create a stream. The root module always passes its own value explicitly, so
+    the shipped path was never exposed — but a default that only works because
+    every caller overrides it is a trap, not a default.
 
     Raising this REQUIRES checking the reservation still fits, and lowering it
     REQUIRES lowering the stream bounds first. Do NOT derive the PV as
     (sum of ceilings) / 0.9: the flooring makes that unsafe, since a 9.5Gi sum
     yields an 11Gi PV whose ceiling is floor(11 × 0.9) = 9Gi — below the sum, and
     back to the crashloop. Pick the smallest whole magnitude where
-    floor(magnitude × 0.9) >= the sum. See nats_jetstream_storage in the root
-    variables.tf for the full sizing history.
+    floor(magnitude × 0.9) >= the sum, and leave margin above it: at 12Gi the
+    unreserved remainder is 512Mi, which is exactly the asserted headroom floor,
+    so the budget has no room for one more stream. See nats_jetstream_storage in
+    the root variables.tf for the full sizing history.
   EOT
   type        = string
-  default     = "12Gi"
+  default     = "16Gi"
   validation {
     # Integer magnitude + unit only. The max_file_store headroom default floors 90%
     # of the magnitude, so a fractional value like "1.5Gi" would drop to "1Gi" (a
@@ -75,14 +89,71 @@ variable "jetstream_storage" {
 }
 
 variable "jetstream_max_file_store" {
-  description = "Server-level max_file_store — the hard aggregate JetStream disk ceiling (ADR-023). Empty (default) derives it as 90% of jetstream_storage, FLOORED to a whole unit of that size's own magnitude (12Gi yields 10Gi, not 10.8Gi), leaving filesystem headroom so JetStream errors cleanly before the volume is 100% full. Set explicitly (e.g. \"6Gi\") to override; must be <= jetstream_storage."
+  description = "Server-level max_file_store — the hard aggregate JetStream disk ceiling (ADR-023), applied PER SERVER. Empty (default) derives it as 90% of jetstream_storage, FLOORED to a whole unit of that size's own magnitude (16Gi yields 14Gi, not 14.4Gi), leaving filesystem headroom so JetStream errors cleanly before the volume is 100% full. Set explicitly (e.g. \"6Gi\") to override; must be <= jetstream_storage."
   type        = string
   default     = ""
 }
 
 variable "ha" {
-  type    = bool
-  default = false
+  description = "Shorthand for the ADR-020 topology: 3 NATS servers instead of 1. cluster_replicas overrides the count; the two must not contradict each other (see the precondition on helm_release.nats)."
+  type        = bool
+  default     = false
+}
+
+variable "cluster_replicas" {
+  description = <<-EOT
+    Number of NATS servers in the RAFT cluster. 0 (default) derives it from var.ha
+    — 3 when true, 1 when false — so the common case stays a single toggle; set it
+    explicitly to represent a topology the toggle cannot, e.g. 5 servers.
+
+    ODD ONLY, and at most 5. RAFT commits on a MAJORITY, so an even cluster
+    tolerates no more failures than the odd size below it (4 servers tolerate 1,
+    exactly as 3 do) while costing an extra server and widening the quorum every
+    write waits on. Above 5 the write-latency cost outruns the durability gain,
+    and JetStream refuses more than 5 replicas per stream anyway — which is the
+    ceiling that actually binds, since a stream cannot be replicated wider than
+    the cluster hosting it.
+
+    THIS IS ONLY HALF THE TOGGLE. It sizes the SERVER cluster; the per-stream
+    replica factor is a separate lever in the services' own config
+    (instance.config.infrastructure.nats.streamReplicas, rendered by the
+    DeviceChain Helm chart, which OpenTofu does not install). Raising this alone
+    yields a 3-node broker whose every stream and KV bucket is still single-replica
+    — the exact false-HA state ADR-020 A0 exists to close. The services clamp
+    streamReplicas down to 1 against an unclustered broker rather than crashloop,
+    and export desired-vs-actual replication so the disagreement alerts; dcctl
+    --ha sets both levers from one value.
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = contains([0, 1, 3, 5], var.cluster_replicas)
+    error_message = "cluster_replicas must be 0 (derive from var.ha), 1, 3, or 5. RAFT commits on a majority, so an even cluster tolerates no more failures than the odd size below it while costing an extra server and a wider quorum on every write; JetStream refuses more than 5 replicas per stream."
+  }
+}
+
+variable "enable_prom_exporter" {
+  description = <<-EOT
+    Run the prometheus-nats-exporter sidecar alongside each NATS server, exposing
+    BROKER-side metrics (routes, RAFT/JetStream cluster health) on :7777.
+
+    Complementary to, not a substitute for, the platform's own replication gauges
+    (devicechain_*_jetstream_replicas_desired/actual/peers_current, exported by
+    every area that touches JetStream): those say whether the STREAMS an instance
+    depends on are replicated, this says whether the SERVERS carrying them can
+    still see each other. A cluster that has lost a route reports healthy streams
+    right up until it does not.
+
+    The PodMonitor that scrapes this is rendered by the DeviceChain Helm chart
+    (metrics.enabled), deliberately NOT here: it is a Prometheus Operator CRD, and
+    a chart in this module that renders one would fail the apply on any cluster
+    where the operator has not been installed yet — which, since both installs run
+    in parallel, includes a fresh bring-up. The chart runs after this apply
+    completes, so by then the CRDs exist.
+  EOT
+  type        = bool
+  default     = true
 }
 
 variable "enable_tls" {
@@ -178,6 +249,53 @@ locals {
   js_size_unit      = regex("[A-Za-z]+$", var.jetstream_storage)
   js_max_file_store = var.jetstream_max_file_store != "" ? var.jetstream_max_file_store : "${floor(local.js_size_magnitude * 0.9)}${local.js_size_unit}"
 
+  # The server count. var.cluster_replicas wins when set; var.ha is the shorthand.
+  cluster_replicas = var.cluster_replicas > 0 ? var.cluster_replicas : (var.ha ? 3 : 1)
+  clustered        = local.cluster_replicas > 1
+
+  # Replication for the MQTT gateway's OWN streams ($MQTT_sess, $MQTT_msgs,
+  # $MQTT_qos2in, $MQTT_out) — nats-server's `mqtt { stream_replicas }`.
+  #
+  # These are easy to forget because nothing in DeviceChain creates them: the
+  # broker does, on first MQTT connect. They are also the streams that decide
+  # whether an MQTT device SURVIVES a node loss, since they hold persistent-session
+  # state and inflight QoS 1 messages. Left at the default 1 on a 3-node cluster,
+  # losing the node that happened to host them drops every persistent session and
+  # every un-acked message — an outage that looks like a device-side reconnect
+  # storm and points nowhere near the broker.
+  #
+  # Capped at 3 rather than tracking a 5-server cluster: session state is
+  # recoverable by a device reconnecting, so it does not warrant a 5-way quorum on
+  # every write the way the platform's own streams might. A 5-node operator who
+  # wants R5 here should say so in nats_jetstream_* territory, not inherit it.
+  mqtt_stream_replicas = min(local.cluster_replicas, 3)
+
+  # Spread the servers across NODES, and do it as a HARD constraint.
+  #
+  # Without this the chart's default is {} — no constraint at all — and the
+  # scheduler is free to place all three servers on one node. That cluster passes
+  # every check A0 adds: three peers, streams reporting Replicas:3, all peers
+  # current. It survives zero node failures. Three replicas on one node is the most
+  # expensive way to run one replica.
+  #
+  # whenUnsatisfiable is DoNotSchedule, not ScheduleAnyway, precisely because the
+  # soft form permits exactly that co-location — silently, and only under the node
+  # pressure that makes it matter. The cost is that a 3-server cluster stays Pending
+  # on a cluster with fewer than 3 schedulable nodes, which is the correct failure:
+  # an unschedulable pod is a question the operator answers in minutes, whereas a
+  # co-located "HA" cluster is a question nobody asks until a node dies.
+  #
+  # Built with a for-expression rather than a ternary so both branches have the
+  # same type — `cond ? {k = {...}} : {}` gives HCL two object types to unify and
+  # is the same class of trap as the tls blocks below.
+  spread_constraints = {
+    for key in(local.clustered ? ["kubernetes.io/hostname"] : []) :
+    key => {
+      maxSkew           = 1
+      whenUnsatisfiable = "DoNotSchedule"
+    }
+  }
+
   # Broker-auth config merged into nats-server.conf (config.merge) when enabled: a
   # single APP account holds services (static dc_service login, exempt) and devices
   # (callout-placed via aud=APP with tenant-scoped perms). JetStream is enabled on
@@ -194,6 +312,23 @@ locals {
   # renders the value as a JSON double-quoted string, which nats-server treats
   # literally — env-var expansion applies only to bare (unquoted) config tokens, so
   # the hash's `$` is not expanded.
+  #
+  # LANDMINE, and the reason the APP account carries `jetstream = "enabled"` and
+  # nothing else. That bare string resolves to nats-server's DYNAMIC account
+  # limits (unlimited), which is what makes replication affordable here: JetStream
+  # charges an account's file-store quota the RESERVATION TIMES THE REPLICA COUNT,
+  # so the platform's ~9.5Gi of stream and bucket ceilings bills as ~28.5Gi at R3.
+  # Against unlimited that multiply is inert and only the server-level
+  # max_file_store binds — which is per-node, and therefore already correct: each
+  # of the 3 servers stores one copy.
+  #
+  # If anyone ever adds an explicit `jetstream { max_file_store = ... }` to this
+  # account, R3 stream creation starts failing at roughly a THIRD of the ceiling
+  # they wrote, and the error is "insufficient storage resources available" — the
+  # same message a genuinely undersized PV produces. It reads as a disk-sizing
+  # problem, so the instinct is to raise the number, which moves the cliff without
+  # removing it. Set account limits only in units of (reservation × replicas), or
+  # leave them dynamic and let max_file_store be the only ceiling.
   #
   # Remaining tradeoff, acceptable pre-GA: enabling auth on a cluster that
   # previously ran without accounts abandons the old default-account ($G) JetStream
@@ -286,12 +421,19 @@ locals {
         # above have to work around.
         merge = {
           reject_qos2_publish = var.reject_qos2_publish
+          stream_replicas     = local.mqtt_stream_replicas
         }
       }
       cluster = {
-        enabled  = var.ha
-        replicas = var.ha ? 3 : 1
+        enabled  = local.clustered
+        replicas = local.cluster_replicas
       }
+    }
+    podTemplate = {
+      topologySpreadConstraints = local.spread_constraints
+    }
+    promExporter = {
+      enabled = var.enable_prom_exporter
     }
   }
 
@@ -434,6 +576,17 @@ resource "helm_release" "nats" {
       condition     = !var.enable_auth || (var.callout_issuer_public != "" && var.service_password_bcrypt != "")
       error_message = "nats enable_auth=true requires non-empty callout_issuer_public and service_password_bcrypt (mint them via dcctl / the genauth helper)."
     }
+
+    # Refuse the contradiction rather than silently picking a winner. ha=true with
+    # cluster_replicas=1 is someone asking for the ADR-020 topology and a single
+    # server in the same breath; whichever side won quietly, the operator would be
+    # told they have HA and have something else. Setting cluster_replicas>1 with
+    # ha=false is NOT a contradiction — it is the explicit-topology path, and the
+    # cluster is enabled on the count, not the flag.
+    precondition {
+      condition     = !(var.ha && var.cluster_replicas == 1)
+      error_message = "nats ha=true with cluster_replicas=1 is contradictory: ha asks for the ADR-020 3-node RAFT topology and cluster_replicas pins a single server. Drop cluster_replicas to let ha choose (0 = derive), or set ha=false if a single server is what you want."
+    }
   }
 }
 
@@ -505,6 +658,11 @@ output "service" {
 output "ca_pem" {
   description = "PEM-encoded CA that signed the NATS server cert. Empty when TLS is off. Threaded into each service's instance config so clients verify the broker (ADR-025)."
   value       = var.enable_tls ? tls_self_signed_cert.ca[0].cert_pem : ""
+}
+
+output "cluster_replicas" {
+  description = "Number of NATS servers provisioned. This is the CEILING on the per-stream replica factor the services may ask for (instance.config.infrastructure.nats.streamReplicas, a Helm value this module does not set): a stream cannot be replicated wider than the cluster hosting it. dcctl's preflight reads this to refuse an install whose two halves disagree, instead of letting it come up looking replicated."
+  value       = local.cluster_replicas
 }
 
 output "tls_enabled" {

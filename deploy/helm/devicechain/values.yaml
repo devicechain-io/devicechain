@@ -80,13 +80,21 @@ instance:
         # additionally caps itself below that bound (256 MiB), so the platform streams
         # reserve 8.25 GiB rather than 9. The MQTT gateway's own streams, bounded at
         # startup because nats-server creates them unlimited, add 384 MiB for
-        # ~8.6 GiB total. The KV buckets (device caches, locks, refresh tokens,
-        # OAuth codes) are bounded too and reserve a further 768 MiB, for ~9.4 GiB —
-        # which fits the 12Gi JetStream PV, whose max_file_store ceiling is 10Gi,
-        # leaving ~640 MiB genuinely unreserved. Note that ceiling
-        # floors 90% of the PV's MAGNITUDE and reattaches the unit
-        # (floor(12 * 0.9) = 10 → "10Gi"), so it is 10Gi and not 10.8 GiB — the
-        # difference is 819 MiB of headroom that does not exist.
+        # 8.625 GiB total. The KV buckets (device caches, locks, refresh tokens,
+        # OAuth codes) are bounded too — 4 State buckets at 128 MiB + 6 Cache buckets
+        # at 64 MiB — and reserve a further 896 MiB, for exactly 9.5 GiB reserved.
+        # That fits the 16Gi JetStream PV, whose max_file_store ceiling is 14Gi,
+        # leaving 4.5 GiB genuinely unreserved. Note that ceiling floors 90% of the
+        # PV's MAGNITUDE and reattaches the unit (floor(16 * 0.9) = 14 → "14Gi"), so
+        # it is 14Gi and not 14.4 GiB — the difference is 409 MiB of headroom that
+        # does not exist.
+        #
+        # The PV was 12Gi, which also "fit" — at a 10Gi ceiling, with 512 MiB left
+        # over, which is EXACTLY the floor the budget test asserts. At that size the
+        # platform could not add one more stream or one more KV bucket without moving
+        # the PV first, and the way it would find out is the crashloop above, on
+        # someone's fresh install, rather than a failing test. The reservation is
+        # per-NODE, so this is not multiplied by an HA cluster's replica factor.
         #
         # streamMaxBytesCold must stay <= streamMaxBytes: lowering only the hot bound
         # (e.g. for a small-footprint deploy) inverts the two and makes control-plane
@@ -318,6 +326,18 @@ metrics:
   # rules. Requires the Prometheus Operator CRDs (same as enabled). Ignored when
   # metrics.enabled is false.
   alerts: true
+  # natsPodMonitor renders a PodMonitor scraping the NATS broker's own
+  # prometheus-nats-exporter sidecar (ADR-020 A0) — BROKER-side cluster health
+  # (routes, JetStream RAFT), complementing the per-stream replication gauges the
+  # services export. It targets the namespace named in
+  # instance.config.infrastructure.nats.hostname, so it follows the broker this
+  # instance actually dials. Safe to leave on when the sidecar is not deployed
+  # (OpenTofu's nats_prom_exporter=false, which the compact preset sets): `port`
+  # names a container port, so the operator generates no targets rather than a
+  # permanently-down one. Set false for a broker this chart should not monitor —
+  # e.g. a managed/shared NATS outside the operator's reach. Ignored when
+  # metrics.enabled is false.
+  natsPodMonitor: true
 
 # Kubernetes volume wiring for the FILESYSTEM object store (ADR-058), i.e. when
 # instance.config.infrastructure.blob.backend is "filesystem". The filesystem backend

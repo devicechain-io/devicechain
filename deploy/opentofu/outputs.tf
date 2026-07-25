@@ -26,6 +26,11 @@ output "nats_ca" {
   value       = module.nats.ca_pem
 }
 
+output "nats_cluster_replicas" {
+  description = "Number of NATS servers provisioned. The CEILING on the per-stream replica factor the Helm chart may ask for (instance.config.infrastructure.nats.streamReplicas) — a stream cannot be replicated wider than its cluster. dcctl reads this between the infra apply and the Helm install so an instance whose two HA levers disagree is refused with a sentence, rather than coming up looking replicated and not being."
+  value       = module.nats.cluster_replicas
+}
+
 output "nats_tls_enabled" {
   description = "Whether the broker terminates TLS. Drives the matching client-side flag (infrastructure.nats.tls.enabled) — the two MUST agree or clients cannot connect."
   value       = module.nats.tls_enabled

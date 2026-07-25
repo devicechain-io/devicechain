@@ -17,6 +17,8 @@ module "nats" {
   jetstream_storage        = var.nats_jetstream_storage
   jetstream_max_file_store = var.nats_jetstream_max_file_store
   ha                       = var.ha
+  cluster_replicas         = var.nats_cluster_replicas
+  enable_prom_exporter     = var.nats_prom_exporter
   enable_tls               = var.nats_enable_tls
   reject_qos2_publish      = var.nats_mqtt_reject_qos2_publish
   enable_auth              = var.nats_enable_auth
