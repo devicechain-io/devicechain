@@ -68,16 +68,22 @@ func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration
 	}
 	if existing, err := nmgr.js.KeyValue(bucket); err == nil {
 		nmgr.reconcileKvBucket(bucket, maxBytes, kv.TierFor(logical))
+		nmgr.trackKvBucket(bucket)
 		return existing, nil
 	} else if !errors.Is(err, nats.ErrBucketNotFound) {
 		return nil, err
 	}
-	return nmgr.js.CreateKeyValue(&nats.KeyValueConfig{
+	created, err := nmgr.js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket:   bucket,
 		TTL:      ttl,
 		MaxBytes: maxBytes,
 		Replicas: nmgr.effectiveStreamReplicas(),
 	})
+	if err != nil {
+		return nil, err
+	}
+	nmgr.trackKvBucket(bucket)
+	return created, nil
 }
 
 // reconcileKvBucket applies the ceiling to a bucket that already exists.

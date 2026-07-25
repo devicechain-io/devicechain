@@ -112,8 +112,11 @@ type NatsManager struct {
 	// streamNames is the set of streams this service has ensured (deduped), guarded
 	// by streamMu because SubscribeLive can ensure a stream at runtime while the
 	// metrics sampler reads the set. The sampler polls each for fill (ADR-023).
+	// bucketNames is the parallel set of KV buckets, held separately because they
+	// get replication metrics only (streamMetrics.sample explains why).
 	streamMu    sync.Mutex
 	streamNames []string
+	bucketNames []string
 	metrics     *streamMetrics
 	stopSampler chan struct{}
 	samplerWg   sync.WaitGroup
@@ -478,21 +481,48 @@ func (nmgr *NatsManager) trackedStreams() []string {
 	return append([]string(nil), nmgr.streamNames...)
 }
 
-// runStreamMetrics samples every ensured stream's fill on a fixed cadence until
-// stopped, so the size ceilings' DiscardOld eviction is observable rather than
-// silent (ADR-023). It re-snapshots the tracked set each tick to pick up any stream
-// a runtime SubscribeLive ensured after startup.
+// trackKvBucket records a KV bucket this service has opened, by the name of the
+// stream backing it, so the sampler can report its replication.
+//
+// Buckets are tracked separately from streams rather than added to streamNames
+// because the two get different metrics — see streamMetrics.sample for why folding
+// them together would turn a correctly-working bounded cache into a firing alert.
+func (nmgr *NatsManager) trackKvBucket(bucket string) {
+	name := kvStreamPrefix + bucket
+	nmgr.streamMu.Lock()
+	defer nmgr.streamMu.Unlock()
+	for _, n := range nmgr.bucketNames {
+		if n == name {
+			return
+		}
+	}
+	nmgr.bucketNames = append(nmgr.bucketNames, name)
+}
+
+// trackedBuckets returns a snapshot of the opened KV bucket stream names.
+func (nmgr *NatsManager) trackedBuckets() []string {
+	nmgr.streamMu.Lock()
+	defer nmgr.streamMu.Unlock()
+	return append([]string(nil), nmgr.bucketNames...)
+}
+
+// runStreamMetrics samples every ensured stream's fill, and every stream's and
+// bucket's replication, on a fixed cadence until stopped — so both the ceilings'
+// DiscardOld eviction (ADR-023) and a stream that is not actually replicated
+// (ADR-020 A0) are observable rather than silent. It re-snapshots the tracked sets
+// each tick to pick up anything a runtime SubscribeLive ensured after startup.
 func (nmgr *NatsManager) runStreamMetrics() {
 	defer nmgr.samplerWg.Done()
 	ticker := time.NewTicker(streamMetricsSampleInterval)
 	defer ticker.Stop()
-	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams()) // seed promptly, don't wait a full interval
+	// Seed promptly, don't wait a full interval.
+	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas())
 	for {
 		select {
 		case <-nmgr.stopSampler:
 			return
 		case <-ticker.C:
-			nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams())
+			nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas())
 		}
 	}
 }

@@ -373,3 +373,76 @@ func TestReconcileRefusesToDeReplicateOnDowngrade(t *testing.T) {
 			after.Config.Replicas)
 	}
 }
+
+// TestReplicationMetricsReportBrokerStateNotConfig is U3's guard, and the reason
+// it runs against a real cluster is the peer count.
+//
+// desired-vs-actual can be faked by reading config twice. peersCurrent cannot: it
+// requires a broker that actually has peers, and it is the term that distinguishes
+// "replicated" from "labelled replicated". Every other assurance that an instance
+// is HA — the rendered value, the tofu plan, the dcctl preflight — is made before
+// anything is running and cannot notice that a stream drifted or that a peer never
+// caught up. This is the one that can.
+func TestReplicationMetricsReportBrokerStateNotConfig(t *testing.T) {
+	nmgr, cleanup := newTestCluster(t)
+	defer cleanup()
+	nmgr.metrics = newStreamMetrics(nmgr.Microservice)
+	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = 3
+
+	const suffix = "inbound-events"
+	name, err := nmgr.ensureStream(suffix)
+	if err != nil {
+		t.Fatalf("ensureStream: %v", err)
+	}
+	info := waitForReplicated(t, nmgr.js, name, 3)
+
+	if got := currentPeers(info); got != 3 {
+		t.Errorf("currentPeers = %d on a healthy 3-node stream, want 3 (leader plus two current peers)", got)
+	}
+
+	// A stream whose peers have not caught up must NOT count them. This is the
+	// exact state a naive check misses: Replicas says 3, replication is not real.
+	stale := *info
+	clusterCopy := *info.Cluster
+	clusterCopy.Replicas = []*nats.PeerInfo{
+		{Name: "n2", Current: true},
+		{Name: "n3", Current: false},
+	}
+	stale.Cluster = &clusterCopy
+	if got := currentPeers(&stale); got != 2 {
+		t.Errorf("currentPeers = %d with one lagging peer, want 2; a stale peer must not be counted "+
+			"as replication", got)
+	}
+
+	offline := stale
+	offlineCluster := clusterCopy
+	offlineCluster.Replicas = []*nats.PeerInfo{
+		{Name: "n2", Current: true, Offline: true},
+		{Name: "n3", Current: true},
+	}
+	offline.Cluster = &offlineCluster
+	if got := currentPeers(&offline); got != 2 {
+		t.Errorf("currentPeers = %d with one offline peer, want 2", got)
+	}
+
+	// An unclustered broker reports no cluster block; the single server holding the
+	// stream is one current peer, not zero.
+	if got := currentPeers(&nats.StreamInfo{}); got != 1 {
+		t.Errorf("currentPeers = %d with no cluster info, want 1", got)
+	}
+
+	// The sampler must not blow up on the two tracked sets, and buckets must be
+	// sampled for replication.
+	if _, err := nmgr.KeyValueStore("leases", "test_leases", time.Hour); err != nil {
+		t.Fatalf("KeyValueStore: %v", err)
+	}
+	buckets := nmgr.trackedBuckets()
+	if len(buckets) != 1 || buckets[0] != kvStreamPrefix+"test_leases" {
+		t.Fatalf("trackedBuckets = %v, want exactly the leases bucket's backing stream", buckets)
+	}
+	if streams := nmgr.trackedStreams(); len(streams) != 1 {
+		t.Errorf("trackedStreams = %v; buckets must not leak into the stream set, or a bounded "+
+			"cache sitting near its ceiling by design fires the near-full alert", streams)
+	}
+	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), buckets, nmgr.desiredStreamReplicas())
+}
