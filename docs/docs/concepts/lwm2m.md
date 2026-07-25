@@ -27,7 +27,11 @@ Every device is bound to its tenant by its **authenticated DTLS PSK identity**, 
 
 ## High availability
 
-A single replica serves the CoAP endpoint at a time, elected through a lease; a standby takes over on failure. Because a queue-mode device can be silent for long stretches by design, the new leader reconstructs presence from the durable projection and each device's registration lifetime rather than probing — so a takeover doesn't false-flag sleeping devices as offline.
+A single replica serves the CoAP endpoint at a time, held by a fenced ownership lease. Devices connect **in** to one bound UDP socket, so this is not a tuning choice: a second replica sharing the Service would silently receive — and drop — a share of the datagrams. Only the lease holder binds the socket; the deployment refuses to render more than one replica.
+
+What the lease buys is that **replacement is safe and automatic**. A replacement pod binds nothing until it has acquired the lease, so two processes are never bound to the endpoint at once. Because a queue-mode device can be silent for long stretches by design, the new leader then reconstructs presence from the durable projection and each device's registration lifetime rather than probing — so a changeover doesn't false-flag sleeping devices as offline.
+
+Recovery is automatic but not instantaneous: it takes as long as the replacement pod needs to schedule and bind, plus up to the lease's 30-second fencing window. Datagrams sent during that window are lost, which for LwM2M is ordinarily invisible — CoAP confirmable messages are retransmitted, and observed resources resume on the next notify.
 
 :::note Status
 LwM2M ingestion is available as an opt-in service over CoAP/UDP with DTLS-PSK. It drives authoritative [device presence](./device-presence.md), ingests observed resources as measurements, and sends Read/Write/Execute commands and firmware updates downlink (with durable hold-and-drain for sleeping devices). GA scope is PSK credentials (X.509 / raw-public-key and a Bootstrap server are planned).

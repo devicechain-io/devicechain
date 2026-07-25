@@ -68,12 +68,27 @@ la de otro.
 ## Alta disponibilidad
 
 Solo **una** réplica del servicio de Sparkplug se conecta a un broker dado a la
-vez, elegida mediante un arrendamiento (lease). Una segunda réplica queda en
-espera y toma el control si la líder falla; al tomar el control, restablece la
-sesión (pidiendo a los nodos que se vuelvan a anunciar) y reconcilia la
-presencia de los dispositivos, de modo que una desconexión ocurrida durante el
-traspaso no se pierde y ningún dispositivo queda mostrado incorrectamente como
-en línea.
+vez. Un Host de Sparkplug es propietario del estado de alias, secuencia y sesión
+por nodo, así que dos instancias conectadas verían cada una una parte del
+tráfico y publicarían STATE contradictorios — por eso la propiedad única no es
+aquí una opción de ajuste sino de correctitud, garantizada por un arrendamiento
+(lease) de propiedad con vallado y por un despliegue que se niega a renderizar
+más de una réplica.
+
+Lo que aporta el arrendamiento es que **el reemplazo es seguro y automático**.
+Cuando el pod que sirve desaparece — una caída, un desalojo, la pérdida de un
+nodo, un despliegue nuevo — su reemplazo no puede empezar a servir hasta haber
+adquirido el arrendamiento, de modo que nunca hay una ventana con dos Hosts en
+el broker. Al adquirirlo, el nuevo líder restablece la sesión (pidiendo a los
+nodos que se vuelvan a anunciar) y reconcilia la presencia de los dispositivos,
+de modo que una desconexión ocurrida durante el relevo no se pierde y ningún
+dispositivo queda mostrado incorrectamente como en línea.
+
+Por tanto la recuperación es automática pero no instantánea: tarda lo que el pod
+de reemplazo necesite para planificarse y arrancar, más hasta 30 segundos de la
+ventana de vallado del arrendamiento. No hay un standby en caliente manteniendo
+una segunda conexión — eso sería precisamente lo que la propiedad única existe
+para evitar.
 
 :::note Estado
 La ingesta de Sparkplug-B está disponible como un servicio opcional (opt-in).

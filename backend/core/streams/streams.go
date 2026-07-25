@@ -193,27 +193,34 @@ const (
 // deviceEventsCaptureMaxBytesCap caps DeviceEventsCapture below the Hot tier
 // ceiling, because taking the Hot ceiling in full does not fit the disk budget.
 //
-// The arithmetic, at the shipped defaults: the declared streams reserve 8 GiB
-// (7 Hot x 1 GiB + 8 Cold x 128 MiB), the MQTT gateway stores 384 MiB and the KV
-// buckets 768 MiB, against a 10 GiB max_file_store — leaving 896 MiB over a
-// headroom floor of 512 MiB, so only 384 MiB is actually free. Every ceiling is
-// reserved UP FRONT, so an uncapped capture stream does not merely overcommit, it
-// crashloops every stream-creating service at upgrade with "insufficient storage
-// resources available".
+// The arithmetic, at the shipped defaults: the declared streams reserve 8448 MiB
+// (7 Hot x 1 GiB + 8 Cold x 128 MiB + this capped capture stream), the MQTT
+// gateway stores 384 MiB and the KV buckets 896 MiB (4 State x 128 + 6 Cache x 64)
+// — 9.5 GiB reserved against the 14 GiB max_file_store a 16Gi PV yields. Every
+// ceiling is reserved UP FRONT, so an uncapped capture stream does not merely
+// overcommit, it crashloops every stream-creating service at upgrade with
+// "insufficient storage resources available".
 //
-// 256 MiB rather than the whole 384: at ~250 B per raw device publish it buys
-// roughly an hour of capture at 250 events/s, which is a real outage-recovery
-// envelope, and it leaves the headroom floor with slack rather than sitting
-// exactly on it.
+// 256 MiB: at ~250 B per raw device publish it buys roughly an hour of capture at
+// 250 events/s, which is a real outage-recovery envelope.
+//
+// READ THE NUMBER ABOVE BEFORE REUSING THIS REASONING. This cap was chosen when
+// the PV was 12Gi, whose 10 GiB ceiling left 512 MiB over the headroom floor —
+// i.e. nothing, so 256 MiB was as much as could be taken. The PV moved to 16Gi
+// (ADR-020 A0) precisely because a budget with no slack makes every new stream a
+// deploy-time landmine, and there is now 4.5 GiB unreserved. So the cap is no
+// longer pinned by the budget: if it proves tight, it can simply be raised. What
+// it is still pinned by is being a CAP rather than an absolute — see below.
 //
 // Being a CAP is what keeps this honest under --compact, whose Hot ceiling is
 // 64 MiB against a 2Gi volume: there the tier binds and this number never applies.
 // An absolute 256 MiB would have overrun the compact budget outright — it did,
 // which is how the cap semantics were arrived at rather than assumed.
 //
-// If it proves tight at the default size, the space to take is $MQTT_msgs: 256 MiB
-// reserved for a gateway store that stops buffering telemetry entirely once
-// nothing subscribes to it over MQTT (ADR-030 slice I7).
+// If it proves tight at the default size the PV now has room outright, but the
+// cheaper space to take first is still $MQTT_msgs: 256 MiB reserved for a gateway
+// store that stops buffering telemetry entirely once nothing subscribes to it
+// over MQTT (ADR-030 slice I7).
 const deviceEventsCaptureMaxBytesCap = 256 << 20
 
 // DeadLetter returns the dead-letter suffix derived from a base suffix.

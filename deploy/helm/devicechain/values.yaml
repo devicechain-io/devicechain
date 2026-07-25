@@ -59,6 +59,22 @@ instance:
       nats:
         hostname: dc-nats.dc-system
         port: 4222
+        # How many copies JetStream keeps of every stream and KV bucket (ADR-020 A0).
+        # ODD, and at most 5 — the services reject an even value at startup, because
+        # RAFT commits on a majority so an even count tolerates no more failures than
+        # the odd one below it while costing the extra disk and a wider quorum.
+        #
+        # THIS IS HALF A TOGGLE, and the other half is not in this file. It is the NATS
+        # SERVER COUNT, provisioned by OpenTofu (nats_cluster_replicas / var.ha), and a
+        # stream cannot be replicated wider than the cluster hosting it. `dcctl bootstrap
+        # --ha` sets both from one value and refuses an install where they disagree.
+        # Raising this key BY HAND against a single-server broker does not fail: the
+        # services clamp to 1 and log it, because crashlooping the platform over a
+        # deployment mismatch is worse — so the instance comes up looking configured for
+        # HA and is not. What says so is devicechain_*_jetstream_replicas_desired vs
+        # _actual, and the JetStreamNotReplicatedAsConfigured alert built on them.
+        #
+        # Leaving it at 1 is correct for a single-node broker and is the shipped default.
         streamReplicas: 1
         # Per-stream JetStream size ceilings (ADR-023): a per-stream platform bound
         # so a producer flood or a wedged consumer cannot grow one stream without

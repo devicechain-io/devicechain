@@ -187,11 +187,13 @@ func (nmgr *NatsManager) desiredStreamReplicas() int {
 // (bootstrap/helm.go, validateRenderedInstanceConfig), which rejects a replica
 // count that is even or above the server maximum. But that is everything decidable
 // from the config DOCUMENT, and this mismatch is not in the document — it is
-// between the document and the broker. Nothing catches it before install today.
-// The A0 work that closes that gap is the dcctl --ha composer plus its
-// broker-capability preflight (unit U5); until it lands, this clamp and the
-// desired-vs-actual gauges are the only things standing between a half-configured
-// HA deployment and a silent one.
+// between the document and the broker. dcctl closes that gap for its own path:
+// `--ha` sets both halves from one value, and a preflight between the infra apply
+// and the helm install compares this replica factor against the server count the
+// infrastructure actually reported (bootstrap/ha.go). What it cannot cover is a
+// chart installed by hand, or against a broker dcctl did not provision — so this
+// clamp and the desired-vs-actual gauges remain the last line, and they are the
+// only line for a direct `helm install`.
 //
 // Note the limitation, because it decides what a green startup here does and does
 // not prove: this reads clustered-NESS, not peer count. A 3-node cluster running
@@ -518,8 +520,6 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 // bucket and a message stream cannot drift apart in how they handle the same
 // operation — they are the same object to JetStream, and the KV path had the
 // lenient posture first.
-//
-// kind is "stream" or "bucket" and only labels the log.
 func (nmgr *NatsManager) reconcileStreamReplicas(name string, current nats.StreamConfig) {
 	desired := nmgr.desiredStreamReplicas()
 	effective := nmgr.effectiveStreamReplicas()
