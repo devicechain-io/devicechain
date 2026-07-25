@@ -259,15 +259,38 @@ locals {
   # These are easy to forget because nothing in DeviceChain creates them: the
   # broker does, on first MQTT connect. They are also the streams that decide
   # whether an MQTT device SURVIVES a node loss, since they hold persistent-session
-  # state and inflight QoS 1 messages. Left at the default 1 on a 3-node cluster,
-  # losing the node that happened to host them drops every persistent session and
-  # every un-acked message — an outage that looks like a device-side reconnect
-  # storm and points nowhere near the broker.
+  # state and inflight QoS 1 messages.
   #
-  # Capped at 3 rather than tracking a 5-server cluster: session state is
-  # recoverable by a device reconnecting, so it does not warrant a 5-way quorum on
-  # every write the way the platform's own streams might. A 5-node operator who
-  # wants R5 here should say so in nats_jetstream_* territory, not inherit it.
+  # WHY SET IT AT ALL, given the default is not simply 1. Left unset on a clustered
+  # broker, nats-server derives the count in mqttDetermineReplicas: it walks the
+  # configured ROUTE URLs, DNS-RESOLVES each one, sums the addresses, and caps the
+  # result at 3. On a settled 3-server cluster that yields 3 — the same number set
+  # here, which is why this is not a correction of the default so much as a
+  # replacement of a derivation with a constant.
+  #
+  # The derivation is the problem. It runs ONCE, when the first MQTT client
+  # connects and the streams are created, and it reads DNS at that instant. In this
+  # chart the routes are the headless Service's per-pod names, so a first connect
+  # that lands while peers are still starting resolves fewer addresses and creates
+  # the streams at R1 or R2 — permanently, because the mismatch path below only
+  # WARNS. So the failure is not a wrong default, it is a NON-DETERMINISTIC one
+  # that depends on pod startup order, and produces an unreplicated MQTT session
+  # store on a cluster where everything else replicated correctly.
+  #
+  # Setting it explicitly also turns the warning ON: nats-server compares the
+  # configured value against the live stream only `if opts.MQTT.StreamReplicas != 0`,
+  # so an unset broker never says a word about a mismatch it is living with.
+  #
+  # 🔴 IT DOES NOT LIFT AN EXISTING STREAM. The platform's own streams and buckets
+  # ARE reconciled upward on start (core/messaging reconcileStreamReplicas); the
+  # $MQTT_* ones are not ours to reconcile, and nats-server only logs the
+  # difference. An instance whose MQTT streams already exist at R1 keeps them there
+  # after this is raised — they need a deliberate `nats stream update` (or a delete
+  # on an instance with no sessions worth keeping).
+  #
+  # Capped at 3 rather than tracking a 5-server cluster, matching the cap the
+  # derivation itself applies: session state is recoverable by a device
+  # reconnecting, so it does not warrant a 5-way quorum on every write.
   mqtt_stream_replicas = min(local.cluster_replicas, 3)
 
   # Spread the servers across NODES, and do it as a HARD constraint.
