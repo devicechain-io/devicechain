@@ -1343,6 +1343,63 @@ func (nmgr *NatsManager) Initialize(ctx context.Context) error {
 	return nmgr.lifecycle.Initialize(ctx)
 }
 
+// connectionEventHandlers logs the client's connection lifecycle.
+//
+// Without these, a broker outage is COMPLETELY SILENT on the client side. The
+// options above are MaxReconnects(-1) and RetryOnFailedConnect(true) — deliberate,
+// and right, because a service that dies when the broker blinks is worse than one
+// that waits — but their combined effect is that the library absorbs every
+// disconnect, retries forever, and says nothing. A service can sit unable to
+// publish for an hour while its logs show only the silence of a service with
+// nothing to do, which are indistinguishable.
+//
+// That gap widens with ADR-020 A0 rather than closing: the point of a 3-node
+// cluster is to survive losing a node, and surviving it means clients disconnect
+// and reconnect somewhere else. Those are the events that say whether failover
+// happened at all, how long it took, and — via ConnectedUrl — whether the client
+// actually landed on a different server or is looping against the same one.
+//
+// Logs, not metrics, and deliberately: what makes these useful is the WHICH and
+// the WHY (which server, which error), and a counter cannot carry either. The
+// broker-side counterpart is the prometheus-nats-exporter (nats_prom_exporter),
+// which reports the same events from the server's view; a disconnect visible in
+// one and not the other localizes the fault to the network between them.
+func connectionEventHandlers(area string) []nats.Option {
+	return []nats.Option{
+		// Fires with a NIL error on a clean server shutdown (lame-duck) and a non-nil
+		// one on a network fault. Both are logged at warn: the client is not connected
+		// either way, which is the fact that matters to whoever is reading.
+		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
+			log.Warn().Str("area", area).Err(err).Str("server", nc.ConnectedUrl()).
+				Msg("Disconnected from NATS; retrying indefinitely (MaxReconnects is unlimited). " +
+					"Publishes are buffered up to the client's pending limit and then fail; " +
+					"consumers stop receiving until the connection is restored")
+		}),
+		// The recovery, and the one that carries the interesting datum: which server
+		// the client came back on. In a clustered broker a reconnect to a DIFFERENT
+		// URL is failover working; repeated reconnects to the SAME one are a flapping
+		// server rather than a node loss, and the two want opposite responses.
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			log.Info().Str("area", area).Str("server", nc.ConnectedUrl()).
+				Str("cluster", nc.ConnectedClusterName()).
+				Msg("Reconnected to NATS. Durable consumers resume from their last ack; " +
+					"anything the client had buffered while disconnected has been flushed")
+		}),
+		// Terminal. With unlimited reconnects this is only reached by an explicit
+		// Close (shutdown) or a state the library considers unrecoverable, so it is
+		// logged at ERROR: the connection will not come back on its own, and every
+		// publish and subscription on it is dead from here. It is the one connection
+		// event that is not self-healing, which is exactly why it must not share a
+		// level with the two above.
+		nats.ClosedHandler(func(nc *nats.Conn) {
+			log.Error().Str("area", area).Err(nc.LastError()).
+				Msg("NATS connection CLOSED permanently; it will not reconnect. If the service " +
+					"is not shutting down, it is now mute: no publishes, no deliveries, and no " +
+					"further retries. The process must be restarted")
+		}),
+	}
+}
+
 // ExecuteInitialize connects to NATS and obtains a JetStream context.
 func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 	url := nmgr.NatsUrl()
@@ -1352,6 +1409,7 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 		nats.MaxReconnects(-1),
 		nats.RetryOnFailedConnect(true),
 	}
+	opts = append(opts, connectionEventHandlers(nmgr.Microservice.FunctionalArea)...)
 	// When the broker terminates TLS (ADR-025) every client must dial over TLS or
 	// the handshake on the TLS-required port fails; verify the server against the
 	// CA threaded into the instance config.
