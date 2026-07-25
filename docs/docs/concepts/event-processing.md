@@ -25,7 +25,7 @@ By default a rule applies to **every device** that resolves to its profile. A ru
 
 Group membership is recorded on each event **as it is resolved**, so the engine sees exactly which rules applied at that moment — including when it replays history to preview or re-derive firings. When a device joins or leaves the group, it is enrolled or dropped on its next event, with no rule edit and no rescan.
 
-## Condition types
+## Condition types {#condition-types}
 
 | Condition | Fires when | Parameters |
 |---|---|---|
@@ -44,7 +44,7 @@ Each condition's comparison can be a structured `metric · operator · value` le
 
 A threshold can be a **fixed value** on the rule, or **dynamic** — the name of a device **attribute** the rule reads at evaluation time. A dynamic threshold lets one rule adapt per device: the profile defines the rule once, and each device carries its own limit as a `SERVER`- or `SHARED`-scoped attribute (server-set values take precedence). Change the attribute and the effective threshold changes with no rule edit.
 
-## Automated actions
+## Automated actions {#automated-actions}
 
 When a rule fires, its **REACT** actions run. The built-in actions are:
 

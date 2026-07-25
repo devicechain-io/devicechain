@@ -1,0 +1,79 @@
+---
+sidebar_position: 7
+title: Acceso de IA (MCP)
+---
+
+# Acceso de IA (MCP)
+
+Los asistentes de IA — Claude Desktop y Claude Code, Cursor, VS Code — pueden operar un inquilino de DeviceChain en nombre de un usuario a través de un servidor **Model Context Protocol (MCP)**. Un cliente LLM se conecta, descubre un conjunto de herramientas y las invoca para responder preguntas sobre tu flota: *"¿qué dispositivos del Edificio 3 no han reportado en la última hora?"*, *"resume las alarmas de hoy para los activos de almacenamiento en frío"*, *"¿cuál es la última temperatura del termostato T-114?"*
+
+El servidor MCP de DeviceChain se construye alrededor de un único principio: **un agente de IA nunca puede hacer más que la persona que lo autorizó.** En lugar de una puerta de enlace amplia y sobre-permisionada, es una capa delgada, curada y de solo lectura sobre la API GraphQL existente de la plataforma, que porta el propio token con alcance de inquilino del usuario autenticado.
+
+:::note Estado
+**Disponible hoy (de solo lectura):** un servicio `mcp` opcional que expone diez herramientas de lectura curadas, respaldado por un servidor de autorización OAuth 2.1 completo en `user-management` (flujo de código de autorización con PKCE, metadatos RFC 8414, rotación de tokens de actualización, vinculación de audiencia RFC 8707). **Planeado:** herramientas de escritura (enviar comando, reconocer/limpiar alarma) detrás de un alcance elevado y una confirmación obligatoria con humano en el bucle; y registro dinámico de clientes (RFC 7591) — hoy los clientes son registrados por un administrador. Este repositorio es la fuente de verdad de lo que actualmente está implementado.
+:::
+
+## Qué puede hacer un asistente
+
+El servidor expone diez herramientas de **lectura**. Cada una es una consulta contra la misma API GraphQL que usa la consola, ejecutada bajo el token del solicitante — de modo que una herramienta devuelve exactamente lo que ese usuario, en ese inquilino, tiene permitido ver, y nada más.
+
+**Dispositivos**
+
+- `list_devices` — lista dispositivos, con filtrado.
+- `get_device` — los detalles de un dispositivo individual.
+- `get_device_capabilities` — qué puede medir un dispositivo, y los comandos **publicados** que acepta (con el esquema de parámetros de cada comando).
+
+**Estado en vivo y telemetría**
+
+- `get_device_state` — el estado actual de último valor conocido de un dispositivo.
+- `get_latest_measurements` — el valor más reciente por medición.
+- `query_measurements` — lecturas de series temporales sin procesar en un rango de tiempo.
+- `aggregate_measurements` — agregados por intervalos (min/max/promedio y similares) en un rango.
+
+**Alarmas**
+
+- `list_alarms` — alarmas, con filtrado por estado y entidad.
+- `get_alarm` — los detalles de una sola alarma.
+
+**Comandos**
+
+- `list_commands` — los comandos emitidos a un dispositivo y su estado.
+
+**No** existe una herramienta genérica de "ejecutar esta consulta GraphQL", y las lecturas sensibles — credenciales, el registro de auditoría, destinatarios de notificaciones, secretos de aprovisionamiento — quedan deliberadamente excluidas del conjunto de herramientas.
+
+## El modelo de seguridad
+
+MCP se está convirtiendo en una forma estándar de dar a los asistentes de IA capacidades reales, y el riesgo es que una implementación descuidada entregue a un agente una clave poderosa y de alcance amplio. El servidor de DeviceChain está diseñado para que eso estructuralmente no pueda ocurrir.
+
+- **Porta el token del usuario — nunca un token de servicio.** El servidor MCP no posee ninguna credencial privilegiada de plataforma. Cada llamada a una herramienta reenvía el JWT validado y con alcance de inquilino del *solicitante* al servicio GraphQL subyacente, de modo que el alcance del agente es exactamente el alcance del usuario. (Entregarle a una IA una identidad de servicio crearía un "diputado confundido" (confused deputy) que podría actuar entre inquilinos — lo único que este diseño rechaza.)
+- **El inquilino se fija en el momento de la concesión, no se pasa como parámetro.** En qué inquilino puede actuar el token se decide durante la autorización, y luego queda incorporado en el token. Ninguna herramienta recibe un argumento de "inquilino" que un agente pudiera cambiar.
+- **Los tokens están vinculados a una audiencia.** Un token de acceso emitido para el servidor MCP está sellado con ese servidor como su audiencia prevista (RFC 8707) y se rechaza en cualquier otro lugar — un token acuñado para un recurso no puede reproducirse contra otro.
+- **De solo lectura, y curado.** Todo el conjunto de herramientas son consultas. No hay ruta de escritura, ni escotilla de escape de consulta genérica, ni exposición de objetos sensibles.
+- **Cada llamada se autentica y se vuelve a verificar.** El servidor valida el token portador contra las claves públicas de `user-management` en cada solicitud y hace cumplir un alcance de solo lectura; el servicio GraphQL subyacente vuelve a aplicar de forma independiente las mismas verificaciones de inquilino y rol que obtiene la consola.
+
+El resultado: conecta un asistente, y podrá *leer dispositivos, estado, mediciones y alarmas* de tu inquilino — y físicamente no puede alcanzar otro inquilino, mutar nada, ni ejecutar una consulta arbitraria.
+
+## Cómo se conecta un cliente
+
+El servidor MCP es un **servidor de recursos OAuth 2.1**, y `user-management` es su **servidor de autorización** — de modo que conectar un cliente es un flujo OAuth estándar, no un intercambio de claves a medida:
+
+1. El cliente descubre los requisitos del servidor a partir de sus metadatos de recurso protegido (RFC 9728) y encuentra el servidor de autorización a partir de sus metadatos (RFC 8414, en `/.well-known/oauth-authorization-server`).
+2. El usuario pasa por el **flujo de código de autorización con PKCE** (`/oauth/authorize`): inicia sesión, elige el inquilino a conceder, y da su consentimiento — todo renderizado por el servidor, sin secreto compartido.
+3. El cliente intercambia el código por un token de acceso con alcance de inquilino en `/oauth/token`, y lo renueva según sea necesario (los tokens de actualización son de un solo uso y rotan).
+4. El cliente invoca las herramientas MCP con ese token; cada llamada se ejecuta bajo los propios permisos del usuario.
+
+Los clientes son **registrados por un administrador** (a través de la API de administración) en lugar de autorregistrarse, de modo que un operador controla qué aplicaciones pueden solicitar acceso y con qué URIs de redirección.
+
+## Qué no puede hacer (hoy)
+
+- **Sin escrituras.** Enviar un comando o reconocer una alarma a través de MCP está planeado, pero solo detrás de un alcance elevado *y* una confirmación humana explícita — un asistente nunca accionará un dispositivo en silencio.
+- **Sin acceso entre inquilinos.** El token tiene alcance limitado a un inquilino, elegido por el usuario en el momento de la concesión.
+- **Sin consultas arbitrarias.** Solo el conjunto de herramientas curado es alcanzable; no existe `run_graphql`.
+
+También es **opcional (opt-in)** — el servicio `mcp` no forma parte de un despliegue predeterminado y es habilitado explícitamente por un operador.
+
+## Relacionado
+
+- **[Multitenencia](./multi-tenancy.md)** — cómo se hace cumplir el aislamiento de inquilinos, sobre lo cual se apoya el token MCP.
+- **[Arquitectura](./architecture.md)** — dónde se ubica el servicio `mcp`, y el modelo de [manejo de secretos](./architecture.md#secret-handling) para credenciales.
+- **[API GraphQL](../reference/graphql-api.md)** — la API que respaldan las herramientas MCP.

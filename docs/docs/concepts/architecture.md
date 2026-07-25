@@ -7,7 +7,7 @@ title: Architecture
 
 DeviceChain is a set of stateless Go microservices over a shared core library, coordinated by a Kubernetes operator and connected by NATS JetStream. A single instance serves all tenants (a shared-microservice model), with tenant isolation enforced at the messaging and storage layers rather than by running separate pods per tenant.
 
-## Components
+## Components {#components}
 
 | Component | Responsibility |
 |---|---|
@@ -33,7 +33,7 @@ Additional services — batch operations and scheduling — are planned. See the
 
 Subjects are scoped per tenant (`{instance}.{tenant}.{suffix}`) and event data is partitioned by tenant in the database, which is how a shared set of services safely serves many tenants.
 
-## The event pipeline
+## The event pipeline {#the-event-pipeline}
 
 ```
 device → MQTT/NATS → event-sources → (decoded event)
@@ -58,7 +58,7 @@ Every service exposes two HTTP endpoints for Kubernetes:
 
 Services start in a **not-ready** state and fetch the JWT signing keys from `user-management` in the background. While not ready, a service is pulled from Service endpoints and its message consumers stay paused — so a brief `user-management` outage degrades a service rather than crashing it, and no request or message is ever processed without verified authentication.
 
-## Secret handling
+## Secret handling {#secret-handling}
 
 Integration and provider credentials — an SMTP password, a webhook bearer token, an outbound-connector's broker or cloud credential — are never stored in plaintext config or a reversible column. They live in an **encrypted secret store**: each value is sealed at rest with a per-secret AES-256-GCM data key wrapped by a key-encryption key (KEK), where the default KEK is a root key on the instance's existing Kubernetes Secret — encryption-at-rest with no additional infrastructure, and cloud KMS / HashiCorp Vault are drop-in alternatives for regulated deployments. A consumer stores only an opaque **handle**; the value is **write-only over the API** and resolved server-internally at use time, never returned as cleartext. Secret mutations are audited (who, when, which handle — never the value).
 

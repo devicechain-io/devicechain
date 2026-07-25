@@ -1,0 +1,8 @@
+{
+  "label": "Referencia",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "Material de referencia: la API de GraphQL y la configuración."
+  }
+}

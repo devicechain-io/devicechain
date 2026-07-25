@@ -117,7 +117,7 @@ Each message is a JSON envelope:
   that command's parameter schema — see
   [Commands and the capability contract](../concepts/domain-model.md#commands-and-the-capability-contract).
 
-## Responding to a command
+## Responding to a command {#responding-to-a-command}
 
 Report the outcome by publishing to the tenant's command-response topic:
 

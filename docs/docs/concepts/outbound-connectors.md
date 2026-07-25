@@ -48,7 +48,7 @@ Two properties keep this safe:
 - **Fire-and-forget, exactly-shaped.** An outbound action does not block the rule waiting for a reply. Payloads are shaped only with CEL — there is no arbitrary scripting in the delivery path — so what a rule can send is bounded and reviewable.
 - **Idempotent by construction.** Each dispatch carries a content-addressed **idempotency key** derived from the firing, so if a detection is replayed or a delivery is retried, the receiver can recognize and drop the duplicate — a redelivery never means a double-send.
 
-## Governance
+## Governance {#governance}
 
 Every outbound action is subject to **per-tenant governance**, because an external call is more expensive — and easier to turn into a self-inflicted flood — than an in-process one. Outbound volume is rate-limited per tenant at both ends of the hop: REACT sheds over-budget emissions before they are dispatched, and the connector service admits sink traffic within a bounded budget. A tenant with no configured limit falls back to a platform default that is **never unlimited**. Shed volume is surfaced as an operational metric so an operator can see a rule that has started to over-emit.
 

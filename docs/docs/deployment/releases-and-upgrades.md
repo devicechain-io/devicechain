@@ -148,7 +148,7 @@ is not a single-writer service and gains nothing from `Recreate` — once cut ov
 multiple replicas, which the MQTT-client path it replaces could not.
 :::
 
-## Data durability
+## Data durability {#data-durability}
 
 The database tier is intentionally **lifecycle-independent** from the application: the
 Postgres and TimescaleDB volumes are provisioned with a `Retain` policy and a destroy guard,
