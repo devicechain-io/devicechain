@@ -46,7 +46,7 @@ Because the embedded artifacts are the *same* ones the platform ships, a
 bootstrapped instance exercises the real deployment — it cannot drift from a
 production deploy.
 
-## Prerequisites
+## Prerequisites {#prerequisites}
 
 - **A Kubernetes cluster and a kube-context** pointing at it. For the `local`
   provider this is a local cluster (kind / minikube / k3d / docker-desktop).

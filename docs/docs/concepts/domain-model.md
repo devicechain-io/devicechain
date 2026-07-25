@@ -19,7 +19,7 @@ DeviceChain models the physical world with a small set of composable concepts. T
 
 Every one of these entities is addressed uniformly by an **entity type + id**, which is what lets relationships, groups, and event indexing operate generically across all of them.
 
-## Relationships
+## Relationships {#relationships}
 
 Instead of binding a device to a single fixed `(customer, area, asset)` assignment, DeviceChain connects entities with **typed, directed relationships**:
 
@@ -40,13 +40,13 @@ DeviceChain distinguishes **current state** from **history**:
   - `SERVER` — platform-only metadata the device never sees.
   - `SHARED` — set by the platform and readable by the device (the channel for remote configuration and OTA targets).
 
-## Facets and dynamic groups
+## Facets and dynamic groups {#facets-and-dynamic-groups}
 
 Attributes double as **classification facets** — the axes you browse and filter entities by. A per-tenant **facet registry** declares which attribute keys (for a given entity family) are facets, giving the console browse UI its axes and value typeahead; it declares *which keys* are facets, not the values (the values stay as attributes on the entities themselves).
 
 A **dynamic group** turns a facet filter into saved, self-updating membership. Its selector is a boolean expression over the members' attributes — for example `attr["climate"] == "arid" && attr["country"] == "US"` — written in [CEL](https://github.com/google/cel-go), the same expression language the detection engine uses. The platform validates and cost-limits the selector when the group is saved, then resolves membership **on read** by lowering the expression to an indexed database query (never by scanning every entity), so a dynamic group always reflects the current attribute state without any materialized cache to keep in sync. A static group, by contrast, holds an explicit member list. The console's **Browse** screen composes a selector from facet axes, previews the matching count live, and saves it as a dynamic group; the **Facets** screen manages the registry.
 
-## Commands and the capability contract
+## Commands and the capability contract {#commands-and-the-capability-contract}
 
 A device profile can declare the **commands** its devices accept, each with a typed
 parameter schema (name, data type, required, min/max, enum). Those declarations are what

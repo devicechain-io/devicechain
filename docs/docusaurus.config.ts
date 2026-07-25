@@ -18,7 +18,13 @@ const config: Config = {
 
   i18n: {
     defaultLocale: 'en',
-    locales: ['en'],
+    // Spanish is the GA docs locale (ADR-066). Additional locales (de, pt-BR, ja)
+    // ship post-GA, matching the app's locale roadmap.
+    locales: ['en', 'es'],
+    localeConfigs: {
+      en: { label: 'English' },
+      es: { label: 'Español' },
+    },
   },
 
   presets: [
@@ -47,6 +53,7 @@ const config: Config = {
       },
       items: [
         { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs' },
+        { type: 'localeDropdown', position: 'right' },
         {
           href: 'https://github.com/devicechain-io/devicechain',
           label: 'GitHub',

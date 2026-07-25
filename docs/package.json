@@ -8,6 +8,7 @@
     "build": "docusaurus build",
     "serve": "docusaurus serve",
     "clear": "docusaurus clear",
+    "write-translations": "docusaurus write-translations",
     "typecheck": "tsc"
   },
   "dependencies": {

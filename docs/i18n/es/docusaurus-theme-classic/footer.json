@@ -1,0 +1,30 @@
+{
+  "link.title.Docs": {
+    "message": "Documentación",
+    "description": "The title of the footer links column with title=Docs in the footer"
+  },
+  "link.title.Project": {
+    "message": "Proyecto",
+    "description": "The title of the footer links column with title=Project in the footer"
+  },
+  "link.item.label.Introduction": {
+    "message": "Introducción",
+    "description": "The label of footer link with label=Introduction linking to /"
+  },
+  "link.item.label.Concepts": {
+    "message": "Conceptos",
+    "description": "The label of footer link with label=Concepts linking to /concepts/architecture"
+  },
+  "link.item.label.Guides": {
+    "message": "Guías",
+    "description": "The label of footer link with label=Guides linking to /guides/local-development"
+  },
+  "link.item.label.GitHub": {
+    "message": "GitHub",
+    "description": "The label of footer link with label=GitHub linking to https://github.com/devicechain-io/devicechain"
+  },
+  "copyright": {
+    "message": "Copyright © 2026 DeviceChain. Apache 2.0.",
+    "description": "The footer copyright"
+  }
+}

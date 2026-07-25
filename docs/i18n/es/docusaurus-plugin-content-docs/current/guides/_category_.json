@@ -1,0 +1,8 @@
+{
+  "label": "Guías",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "description": "Guías prácticas orientadas a tareas para ejecutar y usar DeviceChain."
+  }
+}
