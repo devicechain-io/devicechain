@@ -363,6 +363,9 @@ func removeLocalRegistry(ctx context.Context) error {
 // stepInfraApply deploys the shared data/infra stack via OpenTofu, driving the
 // tofu/terraform binary through terraform-exec.
 func stepInfraApply(ctx context.Context, st *State) error {
+	if err := checkHaNodeCapacity(ctx, st); err != nil {
+		return err
+	}
 	if st.DryRun {
 		doing("applying infrastructure stack (OpenTofu)")
 		fmt.Println()
@@ -408,6 +411,14 @@ func stepInstallCore(ctx context.Context, st *State) error {
 // stepHelmInstall installs (or upgrades) the per-instance chart via the Helm Go
 // SDK, blocking until the rendered workloads are ready.
 func stepHelmInstall(ctx context.Context, st *State) error {
+	// The broker that was actually provisioned must be able to host the replica
+	// factor this install is about to configure. Checked here — after the infra
+	// apply, before the chart — because that is the only point where BOTH halves of
+	// the HA toggle are known: the applied server count is an output of the step
+	// before, and the replica factor is a value of the step after.
+	if err := checkBrokerHostsReplication(st); err != nil {
+		return err
+	}
 	if st.DryRun {
 		doing("installing instance chart (Helm)")
 		fmt.Println()
@@ -501,6 +512,14 @@ func stepReport(ctx context.Context, st *State) error {
 	// is the one the docs describe.
 	if st.Compact {
 		fmt.Printf("  %s %s\n", color.WhiteString("Footprint:"), color.GreenString(compact.summary()))
+	}
+	// The messaging topology, and only when it is the replicated one. Printed from
+	// the SAME haTopology both tools rendered from, so the summary cannot describe a
+	// topology the instance does not have — and printed at all because "is this
+	// instance actually HA?" is otherwise a question answered by reading a tofu
+	// variable and a Helm value in two different places.
+	if ha := haFor(st.HA); ha.Replicated() {
+		fmt.Printf("  %s %s\n", color.WhiteString("Messaging HA:"), color.GreenString(ha.summary()))
 	}
 	fmt.Printf("  %s %s\n", color.WhiteString("Images:"), color.GreenString(st.Values["imageSource"]))
 	fmt.Printf("  %s %s\n", color.WhiteString("Kube context:"), color.GreenString(st.KubeContext))

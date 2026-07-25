@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 
 	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/hashicorp/terraform-exec/tfexec"
@@ -83,6 +84,18 @@ func applyInfra(ctx context.Context, st *State) error {
 		}
 		st.Values["natsCA"] = ca
 	}
+	// The NATS server count the infrastructure ACTUALLY provisioned (ADR-020 A0).
+	// Read back rather than assumed so the Helm step can refuse a replica factor the
+	// broker cannot host — see checkBrokerHostsReplication for why reading reality
+	// rather than our own request is the entire value of this. A decode failure is
+	// non-fatal: this feeds a guard, and an unreadable output should not fail a
+	// bring-up that is otherwise fine (the guard treats absence as "cannot tell").
+	if meta, ok := outputs["nats_cluster_replicas"]; ok {
+		var servers int
+		if err := json.Unmarshal(meta.Value, &servers); err == nil && servers > 0 {
+			st.Values[natsClusterReplicasKey] = strconv.Itoa(servers)
+		}
+	}
 	// Grafana access (when monitoring was installed): stash the namespace/service so
 	// the report step can print a port-forward hint. Null when --no-monitoring.
 	if meta, ok := outputs["grafana_service"]; ok {
@@ -109,6 +122,12 @@ func applyInfra(ctx context.Context, st *State) error {
 // only means something if it reads the vars the apply actually passes.
 func infraVars(st *State) []string {
 	vars := []string{"kubeconfig_context=" + st.KubeContext}
+	// The OpenTofu half of the HA topology. Emitted UNCONDITIONALLY, including for
+	// the single-node case, so the two halves are rendered from one value on every
+	// path rather than only when the flag is set — a conditional here would leave
+	// the disagreement reachable again by the narrow route of turning HA off on an
+	// instance that had it on. See haTopology.
+	vars = append(vars, haFor(st.HA).infraVars()...)
 	// On a kind/minikube node, ingress-nginx must bind the node's 80/443 via
 	// hostPort; a LoadBalancer stays <pending> and times out the apply. The
 	// monitoring stack likewise runs in its slim profile (emptyDir TSDB, smaller
