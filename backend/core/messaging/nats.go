@@ -103,6 +103,12 @@ type NatsManager struct {
 	writers   []*natsWriter
 	lifecycle core.LifecycleManager
 
+	// clustered records whether the connected broker reports a cluster, read once
+	// at connect and used to clamp the replica factor (effectiveStreamReplicas).
+	// It is false until ExecuteInitialize has connected, which is the safe default:
+	// it clamps to 1 rather than issuing a replica count the broker would reject.
+	clustered bool
+
 	// streamNames is the set of streams this service has ensured (deduped), guarded
 	// by streamMu because SubscribeLive can ensure a stream at runtime while the
 	// metrics sampler reads the set. The sampler polls each for fill (ADR-023).
@@ -142,15 +148,79 @@ func (nmgr *NatsManager) NatsUrl() string {
 	return fmt.Sprintf("nats://%s:%d", cfg.Hostname, cfg.Port)
 }
 
-// streamReplicas returns the configured JetStream replica count (defaulting to
-// 1 when unset) so a single-node dev cluster and an HA cluster (ADR-018) share
-// one code path.
-func (nmgr *NatsManager) streamReplicas() int {
+// desiredStreamReplicas returns the CONFIGURED JetStream replica count (defaulting
+// to 1 when unset) — what the operator asked for, which is not necessarily what the
+// broker can deliver. Callers creating or reconciling a stream or bucket want
+// effectiveStreamReplicas instead.
+func (nmgr *NatsManager) desiredStreamReplicas() int {
 	r := int(nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas)
 	if r < 1 {
 		return 1
 	}
 	return r
+}
+
+// effectiveStreamReplicas is the replica count actually used to create and
+// reconcile streams and KV buckets: the configured count, clamped to what the
+// connected broker can satisfy.
+//
+// The clamp exists because the two halves of an HA deployment live in different
+// tools and can therefore disagree. streamReplicas is a helm-rendered instance-config
+// value; whether JetStream is CLUSTERED at all is an infrastructure property of the
+// NATS StatefulSet (tofu var.ha / nats_cluster_replicas). Nothing structurally
+// prevents an operator — or a partial edit, or a values file copied between
+// instances — from raising one without the other.
+//
+// What makes that worth code rather than a comment is the failure it produces.
+// Asking an UNCLUSTERED broker for more than one replica is not a degraded
+// configuration that limps: nats-server rejects every stream creation outright
+// (JSStreamReplicasNotSupportedErr), which RetryInfraConnect converts into a
+// crashloop. That would take down every stream-creating area AND user-management,
+// which is KV-only and is therefore auth and JWKS for the entire platform — a
+// total outage, caused by a single number being too high in a document nobody
+// re-read. The blast radius is wildly out of proportion to the mistake.
+//
+// So the runtime posture here is deliberately NOT the fail-closed one used for
+// config elsewhere: clamp, and shout. Availability is preserved, and the thing
+// that is refused is the CLAIM of high availability, not the platform. The
+// authoring error is caught earlier and properly, by dcctl's preflight, where it
+// can still be fixed before anything is installed.
+//
+// Note the limitation, because it decides what a green startup here does and does
+// not prove: this reads clustered-NESS, not peer count. A 3-node cluster running
+// on one surviving node reports a cluster name and passes this check, then fails
+// the creation with JSClusterNoPeersError. That case is caught at the create/update
+// call site instead. Neither is a substitute for asserting replication from
+// StreamInfo against a running cluster (the A0 Check A suite) — a service that
+// starts clean has not demonstrated that anything is replicated.
+func (nmgr *NatsManager) effectiveStreamReplicas() int {
+	desired := nmgr.desiredStreamReplicas()
+	if desired <= 1 {
+		return desired
+	}
+	if nmgr.clustered {
+		return desired
+	}
+	return 1
+}
+
+// reportReplicaClamp logs the desired-vs-effective mismatch once at connect, naming
+// BOTH levers. Naming both is the whole value of the message: the operator who sees
+// it has set one of them, and the fix is always the other one — a message that
+// named only the config key would send them to the file they already edited.
+func (nmgr *NatsManager) reportReplicaClamp() {
+	desired := nmgr.desiredStreamReplicas()
+	effective := nmgr.effectiveStreamReplicas()
+	if desired == effective {
+		return
+	}
+	log.Warn().Int("desired", desired).Int("effective", effective).
+		Msg("This instance is configured for replicated JetStream streams and KV buckets but the broker is " +
+			"NOT clustered, so every stream and bucket is being created UNREPLICATED. This instance is not " +
+			"highly available. Both halves must be raised together: " +
+			"instance.config.infrastructure.nats.streamReplicas (helm) sets the replica count, and tofu " +
+			"var.ha / nats_cluster_replicas sizes the NATS server cluster that makes it possible. " +
+			"Streams are being created at 1 replica rather than failing, so the platform stays up")
 }
 
 // streamBounds are the platform ceilings applied to every per-suffix stream
@@ -240,6 +310,45 @@ func applyStreamDuplicateWindow(cfg *nats.StreamConfig, window time.Duration) bo
 	return true
 }
 
+// applyStreamReplicas reconciles a stream's replica factor UPWARD only, reporting
+// whether it changed and whether a downward change was refused.
+//
+// Upward is the direction that fixes things and the only one a starting pod is
+// entitled to take. Without it, replication is set at CREATE time and nowhere else,
+// which produces the asymmetry this file has been bitten by twice already: a fresh
+// install comes up correctly replicated while every existing cluster silently keeps
+// the single-replica streams it was born with, looking healthy and reporting
+// nothing. An HA migration that only works on clusters that did not need it is not
+// an HA migration.
+//
+// Downward is refused, and that refusal is doing real work rather than being
+// conservative for its own sake. nats-server executes a scale-down with no safety
+// check at all: it drops RAFT peers and remaps every durable consumer's group. The
+// actor requesting it here would be a pod that just started, acting on config it
+// happens to have been handed — and the ordinary mechanism that hands a pod older
+// config is `helm rollback`, which an operator reaches for to make things SAFER.
+// Rolling back an unrelated bad release must not quietly de-replicate the platform
+// as a side effect. Scale-down stays a deliberate operator action (`nats stream
+// update`), not something inferred from a deployment artifact.
+//
+// A 0 in an existing config means "unspecified", which JetStream treats as 1; it is
+// normalized so an old stream created before the field was set is seen as the single
+// replica it actually is, rather than as an incomparable zero.
+func applyStreamReplicas(cfg *nats.StreamConfig, desired int) (changed, refusedDownward bool) {
+	current := cfg.Replicas
+	if current < 1 {
+		current = 1
+	}
+	if desired == current {
+		return false, false
+	}
+	if desired < current {
+		return false, true
+	}
+	cfg.Replicas = desired
+	return true, false
+}
+
 // ensureStream creates the per-suffix stream if it does not already exist, and
 // reconciles its size ceilings and subjects if it does. The stream captures every
 // tenant's subjects for the suffix, so a single stream backs both the scoped
@@ -270,20 +379,44 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 		info, err := nmgr.js.StreamInfo(name)
 		if err == nil {
 			// The stream exists — an older build (or an earlier ceiling) may have left
-			// it unbounded, so reconcile the size limits in place. UpdateStream touches
-			// only the byte/msg ceilings on the existing config, leaving subjects,
-			// storage, retention and replicas untouched. It is idempotent: concurrent
-			// pods compute the same desired bounds, so no advisory lock is needed.
-			// Config is the source of truth: an out-of-band tune (e.g. a raised
-			// MaxBytes set via the nats CLI) is intentionally reverted to the config
-			// value on the next restart — and shrinking a ceiling below current usage
-			// makes DiscardOld immediately evict the overflow. Change the bound via
-			// config, not out-of-band, to avoid that.
+			// it unbounded, so reconcile in place. UpdateStream touches the byte/msg
+			// ceilings, the captured subjects, the dedup window and the replica factor
+			// on the existing config, leaving storage and retention untouched. Config
+			// is the source of truth: an out-of-band tune (e.g. a raised MaxBytes set
+			// via the nats CLI) is intentionally reverted to the config value on the
+			// next restart — and shrinking a ceiling below current usage makes
+			// DiscardOld immediately evict the overflow. Change the bound via config,
+			// not out-of-band, to avoid that.
+			//
+			// On concurrency: the bounds, subject and window reconciles are idempotent
+			// by construction — every pod computes the same desired value from the same
+			// shared config, so concurrent updates converge and no advisory lock is
+			// needed. The replica reconcile is NOT obviously in that class, because a
+			// replica change is a RAFT peer-set reconfiguration rather than a config
+			// write, and up to four services ensure some of these streams. It is left
+			// unlocked deliberately and provisionally: the only lock available here is
+			// the KV-backed DistributedLock, and taking it from inside the reconcile
+			// path is not possible — NewDistributedLock calls KeyValueStore, which
+			// calls reconcileKvBucket, which is this same path. Whether concurrent
+			// upward updates need coordination at all is unmeasured; it is what A0's
+			// Check C exists to settle, by rolling every service simultaneously during
+			// the lift. If that shows contention, the coordination has to come from
+			// somewhere outside this call path.
 			cfg := info.Config
 			boundsChanged := applyStreamBounds(&cfg, bounds)
 			subjectsChanged := applyStreamSubjects(&cfg, subjects)
 			dupChanged := applyStreamDuplicateWindow(&cfg, dupWindow)
-			if boundsChanged || subjectsChanged || dupChanged {
+			replicasChanged, replicasRefused := applyStreamReplicas(&cfg, nmgr.effectiveStreamReplicas())
+			if replicasRefused {
+				log.Warn().Str("stream", name).Int("current", info.Config.Replicas).
+					Int("configured", nmgr.effectiveStreamReplicas()).
+					Msg("Stream has MORE replicas than this instance is configured for; leaving it alone. " +
+						"A starting pod does not de-replicate a stream — that drops RAFT peers and remaps " +
+						"every durable consumer, and the usual way a pod is handed older config is a " +
+						"rollback of some unrelated release. Scale down deliberately with `nats stream " +
+						"update` if that is genuinely intended")
+			}
+			if boundsChanged || subjectsChanged || dupChanged || replicasChanged {
 				if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
 					return err
 				}
@@ -291,6 +424,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 					Int64("maxMsgs", bounds.maxMsgs).Int32("maxMsgSize", bounds.maxMsgSize).
 					Strs("subjects", cfg.Subjects).Bool("subjectsChanged", subjectsChanged).
 					Dur("duplicateWindow", cfg.Duplicates).Bool("duplicateWindowChanged", dupChanged).
+					Int("replicas", cfg.Replicas).Bool("replicasChanged", replicasChanged).
 					Msg("Reconciled JetStream stream configuration")
 			}
 			return nil
@@ -304,7 +438,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			Retention: nats.LimitsPolicy,
 			Discard:   nats.DiscardOld,
 			MaxAge:    streamMaxAge,
-			Replicas:  nmgr.streamReplicas(),
+			Replicas:  nmgr.effectiveStreamReplicas(),
 		}
 		applyStreamBounds(cfg, bounds)
 		applyStreamDuplicateWindow(cfg, dupWindow)
@@ -1120,7 +1254,12 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 	}
 	nmgr.nc = nc
 	nmgr.js = js
+	// Read clustered-ness once, here, while the connection is fresh. A non-empty
+	// cluster name in the server's INFO is what distinguishes a broker that can host
+	// a replicated stream from one that will reject every attempt.
+	nmgr.clustered = nc.ConnectedClusterName() != ""
 	log.Info().Msg(fmt.Sprintf("Verified connectivity to NATS at '%s'", url))
+	nmgr.reportReplicaClamp()
 	return nil
 }
 

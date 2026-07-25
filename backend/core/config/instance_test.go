@@ -448,6 +448,56 @@ func TestValidateRejectsInvertedTierCeilings(t *testing.T) {
 	}
 }
 
+// A replica count that cannot describe a quorum is refused at config load, with a
+// message that says which way to move. The even values are the interesting ones:
+// JetStream accepts them, so nothing downstream would ever report that 2 replicas
+// buy the cost of replication and none of its fault tolerance.
+func TestValidateRejectsNonQuorumReplicaCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		replicas uint32
+		want     string
+	}{
+		{"two tolerates no failures", 2, "ODD"},
+		{"four is no better than three", 4, "ODD"},
+		{"six is above the maximum", 6, "maximum"},
+		{"seven is above the maximum", 7, "maximum"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := NewDefaultInstanceConfiguration()
+			cfg.ApplyDefaults()
+			cfg.Infrastructure.Nats.StreamReplicas = tc.replicas
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("streamReplicas=%d validated cleanly; an operator would pay for "+
+					"replication and get less fault tolerance than they think", tc.replicas)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not contain %q, so it does not tell an operator what to do",
+					err, tc.want)
+			}
+			if !strings.Contains(err.Error(), "streamReplicas") {
+				t.Errorf("error %q does not name the key being rejected", err)
+			}
+		})
+	}
+}
+
+// The counterweight: every count that CAN describe a quorum must pass untouched,
+// including 0 (which means "unset" — ApplyDefaults floors it to 1, and validating
+// it here would reject any config that simply omits the key).
+func TestValidateAcceptsQuorumReplicaCounts(t *testing.T) {
+	for _, replicas := range []uint32{0, 1, 3, 5} {
+		cfg := NewDefaultInstanceConfiguration()
+		cfg.ApplyDefaults()
+		cfg.Infrastructure.Nats.StreamReplicas = replicas
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("streamReplicas=%d was rejected (%v); a guard that fails a valid "+
+				"topology is worse than the one it replaces", replicas, err)
+		}
+	}
+}
+
 // The guard must not fire on a legitimately small deployment: lowering BOTH
 // ceilings together — which is what the compact preset does — is the supported way
 // to shrink the reservation, and equal ceilings are fine too. This is the
