@@ -37,7 +37,48 @@ import (
 // few dozen bytes, dcctl is a CLI whose dependency surface is worth defending,
 // and the alternative — depending on an MQTT stack to send one packet — is the
 // kind of weight that never comes back off.
+// mqttProbe retries, because the FIRST MQTT connect to a freshly-formed cluster
+// is not an ordinary connect.
+//
+// Observed on the rig: the first client to arrive makes nats-server create all
+// four $MQTT_* streams, at the cluster's replica factor, inside the connect
+// handshake — and on a JetStream cluster that has only just elected a meta leader
+// that hit nats-server's own 5s stream-create timeout:
+//
+//	[INF] Creating MQTT streams/consumers with replicas 3 for account "APP"
+//	[ERR] "dcctl-ha-probe" - unable to connect: create QoS2 incoming messages
+//	      stream: timeout after 5.00031997s
+//
+// The client is refused, and setup aborts partway — three of the four streams
+// existed afterwards, $MQTT_out did not. A real device would reconnect and finish
+// the job, which is why this self-heals in production and why a one-shot probe is
+// the wrong shape for it.
+//
+// Worth knowing beyond this probe: on a fresh HA instance the first device to
+// connect may be rejected once, and if nothing ever retries, the MQTT gateway
+// stays partially initialized.
 func mqttProbe(addr string, tlsCfg *tls.Config, user, password string) error {
+	const attempts = 5
+	var err error
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			time.Sleep(mqttProbeBackoff)
+		}
+		if err = mqttConnectOnce(addr, tlsCfg, user, password); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("after %d attempt(s): %w. On a freshly-formed cluster the first "+
+		"MQTT connect creates the four $MQTT_* streams inside the handshake and can "+
+		"exceed nats-server's internal timeout; if this persists, check the broker log "+
+		"for \"Creating MQTT streams\"", attempts, err)
+}
+
+// mqttProbeBackoff paces the retries above. Generous relative to a normal connect
+// because what is being waited on is a JetStream cluster settling, not a socket.
+var mqttProbeBackoff = 5 * time.Second
+
+func mqttConnectOnce(addr string, tlsCfg *tls.Config, user, password string) error {
 	var conn net.Conn
 	var err error
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
