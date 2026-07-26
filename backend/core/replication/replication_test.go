@@ -408,7 +408,7 @@ func TestEmptySnapshotFails(t *testing.T) {
 	exp := testExpectation(3)
 	rep := Verify(Snapshot{}, exp)
 	mustFail(t, rep, "A1", "no JetStream objects were observed at all")
-	mustFail(t, rep, "A3", "no durable consumers were observed")
+	mustFail(t, rep, "A3", "no consumers were observed AT ALL")
 }
 
 // TestNoConsumersObservedFails covers the half-empty case: every stream present
@@ -419,7 +419,7 @@ func TestNoConsumersObservedFails(t *testing.T) {
 	snap := healthy(exp)
 	snap.Consumers = nil
 	rep := Verify(snap, exp)
-	mustFail(t, rep, "A3", "no durable consumers were observed")
+	mustFail(t, rep, "A3", "no consumers were observed AT ALL")
 }
 
 // TestPlacementRequiredButNotCollectedFails pins that an uncollected placement is

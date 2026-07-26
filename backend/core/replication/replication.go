@@ -278,8 +278,9 @@ func Verify(snap Snapshot, exp Expectation) Report {
 			"below ran over an empty set, so a pass here would mean nothing")
 	}
 	if len(snap.Consumers) == 0 {
-		add("A3", "", "no durable consumers were observed — the consumer replication "+
-			"check had nothing to judge")
+		add("A3", "", "no consumers were observed AT ALL — the consumer replication "+
+			"check had nothing to judge. (Distinct from the case below, where consumers "+
+			"exist but every one is ephemeral.)")
 	}
 
 	// --- A1: every required object is present and replicated ------------------
