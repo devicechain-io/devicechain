@@ -147,7 +147,11 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 		return rep, err
 	}
 
-	exp := messaging.ReplicationExpectation(opts.InstanceId, declared)
+	areas, err := deployedAreas(ctx, typed, opts.InstanceId)
+	if err != nil {
+		return rep, err
+	}
+	exp := messaging.ReplicationExpectation(opts.InstanceId, declared, areas)
 	snap, err := replication.Collect(js, exp)
 	if err != nil {
 		return rep, err
@@ -184,6 +188,31 @@ func deployedInstanceConfig(ctx context.Context, typed *kubernetes.Clientset, in
 	// from the Secret must be judged the way they will judge it and not as a zero.
 	cfg.ApplyDefaults()
 	return cfg, nil
+}
+
+// deployedAreas reads which functional areas are actually running, from the
+// Deployments in the instance namespace (the chart names each one for its area).
+//
+// Observed rather than resolved from a profile name, for the same reason
+// everything else here is: a profile is what was asked for. What decides whether
+// a stream can exist is which services are running, and those are two different
+// facts on any instance that has been upgraded, partially rolled out, or edited.
+//
+// An empty result is NOT an error and NOT a relaxation. ReplicationExpectation
+// reads "no known areas" as "require every stream", so a namespace this cannot
+// read produces the strictest check rather than the most forgiving one — which is
+// the right direction for a failure whose cause is unknown.
+func deployedAreas(ctx context.Context, typed *kubernetes.Clientset, instanceId string) ([]string, error) {
+	list, err := typed.AppsV1().Deployments(instanceId).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("listing the deployed functional areas in namespace %s: %w",
+			instanceId, err)
+	}
+	out := make([]string, 0, len(list.Items))
+	for _, d := range list.Items {
+		out = append(out, d.Name)
+	}
+	return out, nil
 }
 
 // natsPods lists the broker pods, for the placement half of the check.

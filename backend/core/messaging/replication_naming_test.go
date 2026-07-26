@@ -45,7 +45,7 @@ func TestExpectationCoversTheBucketsTheRuntimeCreates(t *testing.T) {
 		t.Fatalf("NewCache: %v", err)
 	}
 
-	exp := ReplicationExpectation(instance, 1)
+	exp := ReplicationExpectation(instance, 1, nil)
 	snap, err := replication.Collect(nmgr.js, exp)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
@@ -110,7 +110,7 @@ func TestLeaseBucketIsNamedAsTheRuntimeCreatedIt(t *testing.T) {
 	if len(found) != 1 {
 		t.Fatalf("expected exactly one KV backing stream after creating only a lease; got %v", found)
 	}
-	exp := ReplicationExpectation("test", 3)
+	exp := ReplicationExpectation("test", 3, nil)
 	if exp.LeaseBucket != found[0] {
 		t.Fatalf("the A.2 lease-bucket assertion names %q but NewDistributedLease "+
 			"created %q — the highest-consequence check in the suite is pointed at an "+
@@ -123,7 +123,7 @@ func TestLeaseBucketIsNamedAsTheRuntimeCreatedIt(t *testing.T) {
 // added to streams.All and not here would be replicated or not with nothing
 // watching, and the suite would report a confident PASS over the other sixteen.
 func TestExpectationNamesEveryDeclaredStream(t *testing.T) {
-	exp := ReplicationExpectation("inst", 3)
+	exp := ReplicationExpectation("inst", 3, nil)
 	if len(exp.Streams) != len(streams.All) {
 		t.Fatalf("the expectation names %d stream(s) but the platform declares %d",
 			len(exp.Streams), len(streams.All))
@@ -142,7 +142,7 @@ func TestExpectationNamesEveryDeclaredStream(t *testing.T) {
 
 // TestExpectationCoversEveryCacheBucket does the same for the KV inventory.
 func TestExpectationCoversEveryCacheBucket(t *testing.T) {
-	exp := ReplicationExpectation("inst", 3)
+	exp := ReplicationExpectation("inst", 3, nil)
 	for _, b := range kv.All {
 		if b.Tier != kv.Cache {
 			continue
@@ -173,7 +173,7 @@ func TestExpectationCoversEveryCacheBucket(t *testing.T) {
 // connected the streams do not exist — and treating that as a pass would mean the
 // lever A0 exists to move was never moved, reported as success.
 func TestExpectationRequiresTheMqttLever(t *testing.T) {
-	exp := ReplicationExpectation("inst", 3)
+	exp := ReplicationExpectation("inst", 3, nil)
 	want := map[string]bool{
 		"$MQTT_sess": true, "$MQTT_msgs": true, "$MQTT_qos2in": true, "$MQTT_out": true,
 	}
@@ -199,5 +199,89 @@ func TestExpectationRequiresTheMqttLever(t *testing.T) {
 	if mqtt != len(exp.MqttStreams) {
 		t.Fatalf("expected every absent MQTT stream to be reported; got %d finding(s) "+
 			"for %d stream(s):\n%s", mqtt, len(exp.MqttStreams), rep.Format())
+	}
+}
+
+// TestUndeployedAreasStreamsAreNotRequired covers the reason ReplicationExpectation
+// takes a deployed-area set at all.
+//
+// connector-dispatch-dead is created only by outbound-connectors, which the
+// `default` profile does not run. Requiring it unconditionally makes the check
+// report a failure on every healthy default install — and the realistic response
+// to an assertion that is red on a working system is to stop running it, which
+// costs more than the assertion ever caught.
+func TestUndeployedAreasStreamsAreNotRequired(t *testing.T) {
+	deployed := []string{
+		"user-management", "device-management", "event-sources", "event-management",
+		"device-state", "dashboard-management", "command-delivery",
+		"notification-management", "event-processing",
+	} // the `default` profile
+	exp := ReplicationExpectation("inst", 3, deployed)
+
+	required := map[string]bool{}
+	for _, s := range exp.Streams {
+		required[s] = true
+	}
+	for _, st := range streams.All {
+		name := StreamName("inst", st.Suffix)
+		anyDeployed := false
+		for _, owner := range st.Areas {
+			for _, d := range deployed {
+				if owner == d {
+					anyDeployed = true
+				}
+			}
+		}
+		if anyDeployed && !required[name] {
+			t.Errorf("stream %q is created by a DEPLOYED area (%v) but is not required",
+				name, st.Areas)
+		}
+		if !anyDeployed && required[name] {
+			t.Errorf("stream %q is created only by undeployed areas (%v) but is required "+
+				"present; it cannot exist, so this would fail every healthy install",
+				name, st.Areas)
+		}
+	}
+	// Non-vacuity: if this list ever covers everything, the case above is asserting
+	// only its trivial half and the gating could be broken without notice.
+	if len(exp.Streams) == len(streams.All) {
+		t.Fatal("the default profile is expected to leave at least one stream " +
+			"unrequired (connector-dispatch-dead, owned solely by outbound-connectors); " +
+			"if that is no longer true this test no longer exercises the gating")
+	}
+}
+
+// TestEveryStreamDeclaresItsOwners keeps the ownership annotations from silently
+// going missing. A stream with no owners is treated as always-required, which is
+// the safe direction — but it is safe by accident rather than by declaration, and
+// this makes the omission visible.
+func TestEveryStreamDeclaresItsOwners(t *testing.T) {
+	known := map[string]bool{
+		"user-management": true, "device-management": true, "event-sources": true,
+		"event-management": true, "device-state": true, "dashboard-management": true,
+		"command-delivery": true, "notification-management": true,
+		"event-processing": true, "outbound-connectors": true, "mcp": true,
+		"ai-inference": true, "sparkplug-ingest": true, "lwm2m-ingest": true,
+	}
+	for _, st := range streams.All {
+		if len(st.Areas) == 0 {
+			t.Errorf("stream %q declares no owning functional area", st.Suffix)
+			continue
+		}
+		for _, a := range st.Areas {
+			if !known[a] {
+				t.Errorf("stream %q names %q as an owner, which is not a functional area",
+					st.Suffix, a)
+			}
+		}
+	}
+}
+
+// TestNilAreasRequiresEveryStream pins the strict default: a caller that cannot
+// observe what is deployed gets the loudest check, not the most forgiving one.
+func TestNilAreasRequiresEveryStream(t *testing.T) {
+	if got := len(ReplicationExpectation("inst", 3, nil).Streams); got != len(streams.All) {
+		t.Fatalf("an unknown deployment must require all %d stream(s); got %d",
+			len(streams.All), got)
 	}
 }

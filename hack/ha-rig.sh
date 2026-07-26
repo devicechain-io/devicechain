@@ -89,19 +89,12 @@ cmd_up() {
   build_dcctl
   create_cluster "$ha_cluster" "$repo_root/deploy/local/kind-cluster-ha.yaml"
 
-  # The spread constraint is HARD, so the bring-up fails outright rather than
-  # degrading if the cluster cannot place one server per node. Prove the cluster
-  # can before spending twenty minutes finding out.
-  local schedulable
-  schedulable=$(kubectl --context "kind-$ha_cluster" get nodes \
-    -o jsonpath='{range .items[*]}{.spec.taints[*].effect}{"\n"}{end}' \
-    | grep -cv 'NoSchedule\|NoExecute' || true)
-  if (( schedulable < 3 )); then
-    fail "the rig cluster has $schedulable schedulable node(s); --ha needs 3. kind only
-removes the control-plane taint on a SINGLE-node cluster, so three workers are
-required — check deploy/local/kind-cluster-ha.yaml"
-  fi
-  say "$schedulable schedulable nodes"
+  # There is deliberately NO schedulable-node pre-check here. dcctl's own
+  # checkHaNodeCapacity already counts them — excluding cordoned and
+  # NoSchedule/NoExecute-tainted nodes, which is the subtlety — refuses before
+  # anything is provisioned, and is unit-tested. A second copy of that rule in
+  # shell is a second place for it to be wrong, and the first draft of this script
+  # proved the point: it counted 0 schedulable nodes on a cluster with 3.
 
   say "bootstrapping --ha"
   "$dcctl" bootstrap local "$instance" --ha --yes \

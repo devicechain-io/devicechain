@@ -5,11 +5,30 @@ package messaging
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/replication"
 	"github.com/devicechain-io/dc-microservice/streams"
 )
+
+// streamIsDeployed reports whether any area that creates this stream is running.
+//
+// A nil area set means "unknown", and unknown resolves to REQUIRED — see
+// ReplicationExpectation. A stream with no declared owners is also required,
+// because the alternative is that forgetting to annotate a new stream silently
+// removes it from the check.
+func streamIsDeployed(st streams.Stream, deployedAreas []string) bool {
+	if len(deployedAreas) == 0 || len(st.Areas) == 0 {
+		return true
+	}
+	for _, owner := range st.Areas {
+		if slices.Contains(deployedAreas, owner) {
+			return true
+		}
+	}
+	return false
+}
 
 // LeaseBucketName is the concrete KV bucket holding an instance's partition
 // ownership leases (ADR-070).
@@ -72,7 +91,19 @@ var mqttStreamNames = []string{
 // it is what proves the suite passes a correct non-HA instance instead of
 // failing everything indiscriminately, which is the other half of the negative
 // control.
-func ReplicationExpectation(instanceId string, replicas int) replication.Expectation {
+// deployedAreas is the set of functional areas actually running in the instance,
+// observed from the cluster rather than resolved from a profile name. It decides
+// which streams must be PRESENT: a stream is created by the first service that
+// ensures it, so one whose every owner is undeployed does not exist and its
+// absence is not a defect. The `default` profile runs neither outbound-connectors
+// nor the opt-in ingest areas, so without this the check reports a failure on
+// every healthy default install — and a check that is red on a healthy system
+// gets switched off, which costs more than it ever caught.
+//
+// Passing nil requires EVERY declared stream. That is the strict direction on
+// purpose: a caller that cannot observe what is deployed should get the loudest
+// check, not the most forgiving one.
+func ReplicationExpectation(instanceId string, replicas int, deployedAreas []string) replication.Expectation {
 	exp := replication.Expectation{
 		Replicas:    replicas,
 		MqttStreams: append([]string(nil), mqttStreamNames...),
@@ -93,8 +124,11 @@ func ReplicationExpectation(instanceId string, replicas int) replication.Expecta
 			replication.MqttStreamPrefix,
 		},
 	}
-	for _, suffix := range streams.Suffixes() {
-		exp.Streams = append(exp.Streams, StreamName(instanceId, suffix))
+	for _, st := range streams.All {
+		if !streamIsDeployed(st, deployedAreas) {
+			continue
+		}
+		exp.Streams = append(exp.Streams, StreamName(instanceId, st.Suffix))
 	}
 	exp.StateBuckets = []string{
 		KvStreamName(LockBucketName(instanceId)),
