@@ -291,6 +291,18 @@ func TestCoLocatedPodsFail(t *testing.T) {
 	mustFail(t, rep, "A5", "distinct node(s)")
 }
 
+// TestUnscheduledPodIsNotADistinctNode covers the pod a hard spread constraint
+// could not place. It carries no node name, and a map keyed on that name would
+// count the empty string as a third node — turning two running servers plus one
+// that never scheduled into a passed three-node placement check.
+func TestUnscheduledPodIsNotADistinctNode(t *testing.T) {
+	exp := testExpectation(3)
+	snap := healthy(exp)
+	snap.Pods[2].Node = ""
+	rep := Verify(snap, exp)
+	mustFail(t, rep, "A5", "not scheduled onto any node")
+}
+
 // --- vacuity: the failure mode that produced A0 -----------------------------
 
 // TestEmptySnapshotFails is the guard against the shape this whole workstream is

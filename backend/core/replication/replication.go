@@ -330,6 +330,18 @@ func Verify(snap Snapshot, exp Expectation) Report {
 	if exp.RequirePods > 0 {
 		nodes := map[string]string{}
 		for _, p := range snap.Pods {
+			// A pod with no node is UNSCHEDULED, and it must never contribute a
+			// distinct node. Counted, it makes "three pods on three nodes" out of two
+			// placed servers and one that could not be placed — which is exactly the
+			// state a hard spread constraint produces when it runs out of room, and
+			// exactly what this check exists to catch. The collector already filters
+			// these out; this is here so the property holds no matter what the
+			// collector does, because a defect that can only be reintroduced upstream
+			// of the assertion is a defect waiting to be reintroduced.
+			if p.Node == "" {
+				add("A5", p.Name, "broker pod is not scheduled onto any node")
+				continue
+			}
 			nodes[p.Node] = p.Name
 		}
 		rep.Checked.Nodes = len(nodes)
