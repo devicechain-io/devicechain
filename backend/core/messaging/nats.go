@@ -1545,6 +1545,42 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 	if err != nil {
 		return err
 	}
+	// 🔴 nats.Connect HAS NOT NECESSARILY CONNECTED YET.
+	//
+	// RetryOnFailedConnect(true) — set above so a service starting before the
+	// broker keeps trying instead of crashlooping — makes Connect return a non-nil
+	// conn and a NIL ERROR while it is still dialling. The conn is usable in the
+	// sense that publishes queue, so nothing here fails; what breaks is everything
+	// that reads CONNECTION-DERIVED state, because nats.go returns the zero value
+	// for all of it unless the status is CONNECTED.
+	//
+	// That is not a theoretical hazard. It has now bitten twice:
+	//
+	//   - brokerIsClustered() cached "not clustered" from a still-dialling
+	//     connection, which clamped every replica factor to 1 on a healthy HA
+	//     cluster (fixed by reading it live, but the root cause was here);
+	//   - KeyValueStore fails outright, because js.KeyValue consults
+	//     ConnectedServerVersion() — empty unless CONNECTED — and reports
+	//     "nats: key-value requires at least server version 2.6.2" against a
+	//     2.14 server. Observed on a live cluster: device-management crashlooped
+	//     every restart with an error blaming the server's version.
+	//
+	// The second one is the reason this waits rather than each call site guarding
+	// itself. ensureStream is wrapped in RetryInfraConnect and survives; the KV
+	// path is not, so a service whose first act is to create a bucket dies. Making
+	// initialization mean "connected" fixes both, and every future reader of
+	// connection state, in one place — and it makes the log line below true, which
+	// it was not.
+	//
+	// Bounded, and a timeout is NOT fatal: the retry loop inside nats.go keeps
+	// running, the connection handlers log the arrival, and the caller's own
+	// RetryInfraConnect wrappers still apply. Failing startup here would trade a
+	// confusing error for an outage.
+	if err := waitForConnected(nc, connectWaitTimeout); err != nil {
+		log.Warn().Err(err).Str("url", url).Msg(
+			"NATS connection is not established yet; continuing to retry in the background. " +
+				"Components that read connection state during initialization may degrade until it lands")
+	}
 	js, err := nc.JetStream()
 	if err != nil {
 		nc.Close()
@@ -1555,6 +1591,30 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 	nmgr.connectedServer.Store(nc.ConnectedUrl())
 	log.Info().Msg(fmt.Sprintf("Verified connectivity to NATS at '%s'", url))
 	return nil
+}
+
+// connectWaitTimeout bounds how long initialization waits for the connection to
+// actually be established. Generous, because the thing being waited on is a
+// broker that may still be starting, and every second here is cheaper than a
+// crashloop; bounded, because a service that never comes up is worse than one
+// that comes up degraded and says so.
+const connectWaitTimeout = 30 * time.Second
+
+// waitForConnected blocks until the connection reports CONNECTED, or the timeout
+// elapses. It polls rather than using a handler because the connection may
+// ALREADY be connected by the time we get here — the common case — and a
+// handler-based wait would miss the event that already happened.
+func waitForConnected(nc *nats.Conn, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if nc.IsConnected() {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("still %s after %s", nc.Status(), timeout)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // Start component.
