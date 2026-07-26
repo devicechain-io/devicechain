@@ -93,12 +93,25 @@ spec:
               availability. Check NATS pod health and placement — three replicas across pods that
               share one node survive zero node losses.
         # The fence substrate, called out by name and at higher severity.
+        #
+        # min by (stream, job, namespace), matching the two rules above — and the
+        # `min` in particular. An earlier version took `max` across areas, which
+        # folded in the FORGIVING direction: one area reporting the lease bucket at
+        # one replica while another reported three left the critical alert silent.
+        # That is the same cross-area masking the other two rules were regrouped to
+        # remove, and it survived on the one rule where a miss matters most.
+        #
+        # The `< 3` is a literal rather than a comparison against desired, and that
+        # is deliberate: three peers is a real quorum, so a five-replica instance
+        # whose lease bucket sits at three is not in danger. It does mean this rule
+        # alone will not notice that case — JetStreamNotReplicatedAsConfigured
+        # catches it at warning severity, which is the right level for it.
         # dc_leases decides which pod is allowed to write (ADR-070). Single-replica,
         # it is not merely a lost lease on node failure — it blocks every standby's
         # Acquire, so the failover the fence exists to make safe cannot happen.
         - alert: JetStreamLeaseBucketNotReplicated
           expr: |
-            max by (stream) (
+            min by (stream, job, namespace) (
               {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}", stream=~"KV_.*dc_leases"}
             ) < 3
             and on()

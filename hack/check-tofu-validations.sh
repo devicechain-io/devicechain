@@ -140,6 +140,34 @@ evaluates 5 module.nats.cluster_replicas -var ha=true -var nats_cluster_replicas
 # on the count, not on the flag, so this is the explicit-topology path.
 evaluates 3 module.nats.cluster_replicas -var ha=false -var nats_cluster_replicas=3
 
+# --- the values that decide whether HA is REAL -------------------------------
+#
+# Each of these can be broken in a way that leaves an instance looking highly
+# available and surviving nothing, and none of them is reachable from a variable
+# validation block. A resource `precondition` would not help either — those run
+# during a PLAN, which no per-PR gate performs. So they are asserted here, off the
+# module's ha_topology output, which `tofu console` can compute because it depends
+# on no resource attribute.
+#
+# whenUnsatisfiable is the sharpest of them: flipping it to ScheduleAnyway is a
+# one-word change that lets the scheduler put all three NATS servers on one node,
+# which passes every other check A0 adds (three peers, Replicas:3, all current)
+# and survives zero node losses.
+evaluates '"DoNotSchedule"' 'module.nats.ha_topology.spread_constraints["kubernetes.io/hostname"].whenUnsatisfiable' -var ha=true
+evaluates 1 'module.nats.ha_topology.spread_constraints["kubernetes.io/hostname"].maxSkew' -var ha=true
+evaluates '{}' 'module.nats.ha_topology.spread_constraints' -var ha=false
+# The MQTT gateway's own streams hold persistent sessions and inflight QoS 1
+# messages; at 1 on a clustered broker, losing their node drops every session.
+evaluates 3 module.nats.ha_topology.mqtt_stream_replicas -var ha=true
+evaluates 1 module.nats.ha_topology.mqtt_stream_replicas -var ha=false
+evaluates 3 module.nats.ha_topology.mqtt_stream_replicas -var nats_cluster_replicas=5
+# Clustering opens route port 6222, which carries every replicated write. Without
+# mutual verification any pod that can reach it joins the cluster as a peer and
+# reads every account, bypassing the auth callout.
+evaluates true module.nats.ha_topology.route_tls_verified -var ha=true
+evaluates true module.nats.ha_topology.clustered -var ha=true
+evaluates false module.nats.ha_topology.clustered -var ha=false
+
 # --- nats_mqtt_node_port -----------------------------------------------------
 # Pre-existing guard, included so this script covers the root's validation blocks
 # rather than only the newest one.

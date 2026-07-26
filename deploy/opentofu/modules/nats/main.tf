@@ -464,6 +464,33 @@ locals {
       cluster = {
         enabled  = local.clustered
         replicas = local.cluster_replicas
+        # SECURE THE WIRE THIS BLOCK CREATES (ADR-025 + ADR-020 A0).
+        #
+        # Turning on clustering opens route port 6222, and it is the port every
+        # replicated write crosses: device events, commands, alarms, and the
+        # dc_leases fence. Left at the chart default it is plaintext AND
+        # unauthenticated, on a module whose 4222 and 1883 listeners both terminate
+        # TLS — so enabling HA would have opened a hole that single-node deploys do
+        # not have, which is the wrong direction for a durability feature.
+        #
+        # verify = true is the half that matters most. TLS alone encrypts the wire
+        # but still accepts ANY inbound route connection, and a NATS route peer is
+        # not a client: it joins the cluster and can read and write every account,
+        # bypassing the auth callout entirely. With verify, a peer must present a
+        # certificate signed by this module's CA — which only the server pods have,
+        # since it is mounted from the same Secret. That gives mutual authentication
+        # with no new credential to mint, rotate or thread through the bring-up.
+        #
+        # `merge` rather than a first-class field because the chart exposes no
+        # `verify` key on the cluster tls block; it passes merge straight into the
+        # generated nats-server tls{} stanza.
+        tls = {
+          enabled    = var.enable_tls && local.clustered
+          secretName = var.enable_tls && local.clustered ? local.tls_secret_name : null
+          merge = {
+            verify = true
+          }
+        }
       }
     }
     podTemplate = {
@@ -542,8 +569,15 @@ resource "tls_locally_signed_cert" "server" {
   validity_period_hours = 8760 # 1 year — re-issued on apply as it nears expiry.
   early_renewal_hours   = 720
 
+  # client_auth as well as server_auth, because this ONE leaf plays both roles.
+  # On the client and MQTT listeners the server presents it as a server; on the
+  # 6222 route listener, with verify on, each server also presents it as a CLIENT
+  # to its peers. Without the clientAuth EKU that handshake is rejected and the
+  # cluster silently never forms — routes retry, JetStream never gets a meta
+  # leader, and the symptom looks like a broken cluster rather than a bad cert.
   allowed_uses = [
     "server_auth",
+    "client_auth",
     "digital_signature",
     "key_encipherment",
   ]
@@ -695,6 +729,30 @@ output "service" {
 output "ca_pem" {
   description = "PEM-encoded CA that signed the NATS server cert. Empty when TLS is off. Threaded into each service's instance config so clients verify the broker (ADR-025)."
   value       = var.enable_tls ? tls_self_signed_cert.ca[0].cert_pem : ""
+}
+
+# The resolved HA topology, as data.
+#
+# Two purposes, and the second is why it is an output rather than a comment.
+# An operator can `tofu output` it to see what was actually applied without
+# reading the derivation. And it makes the values CI-checkable: every one of these
+# decides whether HA is real, none of them is reachable from a variable
+# validation, and a resource precondition does not run under `tofu validate`
+# either — so before this, changing whenUnsatisfiable to ScheduleAnyway (which
+# restores exactly the three-servers-on-one-node outcome A0 exists to prevent) or
+# dropping mqtt_stream_replicas to 1 produced zero signal in any gate.
+# hack/check-tofu-validations.sh asserts against it via `tofu console`.
+#
+# Deliberately carries no secret material, so it is safe to print.
+output "ha_topology" {
+  description = "The resolved HA topology: server count, whether clustering is on, the MQTT gateway's replica factor, whether route TLS is mutually verified, and the pod spread constraints. Verified in CI; safe to print."
+  value = {
+    cluster_replicas     = local.cluster_replicas
+    clustered            = local.clustered
+    mqtt_stream_replicas = local.mqtt_stream_replicas
+    route_tls_verified   = var.enable_tls && local.clustered
+    spread_constraints   = local.spread_constraints
+  }
 }
 
 output "cluster_replicas" {

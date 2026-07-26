@@ -366,6 +366,11 @@ func stepInfraApply(ctx context.Context, st *State) error {
 	if err := checkHaNodeCapacity(ctx, st); err != nil {
 		return err
 	}
+	// An immutable field on an EXISTING StatefulSet, so this must be answered
+	// before the apply that would trip it, not after.
+	if err := checkJetStreamVolumeIsUpgradable(ctx, st); err != nil {
+		return err
+	}
 	if st.DryRun {
 		doing("applying infrastructure stack (OpenTofu)")
 		fmt.Println()
