@@ -328,6 +328,14 @@ func Verify(snap Snapshot, exp Expectation) Report {
 	// area, so the set that exists depends on which areas are deployed. Requiring at
 	// least one match per suffix keeps the check honest without hard-coding a
 	// deployment shape.
+	//
+	// This is REQUIRED-PRESENT with no deployed-area gate, unlike the streams above,
+	// and that is safe only because every cache bucket in the inventory today is
+	// created by device-management — a core area present in every profile. A cache
+	// bucket introduced by an OPT-IN area would make this fail on every deployment
+	// that does not run it, which is the same trap the stream list already needed
+	// gating for (connector-dispatch-dead / outbound-connectors). If that happens,
+	// gate these the same way rather than dropping the requirement.
 	for _, suffix := range exp.CacheBucketSuffixes {
 		matched := 0
 		for _, o := range snap.Objects {
