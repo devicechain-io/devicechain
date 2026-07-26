@@ -40,7 +40,7 @@ type DistributedLock struct {
 // survives without being released (a crashed holder), so it must comfortably
 // exceed the guarded critical section.
 func (nmgr *NatsManager) NewDistributedLock(ttl time.Duration) (*DistributedLock, error) {
-	bucket := sanitizeName(fmt.Sprintf("%s_%s", nmgr.Microservice.InstanceId, lockBucket))
+	bucket := LockBucketName(nmgr.Microservice.InstanceId)
 	store, err := nmgr.KeyValueStore(lockBucket, bucket, ttl)
 	if err != nil {
 		return nil, err

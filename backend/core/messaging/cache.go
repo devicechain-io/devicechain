@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	nats "github.com/nats-io/nats.go"
@@ -30,8 +29,7 @@ type Cache struct {
 // functional area, and the given cache name, creating it with the given TTL if
 // it does not yet exist. The name is sanitized into the bucket-name charset.
 func (nmgr *NatsManager) NewCache(name string, ttl time.Duration) (*Cache, error) {
-	bucket := sanitizeName(fmt.Sprintf("%s_%s_%s",
-		nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, name))
+	bucket := CacheBucketName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, name)
 	store, err := nmgr.KeyValueStore(name, bucket, ttl)
 	if err != nil {
 		return nil, err
