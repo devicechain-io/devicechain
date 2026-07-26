@@ -91,6 +91,7 @@ pipeline, chart, and operator are identical.
 | `--host <name>` | Ingress host to expose the instance on (default `devicechain.local`). Use `localhost` on a local cluster to reach the console with **no `/etc/hosts` edit**. |
 | `--no-tls` | Serve plain HTTP instead of a self-signed cert. With `--host localhost`, a zero-config `http://localhost/` (no cert warning). |
 | `--compact` | Small-footprint preset — see below. |
+| `--ha` | Messaging high availability — see below. Needs at least **3 schedulable nodes**. |
 | `--dry-run` | Print what each step would do without changing anything. |
 | `--skip-preflight` | Skip the environment checks. |
 
@@ -137,6 +138,55 @@ first bring-up; it is not the same operation applied to a running instance.
 `dcctl bootstrap local my-instance --build --host localhost --no-tls` exposes the
 console at `http://localhost/` — no hosts-file entry and no certificate warning.
 :::
+
+### `--ha` {#ha}
+
+Runs the message broker as a 3-node RAFT cluster, one server per node, with **every
+JetStream stream and KV bucket replicated across it**. The instance then survives the
+loss of any one node without losing messages, device sessions, or live state.
+
+```bash
+dcctl bootstrap local my-instance --ha
+```
+
+Both halves are set from that one flag, and that is the point of it. The broker's size
+is infrastructure (OpenTofu); the per-stream replica factor is instance configuration
+(Helm). They live in different tools, neither of which can see the other, and raising
+only the first is the failure mode this flag exists to prevent: a three-node cluster
+whose every stream is still single-replica costs three times the compute, reports three
+healthy peers, and survives nothing.
+
+:::caution It survives exactly ONE node loss
+Three servers commit on a majority, so two remain a quorum and one does not. Losing a
+second node — including losing one to a rolling node upgrade while another is already
+down — stops writes until a node returns. Plan maintenance one node at a time. Surviving
+two concurrent losses needs a 5-server cluster, which is not a supported topology today.
+:::
+
+**Three schedulable nodes, not three nodes.** The servers carry a hard anti-affinity
+constraint, so if the cluster cannot place one per node the surplus stays `Pending`
+rather than doubling up — co-located replicas would cost what replication costs and
+protect against nothing. `dcctl` counts schedulable nodes and refuses before provisioning
+anything. On a local `kind` cluster this means **three workers**: kind only removes the
+control-plane's taint on a single-node cluster, so a control plane plus two workers is a
+three-node cluster with two usable nodes.
+
+**What it does not do.** It replicates the *messaging* tier only. Postgres and TimescaleDB
+remain single-instance, and the number of service replicas is unchanged.
+
+#### Verifying it {#verifying-it}
+
+An HA claim is only worth what the broker actually holds, so check it there rather than
+in the rendered configuration:
+
+```bash
+dcctl ha verify --instance my-instance
+```
+
+This reads the live broker and asserts that every stream, KV bucket and durable consumer
+carries the declared replica factor **with all peers current**, and that the three servers
+are on three distinct nodes. It exits non-zero if anything falls short, and prints what it
+examined so a pass over an empty set is not mistaken for a pass.
 
 ## After bootstrap
 
