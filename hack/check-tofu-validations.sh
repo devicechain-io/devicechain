@@ -69,10 +69,59 @@ fi
 
 failures=0
 
+# EVERY console invocation goes through tf_console, and it is time-bounded.
+#
+# `tofu console` READS STDIN. A harness that hands it a pipe and never closes that
+# pipe does not produce an error — it blocks, forever, with no output. GitHub's
+# opentofu/setup-opentofu does exactly that by default: it puts a Node wrapper on
+# the PATH ahead of the real binary, and the wrapper does not forward the step's
+# stdin to the child. Every other tofu command CI runs (fmt, init, validate) reads
+# no stdin, so all of them passed and only this script hung — the very first
+# assertion, before a single line of output. The observable symptom was not a red
+# check but a check that never resolved, holding a runner until the workflow's own
+# six-hour ceiling.
+#
+# The step now sets `tofu_wrapper: false`, which is the actual fix. This timeout is
+# the backstop, and it is the part worth keeping: it converts any future
+# stdin-blocking harness — a different action, a container, a shell that inherits a
+# terminal — from an invisible six-hour stall into a named failure on the assertion
+# that hung.
+readonly console_timeout="${TF_CONSOLE_TIMEOUT:-60}"
+tf_console_out=""
+tf_console_status=0
+
+# tf_console <stdin> [args...] — run `$TF console`, feeding <stdin> and CLOSING it.
+tf_console() {
+  local input="$1"
+  shift
+  tf_console_status=0
+  tf_console_out="$(printf '%s' "$input" | timeout "$console_timeout" "$TF" console "$@" 2>&1)" ||
+    tf_console_status=$?
+  if ((tf_console_status == 124)); then
+    tf_console_out="TIMED OUT after ${console_timeout}s with no output. \`$TF console\` reads stdin and something in the harness is not closing it; opentofu/setup-opentofu's Node wrapper has this exact behaviour, so check for \`tofu_wrapper: false\` on the setup step."
+  fi
+}
+
+# timed_out — true if the last tf_console call hit the ceiling. Reported on its own
+# rather than folded into the assertion's own failure text, because "the guard is
+# wrong" and "the guard never ran" are different problems and only one of them is
+# about the configuration.
+timed_out() {
+  local what="$1"
+  ((tf_console_status == 124)) || return 1
+  echo "FAIL  $what: $tf_console_out" >&2
+  failures=$((failures + 1))
+  return 0
+}
+
 # rejects <variable> <value> — the value must trip a validation block.
 rejects() {
   local var="$1" value="$2" out
-  out="$("$TF" console -var "$var=$value" </dev/null 2>&1 || true)"
+  # Empty stdin, closed immediately: a rejection is emitted while loading the
+  # variables, before the console would read an expression.
+  tf_console "" -var "$var=$value"
+  timed_out "$var=$value" && return
+  out="$tf_console_out"
   if grep -q "Invalid value for variable" <<<"$out"; then
     echo "ok    $var=$value rejected"
   else
@@ -86,7 +135,9 @@ rejects() {
 # assertion above on its own.
 accepts() {
   local var="$1" value="$2" out
-  out="$(echo "var.$var" | "$TF" console -var "$var=$value" 2>&1 || true)"
+  tf_console "var.$var" -var "$var=$value"
+  timed_out "$var=$value" && return
+  out="$tf_console_out"
   if grep -q "Invalid value for variable" <<<"$out"; then
     echo "FAIL  $var=$value was REJECTED; it is a supported topology" >&2
     failures=$((failures + 1))
@@ -118,20 +169,22 @@ for v in 2 4 6 7 -1; do rejects nats_cluster_replicas "$v"; done
 evaluates() {
   local expected="$1" expr="$2"
   shift 2
-  local out status
-  # `|| true` and an explicit status, NOT a bare command substitution. Under
-  # `set -euo pipefail` a non-zero exit inside $(...) aborts the whole script from
-  # within the substitution: the run ends on a green "ok" line with no FAIL, no
+  local out
+  # tf_console captures the status rather than letting it escape. Under
+  # `set -euo pipefail` a non-zero exit inside a bare $(...) aborts the whole script
+  # from within the substitution: the run ends on a green "ok" line with no FAIL, no
   # summary, and every remaining assertion silently skipped. The exit code
   # survives, so CI does go red — but the diagnostics do not, which is the same
   # family as a pipe to `head` swallowing a failure.
-  out="$(echo "$expr" | "$TF" console "$@" 2>&1 | tail -1 || true)"
-  status=$?
-  if ((status != 0)); then
-    echo "FAIL  $expr did not evaluate (exit $status)  [$*]" >&2
+  tf_console "$expr" "$@"
+  timed_out "$expr  [$*]" && return
+  if ((tf_console_status != 0)); then
+    echo "FAIL  $expr did not evaluate (exit $tf_console_status)  [$*]" >&2
+    sed 's/^/        /' <<<"$tf_console_out" >&2
     failures=$((failures + 1))
     return
   fi
+  out="$(tail -1 <<<"$tf_console_out")"
   if [[ "$out" == "$expected" ]]; then
     echo "ok    $expr == $expected  [$*]"
   else

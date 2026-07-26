@@ -389,6 +389,17 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: opentofu/setup-opentofu@v2
+        with:
+          # The action's default is to install a Node WRAPPER on the PATH ahead of
+          # the real binary, so that a step's tofu output can be read back as step
+          # outputs. Nothing here consumes those, and the wrapper does not forward
+          # the step's stdin to the child process — which is fatal for the
+          # `tofu console` invocations below. They do not fail against it, they
+          # BLOCK: the child waits on a pipe that is never closed, so the job holds
+          # a runner until the workflow ceiling and the PR's check never resolves
+          # rather than going red. fmt/init/validate read no stdin, which is why
+          # only the last step hung and every earlier one passed.
+          tofu_wrapper: false
 
       - name: tofu fmt
         run: tofu fmt -check -recursive
