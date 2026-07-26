@@ -130,6 +130,10 @@ type NatsManager struct {
 	// ExecuteStop/ExecuteTerminate run on the lifecycle goroutine.
 	shuttingDown atomic.Bool
 
+	// warnedClamp edge-triggers the replica-clamp warning. Touched only from the
+	// single sampler goroutine, like streamMetrics.warned.
+	warnedClamp bool
+
 	// connectedServer remembers the broker URL, because the disconnect callback
 	// cannot ask for it. nats.Conn.ConnectedUrl() returns "" for any status other
 	// than CONNECTED, and by the time DisconnectErrHandler runs the status has
@@ -242,7 +246,13 @@ func clampReplicas(desired int, clustered bool) int {
 // brokerIsClustered reports whether the broker this manager is connected to RIGHT
 // NOW is part of a cluster.
 //
-// The IsConnected gate is the entire point, and getting it wrong is a regression
+// WHERE THE SAFETY ACTUALLY COMES FROM, because an earlier version of this
+// comment got it wrong: it is ConnectedClusterName() itself, which returns "" for
+// a nil receiver AND for any status other than CONNECTED. The explicit
+// nil/IsConnected gate below is therefore REDUNDANT — deleting it changes no
+// behaviour and no test — and it is kept only as belt-and-braces against a future
+// nats.go relaxing that guarantee. What is load-bearing is that this is read LIVE
+// on every call rather than cached, and getting THAT wrong is a regression
 // rather than a missed improvement. Under nats.RetryOnFailedConnect — which
 // ExecuteInitialize sets — nats.Connect returns a non-nil connection and a NIL
 // error even when no broker is reachable: it hands back a stub in RECONNECTING
@@ -277,12 +287,44 @@ func (nmgr *NatsManager) brokerIsClustered() bool {
 // BOTH levers. Naming both is the whole value of the message: the operator who sees
 // it has set one of them, and the fix is always the other one — a message that
 // named only the config key would send them to the file they already edited.
+// reportReplicaClamp shouts once if the configured replica factor is being
+// clamped away, i.e. this instance thinks it is HA and is not.
+//
+// 🔴 IT MUST NOT RUN AT CONNECT TIME. Under RetryOnFailedConnect, nats.Connect
+// returns a non-nil connection and a nil error while it is still dialling, and
+// nc.JetStream() does no I/O — so at the end of ExecuteInitialize IsConnected()
+// is routinely false. brokerIsClustered() then reads false for a broker that is
+// merely NOT YET REACHABLE, and a correctly configured 3-node instance gets told
+// its broker is not clustered and it is not highly available, pointing the
+// operator at the one lever they already set right.
+//
+// That is the SAME false-negative the clamp itself was fixed for, one layer over:
+// a cold start where NATS and the services race, a node drain, a helm upgrade
+// that rolls the NATS StatefulSet alongside the Deployments. So it is called from
+// the metrics sampler instead, which runs after oncreate and therefore after the
+// connection has been used, and which re-evaluates on every tick — so the message
+// also stops once the situation is fixed, rather than being a one-shot at boot.
+//
+// warnedClamp keeps it edge-triggered: once per transition into the clamped
+// state, not every 30 seconds.
 func (nmgr *NatsManager) reportReplicaClamp() {
 	desired := nmgr.desiredStreamReplicas()
 	effective := nmgr.effectiveStreamReplicas()
 	if desired == effective {
+		if nmgr.warnedClamp {
+			nmgr.warnedClamp = false
+			log.Info().Int("replicas", desired).
+				Msg("The broker now satisfies the configured JetStream replica factor; " +
+					"streams and buckets created from here are replicated as configured. " +
+					"Anything created while clamped stays at one replica until a restart " +
+					"reconciles it upward")
+		}
 		return
 	}
+	if nmgr.warnedClamp {
+		return
+	}
+	nmgr.warnedClamp = true
 	log.Warn().Int("desired", desired).Int("effective", effective).
 		Msg("This instance is configured for replicated JetStream streams and KV buckets but the broker is " +
 			"NOT clustered, so every stream and bucket is being created UNREPLICATED. This instance is not " +
@@ -643,12 +685,14 @@ func (nmgr *NatsManager) runStreamMetrics() {
 	ticker := time.NewTicker(streamMetricsSampleInterval)
 	defer ticker.Stop()
 	// Seed promptly, don't wait a full interval.
+	nmgr.reportReplicaClamp()
 	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 	for {
 		select {
 		case <-nmgr.stopSampler:
 			return
 		case <-ticker.C:
+			nmgr.reportReplicaClamp()
 			nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 		}
 	}
@@ -1510,7 +1554,6 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 	nmgr.js = js
 	nmgr.connectedServer.Store(nc.ConnectedUrl())
 	log.Info().Msg(fmt.Sprintf("Verified connectivity to NATS at '%s'", url))
-	nmgr.reportReplicaClamp()
 	return nil
 }
 
