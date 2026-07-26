@@ -33,16 +33,18 @@ spec:
         # The false-HA alert. An instance asked for replication and is not getting
         # it — the two halves of the toggle disagree (helm streamReplicas raised
         # without the NATS cluster being scaled, or a lift that has not completed).
-        # 15m rather than the usual 10m because an in-place replica lift is a real
-        # RAFT peer-set change followed by data catch-up, and is legitimately not
-        # instantaneous on a populated stream.
+        # Grouped by (stream, job, namespace), not by stream alone. Folding the area
+        # away meant a page could not say WHICH service saw the low value, and the
+        # cross-area min/max absorbed a single misconfigured area entirely. Per-job
+        # grouping also makes a mid-rollout pod harmless: it compares its own
+        # desired against its own actual rather than against another pod's.
         - alert: JetStreamNotReplicatedAsConfigured
           expr: |
-            max by (stream) (
+            max by (stream, job, namespace) (
               {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
             )
             >
-            min by (stream) (
+            min by (stream, job, namespace) (
               {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
             )
           for: 15m
@@ -56,21 +58,30 @@ spec:
               This instance is NOT highly available for that stream. Both halves of the toggle must
               agree: instance.config.infrastructure.nats.streamReplicas sets the replica count, and
               the NATS server cluster (tofu var.ha / nats_cluster_replicas) must be large enough to
-              host it. If the cluster is mid-scale this clears on its own once peers are placed.
+              host it. NOTE this does NOT clear on its own once peers arrive: the replica lift runs
+              only when a service starts and ensures its streams, and a lift that failed mid-scale
+              (JSClusterNoPeersError) is warned and not retried. Once the cluster is whole, restart
+              the affected Deployments to re-run the lift.
         # Labelled replicated, but not actually replicated. A stream reporting
         # Replicas:3 whose peers are stale or offline has the cost of replication
         # and none of the protection, and this is the single most likely way a
         # merely-plumbed cluster passes a naive check.
         - alert: JetStreamReplicaPeersDegraded
           expr: |
-            min by (stream) (
+            min by (stream, job, namespace) (
               {__name__=~"devicechain_.+_jetstream_peers_current", namespace="{{ $ns }}"}
             )
             <
-            max by (stream) (
+            max by (stream, job, namespace) (
               {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
             )
-          for: 10m
+          # 20m, and longer than the alert above rather than shorter. This is the
+          # one that sees RAFT CATCH-UP: an in-place lift flips Config.Replicas
+          # immediately (so the config alert clears at once) and then copies the
+          # data, during which the new followers are legitimately not Current. On a
+          # populated hot stream that copy is not quick, and a 10m window turned a
+          # correctly-progressing lift into a page.
+          for: 20m
           labels:
             severity: warning
             devicechain_instance: {{ $ns }}
@@ -106,4 +117,44 @@ spec:
               losing its node does not just lose the leases, it blocks every standby's Acquire and
               the lease-fenced failover cannot happen at all. Do not claim lease-fenced HA while
               this is firing.
+        # The one the other three CANNOT see.
+        #
+        # desired/actual/peers all read 1 on a healthy single-node install — and all
+        # three ALSO read 1 on a 3-node cluster whose every stream was created
+        # single-replica. Those series are bit-identical, so no rule built on them
+        # can tell a correct small instance from one paying for three servers, three
+        # volumes and a quorum round-trip to store one copy of everything. That
+        # second state is the literal thing ADR-020 A0 exists to close, and it is
+        # what `tofu apply -var ha=true` followed by a plain `helm install` produces,
+        # because the chart ships streamReplicas: 1.
+        #
+        # So this compares the BROKER's topology against the instance's config,
+        # which is the one comparison the replication triple cannot express.
+        # Warning, not critical: nothing is broken or at risk of loss — the instance
+        # is simply not getting what it is paying for, and the fix is a config
+        # change rather than an incident.
+        - alert: JetStreamClusterUnused
+          expr: |
+            max (
+              {__name__=~"devicechain_.+_jetstream_broker_clustered", namespace="{{ $ns }}"}
+            ) == 1
+            and on()
+            max (
+              {__name__=~"devicechain_.+_jetstream_replicas_desired", namespace="{{ $ns }}"}
+            ) == 1
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "The NATS broker is clustered but nothing on it is replicated"
+            description: >-
+              This instance is connected to a CLUSTERED NATS broker while every stream and KV
+              bucket is configured for a single replica, so it is paying for a multi-server
+              cluster and surviving zero node losses. Both halves of the toggle have to move
+              together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the
+              replica factor is the chart's
+              (instance.config.infrastructure.nats.streamReplicas). `dcctl bootstrap --ha` sets
+              both from one value. If the single-server topology is what you intended, scale the
+              NATS cluster back down rather than leaving it running unused.
 {{- end }}

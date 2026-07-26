@@ -5,10 +5,12 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
 
+	"github.com/hashicorp/terraform-exec/tfexec"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -128,16 +130,25 @@ func (h haTopology) summary() string {
 // a sentence, before the volumes exist.
 //
 // It counts NODES rather than testing the context name against the local-cluster
-// heuristic. The heuristic is what the shipped single-node kind config would have
-// tripped, and it is the likely cause — which is why the message names it — but a
-// name is not the precondition. Someone who has uncommented the workers in
-// deploy/local/kind-cluster.yaml has a perfectly good 3-node kind cluster, and
-// refusing them on the strength of "kind-" in the context name would be a guard
-// that is wrong in exactly the case it was built for.
+// heuristic, because a name is not the precondition: someone running a real
+// multi-node cluster whose context happens to be called "kind-something" should
+// not be refused, and someone on a single-node cluster named anything else should.
 //
-// Unschedulable nodes (cordoned, or carrying a NoSchedule taint) are excluded:
-// counting them would let the check pass and the scheduler still fail, which is
-// the failure this exists to move earlier, not to relabel.
+// Nodes that cannot host a server are excluded — cordoned, or carrying a
+// NoSchedule/NoExecute taint. The NATS release sets no tolerations, so a tainted
+// node genuinely cannot take a server; counting it would let this check pass and
+// leave the scheduler to fail instead, which is the failure being moved earlier,
+// not relabelled.
+//
+// 🔴 THAT EXCLUSION IS WHY A 3-NODE KIND CLUSTER IS NOT ENOUGH, and the reason is
+// not obvious enough to leave to the reader. kind removes the control-plane
+// NoSchedule taint ONLY when the cluster has exactly one node
+// (kubeadminit/init.go: `if len(allNodes) == 1`). So a single-node kind cluster
+// reports one SCHEDULABLE node, while a 1-control-plane + 2-worker cluster reports
+// TWO — the control plane keeps its taint the moment a second node exists.
+// Uncommenting two workers therefore does not satisfy a 3-way spread, and an
+// earlier version of the error message told operators to do exactly that. Three
+// workers.
 // It runs on a DRY RUN too, unlike everything else in this step. The check is
 // read-only — it lists nodes — and "this cluster cannot host the topology you
 // asked for" is the single most useful thing a dry run can say about --ha. A
@@ -182,13 +193,16 @@ func schedulableShortfall(ha haTopology, nodes []corev1.Node) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"--ha places %d NATS servers one per node, and this cluster has %d schedulable node(s). "+
-			"The spread constraint is hard (DoNotSchedule) on purpose: allowing the servers to "+
-			"share a node would give an instance the cost of replication and none of its "+
-			"protection, so the surplus would sit Pending indefinitely instead. Add nodes, or "+
-			"drop --ha. On a local kind cluster, uncomment the workers in "+
-			"deploy/local/kind-cluster.yaml and recreate it",
-		ha.ServerReplicas, schedulable)
+		"--ha places %d NATS servers one per node, and this cluster has %d node(s) that can "+
+			"actually take one (cordoned and NoSchedule/NoExecute-tainted nodes do not count — "+
+			"the NATS release sets no tolerations). The spread constraint is hard "+
+			"(DoNotSchedule) on purpose: letting the servers share a node would give an "+
+			"instance the cost of replication and none of its protection, so the surplus sits "+
+			"Pending instead. Add nodes, or drop --ha. On a local kind cluster you need %d "+
+			"WORKERS in deploy/local/kind-cluster.yaml, not %d — kind only removes the "+
+			"control-plane taint on a single-node cluster, so the control plane stops being "+
+			"schedulable as soon as you add the first worker",
+		ha.ServerReplicas, schedulable, ha.ServerReplicas, ha.ServerReplicas-1)
 }
 
 // checkBrokerHostsReplication refuses to install the chart when the broker that
@@ -235,6 +249,89 @@ func checkBrokerHostsReplication(st *State) error {
 			"both from one value, so a disagreement means the infrastructure was applied by "+
 			"something else — check for a terraform.tfvars in the instance's infra directory)",
 		servers, ha.StreamReplicas)
+}
+
+// outputReader is the slice of tfexec.Terraform the teardown guard needs, so the
+// guard can be exercised without a tofu binary or a state file.
+type outputReader interface {
+	Output(ctx context.Context, opts ...tfexec.OutputOption) (map[string]tfexec.OutputMeta, error)
+}
+
+// checkHaNotTornDown refuses to shrink a NATS cluster that is already carrying
+// replicated data.
+//
+// THE ASYMMETRY THIS FIXES. Raising the topology has two guards (node capacity,
+// broker capability). Lowering it had none — and lowering it is the destructive
+// direction. `--ha` is not persisted anywhere: State.HA lives for one process, and
+// OpenTofu resolves an unpassed variable to its DEFAULT rather than to whatever
+// the last apply used. So `dcctl bootstrap local prod --host new.example.com` on
+// an instance that was built with `--ha` resolves to one server and scales the
+// StatefulSet 3 -> 1. (Emitting nothing would not help: the defaults derive 1 the
+// same way. The exposure is inherent to gaining the ability to build the cluster
+// at all.)
+//
+// What makes that unrecoverable rather than merely wrong: the streams and buckets
+// are still R3, and a 3-replica RAFT group with one surviving peer has no quorum —
+// no meta leader, no writes, no stream creation. The services will not fix it,
+// because the replica reconcile is deliberately upward-only (core/messaging
+// applyStreamReplicas): a starting pod must never de-replicate. So the instance is
+// wedged in a state that re-running bootstrap cannot repair, and the operator was
+// never told, because omitting a flag is not an error.
+//
+// The posture therefore MIRRORS the runtime one: ratchet up, refuse to ratchet
+// down, say so loudly. There is no --force here on purpose. A safe teardown means
+// de-replicating the streams FIRST, while a quorum still exists to accept the
+// update, and that ordering cannot be expressed as a flag on this command.
+//
+// It reads state, so it runs after Init and before Apply. Consequences: it does
+// NOT run under --dry-run, which short-circuits before applyInfra — a dry run will
+// not warn you about a teardown it would perform. Worth closing if dry-run ever
+// grows a real plan step; not worth making dry-run require tofu state today.
+func checkHaNotTornDown(ctx context.Context, st *State, tf outputReader) error {
+	applied, known := appliedServerCount(ctx, tf)
+	return haTeardownRefusal(haFor(st.HA), applied, known)
+}
+
+// appliedServerCount reads the provisioned NATS server count out of the current
+// tofu outputs. known is false when there is nothing to compare against — a fresh
+// instance with no state, or infrastructure applied before this output existed.
+//
+// A read failure is reported as UNKNOWN rather than propagated. The overwhelmingly
+// likely cause is "no state file yet", i.e. a first bootstrap, and failing that
+// because a guard could not find something to protect would be absurd. If state
+// does exist and is unreadable, the Apply immediately after will say so far more
+// precisely than this could.
+func appliedServerCount(ctx context.Context, tf outputReader) (int, bool) {
+	outputs, err := tf.Output(ctx)
+	if err != nil {
+		return 0, false
+	}
+	meta, ok := outputs["nats_cluster_replicas"]
+	if !ok {
+		return 0, false
+	}
+	var servers int
+	if err := json.Unmarshal(meta.Value, &servers); err != nil || servers < 1 {
+		return 0, false
+	}
+	return servers, true
+}
+
+// haTeardownRefusal is the rule, split from the IO so it can be tested directly.
+func haTeardownRefusal(want haTopology, appliedServers int, known bool) error {
+	if !known || appliedServers <= want.ServerReplicas {
+		return nil
+	}
+	return fmt.Errorf(
+		"this instance already has %d NATS servers and this run would provision %d, which "+
+			"would tear down a broker cluster that is carrying replicated data. Its streams and "+
+			"KV buckets are replicated across those %d servers, so shrinking to %d leaves every "+
+			"RAFT group without a quorum: no writes, no stream creation, and no way back by "+
+			"re-running, because the services deliberately never de-replicate a stream. "+
+			"If you meant to keep this instance highly available, pass --ha. If you really "+
+			"intend to collapse it, de-replicate the streams FIRST (`nats stream update -r 1`, "+
+			"while a quorum still exists to accept it) or destroy the instance outright",
+		appliedServers, want.ServerReplicas, appliedServers, want.ServerReplicas)
 }
 
 // natsClusterReplicasKey is where applyInfra stashes the server count read back

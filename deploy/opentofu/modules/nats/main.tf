@@ -146,11 +146,19 @@ variable "enable_prom_exporter" {
     right up until it does not.
 
     The PodMonitor that scrapes this is rendered by the DeviceChain Helm chart
-    (metrics.enabled), deliberately NOT here: it is a Prometheus Operator CRD, and
-    a chart in this module that renders one would fail the apply on any cluster
-    where the operator has not been installed yet — which, since both installs run
-    in parallel, includes a fresh bring-up. The chart runs after this apply
-    completes, so by then the CRDs exist.
+    (metrics.natsPodMonitor), deliberately NOT here: it is a Prometheus Operator
+    CRD, and a chart in this module that renders one would fail the apply on any
+    cluster where the operator has not been installed yet — which, since both
+    installs run in parallel, includes a fresh bring-up. The chart runs after this
+    apply completes, so by then the CRDs exist.
+
+    🔴 The upstream nats chart CAN render that PodMonitor itself, behind
+    promExporter.podMonitor.enabled, and this module deliberately leaves it off for
+    the ordering reason above. Do not turn it on as well: the two select the same
+    pods on the same port, so both enabled means every broker series is scraped
+    twice. If you ever want the upstream one instead, turn OFF
+    metrics.natsPodMonitor in the chart and accept that the tofu apply now depends
+    on the monitoring stack being installed first.
   EOT
   type        = bool
   default     = true
@@ -308,9 +316,15 @@ locals {
   # an unschedulable pod is a question the operator answers in minutes, whereas a
   # co-located "HA" cluster is a question nobody asks until a node dies.
   #
-  # Built with a for-expression rather than a ternary so both branches have the
-  # same type — `cond ? {k = {...}} : {}` gives HCL two object types to unify and
-  # is the same class of trap as the tls blocks below.
+  # Built with a for-expression rather than a ternary purely for readability of the
+  # empty case. NOT because a ternary would break: `cond ? {k = {...}} : {}` was
+  # tested against this module and unifies cleanly to a map, with no coercion of the
+  # inner values. That is a DIFFERENT shape from the tls trap below, where the two
+  # branches share an attribute (`enabled`, a bool) and differ in another
+  # (`secretName`, a string), forcing the fallback to map(string) and stringifying
+  # the bool. Here the empty branch contributes no attributes, so there is nothing
+  # to unify against. The earlier version of this comment drew that analogy and it
+  # was wrong.
   spread_constraints = {
     for key in(local.clustered ? ["kubernetes.io/hostname"] : []) :
     key => {

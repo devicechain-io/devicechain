@@ -25,7 +25,38 @@ func haState(haOn bool) *State {
 		Values: map[string]string{
 			"ingressHost":    "localhost",
 			"secretsRootKey": base64.StdEncoding.EncodeToString(make([]byte, 32)),
+			// The broker-auth material a real bootstrap has minted by the Helm step,
+			// for the SAME reason compactState carries it: the HA replica factor is
+			// merged into the same nats map, and with the map empty at merge time,
+			// merging and assigning are indistinguishable. Without these, mutating
+			// the merge in helm.go to an assignment passes every test in this file —
+			// the HA half would be protected only incidentally, by the compact
+			// fixture, and only for as long as the compact block stays above it.
+			"natsTlsEnabled":        "true",
+			"natsCA":                "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+			"natsCalloutIssuerSeed": "SUAtestseedvaluefortestingonly",
+			"natsServicePassword":   "test-service-password",
 		},
+	}
+}
+
+// The HA replica factor must be MERGED into the nats values, not assigned over
+// them. Assigning drops whichever block was written first — either the broker
+// credentials (a service that cannot connect at all) or the replica factor (a
+// silently unreplicated instance).
+func TestHaValuesMergeIntoTheNatsBlock(t *testing.T) {
+	n := renderFromState(t, haState(true)).Infrastructure.Nats
+
+	if n.StreamReplicas < 2 {
+		t.Errorf("streamReplicas = %d with --ha: the HA block did not survive the merge",
+			n.StreamReplicas)
+	}
+	if n.Auth.User == "" || !n.Tls.Enabled {
+		t.Error("the broker credentials/TLS were lost: the HA block was ASSIGNED over the " +
+			"nats map rather than merged into it, so this instance cannot reach the broker")
+	}
+	if n.Hostname == "" || n.Port == 0 {
+		t.Error("the broker coordinates are gone: the nats block was replaced wholesale")
 	}
 }
 
@@ -102,11 +133,38 @@ func TestBothHaLeversAreAlwaysStated(t *testing.T) {
 				"must always be stated so an instance that had HA cannot keep half of it",
 				on, sawFlag, sawCount)
 		}
-		if r := int(renderFromState(t, st).Infrastructure.Nats.StreamReplicas); r < 1 {
-			t.Errorf("--ha=%t rendered streamReplicas=%d; the chart value must always be "+
-				"stated, not left to whatever a previous install set", on, r)
+
+		// Read the value dcctl STATES, out of helmValues, rather than the value the
+		// chart RENDERS.
+		//
+		// The rendered config cannot answer this question. values.yaml already
+		// carries `streamReplicas: 1`, so a render produces 1 whether dcctl said
+		// anything or not — an earlier version of this assertion checked the
+		// rendered number and passed cleanly after the merge was made conditional
+		// on st.HA, which is the exact regression the doc comment above forbids.
+		// The chart default and dcctl's silence are indistinguishable downstream;
+		// they are only distinguishable here.
+		if _, ok := statedStreamReplicas(helmValues(st)); !ok {
+			t.Errorf("--ha=%t: helmValues states no streamReplicas, leaving it to the "+
+				"chart default. An instance that HAD replication keeps whatever was "+
+				"there, which is how the two halves drift apart again", on)
 		}
 	}
+}
+
+// statedStreamReplicas digs the replica factor out of the values map dcctl hands
+// Helm, reporting whether it was stated at all.
+func statedStreamReplicas(vals map[string]interface{}) (int, bool) {
+	step := func(m map[string]interface{}, key string) map[string]interface{} {
+		next, _ := m[key].(map[string]interface{})
+		return next
+	}
+	nats := step(step(step(step(vals, "instance"), "config"), "infrastructure"), "nats")
+	if nats == nil {
+		return 0, false
+	}
+	v, ok := nats["streamReplicas"].(int)
+	return v, ok
 }
 
 // The server count must be odd. An even RAFT cluster tolerates no more failures

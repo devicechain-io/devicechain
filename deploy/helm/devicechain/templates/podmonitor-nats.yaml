@@ -51,14 +51,21 @@ spec:
   # is false in the monitoring module), so no release label is needed here.
   namespaceSelector:
     matchNames:
-      - {{ $natsNamespace }}
+      - {{ $natsNamespace | quote }}
   selector:
     matchLabels:
+      # Quoted, both here and in namespaceSelector above: a broker addressed by IP
+      # (infrastructure.nats.hostname: 10.0.0.5 — a legitimate external/managed
+      # broker) splits to "10", which YAML reads as an INTEGER, and the PodMonitor
+      # schema requires strings. The whole chart install then fails on a type error
+      # rather than the "silently absent metrics" this template otherwise degrades
+      # to, and the documented escape hatch is only discoverable afterwards.
+      #
       # The nats chart's own pod labels. Same coupling as the MQTT NodePort Service
       # in modules/nats: a future chart that relabels its pods leaves this selecting
       # nothing, and the symptom is silently absent metrics rather than an error.
       app.kubernetes.io/name: nats
-      app.kubernetes.io/instance: {{ $release }}
+      app.kubernetes.io/instance: {{ $release | quote }}
       app.kubernetes.io/component: nats
   podMetricsEndpoints:
     # The exporter's container port name, from the nats chart's promExporter block.

@@ -54,6 +54,28 @@ type streamMetrics struct {
 	replicasActual  *prometheus.GaugeVec
 	peersCurrent    *prometheus.GaugeVec
 
+	// brokerClustered is the fourth number, and without it the other three cannot
+	// see the very state A0 exists to close.
+	//
+	// The triple above is (config, stream state, peer health). All three read 1 on a
+	// healthy single-node install — and all three ALSO read 1 on a 3-node RAFT
+	// cluster whose streams were every one of them created single-replica. Those two
+	// worlds are bit-identical in the metrics, and they are the two worlds A0 is
+	// about: one is correct and cheap, the other pays for three servers, three
+	// volumes and a quorum round-trip to store exactly one copy of everything and
+	// survive exactly zero node losses.
+	//
+	// Nothing else catches it either. The clamp only degrades a factor the broker
+	// cannot satisfy, so it is silent in this direction; dcctl's preflight only
+	// asserts servers >= replicas, which holds; and the shipped chart default is
+	// streamReplicas: 1, so this is what a `tofu apply -var ha=true` followed by a
+	// plain `helm install` produces — the supported direct-use path.
+	//
+	// So the broker's own topology has to be exported, not just the streams'. 1 when
+	// the connected server reports a cluster name, 0 otherwise. Clustered AND
+	// desired == 1 is the false-HA state, stated as an alertable fact.
+	brokerClustered prometheus.Gauge
+
 	// warned tracks whether a stream is currently above the near-full threshold, so
 	// the warning fires once on the way up (and an info once on the way back down)
 	// rather than every sample. Accessed only from the single sampler goroutine.
@@ -75,6 +97,10 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 			"RAFT peers currently caught up and online for this stream or KV bucket, including the leader. "+
 				"Below jetstream_replicas_actual means the stream is labelled replicated but is not.",
 			[]string{"stream"}),
+		brokerClustered: ms.NewGauge("jetstream_broker_clustered",
+			"1 when the connected NATS server reports a cluster, 0 otherwise. Paired with "+
+				"jetstream_replicas_desired == 1 this is the false-HA state: a replicated broker "+
+				"storing one copy of everything.", nil),
 		warned: map[string]bool{},
 	}
 }
@@ -144,7 +170,8 @@ func currentPeers(info *nats.StreamInfo) int {
 // is the right place for it. Replication is different: it is a correctness
 // property, it is the same property for a bucket as for a stream, and for
 // dc_leases it is the one that decides whether failover works at all.
-func (m *streamMetrics) sample(js nats.JetStreamContext, names, buckets []string, desired int) {
+func (m *streamMetrics) sample(js nats.JetStreamContext, names, buckets []string, desired int, clustered bool) {
+	m.brokerClustered.Set(boolGauge(clustered))
 	for _, name := range buckets {
 		info, err := js.StreamInfo(name)
 		if err != nil {
@@ -181,6 +208,14 @@ func (m *streamMetrics) sample(js nats.JetStreamContext, names, buckets []string
 				Msg("JetStream stream utilization recovered below the near-full threshold")
 		}
 	}
+}
+
+// boolGauge renders a bool as the 1/0 a Prometheus gauge carries.
+func boolGauge(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // streamFillRatio returns the higher of the stream's byte- and message-fill

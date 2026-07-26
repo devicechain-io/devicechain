@@ -39,6 +39,8 @@ func TestBrokerOutageIsLogged(t *testing.T) {
 	logs := captureLogs(t)
 
 	srv := startBroker(t)
+	// Captured BEFORE the shutdown below: srv.Addr() is nil once the server stops.
+	port := srv.Addr().(*net.TCPAddr).Port
 	nmgr := managerFor(t, srv)
 	if err := nmgr.ExecuteInitialize(t.Context()); err != nil {
 		t.Fatalf("connecting to the embedded broker: %v", err)
@@ -52,8 +54,21 @@ func TestBrokerOutageIsLogged(t *testing.T) {
 	srv.WaitForShutdown()
 
 	waitFor(t, "a disconnect log", func() bool {
-		return strings.Contains(logs.String(), "Disconnected from NATS")
+		return findLog(logs, "Disconnected from NATS") != nil
 	})
+
+	// The disconnect must name the broker it lost.
+	//
+	// This cannot come from nc.ConnectedUrl() inside the callback: that returns ""
+	// for any status other than CONNECTED, and the status has already flipped by the
+	// time the handler runs — so the obvious implementation logs an empty field
+	// forever. It reads a remembered value instead, and this asserts the remembering
+	// works. Read off the record, not out of the buffer: ExecuteInitialize logs the
+	// same URL on the way in, so a whole-buffer match would pass with the field gone.
+	if got, _ := findLog(logs, "Disconnected from NATS")["server"].(string); !strings.Contains(got, strconv.Itoa(port)) {
+		t.Errorf("the disconnect record's server field is %q and does not name the broker "+
+			"that was lost; on a cluster that is the field that says WHICH node went away", got)
+	}
 
 	// The counterweight. A handler that logged on every event — or a test matching
 	// a substring loose enough to hit anything — would pass the assertion above
@@ -134,6 +149,11 @@ func findLog(logs *syncBuffer, want string) map[string]any {
 
 // A permanent close is the one connection event that is not self-healing, so it
 // must be distinguishable from the two that are.
+//
+// This is the UNEXPECTED close: the connection dies without the manager asking.
+// See TestShutdownCloseIsNotLoggedAtError for the other half — the distinction is
+// load-bearing, because without it every graceful pod termination emits this
+// message and the level stops carrying information.
 func TestPermanentCloseIsLoggedAtError(t *testing.T) {
 	logs := captureLogs(t)
 
@@ -157,6 +177,47 @@ func TestPermanentCloseIsLoggedAtError(t *testing.T) {
 		t.Errorf("the permanent-close message was logged at %q, want error: it is the one "+
 			"connection event that does not heal itself, so it must not share a level "+
 			"with the two that do", lvl)
+	}
+}
+
+// ...and a close the manager ASKED for is not that event.
+//
+// ExecuteStop drains and ExecuteTerminate closes, so the ClosedHandler fires on
+// every graceful shutdown. Logging the terminal message there would put an ERROR
+// reading "the process must be restarted" into the logs of every service on every
+// rolling update, node drain and scale-down — roughly a dozen services times their
+// replicas per `helm upgrade`, all of them describing a healthy deploy. Any
+// error-rate alerting then fires on success, and the one message that means
+// "this pod is mute" is buried in the noise of the ones that do not.
+//
+// An earlier version of this suite asserted the error level using nmgr.nc.Close()
+// — which is precisely the call ExecuteTerminate makes — so it did not merely miss
+// this, it pinned the defect in place.
+func TestShutdownCloseIsNotLoggedAtError(t *testing.T) {
+	logs := captureLogs(t)
+
+	srv := startBroker(t)
+	defer srv.Shutdown()
+	nmgr := managerFor(t, srv)
+	if err := nmgr.ExecuteInitialize(t.Context()); err != nil {
+		t.Fatalf("connecting to the embedded broker: %v", err)
+	}
+
+	if err := nmgr.ExecuteTerminate(t.Context()); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+
+	waitFor(t, "a shutdown-close log", func() bool {
+		return findLog(logs, "closed during shutdown") != nil
+	})
+	if rec := findLog(logs, "CLOSED permanently"); rec != nil {
+		t.Errorf("a deliberate shutdown logged the terminal not-as-part-of-a-shutdown "+
+			"message: %v", rec["message"])
+	}
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, `"level":"error"`) {
+			t.Errorf("a graceful shutdown logged at error level: %s", line)
+		}
 	}
 }
 

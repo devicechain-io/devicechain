@@ -47,6 +47,13 @@ func applyInfra(ctx context.Context, st *State) error {
 		return fmt.Errorf("tofu init: %w", err)
 	}
 
+	// Refuse to shrink a broker cluster that is already carrying replicated data.
+	// Reads the CURRENT state, so it must run after Init and before Apply — this is
+	// the only point where both the applied topology and the requested one are known.
+	if err := checkHaNotTornDown(ctx, st, tf); err != nil {
+		return err
+	}
+
 	opts := make([]tfexec.ApplyOption, 0, 16)
 	for _, v := range infraVars(st) {
 		opts = append(opts, tfexec.Var(v))

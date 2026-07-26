@@ -46,5 +46,13 @@ nodes:
   # Uncomment to exercise PodDisruptionBudgets / anti-affinity / multi-node
   # scheduling. Each node is a full kubelet+containerd container, so only add
   # these when you actually need topology — single-node is lighter.
+  #
+  # THREE workers, not two, for anything that needs three SCHEDULABLE nodes —
+  # `dcctl bootstrap --ha` places one NATS server per node under a hard spread
+  # constraint. kind removes the control-plane NoSchedule taint only when the
+  # cluster has exactly one node, so the control plane stops being schedulable the
+  # moment you add the first worker: 1 control-plane + 2 workers is a 3-node
+  # cluster with 2 usable nodes, and --ha is refused on it.
+  # - role: worker
   # - role: worker
   # - role: worker

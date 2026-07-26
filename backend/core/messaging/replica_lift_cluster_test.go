@@ -466,7 +466,7 @@ func TestReplicationMetricsReportBrokerStateNotConfig(t *testing.T) {
 		t.Errorf("trackedStreams = %v; buckets must not leak into the stream set, or a bounded "+
 			"cache sitting near its ceiling by design fires the near-full alert", streams)
 	}
-	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), buckets, nmgr.desiredStreamReplicas())
+	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), buckets, nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 }
 
 // TestReplicaLiftIsNotBlockedByTheShrinkRefusal proves the ordering inside
@@ -543,7 +543,7 @@ func TestReplicationGaugesCarryTheRightNumbers(t *testing.T) {
 	if _, err := nmgr.KeyValueStore("leases", "test_gauges", time.Hour); err != nil {
 		t.Fatalf("KeyValueStore: %v", err)
 	}
-	nmgr.metrics.sample(nmgr.js, nil, nmgr.trackedBuckets(), nmgr.desiredStreamReplicas())
+	nmgr.metrics.sample(nmgr.js, nil, nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 
 	name := kvStreamPrefix + "test_gauges"
 	desired := testutil.ToFloat64(nmgr.metrics.replicasDesired.WithLabelValues(name))
@@ -563,5 +563,55 @@ func TestReplicationGaugesCarryTheRightNumbers(t *testing.T) {
 	}
 	if peers != 1 {
 		t.Errorf("peers_current = %v, want 1", peers)
+	}
+}
+
+// A replica lift must not revert the bounds and subject reconcile that runs
+// alongside it in the same ensureStream.
+//
+// The two reconciles are deliberately separate UpdateStream calls, so that a
+// failed replica lift cannot veto a subject fix (a stream capturing the wrong
+// subjects DROPS MESSAGES; replication is a durability improvement that can wait).
+// But separate calls mean the second one writes whatever configuration it is
+// handed — so handing it the PRE-update snapshot silently undoes the first,
+// after that first update has already logged success.
+//
+// Every other lift test here changes only the replica factor, which is exactly
+// why none of them saw this: with nothing else reconciling, the stale config and
+// the fresh one are identical. The real rollout is the combination — raising
+// streamReplicas is a values.yaml edit, and streamMaxBytes sits four lines away
+// in the same block, so they get changed in the same release.
+func TestReplicaLiftDoesNotRevertTheBoundsReconcile(t *testing.T) {
+	nmgr, cleanup := newTestCluster(t)
+	defer cleanup()
+
+	cfgNats := &nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats
+	cfgNats.StreamReplicas = 1
+	cfgNats.StreamMaxBytes = 512 << 20
+	const suffix = "inbound-events"
+
+	name, err := nmgr.ensureStream(suffix)
+	if err != nil {
+		t.Fatalf("ensureStream at one replica: %v", err)
+	}
+	waitForReplicated(t, nmgr.js, name, 1)
+
+	// Now change BOTH in one release, the way a real HA rollout does.
+	cfgNats.StreamReplicas = 3
+	cfgNats.StreamMaxBytes = 1 << 30
+	if _, err := nmgr.ensureStream(suffix); err != nil {
+		t.Fatalf("ensureStream after the upgrade: %v", err)
+	}
+
+	after := waitForReplicated(t, nmgr.js, name, 3)
+	if after.Config.Replicas != 3 {
+		t.Fatalf("stream has %d replica(s), want 3", after.Config.Replicas)
+	}
+	// The assertion that matters: the ceiling raised in the SAME call survived the
+	// replica update that followed it.
+	if want := int64(1 << 30); after.Config.MaxBytes != want {
+		t.Errorf("MaxBytes = %d after the lift, want %d: the replica update was issued from "+
+			"the pre-update config and wrote the old ceiling back over the bounds reconcile "+
+			"that had already reported success", after.Config.MaxBytes, want)
 	}
 }

@@ -726,12 +726,17 @@ functionalAreas:
     #
     # It is a STATEFUL single-owner service (ADR-069 / ADR-070): a Sparkplug Host owns
     # per-node alias/seq/session state, so two instances would each see half the
-    # traffic and publish a duplicate STATE. Until the ADR-070 fenced lease lands (SP4)
-    # it MUST run as ONE instance — so it deploys with strategy Recreate (a rollout
-    # stops the old pod before starting the new one, avoiding two concurrent Host
-    # Applications) and stays at replicas:1. Do NOT raise replicas past 1 until the
-    # lease-elected failover lands (a Recreate with 2 replicas runs two permanent
-    # Hosts; the template fails the render), mirroring event-processing above.
+    # traffic and publish a duplicate STATE. It runs as ONE instance — strategy
+    # Recreate (a rollout stops the old pod before starting the new one, avoiding two
+    # concurrent Host Applications) at replicas:1.
+    #
+    # The ADR-070 fenced lease HAS landed (SP4) and does not change that. The lease
+    # makes REPLACEMENT safe — a new pod cannot serve until it holds the lease, so
+    # there is never a window with two Hosts on the broker — it does not make a warm
+    # standby correct. Single ownership here is a correctness property of the
+    # Sparkplug Host, not a limitation waiting on a feature. Do NOT raise replicas
+    # past 1 (a Recreate with 2 replicas runs two permanent Hosts; the template fails
+    # the render), mirroring event-processing above.
     replicas: 1
     strategy: Recreate
     config: {}
@@ -770,9 +775,11 @@ functionalAreas:
     # bound socket, so — unlike an outbound client — it cannot warm-standby (a Service
     # would spray datagrams across replicas, and a standby would drop half). GA is ONE
     # serving replica; it deploys strategy Recreate + replicas:1 (a rollout stops the old
-    # binder before the new one binds). Do NOT raise replicas past 1 until the ADR-070
-    # fenced lease lands. L1 adds the /rd registration + presence handlers and exposes the
-    # device-facing CoAPS port below.
+    # binder before the new one binds). The ADR-070 fenced lease HAS landed and gates
+    # SERVING — only the leader binds the socket — which makes replacement safe but does
+    # NOT make a second replica useful: a standby that also bound the socket would
+    # silently receive and drop the share of datagrams the Service sprayed at it. Do NOT
+    # raise replicas past 1 (the template fails the render).
     replicas: 1
     strategy: Recreate
     # The device-facing CoAPS port is UDP (CoAP over DTLS), so it is declared with an

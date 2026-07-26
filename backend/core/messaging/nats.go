@@ -114,6 +114,28 @@ type NatsManager struct {
 	metrics     *streamMetrics
 	stopSampler chan struct{}
 	samplerWg   sync.WaitGroup
+
+	// shuttingDown distinguishes a connection we closed from one that died.
+	//
+	// The ClosedHandler cannot tell them apart on its own — nc.LastError() is nil
+	// for both a deliberate Close and several terminal states — and the difference
+	// decides the log LEVEL. A closed connection during shutdown is the expected end
+	// of a pod's life; the same event at any other time means the service is
+	// permanently mute and needs a restart. Emitting the second message for the
+	// first case puts an ERROR reading "the process must be restarted" into the logs
+	// of every service on every rolling update, node drain and scale-down, which is
+	// precisely how the one loud signal here stops meaning anything.
+	//
+	// Atomic because the handler runs on the client's callback goroutine while
+	// ExecuteStop/ExecuteTerminate run on the lifecycle goroutine.
+	shuttingDown atomic.Bool
+
+	// connectedServer remembers the broker URL, because the disconnect callback
+	// cannot ask for it. nats.Conn.ConnectedUrl() returns "" for any status other
+	// than CONNECTED, and by the time DisconnectErrHandler runs the status has
+	// already flipped — so reading it there yields an empty string every time,
+	// which is exactly the field an operator needs to know WHICH server was lost.
+	connectedServer atomic.Value
 }
 
 // NewNatsManager creates a new NATS manager. oncreate is invoked on Start to
@@ -484,7 +506,17 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			// wrong subjects drops messages); replication is a durability improvement
 			// that can wait for the next restart. The lower-stakes change must not be
 			// able to veto the higher-stakes one.
-			nmgr.reconcileStreamReplicas(name, info.Config)
+			//
+			// 🔴 PASS cfg, NOT info.Config. cfg is the POST-update configuration;
+			// info.Config is the snapshot taken before the update above. Because the
+			// replica reconcile issues its own UpdateStream from whatever config it is
+			// handed, passing the stale one writes the OLD ceilings and subjects back
+			// over the reconcile that just succeeded — silently, and after its success
+			// has already been logged. That is worse than the veto this split exists to
+			// prevent: a veto at least leaves the stream alone. The KV path avoids the
+			// same hazard by re-reading StreamInfo (kv.go); here the fresh config is
+			// already in hand.
+			nmgr.reconcileStreamReplicas(name, cfg)
 			return nil
 		} else if !errors.Is(err, nats.ErrStreamNotFound) {
 			return err
@@ -611,13 +643,13 @@ func (nmgr *NatsManager) runStreamMetrics() {
 	ticker := time.NewTicker(streamMetricsSampleInterval)
 	defer ticker.Stop()
 	// Seed promptly, don't wait a full interval.
-	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas())
+	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 	for {
 		select {
 		case <-nmgr.stopSampler:
 			return
 		case <-ticker.C:
-			nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas())
+			nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 		}
 	}
 }
@@ -1364,13 +1396,17 @@ func (nmgr *NatsManager) Initialize(ctx context.Context) error {
 // broker-side counterpart is the prometheus-nats-exporter (nats_prom_exporter),
 // which reports the same events from the server's view; a disconnect visible in
 // one and not the other localizes the fault to the network between them.
-func connectionEventHandlers(area string) []nats.Option {
+func (nmgr *NatsManager) connectionEventHandlers() []nats.Option {
+	area := nmgr.Microservice.FunctionalArea
 	return []nats.Option{
-		// Fires with a NIL error on a clean server shutdown (lame-duck) and a non-nil
-		// one on a network fault. Both are logged at warn: the client is not connected
-		// either way, which is the fact that matters to whoever is reading.
+		// The error is NON-nil for everything that actually loses a broker — io.EOF,
+		// connection reset, a stale connection — and nil only when the client itself
+		// closed. Lame-duck is NOT the nil case: the server announces it, then closes
+		// the socket, and the read loop surfaces io.EOF like any other drop. (An
+		// earlier version of this comment had that backwards.) Logged at warn either
+		// way: the client is not connected, which is the fact that matters.
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
-			log.Warn().Str("area", area).Err(err).Str("server", nc.ConnectedUrl()).
+			log.Warn().Str("area", area).Err(err).Str("server", nmgr.lastConnectedServer()).
 				Msg("Disconnected from NATS; retrying indefinitely (MaxReconnects is unlimited). " +
 					"Publishes are buffered up to the client's pending limit and then fail; " +
 					"consumers stop receiving until the connection is restored")
@@ -1379,25 +1415,60 @@ func connectionEventHandlers(area string) []nats.Option {
 		// the client came back on. In a clustered broker a reconnect to a DIFFERENT
 		// URL is failover working; repeated reconnects to the SAME one are a flapping
 		// server rather than a node loss, and the two want opposite responses.
+		// The FIRST successful connect does not come through ReconnectHandler.
+		//
+		// Under RetryOnFailedConnect the client fires ConnectedCB for the initial
+		// attach and ReconnectedCB only afterwards — so without this handler, a
+		// service that starts while the broker is down logs nothing at all when the
+		// broker finally arrives. That is precisely the silence these handlers exist
+		// to end, in the one case (a cold start of the whole instance, where NATS and
+		// the services race) that A0's own rollout makes routine.
+		nats.ConnectHandler(func(nc *nats.Conn) {
+			nmgr.connectedServer.Store(nc.ConnectedUrl())
+			log.Info().Str("area", area).Str("server", nc.ConnectedUrl()).
+				Str("cluster", nc.ConnectedClusterName()).
+				Msg("Connected to NATS")
+		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
+			nmgr.connectedServer.Store(nc.ConnectedUrl())
 			log.Info().Str("area", area).Str("server", nc.ConnectedUrl()).
 				Str("cluster", nc.ConnectedClusterName()).
 				Msg("Reconnected to NATS. Durable consumers resume from their last ack; " +
 					"anything the client had buffered while disconnected has been flushed")
 		}),
-		// Terminal. With unlimited reconnects this is only reached by an explicit
-		// Close (shutdown) or a state the library considers unrecoverable, so it is
-		// logged at ERROR: the connection will not come back on its own, and every
-		// publish and subscription on it is dead from here. It is the one connection
-		// event that is not self-healing, which is exactly why it must not share a
-		// level with the two above.
+		// Terminal. Unlimited reconnects do not make this unreachable: besides an
+		// explicit Close, the client ABORTS the retry loop on a repeated
+		// authorization error (nats.go sets `ar` on the second identical auth
+		// failure unless IgnoreAuthErrorAbort), and an unparsed server -ERR closes
+		// outright. A rotated or revoked broker credential is therefore an ordinary
+		// route here, not an exotic one — which is worth knowing, because it is the
+		// case where "restart the process" is the wrong advice and "fix the
+		// credential" is the right one.
+		//
+		// Logged at ERROR when it was not asked for: the connection will not come
+		// back on its own and every publish and subscription on it is dead. It is the
+		// one connection event that is not self-healing, which is exactly why it must
+		// not share a level with the two above.
 		nats.ClosedHandler(func(nc *nats.Conn) {
+			if nmgr.shuttingDown.Load() {
+				log.Info().Str("area", area).Msg("NATS connection closed during shutdown")
+				return
+			}
 			log.Error().Str("area", area).Err(nc.LastError()).
-				Msg("NATS connection CLOSED permanently; it will not reconnect. If the service " +
-					"is not shutting down, it is now mute: no publishes, no deliveries, and no " +
+				Msg("NATS connection CLOSED permanently and NOT as part of a shutdown; it will not " +
+					"reconnect. This service is now mute: no publishes, no deliveries, and no " +
 					"further retries. The process must be restarted")
 		}),
 	}
+}
+
+// lastConnectedServer returns the broker URL last known to be connected, or the
+// configured URL if none has been observed yet.
+func (nmgr *NatsManager) lastConnectedServer() string {
+	if v, ok := nmgr.connectedServer.Load().(string); ok && v != "" {
+		return v
+	}
+	return nmgr.NatsUrl()
 }
 
 // ExecuteInitialize connects to NATS and obtains a JetStream context.
@@ -1409,7 +1480,7 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 		nats.MaxReconnects(-1),
 		nats.RetryOnFailedConnect(true),
 	}
-	opts = append(opts, connectionEventHandlers(nmgr.Microservice.FunctionalArea)...)
+	opts = append(opts, nmgr.connectionEventHandlers()...)
 	// When the broker terminates TLS (ADR-025) every client must dial over TLS or
 	// the handshake on the TLS-required port fails; verify the server against the
 	// CA threaded into the instance config.
@@ -1437,6 +1508,7 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 	}
 	nmgr.nc = nc
 	nmgr.js = js
+	nmgr.connectedServer.Store(nc.ConnectedUrl())
 	log.Info().Msg(fmt.Sprintf("Verified connectivity to NATS at '%s'", url))
 	nmgr.reportReplicaClamp()
 	return nil
@@ -1474,6 +1546,9 @@ func (nmgr *NatsManager) Stop(ctx context.Context) error {
 // connection. The sampler is stopped first (before Drain) so it is not mid-
 // StreamInfo when the connection closes.
 func (nmgr *NatsManager) ExecuteStop(context.Context) error {
+	// Before anything that can close the connection: Drain below fires the
+	// ClosedHandler, and it must know this was asked for.
+	nmgr.shuttingDown.Store(true)
 	if nmgr.stopSampler != nil {
 		close(nmgr.stopSampler)
 		nmgr.samplerWg.Wait()
@@ -1505,6 +1580,7 @@ func (nmgr *NatsManager) Terminate(ctx context.Context) error {
 
 // ExecuteTerminate closes the NATS connection.
 func (nmgr *NatsManager) ExecuteTerminate(context.Context) error {
+	nmgr.shuttingDown.Store(true)
 	if nmgr.nc != nil && !nmgr.nc.IsClosed() {
 		nmgr.nc.Close()
 	}
