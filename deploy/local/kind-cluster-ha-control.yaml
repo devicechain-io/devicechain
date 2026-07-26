@@ -38,3 +38,16 @@ nodes:
   # ONE node. That is the whole point — with a single node the NATS cluster is a
   # single server, and there is nowhere for a second replica to live.
   - role: control-plane
+    # ingress-ready=true is REQUIRED even though nothing here uses the ingress.
+    # The infrastructure apply installs ingress-nginx unconditionally, and its
+    # controller carries a nodeSelector on this label — without it the pod sits
+    # Pending forever and the apply fails on a Helm wait timeout that reads as a
+    # resource problem ("context deadline exceeded") rather than as a missing
+    # label. Dropped once, when the port mappings this normally accompanies were
+    # removed, and it cost a full bring-up to diagnose.
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
