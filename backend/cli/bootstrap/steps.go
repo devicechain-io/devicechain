@@ -122,16 +122,42 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	}
 	st.Values["serviceAuthSecret"] = serviceSecret
 
-	// Mint the instance secret-store root key (ADR-059): a base64-encoded 256-bit
-	// KEK that wraps every per-secret DEK, threaded into every service's instance
-	// config (helmInstall). Generated once here so the whole instance shares one
-	// KEK; losing it loses every stored secret, so the rendered K8s Secret must be
-	// backed up (see the DR note in the deploy docs).
-	secretsRootKey, err := randomKeyBase64(32)
-	if err != nil {
-		return fail("minting secrets root key", err)
+	// Establish the instance secret-store root key (ADR-059): a base64-encoded
+	// 256-bit KEK that wraps every per-secret DEK, threaded into every service's
+	// instance config (helmInstall). One key for the whole instance.
+	//
+	// Normally minted fresh here and escrowed to a file the operator keeps, because
+	// the K8s Secret this ends up in lives in etcd and etcd is in no backup the
+	// platform takes — see escrow.go for what that costs at restore time. On the
+	// recovery path the key instead comes FROM an escrow artifact, so that a fresh
+	// cluster can read a restored database rather than rehydrating ciphertext
+	// nothing alive can open.
+	secretsRootKey := st.Escrow.RestoredRootKey
+	if secretsRootKey != "" {
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("root key:"),
+			color.GreenString("restored from %s", st.Escrow.RestoredFrom))
+	} else {
+		secretsRootKey, err = randomKeyBase64(32)
+		if err != nil {
+			return fail("minting secrets root key", err)
+		}
 	}
 	st.Values["secretsRootKey"] = secretsRootKey
+
+	// Escrow it BEFORE it is used for anything. The whole value of the artifact is
+	// that it exists for every instance that exists, so a run that cannot write one
+	// must not go on to build an instance around a key with no second copy — the
+	// resulting cluster would look perfectly healthy and be unrecoverable.
+	if st.Escrow.Path != "" {
+		if st.DryRun {
+			wouldDo("write the root-key escrow artifact to " + st.Escrow.Path)
+		} else {
+			if err := WriteEscrow(st.Escrow, secretsRootKey, st.Instance, time.Now().UTC()); err != nil {
+				return fail("escrowing the secret-store root key", err)
+			}
+		}
+	}
 
 	// Mint the Grafana OAuth client secret (ADR-047 SSO) when SSO is wired: one mint,
 	// both sides — the cleartext goes to Grafana's generic_oauth config (the monitoring
@@ -554,6 +580,35 @@ func stepReport(ctx context.Context, st *State) error {
 				color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/  (admin / devicechain)", ns, svc))
 			fmt.Printf("           %s\n", color.YellowString("dev-grade default password — override monitoring_grafana_admin_password, or enable SSO with --grafana-sso (ADR-047)"))
 		}
+	}
+	// The root-key escrow, printed here because this is the screen an operator
+	// actually reads. Every branch says something: the file to back up, the artifact
+	// a restore came from, or — for --no-escrow — that this instance's secrets die
+	// with its cluster. The last one is the whole reason the line is unconditional.
+	//
+	// Keyed on the PLAN, not on a value the write step leaves behind. Keying it on
+	// the side effect is what the first version did, and under --dry-run — where
+	// there is no side effect — the summary announced "none (--no-escrow)" for a run
+	// that had a passphrase, a path and every intention of escrowing. A line whose
+	// whole job is to tell an operator whether their key has a second copy must not
+	// be able to say no when the answer is yes. A failed write aborts the pipeline
+	// before this ever prints, so the plan is also the truth.
+	switch {
+	case st.Escrow.Path != "":
+		what := st.Escrow.Path
+		if st.DryRun {
+			what += "  (dry run — not written)"
+		}
+		fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"), color.GreenString(what))
+		fmt.Printf("                   %s\n", color.YellowString(
+			"copy this off the machine and store the passphrase separately — it is the ONLY copy of the key outside the cluster, and no database backup contains it"))
+	case st.Escrow.RestoredFrom != "":
+		fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"),
+			color.GreenString("restored from %s (that artifact remains the second copy)", st.Escrow.RestoredFrom))
+	default:
+		fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"), color.RedString("none (--no-escrow)"))
+		fmt.Printf("                   %s\n", color.YellowString(
+			"this instance's root key exists only inside the cluster; if the cluster is lost, every stored secret is permanently unreadable even with a database backup"))
 	}
 	if !st.DryRun {
 		host := st.Values["ingressHost"]

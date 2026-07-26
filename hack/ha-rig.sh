@@ -108,8 +108,12 @@ cmd_up() {
   # shell is a second place for it to be wrong, and the first draft of this script
   # proved the point: it counted 0 schedulable nodes on a cluster with 3.
 
+  # --no-escrow: this rig's instances exist to be torn down, so there is no root
+  # key worth a second copy. Bootstrap escrows by default and REFUSES to run
+  # non-interactively without a passphrase, which is the correct default for an
+  # instance anyone might keep — and the wrong one for this.
   say "bootstrapping --ha"
-  "$dcctl" bootstrap local "$instance" --ha --yes \
+  "$dcctl" bootstrap local "$instance" --ha --yes --no-escrow \
     --kube-context "kind-$ha_cluster" --host localhost --no-tls \
     "${image_args[@]}"
 }
@@ -154,7 +158,7 @@ cmd_control() {
   # control still exercises the same 10 functional areas creating the same streams
   # and buckets as the HA side.
   say "bootstrapping the negative control (no --ha, single node)"
-  "$dcctl" bootstrap local "$control_instance" --yes --compact \
+  "$dcctl" bootstrap local "$control_instance" --yes --compact --no-escrow \
     --kube-context "kind-$control_cluster" --host localhost --no-tls \
     "${image_args[@]}"
 

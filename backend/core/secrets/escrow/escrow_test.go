@@ -405,7 +405,8 @@ func TestEncodedFileExplainsItselfToAHuman(t *testing.T) {
 		"prod",                      // which instance
 		"NOT",                       // that backups do not contain it
 		"permanently unrecoverable", // what losing it costs
-		"dcctl secrets rehydrate",   // how to use it
+		RecoveryCommand,             // how to use it
+		"--restore-root-key",        // ...specifically enough to type
 		Fingerprint(testKey()),      // which key, checkable without the passphrase
 	} {
 		if !strings.Contains(text, want) {

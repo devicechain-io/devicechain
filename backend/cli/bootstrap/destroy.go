@@ -6,7 +6,6 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/fatih/color"
 )
@@ -88,12 +87,18 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 	// The cluster is gone, so its persisted tofu state now points at nothing —
 	// remove the whole per-instance state directory.
 	doing(fmt.Sprintf("removing local state (~/.devicechain/%s)", opts.Instance))
+	var keptEscrow []string
 	if dir, err := instanceRoot(opts.Instance); err == nil {
-		if err := os.RemoveAll(dir); err != nil {
+		kept, err := removeStatePreservingEscrow(dir)
+		if err != nil {
 			return fail("removing local state", err)
 		}
+		keptEscrow = kept
 	}
 	done()
+	for _, p := range keptEscrow {
+		fmt.Println(color.YellowString("  kept root-key escrow %s — the cluster is gone but this still opens its database backups", p))
+	}
 
 	if opts.PurgeRegistry {
 		doing("removing local image registry container")

@@ -89,7 +89,14 @@ type State struct {
 	// helmValues renders them into a chart-owned Secret + lwm2m-ingest config. Setting
 	// this implies lwm2m-ingest ∈ EnabledAreas. Empty when the flag is unused.
 	Lwm2mIdentities []Lwm2mIdentity
-	Values          map[string]string
+	// Escrow is the settled root-key plan (ADR-059 / ADR-028): where the key comes
+	// from and where its second copy goes. Resolved in the command layer, BEFORE any
+	// cluster exists, so a missing passphrase or an unopenable restore artifact
+	// fails in the first second rather than behind ten minutes of spin-up. The zero
+	// value writes nothing, which is what every test and every internal pipeline
+	// construction wants.
+	Escrow EscrowPlan
+	Values map[string]string
 }
 
 // Step is a single named unit of bootstrap work.

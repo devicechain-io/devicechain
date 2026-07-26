@@ -76,6 +76,17 @@ const (
 // never be confused with — or replayed as — any other hash of the same key.
 const fingerprintDomain = "devicechain-rootkey-fingerprint-v1"
 
+// RecoveryCommand is the dcctl command the artifact's own preamble tells an
+// operator to run. It is a constant, and exported, so that the CLI can assert this
+// package is not printing recovery instructions for a command dcctl does not have
+// — see TestTheArtifactNamesARealRecoveryCommand in the dcctl module.
+//
+// Worth pinning because the first version of that preamble named
+// `dcctl secrets rehydrate`, which was never built. A file whose entire purpose is
+// to be read years later by someone with no other options must not hand them a
+// command that does not exist, and nothing about writing it here can tell.
+const RecoveryCommand = "dcctl bootstrap"
+
 // PEM-style delimiters. The artifact is a text file on purpose: its whole job is to
 // be recognisable years later by someone who did not write it, in a password
 // manager or a safe, next to things that are not this.
@@ -344,7 +355,9 @@ func (a *Artifact) Encode() ([]byte, error) {
 	fmt.Fprintf(&b, "permanently unrecoverable after a restore to a new cluster. Restoring the\n")
 	fmt.Fprintf(&b, "databases will appear to succeed and the secrets will not decrypt.\n\n")
 	fmt.Fprintf(&b, "Store this file and its passphrase OFF-CLUSTER, and separately from each\n")
-	fmt.Fprintf(&b, "other. Rehydrate with: dcctl secrets rehydrate --escrow-file <this file>\n\n")
+	fmt.Fprintf(&b, "other. To recover, seed a rebuilt instance from this file BEFORE restoring\n")
+	fmt.Fprintf(&b, "its databases:\n\n")
+	fmt.Fprintf(&b, "  %s <provider> %s --restore-root-key <this file>\n\n", RecoveryCommand, a.Instance)
 	fmt.Fprintf(&b, "  instance:     %s\n", a.Instance)
 	fmt.Fprintf(&b, "  created:      %s\n", a.Created.UTC().Format(time.RFC3339))
 	fmt.Fprintf(&b, "  kdf:          %s t=%d m=%dKiB p=%d\n", a.KDF.Alg, a.KDF.Time, a.KDF.Memory, a.KDF.Threads)

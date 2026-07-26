@@ -31,6 +31,10 @@ var (
 	bootstrapHA              bool
 	bootstrapEnableAreas     []string
 	bootstrapLwm2mIdentities string
+	bootstrapEscrowFile      string
+	bootstrapEscrowPassFile  string
+	bootstrapNoEscrow        bool
+	bootstrapRestoreRootKey  string
 )
 
 // devModeResolution is the set of flag values the --dev preset settles on.
@@ -39,6 +43,17 @@ type devModeResolution struct {
 	Host  string
 	NoTLS bool
 	Yes   bool
+	// NoEscrow skips the root-key escrow. A --dev instance is disposable by
+	// construction — built from source, on localhost, over plain http — so there is
+	// nothing in it worth a passphrase, and demanding one would put an interactive
+	// prompt in the middle of the platform's zero-config onboarding path.
+	//
+	// This is the ONE preset that turns escrow off, and it is honoured rather than
+	// forced: an explicit --no-escrow=false keeps it, the same way --no-tls=false
+	// keeps TLS under --compact. Wanting a real escrow on a dev instance is not a
+	// contradiction, it is a dependency, and refusing it would cost function for
+	// nothing.
+	NoEscrow bool
 }
 
 // resolveDevMode expands the --dev local-developer preset — build images from
@@ -47,7 +62,7 @@ type devModeResolution struct {
 // contradicts the preset rather than silently overriding it, so --dev can never mask
 // a mistake (e.g. a real --host that would otherwise be quietly discarded). `changed`
 // reports whether the user set a given flag explicitly (cmd.Flags().Changed).
-func resolveDevMode(changed func(string) bool, host string, noTLS, build bool) (devModeResolution, error) {
+func resolveDevMode(changed func(string) bool, host string, noTLS, build, noEscrow bool) (devModeResolution, error) {
 	if changed("host") && host != "localhost" {
 		return devModeResolution{}, fmt.Errorf("--dev pins --host to localhost; remove the conflicting --host %q (or drop --dev)", host)
 	}
@@ -57,7 +72,11 @@ func resolveDevMode(changed func(string) bool, host string, noTLS, build bool) (
 	if changed("build") && !build {
 		return devModeResolution{}, fmt.Errorf("--dev builds images from source; remove --build=false (or drop --dev)")
 	}
-	return devModeResolution{Build: true, Host: "localhost", NoTLS: true, Yes: true}, nil
+	res := devModeResolution{Build: true, Host: "localhost", NoTLS: true, Yes: true, NoEscrow: true}
+	if changed("no-escrow") {
+		res.NoEscrow = noEscrow
+	}
+	return res, nil
 }
 
 // The profile catalog, split by size relative to `default`, mirroring
@@ -166,12 +185,20 @@ var bootstrapCmd = &cobra.Command{
 		// flags) before anything else runs, so preflight and the pipeline see the
 		// resolved values.
 		if bootstrapDev {
-			res, err := resolveDevMode(cmd.Flags().Changed, bootstrapHost, bootstrapNoTLS, bootstrapBuild)
+			res, err := resolveDevMode(cmd.Flags().Changed, bootstrapHost, bootstrapNoTLS, bootstrapBuild, bootstrapNoEscrow)
 			if err != nil {
 				return err
 			}
 			bootstrapBuild, bootstrapHost, bootstrapNoTLS, bootstrapAssumeYes = res.Build, res.Host, res.NoTLS, res.Yes
-			fmt.Println("dev mode: --build --host localhost --no-tls --yes")
+			bootstrapNoEscrow = res.NoEscrow
+			// Echo what was actually settled, not what the preset usually settles:
+			// --dev --no-escrow=false keeps the escrow, and a banner that claimed
+			// otherwise would be the one line an operator trusts over the truth.
+			escrowNote := "--no-escrow"
+			if !res.NoEscrow {
+				escrowNote = "(escrow kept)"
+			}
+			fmt.Println("dev mode: --build --host localhost --no-tls --yes " + escrowNote)
 		}
 
 		// --compact expands to the small-footprint preset. Resolved here, before
@@ -255,6 +282,23 @@ var bootstrapCmd = &cobra.Command{
 			}
 		}
 
+		// Settle the root-key escrow LAST among the up-front checks but still before
+		// any cluster exists (ADR-059 / ADR-028). Last, because this is the only step
+		// that may stop and ask a human something, and a passphrase typed twice only
+		// to hit a typo'd --enable-area is a bad trade. Before the cluster, because
+		// both of its failure modes — no passphrase in a non-interactive run, an
+		// unopenable restore artifact — must land in the first second rather than as
+		// a prompt nobody sees behind ten minutes of spin-up.
+		escrowPlan, err := bootstrap.ResolveEscrowPlan(args[1], bootstrap.EscrowFlags{
+			File:           bootstrapEscrowFile,
+			PassphraseFile: bootstrapEscrowPassFile,
+			NoEscrow:       bootstrapNoEscrow,
+			RestoreFile:    bootstrapRestoreRootKey,
+		})
+		if err != nil {
+			return err
+		}
+
 		opts := bootstrap.Options{
 			Instance:      args[1],
 			KubeContext:   bootstrapKubeContext,
@@ -298,6 +342,7 @@ var bootstrapCmd = &cobra.Command{
 			EnableAreas:     opts.EnableAreas,
 			EnabledAreas:    enabledAreas,
 			Lwm2mIdentities: lwm2mIdentities,
+			Escrow:          escrowPlan,
 			Values:          map[string]string{},
 		}
 		return bootstrap.NewDefaultPipeline().Run(ctx, st)
@@ -324,6 +369,11 @@ func init() {
 	bootstrapCmd.Flags().BoolVar(&bootstrapHA, "ha", false, "ADR-020 messaging HA: a 3-node NATS RAFT cluster spread one server per node, with every JetStream stream and KV bucket replicated across it. Sets BOTH halves (the OpenTofu server count and the chart's streamReplicas) from one value, and refuses to install if the cluster cannot host the topology. Needs at least 3 schedulable nodes. Does NOT replicate Postgres/TimescaleDB (see ADR-028) and does not change how many services run")
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapEnableAreas, "enable-area", nil, "additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with --compact; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)")
 	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", "path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials")
+
+	bootstrapCmd.Flags().StringVar(&bootstrapEscrowFile, "escrow-file", "", "where to write the encrypted root-key escrow artifact (default ~/.devicechain/escrow/<instance>-rootkey.escrow). Refuses a path inside ~/.devicechain/<instance>, which `dcctl destroy` deletes")
+	bootstrapCmd.Flags().StringVar(&bootstrapEscrowPassFile, "escrow-passphrase-file", "", "read the escrow passphrase from this file instead of $"+bootstrap.EscrowPassphraseEnv+" or an interactive prompt (trailing newline stripped)")
+	bootstrapCmd.Flags().BoolVar(&bootstrapNoEscrow, "no-escrow", false, "do NOT escrow the secret-store root key. The key then exists only inside the cluster: losing the cluster makes every stored secret permanently unreadable, even from a database backup, because no DeviceChain backup contains etcd. For throwaway instances only; implied by --dev")
+	bootstrapCmd.Flags().StringVar(&bootstrapRestoreRootKey, "restore-root-key", "", "disaster recovery: seed the instance's secret-store root key FROM this escrow artifact instead of minting a fresh one, so a rebuilt cluster can read secrets restored from a database backup. Needs the artifact's passphrase")
 
 	rootCmd.AddCommand(bootstrapCmd)
 }
