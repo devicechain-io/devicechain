@@ -20,6 +20,7 @@ var (
 	haNatsUrl     string
 	haTimeout     time.Duration
 	haExpectFail  bool
+	haProbeMqtt   bool
 )
 
 var haCmd = &cobra.Command{
@@ -59,6 +60,7 @@ single-node instance and requires it to report failures:
 			InstanceId:  haInstanceId,
 			Replicas:    haReplicas,
 			NatsUrl:     haNatsUrl,
+			ProbeMqtt:   haProbeMqtt,
 			Timeout:     haTimeout,
 		})
 		if err != nil {
@@ -105,4 +107,8 @@ func init() {
 		"bound the whole check")
 	haVerifyCmd.Flags().BoolVar(&haExpectFail, "expect-fail", false,
 		"invert the exit status: succeed only if the check FAILS (the negative control)")
+	haVerifyCmd.Flags().BoolVar(&haProbeMqtt, "probe-mqtt", false,
+		"open one MQTT connection first so the broker's $MQTT_* streams exist and their "+
+			"replica factor can be observed. MUTATES the broker (it creates those streams "+
+			"if no client has ever connected), so it is off by default")
 }

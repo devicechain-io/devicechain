@@ -41,6 +41,15 @@ type HaVerifyOptions struct {
 	// NatsUrl bypasses the port-forward and dials this URL directly. For a rig
 	// that already has a tunnel open, or a broker reachable without one.
 	NatsUrl string
+	// ProbeMqtt opens one MQTT connection before collecting, so the broker's own
+	// $MQTT_* streams exist and their replica factor can be observed.
+	//
+	// Off by default because it MUTATES: on a broker no device has ever reached, it
+	// causes four streams to be created. A check that changes what it inspects is
+	// not one you can run against production at any time, and that property is
+	// worth more than the convenience. On a validation rig it is exactly right —
+	// see mqttProbe.
+	ProbeMqtt bool
 	// Timeout bounds the whole check.
 	Timeout time.Duration
 }
@@ -117,6 +126,15 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 		}
 		defer stop()
 		url = fmt.Sprintf("nats://127.0.0.1:%d", local)
+	}
+
+	if opts.ProbeMqtt {
+		if len(pods) == 0 {
+			return rep, fmt.Errorf("--probe-mqtt needs a broker pod to forward to and none was found")
+		}
+		if err := probeMqttVia(restCfg, pods[0].Name, cfg.Infrastructure.Nats); err != nil {
+			return rep, err
+		}
 	}
 
 	nc, err := dialBroker(url, cfg.Infrastructure.Nats)
@@ -202,6 +220,39 @@ func placedPods(pods []corev1.Pod) []replication.Pod {
 		out = append(out, replication.Pod{Name: p.Name, Node: p.Spec.NodeName})
 	}
 	return out
+}
+
+// mqttListenerPort is the broker's MQTT listener, set by the OpenTofu nats
+// module. It is not in the instance configuration because no DeviceChain service
+// is an MQTT client — under ADR-030 the gateway is nats-server's own listener and
+// the services consume from JetStream behind it.
+const mqttListenerPort = 1883
+
+// probeMqttVia opens its own port-forward to the MQTT listener.
+//
+// A second tunnel rather than reusing the JetStream one: they are different ports
+// on the same pod, and the probe's tunnel is closed the moment the connection is
+// done, so the broker's MQTT accounting is not left holding a session while the
+// rest of the check runs.
+func probeMqttVia(restCfg *rest.Config, pod string, natscfg config.NatsConfiguration) error {
+	local, stop, err := forwardPort(restCfg, natsInfraNamespace, pod, mqttListenerPort)
+	if err != nil {
+		return fmt.Errorf("opening a port-forward to the MQTT listener on %s: %w", pod, err)
+	}
+	defer stop()
+
+	tlsCfg, err := natscfg.TLSConfig(natscfg.Hostname)
+	if err != nil {
+		return err
+	}
+	if tlsCfg != nil {
+		tlsCfg.ServerName = natscfg.Hostname
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", local)
+	if err := mqttProbe(addr, tlsCfg, natscfg.Auth.User, natscfg.Auth.Password); err != nil {
+		return fmt.Errorf("MQTT probe: %w", err)
+	}
+	return nil
 }
 
 // dialBroker connects with the instance's own TLS material and credentials.

@@ -1,0 +1,65 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Multi-node kind cluster for the ADR-020 A0 high-availability validation rig.
+#
+#   hack/ha-rig.sh up
+#
+# THIS IS A SEPARATE FILE ON PURPOSE. kind-cluster.yaml is embedded into dcctl
+# (deploy/assets.go) and is the topology every local bring-up and the L5 release
+# gate get; making it multi-node would triple the resource cost of every one of
+# them to serve a drill that runs occasionally. So the HA rig creates its cluster
+# itself, from here, and dcctl bootstraps onto the cluster it finds.
+#
+# THREE WORKERS, NOT TWO — and the reason is not obvious.
+#
+# `dcctl bootstrap --ha` places one NATS server per node under a HARD topology
+# spread constraint (whenUnsatisfiable: DoNotSchedule), so it needs three nodes
+# that can actually take a pod. kind removes the control-plane's NoSchedule taint
+# ONLY when the cluster has exactly one node (kubeadminit/init.go:
+# `if len(allNodes) == 1`). The moment a worker is added, the control plane keeps
+# its taint — so "1 control-plane + 2 workers" is a three-node cluster with TWO
+# usable nodes, and --ha is refused on it. That refusal is correct and is itself
+# part of A0: letting the servers share a node gives an instance the cost of
+# replication and none of its protection.
+#
+# Each node is a full kubelet+containerd container. Four of them plus the
+# platform is a real load on a developer box; the rig is not meant to be left
+# running.
+apiVersion: kind.x-k8s.io/v1alpha4
+kind: Cluster
+name: devicechain-ha
+
+# Same pull-through registry as the single-node topology, for the same reason: a
+# dozen service images pulled by reference rather than side-loaded into every
+# node — and with four nodes that arithmetic gets four times worse.
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:5000"]
+      endpoint = ["http://kind-registry:5000"]
+
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80 # ingress HTTP
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 443 # ingress HTTPS
+        hostPort: 8443
+        protocol: TCP
+      - containerPort: 31883 # NATS MQTT device ingress (NodePort)
+        hostPort: 11883
+        protocol: TCP
+
+  # The three schedulable nodes the NATS spread constraint needs. Losing any one
+  # of them is the failure a 3-node R3 cluster is specified to survive; losing two
+  # is not (RAFT quorum), which is the survive-ONE bound A0 has to document.
+  - role: worker
+  - role: worker
+  - role: worker

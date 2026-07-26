@@ -260,22 +260,26 @@ func Verify(snap Snapshot, exp Expectation) Report {
 	required := make([]namedRole, 0,
 		len(exp.Streams)+len(exp.StateBuckets)+len(exp.MqttStreams)+1)
 	for _, n := range exp.Streams {
-		required = append(required, namedRole{n, "A1", "instance message stream"})
+		required = append(required, namedRole{name: n, check: "A1", role: "instance message stream"})
 	}
 	for _, n := range exp.StateBuckets {
-		required = append(required, namedRole{n, "A1", "state KV bucket"})
+		required = append(required, namedRole{name: n, check: "A1", role: "state KV bucket"})
 	}
 	for _, n := range exp.MqttStreams {
-		required = append(required, namedRole{n, "A4", "broker MQTT stream"})
+		required = append(required, namedRole{
+			name: n, check: "A4", role: "broker MQTT stream", missingHint: mqttMissingHint,
+		})
 	}
 	if exp.LeaseBucket != "" {
-		required = append(required, namedRole{exp.LeaseBucket, "A2", "ADR-070 lease bucket"})
+		required = append(required, namedRole{
+			name: exp.LeaseBucket, check: "A2", role: "ADR-070 lease bucket",
+		})
 	}
 	for _, r := range required {
 		o, ok := byName[r.name]
 		if !ok {
 			add(r.check, r.name, "%s is MISSING from the broker; it cannot be "+
-				"replicated and its absence was not treated as a pass", r.role)
+				"replicated and its absence was not treated as a pass.%s", r.role, r.missingHint)
 			continue
 		}
 		if why := replicated(o, exp.Replicas); why != "" {
@@ -364,7 +368,24 @@ type namedRole struct {
 	name  string
 	check string
 	role  string
+	// missingHint is appended ONLY to the missing-object finding, never to an
+	// under-replicated one. The two need different sentences: an absent object
+	// raises "why is it not there", and for the MQTT streams the answer is
+	// specific and actionable in a way no generic message could be.
+	missingHint string
 }
+
+// mqttMissingHint explains the one absence that is not a defect in the
+// deployment. nats-server creates the $MQTT_* streams at the first MQTT connect
+// after a broker start, so on an instance no device has reached they simply do
+// not exist yet — and the replica factor they will get has therefore not been
+// chosen. That is still a FAILED assertion rather than a skipped one, because the
+// alternative is reporting success over the single replication decision this
+// platform does not make.
+const mqttMissingHint = " nats-server creates these at the FIRST MQTT connect after a " +
+	"broker start, so this means no device has ever connected and the replica factor " +
+	"for device sessions has not been chosen yet. Connect a device, or on a validation " +
+	"rig re-run with --probe-mqtt, then check again."
 
 // kvStreamPrefix is what JetStream prepends to a KV bucket name to form its
 // backing stream. Restated here rather than imported because this package is
